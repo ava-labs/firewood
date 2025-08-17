@@ -414,6 +414,49 @@ struct Value fwd_get_latest(const struct DatabaseHandle *db, BorrowedBytes key);
 struct Value fwd_iter_next(const struct DatabaseHandle *db, IteratorId it);
 
 /**
+ * Retrieves up to `n` items from the iterator and returns a single `Value`
+ * containing a packed array of packed key-value pairs.
+ *
+ * Packed format:
+ * [count: u64][ (kv_len: u64)(kv_bytes)... repeated count times ]
+ * where kv_bytes is the same packed format as `iter_next` returns:
+ * [key_len: u64][key][value]
+ */
+struct Value fwd_iter_next_n(const struct DatabaseHandle *db, IteratorId it, size_t n);
+
+/**
+ * Retrieves up to `n` items from the iterator using a pre-allocated memory pool
+ * for zero-copy/minimal-copy performance.
+ *
+ * # Arguments
+ *
+ * * `db` - The database handle returned by `open_db`
+ * * `it` - The iterator handle returned by `fwd_iter_*`
+ * * `n` - Maximum number of items to retrieve
+ * * `buffer` - Pre-allocated buffer to write data into
+ *
+ * # Returns
+ *
+ * A `Value` where:
+ * - `len` contains the number of bytes written to the buffer
+ * - `data` is NULL (data is written directly to the provided buffer)
+ *
+ * If an error occurs, returns a `Value` with len=0 and data containing error message.
+ *
+ * # Safety
+ *
+ * This function is unsafe because it writes directly to a user-provided buffer.
+ * The caller must ensure that:
+ * - The buffer pointer is valid and points to at least `buffer.len` bytes
+ * - The buffer is large enough to hold the packed data
+ * - The buffer remains valid for the duration of the call
+ */
+struct Value fwd_iter_next_n_fast(const struct DatabaseHandle *db,
+                                  IteratorId it,
+                                  size_t n,
+                                  BorrowedBytes buffer);
+
+/**
  * Return an iterator on proposal optionally starting from a key
  *
  * # Arguments

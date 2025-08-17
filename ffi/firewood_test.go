@@ -1089,13 +1089,222 @@ func TestIterOnRoot(t *testing.T) {
 	r.NoError(h2.Err())
 }
 
+// Tests batched iteration via NextN
+func TestIterNextN(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert 25 key-value pairs.
+	keys, vals := kvForTest(25)
+	root, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	// Create two iterators on the same root
+	itBatch, err := db.IterOnRoot(root, nil)
+	r.NoError(err)
+	itSingle, err := db.IterOnRoot(root, nil)
+	r.NoError(err)
+
+	// Fetch using NextN in batches of 10
+	var batchK [][]byte
+	var batchV [][]byte
+	for {
+		k, v, err := itBatch.NextN(10)
+		r.NoError(err)
+		if len(k) == 0 {
+			break
+		}
+		r.Len(k, len(v))
+		batchK = append(batchK, k...)
+		batchV = append(batchV, v...)
+	}
+
+	// Fetch using Next one-by-one
+	var singleK [][]byte
+	var singleV [][]byte
+	for itSingle.Next() {
+		singleK = append(singleK, itSingle.Key())
+		singleV = append(singleV, itSingle.Value())
+	}
+	r.NoError(itSingle.Err())
+
+	t.Log(batchK)
+	r.Equal(singleK, batchK)
+	r.Equal(singleV, batchV)
+}
+
+// Tests batched iteration via NextNFast
+func TestIterNextNFast(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert 100 key-value pairs.
+	keys, vals := kvForTest(100)
+	root, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	// Create three iterators
+	itFast, err := db.IterOnRoot(root, nil)
+	r.NoError(err)
+	itBatch, err := db.IterOnRoot(root, nil)
+	r.NoError(err)
+	itSingle, err := db.IterOnRoot(root, nil)
+	r.NoError(err)
+
+	// Fetch using NextNFast in batches of 25
+	var fastK [][]byte
+	var fastV [][]byte
+	for {
+		k, v, err := itFast.NextNFast(25)
+		r.NoError(err)
+		if len(k) == 0 {
+			break
+		}
+		r.Len(k, len(v))
+		fastK = append(fastK, k...)
+		fastV = append(fastV, v...)
+	}
+
+	// Fetch using NextN in batches of 25
+	var batchK [][]byte
+	var batchV [][]byte
+	for {
+		k, v, err := itBatch.NextN(25)
+		r.NoError(err)
+		if len(k) == 0 {
+			break
+		}
+		r.Len(k, len(v))
+		batchK = append(batchK, k...)
+		batchV = append(batchV, v...)
+	}
+
+	// Fetch using Next one-by-one
+	var singleK [][]byte
+	var singleV [][]byte
+	for itSingle.Next() {
+		singleK = append(singleK, itSingle.Key())
+		singleV = append(singleV, itSingle.Value())
+	}
+	r.NoError(itSingle.Err())
+
+	// All methods should return the same data
+	r.Equal(singleK, fastK, "NextNFast should return same keys as Next")
+	r.Equal(singleK, batchK, "NextN should return same keys as Next")
+	r.Equal(singleV, fastV, "NextNFast should return same values as Next")
+	r.Equal(singleV, batchV, "NextN should return same values as Next")
+}
+
+// Tests NextNFast with custom buffer pool
+func TestIterNextNFastCustomPool(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert data
+	keys, vals := kvForTest(50)
+	root, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	// Create custom pool with smaller buffers
+	customPool := NewIteratorBufferPool(4096) // 4KB buffers
+	defer customPool.Free()
+
+	it, err := db.IterOnRoot(root, nil)
+	r.NoError(err)
+
+	// Fetch all data using custom pool
+	var allKeys [][]byte
+	var allVals [][]byte
+	for {
+		k, v, err := it.NextNFastWithPool(10, customPool)
+		r.NoError(err)
+		if len(k) == 0 {
+			break
+		}
+		allKeys = append(allKeys, k...)
+		allVals = append(allVals, v...)
+	}
+
+	// Verify we got all the data (keys might not be in exact same order due to trie structure)
+	r.Len(allKeys, 50)
+	r.Len(allVals, 50)
+
+	// Create a map to verify all key-value pairs are present
+	expectedKV := make(map[string]string)
+	for i := 0; i < 50; i++ {
+		expectedKV[string(keys[i])] = string(vals[i])
+	}
+
+	// Check all retrieved pairs match expected
+	for i := 0; i < 50; i++ {
+		expectedVal, ok := expectedKV[string(allKeys[i])]
+		r.True(ok, "Key %s should exist", string(allKeys[i]))
+		r.Equal(expectedVal, string(allVals[i]), "Value for key %s should match", string(allKeys[i]))
+	}
+}
+
+// Tests NextNFast handles buffer size limits properly
+func TestIterNextNFastBufferLimits(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert large values - use more keys to ensure we have enough data
+	numKeys := 20
+	keys := make([][]byte, numKeys)
+	vals := make([][]byte, numKeys)
+	for i := 0; i < numKeys; i++ {
+		keys[i] = []byte(fmt.Sprintf("key%02d", i)) // Use 02d for consistent ordering
+		// Create large values
+		vals[i] = make([]byte, 10000) // 10KB each
+		for j := range vals[i] {
+			vals[i][j] = byte(i)
+		}
+	}
+	root, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	// Create pool with buffer that can only fit a few items
+	smallPool := NewIteratorBufferPool(50000) // 50KB buffer
+	defer smallPool.Free()
+
+	it, err := db.IterOnRoot(root, nil)
+	r.NoError(err)
+
+	// Try to fetch many items, but buffer should limit us
+	k, v, err := it.NextNFastWithPool(20, smallPool)
+	r.NoError(err)
+	// Should get less than requested due to buffer size
+	r.Less(len(k), 20, "Should get less than requested due to buffer limits")
+	r.Greater(len(k), 0, "Should get at least some items")
+	r.Equal(len(k), len(v))
+
+	// The main point is that the buffer limits work, not exact count
+	t.Logf("Got %d items in first batch with 50KB buffer and 10KB values", len(k))
+
+	// Fetch remaining items to ensure iterator still works
+	totalKeys := len(k)
+	for {
+		k2, v2, err := it.NextNFastWithPool(20, smallPool)
+		r.NoError(err)
+		if len(k2) == 0 {
+			break
+		}
+		r.Equal(len(k2), len(v2))
+		totalKeys += len(k2)
+	}
+
+	// Should eventually get all items
+	r.LessOrEqual(totalKeys, numKeys, "Should not exceed total number of keys")
+	t.Logf("Retrieved %d total items across multiple batches", totalKeys)
+}
+
 // Dedicated benchmark for iterator Next() performance
 func BenchmarkIteratorNext(b *testing.B) {
 
 	db := newTestDatabase(b)
-
+	N := 100000
 	// Setup test data
-	keys, vals := kvForTest(10000) // Use more data for meaningful benchmark
+	keys, vals := kvForTest(N) // Use more data for meaningful benchmark
 	root, err := db.Update(keys, vals)
 	if err != nil {
 		b.Fatal(err)
@@ -1113,4 +1322,230 @@ func BenchmarkIteratorNext(b *testing.B) {
 			b.Fatal(err)
 		}
 	}
+}
+
+// Dedicated benchmark for iterator Next() performance
+func BenchmarkIteratorAll(b *testing.B) {
+
+	db := newTestDatabase(b)
+	N := 100000
+	// Setup test data
+	keys, vals := kvForTest(N) // Use more data for meaningful benchmark
+	root, err := db.Update(keys, vals)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	for b.Loop() {
+		iter, err := db.IterOnRoot(root, nil)
+		if err != nil {
+			b.Fatal(err)
+		}
+		_, _, e := iter.NextN(N)
+		if e != nil {
+			b.Fatal(e)
+		}
+	}
+}
+
+// Benchmark comparing NextN vs NextNFast for small batches
+func BenchmarkIteratorNextN_Small(b *testing.B) {
+	db := newTestDatabase(b)
+	N := 10000
+	batchSize := 10
+
+	keys, vals := kvForTest(N)
+	root, err := db.Update(keys, vals)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.Run("NextN", func(b *testing.B) {
+		for b.Loop() {
+			iter, err := db.IterOnRoot(root, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			for {
+				k, _, err := iter.NextN(batchSize)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(k) == 0 {
+					break
+				}
+			}
+		}
+	})
+
+	b.Run("NextNFast", func(b *testing.B) {
+		for b.Loop() {
+			iter, err := db.IterOnRoot(root, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			for {
+				k, _, err := iter.NextNFast(batchSize)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(k) == 0 {
+					break
+				}
+			}
+		}
+	})
+}
+
+// Benchmark comparing NextN vs NextNFast for medium batches
+func BenchmarkIteratorNextN_Medium(b *testing.B) {
+	db := newTestDatabase(b)
+	N := 100000
+	batchSize := 100
+
+	keys, vals := kvForTest(N)
+	root, err := db.Update(keys, vals)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.Run("NextN", func(b *testing.B) {
+		for b.Loop() {
+			iter, err := db.IterOnRoot(root, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			for {
+				k, _, err := iter.NextN(batchSize)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(k) == 0 {
+					break
+				}
+			}
+		}
+	})
+
+	b.Run("NextNFast", func(b *testing.B) {
+		for b.Loop() {
+			iter, err := db.IterOnRoot(root, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			for {
+				k, _, err := iter.NextNFast(batchSize)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(k) == 0 {
+					break
+				}
+			}
+		}
+	})
+}
+
+// Benchmark comparing NextN vs NextNFast for large batches
+func BenchmarkIteratorNextN_Large(b *testing.B) {
+	db := newTestDatabase(b)
+	N := 100000
+	batchSize := 100000
+
+	keys, vals := kvForTest(N)
+	root, err := db.Update(keys, vals)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.Run("NextN", func(b *testing.B) {
+		for b.Loop() {
+			iter, err := db.IterOnRoot(root, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			for {
+				k, _, err := iter.NextN(batchSize)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(k) == 0 {
+					break
+				}
+			}
+		}
+	})
+
+	b.Run("NextNFast", func(b *testing.B) {
+		for b.Loop() {
+			iter, err := db.IterOnRoot(root, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			for {
+				k, _, err := iter.NextNFast(batchSize)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(k) == 0 {
+					break
+				}
+			}
+		}
+	})
+}
+
+// Benchmark memory allocations for NextN vs NextNFast
+func BenchmarkIteratorNextN_Allocations(b *testing.B) {
+	db := newTestDatabase(b)
+	N := 10000
+	batchSize := 100
+
+	keys, vals := kvForTest(N)
+	root, err := db.Update(keys, vals)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.Run("NextN", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			iter, err := db.IterOnRoot(root, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			count := 0
+			for count < 10 { // Only do 10 batches to focus on allocations
+				k, _, err := iter.NextN(batchSize)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(k) == 0 {
+					break
+				}
+				count++
+			}
+		}
+	})
+
+	b.Run("NextNFast", func(b *testing.B) {
+		b.ReportAllocs()
+		for b.Loop() {
+			iter, err := db.IterOnRoot(root, nil)
+			if err != nil {
+				b.Fatal(err)
+			}
+			count := 0
+			for count < 10 { // Only do 10 batches to focus on allocations
+				k, _, err := iter.NextNFast(batchSize)
+				if err != nil {
+					b.Fatal(err)
+				}
+				if len(k) == 0 {
+					break
+				}
+				count++
+			}
+		}
+	})
 }

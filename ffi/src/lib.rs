@@ -357,6 +357,228 @@ fn iter_next(db: Option<&DatabaseHandle<'_>>, iterator_id: IteratorId) -> Result
     }
 }
 
+/// Retrieves up to `n` items from the iterator as an array of `Value`s
+///
+/// Each `Value` in the returned array encodes a single (key, value) pair
+/// using the packed format implemented by `impl From<(Box<[u8]>, Box<[u8]>)> for Value`:
+/// [key_len: 8 bytes][key_data][value_data].
+///
+/// Returns an empty array on iterator exhaustion. Returns an error if any
+/// iterator step fails.
+#[doc(hidden)]
+fn iterator_next_n(
+    db: Option<&DatabaseHandle<'_>>,
+    iterator_id: IteratorId,
+    n: usize,
+) -> Result<Box<[Value]>, String> {
+    if n == 0 {
+        return Ok(Vec::new().into_boxed_slice());
+    }
+
+    let db = db.ok_or("db should be non-null")?;
+
+    // Collect up to n items while holding the iterator write lock
+    let mut results: Vec<Value> = Vec::with_capacity(n);
+    let mut maybe_err: Option<String> = None;
+
+    {
+        let mut guard = db
+            .streams
+            .write()
+            .map_err(|_| "stream lock is poisoned")?;
+        let it = guard.get_mut(&iterator_id).ok_or("iterator not found")?;
+
+        for _ in 0..n {
+            match it.next() {
+                Some(Ok((key, value))) => {
+                    // Convert into packed Value
+                    results.push((key, value).into());
+                }
+                Some(Err(e)) => {
+                    maybe_err = Some(e);
+                    break;
+                }
+                None => break,
+            }
+        }
+    }
+
+    if let Some(e) = maybe_err {
+        return Err(e);
+    }
+
+    Ok(results.into_boxed_slice())
+}
+
+/// Retrieves up to `n` items from the iterator and returns a single `Value`
+/// containing a packed array of packed key-value pairs.
+///
+/// Packed format:
+/// [count: u64][ (kv_len: u64)(kv_bytes)... repeated count times ]
+/// where kv_bytes is the same packed format as `iter_next` returns:
+/// [key_len: u64][key][value]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_iter_next_n(
+    db: Option<&DatabaseHandle<'_>>,
+    it: IteratorId,
+    n: usize,
+) -> Value {
+    match iterator_next_n(db, it, n) {
+        Ok(mut items) => {
+            if items.is_empty() {
+                return Value::default();
+            }
+
+            // Compute total size: 8 for count + sum(8 + item.len)
+            let count = items.len();
+            let total_payload: usize = items
+                .iter()
+                .map(|v| 8usize.saturating_add(v.len))
+                .fold(8usize, |acc, x| acc.saturating_add(x));
+
+            let mut packed = Vec::with_capacity(total_payload);
+            packed.extend_from_slice(&(count as u64).to_le_bytes());
+
+            for v in items.iter_mut() {
+                // Safety: Values here were created by Rust in this crate
+                // with non-null data pointers for binary buffers.
+                let len = v.len;
+                packed.extend_from_slice(&(len as u64).to_le_bytes());
+                if let Some(ptr) = v.data.take() {
+                    // Copy the bytes into the packed vector
+                    let slice = std::slice::from_raw_parts(ptr.as_ptr(), len);
+                    packed.extend_from_slice(slice);
+                    // Free the original buffer to avoid leaking
+                    let _ = Box::from_raw(std::slice::from_raw_parts_mut(ptr.as_ptr(), len));
+                } else {
+                    // If somehow data is missing for a non-zero len, treat as error
+                    return String::from("invalid value data while packing iterator batch").into();
+                }
+            }
+
+            packed.into_boxed_slice().into()
+        }
+        Err(e) => e.into(),
+    }
+}
+
+/// Retrieves up to `n` items from the iterator using a pre-allocated memory pool
+/// for zero-copy/minimal-copy performance.
+///
+/// # Arguments
+///
+/// * `db` - The database handle returned by `open_db`
+/// * `it` - The iterator handle returned by `fwd_iter_*`
+/// * `n` - Maximum number of items to retrieve
+/// * `buffer` - Pre-allocated buffer to write data into
+///
+/// # Returns
+///
+/// A `Value` where:
+/// - `len` contains the number of bytes written to the buffer
+/// - `data` is NULL (data is written directly to the provided buffer)
+///
+/// If an error occurs, returns a `Value` with len=0 and data containing error message.
+///
+/// # Safety
+///
+/// This function is unsafe because it writes directly to a user-provided buffer.
+/// The caller must ensure that:
+/// - The buffer pointer is valid and points to at least `buffer.len` bytes
+/// - The buffer is large enough to hold the packed data
+/// - The buffer remains valid for the duration of the call
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_iter_next_n_fast(
+    db: Option<&DatabaseHandle<'_>>,
+    it: IteratorId,
+    n: usize,
+    buffer: BorrowedBytes<'_>,
+) -> Value {
+    let result = iterator_next_n_fast(db, it, n, &buffer);
+    match result {
+        Ok(bytes_written) => Value {
+            len: bytes_written,
+            data: None,  // Signal that data was written to the provided buffer
+        },
+        Err(e) => e.into(),
+    }
+}
+
+/// Internal implementation of fast iterator that writes directly to provided buffer
+#[doc(hidden)]
+fn iterator_next_n_fast(
+    db: Option<&DatabaseHandle<'_>>,
+    iterator_id: IteratorId,
+    n: usize,
+    buffer: &[u8],
+) -> Result<usize, String> {
+    if n == 0 {
+        return Ok(0);
+    }
+
+    let db = db.ok_or("db should be non-null")?;
+    
+    // Get mutable slice from the buffer - this is safe because we have exclusive access
+    let output = unsafe {
+        std::slice::from_raw_parts_mut(buffer.as_ptr() as *mut u8, buffer.len())
+    };
+
+    let mut pos = 0;
+    let mut count = 0u64;
+    
+    // Reserve space for count at the beginning
+    if output.len() < 8 {
+        return Err("buffer too small for count header".to_string());
+    }
+    pos += 8; // We'll write the count at the end
+
+    {
+        let mut guard = db
+            .streams
+            .write()
+            .map_err(|_| "stream lock is poisoned")?;
+        let it = guard.get_mut(&iterator_id).ok_or("iterator not found")?;
+
+        for _ in 0..n {
+            match it.next() {
+                Some(Ok((key, value))) => {
+                    let kv_len = 8 + key.len() + value.len();
+                    
+                    // Check if we have enough space
+                    if pos + 8 + kv_len > output.len() {
+                        break; // Stop if buffer is full
+                    }
+                    
+                    // Write kv_len
+                    output[pos..pos+8].copy_from_slice(&(kv_len as u64).to_le_bytes());
+                    pos += 8;
+                    
+                    // Write key length and key data
+                    output[pos..pos+8].copy_from_slice(&(key.len() as u64).to_le_bytes());
+                    pos += 8;
+                    output[pos..pos+key.len()].copy_from_slice(&key);
+                    pos += key.len();
+                    
+                    // Write value data
+                    output[pos..pos+value.len()].copy_from_slice(&value);
+                    pos += value.len();
+                    
+                    count += 1;
+                }
+                Some(Err(e)) => {
+                    return Err(e);
+                }
+                None => break,
+            }
+        }
+    }
+    
+    // Write the count at the beginning
+    output[0..8].copy_from_slice(&count.to_le_bytes());
+    
+    Ok(pos)
+}
+
 /// Gets the value associated with the given key from the proposal provided.
 ///
 /// # Arguments
