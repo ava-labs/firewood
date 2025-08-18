@@ -54,7 +54,7 @@ impl FreeLists {
     }
 
     /// Get a mutable reference to the underlying array.
-    pub fn as_array_mut(&mut self) -> &mut [Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES] {
+    pub const fn as_array_mut(&mut self) -> &mut [Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES] {
         &mut self.0
     }
 
