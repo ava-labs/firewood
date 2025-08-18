@@ -223,21 +223,13 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         n: u64,
     ) -> Result<Option<(LinearAddress, AreaIndex)>, FileIoError> {
         // Find the smallest free list that can fit this size.
-        let index_wanted = AreaIndex::from_size(n).map_err(|e| {
+        let index = AreaIndex::from_size(n).map_err(|e| {
             self.storage
                 .file_io_error(e, 0, Some("allocate_from_freed".to_string()))
         })?;
 
-        if let Some((index, free_stored_area_addr)) = self
-            .header
-            .free_lists_mut()
-            .iter_mut()
-            .enumerate()
-            .skip(index_wanted.as_usize())
-            .find(|item| item.1.is_some())
+        if let Some(free_stored_area_addr) = self.header.free_lists_mut().get_mut(index.as_usize())
         {
-            let index =
-                AreaIndex::try_from(index).expect("index is less than AreaIndex::NUM_AREA_SIZES");
             let address = free_stored_area_addr
                 .take()
                 .expect("impossible due to find earlier");
@@ -271,13 +263,13 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
             return Ok(Some((address, index)));
         }
 
-        trace!("No free blocks of sufficient size {index_wanted} found");
+        trace!("No free blocks of sufficient size {index} found");
         firewood_counter!(
             "firewood.space.from_end",
             "Space allocated from end of nodestore",
-            "index" => index_name(index_wanted)
+            "index" => index_name(index)
         )
-        .increment(index_wanted.size());
+        .increment(index.size());
         Ok(None)
     }
 
