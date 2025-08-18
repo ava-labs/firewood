@@ -228,11 +228,13 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
                 .file_io_error(e, 0, Some("allocate_from_freed".to_string()))
         })?;
 
-        if let Some(free_stored_area_addr) = self.header.free_lists_mut().get_mut(index.as_usize())
-        {
-            let address = free_stored_area_addr
-                .take()
-                .expect("impossible due to find earlier");
+        let free_stored_area_addr = self
+            .header
+            .free_lists_mut()
+            .get_mut(index.as_usize())
+            .expect("index is less than AreaIndex::NUM_AREA_SIZES");
+        if let Some(address) = free_stored_area_addr {
+            let address = *address;
             // Get the first free block of sufficient size.
             if let Some(free_head) = self.storage.free_list_cache(address) {
                 trace!("free_head@{address}(cached): {free_head:?} size:{index}");
