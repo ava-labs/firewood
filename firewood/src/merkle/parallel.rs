@@ -53,14 +53,28 @@ static THREADPOOL: OnceLock<ThreadPool> = OnceLock::new();
 
 /// TODO add doc
 #[derive(Debug)]
-pub struct ParallelMerkle {}
+pub struct ParallelMerkle {
+    worker: Option<Worker>,
+}
+
+impl Default for ParallelMerkle {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ParallelMerkle {
+    /// Default constructor
+    #[must_use]
+    pub const fn new() -> Self {
+        ParallelMerkle { worker: None }
+    }
+
     /// TODO: add doc
     #[allow(clippy::missing_panics_doc)]
     #[allow(clippy::missing_errors_doc)]
     pub fn create_proposal<T: Parentable>(
-        &self,
+        &mut self,
         parent: &NodeStore<T, FileBacked>,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
     ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, FileIoError> {
@@ -87,7 +101,7 @@ impl ParallelMerkle {
         // keep track of the workers for each nibble
         // TODO: use something better than a hashmap here
         //let mut workers = HashMap::new();
-        let mut worker = None;
+        //self.worker = None;
 
         // Create a response channel the workers use to send messages back to the coordinator (us)
         let response_channel = mpsc::channel();
@@ -104,7 +118,7 @@ impl ParallelMerkle {
             // TODO(bug): we can need to send the key_nibbles iterator instead of the key to the child
 
             // Find the worker for the first nibble, or create a new one if it doesn't exist
-            let worker = worker.get_or_insert_with(|| {
+            let worker = self.worker.get_or_insert_with(|| {
                 // no worker yet, so create one
                 // create a channel for the coordinator to send messages to the worker
                 let child_channel = mpsc::channel();
@@ -134,6 +148,8 @@ impl ParallelMerkle {
                             // insert a key-value pair into the subtrie
                             Request::Insert { key, value } => {
                                 // TODO: we still have a bug here, we need to remove the first nibble from the key :(
+                                println!("### In Worker Thread: Inserting: {key:?} and {value:?}");
+
                                 merkle
                                     .insert(key.as_ref(), value.as_ref().into())
                                     .expect("TODO: handle error");
@@ -183,11 +199,18 @@ impl ParallelMerkle {
         //    worker.sender.send(Request::Done).expect("TODO: handle error");
         //}
 
-        worker
-            .expect("TODO add error handling")
+        self.worker
+            .as_ref()
+            .expect("TODO add error_handling")
             .sender
             .send(Request::Done)
-            .expect("TODO: handle error");
+            .expect("TODO: add error handling");
+
+        //self.worker
+        //    .expect("TODO add error handling")
+        //    .sender
+        //    .send(Request::Done)
+        //    .expect("TODO: handle error");
 
         /*
         // collect all the responses from the workers
@@ -212,6 +235,11 @@ impl ParallelMerkle {
                 Response::Error(_error) => todo!(),
             }
         }
+
+        // Done with these async tasks. Setting worker to None will allow
+        // the next create proposal from the same ParallelMerkle to be reused
+        // to spawn new tasks.
+        self.worker = None;
 
         //*proposal.mut_root() = Some(Node::Branch(root.clone()));
         // impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>

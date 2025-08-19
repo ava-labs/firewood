@@ -285,13 +285,15 @@ impl Db {
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
     ) -> Result<Proposal<'_>, api::Error> {
         let parent = self.manager.current_revision();
-        let parallel_merkle = ParallelMerkle{};
-        let immutable = parallel_merkle.create_proposal(&parent, batch).expect("TODO handle error");
+        let mut parallel_merkle = ParallelMerkle::default();
+        let immutable = parallel_merkle
+            .create_proposal(&parent, batch)
+            .expect("TODO handle error");
         self.manager.add_proposal(immutable.clone());
         Ok(Proposal {
             nodestore: immutable,
             db: self,
-        })        
+        })
     }
 
     /// propose a new batch synchronously
@@ -728,7 +730,7 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test_propose_sync() {
+    async fn test_propose_parallel() {
         const N: usize = 20;
 
         let db = testdb().await;
@@ -743,19 +745,23 @@ mod test {
             })
             .unzip();
 
-        // create two batches, one with the first half of keys and values, and one with the last half keys and values
-        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        // Looping twice to test that we are reusing the thread pool.
+        for _ in 0..2 {
+            // create two batches, one with the first half of keys and values, and one with the last half keys and values
+            let kviter = keys.iter().zip(vals.iter()).map_into_batch();
 
-        //let proposal = db.propose_sync(kviter).unwrap();
-        let proposal = db.propose_parallel(kviter).unwrap();
+            //let proposal = db.propose_sync(kviter).unwrap();
+            let proposal = db.propose_parallel(kviter).unwrap();
 
-        // iterate over the keys and values again, checking that the values are in the correct proposal
-        let kviter = keys.iter().zip(vals.iter());
+            // iterate over the keys and values again, checking that the values are in the correct proposal
+            let kviter = keys.iter().zip(vals.iter());
 
-        for (k, v) in kviter {
-            assert_eq!(&proposal.val(k).await.unwrap().unwrap(), v);
+            for (k, v) in kviter {
+                println!("Checking key: {k:?} and {v:?}");
+                assert_eq!(&proposal.val(k).await.unwrap().unwrap(), v);
+            }
+            println!("!!!!!!!! All done");
         }
-        println!("!!!!!!!! All done");
     }
 
     /// Test that proposing on a proposal works as expected
