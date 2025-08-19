@@ -28,6 +28,8 @@ use std::sync::Arc;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
 
+use crate::merkle::parallel::ParallelMerkle;
+
 #[derive(Error, Debug)]
 /// Represents the different types of errors that can occur in the database.
 pub enum DbError {
@@ -274,6 +276,36 @@ impl Db {
     pub fn view_sync(&self, root_hash: HashKey) -> Result<Box<dyn DbViewSyncBytes>, api::Error> {
         let nodestore = self.manager.view(root_hash)?;
         Ok(nodestore)
+    }
+
+    /// propose a new batch in parallel.
+    #[allow(clippy::missing_panics_doc)]
+    pub fn propose_parallel(
+        &self,
+        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
+    ) -> Result<Proposal<'_>, api::Error> {
+        let parent = self.manager.current_revision();
+        let parallel_merkle = ParallelMerkle{};
+
+        let immutable = parallel_merkle.create_proposal(&parent, batch).expect("TODO handle error");
+        self.manager.add_proposal(immutable.clone());
+        Ok(Proposal {
+            nodestore: immutable,
+            db: self,
+        })        
+
+        /* 
+        let proposal = parallel_merkle.create_proposal(&parent, batch)?;
+        let mut merkle = Merkle::from(proposal);
+        let nodestore = merkle.into_inner();
+        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
+            Arc::new(nodestore.try_into()?);
+        self.manager.add_proposal(immutable.clone());
+        Ok(Proposal {
+            nodestore: immutable,
+            db: self,
+        })
+        */
     }
 
     /// propose a new batch synchronously
