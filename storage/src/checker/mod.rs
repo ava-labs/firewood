@@ -541,7 +541,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     }
 
     fn fix(&self, check_report: CheckerReport) -> FixReport {
-        let mut fixed = Vec::new();
+        let fixed = Vec::new();
         let mut unfixable = Vec::new();
 
         for error in check_report.errors {
