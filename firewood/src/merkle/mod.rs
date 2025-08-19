@@ -4,9 +4,6 @@
 #[cfg(test)]
 mod tests;
 
-/// Parallel merkle
-pub mod parallel;
-
 use crate::proof::{Proof, ProofCollection, ProofError, ProofNode};
 use crate::range_proof::RangeProof;
 use crate::stream::{MerkleKeyValueStream, PathIterator};
