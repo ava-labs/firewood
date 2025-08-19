@@ -2,17 +2,14 @@
 // See the file LICENSE.md for licensing terms.
 
 //use std::collections::HashMap;
-use std::sync::{mpsc, Arc, OnceLock};
+use std::sync::{Arc, OnceLock, mpsc};
 
 //use firewood_storage::{
 //    BranchNode, Child, FileBacked, FileIoError, ImmutableProposal, NibblesIterator, Node,
 //    NodeStore, Parentable, RootReader,
 //};
 
-use firewood_storage::{
-    FileBacked, FileIoError, ImmutableProposal, Node,
-    NodeStore, Parentable,
-};
+use firewood_storage::{FileBacked, FileIoError, ImmutableProposal, Node, NodeStore, Parentable};
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
 //use sha2::digest::crypto_common::KeyInit;
@@ -52,9 +49,7 @@ enum Response {
     Error(FileIoError),
 }
 
-
 static THREADPOOL: OnceLock<ThreadPool> = OnceLock::new();
-
 
 /// TODO add doc
 #[derive(Debug)]
@@ -79,7 +74,7 @@ impl ParallelMerkle {
         });
 
         // Initial version. Just a single offload thread. Since there is only one thread,
-        // we don't need to follow the algorithm regarding whether the root is None or 
+        // we don't need to follow the algorithm regarding whether the root is None or
         // if it has a partial path.
 
         // create a proposal from the parent
@@ -93,7 +88,7 @@ impl ParallelMerkle {
         // TODO: use something better than a hashmap here
         //let mut workers = HashMap::new();
         let mut worker = None;
-        
+
         // Create a response channel the workers use to send messages back to the coordinator (us)
         let response_channel = mpsc::channel();
 
@@ -146,7 +141,7 @@ impl ParallelMerkle {
                             // these should be easy to implement...
                             Request::Delete { key: _ } => todo!(),
                             Request::DeleteRange { prefix: _ } => todo!(),
-                            
+
                             // sent from the coordinator to the workers to signal that they are done
                             Request::Done => {
                                 worker_sender
@@ -188,9 +183,13 @@ impl ParallelMerkle {
         //    worker.sender.send(Request::Done).expect("TODO: handle error");
         //}
 
-        worker.expect("TODO add error handling").sender.send(Request::Done).expect("TODO: handle error");
+        worker
+            .expect("TODO add error handling")
+            .sender
+            .send(Request::Done)
+            .expect("TODO: handle error");
 
-        /* 
+        /*
         // collect all the responses from the workers
         while let Ok(response) = response_channel.1.recv() {
             match response {
@@ -204,7 +203,6 @@ impl ParallelMerkle {
 
         //let mut proposal = NodeStore::new(&parent)?;
 
-
         while let Ok(response) = response_channel.1.recv() {
             match response {
                 Response::Root(new_root) => {
@@ -213,7 +211,6 @@ impl ParallelMerkle {
                 }
                 Response::Error(_error) => todo!(),
             }
-
         }
 
         //*proposal.mut_root() = Some(Node::Branch(root.clone()));
@@ -226,27 +223,5 @@ impl ParallelMerkle {
             Arc::new(proposal.try_into().expect("TODO: handle error"));
 
         Ok(immutable)
-        /* 
-
-        Ok(Proposal {
-            nodestore: immutable,
-            db,
-        });
-
-
-        self.manager.add_proposal(immutable.clone());
-
-        self.metrics.proposals.increment(1);
-
-        Ok(Proposal {
-            nodestore: immutable,
-            db: self,
-        })
-
-
-
-        let immutable_proposal = Proposal::new(immutable, db);
-        Ok(immutable_proposal)
-        */
     }
 }

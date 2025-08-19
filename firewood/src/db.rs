@@ -286,26 +286,12 @@ impl Db {
     ) -> Result<Proposal<'_>, api::Error> {
         let parent = self.manager.current_revision();
         let parallel_merkle = ParallelMerkle{};
-
         let immutable = parallel_merkle.create_proposal(&parent, batch).expect("TODO handle error");
         self.manager.add_proposal(immutable.clone());
         Ok(Proposal {
             nodestore: immutable,
             db: self,
         })        
-
-        /* 
-        let proposal = parallel_merkle.create_proposal(&parent, batch)?;
-        let mut merkle = Merkle::from(proposal);
-        let nodestore = merkle.into_inner();
-        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.try_into()?);
-        self.manager.add_proposal(immutable.clone());
-        Ok(Proposal {
-            nodestore: immutable,
-            db: self,
-        })
-        */
     }
 
     /// propose a new batch synchronously
@@ -739,6 +725,37 @@ mod test {
             .unwrap()
             .unwrap();
         assert_eq!(&*value, b"proposal_value");
+    }
+
+    #[tokio::test]
+    async fn test_propose_sync() {
+        const N: usize = 20;
+
+        let db = testdb().await;
+
+        // create N keys and values like (key0, value0)..(keyN, valueN)
+        let (keys, vals): (Vec<_>, Vec<_>) = (0..N)
+            .map(|i| {
+                (
+                    format!("key{i}").into_bytes(),
+                    Box::from(format!("value{i}").as_bytes()),
+                )
+            })
+            .unzip();
+
+        // create two batches, one with the first half of keys and values, and one with the last half keys and values
+        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+
+        //let proposal = db.propose_sync(kviter).unwrap();
+        let proposal = db.propose_parallel(kviter).unwrap();
+
+        // iterate over the keys and values again, checking that the values are in the correct proposal
+        let kviter = keys.iter().zip(vals.iter());
+
+        for (k, v) in kviter {
+            assert_eq!(&proposal.val(k).await.unwrap().unwrap(), v);
+        }
+        println!("!!!!!!!! All done");
     }
 
     /// Test that proposing on a proposal works as expected
