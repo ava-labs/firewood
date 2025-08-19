@@ -77,6 +77,17 @@ impl<'a, T> BorrowedSlice<'a, T> {
     }
 }
 
+impl<T> From<Box<[T]>> for BorrowedSlice<'static, T> {
+    fn from(value: Box<[T]>) -> Self {
+        let len = value.len();
+        Self {
+            ptr: Box::leak(value).as_ptr(),
+            len,
+            marker: std::marker::PhantomData,
+        }
+    }
+}
+
 impl<T> std::ops::Deref for BorrowedSlice<'_, T> {
     type Target = [T];
 

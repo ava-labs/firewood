@@ -323,6 +323,46 @@ func keyValueFromValue(v *C.struct_Value) ([]byte, []byte, error) {
 	return nil, nil, errBadValue
 }
 
+func kvPairsFromC(bkv *C.BorrowedKeyValuePairs) ([][]byte, [][]byte, error) { // Pin the returned value to prevent it from being garbage collected.
+	defer runtime.KeepAlive(bkv)
+
+	L := int(bkv.len)
+	base := unsafe.Slice((*C.KeyValuePair)(bkv.ptr), L)
+	keys := make([][]byte, L)
+	values := make([][]byte, L)
+
+	for i := 0; i < L; i++ {
+		b := (C.KeyValuePair)(base[i])
+		keyB := C.GoBytes(unsafe.Pointer(b.key.ptr), C.int(b.key.len))
+		valB := C.GoBytes(unsafe.Pointer(b.value.ptr), C.int(b.value.len))
+		keys[i] = keyB
+		values[i] = valB
+	}
+
+	return keys, values, nil
+}
+
+func kvPairsFromC2(bkv *C.BorrowedKeyValuePairs) ([][]byte, [][]byte, error) { // Pin the returned value to prevent it from being garbage collected.
+	defer runtime.KeepAlive(bkv)
+
+	L := int(bkv.len)
+	base := unsafe.Slice((*C.KeyValuePair)(bkv.ptr), L)
+	keys := make([][]byte, L)
+	values := make([][]byte, L)
+
+	for i := 0; i < L; i++ {
+		b := (C.KeyValuePair)(base[i])
+		keyB := unsafe.Slice((*byte)(b.key.ptr), C.int(b.key.len))
+		valB := unsafe.Slice((*byte)(b.value.ptr), C.int(b.value.len))
+		//keyB := C.GoBytes(unsafe.Pointer(b.key.ptr), C.int(b.key.len))
+		//valB := C.GoBytes(unsafe.Pointer(b.value.ptr), C.int(b.value.len))
+		keys[i] = keyB
+		values[i] = valB
+	}
+
+	return keys, values, nil
+}
+
 func databaseFromResult(result *C.struct_DatabaseCreationResult) (*C.DatabaseHandle, error) {
 	if result == nil {
 		return nil, errNilStruct

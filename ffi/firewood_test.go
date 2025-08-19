@@ -1450,7 +1450,7 @@ func BenchmarkIteratorNextN_Medium(b *testing.B) {
 func BenchmarkIteratorNextN_Large(b *testing.B) {
 	db := newTestDatabase(b)
 	N := 100000
-	batchSize := 100000
+	batchSizes := []int{100, 1000, 10000}
 
 	keys, vals := kvForTest(N)
 	root, err := db.Update(keys, vals)
@@ -1458,41 +1458,97 @@ func BenchmarkIteratorNextN_Large(b *testing.B) {
 		b.Fatal(err)
 	}
 
-	b.Run("NextN", func(b *testing.B) {
-		for b.Loop() {
-			iter, err := db.IterOnRoot(root, nil)
-			if err != nil {
-				b.Fatal(err)
-			}
-			for {
-				k, _, err := iter.NextN(batchSize)
+	for _, batchSize := range batchSizes {
+		b.Run(fmt.Sprintf("NextN-%d", batchSize), func(b *testing.B) {
+			for b.Loop() {
+				iter, err := db.IterOnRoot(root, nil)
 				if err != nil {
 					b.Fatal(err)
 				}
-				if len(k) == 0 {
-					break
+				for {
+					k, _, err := iter.NextN(batchSize)
+					if err != nil {
+						b.Fatal(err)
+					}
+					if len(k) == 0 {
+						break
+					}
 				}
 			}
-		}
-	})
+		})
 
-	b.Run("NextNFast", func(b *testing.B) {
-		for b.Loop() {
-			iter, err := db.IterOnRoot(root, nil)
-			if err != nil {
-				b.Fatal(err)
-			}
-			for {
-				k, _, err := iter.NextNFast(batchSize)
+		b.Run(fmt.Sprintf("NextNFast-%d", batchSize), func(b *testing.B) {
+			for b.Loop() {
+				iter, err := db.IterOnRoot(root, nil)
 				if err != nil {
 					b.Fatal(err)
 				}
-				if len(k) == 0 {
-					break
+				for {
+					k, _, err := iter.NextNFast(batchSize)
+					if err != nil {
+						b.Fatal(err)
+					}
+					if len(k) == 0 {
+						break
+					}
 				}
 			}
-		}
-	})
+		})
+
+		b.Run(fmt.Sprintf("NextNZero-%d", batchSize), func(b *testing.B) {
+			for b.Loop() {
+				iter, err := db.IterOnRoot(root, nil)
+				if err != nil {
+					b.Fatal(err)
+				}
+				for {
+					k, _, err := iter.NextNZero(batchSize)
+					if err != nil {
+						b.Fatal(err)
+					}
+					if len(k) == 0 {
+						break
+					}
+				}
+			}
+		})
+
+		b.Run(fmt.Sprintf("NextNZero2-%d", batchSize), func(b *testing.B) {
+			for b.Loop() {
+				iter, err := db.IterOnRoot(root, nil)
+				if err != nil {
+					b.Fatal(err)
+				}
+				for {
+					k, _, err := iter.NextNZero2(batchSize)
+					if err != nil {
+						b.Fatal(err)
+					}
+					if len(k) == 0 {
+						break
+					}
+				}
+			}
+		})
+
+		b.Run(fmt.Sprintf("NextNBuf-%d", batchSize), func(b *testing.B) {
+			for b.Loop() {
+				iter, err := db.IterOnRoot(root, nil)
+				if err != nil {
+					b.Fatal(err)
+				}
+				for {
+					k, _, err := iter.NextNBuf(batchSize)
+					if err != nil {
+						b.Fatal(err)
+					}
+					if len(k) == 0 {
+						break
+					}
+				}
+			}
+		})
+	}
 }
 
 // Benchmark memory allocations for NextN vs NextNFast
@@ -1548,4 +1604,80 @@ func BenchmarkIteratorNextN_Allocations(b *testing.B) {
 			}
 		}
 	})
+}
+
+// Tests batched iteration via NextNFast
+func TestIterNextNZero(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert 100 key-value pairs.
+	keys, vals := kvForTest(100)
+	root, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	// Create three iterators
+	itFast, err := db.IterOnRoot(root, nil)
+	r.NoError(err)
+	itSingle, err := db.IterOnRoot(root, nil)
+	r.NoError(err)
+
+	// Fetch using NextNFast in batches of 25
+	fastK, fastV, err := itFast.NextNZero(140)
+	r.NoError(err)
+	vv, xx, err := itFast.NextNZero(140)
+	t.Log(vv, xx, err)
+	r.NoError(err)
+
+	// Fetch using Next one-by-one
+	var singleK [][]byte
+	var singleV [][]byte
+	for itSingle.Next() {
+		singleK = append(singleK, itSingle.Key())
+		singleV = append(singleV, itSingle.Value())
+	}
+	r.NoError(itSingle.Err())
+
+	// All methods should return the same data
+	r.Equal(singleK, fastK, "NextNFast should return same keys as Next")
+	r.Equal(singleV, fastV, "NextNFast should return same values as Next")
+}
+
+// Tests batched iteration via NextNFast
+func TestIterNextNBuf(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert 100 key-value pairs.
+	keys, vals := kvForTest(100)
+	root, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	// Create three iterators
+	itFast, err := db.IterOnRoot(root, nil)
+	r.NoError(err)
+	itSingle, err := db.IterOnRoot(root, nil)
+	r.NoError(err)
+
+	// Fetch using NextNFast in batches of 25
+	fastK, fastV, err := itFast.NextNBuf(140)
+	r.NoError(err)
+	vv, xx, err := itFast.NextNZero(140)
+	t.Log(vv, xx, err)
+	r.NoError(err)
+
+	// Fetch using Next one-by-one
+	var singleK [][]byte
+	var singleV [][]byte
+	for itSingle.Next() {
+		singleK = append(singleK, itSingle.Key())
+		singleV = append(singleV, itSingle.Value())
+	}
+	r.NoError(itSingle.Err())
+
+	// All methods should return the same data
+	t.Log(singleV)
+	t.Log(fastV)
+	r.Equal(singleK, fastK, "NextNFast should return same keys as Next")
+	r.Equal(singleV, fastV, "NextNFast should return same values as Next")
 }

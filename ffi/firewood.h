@@ -424,6 +424,11 @@ struct Value fwd_iter_next(const struct DatabaseHandle *db, IteratorId it);
  */
 struct Value fwd_iter_next_n(const struct DatabaseHandle *db, IteratorId it, size_t n);
 
+struct Value fwd_iter_next_n_buf(const struct DatabaseHandle *db,
+                                 IteratorId it,
+                                 size_t n,
+                                 BorrowedBytes buffer);
+
 /**
  * Retrieves up to `n` items from the iterator using a pre-allocated memory pool
  * for zero-copy/minimal-copy performance.
@@ -455,6 +460,13 @@ struct Value fwd_iter_next_n_fast(const struct DatabaseHandle *db,
                                   IteratorId it,
                                   size_t n,
                                   BorrowedBytes buffer);
+
+/**
+ * test stuff
+ */
+BorrowedKeyValuePairs fwd_iter_next_n_zero(const struct DatabaseHandle *db,
+                                           IteratorId it,
+                                           size_t n);
 
 /**
  * Return an iterator on proposal optionally starting from a key

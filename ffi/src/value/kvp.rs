@@ -52,3 +52,13 @@ impl<'a> api::KeyValuePair for &KeyValuePair<'a> {
         (*self).into_batch()
     }
 }
+
+impl From<(Box<[u8]>, Box<[u8]>)> for KeyValuePair<'static> {
+    fn from(kvx: (Box<[u8]>, Box<[u8]>)) -> Self {
+        let (k, v) = kvx;
+        Self {
+            key: k.into(),
+            value: v.into(),
+        }
+    }
+}

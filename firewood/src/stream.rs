@@ -434,6 +434,37 @@ impl<'a, T: TrieReader> MerkleKeyValueStream<'a, T> {
             }
         }
     }
+    pub fn next_sync_a(&mut self, buf: &mut [u8]) -> Option<Result<(Key, usize), Error>> {
+        loop {
+            match &mut self.state {
+                MerkleKeyValueStreamState::_Uninitialized(key) => {
+                    let iter = MerkleNodeStream::new(self.merkle.clone(), key.clone());
+                    self.state = MerkleKeyValueStreamState::Initialized { node_iter: iter };
+                    // Continue to the next node.
+                }
+                MerkleKeyValueStreamState::Initialized { node_iter } => {
+                    match Iterator::next(node_iter) {
+                        Some(Ok((key, node))) => match &*node {
+                            Node::Branch(branch) => {
+                                if let Some(value) = branch.value.as_ref() {
+                                    buf.copy_from_slice(&*value);
+                                    return Some(Ok((key, value.len())));
+                                }
+                                // This node doesn't have a value to return.
+                                // Continue to the next node.
+                            }
+                            Node::Leaf(leaf) => {
+                                buf.copy_from_slice(&*leaf.value);
+                                return Some(Ok((key, leaf.value.len())));
+                            }
+                        },
+                        Some(Err(e)) => return Some(Err(e.into())),
+                        None => return None,
+                    }
+                }
+            }
+        }
+    }
 }
 
 impl<T: TrieReader> Stream for MerkleKeyValueStream<'_, T> {

@@ -43,7 +43,9 @@ pub use crate::value::*;
 use firewood::merkle;
 use firewood::stream::MerkleKeyValueStream;
 use firewood::v2::api::{HashKey, KeyValuePairIter};
-use firewood_storage::{Committed, FileBacked, ImmutableProposal, NodeStore};
+use firewood_storage::{
+    Committed, FileBacked, ImmutableProposal, NodeStore, Parentable, ReadableStorage,
+};
 use metrics::counter;
 
 #[cfg(unix)]
@@ -81,6 +83,7 @@ pub struct DatabaseHandle<'p> {
     // Order of fields are important, streams must be dropped before proposals, and proposals
     // should be dropped before database handle to ensure lifetime orders
     streams: RwLock<HashMap<IteratorId, MerkleIterator<'p>>>,
+    raw_iterators: RwLock<HashMap<IteratorId, Box<dyn DebuggableIterator>>>,
     /// Maps proposal IDs to the iterators that depend on them
     proposal_iterators: RwLock<HashMap<ProposalId, Vec<IteratorId>>>,
     /// List of outstanding proposals, by ID
@@ -90,6 +93,7 @@ pub struct DatabaseHandle<'p> {
     /// The database
     db: Db,
 }
+
 
 #[derive(Debug)]
 enum MerkleIterator<'v> {
@@ -120,6 +124,7 @@ impl From<Db> for DatabaseHandle<'_> {
             db,
             proposals: RwLock::new(HashMap::new()),
             streams: RwLock::new(HashMap::new()),
+            raw_iterators: RwLock::new(HashMap::new()),
             proposal_iterators: RwLock::new(HashMap::new()),
             cached_view: Mutex::new(None),
         }
@@ -382,10 +387,7 @@ fn iterator_next_n(
     let mut maybe_err: Option<String> = None;
 
     {
-        let mut guard = db
-            .streams
-            .write()
-            .map_err(|_| "stream lock is poisoned")?;
+        let mut guard = db.streams.write().map_err(|_| "stream lock is poisoned")?;
         let it = guard.get_mut(&iterator_id).ok_or("iterator not found")?;
 
         for _ in 0..n {
@@ -498,7 +500,7 @@ pub unsafe extern "C" fn fwd_iter_next_n_fast(
     match result {
         Ok(bytes_written) => Value {
             len: bytes_written,
-            data: None,  // Signal that data was written to the provided buffer
+            data: None, // Signal that data was written to the provided buffer
         },
         Err(e) => e.into(),
     }
@@ -517,15 +519,14 @@ fn iterator_next_n_fast(
     }
 
     let db = db.ok_or("db should be non-null")?;
-    
+
     // Get mutable slice from the buffer - this is safe because we have exclusive access
-    let output = unsafe {
-        std::slice::from_raw_parts_mut(buffer.as_ptr() as *mut u8, buffer.len())
-    };
+    let output =
+        unsafe { std::slice::from_raw_parts_mut(buffer.as_ptr() as *mut u8, buffer.len()) };
 
     let mut pos = 0;
     let mut count = 0u64;
-    
+
     // Reserve space for count at the beginning
     if output.len() < 8 {
         return Err("buffer too small for count header".to_string());
@@ -533,36 +534,33 @@ fn iterator_next_n_fast(
     pos += 8; // We'll write the count at the end
 
     {
-        let mut guard = db
-            .streams
-            .write()
-            .map_err(|_| "stream lock is poisoned")?;
+        let mut guard = db.streams.write().map_err(|_| "stream lock is poisoned")?;
         let it = guard.get_mut(&iterator_id).ok_or("iterator not found")?;
 
         for _ in 0..n {
             match it.next() {
                 Some(Ok((key, value))) => {
                     let kv_len = 8 + key.len() + value.len();
-                    
+
                     // Check if we have enough space
                     if pos + 8 + kv_len > output.len() {
                         break; // Stop if buffer is full
                     }
-                    
+
                     // Write kv_len
-                    output[pos..pos+8].copy_from_slice(&(kv_len as u64).to_le_bytes());
+                    output[pos..pos + 8].copy_from_slice(&(kv_len as u64).to_le_bytes());
                     pos += 8;
-                    
+
                     // Write key length and key data
-                    output[pos..pos+8].copy_from_slice(&(key.len() as u64).to_le_bytes());
+                    output[pos..pos + 8].copy_from_slice(&(key.len() as u64).to_le_bytes());
                     pos += 8;
-                    output[pos..pos+key.len()].copy_from_slice(&key);
+                    output[pos..pos + key.len()].copy_from_slice(&key);
                     pos += key.len();
-                    
+
                     // Write value data
-                    output[pos..pos+value.len()].copy_from_slice(&value);
+                    output[pos..pos + value.len()].copy_from_slice(&value);
                     pos += value.len();
-                    
+
                     count += 1;
                 }
                 Some(Err(e)) => {
@@ -572,10 +570,148 @@ fn iterator_next_n_fast(
             }
         }
     }
-    
+
     // Write the count at the beginning
     output[0..8].copy_from_slice(&count.to_le_bytes());
-    
+
+    Ok(pos)
+}
+
+/// test stuff
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_iter_next_n_zero(
+    db: Option<&DatabaseHandle<'_>>,
+    it: IteratorId,
+    n: usize,
+) -> BorrowedKeyValuePairs<'static> {
+    let result = iterator_next_n_zero(db, it, n);
+    result.unwrap()
+    // result.unwrap_or_else(Into::into)
+}
+
+/// Internal implementation of fast iterator that writes directly to provided buffer
+#[doc(hidden)]
+fn iterator_next_n_zero(
+    db: Option<&DatabaseHandle<'_>>,
+    iterator_id: IteratorId,
+    n: usize,
+) -> Result<BorrowedKeyValuePairs<'static>, String> {
+    if n == 0 {
+        return Ok(BorrowedKeyValuePairs::from_slice(&[]));
+    }
+
+    let db = db.ok_or("db should be non-null")?;
+
+    let mut items = Vec::<KeyValuePair<'static>>::new();
+    {
+        let mut guard = db.streams.write().map_err(|_| "stream lock is poisoned")?;
+        let it = guard.get_mut(&iterator_id).ok_or("iterator not found")?;
+
+        for _ in 0..n {
+            match it.next() {
+                Some(Ok(pair)) => {
+                    items.push(pair.into());
+                }
+                Some(Err(e)) => {
+                    return Err(e);
+                }
+                None => break,
+            }
+        }
+    }
+    let boxed = items.into_boxed_slice();
+    Ok(boxed.into())
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_iter_next_n_buf(
+    db: Option<&DatabaseHandle<'_>>,
+    it: IteratorId,
+    n: usize,
+    buffer: BorrowedBytes<'_>,
+) -> Value {
+    let result = iterator_next_n_buf(db, it, n, &buffer);
+    match result {
+        Ok(bytes_written) => Value {
+            len: bytes_written,
+            data: None, // Signal that data was written to the provided buffer
+        },
+        Err(e) => e.into(),
+    }
+}
+
+/// Internal implementation of fast iterator that writes directly to provided buffer
+#[doc(hidden)]
+fn iterator_next_n_buf(
+    db: Option<&DatabaseHandle<'_>>,
+    iterator_id: IteratorId,
+    n: usize,
+    buffer: &[u8],
+) -> Result<usize, String> {
+    if n == 0 {
+        return Ok(0);
+    }
+
+    let db = db.ok_or("db should be non-null")?;
+
+    // Get mutable slice from the buffer - this is safe because we have exclusive access
+    let output =
+        unsafe { std::slice::from_raw_parts_mut(buffer.as_ptr() as *mut u8, buffer.len()) };
+
+    let mut pos = 0;
+    let mut count = 0u64;
+
+    let count_size = 8;
+    let index_size = 8 * 4 * n;
+
+    if output.len() < (count_size + index_size) {
+        return Err("buffer too small for header".to_string());
+    }
+    pos += count_size + index_size; // We'll write the count at the end
+
+    {
+        let mut guard = db.streams.write().map_err(|_| "stream lock is poisoned")?;
+        let it = guard.get_mut(&iterator_id).ok_or("iterator not found")?;
+
+        for _ in 0..n {
+            match it.next() {
+                Some(Ok((key, value))) => {
+                    let kv_len = key.len() + value.len();
+
+                    // Check if we have enough space
+                    if pos + kv_len > output.len() {
+                        break; // Stop if buffer is full
+                    }
+
+                    let mut meta_pos = 8 + (4 * 8) * count as usize;
+
+                    output[pos..pos + key.len()].copy_from_slice(&key);
+                    output[meta_pos..meta_pos + 8].copy_from_slice(&(pos as u64).to_le_bytes());
+                    meta_pos += 8;
+                    output[meta_pos..meta_pos + 8]
+                        .copy_from_slice(&(key.len() as u64).to_le_bytes());
+                    meta_pos += 8;
+                    pos += key.len();
+                    output[pos..pos + value.len()].copy_from_slice(&value);
+                    output[meta_pos..meta_pos + 8].copy_from_slice(&(pos as u64).to_le_bytes());
+                    meta_pos += 8;
+                    output[meta_pos..meta_pos + 8]
+                        .copy_from_slice(&(value.len() as u64).to_le_bytes());
+                    pos += value.len();
+
+                    count += 1;
+                }
+                Some(Err(e)) => {
+                    return Err(e);
+                }
+                None => break,
+            }
+        }
+    }
+
+    // Write the count at the beginning
+    output[0..8].copy_from_slice(&count.to_le_bytes());
+
     Ok(pos)
 }
 
