@@ -547,10 +547,12 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         for error in check_report.errors {
             match error.parent() {
                 Some(StoredAreaParent::TrieNode(_)) => {
-                    todo!()
+                    warn!("Fix for trie node error not yet implemented");
+                    unfixable.push((error, None));
                 }
                 Some(StoredAreaParent::FreeList(_)) => {
-                    todo!()
+                    warn!("Fix for free list error not yet implemented");
+                    unfixable.push((error, None));
                 }
                 None => {
                     if let CheckerError::AreaLeaks(ranges) = &error {
@@ -558,7 +560,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                             let _leaked_areas = self.split_all_leaked_ranges(ranges, None);
                             // TODO: add _leaked_areas to the free list
                         }
-                        fixed.push(error);
+                        unfixable.push((error, None));
                     } else {
                         unfixable.push((error, None));
                     }
