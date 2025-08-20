@@ -105,6 +105,13 @@ func New(filePath string, conf *Config) (*Database, error) {
 		return nil, fmt.Errorf("%T.FreeListCacheEntries must be >= 1", conf)
 	}
 
+	if err := StartLogs(&LogConfig{
+		Path:        "/mnt/exp/firewood.log",
+		FilterLevel: "trace",
+	}); err != nil {
+		return nil, err
+	}
+
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
