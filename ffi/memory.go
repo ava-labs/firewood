@@ -103,6 +103,110 @@ func newKeyValuePairs(keys, vals [][]byte, pinner Pinner) (C.BorrowedKeyValuePai
 	return newBorrowedKeyValuePairs(pairs, pinner), nil
 }
 
+// RustOwnedBytes is a wrapper around C.OwnedBytes that provides a Go interface
+// for Rust-owned byte slices.
+type RustOwnedBytes struct {
+	owned C.OwnedBytes
+}
+
+// Free releases the memory associated with the RustOwnedBytes.
+//
+// It is safe to call this method multiple times, and it will do nothing if the
+// RustOwnedBytes is nil or has already been freed.
+func (b *RustOwnedBytes) Free() error {
+	if b == nil {
+		return nil
+	}
+
+	this := *b               // copy so we can reset before freeing,
+	b.owned = C.OwnedBytes{} // reset to clear the pointer
+
+	if this.owned.ptr == nil {
+		return nil
+	}
+
+	// TODO: a check for panic will be inserted here
+
+	return nil
+}
+
+// BorrowedBytes returns the underlying byte slice. It may return nil if the
+// data has already been freed was never set.
+//
+// The returned slice is valid only as long as the RustOwnedBytes is valid.
+//
+// It does not copy the data; however, the slice is valid only as long as the
+// RustOwnedBytes is valid. If the RustOwnedBytes is freed, the slice will
+// become invalid.
+func (b *RustOwnedBytes) BorrowedBytes() []byte {
+	if b == nil {
+		return nil
+	}
+
+	if b.owned.ptr == nil {
+		return nil
+	}
+
+	return unsafe.Slice((*byte)(b.owned.ptr), b.owned.len)
+}
+
+// intoError converts the RustOwnedBytes into an error. This is used for methods
+// that return a RustOwnedBytes as an error type.
+//
+// If the RustOwnedBytes is nil or has already been freed, it returns nil.
+// Otherwise, the bytes will be copied into Go memory and converted into an
+// error. The original RustOwnedBytes will be freed after this operation.
+func (b *RustOwnedBytes) intoError() error {
+	if b == nil {
+		return nil
+	}
+
+	if b.owned.ptr == nil {
+		return nil
+	}
+
+	// Convert the owned bytes to a string and create an error from it.
+	errMsg := string(b.CopiedBytes())
+
+	if err := b.Free(); err != nil {
+		return fmt.Errorf("failed to free owned bytes: %w while handling original error %s", err, errMsg)
+	}
+
+	return errors.New(errMsg)
+}
+
+// CopiedBytes returns a copy of the underlying byte slice. It may return nil if the
+// data has already been freed or was never set.
+//
+// The returned slice is a copy of the data and is valid independently of the
+// RustOwnedBytes. It is safe to use after the RustOwnedBytes is freed and will
+// be freed by the Go garbage collector.
+func (b *RustOwnedBytes) CopiedBytes() []byte {
+	if b == nil {
+		return nil
+	}
+
+	if b.owned.ptr == nil {
+		return nil
+	}
+
+	return C.GoBytes(unsafe.Pointer(b.owned.ptr), C.int(b.owned.len))
+}
+
+// fromOwnedBytes creates a RustOwnedBytes from a C.OwnedBytes.
+//
+// The caller is responsible for calling Free() on the returned RustOwnedBytes
+// when it is no longer needed otherwise memory will leak.
+func fromOwnedBytes(owned C.OwnedBytes) *RustOwnedBytes {
+	if owned.ptr == nil {
+		return nil
+	}
+
+	rustBytes := &RustOwnedBytes{owned: owned}
+
+	return rustBytes
+}
+
 // hashAndIDFromValue converts the cgo `Value` payload into:
 //
 //	case | data    | len   | meaning
