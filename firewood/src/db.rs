@@ -10,14 +10,14 @@ use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
-    self, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair, KeyValuePairIter,
-    OptionalHashKeyExt,
+    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair,
+    KeyValuePairIter, OptionalHashKeyExt,
 };
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore,
+    ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieReader,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
@@ -35,8 +35,6 @@ pub enum DbError {
     FileIo(#[from] FileIoError),
 }
 
-type HistoricalRev = NodeStore<Committed, FileBacked>;
-
 /// Metrics for the database.
 /// TODO: Add more metrics
 pub struct DbMetrics {
@@ -49,50 +47,53 @@ impl std::fmt::Debug for DbMetrics {
     }
 }
 
-/// A synchronous view of the database.
-pub trait DbViewSync {
-    /// find a value synchronously
-    fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Value>, DbError>;
-}
+// /// A synchronous view of the database.
+// pub trait DbViewSync {
+//     /// find a value synchronously
+//     fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Value>, DbError>;
+// }
 
-/// A synchronous view of the database with raw byte keys (object-safe version).
-pub trait DbViewSyncBytes: std::fmt::Debug + Send + Sync {
-    /// find a value synchronously using raw bytes
-    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError>;
-}
+// /// A synchronous view of the database with raw byte keys (object-safe version).
+// pub trait DbViewSyncBytes: std::fmt::Debug + Send + Sync {
+//     /// find a value synchronously using raw bytes
+//     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError>;
+// }
 
-// Provide blanket implementation for DbViewSync using DbViewSyncBytes
-impl<T: DbViewSyncBytes> DbViewSync for T {
-    fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Value>, DbError> {
-        self.val_sync_bytes(key.as_ref())
-    }
-}
+// // Provide blanket implementation for DbViewSync using DbViewSyncBytes
+// impl<T: DbViewSyncBytes> DbViewSync for T {
+//     fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Value>, DbError> {
+//         self.val_sync_bytes(key.as_ref())
+//     }
+// }
 
-impl DbViewSyncBytes for Arc<HistoricalRev> {
-    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
-        let merkle = Merkle::from(self);
-        let value = merkle.get_value(key)?;
-        Ok(value)
-    }
-}
+// impl DbViewSyncBytes for Arc<HistoricalRev> {
+//     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
+//         let merkle = Merkle::from(self);
+//         let value = merkle.get_value(key)?;
+//         Ok(value)
+//     }
+// }
 
-impl DbViewSyncBytes for Proposal<'_> {
-    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
-        let merkle = Merkle::from(self.nodestore.clone());
-        let value = merkle.get_value(key)?;
-        Ok(value)
-    }
-}
+// impl DbViewSyncBytes for Proposal<'_> {
+//     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
+//         let merkle = Merkle::from(self.nodestore.clone());
+//         let value = merkle.get_value(key)?;
+//         Ok(value)
+//     }
+// }
 
-impl DbViewSyncBytes for Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> {
-    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
-        let merkle = Merkle::from(self.clone());
-        let value = merkle.get_value(key)?;
-        Ok(value)
-    }
-}
+// impl DbViewSyncBytes for Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> {
+//     fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
+//         let merkle = Merkle::from(self.clone());
+//         let value = merkle.get_value(key)?;
+//         Ok(value)
+//     }
+// }
 
-impl api::DbView for HistoricalRev {
+impl<P: Parentable, S: ReadableStorage> api::DbView for NodeStore<P, S>
+where
+    NodeStore<P, S>: TrieReader,
+{
     type Iter<'view>
         = MerkleKeyValueIter<'view, Self>
     where
@@ -236,9 +237,8 @@ impl Db {
     }
 
     /// Synchronously get a view, either committed or proposed
-    pub fn view_sync(&self, root_hash: HashKey) -> Result<Box<dyn DbViewSyncBytes>, api::Error> {
-        let nodestore = self.manager.view(root_hash)?;
-        Ok(nodestore)
+    pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, api::Error> {
+        self.manager.view(root_hash).map_err(Into::into)
     }
 
     /// Dump the Trie of the latest revision.
@@ -614,19 +614,13 @@ mod test {
         let proposal_hash = proposal.root_hash().unwrap().unwrap();
 
         // Test that view_sync can find the historical revision
-        let historical_view = db.view_sync(historical_hash).unwrap();
-        let value = historical_view
-            .val_sync_bytes(b"historical_key")
-            .unwrap()
-            .unwrap();
+        let historical_view = db.view(historical_hash).unwrap();
+        let value = historical_view.val(b"historical_key").unwrap().unwrap();
         assert_eq!(&*value, b"historical_value");
 
         // Test that view_sync can find the proposal
-        let proposal_view = db.view_sync(proposal_hash).unwrap();
-        let value = proposal_view
-            .val_sync_bytes(b"proposal_key")
-            .unwrap()
-            .unwrap();
+        let proposal_view = db.view(proposal_hash).unwrap();
+        let value = proposal_view.val(b"proposal_key").unwrap().unwrap();
         assert_eq!(&*value, b"proposal_value");
     }
 
@@ -828,12 +822,12 @@ mod test {
                     }];
                     let proposal = db.propose(batch).unwrap();
                     let last_hash = proposal.root_hash().unwrap().unwrap();
-                    let view = db.view_sync(last_hash).unwrap();
+                    let view = db.view(last_hash).unwrap();
 
                     tx.send(proposal).unwrap();
 
                     let key = [id as u8; 32];
-                    let value = view.val_sync_bytes(&key).unwrap().unwrap();
+                    let value = view.val(&key).unwrap().unwrap();
                     assert_eq!(&*value, &[id as u8; 8]);
                     result_rx.recv().unwrap().unwrap();
                 }

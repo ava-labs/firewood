@@ -305,8 +305,11 @@ pub trait DbView {
 /// A boxed iterator over key/value pairs.
 pub type BoxKeyValueIter<'view> = Box<dyn Iterator<Item = Result<(Key, Value), Error>> + 'view>;
 
+/// A dynamic dyspatch version of [`DbView`] that can be shared.
+pub type ArcDynDbView = Arc<dyn DynDbView + Send + Sync + 'static>;
+
 /// A dyn-safe version of [`DbView`].
-pub trait DynDbView: Send + Sync + 'static {
+pub trait DynDbView: Debug + Send + Sync + 'static {
     /// Get the root hash for the current [`DynDbView`]
     ///
     /// # Note
@@ -368,7 +371,7 @@ pub trait DynDbView: Send + Sync + 'static {
     /// Erases the concrete type and returns an [`Arc`] wrapped version of this trait.
     ///
     /// This also serves as a compile-time assertion that [`DynDbView`] is dyn-safe.
-    fn boxed(self) -> Arc<dyn DynDbView + Send + Sync + 'static>
+    fn boxed(self) -> ArcDynDbView
     where
         Self: Sized,
     {
@@ -376,7 +379,7 @@ pub trait DynDbView: Send + Sync + 'static {
     }
 }
 
-impl<T: DbView + Send + Sync + 'static> DynDbView for T
+impl<T: Debug + DbView + Send + Sync + 'static> DynDbView for T
 where
     for<'a> T::Iter<'a>: Sized,
 {
