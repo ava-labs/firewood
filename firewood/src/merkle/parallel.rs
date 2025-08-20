@@ -277,6 +277,22 @@ impl ParallelMerkle {
         while let Ok(response) = response_channel.1.recv() {
             match response {
                 Response::Root(new_root) => {
+                    // Check if the Merkle trie is malformed. If it is, apply transform to create
+                    // a valid Merkle trie.
+                    //
+                    // If all of the children have been removed, then
+                    //     Convert the root into a leaf if it has a value (this should indicate that a 
+                    //     value was inserted for the empty key).
+                    //     Otherwise, delete the empty root node
+                    // If more than one child remains, then do nothing
+                    // If only one child remains and the root has a value, then do nothing
+                    // If only one child remains and the root doesn’t have a value, then deleted the root, 
+                    // use the child node as the new root, and update the partial path of the new root to 
+                    // include its previous child index
+
+
+
+
                     //let a = new_root.unwrap();
                     *proposal.mut_root() = new_root;
                 }
