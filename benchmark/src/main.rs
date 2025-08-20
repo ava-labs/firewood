@@ -288,5 +288,9 @@ fn spawn_prometheus_listener(port: u16) -> Result<PrometheusHandle, Box<dyn Erro
         .name("metrics-exporter-prometheus".to_owned())
         .spawn(move || rt.block_on(exporter))?;
 
-    Ok(recorder.handle())
+    let handle = recorder.handle();
+
+    metrics::set_global_recorder(recorder)?;
+
+    Ok(handle)
 }
