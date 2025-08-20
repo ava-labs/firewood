@@ -1,9 +1,6 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-// Package ffi provides a Go wrapper around the [Firewood] database.
-//
-// [Firewood]: https://github.com/ava-labs/firewood
 package ffi
 
 // #include <stdlib.h>
@@ -65,8 +62,8 @@ func (p *IteratorBufferPool) Free() {
 	// and free them explicitly. For now, they'll be freed when process exits.
 }
 
-// Default buffer pool with 1MB buffers
-var defaultBufferPool = NewIteratorBufferPool(1024 * 1024 * 100)
+// Default buffer pool with 24MB buffers
+var defaultBufferPool = NewIteratorBufferPool(1024 * 1024 * 24)
 
 type DbIterator struct {
 	dbHandle   *C.DatabaseHandle
@@ -196,13 +193,13 @@ func (it *DbIterator) NextNFastWithPool(n int, pool *IteratorBufferPool) ([][]by
 	runtime.KeepAlive(poolBuf)
 
 	// Create BorrowedBytes struct for C
-	borrowedBytes := C.struct_BorrowedSlice_u8{
-		ptr: (*C.uint8_t)(poolBuf.ptr),
-		len: C.size_t(poolBuf.size),
-	}
+	//borrowedBytes := C.struct_BorrowedSlice_u8{
+	//	ptr: (*C.uint8_t)(poolBuf.ptr),
+	//	len: C.size_t(poolBuf.size),
+	//}
 
 	// Call the fast version that writes directly to our buffer
-	v := C.fwd_iter_next_n_fast(it.dbHandle, C.uint32_t(it.id), C.size_t(n), borrowedBytes)
+	v := C.fwd_iter_next_n_fast(it.dbHandle, C.uint32_t(it.id), C.size_t(n), (*C.uint8_t)(poolBuf.ptr), C.size_t(poolBuf.size))
 
 	// Check for errors
 	if v.data != nil {
@@ -271,26 +268,154 @@ func (it *DbIterator) NextNFastWithPool(n int, pool *IteratorBufferPool) ([][]by
 
 // NextNBuf returns up to n key-value pairs using a custom buffer pool.
 // The pool parameter allows you to provide your own buffer pool with custom sizes.
-func (it *DbIterator) NextNBuf(n int) ([][]byte, [][]byte, error) {
+func (it *DbIterator) NextNBuf(n int, par bool) ([][]byte, [][]byte, error) {
+	return it.NextNBufWithPool(n, par, defaultBufferPool)
+}
+
+func (it *DbIterator) NextNBufWithPool(n int, par bool, pool *IteratorBufferPool) ([][]byte, [][]byte, error) {
 	if n <= 0 {
 		return nil, nil, nil
 	}
 
 	// Get a buffer from the pool
-	poolBuf := defaultBufferPool.Get()
+	poolBuf := pool.Get()
+	//defer pool.Put(poolBuf) // Return to pool when done
+
+	// Call the C function
+	v := C.fwd_iter_next_n_buf(
+		it.dbHandle,
+		C.uint32_t(it.id),
+		C.size_t(n),
+		(*C.uint8_t)(poolBuf.ptr),
+		C.size_t(poolBuf.size),
+	)
+
+	// Check for errors
+	if v.data != nil {
+		defer C.fwd_free_value(&v)
+		return nil, nil, errorFromValue(&v)
+	}
+
+	bytesWritten := int(v.len)
+	if bytesWritten == 0 {
+		return nil, nil, nil // Iterator exhausted
+	}
+
+	// Create a single view of the buffer (avoid bounds checks)
+	buf := unsafe.Slice((*byte)(poolBuf.ptr), bytesWritten)
+
+	if len(buf) < 8 {
+		return nil, nil, errBadValue
+	}
+
+	// Read count once
+	count := int(binary.LittleEndian.Uint64(buf[:8]))
+
+	// Pre-allocate with exact size
+	keys := make([][]byte, count)
+	vals := make([][]byte, count)
+
+	// For small counts, use sequential processing
+	if !par {
+		parseSequential(buf, keys, vals, count)
+	} else {
+		// For large counts, use parallel processing
+		parseParallel(buf, keys, vals, count)
+	}
+
+	return keys, vals, nil
+}
+
+// Sequential parsing - optimized for cache locality
+func parseSequential(buf []byte, keys, vals [][]byte, count int) {
+	// Process metadata in a single pass with better cache usage
+	// Metadata starts at offset 8, each entry is 32 bytes (4 * 8)
+	metadataPtr := unsafe.Pointer(&buf[8])
+
+	for i := 0; i < count; i++ {
+		// Direct memory access without bounds checks
+		metadata := (*[4]uint64)(unsafe.Add(metadataPtr, i*32))
+
+		keyOffset := metadata[0]
+		keyLen := metadata[1]
+		valueOffset := metadata[2]
+		valueLen := metadata[3]
+
+		// Create slices without copying
+		keys[i] = buf[keyOffset : keyOffset+keyLen : keyOffset+keyLen]
+		vals[i] = buf[valueOffset : valueOffset+valueLen : valueOffset+valueLen]
+	}
+}
+
+// Parallel parsing for large datasets
+func parseParallel(buf []byte, keys, vals [][]byte, count int) {
+	// Determine optimal worker count
+	numWorkers := runtime.NumCPU()
+	//if count < numWorkers*16 {
+	//	// Not worth parallelizing for small counts
+	//	parseSequential(buf, keys, vals, count)
+	//	return
+	//}
+
+	// Divide work among workers
+	chunkSize := (count + numWorkers - 1) / numWorkers
+
+	var wg sync.WaitGroup
+	wg.Add(numWorkers)
+
+	for w := 0; w < numWorkers; w++ {
+		start := w * chunkSize
+		end := start + chunkSize
+		if end > count {
+			end = count
+		}
+
+		go func(start, end int) {
+			defer wg.Done()
+
+			// Each worker processes its chunk
+			metadataPtr := unsafe.Pointer(&buf[8+start*32])
+
+			for i := start; i < end; i++ {
+				idx := i - start
+				metadata := (*[4]uint64)(unsafe.Add(metadataPtr, idx*32))
+
+				keyOffset := metadata[0]
+				keyLen := metadata[1]
+				valueOffset := metadata[2]
+				valueLen := metadata[3]
+
+				keys[i] = buf[keyOffset : keyOffset+keyLen : keyOffset+keyLen]
+				vals[i] = buf[valueOffset : valueOffset+valueLen : valueOffset+valueLen]
+			}
+		}(start, end)
+	}
+
+	wg.Wait()
+}
+
+// NextNBufWithPoolX returns up to n key-value pairs using a custom buffer pool.
+// The pool parameter allows you to provide your own buffer pool with custom sizes.
+func (it *DbIterator) NextNBufWithPoolX(n int, pool *IteratorBufferPool) ([][]byte, [][]byte, error) {
+	if n <= 0 {
+		return nil, nil, nil
+	}
+
+	// Get a buffer from the pool
+	poolBuf := pool.Get()
 	//defer pool.Put(poolBuf)
 
 	// Pin the buffer memory to prevent GC from moving it
 	runtime.KeepAlive(poolBuf)
 
 	// Create BorrowedBytes struct for C
-	borrowedBytes := C.struct_BorrowedSlice_u8{
-		ptr: (*C.uint8_t)(poolBuf.ptr),
-		len: C.size_t(poolBuf.size),
-	}
+	//borrowedBytes := C.struct_BorrowedSlice_u8{
+	//	ptr: (*C.uint8_t)(poolBuf.ptr),
+	//	len: C.size_t(poolBuf.size),
+	//}
 
 	// Call the fast version that writes directly to our buffer
-	v := C.fwd_iter_next_n_buf(it.dbHandle, C.uint32_t(it.id), C.size_t(n), borrowedBytes)
+	v := C.fwd_iter_next_n_buf(it.dbHandle, C.uint32_t(it.id), C.size_t(n), (*C.uint8_t)(poolBuf.ptr), C.size_t(poolBuf.size))
 
 	// Check for errors
 	if v.data != nil {
@@ -357,4 +482,18 @@ func (it *DbIterator) NextNZero2(n int) ([][]byte, [][]byte, error) {
 	v := C.fwd_iter_next_n_zero(it.dbHandle, C.uint32_t(it.id), C.size_t(n))
 
 	return kvPairsFromC2(&v)
+}
+
+func (it *DbIterator) NextNNoRet(n int) (uint32, error) {
+	if n <= 0 {
+		return 0, nil
+	}
+
+	// Call the fast version that writes directly to our buffer
+	v := C.fwd_iter_next_n_no_ret(it.dbHandle, C.uint32_t(it.id), C.size_t(n))
+	x, e := u32FromValue(&v)
+	if e != nil {
+		return 0, e
+	}
+	return x, nil
 }

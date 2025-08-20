@@ -427,7 +427,8 @@ struct Value fwd_iter_next_n(const struct DatabaseHandle *db, IteratorId it, siz
 struct Value fwd_iter_next_n_buf(const struct DatabaseHandle *db,
                                  IteratorId it,
                                  size_t n,
-                                 BorrowedBytes buffer);
+                                 uint8_t *buffer,
+                                 size_t buffer_size);
 
 /**
  * Retrieves up to `n` items from the iterator using a pre-allocated memory pool
@@ -459,7 +460,10 @@ struct Value fwd_iter_next_n_buf(const struct DatabaseHandle *db,
 struct Value fwd_iter_next_n_fast(const struct DatabaseHandle *db,
                                   IteratorId it,
                                   size_t n,
-                                  BorrowedBytes buffer);
+                                  uint8_t *buffer,
+                                  size_t buffer_size);
+
+struct Value fwd_iter_next_n_no_ret(const struct DatabaseHandle *db, IteratorId it, size_t n);
 
 /**
  * test stuff

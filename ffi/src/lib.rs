@@ -485,9 +485,10 @@ pub unsafe extern "C" fn fwd_iter_next_n_fast(
     db: Option<&DatabaseHandle<'_>>,
     it: IteratorId,
     n: usize,
-    buffer: BorrowedBytes<'_>,
+    buffer: *mut u8,
+    buffer_size: usize,
 ) -> Value {
-    let result = iterator_next_n_fast(db, it, n, &buffer);
+    let result = iterator_next_n_fast(db, it, n, buffer, buffer_size);
     match result {
         Ok(bytes_written) => Value {
             len: bytes_written,
@@ -503,7 +504,8 @@ fn iterator_next_n_fast(
     db: Option<&DatabaseHandle<'_>>,
     iterator_id: IteratorId,
     n: usize,
-    buffer: &[u8],
+    buffer: *mut u8,
+    buffer_size: usize,
 ) -> Result<usize, String> {
     if n == 0 {
         return Ok(0);
@@ -513,7 +515,7 @@ fn iterator_next_n_fast(
 
     // Get mutable slice from the buffer - this is safe because we have exclusive access
     let output =
-        unsafe { std::slice::from_raw_parts_mut(buffer.as_ptr() as *mut u8, buffer.len()) };
+        unsafe { std::slice::from_raw_parts_mut(buffer, buffer_size) };
 
     let mut pos = 0;
     let mut count = 0u64;
@@ -619,9 +621,10 @@ pub unsafe extern "C" fn fwd_iter_next_n_buf(
     db: Option<&DatabaseHandle<'_>>,
     it: IteratorId,
     n: usize,
-    buffer: BorrowedBytes<'_>,
+    buffer: *mut u8,
+    buffer_size: usize,
 ) -> Value {
-    let result = iterator_next_n_buf(db, it, n, &buffer);
+    let result = iterator_next_n_buf(db, it, n, buffer, buffer_size);
     match result {
         Ok(bytes_written) => Value {
             len: bytes_written,
@@ -637,7 +640,8 @@ fn iterator_next_n_buf(
     db: Option<&DatabaseHandle<'_>>,
     iterator_id: IteratorId,
     n: usize,
-    buffer: &[u8],
+    buffer: *mut u8,
+    buffer_size: usize,
 ) -> Result<usize, String> {
     if n == 0 {
         return Ok(0);
@@ -647,7 +651,7 @@ fn iterator_next_n_buf(
 
     // Get mutable slice from the buffer - this is safe because we have exclusive access
     let output =
-        unsafe { std::slice::from_raw_parts_mut(buffer.as_ptr() as *mut u8, buffer.len()) };
+        unsafe { std::slice::from_raw_parts_mut(buffer, buffer_size) };
 
     let mut pos = 0;
     let mut count = 0u64;
@@ -706,6 +710,56 @@ fn iterator_next_n_buf(
     Ok(pos)
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_iter_next_n_no_ret(
+    db: Option<&DatabaseHandle<'_>>,
+    it: IteratorId,
+    n: usize,
+) -> Value {
+    let result = iterator_next_n_no_ret(db, it, n);
+    match result {
+        Ok(count) => Value {
+            len: count,
+            data: None, // Signal that data was written to the provided buffer
+        },
+        Err(e) => e.into(),
+    }
+}
+
+/// Internal implementation of fast iterator that writes directly to provided buffer
+#[doc(hidden)]
+fn iterator_next_n_no_ret(
+    db: Option<&DatabaseHandle<'_>>,
+    iterator_id: IteratorId,
+    n: usize,
+) -> Result<usize, String> {
+    if n == 0 {
+        return Ok(0);
+    }
+
+    let db = db.ok_or("db should be non-null")?;
+    let mut c = 0;
+
+    {
+        let mut guard = db.streams.write().map_err(|_| "stream lock is poisoned")?;
+        let it = guard.get_mut(&iterator_id).ok_or("iterator not found")?;
+
+        for _ in 0..n {
+            match it.next() {
+                Some(Ok((key, value))) => {
+                    let kv_len = key.len() + value.len();
+                    c += kv_len;
+                }
+                Some(Err(e)) => {
+                    return Err(e.to_string());
+                }
+                None => break,
+            }
+        }
+    }
+
+    Ok(c)
+}
 /// Gets the value associated with the given key from the proposal provided.
 ///
 /// # Arguments
