@@ -388,7 +388,7 @@ fn iterator_next_n(
                     results.push((key, value).into());
                 }
                 Some(Err(e)) => {
-                    maybe_err = Some(e);
+                    maybe_err = Some(e.to_string());
                     break;
                 }
                 None => break,
@@ -555,7 +555,7 @@ fn iterator_next_n_fast(
                     count += 1;
                 }
                 Some(Err(e)) => {
-                    return Err(e);
+                    return Err(e.to_string());
                 }
                 None => break,
             }
@@ -604,7 +604,7 @@ fn iterator_next_n_zero(
                     items.push(pair.into());
                 }
                 Some(Err(e)) => {
-                    return Err(e);
+                    return Err(e.to_string());
                 }
                 None => break,
             }
@@ -693,7 +693,7 @@ fn iterator_next_n_buf(
                     count += 1;
                 }
                 Some(Err(e)) => {
-                    return Err(e);
+                    return Err(e.to_string());
                 }
                 None => break,
             }
