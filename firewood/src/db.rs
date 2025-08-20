@@ -395,7 +395,7 @@ mod test {
 
     use super::{BatchOp, DbConfig};
 
-    /// A chunk of an iterator, provided by [`IterExt::async_chunk_fold`] to the folding
+    /// A chunk of an iterator, provided by [`IterExt::chunk_fold`] to the folding
     /// function.
     type Chunk<'chunk, 'base, T> = &'chunk mut Take<&'base mut Peekable<T>>;
 
@@ -403,7 +403,7 @@ mod test {
         /// Asynchronously folds the iterator with chunks of a specified size. The last
         /// chunk may be smaller than the specified size.
         ///
-        /// The folding function is an async closure that takes an accumulator and a
+        /// The folding function is a closure that takes an accumulator and a
         /// chunk of the underlying iterator, and returns a new accumulator.
         ///
         /// # Panics

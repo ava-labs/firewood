@@ -32,7 +32,6 @@ metrics.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 # Regular dependencies
-async-trait = "0.1.88"
 typed-builder = "0.21.0"
 
 [features]

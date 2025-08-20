@@ -112,7 +112,7 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                             .collect();
                     batch_ops
                 },
-                |batch_ops| async {
+                |batch_ops| {
                     let db_path = std::env::temp_dir();
                     let db_path = db_path.join("benchmark_db");
                     let cfg = DbConfig::builder();
