@@ -47,7 +47,7 @@ impl HasUpdate for Keccak256 {
 // B is 1 if the input had an odd number of nibbles
 // CCCC is the first nibble if B is 1, otherwise it is all 0s
 
-fn nibbles_to_eth_compact<T: AsRef<[u8]>>(nibbles: T, is_leaf: bool) -> SmallVec<[u8; 32]> {
+fn nibbles_to_eth_compact<T: AsRef<[u8]>>(nibbles: T, is_leaf: bool) -> SmallVec<u8, 32> {
     // This is a bitfield that represents the first byte of the output, documented above
     bitfield! {
         struct CompactFirstByte(u8);

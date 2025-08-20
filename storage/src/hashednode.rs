@@ -74,14 +74,7 @@ impl HasUpdate for Vec<u8> {
     }
 }
 
-// TODO: make it work with any size SmallVec
-// impl<T: AsRef<[u8]> + smallvec::Array> HasUpdate for SmallVec<T> {
-//     fn update<U: AsRef<[u8]>>(&mut self, data: U) {
-//         self.extend(data.as_ref());
-//     }
-// }
-
-impl HasUpdate for SmallVec<[u8; 32]> {
+impl<const N: usize> HasUpdate for SmallVec<u8, N> {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
         self.extend(data.as_ref().iter().copied());
     }

@@ -45,7 +45,7 @@ fn is_valid_key(key: &Path) -> bool {
 }
 
 #[cfg(not(feature = "ethhash"))]
-fn is_valid_key(key: &Path) -> bool {
+const fn is_valid_key(key: &Path) -> bool {
     key.0.len() % 2 == 0
 }
 

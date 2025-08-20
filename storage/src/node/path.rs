@@ -26,7 +26,7 @@ static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15
 /// Path is part or all of a node's path in the trie.
 /// Each element is a nibble.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Default)]
-pub struct Path(pub SmallVec<[u8; 64]>);
+pub struct Path(pub SmallVec<u8, 64>);
 
 impl Debug for Path {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
@@ -106,7 +106,7 @@ impl Path {
 
     /// Creates an empty Path
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Path(SmallVec::new())
     }
 
@@ -357,9 +357,9 @@ mod test {
         let from_encoded = Path::from_encoded_iter(encode.as_ref().iter().copied());
         assert_eq!(
             from_encoded.0,
-            SmallVec::<[u8; 32]>::from_slice(expected.as_ref())
+            SmallVec::<u8, 32>::from_slice(expected.as_ref())
         );
-        let to_encoded = from_encoded.iter_encoded().collect::<SmallVec<[u8; 32]>>();
+        let to_encoded = from_encoded.iter_encoded().collect::<SmallVec<u8, 32>>();
         assert_eq!(encode.as_ref(), to_encoded.as_ref());
     }
 

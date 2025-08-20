@@ -34,7 +34,7 @@ impl<'a> PathGuard<'a> {
         }
     }
 
-    fn from_path(path: &'a mut Path) -> Self {
+    const fn from_path(path: &'a mut Path) -> Self {
         Self {
             original_length: path.0.len(),
             path,

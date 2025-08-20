@@ -202,7 +202,7 @@ mod ethhash {
         Hash(TrieHash),
         // TODO: this slice is never larger than 32 bytes so smallvec is probably not our best container
         // the length is stored in a `usize` but it could be in a `u8` and it will never overflow
-        Rlp(SmallVec<[u8; 32]>),
+        Rlp(SmallVec<u8, 32>),
     }
 
     impl HashOrRlp {
