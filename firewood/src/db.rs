@@ -57,7 +57,7 @@ where
         Self: 'view;
 
     fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
-        Ok(HashedNodeReader::root_hash(self))
+        Ok(HashedNodeReader::root_hash(self).or_default_root_hash())
     }
 
     fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
