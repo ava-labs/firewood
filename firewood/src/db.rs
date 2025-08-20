@@ -747,7 +747,6 @@ mod test {
 
         // Looping twice to test that we are reusing the thread pool.
         for _ in 0..2 {
-            // create two batches, one with the first half of keys and values, and one with the last half keys and values
             let kviter = keys.iter().zip(vals.iter()).map_into_batch();
 
             //let proposal = db.propose_sync(kviter).unwrap();
@@ -760,6 +759,7 @@ mod test {
                 println!("Checking key: {k:?} and {v:?}");
                 assert_eq!(&proposal.val(k).await.unwrap().unwrap(), v);
             }
+            proposal.commit().await.unwrap();
             println!("!!!!!!!! All done");
         }
     }

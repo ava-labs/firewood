@@ -9,7 +9,9 @@ use std::sync::{Arc, OnceLock, mpsc};
 //    NodeStore, Parentable, RootReader,
 //};
 
-use firewood_storage::{FileBacked, FileIoError, ImmutableProposal, Node, NodeStore, Parentable};
+use firewood_storage::{
+    BranchNode, FileBacked, FileIoError, ImmutableProposal, NibblesIterator, Node, NodeStore, Parentable, Path
+};
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
 //use sha2::digest::crypto_common::KeyInit;
@@ -94,10 +96,31 @@ impl ParallelMerkle {
         // create a proposal from the parent
         let mut proposal = NodeStore::new(parent)?;
 
-        // Get the root node of that proposal. For now, this must exist and be a branch node.
-        //let root_node = proposal.mut_root().clone().expect("TODO: empty root");
-        //let mut root = root_node.as_branch().expect("TODO: root is a leaf").clone();
+        // Handle different cases depending on the value of root.
 
+        // Prepare phase:
+        // 1.  If root is None, create a branch node with an empty partial path and a None for 
+        //     value. Create Nones for all of its children.
+        // 2.  If the existing root has a partial path, then create a new root with an empty 
+        //     partial path and a None for a value. Push down the previous root as a child. This 
+        //     will be a malformed Merkle trie and will need to be fixed afterwards.
+        // 3.  If the existing root does not have a partial path, then there is nothing we need 
+        //     to do.
+         
+        let root_node = proposal.mut_root().clone();
+        if let Some(_node) = root_node {
+            // Check if it has a partial path
+            //todo!();
+        } else {
+            // Create a branch node with an empty partial path and a None for a value
+            println!("Creating empty branch node for empty trie");
+            let branch = BranchNode {
+                partial_path: Path::new(),
+                value: None,
+                children: BranchNode::empty_children(),
+            };
+            *proposal.mut_root() = Some(branch.into());
+        }
         // keep track of the workers for each nibble
         // TODO: use something better than a hashmap here
         //let mut workers = HashMap::new();
@@ -108,8 +131,6 @@ impl ParallelMerkle {
 
         // for each operation in the batch, send a request to the worker related to the first nibble
         for op in batch.into_iter().map_into_batch() {
-            // For the initial version, just send the key_nibbles iterator to the worker
-
             // For the first version, just pass the key instead of a NibblesIterator
             // Get the first nibble of the key to determine which worker to send the request to
             //let mut key_nibbles = NibblesIterator::new(op.key().as_ref());
