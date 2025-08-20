@@ -276,13 +276,18 @@ fn spawn_prometheus_listener(port: u16) -> Result<PrometheusHandle, Box<dyn Erro
         .enable_all()
         .build()?;
 
-    let (recorder, exporter) = PrometheusBuilder::new()
-        .with_http_listener(SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), port))
-        .idle_timeout(
-            MetricKindMask::COUNTER | MetricKindMask::HISTOGRAM,
-            Some(Duration::from_secs(10)),
-        )
-        .build()?;
+    let (recorder, exporter) = {
+        // PrometheusBuilder::build requires that we be within the tokio runtime context
+        // but we don't need to actually invoke the runtime until we spawn the thread
+        let _guard = rt.enter();
+        PrometheusBuilder::new()
+            .with_http_listener(SocketAddr::new(Ipv6Addr::UNSPECIFIED.into(), port))
+            .idle_timeout(
+                MetricKindMask::COUNTER | MetricKindMask::HISTOGRAM,
+                Some(Duration::from_secs(10)),
+            )
+            .build()?
+    };
 
     std::thread::Builder::new()
         .name("metrics-exporter-prometheus".to_owned())
