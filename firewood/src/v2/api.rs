@@ -408,7 +408,8 @@ where
         &self,
         first_key: Option<&[u8]>,
     ) -> Result<Box<dyn Iterator<Item = Result<(Key, Value), Error>> + '_>, Error> {
-        // NOTE: `Result::map` does not work here because the compilter cannot correctly infer the unsizing operation
+        // NOTE: `Result::map` does not work here because the compiler cannot correctly
+        // infer the unsizing operation
         match DbView::iter_option(self, first_key) {
             Ok(iter) => Ok(Box::new(iter)),
             Err(e) => Err(e),
@@ -416,7 +417,8 @@ where
     }
 
     fn iter(&self) -> Result<Box<dyn Iterator<Item = Result<(Key, Value), Error>> + '_>, Error> {
-        // NOTE: `Result::map` does not work here because the compilter cannot correctly infer the unsizing operation
+        // NOTE: `Result::map` does not work here because the compiler cannot correctly
+        // infer the unsizing operation
         match DbView::iter(self) {
             Ok(iter) => Ok(Box::new(iter)),
             Err(e) => Err(e),
@@ -427,7 +429,8 @@ where
         &self,
         first_key: &[u8],
     ) -> Result<Box<dyn Iterator<Item = Result<(Key, Value), Error>> + '_>, Error> {
-        // NOTE: `Result::map` does not work here because the compilter cannot correctly infer the unsizing operation
+        // NOTE: `Result::map` does not work here because the compiler cannot correctly
+        // infer the unsizing operation
         match DbView::iter_from(self, first_key) {
             Ok(iter) => Ok(Box::new(iter)),
             Err(e) => Err(e),
