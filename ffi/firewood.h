@@ -133,6 +133,8 @@ typedef struct DatabaseCreationResult {
 
 typedef uint32_t ProposalId;
 
+typedef uint32_t IteratorId;
+
 /**
  * Common arguments, accepted by both `fwd_create_db()` and `fwd_open_db()`.
  *
@@ -387,6 +389,78 @@ struct Value fwd_get_from_root(const struct DatabaseHandle *db,
  *
  */
 struct Value fwd_get_latest(const struct DatabaseHandle *db, BorrowedBytes key);
+
+/**
+ * Retrieves the next item from the iterator
+ *
+ * # Arguments
+ *
+ * * `db` - The database handle returned by `open_db`
+ * * `it` - The database handle returned by `fwd_iter_*`
+ *
+ * # Returns
+ *
+ * A `KeyValue` containing the next pair of (key, value) on the iterator.
+ * A `KeyValue` containing with key {0, ""}, and value with an error message if failed.
+ *
+ * # Safety
+ *
+ * The caller must:
+ *  * ensure that `db` is a valid pointer returned by `open_db`
+ *  * ensure that `it` is a valid pointer returned by `fwd_iter_*`
+ *  * call `free_key_value` to free the memory associated with the returned `KeyValue`
+ *
+ */
+struct Value fwd_iter_next(const struct DatabaseHandle *db, IteratorId it);
+
+/**
+ * Return an iterator on proposal optionally starting from a key
+ *
+ * # Arguments
+ *
+ * * `db` - The database handle returned by `open_db`
+ * * `proposal_id` - The proposal id to iterate on
+ * * `key` - The key to start from, in `BorrowedBytes` form
+ *
+ * # Returns
+ *
+ * An iterator id/handle, or an error
+ *
+ * # Safety
+ *
+ * The caller must:
+ *  * ensure that `db` is a valid pointer returned by `open_db`
+ *  * ensure that `proposal_id` is a valid proposal id that is neither commited nor dropped
+ *  * ensure that `key` is a valid pointer to a `Value` struct
+ *
+ */
+struct Value fwd_iter_on_proposal(const struct DatabaseHandle *db,
+                                  ProposalId proposal_id,
+                                  BorrowedBytes key);
+
+/**
+ * Return an iterator optionally starting from a key in database
+ *
+ * # Arguments
+ *
+ * * `db` - The database handle returned by `open_db`
+ * * `root` - The root to iterate on, in `BorrowedBytes` form. Latest revision if not provided/empty.
+ * * `key` - The key to start from, in `BorrowedBytes` form
+ *
+ * # Returns
+ *
+ * An iterator id/handle, or an error
+ *
+ * # Safety
+ *
+ * The caller must:
+ *  * ensure that `db` is a valid pointer returned by `open_db`
+ *  * ensure that `key` is a valid pointer to a `Value` struct
+ *
+ */
+struct Value fwd_iter_on_root(const struct DatabaseHandle *db,
+                              BorrowedBytes root,
+                              BorrowedBytes key);
 
 /**
  * Open a database with the given cache size and maximum number of revisions
