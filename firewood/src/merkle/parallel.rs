@@ -108,9 +108,11 @@ impl ParallelMerkle {
         //     to do.
          
         let root_node = proposal.mut_root().clone();
-        if let Some(_node) = root_node {
+        if let Some(node) = root_node {
             // Check if it has a partial path
             //todo!();
+            let a: Option<(u8, Path)> = node.partial_path().split_first().map(|(index, path)| (*index, path.into()));
+            println!("-------> Split from non empty root: {a:?}");
         } else {
             // Create a branch node with an empty partial path and a None for a value
             println!("Creating empty branch node for empty trie");
