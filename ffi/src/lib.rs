@@ -39,7 +39,7 @@ use std::sync::{Mutex, RwLock};
 use firewood::db::{Db, DbConfig, Proposal};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
-use firewood::v2::api::{ArcDynDbView, Db as _, DbView, HashKey, KeyValuePairIter};
+use firewood::v2::api::{ArcDynDbView, Db as _, DbView, HashKey, KeyValuePairIter, Proposal as _};
 use metrics::counter;
 
 pub use crate::value::*;
@@ -324,14 +324,14 @@ fn batch(db: Option<&DatabaseHandle<'_>>, values: &[KeyValuePair<'_>]) -> Result
     counter!("firewood.ffi.propose_ms").increment(propose_time);
 
     let hash_val = proposal
-        .root_hash_sync()
+        .root_hash()
         .map_err(|e| e.to_string())?
         .ok_or("Proposed revision is empty")?
         .as_slice()
         .into();
 
     // Commit the proposal.
-    proposal.commit_sync().map_err(|e| e.to_string())?;
+    proposal.commit().map_err(|e| e.to_string())?;
 
     // Get the root hash of the database post-commit.
     let propose_plus_commit_time = start.elapsed().as_millis();
@@ -387,7 +387,7 @@ fn propose_on_db<'p>(
     let proposal = db.propose(batch).map_err(|e| e.to_string())?;
 
     // Get the root hash of the new proposal.
-    let mut root_hash: Value = match proposal.root_hash_sync().map_err(|e| e.to_string())? {
+    let mut root_hash: Value = match proposal.root_hash().map_err(|e| e.to_string())? {
         Some(root) => Value::from(root.as_slice()),
         None => String::new().into(),
     };
@@ -453,11 +453,11 @@ fn propose_on_proposal(
         .write()
         .expect("failed to acquire write lock on proposals");
     let proposal = guard.get(&proposal_id).ok_or("proposal not found")?;
-    let new_proposal = proposal.propose_sync(batch).map_err(|e| e.to_string())?;
+    let new_proposal = proposal.propose(batch).map_err(|e| e.to_string())?;
     drop(guard); // Drop the read lock before we get the write lock.
 
     // Get the root hash of the new proposal.
-    let mut root_hash: Value = match new_proposal.root_hash_sync().map_err(|e| e.to_string())? {
+    let mut root_hash: Value = match new_proposal.root_hash().map_err(|e| e.to_string())? {
         Some(root) => Value::from(root.as_slice()),
         None => String::new().into(),
     };
@@ -506,7 +506,7 @@ fn commit(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> Result<(), Strin
         .ok_or("proposal not found")?;
 
     // Get the proposal hash and cache the view. We never cache an empty proposal.
-    let proposal_hash = proposal.root_hash_sync();
+    let proposal_hash = proposal.root_hash();
 
     if let Ok(Some(proposal_hash)) = proposal_hash {
         let mut guard = db.cached_view.lock().expect("cached_view lock is poisoned");
@@ -518,7 +518,7 @@ fn commit(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> Result<(), Strin
     }
 
     // Commit the proposal
-    let result = proposal.commit_sync().map_err(|e| e.to_string());
+    let result = proposal.commit().map_err(|e| e.to_string());
 
     // Clear the cache, which will force readers after this point to find the committed root hash
     db.clear_cached_view();

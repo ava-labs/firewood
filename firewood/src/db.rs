@@ -224,13 +224,6 @@ pub struct Proposal<'db> {
     db: &'db Db,
 }
 
-impl Proposal<'_> {
-    /// Synchronously get the root hash of the latest revision.
-    pub fn root_hash_sync(&self) -> Result<Option<HashKey>, api::Error> {
-        Ok(self.nodestore.root_hash().or_default_root_hash())
-    }
-}
-
 impl api::DbView for Proposal<'_> {
     type Iter<'view>
         = MerkleKeyValueIter<'view, NodeStore<Arc<ImmutableProposal>, FileBacked>>
@@ -238,17 +231,15 @@ impl api::DbView for Proposal<'_> {
         Self: 'view;
 
     fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
-        self.root_hash_sync()
+        api::DbView::root_hash(&*self.nodestore)
     }
 
     fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
-        let merkle = Merkle::from(self.nodestore.clone());
-        merkle.get_value(key.as_ref()).map_err(api::Error::from)
+        api::DbView::val(&*self.nodestore, key)
     }
 
     fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
-        let merkle = Merkle::from(self.nodestore.clone());
-        merkle.prove(key.as_ref()).map_err(api::Error::from)
+        api::DbView::single_key_proof(&*self.nodestore, key)
     }
 
     fn range_proof<K: KeyType>(
@@ -257,18 +248,11 @@ impl api::DbView for Proposal<'_> {
         last_key: Option<K>,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, api::Error> {
-        Merkle::from(&self.nodestore).range_proof(
-            first_key.as_ref().map(AsRef::as_ref),
-            last_key.as_ref().map(AsRef::as_ref),
-            limit,
-        )
+        api::DbView::range_proof(&*self.nodestore, first_key, last_key, limit)
     }
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
-        match first_key {
-            Some(key) => Ok(MerkleKeyValueIter::from_key(&*self.nodestore, key)),
-            None => Ok(MerkleKeyValueIter::from(&*self.nodestore)),
-        }
+        api::DbView::iter_option(&*self.nodestore, first_key)
     }
 }
 
@@ -289,19 +273,6 @@ impl<'db> api::Proposal for Proposal<'db> {
 }
 
 impl Proposal<'_> {
-    /// Commit a proposal synchronously
-    pub fn commit_sync(self) -> Result<(), api::Error> {
-        Ok(self.db.manager.commit(self.nodestore.clone())?)
-    }
-
-    /// Create a new proposal from the current one synchronously
-    pub fn propose_sync(
-        &self,
-        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
-    ) -> Result<Self, api::Error> {
-        self.create_proposal(batch)
-    }
-
     #[crate::metrics("firewood.proposal.create", "database proposal creation")]
     fn create_proposal(
         &self,
