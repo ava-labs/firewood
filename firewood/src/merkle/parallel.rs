@@ -10,7 +10,8 @@ use std::sync::{Arc, OnceLock, mpsc};
 //};
 
 use firewood_storage::{
-    BranchNode, FileBacked, FileIoError, ImmutableProposal, NibblesIterator, Node, NodeStore, Parentable, Path
+    BranchNode, Child, FileBacked, FileIoError, ImmutableProposal, NibblesIterator, Node,
+    NodeStore, Parentable, Path,
 };
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -75,6 +76,7 @@ impl ParallelMerkle {
     /// TODO: add doc
     #[allow(clippy::missing_panics_doc)]
     #[allow(clippy::missing_errors_doc)]
+    #[allow(clippy::too_many_lines)]
     pub fn create_proposal<T: Parentable>(
         &mut self,
         parent: &NodeStore<T, FileBacked>,
@@ -99,20 +101,43 @@ impl ParallelMerkle {
         // Handle different cases depending on the value of root.
 
         // Prepare phase:
-        // 1.  If root is None, create a branch node with an empty partial path and a None for 
+        // 1.  If root is None, create a branch node with an empty partial path and a None for
         //     value. Create Nones for all of its children.
-        // 2.  If the existing root has a partial path, then create a new root with an empty 
-        //     partial path and a None for a value. Push down the previous root as a child. This 
+        // 2.  If the existing root has a partial path, then create a new root with an empty
+        //     partial path and a None for a value. Push down the previous root as a child. This
         //     will be a malformed Merkle trie and will need to be fixed afterwards.
-        // 3.  If the existing root does not have a partial path, then there is nothing we need 
+        // 3.  If the existing root does not have a partial path, then there is nothing we need
         //     to do.
-         
-        let root_node = proposal.mut_root().clone();
-        if let Some(node) = root_node {
+
+        let root_node = proposal.mut_root().take();
+        if let Some(mut node) = root_node {
             // Check if it has a partial path
             //todo!();
-            let a: Option<(u8, Path)> = node.partial_path().split_first().map(|(index, path)| (*index, path.into()));
-            println!("-------> Split from non empty root: {a:?}");
+            let index_path_opt: Option<(u8, Path)> = node
+                .partial_path()
+                .split_first()
+                .map(|(index, path)| (*index, path.into()));
+            println!("-------> Split from non empty root: {index_path_opt:?}");
+            // If above is not None, then create a new branch that will be the new root with the existing root
+            // as the child at the index returned from split_first.
+            if let Some((child_index, child_path)) = index_path_opt {
+                println!(
+                    "Creating empty branch node for non-empty trie. child_index: {child_index:?} child_path: {child_path:?}"
+                );
+                let mut branch = BranchNode {
+                    partial_path: Path::new(),
+                    value: None,
+                    children: BranchNode::empty_children(),
+                };
+                node.update_partial_path(child_path);
+                branch.update_child(child_index, Some(Child::Node(node)));
+
+                println!("New root: {branch:?}");
+                *proposal.mut_root() = Some(branch.into());
+            } else {
+                // Root does not need to be updated. Put it back into the proposal.
+                *proposal.mut_root() = Some(node);
+            }
         } else {
             // Create a branch node with an empty partial path and a None for a value
             println!("Creating empty branch node for empty trie");
