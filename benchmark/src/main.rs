@@ -16,16 +16,12 @@ use clap::{Parser, Subcommand, ValueEnum};
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use firewood::logger::trace;
 use log::LevelFilter;
-use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
-use metrics_util::MetricKindMask;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use std::error::Error;
 use std::fmt::Display;
-use std::net::{Ipv6Addr, SocketAddr};
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use firewood::db::{BatchOp, Db, DbConfig};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
@@ -62,6 +58,7 @@ struct GlobalOpts {
     cache_size: NonZeroUsize,
     #[arg(short, long, default_value_t = 128)]
     revisions: usize,
+    #[cfg(feature = "prometheus")]
     #[arg(
         short = 'p',
         long,
@@ -69,6 +66,7 @@ struct GlobalOpts {
         help = "Port to listen for prometheus"
     )]
     prometheus_port: u16,
+    #[cfg(feature = "prometheus")]
     #[arg(
         short = 's',
         long,
@@ -225,6 +223,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .init();
 
     // Manually set up prometheus
+    #[cfg(feature = "prometheus")]
     let prometheus_handle = spawn_prometheus_listener(args.global_opts.prometheus_port)
         .expect("failed to spawn prometheus listener");
 
@@ -262,6 +261,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    #[cfg(feature = "prometheus")]
     if args.global_opts.stats_dump {
         println!("{}", prometheus_handle.render());
     }
@@ -271,7 +271,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn spawn_prometheus_listener(port: u16) -> Result<PrometheusHandle, Box<dyn Error>> {
+#[cfg(feature = "prometheus")]
+fn spawn_prometheus_listener(
+    port: u16,
+) -> Result<metrics_exporter_prometheus::PrometheusHandle, Box<dyn Error>> {
+    use metrics_exporter_prometheus::PrometheusBuilder;
+    use metrics_util::MetricKindMask;
+    use std::net::{Ipv6Addr, SocketAddr};
+    use std::time::Duration;
+
     let rt = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
