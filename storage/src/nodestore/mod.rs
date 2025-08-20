@@ -760,6 +760,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
                     Some("read_node_with_num_bytes_from_disk".to_string()),
                 )
             })?;
+        trace!("reads to the disk: {addr} {length}");
         Ok((node, length.saturating_add(1))) // add 1 for the area size index byte
     }
 
