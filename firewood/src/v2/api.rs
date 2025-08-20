@@ -367,16 +367,6 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     fn iter_from(&self, first_key: &[u8]) -> Result<BoxKeyValueIter<'_>, Error> {
         self.iter_option(Some(first_key))
     }
-
-    /// Erases the concrete type and returns an [`Arc`] wrapped version of this trait.
-    ///
-    /// This also serves as a compile-time assertion that [`DynDbView`] is dyn-safe.
-    fn boxed(self) -> ArcDynDbView
-    where
-        Self: Sized,
-    {
-        Arc::new(self)
-    }
 }
 
 impl<T: Debug + DbView + Send + Sync + 'static> DynDbView for T
@@ -404,10 +394,7 @@ where
         DbView::range_proof(self, first_key, last_key, limit)
     }
 
-    fn iter_option(
-        &self,
-        first_key: Option<&[u8]>,
-    ) -> Result<Box<dyn Iterator<Item = Result<(Key, Value), Error>> + '_>, Error> {
+    fn iter_option(&self, first_key: Option<&[u8]>) -> Result<BoxKeyValueIter<'_>, Error> {
         // NOTE: `Result::map` does not work here because the compiler cannot correctly
         // infer the unsizing operation
         match DbView::iter_option(self, first_key) {
@@ -416,7 +403,7 @@ where
         }
     }
 
-    fn iter(&self) -> Result<Box<dyn Iterator<Item = Result<(Key, Value), Error>> + '_>, Error> {
+    fn iter(&self) -> Result<BoxKeyValueIter<'_>, Error> {
         // NOTE: `Result::map` does not work here because the compiler cannot correctly
         // infer the unsizing operation
         match DbView::iter(self) {
@@ -425,10 +412,7 @@ where
         }
     }
 
-    fn iter_from(
-        &self,
-        first_key: &[u8],
-    ) -> Result<Box<dyn Iterator<Item = Result<(Key, Value), Error>> + '_>, Error> {
+    fn iter_from(&self, first_key: &[u8]) -> Result<BoxKeyValueIter<'_>, Error> {
         // NOTE: `Result::map` does not work here because the compiler cannot correctly
         // infer the unsizing operation
         match DbView::iter_from(self, first_key) {
