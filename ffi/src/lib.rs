@@ -1003,11 +1003,6 @@ pub unsafe extern "C" fn fwd_close_db(db: Option<&mut DatabaseHandle>) {
 /// * `bytes` - The [`OwnedBytes`] struct to free, previously returned from any
 ///   function from this library.
 ///
-/// # Returns
-///
-/// - [`VoidResult::Ok`] if the memory was successfully freed.
-/// - [`VoidResult::Err`] if the process panics while freeing the memory.
-///
 /// # Safety
 ///
 /// The caller must ensure that the `bytes` struct is valid and that the memory
