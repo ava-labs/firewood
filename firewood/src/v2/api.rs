@@ -371,7 +371,7 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
 
 impl<T: Debug + DbView + Send + Sync + 'static> DynDbView for T
 where
-    for<'a> T::Iter<'a>: Sized,
+    for<'view> T::Iter<'view>: Sized,
 {
     fn root_hash(&self) -> Result<Option<HashKey>, Error> {
         DbView::root_hash(self)
