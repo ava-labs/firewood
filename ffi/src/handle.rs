@@ -28,7 +28,7 @@ impl DatabaseHandle<'_> {
 ///
 /// - `firewood.ffi.cached_view.hit` - Incremented when the cache lookup succeeds
 /// - `firewood.ffi.cached_view.miss` - Incremented when the cache lookup fails
-pub(crate) struct CachedViewHitOnDrop;
+struct CachedViewHitOnDrop;
 
 impl Drop for CachedViewHitOnDrop {
     fn drop(&mut self) {
