@@ -88,12 +88,12 @@ use std::mem::take;
 use std::ops::Deref;
 use std::sync::Arc;
 
+use super::linear::WritableStorage;
 use crate::hashednode::hash_node;
 use crate::node::Node;
 use crate::node::persist::MaybePersistedNode;
+use crate::nodestore::primitives::FreeLists;
 use crate::{CacheReadStrategy, FileIoError, Path, ReadableStorage, SharedNode, TrieHash};
-
-use super::linear::WritableStorage;
 
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Open an existing [`NodeStore`]
@@ -466,7 +466,7 @@ pub struct NodeStore<T, S> {
 }
 
 impl<T, S> NodeStore<T, S> {
-    pub(crate) const fn freelists(&self) -> &alloc::FreeLists {
+    pub(crate) const fn freelists(&self) -> &FreeLists {
         self.header.free_lists()
     }
 }

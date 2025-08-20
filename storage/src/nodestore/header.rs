@@ -27,8 +27,7 @@
 use bytemuck_derive::{Pod, Zeroable};
 use std::io::{Error, ErrorKind};
 
-use super::alloc::FreeLists;
-use super::primitives::{LinearAddress, area_size_hash};
+use super::primitives::{FreeLists, LinearAddress, area_size_hash};
 use crate::logger::{debug, trace};
 
 /// Can be used by filesystem tooling such as "file" to identify
@@ -311,6 +310,7 @@ mod tests {
     use crate::linear::ReadableStorage;
     use crate::linear::memory::MemStore;
     use crate::nodestore::NodeStore;
+    use crate::nodestore::primitives::FreeLists;
     use std::io::Read;
     use test_case::test_case;
 

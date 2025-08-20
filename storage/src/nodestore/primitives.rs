@@ -9,6 +9,7 @@
 
 use crate::TrieHash;
 
+use bytemuck_derive::{Pod, Zeroable};
 use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io::{Error, ErrorKind};
@@ -351,5 +352,59 @@ impl From<LinearAddress> for u64 {
 impl From<NonZeroU64> for LinearAddress {
     fn from(addr: NonZeroU64) -> Self {
         LinearAddress(addr)
+    }
+}
+
+/// `FreeLists` is a wrapper around an array of `Option<LinearAddress>` for each area size.
+/// It provides safe indexing with `AreaIndex` and similar functionality to `Children<T>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable, Default)]
+#[repr(transparent)]
+pub struct FreeLists([Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES]);
+
+impl std::ops::Index<AreaIndex> for FreeLists {
+    type Output = Option<LinearAddress>;
+
+    fn index(&self, index: AreaIndex) -> &Self::Output {
+        self.0
+            .get(index.as_usize())
+            .expect("AreaIndex is guaranteed to be within bounds")
+    }
+}
+
+impl std::ops::IndexMut<AreaIndex> for FreeLists {
+    fn index_mut(&mut self, index: AreaIndex) -> &mut Self::Output {
+        self.0
+            .get_mut(index.as_usize())
+            .expect("AreaIndex is guaranteed to be within bounds")
+    }
+}
+
+impl FreeLists {
+    /// Get an iterator over the free lists.
+    pub fn iter(&self) -> std::slice::Iter<'_, Option<LinearAddress>> {
+        self.0.iter()
+    }
+
+    /// Get a mutable iterator over the free lists.
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Option<LinearAddress>> {
+        self.0.iter_mut()
+    }
+}
+
+impl<'a> IntoIterator for &'a FreeLists {
+    type Item = &'a Option<LinearAddress>;
+    type IntoIter = std::slice::Iter<'a, Option<LinearAddress>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut FreeLists {
+    type Item = &'a mut Option<LinearAddress>;
+    type IntoIter = std::slice::IterMut<'a, Option<LinearAddress>>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter_mut()
     }
 }

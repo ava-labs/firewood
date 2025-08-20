@@ -21,7 +21,7 @@
 //! - **`NodeData`** - Serialized node content
 
 use super::area_index_and_size;
-use super::primitives::{AreaIndex, LinearAddress, index_name};
+use super::primitives::{AreaIndex, FreeLists, LinearAddress, index_name};
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::branch::{ReadSerializable, Serializable};
@@ -39,60 +39,6 @@ use std::iter::FusedIterator;
 /// Returns the maximum size needed to encode a `VarInt`.
 const fn var_int_max_size<VI>() -> usize {
     const { (size_of::<VI>() * 8 + 7) / 7 }
-}
-
-/// `FreeLists` is a wrapper around an array of `Option<LinearAddress>` for each area size.
-/// It provides safe indexing with `AreaIndex` and similar functionality to `Children<T>`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable, Default)]
-#[repr(transparent)]
-pub struct FreeLists([Option<LinearAddress>; AreaIndex::NUM_AREA_SIZES]);
-
-impl std::ops::Index<AreaIndex> for FreeLists {
-    type Output = Option<LinearAddress>;
-
-    fn index(&self, index: AreaIndex) -> &Self::Output {
-        self.0
-            .get(index.as_usize())
-            .expect("AreaIndex is guaranteed to be within bounds")
-    }
-}
-
-impl std::ops::IndexMut<AreaIndex> for FreeLists {
-    fn index_mut(&mut self, index: AreaIndex) -> &mut Self::Output {
-        self.0
-            .get_mut(index.as_usize())
-            .expect("AreaIndex is guaranteed to be within bounds")
-    }
-}
-
-impl FreeLists {
-    /// Get an iterator over the free lists.
-    pub fn iter(&self) -> std::slice::Iter<'_, Option<LinearAddress>> {
-        self.0.iter()
-    }
-
-    /// Get a mutable iterator over the free lists.
-    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Option<LinearAddress>> {
-        self.0.iter_mut()
-    }
-}
-
-impl<'a> IntoIterator for &'a FreeLists {
-    type Item = &'a Option<LinearAddress>;
-    type IntoIter = std::slice::Iter<'a, Option<LinearAddress>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter()
-    }
-}
-
-impl<'a> IntoIterator for &'a mut FreeLists {
-    type Item = &'a mut Option<LinearAddress>;
-    type IntoIter = std::slice::IterMut<'a, Option<LinearAddress>>;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.iter_mut()
-    }
 }
 
 /// A [`FreeArea`] is stored at the start of the area that contained a node that
@@ -407,10 +353,8 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
 
         self.storage.write(addr.into(), &stored_area_bytes)?;
 
-        self.storage.add_to_free_list_cache(
-            addr,
-            self.header.free_lists()[area_size_index],
-        );
+        self.storage
+            .add_to_free_list_cache(addr, self.header.free_lists()[area_size_index]);
 
         // The newly freed block is now the head of the free list.
         self.header.free_lists_mut()[area_size_index] = Some(addr);

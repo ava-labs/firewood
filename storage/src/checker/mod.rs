@@ -625,11 +625,10 @@ mod test {
     use super::*;
     use crate::linear::memory::MemStore;
     use crate::nodestore::NodeStoreHeader;
-    use crate::nodestore::alloc::FreeLists;
     use crate::nodestore::alloc::test_utils::{
         test_write_free_area, test_write_header, test_write_new_node, test_write_zeroed_area,
     };
-    use crate::nodestore::primitives::area_size_iter;
+    use crate::nodestore::primitives::{FreeLists, area_size_iter};
     use crate::{
         BranchNode, Child, FreeListParent, LeafNode, NodeStore, Path, area_index, hash_node,
     };
