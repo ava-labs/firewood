@@ -34,7 +34,7 @@ use std::ffi::{CStr, CString, c_char};
 use std::fmt::{self, Display, Formatter};
 use std::ops::Deref;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Mutex, RwLock};
 
 use firewood::db::{Db, DbConfig, DbViewSync as _, DbViewSyncBytes, Proposal};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
@@ -42,10 +42,9 @@ use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 pub use crate::value::*;
 use firewood::merkle;
 use firewood::stream::MerkleKeyValueStream;
+use firewood::v2::api;
 use firewood::v2::api::{HashKey, KeyValuePairIter};
-use firewood_storage::{
-    Committed, FileBacked, ImmutableProposal, NodeStore, Parentable, ReadableStorage,
-};
+use firewood_storage::TrieReader;
 use metrics::counter;
 
 #[cfg(unix)]
@@ -73,6 +72,12 @@ fn next_iterator_id() -> IteratorId {
     ITERATOR_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
 
+type KeyValueItem = Result<(merkle::Key, merkle::Value), api::Error>;
+
+trait DbIterator: Iterator<Item = KeyValueItem> + std::fmt::Debug {}
+
+impl<T> DbIterator for T where T: Iterator<Item = KeyValueItem> + std::fmt::Debug {}
+
 /// A handle to the database, returned by `fwd_create_db` and `fwd_open_db`.
 ///
 /// These handles are passed to the other FFI functions.
@@ -82,8 +87,7 @@ pub struct DatabaseHandle<'p> {
     /// List of iterators, by ID
     // Order of fields are important, streams must be dropped before proposals, and proposals
     // should be dropped before database handle to ensure lifetime orders
-    streams: RwLock<HashMap<IteratorId, MerkleIterator<'p>>>,
-    raw_iterators: RwLock<HashMap<IteratorId, Box<dyn DebuggableIterator>>>,
+    streams: RwLock<HashMap<IteratorId, Box<dyn DbIterator>>>,
     /// Maps proposal IDs to the iterators that depend on them
     proposal_iterators: RwLock<HashMap<ProposalId, Vec<IteratorId>>>,
     /// List of outstanding proposals, by ID
@@ -94,27 +98,15 @@ pub struct DatabaseHandle<'p> {
     db: Db,
 }
 
-
+// TODO: This wrapper type should be removed all together when async-removal is complete
 #[derive(Debug)]
-enum MerkleIterator<'v> {
-    View(MerkleKeyValueStream<'v, NodeStore<Committed, FileBacked>>),
-    Proposal(MerkleKeyValueStream<'v, NodeStore<Arc<ImmutableProposal>, FileBacked>>),
-    Dropped,
-}
+struct MerkleKeyValueIterator<'v, T>(MerkleKeyValueStream<'v, T>);
 
-impl Iterator for MerkleIterator<'_> {
-    type Item = Result<(merkle::Key, merkle::Value), String>;
+impl<T: TrieReader> Iterator for MerkleKeyValueIterator<'_, T> {
+    type Item = KeyValueItem;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            MerkleIterator::View(iter) => iter.next_sync().map(|r| r.map_err(|e| e.to_string())),
-            MerkleIterator::Proposal(iter) => {
-                iter.next_sync().map(|r| r.map_err(|e| e.to_string()))
-            }
-            MerkleIterator::Dropped => Some(Err(
-                "iterator is dropped and no longer pointing to a valid nodestore".to_string(),
-            )),
-        }
+        self.0.next_sync()
     }
 }
 
@@ -124,7 +116,6 @@ impl From<Db> for DatabaseHandle<'_> {
             db,
             proposals: RwLock::new(HashMap::new()),
             streams: RwLock::new(HashMap::new()),
-            raw_iterators: RwLock::new(HashMap::new()),
             proposal_iterators: RwLock::new(HashMap::new()),
             cached_view: Mutex::new(None),
         }
@@ -253,7 +244,7 @@ fn iter_on_root(db: Option<&DatabaseHandle<'_>>, root: &[u8], key: &[u8]) -> Res
     db.streams
         .write()
         .map_err(|_| "stream lock is poisoned")?
-        .insert(new_id, MerkleIterator::View(it));
+        .insert(new_id, Box::new(MerkleKeyValueIterator(it)));
 
     Ok(new_id.into())
 }
@@ -308,7 +299,7 @@ fn iter_on_proposal(
     db.streams
         .write()
         .map_err(|_| "stream lock is poisoned")?
-        .insert(iterator_id, MerkleIterator::Proposal(it));
+        .insert(iterator_id, Box::new(MerkleKeyValueIterator(it)));
 
     db.proposal_iterators
         .write()
@@ -1130,16 +1121,13 @@ fn drop_proposal(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> Result<()
             .proposal_iterators
             .read()
             .map_err(|_| "proposal iterators lock is poisoned")?;
-        guard.get(&proposal_id).cloned()
+        guard.get(&proposal_id).cloned().unwrap_or_else(Vec::new)
     };
 
-    if let Some(iter_ids) = iterators {
-        let mut guard = db.streams.write().map_err(|_| "streams lock is poisoned")?;
-        for id in iter_ids {
-            let _ = guard.remove(&id);
-            guard.insert(id, MerkleIterator::Dropped);
-        }
-    }
+    db.streams
+        .write()
+        .map_err(|_| "streams lock is poisoned")?
+        .retain(|x, _| !iterators.contains(x));
 
     let mut proposals = db
         .proposals
