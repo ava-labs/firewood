@@ -4,7 +4,7 @@
 #[cfg(test)]
 mod tests;
 
-use crate::iter::{MerkleKeyValueIter, PathIterator, try_extend};
+use crate::iter::{MerkleKeyValueIter, PathIterator, TryExtend};
 use crate::proof::{Proof, ProofCollection, ProofError, ProofNode};
 use crate::range_proof::RangeProof;
 use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
@@ -403,7 +403,7 @@ impl<T: TrieReader> Merkle<T> {
 
         // we stop iterating if either we hit the limit or the key returned was larger
         // than the largest key requested
-        let iter = iter.take(limit.unwrap_or(usize::MAX)).take_while(|kv| {
+        key_values.try_extend(iter.take(limit.unwrap_or(usize::MAX)).take_while(|kv| {
             // no last key asked for, so keep going
             let Some(last_key) = end_key else {
                 return true;
@@ -416,9 +416,7 @@ impl<T: TrieReader> Merkle<T> {
 
             // keep going if the key returned is less than the last key requested
             &*kv.0 <= last_key
-        });
-
-        try_extend(&mut key_values, iter)?;
+        }))?;
 
         let end_proof = key_values
             .last()
