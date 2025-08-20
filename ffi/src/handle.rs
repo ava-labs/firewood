@@ -40,7 +40,7 @@ impl Drop for CachedViewHitOnDrop {
 }
 
 impl CachedViewHitOnDrop {
-    pub fn miss(self) {
+    fn miss(self) {
         std::mem::forget(self);
         counter!("firewood.ffi.cached_view.miss").increment(1);
     }
