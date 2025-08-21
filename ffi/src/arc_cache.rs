@@ -8,7 +8,7 @@
 //! layer to improve performance by avoiding repeated view creation for the same
 //! root hash during database operations.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 /// A thread-safe single-item cache that stores key-value pairs as `Arc<V>`.
 ///
@@ -57,10 +57,7 @@ impl<K: PartialEq, V: ?Sized> ArcCache<K, V> {
         key: K,
         factory: impl FnOnce(&K) -> Result<Arc<V>, E>,
     ) -> Result<Arc<V>, E> {
-        let mut cache = self
-            .cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut cache = self.lock();
         if let Some((cached_key, value)) = cache.as_ref() {
             if *cached_key == key {
                 return Ok(Arc::clone(value));
@@ -76,11 +73,13 @@ impl<K: PartialEq, V: ?Sized> ArcCache<K, V> {
         Ok(value)
     }
 
+    /// Clears the cache, removing any stored key-value pair.
     pub fn clear(&self) {
-        self.cache
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take();
+        self.lock().take();
+    }
+
+    fn lock(&self) -> MutexGuard<'_, Option<(K, Arc<V>)>> {
+        self.cache.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 
