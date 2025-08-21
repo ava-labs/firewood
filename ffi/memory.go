@@ -22,12 +22,45 @@ var (
 	errNilStruct     = errors.New("nil struct pointer cannot be freed")
 	errBadValue      = errors.New("value from cgo formatted incorrectly")
 	errKeysAndValues = errors.New("keys and values must have the same length")
+	errFreeingValue  = errors.New("unexpected error while freeing value")
 )
 
 type Pinner interface {
 	Pin(ptr any)
 	Unpin()
 }
+
+// Borrower is an interface for types that can borrow or copy bytes returned
+// from FFI methods.
+type Borrower interface {
+	// BorrowedBytes returns a slice of bytes that borrows the data from the
+	// Borrower's internal memory.
+	//
+	// The returned slice is valid only as long as the Borrower is valid.
+	// If the Borrower is freed, the slice will become invalid.
+	BorrowedBytes() []byte
+
+	// CopiedBytes returns a slice of bytes that is a copy of the Borrower's
+	// internal memory.
+	//
+	// This is fully independent of the borrowed data and is valid even after
+	// the Borrower is freed.
+	CopiedBytes() []byte
+
+	// Free releases the memory associated with the Borrower's data.
+	//
+	// It is safe to call this method multiple times. Subsequent calls will
+	// do nothing if the data has already been freed (or was never set).
+	//
+	// However, it is not safe to call this method concurrently from multiple
+	// goroutines. It is also not safe to call this method while there are
+	// outstanding references to the slice returned by BorrowedBytes. Any
+	// existing slices will become invalid and may cause undefined behavior
+	// if used after the Free call.
+	Free() error
+}
+
+var _ Borrower = (*ownedBytes)(nil)
 
 // newBorrowedBytes creates a new BorrowedBytes from a Go byte slice.
 //
@@ -103,30 +136,37 @@ func newKeyValuePairs(keys, vals [][]byte, pinner Pinner) (C.BorrowedKeyValuePai
 	return newBorrowedKeyValuePairs(pairs, pinner), nil
 }
 
-// RustOwnedBytes is a wrapper around C.OwnedBytes that provides a Go interface
+// ownedBytes is a wrapper around C.OwnedBytes that provides a Go interface
 // for Rust-owned byte slices.
-type RustOwnedBytes struct {
+//
+// ownedBytes implements the [Borrower] interface allowing it to be shared
+// outside of the FFI package without exposing the C types directly or any FFI
+// implementation details.
+type ownedBytes struct {
 	owned C.OwnedBytes
 }
 
-// Free releases the memory associated with the RustOwnedBytes.
+// Free releases the memory associated with the Borrower's data.
 //
-// It is safe to call this method multiple times, and it will do nothing if the
-// RustOwnedBytes is nil or has already been freed.
-func (b *RustOwnedBytes) Free() error {
-	if b == nil {
-		return nil
-	}
-
-	this := *b               // copy so we can reset before freeing,
-	b.owned = C.OwnedBytes{} // reset to clear the pointer
-
-	if this.owned.ptr == nil {
+// It is safe to call this method multiple times. Subsequent calls will
+// do nothing if the data has already been freed (or was never set).
+//
+// However, it is not safe to call this method concurrently from multiple
+// goroutines. It is also not safe to call this method while there are
+// outstanding references to the slice returned by BorrowedBytes. Any
+// existing slices will become invalid and may cause undefined behavior
+// if used after the Free call.
+func (b *ownedBytes) Free() error {
+	if b.owned.ptr == nil {
+		// Already freed (or never set), nothing to do.
 		return nil
 	}
 
 	// TODO: a check for panic will be inserted here
-	C.fwd_free_owned_bytes(this.owned)
+	C.fwd_free_owned_bytes(b.owned)
+
+	// reset the pointer to nil to prevent double freeing
+	b.owned = C.OwnedBytes{}
 
 	return nil
 }
@@ -134,16 +174,17 @@ func (b *RustOwnedBytes) Free() error {
 // BorrowedBytes returns the underlying byte slice. It may return nil if the
 // data has already been freed was never set.
 //
-// The returned slice is valid only as long as the RustOwnedBytes is valid.
+// The returned slice is valid only as long as the ownedBytes is valid.
 //
 // It does not copy the data; however, the slice is valid only as long as the
-// RustOwnedBytes is valid. If the RustOwnedBytes is freed, the slice will
+// ownedBytes is valid. If the ownedBytes is freed, the slice will
 // become invalid.
-func (b *RustOwnedBytes) BorrowedBytes() []byte {
-	if b == nil {
-		return nil
-	}
-
+//
+// It is safe to cast the returned slice as a string so long as the ownedBytes
+// is not freed while the string is in use.
+//
+// BorrowedBytes is part of the [Borrower] interface.
+func (b *ownedBytes) BorrowedBytes() []byte {
 	if b.owned.ptr == nil {
 		return nil
 	}
@@ -151,61 +192,54 @@ func (b *RustOwnedBytes) BorrowedBytes() []byte {
 	return unsafe.Slice((*byte)(b.owned.ptr), b.owned.len)
 }
 
-// intoError converts the RustOwnedBytes into an error. This is used for methods
-// that return a RustOwnedBytes as an error type.
-//
-// If the RustOwnedBytes is nil or has already been freed, it returns nil.
-// Otherwise, the bytes will be copied into Go memory and converted into an
-// error. The original RustOwnedBytes will be freed after this operation.
-func (b *RustOwnedBytes) intoError() error {
-	if b == nil {
-		return nil
-	}
-
-	if b.owned.ptr == nil {
-		return nil
-	}
-
-	// Convert the owned bytes to a string and create an error from it.
-	errMsg := string(b.CopiedBytes())
-
-	if err := b.Free(); err != nil {
-		return fmt.Errorf("failed to free owned bytes: %w while handling original error %s", err, errMsg)
-	}
-
-	return errors.New(errMsg)
-}
-
 // CopiedBytes returns a copy of the underlying byte slice. It may return nil if the
 // data has already been freed or was never set.
 //
 // The returned slice is a copy of the data and is valid independently of the
-// RustOwnedBytes. It is safe to use after the RustOwnedBytes is freed and will
+// ownedBytes. It is safe to use after the ownedBytes is freed and will
 // be freed by the Go garbage collector.
-func (b *RustOwnedBytes) CopiedBytes() []byte {
-	if b == nil {
-		return nil
-	}
-
+//
+// CopiedBytes is part of the [Borrower] interface.
+func (b *ownedBytes) CopiedBytes() []byte {
 	if b.owned.ptr == nil {
 		return nil
 	}
 
-	return C.GoBytes(unsafe.Pointer(b.owned.ptr), C.int(b.owned.len))
+	return C.GoBytes(unsafe.Pointer(&b.owned.ptr), C.int(b.owned.len))
 }
 
-// fromOwnedBytes creates a RustOwnedBytes from a C.OwnedBytes.
+// intoError converts the ownedBytes into an error. This is used for methods
+// that return a ownedBytes as an error type.
 //
-// The caller is responsible for calling Free() on the returned RustOwnedBytes
-// when it is no longer needed otherwise memory will leak.
-func fromOwnedBytes(owned C.OwnedBytes) *RustOwnedBytes {
-	if owned.ptr == nil {
+// If the ownedBytes is nil or has already been freed, it returns nil.
+// Otherwise, the bytes will be copied into Go memory and converted into an
+// error.
+//
+// The original ownedBytes will be freed after this operation and is no longer
+// valid.
+func (b *ownedBytes) intoError() error {
+	if b.owned.ptr == nil {
 		return nil
 	}
 
-	rustBytes := &RustOwnedBytes{owned: owned}
+	err := errors.New(string(b.CopiedBytes()))
 
-	return rustBytes
+	if err2 := b.Free(); err2 != nil {
+		return fmt.Errorf("%w: %w (original error: %w)", errFreeingValue, err, err2)
+	}
+
+	return err
+}
+
+// newOwnedBytes creates a ownedBytes from a C.OwnedBytes.
+//
+// The caller is responsible for calling Free() on the returned ownedBytes
+// when it is no longer needed otherwise memory will leak.
+//
+// It is not an error to provide an OwnedBytes with a nil pointer or zero length
+// in which case the returned ownedBytes will be empty.
+func newOwnedBytes(owned C.OwnedBytes) *ownedBytes {
+	return &ownedBytes{owned: owned}
 }
 
 // hashAndIDFromValue converts the cgo `Value` payload into:
