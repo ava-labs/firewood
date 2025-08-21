@@ -12,33 +12,6 @@
 
 
 /**
- * The cache read strategy to use for the database.
- *
- * This controls what types of database operations are cached to improve
- * performance by avoiding redundant disk reads and computations.
- */
-enum CacheReadStrategy {
-  /**
-   * Only cache write operations. This is the most conservative strategy
-   * that minimizes memory usage but may result in more disk reads.
-   */
-  CacheReadStrategy_WritesOnly = 0,
-  /**
-   * Cache both write operations and branch node reads. This provides
-   * better performance for tree traversal operations while keeping
-   * memory usage moderate.
-   */
-  CacheReadStrategy_BranchReads = 1,
-  /**
-   * Cache all read and write operations. This provides the best performance
-   * but uses the most memory as it caches leaf nodes and values in addition
-   * to branch nodes.
-   */
-  CacheReadStrategy_All = 2,
-};
-typedef uint8_t CacheReadStrategy;
-
-/**
  * A handle to the database, returned by `fwd_open_db`.
  *
  * These handles are passed to the other FFI functions.
@@ -255,26 +228,33 @@ typedef struct DatabaseHandleArgs {
    */
   BorrowedBytes path;
   /**
-   * The size of the node cache. If zero, the default size of 1,500,000 nodes
-   * will be used.
+   * The size of the node cache.
+   *
+   * Opening returns an error if this is zero.
    */
   size_t cache_size;
   /**
-   * The size of the free list cache. If zero, the default size of 40,000 nodes
-   * will be used.
+   * The size of the free list cache.
+   *
+   * Opening returns an error if this is zero.
    */
   size_t free_list_cache_size;
   /**
-   * The maximum number of revisions to keep. If zero, the default of 128
-   * revisions will be used.
-   *
-   * If this is less than 2, an error will be returned.
+   * The maximum number of revisions to keep.
    */
   size_t revisions;
   /**
    * The cache read strategy to use.
+   *
+   * This must be one of the following:
+   *
+   * - `0`: No cache.
+   * - `1`: Cache only branch reads.
+   * - `2`: Cache all reads.
+   *
+   * Opening returns an error if this is not one of the above values.
    */
-  CacheReadStrategy strategy;
+  uint8_t strategy;
   /**
    * Whether to truncate the database file if it exists.
    */
