@@ -300,13 +300,13 @@ func getErrorFromVoidResult(result C.VoidResult) error {
 	}
 }
 
-// fromValueResult converts a C.ValueResult to a byte slice or error.
+// getValueFromValueResult converts a C.ValueResult to a byte slice or error.
 //
 // It returns nil, nil if the result is None.
 // It returns nil, errRevisionNotFound if the result is RevisionNotFound.
 // It returns a byte slice, nil if the result is Some.
 // It returns an error if the result is an error.
-func fromValueResult(result C.ValueResult) ([]byte, error) {
+func getValueFromValueResult(result C.ValueResult) ([]byte, error) {
 	switch result.tag {
 	case C.ValueResult_NullHandlePointer:
 		return nil, errDBClosed

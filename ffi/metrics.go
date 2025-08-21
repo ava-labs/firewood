@@ -65,7 +65,7 @@ func StartMetricsWithExporter(metricsPort uint16) error {
 // Returns an error if the global recorder is not initialized.
 // This method must be called after StartMetrics or StartMetricsWithExporter
 func GatherMetrics() (string, error) {
-	bytes, err := fromValueResult(C.fwd_gather())
+	bytes, err := getValueFromValueResult(C.fwd_gather())
 	if err != nil {
 		return "", err
 	}

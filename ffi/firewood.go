@@ -166,7 +166,7 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	val, err := fromValueResult(C.fwd_get_latest(db.handle, newBorrowedBytes(key, &pinner)))
+	val, err := getValueFromValueResult(C.fwd_get_latest(db.handle, newBorrowedBytes(key, &pinner)))
 	if errors.Is(err, errRevisionNotFound) {
 		return nil, nil
 	}
@@ -190,7 +190,7 @@ func (db *Database) GetFromRoot(root, key []byte) ([]byte, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	return fromValueResult(C.fwd_get_from_root(
+	return getValueFromValueResult(C.fwd_get_from_root(
 		db.handle,
 		newBorrowedBytes(root, &pinner),
 		newBorrowedBytes(key, &pinner),
