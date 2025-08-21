@@ -126,6 +126,7 @@ func (b *RustOwnedBytes) Free() error {
 	}
 
 	// TODO: a check for panic will be inserted here
+	C.fwd_free_owned_bytes(this.owned)
 
 	return nil
 }
