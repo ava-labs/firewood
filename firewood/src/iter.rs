@@ -1,6 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+mod try_extend;
+
+pub(crate) use self::try_extend::TryExtend;
 use crate::merkle::{Key, Value};
 use crate::v2::api;
 
@@ -557,57 +560,6 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 
     data.into_boxed_slice()
 }
-
-pub(crate) trait TryExtend<T>: Extend<T> {
-    /// Lazily collect an iterator over results into an extendable collection of the Ok value.
-    ///
-    /// Returns early if an error is encountered returning that error.
-    fn try_extend<I: IntoIterator<Item = Result<T, E>>, E>(&mut self, iter: I) -> Result<(), E> {
-        struct Shunt<'a, I, E> {
-            iter: I,
-            error: &'a mut Option<E>,
-        }
-
-        impl<I: Iterator<Item = Result<T, E>>, T, E> Iterator for Shunt<'_, I, E> {
-            type Item = T;
-
-            fn next(&mut self) -> Option<Self::Item> {
-                if self.error.is_some() {
-                    return None;
-                }
-
-                match self.iter.next() {
-                    Some(Ok(item)) => Some(item),
-                    Some(Err(e)) => {
-                        *self.error = Some(e);
-                        None
-                    }
-                    None => None,
-                }
-            }
-
-            fn size_hint(&self) -> (usize, Option<usize>) {
-                if self.error.is_some() {
-                    (0, Some(0))
-                } else {
-                    let (_, upper) = self.iter.size_hint();
-                    (0, upper)
-                }
-            }
-        }
-
-        let mut error = None;
-
-        self.extend(Shunt {
-            iter: iter.into_iter(),
-            error: &mut error,
-        });
-
-        if let Some(e) = error { Err(e) } else { Ok(()) }
-    }
-}
-
-impl<C: Extend<T>, T> TryExtend<T> for C {}
 
 #[cfg(test)]
 #[expect(clippy::indexing_slicing, clippy::unwrap_used)]
