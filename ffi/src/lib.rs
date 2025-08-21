@@ -91,12 +91,6 @@ impl From<Db> for DatabaseHandle<'_> {
     }
 }
 
-impl DatabaseHandle<'_> {
-    fn clear_cached_view(&self) {
-        self.cached_view.clear();
-    }
-}
-
 impl Deref for DatabaseHandle<'_> {
     type Target = Db;
 
