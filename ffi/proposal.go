@@ -134,7 +134,6 @@ func (p *Proposal) Commit() error {
 		// The underlying proposal is no longer valid.
 		p.id = 0
 	}
-
 	return err
 }
 
