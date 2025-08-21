@@ -46,7 +46,7 @@ pub(crate) mod primitives;
 
 use crate::firewood_gauge;
 use crate::linear::OffsetReader;
-use crate::logger::trace;
+use crate::logger::{debug, trace};
 use crate::node::branch::ReadSerializable as _;
 use arc_swap::ArcSwap;
 use arc_swap::access::DynAccess;
@@ -760,7 +760,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
                     Some("read_node_with_num_bytes_from_disk".to_string()),
                 )
             })?;
-        trace!("reads to the disk: {addr} {length}");
+        debug!("reads to the disk: {addr} {length}");
         Ok((node, length.saturating_add(1))) // add 1 for the area size index byte
     }
 

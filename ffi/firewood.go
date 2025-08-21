@@ -123,7 +123,7 @@ func New(filePath string, conf *Config) (*Database, error) {
 
 	if err := StartLogs(&LogConfig{
 		Path:        "/mnt/exp/firewood.log",
-		FilterLevel: "trace",
+		FilterLevel: "debug",
 	}); err != nil {
 		return nil, err
 	}
