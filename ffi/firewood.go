@@ -30,14 +30,12 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"strings"
 )
 
 // These constants are used to identify errors returned by the Firewood Rust FFI.
 // These must be changed if the Rust FFI changes - should be reported by tests.
 const (
-	RootLength       = 32
-	rootHashNotFound = "IO error: Root hash not found"
+	RootLength = 32
 )
 
 var (
@@ -166,15 +164,12 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	val := C.fwd_get_latest(db.handle, newBorrowedBytes(key, &pinner))
-	bytes, err := bytesFromValue(&val)
-
-	// If the root hash is not found, return nil.
-	if err != nil && strings.Contains(err.Error(), rootHashNotFound) {
+	val, err := fromValueResult(C.fwd_get_latest(db.handle, newBorrowedBytes(key, &pinner)))
+	if errors.Is(err, errRevisionNotFound) {
 		return nil, nil
 	}
 
-	return bytes, err
+	return val, err
 }
 
 // GetFromRoot retrieves the value for the given key from a specific root hash.
@@ -193,13 +188,11 @@ func (db *Database) GetFromRoot(root, key []byte) ([]byte, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	val := C.fwd_get_from_root(
+	return fromValueResult(C.fwd_get_from_root(
 		db.handle,
 		newBorrowedBytes(root, &pinner),
 		newBorrowedBytes(key, &pinner),
-	)
-
-	return bytesFromValue(&val)
+	))
 }
 
 // Root returns the current root hash of the trie.
