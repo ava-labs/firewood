@@ -306,7 +306,7 @@ pub trait DbView {
 pub type BoxKeyValueIter<'view> = Box<dyn Iterator<Item = Result<(Key, Value), Error>> + 'view>;
 
 /// A dynamic dyspatch version of [`DbView`] that can be shared.
-pub type ArcDynDbView = Arc<dyn DynDbView + Send + Sync + 'static>;
+pub type ArcDynDbView = Arc<dyn DynDbView>;
 
 /// A dyn-safe version of [`DbView`].
 pub trait DynDbView: Debug + Send + Sync + 'static {
