@@ -32,7 +32,6 @@ use crate::node::ExtendableBytes;
 use crate::{
     FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage, firewood_counter,
 };
-use bytemuck_derive::{Pod, Zeroable};
 use std::io::{Error, ErrorKind, Read};
 use std::iter::FusedIterator;
 
@@ -324,7 +323,6 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the area cannot be read or written.
-    #[expect(clippy::indexing_slicing)]
     pub fn delete_node(&mut self, node: MaybePersistedNode) -> Result<(), FileIoError> {
         let Some(addr) = node.as_linear_address() else {
             return Ok(());
