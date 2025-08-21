@@ -415,7 +415,7 @@ impl<T: TrieReader> Merkle<T> {
             };
 
             // keep going if the key returned is less than the last key requested
-            &*kv.0 <= last_key
+            *kv.0 <= *last_key
         }))?;
 
         let end_proof = key_values

@@ -35,7 +35,7 @@ import (
 // These constants are used to identify errors returned by the Firewood Rust FFI.
 // These must be changed if the Rust FFI changes - should be reported by tests.
 const (
-	RootLength = 32
+	RootLength = C.sizeof_HashKey
 )
 
 var (
@@ -72,14 +72,16 @@ func DefaultConfig() *Config {
 }
 
 // A CacheStrategy represents the caching strategy used by a [Database].
-type CacheStrategy C.CacheReadStrategy
+type CacheStrategy uint8
 
 const (
-	OnlyCacheWrites  CacheStrategy = C.CacheReadStrategy_WritesOnly
-	CacheBranchReads CacheStrategy = C.CacheReadStrategy_BranchReads
-	CacheAllReads    CacheStrategy = C.CacheReadStrategy_All
+	OnlyCacheWrites CacheStrategy = iota
+	CacheBranchReads
+	CacheAllReads
 
-	invalidCacheStrategy = CacheAllReads + 1
+	// invalidCacheStrategy MUST be the final value in the iota block to make it
+	// the smallest value greater than all valid values.
+	invalidCacheStrategy
 )
 
 // New opens or creates a new Firewood database with the given configuration. If
@@ -109,11 +111,11 @@ func New(filePath string, conf *Config) (*Database, error) {
 		cache_size:           C.size_t(conf.NodeCacheEntries),
 		free_list_cache_size: C.size_t(conf.FreeListCacheEntries),
 		revisions:            C.size_t(conf.Revisions),
-		strategy:             C.CacheReadStrategy(conf.ReadCacheStrategy),
+		strategy:             C.uint8_t(conf.ReadCacheStrategy),
 		truncate:             C.bool(conf.Truncate),
 	}
 
-	return fromHandleResult(C.fwd_open_db(args))
+	return getDatabaseFromHandleResult(C.fwd_open_db(args))
 }
 
 // Update applies a batch of updates to the database, returning the hash of the
@@ -134,7 +136,7 @@ func (db *Database) Update(keys, vals [][]byte) ([]byte, error) {
 		return nil, err
 	}
 
-	return fromHashResult(C.fwd_batch(db.handle, kvp))
+	return getHashKeyFromHashResult(C.fwd_batch(db.handle, kvp))
 }
 
 func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
@@ -202,17 +204,13 @@ func (db *Database) Root() ([]byte, error) {
 		return nil, errDBClosed
 	}
 
-	hash, err := fromHashResult(C.fwd_root_hash(db.handle))
-	if err != nil {
-		return nil, err
-	}
+	bytes, err := getHashKeyFromHashResult(C.fwd_root_hash(db.handle))
 
 	// If the root hash is not found, return a zeroed slice.
-	if len(hash) == 0 {
-		return EmptyRoot, nil
+	if err == nil && bytes == nil {
+		bytes = EmptyRoot
 	}
-
-	return hash, nil
+	return bytes, err
 }
 
 // Revision returns a historical revision of the database.

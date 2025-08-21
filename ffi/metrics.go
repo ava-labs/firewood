@@ -50,7 +50,7 @@ func (Gatherer) Gather() ([]*dto.MetricFamily, error) {
 // An error is returned if this method is called a second time, or if it is
 // called after StartMetricsWithExporter.
 func StartMetrics() error {
-	return fromVoidResult(C.fwd_start_metrics())
+	return getErrorFromVoidResult(C.fwd_start_metrics())
 }
 
 // Start global recorder for metrics along with an HTTP exporter.
@@ -58,7 +58,7 @@ func StartMetrics() error {
 // An error is returned if this method is called a second time, if it is
 // called after StartMetrics, or if the exporter failed to start.
 func StartMetricsWithExporter(metricsPort uint16) error {
-	return fromVoidResult(C.fwd_start_metrics_with_exporter(C.uint16_t(metricsPort)))
+	return getErrorFromVoidResult(C.fwd_start_metrics_with_exporter(C.uint16_t(metricsPort)))
 }
 
 // Collect metrics from global recorder
@@ -91,5 +91,5 @@ func StartLogs(config *LogConfig) error {
 		filter_level: newBorrowedBytes([]byte(config.FilterLevel), &pinner),
 	}
 
-	return fromVoidResult(C.fwd_start_logs(args))
+	return getErrorFromVoidResult(C.fwd_start_logs(args))
 }

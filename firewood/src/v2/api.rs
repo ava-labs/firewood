@@ -306,7 +306,7 @@ pub trait DbView {
 pub type BoxKeyValueIter<'view> = Box<dyn Iterator<Item = Result<(Key, Value), Error>> + 'view>;
 
 /// A dynamic dyspatch version of [`DbView`] that can be shared.
-pub type ArcDynDbView = Arc<dyn DynDbView + Send + Sync + 'static>;
+pub type ArcDynDbView = Arc<dyn DynDbView>;
 
 /// A dyn-safe version of [`DbView`].
 pub trait DynDbView: Debug + Send + Sync + 'static {
@@ -398,24 +398,6 @@ where
         // NOTE: `Result::map` does not work here because the compiler cannot correctly
         // infer the unsizing operation
         match DbView::iter_option(self, first_key) {
-            Ok(iter) => Ok(Box::new(iter)),
-            Err(e) => Err(e),
-        }
-    }
-
-    fn iter(&self) -> Result<BoxKeyValueIter<'_>, Error> {
-        // NOTE: `Result::map` does not work here because the compiler cannot correctly
-        // infer the unsizing operation
-        match DbView::iter(self) {
-            Ok(iter) => Ok(Box::new(iter)),
-            Err(e) => Err(e),
-        }
-    }
-
-    fn iter_from(&self, first_key: &[u8]) -> Result<BoxKeyValueIter<'_>, Error> {
-        // NOTE: `Result::map` does not work here because the compiler cannot correctly
-        // infer the unsizing operation
-        match DbView::iter_from(self, first_key) {
             Ok(iter) => Ok(Box::new(iter)),
             Err(e) => Err(e),
         }
