@@ -416,7 +416,7 @@ func databaseFromResult(result *C.struct_DatabaseCreationResult) (*C.DatabaseHan
 	if result.error_str != nil {
 		errStr := C.GoString((*C.char)(unsafe.Pointer(result.error_str)))
 		if err := getErrorFromVoidResult(C.fwd_free_database_error_result(result)); err != nil {
-			return nil, fmt.Errorf("unexpected error while freeing error result: %w", err)
+			return nil, fmt.Errorf("%w: %w", errFreeingValue, err)
 		}
 		runtime.KeepAlive(result)
 		return nil, errors.New(errStr)
