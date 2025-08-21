@@ -75,7 +75,7 @@ pub struct DatabaseHandle<'p> {
     proposals: RwLock<HashMap<ProposalId, Proposal<'p>>>,
 
     /// A single cached view to improve performance of reads while committing
-    cached_view: ArcCache<HashKey, dyn api::DynDbView + Send + Sync + 'static>,
+    cached_view: ArcCache<HashKey, dyn api::DynDbView>,
 
     /// The database
     db: Db,
