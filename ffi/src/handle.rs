@@ -16,6 +16,10 @@ impl DatabaseHandle<'_> {
             self.db.view(HashKey::clone(key))
         })
     }
+
+    pub(crate) fn clear_cached_view(&self) {
+        self.cached_view.clear();
+    }
 }
 
 /// A RAII metrics helper that tracks cache hits and misses for database views.
