@@ -402,24 +402,6 @@ where
             Err(e) => Err(e),
         }
     }
-
-    fn iter(&self) -> Result<BoxKeyValueIter<'_>, Error> {
-        // NOTE: `Result::map` does not work here because the compiler cannot correctly
-        // infer the unsizing operation
-        match DbView::iter(self) {
-            Ok(iter) => Ok(Box::new(iter)),
-            Err(e) => Err(e),
-        }
-    }
-
-    fn iter_from(&self, first_key: &[u8]) -> Result<BoxKeyValueIter<'_>, Error> {
-        // NOTE: `Result::map` does not work here because the compiler cannot correctly
-        // infer the unsizing operation
-        match DbView::iter_from(self, first_key) {
-            Ok(iter) => Ok(Box::new(iter)),
-            Err(e) => Err(e),
-        }
-    }
 }
 
 /// A proposal for a new revision of the database.
