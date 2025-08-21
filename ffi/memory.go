@@ -139,23 +139,18 @@ func newKeyValuePairs(keys, vals [][]byte, pinner Pinner) (C.BorrowedKeyValuePai
 // Close releases the memory associated with the Database.
 //
 // This is safe to call if the pointer is nil, in which case it does nothing. The
-// pointer will be set to nil after freeing to prevent double free.
+// pointer will be set to nil after freeing to prevent double free. However, it is
+// not safe to call this method concurrently from multiple goroutines.
 func (db *Database) Close() error {
-	if db == nil {
+	if db.handle == nil {
 		return nil
 	}
 
-	ptr := db.handle
-	if ptr == nil {
-		return nil
-	}
-
-	// Clear the handle before freeing to prevent double free
-	db.handle = nil
-
-	if err := fromVoidResult(C.fwd_close_db(ptr)); err != nil {
+	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
 		return fmt.Errorf("unexpected error when closing database: %w", err)
 	}
+
+	db.handle = nil // Prevent double free
 
 	return nil
 }
@@ -186,7 +181,7 @@ func (b *ownedBytes) Free() error {
 		return nil
 	}
 
-	if err := fromVoidResult(C.fwd_free_owned_bytes(b.owned)); err != nil {
+	if err := getErrorFromVoidResult(C.fwd_free_owned_bytes(b.owned)); err != nil {
 		return fmt.Errorf("%w: %w", errFreeingValue, err)
 	}
 
@@ -266,10 +261,10 @@ func newOwnedBytes(owned C.OwnedBytes) *ownedBytes {
 	return &ownedBytes{owned: owned}
 }
 
-// fromVoidResult converts a C.VoidResult to an error.
+// getErrorgetErrorFromVoidResult converts a C.VoidResult to an error.
 //
-// It return nil if the result is Ok, otherwise it return an error.
-func fromVoidResult(result C.VoidResult) error {
+// It will return nil if the result is Ok, otherwise it returns an error.
+func getErrorFromVoidResult(result C.VoidResult) error {
 	switch result.tag {
 	case C.VoidResult_NullHandlePointer:
 		return errDBClosed
@@ -313,8 +308,8 @@ func hashAndIDFromValue(v *C.struct_Value) ([]byte, uint32, error) {
 	// Case 3
 	if v.len == 0 {
 		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		if err := fromVoidResult(C.fwd_free_value(v)); err != nil {
-			return nil, 0, fmt.Errorf("unexpected error while freeing value: %w", err)
+		if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
+			return nil, 0, fmt.Errorf("%w: %w", errFreeingValue, err)
 		}
 		return nil, 0, errors.New(errStr)
 	}
@@ -323,8 +318,8 @@ func hashAndIDFromValue(v *C.struct_Value) ([]byte, uint32, error) {
 	id := uint32(v.len)
 	buf := C.GoBytes(unsafe.Pointer(v.data), RootLength)
 	v.len = C.size_t(RootLength) // set the length to free
-	if err := fromVoidResult(C.fwd_free_value(v)); err != nil {
-		return nil, 0, fmt.Errorf("unexpected error while freeing value: %w", err)
+	if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
+		return nil, 0, fmt.Errorf("%w: %w", errFreeingValue, err)
 	}
 	return buf, id, nil
 }
@@ -355,15 +350,15 @@ func errorFromValue(v *C.struct_Value) error {
 	// Case 3
 	if v.len == 0 {
 		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		if err := fromVoidResult(C.fwd_free_value(v)); err != nil {
-			return fmt.Errorf("unexpected error while freeing value: %w", err)
+		if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
+			return fmt.Errorf("%w: %w", errFreeingValue, err)
 		}
 		return errors.New(errStr)
 	}
 
 	// Case 2 and 4
-	if err := fromVoidResult(C.fwd_free_value(v)); err != nil {
-		return fmt.Errorf("unexpected error while freeing value: %w", err)
+	if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
+		return fmt.Errorf("%w: %w", errFreeingValue, err)
 	}
 	return errBadValue
 }
@@ -389,8 +384,8 @@ func bytesFromValue(v *C.struct_Value) ([]byte, error) {
 	// Case 4
 	if v.len != 0 && v.data != nil {
 		buf := C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
-		if err := fromVoidResult(C.fwd_free_value(v)); err != nil {
-			return nil, fmt.Errorf("unexpected error while freeing value: %w", err)
+		if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
+			return nil, fmt.Errorf("%w: %w", errFreeingValue, err)
 		}
 		return buf, nil
 	}
@@ -403,8 +398,8 @@ func bytesFromValue(v *C.struct_Value) ([]byte, error) {
 	// Case 3
 	if v.len == 0 {
 		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		if err := fromVoidResult(C.fwd_free_value(v)); err != nil {
-			return nil, fmt.Errorf("unexpected error while freeing value: %w", err)
+		if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
+			return nil, fmt.Errorf("%w: %w", errFreeingValue, err)
 		}
 		return nil, errors.New(errStr)
 	}
@@ -420,7 +415,7 @@ func databaseFromResult(result *C.struct_DatabaseCreationResult) (*C.DatabaseHan
 
 	if result.error_str != nil {
 		errStr := C.GoString((*C.char)(unsafe.Pointer(result.error_str)))
-		if err := fromVoidResult(C.fwd_free_database_error_result(result)); err != nil {
+		if err := getErrorFromVoidResult(C.fwd_free_database_error_result(result)); err != nil {
 			return nil, fmt.Errorf("unexpected error while freeing error result: %w", err)
 		}
 		runtime.KeepAlive(result)
