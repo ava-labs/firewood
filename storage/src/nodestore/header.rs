@@ -27,8 +27,7 @@
 use bytemuck_derive::{Pod, Zeroable};
 use std::io::{Error, ErrorKind};
 
-use super::alloc::FreeLists;
-use super::primitives::{LinearAddress, area_size_hash};
+use super::primitives::{FreeLists, LinearAddress, area_size_hash};
 use crate::logger::{debug, trace};
 
 /// Can be used by filesystem tooling such as "file" to identify
@@ -194,7 +193,7 @@ impl NodeStoreHeader {
             endian_test: 1,
             root_address: None,
             version: Version::new(),
-            free_lists: Default::default(),
+            free_lists: FreeLists::default(),
             area_size_hash: area_size_hash()
                 .as_slice()
                 .try_into()
@@ -311,6 +310,7 @@ mod tests {
     use crate::linear::ReadableStorage;
     use crate::linear::memory::MemStore;
     use crate::nodestore::NodeStore;
+    use crate::nodestore::primitives::FreeLists;
     use std::io::Read;
     use test_case::test_case;
 
@@ -339,7 +339,7 @@ mod tests {
         header_stream.read_exact(&mut header_bytes).unwrap();
         let header = NodeStoreHeader::from_bytes(&header_bytes);
         assert_eq!(header.version, Version::new());
-        let empty_free_list: FreeLists = Default::default();
+        let empty_free_list: FreeLists = FreeLists::default();
         assert_eq!(*header.free_lists(), empty_free_list);
     }
 }
