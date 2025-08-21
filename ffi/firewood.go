@@ -217,7 +217,7 @@ func (db *Database) Root() ([]byte, error) {
 	if err == nil && bytes == nil {
 		bytes = EmptyRoot
 	}
-	return bytes, nil
+	return bytes, err
 }
 
 // Revision returns a historical revision of the database.
