@@ -22,12 +22,45 @@ var (
 	errNilStruct     = errors.New("nil struct pointer cannot be freed")
 	errBadValue      = errors.New("value from cgo formatted incorrectly")
 	errKeysAndValues = errors.New("keys and values must have the same length")
+	errFreeingValue  = errors.New("unexpected error while freeing value")
 )
 
 type Pinner interface {
 	Pin(ptr any)
 	Unpin()
 }
+
+// Borrower is an interface for types that can borrow or copy bytes returned
+// from FFI methods.
+type Borrower interface {
+	// BorrowedBytes returns a slice of bytes that borrows the data from the
+	// Borrower's internal memory.
+	//
+	// The returned slice is valid only as long as the Borrower is valid.
+	// If the Borrower is freed, the slice will become invalid.
+	BorrowedBytes() []byte
+
+	// CopiedBytes returns a slice of bytes that is a copy of the Borrower's
+	// internal memory.
+	//
+	// This is fully independent of the borrowed data and is valid even after
+	// the Borrower is freed.
+	CopiedBytes() []byte
+
+	// Free releases the memory associated with the Borrower's data.
+	//
+	// It is safe to call this method multiple times. Subsequent calls will
+	// do nothing if the data has already been freed (or was never set).
+	//
+	// However, it is not safe to call this method concurrently from multiple
+	// goroutines. It is also not safe to call this method while there are
+	// outstanding references to the slice returned by BorrowedBytes. Any
+	// existing slices will become invalid and may cause undefined behavior
+	// if used after the Free call.
+	Free() error
+}
+
+var _ Borrower = (*ownedBytes)(nil)
 
 // newBorrowedBytes creates a new BorrowedBytes from a Go byte slice.
 //
@@ -106,52 +139,53 @@ func newKeyValuePairs(keys, vals [][]byte, pinner Pinner) (C.BorrowedKeyValuePai
 // Close releases the memory associated with the Database.
 //
 // This is safe to call if the pointer is nil, in which case it does nothing. The
-// pointer will be set to nil after freeing to prevent double free.
+// pointer will be set to nil after freeing to prevent double free. However, it is
+// not safe to call this method concurrently from multiple goroutines.
 func (db *Database) Close() error {
-	if db == nil {
+	if db.handle == nil {
 		return nil
 	}
 
-	ptr := db.handle
-	if ptr == nil {
-		return nil
-	}
-
-	// Clear the handle before freeing to prevent double free
-	db.handle = nil
-
-	if err := fromVoidResult(C.fwd_close_db(ptr)); err != nil {
+	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
 		return fmt.Errorf("unexpected error when closing database: %w", err)
 	}
+
+	db.handle = nil // Prevent double free
 
 	return nil
 }
 
-// RustOwnedBytes is a wrapper around C.OwnedBytes that provides a Go interface
+// ownedBytes is a wrapper around C.OwnedBytes that provides a Go interface
 // for Rust-owned byte slices.
-type RustOwnedBytes struct {
+//
+// ownedBytes implements the [Borrower] interface allowing it to be shared
+// outside of the FFI package without exposing the C types directly or any FFI
+// implementation details.
+type ownedBytes struct {
 	owned C.OwnedBytes
 }
 
-// Free releases the memory associated with the RustOwnedBytes.
+// Free releases the memory associated with the Borrower's data.
 //
-// It is safe to call this method multiple times, and it will do nothing if the
-// RustOwnedBytes is nil or has already been freed.
-func (b *RustOwnedBytes) Free() error {
-	if b == nil {
+// It is safe to call this method multiple times. Subsequent calls will
+// do nothing if the data has already been freed (or was never set).
+//
+// However, it is not safe to call this method concurrently from multiple
+// goroutines. It is also not safe to call this method while there are
+// outstanding references to the slice returned by BorrowedBytes. Any
+// existing slices will become invalid and may cause undefined behavior
+// if used after the Free call.
+func (b *ownedBytes) Free() error {
+	if b.owned.ptr == nil {
+		// Already freed (or never set), nothing to do.
 		return nil
 	}
 
-	this := *b               // copy so we can reset before freeing,
-	b.owned = C.OwnedBytes{} // reset to clear the pointer
-
-	if this.owned.ptr == nil {
-		return nil
+	if err := getErrorFromVoidResult(C.fwd_free_owned_bytes(b.owned)); err != nil {
+		return fmt.Errorf("%w: %w", errFreeingValue, err)
 	}
 
-	if err := fromVoidResult(C.fwd_free_owned_bytes(this.owned)); err != nil {
-		return fmt.Errorf("unexpected error when freeing owned bytes: %w", err)
-	}
+	b.owned = C.OwnedBytes{}
 
 	return nil
 }
@@ -159,16 +193,17 @@ func (b *RustOwnedBytes) Free() error {
 // BorrowedBytes returns the underlying byte slice. It may return nil if the
 // data has already been freed was never set.
 //
-// The returned slice is valid only as long as the RustOwnedBytes is valid.
+// The returned slice is valid only as long as the ownedBytes is valid.
 //
 // It does not copy the data; however, the slice is valid only as long as the
-// RustOwnedBytes is valid. If the RustOwnedBytes is freed, the slice will
+// ownedBytes is valid. If the ownedBytes is freed, the slice will
 // become invalid.
-func (b *RustOwnedBytes) BorrowedBytes() []byte {
-	if b == nil {
-		return nil
-	}
-
+//
+// It is safe to cast the returned slice as a string so long as the ownedBytes
+// is not freed while the string is in use.
+//
+// BorrowedBytes is part of the [Borrower] interface.
+func (b *ownedBytes) BorrowedBytes() []byte {
 	if b.owned.ptr == nil {
 		return nil
 	}
@@ -176,42 +211,15 @@ func (b *RustOwnedBytes) BorrowedBytes() []byte {
 	return unsafe.Slice((*byte)(b.owned.ptr), b.owned.len)
 }
 
-// intoError converts the RustOwnedBytes into an error. This is used for methods
-// that return a RustOwnedBytes as an error type.
-//
-// If the RustOwnedBytes is nil or has already been freed, it returns nil.
-// Otherwise, the bytes will be copied into Go memory and converted into an
-// error. The original RustOwnedBytes will be freed after this operation.
-func (b *RustOwnedBytes) intoError() error {
-	if b == nil {
-		return nil
-	}
-
-	if b.owned.ptr == nil {
-		return nil
-	}
-
-	// Convert the owned bytes to a string and create an error from it.
-	errMsg := string(b.CopiedBytes())
-
-	if err := b.Free(); err != nil {
-		return fmt.Errorf("failed to free owned bytes: %w while handling original error %s", err, errMsg)
-	}
-
-	return errors.New(errMsg)
-}
-
 // CopiedBytes returns a copy of the underlying byte slice. It may return nil if the
 // data has already been freed or was never set.
 //
 // The returned slice is a copy of the data and is valid independently of the
-// RustOwnedBytes. It is safe to use after the RustOwnedBytes is freed and will
+// ownedBytes. It is safe to use after the ownedBytes is freed and will
 // be freed by the Go garbage collector.
-func (b *RustOwnedBytes) CopiedBytes() []byte {
-	if b == nil {
-		return nil
-	}
-
+//
+// CopiedBytes is part of the [Borrower] interface.
+func (b *ownedBytes) CopiedBytes() []byte {
 	if b.owned.ptr == nil {
 		return nil
 	}
@@ -219,18 +227,27 @@ func (b *RustOwnedBytes) CopiedBytes() []byte {
 	return C.GoBytes(unsafe.Pointer(b.owned.ptr), C.int(b.owned.len))
 }
 
-// fromOwnedBytes creates a RustOwnedBytes from a C.OwnedBytes.
+// intoError converts the ownedBytes into an error. This is used for methods
+// that return a ownedBytes as an error type.
 //
-// The caller is responsible for calling Free() on the returned RustOwnedBytes
-// when it is no longer needed otherwise memory will leak.
-func fromOwnedBytes(owned C.OwnedBytes) *RustOwnedBytes {
-	if owned.ptr == nil {
+// If the ownedBytes is nil or has already been freed, it returns nil.
+// Otherwise, the bytes will be copied into Go memory and converted into an
+// error.
+//
+// The original ownedBytes will be freed after this operation and is no longer
+// valid.
+func (b *ownedBytes) intoError() error {
+	if b.owned.ptr == nil {
 		return nil
 	}
 
-	rustBytes := &RustOwnedBytes{owned: owned}
+	err := errors.New(string(b.CopiedBytes()))
 
-	return rustBytes
+	if err2 := b.Free(); err2 != nil {
+		return fmt.Errorf("%w: %w (original error: %w)", errFreeingValue, err, err2)
+	}
+
+	return err
 }
 
 // fromHashResult creates a byte slice or error from a C.HashResult.
@@ -249,46 +266,55 @@ func fromHashResult(result C.HashResult) ([]byte, error) {
 		hashKey := fromHashKey((*C.HashKey)(unsafe.Pointer(&result.anon0)))
 		return hashKey, nil
 	case C.HashResult_Err:
-		ownedBytes := fromOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0)))
+		ownedBytes := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0)))
 		return nil, ownedBytes.intoError()
 	default:
 		return nil, fmt.Errorf("unknown C.HashResult tag: %d", result.tag)
 	}
 }
 
-// fromVoidResult converts a C.VoidResult to an error.
+// newOwnedBytes creates a ownedBytes from a C.OwnedBytes.
 //
-// It return nil if the result is Ok, otherwise it return an error.
-func fromVoidResult(result C.VoidResult) error {
+// The caller is responsible for calling Free() on the returned ownedBytes
+// when it is no longer needed otherwise memory will leak.
+//
+// It is not an error to provide an OwnedBytes with a nil pointer or zero length
+// in which case the returned ownedBytes will be empty.
+func newOwnedBytes(owned C.OwnedBytes) *ownedBytes {
+	return &ownedBytes{owned: owned}
+}
+
+// getErrorgetErrorFromVoidResult converts a C.VoidResult to an error.
+//
+// It will return nil if the result is Ok, otherwise it returns an error.
+func getErrorFromVoidResult(result C.VoidResult) error {
 	switch result.tag {
 	case C.VoidResult_NullHandlePointer:
 		return errDBClosed
 	case C.VoidResult_Ok:
 		return nil
 	case C.VoidResult_Err:
-		return fromOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 	default:
 		return fmt.Errorf("unknown C.VoidResult tag: %d", result.tag)
 	}
 }
 
-// fromHandleResult converts a C.HandleResult to a Database or error.
+// getDatabaseFromHandleResult converts a C.HandleResult to a Database or error.
 //
 // It sets a finalizer to free the memory when the Database is no longer
 // referenced.
 //
 // If the C.HandleResult is an error, it returns an error instead of a Database.
-func fromHandleResult(result C.HandleResult) (*Database, error) {
+func getDatabaseFromHandleResult(result C.HandleResult) (*Database, error) {
 	switch result.tag {
 	case C.HandleResult_Ok:
 		ptr := *(**C.DatabaseHandle)(unsafe.Pointer(&result.anon0))
-		db := &Database{
-			handle: ptr,
-		}
+		db := &Database{handle: ptr}
 		return db, nil
 	case C.HandleResult_Err:
-		ownedBytes := fromOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0)))
-		return nil, ownedBytes.intoError()
+		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return nil, err
 	default:
 		return nil, fmt.Errorf("unknown C.HandleResult tag: %d", result.tag)
 	}
@@ -325,8 +351,8 @@ func hashAndIDFromValue(v *C.struct_Value) ([]byte, uint32, error) {
 	// Case 3
 	if v.len == 0 {
 		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		if err := fromVoidResult(C.fwd_free_value(v)); err != nil {
-			return nil, 0, fmt.Errorf("unexpected error while freeing value: %w", err)
+		if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
+			return nil, 0, fmt.Errorf("%w: %w", errFreeingValue, err)
 		}
 		return nil, 0, errors.New(errStr)
 	}
@@ -335,8 +361,8 @@ func hashAndIDFromValue(v *C.struct_Value) ([]byte, uint32, error) {
 	id := uint32(v.len)
 	buf := C.GoBytes(unsafe.Pointer(v.data), RootLength)
 	v.len = C.size_t(RootLength) // set the length to free
-	if err := fromVoidResult(C.fwd_free_value(v)); err != nil {
-		return nil, 0, fmt.Errorf("unexpected error while freeing value: %w", err)
+	if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
+		return nil, 0, fmt.Errorf("%w: %w", errFreeingValue, err)
 	}
 	return buf, id, nil
 }
@@ -367,15 +393,15 @@ func errorFromValue(v *C.struct_Value) error {
 	// Case 3
 	if v.len == 0 {
 		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		if err := fromVoidResult(C.fwd_free_value(v)); err != nil {
-			return fmt.Errorf("unexpected error while freeing value: %w", err)
+		if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
+			return fmt.Errorf("%w: %w", errFreeingValue, err)
 		}
 		return errors.New(errStr)
 	}
 
 	// Case 2 and 4
-	if err := fromVoidResult(C.fwd_free_value(v)); err != nil {
-		return fmt.Errorf("unexpected error while freeing value: %w", err)
+	if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
+		return fmt.Errorf("%w: %w", errFreeingValue, err)
 	}
 	return errBadValue
 }
@@ -401,8 +427,8 @@ func bytesFromValue(v *C.struct_Value) ([]byte, error) {
 	// Case 4
 	if v.len != 0 && v.data != nil {
 		buf := C.GoBytes(unsafe.Pointer(v.data), C.int(v.len))
-		if err := fromVoidResult(C.fwd_free_value(v)); err != nil {
-			return nil, fmt.Errorf("unexpected error while freeing value: %w", err)
+		if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
+			return nil, fmt.Errorf("%w: %w", errFreeingValue, err)
 		}
 		return buf, nil
 	}
@@ -415,8 +441,8 @@ func bytesFromValue(v *C.struct_Value) ([]byte, error) {
 	// Case 3
 	if v.len == 0 {
 		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		if err := fromVoidResult(C.fwd_free_value(v)); err != nil {
-			return nil, fmt.Errorf("unexpected error while freeing value: %w", err)
+		if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
+			return nil, fmt.Errorf("%w: %w", errFreeingValue, err)
 		}
 		return nil, errors.New(errStr)
 	}
