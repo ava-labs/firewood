@@ -115,7 +115,7 @@ func New(filePath string, conf *Config) (*Database, error) {
 		truncate:             C.bool(conf.Truncate),
 	}
 
-	return fromHandleResult(C.fwd_open_db(args))
+	return getDatabaseFromHandleResult(C.fwd_open_db(args))
 }
 
 // Update applies a batch of updates to the database, returning the hash of the
