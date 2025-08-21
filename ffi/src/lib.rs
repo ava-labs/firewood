@@ -651,27 +651,6 @@ pub extern "C" fn fwd_gather() -> ValueResult {
     invoke(metrics_setup::gather_metrics)
 }
 
-/// Common arguments, accepted by both `fwd_create_db()` and `fwd_open_db()`.
-///
-/// * `path` - The path to the database file, which will be truncated if passed to `fwd_create_db()`
-///   otherwise should exist if passed to `fwd_open_db()`.
-/// * `cache_size` - The size of the node cache, returns an error if <= 0
-/// * `free_list_cache_size` - The size of the free list cache, returns an error if <= 0
-/// * `revisions` - The maximum number of revisions to keep; firewood currently requires this to be at least 2.
-/// * `strategy` - The cache read strategy to use, 0 for writes only,
-///   1 for branch reads, and 2 for all reads.
-/// * `truncate` - Whether to truncate the database file if it exists.
-///   Returns an error if the value is not 0, 1, or 2.
-#[repr(C)]
-pub struct CreateOrOpenArgs<'a> {
-    path: BorrowedBytes<'a>,
-    cache_size: usize,
-    free_list_cache_size: usize,
-    revisions: usize,
-    strategy: u8,
-    truncate: bool,
-}
-
 /// Open a database with the given arguments.
 ///
 /// # Arguments
