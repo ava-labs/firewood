@@ -105,9 +105,6 @@ func newKeyValuePairs(keys, vals [][]byte, pinner Pinner) (C.BorrowedKeyValuePai
 
 // Close releases the memory associated with the Database.
 //
-// This is not safe to call while there are any outstanding Proposals. All proposals
-// must be freed or committed before calling this.
-//
 // This is safe to call if the pointer is nil, in which case it does nothing. The
 // pointer will be set to nil after freeing to prevent double free.
 func (db *Database) Close() error {
