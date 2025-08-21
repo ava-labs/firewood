@@ -36,7 +36,7 @@ import (
 // These constants are used to identify errors returned by the Firewood Rust FFI.
 // These must be changed if the Rust FFI changes - should be reported by tests.
 const (
-	RootLength       = 32
+	RootLength       = C.sizeof_HashKey
 	rootHashNotFound = "IO error: Root hash not found"
 )
 
