@@ -209,7 +209,17 @@ func (db *Database) Root() ([]byte, error) {
 		return nil, errDBClosed
 	}
 
-	return fromHashResult(C.fwd_root_hash(db.handle))
+	hash, err := fromHashResult(C.fwd_root_hash(db.handle))
+	if err != nil {
+		return nil, err
+	}
+
+	// If the root hash is not found, return a zeroed slice.
+	if len(hash) == 0 {
+		return EmptyRoot, nil
+	}
+
+	return hash, nil
 }
 
 // Revision returns a historical revision of the database.
