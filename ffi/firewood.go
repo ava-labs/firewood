@@ -74,16 +74,14 @@ func DefaultConfig() *Config {
 }
 
 // A CacheStrategy represents the caching strategy used by a [Database].
-type CacheStrategy uint8
+type CacheStrategy C.CacheReadStrategy
 
 const (
-	OnlyCacheWrites CacheStrategy = iota
-	CacheBranchReads
-	CacheAllReads
+	OnlyCacheWrites  CacheStrategy = C.CacheReadStrategy_WritesOnly
+	CacheBranchReads CacheStrategy = C.CacheReadStrategy_BranchReads
+	CacheAllReads    CacheStrategy = C.CacheReadStrategy_All
 
-	// invalidCacheStrategy MUST be the final value in the iota block to make it
-	// the smallest value greater than all valid values.
-	invalidCacheStrategy
+	invalidCacheStrategy = CacheAllReads + 1
 )
 
 // New opens or creates a new Firewood database with the given configuration. If
