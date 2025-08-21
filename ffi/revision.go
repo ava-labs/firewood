@@ -11,8 +11,10 @@ package ffi
 import "C"
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"runtime"
 )
 
@@ -31,6 +33,9 @@ type Revision struct {
 }
 
 func newRevision(handle *C.DatabaseHandle, root []byte) (*Revision, error) {
+	root_hex := hex.EncodeToString(root)
+	slog.Debug("revision.go: newRevision", "root", root_hex)
+
 	if handle == nil {
 		return nil, errDBClosed
 	}
@@ -66,6 +71,9 @@ func newRevision(handle *C.DatabaseHandle, root []byte) (*Revision, error) {
 }
 
 func (r *Revision) Get(key []byte) ([]byte, error) {
+	key_hex := hex.EncodeToString(key)
+	slog.Debug("revision.go: get", "root", r.root, "key", key_hex)
+
 	if r.handle == nil {
 		return nil, errDBClosed
 	}

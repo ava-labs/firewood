@@ -11,7 +11,9 @@ package ffi
 import "C"
 
 import (
+	"encoding/hex"
 	"errors"
+	"log/slog"
 	"runtime"
 )
 
@@ -76,6 +78,9 @@ func (p *Proposal) Root() ([]byte, error) {
 // Get retrieves the value for the given key.
 // If the key does not exist, it returns (nil, nil).
 func (p *Proposal) Get(key []byte) ([]byte, error) {
+	key_hex := hex.EncodeToString(key)
+	slog.Debug("proposal.go: get", "id", p.id, "key", key_hex)
+
 	if p.handle == nil {
 		return nil, errDBClosed
 	}
@@ -95,6 +100,12 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 // Propose creates a new proposal with the given keys and values.
 // The proposal is not committed until Commit is called.
 func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
+	keys_hex := make([]string, len(keys))
+	for i, key := range keys {
+		keys_hex[i] = hex.EncodeToString(key)
+	}
+	slog.Debug("proposal.go: propose", "id", p.id, "keys", keys_hex)
+
 	if p.handle == nil {
 		return nil, errDBClosed
 	}
@@ -120,6 +131,8 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 // Commit commits the proposal and returns any errors.
 // If an error occurs, the proposal is dropped and no longer valid.
 func (p *Proposal) Commit() error {
+	slog.Debug("proposal.go: commit", "id", p.id)
+
 	if p.handle == nil {
 		return errDBClosed
 	}
@@ -143,6 +156,8 @@ func (p *Proposal) Commit() error {
 // In the case of an error, the proposal can assumed to be dropped.
 // An error is returned if the proposal was already dropped.
 func (p *Proposal) Drop() error {
+	slog.Debug("proposal.go: drop", "id", p.id)
+
 	if p.handle == nil {
 		return errDBClosed
 	}

@@ -27,8 +27,11 @@ import "C"
 
 import (
 	"bytes"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
+	"os"
 	"runtime"
 	"strings"
 )
@@ -105,6 +108,19 @@ func New(filePath string, conf *Config) (*Database, error) {
 		return nil, fmt.Errorf("%T.FreeListCacheEntries must be >= 1", conf)
 	}
 
+	f, err := os.OpenFile("firewood-ffi.log", os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		slog.Error("Failed to open log file", "error", err)
+		return nil, err
+	}
+	opts := &slog.HandlerOptions{
+		Level: slog.LevelDebug, // Set the desired log level
+	}
+	handler := slog.NewTextHandler(f, opts)
+	logger := slog.New(handler)
+	slog.SetDefault(logger)
+	slog.Debug("=================== opening firewood ===================")
+
 	if err := StartLogs(&LogConfig{
 		Path:        "/mnt/exp/firewood.log",
 		FilterLevel: "trace",
@@ -139,6 +155,12 @@ func New(filePath string, conf *Config) (*Database, error) {
 // WARNING: a consequence of prefix deletion is that calling Update with an empty
 // key and value will delete the entire database.
 func (db *Database) Update(keys, vals [][]byte) ([]byte, error) {
+	keys_hex := make([]string, len(keys))
+	for i, key := range keys {
+		keys_hex[i] = hex.EncodeToString(key)
+	}
+	slog.Debug("firewood.go: update", "keys", keys_hex)
+
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -156,6 +178,12 @@ func (db *Database) Update(keys, vals [][]byte) ([]byte, error) {
 }
 
 func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
+	keys_hex := make([]string, len(keys))
+	for i, key := range keys {
+		keys_hex[i] = hex.EncodeToString(key)
+	}
+	slog.Debug("firewood.go: propose", "keys", keys_hex)
+
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -175,6 +203,9 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 // Get retrieves the value for the given key. It always returns a nil error.
 // If the key is not found, the return value will be (nil, nil).
 func (db *Database) Get(key []byte) ([]byte, error) {
+	key_hex := hex.EncodeToString(key)
+	slog.Debug("firewood.go: get", "key", key_hex)
+
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -197,6 +228,10 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 // If the root is not found, it returnas an error.
 // If key is not found, it returns (nil, nil).
 func (db *Database) GetFromRoot(root, key []byte) ([]byte, error) {
+	root_hex := hex.EncodeToString(root)
+	key_hex := hex.EncodeToString(key)
+	slog.Debug("firewood.go: get_from_root", "root", root_hex, "key", key_hex)
+
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -221,6 +256,8 @@ func (db *Database) GetFromRoot(root, key []byte) ([]byte, error) {
 // Root returns the current root hash of the trie.
 // Empty trie must return common.Hash{}.
 func (db *Database) Root() ([]byte, error) {
+	slog.Debug("firewood.go: root")
+
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -242,6 +279,8 @@ func (db *Database) Revision(root []byte) (*Revision, error) {
 // Close closes the database and releases all held resources.
 // Returns an error if already closed.
 func (db *Database) Close() error {
+	slog.Debug("firewood.go: close")
+
 	if db.handle == nil {
 		return errDBClosed
 	}
