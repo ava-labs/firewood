@@ -205,7 +205,7 @@ func (b *ownedBytes) CopiedBytes() []byte {
 		return nil
 	}
 
-	return C.GoBytes(unsafe.Pointer(&b.owned.ptr), C.int(b.owned.len))
+	return C.GoBytes(unsafe.Pointer(b.owned.ptr), C.int(b.owned.len))
 }
 
 // intoError converts the ownedBytes into an error. This is used for methods
