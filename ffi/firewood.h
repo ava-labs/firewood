@@ -12,7 +12,34 @@
 
 
 /**
- * A handle to the database, returned by `fwd_create_db` and `fwd_open_db`.
+ * The cache read strategy to use for the database.
+ *
+ * This controls what types of database operations are cached to improve
+ * performance by avoiding redundant disk reads and computations.
+ */
+enum CacheReadStrategy {
+  /**
+   * Only cache write operations. This is the most conservative strategy
+   * that minimizes memory usage but may result in more disk reads.
+   */
+  CacheReadStrategy_WritesOnly = 0,
+  /**
+   * Cache both write operations and branch node reads. This provides
+   * better performance for tree traversal operations while keeping
+   * memory usage moderate.
+   */
+  CacheReadStrategy_BranchReads = 1,
+  /**
+   * Cache all read and write operations. This provides the best performance
+   * but uses the most memory as it caches leaf nodes and values in addition
+   * to branch nodes.
+   */
+  CacheReadStrategy_All = 2,
+};
+typedef uint8_t CacheReadStrategy;
+
+/**
+ * A handle to the database, returned by `fwd_open_db`.
  *
  * These handles are passed to the other FFI functions.
  *
@@ -173,37 +200,86 @@ typedef struct VoidResult {
   };
 } VoidResult;
 
-/**
- * Struct returned by `fwd_create_db` and `fwd_open_db`
- */
-typedef struct DatabaseCreationResult {
-  struct DatabaseHandle *db;
-  uint8_t *error_str;
-} DatabaseCreationResult;
-
 typedef uint32_t ProposalId;
 
 /**
- * Common arguments, accepted by both `fwd_create_db()` and `fwd_open_db()`.
- *
- * * `path` - The path to the database file, which will be truncated if passed to `fwd_create_db()`
- *   otherwise should exist if passed to `fwd_open_db()`.
- * * `cache_size` - The size of the node cache, returns an error if <= 0
- * * `free_list_cache_size` - The size of the free list cache, returns an error if <= 0
- * * `revisions` - The maximum number of revisions to keep; firewood currently requires this to be at least 2.
- * * `strategy` - The cache read strategy to use, 0 for writes only,
- *   1 for branch reads, and 2 for all reads.
- * * `truncate` - Whether to truncate the database file if it exists.
- *   Returns an error if the value is not 0, 1, or 2.
+ * The result type returned from the open or create database functions.
  */
-typedef struct CreateOrOpenArgs {
+typedef enum HandleResult_Tag {
+  /**
+   * The database was opened or created successfully and the handle is
+   * returned as an opaque pointer.
+   *
+   * The caller must ensure that [`fwd_close_db`] is called to free resources
+   * associated with this handle when it is no longer needed.
+   *
+   * [`fwd_close_db`]: crate::fwd_close_db
+   */
+  HandleResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. If
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  HandleResult_Err,
+} HandleResult_Tag;
+
+typedef struct HandleResult {
+  HandleResult_Tag tag;
+  union {
+    struct {
+      struct DatabaseHandle *ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} HandleResult;
+
+/**
+ * Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
+ *
+ * [`fwd_open_db`]: crate::fwd_open_db
+ */
+typedef struct DatabaseHandleArgs {
+  /**
+   * The path to the database file.
+   *
+   * This must be a valid UTF-8 string, even on Windows.
+   *
+   * If this is empty, an error will be returned.
+   */
   BorrowedBytes path;
+  /**
+   * The size of the node cache. If zero, the default size of 1,500,000 nodes
+   * will be used.
+   */
   size_t cache_size;
+  /**
+   * The size of the free list cache. If zero, the default size of 40,000 nodes
+   * will be used.
+   */
   size_t free_list_cache_size;
+  /**
+   * The maximum number of revisions to keep. If zero, the default of 128
+   * revisions will be used.
+   *
+   * If this is less than 2, an error will be returned.
+   */
   size_t revisions;
-  uint8_t strategy;
+  /**
+   * The cache read strategy to use.
+   */
+  CacheReadStrategy strategy;
+  /**
+   * Whether to truncate the database file if it exists.
+   */
   bool truncate;
-} CreateOrOpenArgs;
+} DatabaseHandleArgs;
 
 /**
  * Arguments for initializing logging for the Firewood FFI.
@@ -318,26 +394,6 @@ struct Value fwd_commit(const struct DatabaseHandle *db, uint32_t proposal_id);
  *
  */
 struct Value fwd_drop_proposal(const struct DatabaseHandle *db, uint32_t proposal_id);
-
-/**
- * Frees the memory associated with a `DatabaseCreationResult`.
- * This only needs to be called if the `error_str` field is non-null.
- *
- * # Arguments
- *
- * * `result` - The `DatabaseCreationResult` to free, previously returned from `fwd_create_db` or `fwd_open_db`.
- *
- * # Safety
- *
- * This function is unsafe because it dereferences raw pointers.
- * The caller must ensure that `result` is a valid pointer.
- *
- * # Panics
- *
- * This function panics if `result` is `null`.
- *
- */
-struct VoidResult fwd_free_database_error_result(struct DatabaseCreationResult *result);
 
 /**
  * Consumes the [`OwnedBytes`] and frees the memory associated with it.
@@ -471,25 +527,25 @@ struct Value fwd_get_from_root(const struct DatabaseHandle *db,
 struct Value fwd_get_latest(const struct DatabaseHandle *db, BorrowedBytes key);
 
 /**
- * Open a database with the given cache size and maximum number of revisions
+ * Open a database with the given arguments.
  *
  * # Arguments
  *
- * See `CreateOrOpenArgs`.
+ * See [`DatabaseHandleArgs`].
  *
  * # Returns
  *
- * A database handle, or panics if it cannot be created
+ * - [`HandleResult::Ok`] with the database handle if successful.
+ * - [`HandleResult::Err`] if an error occurs while opening the database.
  *
  * # Safety
  *
- * This function uses raw pointers so it is unsafe.
- * It is the caller's responsibility to ensure that path is a valid pointer to a null-terminated string.
- * The caller must also ensure that the cache size is greater than 0 and that the number of revisions is at least 2.
- * The caller must call `close` to free the memory associated with the returned database handle.
- *
+ * The caller must:
+ * - ensure that the database is freed with [`fwd_close_db`] when no longer needed.
+ * - ensure that the database handle is freed only after freeing or committing
+ *   all proposals created on it.
  */
-struct DatabaseCreationResult fwd_open_db(struct CreateOrOpenArgs args);
+struct HandleResult fwd_open_db(struct DatabaseHandleArgs args);
 
 /**
  * Proposes a batch of operations to the database.

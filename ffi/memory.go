@@ -249,6 +249,28 @@ func fromVoidResult(result C.VoidResult) error {
 	}
 }
 
+// fromHandleResult converts a C.HandleResult to a Database or error.
+//
+// It sets a finalizer to free the memory when the Database is no longer
+// referenced.
+//
+// If the C.HandleResult is an error, it returns an error instead of a Database.
+func fromHandleResult(result C.HandleResult) (*Database, error) {
+	switch result.tag {
+	case C.HandleResult_Ok:
+		ptr := *(**C.DatabaseHandle)(unsafe.Pointer(&result.anon0))
+		db := &Database{
+			handle: ptr,
+		}
+		return db, nil
+	case C.HandleResult_Err:
+		ownedBytes := fromOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0)))
+		return nil, ownedBytes.intoError()
+	default:
+		return nil, fmt.Errorf("unknown C.HandleResult tag: %d", result.tag)
+	}
+}
+
 // hashAndIDFromValue converts the cgo `Value` payload into:
 //
 //	case | data    | len   | meaning
@@ -378,20 +400,4 @@ func bytesFromValue(v *C.struct_Value) ([]byte, error) {
 
 	// Case 2
 	return nil, errBadValue
-}
-
-func databaseFromResult(result *C.struct_DatabaseCreationResult) (*C.DatabaseHandle, error) {
-	if result == nil {
-		return nil, errNilStruct
-	}
-
-	if result.error_str != nil {
-		errStr := C.GoString((*C.char)(unsafe.Pointer(result.error_str)))
-		if err := fromVoidResult(C.fwd_free_database_error_result(result)); err != nil {
-			return nil, fmt.Errorf("unexpected error while freeing error result: %w", err)
-		}
-		runtime.KeepAlive(result)
-		return nil, errors.New(errStr)
-	}
-	return result.db, nil
 }

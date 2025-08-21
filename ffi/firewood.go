@@ -108,22 +108,16 @@ func New(filePath string, conf *Config) (*Database, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	args := C.struct_CreateOrOpenArgs{
+	args := C.struct_DatabaseHandleArgs{
 		path:                 newBorrowedBytes([]byte(filePath), &pinner),
 		cache_size:           C.size_t(conf.NodeCacheEntries),
 		free_list_cache_size: C.size_t(conf.FreeListCacheEntries),
 		revisions:            C.size_t(conf.Revisions),
-		strategy:             C.uint8_t(conf.ReadCacheStrategy),
+		strategy:             C.CacheReadStrategy(conf.ReadCacheStrategy),
 		truncate:             C.bool(conf.Truncate),
 	}
 
-	dbResult := C.fwd_open_db(args)
-	db, err := databaseFromResult(&dbResult)
-	if err != nil {
-		return nil, err
-	}
-
-	return &Database{handle: db}, nil
+	return fromHandleResult(C.fwd_open_db(args))
 }
 
 // Update applies a batch of updates to the database, returning the hash of the
