@@ -69,5 +69,7 @@ mod tests {
         assert_eq!(iter.next(), Some(Ok(3)));
         assert_eq!(iter.next(), None);
         assert_eq!(*collection, [0, 1]);
+        // vec should allocate for 4 elements because of the size hint
+        assert_eq!(collection.capacity(), 4);
     }
 }
