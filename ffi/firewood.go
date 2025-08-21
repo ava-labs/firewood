@@ -138,7 +138,7 @@ func (db *Database) Update(keys, vals [][]byte) ([]byte, error) {
 		return nil, err
 	}
 
-	return fromHashResult(C.fwd_batch(db.handle, kvp))
+	return getHashKeyFromHashResult(C.fwd_batch(db.handle, kvp))
 }
 
 func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
@@ -211,7 +211,7 @@ func (db *Database) Root() ([]byte, error) {
 		return nil, errDBClosed
 	}
 
-	hash, err := fromHashResult(C.fwd_root_hash(db.handle))
+	hash, err := getHashKeyFromHashResult(C.fwd_root_hash(db.handle))
 	if err != nil {
 		return nil, err
 	}

@@ -250,29 +250,6 @@ func (b *ownedBytes) intoError() error {
 	return err
 }
 
-// fromHashResult creates a byte slice or error from a C.HashResult.
-//
-// It returns nil, nil if the result is None.
-// It returns nil, err if the result is an error.
-// It returns a byte slice, nil if the result is Some.
-func fromHashResult(result C.HashResult) ([]byte, error) {
-	switch result.tag {
-	case C.HashResult_NullHandlePointer:
-		return nil, errDBClosed
-	case C.HashResult_None:
-		return nil, nil
-	case C.HashResult_Some:
-		// copy the bytes from the C.HashResult to a fixed-size array
-		hashKey := fromHashKey((*C.HashKey)(unsafe.Pointer(&result.anon0)))
-		return hashKey, nil
-	case C.HashResult_Err:
-		ownedBytes := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0)))
-		return nil, ownedBytes.intoError()
-	default:
-		return nil, fmt.Errorf("unknown C.HashResult tag: %d", result.tag)
-	}
-}
-
 // newOwnedBytes creates a ownedBytes from a C.OwnedBytes.
 //
 // The caller is responsible for calling Free() on the returned ownedBytes
@@ -282,6 +259,29 @@ func fromHashResult(result C.HashResult) ([]byte, error) {
 // in which case the returned ownedBytes will be empty.
 func newOwnedBytes(owned C.OwnedBytes) *ownedBytes {
 	return &ownedBytes{owned: owned}
+}
+
+// getHashKeyFromHashResult creates a byte slice or error from a C.HashResult.
+//
+// It returns nil, nil if the result is None.
+// It returns nil, err if the result is an error.
+// It returns a byte slice, nil if the result is Some.
+func getHashKeyFromHashResult(result C.HashResult) ([]byte, error) {
+	switch result.tag {
+	case C.HashResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.HashResult_None:
+		return nil, nil
+	case C.HashResult_Some:
+		cHashKey := (*C.HashKey)(unsafe.Pointer(&result.anon0))
+		hashKey := *(*[32]byte)(unsafe.Pointer(&cHashKey._0))
+		return hashKey[:], nil
+	case C.HashResult_Err:
+		ownedBytes := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0)))
+		return nil, ownedBytes.intoError()
+	default:
+		return nil, fmt.Errorf("unknown C.HashResult tag: %d", result.tag)
+	}
 }
 
 // getErrorgetErrorFromVoidResult converts a C.VoidResult to an error.
@@ -449,13 +449,4 @@ func bytesFromValue(v *C.struct_Value) ([]byte, error) {
 
 	// Case 2
 	return nil, errBadValue
-}
-
-func fromHashKey(key *C.HashKey) []byte {
-	if key == nil {
-		return nil
-	}
-	hashKey := make([]byte, 32)
-	copy(hashKey, unsafe.Slice((*byte)(unsafe.Pointer(key)), 32))
-	return hashKey
 }
