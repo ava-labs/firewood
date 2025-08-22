@@ -137,7 +137,7 @@ pub trait Hashable {
     fn value_digest(&self) -> Option<ValueDigest<&[u8]>>;
     /// Each element is a child's index and hash.
     /// Yields 0 elements if the node is a leaf.
-    fn children(&self) -> Children<HashType>;
+    fn children(&self) -> Children<&HashType>;
 }
 
 /// A preimage of a hash.
@@ -151,7 +151,7 @@ pub trait Preimage {
 trait HashableNode {
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone;
     fn value(&self) -> Option<&[u8]>;
-    fn child_hashes(&self) -> Children<HashType>;
+    fn child_hashes(&self) -> Children<&HashType>;
 }
 
 impl HashableNode for BranchNode {
@@ -163,7 +163,7 @@ impl HashableNode for BranchNode {
         self.value.as_deref()
     }
 
-    fn child_hashes(&self) -> Children<HashType> {
+    fn child_hashes(&self) -> Children<&HashType> {
         self.children_hashes()
     }
 }
@@ -177,7 +177,7 @@ impl HashableNode for LeafNode {
         Some(&self.value)
     }
 
-    fn child_hashes(&self) -> Children<HashType> {
+    fn child_hashes(&self) -> Children<&HashType> {
         BranchNode::empty_children()
     }
 }
@@ -211,7 +211,7 @@ impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
         self.node.value().map(ValueDigest::Value)
     }
 
-    fn children(&self) -> Children<HashType> {
+    fn children(&self) -> Children<&HashType> {
         self.node.child_hashes()
     }
 }

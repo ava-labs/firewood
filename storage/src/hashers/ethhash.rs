@@ -19,6 +19,7 @@
 )]
 
 use crate::logger::warn;
+use crate::node::branch::ChildrenExt;
 use crate::{
     BranchNode, HashType, Hashable, Preimage, TrieHash, ValueDigest, hashednode::HasUpdate,
     logger::trace,
@@ -119,7 +120,7 @@ impl<T: Hashable> Preimage for T {
 
         let child_hashes = self.children();
 
-        let children = child_hashes.iter().filter(|c| c.is_some()).count();
+        let children = child_hashes.count_some();
 
         if children == 0 {
             // since there are no children, this must be a leaf

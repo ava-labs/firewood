@@ -331,6 +331,19 @@ mod ethhash {
 /// Type alias for a collection of children in a branch node.
 pub type Children<T> = [Option<T>; BranchNode::MAX_CHILDREN];
 
+/// An extension trait for `Children` to add convenience methods.
+///
+/// This should be replaced once `Children` is a proper struct.
+pub trait ChildrenExt<T> {
+    fn count_some(&self) -> usize;
+}
+
+impl<T> ChildrenExt<T> for Children<T> {
+    fn count_some(&self) -> usize {
+        self.iter().filter(|c| c.is_some()).count()
+    }
+}
+
 #[derive(PartialEq, Eq, Clone)]
 /// A branch node
 pub struct BranchNode {
@@ -459,19 +472,15 @@ impl BranchNode {
     /// changes will have this check implemented structurally to prevent such panics.
     #[must_use]
     #[track_caller]
-    pub fn children_hashes(&self) -> Children<HashType> {
-        let mut hashes = Self::empty_children();
-        for (child, slot) in self.children.iter().zip(hashes.iter_mut()) {
-            match child {
-                None => {}
-                Some(Child::Node(_)) => {
-                    panic!("attempted to get the hash of an in-memory mutable node")
-                }
-                Some(Child::AddressWithHash(_, hash)) => _ = slot.replace(hash.clone()),
-                Some(Child::MaybePersisted(_, hash)) => _ = slot.replace(hash.clone()),
+    pub fn children_hashes(&self) -> Children<&HashType> {
+        self.children.each_ref().map(|child| match child {
+            None => None,
+            Some(Child::Node(_)) => {
+                panic!("attempted to get the hash of an in-memory mutable node")
             }
-        }
-        hashes
+            Some(Child::AddressWithHash(_, hash)) => Some(hash),
+            Some(Child::MaybePersisted(_, hash)) => Some(hash),
+        })
     }
 
     /// Returns a set of addresses for each child that has an address set.

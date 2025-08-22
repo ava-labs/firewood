@@ -10,6 +10,7 @@
 )]
 
 use crate::hashednode::{HasUpdate, Hashable, Preimage};
+use crate::node::branch::ChildrenExt;
 use crate::{TrieHash, ValueDigest};
 /// Merkledb compatible hashing algorithm.
 use integer_encoding::VarInt;
@@ -35,7 +36,7 @@ impl<T: Hashable> Preimage for T {
     fn write(&self, buf: &mut impl HasUpdate) {
         let children = self.children();
 
-        let num_children = children.iter().filter(|c| c.is_some()).count() as u64;
+        let num_children = children.count_some() as u64;
 
         add_varint_to_buf(buf, num_children);
 
