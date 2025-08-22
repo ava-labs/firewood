@@ -20,9 +20,9 @@
 typedef struct DatabaseHandle DatabaseHandle;
 
 /**
- * A root database hash key, used in FFI functions that provide or return
- * a root hash. This type requires no allocation and can be copied freely
- * and droppped without any additional overhead.
+ * A database hash key, used in FFI functions that require hashes.
+ * This type requires no allocation and can be copied freely and
+ * dropped without any additional overhead.
  *
  * This is useful because it is the same size as 4 words which is equivalent
  * to 2 heap-allocated slices (pointer + length each), or 1.5 vectors (which
