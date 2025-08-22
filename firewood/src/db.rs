@@ -6,19 +6,18 @@
     reason = "Found 12 occurrences after enabling the lint."
 )]
 
+use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
-use crate::stream::MerkleKeyValueStream;
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
-    self, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair, KeyValuePairIter,
-    OptionalHashKeyExt,
+    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair,
+    KeyValuePairIter, OptionalHashKeyExt,
 };
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
-use async_trait::async_trait;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, ReadableStorage, TrieReader,
+    ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieReader,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
@@ -36,8 +35,6 @@ pub enum DbError {
     FileIo(#[from] FileIoError),
 }
 
-type HistoricalRev = NodeStore<Committed, FileBacked>;
-
 /// Metrics for the database.
 /// TODO: Add more metrics
 pub struct DbMetrics {
@@ -50,93 +47,46 @@ impl std::fmt::Debug for DbMetrics {
     }
 }
 
-/// A synchronous view of the database.
-pub trait DbViewSync {
-    /// find a value synchronously
-    fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Value>, DbError>;
-}
-
-/// A synchronous view of the database with raw byte keys (object-safe version).
-pub trait DbViewSyncBytes: std::fmt::Debug + Send + Sync {
-    /// find a value synchronously using raw bytes
-    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError>;
-}
-
-// Provide blanket implementation for DbViewSync using DbViewSyncBytes
-impl<T: DbViewSyncBytes> DbViewSync for T {
-    fn val_sync<K: KeyType>(&self, key: K) -> Result<Option<Value>, DbError> {
-        self.val_sync_bytes(key.as_ref())
-    }
-}
-
-impl<T, S> DbViewSyncBytes for NodeStore<T, S>
+impl<P: Parentable, S: ReadableStorage> api::DbView for NodeStore<P, S>
 where
-    NodeStore<T, S>: TrieReader,
-    T: std::fmt::Debug + Send + Sync,
-    S: ReadableStorage,
+    NodeStore<P, S>: TrieReader,
 {
-    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
-        let merkle = Merkle::from(self);
-        let value = merkle.get_value(key)?;
-        Ok(value)
-    }
-}
-
-impl<T: DbViewSyncBytes> DbViewSyncBytes for Arc<T> {
-    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
-        (**self).val_sync_bytes(key)
-    }
-}
-
-impl DbViewSyncBytes for Proposal<'_> {
-    fn val_sync_bytes(&self, key: &[u8]) -> Result<Option<Value>, DbError> {
-        self.nodestore.val_sync_bytes(key)
-    }
-}
-
-#[async_trait]
-impl api::DbView for HistoricalRev {
-    type Stream<'view>
-        = MerkleKeyValueStream<'view, Self>
+    type Iter<'view>
+        = MerkleKeyValueIter<'view, Self>
     where
         Self: 'view;
 
-    async fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
-        Ok(HashedNodeReader::root_hash(self))
+    fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
+        Ok(HashedNodeReader::root_hash(self).or_default_root_hash())
     }
 
-    async fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
+    fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
         let merkle = Merkle::from(self);
         Ok(merkle.get_value(key.as_ref())?)
     }
 
-    async fn single_key_proof<K: api::KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
+    fn single_key_proof<K: api::KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
         let merkle = Merkle::from(self);
         merkle.prove(key.as_ref()).map_err(api::Error::from)
     }
 
-    async fn range_proof<K: api::KeyType>(
+    fn range_proof<K: api::KeyType>(
         &self,
         first_key: Option<K>,
         last_key: Option<K>,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, api::Error> {
-        Merkle::from(self)
-            .range_proof(
-                first_key.as_ref().map(AsRef::as_ref),
-                last_key.as_ref().map(AsRef::as_ref),
-                limit,
-            )
-            .await
+        Merkle::from(self).range_proof(
+            first_key.as_ref().map(AsRef::as_ref),
+            last_key.as_ref().map(AsRef::as_ref),
+            limit,
+        )
     }
 
-    fn iter_option<K: KeyType>(
-        &self,
-        first_key: Option<K>,
-    ) -> Result<Self::Stream<'_>, api::Error> {
+    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
         match first_key {
-            Some(key) => Ok(MerkleKeyValueStream::from_key(self, key)),
-            None => Ok(MerkleKeyValueStream::from(self)),
+            Some(key) => Ok(MerkleKeyValueIter::from_key(self, key)),
+            None => Ok(MerkleKeyValueIter::from(self)),
         }
     }
 }
@@ -163,7 +113,6 @@ pub struct Db {
     manager: RevisionManager,
 }
 
-#[async_trait]
 impl api::Db for Db {
     type Historical = NodeStore<Committed, FileBacked>;
 
@@ -172,24 +121,24 @@ impl api::Db for Db {
     where
         Self: 'db;
 
-    async fn revision(&self, root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
+    fn revision(&self, root_hash: HashKey) -> Result<Arc<Self::Historical>, api::Error> {
         let nodestore = self.manager.revision(root_hash)?;
         Ok(nodestore)
     }
 
-    async fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
-        self.root_hash_sync()
+    fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
+        Ok(self.manager.root_hash()?.or_default_root_hash())
     }
 
-    async fn all_hashes(&self) -> Result<Vec<HashKey>, api::Error> {
+    fn all_hashes(&self) -> Result<Vec<HashKey>, api::Error> {
         Ok(self.manager.all_hashes())
     }
 
     #[fastrace::trace(short_name = true)]
-    async fn propose<'db>(
-        &'db self,
-        batch: (impl IntoIterator<IntoIter: KeyValuePairIter> + Send),
-    ) -> Result<Self::Proposal<'db>, api::Error> {
+    fn propose(
+        &self,
+        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
+    ) -> Result<Self::Proposal<'_>, api::Error> {
         let parent = self.manager.current_revision();
         let proposal = NodeStore::new(&parent)?;
         let mut merkle = Merkle::from(proposal);
@@ -244,55 +193,9 @@ impl Db {
         Ok(db)
     }
 
-    /// Synchronously get the root hash of the latest revision.
-    pub fn root_hash_sync(&self) -> Result<Option<HashKey>, api::Error> {
-        Ok(self.manager.root_hash()?.or_default_root_hash())
-    }
-
-    /// Synchronously get a revision from a root hash
-    pub fn revision_sync(&self, root_hash: HashKey) -> Result<Arc<HistoricalRev>, api::Error> {
-        let nodestore = self.manager.revision(root_hash)?;
-        Ok(nodestore)
-    }
-
     /// Synchronously get a view, either committed or proposed
-    pub fn view_sync(&self, root_hash: HashKey) -> Result<Box<dyn DbViewSyncBytes>, api::Error> {
-        let nodestore = self.manager.view(root_hash)?;
-        Ok(nodestore)
-    }
-
-    /// propose a new batch synchronously
-    pub fn propose_sync(
-        &self,
-        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
-    ) -> Result<Proposal<'_>, api::Error> {
-        let parent = self.manager.current_revision();
-        let proposal = NodeStore::new(&parent)?;
-        let mut merkle = Merkle::from(proposal);
-        for op in batch {
-            match op.into_batch() {
-                BatchOp::Put { key, value } => {
-                    merkle.insert(key.as_ref(), value.as_ref().into())?;
-                }
-                BatchOp::Delete { key } => {
-                    merkle.remove(key.as_ref())?;
-                }
-                BatchOp::DeleteRange { prefix } => {
-                    merkle.remove_prefix(prefix.as_ref())?;
-                }
-            }
-        }
-        let nodestore = merkle.into_inner();
-        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.try_into()?);
-        self.manager.add_proposal(immutable.clone());
-
-        self.metrics.proposals.increment(1);
-
-        Ok(Proposal {
-            nodestore: immutable,
-            db: self,
-        })
+    pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, api::Error> {
+        self.manager.view(root_hash).map_err(Into::into)
     }
 
     /// Dump the Trie of the latest revision.
@@ -321,54 +224,35 @@ pub struct Proposal<'db> {
     db: &'db Db,
 }
 
-impl Proposal<'_> {
-    /// Synchronously get the root hash of the latest revision.
-    pub fn root_hash_sync(&self) -> Result<Option<HashKey>, api::Error> {
-        Ok(self.nodestore.root_hash().or_default_root_hash())
-    }
-}
-
-#[async_trait]
 impl api::DbView for Proposal<'_> {
-    type Stream<'view>
-        = MerkleKeyValueStream<'view, NodeStore<Arc<ImmutableProposal>, FileBacked>>
+    type Iter<'view>
+        = MerkleKeyValueIter<'view, NodeStore<Arc<ImmutableProposal>, FileBacked>>
     where
         Self: 'view;
 
-    async fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
-        self.root_hash_sync()
+    fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
+        api::DbView::root_hash(&*self.nodestore)
     }
 
-    async fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
-        let merkle = Merkle::from(self.nodestore.clone());
-        merkle.get_value(key.as_ref()).map_err(api::Error::from)
+    fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
+        api::DbView::val(&*self.nodestore, key)
     }
 
-    async fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
-        let merkle = Merkle::from(self.nodestore.clone());
-        merkle.prove(key.as_ref()).map_err(api::Error::from)
+    fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
+        api::DbView::single_key_proof(&*self.nodestore, key)
     }
 
-    async fn range_proof<K: KeyType>(
+    fn range_proof<K: KeyType>(
         &self,
         first_key: Option<K>,
         last_key: Option<K>,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, api::Error> {
-        Merkle::from(&self.nodestore)
-            .range_proof(
-                first_key.as_ref().map(AsRef::as_ref),
-                last_key.as_ref().map(AsRef::as_ref),
-                limit,
-            )
-            .await
+        api::DbView::range_proof(&*self.nodestore, first_key, last_key, limit)
     }
 
-    fn iter_option<K: KeyType>(
-        &self,
-        _first_key: Option<K>,
-    ) -> Result<Self::Stream<'_>, api::Error> {
-        todo!()
+    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
+        api::DbView::iter_option(&*self.nodestore, first_key)
     }
 }
 
@@ -389,30 +273,6 @@ impl<'db> api::Proposal for Proposal<'db> {
 }
 
 impl Proposal<'_> {
-    /// Commit a proposal synchronously
-    pub fn commit_sync(self) -> Result<(), api::Error> {
-        Ok(self.db.manager.commit(self.nodestore.clone())?)
-    }
-
-    /// Create a new proposal from the current one synchronously
-    pub fn propose_sync(
-        &self,
-        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
-    ) -> Result<Self, api::Error> {
-        self.create_proposal(batch)
-    }
-
-    /// Create an iterator on proposal, owning the nodestore
-    pub fn iter_owned<'a, K: KeyType>(
-        &self,
-        key: Option<K>,
-    ) -> MerkleKeyValueStream<'a, NodeStore<Arc<ImmutableProposal>, FileBacked>> {
-        match key {
-            Some(key) => MerkleKeyValueStream::owned_from_key(self.nodestore.clone(), key),
-            None => MerkleKeyValueStream::from(self.nodestore.clone()),
-        }
-    }
-
     #[crate::metrics("firewood.proposal.create", "database proposal creation")]
     fn create_proposal(
         &self,
@@ -457,14 +317,13 @@ mod test {
     use std::path::PathBuf;
 
     use firewood_storage::{CheckOpt, CheckerError};
-    use tokio::sync::mpsc::{Receiver, Sender};
 
     use crate::db::{Db, Proposal};
     use crate::v2::api::{Db as _, DbView as _, KeyValuePairIter, Proposal as _};
 
     use super::{BatchOp, DbConfig};
 
-    /// A chunk of an iterator, provided by [`IterExt::async_chunk_fold`] to the folding
+    /// A chunk of an iterator, provided by [`IterExt::chunk_fold`] to the folding
     /// function.
     type Chunk<'chunk, 'base, T> = &'chunk mut Take<&'base mut Peekable<T>>;
 
@@ -472,7 +331,7 @@ mod test {
         /// Asynchronously folds the iterator with chunks of a specified size. The last
         /// chunk may be smaller than the specified size.
         ///
-        /// The folding function is an async closure that takes an accumulator and a
+        /// The folding function is a closure that takes an accumulator and a
         /// chunk of the underlying iterator, and returns a new accumulator.
         ///
         /// # Panics
@@ -481,17 +340,17 @@ mod test {
         ///
         /// If the folding function panics, the iterator will be dropped (because this
         /// method consumes `self`).
-        async fn async_chunk_fold<B, F>(self, chunk_size: NonZeroUsize, init: B, mut f: F) -> B
+        fn chunk_fold<B, F>(self, chunk_size: NonZeroUsize, init: B, mut f: F) -> B
         where
             Self: Sized,
-            F: for<'a, 'b> AsyncFnMut(B, Chunk<'a, 'b, Self>) -> B,
+            F: for<'a, 'b> FnMut(B, Chunk<'a, 'b, Self>) -> B,
         {
             let chunk_size = chunk_size.get();
             let mut iter = self.peekable();
             let mut acc = init;
             while iter.peek().is_some() {
                 let mut chunk = iter.by_ref().take(chunk_size);
-                acc = f(acc, chunk.by_ref()).await;
+                acc = f(acc, chunk.by_ref());
                 assert!(chunk.next().is_none(), "entire chunk was not consumed");
             }
             acc
@@ -500,35 +359,35 @@ mod test {
 
     impl<T: Iterator> IterExt for T {}
 
-    #[tokio::test]
-    async fn test_proposal_reads() {
+    #[test]
+    fn test_proposal_reads() {
         let db = testdb();
         let batch = vec![BatchOp::Put {
             key: b"k",
             value: b"v",
         }];
-        let proposal = db.propose(batch).await.unwrap();
-        assert_eq!(&*proposal.val(b"k").await.unwrap().unwrap(), b"v");
+        let proposal = db.propose(batch).unwrap();
+        assert_eq!(&*proposal.val(b"k").unwrap().unwrap(), b"v");
 
-        assert_eq!(proposal.val(b"notfound").await.unwrap(), None);
+        assert_eq!(proposal.val(b"notfound").unwrap(), None);
         proposal.commit().unwrap();
 
         let batch = vec![BatchOp::Put {
             key: b"k",
             value: b"v2",
         }];
-        let proposal = db.propose(batch).await.unwrap();
-        assert_eq!(&*proposal.val(b"k").await.unwrap().unwrap(), b"v2");
+        let proposal = db.propose(batch).unwrap();
+        assert_eq!(&*proposal.val(b"k").unwrap().unwrap(), b"v2");
 
-        let committed = db.root_hash().await.unwrap().unwrap();
-        let historical = db.revision(committed).await.unwrap();
-        assert_eq!(&*historical.val(b"k").await.unwrap().unwrap(), b"v");
+        let committed = db.root_hash().unwrap().unwrap();
+        let historical = db.revision(committed).unwrap();
+        assert_eq!(&*historical.val(b"k").unwrap().unwrap(), b"v");
     }
 
-    #[tokio::test]
-    async fn reopen_test() {
+    #[test]
+    fn reopen_test() {
         let db = testdb();
-        let initial_root = db.root_hash().await.unwrap();
+        let initial_root = db.root_hash().unwrap();
         let batch = vec![
             BatchOp::Put {
                 key: b"a",
@@ -539,130 +398,130 @@ mod test {
                 value: b"2",
             },
         ];
-        let proposal = db.propose(batch).await.unwrap();
+        let proposal = db.propose(batch).unwrap();
         proposal.commit().unwrap();
-        println!("{:?}", db.root_hash().await.unwrap().unwrap());
+        println!("{:?}", db.root_hash().unwrap().unwrap());
 
         let db = db.reopen();
-        println!("{:?}", db.root_hash().await.unwrap().unwrap());
-        let committed = db.root_hash().await.unwrap().unwrap();
-        let historical = db.revision(committed).await.unwrap();
-        assert_eq!(&*historical.val(b"a").await.unwrap().unwrap(), b"1");
+        println!("{:?}", db.root_hash().unwrap().unwrap());
+        let committed = db.root_hash().unwrap().unwrap();
+        let historical = db.revision(committed).unwrap();
+        assert_eq!(&*historical.val(b"a").unwrap().unwrap(), b"1");
 
         let db = db.replace();
-        println!("{:?}", db.root_hash().await.unwrap());
-        assert!(db.root_hash().await.unwrap() == initial_root);
+        println!("{:?}", db.root_hash().unwrap());
+        assert!(db.root_hash().unwrap() == initial_root);
     }
 
-    #[tokio::test]
+    #[test]
     // test that dropping a proposal removes it from the list of known proposals
     //    /-> P1 - will get committed
     // R1 --> P2 - will get dropped
     //    \-> P3 - will get orphaned, but it's still known
-    async fn test_proposal_scope_historic() {
+    fn test_proposal_scope_historic() {
         let db = testdb();
         let batch1 = vec![BatchOp::Put {
             key: b"k1",
             value: b"v1",
         }];
-        let proposal1 = db.propose(batch1).await.unwrap();
-        assert_eq!(&*proposal1.val(b"k1").await.unwrap().unwrap(), b"v1");
+        let proposal1 = db.propose(batch1).unwrap();
+        assert_eq!(&*proposal1.val(b"k1").unwrap().unwrap(), b"v1");
 
         let batch2 = vec![BatchOp::Put {
             key: b"k2",
             value: b"v2",
         }];
-        let proposal2 = db.propose(batch2).await.unwrap();
-        assert_eq!(&*proposal2.val(b"k2").await.unwrap().unwrap(), b"v2");
+        let proposal2 = db.propose(batch2).unwrap();
+        assert_eq!(&*proposal2.val(b"k2").unwrap().unwrap(), b"v2");
 
         let batch3 = vec![BatchOp::Put {
             key: b"k3",
             value: b"v3",
         }];
-        let proposal3 = db.propose(batch3).await.unwrap();
-        assert_eq!(&*proposal3.val(b"k3").await.unwrap().unwrap(), b"v3");
+        let proposal3 = db.propose(batch3).unwrap();
+        assert_eq!(&*proposal3.val(b"k3").unwrap().unwrap(), b"v3");
 
         // the proposal is dropped here, but the underlying
         // nodestore is still accessible because it's referenced by the revision manager
         // The third proposal remains referenced
-        let p2hash = proposal2.root_hash().await.unwrap().unwrap();
-        assert!(db.all_hashes().await.unwrap().contains(&p2hash));
+        let p2hash = proposal2.root_hash().unwrap().unwrap();
+        assert!(db.all_hashes().unwrap().contains(&p2hash));
         drop(proposal2);
 
         // commit the first proposal
         proposal1.commit().unwrap();
         // Ensure we committed the first proposal's data
-        let committed = db.root_hash().await.unwrap().unwrap();
-        let historical = db.revision(committed).await.unwrap();
-        assert_eq!(&*historical.val(b"k1").await.unwrap().unwrap(), b"v1");
+        let committed = db.root_hash().unwrap().unwrap();
+        let historical = db.revision(committed).unwrap();
+        assert_eq!(&*historical.val(b"k1").unwrap().unwrap(), b"v1");
 
         // the second proposal shouldn't be available to commit anymore
-        assert!(!db.all_hashes().await.unwrap().contains(&p2hash));
+        assert!(!db.all_hashes().unwrap().contains(&p2hash));
 
         // the third proposal should still be contained within the all_hashes list
         // would be deleted if another proposal was committed and proposal3 was dropped here
-        let hash3 = proposal3.root_hash().await.unwrap().unwrap();
+        let hash3 = proposal3.root_hash().unwrap().unwrap();
         assert!(db.manager.all_hashes().contains(&hash3));
     }
 
-    #[tokio::test]
+    #[test]
     // test that dropping a proposal removes it from the list of known proposals
     // R1 - base revision
     //  \-> P1 - will get committed
     //   \-> P2 - will get dropped
     //    \-> P3 - will get orphaned, but it's still known
-    async fn test_proposal_scope_orphan() {
+    fn test_proposal_scope_orphan() {
         let db = testdb();
         let batch1 = vec![BatchOp::Put {
             key: b"k1",
             value: b"v1",
         }];
-        let proposal1 = db.propose(batch1).await.unwrap();
-        assert_eq!(&*proposal1.val(b"k1").await.unwrap().unwrap(), b"v1");
+        let proposal1 = db.propose(batch1).unwrap();
+        assert_eq!(&*proposal1.val(b"k1").unwrap().unwrap(), b"v1");
 
         let batch2 = vec![BatchOp::Put {
             key: b"k2",
             value: b"v2",
         }];
         let proposal2 = proposal1.propose(batch2).unwrap();
-        assert_eq!(&*proposal2.val(b"k2").await.unwrap().unwrap(), b"v2");
+        assert_eq!(&*proposal2.val(b"k2").unwrap().unwrap(), b"v2");
 
         let batch3 = vec![BatchOp::Put {
             key: b"k3",
             value: b"v3",
         }];
         let proposal3 = proposal2.propose(batch3).unwrap();
-        assert_eq!(&*proposal3.val(b"k3").await.unwrap().unwrap(), b"v3");
+        assert_eq!(&*proposal3.val(b"k3").unwrap().unwrap(), b"v3");
 
         // the proposal is dropped here, but the underlying
         // nodestore is still accessible because it's referenced by the revision manager
         // The third proposal remains referenced
-        let p2hash = proposal2.root_hash().await.unwrap().unwrap();
-        assert!(db.all_hashes().await.unwrap().contains(&p2hash));
+        let p2hash = proposal2.root_hash().unwrap().unwrap();
+        assert!(db.all_hashes().unwrap().contains(&p2hash));
         drop(proposal2);
 
         // commit the first proposal
         proposal1.commit().unwrap();
         // Ensure we committed the first proposal's data
-        let committed = db.root_hash().await.unwrap().unwrap();
-        let historical = db.revision(committed).await.unwrap();
-        assert_eq!(&*historical.val(b"k1").await.unwrap().unwrap(), b"v1");
+        let committed = db.root_hash().unwrap().unwrap();
+        let historical = db.revision(committed).unwrap();
+        assert_eq!(&*historical.val(b"k1").unwrap().unwrap(), b"v1");
 
         // the second proposal shouldn't be available to commit anymore
-        assert!(!db.all_hashes().await.unwrap().contains(&p2hash));
+        assert!(!db.all_hashes().unwrap().contains(&p2hash));
 
         // the third proposal should still be contained within the all_hashes list
-        let hash3 = proposal3.root_hash().await.unwrap().unwrap();
+        let hash3 = proposal3.root_hash().unwrap().unwrap();
         assert!(db.manager.all_hashes().contains(&hash3));
 
         // moreover, the data from the second and third proposals should still be available
         // through proposal3
-        assert_eq!(&*proposal3.val(b"k2").await.unwrap().unwrap(), b"v2");
-        assert_eq!(&*proposal3.val(b"k3").await.unwrap().unwrap(), b"v3");
+        assert_eq!(&*proposal3.val(b"k2").unwrap().unwrap(), b"v2");
+        assert_eq!(&*proposal3.val(b"k3").unwrap().unwrap(), b"v3");
     }
 
-    #[tokio::test]
-    async fn test_view_sync() {
+    #[test]
+    fn test_view_sync() {
         let db = testdb();
 
         // Create and commit some data to get a historical revision
@@ -670,8 +529,8 @@ mod test {
             key: b"historical_key",
             value: b"historical_value",
         }];
-        let proposal = db.propose(batch).await.unwrap();
-        let historical_hash = proposal.root_hash().await.unwrap().unwrap();
+        let proposal = db.propose(batch).unwrap();
+        let historical_hash = proposal.root_hash().unwrap().unwrap();
         proposal.commit().unwrap();
 
         // Create a new proposal (uncommitted)
@@ -679,23 +538,17 @@ mod test {
             key: b"proposal_key",
             value: b"proposal_value",
         }];
-        let proposal = db.propose(batch).await.unwrap();
-        let proposal_hash = proposal.root_hash().await.unwrap().unwrap();
+        let proposal = db.propose(batch).unwrap();
+        let proposal_hash = proposal.root_hash().unwrap().unwrap();
 
         // Test that view_sync can find the historical revision
-        let historical_view = db.view_sync(historical_hash).unwrap();
-        let value = historical_view
-            .val_sync_bytes(b"historical_key")
-            .unwrap()
-            .unwrap();
+        let historical_view = db.view(historical_hash).unwrap();
+        let value = historical_view.val(b"historical_key").unwrap().unwrap();
         assert_eq!(&*value, b"historical_value");
 
         // Test that view_sync can find the proposal
-        let proposal_view = db.view_sync(proposal_hash).unwrap();
-        let value = proposal_view
-            .val_sync_bytes(b"proposal_key")
-            .unwrap()
-            .unwrap();
+        let proposal_view = db.view(proposal_hash).unwrap();
+        let value = proposal_view.val(b"proposal_key").unwrap().unwrap();
         assert_eq!(&*value, b"proposal_value");
     }
 
@@ -703,8 +556,8 @@ mod test {
     ///
     /// Test creates two batches and proposes them, and verifies that the values are in the correct proposal.
     /// It then commits them one by one, and verifies the latest committed version is correct.
-    #[tokio::test]
-    async fn test_propose_on_proposal() {
+    #[test]
+    fn test_propose_on_proposal() {
         // number of keys and values to create for this test
         const N: usize = 20;
 
@@ -724,7 +577,7 @@ mod test {
         let mut kviter = keys.iter().zip(vals.iter()).map_into_batch();
 
         // create two proposals, second one has a base of the first one
-        let proposal1 = db.propose(kviter.by_ref().take(N / 2)).await.unwrap();
+        let proposal1 = db.propose(kviter.by_ref().take(N / 2)).unwrap();
         let proposal2 = proposal1.propose(kviter).unwrap();
 
         // iterate over the keys and values again, checking that the values are in the correct proposal
@@ -732,39 +585,39 @@ mod test {
 
         // first half of the keys should be in both proposals
         for (k, v) in kviter.by_ref().take(N / 2) {
-            assert_eq!(&proposal1.val(k).await.unwrap().unwrap(), v);
-            assert_eq!(&proposal2.val(k).await.unwrap().unwrap(), v);
+            assert_eq!(&proposal1.val(k).unwrap().unwrap(), v);
+            assert_eq!(&proposal2.val(k).unwrap().unwrap(), v);
         }
 
         // remaining keys should only be in the second proposal
         for (k, v) in kviter {
             // second half of keys are in the second proposal
-            assert_eq!(&proposal2.val(k).await.unwrap().unwrap(), v);
+            assert_eq!(&proposal2.val(k).unwrap().unwrap(), v);
             // but not in the first
-            assert_eq!(proposal1.val(k).await.unwrap(), None);
+            assert_eq!(proposal1.val(k).unwrap(), None);
         }
 
         proposal1.commit().unwrap();
 
         // all keys are still in the second proposal (first is no longer accessible)
         for (k, v) in keys.iter().zip(vals.iter()) {
-            assert_eq!(&proposal2.val(k).await.unwrap().unwrap(), v);
+            assert_eq!(&proposal2.val(k).unwrap().unwrap(), v);
         }
 
         // commit the second proposal
         proposal2.commit().unwrap();
 
         // all keys are in the database
-        let committed = db.root_hash().await.unwrap().unwrap();
-        let revision = db.revision(committed).await.unwrap();
+        let committed = db.root_hash().unwrap().unwrap();
+        let revision = db.revision(committed).unwrap();
 
         for (k, v) in keys.into_iter().zip(vals.into_iter()) {
-            assert_eq!(revision.val(k).await.unwrap().unwrap(), v);
+            assert_eq!(revision.val(k).unwrap().unwrap(), v);
         }
     }
 
-    #[tokio::test]
-    async fn fuzz_checker() {
+    #[test]
+    fn fuzz_checker() {
         let _ = env_logger::Builder::new().is_test(true).try_init();
 
         let rng = firewood_storage::SeededRng::from_env_or_random();
@@ -789,7 +642,7 @@ mod test {
                 }
                 batch
             });
-            let proposal = db.propose(batch).await.unwrap();
+            let proposal = db.propose(batch).unwrap();
             proposal.commit().unwrap();
 
             // check the database for consistency, sometimes checking the hashes
@@ -811,8 +664,8 @@ mod test {
         }
     }
 
-    #[tokio::test]
-    async fn test_deep_propose() {
+    #[test]
+    fn test_deep_propose() {
         const NUM_KEYS: NonZeroUsize = const { NonZeroUsize::new(2).unwrap() };
         const NUM_PROPOSALS: usize = 100;
 
@@ -822,31 +675,22 @@ mod test {
             .map(|i| (format!("key{i}"), format!("value{i}")))
             .collect::<Vec<_>>();
 
-        let proposals = ops
-            .iter()
-            .async_chunk_fold(
-                NUM_KEYS,
-                Vec::<Proposal<'_>>::with_capacity(NUM_PROPOSALS),
-                async |mut proposals, ops| {
-                    let proposal = if let Some(parent) = proposals.last() {
-                        parent.propose(ops).unwrap()
-                    } else {
-                        db.propose(ops).await.unwrap()
-                    };
+        let proposals = ops.iter().chunk_fold(
+            NUM_KEYS,
+            Vec::<Proposal<'_>>::with_capacity(NUM_PROPOSALS),
+            |mut proposals, ops| {
+                let proposal = if let Some(parent) = proposals.last() {
+                    parent.propose(ops).unwrap()
+                } else {
+                    db.propose(ops).unwrap()
+                };
 
-                    proposals.push(proposal);
-                    proposals
-                },
-            )
-            .await;
+                proposals.push(proposal);
+                proposals
+            },
+        );
 
-        let last_proposal_root_hash = proposals
-            .last()
-            .unwrap()
-            .root_hash()
-            .await
-            .unwrap()
-            .unwrap();
+        let last_proposal_root_hash = proposals.last().unwrap().root_hash().unwrap().unwrap();
 
         // commit the proposals
         for proposal in proposals {
@@ -854,15 +698,15 @@ mod test {
         }
 
         // get the last committed revision
-        let last_root_hash = db.root_hash().await.unwrap().unwrap();
-        let committed = db.revision(last_root_hash.clone()).await.unwrap();
+        let last_root_hash = db.root_hash().unwrap().unwrap();
+        let committed = db.revision(last_root_hash.clone()).unwrap();
 
         // the last root hash should be the same as the last proposal root hash
         assert_eq!(last_root_hash, last_proposal_root_hash);
 
         // check that all the keys and values are still present
         for (k, v) in &ops {
-            let found = committed.val(k).await.unwrap();
+            let found = committed.val(k).unwrap();
             assert_eq!(
                 found.as_deref(),
                 Some(v.as_bytes()),
@@ -872,8 +716,8 @@ mod test {
     }
 
     /// Test that reading from a proposal during commit works as expected
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_read_during_commit() {
+    #[test]
+    fn test_read_during_commit() {
         use crate::db::Proposal;
 
         const CHANNEL_CAPACITY: usize = 8;
@@ -881,21 +725,21 @@ mod test {
         let testdb = testdb();
         let db = &testdb.db;
 
-        let (tx, mut rx): (Sender<Proposal<'_>>, Receiver<Proposal<'_>>) =
-            tokio::sync::mpsc::channel(CHANNEL_CAPACITY);
-        let (result_tx, mut result_rx) = tokio::sync::mpsc::channel(CHANNEL_CAPACITY);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Proposal<'_>>(CHANNEL_CAPACITY);
+        let (result_tx, result_rx) = std::sync::mpsc::sync_channel(CHANNEL_CAPACITY);
 
-        tokio_scoped::scope(|scope| {
+        // scope will block until all scope-spawned threads finish
+        std::thread::scope(|scope| {
             // Commit task
-            scope.spawn(async move {
-                while let Some(proposal) = rx.recv().await {
+            scope.spawn(move || {
+                while let Ok(proposal) = rx.recv() {
                     let result = proposal.commit();
                     // send result back to the main thread, both for synchronization and stopping the
                     // test on error
-                    result_tx.send(result).await.unwrap();
+                    result_tx.send(result).unwrap();
                 }
             });
-            scope.spawn(async move {
+            scope.spawn(move || {
                 // Proposal creation
                 for id in 0u32..5000 {
                     // insert a key of length 32 and a value of length 8,
@@ -904,16 +748,16 @@ mod test {
                         key: [id as u8; 32],
                         value: [id as u8; 8],
                     }];
-                    let proposal = db.propose(batch).await.unwrap();
-                    let last_hash = proposal.root_hash().await.unwrap().unwrap();
-                    let view = db.view_sync(last_hash).unwrap();
+                    let proposal = db.propose(batch).unwrap();
+                    let last_hash = proposal.root_hash().unwrap().unwrap();
+                    let view = db.view(last_hash).unwrap();
 
-                    tx.send(proposal).await.unwrap();
+                    tx.send(proposal).unwrap();
 
                     let key = [id as u8; 32];
-                    let value = view.val_sync_bytes(&key).unwrap().unwrap();
+                    let value = view.val(&key).unwrap().unwrap();
                     assert_eq!(&*value, &[id as u8; 8]);
-                    result_rx.recv().await.unwrap().unwrap();
+                    result_rx.recv().unwrap().unwrap();
                 }
                 // close the channel, which will cause the commit task to exit
                 drop(tx);

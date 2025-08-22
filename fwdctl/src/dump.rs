@@ -2,10 +2,9 @@
 // See the file LICENSE.md for licensing terms.
 use clap::Args;
 use firewood::db::{Db, DbConfig};
+use firewood::iter::MerkleKeyValueIter;
 use firewood::merkle::{Key, Value};
-use firewood::stream::MerkleKeyValueStream;
 use firewood::v2::api::{self, Db as _};
-use futures_util::StreamExt;
 use std::borrow::Cow;
 use std::error::Error;
 use std::fs::File;
@@ -117,7 +116,7 @@ pub struct Options {
     pub hex: bool,
 }
 
-pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
+pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("dump database {opts:?}");
 
     // Check if dot format is used with unsupported options
@@ -144,12 +143,12 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
 
     let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
     let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
-    let latest_hash = db.root_hash().await?;
+    let latest_hash = db.root_hash()?;
     let Some(latest_hash) = latest_hash else {
         println!("Database is empty");
         return Ok(());
     };
-    let latest_rev = db.revision(latest_hash).await?;
+    let latest_rev = db.revision(latest_hash)?;
 
     let Some(mut output_handler) =
         create_output_handler(opts, &db).expect("Error creating output handler")
@@ -166,9 +165,9 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
     let stop_key = opts.stop_key.clone().or(opts.stop_key_hex.clone());
     let mut key_count: u32 = 0;
 
-    let mut stream = MerkleKeyValueStream::from_key(&latest_rev, start_key);
+    let mut iter = MerkleKeyValueIter::from_key(&latest_rev, start_key);
 
-    while let Some(item) = stream.next().await {
+    while let Some(item) = iter.next() {
         match item {
             Ok((key, value)) => {
                 output_handler.handle_record(&key, &value)?;
@@ -178,7 +177,7 @@ pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
                 if (stop_key.as_ref().is_some_and(|stop_key| key >= *stop_key))
                     || key_count_exceeded(opts.max_key_count, key_count)
                 {
-                    handle_next_key(stream.next().await);
+                    handle_next_key(iter.next());
                     break;
                 }
             }
