@@ -34,7 +34,7 @@ jobs:
           fi
 
           # Regex pattern to match metric-related code changes
-          METRIC_REGEX_PATTERN="(counter!|gauge!|histogram!|#\\[metrics\\])"
+          METRIC_REGEX_PATTERN="(counter!|gauge!|histogram!|#\\[metrics\\])" # ci trigger
 
           # Check for metric-related changes
           METRIC_CHANGES=$(git diff $BASE_COMMIT..HEAD --unified=0 | grep -E "$METRIC_REGEX_PATTERN" || true)
