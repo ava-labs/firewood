@@ -14,13 +14,10 @@ import "C"
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"unsafe"
 )
 
 var (
-	errNilStruct     = errors.New("nil struct pointer cannot be freed")
-	errBadValue      = errors.New("value from cgo formatted incorrectly")
 	errKeysAndValues = errors.New("keys and values must have the same length")
 	errFreeingValue  = errors.New("unexpected error while freeing value")
 )
@@ -138,6 +135,9 @@ func newKeyValuePairs(keys, vals [][]byte, pinner Pinner) (C.BorrowedKeyValuePai
 
 // Close releases the memory associated with the Database.
 //
+// This is not safe to call while there are any outstanding Proposals. All proposals
+// must be freed or committed before calling this.
+//
 // This is safe to call if the pointer is nil, in which case it does nothing. The
 // pointer will be set to nil after freeing to prevent double free. However, it is
 // not safe to call this method concurrently from multiple goroutines.
@@ -151,6 +151,25 @@ func (db *Database) Close() error {
 	}
 
 	db.handle = nil // Prevent double free
+
+	return nil
+}
+
+// Drop releases the memory associated with the Proposal.
+//
+// This is safe to call if the pointer is nil, in which case it does nothing.
+//
+// The pointer will be set to nil after freeing to prevent double free.
+func (p *Proposal) Drop() error {
+	if p.handle == nil {
+		return nil
+	}
+
+	if err := getErrorFromVoidResult(C.fwd_free_proposal(p.handle)); err != nil {
+		return fmt.Errorf("%w: %w", errFreeingValue, err)
+	}
+
+	p.handle = nil // Prevent double free
 
 	return nil
 }
@@ -348,88 +367,24 @@ func getDatabaseFromHandleResult(result C.HandleResult) (*Database, error) {
 	}
 }
 
-// hashAndIDFromValue converts the cgo `Value` payload into:
-//
-//	case | data    | len   | meaning
-//
-// 1.    | nil     | 0     | invalid
-// 2.    | nil     | non-0 | proposal deleted everything
-// 3.    | non-nil | 0     | error string
-// 4.    | non-nil | non-0 | hash and id
-//
-// The value should never be nil.
-func hashAndIDFromValue(v *C.struct_Value) ([]byte, uint32, error) {
-	// Pin the returned value to prevent it from being garbage collected.
-	defer runtime.KeepAlive(v)
-
-	if v == nil {
-		return nil, 0, errNilStruct
-	}
-
-	if v.data == nil {
-		// Case 2
-		if v.len != 0 {
-			return nil, uint32(v.len), nil
+// getProposalFromProposalResult converts a C.ProposalResult to a Proposal or error.
+func getProposalFromProposalResult(result C.ProposalResult, db *Database) (*Proposal, error) {
+	switch result.tag {
+	case C.ProposalResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.ProposalResult_Ok:
+		body := (*C.ProposalResult_Ok_Body)(unsafe.Pointer(&result.anon0))
+		hashKey := *(*[32]byte)(unsafe.Pointer(&body.root_hash._0))
+		proposal := &Proposal{
+			db:     db,
+			handle: body.handle,
+			root:   hashKey[:],
 		}
-
-		// Case 1
-		return nil, 0, errBadValue
+		return proposal, nil
+	case C.ProposalResult_Err:
+		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return nil, err
+	default:
+		return nil, fmt.Errorf("unknown C.ProposalResult tag: %d", result.tag)
 	}
-
-	// Case 3
-	if v.len == 0 {
-		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
-			return nil, 0, fmt.Errorf("%w: %w", errFreeingValue, err)
-		}
-		return nil, 0, errors.New(errStr)
-	}
-
-	// Case 4
-	id := uint32(v.len)
-	buf := C.GoBytes(unsafe.Pointer(v.data), RootLength)
-	v.len = C.size_t(RootLength) // set the length to free
-	if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
-		return nil, 0, fmt.Errorf("%w: %w", errFreeingValue, err)
-	}
-	return buf, id, nil
-}
-
-// errorFromValue converts the cgo `Value` payload into:
-//
-//	case | data    | len   | meaning
-//
-// 1.    | nil     | 0     | empty
-// 2.    | nil     | non-0 | invalid
-// 3.    | non-nil | 0     | error string
-// 4.    | non-nil | non-0 | invalid
-//
-// The value should never be nil.
-func errorFromValue(v *C.struct_Value) error {
-	// Pin the returned value to prevent it from being garbage collected.
-	defer runtime.KeepAlive(v)
-
-	if v == nil {
-		return errNilStruct
-	}
-
-	// Case 1
-	if v.data == nil && v.len == 0 {
-		return nil
-	}
-
-	// Case 3
-	if v.len == 0 {
-		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
-			return fmt.Errorf("%w: %w", errFreeingValue, err)
-		}
-		return errors.New(errStr)
-	}
-
-	// Case 2 and 4
-	if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
-		return fmt.Errorf("%w: %w", errFreeingValue, err)
-	}
-	return errBadValue
 }

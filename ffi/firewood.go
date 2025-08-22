@@ -152,8 +152,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 		return nil, err
 	}
 
-	val := C.fwd_propose_on_db(db.handle, kvp)
-	return newProposal(db.handle, &val)
+	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), db)
 }
 
 // Get retrieves the value for the given key. It always returns a nil error.
