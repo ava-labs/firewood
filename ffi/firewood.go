@@ -167,6 +167,8 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	defer pinner.Unpin()
 
 	val, err := getValueFromValueResult(C.fwd_get_latest(db.handle, newBorrowedBytes(key, &pinner)))
+	// The revision won't be found if the database is empty.
+	// This is valid, but should be treated as a non-existent key
 	if errors.Is(err, errRevisionNotFound) {
 		return nil, nil
 	}
