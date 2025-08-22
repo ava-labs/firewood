@@ -333,9 +333,6 @@ func getValueFromValueResult(result C.ValueResult) ([]byte, error) {
 
 // getDatabaseFromHandleResult converts a C.HandleResult to a Database or error.
 //
-// It sets a finalizer to free the memory when the Database is no longer
-// referenced.
-//
 // If the C.HandleResult is an error, it returns an error instead of a Database.
 func getDatabaseFromHandleResult(result C.HandleResult) (*Database, error) {
 	switch result.tag {
