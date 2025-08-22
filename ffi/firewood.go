@@ -108,7 +108,7 @@ func New(filePath string, conf *Config) (*Database, error) {
 		return nil, fmt.Errorf("%T.FreeListCacheEntries must be >= 1", conf)
 	}
 
-	f, err := os.OpenFile("firewood-ffi.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
+	f, err := os.OpenFile("/mnt/exp/firewood-ffi.log", os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
 		slog.Error("Failed to open log file", "error", err)
 		return nil, err
