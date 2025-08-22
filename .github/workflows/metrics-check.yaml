@@ -48,7 +48,9 @@ jobs:
 
           # Set output variables for the comment step
           echo "metric_changes_found=$([ -n "$METRIC_CHANGES" ] && echo "true" || echo "false")" >> $GITHUB_OUTPUT
-          echo "metric_changes=$METRIC_CHANGES" >> $GITHUB_OUTPUT
+          echo "metric_changes=<<EOF" >> $GITHUB_OUTPUT
+          echo "$METRIC_CHANGES" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Look for previous comment
         if: github.repository == github.event.pull_request.head.repo.full_name && steps.check-metrics.outputs.metric_changes_found == 'true'
