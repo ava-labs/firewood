@@ -69,12 +69,46 @@ pub enum ProofError {
     #[error("{0:?}")]
     IO(#[from] FileIoError),
 
+    /// Error when the first key is greater than the last key in a provided range proof
+    #[error("first key must come before the last key in a range proof")]
+    InvalidRange,
+
+    /// Error when the caller provides an end key proof but no end key or key-values.
+    #[error("unexpected end key proof when no end key and no key-values were provided")]
+    UnexpectedEndProof,
+
+    /// Error when the caller provides a start key proof but no start key to verify
+    #[error("unexpected start key proof when no start key was provided")]
+    UnexpectedStartProof,
+
+    /// Error when the caller provided key-values or an end key but no end key proof.
+    #[error("expected an end key proof when an end key is provided or key-values are present")]
+    ExpectedEndProof,
+
+    /// Error when the kev-values in in the provided proof are not in strict ascending order
+    #[error("key-values in the provided proof are not in strict ascending order")]
+    NonIncreasingValues,
+
+    /// Error when the key-values are outsided of the expected [start, end] range
+    /// where start and end are inclusive, but optional.
+    #[error("expected key-values to be within the provided [start, end] range")]
+    StateFromOutsideOfRange,
+
+    /// Error when the exclusion proof is missing end nodes for the provided key.
+    #[error("exclusion proof is missing end nodes for target path")]
+    ExclusionProofMissingEndNodes,
+
+    /// Error when the proof is invalid for an exclusion proof because the final
+    /// node diverges from the penultimate node's differently than the target key.
+    #[error("invalid node for exclusion proof")]
+    ExclusionProofInvalidNode,
+
     /// Empty range
     #[error("empty range")]
     EmptyRange,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 /// A node in a proof.
 pub struct ProofNode {
     /// The key this node is at. Each byte is a nibble.
@@ -213,6 +247,127 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
 
         // This is an exclusion proof.
         Ok(None)
+    }
+
+    /// If the last element in `proof` is `key`, this is an inclusion proof.
+    /// Otherwise, this is an exclusion proof and `key` must not be in `proof`.
+    ///
+    /// Returns [`Ok`] if and only if all the following hold:
+    ///
+    ///   - Any node with a partial byte length, should not have a value associated with it
+    ///     since all keys with values are written in complete bytes.
+    ///
+    ///   - Each key in `proof` is a strict prefix of the following key.
+    ///
+    ///   - Each key in `proof` is a strict prefix of `key`, except possibly the last.
+    ///
+    ///   - If this is an inclusion proof, the last key in `proof` is the `key`.
+    ///
+    ///   - If this is an exclusion proof:
+    ///     - the last key in `proof` is the replacement child and is at the
+    ///       corresponding index of the parent's children.
+    ///     - the last key in `proof` is the possible parent and it doesn't
+    ///       have a child at the corresponding index.
+    pub fn verify_proof_path_structure(&self, key: &Path) -> Result<(), ProofError> {
+        let proof_nodes = self.as_ref();
+
+        let Some(last_node) = proof_nodes.last() else {
+            // empty proof
+            return Ok(());
+        };
+
+        // Validate all nodes except the last
+        for window in proof_nodes.windows(2) {
+            let [node, next_node] = window else {
+                unreachable!("windows(2) will always return a slice of length 2");
+            };
+
+            // Check partial byte constraint
+            #[cfg(not(feature = "branch_factor_256"))]
+            if node.key().count() % 2 != 0 && node.value_digest().is_some() {
+                return Err(ProofError::ValueAtOddNibbleLength);
+            }
+
+            // Each node's key should be a prefix of target key
+            if next_nibble(node.key(), key.iter().copied()).is_none() {
+                return Err(ProofError::ShouldBePrefixOfProvenKey);
+            }
+
+            // Each node's key should be a prefix of next node's key
+            if next_nibble(node.key(), next_node.key()).is_none() {
+                return Err(ProofError::ShouldBePrefixOfNextKey);
+            }
+        }
+
+        // Validate last node
+        let last_key = Path(last_node.key().collect());
+
+        #[cfg(not(feature = "branch_factor_256"))]
+        if last_key.len() % 2 != 0 && last_node.value_digest().is_some() {
+            return Err(ProofError::ValueAtOddNibbleLength);
+        }
+
+        match key.strip_prefix(last_key.as_ref()) {
+            Some(&[]) => {
+                // inclusion proof, all done
+                Ok(())
+            }
+            Some(&[next_nibble, ..]) => {
+                if last_node
+                    .children()
+                    .get(next_nibble as usize)
+                    .ok_or(ProofError::ChildIndexOutOfBounds)?
+                    .is_some()
+                {
+                    // exclusion proof, but the last node has a child at the next nibble
+                    // for our target key, so the proof is invalid because we need more
+                    // proof nodes to fully verify the exclusion.
+                    Err(ProofError::ExclusionProofMissingEndNodes)
+                } else {
+                    // exclusion proof, the last node is a parent of the target key and
+                    // there is no child at the next nibble.
+                    Ok(())
+                }
+            }
+            None => {
+                let [.., penultimate_node, _] = proof_nodes else {
+                    // there is no penultimate node, so the last node is the only node
+                    // (it is also the root node). Its existence is enough to verify
+                    // that the target key is excluded.
+                    return Ok(());
+                };
+
+                // replacement child, example:
+                //
+                // penultimate: "ab"
+                // target:      "abd"
+                // final:       "abef"
+                // Note: shares prefix with target but diverges later
+                //
+                // for `last_node` to be a valid exclusion proof, it must be located
+                // at the same index in penultimate_node's children as where the
+                // next nibble would be in the target key.
+                //
+                // The example is invalid because the target key diverges
+                // from the final key at the last nibble (`d != e`).
+                //
+                // the earlier windows loop guarantees that penultimate_node is strict prefix
+                // of both the target key and the final key. Therefore, we can safely use the
+                // result of `next_nibble` to check if the last node is a valid replacement
+                // for the target key.
+
+                let last_index = next_nibble(penultimate_node.key(), last_key.iter().copied());
+                let target_index = next_nibble(penultimate_node.key(), key.iter().copied());
+
+                if matches!((last_index, target_index), (Some(a), Some(b)) if a == b) {
+                    // otherwise, the last node is a valid replacement for the target
+                    // and it is excluded from the trie.
+                    Ok(())
+                } else {
+                    Err(ProofError::ExclusionProofInvalidNode)
+                }
+            }
+        }
     }
 
     /// Returns the length of the proof.
@@ -365,7 +520,7 @@ impl ProofCollection for EmptyProofCollection {
 
 /// Returns the next nibble in `c` after `b`.
 /// Returns None if `b` is not a strict prefix of `c`.
-fn next_nibble<B, C>(b: B, c: C) -> Option<u8>
+pub(crate) fn next_nibble<B, C>(b: B, c: C) -> Option<u8>
 where
     B: IntoIterator<Item = u8>,
     C: IntoIterator<Item = u8>,
@@ -384,7 +539,7 @@ where
     c.next()
 }
 
-fn verify_opt_value_digest(
+pub(crate) fn verify_opt_value_digest(
     expected_value: Option<impl AsRef<[u8]>>,
     found_value: Option<ValueDigest<impl AsRef<[u8]>>>,
 ) -> Result<(), ProofError> {
