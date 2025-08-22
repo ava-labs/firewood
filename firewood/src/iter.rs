@@ -7,12 +7,12 @@ pub(crate) use self::try_extend::TryExtend;
 use crate::merkle::{Key, Value};
 use crate::v2::api;
 
-use crate::v2::api::Error;
 use firewood_storage::{
     BranchNode, Child, FileIoError, NibblesIterator, Node, PathIterItem, SharedNode, TrieReader,
 };
 use std::cmp::Ordering;
 use std::iter::once;
+use std::ops::Deref;
 use std::sync::Arc;
 
 /// Represents an ongoing iteration over a node and its children.
@@ -127,7 +127,7 @@ impl<'a, T: TrieReader> MerkleNodeIter<'a, T> {
         'outer: loop {
             match &mut self.state {
                 NodeIterState::StartFromKey(key) => {
-                    match get_iterator_intial_state(self.merkle, key) {
+                    match get_iterator_intial_state(&self.merkle, key) {
                         Ok(state) => self.state = state,
                         Err(e) => return Some(Err(e)),
                     }
@@ -172,7 +172,7 @@ impl<'a, T: TrieReader> MerkleNodeIter<'a, T> {
                                     Child::Node(node) => node.clone().into(),
                                     Child::MaybePersisted(maybe_persisted, _) => {
                                         // For MaybePersisted, we need to get the node
-                                        match maybe_persisted.as_shared_node(self.merkle) {
+                                        match maybe_persisted.as_shared_node(&self.merkle) {
                                             Ok(node) => node,
                                             Err(e) => return Some(Err(e)),
                                         }
@@ -345,7 +345,7 @@ impl<'a, T: TrieReader> MerkleKeyValueIter<'a, T> {
     /// Construct a [`MerkleKeyValueIter`] that will iterate over all the key-value pairs in `merkle`
     /// starting from a particular key
     pub fn owned_from_key<K: AsRef<[u8]>>(merkle: Arc<T>, key: K) -> Self {
-        Self {            
+        Self {
             iter: MerkleNodeIter::new(MerkleRef::Owned(merkle), key.as_ref().into()),
         }
     }

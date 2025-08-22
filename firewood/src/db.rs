@@ -7,12 +7,9 @@
 )]
 
 use crate::iter::MerkleKeyValueIter;
-use crate::merkle::{Merkle, Value};
+use crate::merkle::{Key, Merkle, Value};
 pub use crate::v2::api::BatchOp;
-use crate::v2::api::{
-    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair,
-    KeyValuePairIter, OptionalHashKeyExt,
-};
+use crate::v2::api::{self, ArcDynDbView, Error, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair, KeyValuePairIter, OptionalHashKeyExt, OwnedIterView};
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_storage::{
@@ -88,6 +85,12 @@ where
             Some(key) => Ok(MerkleKeyValueIter::from_key(self, key)),
             None => Ok(MerkleKeyValueIter::from(self)),
         }
+    }
+}
+
+impl<T: TrieReader + 'static> OwnedIterView for Arc<T> {
+    fn iter_owned(&self, first_key: Option<&[u8]>) -> Result<Box<dyn Iterator<Item=Result<(Key, Value), Error>>>, Error> {
+        Ok(Box::new(MerkleKeyValueIter::owned_from_key(self.clone(), first_key.unwrap_or(&[]))))
     }
 }
 
@@ -253,6 +256,12 @@ impl api::DbView for Proposal<'_> {
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
         api::DbView::iter_option(&*self.nodestore, first_key)
+    }
+}
+
+impl OwnedIterView for Proposal<'_>  {
+    fn iter_owned(&self, first_key: Option<&[u8]>) -> Result<Box<dyn Iterator<Item=Result<(Key, Value), Error>>>, Error> {
+        self.nodestore.iter_owned(first_key)
     }
 }
 
