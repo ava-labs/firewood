@@ -61,7 +61,7 @@ jobs:
 
       - name: Comment on PR (if applicable)
         if: github.repository == github.event.pull_request.head.repo.full_name && steps.check-metrics.outputs.metric_changes_found == 'true'
-        uses: peter-evans/create-or-update-comment
+        uses: peter-evans/create-or-update-comment@v4
         with:
           issue-number: ${{ github.event.pull_request.number }}
           body: |
