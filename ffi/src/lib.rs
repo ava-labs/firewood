@@ -31,21 +31,19 @@ mod value;
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char};
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Debug, Display, Formatter};
 use std::ops::Deref;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, RwLock};
 
-use firewood::db::{Db, DbConfig, DbViewSync as _, DbViewSyncBytes, Proposal};
+use firewood::db::{Db, DbConfig, Proposal};
 use firewood::manager::{CacheReadStrategy, RevisionManagerConfig};
 
-pub use crate::value::*;
+use firewood::v2::api::{ArcDynDbView, Db as _, DbView, HashKey, KeyValuePairIter, OwnedIterView, Proposal as _};
 use firewood::merkle;
-use firewood::stream::MerkleKeyValueStream;
 use firewood::v2::api;
-use firewood::v2::api::{HashKey, KeyValuePairIter};
-use firewood_storage::TrieReader;
 use metrics::counter;
+pub use crate::value::*;
 
 #[cfg(unix)]
 #[global_allocator]
@@ -74,39 +72,35 @@ fn next_iterator_id() -> IteratorId {
 
 type KeyValueItem = Result<(merkle::Key, merkle::Value), api::Error>;
 
-trait DbIterator: Iterator<Item = KeyValueItem> + std::fmt::Debug {}
-
-impl<T> DbIterator for T where T: Iterator<Item = KeyValueItem> + std::fmt::Debug {}
-
 /// A handle to the database, returned by `fwd_create_db` and `fwd_open_db`.
 ///
 /// These handles are passed to the other FFI functions.
 ///
-#[derive(Debug)]
 pub struct DatabaseHandle<'p> {
     /// List of iterators, by ID
     // Order of fields are important, streams must be dropped before proposals, and proposals
     // should be dropped before database handle to ensure lifetime orders
-    streams: RwLock<HashMap<IteratorId, Box<dyn DbIterator>>>,
+    streams: RwLock<HashMap<IteratorId, Box<dyn Iterator<Item = KeyValueItem> + 'p>>>,
     /// Maps proposal IDs to the iterators that depend on them
     proposal_iterators: RwLock<HashMap<ProposalId, Vec<IteratorId>>>,
     /// List of outstanding proposals, by ID
     proposals: RwLock<HashMap<ProposalId, Proposal<'p>>>,
+
     /// A single cached view to improve performance of reads while committing
-    cached_view: Mutex<Option<(HashKey, Box<dyn DbViewSyncBytes>)>>,
+    cached_view: Mutex<Option<(HashKey, ArcDynDbView)>>,
+
     /// The database
     db: Db,
 }
 
-// TODO: This wrapper type should be removed all together when async-removal is complete
-#[derive(Debug)]
-struct MerkleKeyValueIterator<'v, T>(MerkleKeyValueStream<'v, T>);
-
-impl<T: TrieReader> Iterator for MerkleKeyValueIterator<'_, T> {
-    type Item = KeyValueItem;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.next_sync()
+impl Debug for DatabaseHandle<'_> {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DatabaseHandle")
+        .field("proposal_iterators", &self.proposal_iterators)
+        .field("proposals", &self.proposals)
+        .field("cached_view", &self.cached_view)
+        .field("db", &self.db)
+        .finish()
     }
 }
 
@@ -176,17 +170,15 @@ fn get_latest(db: Option<&DatabaseHandle<'_>>, key: &[u8]) -> Result<Value, Stri
     let db = db.ok_or("db should be non-null")?;
     // Find root hash.
     // Matches `hash` function but we use the TrieHash type here
-    let Some(root) = db.root_hash_sync().map_err(|e| e.to_string())? else {
+    let Some(root) = db.root_hash().map_err(|e| e.to_string())? else {
         return Ok(Value::default());
     };
 
     // Find revision assoicated with root.
-    let rev = db.revision_sync(root).map_err(|e| e.to_string())?;
+    let rev = db.revision(root).map_err(|e| e.to_string())?;
+
     // Get value associated with key.
-    let value = rev
-        .val_sync_bytes(key)
-        .map_err(|e| e.to_string())?
-        .ok_or("")?;
+    let value = rev.val(key).map_err(|e| e.to_string())?.ok_or("")?;
     Ok(value.into())
 }
 
@@ -223,7 +215,7 @@ fn iter_on_root(db: Option<&DatabaseHandle<'_>>, root: &[u8], key: &[u8]) -> Res
     let db = db.ok_or("db should be non-null")?;
 
     let root = if root.is_empty() {
-        db.root_hash_sync().map_err(|e| e.to_string())?
+        db.root_hash().map_err(|e| e.to_string())?
     } else {
         Some(HashKey::try_from(root).map_err(|e| e.to_string())?)
     };
@@ -232,19 +224,15 @@ fn iter_on_root(db: Option<&DatabaseHandle<'_>>, root: &[u8], key: &[u8]) -> Res
     };
 
     // Find revision associated with root.
-    let rev = db.revision_sync(root).map_err(|e| e.to_string())?;
-    let it = if key.is_empty() {
-        MerkleKeyValueStream::from(rev)
-    } else {
-        MerkleKeyValueStream::owned_from_key(rev, key)
-    };
+    let rev = db.revision(root).map_err(|e| e.to_string())?;
+    let it = rev.iter_owned(Some(key)).map_err(|e| e.to_string())?;
 
-    // Store the iterator in the map.
+    // // Store the iterator in the map.
     let new_id = next_iterator_id(); // Guaranteed to be non-zero
     db.streams
         .write()
         .map_err(|_| "stream lock is poisoned")?
-        .insert(new_id, Box::new(MerkleKeyValueIterator(it)));
+        .insert(new_id, Box::new(it));
 
     Ok(new_id.into())
 }
@@ -292,14 +280,14 @@ fn iter_on_proposal(
         .read()
         .map_err(|_| "proposal lock is poisoned")?;
     let proposal = proposals.get(&proposal_id).ok_or("proposal not found")?;
-    let it = proposal.iter_owned(Some(key));
+    let it = proposal.iter_owned(Some(key)).map_err(|e| e.to_string())?;
 
     // Store the iterator in the map. We need the write lock.
     let iterator_id = next_iterator_id(); // Guaranteed to be non-zero
     db.streams
         .write()
         .map_err(|_| "stream lock is poisoned")?
-        .insert(iterator_id, Box::new(MerkleKeyValueIterator(it)));
+        .insert(iterator_id, it);
 
     db.proposal_iterators
         .write()
@@ -399,10 +387,7 @@ fn get_from_proposal(
     let proposal = proposals.get(&id).ok_or("proposal not found")?;
 
     // Get value associated with key.
-    let value = proposal
-        .val_sync(key)
-        .map_err(|e| e.to_string())?
-        .ok_or("")?;
+    let value = proposal.val(key).map_err(|e| e.to_string())?.ok_or("")?;
     Ok(value.into())
 }
 
@@ -452,14 +437,14 @@ fn get_from_root(
         // found the cached view, use it
         Some((root_hash, view)) if root_hash == &requested_root => {
             counter!("firewood.ffi.cached_view.hit").increment(1);
-            view.val_sync_bytes(key)
+            view.val(key)
         }
         // If what was there didn't match the requested root, we need a new view, so we
         // update the cache
         _ => {
             counter!("firewood.ffi.cached_view.miss").increment(1);
             let rev = view_sync_from_root(db, root)?;
-            let result = rev.val_sync_bytes(key);
+            let result = rev.val(key);
             *cached_view = Some((requested_root.clone(), rev));
             result
         }
@@ -469,12 +454,9 @@ fn get_from_root(
 
     Ok(value.into())
 }
-fn view_sync_from_root(
-    db: &DatabaseHandle<'_>,
-    root: &[u8],
-) -> Result<Box<dyn DbViewSyncBytes>, String> {
+fn view_sync_from_root(db: &DatabaseHandle<'_>, root: &[u8]) -> Result<ArcDynDbView, String> {
     let rev = db
-        .view_sync(HashKey::try_from(root).map_err(|e| e.to_string())?)
+        .view(HashKey::try_from(root).map_err(|e| e.to_string())?)
         .map_err(|e| e.to_string())?;
     Ok(rev)
 }
@@ -524,19 +506,19 @@ fn batch(db: Option<&DatabaseHandle<'_>>, values: &[KeyValuePair<'_>]) -> Result
     let batch = values.iter().map_into_batch();
 
     // Propose the batch of operations.
-    let proposal = db.propose_sync(batch).map_err(|e| e.to_string())?;
+    let proposal = db.propose(batch).map_err(|e| e.to_string())?;
     let propose_time = start.elapsed().as_millis();
     counter!("firewood.ffi.propose_ms").increment(propose_time);
 
     let hash_val = proposal
-        .root_hash_sync()
+        .root_hash()
         .map_err(|e| e.to_string())?
         .ok_or("Proposed revision is empty")?
         .as_slice()
         .into();
 
     // Commit the proposal.
-    proposal.commit_sync().map_err(|e| e.to_string())?;
+    proposal.commit().map_err(|e| e.to_string())?;
 
     // Get the root hash of the database post-commit.
     let propose_plus_commit_time = start.elapsed().as_millis();
@@ -589,10 +571,10 @@ fn propose_on_db<'p>(
     let batch = values.iter().map_into_batch();
 
     // Propose the batch of operations.
-    let proposal = db.propose_sync(batch).map_err(|e| e.to_string())?;
+    let proposal = db.propose(batch).map_err(|e| e.to_string())?;
 
     // Get the root hash of the new proposal.
-    let mut root_hash: Value = match proposal.root_hash_sync().map_err(|e| e.to_string())? {
+    let mut root_hash: Value = match proposal.root_hash().map_err(|e| e.to_string())? {
         Some(root) => Value::from(root.as_slice()),
         None => String::new().into(),
     };
@@ -658,11 +640,11 @@ fn propose_on_proposal(
         .write()
         .expect("failed to acquire write lock on proposals");
     let proposal = guard.get(&proposal_id).ok_or("proposal not found")?;
-    let new_proposal = proposal.propose_sync(batch).map_err(|e| e.to_string())?;
+    let new_proposal = proposal.propose(batch).map_err(|e| e.to_string())?;
     drop(guard); // Drop the read lock before we get the write lock.
 
     // Get the root hash of the new proposal.
-    let mut root_hash: Value = match new_proposal.root_hash_sync().map_err(|e| e.to_string())? {
+    let mut root_hash: Value = match new_proposal.root_hash().map_err(|e| e.to_string())? {
         Some(root) => Value::from(root.as_slice()),
         None => String::new().into(),
     };
@@ -711,11 +693,11 @@ fn commit(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> Result<(), Strin
         .ok_or("proposal not found")?;
 
     // Get the proposal hash and cache the view. We never cache an empty proposal.
-    let proposal_hash = proposal.root_hash_sync();
+    let proposal_hash = proposal.root_hash();
 
     if let Ok(Some(proposal_hash)) = proposal_hash {
         let mut guard = db.cached_view.lock().expect("cached_view lock is poisoned");
-        match db.view_sync(proposal_hash.clone()) {
+        match db.view(proposal_hash.clone()) {
             Ok(view) => *guard = Some((proposal_hash, view)),
             Err(_) => *guard = None, // Clear cache on error
         }
@@ -723,7 +705,7 @@ fn commit(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> Result<(), Strin
     }
 
     // Commit the proposal
-    let result = proposal.commit_sync().map_err(|e| e.to_string());
+    let result = proposal.commit().map_err(|e| e.to_string());
 
     // TODO: Handle iterators. Options:
     // (1) creating a new iterator from revision, preserving state
@@ -812,7 +794,7 @@ pub unsafe extern "C" fn fwd_root_hash(db: Option<&DatabaseHandle<'_>>) -> Value
 #[doc(hidden)]
 fn root_hash(db: Option<&DatabaseHandle<'_>>) -> Result<Value, String> {
     let db = db.ok_or("db should be non-null")?;
-    db.root_hash_sync()
+    db.root_hash()
         .map_err(|e| e.to_string())?
         .map(|root| Value::from(root.as_slice()))
         .map_or_else(|| Ok(Value::default()), Ok)

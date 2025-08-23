@@ -39,7 +39,7 @@ pub struct Args {
 pub struct Zipf;
 
 impl TestRunner for Zipf {
-    async fn run(&self, db: &Db, args: &crate::Args) -> Result<(), Box<dyn Error>> {
+    fn run(&self, db: &Db, args: &crate::Args) -> Result<(), Box<dyn Error>> {
         let exponent = if let crate::TestName::Zipf(args) = &args.test_name {
             args.exponent
         } else {
@@ -71,7 +71,7 @@ impl TestRunner for Zipf {
                     distinct.len()
                 );
             }
-            let proposal = db.propose(batch).await.expect("proposal should succeed");
+            let proposal = db.propose(batch).expect("proposal should succeed");
             proposal.commit()?;
 
             if log::log_enabled!(log::Level::Debug) {
