@@ -9,7 +9,10 @@
 use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Key, Merkle, Value};
 pub use crate::v2::api::BatchOp;
-use crate::v2::api::{self, ArcDynDbView, Error, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair, KeyValuePairIter, OptionalHashKeyExt, OwnedIterView};
+use crate::v2::api::{
+    self, ArcDynDbView, Error, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair,
+    KeyValuePairIter, OptionalHashKeyExt, OwnedIterView,
+};
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_storage::{

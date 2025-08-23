@@ -14,6 +14,7 @@ use std::cmp::Ordering;
 use std::iter::once;
 use std::ops::Deref;
 use std::sync::Arc;
+use std::iter::FusedIterator;
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {
@@ -120,14 +121,16 @@ impl<'a, T: TrieReader> MerkleNodeIter<'a, T> {
             merkle,
         }
     }
+}
 
-    /// Internal function that handles the core iteration logic.
-    /// Returns None when iteration is complete, or Some(Result) with either a node or an error.
-    fn next_internal(&mut self) -> Option<Result<(Key, SharedNode), FileIoError>> {
+impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
+    type Item = Result<(Key, SharedNode), FileIoError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
         'outer: loop {
             match &mut self.state {
                 NodeIterState::StartFromKey(key) => {
-                    match get_iterator_intial_state(&self.merkle, key) {
+                    match get_iterator_intial_state(self.merkle, key) {
                         Ok(state) => self.state = state,
                         Err(e) => return Some(Err(e)),
                     }
@@ -172,7 +175,7 @@ impl<'a, T: TrieReader> MerkleNodeIter<'a, T> {
                                     Child::Node(node) => node.clone().into(),
                                     Child::MaybePersisted(maybe_persisted, _) => {
                                         // For MaybePersisted, we need to get the node
-                                        match maybe_persisted.as_shared_node(&self.merkle) {
+                                        match maybe_persisted.as_shared_node(self.merkle) {
                                             Ok(node) => node,
                                             Err(e) => return Some(Err(e)),
                                         }
@@ -186,7 +189,7 @@ impl<'a, T: TrieReader> MerkleNodeIter<'a, T> {
                                 let child_key: Key = key
                                     .iter()
                                     .copied()
-                                    .chain(once(pos))
+                                    .chain(Some(pos))
                                     .chain(child_partial_path)
                                     .collect();
 
@@ -211,13 +214,7 @@ impl<'a, T: TrieReader> MerkleNodeIter<'a, T> {
     }
 }
 
-impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
-    type Item = Result<(Key, SharedNode), FileIoError>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.next_internal()
-    }
-}
+impl<T: TrieReader> FusedIterator for MerkleNodeIter<'_, T> {}
 
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
 fn get_iterator_intial_state<T: TrieReader>(
@@ -375,6 +372,8 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
         })
     }
 }
+
+impl<T: TrieReader> FusedIterator for MerkleKeyValueIter<'_, T> {}
 
 #[derive(Debug)]
 enum PathIteratorState<'a> {
@@ -1412,7 +1411,7 @@ mod tests {
         assert_iterator_is_exhausted(iter);
     }
 
-    fn assert_iterator_is_exhausted<I: Iterator>(mut iter: I) {
+    fn assert_iterator_is_exhausted<I: FusedIterator>(mut iter: I) {
         assert!(iter.next().is_none());
     }
 }
