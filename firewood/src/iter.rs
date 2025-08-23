@@ -11,7 +11,6 @@ use firewood_storage::{
     BranchNode, Child, FileIoError, NibblesIterator, Node, PathIterItem, SharedNode, TrieReader,
 };
 use std::cmp::Ordering;
-use std::iter::once;
 use std::ops::Deref;
 use std::sync::Arc;
 use std::iter::FusedIterator;
@@ -130,7 +129,7 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
         'outer: loop {
             match &mut self.state {
                 NodeIterState::StartFromKey(key) => {
-                    match get_iterator_intial_state(self.merkle, key) {
+                    match get_iterator_intial_state(&self.merkle, key) {
                         Ok(state) => self.state = state,
                         Err(e) => return Some(Err(e)),
                     }
@@ -175,7 +174,7 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
                                     Child::Node(node) => node.clone().into(),
                                     Child::MaybePersisted(maybe_persisted, _) => {
                                         // For MaybePersisted, we need to get the node
-                                        match maybe_persisted.as_shared_node(self.merkle) {
+                                        match maybe_persisted.as_shared_node(&self.merkle) {
                                             Ok(node) => node,
                                             Err(e) => return Some(Err(e)),
                                         }

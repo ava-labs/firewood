@@ -40,6 +40,7 @@ use std::sync::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use firewood::db::{Db, Proposal};
+use firewood::merkle;
 use firewood::v2::api::{self, Db as _, DbView, KeyValuePairIter, OwnedIterView, Proposal as _};
 
 use crate::arc_cache::ArcCache;
@@ -223,9 +224,9 @@ fn iter_on_root(db: Option<&DatabaseHandle<'_>>, root: &[u8], key: &[u8]) -> Res
     let db = db.ok_or("db should be non-null")?;
 
     let root = if root.is_empty() {
-        db.root_hash().map_err(|e| e.to_string())?
+        db.current_root_hash().map_err(|e| e.to_string())?
     } else {
-        Some(HashKey::try_from(root).map_err(|e| e.to_string())?)
+        Some(api::HashKey::try_from(root).map_err(|e| e.to_string())?)
     };
     let Some(root) = root else {
         return Ok(Value::default());
