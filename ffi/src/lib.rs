@@ -24,15 +24,16 @@
 
 mod arc_cache;
 mod handle;
+mod iterator;
 mod logging;
 mod metrics_setup;
 mod proposal;
 mod value;
 
 use firewood::v2::api::DbView;
-use firewood::merkle;
 
 pub use crate::handle::*;
+use crate::iterator::IteratorHandle;
 pub use crate::logging::*;
 pub use crate::proposal::*;
 pub use crate::value::*;
@@ -41,8 +42,6 @@ pub use crate::value::*;
 #[global_allocator]
 #[doc(hidden)]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
-
-type KeyValueItem = Result<(merkle::Key, merkle::Value), api::Error>;
 
 /// Invokes a closure and returns the result as a [`CResult`].
 ///
@@ -113,6 +112,7 @@ pub unsafe extern "C" fn fwd_get_latest(
     invoke_with_handle(db, move |db| db.get_latest(key))
 }
 
+// TODO(amin): Update doc for all iter methods
 /// Return an iterator optionally starting from a key in database
 ///
 /// # Arguments
@@ -132,40 +132,14 @@ pub unsafe extern "C" fn fwd_get_latest(
 ///  * ensure that `key` is a valid pointer to a `Value` struct
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_iter_on_root(
-    db: Option<&DatabaseHandle<'_>>,
-    root: BorrowedBytes<'_>,
-    key: BorrowedBytes<'_>,
-) -> Value {
-    iter_on_root(db, &root, &key).unwrap_or_else(Into::into)
-}
-
-/// Internal call for `fwd_iter_on_root` to remove error handling from the C API
-#[doc(hidden)]
-fn iter_on_root(db: Option<&DatabaseHandle<'_>>, root: &[u8], key: &[u8]) -> Result<Value, String> {
-    let db = db.ok_or("db should be non-null")?;
-
-    let root = if root.is_empty() {
-        db.current_root_hash().map_err(|e| e.to_string())?
-    } else {
-        Some(api::HashKey::try_from(root).map_err(|e| e.to_string())?)
-    };
-    let Some(root) = root else {
-        return Ok(Value::default());
-    };
-
-    // Find revision associated with root.
-    let rev = db.revision(root).map_err(|e| e.to_string())?;
-    let it = rev.iter_owned(Some(key)).map_err(|e| e.to_string())?;
-
-    // // Store the iterator in the map.
-    let new_id = next_iterator_id(); // Guaranteed to be non-zero
-    db.streams
-        .write()
-        .map_err(|_| "stream lock is poisoned")?
-        .insert(new_id, Box::new(it));
-
-    Ok(new_id.into())
+pub unsafe extern "C" fn fwd_iter_on_root<'db>(
+    db: Option<&'db DatabaseHandle>,
+    root: BorrowedBytes,
+    key: BorrowedBytes,
+) -> IteratorResult<'db> {
+    invoke_with_handle(db, move |db| {
+        db.iter_on_root(root.as_ref().try_into()?, Some(key.as_slice()))
+    })
 }
 
 /// Return an iterator on proposal optionally starting from a key
@@ -188,46 +162,13 @@ fn iter_on_root(db: Option<&DatabaseHandle<'_>>, root: &[u8], key: &[u8]) -> Res
 ///  * ensure that `key` is a valid pointer to a `Value` struct
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_iter_on_proposal(
-    db: Option<&DatabaseHandle<'_>>,
-    proposal_id: ProposalId,
-    key: BorrowedBytes<'_>,
-) -> Value {
-    iter_on_proposal(db, proposal_id, &key).unwrap_or_else(Into::into)
-}
-
-/// Internal call for `fwd_iter_on_proposal` to remove error handling from the C API
-#[doc(hidden)]
-fn iter_on_proposal(
-    db: Option<&DatabaseHandle<'_>>,
-    proposal_id: ProposalId,
-    key: &[u8],
-) -> Result<Value, String> {
-    let db = db.ok_or("db should be non-null")?;
-
-    // Get proposal from ID.
-    let proposals = db
-        .proposals
-        .read()
-        .map_err(|_| "proposal lock is poisoned")?;
-    let proposal = proposals.get(&proposal_id).ok_or("proposal not found")?;
-    let it = proposal.iter_owned(Some(key)).map_err(|e| e.to_string())?;
-
-    // Store the iterator in the map. We need the write lock.
-    let iterator_id = next_iterator_id(); // Guaranteed to be non-zero
-    db.streams
-        .write()
-        .map_err(|_| "stream lock is poisoned")?
-        .insert(iterator_id, it);
-
-    db.proposal_iterators
-        .write()
-        .map_err(|_| "proposal iterator lock is poisoned")?
-        .entry(proposal_id)
-        .or_insert_with(Vec::new)
-        .push(iterator_id);
-
-    Ok(iterator_id.into())
+pub unsafe extern "C" fn fwd_iter_on_proposal<'db>(
+    handle: Option<&ProposalHandle<'db>>,
+    key: BorrowedBytes,
+) -> IteratorResult<'db> {
+    invoke_with_handle(handle, move |ph| {
+        ph.iter( Some(key.as_slice()))
+    })
 }
 
 /// Retrieves the next item from the iterator
@@ -250,26 +191,8 @@ fn iter_on_proposal(
 ///  * call `free_key_value` to free the memory associated with the returned `KeyValue`
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_iter_next(db: Option<&DatabaseHandle<'_>>, it: IteratorId) -> Value {
-    iter_next(db, it).unwrap_or_else(Into::into)
-}
-
-/// Internal call for `fwd_iter_next` to remove error handling from the C API
-#[doc(hidden)]
-fn iter_next(db: Option<&DatabaseHandle<'_>>, iterator_id: IteratorId) -> Result<Value, String> {
-    let db = db.ok_or("db should be non-null")?;
-
-    let next = {
-        // get a write guard and drop as soon as we get the next item
-        let mut guard = db.streams.write().map_err(|_| "stream lock is poisoned")?;
-        let it = guard.get_mut(&iterator_id).ok_or("iterator not found")?;
-        it.next()
-    };
-
-    match next {
-        Some(kv) => kv.map(Into::into).map_err(|e| e.to_string()),
-        None => Ok(Value::default()),
-    }
+pub unsafe extern "C" fn fwd_iter_next(iterator: Option<&mut IteratorHandle<'_>>) -> KeyValueResult {
+    invoke_with_handle(iterator, move |it| it.iter_next())
 }
 
 /// Gets the value associated with the given key from the proposal provided.
@@ -493,16 +416,7 @@ pub unsafe extern "C" fn fwd_commit_proposal(
 pub unsafe extern "C" fn fwd_free_proposal(
     proposal: Option<Box<ProposalHandle<'_>>>,
 ) -> VoidResult {
-    // TODO: Handle iterators?
-    // mark all dependent iterators as dropped and release the references to node stores
-    // let iterators = {
-    //     let guard = db
-    //         .proposal_iterators
-    //         .read()
-    //         .map_err(|_| "proposal iterators lock is poisoned")?;
-    //     guard.get(&proposal_id).cloned().unwrap_or_else(Vec::new)
-    // };
-
+    // TODO(amin): Handle iterators?
     invoke_with_handle(proposal, drop)
 }
 

@@ -20,6 +20,11 @@
 typedef struct DatabaseHandle DatabaseHandle;
 
 /**
+ * An opaque wrapper around an Iterator.
+ */
+typedef struct IteratorHandle IteratorHandle;
+
+/**
  * An opaque wrapper around a Proposal that also retains a reference to the
  * database handle it was created from.
  */
@@ -268,6 +273,100 @@ typedef struct ValueResult {
     };
   };
 } ValueResult;
+
+/**
+ * Owned version of `KeyValuePair`, returned to the FFI.
+ */
+typedef struct OwnedKeyValuePair {
+  OwnedBytes key;
+  OwnedBytes value;
+} OwnedKeyValuePair;
+
+/**
+ * A result type returned from iterator FFI functions
+ */
+typedef enum KeyValueResult_Tag {
+  /**
+   * The caller provided a null pointer to an iterator handle.
+   */
+  KeyValueResult_NullHandlePointer,
+  /**
+   * The iterator returned empty result, the iterator is exhausted
+   */
+  KeyValueResult_None,
+  /**
+   * The next item on iterator is returned.
+   */
+  KeyValueResult_Some,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. If
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  KeyValueResult_Err,
+} KeyValueResult_Tag;
+
+typedef struct KeyValueResult {
+  KeyValueResult_Tag tag;
+  union {
+    struct {
+      struct OwnedKeyValuePair some;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} KeyValueResult;
+
+/**
+ * A result type returned from FFI functions that create an iterator
+ */
+typedef enum IteratorResult_Tag {
+  /**
+   * The caller provided a null pointer to a database handle.
+   */
+  IteratorResult_NullHandlePointer,
+  /**
+   * Building the proposal was successful and the proposal ID and root hash
+   * are returned.
+   */
+  IteratorResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. If
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  IteratorResult_Err,
+} IteratorResult_Tag;
+
+typedef struct IteratorResult_Ok_Body {
+  /**
+   * An opaque pointer to the [`ProposalHandle`] that can be use to create
+   * an additional proposal or later commit. The caller must ensure that this
+   * pointer is freed with [`fwd_free_proposal`] if it is not committed.
+   *
+   * [`fwd_free_proposal`]: crate::fwd_free_proposal
+   */
+  struct IteratorHandle *handle;
+} IteratorResult_Ok_Body;
+
+typedef struct IteratorResult {
+  IteratorResult_Tag tag;
+  union {
+    IteratorResult_Ok_Body ok;
+    struct {
+      OwnedBytes err;
+    };
+  };
+} IteratorResult;
 
 /**
  * The result type returned from the open or create database functions.
@@ -632,6 +731,7 @@ struct ValueResult fwd_get_from_root(const struct DatabaseHandle *db,
                                      BorrowedBytes key);
 
 /**
+ * Maps proposal IDs to the iterators that depend on them
  * Gets the value associated with the given key from the database for the
  * latest revision.
  *
@@ -682,7 +782,7 @@ struct ValueResult fwd_get_latest(const struct DatabaseHandle *db, BorrowedBytes
  *  * call `free_key_value` to free the memory associated with the returned `KeyValue`
  *
  */
-struct Value fwd_iter_next(const struct DatabaseHandle *db, IteratorId it);
+struct KeyValueResult fwd_iter_next(struct IteratorHandle *iterator);
 
 /**
  * Return an iterator on proposal optionally starting from a key
@@ -705,9 +805,7 @@ struct Value fwd_iter_next(const struct DatabaseHandle *db, IteratorId it);
  *  * ensure that `key` is a valid pointer to a `Value` struct
  *
  */
-struct Value fwd_iter_on_proposal(const struct DatabaseHandle *db,
-                                  ProposalId proposal_id,
-                                  BorrowedBytes key);
+struct IteratorResult fwd_iter_on_proposal(const struct ProposalHandle *handle, BorrowedBytes key);
 
 /**
  * Return an iterator optionally starting from a key in database
@@ -729,9 +827,9 @@ struct Value fwd_iter_on_proposal(const struct DatabaseHandle *db,
  *  * ensure that `key` is a valid pointer to a `Value` struct
  *
  */
-struct Value fwd_iter_on_root(const struct DatabaseHandle *db,
-                              BorrowedBytes root,
-                              BorrowedBytes key);
+struct IteratorResult fwd_iter_on_root(const struct DatabaseHandle *db,
+                                       BorrowedBytes root,
+                                       BorrowedBytes key);
 
 /**
  * Open a database with the given arguments.

@@ -10,6 +10,8 @@ use firewood::{
 use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
 
 use metrics::counter;
+use firewood::v2::api::OwnedIterView;
+use crate::iterator::{CreateIteratorResult, IteratorHandle};
 
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
 ///
@@ -174,6 +176,23 @@ impl DatabaseHandle {
         counter!("firewood.ffi.batch").increment(1);
 
         Ok(root_hash)
+    }
+
+    // TODO(amin): Doc + KeyType
+    /// doc
+    pub fn iter_on_root(
+        &self,
+        root: HashKey,
+        first_key: Option<&[u8]>,
+    ) -> Result<CreateIteratorResult<'_>, api::Error> {
+        let rev = self.db.revision(root)?;
+        let it = rev.iter_owned(first_key)?;
+
+        Ok(CreateIteratorResult {
+            handle: IteratorHandle {
+                iterator: it,
+            }
+        })
     }
 
     pub(crate) fn get_root(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {
