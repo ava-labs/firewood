@@ -114,7 +114,7 @@ where
         #[cfg(not(feature = "ethhash"))]
         let res = Self::hash_helper_inner(node, PathGuard::from_path(&mut root_path))?;
         #[cfg(feature = "ethhash")]
-        let res = self.hash_helper_inner(node, PathGuard::from_path(&mut root_path), None)?;
+        let res = self.hash_helper_inner(node, PathGuard::from_path(&mut root_path), 1)?;
         Ok(res)
     }
 
@@ -126,7 +126,7 @@ where
         #[cfg(feature = "ethhash")] &self,
         mut node: Node,
         mut path_prefix: PathGuard<'_>,
-        #[cfg(feature = "ethhash")] fake_root_extra_nibble: Option<u8>,
+        #[cfg(feature = "ethhash")] num_siblings: usize,
     ) -> Result<(MaybePersistedNode, HashType, usize), FileIoError> {
         // If this is a branch, find all unhashed children and recursively hash them.
         trace!("hashing {node:?} at {path_prefix:?}");
@@ -136,7 +136,9 @@ where
             let mut current_path = PathGuard::new(&mut path_prefix);
             current_path.0.extend(b.partial_path.0.iter().copied());
             #[cfg(feature = "ethhash")]
-            let make_fake_root = if current_path.0.len() == 64 {
+            let num_children = b.children.iter().filter(|child| child.is_some()).count();
+            #[cfg(feature = "ethhash")]
+            if current_path.0.len() == 64 {
                 // looks like we're at an account branch
                 // tally up how many hashes we need to deal with
                 let ClassifiedChildren {
@@ -149,33 +151,12 @@ where
                     // Extract the address from the MaybePersistedNode
                     let hash = {
                         let mut child_path_prefix = PathGuard::new(&mut current_path);
-                        let mut hashable_node = (**child_node).clone();
-                        if unhashed.is_empty() {
-                            hashable_node.update_partial_path(Path::from_nibbles_iterator(
-                                std::iter::once(*child_idx as u8)
-                                    .chain(hashable_node.partial_path().0.iter().copied()),
-                            ));
-                        } else {
-                            child_path_prefix.0.push(*child_idx as u8);
-                        }
-                        hash_node(&hashable_node, &child_path_prefix)
+                        child_path_prefix.0.push(*child_idx as u8);
+                        Self::compute_node_ethhash(child_node, &mut child_path_prefix, num_children)
                     };
                     **child_hash = hash;
                 }
-                // handle the single-child case for an account special below
-                if hashed.is_empty() {
-                    if let [idx] = &unhashed[..] {
-                        Some(*idx as u8)
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                // not a single child
-                None
-            };
+            }
 
             // branch children cases:
             // 1. 1 child, already hashed
@@ -200,17 +181,10 @@ where
                 let (child_node, child_hash, child_count) = {
                     // we extend and truncate path_prefix to reduce memory allocations]
                     let mut child_path_prefix = PathGuard::new(&mut current_path);
-                    #[cfg(feature = "ethhash")]
-                    if make_fake_root.is_none() {
-                        // we don't push the nibble there is only one unhashed child and
-                        // we're on an account
-                        child_path_prefix.0.push(nibble as u8);
-                    }
-                    #[cfg(not(feature = "ethhash"))]
                     child_path_prefix.0.push(nibble as u8);
                     #[cfg(feature = "ethhash")]
                     let (child_node, child_hash, child_count) =
-                        self.hash_helper_inner(child_node, child_path_prefix, make_fake_root)?;
+                        self.hash_helper_inner(child_node, child_path_prefix, num_children)?;
                     #[cfg(not(feature = "ethhash"))]
                     let (child_node, child_hash, child_count) =
                         Self::hash_helper_inner(child_node, child_path_prefix)?;
@@ -229,18 +203,7 @@ where
         #[cfg(feature = "ethhash")]
         // if we have a child that is the only child of an account branch, we will hash this child as if it
         // is a root node. This means we have to take the nibble from the parent and prefix it to the partial path
-        let hash = if let Some(nibble) = fake_root_extra_nibble {
-            let mut fake_root = node.clone();
-            trace!("old node: {fake_root:?}");
-            fake_root.update_partial_path(Path::from_nibbles_iterator(
-                std::iter::once(nibble).chain(fake_root.partial_path().0.iter().copied()),
-            ));
-            trace!("new node: {fake_root:?}");
-            hash_node(&fake_root, &path_prefix)
-        } else {
-            hash_node(&node, &path_prefix)
-        };
-
+        let hash = Self::compute_node_ethhash(&node, &mut path_prefix, num_siblings);
         #[cfg(not(feature = "ethhash"))]
         let hash = hash_node(&node, &path_prefix);
 
