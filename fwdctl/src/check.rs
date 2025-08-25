@@ -8,7 +8,7 @@ use std::{collections::BTreeMap, path::PathBuf};
 use clap::Args;
 use firewood::v2::api;
 use firewood_storage::{CacheReadStrategy, CheckOpt, DBStats, FileBacked, NodeStore};
-use handlebars::{Handlebars, RenderError};
+use handlebars::Handlebars;
 use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 use nonzero_ext::nonzero;
 use num_format::{Locale, ToFormattedString};
