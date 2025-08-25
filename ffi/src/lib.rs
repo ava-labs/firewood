@@ -73,11 +73,6 @@ fn invoke_with_handle<H, T: NullHandleResult, V: Into<T>>(
     }
 }
 
-// TODO: HANDLE ITERATOR
-// streams: RwLock<HashMap<IteratorId, Box<dyn Iterator<Item = KeyValueItem> + 'p>>>,
-/// Maps proposal IDs to the iterators that depend on them
-// proposal_iterators: RwLock<HashMap<ProposalId, Vec<IteratorId>>>,
-
 /// Gets the value associated with the given key from the database for the
 /// latest revision.
 ///

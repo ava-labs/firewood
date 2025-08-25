@@ -731,7 +731,6 @@ struct ValueResult fwd_get_from_root(const struct DatabaseHandle *db,
                                      BorrowedBytes key);
 
 /**
- * Maps proposal IDs to the iterators that depend on them
  * Gets the value associated with the given key from the database for the
  * latest revision.
  *
