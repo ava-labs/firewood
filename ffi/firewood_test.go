@@ -5,6 +5,7 @@ package ffi
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -126,7 +127,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func newTestDatabase(t *testing.T) *Database {
+func newTestDatabase(t testing.TB) *Database {
 	t.Helper()
 	r := require.New(t)
 
@@ -243,6 +244,23 @@ func kvForTest(num int) ([][]byte, [][]byte) {
 	for i := range keys {
 		keys[i] = keyForTest(i)
 		vals[i] = valForTest(i)
+	}
+	return keys, vals
+}
+
+func randomBytes(n int) []byte {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return b
+}
+
+func kvForBench(num int) ([][]byte, [][]byte) {
+	keys := make([][]byte, num)
+	vals := make([][]byte, num)
+
+	for i := range keys {
+		keys[i] = randomBytes(32)
+		vals[i] = randomBytes(128)
 	}
 	return keys, vals
 }
@@ -1042,4 +1060,34 @@ func TestGetFromRootParallel(t *testing.T) {
 		err := <-results
 		r.NoError(err, "Parallel operation failed")
 	}
+}
+
+// Tests that basic iterator functionality works
+func TestIterOnRoot(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Commit 10 key-value pairs.
+	keys, vals := kvForTest(20)
+	firstRoot, err := db.Update(keys[:10], vals[:10])
+	r.NoError(err)
+
+	secondRoot, err := db.Update(keys[:10], vals[10:])
+	r.NoError(err)
+
+	h1, err := db.IterOnRoot(firstRoot, nil)
+	r.NoError(err)
+
+	h2, err := db.IterOnRoot(secondRoot, nil)
+	r.NoError(err)
+
+	for i := 0; h1.Next() && h2.Next(); i += 1 {
+		t.Logf("%s => %s | %s => %s", string(h1.Key()), string(h1.Value()), string(h2.Key()), string(h2.Value()))
+		r.Equal(keys[i], h1.Key())
+		r.Equal(keys[i], h2.Key())
+		r.Equal(vals[i], h1.Value())
+		r.Equal(vals[i+10], h2.Value())
+	}
+	r.NoError(h1.Err())
+	r.NoError(h2.Err())
 }
