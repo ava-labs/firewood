@@ -3,9 +3,9 @@
 
 use std::fmt;
 
-use firewood::v2::api;
 use crate::OwnedBytes;
 use crate::value::BorrowedBytes;
+use firewood::v2::api;
 
 /// A `KeyValue` represents a key-value pair, passed to the FFI.
 #[repr(C)]

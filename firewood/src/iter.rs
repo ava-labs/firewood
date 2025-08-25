@@ -11,9 +11,9 @@ use firewood_storage::{
     BranchNode, Child, FileIoError, NibblesIterator, Node, PathIterItem, SharedNode, TrieReader,
 };
 use std::cmp::Ordering;
+use std::iter::FusedIterator;
 use std::ops::Deref;
 use std::sync::Arc;
-use std::iter::FusedIterator;
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {

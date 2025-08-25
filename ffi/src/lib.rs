@@ -161,9 +161,7 @@ pub unsafe extern "C" fn fwd_iter_on_proposal<'db>(
     handle: Option<&ProposalHandle<'db>>,
     key: BorrowedBytes,
 ) -> IteratorResult<'db> {
-    invoke_with_handle(handle, move |ph| {
-        ph.iter( Some(key.as_slice()))
-    })
+    invoke_with_handle(handle, move |ph| ph.iter(Some(key.as_slice())))
 }
 
 /// Retrieves the next item from the iterator
@@ -186,7 +184,9 @@ pub unsafe extern "C" fn fwd_iter_on_proposal<'db>(
 ///  * call `free_key_value` to free the memory associated with the returned `KeyValue`
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_iter_next(iterator: Option<&mut IteratorHandle<'_>>) -> KeyValueResult {
+pub unsafe extern "C" fn fwd_iter_next(
+    iterator: Option<&mut IteratorHandle<'_>>,
+) -> KeyValueResult {
     invoke_with_handle(iterator, move |it| it.iter_next())
 }
 

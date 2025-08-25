@@ -1,13 +1,13 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::fmt;
 use firewood::merkle;
 use firewood::v2::api;
+use std::fmt;
 
-use crate::{CreateProposalResult, HashKey, OwnedBytes, ProposalHandle};
 use crate::iterator::{CreateIteratorResult, IteratorHandle};
 use crate::value::kvp::OwnedKeyValuePair;
+use crate::{CreateProposalResult, HashKey, OwnedBytes, ProposalHandle};
 
 /// The result type returned from an FFI function that returns no value but may
 /// return an error.

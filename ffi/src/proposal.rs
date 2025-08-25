@@ -101,15 +101,10 @@ impl<'db> ProposalHandle<'db> {
 
     // TODO(amin): Doc + KeyType
     ///doc
-    pub fn iter(
-        &self,
-        first_key: Option<&[u8]>,
-    ) -> Result<CreateIteratorResult<'db>, api::Error> {
+    pub fn iter(&self, first_key: Option<&[u8]>) -> Result<CreateIteratorResult<'db>, api::Error> {
         let it = self.proposal.iter_owned(first_key)?;
         Ok(CreateIteratorResult {
-            handle: IteratorHandle {
-                iterator: it,
-            }
+            handle: IteratorHandle { iterator: it },
         })
     }
 }

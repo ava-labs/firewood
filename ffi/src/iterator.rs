@@ -18,8 +18,7 @@ pub struct IteratorHandle<'db> {
 
 impl Debug for IteratorHandle<'_> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("IteratorHandle")
-            .finish()
+        f.debug_struct("IteratorHandle").finish()
     }
 }
 

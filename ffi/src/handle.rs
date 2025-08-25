@@ -9,9 +9,9 @@ use firewood::{
 
 use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
 
-use metrics::counter;
-use firewood::v2::api::OwnedIterView;
 use crate::iterator::{CreateIteratorResult, IteratorHandle};
+use firewood::v2::api::OwnedIterView;
+use metrics::counter;
 
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
 ///
@@ -189,9 +189,7 @@ impl DatabaseHandle {
         let it = rev.iter_owned(first_key)?;
 
         Ok(CreateIteratorResult {
-            handle: IteratorHandle {
-                iterator: it,
-            }
+            handle: IteratorHandle { iterator: it },
         })
     }
 

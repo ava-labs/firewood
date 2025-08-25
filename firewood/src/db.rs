@@ -92,8 +92,14 @@ where
 }
 
 impl<T: TrieReader + 'static> OwnedIterView for Arc<T> {
-    fn iter_owned(&self, first_key: Option<&[u8]>) -> Result<Box<dyn Iterator<Item=Result<(Key, Value), Error>>>, Error> {
-        Ok(Box::new(MerkleKeyValueIter::owned_from_key(self.clone(), first_key.unwrap_or(&[]))))
+    fn iter_owned(
+        &self,
+        first_key: Option<&[u8]>,
+    ) -> Result<Box<dyn Iterator<Item = Result<(Key, Value), Error>>>, Error> {
+        Ok(Box::new(MerkleKeyValueIter::owned_from_key(
+            self.clone(),
+            first_key.unwrap_or(&[]),
+        )))
     }
 }
 
@@ -262,8 +268,11 @@ impl api::DbView for Proposal<'_> {
     }
 }
 
-impl OwnedIterView for Proposal<'_>  {
-    fn iter_owned(&self, first_key: Option<&[u8]>) -> Result<Box<dyn Iterator<Item=Result<(Key, Value), Error>>>, Error> {
+impl OwnedIterView for Proposal<'_> {
+    fn iter_owned(
+        &self,
+        first_key: Option<&[u8]>,
+    ) -> Result<Box<dyn Iterator<Item = Result<(Key, Value), Error>>>, Error> {
         self.nodestore.iter_owned(first_key)
     }
 }
