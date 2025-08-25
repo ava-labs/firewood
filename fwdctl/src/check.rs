@@ -153,16 +153,16 @@ fn format_u64(value: u64) -> String {
 }
 
 fn format_map(map: &BTreeMap<impl ToFormattedString, impl ToFormattedString>) -> String {
-    let str_map = map
-        .iter()
+    map.iter()
         .map(|(key, value)| {
-            (
+            format!(
+                "{}: {}",
                 key.to_formatted_string(&Locale::en),
-                value.to_formatted_string(&Locale::en),
+                value.to_formatted_string(&Locale::en)
             )
         })
-        .collect::<BTreeMap<String, String>>();
-    format!("{str_map:?}")
+        .collect::<Vec<String>>()
+        .join(", ")
 }
 
 #[expect(clippy::cast_precision_loss)]
