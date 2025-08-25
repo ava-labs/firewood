@@ -33,9 +33,9 @@ mod value;
 use firewood::v2::api::DbView;
 
 pub use crate::handle::*;
+pub use crate::iterator::*;
 pub use crate::logging::*;
 pub use crate::proposal::*;
-pub use crate::iterator::*;
 pub use crate::value::*;
 
 #[cfg(unix)]
