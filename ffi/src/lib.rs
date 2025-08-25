@@ -33,9 +33,9 @@ mod value;
 use firewood::v2::api::DbView;
 
 pub use crate::handle::*;
-use crate::iterator::IteratorHandle;
 pub use crate::logging::*;
 pub use crate::proposal::*;
+pub use crate::iterator::*;
 pub use crate::value::*;
 
 #[cfg(unix)]
@@ -107,24 +107,27 @@ pub unsafe extern "C" fn fwd_get_latest(
     invoke_with_handle(db, move |db| db.get_latest(key))
 }
 
-// TODO(amin): Update doc for all iter methods
 /// Return an iterator optionally starting from a key in database
 ///
 /// # Arguments
 ///
-/// * `db` - The database handle returned by `open_db`
-/// * `root` - The root to iterate on, in `BorrowedBytes` form. Latest revision if not provided/empty.
-/// * `key` - The key to start from, in `BorrowedBytes` form
+/// * `db` - The database handle returned by [`fwd_open_db`]
+/// * `root` - The root hash to look up as a [`BorrowedBytes`]
+/// * `key` - The key to look up as a [`BorrowedBytes`]
 ///
 /// # Returns
 ///
-/// An iterator id/handle, or an error
+/// - [`IteratorResult::NullHandlePointer`] if the provided database handle is null.
+/// - [`IteratorResult::Ok`] if the iterator was created, with the iterator handle.
+/// - [`IteratorResult::Err`] if an error occurred while creating the iterator.
 ///
 /// # Safety
 ///
 /// The caller must:
-///  * ensure that `db` is a valid pointer returned by `open_db`
-///  * ensure that `key` is a valid pointer to a `Value` struct
+/// * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
+/// * ensure that `root` is a valid for [`BorrowedBytes`]
+/// * ensure that `key` is a valid for [`BorrowedBytes`]
+/// * call [`fwd_free_iterator`] to free the memory associated with the iterator.
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_iter_on_root<'db>(
@@ -141,53 +144,81 @@ pub unsafe extern "C" fn fwd_iter_on_root<'db>(
 ///
 /// # Arguments
 ///
-/// * `db` - The database handle returned by `open_db`
-/// * `proposal_id` - The proposal id to iterate on
-/// * `key` - The key to start from, in `BorrowedBytes` form
+/// * `handle` - The proposal handle returned by [`fwd_propose_on_db`] or
+///   [`fwd_propose_on_proposal`].
+/// * `key` - The key to look up as a [`BorrowedBytes`]
 ///
 /// # Returns
 ///
-/// An iterator id/handle, or an error
+/// - [`IteratorResult::NullHandlePointer`] if the provided proposal handle is null.
+/// - [`IteratorResult::Ok`] if the iterator was created, with the iterator handle.
+/// - [`IteratorResult::Err`] if an error occurred while creating the iterator.
 ///
 /// # Safety
 ///
 /// The caller must:
-///  * ensure that `db` is a valid pointer returned by `open_db`
-///  * ensure that `proposal_id` is a valid proposal id that is neither commited nor dropped
-///  * ensure that `key` is a valid pointer to a `Value` struct
+/// * ensure that `handle` is a valid pointer to a [`ProposalHandle`]
+/// * ensure that `key` is a valid for [`BorrowedBytes`]
+/// * call [`fwd_free_iterator`] to free the memory associated with the iterator.
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_iter_on_proposal<'db>(
     handle: Option<&ProposalHandle<'db>>,
     key: BorrowedBytes,
 ) -> IteratorResult<'db> {
-    invoke_with_handle(handle, move |ph| ph.iter(Some(key.as_slice())))
+    invoke_with_handle(handle, move |p| p.iter_from(Some(key.as_slice())))
 }
 
 /// Retrieves the next item from the iterator
 ///
 /// # Arguments
 ///
-/// * `db` - The database handle returned by `open_db`
-/// * `it` - The database handle returned by `fwd_iter_*`
+/// * `handle` - The iterator handle returned by [`fwd_iter_on_root`] or
+///   [`fwd_iter_on_proposal`].
 ///
 /// # Returns
 ///
-/// A `KeyValue` containing the next pair of (key, value) on the iterator.
-/// A `KeyValue` containing with key {0, ""}, and value with an error message if failed.
+/// - [`KeyValueResult::NullHandlePointer`] if the provided iterator handle is null.
+/// - [`KeyValueResult::None`] if the iterator doesn't have any remaining values/exhausted.
+/// - [`KeyValueResult::Some`] if the next item on iterator was retrieved, with the associated
+///   key value pair.
+/// - [`KeyValueResult::Err`] if an error occurred while retrieving the next item on iterator.
 ///
 /// # Safety
 ///
 /// The caller must:
-///  * ensure that `db` is a valid pointer returned by `open_db`
-///  * ensure that `it` is a valid pointer returned by `fwd_iter_*`
-///  * call `free_key_value` to free the memory associated with the returned `KeyValue`
+/// * ensure that `handle` is a valid pointer to a [`IteratorHandle`].
+/// * call [`fwd_free_owned_bytes`] on [`OwnedKeyValuePair::key`] and [`OwnedKeyValuePair::value`]
+///   to free the memory associated with the returned error or value.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_iter_next(
-    iterator: Option<&mut IteratorHandle<'_>>,
-) -> KeyValueResult {
-    invoke_with_handle(iterator, move |it| it.iter_next())
+pub unsafe extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) -> KeyValueResult {
+    invoke_with_handle(handle, IteratorHandle::iter_next)
+}
+
+/// Consumes the [`IteratorHandle`], destroys the iterator, and frees the memory.
+///
+/// # Arguments
+///
+/// * `iterator` - A pointer to a [`IteratorHandle`] previously returned from a
+///   function from this library.
+///
+/// # Returns
+///
+/// - [`VoidResult::NullHandlePointer`] if the provided iterator handle is null.
+/// - [`VoidResult::Ok`] if the iterator was successfully freed.
+/// - [`VoidResult::Err`] if the process panics while freeing the memory.
+///
+/// # Safety
+///
+/// The caller must ensure that the `iterator` is not null and that it points to
+/// a valid [`IteratorHandle`] previously returned by a function from this library.
+///
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_free_iterator(
+    iterator: Option<Box<IteratorHandle<'_>>>,
+) -> VoidResult {
+    invoke_with_handle(iterator, drop)
 }
 
 /// Gets the value associated with the given key from the proposal provided.

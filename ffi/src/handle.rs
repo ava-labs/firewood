@@ -178,8 +178,11 @@ impl DatabaseHandle {
         Ok(root_hash)
     }
 
-    // TODO(amin): Doc + KeyType
-    /// doc
+    /// Creates an iterator on the revision with specified root starting from the given key.
+    ///
+    /// # Errors
+    ///
+    /// An error is returned if the iterator could not be created.
     pub fn iter_on_root(
         &self,
         root: HashKey,

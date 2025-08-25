@@ -99,9 +99,12 @@ impl<'db> ProposalHandle<'db> {
         Ok(hash_key)
     }
 
-    // TODO(amin): Doc + KeyType
-    ///doc
-    pub fn iter(&self, first_key: Option<&[u8]>) -> Result<CreateIteratorResult<'db>, api::Error> {
+    /// Creates an iterator on the proposal starting from the given key.
+    ///
+    /// # Errors
+    ///
+    /// An error is returned if the iterator could not be created.
+    pub fn iter_from(&self, first_key: Option<&[u8]>) -> Result<CreateIteratorResult<'db>, api::Error> {
         let it = self.proposal.iter_owned(first_key)?;
         Ok(CreateIteratorResult {
             handle: IteratorHandle { iterator: it },

@@ -369,10 +369,16 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     }
 }
 
-/// A view of database with possibility of getting an owned iterator from
-/// This trait is automatically implemented for Arc<NodeStore<P: Parentable, S: ReadableStorage>> and Proposal
+/// A view of database with possibility of getting an owned iterator from.
+/// This trait is implemented for [`Arc`]<[`NodeStore`]<P: [`Parentable`], S: [`ReadableStorage`]>> and [`Proposal`]
+///
+/// [`NodeStore`]: firewood_storage::NodeStore
+/// [`Parentable`]: firewood_storage::Parentable
+/// [`ReadableStorage`]: firewood_storage::ReadableStorage
 pub trait OwnedIterView {
     /// Obtain an owned stream over the key/values, starting at a specific key
+    #[expect(clippy::type_complexity)]
+    #[expect(clippy::missing_errors_doc)]
     fn iter_owned(
         &self,
         first_key: Option<&[u8]>,
