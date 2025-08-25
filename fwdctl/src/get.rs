@@ -18,22 +18,22 @@ pub struct Options {
     pub key: String,
 }
 
-pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
+pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("get key value pair {opts:?}");
     let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
 
     let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
 
-    let hash = db.root_hash().await?;
+    let hash = db.root_hash()?;
 
     let Some(hash) = hash else {
         println!("Database is empty");
         return Ok(());
     };
 
-    let rev = db.revision(hash).await?;
+    let rev = db.revision(hash)?;
 
-    match rev.val(opts.key.as_bytes()).await {
+    match rev.val(opts.key.as_bytes()) {
         Ok(Some(val)) => {
             let s = String::from_utf8_lossy(val.as_ref());
             println!("{s:?}");
