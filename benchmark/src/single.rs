@@ -23,7 +23,7 @@ use std::time::Instant;
 pub struct Single;
 
 impl TestRunner for Single {
-    async fn run(&self, db: &Db, args: &crate::Args) -> Result<(), Box<dyn Error>> {
+    fn run(&self, db: &Db, args: &crate::Args) -> Result<(), Box<dyn Error>> {
         let start = Instant::now();
         let inner_keys: Vec<_> = (0..args.global_opts.batch_size)
             .map(|i| Sha256::digest(i.to_ne_bytes()))
@@ -35,8 +35,8 @@ impl TestRunner for Single {
                 key,
                 value: vec![batch_id as u8],
             });
-            let proposal = db.propose(batch).await.expect("proposal should succeed");
-            proposal.commit().await?;
+            let proposal = db.propose(batch).expect("proposal should succeed");
+            proposal.commit()?;
 
             if log::log_enabled!(log::Level::Debug) && batch_id % 1000 == 999 {
                 debug!(

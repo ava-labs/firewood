@@ -88,8 +88,7 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 	defer pinner.Unpin()
 
 	// Get the value for the given key.
-	val := C.fwd_get_from_proposal(p.handle, C.uint32_t(p.id), newBorrowedBytes(key, &pinner))
-	return bytesFromValue(&val)
+	return getValueFromValueResult(C.fwd_get_from_proposal(p.handle, C.uint32_t(p.id), newBorrowedBytes(key, &pinner)))
 }
 
 // Propose creates a new proposal with the given keys and values.
@@ -128,9 +127,7 @@ func (p *Proposal) Commit() error {
 		return errDroppedProposal
 	}
 
-	// Commit the proposal and return the hash.
-	errVal := C.fwd_commit(p.handle, C.uint32_t(p.id))
-	err := errorFromValue(&errVal)
+	_, err := getHashKeyFromHashResult(C.fwd_commit(p.handle, C.uint32_t(p.id)))
 	if err != nil {
 		// this is unrecoverable due to Rust's ownership model
 		// The underlying proposal is no longer valid.

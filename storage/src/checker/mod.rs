@@ -8,8 +8,9 @@ use crate::logger::warn;
 use crate::nodestore::alloc::FreeAreaWithMetadata;
 use crate::nodestore::primitives::{AreaIndex, area_size_iter};
 use crate::{
-    CheckerError, Committed, HashType, HashedNodeReader, IntoHashType, LinearAddress, Node,
-    NodeStore, Path, RootReader, StoredAreaParent, TrieNodeParent, WritableStorage,
+    CheckerError, Committed, FileIoError, FreeListParent, HashType, HashedNodeReader, IntoHashType,
+    LinearAddress, Node, NodeStore, Path, ReadableStorage, RootReader, StoredAreaParent,
+    TrieNodeParent, WritableStorage,
 };
 
 #[cfg(not(feature = "ethhash"))]
@@ -29,11 +30,11 @@ const fn page_number(addr: LinearAddress) -> u64 {
     addr.get() / OS_PAGE_SIZE
 }
 
-fn extra_read_pages(addr: LinearAddress, page_size: u64) -> Option<u64> {
+fn extra_read_pages(addr: LinearAddress, bytes: u64) -> Option<u64> {
     let start_page = page_number(addr);
-    let end_page = page_number(addr.advance(page_size.saturating_sub(1))?);
+    let end_page = page_number(addr.advance(bytes.saturating_sub(1))?);
     let pages_read = end_page.saturating_sub(start_page).saturating_add(1); // Include the first page
-    let min_pages = page_size.saturating_add(OS_PAGE_SIZE - 1) / OS_PAGE_SIZE; // Round up to the nearest page
+    let min_pages = bytes.saturating_add(OS_PAGE_SIZE - 1) / OS_PAGE_SIZE; // Round up to the nearest page
     Some(pages_read.saturating_sub(min_pages))
 }
 
@@ -57,11 +58,18 @@ pub struct CheckOpt {
     pub progress_bar: Option<ProgressBar>,
 }
 
-#[derive(Debug)]
 /// Report of the checker results.
+#[derive(Debug)]
 pub struct CheckerReport {
     /// Errors encountered during the check
     pub errors: Vec<CheckerError>,
+    /// Statistics about the database
+    pub db_stats: DBStats,
+}
+
+/// All statistics about the given database image
+#[derive(Debug, Default)]
+pub struct DBStats {
     /// The high watermark of the database
     pub high_watermark: u64,
     /// Statistics about the trie
@@ -70,11 +78,13 @@ pub struct CheckerReport {
     pub free_list_stats: FreeListsStats,
 }
 
-#[derive(Debug, PartialEq)]
 /// Statistics about the trie
+#[derive(Debug, PartialEq)]
 pub struct TrieStats {
-    /// The total number of bytes of compressed trie nodes
-    pub trie_bytes: u64,
+    /// The total number of bytes of compressed branch nodes
+    pub branch_bytes: u64,
+    /// The total number of bytes of compressed leaf nodes
+    pub leaf_bytes: u64,
     /// The number of key-value pairs stored in the trie
     pub kv_count: u64,
     /// The total number of bytes of for key-value pairs stored in the trie
@@ -83,43 +93,53 @@ pub struct TrieStats {
     pub branching_factors: BTreeMap<usize, u64>,
     /// Depth distribution of each leaf node
     pub depths: BTreeMap<usize, u64>,
-    /// The distribution of area sizes in the trie
-    pub area_counts: BTreeMap<u64, u64>,
-    /// The stored areas whose content can fit into a smaller area
-    pub low_occupancy_area_count: u64,
-    /// The number of areas that require an extra page read due to not being aligned
-    pub extra_unaligned_page_read: u64,
+    /// The distribution of area sizes for branch nodes
+    pub branch_area_counts: BTreeMap<u64, u64>,
+    /// The distribution of area sizes for leaf nodes
+    pub leaf_area_counts: BTreeMap<u64, u64>,
+    /// Branches that can fit into a smaller area
+    pub low_occupancy_branch_area_count: u64,
+    /// Leaves that can fit into a smaller area
+    pub low_occupancy_leaf_area_count: u64,
+    /// The number of areas that span an extra page due to not being aligned
+    pub area_extra_unaligned_page: u64,
+    /// The number of nodes that span an extra page due to not being aligned
+    pub node_extra_unaligned_page: u64,
 }
 
 impl Default for TrieStats {
     fn default() -> Self {
         Self {
-            trie_bytes: 0,
+            branch_bytes: 0,
+            leaf_bytes: 0,
             kv_count: 0,
             kv_bytes: 0,
             branching_factors: BTreeMap::new(),
             depths: BTreeMap::new(),
-            area_counts: area_size_iter().map(|(_, size)| (size, 0)).collect(),
-            low_occupancy_area_count: 0,
-            extra_unaligned_page_read: 0,
+            branch_area_counts: area_size_iter().map(|(_, size)| (size, 0)).collect(),
+            leaf_area_counts: area_size_iter().map(|(_, size)| (size, 0)).collect(),
+            low_occupancy_branch_area_count: 0,
+            low_occupancy_leaf_area_count: 0,
+            area_extra_unaligned_page: 0,
+            node_extra_unaligned_page: 0,
         }
     }
 }
 
-#[derive(Debug, PartialEq)]
 /// Statistics about the free list
+#[derive(Debug, PartialEq)]
 pub struct FreeListsStats {
     /// The distribution of area sizes in the free lists
     pub area_counts: BTreeMap<u64, u64>,
-    /// The number of areas that require an extra page read due to not being aligned
-    pub extra_unaligned_page_read: u64,
+    /// The number of free areas that span an extra page due to not being aligned
+    pub area_extra_unaligned_page: u64,
 }
 
 impl Default for FreeListsStats {
     fn default() -> Self {
         Self {
             area_counts: area_size_iter().map(|(_, size)| (size, 0)).collect(),
-            extra_unaligned_page_read: 0,
+            area_extra_unaligned_page: 0,
         }
     }
 }
@@ -136,25 +156,23 @@ struct SubTrieMetadata {
 
 /// [`NodeStore`] checker
 #[expect(clippy::result_large_err)]
-impl<S: WritableStorage> NodeStore<Committed, S> {
+impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Go through the filebacked storage and check for any inconsistencies. It proceeds in the following steps:
     /// 1. Check the header
     /// 2. traverse the trie and check the nodes
     /// 3. check the free list
-    /// 4. check leaked areas - what are the spaces between trie nodes and free lists we have traversed?
+    /// 4. report leaked areas (areas that have not yet been visited)
     /// # Errors
     /// Returns a [`CheckerError`] if the database is inconsistent.
     pub fn check(&self, opt: CheckOpt) -> CheckerReport {
         // 1. Check the header
-        let db_size = self.size();
-        let mut visited = match LinearAddressRangeSet::new(db_size) {
+        let high_watermark = self.size();
+        let mut visited = match LinearAddressRangeSet::new(high_watermark) {
             Ok(visited) => visited,
             Err(e) => {
                 return CheckerReport {
                     errors: vec![e],
-                    high_watermark: db_size,
-                    trie_stats: TrieStats::default(),
-                    free_list_stats: FreeListsStats::default(),
+                    db_stats: DBStats::default(),
                 };
             }
         };
@@ -163,7 +181,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         // 2. traverse the trie and check the nodes
         if let Some(progress_bar) = &opt.progress_bar {
-            progress_bar.set_length(db_size);
+            progress_bar.set_length(high_watermark);
             progress_bar.set_message("Traversing the trie...");
         }
         let trie_stats = self
@@ -195,26 +213,23 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             self.visit_freelist(&mut visited, opt.progress_bar.as_ref());
         errors.extend(free_list_traverse_errors);
 
-        // 4. check leaked areas - what are the spaces between trie nodes and free lists we have traversed?
+        // 4. report leaked areas (areas that have not yet been visited)
         if let Some(progress_bar) = &opt.progress_bar {
             progress_bar.set_message("Checking leaked areas...");
         }
         let leaked_ranges = visited.complement();
         if !leaked_ranges.is_empty() {
             warn!("Found leaked ranges: {leaked_ranges}");
-            {
-                // TODO: add leaked areas to the free list
-                let _leaked_areas =
-                    self.split_all_leaked_ranges(&leaked_ranges, opt.progress_bar.as_ref());
-            }
             errors.push(CheckerError::AreaLeaks(leaked_ranges));
         }
 
         CheckerReport {
             errors,
-            high_watermark: db_size,
-            trie_stats,
-            free_list_stats,
+            db_stats: DBStats {
+                high_watermark,
+                trie_stats,
+                free_list_stats,
+            },
         }
     }
 
@@ -343,28 +358,32 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         // collect trie stats
         {
-            // update the area count
-            let area_count = trie_stats
-                .area_counts
-                .get_mut(&area_size)
-                .expect("area size is initialized when trie_stats is created");
-            *area_count = area_count.saturating_add(1);
-            // collect the trie bytes
-            trie_stats.trie_bytes = trie_stats.trie_bytes.saturating_add(node_bytes);
-            // collect low occupancy area count, add 1 for the area size index byte
-            let smallest_area_index = AreaIndex::from_size(node_bytes)
-                .expect("impossible since we checked that node_bytes <= area_size");
-            if smallest_area_index < area_index {
-                trie_stats.low_occupancy_area_count =
-                    trie_stats.low_occupancy_area_count.saturating_add(1);
+            if let Some(value) = node.value() {
+                // collect kv count
+                trie_stats.kv_count = trie_stats.kv_count.saturating_add(1);
+                // collect kv pair bytes - this is the minimum number of bytes needed to store the data
+                let key_bytes = current_path_prefix.0.len().div_ceil(2);
+                let value_bytes = value.len();
+                trie_stats.kv_bytes = trie_stats
+                    .kv_bytes
+                    .saturating_add(key_bytes as u64)
+                    .saturating_add(value_bytes as u64);
             }
             // collect the number of areas that requires reading an extra page due to not being aligned
             if extra_read_pages(subtrie_root_address, area_size)
                 .expect("impossible since we checked in visited.insert_area()")
                 > 0
             {
-                trie_stats.extra_unaligned_page_read =
-                    trie_stats.extra_unaligned_page_read.saturating_add(1);
+                trie_stats.area_extra_unaligned_page =
+                    trie_stats.area_extra_unaligned_page.saturating_add(1);
+            }
+            // collect the number of nodes that requires reading an extra page due to not being aligned
+            if extra_read_pages(subtrie_root_address, node_bytes)
+                .expect("impossible since we checked in visited.insert_area()")
+                > 0
+            {
+                trie_stats.node_extra_unaligned_page =
+                    trie_stats.node_extra_unaligned_page.saturating_add(1);
             }
         }
 
@@ -374,6 +393,21 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             Node::Branch(branch) => {
                 let num_children = branch.children_iter().count();
                 {
+                    // update the branch area count
+                    let branch_area_count = trie_stats
+                        .branch_area_counts
+                        .get_mut(&area_size)
+                        .expect("area size is initialized when trie_stats is created and we checked that node_bytes <= area_size");
+                    *branch_area_count = branch_area_count.saturating_add(1);
+                    // collect the branch bytes
+                    trie_stats.branch_bytes = trie_stats.branch_bytes.saturating_add(node_bytes);
+                    // collect low occupancy area count, add 1 for the area size index byte
+                    let smallest_area_index = AreaIndex::from_size(node_bytes)
+                        .expect("impossible since we checked that node_bytes <= area_size");
+                    if smallest_area_index < area_index {
+                        trie_stats.low_occupancy_branch_area_count =
+                            trie_stats.low_occupancy_branch_area_count.saturating_add(1);
+                    }
                     // collect the branching factor distribution
                     let branching_factor_count = trie_stats
                         .branching_factors
@@ -407,19 +441,25 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                     }
                 }
             }
-            Node::Leaf(leaf) => {
+            Node::Leaf(_) => {
+                // update the leaf area count
+                let leaf_area_count = trie_stats
+                 .leaf_area_counts
+                 .get_mut(&area_size)
+                 .expect("area size is initialized when trie_stats is created and we checked that node_bytes <= area_size");
+                *leaf_area_count = leaf_area_count.saturating_add(1);
+                // collect the leaf bytes
+                trie_stats.leaf_bytes = trie_stats.leaf_bytes.saturating_add(node_bytes);
+                // collect low occupancy area count, add 1 for the area size index byte
+                let smallest_area_index = AreaIndex::from_size(node_bytes)
+                    .expect("impossible since we checked that node_bytes <= area_size");
+                if smallest_area_index < area_index {
+                    trie_stats.low_occupancy_leaf_area_count =
+                        trie_stats.low_occupancy_leaf_area_count.saturating_add(1);
+                }
                 // collect the depth distribution
                 let depth_count = trie_stats.depths.entry(depth).or_insert(0);
                 *depth_count = depth_count.saturating_add(1);
-                // collect kv count
-                trie_stats.kv_count = trie_stats.kv_count.saturating_add(1);
-                // collect kv pair bytes - this is the minimum number of bytes needed to store the data
-                let key_bytes = current_path_prefix.0.len().div_ceil(2);
-                let value_bytes = leaf.value.len();
-                trie_stats.kv_bytes = trie_stats
-                    .kv_bytes
-                    .saturating_add(key_bytes as u64)
-                    .saturating_add(value_bytes as u64);
             }
         }
 
@@ -438,7 +478,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     ) -> (FreeListsStats, Vec<CheckerError>) {
         let mut area_counts: BTreeMap<u64, u64> =
             area_size_iter().map(|(_, size)| (size, 0)).collect();
-        let mut multi_page_area_count = 0u64;
+        let mut area_extra_unaligned_page = 0u64;
         let mut errors = Vec::new();
 
         let mut free_list_iter = self.free_list_iter(AreaIndex::MIN);
@@ -501,7 +541,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                     .expect("impossible since we checked in visited.insert_area()")
                     > 0
                 {
-                    multi_page_area_count = multi_page_area_count.saturating_add(1);
+                    area_extra_unaligned_page = area_extra_unaligned_page.saturating_add(1);
                 }
             }
         }
@@ -509,7 +549,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         (
             FreeListsStats {
                 area_counts,
-                extra_unaligned_page_read: multi_page_area_count,
+                area_extra_unaligned_page,
             },
             errors,
         )
@@ -524,6 +564,73 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             return Err(CheckerError::AreaMisaligned { address, parent });
         }
         Ok(())
+    }
+}
+
+/// Report of the fix operation
+#[derive(Debug)]
+pub struct FixReport {
+    /// Errors that were fixed
+    pub fixed: Vec<CheckerError>,
+    /// Errors that were not fixed, either because they are unfixable or because an IO error occurred
+    pub unfixable: Vec<(CheckerError, Option<FileIoError>)>,
+    /// Statistics about the database
+    pub db_stats: DBStats,
+}
+
+impl<S: WritableStorage> NodeStore<Committed, S> {
+    /// Check the node store and fix any errors found.
+    /// Returns a report of the fix operation.
+    pub fn check_and_fix(&self, opt: CheckOpt) -> FixReport {
+        let report = self.check(opt);
+        self.fix(report)
+    }
+
+    fn fix(&self, check_report: CheckerReport) -> FixReport {
+        let mut fixed = Vec::new();
+        let mut unfixable = Vec::new();
+
+        for error in check_report.errors {
+            match error.parent() {
+                Some(StoredAreaParent::TrieNode(_)) => {
+                    warn!("Fix for trie node error not yet implemented");
+                    unfixable.push((error, None));
+                }
+                Some(StoredAreaParent::FreeList(free_list_parent)) => match free_list_parent {
+                    FreeListParent::FreeListHead(_) => {
+                        warn!("Fix for free list head error not yet implemented");
+                        unfixable.push((error, None));
+                    }
+                    FreeListParent::PrevFreeArea {
+                        area_size_idx,
+                        parent_addr,
+                    } => {
+                        if let Err(e) = self.truncate_free_list(area_size_idx, parent_addr) {
+                            unfixable.push((error, Some(e)));
+                        } else {
+                            fixed.push(error);
+                        }
+                    }
+                },
+                None => {
+                    if let CheckerError::AreaLeaks(ranges) = &error {
+                        {
+                            let _leaked_areas = self.split_all_leaked_ranges(ranges, None);
+                            // TODO: add _leaked_areas to the free list
+                        }
+                        unfixable.push((error, None));
+                    } else {
+                        unfixable.push((error, None));
+                    }
+                }
+            }
+        }
+
+        FixReport {
+            fixed,
+            unfixable,
+            db_stats: check_report.db_stats,
+        }
     }
 
     /// Wrapper around `split_into_leaked_areas` that iterates over a collection of ranges.
@@ -667,8 +774,11 @@ mod test {
     #[expect(clippy::arithmetic_side_effects)]
     fn gen_test_trie(nodestore: &mut NodeStore<Committed, MemStore>) -> TestTrie {
         let mut high_watermark = NodeStoreHeader::SIZE;
-        let mut total_bytes_written = 0;
-        let mut area_counts: BTreeMap<u64, u64> =
+        let mut total_branch_bytes_written = 0;
+        let mut total_leaf_bytes_written = 0;
+        let mut branch_area_counts: BTreeMap<u64, u64> =
+            area_size_iter().map(|(_, size)| (size, 0)).collect();
+        let mut leaf_area_counts: BTreeMap<u64, u64> =
             area_size_iter().map(|(_, size)| (size, 0)).collect();
         let leaf = Node::Leaf(LeafNode {
             partial_path: Path::from_nibbles_iterator(std::iter::repeat_n([4, 5], 30).flatten()),
@@ -679,8 +789,8 @@ mod test {
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &leaf, high_watermark);
         high_watermark += stored_area_size;
-        total_bytes_written += bytes_written;
-        let area_count = area_counts.get_mut(&stored_area_size).unwrap();
+        total_leaf_bytes_written += bytes_written;
+        let area_count = leaf_area_counts.get_mut(&stored_area_size).unwrap();
         *area_count = area_count.saturating_add(1);
 
         let mut branch_children = BranchNode::empty_children();
@@ -695,8 +805,8 @@ mod test {
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &branch, high_watermark);
         high_watermark += stored_area_size;
-        total_bytes_written += bytes_written;
-        let area_count = area_counts.get_mut(&stored_area_size).unwrap();
+        total_branch_bytes_written += bytes_written;
+        let area_count = branch_area_counts.get_mut(&stored_area_size).unwrap();
         *area_count = area_count.saturating_add(1);
 
         let mut root_children = BranchNode::empty_children();
@@ -711,8 +821,8 @@ mod test {
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &root, high_watermark);
         high_watermark += stored_area_size;
-        total_bytes_written += bytes_written;
-        let area_count = area_counts.get_mut(&stored_area_size).unwrap();
+        total_branch_bytes_written += bytes_written;
+        let area_count = branch_area_counts.get_mut(&stored_area_size).unwrap();
         *area_count = area_count.saturating_add(1);
 
         // write the header
@@ -724,14 +834,18 @@ mod test {
         );
 
         let trie_stats = TrieStats {
-            trie_bytes: total_bytes_written,
+            branch_bytes: total_branch_bytes_written,
+            leaf_bytes: total_leaf_bytes_written,
             kv_count: 1,
             kv_bytes: 32 + 3, // 32 bytes for the key, 3 bytes for the value
-            area_counts,
+            branch_area_counts,
+            leaf_area_counts,
             branching_factors: BTreeMap::from([(1, 2)]),
             depths: BTreeMap::from([(2, 1)]),
-            low_occupancy_area_count: 0,
-            extra_unaligned_page_read: 0,
+            low_occupancy_branch_area_count: 0,
+            low_occupancy_leaf_area_count: 0,
+            area_extra_unaligned_page: 0,
+            node_extra_unaligned_page: 0,
         };
 
         TestTrie {
@@ -740,6 +854,104 @@ mod test {
             root_address: root_addr,
             root_hash,
             stats: trie_stats,
+        }
+    }
+
+    #[derive(Debug)]
+    struct TestFreelist {
+        high_watermark: u64,
+        free_ranges: Vec<Range<LinearAddress>>,
+        errors: Vec<CheckerError>,
+        stats: FreeListsStats,
+    }
+
+    // Free list 1: 2048 bytes
+    // Free list 2: 8192 bytes
+    // ---------------------------------------------------------------------------------------------------------------------------
+    // | header | empty | free_list1_area3 | free_list1_area2 | overlap | free_list1_area1 | free_list2_area1 | free_list2_area2 |
+    // ---------------------------------------------------------------------------------------------------------------------------
+    //                                                             ^ free_list1_area1 and free_list1_area2 overlap by 16 bytes
+    //              ^ 16 empty bytes to ensure that free_list1_area1, free_list1_area2, and free_list2_area1 are page-aligned
+    #[expect(clippy::arithmetic_side_effects)]
+    fn gen_test_freelist_with_overlap(
+        nodestore: &mut NodeStore<Committed, MemStore>,
+    ) -> TestFreelist {
+        const AREA_INDEX1: AreaIndex = area_index!(9); // 2048
+        const AREA_INDEX2: AreaIndex = area_index!(12); // 16384
+
+        let mut free_lists = FreeLists::default();
+        let mut high_watermark = NodeStoreHeader::SIZE + 16; // + 16 to create overlap
+
+        // first free list
+        let area_size1 = AREA_INDEX1.size();
+        let mut next_free_block1 = None;
+
+        test_write_free_area(nodestore, next_free_block1, AREA_INDEX1, high_watermark);
+        let free_list1_area3 = LinearAddress::new(high_watermark).unwrap();
+        next_free_block1 = Some(free_list1_area3);
+        high_watermark += area_size1;
+
+        test_write_free_area(nodestore, next_free_block1, AREA_INDEX1, high_watermark);
+        let free_list1_area2 = LinearAddress::new(high_watermark).unwrap();
+        next_free_block1 = Some(free_list1_area2);
+        high_watermark += area_size1;
+
+        let intersection_end = LinearAddress::new(high_watermark).unwrap();
+        high_watermark -= 16; // create an overlap with free_list1_area2 and restore to page-aligned address
+        let intersection_start = LinearAddress::new(high_watermark).unwrap();
+        test_write_free_area(nodestore, next_free_block1, AREA_INDEX1, high_watermark);
+        let free_list1_area1 = LinearAddress::new(high_watermark).unwrap();
+        next_free_block1 = Some(free_list1_area1);
+        high_watermark += area_size1;
+
+        free_lists[AREA_INDEX1.as_usize()] = next_free_block1;
+
+        // second free list
+        let area_size2 = AREA_INDEX2.size();
+        let mut next_free_block2 = None;
+
+        test_write_free_area(nodestore, next_free_block2, AREA_INDEX2, high_watermark);
+        let free_list2_area2 = LinearAddress::new(high_watermark).unwrap();
+        next_free_block2 = Some(free_list2_area2);
+        high_watermark += area_size2;
+
+        test_write_free_area(nodestore, next_free_block2, AREA_INDEX2, high_watermark);
+        let free_list2_area1 = LinearAddress::new(high_watermark).unwrap();
+        next_free_block2 = Some(free_list2_area1);
+        high_watermark += area_size2;
+
+        free_lists[AREA_INDEX2.as_usize()] = next_free_block2;
+
+        // write header
+        test_write_header(nodestore, high_watermark, None, free_lists);
+
+        let expected_start_addr = free_lists[AREA_INDEX1.as_usize()].unwrap();
+        let expected_end_addr = LinearAddress::new(high_watermark).unwrap();
+        let expected_free_areas = vec![expected_start_addr..expected_end_addr];
+        let expected_freelist_errors = vec![CheckerError::AreaIntersects {
+            start: free_list1_area2,
+            size: area_size1,
+            intersection: vec![intersection_start..intersection_end],
+            parent: StoredAreaParent::FreeList(FreeListParent::PrevFreeArea {
+                area_size_idx: AREA_INDEX1,
+                parent_addr: free_list1_area1,
+            }),
+        }];
+        let mut area_counts = area_size_iter()
+            .map(|(_, size)| (size, 0))
+            .collect::<BTreeMap<_, _>>();
+        area_counts.insert(area_size1, 1);
+        area_counts.insert(area_size2, 2);
+        let expected_free_lists_stats = FreeListsStats {
+            area_counts,
+            area_extra_unaligned_page: 0,
+        };
+
+        TestFreelist {
+            high_watermark,
+            free_ranges: expected_free_areas,
+            errors: expected_freelist_errors,
+            stats: expected_free_lists_stats,
         }
     }
 
@@ -870,7 +1082,7 @@ mod test {
         }
         let expected_free_lists_stats = FreeListsStats {
             area_counts: free_area_counts,
-            extra_unaligned_page_read,
+            area_extra_unaligned_page: extra_unaligned_page_read,
         };
 
         // write header
@@ -887,93 +1099,52 @@ mod test {
     }
 
     #[test]
-    // Free list 1: 2048 bytes
-    // Free list 2: 8192 bytes
-    // ---------------------------------------------------------------------------------------------------------------------------
-    // | header | empty | free_list1_area3 | free_list1_area2 | overlap | free_list1_area1 | free_list2_area1 | free_list2_area2 |
-    // ---------------------------------------------------------------------------------------------------------------------------
-    //                                                             ^ free_list1_area1 and free_list1_area2 overlap by 16 bytes
-    //              ^ 16 empty bytes to ensure that free_list1_area1, free_list1_area2, and free_list2_area1 are page-aligned
-    #[expect(clippy::arithmetic_side_effects)]
     fn traverse_freelist_should_skip_offspring_of_incorrect_areas() {
-        const AREA_INDEX1: AreaIndex = area_index!(9); // 2048
-        const AREA_INDEX2: AreaIndex = area_index!(12); // 16384
-
         let memstore = MemStore::new(vec![]);
         let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
-
-        let mut free_lists = FreeLists::default();
-        let mut high_watermark = NodeStoreHeader::SIZE + 16; // + 16 to create overlap
-
-        // first free list
-        let area_size1 = AREA_INDEX1.size();
-        let mut next_free_block1 = None;
-
-        test_write_free_area(&nodestore, next_free_block1, AREA_INDEX1, high_watermark);
-        let free_list1_area3 = LinearAddress::new(high_watermark).unwrap();
-        next_free_block1 = Some(free_list1_area3);
-        high_watermark += area_size1;
-
-        test_write_free_area(&nodestore, next_free_block1, AREA_INDEX1, high_watermark);
-        let free_list1_area2 = LinearAddress::new(high_watermark).unwrap();
-        next_free_block1 = Some(free_list1_area2);
-        high_watermark += area_size1;
-
-        let intersection_end = LinearAddress::new(high_watermark).unwrap();
-        high_watermark -= 16; // create an overlap with free_list1_area2 and restore to page-aligned address
-        let intersection_start = LinearAddress::new(high_watermark).unwrap();
-        test_write_free_area(&nodestore, next_free_block1, AREA_INDEX1, high_watermark);
-        let free_list1_area1 = LinearAddress::new(high_watermark).unwrap();
-        next_free_block1 = Some(free_list1_area1);
-        high_watermark += area_size1;
-
-        free_lists[AREA_INDEX1.as_usize()] = next_free_block1;
-
-        // second free list
-        let area_size2 = AREA_INDEX2.size();
-        let mut next_free_block2 = None;
-
-        test_write_free_area(&nodestore, next_free_block2, AREA_INDEX2, high_watermark);
-        let free_list2_area2 = LinearAddress::new(high_watermark).unwrap();
-        next_free_block2 = Some(free_list2_area2);
-        high_watermark += area_size2;
-
-        test_write_free_area(&nodestore, next_free_block2, AREA_INDEX2, high_watermark);
-        let free_list2_area1 = LinearAddress::new(high_watermark).unwrap();
-        next_free_block2 = Some(free_list2_area1);
-        high_watermark += area_size2;
-
-        free_lists[AREA_INDEX2.as_usize()] = next_free_block2;
-
-        // write header
-        test_write_header(&mut nodestore, high_watermark, None, free_lists);
-
-        let expected_start_addr = free_lists[AREA_INDEX1.as_usize()].unwrap();
-        let expected_end_addr = LinearAddress::new(high_watermark).unwrap();
-        let expected_free_areas = vec![expected_start_addr..expected_end_addr];
-        let expected_freelist_errors = vec![CheckerError::AreaIntersects {
-            start: free_list1_area2,
-            size: area_size1,
-            intersection: vec![intersection_start..intersection_end],
-            parent: StoredAreaParent::FreeList(FreeListParent::PrevFreeArea(free_list1_area1)),
-        }];
-        let mut area_counts = area_size_iter()
-            .map(|(_, size)| (size, 0))
-            .collect::<BTreeMap<_, _>>();
-        area_counts.insert(area_size1, 1);
-        area_counts.insert(area_size2, 2);
-        let expected_free_lists_stats = FreeListsStats {
-            area_counts,
-            extra_unaligned_page_read: 0,
-        };
+        let TestFreelist {
+            high_watermark,
+            free_ranges,
+            errors,
+            stats,
+        } = gen_test_freelist_with_overlap(&mut nodestore);
 
         // test that the we traversed all the free areas
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
         let (actual_free_lists_stats, free_list_errors) =
             nodestore.visit_freelist(&mut visited, None);
-        assert_eq!(visited.into_iter().collect::<Vec<_>>(), expected_free_areas);
-        assert_eq!(actual_free_lists_stats, expected_free_lists_stats);
-        assert_eq!(free_list_errors, expected_freelist_errors);
+        assert_eq!(visited.into_iter().collect::<Vec<_>>(), free_ranges);
+        assert_eq!(actual_free_lists_stats, stats);
+        assert_eq!(free_list_errors, errors);
+    }
+
+    #[test]
+    fn fix_freelist_with_overlap() {
+        let memstore = MemStore::new(vec![]);
+        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let TestFreelist {
+            high_watermark,
+            free_ranges: _,
+            errors,
+            stats,
+        } = gen_test_freelist_with_overlap(&mut nodestore);
+        let expected_error_num = errors.len();
+
+        // fix the freelist
+        let fix_report = nodestore.fix(CheckerReport {
+            errors,
+            db_stats: DBStats {
+                high_watermark,
+                trie_stats: TrieStats::default(),
+                free_list_stats: stats,
+            },
+        });
+        assert_eq!(fix_report.fixed.len(), expected_error_num);
+        assert_eq!(fix_report.unfixable.len(), 0);
+
+        let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
+        let (_, free_list_errors) = nodestore.visit_freelist(&mut visited, None);
+        assert_eq!(free_list_errors, vec![]);
     }
 
     #[test]
