@@ -136,7 +136,9 @@ pub unsafe extern "C" fn fwd_iter_on_root<'db>(
     key: BorrowedBytes,
 ) -> IteratorResult<'db> {
     invoke_with_handle(db, move |db| {
-        db.iter_on_root(root.as_ref().try_into()?, Some(key.as_slice()))
+        let root = root.as_ref();
+        let root = (!root.is_empty()).then(|| {root.try_into()}).transpose()?;
+        db.iter_on_root(root, Some(key.as_slice()))
     })
 }
 

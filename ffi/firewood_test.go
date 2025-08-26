@@ -1062,7 +1062,36 @@ func TestGetFromRootParallel(t *testing.T) {
 	}
 }
 
+// Tests that iterator isn't created for empty database
+func TestIterEmptyDb(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	it, err := db.IterLatest(nil)
+	r.Nil(it)
+	r.Error(err)
+}
+
 // Tests that basic iterator functionality works
+func TestIter(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(10)
+	_, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	it, err := db.IterLatest(nil)
+	r.NoError(err)
+
+	for i := 0; it.Next(); i += 1 {
+		r.Equal(keys[i], it.Key())
+		r.Equal(vals[i], it.Value())
+	}
+	r.NoError(it.Err())
+}
+
+// Tests that iterators on different roots work fine
 func TestIterOnRoot(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
@@ -1082,7 +1111,6 @@ func TestIterOnRoot(t *testing.T) {
 	r.NoError(err)
 
 	for i := 0; h1.Next() && h2.Next(); i += 1 {
-		t.Logf("%s => %s | %s => %s", string(h1.Key()), string(h1.Value()), string(h2.Key()), string(h2.Value()))
 		r.Equal(keys[i], h1.Key())
 		r.Equal(keys[i], h2.Key())
 		r.Equal(vals[i], h1.Value())
@@ -1090,4 +1118,23 @@ func TestIterOnRoot(t *testing.T) {
 	}
 	r.NoError(h1.Err())
 	r.NoError(h2.Err())
+}
+
+// Tests that basic iterator functionality works for proposal
+func TestIterOnProposal(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(10)
+	p, err := db.Propose(keys, vals)
+	r.NoError(err)
+
+	it, err := p.Iter(nil)
+	r.NoError(err)
+
+	for i := 0; it.Next(); i += 1 {
+		r.Equal(keys[i], it.Key())
+		r.Equal(vals[i], it.Value())
+	}
+	r.NoError(it.Err())
 }

@@ -387,6 +387,10 @@ func getKeyValueFromKeyValueResult(result C.KeyValueResult) (*ownedKeyValue, err
 	switch result.tag {
 	case C.KeyValueResult_NullHandlePointer:
 		return nil, errDBClosed
+	case C.ValueResult_RevisionNotFound:
+		// NOTE: the result value contains the provided root hash, we could use
+		// it in the error message if needed.
+		return nil, errRevisionNotFound
 	case C.KeyValueResult_None:
 		return nil, nil
 	case C.KeyValueResult_Some:
