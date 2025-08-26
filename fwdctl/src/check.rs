@@ -70,7 +70,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
 
     let nodestore = NodeStore::open(storage)?;
     let db_stats = if opts.fix {
-        let report = nodestore.check_and_fix(check_ops);
+        let (_, report) = nodestore.check_and_fix(check_ops);
         println!("Fixed Errors ({}):", report.fixed.len());
         for error in report.fixed {
             println!("\t{error}");
