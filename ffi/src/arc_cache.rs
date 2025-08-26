@@ -59,9 +59,10 @@ impl<K: PartialEq, V: ?Sized> ArcCache<K, V> {
     ) -> Result<Arc<V>, E> {
         let mut cache = self.lock();
         if let Some((cached_key, value)) = cache.as_ref()
-            && *cached_key == key {
-                return Ok(Arc::clone(value));
-            }
+            && *cached_key == key
+        {
+            return Ok(Arc::clone(value));
+        }
 
         // clear the cache before running the factory in case it fails
         *cache = None;

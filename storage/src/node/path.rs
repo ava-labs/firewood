@@ -166,9 +166,10 @@ impl Iterator for BytesIterator<'_> {
     type Item = u8;
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(&hi) = self.nibbles_iter.next()
-            && let Some(&lo) = self.nibbles_iter.next() {
-                return Some(hi * 16 + lo);
-            }
+            && let Some(&lo) = self.nibbles_iter.next()
+        {
+            return Some(hi * 16 + lo);
+        }
         None
     }
 
