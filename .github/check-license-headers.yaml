@@ -27,7 +27,6 @@
       "**/go.mod",
       "**/go.mod",
       "**/cbindgen.toml",
-      "rust-toolchain.toml",
     ],
     "license": "./.github/license-header.txt"
   },
@@ -52,7 +51,6 @@
       "cliff.toml",
       "clippy.toml",
       "**/tests/compile_*/**",
-      "rust-toolchain.toml",
     ],
   }
 ]
