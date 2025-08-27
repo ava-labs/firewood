@@ -2,18 +2,14 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::merkle;
-use firewood::v2::api::{self};
 use std::fmt::{Debug, Formatter};
+use firewood::v2::api;
 
-// This wrapper doesn't do anything special now, but we need to figure out how to handle
-// proposal commits, drops, revision cleaning
-// TODO(amin): figure this out
-
-type KeyValueItem = Result<(merkle::Key, merkle::Value), api::Error>;
+type KeyValueItem = (merkle::Key, merkle::Value);
 
 /// An opaque wrapper around an Iterator.
 pub struct IteratorHandle<'db> {
-    pub iterator: Box<dyn Iterator<Item = KeyValueItem> + 'db>,
+    pub iterator: Box<dyn Iterator<Item = Result<KeyValueItem, api::Error>> + 'db>,
 }
 
 impl Debug for IteratorHandle<'_> {
@@ -23,8 +19,21 @@ impl Debug for IteratorHandle<'_> {
 }
 
 impl IteratorHandle<'_> {
-    pub fn iter_next(&mut self) -> Option<KeyValueItem> {
+    pub fn iter_next(&mut self) -> Option<Result<KeyValueItem, api::Error>> {
         self.iterator.next()
+    }
+
+    pub fn iter_next_n(&mut self, n: usize) -> Result<Vec<KeyValueItem>, api::Error> {
+        let mut items = Vec::<KeyValueItem>::new();
+        for _ in 0..n {
+            let item = self.iter_next();
+            if let Some(item) = item {
+                items.push(item?);
+            } else {
+                break;
+            }
+        }
+        Ok(items)
     }
 }
 

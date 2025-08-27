@@ -15,6 +15,6 @@ pub use self::kvp::{KeyValuePair, OwnedKeyValuePair};
 pub use self::owned::{OwnedBytes, OwnedSlice};
 pub(crate) use self::results::{CResult, NullHandleResult};
 pub use self::results::{
-    HandleResult, HashResult, IteratorResult, KeyValueResult, ProposalResult, ValueResult,
+    HandleResult, HashResult, IteratorResult, KeyValueResult, KeyValueBatchResult, ProposalResult, ValueResult,
     VoidResult,
 };
