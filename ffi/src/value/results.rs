@@ -6,8 +6,8 @@ use firewood::v2::api;
 use std::fmt;
 
 use crate::iterator::{CreateIteratorResult, IteratorHandle};
-use crate::value::kvp::OwnedKeyValuePair;
-use crate::{CreateProposalResult, HashKey, OwnedBytes, OwnedSlice, ProposalHandle};
+use crate::value::kvp::{OwnedKeyValueBatch, OwnedKeyValuePair};
+use crate::{CreateProposalResult, HashKey, OwnedBytes, ProposalHandle};
 
 /// The result type returned from an FFI function that returns no value but may
 /// return an error.
@@ -271,7 +271,7 @@ pub enum KeyValueBatchResult {
     /// The provided root was not found in the database.
     RevisionNotFound(HashKey),
     /// The next batch of items on iterator are returned.
-    Some(OwnedSlice<OwnedKeyValuePair>),
+    Some(OwnedKeyValueBatch),
     /// An error occurred and the message is returned as an [`OwnedBytes`]. If
     /// value is guaranteed to contain only valid UTF-8.
     ///

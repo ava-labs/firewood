@@ -341,6 +341,11 @@ typedef struct OwnedSlice_OwnedKeyValuePair {
 } OwnedSlice_OwnedKeyValuePair;
 
 /**
+ * A type alias for a rust-owned byte slice.
+ */
+typedef struct OwnedSlice_OwnedKeyValuePair OwnedKeyValueBatch;
+
+/**
  * A result type returned from iterator FFI functions
  */
 typedef enum KeyValueBatchResult_Tag {
@@ -375,7 +380,7 @@ typedef struct KeyValueBatchResult {
       struct HashKey revision_not_found;
     };
     struct {
-      struct OwnedSlice_OwnedKeyValuePair some;
+      OwnedKeyValueBatch some;
     };
     struct {
       OwnedBytes err;

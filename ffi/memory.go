@@ -350,6 +350,49 @@ func getValueFromValueResult(result C.ValueResult) ([]byte, error) {
 	}
 }
 
+type ownedKeyValueBatch struct {
+	owned C.OwnedKeyValueBatch
+}
+
+func (b *ownedKeyValueBatch) Copied() []*ownedKeyValue {
+	if b.owned.ptr == nil {
+		return nil
+	}
+	borrowed := b.Borrow()
+	copied := make([]*ownedKeyValue, len(borrowed))
+	for i, borrow := range borrowed {
+		copied[i] = newOwnedKeyValue(borrow)
+	}
+	return copied
+}
+
+func (b *ownedKeyValueBatch) Borrow() []C.OwnedKeyValuePair {
+	if b.owned.ptr == nil {
+		return nil
+	}
+
+	return unsafe.Slice((*C.OwnedKeyValuePair)(unsafe.Pointer(b.owned.ptr)), b.owned.len)
+}
+
+func (b *ownedKeyValueBatch) Free() error {
+	if b.owned.ptr == nil {
+		return nil
+	}
+
+	// TODO
+	return nil
+}
+
+// newOwnedKeyValueBatch creates a ownedKeyValueBatch from a C.OwnedKeyValueBatch.
+//
+// The caller is responsible for calling Free() on the returned ownedKeyValue
+// when it is no longer needed otherwise memory will leak.
+func newOwnedKeyValueBatch(owned C.OwnedKeyValueBatch) *ownedKeyValueBatch {
+	return &ownedKeyValueBatch{
+		owned: owned,
+	}
+}
+
 type ownedKeyValue struct {
 	key   *ownedBytes
 	value *ownedBytes
@@ -396,11 +439,35 @@ func getKeyValueFromKeyValueResult(result C.KeyValueResult) (*ownedKeyValue, err
 	case C.KeyValueResult_Some:
 		ownedKvp := newOwnedKeyValue(*(*C.OwnedKeyValuePair)(unsafe.Pointer(&result.anon0)))
 		return ownedKvp, nil
-	case C.ValueResult_Err:
+	case C.KeyValueResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err
 	default:
 		return nil, fmt.Errorf("unknown C.KeyValueResult tag: %d", result.tag)
+	}
+}
+
+// getKeyValueBatchFromKeyValueBatchResult converts a C.KeyValueResult to a key value pair or error.
+//
+// It returns nil, nil if the result is None.
+// It returns a *ownedKeyValueBatch, nil if the result is Some.
+// It returns an error if the result is an error.
+func getKeyValueBatchFromKeyValueBatchResult(result C.KeyValueBatchResult) (*ownedKeyValueBatch, error) {
+	switch result.tag {
+	case C.KeyValueBatchResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.KeyValueBatchResult_RevisionNotFound:
+		// NOTE: the result value contains the provided root hash, we could use
+		// it in the error message if needed.
+		return nil, errRevisionNotFound
+	case C.KeyValueBatchResult_Some:
+		ownedBatch := newOwnedKeyValueBatch(*(*C.OwnedKeyValueBatch)(unsafe.Pointer(&result.anon0)))
+		return ownedBatch, nil
+	case C.KeyValueBatchResult_Err:
+		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return nil, err
+	default:
+		return nil, fmt.Errorf("unknown C.KeyValueBatchResult tag: %d", result.tag)
 	}
 }
 

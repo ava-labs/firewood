@@ -11,7 +11,7 @@ mod results;
 pub use self::borrowed::{BorrowedBytes, BorrowedKeyValuePairs, BorrowedSlice};
 use self::display_hex::DisplayHex;
 pub use self::hash_key::HashKey;
-pub use self::kvp::{KeyValuePair, OwnedKeyValuePair};
+pub use self::kvp::{KeyValuePair, OwnedKeyValuePair, OwnedKeyValueBatch};
 pub use self::owned::{OwnedBytes, OwnedSlice};
 pub(crate) use self::results::{CResult, NullHandleResult};
 pub use self::results::{

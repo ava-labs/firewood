@@ -7,10 +7,12 @@ import (
 	"bytes"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -254,6 +256,37 @@ func randomBytes(n int) []byte {
 	return b
 }
 
+// sortKV sorts keys lexicographically and keeps vals paired.
+func sortKV(keys, vals [][]byte) error {
+	if len(keys) != len(vals) {
+		return errors.New("keys/vals length mismatch")
+	}
+	n := len(keys)
+	if n <= 1 {
+		return nil
+	}
+	ord := make([]int, n)
+	for i := range ord {
+		ord[i] = i
+	}
+	sort.Slice(ord, func(i, j int) bool {
+		return bytes.Compare(keys[ord[i]], keys[ord[j]]) < 0
+	})
+	perm := make([]int, n)
+	for dest, orig := range ord {
+		perm[orig] = dest
+	}
+	for i := 0; i < n; i++ {
+		for perm[i] != i {
+			j := perm[i]
+			keys[i], keys[j] = keys[j], keys[i]
+			vals[i], vals[j] = vals[j], vals[i]
+			perm[i], perm[j] = perm[j], j
+		}
+	}
+	return nil
+}
+
 func kvForBench(num int) ([][]byte, [][]byte) {
 	keys := make([][]byte, num)
 	vals := make([][]byte, num)
@@ -262,6 +295,7 @@ func kvForBench(num int) ([][]byte, [][]byte) {
 		keys[i] = randomBytes(32)
 		vals[i] = randomBytes(128)
 	}
+	_ = sortKV(keys, vals)
 	return keys, vals
 }
 
@@ -1137,4 +1171,31 @@ func TestIterOnProposal(t *testing.T) {
 		r.Equal(vals[i], it.Value())
 	}
 	r.NoError(it.Err())
+}
+
+// Tests that batched iterator functionality works
+func TestIterBatched(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForBench(1000)
+	_, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	it, err := db.IterLatest(nil)
+	r.NoError(err)
+	it.SetBatchSize(100)
+	it2, err := db.IterLatest(nil)
+	r.NoError(err)
+
+	i := 0
+	for ; it.Next() && it2.Next(); i += 1 {
+		r.Equal(it.Key(), it2.Key())
+		r.Equal(it.Value(), it2.Value())
+		r.Equal(keys[i], it.Key())
+		r.Equal(vals[i], it.Value())
+	}
+	r.NoError(it.Err())
+	r.NoError(it2.Err())
+	r.Equal(i, 1000)
 }
