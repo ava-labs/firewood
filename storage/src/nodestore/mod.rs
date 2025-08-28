@@ -265,7 +265,7 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     }
 
     /// Returns the root of this proposal.
-    pub const fn mut_root(&mut self) -> &mut Option<Node> {
+    pub const fn root_mut(&mut self) -> &mut Option<Node> {
         &mut self.kind.root
     }
 }
@@ -277,6 +277,7 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
     /// # Panics
     ///
     /// Panics if the header cannot be written.
+    #[cfg(any(test, feature = "test_utils"))]
     pub fn new_empty_proposal(storage: Arc<S>) -> Self {
         let header = NodeStoreHeader::new();
         let header_bytes = bytemuck::bytes_of(&header);
@@ -940,7 +941,7 @@ mod tests {
             value: huge_value.into_boxed_slice(),
         });
 
-        node_store.mut_root().replace(giant_leaf);
+        node_store.root_mut().replace(giant_leaf);
 
         let immutable = NodeStore::<Arc<ImmutableProposal>, _>::try_from(node_store).unwrap();
         println!("{immutable:?}"); // should not be reached, but need to consume immutable to avoid optimization removal

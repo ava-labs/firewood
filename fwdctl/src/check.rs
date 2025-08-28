@@ -1,14 +1,14 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::collections::HashMap;
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 use std::sync::Arc;
-use std::{collections::BTreeMap, path::PathBuf};
 
+use askama::Template;
 use clap::Args;
 use firewood::v2::api;
 use firewood_storage::{CacheReadStrategy, CheckOpt, DBStats, FileBacked, NodeStore};
-use handlebars::Handlebars;
 use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 use nonzero_ext::nonzero;
 use num_format::{Locale, ToFormattedString};
@@ -108,7 +108,9 @@ fn calculate_area_totals(area_counts: &BTreeMap<u64, u64>) -> (u64, u64) {
     (total_area_count, total_area_bytes)
 }
 
-const TEMPLATE: &str = r"
+#[derive(Template)]
+#[template(
+    source = r"
 Basic Stats:
     Firewood Image Size / High Watermark (high_watermark): {{high_watermark}}
     Total Key-Value Count (kv_count): {{kv_count}}
@@ -146,7 +148,49 @@ Advanced Stats:
     Storage Overhead: high_watermark / kv_bytes = {{storage_overhead}}
     Internal Fragmentation: 1 - (branch_bytes + leaf_bytes) / (branch_area_bytes + leaf_area_bytes) = {{internal_fragmentation}}
     Areas that Can Fit Into Smaller Area: low_occupancy_branch_area + low_occupancy_leaf_area = {{low_occupancy_area_count}} ({{low_occupancy_area_percent}})
-";
+",
+    ext = "txt"
+)]
+struct DBStatsReport {
+    // Basic stats
+    high_watermark: String,
+    kv_count: String,
+    kv_bytes: String,
+    // Trie stats
+    branching_factors: String,
+    depths: String,
+    // Branch area stats
+    branch_bytes: String,
+    total_branch_area_count: String,
+    total_branch_area_bytes: String,
+    branch_area_counts: String,
+    low_occupancy_branch_area_count: String,
+    low_occupancy_branch_area_percent: String,
+    // Leaf area stats
+    leaf_bytes: String,
+    total_leaf_area_count: String,
+    total_leaf_area_bytes: String,
+    leaf_area_counts: String,
+    low_occupancy_leaf_area_count: String,
+    low_occupancy_leaf_area_percent: String,
+    // Free list area stats
+    total_free_list_area_count: String,
+    total_free_list_area_bytes: String,
+    free_list_area_counts: String,
+    // Alignment stats
+    trie_area_extra_unaligned_page: String,
+    trie_area_extra_unaligned_page_percent: String,
+    free_list_area_extra_unaligned_page: String,
+    free_list_area_extra_unaligned_page_percent: String,
+    // Node stats
+    trie_node_extra_unaligned_page: String,
+    trie_node_extra_unaligned_page_percent: String,
+    // Advanced stats
+    storage_overhead: String,
+    internal_fragmentation: String,
+    low_occupancy_area_count: String,
+    low_occupancy_area_percent: String,
+}
 
 fn format_u64(value: u64) -> String {
     value.to_formatted_string(&Locale::en)
@@ -175,7 +219,6 @@ fn format_multiple(num: u64, base: u64) -> String {
     format!("{:.2}x", num as f64 / base as f64)
 }
 
-#[expect(clippy::too_many_lines)]
 fn print_stats_report(db_stats: DBStats) {
     let (total_branch_area_count, total_branch_area_bytes) =
         calculate_area_totals(&db_stats.trie_stats.branch_area_counts);
@@ -196,132 +239,65 @@ fn print_stats_report(db_stats: DBStats) {
         .low_occupancy_branch_area_count
         .saturating_add(db_stats.trie_stats.low_occupancy_leaf_area_count);
 
-    let context = HashMap::from([
-        // Basic stats
-        ("high_watermark", format_u64(db_stats.high_watermark)),
-        ("kv_count", format_u64(db_stats.trie_stats.kv_count)),
-        ("kv_bytes", format_u64(db_stats.trie_stats.kv_bytes)),
-        // Trie stats
-        (
-            "branching_factors",
-            format_map(&db_stats.trie_stats.branching_factors),
+    let report = DBStatsReport {
+        high_watermark: format_u64(db_stats.high_watermark),
+        kv_count: format_u64(db_stats.trie_stats.kv_count),
+        kv_bytes: format_u64(db_stats.trie_stats.kv_bytes),
+        branching_factors: format_map(&db_stats.trie_stats.branching_factors),
+        depths: format_map(&db_stats.trie_stats.depths),
+        branch_bytes: format_u64(db_stats.trie_stats.branch_bytes),
+        total_branch_area_count: format_u64(total_branch_area_count),
+        total_branch_area_bytes: format_u64(total_branch_area_bytes),
+        branch_area_counts: format_map(&db_stats.trie_stats.branch_area_counts),
+        low_occupancy_branch_area_count: format_u64(
+            db_stats.trie_stats.low_occupancy_branch_area_count,
         ),
-        ("depths", format_map(&db_stats.trie_stats.depths)),
-        // Branch area stats
-        ("branch_bytes", format_u64(db_stats.trie_stats.branch_bytes)),
-        (
-            "total_branch_area_count",
-            format_u64(total_branch_area_count),
+        low_occupancy_branch_area_percent: format_percent(
+            db_stats.trie_stats.low_occupancy_branch_area_count,
+            total_branch_area_count,
         ),
-        (
-            "total_branch_area_bytes",
-            format_u64(total_branch_area_bytes),
+        leaf_bytes: format_u64(db_stats.trie_stats.leaf_bytes),
+        total_leaf_area_count: format_u64(total_leaf_area_count),
+        total_leaf_area_bytes: format_u64(total_leaf_area_bytes),
+        leaf_area_counts: format_map(&db_stats.trie_stats.leaf_area_counts),
+        low_occupancy_leaf_area_count: format_u64(
+            db_stats.trie_stats.low_occupancy_leaf_area_count,
         ),
-        (
-            "branch_area_counts",
-            format_map(&db_stats.trie_stats.branch_area_counts),
+        low_occupancy_leaf_area_percent: format_percent(
+            db_stats.trie_stats.low_occupancy_leaf_area_count,
+            total_leaf_area_count,
         ),
-        (
-            "low_occupancy_branch_area_count",
-            format_u64(db_stats.trie_stats.low_occupancy_branch_area_count),
+        total_free_list_area_count: format_u64(total_free_list_area_count),
+        total_free_list_area_bytes: format_u64(total_free_list_area_bytes),
+        free_list_area_counts: format_map(&db_stats.free_list_stats.area_counts),
+        trie_area_extra_unaligned_page: format_u64(db_stats.trie_stats.area_extra_unaligned_page),
+        trie_area_extra_unaligned_page_percent: format_percent(
+            db_stats.trie_stats.area_extra_unaligned_page,
+            total_trie_area_count,
         ),
-        (
-            "low_occupancy_branch_area_percent",
-            format_percent(
-                db_stats.trie_stats.low_occupancy_branch_area_count,
-                total_branch_area_count,
-            ),
+        free_list_area_extra_unaligned_page: format_u64(
+            db_stats.free_list_stats.area_extra_unaligned_page,
         ),
-        // Leaf area stats
-        ("leaf_bytes", format_u64(db_stats.trie_stats.leaf_bytes)),
-        ("total_leaf_area_count", format_u64(total_leaf_area_count)),
-        ("total_leaf_area_bytes", format_u64(total_leaf_area_bytes)),
-        (
-            "leaf_area_counts",
-            format_map(&db_stats.trie_stats.leaf_area_counts),
+        free_list_area_extra_unaligned_page_percent: format_percent(
+            db_stats.free_list_stats.area_extra_unaligned_page,
+            total_free_list_area_count,
         ),
-        (
-            "low_occupancy_leaf_area_count",
-            format_u64(db_stats.trie_stats.low_occupancy_leaf_area_count),
+        trie_node_extra_unaligned_page: format_u64(db_stats.trie_stats.node_extra_unaligned_page),
+        trie_node_extra_unaligned_page_percent: format_percent(
+            db_stats.trie_stats.node_extra_unaligned_page,
+            total_trie_area_count,
         ),
-        (
-            "low_occupancy_leaf_area_percent",
-            format_percent(
-                db_stats.trie_stats.low_occupancy_leaf_area_count,
-                total_leaf_area_count,
-            ),
+        storage_overhead: format_multiple(db_stats.high_watermark, db_stats.trie_stats.kv_bytes),
+        internal_fragmentation: format_percent(
+            total_trie_area_bytes.saturating_sub(total_trie_bytes),
+            total_trie_area_bytes,
         ),
-        // Free list area stats
-        (
-            "total_free_list_area_count",
-            format_u64(total_free_list_area_count),
+        low_occupancy_area_count: format_u64(total_low_occupancy_area_count),
+        low_occupancy_area_percent: format_percent(
+            total_low_occupancy_area_count,
+            total_trie_area_count,
         ),
-        (
-            "total_free_list_area_bytes",
-            format_u64(total_free_list_area_bytes),
-        ),
-        (
-            "free_list_area_counts",
-            format_map(&db_stats.free_list_stats.area_counts),
-        ),
-        // Alignment stats
-        (
-            "trie_area_extra_unaligned_page",
-            format_u64(db_stats.trie_stats.area_extra_unaligned_page),
-        ),
-        (
-            "trie_area_extra_unaligned_page_percent",
-            format_percent(
-                db_stats.trie_stats.area_extra_unaligned_page,
-                total_trie_area_count,
-            ),
-        ),
-        (
-            "free_list_area_extra_unaligned_page",
-            format_u64(db_stats.free_list_stats.area_extra_unaligned_page),
-        ),
-        (
-            "free_list_area_extra_unaligned_page_percent",
-            format_percent(
-                db_stats.free_list_stats.area_extra_unaligned_page,
-                total_free_list_area_count,
-            ),
-        ),
-        (
-            "trie_node_extra_unaligned_page",
-            format_u64(db_stats.trie_stats.node_extra_unaligned_page),
-        ),
-        (
-            "trie_node_extra_unaligned_page_percent",
-            format_percent(
-                db_stats.trie_stats.node_extra_unaligned_page,
-                total_trie_area_count,
-            ),
-        ),
-        (
-            "storage_overhead",
-            format_multiple(db_stats.high_watermark, db_stats.trie_stats.kv_bytes),
-        ),
-        (
-            "internal_fragmentation",
-            format_percent(
-                total_trie_area_bytes.saturating_sub(total_trie_bytes),
-                total_trie_area_bytes,
-            ),
-        ),
-        (
-            "low_occupancy_area_count",
-            format_u64(total_low_occupancy_area_count),
-        ),
-        (
-            "low_occupancy_area_percent",
-            format_percent(total_low_occupancy_area_count, total_trie_area_count),
-        ),
-    ]);
+    };
 
-    let reg = Handlebars::new();
-    let report = reg
-        .render_template(TEMPLATE, &context)
-        .expect("valid template");
     println!("{report}");
 }
