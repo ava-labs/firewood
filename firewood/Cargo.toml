@@ -29,6 +29,7 @@ fastrace.workspace = true
 firewood-macros.workspace = true
 hex.workspace = true
 metrics.workspace = true
+smallvec.workspace = true
 sha2.workspace = true
 thiserror.workspace = true
 # Regular dependencies
