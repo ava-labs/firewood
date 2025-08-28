@@ -585,7 +585,17 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         FixReport,
     ) {
         let check_report = self.check(opt);
-        let mut proposal = self.new_proposal();
+        let mut proposal = match NodeStore::<MutableProposal, S>::new(self) {
+            Ok(proposal) => proposal,
+            Err(e) => {
+                let report = FixReport {
+                    fixed: Vec::new(),
+                    unfixable: check_report.errors.into_iter().map(|e| (e, None)).collect(),
+                    db_stats: check_report.db_stats,
+                };
+                return (Err(e), report);
+            }
+        };
         let fix_report = proposal.fix(check_report);
         let immutable_proposal = NodeStore::<Arc<ImmutableProposal>, S>::try_from(proposal);
         (immutable_proposal, fix_report)
@@ -1154,7 +1164,7 @@ mod test {
         let expected_error_num = errors.len();
 
         // fix the freelist
-        let mut proposal = nodestore.new_proposal();
+        let mut proposal = NodeStore::<MutableProposal, _>::new(&nodestore).unwrap();
         let fix_report = proposal.fix(CheckerReport {
             errors,
             db_stats: DBStats {

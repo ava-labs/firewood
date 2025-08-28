@@ -840,15 +840,6 @@ where
     }
 }
 
-// Helper functions for the fixer
-impl<T: Parentable, S: WritableStorage> NodeStore<T, S> {
-    pub(crate) fn new_proposal(&self) -> NodeStore<MutableProposal, S> {
-        NodeStore::<MutableProposal, S>::new(self).unwrap_or_else(|_| {
-            NodeStore::<MutableProposal, S>::new_empty_proposal(self.storage.clone())
-        })
-    }
-}
-
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 #[expect(clippy::cast_possible_truncation)]
