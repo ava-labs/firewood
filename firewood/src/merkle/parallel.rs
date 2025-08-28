@@ -10,8 +10,7 @@ use std::sync::{Arc, OnceLock, mpsc};
 //};
 
 use firewood_storage::{
-    BranchNode, Child, FileBacked, FileIoError, ImmutableProposal, NibblesIterator, Node,
-    NodeStore, Parentable, Path,
+    BranchNode, Child, FileBacked, FileIoError, ImmutableProposal, LeafNode, MutableProposal, Node, NodeStore, Parentable, Path,
 };
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -20,6 +19,7 @@ use rayon::{ThreadPool, ThreadPoolBuilder};
 //use crate::db;
 use crate::merkle::{Key, Merkle, Value};
 use crate::v2::api::KeyValuePairIter;
+use std::iter::once;
 
 /*
 trait DbExt {
@@ -66,11 +66,234 @@ impl Default for ParallelMerkle {
     }
 }
 
+/*
+            let mut branch = new_root
+                .as_branch()
+                .expect("Should be a branch because of earlier transform");
+
+            let mut children_iter = branch
+                .children
+                .iter()
+                .enumerate()
+                .filter_map(|(index, child)| child.as_ref().map(|child| (index, child)));
+
+            let first_child = children_iter.next();
+
+            match first_child {
+                None => {
+                    // No value. Just delete the root
+                    if branch.value.is_none() {
+                        return None;
+                    }
+                    let new_leaf = Node::Leaf(LeafNode {
+                        value: branch.value.take()?,
+                        partial_path: branch.partial_path.clone(),
+                    });
+                }
+                Some(child) => {}
+            }
+        }
+
+        None
+
+
+        if let Some(new_root) = new_root_opt {
+            // Root should always be a branch given our earlier transform
+            let branch = new_root
+                .as_branch()
+                .expect("Should be branch because of earlier transform");
+
+            let children_iter = branch
+                .children
+                .iter()
+                .enumerate()
+                .filter_map(|(index, child)| child.map(|child| (index, child)));
+
+            let first_child = children_iter.next();
+
+            match first_child {
+                None => {
+                    // No value. Just delete the root
+                    if branch.value.is_none() {
+                        return None;
+                    }
+                }
+                Some => {}
+            }
+
+            let (child_index, child) = children_iter
+                .next()
+                .expect("branch node must have children");
+
+            if children_iter.next().is_some() {
+                // The branch has more than 1 child so do nothing
+                *proposal.mut_root() = new_root;
+            } else {
+                // The branch's only child becomes the root of this subtrie.
+                let mut child = match child {
+                    Child::Node(child_node) => std::mem::take(child_node),
+                    Child::AddressWithHash(addr, _) => {
+                        self.nodestore.read_for_update((*addr).into())?
+                    }
+                    Child::MaybePersisted(maybe_persisted, _) => {
+                        self.nodestore.read_for_update(maybe_persisted.clone())?
+                    }
+                };
+
+
+                let mut children_iter =
+                    branch
+                        .children
+                        .iter_mut
+                        .enumerate()
+                        .filter_map(|(index, child)| {
+                            child.as_mut().map(|child| (index, child))
+                        });
+
+
+                //let children = branch.children;
+
+                //if new_root.
+            }
+
+            // This branch node has a value.
+            // If it has multiple children, return the node as is.
+            // Otherwise, its only child becomes the root of this subtrie.
+            //let mut children_iter =
+            //    branch
+            //        .children
+            //        .iter_mut()
+            //        .enumerate()
+            //        .filter_map(|(index, child)| {
+            //            child.as_mut().map(|child| (index, child))
+            //        });
+
+            //let (child_index, child) = children_iter
+            //    .next()
+            //    .expect("branch node must have children");
+
+            //if children_iter.next().is_some() {
+            //    // The branch has more than 1 child so it can't be removed.
+            //    Ok((Some(node), Some(removed_value)))
+
+            //let a = new_root.unwrap();
+            *proposal.mut_root() = new_root;
+        }
+
+
+
+*/
+
 impl ParallelMerkle {
     /// Default constructor
     #[must_use]
     pub const fn new() -> Self {
         ParallelMerkle { worker: None }
+    }
+
+    fn undo_trie_transform(
+        &self,
+        nodestore: &mut NodeStore<MutableProposal, FileBacked>,
+        new_root_opt: Option<Node>,
+    ) -> Result<Option<Node>, FileIoError> {
+        // Check if the Merkle trie is malformed. If it is, apply transform to create
+        // a valid Merkle trie.
+        //
+        // If all of the children have been removed, then
+        //     Convert the root into a leaf if it has a value (this should indicate that a
+        //     value was inserted for the empty key).
+        //     Otherwise, delete the empty root node
+        // If more than one child remains, then do nothing
+        // If only one child remains and the root has a value, then do nothing
+        // If only one child remains and the root doesn’t have a value, then deleted the root,
+        // use the child node as the new root, and update the partial path of the new root to
+        // include its previous child index
+        if let Some(mut new_root) = new_root_opt {
+            match &mut new_root {
+                Node::Branch(branch) => {
+                    let mut children_iter = branch
+                        .children
+                        .iter_mut()
+                        .enumerate()
+                        .filter_map(|(index, child)| child.as_mut().map(|child| (index, child)));
+
+                    let first_child = children_iter.next();
+                    match first_child {
+                        None => {
+                            if let Some(value) = branch.value.take() {
+                                // There is a value for the empty key. Create a leaf with the value and return.
+                                let new_leaf = Node::Leaf(LeafNode {
+                                    value,
+                                    partial_path: Path::new(), // Partial path should be empty
+                                                            //partial_path: branch.partial_path.clone(),
+                                });
+                                return Ok(Some(new_leaf));
+                            } 
+                            // No value. Just delete the root
+                            return Ok(None);
+                        }
+                        Some((child_index, child)) => {
+                            // Check if the root has a value or if there is more than one children. If yes, then
+                            // just return the root unmodified
+                            if branch.value.is_some() || children_iter.next().is_some() {
+                                return Ok(Some(new_root));
+                            }
+
+                            // Return the child as the new root. Need to update its partial path to include the
+                            // index value. Copied from remove_helper. Should move to a shared function to
+                            // increase code reuse.
+                            //
+                            // The branch's only child becomes the root of this subtrie.
+                            let mut child = match child {
+                                Child::Node(child_node) => std::mem::take(child_node),
+                                Child::AddressWithHash(addr, _) => {
+                                    nodestore.read_for_update((*addr).into())?
+                                    //todo!();
+                                }
+                                Child::MaybePersisted(maybe_persisted, _) => {
+                                    nodestore.read_for_update(maybe_persisted.clone())?
+                                    //todo!();
+                                }
+                            };
+
+                            // The child's partial path is the concatenation of its (now removed) parent,
+                            // its (former) child index, and its partial path.
+                            match child {
+                                Node::Branch(ref mut child_branch) => {
+                                    let partial_path = Path::from_nibbles_iterator(
+                                        branch
+                                            .partial_path
+                                            .iter()
+                                            .copied()
+                                            .chain(once(child_index as u8))
+                                            .chain(child_branch.partial_path.iter().copied()),
+                                    );
+                                    child_branch.partial_path = partial_path;
+                                }
+                                Node::Leaf(ref mut leaf) => {
+                                    let partial_path = Path::from_nibbles_iterator(
+                                        branch
+                                            .partial_path
+                                            .iter()
+                                            .copied()
+                                            .chain(once(child_index as u8))
+                                            .chain(leaf.partial_path.iter().copied()),
+                                    );
+                                    leaf.partial_path = partial_path;
+                                }
+                            }
+                            return Ok(Some(child));
+                        }
+                    }
+                }
+                Node::Leaf(_) => {
+                    return Ok(None);
+                    // Should never be a leaf
+                    //assert!(false);
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// TODO: add doc
@@ -96,7 +319,7 @@ impl ParallelMerkle {
         // if it has a partial path.
 
         // create a proposal from the parent
-        let mut proposal = NodeStore::new(parent)?;
+        let mut proposal: NodeStore<MutableProposal, FileBacked> = NodeStore::new(parent)?;
 
         // Handle different cases depending on the value of root.
 
@@ -276,25 +499,8 @@ impl ParallelMerkle {
 
         while let Ok(response) = response_channel.1.recv() {
             match response {
-                Response::Root(new_root) => {
-                    // Check if the Merkle trie is malformed. If it is, apply transform to create
-                    // a valid Merkle trie.
-                    //
-                    // If all of the children have been removed, then
-                    //     Convert the root into a leaf if it has a value (this should indicate that a 
-                    //     value was inserted for the empty key).
-                    //     Otherwise, delete the empty root node
-                    // If more than one child remains, then do nothing
-                    // If only one child remains and the root has a value, then do nothing
-                    // If only one child remains and the root doesn’t have a value, then deleted the root, 
-                    // use the child node as the new root, and update the partial path of the new root to 
-                    // include its previous child index
-
-
-
-
-                    //let a = new_root.unwrap();
-                    *proposal.mut_root() = new_root;
+                Response::Root(new_root_opt) => {
+                    *proposal.mut_root() = self.undo_trie_transform(&mut proposal, new_root_opt).expect("TODO check errors");
                 }
                 Response::Error(_error) => todo!(),
             }
