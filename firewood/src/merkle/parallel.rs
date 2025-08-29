@@ -10,7 +10,8 @@ use std::sync::{Arc, OnceLock, mpsc};
 //};
 
 use firewood_storage::{
-    BranchNode, Child, FileBacked, FileIoError, ImmutableProposal, LeafNode, MutableProposal, Node, NodeStore, Parentable, Path,
+    BranchNode, Child, FileBacked, FileIoError, ImmutableProposal, LeafNode, MutableProposal, Node,
+    NodeStore, Parentable, Path,
 };
 
 use rayon::{ThreadPool, ThreadPoolBuilder};
@@ -31,7 +32,7 @@ trait DbExt {
 */
 
 #[derive(Debug)]
-struct Worker {
+struct WorkerState {
     sender: mpsc::Sender<Request>,
 }
 
@@ -57,7 +58,7 @@ static THREADPOOL: OnceLock<ThreadPool> = OnceLock::new();
 /// TODO add doc
 #[derive(Debug)]
 pub struct ParallelMerkle {
-    worker: Option<Worker>,
+    worker: Option<WorkerState>,
 }
 
 impl Default for ParallelMerkle {
@@ -191,7 +192,7 @@ impl ParallelMerkle {
         ParallelMerkle { worker: None }
     }
 
-    fn undo_trie_transform(
+    fn postprocess_trie(
         &self,
         nodestore: &mut NodeStore<MutableProposal, FileBacked>,
         new_root_opt: Option<Node>,
@@ -225,10 +226,10 @@ impl ParallelMerkle {
                                 let new_leaf = Node::Leaf(LeafNode {
                                     value,
                                     partial_path: Path::new(), // Partial path should be empty
-                                                            //partial_path: branch.partial_path.clone(),
+                                                               //partial_path: branch.partial_path.clone(),
                                 });
                                 return Ok(Some(new_leaf));
-                            } 
+                            }
                             // No value. Just delete the root
                             return Ok(None);
                         }
@@ -301,41 +302,43 @@ impl ParallelMerkle {
         // get (or create) a threadpool
         let pool = THREADPOOL.get_or_init(|| {
             ThreadPoolBuilder::new()
-                //.num_threads(BranchNode::MAX_CHILDREN)
-                .num_threads(1)
+                .num_threads(BranchNode::MAX_CHILDREN)
                 .build()
                 .expect("TODO: handle error")
         });
 
-        // Initial version. Just a single offload thread. Since there is only one thread,
-        // we don't need to follow the algorithm regarding whether the root is None or
-        // if it has a partial path.
-
         // create a proposal from the parent
-        let mut proposal: NodeStore<MutableProposal, FileBacked> = NodeStore::new(parent)?;
+        let mut proposal = NodeStore::new(parent)?;
 
-        // Handle different cases depending on the value of root.
-
+        // Creating a parallel proposal consists of 4 phases: Prepare, Split, Merge, and Postprocess.
+        //
         // Prepare phase:
-        // 1.  If root is None, create a branch node with an empty partial path and a None for
-        //     value. Create Nones for all of its children.
-        // 2.  If the existing root has a partial path, then create a new root with an empty
-        //     partial path and a None for a value. Push down the previous root as a child. This
-        //     will be a malformed Merkle trie and will need to be fixed afterwards.
-        // 3.  If the existing root does not have a partial path, then there is nothing we need
-        //     to do.
+        // --------------
+        // There are 3 different cases to handle depending on the value of the root node.
+        //
+        // 1. If root is None, create a branch node with an empty partial path and a None for
+        //    value. Create Nones for all of its children.
+        // 2. If the existing root has a partial path, then create a new root with an empty
+        //    partial path and a None for a value. Push down the previous root as a child. This
+        //    will be a malformed Merkle trie and will need to be fixed afterwards.
+        // 3. If the existing root does not have a partial path, then there is nothing we need
+        //    to do.
+        //
+        // The result after the prepare phase is that there is a branch node at the root with
+        // an empty partial path.
 
         let root_node = proposal.mut_root().take();
         if let Some(mut node) = root_node {
-            // Check if it has a partial path
-            //todo!();
+            // Non-empty root. Check if it has a partial path
             let index_path_opt: Option<(u8, Path)> = node
                 .partial_path()
                 .split_first()
                 .map(|(index, path)| (*index, path.into()));
-            println!("-------> Split from non empty root: {index_path_opt:?}");
-            // If above is not None, then create a new branch that will be the new root with the existing root
-            // as the child at the index returned from split_first.
+
+            println!("Split from non empty root: {index_path_opt:?}");
+
+            // If index_path_opt is not None, then create a new branch that will be the new root with
+            // the previous root as the child at the index returned from split_first.
             if let Some((child_index, child_path)) = index_path_opt {
                 println!(
                     "Creating empty branch node for non-empty trie. child_index: {child_index:?} child_path: {child_path:?}"
@@ -351,7 +354,8 @@ impl ParallelMerkle {
                 println!("New root: {branch:?}");
                 *proposal.mut_root() = Some(branch.into());
             } else {
-                // Root does not need to be updated. Put it back into the proposal.
+                // Root does not need to be updated since it has an empty partial path. Put it 
+                // back into the proposal.
                 *proposal.mut_root() = Some(node);
             }
         } else {
@@ -364,6 +368,7 @@ impl ParallelMerkle {
             };
             *proposal.mut_root() = Some(branch.into());
         }
+
         // keep track of the workers for each nibble
         // TODO: use something better than a hashmap here
         //let mut workers = HashMap::new();
@@ -372,22 +377,23 @@ impl ParallelMerkle {
         // Create a response channel the workers use to send messages back to the coordinator (us)
         let response_channel = mpsc::channel();
 
-        // for each operation in the batch, send a request to the worker related to the first nibble
+        // For each operation in the batch, send a request to the worker related to the first nibble
         for op in batch.into_iter().map_into_batch() {
             // For the first version, just pass the key instead of a NibblesIterator
             // Get the first nibble of the key to determine which worker to send the request to
             //let mut key_nibbles = NibblesIterator::new(op.key().as_ref());
 
             //let first_nibble = key_nibbles.next().expect("TODO: empty key");
-            // TODO(bug): we can need to send the key_nibbles iterator instead of the key to the child
+            // TODO(bug): we need to send the key_nibbles iterator instead of the key to the child
 
-            // Find the worker for the first nibble, or create a new one if it doesn't exist
+            // Find the worker state corresponding to the first nibble, or create a new one if it 
+            // doesn't exist.
             let worker = self.worker.get_or_insert_with(|| {
-                // no worker yet, so create one
-                // create a channel for the coordinator to send messages to the worker
+                // No worker state for this nibble yet, so create one.
+                // Create a channel for the coordinator (main thread) to send messages to this worker.
                 let child_channel = mpsc::channel();
 
-                // the worker will send messages to the coordinator using the response channel
+                // The worker will send messages to the coordinator using the response channel
                 // we copy and (poorly) name the variables here to move them to the worker
                 let (worker_receiver, worker_sender) =
                     (child_channel.1, response_channel.0.clone());
@@ -400,12 +406,13 @@ impl ParallelMerkle {
                 //    NodeStore::from_child(&proposal, child).expect("TODO: handle error");
 
                 let worker_nodestore = NodeStore::new(parent).expect("TODO handle error");
+                //let worker_nodestore = NodeStore::new(&proposal).expect("TODO handle error");
+                //let mut merkle = Merkle::from(proposal);
 
                 // now tell the threadpool to spawn a worker for this nibble
                 pool.spawn(move || {
                     //let mut merkle = Merkle::from(child_nodestore);
                     let mut merkle = Merkle::from(worker_nodestore);
-
                     loop {
                         let request = worker_receiver.recv().expect("TODO: handle error");
                         match request {
@@ -435,7 +442,7 @@ impl ParallelMerkle {
                         }
                     }
                 });
-                Worker {
+                WorkerState {
                     sender: child_channel.0,
                 }
             });
@@ -493,7 +500,9 @@ impl ParallelMerkle {
         while let Ok(response) = response_channel.1.recv() {
             match response {
                 Response::Root(new_root_opt) => {
-                    *proposal.mut_root() = self.undo_trie_transform(&mut proposal, new_root_opt).expect("TODO check errors");
+                    *proposal.mut_root() = self
+                        .postprocess_trie(&mut proposal, new_root_opt)
+                        .expect("TODO check errors");
                 }
                 Response::Error(_error) => todo!(),
             }
