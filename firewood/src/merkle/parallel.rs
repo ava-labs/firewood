@@ -405,7 +405,10 @@ impl ParallelMerkle {
                 //let child_nodestore =
                 //    NodeStore::from_child(&proposal, child).expect("TODO: handle error");
 
-                let worker_nodestore = NodeStore::new(parent).expect("TODO handle error");
+                //let worker_nodestore = NodeStore::new(parent).expect("TODO handle error");
+
+                let worker_nodestore = NodeStore::from_proposal(&mut proposal).expect("TODO handle error");
+
                 //let worker_nodestore = NodeStore::new(&proposal).expect("TODO handle error");
                 //let mut merkle = Merkle::from(proposal);
 
@@ -434,7 +437,8 @@ impl ParallelMerkle {
                                 worker_sender
                                     .send(Response::Root(
                                         //first_nibble,
-                                        merkle.into_inner().mut_root().take(),
+                                        merkle.into_inner().into_root(),
+                                        //merkle.into_inner().mut_root().take(),
                                     ))
                                     .expect("TODO: handle error");
                                 break;

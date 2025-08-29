@@ -44,7 +44,7 @@ pub(crate) mod header;
 pub(crate) mod persist;
 pub(crate) mod primitives;
 
-use crate::firewood_gauge;
+use crate::{firewood_gauge, Child};
 use crate::linear::OffsetReader;
 use crate::logger::trace;
 use crate::node::branch::ReadSerializable as _;
@@ -267,6 +267,56 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     /// Returns the root of this proposal.
     pub const fn mut_root(&mut self) -> &mut Option<Node> {
         &mut self.kind.root
+    }
+}
+
+impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
+    /// Creates a new [`NodeStore`] from a child node.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the child node cannot be read.
+    pub fn from_child(parent: &NodeStore<MutableProposal, S>, child: Option<Child>) -> Result<Self, FileIoError> {
+        let child_root = child.map(|child| {
+            match child {
+                Child::Node(node) => Ok(node),
+                Child::AddressWithHash(address, _) => {
+                    Ok(parent.read_node(address)?.deref().clone())
+                }
+                Child::MaybePersisted(maybe_persisted, _) => {
+                    Ok(maybe_persisted.as_shared_node(parent)?.deref().clone())
+                }
+            }
+        }).transpose()?;
+        Ok(NodeStore {
+            header: parent.header,
+            kind: MutableProposal {
+                root: child_root,
+                deleted: Vec::default(),
+                parent: parent.kind.parent.clone(),
+            },
+            storage: parent.storage.clone(),
+        })
+    }
+
+    /// Just for testing.
+    #[allow(clippy::missing_errors_doc)]
+    pub fn from_proposal(parent: &mut NodeStore<MutableProposal, S>) -> Result<Self, FileIoError> {
+        Ok(NodeStore {
+            header: parent.header,
+            kind: MutableProposal {
+                root: parent.mut_root().clone(),
+                deleted: Vec::default(),
+                parent: parent.kind.parent.clone(),
+            },
+            storage: parent.storage.clone(),
+        })
+    }
+
+    /// Consumes the `NodeStore` and returns the root of the trie
+    #[must_use]
+    pub fn into_root(self) -> Option<Node> {
+        self.kind.root
     }
 }
 
