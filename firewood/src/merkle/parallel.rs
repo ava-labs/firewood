@@ -257,28 +257,21 @@ impl ParallelMerkle {
                             };
 
                             // The child's partial path is the concatenation of its (now removed) parent,
-                            // its (former) child index, and its partial path.
+                            // its (former) child index, and its partial path. Note that the parent's
+                            // partial path should always be empty given the pre-insert transform.
+                            let partial_path = Path::from_nibbles_iterator(
+                                branch
+                                    .partial_path
+                                    .iter()
+                                    .copied()
+                                    .chain(once(child_index as u8))
+                                    .chain(child.partial_path().iter().copied()),
+                            );
                             match child {
                                 Node::Branch(ref mut child_branch) => {
-                                    let partial_path = Path::from_nibbles_iterator(
-                                        branch
-                                            .partial_path
-                                            .iter()
-                                            .copied()
-                                            .chain(once(child_index as u8))
-                                            .chain(child_branch.partial_path.iter().copied()),
-                                    );
                                     child_branch.partial_path = partial_path;
                                 }
                                 Node::Leaf(ref mut leaf) => {
-                                    let partial_path = Path::from_nibbles_iterator(
-                                        branch
-                                            .partial_path
-                                            .iter()
-                                            .copied()
-                                            .chain(once(child_index as u8))
-                                            .chain(leaf.partial_path.iter().copied()),
-                                    );
                                     leaf.partial_path = partial_path;
                                 }
                             }
