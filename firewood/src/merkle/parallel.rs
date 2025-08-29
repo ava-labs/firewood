@@ -209,9 +209,13 @@ impl ParallelMerkle {
         // If only one child remains and the root doesn’t have a value, then deleted the root,
         // use the child node as the new root, and update the partial path of the new root to
         // include its previous child index
+        println!("In postprocess_trie");
+
         if let Some(mut new_root) = new_root_opt {
             match &mut new_root {
                 Node::Branch(branch) => {
+                    println!("Root is a branch");
+                    println!("Root node: {branch:?}");
                     let mut children_iter = branch
                         .children
                         .iter_mut()
@@ -221,6 +225,7 @@ impl ParallelMerkle {
                     let first_child = children_iter.next();
                     match first_child {
                         None => {
+                            println!("First child is None");
                             if let Some(value) = branch.value.take() {
                                 // There is a value for the empty key. Create a leaf with the value and return.
                                 let new_leaf = Node::Leaf(LeafNode {
@@ -237,6 +242,7 @@ impl ParallelMerkle {
                             // Check if the root has a value or if there is more than one children. If yes, then
                             // just return the root unmodified
                             if branch.value.is_some() || children_iter.next().is_some() {
+                                println!("root has a value or has more than one child");
                                 return Ok(Some(new_root));
                             }
 
@@ -245,15 +251,14 @@ impl ParallelMerkle {
                             // increase code reuse.
                             //
                             // The branch's only child becomes the root of this subtrie.
+                            println!("root only has one child");
                             let mut child = match child {
                                 Child::Node(child_node) => std::mem::take(child_node),
                                 Child::AddressWithHash(addr, _) => {
                                     nodestore.read_for_update((*addr).into())?
-                                    //todo!();
                                 }
                                 Child::MaybePersisted(maybe_persisted, _) => {
                                     nodestore.read_for_update(maybe_persisted.clone())?
-                                    //todo!();
                                 }
                             };
 
@@ -276,6 +281,7 @@ impl ParallelMerkle {
                                     leaf.partial_path = partial_path;
                                 }
                             }
+                            println!("Old root: {branch:?} New root: {child:?}");
                             return Ok(Some(child));
                         }
                     }
@@ -335,7 +341,7 @@ impl ParallelMerkle {
                 .split_first()
                 .map(|(index, path)| (*index, path.into()));
 
-            println!("Split from non empty root: {index_path_opt:?}");
+            println!("Split index from non empty root: {index_path_opt:?}");
 
             // If index_path_opt is not None, then create a new branch that will be the new root with
             // the previous root as the child at the index returned from split_first.
@@ -354,7 +360,7 @@ impl ParallelMerkle {
                 println!("New root: {branch:?}");
                 *proposal.mut_root() = Some(branch.into());
             } else {
-                // Root does not need to be updated since it has an empty partial path. Put it 
+                // Root does not need to be updated since it has an empty partial path. Put it
                 // back into the proposal.
                 *proposal.mut_root() = Some(node);
             }
@@ -386,7 +392,7 @@ impl ParallelMerkle {
             //let first_nibble = key_nibbles.next().expect("TODO: empty key");
             // TODO(bug): we need to send the key_nibbles iterator instead of the key to the child
 
-            // Find the worker state corresponding to the first nibble, or create a new one if it 
+            // Find the worker state corresponding to the first nibble, or create a new one if it
             // doesn't exist.
             let worker = self.worker.get_or_insert_with(|| {
                 // No worker state for this nibble yet, so create one.
@@ -407,7 +413,8 @@ impl ParallelMerkle {
 
                 //let worker_nodestore = NodeStore::new(parent).expect("TODO handle error");
 
-                let worker_nodestore = NodeStore::from_proposal(&mut proposal).expect("TODO handle error");
+                let worker_nodestore =
+                    NodeStore::from_proposal(&mut proposal).expect("TODO handle error");
 
                 //let worker_nodestore = NodeStore::new(&proposal).expect("TODO handle error");
                 //let mut merkle = Merkle::from(proposal);
