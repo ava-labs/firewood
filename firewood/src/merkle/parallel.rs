@@ -1,36 +1,16 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-//use std::collections::HashMap;
 use std::sync::{Arc, OnceLock, mpsc};
-
-//use firewood_storage::{
-//    BranchNode, Child, FileBacked, FileIoError, ImmutableProposal, NibblesIterator, Node,
-//    NodeStore, Parentable, RootReader,
-//};
-
 use firewood_storage::{
     BranchNode, Child, FileBacked, FileIoError, ImmutableProposal, LeafNode, MutableProposal,
     NibblesIterator, Node, NodeStore, Parentable, Path,
 };
-
 use rayon::{ThreadPool, ThreadPoolBuilder};
-//use sha2::digest::crypto_common::KeyInit;
-
 use crate::db::BatchOp;
-//use crate::db;
-use crate::merkle::{Merkle, PrefixOverlap, Value};
+use crate::merkle::{Merkle, Value};
 use crate::v2::api::KeyValuePairIter;
 use std::iter::once;
-
-/*
-trait DbExt {
-    fn propose_sync_parallel(
-        &self,
-        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
-    ) -> Result<Proposal<'_>, FileIoError>;
-}
-*/
 
 #[derive(Debug)]
 struct WorkerState {
@@ -40,7 +20,6 @@ struct WorkerState {
 /// A request to the worker.
 #[derive(Debug)]
 enum Request {
-    //Insert { key: Key, value: Value },
     Insert { key: Path, value: Value },
     Delete { key: Path },
     DeleteRange { prefix: Path },
@@ -50,7 +29,6 @@ enum Request {
 #[derive(Debug)]
 enum Response {
     // return the new root of the subtrie at the given nibble
-    //Root(u8, Option<Node>),
     Root(u8, Option<Node>),
     Error(FileIoError),
 }
@@ -70,133 +48,10 @@ impl Default for ParallelMerkle {
     }
 }
 
-/*
-            let mut branch = new_root
-                .as_branch()
-                .expect("Should be a branch because of earlier transform");
-
-            let mut children_iter = branch
-                .children
-                .iter()
-                .enumerate()
-                .filter_map(|(index, child)| child.as_ref().map(|child| (index, child)));
-
-            let first_child = children_iter.next();
-
-            match first_child {
-                None => {
-                    // No value. Just delete the root
-                    if branch.value.is_none() {
-                        return None;
-                    }
-                    let new_leaf = Node::Leaf(LeafNode {
-                        value: branch.value.take()?,
-                        partial_path: branch.partial_path.clone(),
-                    });
-                }
-                Some(child) => {}
-            }
-        }
-
-        None
-
-
-        if let Some(new_root) = new_root_opt {
-            // Root should always be a branch given our earlier transform
-            let branch = new_root
-                .as_branch()
-                .expect("Should be branch because of earlier transform");
-
-            let children_iter = branch
-                .children
-                .iter()
-                .enumerate()
-                .filter_map(|(index, child)| child.map(|child| (index, child)));
-
-            let first_child = children_iter.next();
-
-            match first_child {
-                None => {
-                    // No value. Just delete the root
-                    if branch.value.is_none() {
-                        return None;
-                    }
-                }
-                Some => {}
-            }
-
-            let (child_index, child) = children_iter
-                .next()
-                .expect("branch node must have children");
-
-            if children_iter.next().is_some() {
-                // The branch has more than 1 child so do nothing
-                *proposal.mut_root() = new_root;
-            } else {
-                // The branch's only child becomes the root of this subtrie.
-                let mut child = match child {
-                    Child::Node(child_node) => std::mem::take(child_node),
-                    Child::AddressWithHash(addr, _) => {
-                        self.nodestore.read_for_update((*addr).into())?
-                    }
-                    Child::MaybePersisted(maybe_persisted, _) => {
-                        self.nodestore.read_for_update(maybe_persisted.clone())?
-                    }
-                };
-
-
-                let mut children_iter =
-                    branch
-                        .children
-                        .iter_mut
-                        .enumerate()
-                        .filter_map(|(index, child)| {
-                            child.as_mut().map(|child| (index, child))
-                        });
-
-
-                //let children = branch.children;
-
-                //if new_root.
-            }
-
-            // This branch node has a value.
-            // If it has multiple children, return the node as is.
-            // Otherwise, its only child becomes the root of this subtrie.
-            //let mut children_iter =
-            //    branch
-            //        .children
-            //        .iter_mut()
-            //        .enumerate()
-            //        .filter_map(|(index, child)| {
-            //            child.as_mut().map(|child| (index, child))
-            //        });
-
-            //let (child_index, child) = children_iter
-            //    .next()
-            //    .expect("branch node must have children");
-
-            //if children_iter.next().is_some() {
-            //    // The branch has more than 1 child so it can't be removed.
-            //    Ok((Some(node), Some(removed_value)))
-
-            //let a = new_root.unwrap();
-            *proposal.mut_root() = new_root;
-        }
-
-
-
-*/
-
 impl ParallelMerkle {
     /// Default constructor
     #[must_use]
     pub fn new() -> Self {
-        //ParallelMerkle { workers: [None, None, None, None,
-        //                           None, None, None, None,
-        //                           None, None, None, None,
-        //                           None, None, None, None]}
-        //let none_array = [(); BranchNode::MAX_CHILDREN].map(|_| None);
         ParallelMerkle {
             workers: [(); BranchNode::MAX_CHILDREN].map(|()| None),
         }
@@ -423,6 +278,7 @@ impl ParallelMerkle {
             //let b = a.split_first().unwrap();
             //println!("Index: {:?} Remaining: {:?}", b.0, b.1);
 
+            /* 
             let key_nibbles = NibblesIterator::new(op.key().as_ref());
             let key_path = Path::from_nibbles_iterator(key_nibbles);
 
@@ -440,6 +296,7 @@ impl ParallelMerkle {
                 .map(|(index, path)| (*index, path.into())).expect("todo");
             
             println!("Split: {:?} ------ {:?}", a.0, a.1);
+            */
 
             // TODO: It might be better to call insert_helper instead of insert because of the nibble
             //       taken off the key.
@@ -544,6 +401,7 @@ impl ParallelMerkle {
 
             println!("Worker Send (key_path): {:?}", key_path.as_ref());
 
+            // we have the right worker, so send the request to it
             match &op {
                 BatchOp::Put { key: _, value: _} => {
                     worker
@@ -575,24 +433,6 @@ impl ParallelMerkle {
                         .expect("TODO: handle error");
                 }
             }
-
-            /* 
-            //key_nibbles.
-            // we have the right worker, so send the request to it
-            worker
-                .sender
-                .send(Request::Insert {
-                    //key: key_path.as_ref().into(),
-                    key: key_path,
-                    //key: op.key().as_ref().into(),
-                    value: op
-                        .value()
-                        .as_ref()
-                        .map(|v| v.as_ref().into())
-                        .unwrap_or_default(),
-                })
-                .expect("TODO: handle error");
-            */
         }
 
         // Drop the sender response channel from the parent thread.
@@ -611,48 +451,7 @@ impl ParallelMerkle {
                 .expect("TODO: add error handling");
         }
 
-        /*
-                for worker in &self.workers {
-                    if let Some(worker) = worker {
-                        worker
-                            .sender
-                            .send(Request::Done)
-                            .expect("TODO: add error handling");
-                    }
-
-
-                                match worker {
-                                    None => {}
-                                    Some(worker) => {
-                                        worker
-                                            .sender
-                                            .send(Request::Done)
-                                            .expect("TODO: add error handling");
-                                    }
-                                }
-
-                }
-        */
-        //self.worker
-        //    .expect("TODO add error handling")
-        //    .sender
-        //    .send(Request::Done)
-        //    .expect("TODO: handle error");
-
-        /*
-        // collect all the responses from the workers
-        while let Ok(response) = response_channel.1.recv() {
-            match response {
-                Response::Root(nibble, new_root) => {
-                    root.children[nibble as usize] = new_root.map(Child::Node);
-                }
-                Response::Error(_error) => todo!(),
-            }
-        }
-        */
-
         //let mut proposal = NodeStore::new(&parent)?;
-
         while let Ok(response) = response_channel.1.recv() {
             match response {
                 Response::Root(index, new_root_opt) => {
