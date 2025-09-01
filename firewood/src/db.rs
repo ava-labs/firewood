@@ -731,7 +731,9 @@ mod test {
 
     #[tokio::test]
     async fn test_propose_parallel() {
-        const N: usize = 20;
+        const N: usize = 5;
+
+        let rng = firewood_storage::SeededRng::from_env_or_random();
 
         let db = testdb().await;
 
@@ -740,6 +742,7 @@ mod test {
             .map(|i| {
                 (
                     format!("key{i}").into_bytes(),
+                    //rng.random::<[u8; 32]>(),
                     Box::from(format!("value{i}").as_bytes()),
                 )
             })

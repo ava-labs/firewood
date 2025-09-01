@@ -593,10 +593,32 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         self.try_into().expect("failed to convert")
     }
 
+    pub fn insert_path(&mut self, key:Path, value: Value) -> Result<(), FileIoError> {
+        let root = self.nodestore.mut_root();
+
+        let Some(root_node) = std::mem::take(root) else {
+            // The trie is empty. Create a new leaf node with `value` and set
+            // it as the root.
+            let root_node = Node::Leaf(LeafNode {
+                partial_path: key,
+                value,
+            });
+            *root = root_node.into();
+            return Ok(());
+        };
+
+        let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
+        *self.nodestore.mut_root() = root_node.into();
+        Ok(())
+    }
+
+
     /// Map `key` to `value` in the trie.
     /// Each element of key is 2 nibbles.
     pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), FileIoError> {
+        println!("Merkle Insert 1: {key:?}");
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        println!("Merkle Insert 2: {key:?}");
 
         let root = self.nodestore.mut_root();
 
