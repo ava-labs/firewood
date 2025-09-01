@@ -17,8 +17,9 @@ use firewood_storage::{
 use rayon::{ThreadPool, ThreadPoolBuilder};
 //use sha2::digest::crypto_common::KeyInit;
 
+use crate::db::BatchOp;
 //use crate::db;
-use crate::merkle::{Key, Merkle, PrefixOverlap, Value};
+use crate::merkle::{Merkle, PrefixOverlap, Value};
 use crate::v2::api::KeyValuePairIter;
 use std::iter::once;
 
@@ -41,8 +42,8 @@ struct WorkerState {
 enum Request {
     //Insert { key: Key, value: Value },
     Insert { key: Path, value: Value },
-    Delete { key: Key },
-    DeleteRange { prefix: Key },
+    Delete { key: Path },
+    DeleteRange { prefix: Path },
     Done,
 }
 
@@ -422,7 +423,7 @@ impl ParallelMerkle {
             //let b = a.split_first().unwrap();
             //println!("Index: {:?} Remaining: {:?}", b.0, b.1);
 
-            let mut key_nibbles = NibblesIterator::new(op.key().as_ref());
+            let key_nibbles = NibblesIterator::new(op.key().as_ref());
             let key_path = Path::from_nibbles_iterator(key_nibbles);
 
             let empty_path = Path::new();
@@ -508,7 +509,7 @@ impl ParallelMerkle {
                             // insert a key-value pair into the subtrie
                             Request::Insert { key, value } => {
                                 // TODO: we still have a bug here, we need to remove the first nibble from the key :(
-                                println!("### In Worker Thread: Inserting: {:?} and {value:?}", key);
+                                println!("### In Worker Thread: Inserting: {key:?} and {value:?}");
                                 merkle
                                     //.insert(key_path.as_ref(), value.as_ref().into())
                                     //.insert(key.as_ref(), value.as_ref().into())
@@ -516,9 +517,12 @@ impl ParallelMerkle {
                                     .expect("TODO: handle error");
                             }
                             // these should be easy to implement...
-                            Request::Delete { key: _ } => todo!(),
-                            Request::DeleteRange { prefix: _ } => todo!(),
-
+                            Request::Delete { key } => {
+                                merkle.remove_path(key).expect("TODO: handle error");
+                            }
+                            Request::DeleteRange { prefix } => {
+                                merkle.remove_prefix_path(prefix).expect("TODO: handle error");
+                            }
                             // sent from the coordinator to the workers to signal that they are done
                             Request::Done => {
                                 worker_sender
@@ -540,6 +544,39 @@ impl ParallelMerkle {
 
             println!("Worker Send (key_path): {:?}", key_path.as_ref());
 
+            match &op {
+                BatchOp::Put { key: _, value: _} => {
+                    worker
+                        .sender
+                        .send(Request::Insert {
+                            key: key_path,
+                            value: op
+                                .value()
+                                .as_ref()
+                                .map(|v| v.as_ref().into())
+                                .unwrap_or_default(),
+                        })
+                        .expect("TODO: handle error");
+                }
+                BatchOp::Delete { key: _ } => {
+                    worker
+                        .sender
+                        .send(Request::Delete {
+                            key: key_path,
+                        })
+                        .expect("TODO: handle error");
+                }
+                BatchOp::DeleteRange { prefix: _ } => {
+                    worker
+                        .sender
+                        .send(Request::DeleteRange {
+                            prefix: key_path,
+                        })
+                        .expect("TODO: handle error");
+                }
+            }
+
+            /* 
             //key_nibbles.
             // we have the right worker, so send the request to it
             worker
@@ -555,6 +592,7 @@ impl ParallelMerkle {
                         .unwrap_or_default(),
                 })
                 .expect("TODO: handle error");
+            */
         }
 
         // Drop the sender response channel from the parent thread.
