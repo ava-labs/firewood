@@ -21,10 +21,11 @@ use firewood_storage::{
     ImmutableProposal, NodeStore,
 };
 use metrics::{counter, describe_counter};
+use rayon::ThreadPool;
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use thiserror::Error;
 use typed_builder::TypedBuilder;
 
@@ -162,6 +163,9 @@ pub struct DbConfig {
 pub struct Db {
     metrics: Arc<DbMetrics>,
     manager: RevisionManager,
+
+    threadpool: OnceLock<ThreadPool>,
+    //static THREADPOOL: OnceLock<ThreadPool> = OnceLock::new();
 }
 
 #[async_trait]
@@ -241,7 +245,8 @@ impl Db {
             .manager(cfg.manager)
             .build();
         let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
-        let db = Self { metrics, manager };
+        let threadpool= OnceLock::new();
+        let db = Self { metrics, manager, threadpool };
         Ok(db)
     }
 
@@ -257,7 +262,8 @@ impl Db {
             .manager(cfg.manager)
             .build();
         let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
-        let db = Self { metrics, manager };
+        let threadpool= OnceLock::new();
+        let db = Self { metrics, manager, threadpool };
         Ok(db)
     }
 
@@ -281,13 +287,13 @@ impl Db {
     /// propose a new batch in parallel.
     #[allow(clippy::missing_panics_doc)]
     pub fn propose_parallel(
-        &self,
+        &mut self,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
     ) -> Result<Proposal<'_>, api::Error> {
         let parent = self.manager.current_revision();
         let mut parallel_merkle = ParallelMerkle::default();
         let immutable = parallel_merkle
-            .create_proposal(&parent, batch)
+            .create_proposal(&parent, batch, &mut self.threadpool)
             .expect("TODO handle error");
         self.manager.add_proposal(immutable.clone());
         Ok(Proposal {
@@ -735,7 +741,7 @@ mod test {
 
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
-        let db = testdb().await;
+        let mut db = testdb().await;
 
         // create N keys and values like (key0, value0)..(keyN, valueN)
         let (keys, vals): (Vec<_>, Vec<_>) = (0..N)

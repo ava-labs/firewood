@@ -33,7 +33,7 @@ enum Response<S> {
     Error(FileIoError),
 }
 
-static THREADPOOL: OnceLock<ThreadPool> = OnceLock::new();
+//static THREADPOOL: OnceLock<ThreadPool> = OnceLock::new();
 
 /// TODO add doc
 #[derive(Debug)]
@@ -102,11 +102,11 @@ impl ParallelMerkle {
                     let new_leaf = Node::Leaf(LeafNode {
                         value,
                         partial_path: Path::new(), // Partial path should be empty
-                                                    //partial_path: branch.partial_path.clone(),
+                                                   //partial_path: branch.partial_path.clone(),
                     });
                     return Ok(Some(new_leaf));
                 }
-                Ok(None)  // No value. Just delete the root
+                Ok(None) // No value. Just delete the root
             }
             Some((child_index, child)) => {
                 // Check if the root has a value or if there is more than one children. If yes, then
@@ -124,9 +124,7 @@ impl ParallelMerkle {
                 println!("root only has one child");
                 let mut child = match child {
                     Child::Node(child_node) => std::mem::take(child_node),
-                    Child::AddressWithHash(addr, _) => {
-                        nodestore.read_for_update((*addr).into())?
-                    }
+                    Child::AddressWithHash(addr, _) => nodestore.read_for_update((*addr).into())?,
                     Child::MaybePersisted(maybe_persisted, _) => {
                         nodestore.read_for_update(maybe_persisted.clone())?
                     }
@@ -134,7 +132,7 @@ impl ParallelMerkle {
 
                 println!("Child's partial path: {:?}", child.partial_path());
                 // The child's partial path is the concatenation of its (now removed) parent,
-                // which should always be empty because of our prepare step, its (former) 
+                // which should always be empty because of our prepare step, its (former)
                 // child index, and its partial path. Because the parent's partial path
                 // should always be empty, we replace it here with a Path::new().
                 let partial_path = Path::from_nibbles_iterator(
@@ -167,9 +165,10 @@ impl ParallelMerkle {
         &mut self,
         parent: &NodeStore<T, FileBacked>,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
+        threadpool: &mut OnceLock<ThreadPool>,
     ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, FileIoError> {
         // get (or create) a threadpool
-        let pool = THREADPOOL.get_or_init(|| {
+        let pool = threadpool.get_or_init(|| {
             ThreadPoolBuilder::new()
                 .num_threads(BranchNode::MAX_CHILDREN)
                 .build()
@@ -297,7 +296,7 @@ impl ParallelMerkle {
             let key_path = Path::from_nibbles_iterator(key_nibbles);
             println!("Key Path: {key_path:?}");
 
-            // Find the worker's state corresponding to the first nibble which are stored in an array. 
+            // Find the worker's state corresponding to the first nibble which are stored in an array.
             // Create a new worker state if it doesn't exist.
             let worker_option = self
                 .workers
@@ -419,9 +418,16 @@ impl ParallelMerkle {
         while let Ok(response) = response_channel.1.recv() {
             match response {
                 Response::Root(index, mut child_nodestore) => {
+                    // Taking deleted nodes (from calling read_for_update) from child nodestores.
                     proposal.add_deleted_nodes_from_child(&mut child_nodestore);
-                    //let new_root_opt = ;
-                    root_branch.children[index as usize] = child_nodestore.into_root().map(Child::Node);
+
+                    // Set the child at index using the root from the child nodestore.
+                    *root_branch
+                        .children
+                        .get_mut(index as usize)
+                        .expect("index error") = child_nodestore.into_root().map(Child::Node);
+
+                    //root_branch.children[index as usize] = child_nodestore.into_root().map(Child::Node);
                     // TODO: Need to combine the deletes from the children.
                     //proposal.add_deleted_nodes_from_child(&mut child_nodestore);
                 }
@@ -433,7 +439,7 @@ impl ParallelMerkle {
             .postprocess_trie(&mut proposal, Some((*root_branch).into()))
             .expect("TODO check errors");
 
-        // Done with these worker states. Setting the workers to None will allow the next create 
+        // Done with these worker states. Setting the workers to None will allow the next create
         // proposal from the same ParallelMerkle to be reused to spawn new states.
         self.workers = [(); BranchNode::MAX_CHILDREN].map(|()| None);
 
