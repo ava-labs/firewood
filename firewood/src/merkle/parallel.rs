@@ -102,7 +102,6 @@ impl ParallelMerkle {
                     let new_leaf = Node::Leaf(LeafNode {
                         value,
                         partial_path: Path::new(), // Partial path should be empty
-                                                   //partial_path: branch.partial_path.clone(),
                     });
                     return Ok(Some(new_leaf));
                 }
@@ -172,7 +171,7 @@ impl ParallelMerkle {
             ThreadPoolBuilder::new()
                 .num_threads(BranchNode::MAX_CHILDREN)
                 .build()
-                .expect("TODO: handle error")
+                .expect("Error in creating threadpool")
         });
 
         // create a proposal from the parent
@@ -190,7 +189,7 @@ impl ParallelMerkle {
         //    partial path and a None for a value. Push down the previous root as a child. This
         //    will be a malformed Merkle trie and will need to be fixed afterwards.
         // 3. If the existing root does not have a partial path, then there is nothing we need
-        //    to do.
+        //    to do if it is a branch. If it is a leaf, then convert it into a branch.
         //
         // The result after the prepare phase is that there is a branch node at the root with
         // an empty partial path.
@@ -221,10 +220,40 @@ impl ParallelMerkle {
                 println!("New root: {branch:?}");
                 *proposal.mut_root() = Some(branch.into());
             } else {
-                // Root does not need to be updated since it has an empty partial path. Put it
-                // back into the proposal.
+                match node {
+                    Node::Leaf(leaf) => {
+                        let branch = BranchNode {
+                            partial_path: Path::new(),
+                            value: Some(leaf.value.clone()),
+                            children: BranchNode::empty_children(),
+                        };
+                        *proposal.mut_root() = Some(branch.into());  
+                    },
+                    Node::Branch(_) => {
+                        // Root does not need to be updated since it has an empty partial path and is a
+                        // branch. Put it back into the proposal.
+                        *proposal.mut_root() = Some(node);
+                    }
+                }
+            }
+            
+            /*       
+            else if node.is_leaf() {
+                // Empty partial path and the root is a leaf. Replace with a branch.
+                //let a = node.as_leaf().expect("Not leaf").value.clone();
+                //let a = node.value().take();
+                let branch = BranchNode {
+                    partial_path: Path::new(),
+                    value: Some(node.as_leaf().expect("Not leaf").value.clone()),
+                    children: BranchNode::empty_children(),
+                };
+                *proposal.mut_root() = Some(branch.into());        
+            } else {
+                // Root does not need to be updated since it has an empty partial path and is a
+                // branch. Put it back into the proposal.
                 *proposal.mut_root() = Some(node);
             }
+            */
         } else {
             // Create a branch node with an empty partial path and a None for a value
             println!("Creating empty branch node for empty trie");
@@ -240,6 +269,7 @@ impl ParallelMerkle {
             .mut_root()
             .take()
             .expect("Should have a root node after transform");
+
         let mut root_branch = root_node.into_branch().expect("Should be branch");
 
         // Create a response channel the workers use to send messages back to the coordinator (us)
