@@ -293,8 +293,8 @@ impl Db {
         let parent = self.manager.current_revision();
         let mut parallel_merkle = ParallelMerkle::default();
         let immutable = parallel_merkle
-            .create_proposal(&parent, batch, &mut self.threadpool)
-            .expect("TODO handle error");
+            .create_proposal(&parent, batch, &mut self.threadpool)?;
+            //.expect("TODO handle error");
         self.manager.add_proposal(immutable.clone());
         Ok(Proposal {
             nodestore: immutable,
@@ -491,11 +491,14 @@ mod test {
     use std::num::NonZeroUsize;
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
+    use std::process::abort;
 
     use firewood_storage::{CheckOpt, CheckerError};
     use tokio::sync::mpsc::{Receiver, Sender};
 
     use crate::db::{Db, Proposal};
+    use crate::merkle::parallel::ParallelMerkleError;
+    use crate::v2;
     use crate::v2::api::{Db as _, DbView as _, KeyValuePairIter, Proposal as _};
 
     use super::{BatchOp, DbConfig};
@@ -758,7 +761,16 @@ mod test {
             let kviter = keys.iter().zip(vals.iter()).map_into_batch();
 
             //let proposal = db.propose_sync(kviter).unwrap();
-            let proposal = db.propose_parallel(kviter).unwrap();
+            let proposal= match db.propose_parallel(kviter) {
+                Ok(p) => p,
+                Err(err) => {
+                    if let v2::api::Error::ParallelError(ParallelMerkleError::RetrySerial) = err {
+                        db.propose_sync(keys.iter().zip(vals.iter()).map_into_batch()).expect("Error with sync propose")
+                    } else {
+                        abort();
+                    }
+                }
+            };
 
             // iterate over the keys and values again, checking that the values are in the correct proposal
             let kviter = keys.iter().zip(vals.iter());

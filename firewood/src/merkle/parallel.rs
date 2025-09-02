@@ -9,8 +9,10 @@ use firewood_storage::{
     NibblesIterator, Node, NodeStore, Parentable, Path,
 };
 use rayon::{ThreadPool, ThreadPoolBuilder};
+use std::fmt;
 use std::iter::once;
 use std::sync::{Arc, OnceLock, mpsc};
+use thiserror::Error;
 
 #[derive(Debug)]
 struct WorkerState {
@@ -31,6 +33,25 @@ enum Response<S> {
     // return the new root of the subtrie at the given nibble
     Root(u8, Box<NodeStore<MutableProposal, S>>),
     Error(FileIoError),
+}
+
+/// Error types for calling `ParallelMerkle`
+#[derive(Debug, Error)]
+pub enum ParallelMerkleError {
+    /// Received a `FileIoError` while performing a parallel operation.
+    Io(FileIoError),
+    /// Batch includes an invalid parallel operation (remove prefix on empty key).
+    /// Caller should catch this error and re-create proposal serially.
+    RetrySerial,
+}
+
+impl fmt::Display for ParallelMerkleError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "")
+        // Use the `write!` macro to write to the formatter `f`
+        // You can access the struct's fields using `self.field_name`
+        // write!(f, "MyStruct: value1 = {}, value2 = {}", self.value1, self.value2)
+    }
 }
 
 //static THREADPOOL: OnceLock<ThreadPool> = OnceLock::new();
@@ -165,7 +186,7 @@ impl ParallelMerkle {
         parent: &NodeStore<T, FileBacked>,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
         threadpool: &mut OnceLock<ThreadPool>,
-    ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, FileIoError> {
+    ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, ParallelMerkleError> {
         // get (or create) a threadpool
         let pool = threadpool.get_or_init(|| {
             ThreadPoolBuilder::new()
@@ -175,7 +196,12 @@ impl ParallelMerkle {
         });
 
         // create a proposal from the parent
-        let mut proposal = NodeStore::new(parent)?;
+        let mut proposal = match NodeStore::new(parent) {
+            Ok(p) => p,
+            Err(err) => {
+                return Err(ParallelMerkleError::Io(err));
+            }
+        };
 
         // Creating a parallel proposal consists of 4 phases: Prepare, Split, Merge, and Postprocess.
         //
@@ -220,11 +246,13 @@ impl ParallelMerkle {
                 println!("New root: {branch:?}");
                 *proposal.mut_root() = Some(branch.into());
             } else {
+                // Root has an empty partial path. We need to consider two cases.
                 match node {
-                    Node::Leaf(leaf) => {
+                    // Root is a leaf with an empty key. We need to replace the leaf with a branch.
+                    Node::Leaf(mut leaf) => {
                         let branch = BranchNode {
                             partial_path: Path::new(),
-                            value: Some(leaf.value.clone()),
+                            value: Some(std::mem::take(&mut leaf.value)),
                             children: BranchNode::empty_children(),
                         };
                         *proposal.mut_root() = Some(branch.into());  
@@ -236,26 +264,8 @@ impl ParallelMerkle {
                     }
                 }
             }
-            
-            /*       
-            else if node.is_leaf() {
-                // Empty partial path and the root is a leaf. Replace with a branch.
-                //let a = node.as_leaf().expect("Not leaf").value.clone();
-                //let a = node.value().take();
-                let branch = BranchNode {
-                    partial_path: Path::new(),
-                    value: Some(node.as_leaf().expect("Not leaf").value.clone()),
-                    children: BranchNode::empty_children(),
-                };
-                *proposal.mut_root() = Some(branch.into());        
-            } else {
-                // Root does not need to be updated since it has an empty partial path and is a
-                // branch. Put it back into the proposal.
-                *proposal.mut_root() = Some(node);
-            }
-            */
         } else {
-            // Create a branch node with an empty partial path and a None for a value
+            // Empty trie. Create a branch node with an empty partial path and a None for a value.
             println!("Creating empty branch node for empty trie");
             let branch = BranchNode {
                 partial_path: Path::new(),
@@ -265,12 +275,12 @@ impl ParallelMerkle {
             *proposal.mut_root() = Some(branch.into());
         }
 
-        let root_node = proposal
+        let mut root_branch = proposal
             .mut_root()
             .take()
-            .expect("Should have a root node after transform");
-
-        let mut root_branch = root_node.into_branch().expect("Should be branch");
+            .expect("Should have a root node after prepare phase")
+            .into_branch()
+            .expect("Root should be branch after prepare phase");
 
         // Create a response channel the workers use to send messages back to the coordinator (us)
         let response_channel = mpsc::channel();
@@ -309,11 +319,10 @@ impl ParallelMerkle {
                         );
                     }
                     BatchOp::Delete { key: _ } => {
-                        // Delete the value for this key.
                         root_branch.value = None;
                     }
                     BatchOp::DeleteRange { prefix: _ } => {
-                        todo!();
+                        return Err(ParallelMerkleError::RetrySerial);
                     }
                 }
                 continue; // Done with this operation.
