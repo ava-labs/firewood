@@ -207,7 +207,6 @@ impl ParallelMerkle {
         //
         // The result after the prepare phase is that there is a branch node at the root with
         // an empty partial path.
-
         let root_node = proposal.mut_root().take();
         if let Some(mut node) = root_node {
             // Non-empty root. Check if it has a partial path
@@ -250,11 +249,6 @@ impl ParallelMerkle {
             *proposal.mut_root() = Some(branch.into());
         }
 
-        // keep track of the workers for each nibble
-        // TODO: use something better than a hashmap here
-        //let mut workers = HashMap::new();
-        //self.worker = None;
-
         let root_node = proposal
             .mut_root()
             .take()
@@ -270,14 +264,22 @@ impl ParallelMerkle {
 
             let mut key_nibbles = NibblesIterator::new(op.key().as_ref());
 
-            // TODO: Need to handle empty key. Since the partial_path of the root must be empty, an
-            //       empty key should always be for the root. For a insert, it would just modify
-            //       the root. For a remove, it would remove any value at the root, but we should not
-            //       delete the root node. For a remove prefix, it should remove everything, which
-            //       cannot safely be done in parallel with other operations. Calling a remove prefix
-            //       on an empty key should never happen in normal operations. We should just return
-            //       an error and have the caller recreated the proposal serially.
-            // Get the first nibble of the key to determine which worker to send the request to
+            // Get the first nibble of the key to determine which worker to send the request to.
+            //
+            // Need to handle empty key. Since the partial_path of the root must be empty, an empty
+            // key should always be for the root node. There are 3 cases the consider.
+            //
+            // Insert: The main thread modifies the value of the root.
+            //
+            // Remove: The main thread removes any value at the root. However, it should not delete
+            //         the root node, which, if necessary later, will be done in post processing.
+            //
+            // Remove Prefix:
+            //         For a remove prefix, we would need to remove everything, which cannot safely
+            //         be done in parallel with other operations. Calling a remove prefix on an
+            //         empty key should never happen during normal operations. We handle this case
+            //         by returning an error. The caller will then need to recreate the proposal
+            //         serially.
             let Some(first_nibble) = key_nibbles.next() else {
                 match &op {
                     BatchOp::Put { key: _, value: _ } => {
@@ -300,16 +302,15 @@ impl ParallelMerkle {
                 continue; // Done with this operation.
             };
 
-            //let first_nibble = key_nibbles.next().expect("TODO: empty key");
             println!("First nibble: {first_nibble:?}");
 
             // We send a path to the worker without the first nibble. Sending a nibble iterator to a
-            // worker is more difficult due to lifetime reasons as it takes a references from op.
+            // worker is more difficult as it takes a reference from op.
             let key_path = Path::from_nibbles_iterator(key_nibbles);
             println!("Key Path: {key_path:?}");
 
-            // Find the worker state corresponding to the first nibble. Check for index bounds
-            // just in case. Create a new worker state if it doesn't exist.
+            // Find the worker's state corresponding to the first nibble which are stored in an array. 
+            // Create a new worker state if it doesn't exist.
             let worker_option = self
                 .workers
                 .get_mut(first_nibble as usize)
@@ -327,26 +328,15 @@ impl ParallelMerkle {
                     (child_channel.1, response_channel.0.clone());
 
                 // get the child node from the proposal
-
                 let child = root_branch
                     .children
                     .get_mut(first_nibble as usize)
                     .expect("index error")
                     .take();
 
-                //let child = std::mem::take(&mut root_branch.children.get_mut(first_nibble as usize).expect("index error"));
-                //
                 // build a nodestore from the child node
                 let worker_nodestore =
                     NodeStore::from_child(&proposal, child).expect("TODO: handle error");
-
-                //let worker_nodestore = NodeStore::new(parent).expect("TODO handle error");
-
-                //let worker_nodestore =
-                //    NodeStore::from_proposal(&mut proposal).expect("TODO handle error");
-
-                //let worker_nodestore = NodeStore::new(&proposal).expect("TODO handle error");
-                //let mut merkle = Merkle::from(proposal);
 
                 // now tell the threadpool to spawn a worker for this nibble
                 pool.spawn(move || {
@@ -428,12 +418,7 @@ impl ParallelMerkle {
         // Drop the sender response channel from the parent thread.
         drop(response_channel.0);
 
-        // we have processed all the batches, so send a Done message to each worker
-
-        //for worker in workers.values_mut() {
-        //    worker.sender.send(Request::Done).expect("TODO: handle error");
-        //}
-
+        // we have processed all the ops in the batch, so send a Done message to each worker
         for worker in self.workers.iter().flatten() {
             worker
                 .sender
@@ -447,10 +432,6 @@ impl ParallelMerkle {
                 Response::Root(index, new_root_opt) => {
                     root_branch.children[index as usize] = new_root_opt.map(Child::Node);
                     // TODO: Need to combine the deletes from the children.
-
-                    //*proposal.mut_root() = self
-                    //    .postprocess_trie(&mut proposal, new_root_opt)
-                    //    .expect("TODO check errors");
                 }
                 Response::Error(_error) => todo!(),
             }
@@ -460,9 +441,8 @@ impl ParallelMerkle {
             .postprocess_trie(&mut proposal, Some((*root_branch).into()))
             .expect("TODO check errors");
 
-        // Done with these async tasks. Setting worker to None will allow
-        // the next create proposal from the same ParallelMerkle to be reused
-        // to spawn new tasks.
+        // Done with these worker states. Setting the workers to None will allow the next create 
+        // proposal from the same ParallelMerkle to be reused to spawn new states.
         self.workers = [(); BranchNode::MAX_CHILDREN].map(|()| None);
 
         //*proposal.mut_root() = Some(Node::Branch(root.clone()));
