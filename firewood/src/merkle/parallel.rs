@@ -1,16 +1,16 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::sync::{Arc, OnceLock, mpsc};
+use crate::db::BatchOp;
+use crate::merkle::{Merkle, Value};
+use crate::v2::api::KeyValuePairIter;
 use firewood_storage::{
     BranchNode, Child, FileBacked, FileIoError, ImmutableProposal, LeafNode, MutableProposal,
     NibblesIterator, Node, NodeStore, Parentable, Path,
 };
 use rayon::{ThreadPool, ThreadPoolBuilder};
-use crate::db::BatchOp;
-use crate::merkle::{Merkle, Value};
-use crate::v2::api::KeyValuePairIter;
 use std::iter::once;
+use std::sync::{Arc, OnceLock, mpsc};
 
 #[derive(Debug)]
 struct WorkerState {
@@ -38,7 +38,6 @@ static THREADPOOL: OnceLock<ThreadPool> = OnceLock::new();
 /// TODO add doc
 #[derive(Debug)]
 pub struct ParallelMerkle {
-    //worker: Option<WorkerState>,
     workers: [Option<WorkerState>; BranchNode::MAX_CHILDREN],
 }
 
@@ -62,10 +61,11 @@ impl ParallelMerkle {
         nodestore: &mut NodeStore<MutableProposal, FileBacked>,
         new_root_opt: Option<Node>,
     ) -> Result<Option<Node>, FileIoError> {
-        // Check if the Merkle trie is malformed. If it is, apply transform to create
-        // a valid Merkle trie.
+        // Check if the Merkle trie has an extra root node that was added to facilitate efficient
+        // parallel modification of the trie. If it does, apply transform to return trie to a
+        // valid state by following the steps below:
         //
-        // If all of the children have been removed, then
+        // If all of the children from the root has been removed, then
         //     Convert the root into a leaf if it has a value (this should indicate that a
         //     value was inserted for the empty key).
         //     Otherwise, delete the empty root node
@@ -268,51 +268,43 @@ impl ParallelMerkle {
         for op in batch.into_iter().map_into_batch() {
             println!("Key: {:?}", op.key().as_ref());
 
-            // For the first version, just pass the key instead of a NibblesIterator
-            // Get the first nibble of the key to determine which worker to send the request to
-            //let key_nibbles = NibblesIterator::new(op.key().as_ref());
-            //let key_path = Path::from_nibbles_iterator(key_nibbles);
-            //println!("Key Path: {key_path:?}");
-
-            //let a: &[u8] = key_path.as_ref();
-            //let b = a.split_first().unwrap();
-            //println!("Index: {:?} Remaining: {:?}", b.0, b.1);
-
-            /* 
-            let key_nibbles = NibblesIterator::new(op.key().as_ref());
-            let key_path = Path::from_nibbles_iterator(key_nibbles);
-
-            let empty_path = Path::new();
-            let path_overlap = PrefixOverlap::from(key_path.as_ref(), empty_path.as_ref());
-
-            let unique_key = path_overlap.unique_a;
-            let unique_node = path_overlap.unique_b;
-
-            println!("unique_key: {unique_key:?}");
-            println!("unique_node: {unique_node:?}");
-
-            let a: (u8, Path) = unique_key
-                .split_first()
-                .map(|(index, path)| (*index, path.into())).expect("todo");
-            
-            println!("Split: {:?} ------ {:?}", a.0, a.1);
-            */
-
-            // TODO: It might be better to call insert_helper instead of insert because of the nibble
-            //       taken off the key.
-
-
             let mut key_nibbles = NibblesIterator::new(op.key().as_ref());
-            //let key_path = Path::from_nibbles_iterator(key_nibbles);
-            // TODO: Need to handle empty key.
-            let first_nibble = key_nibbles.next().expect("TODO: empty key");
-            //key_nibbles.next().expect("testing");
 
+            // TODO: Need to handle empty key. Since the partial_path of the root must be empty, an
+            //       empty key should always be for the root. For a insert, it would just modify
+            //       the root. For a remove, it would remove any value at the root, but we should not
+            //       delete the root node. For a remove prefix, it should remove everything, which
+            //       cannot safely be done in parallel with other operations. Calling a remove prefix
+            //       on an empty key should never happen in normal operations. We should just return
+            //       an error and have the caller recreated the proposal serially.
+            // Get the first nibble of the key to determine which worker to send the request to
+            let Some(first_nibble) = key_nibbles.next() else {
+                match &op {
+                    BatchOp::Put { key: _, value: _ } => {
+                        // There should always be a value, even if it is empty.
+                        root_branch.value = Some(
+                            op.value()
+                                .as_ref()
+                                .map(|v| v.as_ref().into())
+                                .unwrap_or_default(),
+                        );
+                    }
+                    BatchOp::Delete { key: _ } => {
+                        // Delete the value for this key.
+                        root_branch.value = None;
+                    }
+                    BatchOp::DeleteRange { prefix: _ } => {
+                        todo!();
+                    }
+                }
+                continue; // Done with this operation.
+            };
+
+            //let first_nibble = key_nibbles.next().expect("TODO: empty key");
             println!("First nibble: {first_nibble:?}");
-            // TODO(bug): we need to send the key_nibbles iterator instead of the key to the child
 
-            //let worker = self.workers[first_nibble as usize];
-
+            // We send a path to the worker without the first nibble. Sending a nibble iterator to a
+            // worker is more difficult due to lifetime reasons as it takes a references from op.
             let key_path = Path::from_nibbles_iterator(key_nibbles);
             println!("Key Path: {key_path:?}");
 
@@ -378,7 +370,9 @@ impl ParallelMerkle {
                                 merkle.remove_path(key).expect("TODO: handle error");
                             }
                             Request::DeleteRange { prefix } => {
-                                merkle.remove_prefix_path(prefix).expect("TODO: handle error");
+                                merkle
+                                    .remove_prefix_path(prefix)
+                                    .expect("TODO: handle error");
                             }
                             // sent from the coordinator to the workers to signal that they are done
                             Request::Done => {
@@ -403,7 +397,7 @@ impl ParallelMerkle {
 
             // we have the right worker, so send the request to it
             match &op {
-                BatchOp::Put { key: _, value: _} => {
+                BatchOp::Put { key: _, value: _ } => {
                     worker
                         .sender
                         .send(Request::Insert {
@@ -419,17 +413,13 @@ impl ParallelMerkle {
                 BatchOp::Delete { key: _ } => {
                     worker
                         .sender
-                        .send(Request::Delete {
-                            key: key_path,
-                        })
+                        .send(Request::Delete { key: key_path })
                         .expect("TODO: handle error");
                 }
                 BatchOp::DeleteRange { prefix: _ } => {
                     worker
                         .sender
-                        .send(Request::DeleteRange {
-                            prefix: key_path,
-                        })
+                        .send(Request::DeleteRange { prefix: key_path })
                         .expect("TODO: handle error");
                 }
             }
@@ -456,6 +446,7 @@ impl ParallelMerkle {
             match response {
                 Response::Root(index, new_root_opt) => {
                     root_branch.children[index as usize] = new_root_opt.map(Child::Node);
+                    // TODO: Need to combine the deletes from the children.
 
                     //*proposal.mut_root() = self
                     //    .postprocess_trie(&mut proposal, new_root_opt)
