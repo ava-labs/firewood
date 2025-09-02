@@ -11,6 +11,7 @@ use firewood_storage::{
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::fmt;
 use std::iter::once;
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, OnceLock, mpsc};
 use thiserror::Error;
 
@@ -183,8 +184,6 @@ impl ParallelMerkle {
     }
 
     fn prepare_trie(&self, proposal: &mut NodeStore<MutableProposal, FileBacked>) {
-        // Creating a parallel proposal consists of 4 phases: Prepare, Split, Merge, and Postprocess.
-        //
         // Prepare phase:
         // --------------
         // There are 3 different cases to handle depending on the value of the root node.
@@ -256,10 +255,102 @@ impl ParallelMerkle {
         }
     }
 
-    /// TODO: add doc
+    fn create_worker(
+        pool: &ThreadPool,
+        proposal: &NodeStore<MutableProposal, FileBacked>,
+        root_branch: &mut Box<BranchNode>,
+        first_nibble: u8,
+        worker_sender: Sender<Response<FileBacked>>,
+    ) -> WorkerState {
+        // No worker state for this nibble yet, so create one.
+        // Create a channel for the coordinator (main thread) to send messages to this worker.
+        let child_channel = mpsc::channel();
+
+        // get the child node from the proposal
+        let child = root_branch
+            .children
+            .get_mut(first_nibble as usize)
+            .expect("index error")
+            .take();
+
+        // build a nodestore from the child node
+        let worker_nodestore =
+            NodeStore::from_child(proposal, child).expect("TODO: handle error");
+
+        // The worker will send messages to the coordinator using the response channel
+        // now tell the threadpool to spawn a worker for this nibble
+        pool.spawn(move || {
+            //let mut merkle = Merkle::from(child_nodestore);
+            let mut merkle = Merkle::from(worker_nodestore);
+            loop {
+                let request = child_channel.1.recv().expect("TODO: handle error");
+                match request {
+                    // insert a key-value pair into the subtrie
+                    Request::Insert { key, value } => {
+                        println!("### In Worker Thread: Inserting: {key:?} and {value:?}");
+                        merkle
+                            .insert_path(key, value.as_ref().into())
+                            .expect("TODO: handle error");
+                    }
+                    // these should be easy to implement...
+                    Request::Delete { key } => {
+                        merkle.remove_path(key).expect("TODO: handle error");
+                    }
+                    Request::DeleteRange { prefix } => {
+                        merkle
+                            .remove_prefix_path(prefix)
+                            .expect("TODO: handle error");
+                    }
+                    // sent from the coordinator to the workers to signal that they are done
+                    Request::Done => {
+                        worker_sender
+                            .send(Response::Root(first_nibble, merkle.into_inner().into()))
+                            .expect("TODO: handle error");
+                        break;
+                    }
+                }
+            }
+        });
+        WorkerState {
+            sender: child_channel.0,
+        }
+    }
+
+    fn end_batch(
+        &mut self,
+        response_channel: Receiver<Response<FileBacked>>,
+        proposal: &mut NodeStore<MutableProposal, FileBacked>,
+        root_branch: &mut Box<BranchNode>,
+    ) {
+        // we have processed all the ops in the batch, so send a Done message to each worker
+        for worker in self.workers.iter().flatten() {
+            worker
+                .sender
+                .send(Request::Done)
+                .expect("TODO: add error handling");
+        }
+
+        while let Ok(response) = response_channel.recv() {
+            match response {
+                Response::Root(index, mut child_nodestore) => {
+                    // Taking deleted nodes (from calling read_for_update) from child nodestores.
+                    proposal.add_deleted_nodes_from_child(&mut child_nodestore);
+
+                    // Set the child at index using the root from the child nodestore.
+                    *root_branch
+                        .children
+                        .get_mut(index as usize)
+                        .expect("index error") = child_nodestore.into_root().map(Child::Node);
+                }
+                Response::Error(_error) => todo!(),
+            }
+        }
+    }
+
+    /// Creating a parallel proposal consists of 4 phases: Prepare, Split, Merge, and Postprocess.
     #[allow(clippy::missing_panics_doc)]
     #[allow(clippy::missing_errors_doc)]
-    #[allow(clippy::too_many_lines)]
+    //#[allow(clippy::too_many_lines)]
     pub fn create_proposal<T: Parentable>(
         &mut self,
         parent: &NodeStore<T, FileBacked>,
@@ -297,8 +388,7 @@ impl ParallelMerkle {
 
         // For each operation in the batch, send a request to the worker related to the first nibble
         for op in batch.into_iter().map_into_batch() {
-            println!("Key: {:?}", op.key().as_ref());
-
+            //println!("Key: {:?}", op.key().as_ref());
             let mut key_nibbles = NibblesIterator::new(op.key().as_ref());
 
             // Get the first nibble of the key to determine which worker to send the request to.
@@ -338,12 +428,12 @@ impl ParallelMerkle {
                 continue; // Done with this operation.
             };
 
-            println!("First nibble: {first_nibble:?}");
+            //println!("First nibble: {first_nibble:?}");
 
             // We send a path to the worker without the first nibble. Sending a nibble iterator to a
             // worker is more difficult as it takes a reference from op.
             let key_path = Path::from_nibbles_iterator(key_nibbles);
-            println!("Key Path: {key_path:?}");
+            //println!("Key Path: {key_path:?}");
 
             // Find the worker's state corresponding to the first nibble which are stored in an array.
             // Create a new worker state if it doesn't exist.
@@ -352,75 +442,16 @@ impl ParallelMerkle {
                 .get_mut(first_nibble as usize)
                 .expect("index out of bounds");
             let worker = worker_option.get_or_insert_with(|| {
-                println!("Creating worker for nibble: {first_nibble:?}");
-
-                // No worker state for this nibble yet, so create one.
-                // Create a channel for the coordinator (main thread) to send messages to this worker.
-                let child_channel = mpsc::channel();
-
-                // The worker will send messages to the coordinator using the response channel
-                // we copy and (poorly) name the variables here to move them to the worker
-                let (worker_receiver, worker_sender) =
-                    (child_channel.1, response_channel.0.clone());
-
-                // get the child node from the proposal
-                let child = root_branch
-                    .children
-                    .get_mut(first_nibble as usize)
-                    .expect("index error")
-                    .take();
-
-                // build a nodestore from the child node
-                let worker_nodestore =
-                    NodeStore::from_child(&proposal, child).expect("TODO: handle error");
-
-                // now tell the threadpool to spawn a worker for this nibble
-                pool.spawn(move || {
-                    //let mut merkle = Merkle::from(child_nodestore);
-                    let mut merkle = Merkle::from(worker_nodestore);
-                    loop {
-                        let request = worker_receiver.recv().expect("TODO: handle error");
-                        match request {
-                            // insert a key-value pair into the subtrie
-                            Request::Insert { key, value } => {
-                                // TODO: we still have a bug here, we need to remove the first nibble from the key :(
-                                println!("### In Worker Thread: Inserting: {key:?} and {value:?}");
-                                merkle
-                                    //.insert(key_path.as_ref(), value.as_ref().into())
-                                    //.insert(key.as_ref(), value.as_ref().into())
-                                    .insert_path(key, value.as_ref().into())
-                                    .expect("TODO: handle error");
-                            }
-                            // these should be easy to implement...
-                            Request::Delete { key } => {
-                                merkle.remove_path(key).expect("TODO: handle error");
-                            }
-                            Request::DeleteRange { prefix } => {
-                                merkle
-                                    .remove_prefix_path(prefix)
-                                    .expect("TODO: handle error");
-                            }
-                            // sent from the coordinator to the workers to signal that they are done
-                            Request::Done => {
-                                worker_sender
-                                    .send(Response::Root(
-                                        first_nibble,
-                                        //merkle.into_inner().into_root(),
-                                        merkle.into_inner().into(),
-                                        //merkle.into_inner().mut_root().take(),
-                                    ))
-                                    .expect("TODO: handle error");
-                                break;
-                            }
-                        }
-                    }
-                });
-                WorkerState {
-                    sender: child_channel.0,
-                }
+                ParallelMerkle::create_worker(
+                    pool,
+                    &proposal,
+                    &mut root_branch,
+                    first_nibble,
+                    response_channel.0.clone(),
+                )
             });
 
-            println!("Worker Send (key_path): {:?}", key_path.as_ref());
+            //println!("Worker Send (key_path): {:?}", key_path.as_ref());
 
             // we have the right worker, so send the request to it
             match &op {
@@ -455,30 +486,7 @@ impl ParallelMerkle {
         // Drop the sender response channel from the parent thread.
         drop(response_channel.0);
 
-        // we have processed all the ops in the batch, so send a Done message to each worker
-        for worker in self.workers.iter().flatten() {
-            worker
-                .sender
-                .send(Request::Done)
-                .expect("TODO: add error handling");
-        }
-
-        //let mut proposal = NodeStore::new(&parent)?;
-        while let Ok(response) = response_channel.1.recv() {
-            match response {
-                Response::Root(index, mut child_nodestore) => {
-                    // Taking deleted nodes (from calling read_for_update) from child nodestores.
-                    proposal.add_deleted_nodes_from_child(&mut child_nodestore);
-
-                    // Set the child at index using the root from the child nodestore.
-                    *root_branch
-                        .children
-                        .get_mut(index as usize)
-                        .expect("index error") = child_nodestore.into_root().map(Child::Node);
-                }
-                Response::Error(_error) => todo!(),
-            }
-        }
+        self.end_batch(response_channel.1, &mut proposal, &mut root_branch);
 
         *proposal.mut_root() = self
             .postprocess_trie(&mut proposal, Some((*root_branch).into()))
