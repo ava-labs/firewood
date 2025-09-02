@@ -40,6 +40,7 @@ enum Response<S> {
 pub enum ParallelMerkleError {
     /// Received a `FileIoError` while performing a parallel operation.
     Io(FileIoError),
+
     /// Batch includes an invalid parallel operation (remove prefix on empty key).
     /// Caller should catch this error and re-create proposal serially.
     RetrySerial,
@@ -47,10 +48,14 @@ pub enum ParallelMerkleError {
 
 impl fmt::Display for ParallelMerkleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "")
-        // Use the `write!` macro to write to the formatter `f`
-        // You can access the struct's fields using `self.field_name`
-        // write!(f, "MyStruct: value1 = {}, value2 = {}", self.value1, self.value2)
+        match self {
+            ParallelMerkleError::Io(err) => {
+                write!(f, "{err:?}")
+            }
+            ParallelMerkleError::RetrySerial => {
+                write!(f, "RetrySerial: Invalid remove_prefix in parallel batch")
+            }
+        }
     }
 }
 
@@ -177,32 +182,7 @@ impl ParallelMerkle {
         }
     }
 
-    /// TODO: add doc
-    #[allow(clippy::missing_panics_doc)]
-    #[allow(clippy::missing_errors_doc)]
-    #[allow(clippy::too_many_lines)]
-    pub fn create_proposal<T: Parentable>(
-        &mut self,
-        parent: &NodeStore<T, FileBacked>,
-        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
-        threadpool: &mut OnceLock<ThreadPool>,
-    ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, ParallelMerkleError> {
-        // get (or create) a threadpool
-        let pool = threadpool.get_or_init(|| {
-            ThreadPoolBuilder::new()
-                .num_threads(BranchNode::MAX_CHILDREN)
-                .build()
-                .expect("Error in creating threadpool")
-        });
-
-        // create a proposal from the parent
-        let mut proposal = match NodeStore::new(parent) {
-            Ok(p) => p,
-            Err(err) => {
-                return Err(ParallelMerkleError::Io(err));
-            }
-        };
-
+    fn prepare_trie(&self, proposal: &mut NodeStore<MutableProposal, FileBacked>) {
         // Creating a parallel proposal consists of 4 phases: Prepare, Split, Merge, and Postprocess.
         //
         // Prepare phase:
@@ -255,8 +235,8 @@ impl ParallelMerkle {
                             value: Some(std::mem::take(&mut leaf.value)),
                             children: BranchNode::empty_children(),
                         };
-                        *proposal.mut_root() = Some(branch.into());  
-                    },
+                        *proposal.mut_root() = Some(branch.into());
+                    }
                     Node::Branch(_) => {
                         // Root does not need to be updated since it has an empty partial path and is a
                         // branch. Put it back into the proposal.
@@ -274,6 +254,36 @@ impl ParallelMerkle {
             };
             *proposal.mut_root() = Some(branch.into());
         }
+    }
+
+    /// TODO: add doc
+    #[allow(clippy::missing_panics_doc)]
+    #[allow(clippy::missing_errors_doc)]
+    #[allow(clippy::too_many_lines)]
+    pub fn create_proposal<T: Parentable>(
+        &mut self,
+        parent: &NodeStore<T, FileBacked>,
+        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
+        threadpool: &mut OnceLock<ThreadPool>,
+    ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, ParallelMerkleError> {
+        // get (or create) a threadpool
+        let pool = threadpool.get_or_init(|| {
+            ThreadPoolBuilder::new()
+                .num_threads(BranchNode::MAX_CHILDREN)
+                .build()
+                .expect("Error in creating threadpool")
+        });
+
+        // create a proposal from the parent
+        let mut proposal = match NodeStore::new(parent) {
+            Ok(p) => p,
+            Err(err) => {
+                return Err(ParallelMerkleError::Io(err));
+            }
+        };
+
+        // Process trie in preparation for performing parallel modifications.
+        self.prepare_trie(&mut proposal);
 
         let mut root_branch = proposal
             .mut_root()
@@ -465,10 +475,6 @@ impl ParallelMerkle {
                         .children
                         .get_mut(index as usize)
                         .expect("index error") = child_nodestore.into_root().map(Child::Node);
-
-                    //root_branch.children[index as usize] = child_nodestore.into_root().map(Child::Node);
-                    // TODO: Need to combine the deletes from the children.
-                    //proposal.add_deleted_nodes_from_child(&mut child_nodestore);
                 }
                 Response::Error(_error) => todo!(),
             }
