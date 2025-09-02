@@ -27,9 +27,9 @@ enum Request {
 }
 
 #[derive(Debug)]
-enum Response {
+enum Response<S> {
     // return the new root of the subtrie at the given nibble
-    Root(u8, Option<Node>),
+    Root(u8, Box<NodeStore<MutableProposal, S>>),
     Error(FileIoError),
 }
 
@@ -76,99 +76,87 @@ impl ParallelMerkle {
         // include its previous child index
         println!("In postprocess_trie");
 
-        if let Some(mut new_root) = new_root_opt {
-            match &mut new_root {
-                Node::Branch(branch) => {
-                    println!("Root is a branch");
-                    println!("Root node: {branch:?}");
-                    let mut children_iter = branch
-                        .children
-                        .iter_mut()
-                        .enumerate()
-                        .filter_map(|(index, child)| child.as_mut().map(|child| (index, child)));
+        let Some(mut new_root) = new_root_opt else {
+            return Ok(None);
+        };
 
-                    let first_child = children_iter.next();
-                    match first_child {
-                        None => {
-                            println!("First child is None");
-                            if let Some(value) = branch.value.take() {
-                                // There is a value for the empty key. Create a leaf with the value and return.
-                                let new_leaf = Node::Leaf(LeafNode {
-                                    value,
-                                    partial_path: Path::new(), // Partial path should be empty
-                                                               //partial_path: branch.partial_path.clone(),
-                                });
-                                return Ok(Some(new_leaf));
-                            }
-                            // No value. Just delete the root
-                            return Ok(None);
-                        }
-                        Some((child_index, child)) => {
-                            // Check if the root has a value or if there is more than one children. If yes, then
-                            // just return the root unmodified
-                            if branch.value.is_some() || children_iter.next().is_some() {
-                                println!("root has a value or has more than one child");
-                                return Ok(Some(new_root));
-                            }
+        // Should always be a branch given the prepare phase.
+        let Node::Branch(branch) = &mut new_root else {
+            return Ok(None); // TODO: Return some type of error
+        };
 
-                            // Return the child as the new root. Need to update its partial path to include the
-                            // index value. Copied from remove_helper. Should move to a shared function to
-                            // increase code reuse.
-                            //
-                            // The branch's only child becomes the root of this subtrie.
-                            println!("root only has one child");
-                            let mut child = match child {
-                                Child::Node(child_node) => std::mem::take(child_node),
-                                Child::AddressWithHash(addr, _) => {
-                                    nodestore.read_for_update((*addr).into())?
-                                }
-                                Child::MaybePersisted(maybe_persisted, _) => {
-                                    nodestore.read_for_update(maybe_persisted.clone())?
-                                }
-                            };
+        println!("Root is a branch");
+        println!("Root node: {branch:?}");
+        let mut children_iter = branch
+            .children
+            .iter_mut()
+            .enumerate()
+            .filter_map(|(index, child)| child.as_mut().map(|child| (index, child)));
 
-                            // The child's partial path is the concatenation of its (now removed) parent,
-                            // its (former) child index, and its partial path. Note that the parent's
-                            // partial path should always be empty given the pre-insert transform.
-                            //let partial_path = Path::from_nibbles_iterator(
-                            //    branch
-                            //        .partial_path
-                            //        .iter()
-                            //        .copied()
-                            //        .chain(once(child_index as u8))
-                            //        .chain(child.partial_path().iter().copied()),
-                            //);
-                            println!("Child's partial path: {:?}", child.partial_path());
+        let first_child = children_iter.next();
+        match first_child {
+            None => {
+                println!("First child is None");
+                if let Some(value) = branch.value.take() {
+                    // There is a value for the empty key. Create a leaf with the value and return.
+                    let new_leaf = Node::Leaf(LeafNode {
+                        value,
+                        partial_path: Path::new(), // Partial path should be empty
+                                                    //partial_path: branch.partial_path.clone(),
+                    });
+                    return Ok(Some(new_leaf));
+                }
+                Ok(None)  // No value. Just delete the root
+            }
+            Some((child_index, child)) => {
+                // Check if the root has a value or if there is more than one children. If yes, then
+                // just return the root unmodified
+                if branch.value.is_some() || children_iter.next().is_some() {
+                    println!("root has a value or has more than one child");
+                    return Ok(Some(new_root));
+                }
 
-                            let partial_path = Path::from_nibbles_iterator(
-                                Path::new()
-                                    .iter()
-                                    .copied()
-                                    .chain(once(child_index as u8))
-                                    .chain(child.partial_path().iter().copied()),
-                            );
+                // Return the child as the new root. Need to update its partial path to include the
+                // index value. Copied from remove_helper. Should move to a shared function to
+                // increase code reuse.
+                //
+                // The branch's only child becomes the root of this subtrie.
+                println!("root only has one child");
+                let mut child = match child {
+                    Child::Node(child_node) => std::mem::take(child_node),
+                    Child::AddressWithHash(addr, _) => {
+                        nodestore.read_for_update((*addr).into())?
+                    }
+                    Child::MaybePersisted(maybe_persisted, _) => {
+                        nodestore.read_for_update(maybe_persisted.clone())?
+                    }
+                };
 
-                            match child {
-                                Node::Branch(ref mut child_branch) => {
-                                    child_branch.partial_path = partial_path;
-                                }
-                                Node::Leaf(ref mut leaf) => {
-                                    leaf.partial_path = partial_path;
-                                }
-                            }
-                            println!("Old root: {branch:?} New root: {child:?}");
-                            return Ok(Some(child));
-                        }
+                println!("Child's partial path: {:?}", child.partial_path());
+                // The child's partial path is the concatenation of its (now removed) parent,
+                // which should always be empty because of our prepare step, its (former) 
+                // child index, and its partial path. Because the parent's partial path
+                // should always be empty, we replace it here with a Path::new().
+                let partial_path = Path::from_nibbles_iterator(
+                    Path::new()
+                        .iter()
+                        .copied()
+                        .chain(once(child_index as u8))
+                        .chain(child.partial_path().iter().copied()),
+                );
+
+                match child {
+                    Node::Branch(ref mut child_branch) => {
+                        child_branch.partial_path = partial_path;
+                    }
+                    Node::Leaf(ref mut leaf) => {
+                        leaf.partial_path = partial_path;
                     }
                 }
-                Node::Leaf(_) => {
-                    return Ok(None);
-                    // Should never be a leaf
-                    //assert!(false);
-                }
+                println!("Old root: {branch:?} New root: {child:?}");
+                Ok(Some(child))
             }
         }
-        Ok(None)
     }
 
     /// TODO: add doc
@@ -369,7 +357,8 @@ impl ParallelMerkle {
                                 worker_sender
                                     .send(Response::Root(
                                         first_nibble,
-                                        merkle.into_inner().into_root(),
+                                        //merkle.into_inner().into_root(),
+                                        merkle.into_inner().into(),
                                         //merkle.into_inner().mut_root().take(),
                                     ))
                                     .expect("TODO: handle error");
@@ -429,9 +418,12 @@ impl ParallelMerkle {
         //let mut proposal = NodeStore::new(&parent)?;
         while let Ok(response) = response_channel.1.recv() {
             match response {
-                Response::Root(index, new_root_opt) => {
-                    root_branch.children[index as usize] = new_root_opt.map(Child::Node);
+                Response::Root(index, mut child_nodestore) => {
+                    proposal.add_deleted_nodes_from_child(&mut child_nodestore);
+                    //let new_root_opt = ;
+                    root_branch.children[index as usize] = child_nodestore.into_root().map(Child::Node);
                     // TODO: Need to combine the deletes from the children.
+                    //proposal.add_deleted_nodes_from_child(&mut child_nodestore);
                 }
                 Response::Error(_error) => todo!(),
             }
@@ -445,12 +437,6 @@ impl ParallelMerkle {
         // proposal from the same ParallelMerkle to be reused to spawn new states.
         self.workers = [(); BranchNode::MAX_CHILDREN].map(|()| None);
 
-        //*proposal.mut_root() = Some(Node::Branch(root.clone()));
-        // impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
-        //     for NodeStore<Arc<ImmutableProposal>, S>
-
-        // TODO: Replace Proposal::new with the correct constructor or method for Proposal.
-        // The current code will not compile if Proposal::new does not exist.
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
             Arc::new(proposal.try_into().expect("TODO: handle error"));
 

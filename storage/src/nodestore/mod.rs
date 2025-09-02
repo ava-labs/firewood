@@ -44,10 +44,10 @@ pub(crate) mod header;
 pub(crate) mod persist;
 pub(crate) mod primitives;
 
-use crate::{firewood_gauge, Child};
 use crate::linear::OffsetReader;
 use crate::logger::trace;
 use crate::node::branch::ReadSerializable as _;
+use crate::{Child, firewood_gauge};
 use arc_swap::ArcSwap;
 use arc_swap::access::DynAccess;
 use smallvec::SmallVec;
@@ -251,6 +251,14 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
         self.kind.deleted.push(node);
     }
 
+    /// Take deleted nodes from child nodestore
+    pub fn add_deleted_nodes_from_child(
+        &mut self,
+        child_nodestore: &mut NodeStore<MutableProposal, S>,
+    ) {
+        self.kind.deleted.append(&mut child_nodestore.kind.deleted);
+    }
+
     /// Reads a node for update, marking it as deleted in this proposal.
     /// We get an arc from cache (reading it from disk if necessary) then
     /// copy/clone the node and return it.
@@ -276,9 +284,12 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the child node cannot be read.
-    pub fn from_child(parent: &NodeStore<MutableProposal, S>, child: Option<Child>) -> Result<Self, FileIoError> {
-        let child_root = child.map(|child| {
-            match child {
+    pub fn from_child(
+        parent: &NodeStore<MutableProposal, S>,
+        child: Option<Child>,
+    ) -> Result<Self, FileIoError> {
+        let child_root = child
+            .map(|child| match child {
                 Child::Node(node) => Ok(node),
                 Child::AddressWithHash(address, _) => {
                     Ok(parent.read_node(address)?.deref().clone())
@@ -286,8 +297,8 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
                 Child::MaybePersisted(maybe_persisted, _) => {
                     Ok(maybe_persisted.as_shared_node(parent)?.deref().clone())
                 }
-            }
-        }).transpose()?;
+            })
+            .transpose()?;
         Ok(NodeStore {
             header: parent.header,
             kind: MutableProposal {
@@ -299,7 +310,7 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
         })
     }
 
-    /// Just for testing.
+    /*
     #[allow(clippy::missing_errors_doc)]
     pub fn from_proposal(parent: &mut NodeStore<MutableProposal, S>) -> Result<Self, FileIoError> {
         Ok(NodeStore {
@@ -312,6 +323,7 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
             storage: parent.storage.clone(),
         })
     }
+    */
 
     /// Consumes the `NodeStore` and returns the root of the trie
     #[must_use]

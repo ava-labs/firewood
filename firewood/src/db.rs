@@ -741,8 +741,7 @@ mod test {
         let (keys, vals): (Vec<_>, Vec<_>) = (0..N)
             .map(|i| {
                 (
-                    format!("key{i}").into_bytes(),
-                    //rng.random::<[u8; 32]>(),
+                    rng.random::<[u8; 32]>(),
                     Box::from(format!("value{i}").as_bytes()),
                 )
             })
