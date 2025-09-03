@@ -1233,19 +1233,18 @@ func TestIterExhaust(t *testing.T) {
 
 // Benchmark comparing all next implementations
 func BenchmarkIterator(b *testing.B) {
+	r := require.New(b)
 	db := newTestDatabase(b)
-	N := 1000000
+	n := 10000
 	batchSizes := make([]int, 0)
 	base := 4
-	for i := base; i <= N; i *= base {
+	for i := base; i <= n; i *= base {
 		batchSizes = append(batchSizes, i)
 	}
 
-	keys, vals := kvForBench(N)
+	keys, vals := kvForBench(n)
 	root, err := db.Update(keys, vals)
-	if err != nil {
-		b.Fatal(err)
-	}
+	r.NoError(err)
 
 	dataModes := []struct {
 		name     string
@@ -1289,7 +1288,7 @@ func BenchmarkIterator(b *testing.B) {
 		for range b.N {
 			iter, err := db.IterOnRoot(root, nil)
 			r.NoError(err)
-			err = iter.Exhaust(N)
+			err = iter.Exhaust(n)
 			r.NoError(err)
 		}
 	})
