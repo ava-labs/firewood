@@ -141,7 +141,7 @@ pub trait Hashable: std::fmt::Debug {
 }
 
 /// A preimage of a hash.
-pub trait Preimage {
+pub trait Preimage: std::fmt::Debug {
     /// Returns the hash of this preimage.
     fn to_hash(&self) -> HashType;
     /// Write this hash preimage to `buf`.
