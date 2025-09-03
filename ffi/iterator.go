@@ -87,6 +87,11 @@ func (it *Iterator) SetBatchSize(batchSize int) {
 	it.batchSize = batchSize
 }
 
+func (it *Iterator) Exhaust(totalLen int) error {
+	C.fwd_iter_next_n(it.handle, C.size_t(totalLen))
+	return nil
+}
+
 // Next proceeds to the next item on the iterator, and returns true
 // if succeeded and there is a pair available.
 // The new pair could be retrieved with Key and Value methods.
