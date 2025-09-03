@@ -8,8 +8,9 @@ use std::fmt::{Debug, Formatter};
 type KeyValueItem = (merkle::Key, merkle::Value);
 
 /// An opaque wrapper around an Iterator.
+#[derive(Default)]
 pub struct IteratorHandle<'db> {
-    pub iterator: Box<dyn Iterator<Item = Result<KeyValueItem, api::Error>> + 'db>,
+    pub iterator: Option<Box<dyn Iterator<Item = Result<KeyValueItem, api::Error>> + 'db>>,
 }
 
 impl Debug for IteratorHandle<'_> {
@@ -21,7 +22,11 @@ impl Debug for IteratorHandle<'_> {
 #[expect(clippy::missing_errors_doc)]
 impl IteratorHandle<'_> {
     pub fn iter_next(&mut self) -> Option<Result<KeyValueItem, api::Error>> {
-        self.iterator.next()
+        if let Some(iterator) = self.iterator.as_mut() {
+            iterator.next()
+        } else {
+            None
+        }
     }
 
     pub fn iter_next_n(&mut self, n: usize) -> Result<Vec<KeyValueItem>, api::Error> {
@@ -38,7 +43,7 @@ impl IteratorHandle<'_> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CreateIteratorResult<'db> {
     pub handle: IteratorHandle<'db>,
 }

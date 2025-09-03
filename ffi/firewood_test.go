@@ -1102,8 +1102,8 @@ func TestIterEmptyDb(t *testing.T) {
 	db := newTestDatabase(t)
 
 	it, err := db.IterLatest(nil)
-	r.Nil(it)
-	r.Error(err)
+	r.NoError(err)
+	r.False(it.Next())
 }
 
 type kvIter interface {
