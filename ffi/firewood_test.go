@@ -1286,7 +1286,7 @@ func BenchmarkIterator(b *testing.B) {
 
 	b.Run("ExhaustInRust", func(b *testing.B) {
 		r := require.New(b)
-		for b.Loop() {
+		for range b.N {
 			iter, err := db.IterOnRoot(root, nil)
 			r.NoError(err)
 			err = iter.Exhaust(N)
@@ -1296,7 +1296,7 @@ func BenchmarkIterator(b *testing.B) {
 
 	runForAllModes(b, "Next", func(b *testing.B, configureIterator func(it *Iterator) kvIter) {
 		r := require.New(b)
-		for b.Loop() {
+		for range b.N {
 			iter, err := db.IterOnRoot(root, nil)
 			r.NoError(err)
 			it := configureIterator(iter)
