@@ -1106,123 +1106,110 @@ func TestIterEmptyDb(t *testing.T) {
 	r.Error(err)
 }
 
+type kvIter interface {
+	Next() bool
+	Key() []byte
+	Value() []byte
+	Err() error
+}
+type borrowIter struct{ it *Iterator }
+
+func (b borrowIter) Next() bool    { return b.it.NextBorrowed() }
+func (b borrowIter) Key() []byte   { return b.it.Key() }
+func (b borrowIter) Value() []byte { return b.it.Value() }
+func (b borrowIter) Err() error    { return b.it.Err() }
+
+func assertIteratorYields(r *require.Assertions, it kvIter, keys [][]byte, vals [][]byte) {
+	i := 0
+	for ; it.Next(); i += 1 {
+		r.Equal(keys[i], it.Key())
+		r.Equal(vals[i], it.Value())
+	}
+	r.NoError(it.Err())
+	r.Equal(len(keys), i)
+}
+
 // Tests that basic iterator functionality works
 func TestIter(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals := kvForTest(10)
-	_, err := db.Update(keys, vals)
-	r.NoError(err)
-
-	it, err := db.IterLatest(nil)
-	r.NoError(err)
-
-	for i := 0; it.Next(); i += 1 {
-		r.Equal(keys[i], it.Key())
-		r.Equal(vals[i], it.Value())
+	dataModes := []struct {
+		name     string
+		configFn func(it *Iterator) kvIter
+	}{
+		{"Owned", func(it *Iterator) kvIter { return it }},
+		{"Borrowed", func(it *Iterator) kvIter { return borrowIter{it: it} }},
 	}
-	r.NoError(it.Err())
-}
 
-// Tests that iterators on different roots work fine
-func TestIterOnRoot(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	// Commit 10 key-value pairs.
-	keys, vals := kvForTest(20)
-	firstRoot, err := db.Update(keys[:10], vals[:10])
-	r.NoError(err)
-
-	secondRoot, err := db.Update(keys[:10], vals[10:])
-	r.NoError(err)
-
-	h1, err := db.IterOnRoot(firstRoot, nil)
-	r.NoError(err)
-
-	h2, err := db.IterOnRoot(secondRoot, nil)
-	r.NoError(err)
-
-	for i := 0; h1.Next() && h2.Next(); i += 1 {
-		r.Equal(keys[i], h1.Key())
-		r.Equal(keys[i], h2.Key())
-		r.Equal(vals[i], h1.Value())
-		r.Equal(vals[i+10], h2.Value())
+	batchModes := []struct {
+		name     string
+		configFn func(it *Iterator)
+	}{
+		{"Single", func(it *Iterator) {
+			it.SetBatchSize(1)
+		}},
+		{"Batched", func(it *Iterator) {
+			it.SetBatchSize(100)
+		}},
 	}
-	r.NoError(h1.Err())
-	r.NoError(h2.Err())
-}
 
-// Tests that basic iterator functionality works for proposal
-func TestIterOnProposal(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	keys, vals := kvForTest(10)
-	p, err := db.Propose(keys, vals)
+	keys, vals := kvForBench(240)
+	firstRoot, err := db.Update(keys[:80], vals[:80])
+	r.NoError(err)
+	secondRoot, err := db.Update(keys[80:160], vals[80:160])
+	r.NoError(err)
+	thirdRoot, err := db.Update(keys[160:], vals[160:])
 	r.NoError(err)
 
-	it, err := p.Iter(nil)
-	r.NoError(err)
+	for _, dataMode := range dataModes {
+		for _, batchMode := range batchModes {
+			t.Run(fmt.Sprintf("Latest/%s/%s", dataMode.name, batchMode.name), func(t *testing.T) {
+				r := require.New(t)
+				it, err := db.IterLatest(nil)
+				r.NoError(err)
 
-	for i := 0; it.Next(); i += 1 {
-		r.Equal(keys[i], it.Key())
-		r.Equal(vals[i], it.Value())
+				batchMode.configFn(it)
+				assertIteratorYields(r, dataMode.configFn(it), keys, vals)
+			})
+
+			t.Run(fmt.Sprintf("OnRoot/%s/%s", dataMode.name, batchMode.name), func(t *testing.T) {
+				r := require.New(t)
+				h1, err := db.IterOnRoot(firstRoot, nil)
+				r.NoError(err)
+				h2, err := db.IterOnRoot(secondRoot, nil)
+				r.NoError(err)
+				h3, err := db.IterOnRoot(thirdRoot, nil)
+				r.NoError(err)
+				batchMode.configFn(h1)
+				batchMode.configFn(h2)
+				batchMode.configFn(h3)
+				assertIteratorYields(r, dataMode.configFn(h1), keys[:80], vals[:80])
+				assertIteratorYields(r, dataMode.configFn(h2), keys[:160], vals[:160])
+				assertIteratorYields(r, dataMode.configFn(h3), keys, vals)
+			})
+
+			t.Run(fmt.Sprintf("OnProposal/%s/%s", dataMode.name, batchMode.name), func(t *testing.T) {
+				r := require.New(t)
+				updatedValues := make([][]byte, len(vals))
+				copy(updatedValues, vals)
+
+				changedKeys := make([][]byte, 0)
+				changedVals := make([][]byte, 0)
+				for i := 0; i < len(vals); i += 4 {
+					changedKeys = append(changedKeys, keys[i])
+					newVal := []byte{byte(i)}
+					changedVals = append(changedVals, newVal)
+					updatedValues[i] = newVal
+				}
+				p, err := db.Propose(changedKeys, changedVals)
+				r.NoError(err)
+				it, err := p.Iter(nil)
+				r.NoError(err)
+
+				batchMode.configFn(it)
+				assertIteratorYields(r, dataMode.configFn(it), keys, updatedValues)
+			})
+		}
 	}
-	r.NoError(it.Err())
-}
-
-// Tests that batched iterator functionality works
-func TestIterBatched(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	keys, vals := kvForBench(1000)
-	_, err := db.Update(keys, vals)
-	r.NoError(err)
-
-	it, err := db.IterLatest(nil)
-	r.NoError(err)
-	it.SetBatchSize(100)
-	it2, err := db.IterLatest(nil)
-	r.NoError(err)
-
-	i := 0
-	for ; it.Next() && it2.Next(); i += 1 {
-		r.Equal(it.Key(), it2.Key())
-		r.Equal(it.Value(), it2.Value())
-		r.Equal(keys[i], it.Key())
-		r.Equal(vals[i], it.Value())
-	}
-	r.NoError(it.Err())
-	r.NoError(it2.Err())
-	r.Equal(i, 1000)
-}
-
-// Tests that batched iterator functionality works
-func TestIterBatchedBorrowed(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	keys, vals := kvForBench(1000)
-	_, err := db.Update(keys, vals)
-	r.NoError(err)
-
-	it, err := db.IterLatest(nil)
-	r.NoError(err)
-	it.SetBatchSize(100)
-	it2, err := db.IterLatest(nil)
-	r.NoError(err)
-
-	i := 0
-	for ; it.NextBorrowed() && it2.NextBorrowed(); i += 1 {
-		r.Equal(it.Key(), it2.Key())
-		r.Equal(it.Value(), it2.Value())
-		r.Equal(keys[i], it.Key())
-		r.Equal(vals[i], it.Value())
-	}
-	r.NoError(it.Err())
-	r.NoError(it2.Err())
-	r.Equal(i, 1000)
 }

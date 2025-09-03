@@ -48,7 +48,7 @@ func (it *Iterator) nextInternal() error {
 		}
 	}
 	if len(it.loadedPairs) == 0 {
-		if it.batchSize < 1 {
+		if it.batchSize <= 1 {
 			kv, e := getKeyValueFromKeyValueResult(C.fwd_iter_next(it.handle))
 			if e != nil {
 				return e
