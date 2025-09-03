@@ -743,7 +743,6 @@ mod test {
     }
 
     #[tokio::test]
-    #[allow(clippy::too_many_lines)]
     async fn test_propose_parallel() {
         const N: usize = 100;
         let mut db = testdb().await;
@@ -768,7 +767,6 @@ mod test {
 
         let kviter = keys.iter().zip(vals.iter());
         for (k, v) in kviter {
-            println!("Checking key: {k:?} and {v:?}");
             assert_eq!(&proposal.val(k).await.unwrap().unwrap(), v);
         }
         proposal.commit().await.unwrap();
@@ -777,7 +775,6 @@ mod test {
         let parent = db.manager.current_revision();
         let kviter = keys.iter().zip(vals.iter());
         for (k, v) in kviter {
-            println!("Checking key: {k:?} and {v:?}");
             assert_eq!(&parent.val(k).await.unwrap().unwrap(), v);
         }
 
@@ -787,8 +784,7 @@ mod test {
         let proposal = db.propose_parallel(kviter).unwrap();
 
         let kviter = keys.iter().zip(vals.iter());
-        for (k, v) in kviter {
-            println!("Checking key: {k:?} and {v:?}");
+        for (k, _v) in kviter {
             assert_eq!(proposal.val(k).await.unwrap(), None);
         }
         proposal.commit().await.unwrap();
@@ -807,7 +803,6 @@ mod test {
         let proposal = db.propose_parallel(kviter).unwrap();
         let kviter = keys.iter().zip(vals.iter());
         for (k, v) in kviter {
-            println!("Checking key: {k:?} and {v:?}");
             assert_eq!(&proposal.val(k).await.unwrap().unwrap(), v);
         }
         proposal.commit().await.unwrap();
@@ -816,10 +811,7 @@ mod test {
         let (keys, vals): (Vec<_>, Vec<_>) = (0..1000)
             .filter_map(|i| {
                 if i % 2 != 0 {
-                    Some::<(Vec<u8>, Box<[u8]>)>((
-                        format!("key{i}").into_bytes(),
-                        Box::new([]),
-                    ))
+                    Some::<(Vec<u8>, Box<[u8]>)>((format!("key{i}").into_bytes(), Box::new([])))
                 } else {
                     None
                 }
@@ -829,8 +821,7 @@ mod test {
         let kviter = keys.iter().zip(vals.iter()).map_into_batch();
         let proposal = db.propose_parallel(kviter).unwrap();
         let kviter = keys.iter().zip(vals.iter());
-        for (k, v) in kviter {
-            println!("Checking key: {k:?} and {v:?}");
+        for (k, _v) in kviter {
             assert_eq!(proposal.val(k).await.unwrap(), None);
         }
         proposal.commit().await.unwrap();
@@ -864,7 +855,6 @@ mod test {
             let kviter = keys.iter().zip(vals.iter());
 
             for (k, v) in kviter {
-                println!("Checking key: {k:?} and {v:?}");
                 assert_eq!(&proposal.val(k).await.unwrap().unwrap(), v);
             }
             proposal.commit().await.unwrap();

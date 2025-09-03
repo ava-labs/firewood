@@ -423,19 +423,14 @@ impl ParallelMerkle {
             //         value of the root node.
             let mut key_nibbles = NibblesIterator::new(op.key().as_ref());
             let Some(first_nibble) = key_nibbles.next() else {
-                println!("No first key nibble");
                 match &op {
                     BatchOp::Put { key: _, value } => {
-                        println!("Put");
                         root_branch.value = Some(value.as_ref().into());
                     }
                     BatchOp::Delete { key: _ } => {
-                        println!("Delete");
                         root_branch.value = None;
                     }
                     BatchOp::DeleteRange { prefix: _ } => {
-                        println!("Removing all entries");
-                        println!("DeleteRange");
                         // Calling remove prefix with an empty prefix is equivalent to a remove all.
                         self.remove_all_entries(&mut root_branch);
                     }
