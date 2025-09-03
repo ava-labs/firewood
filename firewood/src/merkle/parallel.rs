@@ -34,33 +34,6 @@ enum Response<S> {
     Error(FileIoError),
 }
 
-/*
-/// Error types for calling `ParallelMerkle`
-#[derive(Debug, Error)]
-pub enum ParallelMerkleError {
-    /// Received a `FileIoError` while performing a parallel operation.
-    Io(FileIoError),
-
-    /// Batch includes an invalid parallel operation (remove prefix on empty key).
-    /// Caller should catch this error and re-create proposal serially.
-    RetrySerial,
-}
-
-
-impl fmt::Display for ParallelMerkleError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ParallelMerkleError::Io(err) => {
-                write!(f, "{err:?}")
-            }
-            ParallelMerkleError::RetrySerial => {
-                write!(f, "RetrySerial: Invalid remove_prefix in parallel batch")
-            }
-        }
-    }
-}
-*/
-
 /// TODO add doc
 #[derive(Debug)]
 pub struct ParallelMerkle {
@@ -384,7 +357,7 @@ impl ParallelMerkle {
         }
     }
 
-    fn remove_all(&self) {
+    fn remove_all_entries(&self, root_branch: &mut Box<BranchNode>) {
         for worker in self.workers.iter().flatten() {
             worker
                 .sender
@@ -393,6 +366,8 @@ impl ParallelMerkle {
                 })
                 .expect("TODO: handle error");
         }
+        // Also set the root value to None but does not delete the root.
+        root_branch.value = None;
     }
 
     /// Creating a parallel proposal consists of 4 phases: Prepare, Split, Merge, and Postprocess.
@@ -466,7 +441,7 @@ impl ParallelMerkle {
                     }
                     BatchOp::DeleteRange { prefix: _ } => {
                         // Calling remove prefix with an empty prefix is equivalent to a remove all.
-                        self.remove_all();
+                        self.remove_all_entries(&mut root_branch);
                     }
                 }
                 continue; // Done with this operation.
