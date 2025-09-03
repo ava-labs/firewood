@@ -310,21 +310,6 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
         })
     }
 
-    /*
-    #[allow(clippy::missing_errors_doc)]
-    pub fn from_proposal(parent: &mut NodeStore<MutableProposal, S>) -> Result<Self, FileIoError> {
-        Ok(NodeStore {
-            header: parent.header,
-            kind: MutableProposal {
-                root: parent.mut_root().clone(),
-                deleted: Vec::default(),
-                parent: parent.kind.parent.clone(),
-            },
-            storage: parent.storage.clone(),
-        })
-    }
-    */
-
     /// Consumes the `NodeStore` and returns the root of the trie
     #[must_use]
     pub fn into_root(self) -> Option<Node> {
