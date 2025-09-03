@@ -1162,54 +1162,58 @@ func TestIter(t *testing.T) {
 	thirdRoot, err := db.Update(keys[160:], vals[160:])
 	r.NoError(err)
 
-	for _, dataMode := range dataModes {
-		for _, batchMode := range batchModes {
-			t.Run(fmt.Sprintf("Latest/%s/%s", dataMode.name, batchMode.name), func(t *testing.T) {
-				r := require.New(t)
-				it, err := db.IterLatest(nil)
-				r.NoError(err)
-
-				batchMode.configFn(it)
-				assertIteratorYields(r, dataMode.configFn(it), keys, vals)
-			})
-
-			t.Run(fmt.Sprintf("OnRoot/%s/%s", dataMode.name, batchMode.name), func(t *testing.T) {
-				r := require.New(t)
-				h1, err := db.IterOnRoot(firstRoot, nil)
-				r.NoError(err)
-				h2, err := db.IterOnRoot(secondRoot, nil)
-				r.NoError(err)
-				h3, err := db.IterOnRoot(thirdRoot, nil)
-				r.NoError(err)
-				batchMode.configFn(h1)
-				batchMode.configFn(h2)
-				batchMode.configFn(h3)
-				assertIteratorYields(r, dataMode.configFn(h1), keys[:80], vals[:80])
-				assertIteratorYields(r, dataMode.configFn(h2), keys[:160], vals[:160])
-				assertIteratorYields(r, dataMode.configFn(h3), keys, vals)
-			})
-
-			t.Run(fmt.Sprintf("OnProposal/%s/%s", dataMode.name, batchMode.name), func(t *testing.T) {
-				r := require.New(t)
-				updatedValues := make([][]byte, len(vals))
-				copy(updatedValues, vals)
-
-				changedKeys := make([][]byte, 0)
-				changedVals := make([][]byte, 0)
-				for i := 0; i < len(vals); i += 4 {
-					changedKeys = append(changedKeys, keys[i])
-					newVal := []byte{byte(i)}
-					changedVals = append(changedVals, newVal)
-					updatedValues[i] = newVal
-				}
-				p, err := db.Propose(changedKeys, changedVals)
-				r.NoError(err)
-				it, err := p.Iter(nil)
-				r.NoError(err)
-
-				batchMode.configFn(it)
-				assertIteratorYields(r, dataMode.configFn(it), keys, updatedValues)
-			})
+	runForAllModes := func(parentT *testing.T, name string, fn func(*testing.T, func(it *Iterator) kvIter)) {
+		for _, dataMode := range dataModes {
+			for _, batchMode := range batchModes {
+				parentT.Run(fmt.Sprintf("%s/%s/%s", name, dataMode.name, batchMode.name), func(t *testing.T) {
+					fn(t, func(it *Iterator) kvIter {
+						batchMode.configFn(it)
+						return dataMode.configFn(it)
+					})
+				})
+			}
 		}
 	}
+	runForAllModes(t, "Latest", func(t *testing.T, fn func(it *Iterator) kvIter) {
+		r := require.New(t)
+		it, err := db.IterLatest(nil)
+		r.NoError(err)
+
+		assertIteratorYields(r, fn(it), keys, vals)
+	})
+
+	runForAllModes(t, "OnRoot", func(t *testing.T, fn func(it *Iterator) kvIter) {
+		r := require.New(t)
+		h1, err := db.IterOnRoot(firstRoot, nil)
+		r.NoError(err)
+		h2, err := db.IterOnRoot(secondRoot, nil)
+		r.NoError(err)
+		h3, err := db.IterOnRoot(thirdRoot, nil)
+		r.NoError(err)
+
+		assertIteratorYields(r, fn(h1), keys[:80], vals[:80])
+		assertIteratorYields(r, fn(h2), keys[:160], vals[:160])
+		assertIteratorYields(r, fn(h3), keys, vals)
+	})
+
+	runForAllModes(t, "OnProposal", func(t *testing.T, fn func(it *Iterator) kvIter) {
+		r := require.New(t)
+		updatedValues := make([][]byte, len(vals))
+		copy(updatedValues, vals)
+
+		changedKeys := make([][]byte, 0)
+		changedVals := make([][]byte, 0)
+		for i := 0; i < len(vals); i += 4 {
+			changedKeys = append(changedKeys, keys[i])
+			newVal := []byte{byte(i)}
+			changedVals = append(changedVals, newVal)
+			updatedValues[i] = newVal
+		}
+		p, err := db.Propose(changedKeys, changedVals)
+		r.NoError(err)
+		it, err := p.Iter(nil)
+		r.NoError(err)
+
+		assertIteratorYields(r, fn(it), keys, updatedValues)
+	})
 }
