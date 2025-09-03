@@ -1068,8 +1068,8 @@ func TestIterEmptyDb(t *testing.T) {
 	db := newTestDatabase(t)
 
 	it, err := db.IterLatest(nil)
-	r.Nil(it)
-	r.Error(err)
+	r.NoError(err)
+	r.False(it.Next())
 }
 
 // Tests that basic iterator functionality works

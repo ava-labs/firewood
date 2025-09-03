@@ -110,7 +110,7 @@ impl<'db> ProposalHandle<'db> {
     ) -> Result<CreateIteratorResult<'db>, api::Error> {
         let it = self.proposal.iter_owned(first_key)?;
         Ok(CreateIteratorResult {
-            handle: IteratorHandle { iterator: it },
+            handle: IteratorHandle { iterator: Some(it) },
         })
     }
 }
