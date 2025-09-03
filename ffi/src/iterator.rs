@@ -2,8 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::merkle;
-use std::fmt::{Debug, Formatter};
 use firewood::v2::api;
+use std::fmt::{Debug, Formatter};
 
 type KeyValueItem = (merkle::Key, merkle::Value);
 
@@ -18,6 +18,7 @@ impl Debug for IteratorHandle<'_> {
     }
 }
 
+#[expect(clippy::missing_errors_doc)]
 impl IteratorHandle<'_> {
     pub fn iter_next(&mut self) -> Option<Result<KeyValueItem, api::Error>> {
         self.iterator.next()
