@@ -400,14 +400,24 @@ type ownedKeyValue struct {
 
 func (kv *ownedKeyValue) Consume() ([]byte, []byte, error) {
 	key := kv.key.CopiedBytes()
-	if err := kv.key.Free(); err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", errFreeingValue, err)
-	}
 	value := kv.value.CopiedBytes()
-	if err := kv.value.Free(); err != nil {
-		return nil, nil, fmt.Errorf("%w: %w", errFreeingValue, err)
+	e := kv.Free()
+	if e != nil {
+		return nil, nil, e
 	}
 	return key, value, nil
+}
+
+func (kv *ownedKeyValue) Free() error {
+	err := kv.key.Free()
+	if err != nil {
+		return fmt.Errorf("%w: %w", errFreeingValue, err)
+	}
+	err = kv.value.Free()
+	if err != nil {
+		return fmt.Errorf("%w: %w", errFreeingValue, err)
+	}
+	return nil
 }
 
 // newOwnedKeyValue creates a ownedKeyValue from a C.OwnedKeyValuePair.

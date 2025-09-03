@@ -41,6 +41,12 @@ type Iterator struct {
 }
 
 func (it *Iterator) nextInternal() error {
+	if it.currentPair != nil {
+		err := it.currentPair.Free()
+		if err != nil {
+			return err
+		}
+	}
 	if len(it.loadedPairs) == 0 {
 		if it.batchSize < 1 {
 			kv, e := getKeyValueFromKeyValueResult(C.fwd_iter_next(it.handle))
@@ -88,6 +94,20 @@ func (it *Iterator) Next() bool {
 	it.currentValue = v
 	it.err = e
 	return e == nil
+}
+
+// NextBorrowed retrieves the next item on the iterator similar to Next
+// the difference is that returned bytes in Key and Value are not copied
+// and will be freed on next call to Next or NextBorrowed
+func (it *Iterator) NextBorrowed() bool {
+	it.err = it.nextInternal()
+	if it.currentPair == nil || it.err != nil {
+		return false
+	}
+	it.currentKey = it.currentPair.key.BorrowedBytes()
+	it.currentValue = it.currentPair.value.BorrowedBytes()
+	it.err = nil
+	return true
 }
 
 // Key returns the key of the current pair

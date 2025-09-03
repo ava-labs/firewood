@@ -1199,3 +1199,30 @@ func TestIterBatched(t *testing.T) {
 	r.NoError(it2.Err())
 	r.Equal(i, 1000)
 }
+
+// Tests that batched iterator functionality works
+func TestIterBatchedBorrowed(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForBench(1000)
+	_, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	it, err := db.IterLatest(nil)
+	r.NoError(err)
+	it.SetBatchSize(100)
+	it2, err := db.IterLatest(nil)
+	r.NoError(err)
+
+	i := 0
+	for ; it.NextBorrowed() && it2.NextBorrowed(); i += 1 {
+		r.Equal(it.Key(), it2.Key())
+		r.Equal(it.Value(), it2.Value())
+		r.Equal(keys[i], it.Key())
+		r.Equal(vals[i], it.Value())
+	}
+	r.NoError(it.Err())
+	r.NoError(it2.Err())
+	r.Equal(i, 1000)
+}
