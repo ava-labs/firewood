@@ -379,7 +379,12 @@ func (b *ownedKeyValueBatch) Free() error {
 		return nil
 	}
 
-	// TODO
+	if err := getErrorFromVoidResult(C.fwd_free_owned_key_value_batch(b.owned)); err != nil {
+		return fmt.Errorf("%w: %w", errFreeingValue, err)
+	}
+
+	b.owned = C.OwnedKeyValueBatch{}
+
 	return nil
 }
 
@@ -398,14 +403,10 @@ type ownedKeyValue struct {
 	value *ownedBytes
 }
 
-func (kv *ownedKeyValue) Consume() ([]byte, []byte, error) {
+func (kv *ownedKeyValue) Copy() ([]byte, []byte) {
 	key := kv.key.CopiedBytes()
 	value := kv.value.CopiedBytes()
-	e := kv.Free()
-	if e != nil {
-		return nil, nil, e
-	}
-	return key, value, nil
+	return key, value
 }
 
 func (kv *ownedKeyValue) Free() error {

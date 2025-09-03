@@ -223,6 +223,30 @@ typedef struct VoidResult {
 } VoidResult;
 
 /**
+ * Owned version of `KeyValuePair`, returned to the FFI.
+ */
+typedef struct OwnedKeyValuePair {
+  OwnedBytes key;
+  OwnedBytes value;
+} OwnedKeyValuePair;
+
+/**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_OwnedKeyValuePair {
+  struct OwnedKeyValuePair *ptr;
+  size_t len;
+} OwnedSlice_OwnedKeyValuePair;
+
+/**
+ * A type alias for a rust-owned byte slice.
+ */
+typedef struct OwnedSlice_OwnedKeyValuePair OwnedKeyValueBatch;
+
+/**
  * A result type returned from FFI functions that retrieve a single value.
  */
 typedef enum ValueResult_Tag {
@@ -275,14 +299,6 @@ typedef struct ValueResult {
 } ValueResult;
 
 /**
- * Owned version of `KeyValuePair`, returned to the FFI.
- */
-typedef struct OwnedKeyValuePair {
-  OwnedBytes key;
-  OwnedBytes value;
-} OwnedKeyValuePair;
-
-/**
  * A result type returned from iterator FFI functions
  */
 typedef enum KeyValueResult_Tag {
@@ -328,22 +344,6 @@ typedef struct KeyValueResult {
     };
   };
 } KeyValueResult;
-
-/**
- * A Rust-owned vector of bytes that can be passed to C code.
- *
- * C callers must free this memory using the respective FFI function for the
- * concrete type (but not using the `free` function from the C standard library).
- */
-typedef struct OwnedSlice_OwnedKeyValuePair {
-  struct OwnedKeyValuePair *ptr;
-  size_t len;
-} OwnedSlice_OwnedKeyValuePair;
-
-/**
- * A type alias for a rust-owned byte slice.
- */
-typedef struct OwnedSlice_OwnedKeyValuePair OwnedKeyValueBatch;
 
 /**
  * A result type returned from iterator FFI functions
@@ -717,6 +717,27 @@ struct VoidResult fwd_free_iterator(struct IteratorHandle *iterator);
  * this function does nothing.
  */
 struct VoidResult fwd_free_owned_bytes(OwnedBytes bytes);
+
+/**
+ * Consumes the [`OwnedKeyValueBatch`] and frees the memory associated with it.
+ *
+ * # Arguments
+ *
+ * * `batch` - The [`OwnedKeyValueBatch`] struct to free, previously returned from any
+ *   function from this library.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ *
+ * # Safety
+ *
+ * The caller must ensure that the `batch` struct is valid and that the memory
+ * it points to is uniquely owned by this object. However, if `batch.ptr` is null,
+ * this function does nothing.
+ */
+struct VoidResult fwd_free_owned_key_value_batch(OwnedKeyValueBatch batch);
 
 /**
  * Consumes the [`ProposalHandle`], cancels the proposal, and frees the memory.

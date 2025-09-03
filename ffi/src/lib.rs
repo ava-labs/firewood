@@ -639,3 +639,26 @@ pub unsafe extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidRe
 pub unsafe extern "C" fn fwd_free_owned_bytes(bytes: OwnedBytes) -> VoidResult {
     invoke(move || drop(bytes))
 }
+
+
+/// Consumes the [`OwnedKeyValueBatch`] and frees the memory associated with it.
+///
+/// # Arguments
+///
+/// * `batch` - The [`OwnedKeyValueBatch`] struct to free, previously returned from any
+///   function from this library.
+///
+/// # Returns
+///
+/// - [`VoidResult::Ok`] if the memory was successfully freed.
+/// - [`VoidResult::Err`] if the process panics while freeing the memory.
+///
+/// # Safety
+///
+/// The caller must ensure that the `batch` struct is valid and that the memory
+/// it points to is uniquely owned by this object. However, if `batch.ptr` is null,
+/// this function does nothing.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_free_owned_key_value_batch(batch: OwnedKeyValueBatch) -> VoidResult {
+    invoke(move || drop(batch))
+}

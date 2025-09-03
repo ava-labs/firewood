@@ -38,16 +38,23 @@ type Iterator struct {
 
 	// err is the error from the iterator, if any
 	err error
+
+	// currentResource is a reference to a freeable resource to clean up
+	currentResource interface{ Free() error }
+}
+
+func (it *Iterator) Release() error {
+	if it.currentResource == nil {
+		return nil
+	}
+	return it.currentResource.Free()
 }
 
 func (it *Iterator) nextInternal() error {
-	if it.currentPair != nil {
-		err := it.currentPair.Free()
-		if err != nil {
-			return err
-		}
-	}
 	if len(it.loadedPairs) == 0 {
+		if e := it.Release(); e != nil {
+			return e
+		}
 		if it.batchSize <= 1 {
 			kv, e := getKeyValueFromKeyValueResult(C.fwd_iter_next(it.handle))
 			if e != nil {
@@ -57,15 +64,14 @@ func (it *Iterator) nextInternal() error {
 				// kv is nil when done
 				it.loadedPairs = append(it.loadedPairs, kv)
 			}
+			it.currentResource = kv
 		} else {
 			batch, e := getKeyValueBatchFromKeyValueBatchResult(C.fwd_iter_next_n(it.handle, C.size_t(it.batchSize)))
 			if e != nil {
 				return e
 			}
 			it.loadedPairs = batch.Copied()
-			if e = batch.Free(); e != nil {
-				return e
-			}
+			it.currentResource = batch
 		}
 	}
 	if len(it.loadedPairs) > 0 {
@@ -89,11 +95,11 @@ func (it *Iterator) Next() bool {
 	if it.currentPair == nil || it.err != nil {
 		return false
 	}
-	k, v, e := it.currentPair.Consume()
+	k, v := it.currentPair.Copy()
 	it.currentKey = k
 	it.currentValue = v
-	it.err = e
-	return e == nil
+	it.err = nil
+	return true
 }
 
 // NextBorrowed retrieves the next item on the iterator similar to Next
