@@ -1217,3 +1217,92 @@ func TestIter(t *testing.T) {
 		assertIteratorYields(r, configureIterator(it), keys, updatedValues)
 	})
 }
+
+func TestIterExhaust(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+	keys, vals := kvForBench(1000)
+	_, err := db.Update(keys, vals)
+	r.NoError(err)
+	it, err := db.IterLatest(nil)
+	r.NoError(err)
+	err = it.Exhaust(1000)
+	r.NoError(err)
+	r.False(it.Next())
+}
+
+// Benchmark comparing all next implementations
+func BenchmarkIterator(b *testing.B) {
+	db := newTestDatabase(b)
+	N := 1000000
+	batchSizes := make([]int, 0)
+	base := 4
+	for i := base; i <= N; i *= base {
+		batchSizes = append(batchSizes, i)
+	}
+
+	keys, vals := kvForBench(N)
+	root, err := db.Update(keys, vals)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	dataModes := []struct {
+		name     string
+		configFn func(it *Iterator) kvIter
+	}{
+		{"Owned", func(it *Iterator) kvIter { return it }},
+		{"Borrowed", func(it *Iterator) kvIter { return borrowIter{it: it} }},
+	}
+
+	type benchMode struct {
+		name     string
+		configFn func(it *Iterator)
+	}
+	batchModes := []benchMode{
+		{"Single", func(it *Iterator) {
+			it.SetBatchSize(1)
+		}},
+	}
+
+	for _, batchSize := range batchSizes {
+		batchModes = append(batchModes, benchMode{name: fmt.Sprintf("Batched-%d", batchSize), configFn: func(it *Iterator) {
+			it.SetBatchSize(batchSize)
+		}})
+	}
+
+	runForAllModes := func(parentB *testing.B, name string, fn func(*testing.B, func(it *Iterator) kvIter)) {
+		for _, dataMode := range dataModes {
+			for _, batchMode := range batchModes {
+				parentB.Run(fmt.Sprintf("%s/%s/%s", name, dataMode.name, batchMode.name), func(b *testing.B) {
+					fn(b, func(it *Iterator) kvIter {
+						batchMode.configFn(it)
+						return dataMode.configFn(it)
+					})
+				})
+			}
+		}
+	}
+
+	b.Run("ExhaustInRust", func(b *testing.B) {
+		r := require.New(b)
+		for b.Loop() {
+			iter, err := db.IterOnRoot(root, nil)
+			r.NoError(err)
+			err = iter.Exhaust(N)
+			r.NoError(err)
+		}
+	})
+
+	runForAllModes(b, "Next", func(b *testing.B, configureIterator func(it *Iterator) kvIter) {
+		r := require.New(b)
+		for b.Loop() {
+			iter, err := db.IterOnRoot(root, nil)
+			r.NoError(err)
+			it := configureIterator(iter)
+			for it.Next() {
+			}
+			r.NoError(it.Err())
+		}
+	})
+}
