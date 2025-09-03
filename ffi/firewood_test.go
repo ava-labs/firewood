@@ -12,7 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -269,8 +269,8 @@ func sortKV(keys, vals [][]byte) error {
 	for i := range ord {
 		ord[i] = i
 	}
-	sort.Slice(ord, func(i, j int) bool {
-		return bytes.Compare(keys[ord[i]], keys[ord[j]]) < 0
+	slices.SortFunc(ord, func(i, j int) int {
+		return bytes.Compare(keys[i], keys[j])
 	})
 	perm := make([]int, n)
 	for dest, orig := range ord {
