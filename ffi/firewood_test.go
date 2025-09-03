@@ -1174,15 +1174,15 @@ func TestIter(t *testing.T) {
 			}
 		}
 	}
-	runForAllModes(t, "Latest", func(t *testing.T, fn func(it *Iterator) kvIter) {
+	runForAllModes(t, "Latest", func(t *testing.T, configureIterator func(it *Iterator) kvIter) {
 		r := require.New(t)
 		it, err := db.IterLatest(nil)
 		r.NoError(err)
 
-		assertIteratorYields(r, fn(it), keys, vals)
+		assertIteratorYields(r, configureIterator(it), keys, vals)
 	})
 
-	runForAllModes(t, "OnRoot", func(t *testing.T, fn func(it *Iterator) kvIter) {
+	runForAllModes(t, "OnRoot", func(t *testing.T, configureIterator func(it *Iterator) kvIter) {
 		r := require.New(t)
 		h1, err := db.IterOnRoot(firstRoot, nil)
 		r.NoError(err)
@@ -1191,12 +1191,12 @@ func TestIter(t *testing.T) {
 		h3, err := db.IterOnRoot(thirdRoot, nil)
 		r.NoError(err)
 
-		assertIteratorYields(r, fn(h1), keys[:80], vals[:80])
-		assertIteratorYields(r, fn(h2), keys[:160], vals[:160])
-		assertIteratorYields(r, fn(h3), keys, vals)
+		assertIteratorYields(r, configureIterator(h1), keys[:80], vals[:80])
+		assertIteratorYields(r, configureIterator(h2), keys[:160], vals[:160])
+		assertIteratorYields(r, configureIterator(h3), keys, vals)
 	})
 
-	runForAllModes(t, "OnProposal", func(t *testing.T, fn func(it *Iterator) kvIter) {
+	runForAllModes(t, "OnProposal", func(t *testing.T, configureIterator func(it *Iterator) kvIter) {
 		r := require.New(t)
 		updatedValues := make([][]byte, len(vals))
 		copy(updatedValues, vals)
@@ -1214,6 +1214,6 @@ func TestIter(t *testing.T) {
 		it, err := p.Iter(nil)
 		r.NoError(err)
 
-		assertIteratorYields(r, fn(it), keys, updatedValues)
+		assertIteratorYields(r, configureIterator(it), keys, updatedValues)
 	})
 }
