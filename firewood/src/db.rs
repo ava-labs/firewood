@@ -166,7 +166,7 @@ pub struct Db {
 
     //threadpool: OnceLock<ThreadPool>,
     //static THREADPOOL: OnceLock<ThreadPool> = OnceLock::new();
-    threadpool: Option<ThreadPool>
+    threadpool: Option<ThreadPool>,
 }
 
 #[async_trait]
@@ -247,7 +247,11 @@ impl Db {
             .build();
         let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
         //let threadpool= OnceLock::new();
-        let db = Self { metrics, manager, threadpool: None };
+        let db = Self {
+            metrics,
+            manager,
+            threadpool: None,
+        };
         Ok(db)
     }
 
@@ -264,7 +268,11 @@ impl Db {
             .build();
         let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
         //let threadpool= OnceLock::new();
-        let db = Self { metrics, manager, threadpool: None };
+        let db = Self {
+            metrics,
+            manager,
+            threadpool: None,
+        };
         Ok(db)
     }
 
@@ -293,8 +301,7 @@ impl Db {
     ) -> Result<Proposal<'_>, api::Error> {
         let parent = self.manager.current_revision();
         let mut parallel_merkle = ParallelMerkle::default();
-        let immutable = parallel_merkle
-            .create_proposal(&parent, batch, &mut self.threadpool)?;
+        let immutable = parallel_merkle.create_proposal(&parent, batch, &mut self.threadpool)?;
         self.manager.add_proposal(immutable.clone());
         Ok(Proposal {
             nodestore: immutable,
@@ -736,14 +743,107 @@ mod test {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn test_propose_parallel() {
-        const N: usize = 1000;
-
-        let rng = firewood_storage::SeededRng::from_env_or_random();
-
+        const N: usize = 100;
         let mut db = testdb().await;
 
-        // create N keys and values like (key0, value0)..(keyN, valueN)
+        // Test an empty proposal
+        let keys: Vec<[u8; 0]> = Vec::new();
+        let vals: Vec<Box<[u8]>> = Vec::new();
+
+        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let proposal = db.propose_parallel(kviter).unwrap();
+        proposal.commit().await.unwrap();
+
+        // Create a proposal consisting of a single entry and an empty key.
+        let keys: Vec<[u8; 0]> = vec![[0; 0]];
+
+        // Note that if the value is [], then it is interpreted as a DeleteRange.
+        // Instead, set value to [0]
+        let vals: Vec<Box<[u8]>> = vec![Box::new([0; 1])];
+
+        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let proposal = db.propose_parallel(kviter).unwrap();
+
+        let kviter = keys.iter().zip(vals.iter());
+        for (k, v) in kviter {
+            println!("Checking key: {k:?} and {v:?}");
+            assert_eq!(&proposal.val(k).await.unwrap().unwrap(), v);
+        }
+        proposal.commit().await.unwrap();
+
+        // Check that the key is still there after the commit
+        let parent = db.manager.current_revision();
+        let kviter = keys.iter().zip(vals.iter());
+        for (k, v) in kviter {
+            println!("Checking key: {k:?} and {v:?}");
+            assert_eq!(&parent.val(k).await.unwrap().unwrap(), v);
+        }
+
+        // Create a proposal that deletes the previous entry
+        let vals: Vec<Box<[u8]>> = vec![Box::new([0; 0])];
+        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let proposal = db.propose_parallel(kviter).unwrap();
+
+        let kviter = keys.iter().zip(vals.iter());
+        for (k, v) in kviter {
+            println!("Checking key: {k:?} and {v:?}");
+            assert_eq!(proposal.val(k).await.unwrap(), None);
+        }
+        proposal.commit().await.unwrap();
+
+        // Create a proposal that inserts 0 to 999
+        let (keys, vals): (Vec<_>, Vec<_>) = (0..1000)
+            .map(|i| {
+                (
+                    format!("key{i}").into_bytes(),
+                    Box::from(format!("value{i}").as_bytes()),
+                )
+            })
+            .unzip();
+
+        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let proposal = db.propose_parallel(kviter).unwrap();
+        let kviter = keys.iter().zip(vals.iter());
+        for (k, v) in kviter {
+            println!("Checking key: {k:?} and {v:?}");
+            assert_eq!(&proposal.val(k).await.unwrap().unwrap(), v);
+        }
+        proposal.commit().await.unwrap();
+
+        // Create a proposal that deletes all of the even entries
+        let (keys, vals): (Vec<_>, Vec<_>) = (0..1000)
+            .filter_map(|i| {
+                if i % 2 != 0 {
+                    Some::<(Vec<u8>, Box<[u8]>)>((
+                        format!("key{i}").into_bytes(),
+                        Box::new([]),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .unzip();
+
+        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let proposal = db.propose_parallel(kviter).unwrap();
+        let kviter = keys.iter().zip(vals.iter());
+        for (k, v) in kviter {
+            println!("Checking key: {k:?} and {v:?}");
+            assert_eq!(proposal.val(k).await.unwrap(), None);
+        }
+        proposal.commit().await.unwrap();
+
+        // Create a proposal that deletes using empty prefix
+        let keys: Vec<[u8; 0]> = vec![[0; 0]];
+        let vals: Vec<Box<[u8]>> = vec![Box::new([0; 0])];
+        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let proposal = db.propose_parallel(kviter).unwrap();
+        proposal.commit().await.unwrap();
+
+        // Create N keys and values like (key0, value0)..(keyN, valueN)
+        let rng = firewood_storage::SeededRng::from_env_or_random();
         let (keys, vals): (Vec<_>, Vec<_>) = (0..N)
             .map(|i| {
                 (
@@ -768,7 +868,6 @@ mod test {
                 assert_eq!(&proposal.val(k).await.unwrap().unwrap(), v);
             }
             proposal.commit().await.unwrap();
-            //println!("!!!!!!!! All done");
         }
     }
 
