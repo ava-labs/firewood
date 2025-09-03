@@ -5,7 +5,6 @@ package ffi
 
 import (
 	"bytes"
-	"crypto/rand"
 	"encoding/hex"
 	"fmt"
 	"os"
@@ -244,23 +243,6 @@ func kvForTest(num int) ([][]byte, [][]byte) {
 	for i := range keys {
 		keys[i] = keyForTest(i)
 		vals[i] = valForTest(i)
-	}
-	return keys, vals
-}
-
-func randomBytes(n int) []byte {
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return b
-}
-
-func kvForBench(num int) ([][]byte, [][]byte) {
-	keys := make([][]byte, num)
-	vals := make([][]byte, num)
-
-	for i := range keys {
-		keys[i] = randomBytes(32)
-		vals[i] = randomBytes(128)
 	}
 	return keys, vals
 }
