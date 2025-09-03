@@ -189,15 +189,13 @@ impl DatabaseHandle {
         first_key: Option<&[u8]>,
     ) -> Result<CreateIteratorResult<'_>, api::Error> {
         let Some(root) = root.or(self.current_root_hash()?) else {
-            return Err(api::Error::RevisionNotFound {
-                provided: HashKey::default_root_hash(),
-            });
+            return Ok(CreateIteratorResult::default());
         };
         let rev = self.db.revision(root)?;
         let it = rev.iter_owned(first_key)?;
 
         Ok(CreateIteratorResult {
-            handle: IteratorHandle { iterator: it },
+            handle: IteratorHandle { iterator: Some(it) },
         })
     }
 
