@@ -11,7 +11,7 @@ use firewood_storage::{
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::iter::once;
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, OnceLock, mpsc};
+use std::sync::{Arc, mpsc};
 
 #[derive(Debug)]
 struct WorkerState {
@@ -34,7 +34,9 @@ enum Response<S> {
     Error(FileIoError),
 }
 
-/// TODO add doc
+/// `ParallelMerkle` safely performs parallel modifications to a Merkle trie. It does this 
+/// by creating a worker for each subtrie from the root, and allowing the the workers to 
+/// perform inserts and removes to their subtries.
 #[derive(Debug)]
 pub struct ParallelMerkle {
     workers: [Option<WorkerState>; BranchNode::MAX_CHILDREN],
@@ -55,6 +57,8 @@ impl ParallelMerkle {
         }
     }
 
+    /// Performs the prepare phase to allow clean separation of the trie into an array
+    /// of subtries that can be operated on independently by the worker threads.
     fn prepare_trie(&self, proposal: &mut NodeStore<MutableProposal, FileBacked>) {
         // Prepare phase:
         // --------------
@@ -63,8 +67,9 @@ impl ParallelMerkle {
         // 1. If root is None, create a branch node with an empty partial path and a None for
         //    value. Create Nones for all of its children.
         // 2. If the existing root has a partial path, then create a new root with an empty
-        //    partial path and a None for a value. Push down the previous root as a child. This
-        //    will be a malformed Merkle trie and will need to be fixed afterwards.
+        //    partial path and a None for a value. Push down the previous root as a child. Note
+        //    that this modified Merkle trie is not currently valid and may need to be updated
+        //    during the post-processing phase.
         // 3. If the existing root does not have a partial path, then there is nothing we need
         //    to do if it is a branch. If it is a leaf, then convert it into a branch.
         //
@@ -92,8 +97,8 @@ impl ParallelMerkle {
             } else {
                 // Root has an empty partial path. We need to consider two cases.
                 match node {
-                    // Root is a leaf with an empty key. We need to replace the leaf with a branch.
                     Node::Leaf(mut leaf) => {
+                        // Root is a leaf with an empty partial path. Replace it with a branch.
                         let branch = BranchNode {
                             partial_path: Path::new(),
                             value: Some(std::mem::take(&mut leaf.value)),
@@ -359,10 +364,10 @@ impl ParallelMerkle {
         &mut self,
         parent: &NodeStore<T, FileBacked>,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
-        threadpool: &mut OnceLock<ThreadPool>,
+        threadpool: &mut Option<ThreadPool>,
     ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, FileIoError> {
         // get (or create) a threadpool
-        let pool = threadpool.get_or_init(|| {
+        let pool = threadpool.get_or_insert_with(|| {
             ThreadPoolBuilder::new()
                 .num_threads(BranchNode::MAX_CHILDREN)
                 .build()
@@ -387,12 +392,10 @@ impl ParallelMerkle {
 
         // For each operation in the batch, send a request to the worker related to the first nibble
         for op in batch.into_iter().map_into_batch() {
-            let mut key_nibbles = NibblesIterator::new(op.key().as_ref());
-
             // Get the first nibble of the key to determine which worker to send the request to.
             //
-            // Need to handle empty key. Since the partial_path of the root must be empty, an empty
-            // key should always be for the root node. There are 3 cases the consider.
+            // Need to handle an empty key. Since the partial_path of the root must be empty, an 
+            // empty key should always be for the root node. There are 3 cases the consider.
             //
             // Insert: The main thread modifies the value of the root.
             //
@@ -400,14 +403,15 @@ impl ParallelMerkle {
             //         the root node, which, if necessary later, will be done in post processing.
             //
             // Remove Prefix:
-            //         For a remove prefix, we would need to remove everything, which cannot safely
-            //         be done in parallel with other operations. Calling a remove prefix on an
-            //         empty key should never happen during normal operations. We handle this case
-            //         by returning an error. The caller will then need to recreate the proposal
-            //         serially.
+            //         For a remove prefix, we would need to remove everything. We do this by sending
+            //         a remove prefix with an empty prefix to all of the children, then removing the
+            //         value of the root node.
+            let mut key_nibbles = NibblesIterator::new(op.key().as_ref());
             let Some(first_nibble) = key_nibbles.next() else {
                 match &op {
-                    BatchOp::Put { key: _, value: _ } => {
+                    BatchOp::Put { key: _, value } => {
+                        root_branch.value = Some(value.as_ref().into());
+                        /*
                         // There should always be a value, even if it is empty.
                         root_branch.value = Some(
                             op.value()
@@ -415,6 +419,7 @@ impl ParallelMerkle {
                                 .map(|v| v.as_ref().into())
                                 .unwrap_or_default(),
                         );
+                        */
                     }
                     BatchOp::Delete { key: _ } => {
                         root_branch.value = None;
@@ -424,14 +429,15 @@ impl ParallelMerkle {
                         self.remove_all_entries(&mut root_branch);
                     }
                 }
-                continue; // Done with this operation.
+                continue; // Done with this empty key operation.
             };
 
             // We send a path to the worker without the first nibble. Sending a nibble iterator to a
             // worker is more difficult as it takes a reference from op.
             let key_path = Path::from_nibbles_iterator(key_nibbles);
 
-            // Get the worker that is responsible for this nibble.
+            // Get the worker that is responsible for this nibble. The worker will be created if it
+            // doesn't already exist.
             let worker = self.get_worker(
                 pool,
                 &proposal,
@@ -442,7 +448,15 @@ impl ParallelMerkle {
 
             // Send the current operation to the worker.
             match &op {
-                BatchOp::Put { key: _, value: _ } => {
+                BatchOp::Put { key: _, value } => {
+                    worker
+                        .sender
+                        .send(Request::Insert {
+                            key: key_path,
+                            value: value.as_ref().into(),
+                        })
+                        .expect("send to worker error");
+                    /*
                     worker
                         .sender
                         .send(Request::Insert {
@@ -454,6 +468,7 @@ impl ParallelMerkle {
                                 .unwrap_or_default(),
                         })
                         .expect("send to worker error");
+                    */
                 }
                 BatchOp::Delete { key: _ } => {
                     worker
@@ -476,8 +491,7 @@ impl ParallelMerkle {
         self.end_batch(response_channel.1, &mut proposal, &mut root_branch)?;
 
         *proposal.mut_root() = self
-            .postprocess_trie(&mut proposal, (*root_branch).into())
-            .expect("TODO check errors");
+            .postprocess_trie(&mut proposal, (*root_branch).into())?;
 
         // Done with these worker states. Setting the workers to None will allow the next create
         // proposal from the same ParallelMerkle to be reused to spawn new states.

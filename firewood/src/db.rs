@@ -25,7 +25,7 @@ use rayon::ThreadPool;
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
 
@@ -164,8 +164,9 @@ pub struct Db {
     metrics: Arc<DbMetrics>,
     manager: RevisionManager,
 
-    threadpool: OnceLock<ThreadPool>,
+    //threadpool: OnceLock<ThreadPool>,
     //static THREADPOOL: OnceLock<ThreadPool> = OnceLock::new();
+    threadpool: Option<ThreadPool>
 }
 
 #[async_trait]
@@ -245,8 +246,8 @@ impl Db {
             .manager(cfg.manager)
             .build();
         let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
-        let threadpool= OnceLock::new();
-        let db = Self { metrics, manager, threadpool };
+        //let threadpool= OnceLock::new();
+        let db = Self { metrics, manager, threadpool: None };
         Ok(db)
     }
 
@@ -262,8 +263,8 @@ impl Db {
             .manager(cfg.manager)
             .build();
         let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
-        let threadpool= OnceLock::new();
-        let db = Self { metrics, manager, threadpool };
+        //let threadpool= OnceLock::new();
+        let db = Self { metrics, manager, threadpool: None };
         Ok(db)
     }
 
@@ -294,7 +295,6 @@ impl Db {
         let mut parallel_merkle = ParallelMerkle::default();
         let immutable = parallel_merkle
             .create_proposal(&parent, batch, &mut self.threadpool)?;
-            //.expect("TODO handle error");
         self.manager.add_proposal(immutable.clone());
         Ok(Proposal {
             nodestore: immutable,
