@@ -261,7 +261,6 @@ impl From<Option<Result<(merkle::Key, merkle::Value), api::Error>>> for KeyValue
     }
 }
 
-
 /// A result type returned from iterator FFI functions
 #[derive(Debug)]
 #[repr(C)]
@@ -285,14 +284,22 @@ pub enum KeyValueBatchResult {
 impl From<Result<Vec<(merkle::Key, merkle::Value)>, api::Error>> for KeyValueBatchResult {
     fn from(value: Result<Vec<(merkle::Key, merkle::Value)>, api::Error>) -> Self {
         match value {
-                Ok(pairs) => {
-                    let values: Vec<_> = pairs.into_iter().map(|(k, v)| OwnedKeyValuePair {key:k.into(), value:v.into()}).collect();
-                    KeyValueBatchResult::Some(values.into())
-                },
-                Err(api::Error::RevisionNotFound { provided }) => KeyValueBatchResult::RevisionNotFound(
-                    HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
-                ),
-                Err(err) => KeyValueBatchResult::Err(err.to_string().into_bytes().into()),
+            Ok(pairs) => {
+                let values: Vec<_> = pairs
+                    .into_iter()
+                    .map(|(k, v)| OwnedKeyValuePair {
+                        key: k.into(),
+                        value: v.into(),
+                    })
+                    .collect();
+                KeyValueBatchResult::Some(values.into())
+            }
+            Err(api::Error::RevisionNotFound { provided }) => {
+                KeyValueBatchResult::RevisionNotFound(HashKey::from(
+                    provided.unwrap_or_else(api::HashKey::empty),
+                ))
+            }
+            Err(err) => KeyValueBatchResult::Err(err.to_string().into_bytes().into()),
         }
     }
 }
