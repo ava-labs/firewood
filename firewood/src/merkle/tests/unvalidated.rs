@@ -7,7 +7,6 @@ use crate::range_proof::RangeProof;
 type KeyValuePairs = Vec<(Box<[u8]>, Box<[u8]>)>;
 
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn range_proof_invalid_bounds() {
     let merkle = create_in_memory_merkle().hash();
 
@@ -25,7 +24,6 @@ fn range_proof_invalid_bounds() {
 }
 
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn full_range_proof() {
     let merkle = init_merkle((u8::MIN..=u8::MAX).map(|k| ([k], [k])));
 
@@ -39,7 +37,6 @@ fn full_range_proof() {
 }
 
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn single_value_range_proof() {
     const RANDOM_KEY: u8 = 42;
 
@@ -76,7 +73,6 @@ fn shared_path_proof() {
 
 // this was a specific failing case
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn shared_path_on_insert() {
     init_merkle([
         (
@@ -99,7 +95,6 @@ fn shared_path_on_insert() {
 }
 
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn overwrite_leaf() {
     let key = &[0x00];
     let val = &[1];
