@@ -185,14 +185,17 @@ impl DatabaseHandle {
     /// An error is returned if the iterator could not be created.
     pub fn iter_on_root(
         &self,
-        root: HashKey,
+        root: Option<HashKey>,
         first_key: Option<&[u8]>,
     ) -> Result<CreateIteratorResult<'_>, api::Error> {
+        let Some(root) = root.or(self.current_root_hash()?) else {
+            return Ok(CreateIteratorResult::default());
+        };
         let rev = self.db.revision(root)?;
         let it = rev.iter_owned(first_key)?;
 
         Ok(CreateIteratorResult {
-            handle: IteratorHandle { iterator: it },
+            handle: IteratorHandle { iterator: Some(it) },
         })
     }
 

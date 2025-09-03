@@ -12,8 +12,9 @@ use std::fmt::{Debug, Formatter};
 type KeyValueItem = Result<(merkle::Key, merkle::Value), api::Error>;
 
 /// An opaque wrapper around an Iterator.
+#[derive(Default)]
 pub struct IteratorHandle<'db> {
-    pub iterator: Box<dyn Iterator<Item = KeyValueItem> + 'db>,
+    pub iterator: Option<Box<dyn Iterator<Item = KeyValueItem> + 'db>>,
 }
 
 impl Debug for IteratorHandle<'_> {
@@ -24,11 +25,15 @@ impl Debug for IteratorHandle<'_> {
 
 impl IteratorHandle<'_> {
     pub fn iter_next(&mut self) -> Option<KeyValueItem> {
-        self.iterator.next()
+        if let Some(iterator) = self.iterator.as_mut() {
+            iterator.next()
+        } else {
+            None
+        }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CreateIteratorResult<'db> {
     pub handle: IteratorHandle<'db>,
 }

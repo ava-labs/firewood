@@ -230,6 +230,8 @@ pub enum IteratorResult<'db> {
 pub enum KeyValueResult {
     /// The caller provided a null pointer to an iterator handle.
     NullHandlePointer,
+    /// The provided root was not found in the database.
+    RevisionNotFound(HashKey),
     /// The iterator returned empty result, the iterator is exhausted
     None,
     /// The next item on iterator is returned.
@@ -244,11 +246,14 @@ pub enum KeyValueResult {
     Err(OwnedBytes),
 }
 
-impl<E: fmt::Display> From<Option<Result<(merkle::Key, merkle::Value), E>>> for KeyValueResult {
-    fn from(value: Option<Result<(merkle::Key, merkle::Value), E>>) -> Self {
+impl From<Option<Result<(merkle::Key, merkle::Value), api::Error>>> for KeyValueResult {
+    fn from(value: Option<Result<(merkle::Key, merkle::Value), api::Error>>) -> Self {
         match value {
             Some(value) => match value {
                 Ok(value) => KeyValueResult::Some(value.into()),
+                Err(api::Error::RevisionNotFound { provided }) => KeyValueResult::RevisionNotFound(
+                    HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
+                ),
                 Err(err) => KeyValueResult::Err(err.to_string().into_bytes().into()),
             },
             None => KeyValueResult::None,

@@ -126,7 +126,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func newTestDatabase(t *testing.T) *Database {
+func newTestDatabase(t testing.TB) *Database {
 	t.Helper()
 	r := require.New(t)
 
@@ -1042,4 +1042,81 @@ func TestGetFromRootParallel(t *testing.T) {
 		err := <-results
 		r.NoError(err, "Parallel operation failed")
 	}
+}
+
+// Tests that iterator isn't created for empty database
+func TestIterEmptyDb(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	it, err := db.IterLatest(nil)
+	r.NoError(err)
+	r.False(it.Next())
+}
+
+// Tests that basic iterator functionality works
+func TestIter(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(10)
+	_, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	it, err := db.IterLatest(nil)
+	r.NoError(err)
+
+	for i := 0; it.Next(); i += 1 {
+		r.Equal(keys[i], it.Key())
+		r.Equal(vals[i], it.Value())
+	}
+	r.NoError(it.Err())
+}
+
+// Tests that iterators on different roots work fine
+func TestIterOnRoot(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Commit 10 key-value pairs.
+	keys, vals := kvForTest(20)
+	firstRoot, err := db.Update(keys[:10], vals[:10])
+	r.NoError(err)
+
+	secondRoot, err := db.Update(keys[:10], vals[10:])
+	r.NoError(err)
+
+	h1, err := db.IterOnRoot(firstRoot, nil)
+	r.NoError(err)
+
+	h2, err := db.IterOnRoot(secondRoot, nil)
+	r.NoError(err)
+
+	for i := 0; h1.Next() && h2.Next(); i += 1 {
+		r.Equal(keys[i], h1.Key())
+		r.Equal(keys[i], h2.Key())
+		r.Equal(vals[i], h1.Value())
+		r.Equal(vals[i+10], h2.Value())
+	}
+	r.NoError(h1.Err())
+	r.NoError(h2.Err())
+}
+
+// Tests that basic iterator functionality works for proposal
+func TestIterOnProposal(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(10)
+	p, err := db.Propose(keys, vals)
+	r.NoError(err)
+
+	it, err := p.Iter(nil)
+	r.NoError(err)
+
+	for i := 0; it.Next(); i += 1 {
+		r.Equal(keys[i], it.Key())
+		r.Equal(vals[i], it.Value())
+	}
+	r.NoError(it.Err())
 }
