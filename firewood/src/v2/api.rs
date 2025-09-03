@@ -2,7 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::manager::RevisionManagerError;
-use crate::merkle::parallel::ParallelMerkleError;
 use crate::merkle::{Key, Value};
 use crate::proof::{Proof, ProofError, ProofNode};
 use async_trait::async_trait;
@@ -159,10 +158,6 @@ pub enum Error {
     /// An invalid root hash was provided
     #[error(transparent)]
     InvalidRootHash(#[from] firewood_storage::InvalidTrieHashLength),
-
-    /// Invalid `remove_prefix` on a `ParallelMerkle`
-    #[error("invalid parallel remove prefix")]
-    ParallelError(#[from] ParallelMerkleError),
 }
 
 impl From<RevisionManagerError> for Error {

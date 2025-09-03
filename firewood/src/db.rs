@@ -491,14 +491,11 @@ mod test {
     use std::num::NonZeroUsize;
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
-    use std::process::abort;
 
     use firewood_storage::{CheckOpt, CheckerError};
     use tokio::sync::mpsc::{Receiver, Sender};
 
     use crate::db::{Db, Proposal};
-    use crate::merkle::parallel::ParallelMerkleError;
-    use crate::v2;
     use crate::v2::api::{Db as _, DbView as _, KeyValuePairIter, Proposal as _};
 
     use super::{BatchOp, DbConfig};
@@ -744,7 +741,7 @@ mod test {
 
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
-        let mut db = testdb().await;
+        let db = testdb().await;
 
         // create N keys and values like (key0, value0)..(keyN, valueN)
         let (keys, vals): (Vec<_>, Vec<_>) = (0..N)
@@ -760,7 +757,8 @@ mod test {
         for _ in 0..2 {
             let kviter = keys.iter().zip(vals.iter()).map_into_batch();
 
-            //let proposal = db.propose_sync(kviter).unwrap();
+            let proposal = db.propose_sync(kviter).unwrap();
+            /* 
             let proposal= match db.propose_parallel(kviter) {
                 Ok(p) => p,
                 Err(err) => {
@@ -771,6 +769,7 @@ mod test {
                     }
                 }
             };
+            */
 
             // iterate over the keys and values again, checking that the values are in the correct proposal
             let kviter = keys.iter().zip(vals.iter());

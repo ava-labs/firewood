@@ -9,11 +9,9 @@ use firewood_storage::{
     NibblesIterator, Node, NodeStore, Parentable, Path,
 };
 use rayon::{ThreadPool, ThreadPoolBuilder};
-use std::fmt;
 use std::iter::once;
 use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, OnceLock, mpsc};
-use thiserror::Error;
 
 #[derive(Debug)]
 struct WorkerState {
@@ -36,6 +34,7 @@ enum Response<S> {
     Error(FileIoError),
 }
 
+/*
 /// Error types for calling `ParallelMerkle`
 #[derive(Debug, Error)]
 pub enum ParallelMerkleError {
@@ -46,6 +45,7 @@ pub enum ParallelMerkleError {
     /// Caller should catch this error and re-create proposal serially.
     RetrySerial,
 }
+
 
 impl fmt::Display for ParallelMerkleError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -59,6 +59,7 @@ impl fmt::Display for ParallelMerkleError {
         }
     }
 }
+*/
 
 /// TODO add doc
 #[derive(Debug)]
@@ -362,7 +363,7 @@ impl ParallelMerkle {
         root_branch: &mut Box<BranchNode>,
         first_nibble: u8,
         worker_sender: Sender<Response<FileBacked>>,
-    ) -> Result<&mut WorkerState, ParallelMerkleError> {
+    ) -> Result<&mut WorkerState, FileIoError> {
         // Find the worker's state corresponding to the first nibble which are stored in an array.
         let worker_option = self
             .workers
@@ -371,25 +372,27 @@ impl ParallelMerkle {
 
         // Create a new worker if it doesn't exist. Not using `get_or_insert_with` with worker_option
         // because it is possible to generate a FileIoError within the closure.
-        if worker_option.is_none() {
-            match ParallelMerkle::create_worker(
+        match worker_option {
+            Some(worker) => Ok(worker),
+            None => Ok(worker_option.insert(ParallelMerkle::create_worker(
                 pool,
                 proposal,
                 root_branch,
                 first_nibble,
                 worker_sender,
-            ) {
-                Ok(worker) => {
-                    let _ = worker_option.insert(worker);
-                }
-                Err(err) => {
-                    return Err(ParallelMerkleError::Io(err));
-                }
-            }
+            )?)),
         }
-        Ok(worker_option
-            .as_mut()
-            .expect("all None cases should have been handled"))
+    }
+
+    fn remove_all(&self) {
+        for worker in self.workers.iter().flatten() {
+            worker
+                .sender
+                .send(Request::DeleteRange {
+                    prefix: Path::new(), // Empty prefix
+                })
+                .expect("TODO: handle error");
+        }
     }
 
     /// Creating a parallel proposal consists of 4 phases: Prepare, Split, Merge, and Postprocess.
@@ -401,7 +404,7 @@ impl ParallelMerkle {
         parent: &NodeStore<T, FileBacked>,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
         threadpool: &mut OnceLock<ThreadPool>,
-    ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, ParallelMerkleError> {
+    ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, FileIoError> {
         // get (or create) a threadpool
         let pool = threadpool.get_or_init(|| {
             ThreadPoolBuilder::new()
@@ -411,12 +414,7 @@ impl ParallelMerkle {
         });
 
         // create a proposal from the parent
-        let mut proposal = match NodeStore::new(parent) {
-            Ok(p) => p,
-            Err(err) => {
-                return Err(ParallelMerkleError::Io(err));
-            }
-        };
+        let mut proposal = NodeStore::new(parent)?;
 
         // Process trie in preparation for performing parallel modifications.
         self.prepare_trie(&mut proposal);
@@ -467,7 +465,8 @@ impl ParallelMerkle {
                         root_branch.value = None;
                     }
                     BatchOp::DeleteRange { prefix: _ } => {
-                        return Err(ParallelMerkleError::RetrySerial);
+                        // Calling remove prefix with an empty prefix is equivalent to a remove all.
+                        self.remove_all();
                     }
                 }
                 continue; // Done with this operation.
@@ -533,7 +532,7 @@ impl ParallelMerkle {
         self.workers = [(); BranchNode::MAX_CHILDREN].map(|()| None);
 
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(proposal.try_into().expect("TODO: handle error"));
+            Arc::new(proposal.try_into().expect("error creating immutable"));
 
         Ok(immutable)
     }
