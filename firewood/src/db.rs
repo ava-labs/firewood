@@ -737,11 +737,11 @@ mod test {
 
     #[tokio::test]
     async fn test_propose_parallel() {
-        const N: usize = 5;
+        const N: usize = 1000;
 
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
-        let db = testdb().await;
+        let mut db = testdb().await;
 
         // create N keys and values like (key0, value0)..(keyN, valueN)
         let (keys, vals): (Vec<_>, Vec<_>) = (0..N)
@@ -757,19 +757,8 @@ mod test {
         for _ in 0..2 {
             let kviter = keys.iter().zip(vals.iter()).map_into_batch();
 
-            let proposal = db.propose_sync(kviter).unwrap();
-            /* 
-            let proposal= match db.propose_parallel(kviter) {
-                Ok(p) => p,
-                Err(err) => {
-                    if let v2::api::Error::ParallelError(ParallelMerkleError::RetrySerial) = err {
-                        db.propose_sync(keys.iter().zip(vals.iter()).map_into_batch()).expect("Error with sync propose")
-                    } else {
-                        abort();
-                    }
-                }
-            };
-            */
+            //let proposal = db.propose_sync(kviter).unwrap();
+            let proposal = db.propose_parallel(kviter).unwrap();
 
             // iterate over the keys and values again, checking that the values are in the correct proposal
             let kviter = keys.iter().zip(vals.iter());
@@ -779,7 +768,7 @@ mod test {
                 assert_eq!(&proposal.val(k).await.unwrap().unwrap(), v);
             }
             proposal.commit().await.unwrap();
-            println!("!!!!!!!! All done");
+            //println!("!!!!!!!! All done");
         }
     }
 

@@ -78,14 +78,9 @@ impl ParallelMerkle {
                 .split_first()
                 .map(|(index, path)| (*index, path.into()));
 
-            println!("Split index from non empty root: {index_path_opt:?}");
-
             // If index_path_opt is not None, then create a new branch that will be the new root with
             // the previous root as the child at the index returned from split_first.
             if let Some((child_index, child_path)) = index_path_opt {
-                println!(
-                    "Creating empty branch node for non-empty trie. child_index: {child_index:?} child_path: {child_path:?}"
-                );
                 let mut branch = BranchNode {
                     partial_path: Path::new(),
                     value: None,
@@ -93,8 +88,6 @@ impl ParallelMerkle {
                 };
                 node.update_partial_path(child_path);
                 branch.update_child(child_index, Some(Child::Node(node)));
-
-                println!("New root: {branch:?}");
                 *proposal.mut_root() = Some(branch.into());
             } else {
                 // Root has an empty partial path. We need to consider two cases.
@@ -117,7 +110,6 @@ impl ParallelMerkle {
             }
         } else {
             // Empty trie. Create a branch node with an empty partial path and a None for a value.
-            println!("Creating empty branch node for empty trie");
             let branch = BranchNode {
                 partial_path: Path::new(),
                 value: None,
@@ -130,7 +122,7 @@ impl ParallelMerkle {
     fn postprocess_trie(
         &self,
         nodestore: &mut NodeStore<MutableProposal, FileBacked>,
-        new_root_opt: Option<Node>,
+        mut new_root: Node,
     ) -> Result<Option<Node>, FileIoError> {
         // Check if the Merkle trie has an extra root node that was added to facilitate efficient
         // parallel modification of the trie. If it does, apply transform to return trie to a
@@ -145,19 +137,16 @@ impl ParallelMerkle {
         // If only one child remains and the root doesn’t have a value, then deleted the root,
         // use the child node as the new root, and update the partial path of the new root to
         // include its previous child index
-        println!("In postprocess_trie");
 
-        let Some(mut new_root) = new_root_opt else {
-            return Ok(None);
-        };
+        //let Some(mut new_root) = new_root_opt else {
+        //    return Ok(None);
+        //};
 
         // Should always be a branch given the prepare phase.
         let Node::Branch(branch) = &mut new_root else {
             return Ok(None); // TODO: Return some type of error
         };
 
-        println!("Root is a branch");
-        println!("Root node: {branch:?}");
         let mut children_iter = branch
             .children
             .iter_mut()
@@ -167,7 +156,6 @@ impl ParallelMerkle {
         let first_child = children_iter.next();
         match first_child {
             None => {
-                println!("First child is None");
                 if let Some(value) = branch.value.take() {
                     // There is a value for the empty key. Create a leaf with the value and return.
                     let new_leaf = Node::Leaf(LeafNode {
@@ -182,16 +170,10 @@ impl ParallelMerkle {
                 // Check if the root has a value or if there is more than one children. If yes, then
                 // just return the root unmodified
                 if branch.value.is_some() || children_iter.next().is_some() {
-                    println!("root has a value or has more than one child");
                     return Ok(Some(new_root));
                 }
 
-                // Return the child as the new root. Need to update its partial path to include the
-                // index value. Copied from remove_helper. Should move to a shared function to
-                // increase code reuse.
-                //
-                // The branch's only child becomes the root of this subtrie.
-                println!("root only has one child");
+                // Return the child as the new root. Up its partial path to include the index value.
                 let mut child = match child {
                     Child::Node(child_node) => std::mem::take(child_node),
                     Child::AddressWithHash(addr, _) => nodestore.read_for_update((*addr).into())?,
@@ -200,7 +182,6 @@ impl ParallelMerkle {
                     }
                 };
 
-                println!("Child's partial path: {:?}", child.partial_path());
                 // The child's partial path is the concatenation of its (now removed) parent,
                 // which should always be empty because of our prepare step, its (former)
                 // child index, and its partial path. Because the parent's partial path
@@ -221,7 +202,6 @@ impl ParallelMerkle {
                         leaf.partial_path = partial_path;
                     }
                 }
-                println!("Old root: {branch:?} New root: {child:?}");
                 Ok(Some(child))
             }
         }
@@ -251,7 +231,6 @@ impl ParallelMerkle {
         // The worker will send messages to the coordinator using the response channel
         // now tell the threadpool to spawn a worker for this nibble
         pool.spawn(move || {
-            //let mut merkle = Merkle::from(child_nodestore);
             let mut merkle = Merkle::from(worker_nodestore);
             loop {
                 // Wait for a message on the receiver child channel. Break out of loop if there is an error.
@@ -262,7 +241,6 @@ impl ParallelMerkle {
                 match request {
                     // insert a key-value pair into the subtrie
                     Request::Insert { key, value } => {
-                        //println!("### In Worker Thread: Inserting: {key:?} and {value:?}");
                         if let Err(err) = merkle.insert_path(key, value.as_ref().into()) {
                             worker_sender
                                 .send(Response::Error(err))
@@ -287,7 +265,7 @@ impl ParallelMerkle {
                     Request::Done => {
                         worker_sender
                             .send(Response::Root(first_nibble, merkle.into_inner().into()))
-                            .expect("TODO: handle error");
+                            .expect("send error");
                         break;
                     }
                 }
@@ -303,13 +281,13 @@ impl ParallelMerkle {
         response_channel: Receiver<Response<FileBacked>>,
         proposal: &mut NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut Box<BranchNode>,
-    ) {
+    ) -> Result<(), FileIoError> {
         // We have processed all the ops in the batch, so send a Done message to each worker
         for worker in self.workers.iter().flatten() {
             worker
                 .sender
                 .send(Request::Done)
-                .expect("TODO: add error handling");
+                .expect("send to worker error");
         }
 
         while let Ok(response) = response_channel.recv() {
@@ -324,9 +302,12 @@ impl ParallelMerkle {
                         .get_mut(index as usize)
                         .expect("index error") = child_nodestore.into_root().map(Child::Node);
                 }
-                Response::Error(_error) => todo!(),
+                Response::Error(err) => {
+                    return Err(err); // Early termination.
+                }
             }
         }
+        Ok(())
     }
 
     fn get_worker(
@@ -406,7 +387,6 @@ impl ParallelMerkle {
 
         // For each operation in the batch, send a request to the worker related to the first nibble
         for op in batch.into_iter().map_into_batch() {
-            //println!("Key: {:?}", op.key().as_ref());
             let mut key_nibbles = NibblesIterator::new(op.key().as_ref());
 
             // Get the first nibble of the key to determine which worker to send the request to.
@@ -447,12 +427,9 @@ impl ParallelMerkle {
                 continue; // Done with this operation.
             };
 
-            //println!("First nibble: {first_nibble:?}");
-
             // We send a path to the worker without the first nibble. Sending a nibble iterator to a
             // worker is more difficult as it takes a reference from op.
             let key_path = Path::from_nibbles_iterator(key_nibbles);
-            //println!("Key Path: {key_path:?}");
 
             // Get the worker that is responsible for this nibble.
             let worker = self.get_worker(
@@ -476,19 +453,19 @@ impl ParallelMerkle {
                                 .map(|v| v.as_ref().into())
                                 .unwrap_or_default(),
                         })
-                        .expect("TODO: handle error");
+                        .expect("send to worker error");
                 }
                 BatchOp::Delete { key: _ } => {
                     worker
                         .sender
                         .send(Request::Delete { key: key_path })
-                        .expect("TODO: handle error");
+                        .expect("send to worker error");
                 }
                 BatchOp::DeleteRange { prefix: _ } => {
                     worker
                         .sender
                         .send(Request::DeleteRange { prefix: key_path })
-                        .expect("TODO: handle error");
+                        .expect("send to worker error");
                 }
             }
         }
@@ -496,10 +473,10 @@ impl ParallelMerkle {
         // Drop the sender response channel from the parent thread.
         drop(response_channel.0);
 
-        self.end_batch(response_channel.1, &mut proposal, &mut root_branch);
+        self.end_batch(response_channel.1, &mut proposal, &mut root_branch)?;
 
         *proposal.mut_root() = self
-            .postprocess_trie(&mut proposal, Some((*root_branch).into()))
+            .postprocess_trie(&mut proposal, (*root_branch).into())
             .expect("TODO check errors");
 
         // Done with these worker states. Setting the workers to None will allow the next create
