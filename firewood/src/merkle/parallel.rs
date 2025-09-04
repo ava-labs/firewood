@@ -11,7 +11,7 @@ use firewood_storage::{
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::iter::once;
 use std::sync::mpsc::{Receiver, Sender};
-use std::sync::{Arc, mpsc};
+use std::sync::{Arc, OnceLock, mpsc};
 
 #[derive(Debug)]
 struct WorkerState {
@@ -378,10 +378,10 @@ impl ParallelMerkle {
         &mut self,
         parent: &NodeStore<T, FileBacked>,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
-        threadpool: &mut Option<ThreadPool>,
+        threadpool: &OnceLock<ThreadPool>,
     ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, FileIoError> {
         // Get (or create) a threadpool
-        let pool = threadpool.get_or_insert_with(|| {
+        let pool = threadpool.get_or_init(|| {
             ThreadPoolBuilder::new()
                 .num_threads(BranchNode::MAX_CHILDREN)
                 .build()

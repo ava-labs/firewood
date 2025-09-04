@@ -24,7 +24,7 @@ use rayon::ThreadPool;
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use thiserror::Error;
 use typed_builder::TypedBuilder;
 
@@ -114,7 +114,7 @@ pub struct DbConfig {
 pub struct Db {
     metrics: Arc<DbMetrics>,
     manager: RevisionManager,
-    threadpool: Option<ThreadPool>,
+    threadpool: OnceLock<ThreadPool>,
 }
 
 impl api::Db for Db {
@@ -196,7 +196,7 @@ impl Db {
         let db = Self {
             metrics,
             manager,
-            threadpool: None,
+            threadpool: OnceLock::new(),
         };
         Ok(db)
     }
@@ -208,12 +208,12 @@ impl Db {
 
     /// propose a new batch that is processed in parallel.
     pub fn propose_parallel(
-        &mut self,
+        &self,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
     ) -> Result<Proposal<'_>, api::Error> {
         let parent = self.manager.current_revision();
         let mut parallel_merkle = ParallelMerkle::default();
-        let immutable = parallel_merkle.create_proposal(&parent, batch, &mut self.threadpool)?;
+        let immutable = parallel_merkle.create_proposal(&parent, batch, &self.threadpool)?;
         self.manager.add_proposal(immutable.clone());
         Ok(Proposal {
             nodestore: immutable,
@@ -579,7 +579,7 @@ mod test {
     #[test]
     fn test_propose_parallel() {
         const N: usize = 100;
-        let mut db = testdb();
+        let db = testdb();
 
         // Test an empty proposal
         let keys: Vec<[u8; 0]> = Vec::new();
