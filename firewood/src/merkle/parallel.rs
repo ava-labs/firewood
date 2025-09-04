@@ -278,7 +278,7 @@ impl ParallelMerkle {
         })
     }
 
-    // Send a done message to all of the workers. Collect the responses, each representing the root of a 
+    // Send a done message to all of the workers. Collect the responses, each representing the root of a
     // subtrie, and merge them into the root node of the main trie.
     fn merge_children(
         &mut self,
@@ -481,7 +481,7 @@ impl ParallelMerkle {
         // Drop the sender response channel from the parent thread.
         drop(response_channel.0);
 
-        // Merge step: send a done message to all of the workers to indicate that the batch is complete. 
+        // Merge step: send a done message to all of the workers to indicate that the batch is complete.
         // Collect the results from the workers and merge them as children to the root.
         self.merge_children(response_channel.1, &mut proposal, &mut root_branch)?;
 

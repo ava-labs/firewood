@@ -114,9 +114,6 @@ pub struct DbConfig {
 pub struct Db {
     metrics: Arc<DbMetrics>,
     manager: RevisionManager,
-
-    //threadpool: OnceLock<ThreadPool>,
-    //static THREADPOOL: OnceLock<ThreadPool> = OnceLock::new();
     threadpool: Option<ThreadPool>,
 }
 
@@ -196,7 +193,6 @@ impl Db {
             .manager(cfg.manager)
             .build();
         let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
-        //let threadpool= OnceLock::new();
         let db = Self {
             metrics,
             manager,
@@ -219,40 +215,6 @@ impl Db {
         let mut parallel_merkle = ParallelMerkle::default();
         let immutable = parallel_merkle.create_proposal(&parent, batch, &mut self.threadpool)?;
         self.manager.add_proposal(immutable.clone());
-        Ok(Proposal {
-            nodestore: immutable,
-            db: self,
-        })
-    }
-
-    /// propose a new batch synchronously
-    pub fn propose_sync(
-        &self,
-        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
-    ) -> Result<Proposal<'_>, api::Error> {
-        let parent = self.manager.current_revision();
-        let proposal = NodeStore::new(&parent)?;
-        let mut merkle = Merkle::from(proposal);
-        for op in batch {
-            match op.into_batch() {
-                BatchOp::Put { key, value } => {
-                    merkle.insert(key.as_ref(), value.as_ref().into())?;
-                }
-                BatchOp::Delete { key } => {
-                    merkle.remove(key.as_ref())?;
-                }
-                BatchOp::DeleteRange { prefix } => {
-                    merkle.remove_prefix(prefix.as_ref())?;
-                }
-            }
-        }
-        let nodestore = merkle.into_inner();
-        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.try_into()?);
-        self.manager.add_proposal(immutable.clone());
-
-        self.metrics.proposals.increment(1);
-
         Ok(Proposal {
             nodestore: immutable,
             db: self,
@@ -334,7 +296,7 @@ impl<'db> api::Proposal for Proposal<'db> {
 }
 
 impl Proposal<'_> {
-    //#[crate::metrics("firewood.proposal.create", "database proposal creation")]
+    #[crate::metrics("firewood.proposal.create", "database proposal creation")]
     fn create_proposal(
         &self,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
@@ -719,8 +681,6 @@ mod test {
         // Looping twice to test that we are reusing the thread pool.
         for _ in 0..2 {
             let kviter = keys.iter().zip(vals.iter()).map_into_batch();
-
-            //let proposal = db.propose_sync(kviter).unwrap();
             let proposal = db.propose_parallel(kviter).unwrap();
 
             // iterate over the keys and values again, checking that the values are in the correct proposal

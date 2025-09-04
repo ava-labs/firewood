@@ -586,7 +586,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     }
 
     /// Map `key` to `value` in the trie when `key` is a `Path`
-    pub fn insert_path(&mut self, key:Path, value: Value) -> Result<(), FileIoError> {
+    pub fn insert_path(&mut self, key: Path, value: Value) -> Result<(), FileIoError> {
         let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. Create a new leaf node with `value` and set
@@ -603,7 +603,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         *self.nodestore.root_mut() = root_node.into();
         Ok(())
     }
-
 
     /// Map `key` to `value` in the trie.
     /// Each element of key is 2 nibbles.
@@ -751,7 +750,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         }
     }
 
-
     /// Removes the value associated with the given `key` where `key` is a `Path`
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
@@ -774,7 +772,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 .increment(1);
         }
         Ok(removed_value)
-    }    
+    }
 
     /// Removes the value associated with the given `key`.
     /// Returns the value that was removed, if any.
