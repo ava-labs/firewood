@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 pub struct TenKRandom;
 
 impl TestRunner for TenKRandom {
-    async fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>> {
+    fn run(&self, db: &Db, args: &Args) -> Result<(), Box<dyn Error>> {
         let mut low = 0;
         let mut high = args.global_opts.number_of_batches * args.global_opts.batch_size;
         let twenty_five_pct = args.global_opts.batch_size / 4;
@@ -32,8 +32,8 @@ impl TestRunner for TenKRandom {
                 .chain(generate_deletes(low, twenty_five_pct))
                 .chain(generate_updates(low + high / 2, twenty_five_pct * 2, low))
                 .collect();
-            let proposal = db.propose(batch).await.expect("proposal should succeed");
-            proposal.commit().await?;
+            let proposal = db.propose(batch).expect("proposal should succeed");
+            proposal.commit()?;
             low += twenty_five_pct;
             high += twenty_five_pct;
         }

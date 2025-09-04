@@ -223,24 +223,18 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         n: u64,
     ) -> Result<Option<(LinearAddress, AreaIndex)>, FileIoError> {
         // Find the smallest free list that can fit this size.
-        let index_wanted = AreaIndex::from_size(n).map_err(|e| {
+        let index = AreaIndex::from_size(n).map_err(|e| {
             self.storage
                 .file_io_error(e, 0, Some("allocate_from_freed".to_string()))
         })?;
 
-        if let Some((index, free_stored_area_addr)) = self
+        let free_stored_area_addr = self
             .header
             .free_lists_mut()
-            .iter_mut()
-            .enumerate()
-            .skip(index_wanted.as_usize())
-            .find(|item| item.1.is_some())
-        {
-            let index =
-                AreaIndex::try_from(index).expect("index is less than AreaIndex::NUM_AREA_SIZES");
-            let address = free_stored_area_addr
-                .take()
-                .expect("impossible due to find earlier");
+            .get_mut(index.as_usize())
+            .expect("index is less than AreaIndex::NUM_AREA_SIZES");
+        if let Some(address) = free_stored_area_addr {
+            let address = *address;
             // Get the first free block of sufficient size.
             if let Some(free_head) = self.storage.free_list_cache(address) {
                 trace!("free_head@{address}(cached): {free_head:?} size:{index}");
@@ -271,13 +265,13 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
             return Ok(Some((address, index)));
         }
 
-        trace!("No free blocks of sufficient size {index_wanted} found");
+        trace!("No free blocks of sufficient size {index} found");
         firewood_counter!(
             "firewood.space.from_end",
             "Space allocated from end of nodestore",
-            "index" => index_name(index_wanted)
+            "index" => index_name(index)
         )
-        .increment(index_wanted.size());
+        .increment(index.size());
         Ok(None)
     }
 
@@ -420,7 +414,10 @@ impl<S: ReadableStorage> Iterator for FreeListIterator<'_, S> {
         };
 
         // update the next address to the next free block
-        self.parent = FreeListParent::PrevFreeArea(next_addr);
+        self.parent = FreeListParent::PrevFreeArea {
+            area_size_idx: stored_area_index,
+            parent_addr: next_addr,
+        };
         self.next_addr = free_area.next_free_block();
         Some(Ok((next_addr, stored_area_index)))
     }
@@ -526,6 +523,34 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
     // Since this is a low-level iterator, we avoid safe conversion to AreaIndex for performance
     pub(crate) fn free_list_iter(&self, start_area_index: AreaIndex) -> FreeListsIterator<'_, S> {
         FreeListsIterator::new(self.storage.as_ref(), self.freelists(), start_area_index)
+    }
+}
+
+// Functionalities use by the checker
+impl<T, S: WritableStorage> NodeStore<T, S> {
+    pub(crate) fn truncate_free_list(
+        &mut self,
+        free_list_parent: FreeListParent,
+    ) -> Result<(), FileIoError> {
+        match free_list_parent {
+            FreeListParent::FreeListHead(area_size_index) => {
+                *self
+                    .freelists_mut()
+                    .get_mut(area_size_index.as_usize())
+                    .expect("area_size_index is less than AreaIndex::NUM_AREA_SIZES") = None;
+                Ok(())
+            }
+            FreeListParent::PrevFreeArea {
+                area_size_idx,
+                parent_addr,
+            } => {
+                let free_area = FreeArea::new(None);
+                let mut stored_area_bytes = Vec::new();
+                free_area.as_bytes(area_size_idx, &mut stored_area_bytes);
+                self.storage.write(parent_addr.into(), &stored_area_bytes)?;
+                Ok(())
+            }
+        }
     }
 }
 
@@ -785,7 +810,10 @@ mod tests {
                     area_index: area_index1,
                     free_list_id: area_index1,
                 },
-                FreeListParent::PrevFreeArea(free_list1_area1),
+                FreeListParent::PrevFreeArea {
+                    area_size_idx: area_index1,
+                    parent_addr: free_list1_area1,
+                },
             ),
         ];
 
@@ -804,7 +832,10 @@ mod tests {
                     area_index: area_index2,
                     free_list_id: area_index2,
                 },
-                FreeListParent::PrevFreeArea(free_list2_area1),
+                FreeListParent::PrevFreeArea {
+                    area_size_idx: area_index2,
+                    parent_addr: free_list2_area1,
+                },
             ),
         ];
 

@@ -40,7 +40,7 @@ pub mod logger;
 /// Macros module for defining macros used in the storage module
 pub mod macros;
 // re-export these so callers don't need to know where they are
-pub use checker::{CheckOpt, CheckerReport, FreeListsStats, TrieStats};
+pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
@@ -109,7 +109,12 @@ pub enum FreeListParent {
     /// The stored area is the head of the free list, so the header points to it
     FreeListHead(AreaIndex),
     /// The stored area is not the head of the free list, so a previous free area points to it
-    PrevFreeArea(LinearAddress),
+    PrevFreeArea {
+        /// The size index of the area, helps with debugging and fixing
+        area_size_idx: AreaIndex,
+        /// The address of the previous free area
+        parent_addr: LinearAddress,
+    },
 }
 
 impl LowerHex for StoredAreaParent {
@@ -138,9 +143,12 @@ impl LowerHex for FreeListParent {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
             FreeListParent::FreeListHead(index) => f.write_fmt(format_args!("FreeLists[{index}]")),
-            FreeListParent::PrevFreeArea(addr) => {
-                f.write_str("FreeArea@")?;
-                LowerHex::fmt(addr, f)
+            FreeListParent::PrevFreeArea {
+                area_size_idx,
+                parent_addr,
+            } => {
+                f.write_fmt(format_args!("FreeArea[{area_size_idx}]@"))?;
+                LowerHex::fmt(parent_addr, f)
             }
         }
     }
@@ -286,6 +294,26 @@ pub enum CheckerError {
         /// parent of the area
         parent: StoredAreaParent,
     },
+}
+
+impl CheckerError {
+    const fn parent(&self) -> Option<StoredAreaParent> {
+        match self {
+            CheckerError::InvalidDBSize { .. }
+            | CheckerError::AreaLeaks(_)
+            | CheckerError::UnpersistedRoot => None,
+            CheckerError::AreaOutOfBounds { parent, .. }
+            | CheckerError::AreaIntersects { parent, .. }
+            | CheckerError::AreaMisaligned { parent, .. }
+            | CheckerError::IO { parent, .. } => Some(*parent),
+            CheckerError::HashMismatch { parent, .. }
+            | CheckerError::NodeLargerThanArea { parent, .. }
+            | CheckerError::InvalidKey { parent, .. } => Some(StoredAreaParent::TrieNode(*parent)),
+            CheckerError::FreelistAreaSizeMismatch { parent, .. } => {
+                Some(StoredAreaParent::FreeList(*parent))
+            }
+        }
+    }
 }
 
 impl From<CheckerError> for Vec<CheckerError> {

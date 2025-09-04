@@ -8,17 +8,16 @@ members = [
   "storage",
   "triehash",
 ]
-exclude = ["grpc-testtool"]
 resolver = "2"
 
 [workspace.package]
-version = "0.0.10"
+version = "0.0.12"
 edition = "2024"
 license-file = "LICENSE.md"
 homepage = "https://avalabs.org"
 repository = "https://github.com/ava-labs/firewood"
 readme = "README.md"
-rust-version = "1.85.0"
+rust-version = "1.89.0"
 
 [profile.release]
 debug = true
@@ -45,7 +44,6 @@ pedantic = { level = "warn", priority = -1 }
 # These lints are from pedantic but allowed. They are a bit too pedantic and
 # encourage making backwards incompatible changes.
 needless_pass_by_value = "allow"
-unused_async = "allow"
 unnecessary_wraps = "allow"
 unused_self = "allow"
 # Ignore interger casts. This is to avoid unnecessary `try_into` calls for usize
@@ -55,11 +53,11 @@ cast_possible_truncation = "allow"
 
 [workspace.dependencies]
 # workspace local packages
-firewood = { path = "firewood", version = "0.0.10" }
-firewood-macros = { path = "firewood-macros", version = "0.0.10" }
-firewood-storage = { path = "storage", version = "0.0.10" }
-firewood-ffi = { path = "ffi", version = "0.0.10" }
-firewood-triehash = { path = "triehash", version = "0.0.10" }
+firewood = { path = "firewood", version = "0.0.12" }
+firewood-macros = { path = "firewood-macros", version = "0.0.12" }
+firewood-storage = { path = "storage", version = "0.0.12" }
+firewood-ffi = { path = "ffi", version = "0.0.12" }
+firewood-triehash = { path = "triehash", version = "0.0.12" }
 
 # common dependencies
 aquamarine = "0.6.0"
@@ -77,7 +75,6 @@ sha2 = "0.10.9"
 smallvec = "1.15.1"
 test-case = "3.3.1"
 thiserror = "2.0.12"
-tokio = "1.46.1"
 
 # common dev dependencies
 criterion = "0.7.0"

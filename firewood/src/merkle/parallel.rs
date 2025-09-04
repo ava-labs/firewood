@@ -75,7 +75,7 @@ impl ParallelMerkle {
         //
         // The result after the prepare step is that there is a branch node at the root with
         // an empty partial path.
-        let root_node = proposal.mut_root().take();
+        let root_node = proposal.root_mut().take();
         if let Some(mut node) = root_node {
             // Non-empty root. Check if it has a partial path
             let index_path_opt: Option<(u8, Path)> = node
@@ -93,7 +93,7 @@ impl ParallelMerkle {
                 };
                 node.update_partial_path(child_path);
                 branch.update_child(child_index, Some(Child::Node(node)));
-                *proposal.mut_root() = Some(branch.into());
+                *proposal.root_mut() = Some(branch.into());
             } else {
                 // Root has an empty partial path. We need to consider two cases.
                 match node {
@@ -104,12 +104,12 @@ impl ParallelMerkle {
                             value: Some(std::mem::take(&mut leaf.value)),
                             children: BranchNode::empty_children(),
                         };
-                        *proposal.mut_root() = Some(branch.into());
+                        *proposal.root_mut() = Some(branch.into());
                     }
                     Node::Branch(_) => {
                         // Root does not need to be updated since it has an empty partial path and is a
                         // branch. Put it back into the proposal.
-                        *proposal.mut_root() = Some(node);
+                        *proposal.root_mut() = Some(node);
                     }
                 }
             }
@@ -120,7 +120,7 @@ impl ParallelMerkle {
                 value: None,
                 children: BranchNode::empty_children(),
             };
-            *proposal.mut_root() = Some(branch.into());
+            *proposal.root_mut() = Some(branch.into());
         }
     }
 
@@ -395,7 +395,7 @@ impl ParallelMerkle {
         self.prepare_trie(&mut proposal);
 
         let mut root_branch = proposal
-            .mut_root()
+            .root_mut()
             .take()
             .expect("Should have a root node after prepare step")
             .into_branch()
@@ -486,7 +486,7 @@ impl ParallelMerkle {
         self.merge_children(response_channel.1, &mut proposal, &mut root_branch)?;
 
         // Post-process step: return the trie to its canonical form.
-        *proposal.mut_root() = self.postprocess_trie(&mut proposal, (*root_branch).into())?;
+        *proposal.root_mut() = self.postprocess_trie(&mut proposal, (*root_branch).into())?;
 
         // Done with these worker states. Setting the workers to None will allow the next create
         // proposal from the same ParallelMerkle to reuse the thread pool.

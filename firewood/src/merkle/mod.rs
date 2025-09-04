@@ -7,20 +7,18 @@ mod tests;
 /// Parallel merkle
 pub mod parallel;
 
+use crate::iter::{MerkleKeyValueIter, PathIterator, TryExtend};
 use crate::proof::{Proof, ProofCollection, ProofError, ProofNode};
 use crate::range_proof::RangeProof;
-use crate::stream::{MerkleKeyValueStream, PathIterator};
 use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
 use firewood_storage::{
     BranchNode, Child, FileIoError, HashType, HashedNodeReader, ImmutableProposal, IntoHashType,
     LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore, Parentable,
     Path, ReadableStorage, SharedNode, TrieHash, TrieReader, ValueDigest,
 };
-use futures::{StreamExt, TryStreamExt};
 use metrics::counter;
 use std::collections::HashSet;
 use std::fmt::Debug;
-use std::future::ready;
 use std::io::Error;
 use std::iter::once;
 use std::num::NonZeroUsize;
@@ -275,16 +273,16 @@ impl<T: TrieReader> Merkle<T> {
         PathIterator::new(&self.nodestore, key)
     }
 
-    pub(super) fn key_value_iter(&self) -> MerkleKeyValueStream<'_, T> {
-        MerkleKeyValueStream::from(&self.nodestore)
+    pub(super) fn key_value_iter(&self) -> MerkleKeyValueIter<'_, T> {
+        MerkleKeyValueIter::from(&self.nodestore)
     }
 
     pub(super) fn key_value_iter_from_key<K: AsRef<[u8]>>(
         &self,
         key: K,
-    ) -> MerkleKeyValueStream<'_, T> {
+    ) -> MerkleKeyValueIter<'_, T> {
         // TODO danlaine: change key to &[u8]
-        MerkleKeyValueStream::from_key(&self.nodestore, key.as_ref())
+        MerkleKeyValueIter::from_key(&self.nodestore, key.as_ref())
     }
 
     /// Generate a cryptographic proof for a range of key-value pairs in the Merkle trie.
@@ -355,29 +353,29 @@ impl<T: TrieReader> Merkle<T> {
     ///     None
     /// ).await?;
     /// ```
-    pub(super) async fn range_proof(
+    pub(super) fn range_proof(
         &self,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, api::Error> {
-        if let (Some(k1), Some(k2)) = (&start_key, &end_key) {
-            if k1 > k2 {
-                return Err(api::Error::InvalidRange {
-                    start_key: k1.to_vec().into(),
-                    end_key: k2.to_vec().into(),
-                });
-            }
+        if let (Some(k1), Some(k2)) = (&start_key, &end_key)
+            && k1 > k2
+        {
+            return Err(api::Error::InvalidRange {
+                start_key: k1.to_vec().into(),
+                end_key: k2.to_vec().into(),
+            });
         }
 
-        let mut stream = match start_key {
+        let mut iter = match start_key {
             // TODO: fix the call-site to force the caller to do the allocation
             Some(key) => self.key_value_iter_from_key(key.to_vec().into_boxed_slice()),
             None => self.key_value_iter(),
         };
 
         // fetch the first key from the stream
-        let first_result = stream.next().await;
+        let first_result = iter.next();
 
         // transpose the Option<Result<T, E>> to Result<Option<T>, E>
         // If this is an error, the ? operator will return it
@@ -406,28 +404,22 @@ impl<T: TrieReader> Merkle<T> {
 
         let mut key_values = vec![(first_key, first_value)];
 
-        // we stop streaming if either we hit the limit or the key returned was larger
+        // we stop iterating if either we hit the limit or the key returned was larger
         // than the largest key requested
-        key_values.extend(
-            stream
-                .take(limit.unwrap_or(usize::MAX))
-                .take_while(|kv| {
-                    // no last key asked for, so keep going
-                    let Some(last_key) = end_key else {
-                        return ready(true);
-                    };
+        key_values.try_extend(iter.take(limit.unwrap_or(usize::MAX)).take_while(|kv| {
+            // no last key asked for, so keep going
+            let Some(last_key) = end_key else {
+                return true;
+            };
 
-                    // return the error if there was one
-                    let Ok(kv) = kv else {
-                        return ready(true);
-                    };
+            // return the error if there was one
+            let Ok(kv) = kv else {
+                return true;
+            };
 
-                    // keep going if the key returned is less than the last key requested
-                    ready(&*kv.0 <= last_key)
-                })
-                .try_collect::<Vec<(Key, Value)>>()
-                .await?,
-        );
+            // keep going if the key returned is less than the last key requested
+            *kv.0 <= *last_key
+        }))?;
 
         let end_proof = key_values
             .last()
@@ -595,8 +587,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
     /// Map `key` to `value` in the trie when `key` is a `Path`
     pub fn insert_path(&mut self, key:Path, value: Value) -> Result<(), FileIoError> {
-        let root = self.nodestore.mut_root();
-
+        let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. Create a new leaf node with `value` and set
             // it as the root.
@@ -609,7 +600,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         };
 
         let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
-        *self.nodestore.mut_root() = root_node.into();
+        *self.nodestore.root_mut() = root_node.into();
         Ok(())
     }
 
@@ -617,9 +608,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Map `key` to `value` in the trie.
     /// Each element of key is 2 nibbles.
     pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), FileIoError> {
-        println!("Merkle Insert 1: {key:?}");
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
-        println!("Merkle Insert 2: {key:?}");
         self.insert_path(key, value)
     }
 
@@ -768,8 +757,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Otherwise returns `None`.
     /// Each element of `key` is 2 nibbles.
     pub fn remove_path(&mut self, key: Path) -> Result<Option<Value>, FileIoError> {
-        //let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
-        let root = self.nodestore.mut_root();
+        let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. There is nothing to remove.
             counter!("firewood.remove", "prefix" => "false", "result" => "nonexistent")
@@ -778,7 +766,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         };
 
         let (root_node, removed_value) = self.remove_helper(root_node, &key)?;
-        *self.nodestore.mut_root() = root_node;
+        *self.nodestore.root_mut() = root_node;
         if removed_value.is_some() {
             counter!("firewood.remove", "prefix" => "false", "result" => "success").increment(1);
         } else {
@@ -1010,7 +998,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Removes any key-value pairs with keys that have the given `prefix` where `prefix` is a `Path`
     /// Returns the number of key-value pairs removed.
     pub fn remove_prefix_path(&mut self, prefix: Path) -> Result<usize, FileIoError> {
-        let root = self.nodestore.mut_root();
+        let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. There is nothing to remove.
             counter!("firewood.remove", "prefix" => "true", "result" => "nonexistent").increment(1);
@@ -1021,7 +1009,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         let root_node = self.remove_prefix_helper(root_node, &prefix, &mut deleted)?;
         counter!("firewood.remove", "prefix" => "true", "result" => "success")
             .increment(deleted as u64);
-        *self.nodestore.mut_root() = root_node;
+        *self.nodestore.root_mut() = root_node;
         Ok(deleted)
     }
 
