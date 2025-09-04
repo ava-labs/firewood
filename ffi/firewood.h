@@ -291,7 +291,7 @@ typedef enum KeyValueResult_Tag {
    */
   KeyValueResult_NullHandlePointer,
   /**
-   * The iterator returned empty result, the iterator is exhausted
+   * The iterator is exhausted
    */
   KeyValueResult_None,
   /**
@@ -299,7 +299,7 @@ typedef enum KeyValueResult_Tag {
    */
   KeyValueResult_Some,
   /**
-   * An error occurred and the message is returned as an [`OwnedBytes`]. If
+   * An error occurred and the message is returned as an [`OwnedBytes`]. The
    * value is guaranteed to contain only valid UTF-8.
    *
    * The caller must call [`fwd_free_owned_bytes`] to free the memory
@@ -327,16 +327,15 @@ typedef struct KeyValueResult {
  */
 typedef enum IteratorResult_Tag {
   /**
-   * The caller provided a null pointer to a database handle.
+   * The caller provided a null pointer to a database/proposal handle.
    */
   IteratorResult_NullHandlePointer,
   /**
-   * Building the proposal was successful and the proposal ID and root hash
-   * are returned.
+   * Building the iterator was successful and the iterator handle is returned
    */
   IteratorResult_Ok,
   /**
-   * An error occurred and the message is returned as an [`OwnedBytes`]. If
+   * An error occurred and the message is returned as an [`OwnedBytes`]. The
    * value is guaranteed to contain only valid UTF-8.
    *
    * The caller must call [`fwd_free_owned_bytes`] to free the memory
@@ -349,11 +348,10 @@ typedef enum IteratorResult_Tag {
 
 typedef struct IteratorResult_Ok_Body {
   /**
-   * An opaque pointer to the [`ProposalHandle`] that can be use to create
-   * an additional proposal or later commit. The caller must ensure that this
-   * pointer is freed with [`fwd_free_proposal`] if it is not committed.
+   * An opaque pointer to the [`IteratorHandle`].
+   * The value should be freed with [`fwd_free_iterator`]
    *
-   * [`fwd_free_proposal`]: crate::fwd_free_proposal
+   * [`fwd_free_iterator`]: crate::fwd_free_iterator
    */
   struct IteratorHandle *handle;
 } IteratorResult_Ok_Body;
@@ -834,7 +832,7 @@ struct KeyValueResult fwd_iter_next(struct IteratorHandle *handle);
 struct IteratorResult fwd_iter_on_proposal(const struct ProposalHandle *handle, BorrowedBytes key);
 
 /**
- * Return an iterator optionally starting from a key in database
+ * Returns an iterator optionally starting from a key in database
  *
  * # Arguments
  *
@@ -842,18 +840,12 @@ struct IteratorResult fwd_iter_on_proposal(const struct ProposalHandle *handle, 
  * * `root` - The root hash to look up as a [`BorrowedBytes`]
  * * `key` - The key to look up as a [`BorrowedBytes`]
  *
- * # Returns
- *
- * - [`IteratorResult::NullHandlePointer`] if the provided database handle is null.
- * - [`IteratorResult::Ok`] if the iterator was created, with the iterator handle.
- * - [`IteratorResult::Err`] if an error occurred while creating the iterator.
- *
  * # Safety
  *
  * The caller must:
  * * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
- * * ensure that `root` is a valid for [`BorrowedBytes`]
- * * ensure that `key` is a valid for [`BorrowedBytes`]
+ * * ensure that `root` is a valid [`BorrowedBytes`]
+ * * ensure that `key` is a valid [`BorrowedBytes`]
  * * call [`fwd_free_iterator`] to free the memory associated with the iterator.
  *
  */

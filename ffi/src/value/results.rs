@@ -201,20 +201,17 @@ pub enum ProposalResult<'db> {
 #[derive(Debug)]
 #[repr(C)]
 pub enum IteratorResult<'db> {
-    /// The caller provided a null pointer to a database handle.
+    /// The caller provided a null pointer to a database/proposal handle.
     NullHandlePointer,
-    /// Building the proposal was successful and the proposal ID and root hash
-    /// are returned.
+    /// Building the iterator was successful and the iterator handle is returned
     Ok {
-        /// An opaque pointer to the [`ProposalHandle`] that can be use to create
-        /// an additional proposal or later commit. The caller must ensure that this
-        /// pointer is freed with [`fwd_free_proposal`] if it is not committed.
+        /// An opaque pointer to the [`IteratorHandle`].
+        /// The value should be freed with [`fwd_free_iterator`]
         ///
-        /// [`fwd_free_proposal`]: crate::fwd_free_proposal
-        // note: opaque pointers mut be boxed because the FFI does not the structure definition.
+        /// [`fwd_free_iterator`]: crate::fwd_free_iterator
         handle: Box<IteratorHandle<'db>>,
     },
-    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. The
     /// value is guaranteed to contain only valid UTF-8.
     ///
     /// The caller must call [`fwd_free_owned_bytes`] to free the memory
@@ -230,11 +227,11 @@ pub enum IteratorResult<'db> {
 pub enum KeyValueResult {
     /// The caller provided a null pointer to an iterator handle.
     NullHandlePointer,
-    /// The iterator returned empty result, the iterator is exhausted
+    /// The iterator is exhausted
     None,
     /// The next item on iterator is returned.
     Some(OwnedKeyValuePair),
-    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. The
     /// value is guaranteed to contain only valid UTF-8.
     ///
     /// The caller must call [`fwd_free_owned_bytes`] to free the memory

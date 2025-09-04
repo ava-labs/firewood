@@ -5,7 +5,7 @@ use firewood::v2::api::{self, DbView, HashKey, OwnedIterView, Proposal as _};
 
 use crate::value::KeyValuePair;
 
-use crate::iterator::{CreateIteratorResult, IteratorHandle};
+use crate::iterator::CreateIteratorResult;
 use metrics::counter;
 
 /// An opaque wrapper around a Proposal that also retains a reference to the
@@ -109,9 +109,7 @@ impl<'db> ProposalHandle<'db> {
         first_key: Option<&[u8]>,
     ) -> Result<CreateIteratorResult<'db>, api::Error> {
         let it = self.proposal.iter_owned(first_key)?;
-        Ok(CreateIteratorResult {
-            handle: IteratorHandle { iterator: it },
-        })
+        Ok(CreateIteratorResult { handle: it.into() })
     }
 }
 #[derive(Debug)]

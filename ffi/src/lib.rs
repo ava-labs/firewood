@@ -107,7 +107,7 @@ pub unsafe extern "C" fn fwd_get_latest(
     invoke_with_handle(db, move |db| db.get_latest(key))
 }
 
-/// Return an iterator optionally starting from a key in database
+/// Returns an iterator optionally starting from a key in database
 ///
 /// # Arguments
 ///
@@ -115,18 +115,12 @@ pub unsafe extern "C" fn fwd_get_latest(
 /// * `root` - The root hash to look up as a [`BorrowedBytes`]
 /// * `key` - The key to look up as a [`BorrowedBytes`]
 ///
-/// # Returns
-///
-/// - [`IteratorResult::NullHandlePointer`] if the provided database handle is null.
-/// - [`IteratorResult::Ok`] if the iterator was created, with the iterator handle.
-/// - [`IteratorResult::Err`] if an error occurred while creating the iterator.
-///
 /// # Safety
 ///
 /// The caller must:
 /// * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
-/// * ensure that `root` is a valid for [`BorrowedBytes`]
-/// * ensure that `key` is a valid for [`BorrowedBytes`]
+/// * ensure that `root` is a valid [`BorrowedBytes`]
+/// * ensure that `key` is a valid [`BorrowedBytes`]
 /// * call [`fwd_free_iterator`] to free the memory associated with the iterator.
 ///
 #[unsafe(no_mangle)]
@@ -193,7 +187,7 @@ pub unsafe extern "C" fn fwd_iter_on_proposal<'db>(
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) -> KeyValueResult {
-    invoke_with_handle(handle, IteratorHandle::iter_next)
+    invoke_with_handle(handle, IteratorHandle::next)
 }
 
 /// Consumes the [`IteratorHandle`], destroys the iterator, and frees the memory.
