@@ -196,6 +196,7 @@ pub enum RangeProofResult {
     /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
     Err(OwnedBytes),
 }
+
 /// A result type returned from FFI functions that create or parse change proofs.
 ///
 /// The caller must ensure that [`fwd_free_change_proof`] is called to
