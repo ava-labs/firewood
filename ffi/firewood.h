@@ -299,6 +299,8 @@ typedef enum KeyValueResult_Tag {
    *
    * The caller must call [`fwd_free_owned_bytes`] to free the memory
    * associated with the key and the value of this pair.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   KeyValueResult_Some,
   /**

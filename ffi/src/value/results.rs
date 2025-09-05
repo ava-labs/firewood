@@ -233,6 +233,8 @@ pub enum KeyValueResult {
     ///
     /// The caller must call [`fwd_free_owned_bytes`] to free the memory
     /// associated with the key and the value of this pair.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
     Some(OwnedKeyValuePair),
     /// An error occurred and the message is returned as an [`OwnedBytes`]. The
     /// value is guaranteed to contain only valid UTF-8.
