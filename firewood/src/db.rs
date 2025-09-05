@@ -7,11 +7,11 @@
 )]
 
 use crate::iter::MerkleKeyValueIter;
-use crate::merkle::{Merkle, Value};
+use crate::merkle::{Key, Merkle, Value};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
-    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair,
-    KeyValuePairIter, OptionalHashKeyExt,
+    self, ArcDynDbView, Error, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair,
+    KeyValuePairIter, OptionalHashKeyExt, OwnedIterView,
 };
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
@@ -88,6 +88,18 @@ where
             Some(key) => Ok(MerkleKeyValueIter::from_key(self, key)),
             None => Ok(MerkleKeyValueIter::from(self)),
         }
+    }
+}
+
+impl<T: TrieReader + 'static> OwnedIterView for Arc<T> {
+    fn iter_owned(
+        &self,
+        first_key: Option<&[u8]>,
+    ) -> Box<dyn Iterator<Item = Result<(Key, Value), Error>>> {
+        Box::new(MerkleKeyValueIter::owned_from_key(
+            self.clone(),
+            first_key.unwrap_or(&[]),
+        ))
     }
 }
 
@@ -195,6 +207,14 @@ impl Db {
 
     /// Synchronously get a view, either committed or proposed
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, api::Error> {
+        self.manager
+            .view(root_hash)
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+
+    /// Synchronously get an owned iterator view, either over a committed or a proposed revision
+    pub fn iter_view(&self, root_hash: HashKey) -> Result<impl OwnedIterView, api::Error> {
         self.manager.view(root_hash).map_err(Into::into)
     }
 
@@ -253,6 +273,15 @@ impl api::DbView for Proposal<'_> {
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
         api::DbView::iter_option(&*self.nodestore, first_key)
+    }
+}
+
+impl OwnedIterView for Proposal<'_> {
+    fn iter_owned(
+        &self,
+        first_key: Option<&[u8]>,
+    ) -> Box<dyn Iterator<Item = Result<(Key, Value), Error>>> {
+        self.nodestore.iter_owned(first_key)
     }
 }
 

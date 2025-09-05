@@ -1,10 +1,11 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood::v2::api::{self, DbView, HashKey, Proposal as _};
+use firewood::v2::api::{self, DbView, HashKey, OwnedIterView, Proposal as _};
 
 use crate::value::KeyValuePair;
 
+use crate::iterator::CreateIteratorResult;
 use metrics::counter;
 
 /// An opaque wrapper around a Proposal that also retains a reference to the
@@ -51,7 +52,7 @@ impl<'db> DbView for ProposalHandle<'db> {
     }
 }
 
-impl ProposalHandle<'_> {
+impl<'db> ProposalHandle<'db> {
     /// Returns the root hash of the proposal.
     #[must_use]
     pub fn hash_key(&self) -> Option<crate::HashKey> {
@@ -97,8 +98,14 @@ impl ProposalHandle<'_> {
 
         Ok(hash_key)
     }
-}
 
+    /// Creates an iterator on the proposal starting from the given key.
+    #[must_use]
+    pub fn iter_from(&self, first_key: Option<&[u8]>) -> CreateIteratorResult<'db> {
+        let it = self.proposal.iter_owned(first_key);
+        CreateIteratorResult { handle: it.into() }
+    }
+}
 #[derive(Debug)]
 pub struct CreateProposalResult<'db> {
     pub handle: ProposalHandle<'db>,
