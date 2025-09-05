@@ -1016,8 +1016,6 @@ struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *_db,
  * - [`HashResult::Some`] containing the new root hash if the proof was successfully verified
  * - [`HashResult::Err`] containing an error message if the proof could not be verified or committed.
  *
- * [`fwd_commit`]: crate::fwd_commit
- *
  * # Thread Safety
  *
  * It is not safe to call this function concurrently with the same proof context
