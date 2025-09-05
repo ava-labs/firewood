@@ -133,47 +133,6 @@ func newKeyValuePairs(keys, vals [][]byte, pinner Pinner) (C.BorrowedKeyValuePai
 	return newBorrowedKeyValuePairs(pairs, pinner), nil
 }
 
-// Close releases the memory associated with the Database.
-//
-// This is not safe to call while there are any outstanding Proposals. All proposals
-// must be freed or committed before calling this.
-//
-// This is safe to call if the pointer is nil, in which case it does nothing. The
-// pointer will be set to nil after freeing to prevent double free. However, it is
-// not safe to call this method concurrently from multiple goroutines.
-func (db *Database) Close() error {
-	if db.handle == nil {
-		return nil
-	}
-
-	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
-		return fmt.Errorf("unexpected error when closing database: %w", err)
-	}
-
-	db.handle = nil // Prevent double free
-
-	return nil
-}
-
-// Drop releases the memory associated with the Proposal.
-//
-// This is safe to call if the pointer is nil, in which case it does nothing.
-//
-// The pointer will be set to nil after freeing to prevent double free.
-func (p *Proposal) Drop() error {
-	if p.handle == nil {
-		return nil
-	}
-
-	if err := getErrorFromVoidResult(C.fwd_free_proposal(p.handle)); err != nil {
-		return fmt.Errorf("%w: %w", errFreeingValue, err)
-	}
-
-	p.handle = nil // Prevent double free
-
-	return nil
-}
-
 // ownedBytes is a wrapper around C.OwnedBytes that provides a Go interface
 // for Rust-owned byte slices.
 //
@@ -394,27 +353,5 @@ func getChangeProofFromChangeProofResult(result C.ChangeProofResult) (*ChangePro
 		return nil, err
 	default:
 		return nil, fmt.Errorf("unknown C.ChangeProofResult tag: %d", result.tag)
-	}
-}
-
-// getProposalFromProposalResult converts a C.ProposalResult to a Proposal or error.
-func getProposalFromProposalResult(result C.ProposalResult, db *Database) (*Proposal, error) {
-	switch result.tag {
-	case C.ProposalResult_NullHandlePointer:
-		return nil, errDBClosed
-	case C.ProposalResult_Ok:
-		body := (*C.ProposalResult_Ok_Body)(unsafe.Pointer(&result.anon0))
-		hashKey := *(*[32]byte)(unsafe.Pointer(&body.root_hash._0))
-		proposal := &Proposal{
-			db:     db,
-			handle: body.handle,
-			root:   hashKey[:],
-		}
-		return proposal, nil
-	case C.ProposalResult_Err:
-		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
-		return nil, err
-	default:
-		return nil, fmt.Errorf("unknown C.ProposalResult tag: %d", result.tag)
 	}
 }
