@@ -12,6 +12,14 @@ import (
 )
 
 // Maybe is an interface that represents an optional value of type T.
+//
+// Maybe is a drop-in replacement for the Maybe type defined in avalanchego/utils/maybe.
+// This interface is used to avoid importing avalanchego packages into the ffi
+// package, which would create a circular dependency.
+//
+// <https://github.com/ava-labs/avalanchego/blob/66ca7dc0ce354ff4c4ebdc8b377e099ba91f2e2b/utils/maybe/maybe.go#L40-L48>
+//
+// The avalanchego implementation of Maybe implements this interface.
 type Maybe[T any] interface {
 	// HasValue returns true if the Maybe contains a value.
 	HasValue() bool
