@@ -354,6 +354,7 @@ impl_null_handle_result!(
     RangeProofResult,
     ChangeProofResult,
     NextKeyRangeResult,
+    ProposalResult<'_>,
 );
 
 impl_cresult!(
@@ -364,19 +365,8 @@ impl_cresult!(
     RangeProofResult,
     ChangeProofResult,
     NextKeyRangeResult,
+    ProposalResult<'_>,
 );
-
-impl NullHandleResult for ProposalResult<'_> {
-    fn null_handle_pointer_error() -> Self {
-        Self::NullHandlePointer
-    }
-}
-
-impl CResult for ProposalResult<'_> {
-    fn from_err(err: impl ToString) -> Self {
-        Self::Err(err.to_string().into_bytes().into())
-    }
-}
 
 enum Panic {
     Static(&'static str),
