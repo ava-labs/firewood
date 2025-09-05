@@ -19,8 +19,8 @@ use firewood_storage::logger::{trace, warn};
 use metrics::gauge;
 use typed_builder::TypedBuilder;
 
-use crate::merkle::Merkle;
-use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
+use crate::merkle::{Key, Merkle, Value};
+use crate::v2::api::{ArcDynDbView, Error, HashKey, OptionalHashKeyExt, OwnedIterView};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
@@ -89,6 +89,32 @@ pub(crate) enum RevisionManagerError {
     },
     #[error("An IO error occurred during the commit")]
     FileIoError(#[from] FileIoError),
+}
+
+pub(crate) enum ViewKind {
+    Committed(CommittedRevision),
+    Proposed(ProposedRevision),
+}
+
+impl OwnedIterView for ViewKind {
+    fn iter_owned(
+        &self,
+        first_key: Option<&[u8]>,
+    ) -> Box<dyn Iterator<Item = Result<(Key, Value), Error>>> {
+        match &self {
+            ViewKind::Committed(v) => v.iter_owned(first_key),
+            ViewKind::Proposed(v) => v.iter_owned(first_key),
+        }
+    }
+}
+
+impl From<ViewKind> for ArcDynDbView {
+    fn from(value: ViewKind) -> Self {
+        match value {
+            ViewKind::Committed(v) => v,
+            ViewKind::Proposed(v) => v,
+        }
+    }
 }
 
 impl RevisionManager {
@@ -259,25 +285,21 @@ impl RevisionManager {
         self.proposals.lock().expect("poisoned lock").push(proposal);
     }
 
-    pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, RevisionManagerError> {
-        // First try to find it in committed revisions
-        if let Ok(committed) = self.revision(root_hash.clone()) {
-            return Ok(committed);
-        }
-
-        // If not found in committed revisions, try proposals
-        let proposal = self
-            .proposals
-            .lock()
-            .expect("poisoned lock")
-            .iter()
-            .find(|p| p.root_hash().as_ref() == Some(&root_hash))
-            .cloned()
-            .ok_or(RevisionManagerError::RevisionNotFound {
-                provided: root_hash,
-            })?;
-
-        Ok(proposal)
+    pub fn view(&self, root_hash: HashKey) -> Result<ViewKind, RevisionManagerError> {
+        self.revision(root_hash.clone())
+            .map(ViewKind::Committed)
+            .or_else(|_| {
+                self.proposals
+                    .lock()
+                    .expect("poisoned lock")
+                    .iter()
+                    .find(|p| p.root_hash().as_ref() == Some(&root_hash))
+                    .cloned()
+                    .map(ViewKind::Proposed)
+                    .ok_or_else(|| RevisionManagerError::RevisionNotFound {
+                        provided: root_hash.clone(),
+                    })
+            })
     }
 
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {

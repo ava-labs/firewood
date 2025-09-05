@@ -229,7 +229,10 @@ pub enum KeyValueResult {
     NullHandlePointer,
     /// The iterator is exhausted
     None,
-    /// The next item on iterator is returned.
+    /// The next item is returned.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with the key and the value of this pair.
     Some(OwnedKeyValuePair),
     /// An error occurred and the message is returned as an [`OwnedBytes`]. The
     /// value is guaranteed to contain only valid UTF-8.
@@ -253,12 +256,18 @@ impl<E: fmt::Display> From<Option<Result<(merkle::Key, merkle::Value), E>>> for 
     }
 }
 
+impl<'db> From<CreateIteratorResult<'db>> for IteratorResult<'db> {
+    fn from(value: CreateIteratorResult<'db>) -> Self {
+        IteratorResult::Ok {
+            handle: Box::new(value.handle),
+        }
+    }
+}
+
 impl<'db, E: fmt::Display> From<Result<CreateIteratorResult<'db>, E>> for IteratorResult<'db> {
     fn from(value: Result<CreateIteratorResult<'db>, E>) -> Self {
         match value {
-            Ok(CreateIteratorResult { handle, .. }) => IteratorResult::Ok {
-                handle: Box::new(handle),
-            },
+            Ok(res) => res.into(),
             Err(err) => IteratorResult::Err(err.to_string().into_bytes().into()),
         }
     }

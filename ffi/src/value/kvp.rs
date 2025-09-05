@@ -15,7 +15,6 @@ pub struct KeyValuePair<'a> {
     pub value: BorrowedBytes<'a>,
 }
 
-// TODO(amin): is this the best place for it?
 /// Owned version of `KeyValuePair`, returned to the FFI.
 #[repr(C)]
 #[derive(Debug, Clone)]

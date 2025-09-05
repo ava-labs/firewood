@@ -188,8 +188,8 @@ impl DatabaseHandle {
         root: HashKey,
         first_key: Option<&[u8]>,
     ) -> Result<CreateIteratorResult<'_>, api::Error> {
-        let rev = self.db.revision(root)?;
-        let it = rev.iter_owned(first_key)?;
+        let view = self.db.iter_view(root)?;
+        let it = view.iter_owned(first_key);
 
         Ok(CreateIteratorResult { handle: it.into() })
     }

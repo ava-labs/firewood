@@ -107,7 +107,7 @@ pub unsafe extern "C" fn fwd_get_latest(
     invoke_with_handle(db, move |db| db.get_latest(key))
 }
 
-/// Returns an iterator optionally starting from a key in database
+/// Returns an iterator optionally starting from a key in the provided database
 ///
 /// # Arguments
 ///
@@ -134,7 +134,7 @@ pub unsafe extern "C" fn fwd_iter_on_root<'db>(
     })
 }
 
-/// Return an iterator on proposal optionally starting from a key
+/// Returns an iterator on the provided proposal optionally starting from a key
 ///
 /// # Arguments
 ///
@@ -436,7 +436,13 @@ pub unsafe extern "C" fn fwd_commit_proposal(
 pub unsafe extern "C" fn fwd_free_proposal(
     proposal: Option<Box<ProposalHandle<'_>>>,
 ) -> VoidResult {
-    // TODO(amin): Handle iterators?
+    // TODO(amin): Handling iterators lifetime.
+    // Iterators hold `Arc<NodeStore<...>>` so they can be long-lived for FFI.
+    // Issue: If a proposal is freed or promoted to a committed revision, any live iterator
+    // still holds an Arc and prevents the corresponding NodeStore from dropping early.
+    // This is not a leak, when the iterator is dropped, the NodeStore drops as well.
+    // Maybe a better solution is to keep track of iterators and destroy them if proposal is freed
+    // or reinstantiate them with the new commited nodestore if commited.
     invoke_with_handle(proposal, drop)
 }
 

@@ -295,7 +295,10 @@ typedef enum KeyValueResult_Tag {
    */
   KeyValueResult_None,
   /**
-   * The next item on iterator is returned.
+   * The next item is returned.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with the key and the value of this pair.
    */
   KeyValueResult_Some,
   /**
@@ -807,7 +810,7 @@ struct ValueResult fwd_get_latest(const struct DatabaseHandle *db, BorrowedBytes
 struct KeyValueResult fwd_iter_next(struct IteratorHandle *handle);
 
 /**
- * Return an iterator on proposal optionally starting from a key
+ * Returns an iterator on the provided proposal optionally starting from a key
  *
  * # Arguments
  *
@@ -832,7 +835,7 @@ struct KeyValueResult fwd_iter_next(struct IteratorHandle *handle);
 struct IteratorResult fwd_iter_on_proposal(const struct ProposalHandle *handle, BorrowedBytes key);
 
 /**
- * Returns an iterator optionally starting from a key in database
+ * Returns an iterator optionally starting from a key in the provided database
  *
  * # Arguments
  *
