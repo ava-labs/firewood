@@ -92,18 +92,18 @@ pub struct ProofNode {
 impl std::fmt::Debug for ProofNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let key: Vec<u8> = self.key().collect();
-        let children: Vec<(usize, TrieHash)> = self
-            .children()
+        let children: Vec<(usize, &HashType)> = self
+            .child_hashes
             .iter()
             .enumerate()
-            .filter_map(|(i, c)| c.as_ref().map(|h| (i, (*h).clone().into_triehash())))
+            .filter_map(|(i, c)| c.as_ref().map(|h| (i, h)))
             .collect();
         let value_digest = self.value_digest();
 
         let mut ds = f.debug_struct("ProofNode");
-        ds.field("key_nibbles", &key)
+        ds.field("key", &key)
             .field("value_digest", &value_digest)
-            .field("children", &children);
+            .field("child_hashes", &children);
 
         #[cfg(feature = "ethhash")]
         ds.field("partial_len", &self.partial_len);
