@@ -76,7 +76,7 @@ fn main() -> Result<(), api::Error> {
 
     env_logger::init_from_env(
         env_logger::Env::default()
-            .filter_or(env_logger::DEFAULT_FILTER_ENV, cli.log_level.to_string()),
+            .filter_or(env_logger::DEFAULT_FILTER_ENV, cli.log_level.clone()),
     );
 
     match &cli.command {
