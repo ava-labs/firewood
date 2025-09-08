@@ -120,6 +120,7 @@ impl<T: AsRef<[u8]>> ValueDigest<T> {
             }
             #[cfg(not(feature = "ethhash"))]
             Self::Hash(got_hash) => {
+                use sha2::{Digest, Sha256};
                 // This proof proves that `key` maps to a value
                 // whose hash is `got_hash`.
                 got_hash.as_ref() == Sha256::digest(expected.as_ref()).as_slice()
