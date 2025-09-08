@@ -1044,6 +1044,17 @@ func TestGetFromRootParallel(t *testing.T) {
 	}
 }
 
+func assertIteratorYields(r *require.Assertions, it *Iterator, keys [][]byte, vals [][]byte) {
+	i := 0
+	for ; it.Next(); i += 1 {
+		r.Equal(keys[i], it.Key())
+		r.Equal(vals[i], it.Value())
+	}
+	r.NoError(it.Err())
+	r.Equal(len(keys), i)
+	r.NoError(it.Drop())
+}
+
 // Tests that iterator isn't created for empty database
 func TestIterEmptyDb(t *testing.T) {
 	r := require.New(t)
@@ -1066,11 +1077,7 @@ func TestIter(t *testing.T) {
 	it, err := db.Iter(nil)
 	r.NoError(err)
 
-	for i := 0; it.Next(); i += 1 {
-		r.Equal(keys[i], it.Key())
-		r.Equal(vals[i], it.Value())
-	}
-	r.NoError(it.Err())
+	assertIteratorYields(r, it, keys, vals)
 }
 
 // Tests that iterators on different roots work fine
@@ -1080,13 +1087,14 @@ func TestIterOnRoot(t *testing.T) {
 
 	// Commit 10 key-value pairs.
 	keys, vals := kvForTest(20)
+	keys = keys[:10]
 	vals1, vals2 := vals[:10], vals[10:]
 
-	firstRoot, err := db.Update(keys[:10], vals1)
+	firstRoot, err := db.Update(keys, vals1)
 	r.NoError(err)
 
 	// we use the same keys, but update the values
-	secondRoot, err := db.Update(keys[:10], vals2)
+	secondRoot, err := db.Update(keys, vals2)
 	r.NoError(err)
 
 	h1, err := db.IterOnRoot(firstRoot, nil)
@@ -1095,15 +1103,8 @@ func TestIterOnRoot(t *testing.T) {
 	h2, err := db.IterOnRoot(secondRoot, nil)
 	r.NoError(err)
 
-	i := 0
-	for ; h1.Next() && h2.Next(); i += 1 {
-		r.Equal(keys[i], h1.Key())
-		r.Equal(keys[i], h2.Key())
-		r.Equal(vals1[i], h1.Value())
-		r.Equal(vals2[i], h2.Value())
-	}
-	r.NoErrorf(h1.Err(), "failed on iter %d", i)
-	r.NoErrorf(h2.Err(), "failed on iter %d", i)
+	assertIteratorYields(r, h1, keys, vals1)
+	assertIteratorYields(r, h2, keys, vals2)
 }
 
 // Tests that basic iterator functionality works for proposal
@@ -1118,11 +1119,49 @@ func TestIterOnProposal(t *testing.T) {
 	it, err := p.Iter(nil)
 	r.NoError(err)
 
-	i := 0
-	for ; it.Next(); i += 1 {
-		r.Equal(keys[i], it.Key())
-		r.Equal(vals[i], it.Value())
-	}
-	r.Equal(10, i)
-	r.NoError(it.Err())
+	assertIteratorYields(r, it, keys, vals)
+}
+
+// Tests that the iterator still works after proposal is committed
+func TestIterAfterProposalCommit(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(10)
+	p, err := db.Propose(keys, vals)
+	r.NoError(err)
+
+	it, err := p.Iter(nil)
+	r.NoError(err)
+
+	err = p.Commit()
+	r.NoError(err)
+
+	// iterate after commit
+	// because iterator hangs on the nodestore reference of proposal
+	// the nodestore won't be dropped until we drop the iterator
+	assertIteratorYields(r, it, keys, vals)
+}
+
+// Tests that the iterator on latest revision works properly after a proposal commit
+func TestIterUpdate(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(10)
+	_, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	// get an iterator on latest revision
+	it, err := db.Iter(nil)
+	r.NoError(err)
+
+	// update the database
+	keys2, vals2 := kvForTest(10)
+	_, err = db.Update(keys2, vals2)
+	r.NoError(err)
+
+	// iterate after commit
+	// because iterator is fixed on the revision hash, it should return the initial values
+	assertIteratorYields(r, it, keys, vals)
 }
