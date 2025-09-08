@@ -67,7 +67,7 @@ enum NodeIterState {
 /// A reference to the merkle, could be borrowed, or behind an Arc
 #[derive(Debug)]
 pub enum MerkleRef<'a, T> {
-    /// reference with borrowing the merkle
+    /// borrowing the merkle
     Borrowed(&'a T),
     /// referencing the merkle via Arc
     Owned(Arc<T>),

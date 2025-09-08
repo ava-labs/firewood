@@ -12,7 +12,9 @@ import "C"
 
 import (
 	"errors"
+	"fmt"
 	"runtime"
+	"unsafe"
 )
 
 var errDroppedProposal = errors.New("proposal already dropped")
@@ -102,4 +104,45 @@ func (p *Proposal) Commit() error {
 	p.handle = nil // we no longer own the proposal handle
 
 	return err
+}
+
+// Drop releases the memory associated with the Proposal.
+//
+// This is safe to call if the pointer is nil, in which case it does nothing.
+//
+// The pointer will be set to nil after freeing to prevent double free.
+func (p *Proposal) Drop() error {
+	if p.handle == nil {
+		return nil
+	}
+
+	if err := getErrorFromVoidResult(C.fwd_free_proposal(p.handle)); err != nil {
+		return fmt.Errorf("%w: %w", errFreeingValue, err)
+	}
+
+	p.handle = nil // Prevent double free
+
+	return nil
+}
+
+// getProposalFromProposalResult converts a C.ProposalResult to a Proposal or error.
+func getProposalFromProposalResult(result C.ProposalResult, db *Database) (*Proposal, error) {
+	switch result.tag {
+	case C.ProposalResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.ProposalResult_Ok:
+		body := (*C.ProposalResult_Ok_Body)(unsafe.Pointer(&result.anon0))
+		hashKey := *(*[32]byte)(unsafe.Pointer(&body.root_hash._0))
+		proposal := &Proposal{
+			db:     db,
+			handle: body.handle,
+			root:   hashKey[:],
+		}
+		return proposal, nil
+	case C.ProposalResult_Err:
+		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return nil, err
+	default:
+		return nil, fmt.Errorf("unknown C.ProposalResult tag: %d", result.tag)
+	}
 }

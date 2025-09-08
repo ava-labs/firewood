@@ -9,7 +9,7 @@ use firewood::{
 
 use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
 
-use crate::iterator::{CreateIteratorResult, IteratorHandle};
+use crate::iterator::CreateIteratorResult;
 use firewood::v2::api::OwnedIterView;
 use metrics::counter;
 
@@ -182,7 +182,7 @@ impl DatabaseHandle {
     ///
     /// # Errors
     ///
-    /// An error is returned if the iterator could not be created.
+    /// An error is returned if the requested revision doesn't exist.
     pub fn iter_on_root(
         &self,
         root: Option<HashKey>,
@@ -191,12 +191,10 @@ impl DatabaseHandle {
         let Some(root) = root.or(self.current_root_hash()?) else {
             return Ok(CreateIteratorResult::default());
         };
-        let rev = self.db.revision(root)?;
-        let it = rev.iter_owned(first_key)?;
+        let view = self.db.iter_view(root)?;
+        let it = view.iter_owned(first_key);
 
-        Ok(CreateIteratorResult {
-            handle: IteratorHandle { iterator: Some(it) },
-        })
+        Ok(CreateIteratorResult { handle: it.into() })
     }
 
     pub(crate) fn get_root(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {

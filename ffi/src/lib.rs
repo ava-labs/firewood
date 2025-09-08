@@ -27,6 +27,7 @@ mod handle;
 mod iterator;
 mod logging;
 mod metrics_setup;
+mod proofs;
 mod proposal;
 mod value;
 
@@ -35,6 +36,7 @@ use firewood::v2::api::DbView;
 pub use crate::handle::*;
 pub use crate::iterator::*;
 pub use crate::logging::*;
+pub use crate::proofs::*;
 pub use crate::proposal::*;
 pub use crate::value::*;
 
@@ -107,7 +109,7 @@ pub unsafe extern "C" fn fwd_get_latest(
     invoke_with_handle(db, move |db| db.get_latest(key))
 }
 
-/// Return an iterator optionally starting from a key in database
+/// Returns an iterator optionally starting from a key in the provided database
 ///
 /// # Arguments
 ///
@@ -115,18 +117,12 @@ pub unsafe extern "C" fn fwd_get_latest(
 /// * `root` - The root hash to look up as a [`BorrowedBytes`]
 /// * `key` - The key to look up as a [`BorrowedBytes`]
 ///
-/// # Returns
-///
-/// - [`IteratorResult::NullHandlePointer`] if the provided database handle is null.
-/// - [`IteratorResult::Ok`] if the iterator was created, with the iterator handle.
-/// - [`IteratorResult::Err`] if an error occurred while creating the iterator.
-///
 /// # Safety
 ///
 /// The caller must:
 /// * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
-/// * ensure that `root` is a valid for [`BorrowedBytes`]
-/// * ensure that `key` is a valid for [`BorrowedBytes`]
+/// * ensure that `root` is a valid [`BorrowedBytes`]
+/// * ensure that `key` is a valid [`BorrowedBytes`]
 /// * call [`fwd_free_iterator`] to free the memory associated with the iterator.
 ///
 #[unsafe(no_mangle)]
@@ -142,7 +138,7 @@ pub unsafe extern "C" fn fwd_iter_on_root<'db>(
     })
 }
 
-/// Return an iterator on proposal optionally starting from a key
+/// Returns an iterator on the provided proposal optionally starting from a key
 ///
 /// # Arguments
 ///
@@ -195,7 +191,7 @@ pub unsafe extern "C" fn fwd_iter_on_proposal<'db>(
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) -> KeyValueResult {
-    invoke_with_handle(handle, IteratorHandle::iter_next)
+    invoke_with_handle(handle, IteratorHandle::next)
 }
 
 /// Retrieves the next batch of items from the iterator
@@ -474,7 +470,13 @@ pub unsafe extern "C" fn fwd_commit_proposal(
 pub unsafe extern "C" fn fwd_free_proposal(
     proposal: Option<Box<ProposalHandle<'_>>>,
 ) -> VoidResult {
-    // TODO(amin): Handle iterators?
+    // TODO(amin): Handling iterators lifetime.
+    // Iterators hold `Arc<NodeStore<...>>` so they can be long-lived for FFI.
+    // Issue: If a proposal is freed or promoted to a committed revision, any live iterator
+    // still holds an Arc and prevents the corresponding NodeStore from dropping early.
+    // This is not a leak, when the iterator is dropped, the NodeStore drops as well.
+    // Maybe a better solution is to keep track of iterators and destroy them if proposal is freed
+    // or reinstantiate them with the new commited nodestore if commited.
     invoke_with_handle(proposal, drop)
 }
 

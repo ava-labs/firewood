@@ -136,3 +136,11 @@ func (it *Iterator) Value() []byte {
 func (it *Iterator) Err() error {
 	return it.err
 }
+
+// Drop drops the iterator and releases the resources
+func (it *Iterator) Drop() error {
+	if it.handle != nil {
+		return getErrorFromVoidResult(C.fwd_free_iterator(it.handle))
+	}
+	return nil
+}

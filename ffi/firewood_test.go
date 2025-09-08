@@ -1101,7 +1101,7 @@ func TestIterEmptyDb(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	it, err := db.IterLatest(nil)
+	it, err := db.Iter(nil)
 	r.NoError(err)
 	r.False(it.Next())
 }
@@ -1111,6 +1111,7 @@ type kvIter interface {
 	Key() []byte
 	Value() []byte
 	Err() error
+	Drop() error
 }
 type borrowIter struct{ it *Iterator }
 
@@ -1118,6 +1119,7 @@ func (b borrowIter) Next() bool    { return b.it.NextBorrowed() }
 func (b borrowIter) Key() []byte   { return b.it.Key() }
 func (b borrowIter) Value() []byte { return b.it.Value() }
 func (b borrowIter) Err() error    { return b.it.Err() }
+func (b borrowIter) Drop() error   { return b.it.Drop() }
 
 func assertIteratorYields(r *require.Assertions, it kvIter, keys [][]byte, vals [][]byte) {
 	i := 0
@@ -1127,6 +1129,7 @@ func assertIteratorYields(r *require.Assertions, it kvIter, keys [][]byte, vals 
 	}
 	r.NoError(it.Err())
 	r.Equal(len(keys), i)
+	r.NoError(it.Drop())
 }
 
 // Tests that basic iterator functionality works
@@ -1176,7 +1179,7 @@ func TestIter(t *testing.T) {
 	}
 	runForAllModes(t, "Latest", func(t *testing.T, configureIterator func(it *Iterator) kvIter) {
 		r := require.New(t)
-		it, err := db.IterLatest(nil)
+		it, err := db.Iter(nil)
 		r.NoError(err)
 
 		assertIteratorYields(r, configureIterator(it), keys, vals)
@@ -1216,4 +1219,48 @@ func TestIter(t *testing.T) {
 
 		assertIteratorYields(r, configureIterator(it), keys, updatedValues)
 	})
+}
+
+// Tests that the iterator still works after proposal is committed
+func TestIterAfterProposalCommit(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(10)
+	p, err := db.Propose(keys, vals)
+	r.NoError(err)
+
+	it, err := p.Iter(nil)
+	r.NoError(err)
+
+	err = p.Commit()
+	r.NoError(err)
+
+	// iterate after commit
+	// because iterator hangs on the nodestore reference of proposal
+	// the nodestore won't be dropped until we drop the iterator
+	assertIteratorYields(r, it, keys, vals)
+}
+
+// Tests that the iterator on latest revision works properly after a proposal commit
+func TestIterUpdate(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(10)
+	_, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	// get an iterator on latest revision
+	it, err := db.Iter(nil)
+	r.NoError(err)
+
+	// update the database
+	keys2, vals2 := kvForTest(10)
+	_, err = db.Update(keys2, vals2)
+	r.NoError(err)
+
+	// iterate after commit
+	// because iterator is fixed on the revision hash, it should return the initial values
+	assertIteratorYields(r, it, keys, vals)
 }
