@@ -95,11 +95,11 @@ impl<T: TrieReader + 'static> OwnedIterView for Arc<T> {
     fn iter_owned(
         &self,
         first_key: Option<&[u8]>,
-    ) -> Result<Box<dyn Iterator<Item = Result<(Key, Value), Error>>>, Error> {
-        Ok(Box::new(MerkleKeyValueIter::owned_from_key(
+    ) -> Box<dyn Iterator<Item = Result<(Key, Value), Error>>> {
+        Box::new(MerkleKeyValueIter::owned_from_key(
             self.clone(),
             first_key.unwrap_or(&[]),
-        )))
+        ))
     }
 }
 
@@ -207,6 +207,14 @@ impl Db {
 
     /// Synchronously get a view, either committed or proposed
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, api::Error> {
+        self.manager
+            .view(root_hash)
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+
+    /// Synchronously get an owned iterator view, either over a committed or a proposed revision
+    pub fn iter_view(&self, root_hash: HashKey) -> Result<impl OwnedIterView, api::Error> {
         self.manager.view(root_hash).map_err(Into::into)
     }
 
@@ -272,7 +280,7 @@ impl OwnedIterView for Proposal<'_> {
     fn iter_owned(
         &self,
         first_key: Option<&[u8]>,
-    ) -> Result<Box<dyn Iterator<Item = Result<(Key, Value), Error>>>, Error> {
+    ) -> Box<dyn Iterator<Item = Result<(Key, Value), Error>>> {
         self.nodestore.iter_owned(first_key)
     }
 }
@@ -289,7 +297,7 @@ impl<'db> api::Proposal for Proposal<'db> {
     }
 
     fn commit(self) -> Result<(), api::Error> {
-        Ok(self.db.manager.commit(self.nodestore.clone())?)
+        Ok(self.db.manager.commit(self.nodestore)?)
     }
 }
 
@@ -428,6 +436,7 @@ mod test {
         let committed = db.root_hash().unwrap().unwrap();
         let historical = db.revision(committed).unwrap();
         assert_eq!(&*historical.val(b"a").unwrap().unwrap(), b"1");
+        drop(historical);
 
         let db = db.replace();
         println!("{:?}", db.root_hash().unwrap());

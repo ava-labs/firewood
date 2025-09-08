@@ -252,3 +252,25 @@ func (db *Database) Revision(root []byte) (*Revision, error) {
 
 	return &Revision{database: db, root: root}, nil
 }
+
+// Close releases the memory associated with the Database.
+//
+// This is not safe to call while there are any outstanding Proposals. All proposals
+// must be freed or committed before calling this.
+//
+// This is safe to call if the pointer is nil, in which case it does nothing. The
+// pointer will be set to nil after freeing to prevent double free. However, it is
+// not safe to call this method concurrently from multiple goroutines.
+func (db *Database) Close() error {
+	if db.handle == nil {
+		return nil
+	}
+
+	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
+		return fmt.Errorf("unexpected error when closing database: %w", err)
+	}
+
+	db.handle = nil // Prevent double free
+
+	return nil
+}

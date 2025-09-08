@@ -15,13 +15,13 @@ pub struct KeyValuePair<'a> {
     pub value: BorrowedBytes<'a>,
 }
 
-// TODO(amin): is this the best place for it?
-/// Owned version of `KeyValuePair`, returned to the FFI.
-#[repr(C)]
-#[derive(Debug, Clone)]
-pub struct OwnedKeyValuePair {
-    pub key: OwnedBytes,
-    pub value: OwnedBytes,
+impl<'a> KeyValuePair<'a> {
+    pub fn new((key, value): &'a (impl AsRef<[u8]>, impl AsRef<[u8]>)) -> Self {
+        Self {
+            key: BorrowedBytes::from_slice(key.as_ref()),
+            value: BorrowedBytes::from_slice(value.as_ref()),
+        }
+    }
 }
 
 impl fmt::Display for KeyValuePair<'_> {
@@ -60,6 +60,14 @@ impl<'a> api::KeyValuePair for &KeyValuePair<'a> {
     fn into_batch(self) -> api::BatchOp<Self::Key, Self::Value> {
         (*self).into_batch()
     }
+}
+
+/// Owned version of `KeyValuePair`, returned to the FFI.
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub struct OwnedKeyValuePair {
+    pub key: OwnedBytes,
+    pub value: OwnedBytes,
 }
 
 impl From<(Box<[u8]>, Box<[u8]>)> for OwnedKeyValuePair {

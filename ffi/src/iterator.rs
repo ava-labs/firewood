@@ -1,30 +1,32 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use derive_where::derive_where;
 use firewood::merkle;
 use firewood::v2::api::{self};
-use std::fmt::{Debug, Formatter};
-
-// This wrapper doesn't do anything special now, but we need to figure out how to handle
-// proposal commits, drops, revision cleaning
-// TODO(amin): figure this out
 
 type KeyValueItem = Result<(merkle::Key, merkle::Value), api::Error>;
 
 /// An opaque wrapper around an Iterator.
 #[derive(Default)]
+#[derive_where(Debug)]
+#[derive_where(skip_inner(Debug))]
 pub struct IteratorHandle<'db> {
-    pub iterator: Option<Box<dyn Iterator<Item = KeyValueItem> + 'db>>,
+    iterator: Option<Box<dyn Iterator<Item = KeyValueItem> + 'db>>,
 }
 
-impl Debug for IteratorHandle<'_> {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("IteratorHandle").finish()
+impl From<Box<dyn Iterator<Item = KeyValueItem>>> for IteratorHandle<'_> {
+    fn from(value: Box<dyn Iterator<Item = KeyValueItem>>) -> Self {
+        IteratorHandle {
+            iterator: Some(value),
+        }
     }
 }
 
-impl IteratorHandle<'_> {
-    pub fn iter_next(&mut self) -> Option<KeyValueItem> {
+impl Iterator for IteratorHandle<'_> {
+    type Item = KeyValueItem;
+
+    fn next(&mut self) -> Option<Self::Item> {
         if let Some(iterator) = self.iterator.as_mut() {
             iterator.next()
         } else {
@@ -33,7 +35,7 @@ impl IteratorHandle<'_> {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct CreateIteratorResult<'db> {
     pub handle: IteratorHandle<'db>,
 }
