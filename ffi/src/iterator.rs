@@ -27,11 +27,12 @@ impl Iterator for IteratorHandle<'_> {
     type Item = KeyValueItem;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(iterator) = self.iterator.as_mut() {
-            iterator.next()
-        } else {
-            None
+        let out = self.iterator.as_mut()?.next();
+        if out.is_none() {
+            // iterator exhausted; drop it so the NodeStore can be released
+            self.iterator.take();
         }
+        out
     }
 }
 
