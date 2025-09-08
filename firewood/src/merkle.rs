@@ -10,8 +10,8 @@ use crate::range_proof::RangeProof;
 use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
 use firewood_storage::{
     BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader, ImmutableProposal,
-    IntoHashType, LeafNode, MaybePersistedNode, MemStore, MutableProposal, NibblesIterator, Node,
-    NodeStore, Parentable, Path, ReadableStorage, SharedNode, TrieHash, TrieReader, ValueDigest,
+    IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore,
+    Parentable, Path, ReadableStorage, SharedNode, TrieHash, TrieReader, ValueDigest,
 };
 use metrics::counter;
 use smallvec::SmallVec;
@@ -132,6 +132,7 @@ impl<T: TrieReader> Merkle<T> {
         self.nodestore.root_node()
     }
 
+    #[cfg(test)]
     pub(crate) const fn nodestore(&self) -> &T {
         &self.nodestore
     }
@@ -441,35 +442,12 @@ impl<T: TrieReader> Merkle<T> {
 
     fn verify_reconstructed_trie_root(
         &self,
-        proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
-        root_hash: &TrieHash,
+        _proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
+        _root_hash: &TrieHash,
     ) -> Result<(), api::Error> {
-        // Create in-memory trie for reconstruction
-        let memstore = MemStore::new(vec![]);
-        let nodestore = NodeStore::new_empty_proposal(memstore.into());
-        let mut merkle = Merkle { nodestore };
-
-        // Insert all key-value pairs from the range proof
-        for (key, value) in proof.key_values() {
-            merkle
-                .insert(key.as_ref(), value.as_ref().into())
-                .map_err(ProofError::IO)?;
-        }
-
-        // Hash the trie and get root
-        let merkle: Merkle<NodeStore<Arc<ImmutableProposal>, _>> = merkle.try_into()?;
-        let computed_root = merkle.nodestore().root_hash().ok_or(ProofError::Empty)?;
-
-        // Compare with expected root
-        if computed_root == *root_hash {
-            Ok(())
-        } else {
-            Err(api::Error::InvalidHash {
-                reason: api::InvalidHashReason::MismatchedHash,
-                invalid: Some(computed_root),
-                expected: Some(root_hash.clone()),
-            })
-        }
+        todo!(
+            "implement verify_reconstructed_trie_root by replacing hashes where needed and reconstructing the root"
+        )
     }
 
     /// Get the value for the given key from the proof key-values. If not found,
