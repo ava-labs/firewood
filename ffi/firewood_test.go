@@ -1049,7 +1049,7 @@ func TestIterEmptyDb(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	it, err := db.IterLatest(nil)
+	it, err := db.Iter(nil)
 	r.NoError(err)
 	r.False(it.Next())
 }
@@ -1063,7 +1063,7 @@ func TestIter(t *testing.T) {
 	_, err := db.Update(keys, vals)
 	r.NoError(err)
 
-	it, err := db.IterLatest(nil)
+	it, err := db.Iter(nil)
 	r.NoError(err)
 
 	for i := 0; it.Next(); i += 1 {
@@ -1080,10 +1080,13 @@ func TestIterOnRoot(t *testing.T) {
 
 	// Commit 10 key-value pairs.
 	keys, vals := kvForTest(20)
-	firstRoot, err := db.Update(keys[:10], vals[:10])
+	vals1, vals2 := vals[:10], vals[10:]
+
+	firstRoot, err := db.Update(keys[:10], vals1)
 	r.NoError(err)
 
-	secondRoot, err := db.Update(keys[:10], vals[10:])
+	// we use the same keys, but update the values
+	secondRoot, err := db.Update(keys[:10], vals2)
 	r.NoError(err)
 
 	h1, err := db.IterOnRoot(firstRoot, nil)
@@ -1092,14 +1095,15 @@ func TestIterOnRoot(t *testing.T) {
 	h2, err := db.IterOnRoot(secondRoot, nil)
 	r.NoError(err)
 
-	for i := 0; h1.Next() && h2.Next(); i += 1 {
+	i := 0
+	for ; h1.Next() && h2.Next(); i += 1 {
 		r.Equal(keys[i], h1.Key())
 		r.Equal(keys[i], h2.Key())
-		r.Equal(vals[i], h1.Value())
-		r.Equal(vals[i+10], h2.Value())
+		r.Equal(vals1[i], h1.Value())
+		r.Equal(vals2[i], h2.Value())
 	}
-	r.NoError(h1.Err())
-	r.NoError(h2.Err())
+	r.NoErrorf(h1.Err(), "failed on iter %d", i)
+	r.NoErrorf(h2.Err(), "failed on iter %d", i)
 }
 
 // Tests that basic iterator functionality works for proposal
@@ -1114,9 +1118,11 @@ func TestIterOnProposal(t *testing.T) {
 	it, err := p.Iter(nil)
 	r.NoError(err)
 
-	for i := 0; it.Next(); i += 1 {
+	i := 0
+	for ; it.Next(); i += 1 {
 		r.Equal(keys[i], it.Key())
 		r.Equal(vals[i], it.Value())
 	}
+	r.Equal(10, i)
 	r.NoError(it.Err())
 }

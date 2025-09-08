@@ -27,6 +27,9 @@ type Iterator struct {
 	err error
 }
 
+// Next proceeds to the next item on the iterator, and returns true
+// if succeeded and there is a pair available.
+// The new pair could be retrieved with Key and Value methods.
 func (it *Iterator) Next() bool {
 	kv, e := getKeyValueFromKeyValueResult(C.fwd_iter_next(it.handle))
 	it.err = e
@@ -40,6 +43,7 @@ func (it *Iterator) Next() bool {
 	return e == nil
 }
 
+// Key returns the key of the current pair
 func (it *Iterator) Key() []byte {
 	if (it.currentKey == nil && it.currentVal == nil) || it.err != nil {
 		return nil
@@ -47,6 +51,7 @@ func (it *Iterator) Key() []byte {
 	return it.currentKey
 }
 
+// Value returns the value of the current pair
 func (it *Iterator) Value() []byte {
 	if (it.currentKey == nil && it.currentVal == nil) || it.err != nil {
 		return nil
@@ -54,6 +59,7 @@ func (it *Iterator) Value() []byte {
 	return it.currentVal
 }
 
+// Err returns the error if Next failed
 func (it *Iterator) Err() error {
 	return it.err
 }

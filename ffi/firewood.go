@@ -198,9 +198,9 @@ func (db *Database) GetFromRoot(root, key []byte) ([]byte, error) {
 	))
 }
 
-// IterLatest creates and iterator starting from the provided key on the latest root hash.
+// Iter creates and iterator starting from the provided key on the latest root hash.
 // pass empty slice to start from beginning
-func (db *Database) IterLatest(key []byte) (*Iterator, error) {
+func (db *Database) Iter(key []byte) (*Iterator, error) {
 	return db.IterOnRoot(nil, key)
 }
 
