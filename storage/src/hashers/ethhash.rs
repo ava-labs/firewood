@@ -134,9 +134,6 @@ impl<T: Hashable> Preimage for T {
                             rlp.append(&bytes);
                         }
                     }
-                    Some(ValueDigest::Hash(hash)) => {
-                        rlp.append(&hash);
-                    }
                     None => {
                         rlp.append_empty_data();
                     }
@@ -144,7 +141,6 @@ impl<T: Hashable> Preimage for T {
             } else {
                 match self.value_digest() {
                     Some(ValueDigest::Value(bytes)) => rlp.append(&bytes),
-                    Some(ValueDigest::Hash(hash)) => rlp.append(&hash),
                     None => rlp.append_empty_data(),
                 };
             }
