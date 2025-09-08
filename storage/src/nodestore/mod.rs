@@ -265,7 +265,7 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     }
 
     /// Returns the root of this proposal.
-    pub const fn mut_root(&mut self) -> &mut Option<Node> {
+    pub const fn root_mut(&mut self) -> &mut Option<Node> {
         &mut self.kind.root
     }
 }
@@ -277,6 +277,7 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
     /// # Panics
     ///
     /// Panics if the header cannot be written.
+    #[cfg(any(test, feature = "test_utils"))]
     pub fn new_empty_proposal(storage: Arc<S>) -> Self {
         let header = NodeStoreHeader::new();
         let header_bytes = bytemuck::bytes_of(&header);
@@ -468,6 +469,10 @@ pub struct NodeStore<T, S> {
 impl<T, S> NodeStore<T, S> {
     pub(crate) const fn freelists(&self) -> &alloc::FreeLists {
         self.header.free_lists()
+    }
+
+    pub(crate) const fn freelists_mut(&mut self) -> &mut alloc::FreeLists {
+        self.header.free_lists_mut()
     }
 }
 
@@ -812,7 +817,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 }
 
 // Helper functions for the checker
-impl<S: ReadableStorage> NodeStore<Committed, S> {
+impl<T, S: ReadableStorage> NodeStore<T, S>
+where
+    NodeStore<T, S>: NodeReader,
+{
     pub(crate) const fn size(&self) -> u64 {
         self.header.size()
     }
@@ -924,7 +932,7 @@ mod tests {
             value: huge_value.into_boxed_slice(),
         });
 
-        node_store.mut_root().replace(giant_leaf);
+        node_store.root_mut().replace(giant_leaf);
 
         let immutable = NodeStore::<Arc<ImmutableProposal>, _>::try_from(node_store).unwrap();
         println!("{immutable:?}"); // should not be reached, but need to consume immutable to avoid optimization removal

@@ -5,9 +5,10 @@ use firewood::merkle;
 use firewood::v2::api;
 use std::fmt;
 
-use crate::iterator::{CreateIteratorResult, IteratorHandle};
-use crate::value::kvp::OwnedKeyValuePair;
-use crate::{CreateProposalResult, HashKey, OwnedBytes, ProposalHandle};
+use crate::{
+    ChangeProofContext, CreateIteratorResult, CreateProposalResult, HashKey, IteratorHandle,
+    NextKeyRange, OwnedBytes, OwnedKeyValuePair, ProposalHandle, RangeProofContext,
+};
 
 /// The result type returned from an FFI function that returns no value but may
 /// return an error.
@@ -166,6 +167,87 @@ impl<E: fmt::Display> From<Result<Option<api::HashKey>, E>> for HashResult {
     }
 }
 
+/// A result type returned from FFI functions that create or parse range proofs.
+///
+/// The caller must ensure that [`fwd_free_range_proof`] is called to
+/// free the memory associated with the returned context when it is no longer
+/// needed.
+///
+/// [`fwd_free_range_proof`]: crate::fwd_free_range_proof
+#[derive(Debug)]
+#[repr(C)]
+pub enum RangeProofResult {
+    /// The caller provided a null pointer to the input handle.
+    NullHandlePointer,
+    /// The provided root was not found in the database.
+    RevisionNotFound(HashKey),
+    /// The proof was successfully created or parsed.
+    ///
+    /// If the value was parsed from a serialized proof, this does not imply that
+    /// the proof is valid, only that it is well-formed. The verify method must
+    /// be called to ensure the proof is cryptographically valid.
+    Ok(Box<RangeProofContext>),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+/// A result type returned from FFI functions that create or parse change proofs.
+///
+/// The caller must ensure that [`fwd_free_change_proof`] is called to
+/// free the memory associated with the returned context when it is no longer
+/// needed.
+///
+/// [`fwd_free_change_proof`]: crate::fwd_free_change_proof
+#[derive(Debug)]
+#[repr(C)]
+pub enum ChangeProofResult {
+    /// The caller provided a null pointer to the input handle.
+    NullHandlePointer,
+    /// The provided root was not found in the database.
+    RevisionNotFound(HashKey),
+    /// The proof was successfully created or parsed.
+    ///
+    /// If the value was parsed from a serialized proof, this does not imply that
+    /// the proof is valid, only that it is well-formed. The verify method must
+    /// be called to ensure the proof is cryptographically valid.
+    Ok(Box<ChangeProofContext>),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+#[derive(Debug)]
+#[repr(C)]
+pub enum NextKeyRangeResult {
+    /// The caller provided a null pointer to the input handle.
+    NullHandlePointer,
+    /// The proof has not prepared into a proposal nor committed to the database.
+    NotPrepared,
+    /// There are no more keys to fetch.
+    None,
+    /// The next key range to fetch is returned.
+    Some(NextKeyRange),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
 /// A result type returned from FFI functions that create a proposal but do not
 /// commit it to the database.
 #[derive(Debug)]
@@ -320,59 +402,50 @@ pub(crate) trait CResult: Sized {
     }
 }
 
-impl NullHandleResult for VoidResult {
-    fn null_handle_pointer_error() -> Self {
-        Self::NullHandlePointer
-    }
+macro_rules! impl_null_handle_result {
+    ($($Enum:ty),* $(,)?) => {
+        $(
+            impl NullHandleResult for $Enum {
+                fn null_handle_pointer_error() -> Self {
+                    Self::NullHandlePointer
+                }
+            }
+        )*
+    };
 }
 
-impl CResult for VoidResult {
-    fn from_err(err: impl ToString) -> Self {
-        Self::Err(err.to_string().into_bytes().into())
-    }
+macro_rules! impl_cresult {
+    ($($Enum:ty),* $(,)?) => {
+        $(
+            impl CResult for $Enum {
+                fn from_err(err: impl ToString) -> Self {
+                    Self::Err(err.to_string().into_bytes().into())
+                }
+            }
+        )*
+    };
 }
 
-impl CResult for HandleResult {
-    fn from_err(err: impl ToString) -> Self {
-        Self::Err(err.to_string().into_bytes().into())
-    }
-}
+impl_null_handle_result!(
+    VoidResult,
+    ValueResult,
+    HashResult,
+    RangeProofResult,
+    ChangeProofResult,
+    NextKeyRangeResult,
+    ProposalResult<'_>,
+);
 
-impl NullHandleResult for ValueResult {
-    fn null_handle_pointer_error() -> Self {
-        Self::NullHandlePointer
-    }
-}
-
-impl CResult for ValueResult {
-    fn from_err(err: impl ToString) -> Self {
-        Self::Err(err.to_string().into_bytes().into())
-    }
-}
-
-impl NullHandleResult for HashResult {
-    fn null_handle_pointer_error() -> Self {
-        Self::NullHandlePointer
-    }
-}
-
-impl CResult for HashResult {
-    fn from_err(err: impl ToString) -> Self {
-        Self::Err(err.to_string().into_bytes().into())
-    }
-}
-
-impl NullHandleResult for ProposalResult<'_> {
-    fn null_handle_pointer_error() -> Self {
-        Self::NullHandlePointer
-    }
-}
-
-impl CResult for ProposalResult<'_> {
-    fn from_err(err: impl ToString) -> Self {
-        Self::Err(err.to_string().into_bytes().into())
-    }
-}
+impl_cresult!(
+    VoidResult,
+    ValueResult,
+    HashResult,
+    HandleResult,
+    RangeProofResult,
+    ChangeProofResult,
+    NextKeyRangeResult,
+    ProposalResult<'_>,
+);
 
 impl NullHandleResult for IteratorResult<'_> {
     fn null_handle_pointer_error() -> Self {

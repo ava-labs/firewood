@@ -27,6 +27,7 @@ mod handle;
 mod iterator;
 mod logging;
 mod metrics_setup;
+mod proofs;
 mod proposal;
 mod value;
 
@@ -35,6 +36,7 @@ use firewood::v2::api::DbView;
 pub use crate::handle::*;
 pub use crate::iterator::*;
 pub use crate::logging::*;
+pub use crate::proofs::*;
 pub use crate::proposal::*;
 pub use crate::value::*;
 
