@@ -1107,6 +1107,7 @@ func TestIterEmptyDb(t *testing.T) {
 }
 
 type kvIter interface {
+	SetBatchSize(int)
 	Next() bool
 	Key() []byte
 	Value() []byte
@@ -1115,11 +1116,12 @@ type kvIter interface {
 }
 type borrowIter struct{ it *Iterator }
 
-func (b borrowIter) Next() bool    { return b.it.NextBorrowed() }
-func (b borrowIter) Key() []byte   { return b.it.Key() }
-func (b borrowIter) Value() []byte { return b.it.Value() }
-func (b borrowIter) Err() error    { return b.it.Err() }
-func (b borrowIter) Drop() error   { return b.it.Drop() }
+func (b borrowIter) SetBatchSize(int) { b.it.SetBatchSize(1) }
+func (b borrowIter) Next() bool       { return b.it.NextBorrowed() }
+func (b borrowIter) Key() []byte      { return b.it.Key() }
+func (b borrowIter) Value() []byte    { return b.it.Value() }
+func (b borrowIter) Err() error       { return b.it.Err() }
+func (b borrowIter) Drop() error      { return b.it.Drop() }
 
 func assertIteratorYields(r *require.Assertions, it kvIter, keys [][]byte, vals [][]byte) {
 	i := 0
@@ -1132,31 +1134,63 @@ func assertIteratorYields(r *require.Assertions, it kvIter, keys [][]byte, vals 
 	r.NoError(it.Drop())
 }
 
-// Tests that basic iterator functionality works
+type iteratorConfigFn = func(it kvIter) kvIter
+
+var iterConfigs = map[string]iteratorConfigFn{
+	"Owned":    func(it kvIter) kvIter { return it },
+	"Borrowed": func(it kvIter) kvIter { return borrowIter{it: it.(*Iterator)} },
+	"Single": func(it kvIter) kvIter {
+		it.SetBatchSize(1)
+		return it
+	},
+	"Batched": func(it kvIter) kvIter {
+		it.SetBatchSize(100)
+		return it
+	},
+}
+
+func runIteratorTestForModes(parentT *testing.T, fn func(*testing.T, iteratorConfigFn), modes ...string) {
+	r := require.New(parentT)
+	testName := strings.Join(modes, "/")
+	parentT.Run(testName, func(t *testing.T) {
+		fn(t, func(it kvIter) kvIter {
+			for _, m := range modes {
+				config, ok := iterConfigs[m]
+				r.Truef(ok, "specified config mode %s does not exist", m)
+				it = config(it)
+			}
+			return it
+		})
+	})
+}
+
+func runIteratorTestForAllModes(parentT *testing.T, fn func(*testing.T, iteratorConfigFn)) {
+	for _, dataMode := range []string{"Owned", "Borrowed"} {
+		for _, batchMode := range []string{"Single", "Batched"} {
+			runIteratorTestForModes(parentT, fn, batchMode, dataMode)
+		}
+	}
+}
+
 func TestIter(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
+	keys, vals := kvForBench(100)
+	_, err := db.Update(keys, vals)
+	r.NoError(err)
 
-	dataModes := []struct {
-		name     string
-		configFn func(it *Iterator) kvIter
-	}{
-		{"Owned", func(it *Iterator) kvIter { return it }},
-		{"Borrowed", func(it *Iterator) kvIter { return borrowIter{it: it} }},
-	}
+	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
+		r := require.New(t)
+		it, err := db.Iter(nil)
+		r.NoError(err)
 
-	batchModes := []struct {
-		name     string
-		configFn func(it *Iterator)
-	}{
-		{"Single", func(it *Iterator) {
-			it.SetBatchSize(1)
-		}},
-		{"Batched", func(it *Iterator) {
-			it.SetBatchSize(100)
-		}},
-	}
+		assertIteratorYields(r, cfn(it), keys, vals)
+	})
+}
 
+func TestIterOnRoot(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
 	keys, vals := kvForBench(240)
 	firstRoot, err := db.Update(keys[:80], vals[:80])
 	r.NoError(err)
@@ -1165,27 +1199,7 @@ func TestIter(t *testing.T) {
 	thirdRoot, err := db.Update(keys[160:], vals[160:])
 	r.NoError(err)
 
-	runForAllModes := func(parentT *testing.T, name string, fn func(*testing.T, func(it *Iterator) kvIter)) {
-		for _, dataMode := range dataModes {
-			for _, batchMode := range batchModes {
-				parentT.Run(fmt.Sprintf("%s/%s/%s", name, dataMode.name, batchMode.name), func(t *testing.T) {
-					fn(t, func(it *Iterator) kvIter {
-						batchMode.configFn(it)
-						return dataMode.configFn(it)
-					})
-				})
-			}
-		}
-	}
-	runForAllModes(t, "Latest", func(t *testing.T, configureIterator func(it *Iterator) kvIter) {
-		r := require.New(t)
-		it, err := db.Iter(nil)
-		r.NoError(err)
-
-		assertIteratorYields(r, configureIterator(it), keys, vals)
-	})
-
-	runForAllModes(t, "OnRoot", func(t *testing.T, configureIterator func(it *Iterator) kvIter) {
+	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
 		r := require.New(t)
 		h1, err := db.IterOnRoot(firstRoot, nil)
 		r.NoError(err)
@@ -1194,12 +1208,20 @@ func TestIter(t *testing.T) {
 		h3, err := db.IterOnRoot(thirdRoot, nil)
 		r.NoError(err)
 
-		assertIteratorYields(r, configureIterator(h1), keys[:80], vals[:80])
-		assertIteratorYields(r, configureIterator(h2), keys[:160], vals[:160])
-		assertIteratorYields(r, configureIterator(h3), keys, vals)
+		assertIteratorYields(r, cfn(h1), keys[:80], vals[:80])
+		assertIteratorYields(r, cfn(h2), keys[:160], vals[:160])
+		assertIteratorYields(r, cfn(h3), keys, vals)
 	})
+}
 
-	runForAllModes(t, "OnProposal", func(t *testing.T, configureIterator func(it *Iterator) kvIter) {
+func TestIterOnProposal(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+	keys, vals := kvForBench(240)
+	_, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
 		r := require.New(t)
 		updatedValues := make([][]byte, len(vals))
 		copy(updatedValues, vals)
@@ -1217,7 +1239,7 @@ func TestIter(t *testing.T) {
 		it, err := p.Iter(nil)
 		r.NoError(err)
 
-		assertIteratorYields(r, configureIterator(it), keys, updatedValues)
+		assertIteratorYields(r, cfn(it), keys, updatedValues)
 	})
 }
 

@@ -6,6 +6,7 @@ package ffi
 // #include <stdlib.h>
 // #include "firewood.h"
 import "C"
+import "errors"
 
 type Iterator struct {
 	// The database this iterator is associated with. We hold onto this to ensure
@@ -43,7 +44,7 @@ type Iterator struct {
 	currentResource interface{ Free() error }
 }
 
-func (it *Iterator) Release() error {
+func (it *Iterator) freeCurrentAllocation() error {
 	if it.currentResource == nil {
 		return nil
 	}
@@ -52,7 +53,7 @@ func (it *Iterator) Release() error {
 
 func (it *Iterator) nextInternal() error {
 	if len(it.loadedPairs) == 0 {
-		if e := it.Release(); e != nil {
+		if e := it.freeCurrentAllocation(); e != nil {
 			return e
 		}
 		if it.batchSize <= 1 {
@@ -98,7 +99,6 @@ func (it *Iterator) Next() bool {
 	k, v := it.currentPair.Copy()
 	it.currentKey = k
 	it.currentValue = v
-	it.err = nil
 	return true
 }
 
@@ -139,8 +139,11 @@ func (it *Iterator) Err() error {
 
 // Drop drops the iterator and releases the resources
 func (it *Iterator) Drop() error {
+	e1 := it.freeCurrentAllocation()
 	if it.handle != nil {
-		return getErrorFromVoidResult(C.fwd_free_iterator(it.handle))
+		return errors.Join(
+			e1,
+			getErrorFromVoidResult(C.fwd_free_iterator(it.handle)))
 	}
-	return nil
+	return e1
 }
