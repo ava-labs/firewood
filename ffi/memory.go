@@ -313,11 +313,11 @@ type ownedKeyValueBatch struct {
 	owned C.OwnedKeyValueBatch
 }
 
-func (b *ownedKeyValueBatch) Copied() []*ownedKeyValue {
+func (b *ownedKeyValueBatch) copy() []*ownedKeyValue {
 	if b.owned.ptr == nil {
 		return nil
 	}
-	borrowed := b.Borrow()
+	borrowed := b.borrow()
 	copied := make([]*ownedKeyValue, len(borrowed))
 	for i, borrow := range borrowed {
 		copied[i] = newOwnedKeyValue(borrow)
@@ -325,7 +325,7 @@ func (b *ownedKeyValueBatch) Copied() []*ownedKeyValue {
 	return copied
 }
 
-func (b *ownedKeyValueBatch) Borrow() []C.OwnedKeyValuePair {
+func (b *ownedKeyValueBatch) borrow() []C.OwnedKeyValuePair {
 	if b.owned.ptr == nil {
 		return nil
 	}
@@ -333,8 +333,9 @@ func (b *ownedKeyValueBatch) Borrow() []C.OwnedKeyValuePair {
 	return unsafe.Slice((*C.OwnedKeyValuePair)(unsafe.Pointer(b.owned.ptr)), b.owned.len)
 }
 
-func (b *ownedKeyValueBatch) Free() error {
-	if b.owned.ptr == nil {
+func (b *ownedKeyValueBatch) free() error {
+	if b == nil || b.owned.ptr == nil {
+		// we want ownedKeyValueBatch to be typed-nil safe
 		return nil
 	}
 
@@ -362,18 +363,18 @@ type ownedKeyValue struct {
 	value *ownedBytes
 }
 
-func (kv *ownedKeyValue) Copy() ([]byte, []byte) {
+func (kv *ownedKeyValue) copy() ([]byte, []byte) {
 	key := kv.key.CopiedBytes()
 	value := kv.value.CopiedBytes()
 	return key, value
 }
 
-func (kv *ownedKeyValue) Free() error {
-	err := kv.key.Free()
-	if err != nil {
-		return fmt.Errorf("%w: %w", errFreeingValue, err)
+func (kv *ownedKeyValue) free() error {
+	if kv == nil {
+		// we want ownedKeyValue to be typed-nil safe
+		return nil
 	}
-	err = kv.value.Free()
+	err := errors.Join(kv.key.Free(), kv.value.Free())
 	if err != nil {
 		return fmt.Errorf("%w: %w", errFreeingValue, err)
 	}
@@ -391,12 +392,12 @@ func newOwnedKeyValue(owned C.OwnedKeyValuePair) *ownedKeyValue {
 	}
 }
 
-// getKeyValueFromKeyValueResult converts a C.KeyValueResult to a key value pair or error.
+// getKeyValueFromResult converts a C.KeyValueResult to a key value pair or error.
 //
 // It returns nil, nil if the result is None.
 // It returns a *ownedKeyValue, nil if the result is Some.
 // It returns an error if the result is an error.
-func getKeyValueFromKeyValueResult(result C.KeyValueResult) (*ownedKeyValue, error) {
+func getKeyValueFromResult(result C.KeyValueResult) (*ownedKeyValue, error) {
 	switch result.tag {
 	case C.KeyValueResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -417,12 +418,12 @@ func getKeyValueFromKeyValueResult(result C.KeyValueResult) (*ownedKeyValue, err
 	}
 }
 
-// getKeyValueBatchFromKeyValueBatchResult converts a C.KeyValueResult to a key value pair or error.
+// getKeyValueBatchFromResult converts a C.KeyValueBatchResult to a key value batch or error.
 //
 // It returns nil, nil if the result is None.
 // It returns a *ownedKeyValueBatch, nil if the result is Some.
 // It returns an error if the result is an error.
-func getKeyValueBatchFromKeyValueBatchResult(result C.KeyValueBatchResult) (*ownedKeyValueBatch, error) {
+func getKeyValueBatchFromResult(result C.KeyValueBatchResult) (*ownedKeyValueBatch, error) {
 	switch result.tag {
 	case C.KeyValueBatchResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -485,25 +486,5 @@ func getChangeProofFromChangeProofResult(result C.ChangeProofResult) (*ChangePro
 		return nil, err
 	default:
 		return nil, fmt.Errorf("unknown C.ChangeProofResult tag: %d", result.tag)
-	}
-}
-
-// getIteratorFromIteratorResult converts a C.IteratorResult to an Iterator or error.
-func getIteratorFromIteratorResult(result C.IteratorResult, db *Database) (*Iterator, error) {
-	switch result.tag {
-	case C.IteratorResult_NullHandlePointer:
-		return nil, errDBClosed
-	case C.IteratorResult_Ok:
-		body := (*C.IteratorResult_Ok_Body)(unsafe.Pointer(&result.anon0))
-		proposal := &Iterator{
-			db:     db,
-			handle: body.handle,
-		}
-		return proposal, nil
-	case C.IteratorResult_Err:
-		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
-		return nil, err
-	default:
-		return nil, fmt.Errorf("unknown C.IteratorResult tag: %d", result.tag)
 	}
 }
