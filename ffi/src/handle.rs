@@ -185,9 +185,12 @@ impl DatabaseHandle {
     /// An error is returned if the requested revision doesn't exist.
     pub fn iter_on_root(
         &self,
-        root: HashKey,
+        root: Option<HashKey>,
         first_key: Option<&[u8]>,
     ) -> Result<CreateIteratorResult<'_>, api::Error> {
+        let Some(root) = root.or(self.current_root_hash()?) else {
+            return Ok(CreateIteratorResult::default());
+        };
         let view = self.db.iter_view(root)?;
         let it = view.iter_owned(first_key);
 
