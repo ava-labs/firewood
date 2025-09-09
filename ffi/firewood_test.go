@@ -1052,7 +1052,6 @@ func assertIteratorYields(r *require.Assertions, it *Iterator, keys [][]byte, va
 	}
 	r.NoError(it.Err())
 	r.Equal(len(keys), i)
-	r.NoError(it.Drop())
 }
 
 // Tests that iterator isn't created for empty database
@@ -1062,6 +1061,10 @@ func TestIterEmptyDb(t *testing.T) {
 
 	it, err := db.Iter(nil)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(it.Drop())
+	})
+
 	r.False(it.Next())
 }
 
@@ -1076,6 +1079,9 @@ func TestIter(t *testing.T) {
 
 	it, err := db.Iter(nil)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(it.Drop())
+	})
 
 	assertIteratorYields(r, it, keys, vals)
 }
@@ -1099,9 +1105,15 @@ func TestIterOnRoot(t *testing.T) {
 
 	h1, err := db.IterOnRoot(firstRoot, nil)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(h1.Drop())
+	})
 
 	h2, err := db.IterOnRoot(secondRoot, nil)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(h2.Drop())
+	})
 
 	assertIteratorYields(r, h1, keys, vals1)
 	assertIteratorYields(r, h2, keys, vals2)
@@ -1118,6 +1130,9 @@ func TestIterOnProposal(t *testing.T) {
 
 	it, err := p.Iter(nil)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(it.Drop())
+	})
 
 	assertIteratorYields(r, it, keys, vals)
 }
@@ -1133,6 +1148,9 @@ func TestIterAfterProposalCommit(t *testing.T) {
 
 	it, err := p.Iter(nil)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(it.Drop())
+	})
 
 	err = p.Commit()
 	r.NoError(err)
@@ -1155,6 +1173,9 @@ func TestIterUpdate(t *testing.T) {
 	// get an iterator on latest revision
 	it, err := db.Iter(nil)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(it.Drop())
+	})
 
 	// update the database
 	keys2, vals2 := kvForTest(10)
