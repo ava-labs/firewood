@@ -90,13 +90,19 @@ pub struct ProofNode {
 
 impl std::fmt::Debug for ProofNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let child_hashes = self
+            .child_hashes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, h)| h.as_ref().map(|h| (i, h)))
+            .collect::<Vec<_>>();
         let hash = firewood_storage::Preimage::to_hash(self);
 
         f.debug_struct("ProofNode")
             .field("key", &self.key)
             .field("partial_len", &self.partial_len)
             .field("value_digest", &self.value_digest)
-            .field("child_hashes", &self.child_hashes)
+            .field("child_hashes", &child_hashes)
             .field("hash", &hash)
             .finish()
     }
