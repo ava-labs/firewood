@@ -6,10 +6,12 @@ package ffi
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -244,7 +246,39 @@ func kvForTest(num int) ([][]byte, [][]byte) {
 		keys[i] = keyForTest(i)
 		vals[i] = valForTest(i)
 	}
+	_ = sortKV(keys, vals)
 	return keys, vals
+}
+
+// sortKV sorts keys lexicographically and keeps vals paired.
+func sortKV(keys, vals [][]byte) error {
+	if len(keys) != len(vals) {
+		return errors.New("keys/vals length mismatch")
+	}
+	n := len(keys)
+	if n <= 1 {
+		return nil
+	}
+	ord := make([]int, n)
+	for i := range ord {
+		ord[i] = i
+	}
+	slices.SortFunc(ord, func(i, j int) int {
+		return bytes.Compare(keys[i], keys[j])
+	})
+	perm := make([]int, n)
+	for dest, orig := range ord {
+		perm[orig] = dest
+	}
+	for i := 0; i < n; i++ {
+		for perm[i] != i {
+			j := perm[i]
+			keys[i], keys[j] = keys[j], keys[i]
+			vals[i], vals[j] = vals[j], vals[i]
+			perm[i], perm[j] = perm[j], j
+		}
+	}
+	return nil
 }
 
 // Tests that 100 key-value pairs can be inserted and retrieved.
@@ -1044,16 +1078,6 @@ func TestGetFromRootParallel(t *testing.T) {
 	}
 }
 
-func assertIteratorYields(r *require.Assertions, it *Iterator, keys [][]byte, vals [][]byte) {
-	i := 0
-	for ; it.Next(); i += 1 {
-		r.Equal(keys[i], it.Key())
-		r.Equal(vals[i], it.Value())
-	}
-	r.NoError(it.Err())
-	r.Equal(len(keys), i)
-}
-
 // Tests that iterator isn't created for empty database
 func TestIterEmptyDb(t *testing.T) {
 	r := require.New(t)
@@ -1068,73 +1092,157 @@ func TestIterEmptyDb(t *testing.T) {
 	r.False(it.Next())
 }
 
-// Tests that basic iterator functionality works
+type kvIter interface {
+	SetBatchSize(int)
+	Next() bool
+	Key() []byte
+	Value() []byte
+	Err() error
+	Drop() error
+}
+type borrowIter struct{ it *Iterator }
+
+func (b *borrowIter) SetBatchSize(batchSize int) { b.it.SetBatchSize(batchSize) }
+func (b *borrowIter) Next() bool                 { return b.it.NextBorrowed() }
+func (b *borrowIter) Key() []byte                { return b.it.Key() }
+func (b *borrowIter) Value() []byte              { return b.it.Value() }
+func (b *borrowIter) Err() error                 { return b.it.Err() }
+func (b *borrowIter) Drop() error                { return b.it.Drop() }
+
+func assertIteratorYields(r *require.Assertions, it kvIter, keys [][]byte, vals [][]byte) {
+	i := 0
+	for ; it.Next(); i += 1 {
+		r.Equal(keys[i], it.Key())
+		r.Equal(vals[i], it.Value())
+	}
+	r.NoError(it.Err())
+	r.Equal(len(keys), i)
+}
+
+type iteratorConfigFn = func(it kvIter) kvIter
+
+var iterConfigs = map[string]iteratorConfigFn{
+	"Owned":    func(it kvIter) kvIter { return it },
+	"Borrowed": func(it kvIter) kvIter { return &borrowIter{it: it.(*Iterator)} },
+	"Single": func(it kvIter) kvIter {
+		it.SetBatchSize(1)
+		return it
+	},
+	"Batched": func(it kvIter) kvIter {
+		it.SetBatchSize(100)
+		return it
+	},
+}
+
+func runIteratorTestForModes(t *testing.T, fn func(*testing.T, iteratorConfigFn), modes ...string) {
+	testName := strings.Join(modes, "/")
+	t.Run(testName, func(t *testing.T) {
+		r := require.New(t)
+		fn(t, func(it kvIter) kvIter {
+			for _, m := range modes {
+				config, ok := iterConfigs[m]
+				r.Truef(ok, "specified config mode %s does not exist", m)
+				it = config(it)
+			}
+			return it
+		})
+	})
+}
+
+func runIteratorTestForAllModes(parentT *testing.T, fn func(*testing.T, iteratorConfigFn)) {
+	for _, dataMode := range []string{"Owned", "Borrowed"} {
+		for _, batchMode := range []string{"Single", "Batched"} {
+			runIteratorTestForModes(parentT, fn, batchMode, dataMode)
+		}
+	}
+}
+
 func TestIter(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-
-	keys, vals := kvForTest(10)
+	keys, vals := kvForTest(100)
 	_, err := db.Update(keys, vals)
 	r.NoError(err)
 
-	it, err := db.Iter(nil)
-	r.NoError(err)
-	t.Cleanup(func() {
-		r.NoError(it.Drop())
-	})
+	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
+		r := require.New(t)
+		it, err := db.Iter(nil)
+		r.NoError(err)
+		t.Cleanup(func() {
+			r.NoError(it.Drop())
+		})
 
-	assertIteratorYields(r, it, keys, vals)
+		assertIteratorYields(r, cfn(it), keys, vals)
+	})
 }
 
-// Tests that iterators on different roots work fine
 func TestIterOnRoot(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-
-	// Commit 10 key-value pairs.
-	keys, vals := kvForTest(20)
-	keys = keys[:10]
-	vals1, vals2 := vals[:10], vals[10:]
-
-	firstRoot, err := db.Update(keys, vals1)
+	keys, vals := kvForTest(240)
+	firstRoot, err := db.Update(keys[:80], vals[:80])
+	r.NoError(err)
+	secondRoot, err := db.Update(keys[80:160], vals[80:160])
+	r.NoError(err)
+	thirdRoot, err := db.Update(keys[160:], vals[160:])
 	r.NoError(err)
 
-	// we use the same keys, but update the values
-	secondRoot, err := db.Update(keys, vals2)
-	r.NoError(err)
+	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
+		r := require.New(t)
+		h1, err := db.IterOnRoot(firstRoot, nil)
+		r.NoError(err)
+		t.Cleanup(func() {
+			r.NoError(h1.Drop())
+		})
 
-	h1, err := db.IterOnRoot(firstRoot, nil)
-	r.NoError(err)
-	t.Cleanup(func() {
-		r.NoError(h1.Drop())
+		h2, err := db.IterOnRoot(secondRoot, nil)
+		r.NoError(err)
+		t.Cleanup(func() {
+			r.NoError(h2.Drop())
+		})
+
+		h3, err := db.IterOnRoot(thirdRoot, nil)
+		r.NoError(err)
+		t.Cleanup(func() {
+			r.NoError(h3.Drop())
+		})
+
+		assertIteratorYields(r, cfn(h1), keys[:80], vals[:80])
+		assertIteratorYields(r, cfn(h2), keys[:160], vals[:160])
+		assertIteratorYields(r, cfn(h3), keys, vals)
 	})
-
-	h2, err := db.IterOnRoot(secondRoot, nil)
-	r.NoError(err)
-	t.Cleanup(func() {
-		r.NoError(h2.Drop())
-	})
-
-	assertIteratorYields(r, h1, keys, vals1)
-	assertIteratorYields(r, h2, keys, vals2)
 }
 
-// Tests that basic iterator functionality works for proposal
 func TestIterOnProposal(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-
-	keys, vals := kvForTest(10)
-	p, err := db.Propose(keys, vals)
+	keys, vals := kvForTest(240)
+	_, err := db.Update(keys, vals)
 	r.NoError(err)
 
-	it, err := p.Iter(nil)
-	r.NoError(err)
-	t.Cleanup(func() {
-		r.NoError(it.Drop())
+	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
+		r := require.New(t)
+		updatedValues := make([][]byte, len(vals))
+		copy(updatedValues, vals)
+
+		changedKeys := make([][]byte, 0)
+		changedVals := make([][]byte, 0)
+		for i := 0; i < len(vals); i += 4 {
+			changedKeys = append(changedKeys, keys[i])
+			newVal := []byte{byte(i)}
+			changedVals = append(changedVals, newVal)
+			updatedValues[i] = newVal
+		}
+		p, err := db.Propose(changedKeys, changedVals)
+		r.NoError(err)
+		it, err := p.Iter(nil)
+		r.NoError(err)
+		t.Cleanup(func() {
+			r.NoError(it.Drop())
+		})
+
+		assertIteratorYields(r, cfn(it), keys, updatedValues)
 	})
-
-	assertIteratorYields(r, it, keys, vals)
 }
 
 // Tests that the iterator still works after proposal is committed
