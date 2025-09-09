@@ -90,12 +90,14 @@ pub struct ProofNode {
 
 impl std::fmt::Debug for ProofNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Filter the missing children and only show the present ones with their indices
         let child_hashes = self
             .child_hashes
             .iter()
             .enumerate()
             .filter_map(|(i, h)| h.as_ref().map(|h| (i, h)))
             .collect::<Vec<_>>();
+        // Compute the hash and render it as well
         let hash = firewood_storage::Preimage::to_hash(self);
 
         f.debug_struct("ProofNode")
