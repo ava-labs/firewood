@@ -5,6 +5,7 @@ package ffi
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -279,6 +280,24 @@ func sortKV(keys, vals [][]byte) error {
 		}
 	}
 	return nil
+}
+
+func randomBytes(n int) []byte {
+	b := make([]byte, n)
+	_, _ = rand.Read(b)
+	return b
+}
+
+func kvForBench(num int) ([][]byte, [][]byte) {
+	keys := make([][]byte, num)
+	vals := make([][]byte, num)
+
+	for i := range keys {
+		keys[i] = randomBytes(32)
+		vals[i] = randomBytes(128)
+	}
+	_ = sortKV(keys, vals)
+	return keys, vals
 }
 
 // Tests that 100 key-value pairs can be inserted and retrieved.
@@ -1278,7 +1297,7 @@ func BenchmarkIterator(b *testing.B) {
 		configFn func(it *Iterator) kvIter
 	}{
 		{"Owned", func(it *Iterator) kvIter { return it }},
-		{"Borrowed", func(it *Iterator) kvIter { return borrowIter{it: it} }},
+		{"Borrowed", func(it *Iterator) kvIter { return &borrowIter{it: it} }},
 	}
 
 	type benchMode struct {
