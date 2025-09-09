@@ -110,13 +110,13 @@ func (it *Iterator) Next() bool {
 
 // NextBorrowed is like Next, but Key and Value **borrow** rust-owned buffers.
 //
-// ⚠️ Lifetime: the returned slices are valid **only until** the next call to
+// Lifetime: the returned slices are valid **only until** the next call to
 // Next, NextBorrowed, Close, or any operation that advances/invalidates the iterator.
 // They alias FFI-owned memory that will be **freed or reused** on the next advance.
 //
 // Do **not** retain, store, or modify these slices.
 // **Copy** or use Next if you need to keep them.
-// Misuse can read freed memory and cause corruption or crashes.
+// Misuse can read freed memory and cause undefined behavior.
 func (it *Iterator) NextBorrowed() bool {
 	it.err = it.nextInternal()
 	if it.currentPair == nil || it.err != nil {
@@ -151,13 +151,15 @@ func (it *Iterator) Err() error {
 
 // Drop drops the iterator and releases the resources
 func (it *Iterator) Drop() error {
-	e1 := it.freeCurrentAllocation()
+	err := it.freeCurrentAllocation()
 	if it.handle != nil {
+		// Always free the iterator even if releasing the current KV/batch failed.
+		// The iterator holds a NodeStore ref that must be dropped.
 		return errors.Join(
-			e1,
+			err,
 			getErrorFromVoidResult(C.fwd_free_iterator(it.handle)))
 	}
-	return e1
+	return err
 }
 
 // getIteratorFromIteratorResult converts a C.IteratorResult to an Iterator or error.

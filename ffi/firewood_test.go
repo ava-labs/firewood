@@ -5,7 +5,6 @@ package ffi
 
 import (
 	"bytes"
-	"crypto/rand"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -247,13 +246,8 @@ func kvForTest(num int) ([][]byte, [][]byte) {
 		keys[i] = keyForTest(i)
 		vals[i] = valForTest(i)
 	}
+	_ = sortKV(keys, vals)
 	return keys, vals
-}
-
-func randomBytes(n int) []byte {
-	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return b
 }
 
 // sortKV sorts keys lexicographically and keeps vals paired.
@@ -285,18 +279,6 @@ func sortKV(keys, vals [][]byte) error {
 		}
 	}
 	return nil
-}
-
-func kvForBench(num int) ([][]byte, [][]byte) {
-	keys := make([][]byte, num)
-	vals := make([][]byte, num)
-
-	for i := range keys {
-		keys[i] = randomBytes(32)
-		vals[i] = randomBytes(128)
-	}
-	_ = sortKV(keys, vals)
-	return keys, vals
 }
 
 // Tests that 100 key-value pairs can be inserted and retrieved.
@@ -1120,12 +1102,12 @@ type kvIter interface {
 }
 type borrowIter struct{ it *Iterator }
 
-func (b borrowIter) SetBatchSize(int) { b.it.SetBatchSize(1) }
-func (b borrowIter) Next() bool       { return b.it.NextBorrowed() }
-func (b borrowIter) Key() []byte      { return b.it.Key() }
-func (b borrowIter) Value() []byte    { return b.it.Value() }
-func (b borrowIter) Err() error       { return b.it.Err() }
-func (b borrowIter) Drop() error      { return b.it.Drop() }
+func (b *borrowIter) SetBatchSize(batchSize int) { b.it.SetBatchSize(batchSize) }
+func (b *borrowIter) Next() bool                 { return b.it.NextBorrowed() }
+func (b *borrowIter) Key() []byte                { return b.it.Key() }
+func (b *borrowIter) Value() []byte              { return b.it.Value() }
+func (b *borrowIter) Err() error                 { return b.it.Err() }
+func (b *borrowIter) Drop() error                { return b.it.Drop() }
 
 func assertIteratorYields(r *require.Assertions, it kvIter, keys [][]byte, vals [][]byte) {
 	i := 0
@@ -1141,7 +1123,7 @@ type iteratorConfigFn = func(it kvIter) kvIter
 
 var iterConfigs = map[string]iteratorConfigFn{
 	"Owned":    func(it kvIter) kvIter { return it },
-	"Borrowed": func(it kvIter) kvIter { return borrowIter{it: it.(*Iterator)} },
+	"Borrowed": func(it kvIter) kvIter { return &borrowIter{it: it.(*Iterator)} },
 	"Single": func(it kvIter) kvIter {
 		it.SetBatchSize(1)
 		return it
@@ -1152,10 +1134,10 @@ var iterConfigs = map[string]iteratorConfigFn{
 	},
 }
 
-func runIteratorTestForModes(parentT *testing.T, fn func(*testing.T, iteratorConfigFn), modes ...string) {
-	r := require.New(parentT)
+func runIteratorTestForModes(t *testing.T, fn func(*testing.T, iteratorConfigFn), modes ...string) {
+	r := require.New(t)
 	testName := strings.Join(modes, "/")
-	parentT.Run(testName, func(t *testing.T) {
+	t.Run(testName, func(t *testing.T) {
 		fn(t, func(it kvIter) kvIter {
 			for _, m := range modes {
 				config, ok := iterConfigs[m]
@@ -1178,7 +1160,7 @@ func runIteratorTestForAllModes(parentT *testing.T, fn func(*testing.T, iterator
 func TestIter(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals := kvForBench(100)
+	keys, vals := kvForTest(100)
 	_, err := db.Update(keys, vals)
 	r.NoError(err)
 
@@ -1197,7 +1179,7 @@ func TestIter(t *testing.T) {
 func TestIterOnRoot(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals := kvForBench(240)
+	keys, vals := kvForTest(240)
 	firstRoot, err := db.Update(keys[:80], vals[:80])
 	r.NoError(err)
 	secondRoot, err := db.Update(keys[80:160], vals[80:160])
@@ -1234,7 +1216,7 @@ func TestIterOnRoot(t *testing.T) {
 func TestIterOnProposal(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals := kvForBench(240)
+	keys, vals := kvForTest(240)
 	_, err := db.Update(keys, vals)
 	r.NoError(err)
 
