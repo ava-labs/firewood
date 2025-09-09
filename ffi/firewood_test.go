@@ -1135,9 +1135,9 @@ var iterConfigs = map[string]iteratorConfigFn{
 }
 
 func runIteratorTestForModes(t *testing.T, fn func(*testing.T, iteratorConfigFn), modes ...string) {
-	r := require.New(t)
 	testName := strings.Join(modes, "/")
 	t.Run(testName, func(t *testing.T) {
+		r := require.New(t)
 		fn(t, func(it kvIter) kvIter {
 			for _, m := range modes {
 				config, ok := iterConfigs[m]
