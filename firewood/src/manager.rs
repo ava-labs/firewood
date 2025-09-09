@@ -19,8 +19,8 @@ use firewood_storage::logger::{trace, warn};
 use metrics::gauge;
 use typed_builder::TypedBuilder;
 
-use crate::merkle::Merkle;
-use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
+use crate::merkle::{Key, Merkle, Value};
+use crate::v2::api::{ArcDynDbView, Error, HashKey, OptionalHashKeyExt, OwnedIterView};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
@@ -91,6 +91,32 @@ pub(crate) enum RevisionManagerError {
     FileIoError(#[from] FileIoError),
 }
 
+pub(crate) enum ViewKind {
+    Committed(CommittedRevision),
+    Proposed(ProposedRevision),
+}
+
+impl OwnedIterView for ViewKind {
+    fn iter_owned(
+        &self,
+        first_key: Option<&[u8]>,
+    ) -> Box<dyn Iterator<Item = Result<(Key, Value), Error>>> {
+        match &self {
+            ViewKind::Committed(v) => v.iter_owned(first_key),
+            ViewKind::Proposed(v) => v.iter_owned(first_key),
+        }
+    }
+}
+
+impl From<ViewKind> for ArcDynDbView {
+    fn from(value: ViewKind) -> Self {
+        match value {
+            ViewKind::Committed(v) => v,
+            ViewKind::Proposed(v) => v,
+        }
+    }
+}
+
 impl RevisionManager {
     pub fn new(filename: PathBuf, config: ConfigManager) -> Result<Self, FileIoError> {
         let fb = FileBacked::new(
@@ -101,6 +127,11 @@ impl RevisionManager {
             config.create,
             config.manager.cache_read_strategy,
         )?;
+
+        // Acquire an advisory lock on the database file to prevent multiple processes
+        // from opening the same database simultaneously
+        fb.lock()?;
+
         let storage = Arc::new(fb);
         let nodestore = Arc::new(NodeStore::open(storage.clone())?);
         let manager = Self {
@@ -259,25 +290,21 @@ impl RevisionManager {
         self.proposals.lock().expect("poisoned lock").push(proposal);
     }
 
-    pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, RevisionManagerError> {
-        // First try to find it in committed revisions
-        if let Ok(committed) = self.revision(root_hash.clone()) {
-            return Ok(committed);
-        }
-
-        // If not found in committed revisions, try proposals
-        let proposal = self
-            .proposals
-            .lock()
-            .expect("poisoned lock")
-            .iter()
-            .find(|p| p.root_hash().as_ref() == Some(&root_hash))
-            .cloned()
-            .ok_or(RevisionManagerError::RevisionNotFound {
-                provided: root_hash,
-            })?;
-
-        Ok(proposal)
+    pub fn view(&self, root_hash: HashKey) -> Result<ViewKind, RevisionManagerError> {
+        self.revision(root_hash.clone())
+            .map(ViewKind::Committed)
+            .or_else(|_| {
+                self.proposals
+                    .lock()
+                    .expect("poisoned lock")
+                    .iter()
+                    .find(|p| p.root_hash().as_ref() == Some(&root_hash))
+                    .cloned()
+                    .map(ViewKind::Proposed)
+                    .ok_or_else(|| RevisionManagerError::RevisionNotFound {
+                        provided: root_hash.clone(),
+                    })
+            })
     }
 
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
@@ -306,6 +333,54 @@ impl RevisionManager {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
-    // TODO
+    use super::*;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn test_file_advisory_lock() {
+        // Create a temporary file for testing
+        let temp_file = NamedTempFile::new().unwrap();
+        let db_path = temp_file.path().to_path_buf();
+
+        let config = ConfigManager::builder()
+            .create(true)
+            .truncate(false)
+            .build();
+
+        // First database instance should open successfully
+        let first_manager = RevisionManager::new(db_path.clone(), config.clone());
+        assert!(
+            first_manager.is_ok(),
+            "First database should open successfully"
+        );
+
+        // Second database instance should fail to open due to file locking
+        let second_manager = RevisionManager::new(db_path.clone(), config.clone());
+        assert!(
+            second_manager.is_err(),
+            "Second database should fail to open"
+        );
+
+        // Verify the error message contains the expected information
+        let error = second_manager.unwrap_err();
+        let error_string = error.to_string();
+
+        assert!(
+            error_string.contains("database may be opened by another instance"),
+            "Error is missing 'database may be opened by another instance', got: {error_string}"
+        );
+
+        // The file lock is held by the FileBacked instance. When we drop the first_manager,
+        // the Arc<FileBacked> should be dropped, releasing the file lock.
+        drop(first_manager.unwrap());
+
+        // Now the second database should open successfully
+        let third_manager = RevisionManager::new(db_path, config);
+        assert!(
+            third_manager.is_ok(),
+            "Database should open after first instance is dropped"
+        );
+    }
 }

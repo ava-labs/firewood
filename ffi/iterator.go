@@ -7,6 +7,12 @@ package ffi
 // #include "firewood.h"
 import "C"
 
+import (
+	"errors"
+	"fmt"
+	"unsafe"
+)
+
 type Iterator struct {
 	// The database this iterator is associated with. We hold onto this to ensure
 	// the database handle outlives the iterator handle, which is required for
@@ -27,58 +33,59 @@ type Iterator struct {
 	// from the iterator, not yet consumed by user
 	loadedPairs []*ownedKeyValue
 
-	// currentPair is the current pair retrieved from the iterator
-	currentPair *ownedKeyValue
-
-	// currentKey is the current pair retrieved from the iterator
-	currentKey []byte
-
-	// currentValue is the current pair retrieved from the iterator
+	// current* fields correspond to the current cursor state
+	// nil/empty if not started or exhausted; refreshed on each Next().
+	currentPair  *ownedKeyValue
+	currentKey   []byte
 	currentValue []byte
+	// FFI resource for current pair or batch to free on advance or drop
+	currentResource interface{ free() error }
 
 	// err is the error from the iterator, if any
 	err error
-
-	// currentResource is a reference to a freeable resource to clean up
-	currentResource interface{ Free() error }
 }
 
-func (it *Iterator) Release() error {
+func (it *Iterator) freeCurrentAllocation() error {
 	if it.currentResource == nil {
 		return nil
 	}
-	return it.currentResource.Free()
+	e := it.currentResource.free()
+	it.currentResource = nil
+	return e
 }
 
 func (it *Iterator) nextInternal() error {
-	if len(it.loadedPairs) == 0 {
-		if e := it.Release(); e != nil {
-			return e
-		}
-		if it.batchSize <= 1 {
-			kv, e := getKeyValueFromKeyValueResult(C.fwd_iter_next(it.handle))
-			if e != nil {
-				return e
-			}
-			if kv != nil {
-				// kv is nil when done
-				it.loadedPairs = append(it.loadedPairs, kv)
-			}
-			it.currentResource = kv
-		} else {
-			batch, e := getKeyValueBatchFromKeyValueBatchResult(C.fwd_iter_next_n(it.handle, C.size_t(it.batchSize)))
-			if e != nil {
-				return e
-			}
-			it.loadedPairs = batch.Copied()
-			it.currentResource = batch
-		}
-	}
 	if len(it.loadedPairs) > 0 {
 		it.currentPair, it.loadedPairs = it.loadedPairs[0], it.loadedPairs[1:]
-	} else {
-		it.currentPair = nil
+		return nil
 	}
+
+	// current resources should **only** be freed, on the next call to the FFI
+	// this is to make sure we don't invalidate a batch in between iteration
+	if e := it.freeCurrentAllocation(); e != nil {
+		return e
+	}
+	if it.batchSize <= 1 {
+		kv, e := getKeyValueFromResult(C.fwd_iter_next(it.handle))
+		if e != nil {
+			return e
+		}
+		it.currentPair = kv
+		it.currentResource = kv
+	} else {
+		batch, e := getKeyValueBatchFromResult(C.fwd_iter_next_n(it.handle, C.size_t(it.batchSize)))
+		if e != nil {
+			return e
+		}
+		pairs := batch.copy()
+		if len(pairs) > 0 {
+			it.currentPair, it.loadedPairs = pairs[0], pairs[1:]
+		} else {
+			it.currentPair = nil
+		}
+		it.currentResource = batch
+	}
+
 	return nil
 }
 
@@ -100,16 +107,21 @@ func (it *Iterator) Next() bool {
 	if it.currentPair == nil || it.err != nil {
 		return false
 	}
-	k, v := it.currentPair.Copy()
+	k, v := it.currentPair.copy()
 	it.currentKey = k
 	it.currentValue = v
-	it.err = nil
 	return true
 }
 
-// NextBorrowed retrieves the next item on the iterator similar to Next
-// the difference is that returned bytes in Key and Value are not copied
-// and will be freed on next call to Next or NextBorrowed
+// NextBorrowed is like Next, but Key and Value **borrow** rust-owned buffers.
+//
+// ⚠️ Lifetime: the returned slices are valid **only until** the next call to
+// Next, NextBorrowed, Close, or any operation that advances/invalidates the iterator.
+// They alias FFI-owned memory that will be **freed or reused** on the next advance.
+//
+// Do **not** retain, store, or modify these slices.
+// **Copy** or use Next if you need to keep them.
+// Misuse can read freed memory and cause corruption or crashes.
 func (it *Iterator) NextBorrowed() bool {
 	it.err = it.nextInternal()
 	if it.currentPair == nil || it.err != nil {
@@ -140,4 +152,35 @@ func (it *Iterator) Value() []byte {
 // Err returns the error if Next failed
 func (it *Iterator) Err() error {
 	return it.err
+}
+
+// Drop drops the iterator and releases the resources
+func (it *Iterator) Drop() error {
+	e1 := it.freeCurrentAllocation()
+	if it.handle != nil {
+		return errors.Join(
+			e1,
+			getErrorFromVoidResult(C.fwd_free_iterator(it.handle)))
+	}
+	return e1
+}
+
+// getIteratorFromIteratorResult converts a C.IteratorResult to an Iterator or error.
+func getIteratorFromIteratorResult(result C.IteratorResult, db *Database) (*Iterator, error) {
+	switch result.tag {
+	case C.IteratorResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.IteratorResult_Ok:
+		body := (*C.IteratorResult_Ok_Body)(unsafe.Pointer(&result.anon0))
+		proposal := &Iterator{
+			db:     db,
+			handle: body.handle,
+		}
+		return proposal, nil
+	case C.IteratorResult_Err:
+		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return nil, err
+	default:
+		return nil, fmt.Errorf("unknown C.IteratorResult tag: %d", result.tag)
+	}
 }

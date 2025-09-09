@@ -133,47 +133,6 @@ func newKeyValuePairs(keys, vals [][]byte, pinner Pinner) (C.BorrowedKeyValuePai
 	return newBorrowedKeyValuePairs(pairs, pinner), nil
 }
 
-// Close releases the memory associated with the Database.
-//
-// This is not safe to call while there are any outstanding Proposals. All proposals
-// must be freed or committed before calling this.
-//
-// This is safe to call if the pointer is nil, in which case it does nothing. The
-// pointer will be set to nil after freeing to prevent double free. However, it is
-// not safe to call this method concurrently from multiple goroutines.
-func (db *Database) Close() error {
-	if db.handle == nil {
-		return nil
-	}
-
-	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
-		return fmt.Errorf("unexpected error when closing database: %w", err)
-	}
-
-	db.handle = nil // Prevent double free
-
-	return nil
-}
-
-// Drop releases the memory associated with the Proposal.
-//
-// This is safe to call if the pointer is nil, in which case it does nothing.
-//
-// The pointer will be set to nil after freeing to prevent double free.
-func (p *Proposal) Drop() error {
-	if p.handle == nil {
-		return nil
-	}
-
-	if err := getErrorFromVoidResult(C.fwd_free_proposal(p.handle)); err != nil {
-		return fmt.Errorf("%w: %w", errFreeingValue, err)
-	}
-
-	p.handle = nil // Prevent double free
-
-	return nil
-}
-
 // ownedBytes is a wrapper around C.OwnedBytes that provides a Go interface
 // for Rust-owned byte slices.
 //
@@ -354,11 +313,11 @@ type ownedKeyValueBatch struct {
 	owned C.OwnedKeyValueBatch
 }
 
-func (b *ownedKeyValueBatch) Copied() []*ownedKeyValue {
+func (b *ownedKeyValueBatch) copy() []*ownedKeyValue {
 	if b.owned.ptr == nil {
 		return nil
 	}
-	borrowed := b.Borrow()
+	borrowed := b.borrow()
 	copied := make([]*ownedKeyValue, len(borrowed))
 	for i, borrow := range borrowed {
 		copied[i] = newOwnedKeyValue(borrow)
@@ -366,7 +325,7 @@ func (b *ownedKeyValueBatch) Copied() []*ownedKeyValue {
 	return copied
 }
 
-func (b *ownedKeyValueBatch) Borrow() []C.OwnedKeyValuePair {
+func (b *ownedKeyValueBatch) borrow() []C.OwnedKeyValuePair {
 	if b.owned.ptr == nil {
 		return nil
 	}
@@ -374,8 +333,9 @@ func (b *ownedKeyValueBatch) Borrow() []C.OwnedKeyValuePair {
 	return unsafe.Slice((*C.OwnedKeyValuePair)(unsafe.Pointer(b.owned.ptr)), b.owned.len)
 }
 
-func (b *ownedKeyValueBatch) Free() error {
-	if b.owned.ptr == nil {
+func (b *ownedKeyValueBatch) free() error {
+	if b == nil || b.owned.ptr == nil {
+		// we want ownedKeyValueBatch to be typed-nil safe
 		return nil
 	}
 
@@ -403,18 +363,18 @@ type ownedKeyValue struct {
 	value *ownedBytes
 }
 
-func (kv *ownedKeyValue) Copy() ([]byte, []byte) {
+func (kv *ownedKeyValue) copy() ([]byte, []byte) {
 	key := kv.key.CopiedBytes()
 	value := kv.value.CopiedBytes()
 	return key, value
 }
 
-func (kv *ownedKeyValue) Free() error {
-	err := kv.key.Free()
-	if err != nil {
-		return fmt.Errorf("%w: %w", errFreeingValue, err)
+func (kv *ownedKeyValue) free() error {
+	if kv == nil {
+		// we want ownedKeyValue to be typed-nil safe
+		return nil
 	}
-	err = kv.value.Free()
+	err := errors.Join(kv.key.Free(), kv.value.Free())
 	if err != nil {
 		return fmt.Errorf("%w: %w", errFreeingValue, err)
 	}
@@ -432,12 +392,12 @@ func newOwnedKeyValue(owned C.OwnedKeyValuePair) *ownedKeyValue {
 	}
 }
 
-// getKeyValueFromKeyValueResult converts a C.KeyValueResult to a key value pair or error.
+// getKeyValueFromResult converts a C.KeyValueResult to a key value pair or error.
 //
 // It returns nil, nil if the result is None.
 // It returns a *ownedKeyValue, nil if the result is Some.
 // It returns an error if the result is an error.
-func getKeyValueFromKeyValueResult(result C.KeyValueResult) (*ownedKeyValue, error) {
+func getKeyValueFromResult(result C.KeyValueResult) (*ownedKeyValue, error) {
 	switch result.tag {
 	case C.KeyValueResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -458,12 +418,12 @@ func getKeyValueFromKeyValueResult(result C.KeyValueResult) (*ownedKeyValue, err
 	}
 }
 
-// getKeyValueBatchFromKeyValueBatchResult converts a C.KeyValueResult to a key value pair or error.
+// getKeyValueBatchFromResult converts a C.KeyValueBatchResult to a key value batch or error.
 //
 // It returns nil, nil if the result is None.
 // It returns a *ownedKeyValueBatch, nil if the result is Some.
 // It returns an error if the result is an error.
-func getKeyValueBatchFromKeyValueBatchResult(result C.KeyValueBatchResult) (*ownedKeyValueBatch, error) {
+func getKeyValueBatchFromResult(result C.KeyValueBatchResult) (*ownedKeyValueBatch, error) {
 	switch result.tag {
 	case C.KeyValueBatchResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -499,44 +459,32 @@ func getDatabaseFromHandleResult(result C.HandleResult) (*Database, error) {
 	}
 }
 
-// getProposalFromProposalResult converts a C.ProposalResult to a Proposal or error.
-func getProposalFromProposalResult(result C.ProposalResult, db *Database) (*Proposal, error) {
+func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, error) {
 	switch result.tag {
-	case C.ProposalResult_NullHandlePointer:
+	case C.RangeProofResult_NullHandlePointer:
 		return nil, errDBClosed
-	case C.ProposalResult_Ok:
-		body := (*C.ProposalResult_Ok_Body)(unsafe.Pointer(&result.anon0))
-		hashKey := *(*[32]byte)(unsafe.Pointer(&body.root_hash._0))
-		proposal := &Proposal{
-			db:     db,
-			handle: body.handle,
-			root:   hashKey[:],
-		}
-		return proposal, nil
-	case C.ProposalResult_Err:
+	case C.RangeProofResult_Ok:
+		ptr := *(**C.RangeProofContext)(unsafe.Pointer(&result.anon0))
+		return &RangeProof{handle: ptr}, nil
+	case C.RangeProofResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err
 	default:
-		return nil, fmt.Errorf("unknown C.ProposalResult tag: %d", result.tag)
+		return nil, fmt.Errorf("unknown C.RangeProofResult tag: %d", result.tag)
 	}
 }
 
-// getIteratorFromIteratorResult converts a C.IteratorResult to an Iterator or error.
-func getIteratorFromIteratorResult(result C.IteratorResult, db *Database) (*Iterator, error) {
+func getChangeProofFromChangeProofResult(result C.ChangeProofResult) (*ChangeProof, error) {
 	switch result.tag {
-	case C.IteratorResult_NullHandlePointer:
+	case C.ChangeProofResult_NullHandlePointer:
 		return nil, errDBClosed
-	case C.IteratorResult_Ok:
-		body := (*C.IteratorResult_Ok_Body)(unsafe.Pointer(&result.anon0))
-		proposal := &Iterator{
-			db:     db,
-			handle: body.handle,
-		}
-		return proposal, nil
-	case C.IteratorResult_Err:
+	case C.ChangeProofResult_Ok:
+		ptr := *(**C.ChangeProofContext)(unsafe.Pointer(&result.anon0))
+		return &ChangeProof{handle: ptr}, nil
+	case C.ChangeProofResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err
 	default:
-		return nil, fmt.Errorf("unknown C.IteratorResult tag: %d", result.tag)
+		return nil, fmt.Errorf("unknown C.ChangeProofResult tag: %d", result.tag)
 	}
 }
