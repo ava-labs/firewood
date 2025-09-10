@@ -20,11 +20,10 @@ use firewood_storage::{
     ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieReader,
 };
 use metrics::{counter, describe_counter};
-use rayon::ThreadPool;
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::Path;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
 
@@ -114,7 +113,6 @@ pub struct DbConfig {
 pub struct Db {
     metrics: Arc<DbMetrics>,
     manager: RevisionManager,
-    threadpool: OnceLock<ThreadPool>,
 }
 
 impl api::Db for Db {
@@ -193,11 +191,7 @@ impl Db {
             .manager(cfg.manager)
             .build();
         let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
-        let db = Self {
-            metrics,
-            manager,
-            threadpool: OnceLock::new(),
-        };
+        let db = Self { metrics, manager };
         Ok(db)
     }
 
@@ -213,7 +207,8 @@ impl Db {
     ) -> Result<Proposal<'_>, api::Error> {
         let parent = self.manager.current_revision();
         let mut parallel_merkle = ParallelMerkle::default();
-        let immutable = parallel_merkle.create_proposal(&parent, batch, &self.threadpool)?;
+        let immutable =
+            parallel_merkle.create_proposal(&parent, batch, self.manager.threadpool())?;
         self.manager.add_proposal(immutable.clone());
         Ok(Proposal {
             nodestore: immutable,
