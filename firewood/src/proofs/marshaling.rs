@@ -82,9 +82,21 @@ impl ProofType {
     }
 }
 
+/// A fixed-size header at the beginning of every serialized proof.
+///
+/// # Format
+///
+/// - 8 bytes: A magic value to identify the file type. This is `b"fwdproof"`.
+/// - 1 byte: The version of the proof format. Currently `0`.
+/// - 1 byte: The hash mode used in the proof. Currently `0` for sha256, `1` for
+///   keccak256.
+/// - 1 byte: The branching factor of the trie. Currently `16` or `0` for `256`.
+/// - 1 byte: The type of proof. See [`ProofType`].
+/// - 20 bytes: Reserved for future use and to pad the header to 32 bytes. Ignored
+///   when reading, and set to zero when writing.
 #[derive(Debug, Clone, Copy, bytemuck_derive::Pod, bytemuck_derive::Zeroable)]
 #[repr(C)]
-pub(crate) struct Header {
+pub struct Header {
     pub(super) magic: [u8; 8],
     pub(super) version: u8,
     pub(super) hash_mode: u8,
@@ -100,7 +112,7 @@ const _: () = {
 impl Header {
     /// Construct a new header for the given proof type.
     #[must_use]
-    pub const fn new(proof_type: ProofType) -> Self {
+    pub(crate) const fn new(proof_type: ProofType) -> Self {
         Self {
             magic: *magic::PROOF_HEADER,
             version: magic::PROOF_VERSION,
