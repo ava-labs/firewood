@@ -154,6 +154,17 @@ pub enum HashResult {
     Err(OwnedBytes),
 }
 
+impl fmt::Display for HashResult {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            HashResult::None => write!(f, "(none)"),
+            HashResult::Some(hash) => write!(f, "{hash}"),
+            HashResult::NullHandlePointer => write!(f, "(null handle pointer)"),
+            HashResult::Err(err) => write!(f, "[error] {err}"),
+        }
+    }
+}
+
 impl<E: fmt::Display> From<Result<Option<api::HashKey>, E>> for HashResult {
     fn from(value: Result<Option<api::HashKey>, E>) -> Self {
         match value {

@@ -35,12 +35,13 @@ mod value;
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char};
-use std::fmt::{self, Display, Formatter};
+use std::fmt::{self, Display, Formatter, LowerHex};
 use std::ops::Deref;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use firewood::db::{Db, Proposal};
+use firewood::logger::{debug, trace};
 use firewood::v2::api::{self, Db as _, DbView, KeyValuePairIter, Proposal as _};
 
 use crate::arc_cache::ArcCache;
@@ -147,22 +148,16 @@ impl Deref for DatabaseHandle<'_> {
 /// - [`ValueResult::None`] if the key was not found.
 /// - [`ValueResult::Some`] if the key was found with the associated value.
 /// - [`ValueResult::Err`] if an error occurred while retrieving the value.
-///
-/// # Safety
-///
-/// The caller must:
-/// * ensure that `db` is a valid pointer to a [`DatabaseHandle`].
-/// * ensure that `key` is valid for [`BorrowedBytes`]
-/// * call [`fwd_free_owned_bytes`] to free the memory associated with the
-///   returned error or value.
-///
+/// 
 /// [`BorrowedBytes`]: crate::value::BorrowedBytes
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_get_latest(
+pub extern "C" fn fwd_get_latest(
     db: Option<&DatabaseHandle>,
     key: BorrowedBytes,
 ) -> ValueResult {
-    invoke_with_handle(db, move |db| db.get_latest(key))
+    let result = invoke_with_handle(db, move |db| db.get_latest(key));
+    trace!("get_latest: {key:?} -> {result:?}");
+    result
 }
 
 /// Gets the value associated with the given key from the proposal provided.
@@ -178,20 +173,15 @@ pub unsafe extern "C" fn fwd_get_latest(
 /// A `Value` containing the requested value.
 /// A `Value` containing {0, "error message"} if the get failed.
 ///
-/// # Safety
-///
-/// The caller must:
-///  * ensure that `db` is a valid pointer returned by `open_db`
-///  * ensure that `key` is a valid pointer to a `Value` struct
-///  * call `free_value` to free the memory associated with the returned `Value`
-///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_get_from_proposal(
+pub extern "C" fn fwd_get_from_proposal(
     db: Option<&DatabaseHandle<'_>>,
     id: ProposalId,
     key: BorrowedBytes<'_>,
 ) -> ValueResult {
-    invoke_with_handle(db, move |db| db.get_from_proposal(id, key))
+    let result = invoke_with_handle(db, move |db| db.get_from_proposal(id, key));
+    trace!("get_from_proposal: id={id:?} key={key:?} -> {result:?}");
+    result
 }
 
 /// Gets a value assoicated with the given root hash and key.
@@ -211,24 +201,17 @@ pub unsafe extern "C" fn fwd_get_from_proposal(
 /// - [`ValueResult::None`] if the key was not found.
 /// - [`ValueResult::Some`] if the key was found with the associated value.
 /// - [`ValueResult::Err`] if an error occurred while retrieving the value.
-///
-/// # Safety
-///
-/// The caller must:
-/// * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
-/// * ensure that `root` is a valid for [`BorrowedBytes`]
-/// * ensure that `key` is a valid for [`BorrowedBytes`]
-/// * call [`fwd_free_owned_bytes`] to free the memory associated [`OwnedBytes`]
-///   returned in the result.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_get_from_root(
+pub extern "C" fn fwd_get_from_root(
     db: Option<&DatabaseHandle>,
     root: BorrowedBytes,
     key: BorrowedBytes,
 ) -> ValueResult {
-    invoke_with_handle(db, move |db| {
+    let result = invoke_with_handle(db, move |db| {
         db.get_from_root(root.as_ref().try_into()?, key)
-    })
+    });
+    trace!("get_from_root: root={root:?} key={key:?} -> {result:?}");
+    result
 }
 
 /// Puts the given key-value pairs into the database.
@@ -245,20 +228,14 @@ pub unsafe extern "C" fn fwd_get_from_root(
 /// - [`HashResult::Some`] if the commit was successful, containing the new root hash.
 /// - [`HashResult::Err`] if an error occurred while committing the batch.
 ///
-/// # Safety
-///
-/// The caller must:
-/// * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
-/// * ensure that `values` is valid for [`BorrowedKeyValuePairs`]
-/// * call [`fwd_free_owned_bytes`] to free the memory associated with the
-///   returned error ([`HashKey`] does not need to be freed as it is returned by
-///   value).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_batch(
+pub extern "C" fn fwd_batch(
     db: Option<&DatabaseHandle>,
     values: BorrowedKeyValuePairs<'_>,
 ) -> HashResult {
-    invoke_with_handle(db, move |db| db.create_batch(values))
+    let result = invoke_with_handle(db, move |db| db.create_batch(values));
+    trace!("batch: {values:?} -> {result:?}");
+    result
 }
 
 /// Proposes a batch of operations to the database.
@@ -273,17 +250,8 @@ pub unsafe extern "C" fn fwd_batch(
 /// On success, a `Value` containing {len=id, data=hash}. In this case, the
 /// hash will always be 32 bytes, and the id will be non-zero.
 /// On failure, a `Value` containing {0, "error message"}.
-///
-/// # Safety
-///
-/// This function is unsafe because it dereferences raw pointers.
-/// The caller must:
-///  * ensure that `db` is a valid pointer returned by `open_db`
-///  * ensure that `values` is a valid pointer and that it points to an array of `KeyValue` structs of length `nkeys`.
-///  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
-///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_propose_on_db<'p>(
+pub extern "C" fn fwd_propose_on_db<'p>(
     db: Option<&'p DatabaseHandle<'p>>,
     values: BorrowedKeyValuePairs<'_>,
 ) -> Value {
@@ -317,6 +285,10 @@ fn propose_on_db<'p>(
         .write()
         .map_err(|_| "proposal lock is poisoned")?
         .insert(new_id, proposal);
+
+    // Note: do this before storing the ID in Value; at that point it is not safe to print it.
+    debug!("propose_on_db: id={new_id} hash={root_hash}");
+
     root_hash.len = new_id as usize; // Set the length to the proposal ID
     Ok(root_hash)
 }
@@ -334,17 +306,8 @@ fn propose_on_db<'p>(
 /// On success, a `Value` containing {len=id, data=hash}. In this case, the
 /// hash will always be 32 bytes, and the id will be non-zero.
 /// On failure, a `Value` containing {0, "error message"}.
-///
-/// # Safety
-///
-/// This function is unsafe because it dereferences raw pointers.
-/// The caller must:
-///  * ensure that `db` is a valid pointer returned by `open_db`
-///  * ensure that `values` is a valid pointer and that it points to an array of `KeyValue` structs of length `nkeys`.
-///  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
-///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_propose_on_proposal(
+pub extern "C" fn fwd_propose_on_proposal(
     db: Option<&DatabaseHandle<'_>>,
     proposal_id: ProposalId,
     values: BorrowedKeyValuePairs<'_>,
@@ -369,7 +332,7 @@ fn propose_on_proposal(
     // We need write access to add the proposal after we create it.
     let guard = db
         .proposals
-        .write()
+        .read()
         .expect("failed to acquire write lock on proposals");
     let proposal = guard.get(&proposal_id).ok_or("proposal not found")?;
     let new_proposal = proposal.propose(batch).map_err(|e| e.to_string())?;
@@ -387,6 +350,10 @@ fn propose_on_proposal(
         .write()
         .map_err(|_| "proposal lock is poisoned")?
         .insert(new_id, new_proposal);
+
+    // Note: do this before storing the ID in Value; at that point it is not safe to print it.
+    debug!("propose_on_proposal: id={new_id} hash={root_hash:x}");
+
     root_hash.len = new_id as usize; // Set the length to the proposal ID
     Ok(root_hash)
 }
@@ -402,18 +369,14 @@ fn propose_on_proposal(
 ///
 /// A `Value` containing {0, null} if the commit was successful.
 /// A `Value` containing {0, "error message"} if the commit failed.
-///
-/// # Safety
-///
-/// This function is unsafe because it dereferences raw pointers.
-/// The caller must ensure that `db` is a valid pointer returned by `open_db`
-///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_commit(
+pub extern "C" fn fwd_commit(
     db: Option<&DatabaseHandle<'_>>,
     proposal_id: u32,
 ) -> HashResult {
-    invoke_with_handle(db, move |db| db.commit_proposal(proposal_id))
+    let result = invoke_with_handle(db, move |db| db.commit_proposal(proposal_id));
+    trace!("commit: id={proposal_id} -> {result:?}");
+    result
 }
 
 /// Drops a proposal from the database.
@@ -423,17 +386,12 @@ pub unsafe extern "C" fn fwd_commit(
 ///
 /// * `db` - The database handle returned by `open_db`
 /// * `proposal_id` - The ID of the proposal to drop
-///
-/// # Safety
-///
-/// This function is unsafe because it dereferences raw pointers.
-/// The caller must ensure that `db` is a valid pointer returned by `open_db`
-///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_drop_proposal(
+pub extern "C" fn fwd_drop_proposal(
     db: Option<&DatabaseHandle<'_>>,
     proposal_id: u32,
 ) -> Value {
+    debug!("drop_proposal: id={proposal_id}");
     drop_proposal(db, proposal_id).map_or_else(Into::into, Into::into)
 }
 
@@ -445,6 +403,7 @@ fn drop_proposal(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> Result<()
         .proposals
         .write()
         .map_err(|_| "proposal lock is poisoned")?;
+
     proposals.remove(&proposal_id).ok_or("proposal not found")?;
     Ok(())
 }
@@ -461,16 +420,11 @@ fn drop_proposal(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> Result<()
 /// - [`HashResult::None`] if the database is empty.
 /// - [`HashResult::Some`] with the root hash of the database.
 /// - [`HashResult::Err`] if an error occurred while looking up the root hash.
-///
-/// # Safety
-///
-/// * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
-/// * call [`fwd_free_owned_bytes`] to free the memory associated with the
-///   returned error ([`HashKey`] does not need to be freed as it is returned
-///   by value).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_root_hash(db: Option<&DatabaseHandle>) -> HashResult {
-    invoke_with_handle(db, DatabaseHandle::current_root_hash)
+pub extern "C" fn fwd_root_hash(db: Option<&DatabaseHandle>) -> HashResult {
+    let result = invoke_with_handle(db, DatabaseHandle::current_root_hash);
+    debug!("root_hash: {result}");
+    result
 }
 
 /// A value returned by the FFI.
@@ -502,6 +456,21 @@ impl Display for Value {
             }),
             (len, None) => write!(f, "[id] {len}"),
             (_, Some(_)) => write!(f, "[data] {:?}", self.as_slice()),
+        }
+    }
+}
+
+impl LowerHex for Value {
+    fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+        if let (len, Some(_)) = (self.len, self.data)
+            && len > 0
+        {
+            for byte in self.as_slice() {
+                write!(f, "{byte:02x}")?;
+            }
+            Ok(())
+        } else {
+            Display::fmt(self, f)
         }
     }
 }
@@ -574,17 +543,12 @@ impl From<()> for Value {
 ///
 /// * `value` - The `Value` to free, previously returned from any Rust function.
 ///
-/// # Safety
-///
-/// This function is unsafe because it dereferences raw pointers.
-/// The caller must ensure that `value` is a valid pointer.
-///
 /// # Panics
 ///
 /// This function panics if `value` is `null`.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_value(value: Option<&mut Value>) -> VoidResult {
+pub extern "C" fn fwd_free_value(value: Option<&mut Value>) -> VoidResult {
     invoke_with_handle(value, |value| {
         if let Some(data) = value.data {
             let data_ptr = data.as_ptr();
@@ -663,15 +627,8 @@ pub extern "C" fn fwd_gather() -> ValueResult {
 ///
 /// - [`HandleResult::Ok`] with the database handle if successful.
 /// - [`HandleResult::Err`] if an error occurs while opening the database.
-///
-/// # Safety
-///
-/// The caller must:
-/// - ensure that the database is freed with [`fwd_close_db`] when no longer needed.
-/// - ensure that the database handle is freed only after freeing or committing
-///   all proposals created on it.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_open_db(args: DatabaseHandleArgs) -> HandleResult {
+pub extern "C" fn fwd_open_db(args: DatabaseHandleArgs) -> HandleResult {
     invoke(move || DatabaseHandle::new(args))
 }
 
@@ -697,6 +654,8 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 }
 
 /// Close and free the memory for a database handle
+/// 
+/// The caller should not use the database handle after this function is called.
 ///
 /// # Arguments
 ///
@@ -707,16 +666,9 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 /// - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
 /// - [`VoidResult::Ok`] if the database handle was successfully closed and freed.
 /// - [`VoidResult::Err`] if the process panics while closing the database handle.
-///
-/// # Safety
-///
-/// Callers must ensure that:
-///
-/// - `db` is a valid pointer to a [`DatabaseHandle`] returned by [`fwd_open_db`].
-/// - The database handle is not used after this function is called.
 #[expect(clippy::missing_panics_doc, reason = "panics are captured")]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle<'_>>>) -> VoidResult {
+pub extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle<'_>>>) -> VoidResult {
     invoke_with_handle(db, |db| {
         db.proposals
             .write()
@@ -737,14 +689,8 @@ pub unsafe extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle<'_>>>) -> Vo
 ///
 /// - [`VoidResult::Ok`] if the memory was successfully freed.
 /// - [`VoidResult::Err`] if the process panics while freeing the memory.
-///
-/// # Safety
-///
-/// The caller must ensure that the `bytes` struct is valid and that the memory
-/// it points to is uniquely owned by this object. However, if `bytes.ptr` is null,
-/// this function does nothing.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_owned_bytes(bytes: OwnedBytes) -> VoidResult {
+pub extern "C" fn fwd_free_owned_bytes(bytes: OwnedBytes) -> VoidResult {
     invoke(move || drop(bytes))
 }
 

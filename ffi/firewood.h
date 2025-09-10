@@ -780,14 +780,6 @@ typedef struct LogArgs {
  * - [`HashResult::Some`] if the commit was successful, containing the new root hash.
  * - [`HashResult::Err`] if an error occurred while committing the batch.
  *
- * # Safety
- *
- * The caller must:
- * * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
- * * ensure that `values` is valid for [`BorrowedKeyValuePairs`]
- * * call [`fwd_free_owned_bytes`] to free the memory associated with the
- *   returned error ([`HashKey`] does not need to be freed as it is returned by
- *   value).
  */
 struct HashResult fwd_batch(const struct DatabaseHandle *db, BorrowedKeyValuePairs values);
 
@@ -862,6 +854,8 @@ struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *_p
 /**
  * Close and free the memory for a database handle
  *
+ * The caller should not use the database handle after this function is called.
+ *
  * # Arguments
  *
  * * `db` - The database handle to close, previously returned from a call to [`fwd_open_db`].
@@ -871,13 +865,6 @@ struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *_p
  * - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
  * - [`VoidResult::Ok`] if the database handle was successfully closed and freed.
  * - [`VoidResult::Err`] if the process panics while closing the database handle.
- *
- * # Safety
- *
- * Callers must ensure that:
- *
- * - `db` is a valid pointer to a [`DatabaseHandle`] returned by [`fwd_open_db`].
- * - The database handle is not used after this function is called.
  */
 struct VoidResult fwd_close_db(struct DatabaseHandle *db);
 
@@ -893,12 +880,6 @@ struct VoidResult fwd_close_db(struct DatabaseHandle *db);
  *
  * A `Value` containing {0, null} if the commit was successful.
  * A `Value` containing {0, "error message"} if the commit failed.
- *
- * # Safety
- *
- * This function is unsafe because it dereferences raw pointers.
- * The caller must ensure that `db` is a valid pointer returned by `open_db`
- *
  */
 struct HashResult fwd_commit(const struct DatabaseHandle *db, uint32_t proposal_id);
 
@@ -1075,12 +1056,6 @@ struct VoidResult fwd_db_verify_range_proof(const struct DatabaseHandle *_db,
  *
  * * `db` - The database handle returned by `open_db`
  * * `proposal_id` - The ID of the proposal to drop
- *
- * # Safety
- *
- * This function is unsafe because it dereferences raw pointers.
- * The caller must ensure that `db` is a valid pointer returned by `open_db`
- *
  */
 struct Value fwd_drop_proposal(const struct DatabaseHandle *db, uint32_t proposal_id);
 
@@ -1110,12 +1085,6 @@ struct VoidResult fwd_free_change_proof(struct ChangeProofContext *proof);
  *
  * - [`VoidResult::Ok`] if the memory was successfully freed.
  * - [`VoidResult::Err`] if the process panics while freeing the memory.
- *
- * # Safety
- *
- * The caller must ensure that the `bytes` struct is valid and that the memory
- * it points to is uniquely owned by this object. However, if `bytes.ptr` is null,
- * this function does nothing.
  */
 struct VoidResult fwd_free_owned_bytes(OwnedBytes bytes);
 
@@ -1139,11 +1108,6 @@ struct VoidResult fwd_free_range_proof(struct RangeProofContext *proof);
  * # Arguments
  *
  * * `value` - The `Value` to free, previously returned from any Rust function.
- *
- * # Safety
- *
- * This function is unsafe because it dereferences raw pointers.
- * The caller must ensure that `value` is a valid pointer.
  *
  * # Panics
  *
@@ -1184,13 +1148,6 @@ struct ValueResult fwd_gather(void);
  * A `Value` containing the requested value.
  * A `Value` containing {0, "error message"} if the get failed.
  *
- * # Safety
- *
- * The caller must:
- *  * ensure that `db` is a valid pointer returned by `open_db`
- *  * ensure that `key` is a valid pointer to a `Value` struct
- *  * call `free_value` to free the memory associated with the returned `Value`
- *
  */
 struct ValueResult fwd_get_from_proposal(const struct DatabaseHandle *db,
                                          ProposalId id,
@@ -1214,15 +1171,6 @@ struct ValueResult fwd_get_from_proposal(const struct DatabaseHandle *db,
  * - [`ValueResult::None`] if the key was not found.
  * - [`ValueResult::Some`] if the key was found with the associated value.
  * - [`ValueResult::Err`] if an error occurred while retrieving the value.
- *
- * # Safety
- *
- * The caller must:
- * * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
- * * ensure that `root` is a valid for [`BorrowedBytes`]
- * * ensure that `key` is a valid for [`BorrowedBytes`]
- * * call [`fwd_free_owned_bytes`] to free the memory associated [`OwnedBytes`]
- *   returned in the result.
  */
 struct ValueResult fwd_get_from_root(const struct DatabaseHandle *db,
                                      BorrowedBytes root,
@@ -1246,14 +1194,6 @@ struct ValueResult fwd_get_from_root(const struct DatabaseHandle *db,
  * - [`ValueResult::Some`] if the key was found with the associated value.
  * - [`ValueResult::Err`] if an error occurred while retrieving the value.
  *
- * # Safety
- *
- * The caller must:
- * * ensure that `db` is a valid pointer to a [`DatabaseHandle`].
- * * ensure that `key` is valid for [`BorrowedBytes`]
- * * call [`fwd_free_owned_bytes`] to free the memory associated with the
- *   returned error or value.
- *
  * [`BorrowedBytes`]: crate::value::BorrowedBytes
  */
 struct ValueResult fwd_get_latest(const struct DatabaseHandle *db, BorrowedBytes key);
@@ -1269,13 +1209,6 @@ struct ValueResult fwd_get_latest(const struct DatabaseHandle *db, BorrowedBytes
  *
  * - [`HandleResult::Ok`] with the database handle if successful.
  * - [`HandleResult::Err`] if an error occurs while opening the database.
- *
- * # Safety
- *
- * The caller must:
- * - ensure that the database is freed with [`fwd_close_db`] when no longer needed.
- * - ensure that the database handle is freed only after freeing or committing
- *   all proposals created on it.
  */
 struct HandleResult fwd_open_db(struct DatabaseHandleArgs args);
 
@@ -1292,18 +1225,8 @@ struct HandleResult fwd_open_db(struct DatabaseHandleArgs args);
  * On success, a `Value` containing {len=id, data=hash}. In this case, the
  * hash will always be 32 bytes, and the id will be non-zero.
  * On failure, a `Value` containing {0, "error message"}.
- *
- * # Safety
- *
- * This function is unsafe because it dereferences raw pointers.
- * The caller must:
- *  * ensure that `db` is a valid pointer returned by `open_db`
- *  * ensure that `values` is a valid pointer and that it points to an array of `KeyValue` structs of length `nkeys`.
- *  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
- *
  */
-struct Value fwd_propose_on_db(const struct DatabaseHandle *db,
-                               BorrowedKeyValuePairs values);
+struct Value fwd_propose_on_db(const struct DatabaseHandle *db, BorrowedKeyValuePairs values);
 
 /**
  * Proposes a batch of operations to the database on top of an existing proposal.
@@ -1319,15 +1242,6 @@ struct Value fwd_propose_on_db(const struct DatabaseHandle *db,
  * On success, a `Value` containing {len=id, data=hash}. In this case, the
  * hash will always be 32 bytes, and the id will be non-zero.
  * On failure, a `Value` containing {0, "error message"}.
- *
- * # Safety
- *
- * This function is unsafe because it dereferences raw pointers.
- * The caller must:
- *  * ensure that `db` is a valid pointer returned by `open_db`
- *  * ensure that `values` is a valid pointer and that it points to an array of `KeyValue` structs of length `nkeys`.
- *  * ensure that the `Value` fields of the `KeyValue` structs are valid pointers.
- *
  */
 struct Value fwd_propose_on_proposal(const struct DatabaseHandle *db,
                                      ProposalId proposal_id,
@@ -1436,13 +1350,6 @@ struct VoidResult fwd_range_proof_verify(struct VerifyRangeProofArgs _args);
  * - [`HashResult::None`] if the database is empty.
  * - [`HashResult::Some`] with the root hash of the database.
  * - [`HashResult::Err`] if an error occurred while looking up the root hash.
- *
- * # Safety
- *
- * * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
- * * call [`fwd_free_owned_bytes`] to free the memory associated with the
- *   returned error ([`HashKey`] does not need to be freed as it is returned
- *   by value).
  */
 struct HashResult fwd_root_hash(const struct DatabaseHandle *db);
 
