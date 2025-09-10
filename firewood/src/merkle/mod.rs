@@ -585,6 +585,13 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         self.try_into().expect("failed to convert")
     }
 
+    /// Map `key` to `value` in the trie.
+    /// Each element of key is 2 nibbles.
+    pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), FileIoError> {
+        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        self.insert_path(key, value)
+    }
+
     /// Map `key` to `value` in the trie when `key` is a `Path`
     pub fn insert_path(&mut self, key: Path, value: Value) -> Result<(), FileIoError> {
         let root = self.nodestore.root_mut();
@@ -602,13 +609,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
         *self.nodestore.root_mut() = root_node.into();
         Ok(())
-    }
-
-    /// Map `key` to `value` in the trie.
-    /// Each element of key is 2 nibbles.
-    pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), FileIoError> {
-        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
-        self.insert_path(key, value)
     }
 
     /// Map `key` to `value` into the subtrie rooted at `node`.
@@ -750,6 +750,15 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         }
     }
 
+    /// Removes the value associated with the given `key`.
+    /// Returns the value that was removed, if any.
+    /// Otherwise returns `None`.
+    /// Each element of `key` is 2 nibbles.
+    pub fn remove(&mut self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
+        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        self.remove_path(key)
+    }
+
     /// Removes the value associated with the given `key` where `key` is a `Path`
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
@@ -772,15 +781,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 .increment(1);
         }
         Ok(removed_value)
-    }
-
-    /// Removes the value associated with the given `key`.
-    /// Returns the value that was removed, if any.
-    /// Otherwise returns `None`.
-    /// Each element of `key` is 2 nibbles.
-    pub fn remove(&mut self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
-        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
-        self.remove_path(key)
     }
 
     /// Removes the value associated with the given `key` from the subtrie rooted at `node`.
@@ -993,6 +993,13 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         }
     }
 
+    /// Removes any key-value pairs with keys that have the given `prefix`.
+    /// Returns the number of key-value pairs removed.
+    pub fn remove_prefix(&mut self, prefix: &[u8]) -> Result<usize, FileIoError> {
+        let prefix = Path::from_nibbles_iterator(NibblesIterator::new(prefix));
+        self.remove_prefix_path(prefix)
+    }
+
     /// Removes any key-value pairs with keys that have the given `prefix` where `prefix` is a `Path`
     /// Returns the number of key-value pairs removed.
     pub fn remove_prefix_path(&mut self, prefix: Path) -> Result<usize, FileIoError> {
@@ -1009,13 +1016,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             .increment(deleted as u64);
         *self.nodestore.root_mut() = root_node;
         Ok(deleted)
-    }
-
-    /// Removes any key-value pairs with keys that have the given `prefix`.
-    /// Returns the number of key-value pairs removed.
-    pub fn remove_prefix(&mut self, prefix: &[u8]) -> Result<usize, FileIoError> {
-        let prefix = Path::from_nibbles_iterator(NibblesIterator::new(prefix));
-        self.remove_prefix_path(prefix)
     }
 
     fn remove_prefix_helper(

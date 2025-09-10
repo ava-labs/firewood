@@ -44,10 +44,10 @@ pub(crate) mod header;
 pub(crate) mod persist;
 pub(crate) mod primitives;
 
+use crate::firewood_gauge;
 use crate::linear::OffsetReader;
 use crate::logger::trace;
 use crate::node::branch::ReadSerializable as _;
-use crate::{Child, firewood_gauge};
 use arc_swap::ArcSwap;
 use arc_swap::access::DynAccess;
 use smallvec::SmallVec;
@@ -251,12 +251,15 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
         self.kind.deleted.push(node);
     }
 
-    /// Take deleted nodes from child nodestore
-    pub fn add_deleted_nodes_from_child(
-        &mut self,
-        child_nodestore: &mut NodeStore<MutableProposal, S>,
-    ) {
-        self.kind.deleted.append(&mut child_nodestore.kind.deleted);
+    /// Return nodes that have been maked as deleted in this proposal as a slice.
+    #[must_use]
+    pub const fn deleted_as_slice(&self) -> &[MaybePersistedNode] {
+        self.kind.deleted.as_slice()
+    }
+
+    /// Adds to the nodes deleted in this proposal.
+    pub fn delete_nodes(&mut self, nodes: &[MaybePersistedNode]) {
+        self.kind.deleted.extend_from_slice(nodes);
     }
 
     /// Reads a node for update, marking it as deleted in this proposal.
@@ -279,35 +282,18 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
 }
 
 impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
-    /// Creates a new [`NodeStore`] from a child node.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the child node cannot be read.
-    pub fn from_child(
-        parent: &NodeStore<MutableProposal, S>,
-        child: Option<Child>,
-    ) -> Result<Self, FileIoError> {
-        let child_root = child
-            .map(|child| match child {
-                Child::Node(node) => Ok(node),
-                Child::AddressWithHash(address, _) => {
-                    Ok(parent.read_node(address)?.deref().clone())
-                }
-                Child::MaybePersisted(maybe_persisted, _) => {
-                    Ok(maybe_persisted.as_shared_node(parent)?.deref().clone())
-                }
-            })
-            .transpose()?;
-        Ok(NodeStore {
+    /// Creates a new [`NodeStore`] from a root node.
+    #[must_use]
+    pub fn from_root(parent: &NodeStore<MutableProposal, S>, root: Option<Node>) -> Self {
+        NodeStore {
             header: parent.header,
             kind: MutableProposal {
-                root: child_root,
+                root,
                 deleted: Vec::default(),
                 parent: parent.kind.parent.clone(),
             },
             storage: parent.storage.clone(),
-        })
+        }
     }
 
     /// Consumes the `NodeStore` and returns the root of the trie
