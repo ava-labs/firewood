@@ -285,7 +285,7 @@ fn propose_on_db<'p>(
         .insert(new_id, proposal);
 
     // Note: do this before storing the ID in Value; at that point it is not safe to print it.
-    debug!("propose_on_db: id={new_id} hash={root_hash}");
+    debug!("propose_on_db: id={new_id} hash={root_hash:x}");
 
     root_hash.len = new_id as usize; // Set the length to the proposal ID
     Ok(root_hash)
