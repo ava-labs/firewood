@@ -7,7 +7,7 @@ use integer_encoding::VarInt;
 use test_case::test_case;
 
 use crate::{
-    proofs::{header::InvalidHeader, marshaling::ProofType, reader::ReadError},
+    proofs::{header::InvalidHeader, magic, proof_type::ProofType, reader::ReadError},
     v2::api::FrozenRangeProof,
 };
 
@@ -206,9 +206,9 @@ fn test_empty_proof() {
     let bytes = [
         b'f', b'w', b'd', b'p', b'r', b'o', b'o', b'f', // magic
         0, // version
-        crate::proofs::marshaling::magic::HASH_MODE,
-        crate::proofs::marshaling::magic::BRANCH_FACTOR,
-        crate::proofs::marshaling::ProofType::Range as u8,
+        magic::HASH_MODE,
+        magic::BRANCH_FACTOR,
+        ProofType::Range as u8,
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, // reserved
         0, // start proof length = 0
         0, // end proof length = 0

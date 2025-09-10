@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::proofs::marshaling::{ProofType, magic};
+use crate::proofs::{magic, proof_type::ProofType};
 
 /// A fixed-size header at the beginning of every serialized proof.
 ///

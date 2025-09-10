@@ -11,7 +11,7 @@ use crate::{
     proofs::{
         bitmap::ChildrenMap,
         header::{Header, InvalidHeader},
-        marshaling::ProofType,
+        proof_type::ProofType,
         reader::{ProofReader, ReadError, ReadItem, V0Reader, Version0},
     },
     v2::api::FrozenRangeProof,
