@@ -398,6 +398,7 @@ func getNextKeyRangeFromNextKeyRangeResult(result C.NextKeyRangeResult) (*NextKe
 		return nil, fmt.Errorf("unknown C.NextKeyRangeResult tag: %d", result.tag)
 	}
 }
+
 func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, error) {
 	switch result.tag {
 	case C.RangeProofResult_NullHandlePointer:
