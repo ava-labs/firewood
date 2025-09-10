@@ -9,6 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const maxProofLen = 10
+
 type maybe struct {
 	value    []byte
 	hasValue bool
@@ -74,10 +76,10 @@ func TestRangeProofPartialRange(t *testing.T) {
 	r.NoError(err)
 
 	// get a proof over some partial range
-	proof1 := rangeProofWithAndWithoutRoot(t, db, root, nothing(), nothing(), 10)
+	proof1 := rangeProofWithAndWithoutRoot(t, db, root, nothing(), nothing())
 
 	// get a proof over a different range
-	proof2 := rangeProofWithAndWithoutRoot(t, db, root, something([]byte("key2")), something([]byte("key3")), 10)
+	proof2 := rangeProofWithAndWithoutRoot(t, db, root, something([]byte("key2")), something([]byte("key3")))
 
 	// ensure the proofs are different
 	r.NotEqual(proof1, proof2)
@@ -95,7 +97,7 @@ func TestRangeProofDiffersAfterUpdate(t *testing.T) {
 	r.NoError(err)
 
 	// get a proof
-	proof := rangeProofWithAndWithoutRoot(t, db, root1, nothing(), nothing(), 10)
+	proof := rangeProofWithAndWithoutRoot(t, db, root1, nothing(), nothing())
 
 	// insert more data
 	root2, err := db.Update(keys[50:], vals[50:])
@@ -103,7 +105,7 @@ func TestRangeProofDiffersAfterUpdate(t *testing.T) {
 	r.NotEqual(root1, root2)
 
 	// get a proof again
-	proof2 := rangeProofWithAndWithoutRoot(t, db, root2, nothing(), nothing(), 10)
+	proof2 := rangeProofWithAndWithoutRoot(t, db, root2, nothing(), nothing())
 
 	// ensure the proofs are different
 	r.NotEqual(proof, proof2)
@@ -119,7 +121,7 @@ func TestRoundTripSerialization(t *testing.T) {
 	r.NoError(err)
 
 	// get a proof
-	proofBytes := rangeProofWithAndWithoutRoot(t, db, root, nothing(), nothing(), 10)
+	proofBytes := rangeProofWithAndWithoutRoot(t, db, root, nothing(), nothing())
 
 	// Deserialize the proof.
 	proof := new(RangeProof)
@@ -142,18 +144,17 @@ func rangeProofWithAndWithoutRoot(
 	db *Database,
 	root []byte,
 	startKey, endKey maybe,
-	maxLength uint32,
 ) []byte {
 	r := require.New(t)
 
-	proof1, err := db.RangeProof(maybe{hasValue: false}, startKey, endKey, maxLength)
+	proof1, err := db.RangeProof(maybe{hasValue: false}, startKey, endKey, maxProofLen)
 	r.NoError(err)
 	r.NotNil(proof1)
 	proof1Bytes, err := proof1.MarshalBinary()
 	r.NoError(err)
 	r.NoError(proof1.Free())
 
-	proof2, err := db.RangeProof(maybe{hasValue: true, value: root}, startKey, endKey, maxLength)
+	proof2, err := db.RangeProof(maybe{hasValue: true, value: root}, startKey, endKey, maxProofLen)
 	r.NoError(err)
 	r.NotNil(proof2)
 	proof2Bytes, err := proof2.MarshalBinary()
