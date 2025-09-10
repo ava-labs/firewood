@@ -83,7 +83,7 @@ fn test_eth_compatible_accounts(
     key_suffixes_and_values: &[(&str, &str)],
     expected_root: &str,
 ) {
-    use sha2::Digest as _;
+    use sha3::Digest as _;
     use sha3::Keccak256;
 
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace"))
