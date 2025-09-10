@@ -114,7 +114,7 @@ pub extern "C" fn fwd_db_range_proof(
             Maybe::Some(root) => root.as_ref().try_into()?,
             Maybe::None => db
                 .current_root_hash()?
-                .ok_or(api::Error::RevisionNotFound { provided: None })?,
+                .ok_or(api::Error::RangeProofOnEmptyTrie)?,
         };
 
         let view = db.get_root(root_hash)?;
