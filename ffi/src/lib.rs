@@ -370,7 +370,7 @@ fn propose_on_proposal(
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_commit(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> HashResult {
     let result = invoke_with_handle(db, move |db| db.commit_proposal(proposal_id));
-    trace!("commit: id={proposal_id} -> {result:?}");
+    debug!("commit: id={proposal_id} -> {result:?}");
     result
 }
 
