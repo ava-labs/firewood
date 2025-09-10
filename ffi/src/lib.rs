@@ -148,13 +148,10 @@ impl Deref for DatabaseHandle<'_> {
 /// - [`ValueResult::None`] if the key was not found.
 /// - [`ValueResult::Some`] if the key was found with the associated value.
 /// - [`ValueResult::Err`] if an error occurred while retrieving the value.
-/// 
+///
 /// [`BorrowedBytes`]: crate::value::BorrowedBytes
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_get_latest(
-    db: Option<&DatabaseHandle>,
-    key: BorrowedBytes,
-) -> ValueResult {
+pub extern "C" fn fwd_get_latest(db: Option<&DatabaseHandle>, key: BorrowedBytes) -> ValueResult {
     let result = invoke_with_handle(db, move |db| db.get_latest(key));
     trace!("get_latest: {key:?} -> {result:?}");
     result
@@ -370,10 +367,7 @@ fn propose_on_proposal(
 /// A `Value` containing {0, null} if the commit was successful.
 /// A `Value` containing {0, "error message"} if the commit failed.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_commit(
-    db: Option<&DatabaseHandle<'_>>,
-    proposal_id: u32,
-) -> HashResult {
+pub extern "C" fn fwd_commit(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> HashResult {
     let result = invoke_with_handle(db, move |db| db.commit_proposal(proposal_id));
     trace!("commit: id={proposal_id} -> {result:?}");
     result
@@ -387,10 +381,7 @@ pub extern "C" fn fwd_commit(
 /// * `db` - The database handle returned by `open_db`
 /// * `proposal_id` - The ID of the proposal to drop
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_drop_proposal(
-    db: Option<&DatabaseHandle<'_>>,
-    proposal_id: u32,
-) -> Value {
+pub extern "C" fn fwd_drop_proposal(db: Option<&DatabaseHandle<'_>>, proposal_id: u32) -> Value {
     debug!("drop_proposal: id={proposal_id}");
     drop_proposal(db, proposal_id).map_or_else(Into::into, Into::into)
 }
@@ -654,7 +645,7 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 }
 
 /// Close and free the memory for a database handle
-/// 
+///
 /// The caller should not use the database handle after this function is called.
 ///
 /// # Arguments

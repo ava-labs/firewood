@@ -55,15 +55,20 @@ impl LogArgs<'_> {
 
     /// Starts logging to the specified file path with the given filter level.
     ///
+    /// This method respects the `RUST_LOG` environment variable. If `RUST_LOG` is set,
+    /// it will be used for the log level configuration. If not set, the filter level
+    /// provided in the FFI arguments will be used as the default.
+    ///
     /// # Errors
     ///
     /// If the log file cannot be created or opened, or if the log level is invalid,
     /// this will return an error.
     pub fn start_logging(&self) -> std::io::Result<()> {
-        use env_logger::Target::Pipe;
+        use env_logger::{Env, Target::Pipe};
         use std::fs::OpenOptions;
 
         let log_path = self.path()?;
+        let default_level = self.log_level()?;
 
         if let Some(log_dir) = log_path.parent() {
             std::fs::create_dir_all(log_dir).map_err(|e| {
@@ -77,14 +82,6 @@ impl LogArgs<'_> {
             })?;
         }
 
-        let level = self.log_level()?;
-        let level = level.parse().map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("invalid log level `{level}`: {e}"),
-            )
-        })?;
-
         let file = OpenOptions::new()
             .create(true)
             .write(true)
@@ -97,8 +94,8 @@ impl LogArgs<'_> {
                 )
             })?;
 
-        env_logger::Builder::new()
-            .filter_level(level)
+        // Use from_env to respect RUST_LOG, but provide the FFI level as default
+        env_logger::Builder::from_env(Env::default().default_filter_or(default_level))
             .target(Pipe(Box::new(file)))
             .try_init()
             .map_err(|e| std::io::Error::other(format!("failed to initialize logger: {e}")))?;
