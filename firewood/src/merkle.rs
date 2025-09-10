@@ -363,7 +363,7 @@ impl<T: TrieReader> Merkle<T> {
                 if !last_key_buf.is_empty() && this_key_buf < last_key_buf {
                     // we have a last key but it is greater than the current key
                     // therefore, the list is not sorted or has duplicates
-                    return Err(ProofError::NonIncreasingValues);
+                    return Err(ProofError::NonMonotonicIncreaseRange);
                 }
 
                 // swap the buffers so that `last_key_buf` contains the key we

@@ -21,8 +21,8 @@ use crate::merkle::{Key, Value};
 #[derive(Debug, Error)]
 /// Reasons why a proof is invalid
 pub enum ProofError {
-    /// Non-monotonic range decrease
-    #[error("non-monotonic range increase")]
+    /// Error when the kev-values in in the provided proof are not in strict ascending order
+    #[error("key-values in the provided proof are not in strict ascending order")]
     NonMonotonicIncreaseRange,
 
     /// Unexpected hash
@@ -89,10 +89,6 @@ pub enum ProofError {
     #[error("expected an end key proof when an end key is provided or key-values are present")]
     ExpectedEndProof,
 
-    /// Error when the kev-values in in the provided proof are not in strict ascending order
-    #[error("key-values in the provided proof are not in strict ascending order")]
-    NonIncreasingValues,
-
     /// Error when the key-values are outsided of the expected [start, end] range
     /// where start and end are inclusive, but optional.
     #[error("expected key-values to be within the provided [start, end] range")]
@@ -106,10 +102,6 @@ pub enum ProofError {
     /// node diverges from the penultimate node's differently than the target key.
     #[error("invalid node for exclusion proof")]
     ExclusionProofInvalidNode,
-
-    /// Empty range
-    #[error("empty range")]
-    EmptyRange,
 }
 
 #[derive(Clone, PartialEq, Eq)]
