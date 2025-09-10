@@ -31,3 +31,41 @@ pub enum Maybe<T> {
     /// A value is present.
     Some(T),
 }
+
+impl<T> Maybe<T> {
+    pub const fn is_some(&self) -> bool {
+        matches!(self, Maybe::Some(_))
+    }
+
+    pub const fn is_none(&self) -> bool {
+        matches!(self, Maybe::None)
+    }
+
+    pub const fn as_ref(&self) -> Maybe<&T> {
+        match self {
+            Maybe::None => Maybe::None,
+            Maybe::Some(v) => Maybe::Some(v),
+        }
+    }
+
+    pub const fn as_mut(&mut self) -> Maybe<&mut T> {
+        match self {
+            Maybe::None => Maybe::None,
+            Maybe::Some(v) => Maybe::Some(v),
+        }
+    }
+
+    pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Maybe<U> {
+        match self {
+            Maybe::None => Maybe::None,
+            Maybe::Some(v) => Maybe::Some(f(v)),
+        }
+    }
+
+    pub fn into_option(self) -> Option<T> {
+        match self {
+            Maybe::None => None,
+            Maybe::Some(v) => Some(v),
+        }
+    }
+}
