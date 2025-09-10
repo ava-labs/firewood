@@ -12,6 +12,55 @@ use crate::{
 
 impl FrozenRangeProof {
     /// Serializes this proof into the provided byte vector.
+    ///
+    /// # Format
+    ///
+    /// The V0 serialization format for a range proof is:
+    ///
+    /// - A 32-byte [`Header`] with the proof type set to [`ProofType::Range`].
+    /// - The start proof, serialized as a _sequence_ of [`ProofNode`]s
+    /// - The end proof, serialized as a _sequence_ of [`ProofNode`]s
+    /// - The key-value pairs, serialized as a _sequence_ of `(key, value)` tuples.
+    ///
+    /// Each [`ProofNode`] is serialized as:
+    /// - The key, serialized as a _sequence_ of bytes where each byte is a nibble
+    ///   of the appropriate branching factor. E.g., if the trie has a branching
+    ///   factor of 16, each byte is only the lower 4 bits of the byte and the
+    ///   upper 4 bits are all zero.
+    /// - A variable-length integer indicating the length of the parent's key of
+    ///   the `key`. I.e., `key[partial_len..]` is the partial path of this node.
+    /// - The value digest:
+    ///   - If there is no value for the node, a single byte with the value `0`.
+    ///   - If there is a value for the node, a single byte with the value `1`
+    ///     followed by:
+    ///     - If the value digest is of a full value, a single byte with the value
+    ///       `0` followed by the value serialized as a _sequence_ of bytes.
+    ///     - If the value digest is of a hash, a single byte with the value `1`
+    ///       followed by the hash serialized as exactly 32 bytes.
+    ///     - See [`ValueDigest::make_hash`] as to when a value digest is a hash.
+    /// - The children bitmap, which is a fixed-size bit field where each bit
+    ///   indicates whether the corresponding child is present. The size of the
+    ///   bitmap is `branching_factor / 8` bytes. E.g., if the branching factor is
+    ///   16, the bitmap is 2 bytes (16 bits) and if the branching factor is 256,
+    ///   the bitmap is 32 bytes (256 bits). All zero bits indicate that the node
+    ///   is a leaf node and no children follow.
+    /// - For each child that is present, as indicated by the bitmap, the child's
+    ///   node ID is serialized.
+    ///   - If the trie is using MerkleDB hashing, the ID is a fixed 32-byte
+    ///     sha256 hash.
+    ///   - If the trie is using Ethereum hashing, the ID is serialized as:
+    ///     - A single byte with the value `0` if the ID is a keccak256 hash;
+    ///       followed by the fixed 32-byte hash.
+    ///     - A single byte with the value `1` if the ID is an RLP encoded node;
+    ///       followed by the RLP encoded bytes serialized as a _sequence_ of
+    ///       bytes. This occurs when the hash input (RLP encoded node) is smaller
+    ///       than 32 bytes; in which case, the hash result is the input value
+    ///       unhashed.
+    ///
+    /// Each _sequence_ mentioned above is prefixed with a variable-length integer
+    /// indicating the number of items in the sequence.
+    ///
+    /// Variable-length integers are encoded using unsigned LEB128.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
         Header::new(ProofType::Range).write_item(out);
         self.write_item(out);

@@ -191,7 +191,7 @@ typedef struct BorrowedSlice_KeyValuePair BorrowedKeyValuePairs;
  * Maybe is a C-compatible optional type using a tagged union pattern.
  *
  * FFI methods and types can use this to represent optional values where `Optional<T>`
- * does not work due to it not having C-compatible layout.
+ * does not work due to it not having a C-compatible layout.
  */
 typedef enum Maybe_OwnedBytes_Tag {
   /**
@@ -415,7 +415,7 @@ typedef struct VoidResult {
  * Maybe is a C-compatible optional type using a tagged union pattern.
  *
  * FFI methods and types can use this to represent optional values where `Optional<T>`
- * does not work due to it not having C-compatible layout.
+ * does not work due to it not having a C-compatible layout.
  */
 typedef enum Maybe_BorrowedBytes_Tag {
   /**

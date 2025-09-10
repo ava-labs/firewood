@@ -22,8 +22,8 @@ pub use self::results::{
 /// Maybe is a C-compatible optional type using a tagged union pattern.
 ///
 /// FFI methods and types can use this to represent optional values where `Optional<T>`
-/// does not work due to it not having C-compatible layout.
-#[derive(Debug)]
+/// does not work due to it not having a C-compatible layout.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[repr(C)]
 pub enum Maybe<T> {
     /// No value present.
@@ -33,14 +33,17 @@ pub enum Maybe<T> {
 }
 
 impl<T> Maybe<T> {
+    /// Returns true if the `Maybe` contains a value.
     pub const fn is_some(&self) -> bool {
         matches!(self, Maybe::Some(_))
     }
 
+    /// Returns true if the `Maybe` does not contain a value.
     pub const fn is_none(&self) -> bool {
         matches!(self, Maybe::None)
     }
 
+    /// Converts from `&Maybe<T>` to `Maybe<&T>`.
     pub const fn as_ref(&self) -> Maybe<&T> {
         match self {
             Maybe::None => Maybe::None,
@@ -48,6 +51,7 @@ impl<T> Maybe<T> {
         }
     }
 
+    /// Converts from `&mut Maybe<T>` to `Maybe<&mut T>`.
     pub const fn as_mut(&mut self) -> Maybe<&mut T> {
         match self {
             Maybe::None => Maybe::None,
@@ -55,6 +59,7 @@ impl<T> Maybe<T> {
         }
     }
 
+    /// Maps a `Maybe<T>` to `Maybe<U>` by applying a function to a contained value.
     pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> Maybe<U> {
         match self {
             Maybe::None => Maybe::None,
@@ -62,10 +67,20 @@ impl<T> Maybe<T> {
         }
     }
 
+    /// Converts from `Maybe<T>` to `Option<T>`.
     pub fn into_option(self) -> Option<T> {
         match self {
             Maybe::None => None,
             Maybe::Some(v) => Some(v),
+        }
+    }
+}
+
+impl<T> From<Option<T>> for Maybe<T> {
+    fn from(opt: Option<T>) -> Self {
+        match opt {
+            None => Maybe::None,
+            Some(v) => Maybe::Some(v),
         }
     }
 }

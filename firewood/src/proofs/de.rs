@@ -15,9 +15,13 @@ use crate::{
 impl FrozenRangeProof {
     /// Parses a `FrozenRangeProof` from the given byte slice.
     ///
+    /// Currently only V0 proofs are supported. See [`FrozenRangeProof::write_to_vec`]
+    /// for the serialization format.
+    ///
     /// # Errors
     ///
-    /// Returns a [`ReadError`] if the data is invalid.
+    /// Returns a [`ReadError`] if the data is invalid. See the enum variants for
+    /// the possible reasons.
     pub fn from_slice(mut data: &[u8]) -> Result<Self, ReadError> {
         let header = data.read_item::<Header>()?;
         header
