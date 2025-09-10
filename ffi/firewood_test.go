@@ -514,6 +514,13 @@ func TestDropProposal(t *testing.T) {
 	r.ErrorIs(err, errDroppedProposal)
 	_, err = proposal.Root()
 	r.NoError(err, "Root of dropped proposal should still be accessible")
+
+	// Check that the keys are not in the database.
+	for i := range keys {
+		got, err := db.Get(keys[i])
+		r.NoError(err, "Get(%d)", i)
+		r.Empty(got, "Get(%d)", i)
+	}
 }
 
 // Create a proposal with 10 key-value pairs.

@@ -71,7 +71,7 @@ pub enum ProofError {
 
     /// Error deserializing a proof
     #[error("error deserializing a proof: {0}")]
-    Deserialization(crate::proofs::de::ReadError),
+    Deserialization(crate::proofs::ReadError),
 
     /// Error when the first key is greater than the last key in a provided range proof
     #[error("first key must come before the last key in a range proof")]
