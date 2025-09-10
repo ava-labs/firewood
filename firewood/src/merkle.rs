@@ -167,7 +167,6 @@ impl<T: TrieReader> Merkle<T> {
 
             proof.push(ProofNode {
                 key: root.partial_path().bytes(),
-                #[cfg(feature = "ethhash")]
                 partial_len: root.partial_path().0.len(),
                 value_digest: root
                     .value()
@@ -406,7 +405,7 @@ impl<T: TrieReader> Merkle<T> {
         let mut node_key = Path::default();
         for node in proof.as_ref() {
             node_key.0.clear();
-            node_key.0.extend(node.key());
+            node_key.0.extend(node.full_path());
 
             // skip partial paths as they cannot have values
             #[cfg(not(feature = "branch_factor_256"))]
