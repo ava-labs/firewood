@@ -40,6 +40,7 @@ use std::ops::Deref;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use env_logger::Env;
 use firewood::db::{Db, Proposal};
 use firewood::logger::{debug, trace};
 use firewood::v2::api::{self, Db as _, DbView, KeyValuePairIter, Proposal as _};
@@ -620,6 +621,9 @@ pub extern "C" fn fwd_gather() -> ValueResult {
 /// - [`HandleResult::Err`] if an error occurs while opening the database.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_open_db(args: DatabaseHandleArgs) -> HandleResult {
+    // Initialize logger for debugging, ignoring errors if already initialized
+    // TODO: Roll this back. This should be done by coreth!
+    let _ = env_logger::Builder::from_env(Env::default().default_filter_or("info")).try_init();
     invoke(move || DatabaseHandle::new(args))
 }
 
