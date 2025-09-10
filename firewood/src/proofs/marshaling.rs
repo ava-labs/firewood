@@ -203,12 +203,11 @@ mod tests {
     use test_case::test_case;
 
     #[test_case(BranchNode::empty_children(), &[]; "empty")]
-    #[test_case(
-        {
-            let mut children = BranchNode::empty_children();
-            children[0] = Some(());
-            children
-        }, &[0]; "first")]
+    #[test_case({
+        let mut children = BranchNode::empty_children();
+        children[0] = Some(());
+        children
+    }, &[0]; "first")]
     #[test_case({
         let mut children = BranchNode::empty_children();
         children[1] = Some(());
