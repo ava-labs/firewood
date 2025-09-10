@@ -7,3 +7,6 @@ pub mod de;
 pub mod marshaling;
 /// Serialization utilities for proofs.
 pub mod ser;
+
+#[cfg(test)]
+mod tests;

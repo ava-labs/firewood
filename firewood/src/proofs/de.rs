@@ -42,7 +42,7 @@ impl FrozenRangeProof {
                 item: "trailing data",
                 #[expect(clippy::arithmetic_side_effects)]
                 offset: size_of::<Header>() + data.len() - rest.len(),
-                expected: "none",
+                expected: "no data after the proof",
                 found: format!("{} bytes", rest.len()),
             })
         }
@@ -205,6 +205,19 @@ impl<T: Version0> Version0 for Box<[T]> {
     fn parse_v0<'a>(header: &Header, mut data: &'a [u8]) -> Result<(Self, &'a [u8]), ReadError> {
         let data_len = data.len();
         let num_items = data.read_item::<usize>()?;
+
+        if num_items > (isize::MAX as usize) {
+            return Err(ReadError::InvalidItem {
+                item: "array length",
+                offset: 0,
+                expected: "less than or equal to isize::MAX (<= 2^63-1)",
+                found: num_items.to_string(),
+            });
+        }
+        // FIXME: we must somehow validate `num_items` matches what is expected;
+        //        the above check is insufficient and is only to prevent
+        //        `Vec::with_capacity` from panicking in case of extreme values.
+        //        But, an OOM will also cause us to panic, which is undesirable.
         let mut items = Vec::with_capacity(num_items);
         for _ in 0..num_items {
             #[expect(clippy::arithmetic_side_effects)]
@@ -218,19 +231,16 @@ impl<T: Version0> Version0 for Box<[T]> {
 }
 
 impl Version0 for FrozenRangeProof {
-    #[expect(clippy::arithmetic_side_effects)]
-    fn parse_v0<'a>(header: &Header, mut data: &'a [u8]) -> Result<(Self, &'a [u8]), ReadError> {
+    fn parse_v0<'a>(header: &Header, data: &'a [u8]) -> Result<(Self, &'a [u8]), ReadError> {
         let data_len = data.len();
 
-        let start_proof;
-        let end_proof;
-
-        (start_proof, data) = Version0::parse_v0(header, data)?;
+        let (start_proof, data) = Version0::parse_v0(header, data)?;
 
         #[expect(clippy::arithmetic_side_effects)]
         let offset = data_len - data.len();
-        (end_proof, data) = Version0::parse_v0(header, data).add_offset(offset)?;
+        let (end_proof, data) = Version0::parse_v0(header, data).add_offset(offset)?;
 
+        #[expect(clippy::arithmetic_side_effects)]
         let offset = data_len - data.len();
         let (key_values, data) = Version0::parse_v0(header, data).add_offset(offset)?;
 
@@ -329,11 +339,18 @@ impl<'a> ReadItem<'a> for usize {
         match u64::decode_var(data) {
             #[expect(clippy::indexing_slicing)]
             Some((n, size)) => Ok((n as usize, &data[size..])),
-            None => Err(ReadError::IncompleteItem {
+            None if data.is_empty() => Err(ReadError::IncompleteItem {
                 item: "varint",
                 offset: 0,
                 expected: 1, // at least 1 byte is needed
-                found: data.len(),
+                found: 0,
+            }),
+            None => Err(ReadError::InvalidItem {
+                item: "varint",
+                offset: 0,
+                expected: "byte with no MSB within 9 bytes",
+                #[expect(clippy::indexing_slicing)]
+                found: format!("{:?}", &data[..data.len().min(10)]),
             }),
         }
     }
