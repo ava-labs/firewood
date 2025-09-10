@@ -11,7 +11,6 @@ mod ser;
 mod tests;
 
 pub use self::header::InvalidHeader;
-pub use self::proof_type::ProofType;
 pub use self::reader::ReadError;
 
 mod magic {
