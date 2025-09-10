@@ -71,7 +71,7 @@ pub enum ProofError {
 
     /// Error deserializing a proof
     #[error("error deserializing a proof: {0}")]
-    Deserialization(crate::proofs::de::ReadError),
+    Deserialization(crate::proofs::ReadError),
 
     /// Empty range
     #[error("empty range")]

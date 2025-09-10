@@ -6,7 +6,7 @@ use integer_encoding::VarInt;
 
 use crate::{
     proof::ProofNode,
-    proofs::marshaling::{ChildrenMap, Header, ProofType},
+    proofs::{bitmap::ChildrenMap, header::Header, proof_type::ProofType},
     v2::api::FrozenRangeProof,
 };
 
@@ -17,6 +17,10 @@ impl FrozenRangeProof {
     ///
     /// The V0 serialization format for a range proof is:
     ///
+    #[expect(
+        rustdoc::private_intra_doc_links,
+        reason = "Header and ProofType are not exported"
+    )]
     /// - A 32-byte [`Header`] with the proof type set to [`ProofType::Range`].
     /// - The start proof, serialized as a _sequence_ of [`ProofNode`]s
     /// - The end proof, serialized as a _sequence_ of [`ProofNode`]s
