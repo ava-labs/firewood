@@ -6,7 +6,7 @@ use integer_encoding::VarInt;
 
 use crate::{
     proof::ProofNode,
-    proofs::marshaling::{ChildrenMap, Header, ProofType},
+    proofs::{bitmap::ChildrenMap, header::Header, marshaling::ProofType},
     v2::api::FrozenRangeProof,
 };
 

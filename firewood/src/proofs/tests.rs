@@ -1,20 +1,13 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    clippy::arithmetic_side_effects
-)]
+#![expect(clippy::unwrap_used, clippy::indexing_slicing)]
 
 use integer_encoding::VarInt;
 use test_case::test_case;
 
 use crate::{
-    proofs::{
-        de::{InvalidHeader, ReadError},
-        marshaling::ProofType,
-    },
+    proofs::{header::InvalidHeader, marshaling::ProofType, reader::ReadError},
     v2::api::FrozenRangeProof,
 };
 
@@ -88,23 +81,26 @@ fn test_invalid_header(
 )]
 #[test_case(
     |_, data| data.truncate(32),
-    "varint",
+    "array length",
     1, // expected len
     0; // found len
     "no varint after header"
 )]
-#[test_case(
-    |proof, data| data.truncate(
-        32
-        + proof.start_proof().len().required_space()
-        + proof.start_proof()[0].key.len().required_space()
-        // truncate after the key length varint but before the key bytes
-    ),
-    "byte array",
+#[cfg_attr(not(feature = "branch_factor_256"), test_case(
+    |proof, data| {
+        #[expect(clippy::arithmetic_side_effects)]
+        data.truncate(
+            32
+            + proof.start_proof().len().required_space()
+            + proof.start_proof()[0].key.len().required_space()
+            // truncate after the key length varint but before the key bytes
+        );
+    },
+    "byte slice",
     1, // expected len
     0; // found len
     "truncated node key"
-)]
+))]
 fn test_incomplete_item(
     mutator: impl FnOnce(&FrozenRangeProof, &mut Vec<u8>),
     item: &'static str,
@@ -112,6 +108,10 @@ fn test_incomplete_item(
     found_len: usize,
 ) {
     let (proof, mut data) = create_valid_range_proof();
+
+    eprintln!("data len: {}", data.len());
+    eprintln!("proof: {proof:#?}");
+    eprintln!("data: {}", hex::encode(&data));
 
     mutator(&proof, &mut data);
 
@@ -124,15 +124,15 @@ fn test_incomplete_item(
         }) => {
             assert_eq!(
                 found_item, item,
-                "unexpected `item` value, got: {found_item}, wanted: {item}"
+                "unexpected `item` value, got: {found_item}, wanted: {item}; {data:?}"
             );
             assert_eq!(
                 expected, expected_len,
-                "unexpected `expected` value, got: {expected}, wanted: {expected_len}"
+                "unexpected `expected` value, got: {expected}, wanted: {expected_len}; {data:?}"
             );
             assert_eq!(
                 found, found_len,
-                "unexpected `found` value, got: {found}, wanted: {found_len}"
+                "unexpected `found` value, got: {found}, wanted: {found_len}; {data:?}"
             );
         }
         other => panic!("Expected ReadError::IncompleteItem, got: {other:?}"),
@@ -154,14 +154,14 @@ fn test_incomplete_item(
 )]
 #[test_case(
     |_, data| data[32..42].copy_from_slice(&[0x80, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88, 0x89]),
-    "varint",
+    "array length",
     "byte with no MSB within 9 bytes",
     "[128, 129, 130, 131, 132, 133, 134, 135, 136, 137]";
     "invalid varint"
 )]
 #[test_case(
     |_, data| data.extend_from_slice(&[0xFF; 100]), // extend data with invalid trailing bytes
-    "trailing data",
+    "trailing bytes",
     "no data after the proof",
     "100 bytes";
     "extra trailing bytes"
