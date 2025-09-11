@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::db::BatchOp;
-use crate::merkle::{Merkle, Value};
+use crate::merkle::{Key, Merkle, Value};
 use crate::v2::api::KeyValuePairIter;
 use firewood_storage::{
     BranchNode, Child, FileBacked, FileIoError, ImmutableProposal, LeafNode, MutableProposal,
@@ -28,9 +28,9 @@ impl std::ops::Deref for WorkerSender {
 /// A request to the worker.
 #[derive(Debug)]
 enum Request {
-    Insert { key: Path, value: Value },
-    Delete { key: Path },
-    DeleteRange { prefix: Path },
+    Insert { key: Key, value: Value },
+    Delete { key: Key },
+    DeleteRange { prefix: Key },
     Done,
 }
 
@@ -196,40 +196,45 @@ impl ParallelMerkle {
         // using `worker_sender`.
         pool.spawn(move || {
             let mut merkle = Merkle::from(worker_nodestore);
-            loop {
-                // Wait for a message on the receiver child channel. Break out of loop if there is an error.
-                let request = match child_receiver.recv() {
-                    Ok(r) => r,
-                    Err(_err) => break, // Exit recv loop
-                };
+
+            // Wait for a message on the receiver child channel. Break out of loop if there is an error.
+            while let Ok(request) = child_receiver.recv() {
                 match request {
                     // insert a key-value pair into the subtrie
                     Request::Insert { key, value } => {
-                        if let Err(err) = merkle.insert_path(key, value.as_ref().into()) {
+                        let mut nibbles_iter = NibblesIterator::new(&key);
+                        nibbles_iter.next(); // Skip the first nibble
+                        if let Err(err) =
+                            merkle.insert_from_iter(nibbles_iter, value.as_ref().into())
+                        {
                             worker_sender
                                 .send(Response::Error(err))
-                                .expect("send error");
+                                .expect("send from worker error");
                         }
                     }
                     Request::Delete { key } => {
-                        if let Err(err) = merkle.remove_path(key) {
+                        let mut nibbles_iter = NibblesIterator::new(&key);
+                        nibbles_iter.next(); // Skip the first nibble
+                        if let Err(err) = merkle.remove_from_iter(nibbles_iter) {
                             worker_sender
                                 .send(Response::Error(err))
-                                .expect("send error");
+                                .expect("send from worker error");
                         }
                     }
                     Request::DeleteRange { prefix } => {
-                        if let Err(err) = merkle.remove_prefix_path(prefix) {
+                        let mut nibbles_iter = NibblesIterator::new(&prefix);
+                        nibbles_iter.next(); // Skip the first nibble
+                        if let Err(err) = merkle.remove_prefix_from_iter(nibbles_iter) {
                             worker_sender
                                 .send(Response::Error(err))
-                                .expect("send error");
+                                .expect("send from worker error");
                         }
                     }
                     // Sent from the coordinator to the workers to signal that the batch is done.
                     Request::Done => {
                         worker_sender
                             .send(Response::Root(first_nibble, merkle.into_inner().into()))
-                            .expect("send error");
+                            .expect("send from worker error");
                         break; // Allow the worker to return to the thread pool.
                     }
                 }
@@ -307,7 +312,7 @@ impl ParallelMerkle {
         for worker in self.workers.iter().flatten() {
             worker
                 .send(Request::DeleteRange {
-                    prefix: Path::new(), // Empty prefix
+                    prefix: Box::default(), // Empty prefix
                 })
                 .expect("TODO: handle error");
         }
@@ -394,10 +399,6 @@ impl ParallelMerkle {
                 continue; // Done with this empty key operation.
             };
 
-            // We send a path to the worker without the first nibble. Sending a nibble iterator to a
-            // worker is more difficult as it takes a reference from op.
-            let key_path = Path::from_nibbles_iterator(key_nibbles);
-
             // Get the worker that is responsible for this nibble. The worker will be created if it
             // doesn't already exist.
             let worker = self.get_worker(
@@ -413,19 +414,23 @@ impl ParallelMerkle {
                 BatchOp::Put { key: _, value } => {
                     worker
                         .send(Request::Insert {
-                            key: key_path,
+                            key: op.key().as_ref().into(),
                             value: value.as_ref().into(),
                         })
                         .expect("send to worker error");
                 }
                 BatchOp::Delete { key: _ } => {
                     worker
-                        .send(Request::Delete { key: key_path })
+                        .send(Request::Delete {
+                            key: op.key().as_ref().into(),
+                        })
                         .expect("send to worker error");
                 }
                 BatchOp::DeleteRange { prefix: _ } => {
                     worker
-                        .send(Request::DeleteRange { prefix: key_path })
+                        .send(Request::DeleteRange {
+                            prefix: op.key().as_ref().into(),
+                        })
                         .expect("send to worker error");
                 }
             }
