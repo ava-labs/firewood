@@ -404,6 +404,15 @@ impl BranchNode {
             .expect("child_index is in bounds")
     }
 
+    /// Takes the child at the given index.
+    /// Panics if `child_index` >= [`BranchNode::MAX_CHILDREN`].
+    pub fn take_child(&mut self, child_index: u8) -> Option<Child> {
+        self.children
+            .get_mut(child_index as usize)
+            .expect("index error")
+            .take()
+    }
+
     /// Update the child at `child_index` to be `new_child_addr`.
     /// If `new_child_addr` is None, the child is removed.
     pub fn update_child(&mut self, child_index: u8, new_child: Option<Child>) {

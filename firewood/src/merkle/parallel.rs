@@ -171,13 +171,8 @@ impl ParallelMerkle {
         let (child_sender, child_receiver) = mpsc::channel();
 
         // The root's child becomes the root node of the worker
-        let child = root_branch
-            .children
-            .get_mut(first_nibble as usize)
-            .expect("index error")
-            .take();
-
-        let child_root = child
+        let child_root = root_branch
+            .take_child(first_nibble)
             .map(|child| match child {
                 Child::Node(node) => Ok(node),
                 Child::AddressWithHash(address, _) => {
