@@ -347,7 +347,8 @@ impl ParallelMerkle {
         // Create a proposal from the parent
         let mut proposal = NodeStore::new(parent)?;
 
-        // Prepare step: process trie in preparation for performing parallel modifications.
+        // Prepare step: normalize the root in preparation for performing parallel modifications
+        // to the trie.
         self.normalize_root(&mut proposal);
 
         let mut root_branch = proposal
@@ -405,6 +406,10 @@ impl ParallelMerkle {
             )?;
 
             // Send the current operation to the worker.
+            // TODO: Currently the key from the BatchOp is copied to a Box<[u8]> before it is sent
+            //       to the worker. It may be possible to send a nibble iterator instead of a
+            //       Box<[u8]> to the worker if we use rayon scoped threads. This change would
+            //       eliminate a memory copy but may require some code refactoring.
             match &op {
                 BatchOp::Put { key: _, value } => {
                     worker
