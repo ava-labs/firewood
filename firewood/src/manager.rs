@@ -13,10 +13,11 @@
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZero;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use firewood_storage::logger::{trace, warn};
 use metrics::gauge;
+use rayon::ThreadPool;
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
@@ -74,6 +75,7 @@ pub(crate) struct RevisionManager {
     proposals: Mutex<Vec<ProposedRevision>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
+    threadpool: OnceLock<ThreadPool>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -114,6 +116,7 @@ impl RevisionManager {
             by_hash: RwLock::new(Default::default()),
             proposals: Mutex::new(Default::default()),
             // committing_proposals: Default::default(),
+            threadpool: OnceLock::new(),
         };
 
         if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
@@ -307,6 +310,10 @@ impl RevisionManager {
             .back()
             .expect("there is always one revision")
             .clone()
+    }
+
+    pub const fn threadpool(&self) -> &OnceLock<ThreadPool> {
+        &self.threadpool
     }
 }
 
