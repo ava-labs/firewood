@@ -3,9 +3,9 @@
 
 use std::fmt;
 
-use firewood::v2::api;
-
+use crate::OwnedBytes;
 use crate::value::BorrowedBytes;
+use firewood::v2::api;
 
 /// A `KeyValue` represents a key-value pair, passed to the FFI.
 #[repr(C)]
@@ -59,5 +59,22 @@ impl<'a> api::KeyValuePair for &KeyValuePair<'a> {
     #[inline]
     fn into_batch(self) -> api::BatchOp<Self::Key, Self::Value> {
         (*self).into_batch()
+    }
+}
+
+/// Owned version of `KeyValuePair`, returned to the FFI.
+#[repr(C)]
+#[derive(Debug, Clone)]
+pub struct OwnedKeyValuePair {
+    pub key: OwnedBytes,
+    pub value: OwnedBytes,
+}
+
+impl From<(Box<[u8]>, Box<[u8]>)> for OwnedKeyValuePair {
+    fn from(value: (Box<[u8]>, Box<[u8]>)) -> Self {
+        OwnedKeyValuePair {
+            key: value.0.into(),
+            value: value.1.into(),
+        }
     }
 }
