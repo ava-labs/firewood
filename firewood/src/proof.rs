@@ -74,7 +74,7 @@ pub enum ProofError {
     EmptyRange,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, PartialEq, Eq, Default)]
 /// A node in a proof.
 pub struct ProofNode {
     /// The key this node is at. Each byte is a nibble.
@@ -87,6 +87,33 @@ pub struct ProofNode {
     pub value_digest: Option<ValueDigest<Value>>,
     /// The hash of each child, or None if the child does not exist.
     pub child_hashes: Children<HashType>,
+}
+
+impl std::fmt::Debug for ProofNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let key: Vec<u8> = self.key().collect();
+        let children: Vec<(usize, &HashType)> = self
+            .child_hashes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| c.as_ref().map(|h| (i, h)))
+            .collect();
+        let value_digest = self.value_digest();
+
+        let mut ds = f.debug_struct("ProofNode");
+        ds.field("key", &key)
+            .field("value_digest", &value_digest)
+            .field("child_hashes", &children);
+
+        #[cfg(feature = "ethhash")]
+        ds.field("partial_len", &self.partial_len);
+
+        // Compute the hash and render it as well
+        let hash = firewood_storage::Preimage::to_hash(self);
+        ds.field("hash", &hash);
+
+        ds.finish()
+    }
 }
 
 impl Hashable for ProofNode {
@@ -102,6 +129,7 @@ impl Hashable for ProofNode {
     fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {
         self.value_digest.as_ref().map(|vd| match vd {
             ValueDigest::Value(v) => ValueDigest::Value(v.as_ref()),
+            #[cfg(not(feature = "ethhash"))]
             ValueDigest::Hash(h) => ValueDigest::Hash(h.as_ref()),
         })
     }
