@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::{BranchNode, Children, HashType, Hashable, ValueDigest};
+use firewood_storage::{BranchNode, Children, HashType, Hashable, ValueDigest, logger::trace};
 
 use crate::{
     proof::{Proof, ProofCollection, ProofError, ProofNode},
@@ -77,6 +77,7 @@ struct KeyValueTrieRoot<'a> {
 }
 
 /// A root node in a trie formed from a [`ProofNode`].
+#[derive(Debug)]
 struct KeyProofTrieRoot<'a> {
     /// Unlike `KeyValueTrie`, each byte in the slice is a nibble regardless of
     /// the branching factor and those that are out of bounds will error when used.
@@ -86,6 +87,7 @@ struct KeyProofTrieRoot<'a> {
 }
 
 /// A node in a trie formed a collection of [`ProofNode`]s.
+#[derive(Debug)]
 enum KeyProofTrieEdge<'a> {
     /// Remote nodes are the nodes where we only know the ID, as discovered
     /// from a proof node. If we only have the child, we can't infer anything
@@ -103,7 +105,10 @@ impl<'a> HashedRangeProofTrieRoot<'a> {
         proof: &'a RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
     ) -> Result<Self, ProofError> {
         let root = RangeProofTrieRoot::from_range_proof(proof)?;
-        Ok(Self::new(PathGuard::new(&mut Vec::new()), root))
+        trace!("RangeProofTrieRoot: {root:#?}");
+        let this = Self::new(PathGuard::new(&mut Vec::new()), root);
+        trace!("HashedRangeProofTrieRoot: {this:#?}");
+        Ok(this)
     }
 
     fn new(mut parent_path: PathGuard<'_>, node: RangeProofTrieRoot<'a>) -> Self {
@@ -203,13 +208,24 @@ impl<'a> RangeProofTrieRoot<'a> {
         proof: &'a RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
     ) -> Result<Self, ProofError> {
         let start_proof = KeyProofTrieRoot::from_proof(proof.start_proof())?;
+        trace!(
+            "Start KeyProofTrieRoot: {:#?} {start_proof:#?}",
+            proof.start_proof().as_ref(),
+        );
+
         let end_proof = KeyProofTrieRoot::from_proof(proof.end_proof())?;
+        trace!(
+            "End KeyProofTrieRoot: {:#?} {end_proof:#?}",
+            proof.end_proof().as_ref(),
+        );
 
         let key_proof = KeyProofTrieRoot::merge_proof_roots(start_proof, end_proof)?
             .unwrap_or_else(KeyProofTrieRoot::empty);
+        trace!("Merged KeyProofTrieRoot: {key_proof:#?}");
 
         let kvp = KeyValueTrieRoot::from_pairs(proof.key_values())?
             .unwrap_or_else(KeyValueTrieRoot::empty);
+        trace!("KeyValueTrieRoot: {kvp:#?}");
 
         Self::join(key_proof, kvp)
     }
