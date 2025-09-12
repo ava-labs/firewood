@@ -103,23 +103,23 @@ impl<'a> HashedRangeProofTrieRoot<'a> {
         proof: &'a RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
     ) -> Result<Self, ProofError> {
         let root = RangeProofTrieRoot::from_range_proof(proof)?;
-        Ok(Self::new(std::iter::empty(), root))
+        Ok(Self::new(PathGuard::new(&mut Vec::new()), root))
     }
 
-    fn new(parent_path: impl Iterator<Item = u8> + Clone, node: RangeProofTrieRoot<'a>) -> Self {
+    fn new(mut parent_path: PathGuard<'_>, node: RangeProofTrieRoot<'a>) -> Self {
         let mut nibble = 0_u8;
         let children = node.children.map(|maybe| {
             let this_nibble = nibble;
             nibble = nibble.wrapping_add(1);
 
             maybe.map(|child| {
-                HashedRangeProofTrieEdge::new(parent_path.clone().chain(Some(this_nibble)), *child)
+                HashedRangeProofTrieEdge::new(parent_path.fork_push(this_nibble), *child)
             })
         });
 
         Self {
             computed: Shunt::new(
-                parent_path,
+                &parent_path,
                 node.key,
                 node.value_digest.as_ref().map(ValueDigest::as_ref),
                 children
@@ -135,7 +135,7 @@ impl<'a> HashedRangeProofTrieRoot<'a> {
 }
 
 impl<'a> HashedRangeProofTrieEdge<'a> {
-    fn new(parent_path: impl Iterator<Item = u8> + Clone, edge: RangeProofTrieEdge<'a>) -> Self {
+    fn new(parent_path: PathGuard<'_>, edge: RangeProofTrieEdge<'a>) -> Self {
         match edge {
             RangeProofTrieEdge::Distant(hash) => Self::Distant(hash),
             RangeProofTrieEdge::Partial(hash, root) => {
@@ -170,13 +170,13 @@ impl<'a> HashedRangeProofTrieEdge<'a> {
 }
 
 impl<'a> HashedKeyValueTrieRoot<'a> {
-    fn new(parent_path: impl Iterator<Item = u8> + Clone, node: KeyValueTrieRoot<'a>) -> Self {
+    fn new(mut parent_path: PathGuard<'_>, node: KeyValueTrieRoot<'a>) -> Self {
         let mut nibble = 0_u8;
         let children = node.children.map(|maybe| {
             let this_nibble = nibble;
             nibble = nibble.wrapping_add(1);
 
-            maybe.map(|child| Self::new(parent_path.clone().chain(Some(this_nibble)), *child))
+            maybe.map(|child| Self::new(parent_path.fork_push(this_nibble), *child))
         });
 
         let child_hashes = children
@@ -185,7 +185,7 @@ impl<'a> HashedKeyValueTrieRoot<'a> {
 
         HashedKeyValueTrieRoot {
             computed: Shunt::new(
-                parent_path,
+                &parent_path,
                 node.key,
                 node.value.map(ValueDigest::Value),
                 child_hashes,
@@ -760,26 +760,25 @@ impl KeyProofTrieEdge<'_> {
     }
 }
 
-struct Shunt<'a, P, I> {
-    parent_path: I,
+struct Shunt<'a, P> {
+    parent_nibbles: &'a [u8],
     key: P,
     value: Option<ValueDigest<&'a [u8]>>,
     child_hashes: Children<HashType>,
 }
 
-impl<'a, P, I> Shunt<'a, P, I>
+impl<'a, P> Shunt<'a, P>
 where
     P: Nibbles<'a> + Copy,
-    I: Iterator<Item = u8> + Clone,
 {
     const fn new(
-        parent_path: I,
+        parent_nibbles: &'a [u8],
         key: P,
         value: Option<ValueDigest<&'a [u8]>>,
         child_hashes: Children<HashType>,
     ) -> Self {
         Self {
-            parent_path,
+            parent_nibbles,
             key,
             value,
             child_hashes,
@@ -791,17 +790,13 @@ where
     }
 }
 
-impl<'a, P, I> std::fmt::Debug for Shunt<'a, P, I>
-where
-    P: Nibbles<'a> + Copy,
-    I: Iterator<Item = u8> + Clone,
-{
+impl<'a, P: Nibbles<'a> + Copy> std::fmt::Debug for Shunt<'a, P> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        struct ParentPath<'a, I>(&'a I);
+        struct ParentPath<'a>(&'a [u8]);
 
-        impl<I: Iterator<Item = u8> + Clone> std::fmt::Debug for ParentPath<'_, I> {
+        impl std::fmt::Debug for ParentPath<'_> {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                super::path::display_nibbles(f, self.0.clone())
+                super::path::display_nibbles(f, self.0.iter().copied())
             }
         }
 
@@ -814,7 +809,7 @@ where
         }
 
         f.debug_struct("Shunt")
-            .field("parent_path", &ParentPath(&self.parent_path))
+            .field("parent_path", &ParentPath(self.parent_nibbles))
             .field("key", &DebugNibbles(self.key))
             .field("value", &self.value.as_ref().map(hex::encode))
             .field("child_hashes", &self.child_hashes)
@@ -822,9 +817,9 @@ where
     }
 }
 
-impl<'a, P: Nibbles<'a> + Copy, I: Iterator<Item = u8> + Clone> Hashable for Shunt<'a, P, I> {
+impl<'a, P: Nibbles<'a> + Copy> Hashable for Shunt<'a, P> {
     fn parent_prefix_path(&self) -> impl Iterator<Item = u8> + Clone {
-        self.parent_path.clone()
+        self.parent_nibbles.iter().copied()
     }
 
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
@@ -880,6 +875,48 @@ impl<'a> Merge for KeyValueTrieRoot<'a> {
 
     fn merge(lhs: Self, rhs: Self) -> Result<Option<Self::Output>, Self::Error> {
         KeyValueTrieRoot::merge(lhs, rhs).map(Some)
+    }
+}
+
+struct PathGuard<'a> {
+    nibbles: &'a mut Vec<u8>,
+    reset_len: usize,
+}
+
+impl Drop for PathGuard<'_> {
+    fn drop(&mut self) {
+        self.nibbles.truncate(self.reset_len);
+    }
+}
+
+impl<'a> PathGuard<'a> {
+    const fn new(nibbles: &'a mut Vec<u8>) -> Self {
+        let reset_len = nibbles.len();
+        Self { nibbles, reset_len }
+    }
+
+    const fn fork(&mut self) -> PathGuard<'_> {
+        PathGuard::new(self.nibbles)
+    }
+
+    fn fork_push(&mut self, nibble: u8) -> PathGuard<'_> {
+        let mut this = self.fork();
+        this.push(nibble);
+        this
+    }
+}
+
+impl std::ops::Deref for PathGuard<'_> {
+    type Target = Vec<u8>;
+
+    fn deref(&self) -> &Self::Target {
+        self.nibbles
+    }
+}
+
+impl std::ops::DerefMut for PathGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.nibbles
     }
 }
 
