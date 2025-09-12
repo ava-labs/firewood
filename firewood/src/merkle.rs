@@ -446,15 +446,15 @@ impl<T: TrieReader> Merkle<T> {
         proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
         root_hash: &HashKey,
     ) -> Result<(), api::Error> {
-        let result = crate::proofs::HashedRangeProofTrieRoot::from_range_proof(proof)?;
-        if *root_hash == result.computed {
+        let result = crate::proofs::HashedRangeProof::new(proof)?;
+        if *root_hash == *result.computed() {
             counter!("firewood.proofs.valid_range_proof").increment(1);
             Ok(())
         } else {
             counter!("firewood.proofs.invalid_range_proof").increment(1);
             Err(api::Error::InvalidHash {
                 reason: api::InvalidHashReason::MismatchedHash,
-                invalid: Some(result.computed),
+                invalid: Some(result.computed().clone()),
                 expected: Some(root_hash.clone().into_hash_type()),
             })
         }

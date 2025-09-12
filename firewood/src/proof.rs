@@ -12,7 +12,7 @@
 
 use firewood_storage::{
     BranchNode, Children, FileIoError, HashType, Hashable, IntoHashType, NibblesIterator, Path,
-    PathIterItem, Preimage, TrieHash, ValueDigest, padded_packed_path,
+    PathIterItem, Preimage, TrieHash, ValueDigest,
 };
 use thiserror::Error;
 
@@ -103,21 +103,13 @@ pub enum ProofError {
 
     /// Node not in trie
     #[error(
-        "parent node {} does not have a child at index {child_nibble}, but child node {} exists",
+        "parent node {} does not have a child for {}",
         hex::encode(parent),
         hex::encode(child)
     )]
     NodeNotInTrie {
         /// The key of the parent node that is missing the child at the given index.
         parent: Key,
-        /// The index of the missing child in the parent's children.
-        ///
-        /// This is equivalent to;
-        ///
-        /// ```ignore
-        /// next_nibble(NibblesIterator::new(parent), NibblesIterator::new(child)).unwrap()
-        /// ```
-        child_nibble: u8,
         /// The key of the child node that exists in the proof, but is missing
         /// from the parent's children.
         child: Key,
@@ -162,14 +154,14 @@ pub enum ProofError {
     ExclusionProofInvalidNode,
 
     /// Error when there are duplicate keys in the proof with different values.
-    #[error("duplicate keys in proof: {key:?} with values {value1:?} and {value2:?}")]
+    #[error("duplicate keys in proof: {key:?} with values {value1} and {value2}")]
     DuplicateKeysInProof {
         /// The duplicate key.
         key: Key,
         /// The first value.
-        value1: Value,
+        value1: String,
         /// The second value.
-        value2: Value,
+        value2: String,
     },
 }
 
@@ -326,8 +318,8 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
 
                 let Some(next_nibble) = next_node_index else {
                     return Err(ProofError::ShouldBePrefixOfNextKey {
-                        parent: padded_packed_path(node.full_path()),
-                        child: padded_packed_path(next_node.full_path()),
+                        parent: crate::proofs::BytesIter::new(node.full_path()).collect(),
+                        child: crate::proofs::BytesIter::new(next_node.full_path()).collect(),
                     });
                 };
 
@@ -339,9 +331,8 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                     })?
                     .as_ref()
                     .ok_or_else(|| ProofError::NodeNotInTrie {
-                        parent: padded_packed_path(node.full_path()),
-                        child_nibble: next_nibble,
-                        child: padded_packed_path(next_node.full_path()),
+                        parent: crate::proofs::BytesIter::new(node.full_path()).collect(),
+                        child: crate::proofs::BytesIter::new(next_node.full_path()).collect(),
                     })?
                     .clone();
             }
@@ -407,8 +398,8 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             // Each node's key should be a prefix of next node's key
             if next_nibble(node.full_path(), next_node.full_path()).is_none() {
                 return Err(ProofError::ShouldBePrefixOfNextKey {
-                    parent: padded_packed_path(node.full_path()),
-                    child: padded_packed_path(next_node.full_path()),
+                    parent: crate::proofs::BytesIter::new(node.full_path()).collect(),
+                    child: crate::proofs::BytesIter::new(next_node.full_path()).collect(),
                 });
             }
         }

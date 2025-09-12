@@ -1,41 +1,49 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::convert::Infallible;
+
 use firewood_storage::{BranchNode, Children, HashType, Hashable, ValueDigest, logger::trace};
 
 use crate::{
     proof::{Proof, ProofCollection, ProofError, ProofNode},
-    proofs::path::{Nibbles, PackedPath, RangeProofPath, SplitKey, WidenedPath},
+    proofs::path::{
+        CollectedNibbles, Nibbles, PackedPath, PathNibble, SplitNibbles, SplitPath, WidenedPath,
+    },
     range_proof::RangeProof,
     v2::api::{KeyType, ValueType},
 };
 
+type EitherProof<'a> = either::Either<RangeProofTrieRoot<'a>, KeyValueTrieRoot<'a>>;
+
 #[derive(Debug)]
-struct HashedKeyValueTrieRoot<'a> {
-    computed: HashType,
-    #[expect(unused)]
-    key: PackedPath<'a>,
-    #[expect(unused)]
-    value: Option<&'a [u8]>,
-    #[expect(unused)]
-    children: Children<Box<HashedKeyValueTrieRoot<'a>>>,
+pub(crate) struct HashedRangeProof<'a> {
+    either: either::Either<HashedRangeProofTrieRoot<'a>, HashedKeyValueTrieRoot<'a>>,
 }
 
 #[derive(Debug)]
-pub(crate) struct HashedRangeProofTrieRoot<'a> {
-    pub(crate) computed: HashType,
-    #[expect(unused)]
-    key: RangeProofPath<'a>,
-    #[expect(unused)]
+pub(crate) struct HashedRangeProofRef<'a, 'b> {
+    either: either::Either<&'b HashedRangeProofTrieRoot<'a>, &'b HashedKeyValueTrieRoot<'a>>,
+}
+
+#[derive(Debug)]
+struct HashedRangeProofTrieRoot<'a> {
+    computed: HashType,
+    leading_path: CollectedNibbles,
+    partial_path: WidenedPath<'a>,
     value_digest: Option<ValueDigest<&'a [u8]>>,
-    #[expect(unused)]
     children: Children<Box<HashedRangeProofTrieEdge<'a>>>,
 }
 
-/// The edge of a trie formed by hashing a range proof.
-///
-/// The hash stored on the enum variants is the hash discovered from the proof
-/// trie. The hash stored within the root is the hash we computed.
+#[derive(Debug)]
+struct HashedKeyValueTrieRoot<'a> {
+    computed: HashType,
+    leading_path: CollectedNibbles,
+    partial_path: PackedPath<'a>,
+    value: Option<&'a [u8]>,
+    children: Children<Box<HashedKeyValueTrieRoot<'a>>>,
+}
+
 #[derive(Debug)]
 enum HashedRangeProofTrieEdge<'a> {
     Distant(HashType),
@@ -43,10 +51,9 @@ enum HashedRangeProofTrieEdge<'a> {
     Complete(HashType, HashedRangeProofTrieRoot<'a>),
 }
 
-/// A root node within a trie formed by a range proof.
 #[derive(Debug)]
 struct RangeProofTrieRoot<'a> {
-    key: RangeProofPath<'a>,
+    partial_path: WidenedPath<'a>,
     value_digest: Option<ValueDigest<&'a [u8]>>,
     children: Children<Box<RangeProofTrieEdge<'a>>>,
 }
@@ -71,7 +78,7 @@ enum RangeProofTrieEdge<'a> {
 /// A collected of key-value pairs organized into a trie.
 #[derive(Debug, PartialEq, Eq)]
 struct KeyValueTrieRoot<'a> {
-    key: PackedPath<'a>,
+    partial_path: PackedPath<'a>,
     value: Option<&'a [u8]>,
     children: Children<Box<KeyValueTrieRoot<'a>>>,
 }
@@ -79,9 +86,7 @@ struct KeyValueTrieRoot<'a> {
 /// A root node in a trie formed from a [`ProofNode`].
 #[derive(Debug)]
 struct KeyProofTrieRoot<'a> {
-    /// Unlike `KeyValueTrie`, each byte in the slice is a nibble regardless of
-    /// the branching factor and those that are out of bounds will error when used.
-    key: WidenedPath<'a>,
+    partial_path: WidenedPath<'a>,
     value_digest: Option<ValueDigest<&'a [u8]>>,
     children: Children<Box<KeyProofTrieEdge<'a>>>,
 }
@@ -100,54 +105,192 @@ enum KeyProofTrieEdge<'a> {
     Described(HashType, KeyProofTrieRoot<'a>),
 }
 
-impl<'a> HashedRangeProofTrieRoot<'a> {
-    pub(crate) fn from_range_proof(
-        proof: &'a RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
-    ) -> Result<Self, ProofError> {
-        let root = RangeProofTrieRoot::from_range_proof(proof)?;
-        trace!("RangeProofTrieRoot: {root:#?}");
-        let this = Self::new(PathGuard::new(&mut Vec::new()), root);
-        trace!("HashedRangeProofTrieRoot: {this:#?}");
-        Ok(this)
+impl<'a> HashedRangeProof<'a> {
+    pub const fn computed(&self) -> &HashType {
+        match &self.either {
+            either::Left(proof) => &proof.computed,
+            either::Right(kvp) => &kvp.computed,
+        }
     }
 
-    fn new(mut parent_path: PathGuard<'_>, node: RangeProofTrieRoot<'a>) -> Self {
-        let mut nibble = 0_u8;
-        let children = node.children.map(|maybe| {
-            let this_nibble = nibble;
-            nibble = nibble.wrapping_add(1);
+    #[expect(unused)]
+    pub(crate) const fn leading_path(&self) -> &CollectedNibbles {
+        match &self.either {
+            either::Left(proof) => &proof.leading_path,
+            either::Right(kvp) => &kvp.leading_path,
+        }
+    }
 
-            maybe.map(|child| {
-                HashedRangeProofTrieEdge::new(parent_path.fork_push(this_nibble), *child)
+    #[expect(unused)]
+    pub(crate) const fn partial_path(&self) -> either::Either<&WidenedPath<'a>, &PackedPath<'a>> {
+        match &self.either {
+            either::Left(proof) => either::Left(&proof.partial_path),
+            either::Right(kvp) => either::Right(&kvp.partial_path),
+        }
+    }
+
+    #[expect(unused)]
+    pub(crate) fn value_digest(&self) -> Option<ValueDigest<&'a [u8]>> {
+        match &self.either {
+            either::Left(proof) => proof.value_digest.clone(),
+            either::Right(kvp) => kvp.value.map(ValueDigest::Value),
+        }
+    }
+
+    #[expect(unused)]
+    pub(crate) fn children(&self) -> Children<HashedRangeProofRef<'a, '_>> {
+        match &self.either {
+            either::Left(proof) => proof.children.each_ref().map(HashedRangeProofRef::left),
+            either::Right(kvp) => kvp.children.each_ref().map(HashedRangeProofRef::right),
+        }
+    }
+
+    pub fn new<K, V, P>(proof: &'a RangeProof<K, V, P>) -> Result<Self, ProofError>
+    where
+        K: KeyType,
+        V: ValueType,
+        P: ProofCollection<Node = ProofNode>,
+    {
+        let mut path_buf = Vec::new();
+        let mut p = PathGuard::new(&mut path_buf);
+        Ok(Self {
+            either: match RangeProofTrieRoot::new(p.fork(), proof)? {
+                either::Left(node) => either::Left(HashedRangeProofTrieRoot::new(p, node)),
+                either::Right(node) => either::Right(HashedKeyValueTrieRoot::new(p, node)),
+            },
+        })
+    }
+}
+
+impl<'a, 'b> HashedRangeProofRef<'a, 'b> {
+    #[expect(clippy::ref_option)]
+    fn left(proof: &'b Option<Box<HashedRangeProofTrieEdge<'a>>>) -> Option<Self> {
+        proof.as_ref().and_then(|p| match **p {
+            HashedRangeProofTrieEdge::Distant(_) => None,
+            HashedRangeProofTrieEdge::Partial(_, ref root) => Some(Self {
+                either: either::Right(root),
+            }),
+            HashedRangeProofTrieEdge::Complete(_, ref root) => Some(Self {
+                either: either::Left(root),
+            }),
+        })
+    }
+
+    #[expect(clippy::ref_option)]
+    fn right(kvp: &'b Option<Box<HashedKeyValueTrieRoot<'a>>>) -> Option<Self> {
+        kvp.as_ref().map(|k| Self {
+            either: either::Right(k),
+        })
+    }
+
+    #[expect(unused)]
+    pub const fn computed(&self) -> &HashType {
+        match &self.either {
+            either::Left(proof) => &proof.computed,
+            either::Right(kvp) => &kvp.computed,
+        }
+    }
+
+    #[expect(unused)]
+    pub(crate) const fn leading_path(&self) -> &CollectedNibbles {
+        match &self.either {
+            either::Left(proof) => &proof.leading_path,
+            either::Right(kvp) => &kvp.leading_path,
+        }
+    }
+
+    #[expect(unused)]
+    pub(crate) const fn partial_path(&self) -> either::Either<&WidenedPath<'a>, &PackedPath<'a>> {
+        match &self.either {
+            either::Left(proof) => either::Left(&proof.partial_path),
+            either::Right(kvp) => either::Right(&kvp.partial_path),
+        }
+    }
+
+    #[expect(unused)]
+    pub(crate) fn value_digest(&self) -> Option<ValueDigest<&'a [u8]>> {
+        match &self.either {
+            either::Left(proof) => proof.value_digest.clone(),
+            either::Right(kvp) => kvp.value.map(ValueDigest::Value),
+        }
+    }
+
+    #[expect(unused)]
+    pub(crate) fn children(&self) -> Children<HashedRangeProofRef<'a, '_>> {
+        match &self.either {
+            either::Left(proof) => proof.children.each_ref().map(HashedRangeProofRef::left),
+            either::Right(kvp) => kvp.children.each_ref().map(HashedRangeProofRef::right),
+        }
+    }
+}
+
+impl<'a> HashedRangeProofTrieRoot<'a> {
+    fn new(mut leading_path: PathGuard<'_>, node: RangeProofTrieRoot<'a>) -> Self {
+        let children = {
+            let mut nibble = NibbleCounter::new();
+            let mut leading_path = leading_path.fork_push(node.partial_path);
+            node.children.map(|maybe| {
+                let leading_path = leading_path.fork_push(nibble.next());
+                maybe.map(|child| HashedRangeProofTrieEdge::new(leading_path, *child))
             })
-        });
+        };
 
         Self {
-            computed: Shunt::new(
-                &parent_path,
-                node.key,
+            computed: HashableShunt::new(
+                &leading_path,
+                node.partial_path,
                 node.value_digest.as_ref().map(ValueDigest::as_ref),
                 children
                     .each_ref()
                     .map(|maybe| maybe.as_ref().map(HashedRangeProofTrieEdge::hash).cloned()),
             )
             .to_hash(),
-            key: node.key,
+            leading_path: leading_path.collect(),
+            partial_path: node.partial_path,
             value_digest: node.value_digest,
             children: boxed_children(children),
         }
     }
 }
 
+impl<'a> HashedKeyValueTrieRoot<'a> {
+    fn new(mut leading_path: PathGuard<'_>, node: KeyValueTrieRoot<'a>) -> Self {
+        let children = {
+            let mut nibble = NibbleCounter::new();
+            let mut leading_path = leading_path.fork_push(node.partial_path);
+            node.children.map(|maybe| {
+                let leading_path = leading_path.fork_push(nibble.next());
+                maybe.map(|child| Self::new(leading_path, *child))
+            })
+        };
+
+        Self {
+            computed: HashableShunt::new(
+                &leading_path,
+                node.partial_path,
+                node.value.map(ValueDigest::Value),
+                children
+                    .each_ref()
+                    .map(|maybe| maybe.as_ref().map(|child| child.computed.clone())),
+            )
+            .to_hash(),
+            leading_path: leading_path.collect(),
+            partial_path: node.partial_path,
+            value: node.value,
+            children: boxed_children(children),
+        }
+    }
+}
+
 impl<'a> HashedRangeProofTrieEdge<'a> {
-    fn new(parent_path: PathGuard<'_>, edge: RangeProofTrieEdge<'a>) -> Self {
+    fn new(leading_path: PathGuard<'_>, edge: RangeProofTrieEdge<'a>) -> Self {
         match edge {
             RangeProofTrieEdge::Distant(hash) => Self::Distant(hash),
-            RangeProofTrieEdge::Partial(hash, root) => {
-                Self::Partial(hash, HashedKeyValueTrieRoot::new(parent_path, root))
+            RangeProofTrieEdge::Partial(hash, node) => {
+                Self::Partial(hash, HashedKeyValueTrieRoot::new(leading_path, node))
             }
-            RangeProofTrieEdge::Complete(hash, root) => {
-                Self::Complete(hash, HashedRangeProofTrieRoot::new(parent_path, root))
+            RangeProofTrieEdge::Complete(hash, node) => {
+                Self::Complete(hash, HashedRangeProofTrieRoot::new(leading_path, node))
             }
         }
     }
@@ -174,60 +317,38 @@ impl<'a> HashedRangeProofTrieEdge<'a> {
     }
 }
 
-impl<'a> HashedKeyValueTrieRoot<'a> {
-    fn new(mut parent_path: PathGuard<'_>, node: KeyValueTrieRoot<'a>) -> Self {
-        let mut nibble = 0_u8;
-        let children = node.children.map(|maybe| {
-            let this_nibble = nibble;
-            nibble = nibble.wrapping_add(1);
-
-            maybe.map(|child| Self::new(parent_path.fork_push(this_nibble), *child))
-        });
-
-        let child_hashes = children
-            .each_ref()
-            .map(|maybe| maybe.as_ref().map(|child| child.computed.clone()));
-
-        HashedKeyValueTrieRoot {
-            computed: Shunt::new(
-                &parent_path,
-                node.key,
-                node.value.map(ValueDigest::Value),
-                child_hashes,
-            )
-            .to_hash(),
-            key: node.key,
-            value: node.value,
-            children: boxed_children(children),
+impl<'a> RangeProofTrieRoot<'a> {
+    const fn empty() -> Self {
+        Self {
+            partial_path: WidenedPath::new(&[]),
+            value_digest: None,
+            children: BranchNode::empty_children(),
         }
     }
-}
 
-impl<'a> RangeProofTrieRoot<'a> {
-    fn from_range_proof(
-        proof: &'a RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
-    ) -> Result<Self, ProofError> {
-        let start_proof = KeyProofTrieRoot::from_proof(proof.start_proof())?;
-        trace!(
-            "Start KeyProofTrieRoot: {:#?} {start_proof:#?}",
-            proof.start_proof().as_ref(),
-        );
+    fn new<K, V, P>(
+        mut leading_path: PathGuard<'_>,
+        proof: &'a RangeProof<K, V, P>,
+    ) -> Result<EitherProof<'a>, ProofError>
+    where
+        K: KeyType,
+        V: ValueType,
+        P: ProofCollection<Node = ProofNode>,
+    {
+        let kvp = KeyValueTrieRoot::new(leading_path.fork(), proof.key_values())?;
 
-        let end_proof = KeyProofTrieRoot::from_proof(proof.end_proof())?;
-        trace!(
-            "End KeyProofTrieRoot: {:#?} {end_proof:#?}",
-            proof.end_proof().as_ref(),
-        );
+        let lhs = KeyProofTrieRoot::new(proof.start_proof())?;
+        let rhs = KeyProofTrieRoot::new(proof.end_proof())?;
+        let proof = KeyProofTrieRoot::merge_opt(leading_path.fork(), lhs, rhs)?;
 
-        let key_proof = KeyProofTrieRoot::merge_proof_roots(start_proof, end_proof)?
-            .unwrap_or_else(KeyProofTrieRoot::empty);
-        trace!("Merged KeyProofTrieRoot: {key_proof:#?}");
-
-        let kvp = KeyValueTrieRoot::from_pairs(proof.key_values())?
-            .unwrap_or_else(KeyValueTrieRoot::empty);
-        trace!("KeyValueTrieRoot: {kvp:#?}");
-
-        Self::join(key_proof, kvp)
+        match (proof, kvp) {
+            (None, None) => Ok(either::Left(Self::empty())),
+            // no values, return the root as is
+            (Some(proof), None) => Ok(either::Left(Self::from_proof_root(proof))),
+            // no proof, so we have an unbounded range of key-values
+            (None, Some(kvp)) => Ok(either::Right(kvp)),
+            (Some(proof), Some(kvp)) => Self::join(leading_path, proof, kvp).map(either::Left),
+        }
     }
 
     /// Recursively joins a proof trie with a key-value trie.
@@ -236,130 +357,143 @@ impl<'a> RangeProofTrieRoot<'a> {
     /// any new children to discovered [`KeyProofTrieRoot`] nodes. However, key-
     /// value nodes may introduce any number of nodes that fill in a
     /// [`KeyProofTrieEdge::Remote`] node.
-    fn join(proof: KeyProofTrieRoot<'a>, kvp: KeyValueTrieRoot<'a>) -> Result<Self, ProofError> {
-        // provide kvp first so SplitKey uses the PackedKey for the common prefix
-        let split = SplitKey::new(kvp.key, proof.key);
+    fn join(
+        leading_path: PathGuard<'_>,
+        proof: KeyProofTrieRoot<'a>,
+        kvp: KeyValueTrieRoot<'a>,
+    ) -> Result<Self, ProofError> {
+        let split = SplitPath::new(proof.partial_path, kvp.partial_path);
 
         match (
-            split.rhs_suffix.split_first(),
             split.lhs_suffix.split_first(),
+            split.rhs_suffix.split_first(),
         ) {
             // The proof path diverges from the kvp path. This is not allowed
             // because it would introduce a new node where the proof trie
             // indicates there is none.
-            ((Some(child_nibble), _), _) => Err(ProofError::NodeNotInTrie {
-                parent: proof.key.with_prefix().to_packed_key(),
-                child_nibble,
-                child: kvp.key.with_prefix().to_packed_key(),
+            ((Some(_), _), _) => Err(ProofError::NodeNotInTrie {
+                parent: (&leading_path)
+                    .join(proof.partial_path)
+                    .bytes_iter()
+                    .collect(),
+                child: (&leading_path)
+                    .join(kvp.partial_path)
+                    .bytes_iter()
+                    .collect(),
             }),
             // The kvp path diverges from the proof path. We can merge the kvp
             // with the child of the proof node at the next nibble; but only
             // if the proof describes a child at that nibble.
-            ((None, _), (Some(kvp_nibble), kvp_key)) => {
-                Self::from_parent_child(split.common_prefix, proof, kvp, kvp_nibble, kvp_key)
-            }
-
+            ((None, _), (Some(child_nibble), child_partial_path)) => Self::from_parent_child(
+                leading_path,
+                split.common_prefix,
+                proof.value_digest,
+                proof.children,
+                child_nibble,
+                KeyValueTrieRoot {
+                    partial_path: child_partial_path,
+                    ..kvp
+                },
+            ),
             // Both keys are identical, we can merge the nodes directly
             // but only if the value digest matches the value on the kvp node
-            ((None, _), (None, _)) => Self::from_deep_merge(split.common_prefix, proof, kvp),
+            ((None, _), (None, _)) => Self::from_deep_merge(
+                leading_path,
+                split.common_prefix,
+                proof.value_digest,
+                kvp.value,
+                proof.children,
+                kvp.children,
+            ),
         }
     }
 
     fn from_parent_child(
-        key: PackedPath<'a>,
-        proof: KeyProofTrieRoot<'a>,
-        kvp: KeyValueTrieRoot<'a>,
-        kvp_nibble: u8,
-        kvp_key: PackedPath<'a>,
+        mut leading_path: PathGuard<'_>,
+        partial_path: WidenedPath<'a>,
+        value_digest: Option<ValueDigest<&'a [u8]>>,
+        children: Children<Box<KeyProofTrieEdge<'a>>>,
+        child_nibble: PathNibble,
+        child: KeyValueTrieRoot<'a>,
     ) -> Result<Self, ProofError> {
-        let mut kvp_children = BranchNode::empty_children();
-        #[expect(
-            clippy::indexing_slicing,
-            reason = "we trust the values from PackedPath"
-        )]
-        {
-            kvp_children[kvp_nibble as usize] = Some(KeyValueTrieRoot {
-                key: kvp_key,
-                value: kvp.value,
-                children: kvp.children,
-            });
-        }
+        #![expect(clippy::indexing_slicing)]
 
-        let mut nibble = 0_u8;
-        let children = merge_array(proof.children, kvp_children, |maybe_proof, maybe_kvp| {
-            let this_nibble = nibble;
-            nibble = nibble.wrapping_add(1);
-            RangeProofTrieEdge::merge_trie_edge(
-                proof.key,
-                this_nibble,
+        let mut kvp_child = BranchNode::empty_children();
+        kvp_child[child_nibble.0 as usize].replace(child);
+
+        let mut nibble = NibbleCounter::new();
+        leading_path.extend(partial_path.nibbles_iter());
+        let children = merge_array(children, kvp_child, |maybe_proof, maybe_kvp| {
+            RangeProofTrieEdge::new(
+                leading_path.fork_push(nibble.next()),
                 maybe_proof.map(|v| *v),
                 maybe_kvp,
             )
         })?;
 
         Ok(Self {
-            key: key.into(),
-            value_digest: proof.value_digest,
+            partial_path,
+            value_digest,
             children: boxed_children(children),
         })
     }
 
     fn from_deep_merge(
-        key: PackedPath<'a>,
-        proof: KeyProofTrieRoot<'a>,
-        kvp: KeyValueTrieRoot<'a>,
+        mut leading_path: PathGuard<'_>,
+        partial_path: WidenedPath<'a>,
+        value_digest: Option<ValueDigest<&'a [u8]>>,
+        value: Option<&'a [u8]>,
+        proof_children: Children<Box<KeyProofTrieEdge<'a>>>,
+        kvp_children: Children<Box<KeyValueTrieRoot<'a>>>,
     ) -> Result<Self, ProofError> {
-        crate::proof::verify_opt_value_digest(kvp.value, proof.value_digest)?;
+        crate::proof::verify_opt_value_digest(value, value_digest)?;
 
-        let mut nibble = 0_u8;
-        let children = merge_array(proof.children, kvp.children, |maybe_proof, maybe_kvp| {
-            let this_nibble = nibble;
-            nibble = nibble.wrapping_add(1);
-            RangeProofTrieEdge::merge_trie_edge(
-                proof.key,
-                this_nibble,
+        let mut nibble = NibbleCounter::new();
+        leading_path.extend(partial_path.nibbles_iter());
+        let children = merge_array(proof_children, kvp_children, |maybe_proof, maybe_kvp| {
+            RangeProofTrieEdge::new(
+                leading_path.fork_push(nibble.next()),
                 maybe_proof.map(|v| *v),
                 maybe_kvp.map(|v| *v),
             )
         })?;
 
         Ok(Self {
-            key: key.into(),
-            value_digest: kvp.value.map(ValueDigest::Value),
+            partial_path,
+            value_digest: value.map(ValueDigest::Value),
             children: boxed_children(children),
         })
     }
 
-    fn from_proof_root(proof: KeyProofTrieRoot<'a>) -> Result<Self, ProofError> {
-        Ok(Self {
-            key: proof.key.into(),
+    fn from_proof_root(proof: KeyProofTrieRoot<'a>) -> Self {
+        Self {
+            partial_path: proof.partial_path,
             value_digest: proof.value_digest,
-            children: boxed_children(merge_array(
-                proof.children,
-                BranchNode::empty_children::<std::convert::Infallible>(),
-                |child, None| match child {
-                    None => Ok(None),
-                    Some(child) => match *child {
-                        KeyProofTrieEdge::Remote(hash) => {
-                            Ok(Some(RangeProofTrieEdge::Distant(hash)))
-                        }
-                        KeyProofTrieEdge::Described(id, root) => {
-                            match Self::from_proof_root(root) {
-                                Ok(root) => Ok(Some(RangeProofTrieEdge::Complete(id, root))),
-                                Err(e) => Err(e),
+            children: boxed_children(
+                merge_array(
+                    proof.children,
+                    BranchNode::empty_children::<Infallible>(),
+                    |child, None| match child {
+                        None => Ok(None),
+                        Some(child) => match *child {
+                            KeyProofTrieEdge::Remote(hash) => {
+                                Ok(Some(RangeProofTrieEdge::Distant(hash)))
                             }
-                        }
+                            KeyProofTrieEdge::Described(id, root) => Ok(Some(
+                                RangeProofTrieEdge::Complete(id, Self::from_proof_root(root)),
+                            )),
+                        },
                     },
-                },
-            )?),
-        })
+                )
+                .unwrap_or_else(|inf: Infallible| match inf {}),
+            ),
+        }
     }
 }
 
 impl<'a> RangeProofTrieEdge<'a> {
-    fn merge_trie_edge(
-        parent_key: WidenedPath<'a>,
-        this_nibble: u8,
+    fn new(
+        leading_path: PathGuard<'_>,
         proof: Option<KeyProofTrieEdge<'a>>,
         kvp: Option<KeyValueTrieRoot<'a>>,
     ) -> Result<Option<Self>, ProofError> {
@@ -370,9 +504,8 @@ impl<'a> RangeProofTrieEdge<'a> {
             // it would introduce a new node where the proof trie
             // indicates there is none.
             (None, Some(kvp)) => Err(ProofError::NodeNotInTrie {
-                parent: parent_key.with_prefix().to_packed_key(),
-                child_nibble: this_nibble,
-                child: kvp.key.with_prefix().to_packed_key(),
+                parent: leading_path.bytes_iter().collect(),
+                child: leading_path.join(kvp.partial_path).bytes_iter().collect(),
             }),
             // The proof describes a distant edge node at this nibble,
             // and the kvp trie doesn't have a child here. We can
@@ -384,7 +517,7 @@ impl<'a> RangeProofTrieEdge<'a> {
             // proof root without needing to merge in any kvp nodes.
             (Some(KeyProofTrieEdge::Described(id, root)), None) => Ok(Some(Self::Complete(
                 id,
-                RangeProofTrieRoot::from_proof_root(root)?,
+                RangeProofTrieRoot::from_proof_root(root),
             ))),
             // The proof describes a distant edge node at this nibble,
             // and the kvp trie has a child here. We can store the
@@ -395,78 +528,119 @@ impl<'a> RangeProofTrieEdge<'a> {
             // nibble. We need to recursively join the two nodes.
             (Some(KeyProofTrieEdge::Described(id, proof)), Some(kvp)) => Ok(Some(Self::Complete(
                 id,
-                RangeProofTrieRoot::join(proof, kvp)?,
+                RangeProofTrieRoot::join(leading_path, proof, kvp)?,
             ))),
         }
     }
 }
 
 impl<'a> KeyValueTrieRoot<'a> {
-    const fn empty() -> Self {
+    const fn leaf(key: &'a [u8], value: &'a [u8]) -> Self {
         Self {
-            key: PackedPath::new(&[]),
-            value: None,
-            children: BranchNode::empty_children(),
-        }
-    }
-
-    const fn new(key: &'a [u8], value: &'a [u8]) -> Self {
-        Self {
-            key: PackedPath::new(key),
+            partial_path: PackedPath::new(key),
             value: Some(value),
             children: BranchNode::empty_children(),
         }
     }
 
-    fn from_pairs<K, V>(pairs: &'a [(K, V)]) -> Result<Option<Self>, ProofError>
+    fn new<K, V>(
+        mut leading_path: PathGuard<'_>,
+        pairs: &'a [(K, V)],
+    ) -> Result<Option<Self>, ProofError>
     where
         K: AsRef<[u8]>,
         V: AsRef<[u8]>,
     {
         match pairs {
             [] => Ok(None),
-            [(k, v)] => Ok(Some(Self::new(k.as_ref(), v.as_ref()))),
+            [(k, v)] => Ok(Some(Self::leaf(k.as_ref(), v.as_ref()))),
             many => {
                 let mid = many.len() / 2;
                 let (lhs, rhs) = many.split_at(mid);
-                let lhs = Self::from_pairs(lhs)?;
-                let rhs = Self::from_pairs(rhs)?;
-                Merge::merge(lhs, rhs)
+                let lhs = Self::new(leading_path.fork(), lhs)?;
+                let rhs = Self::new(leading_path.fork(), rhs)?;
+                Self::merge_root(leading_path, lhs, rhs)
             }
         }
     }
 
-    fn merge(lhs: Self, rhs: Self) -> Result<Self, ProofError> {
-        let split = SplitKey::new(lhs.key, rhs.key);
+    fn merge_root(
+        leading_path: PathGuard<'_>,
+        lhs: Option<Self>,
+        rhs: Option<Self>,
+    ) -> Result<Option<Self>, ProofError> {
+        match (lhs, rhs) {
+            (None, None) => Ok(None),
+            (Some(root), None) | (None, Some(root)) => Ok(Some(root)),
+            (Some(lhs), Some(rhs)) => Self::merge(leading_path, lhs, rhs).map(Some),
+        }
+    }
+
+    fn merge(leading_path: PathGuard<'_>, lhs: Self, rhs: Self) -> Result<Self, ProofError> {
+        let split = SplitPath::new(lhs.partial_path, rhs.partial_path);
         match (
             split.lhs_suffix.split_first(),
             split.rhs_suffix.split_first(),
         ) {
-            ((Some(lhs_nibble), lhs_key), (Some(rhs_nibble), rhs_key)) => Ok(
+            ((Some(lhs_nibble), lhs_path), (Some(rhs_nibble), rhs_path)) => {
+                trace!(
+                    "KeyValueTrieRoot: merging two diverging keys; leading_path: {}, {split}",
+                    leading_path.display(),
+                );
                 // both keys diverge at some point after the common prefix, we
                 // need a new parent node with no value and both nodes as children
-                Self::from_siblings(
-                    lhs,
-                    rhs,
+                Ok(Self::from_siblings(
                     split.common_prefix,
                     lhs_nibble,
-                    lhs_key,
+                    Self {
+                        partial_path: lhs_path,
+                        ..lhs
+                    },
                     rhs_nibble,
-                    rhs_key,
-                ),
-            ),
-            ((None, _), (Some(rhs_nibble), rhs_key)) => {
-                // lhs is a strict prefix of rhs, so lhs becomes the parent of rhs
-                Self::from_parent_child(lhs, rhs, rhs_nibble, rhs_key)
+                    Self {
+                        partial_path: rhs_path,
+                        ..rhs
+                    },
+                ))
             }
-            ((Some(lhs_nibble), lhs_key), (None, _)) => {
+            ((None, _), (Some(nibble), partial_path)) => {
+                trace!(
+                    "KeyValueTrieRoot: merging where lhs is a prefix of rhs; leading_path: {}, {split}",
+                    leading_path.display(),
+                );
+                // lhs is a strict prefix of rhs, so lhs becomes the parent of rhs
+                lhs.merge_child(
+                    leading_path,
+                    nibble,
+                    Self {
+                        partial_path,
+                        ..rhs
+                    },
+                )
+            }
+            ((Some(nibble), partial_path), (None, _)) => {
+                trace!(
+                    "KeyValueTrieRoot: merging where rhs is a prefix of lhs; leading_path: {}, {split}",
+                    leading_path.display(),
+                );
                 // rhs is a strict prefix of lhs, so rhs becomes the parent of lhs
-                Self::from_parent_child(rhs, lhs, lhs_nibble, lhs_key)
+                rhs.merge_child(
+                    leading_path,
+                    nibble,
+                    Self {
+                        partial_path,
+                        ..lhs
+                    },
+                )
             }
             ((None, _), (None, _)) => {
+                trace!(
+                    "KeyValueTrieRoot: merging where both keys are identical; leading_path: {}, {split}",
+                    leading_path.display(),
+                );
                 // both keys are identical, this is invalid if they both have
                 // values, otherwise we can merge their children
-                Self::deep_merge(lhs, rhs)
+                Self::deep_merge(leading_path, lhs, rhs)
             }
         }
     }
@@ -475,186 +649,116 @@ impl<'a> KeyValueTrieRoot<'a> {
     ///
     /// Used when the keys are identical. Errors if both nodes have values
     /// and they are not equal.
-    fn deep_merge(lhs: Self, rhs: Self) -> Result<Self, ProofError> {
+    fn deep_merge(
+        mut leading_path: PathGuard<'_>,
+        lhs: Self,
+        rhs: Self,
+    ) -> Result<Self, ProofError> {
+        leading_path.extend(lhs.partial_path.nibbles_iter());
+
         let value = match (lhs.value, rhs.value) {
             (Some(lhs), Some(rhs)) if lhs == rhs => Some(lhs),
             (Some(value1), Some(value2)) => {
                 return Err(ProofError::DuplicateKeysInProof {
-                    key: lhs.key.with_prefix().to_packed_key(),
-                    value1: value1.into(),
-                    value2: value2.into(),
+                    key: leading_path.bytes_iter().collect(),
+                    value1: hex::encode(value1),
+                    value2: hex::encode(value2),
                 });
             }
             (Some(v), None) | (None, Some(v)) => Some(v),
             (None, None) => None,
         };
 
-        let children = merge_array(lhs.children, rhs.children, Merge::merge)?;
-
-        Ok(Self {
-            key: lhs.key,
-            value,
-            children,
-        })
-    }
-
-    fn from_siblings(
-        lhs: Self,
-        rhs: Self,
-        common_prefix: PackedPath<'a>,
-        lhs_nibble: u8,
-        lhs_key: PackedPath<'a>,
-        rhs_nibble: u8,
-        rhs_key: PackedPath<'a>,
-    ) -> Self {
-        #![expect(
-            clippy::indexing_slicing,
-            reason = "we trust the values from PackedPath"
-        )]
-
-        debug_assert_ne!(lhs_nibble, rhs_nibble);
-
-        let mut children = BranchNode::empty_children();
-
-        children[lhs_nibble as usize] = Some(Self {
-            key: lhs_key,
-            value: lhs.value,
-            children: lhs.children,
-        });
-
-        children[rhs_nibble as usize] = Some(Self {
-            key: rhs_key,
-            value: rhs.value,
-            children: rhs.children,
-        });
-
-        Self {
-            key: common_prefix,
-            value: None,
-            children: boxed_children(children),
-        }
-    }
-
-    fn from_parent_child(
-        parent: Self,
-        child: Self,
-        child_nibble: u8,
-        child_key: PackedPath<'a>,
-    ) -> Result<Self, ProofError> {
-        #![expect(
-            clippy::indexing_slicing,
-            reason = "we trust the values from PackedPath"
-        )]
-
-        let child = Self {
-            key: child_key,
-            value: child.value,
-            children: child.children,
-        };
-
-        let mut children = parent.children;
-        children[child_nibble as usize] =
-            Some(Box::new(match children[child_nibble as usize].take() {
-                Some(existing) => Self::merge(*existing, child)?,
-                None => child,
-            }));
-
-        Ok(Self {
-            key: parent.key,
-            value: parent.value,
-            children,
-        })
-    }
-}
-
-impl<'a> KeyProofTrieRoot<'a> {
-    const fn empty() -> Self {
-        Self {
-            key: WidenedPath::new(&[]),
-            value_digest: None,
-            children: BranchNode::empty_children(),
-        }
-    }
-
-    /// Constructs a trie root from a slice of proof nodes.
-    ///
-    /// Each node in the slice must be a strict prefix of the following node. And,
-    /// each child node must be referenced by its parent.
-    fn from_proof(
-        nodes: &'a Proof<impl ProofCollection<Node = ProofNode>>,
-    ) -> Result<Option<Self>, ProofError> {
-        nodes
-            .as_ref()
-            .iter()
-            .rev()
-            .try_fold(None::<Self>, |child, parent| match child {
-                // each node in the slice must be a strict prefix of the following node
-                Some(child) => child.with_parent(parent).map(Some),
-                None => Ok(Some(Self::tail_node(parent))),
-            })
-    }
-
-    /// Merges two trie roots, as returned by [`Self::from_proof`].
-    ///
-    /// Every node in both tries must be equal by hash. [`KeyProofTrieEdge::Described`]
-    /// nodes in both tries must have the same key and value digest. The resulting
-    /// trie will contain all nodes from both tries and resolve any
-    /// [`KeyProofTrieEdge::Remote`] nodes to the corresponding
-    /// [`KeyProofTrieEdge::Described`] if one is present in the opposite trie.
-    ///
-    /// Children that are present in both tries will be merged recursively. Nodes
-    /// that are in both tries must have the same key and value digest.
-    fn merge_proof_roots(lhs: Option<Self>, rhs: Option<Self>) -> Result<Option<Self>, ProofError> {
-        match (lhs, rhs) {
-            (Some(lhs), Some(rhs)) => Self::merge_from_proof(lhs, rhs).map(Some),
-            (Some(root), None) | (None, Some(root)) => Ok(Some(root)),
-            (None, None) => Ok(None),
-        }
-    }
-
-    fn merge_from_proof(lhs: Self, rhs: Self) -> Result<Self, ProofError> {
-        // at this level, keys must be identical
-        if lhs.key != rhs.key {
-            return Err(ProofError::DisjointEdges {
-                lower: lhs.key.with_prefix().to_packed_key(),
-                upper: rhs.key.with_prefix().to_packed_key(),
-            });
-        }
-
-        if lhs.value_digest != rhs.value_digest {
-            return Err(ProofError::DuplicateKeysInProof {
-                key: lhs.key.with_prefix().to_packed_key(),
-                value1: AsRef::<[u8]>::as_ref(&lhs.value_digest.unwrap_or(ValueDigest::Value(&[])))
-                    .into(),
-                value2: AsRef::<[u8]>::as_ref(&rhs.value_digest.unwrap_or(ValueDigest::Value(&[])))
-                    .into(),
-            });
-        }
-
-        let parent_path = lhs.key;
-        let mut child_nibble = 0_u8;
+        let mut nibble = NibbleCounter::new();
         let children = merge_array(lhs.children, rhs.children, |lhs, rhs| {
-            let nibble = child_nibble;
-            child_nibble = child_nibble.wrapping_add(1);
-            KeyProofTrieEdge::merge_from_proof(
-                parent_path,
-                nibble,
+            Self::merge_root(
+                leading_path.fork_push(nibble.next()),
                 lhs.map(|v| *v),
                 rhs.map(|v| *v),
             )
         })?;
 
         Ok(Self {
-            key: parent_path,
-            value_digest: lhs.value_digest,
+            partial_path: lhs.partial_path,
+            value,
             children: boxed_children(children),
         })
     }
 
-    fn tail_node(node: &'a ProofNode) -> Self {
+    fn from_siblings(
+        partial_path: PackedPath<'a>,
+        lhs_nibble: PathNibble,
+        lhs: Self,
+        rhs_nibble: PathNibble,
+        rhs: Self,
+    ) -> Self {
+        #![expect(clippy::indexing_slicing)]
+        debug_assert_ne!(lhs_nibble, rhs_nibble);
+        let mut children = BranchNode::empty_children();
+        children[lhs_nibble.0 as usize] = Some(Box::new(lhs));
+        children[rhs_nibble.0 as usize] = Some(Box::new(rhs));
+
         Self {
-            key: WidenedPath::new(node.key.as_ref()),
+            partial_path,
+            value: None,
+            children,
+        }
+    }
+
+    fn merge_child(
+        self,
+        mut leading_path: PathGuard<'_>,
+        nibble: PathNibble,
+        child: Self,
+    ) -> Result<Self, ProofError> {
+        #![expect(clippy::indexing_slicing)]
+
+        leading_path.extend(self.partial_path.nibbles_iter());
+        leading_path.push(nibble.0);
+
+        let mut children = self.children;
+        children[nibble.0 as usize] = Some(Box::new(match children[nibble.0 as usize].take() {
+            Some(existing) => Self::merge(leading_path, *existing, child)?,
+            None => child,
+        }));
+
+        Ok(Self { children, ..self })
+    }
+}
+
+impl<'a> KeyProofTrieRoot<'a> {
+    /// Constructs a trie root from a slice of proof nodes.
+    ///
+    /// Each node in the slice must be a strict prefix of the following node. And,
+    /// each child node must be referenced by its parent.
+    fn new<P>(nodes: &'a Proof<P>) -> Result<Option<Self>, ProofError>
+    where
+        P: ProofCollection<Node = ProofNode>,
+    {
+        nodes
+            .as_ref()
+            .iter()
+            .rev()
+            .try_fold(None::<Self>, |child, parent| match child {
+                // each node in the slice must be a strict prefix of the following node
+                Some(child) => child.new_parent_node(parent).map(Some),
+                None => Ok(Some(Self::new_tail_node(parent))),
+            })
+    }
+
+    fn new_tail_node(node: &'a ProofNode) -> Self {
+        let partial_path = WidenedPath::new(node.key.as_ref());
+        trace!(
+            "KeyProofTrieRoot: creating tail node for key {}",
+            hex::encode(partial_path.bytes_iter().collect::<Vec<_>>()),
+        );
+
+        Self {
+            partial_path,
             value_digest: node.value_digest.as_ref().map(ValueDigest::as_ref),
+            // A tail node is allowed to have children; they will all be remote.
+            // However, a tail node with children is also only valid if the proof
+            // is an exclusion proof on some key that would be a child of this node.
             children: boxed_children(
                 node.child_hashes
                     .clone()
@@ -666,61 +770,134 @@ impl<'a> KeyProofTrieRoot<'a> {
     /// Creates a new trie root by making this node a child of the given parent.
     ///
     /// The parent key must be a strict prefix of this node's key, and the parent
-    /// must reference this node in its children by hash.
-    fn with_parent(self, parent: &'a ProofNode) -> Result<Self, ProofError> {
-        let parent_key = WidenedPath::new(&parent.key);
-        let split = SplitKey::new(parent_key, self.key);
+    /// must reference this node in its children by hash (the hash is not verified
+    /// here).
+    fn new_parent_node(self, parent: &'a ProofNode) -> Result<Self, ProofError> {
+        let parent_path = WidenedPath::new(&parent.key);
+        trace!(
+            "KeyProofTrieRoot: adding parent for key {}; parent: {}",
+            hex::encode(self.partial_path.bytes_iter().collect::<Vec<_>>()),
+            hex::encode(parent_path.bytes_iter().collect::<Vec<_>>()),
+        );
 
-        let ((None, _), (Some(rhs_nibble), rhs_key)) = (
+        let split = SplitPath::new(parent_path, self.partial_path);
+
+        let ((None, _), (Some(nibble), partial_path)) = (
             split.lhs_suffix.split_first(),
             split.rhs_suffix.split_first(),
         ) else {
             return Err(ProofError::ShouldBePrefixOfNextKey {
-                parent: parent_key.with_prefix().to_packed_key(),
-                child: self.key.with_prefix().to_packed_key(),
+                parent: parent_path.bytes_iter().collect(),
+                child: self.partial_path.bytes_iter().collect(),
             });
         };
 
         let mut with_self = BranchNode::empty_children();
         with_self
-            .get_mut(rhs_nibble as usize)
-            .ok_or_else(|| ProofError::ChildIndexOutOfBounds(self.key.nibbles_iter().collect()))?
+            .get_mut(nibble.0 as usize)
+            .ok_or_else(|| {
+                ProofError::ChildIndexOutOfBounds(self.partial_path.nibbles_iter().collect())
+            })?
             .replace(self);
 
-        let children = merge_array(
-            parent.child_hashes.each_ref().map(Option::as_ref),
-            with_self,
-            |hash, this| match (hash, this) {
-                (None, None) => Ok(None),
-                (None, Some(child)) => Err(ProofError::NodeNotInTrie {
-                    parent: parent_key.with_prefix().to_packed_key(),
-                    child_nibble: rhs_nibble,
-                    child: child.key.with_prefix().to_packed_key(),
-                }),
-                (Some(hash), None) => Ok(Some(KeyProofTrieEdge::Remote(hash.clone()))),
-                (Some(hash), Some(this)) => Ok(Some(KeyProofTrieEdge::Described(
-                    hash.clone(),
-                    KeyProofTrieRoot {
-                        key: rhs_key,
-                        value_digest: this.value_digest,
-                        children: this.children,
-                    },
-                ))),
-            },
-        )?;
+        let children = merge_array(parent.child_hashes.clone(), with_self, |hash, this| match (
+            hash, this,
+        ) {
+            (None, None) => Ok(None),
+            (None, Some(this)) => Err(ProofError::NodeNotInTrie {
+                parent: parent_path.bytes_iter().collect(),
+                child: this.partial_path.bytes_iter().collect(),
+            }),
+            (Some(hash), None) => Ok(Some(KeyProofTrieEdge::Remote(hash))),
+            (Some(hash), Some(this)) => Ok(Some(KeyProofTrieEdge::Described(
+                hash,
+                Self {
+                    partial_path,
+                    ..this
+                },
+            ))),
+        })?;
 
         Ok(Self {
-            key: parent_key,
+            partial_path: parent_path,
             value_digest: parent.value_digest.as_ref().map(ValueDigest::as_ref),
             children: boxed_children(children),
+        })
+    }
+
+    /// Merges two trie roots, as returned by [`Self::new`].
+    ///
+    /// Every node in both tries must be equal by hash. [`KeyProofTrieEdge::Described`]
+    /// nodes in both tries must have the same key and value digest. The resulting
+    /// trie will contain all nodes from both tries and resolve any
+    /// [`KeyProofTrieEdge::Remote`] nodes to the corresponding
+    /// [`KeyProofTrieEdge::Described`] if one is present in the opposite trie.
+    ///
+    /// Children that are present in both tries will be merged recursively. Nodes
+    /// that are in both tries must have the same key and value digest.
+    fn merge_opt(
+        leading_path: PathGuard<'_>,
+        lhs: Option<Self>,
+        rhs: Option<Self>,
+    ) -> Result<Option<Self>, ProofError> {
+        match (lhs, rhs) {
+            (Some(lhs), Some(rhs)) => Self::merge(leading_path, lhs, rhs).map(Some),
+            (Some(root), None) | (None, Some(root)) => Ok(Some(root)),
+            (None, None) => Ok(None),
+        }
+    }
+
+    fn merge(mut leading_path: PathGuard<'_>, lhs: Self, rhs: Self) -> Result<Self, ProofError> {
+        trace!(
+            "KeyProofTrieRoot: merging two proof roots; leading_path: {}, lhs: {}, rhs: {}",
+            leading_path.display(),
+            lhs.partial_path.display(),
+            rhs.partial_path.display(),
+        );
+
+        // at this level, keys must be identical
+        if lhs.partial_path != rhs.partial_path {
+            return Err(ProofError::DisjointEdges {
+                lower: (&leading_path)
+                    .join(lhs.partial_path)
+                    .bytes_iter()
+                    .collect(),
+                upper: (&leading_path)
+                    .join(rhs.partial_path)
+                    .bytes_iter()
+                    .collect(),
+            });
+        }
+
+        let mut leading_path = leading_path.fork_push(lhs.partial_path);
+
+        if lhs.value_digest != rhs.value_digest {
+            return Err(ProofError::DuplicateKeysInProof {
+                key: leading_path.bytes_iter().collect(),
+                value1: format!("{:?}", lhs.value_digest),
+                value2: format!("{:?}", rhs.value_digest),
+            });
+        }
+
+        let mut nibble = NibbleCounter::new();
+        let children = merge_array(lhs.children, rhs.children, |lhs, rhs| {
+            KeyProofTrieEdge::new(
+                leading_path.fork_push(nibble.next()),
+                lhs.map(|v| *v),
+                rhs.map(|v| *v),
+            )
+        })?;
+
+        Ok(Self {
+            children: boxed_children(children),
+            ..lhs
         })
     }
 }
 
 impl KeyProofTrieEdge<'_> {
-    fn merge_from_proof(
-        parent_path: WidenedPath<'_>,
-        child_nibble: u8,
+    fn new(
+        leading_path: PathGuard<'_>,
         lhs: Option<Self>,
         rhs: Option<Self>,
     ) -> Result<Option<Self>, ProofError> {
@@ -734,12 +911,7 @@ impl KeyProofTrieEdge<'_> {
                     Ok(Some(Self::Remote(lhs)))
                 } else {
                     Err(ProofError::UnexpectedHash {
-                        key: firewood_storage::padded_packed_path(
-                            parent_path
-                                .with_prefix()
-                                .nibbles_iter()
-                                .chain(Some(child_nibble)),
-                        ),
+                        key: leading_path.bytes_iter().collect(),
                         context: "merging two remote edges with different hashes",
                         expected: lhs,
                         actual: rhs,
@@ -752,7 +924,7 @@ impl KeyProofTrieEdge<'_> {
                     Ok(Some(Self::Described(id, root)))
                 } else {
                     Err(ProofError::UnexpectedHash {
-                        key: root.key.with_prefix().to_packed_key(),
+                        key: leading_path.join(root.partial_path).bytes_iter().collect(),
                         context: "merging a remote edge with a described edge with different hashes",
                         expected: hash,
                         actual: id,
@@ -764,11 +936,14 @@ impl KeyProofTrieEdge<'_> {
                 Some(Self::Described { 0: r_id, 1: r_root }),
             ) => {
                 if l_id == r_id {
-                    KeyProofTrieRoot::merge_from_proof(l_root, r_root)
+                    KeyProofTrieRoot::merge(leading_path, l_root, r_root)
                         .map(|root| Some(Self::Described(l_id, root)))
                 } else {
                     Err(ProofError::UnexpectedHash {
-                        key: l_root.key.with_prefix().to_packed_key(),
+                        key: leading_path
+                            .join(l_root.partial_path)
+                            .bytes_iter()
+                            .collect(),
                         context: "merging two described edges with different hashes",
                         expected: l_id,
                         actual: r_id,
@@ -779,26 +954,23 @@ impl KeyProofTrieEdge<'_> {
     }
 }
 
-struct Shunt<'a, P> {
-    parent_nibbles: &'a [u8],
-    key: P,
+struct HashableShunt<'a, P1, P2> {
+    parent_nibbles: P1,
+    partial_path: P2,
     value: Option<ValueDigest<&'a [u8]>>,
     child_hashes: Children<HashType>,
 }
 
-impl<'a, P> Shunt<'a, P>
-where
-    P: Nibbles<'a> + Copy,
-{
+impl<'a, P1: Nibbles, P2: Nibbles> HashableShunt<'a, P1, P2> {
     const fn new(
-        parent_nibbles: &'a [u8],
-        key: P,
+        parent_nibbles: P1,
+        partial_path: P2,
         value: Option<ValueDigest<&'a [u8]>>,
         child_hashes: Children<HashType>,
     ) -> Self {
         Self {
             parent_nibbles,
-            key,
+            partial_path,
             value,
             child_hashes,
         }
@@ -809,40 +981,27 @@ where
     }
 }
 
-impl<'a, P: Nibbles<'a> + Copy> std::fmt::Debug for Shunt<'a, P> {
+impl<P1: Nibbles, P2: Nibbles> std::fmt::Debug for HashableShunt<'_, P1, P2> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        struct ParentPath<'a>(&'a [u8]);
-
-        impl std::fmt::Debug for ParentPath<'_> {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                super::path::display_nibbles(f, self.0.iter().copied())
-            }
-        }
-
-        struct DebugNibbles<P>(P);
-
-        impl<'a, P: Nibbles<'a> + Copy> std::fmt::Debug for DebugNibbles<P> {
-            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                super::path::display_nibbles(f, self.0.nibbles_iter())
-            }
-        }
-
         f.debug_struct("Shunt")
-            .field("parent_path", &ParentPath(self.parent_nibbles))
-            .field("key", &DebugNibbles(self.key))
-            .field("value", &self.value.as_ref().map(hex::encode))
+            .field("parent_nibbles", &self.parent_nibbles.display())
+            .field("partial_path", &self.partial_path.display())
+            .field(
+                "value",
+                &self.value.as_ref().map(|v| v.as_ref().map(hex::encode)),
+            )
             .field("child_hashes", &self.child_hashes)
             .finish()
     }
 }
 
-impl<'a, P: Nibbles<'a> + Copy> Hashable for Shunt<'a, P> {
+impl<P1: Nibbles, P2: Nibbles> Hashable for HashableShunt<'_, P1, P2> {
     fn parent_prefix_path(&self) -> impl Iterator<Item = u8> + Clone {
-        self.parent_nibbles.iter().copied()
+        self.parent_nibbles.nibbles_iter()
     }
 
     fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
-        self.key.nibbles_iter()
+        self.partial_path.nibbles_iter()
     }
 
     fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {
@@ -851,49 +1010,6 @@ impl<'a, P: Nibbles<'a> + Copy> Hashable for Shunt<'a, P> {
 
     fn children(&self) -> Children<HashType> {
         self.child_hashes.clone()
-    }
-}
-
-trait Merge: Sized {
-    type Output;
-    type Error;
-    fn merge(lhs: Self, rhs: Self) -> Result<Option<Self::Output>, Self::Error>;
-}
-
-impl<T: Merge<Output = T>> Merge for Option<T> {
-    type Output = T;
-    type Error = T::Error;
-
-    fn merge(lhs: Self, rhs: Self) -> Result<Option<Self::Output>, Self::Error> {
-        match (lhs, rhs) {
-            (Some(l), Some(r)) => T::merge(l, r),
-            (Some(l), None) => Ok(Some(l)),
-            (None, Some(r)) => Ok(Some(r)),
-            (None, None) => Ok(None),
-        }
-    }
-}
-
-impl<T: Merge> Merge for Box<T> {
-    type Output = Box<T::Output>;
-    type Error = T::Error;
-
-    fn merge(lhs: Self, rhs: Self) -> Result<Option<Self::Output>, Self::Error> {
-        #[inline]
-        fn boxed<T>(t: Option<T>) -> Option<Box<T>> {
-            t.map(Box::new)
-        }
-
-        T::merge(*lhs, *rhs).map(boxed)
-    }
-}
-
-impl<'a> Merge for KeyValueTrieRoot<'a> {
-    type Output = KeyValueTrieRoot<'a>;
-    type Error = ProofError;
-
-    fn merge(lhs: Self, rhs: Self) -> Result<Option<Self::Output>, Self::Error> {
-        KeyValueTrieRoot::merge(lhs, rhs).map(Some)
     }
 }
 
@@ -918,9 +1034,9 @@ impl<'a> PathGuard<'a> {
         PathGuard::new(self.nibbles)
     }
 
-    fn fork_push(&mut self, nibble: u8) -> PathGuard<'_> {
+    fn fork_push(&mut self, nibbles: impl Nibbles) -> PathGuard<'_> {
         let mut this = self.fork();
-        this.push(nibble);
+        this.extend(nibbles.nibbles_iter());
         this
     }
 }
@@ -936,6 +1052,37 @@ impl std::ops::Deref for PathGuard<'_> {
 impl std::ops::DerefMut for PathGuard<'_> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.nibbles
+    }
+}
+
+impl Nibbles for PathGuard<'_> {
+    fn nibbles_iter(&self) -> impl Iterator<Item = u8> + Clone + '_ {
+        self.nibbles.iter().copied()
+    }
+
+    fn len(&self) -> usize {
+        self.nibbles.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.nibbles.is_empty()
+    }
+}
+
+struct NibbleCounter(u8);
+
+impl NibbleCounter {
+    const fn new() -> Self {
+        Self(0)
+    }
+
+    fn next(&mut self) -> PathNibble {
+        let this = self.0;
+        self.0 = self
+            .0
+            .wrapping_add(1)
+            .clamp(0, const { (BranchNode::MAX_CHILDREN - 1) as u8 });
+        PathNibble(this)
     }
 }
 

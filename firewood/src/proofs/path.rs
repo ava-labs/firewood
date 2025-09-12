@@ -1,7 +1,65 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#[cfg(not(feature = "branch_factor_256"))]
 use firewood_storage::NibblesIterator;
+
+pub(crate) trait Nibbles {
+    fn nibbles_iter(&self) -> impl Iterator<Item = u8> + Clone + '_;
+
+    fn len(&self) -> usize;
+
+    fn is_empty(&self) -> bool;
+
+    fn bytes_iter(&self) -> impl Iterator<Item = u8> + Clone + '_ {
+        BytesIter::new(self.nibbles_iter())
+    }
+
+    fn collect(&self) -> CollectedNibbles {
+        CollectedNibbles::new(self)
+    }
+
+    fn display(&self) -> DisplayNibbles<'_, Self> {
+        DisplayNibbles(self)
+    }
+
+    fn join<O: Nibbles>(self, other: O) -> JoinedPath<Self, O>
+    where
+        Self: Sized,
+    {
+        JoinedPath { a: self, b: other }
+    }
+}
+
+pub(crate) struct DisplayNibbles<'a, P: ?Sized>(&'a P);
+
+impl<P: Nibbles + ?Sized> std::fmt::Debug for DisplayNibbles<'_, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self}")
+    }
+}
+
+impl<P: Nibbles + ?Sized> std::fmt::Display for DisplayNibbles<'_, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        display_nibbles(f, self.0.nibbles_iter())
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CollectedNibbles {
+    nibbles: smallvec::SmallVec<[u8; 32]>,
+}
+
+impl CollectedNibbles {
+    pub fn new(nibbles: impl Nibbles) -> Self {
+        Self {
+            nibbles: nibbles.nibbles_iter().collect(),
+        }
+    }
+}
+
+#[cfg(feature = "branch_factor_256")]
+pub(super) type PackedPath<'a> = WidenedPath<'a>;
 
 /// (first nibble, middle nibbles, last nibble)
 ///
@@ -16,29 +74,29 @@ use firewood_storage::NibblesIterator;
 /// is not enabled, represent 2 nibbles per byte (in big-endian order).
 ///
 /// This represents all the parts in a sub-slice of a Path.
-pub(super) type NibbleParts<'a> = (Option<u8>, &'a [u8], Option<u8>);
+#[cfg(not(feature = "branch_factor_256"))]
+type NibbleParts<'a> = (Option<u8>, &'a [u8], Option<u8>);
 
 /// Path represents a view over a byte slice as a sequence of nibbles.
 ///
 /// Path also acts as a double-ended cursor over the nibbles, allowing it
 /// to be split into sub-paths while retaining the original byte slice.
 #[derive(Clone, Copy)]
-pub(super) struct PackedPath<'a> {
+#[cfg(not(feature = "branch_factor_256"))]
+pub(crate) struct PackedPath<'a> {
     bytes: &'a [u8],
     head: usize,
     tail: usize,
 }
 
+#[cfg(not(feature = "branch_factor_256"))]
 impl<'a> PackedPath<'a> {
     pub const fn new(key: &'a [u8]) -> Self {
         Self {
             bytes: key,
             head: 0,
-            #[cfg(not(feature = "branch_factor_256"))]
             #[expect(clippy::arithmetic_side_effects)]
             tail: key.len() * 2,
-            #[cfg(feature = "branch_factor_256")]
-            tail: key.len(),
         }
     }
 
@@ -46,67 +104,34 @@ impl<'a> PackedPath<'a> {
     ///
     /// The first and last nibbles are optional and will be [`None`] if the path
     /// starts and/or ends on a byte boundary.
-    #[cfg(not(feature = "branch_factor_256"))]
-    pub fn as_parts(&self) -> NibbleParts<'a> {
+    fn as_parts(&self) -> NibbleParts<'a> {
+        #![expect(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
+
         if self.is_empty() {
             return (None, &[], None);
         }
 
-        let add_one = !self.head.is_multiple_of(2);
-        let sub_one = !self.tail.is_multiple_of(2);
-
-        let mid1 = self.head.midpoint(usize::from(add_one));
-        #[expect(clippy::arithmetic_side_effects)]
-        let mid2 = (self.tail - usize::from(sub_one)) / 2;
-
-        let (head, tail) = self.bytes.split_at(mid1);
-        #[expect(clippy::arithmetic_side_effects)]
-        let (middle, tail) = tail.split_at(mid2 - mid1);
-
-        let first = if add_one {
-            Some(head.last().copied().unwrap_or(0) & 0x0F)
+        let (leading_nibble, mid1) = if self.head.is_multiple_of(2) {
+            (None, self.head)
         } else {
-            None
+            let byte = self.bytes[self.head / 2];
+            (Some(byte & 0xf), self.head + 1)
         };
 
-        let last = if sub_one {
-            Some(tail.first().copied().unwrap_or(0) >> 4)
+        let (trailing_nibble, mid2) = if self.tail.is_multiple_of(2) {
+            (None, self.tail)
         } else {
-            None
+            let byte = self.bytes[self.tail / 2];
+            (Some(byte >> 4), self.tail - 1)
         };
 
-        (first, middle, last)
-    }
-
-    #[cfg(feature = "branch_factor_256")]
-    pub fn as_parts(&self) -> NibbleParts<'a> {
-        if self.is_empty() {
-            (None, &[], None)
+        let middle = if mid2 > mid1 {
+            &self.bytes[mid1 / 2..mid2 / 2]
         } else {
-            #[expect(clippy::indexing_slicing)]
-            (None, &self.bytes[self.head..self.tail], None)
-        }
-    }
-}
+            &[]
+        };
 
-impl std::fmt::Debug for PackedPath<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if f.alternate() {
-            f.debug_struct("Path")
-                .field("bytes", &self.bytes)
-                .field("offset", &self.head)
-                .field("length", &self.tail)
-                .field("nibbles", &format_args!("{self}"))
-                .finish()
-        } else {
-            write!(f, "{self}")
-        }
-    }
-}
-
-impl std::fmt::Display for PackedPath<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        display_nibbles(f, self.nibbles_iter())
+        (leading_nibble, middle, trailing_nibble)
     }
 }
 
@@ -116,7 +141,7 @@ impl std::fmt::Display for PackedPath<'_> {
 /// Also acts as a double-ended cursor over the nibbles, but we do not need to
 /// handle any partial bytes since each nibble is already widened into a byte.
 #[derive(Clone, Copy)]
-pub(super) struct WidenedPath<'a> {
+pub(crate) struct WidenedPath<'a> {
     bytes: &'a [u8],
     head: usize,
     tail: usize,
@@ -132,53 +157,17 @@ impl<'a> WidenedPath<'a> {
     }
 }
 
-impl std::fmt::Debug for WidenedPath<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if f.alternate() {
-            f.debug_struct("WidenedPath")
-                .field("bytes", &self.bytes)
-                .field("offset", &self.head)
-                .field("length", &self.tail)
-                .field("nibbles", &format_args!("{self}"))
-                .finish()
-        } else {
-            write!(f, "{self}")
-        }
-    }
-}
-
-impl std::fmt::Display for WidenedPath<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        display_nibbles(f, self.nibbles_iter())
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(super) enum RangeProofPath<'a> {
-    Packed(PackedPath<'a>),
-    Widened(WidenedPath<'a>),
-}
-
-impl std::fmt::Display for RangeProofPath<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            RangeProofPath::Packed(p) => write!(f, "{p}"),
-            RangeProofPath::Widened(w) => write!(f, "{w}"),
-        }
-    }
-}
-
-pub(super) struct SplitKey<L, R = L> {
+pub(super) struct SplitPath<L, R = L> {
     pub common_prefix: L,
     pub lhs_suffix: L,
     pub rhs_suffix: R,
 }
 
-impl<L, R> SplitKey<L, R> {
-    pub fn new<'a>(lhs: L, rhs: R) -> Self
+impl<L, R> SplitPath<L, R> {
+    pub fn new(lhs: L, rhs: R) -> Self
     where
-        L: Nibbles<'a> + Copy,
-        R: Nibbles<'a> + Copy,
+        L: SplitNibbles + Copy,
+        R: SplitNibbles + Copy,
     {
         let mid = lhs
             .nibbles_iter()
@@ -195,83 +184,109 @@ impl<L, R> SplitKey<L, R> {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(super) struct WithPrefix<T>(T);
+impl<L: Nibbles, R: Nibbles> std::fmt::Display for SplitPath<L, R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "common: {}, lhs: {}, rhs: {}",
+            DisplayNibbles(&self.common_prefix),
+            DisplayNibbles(&self.lhs_suffix),
+            DisplayNibbles(&self.rhs_suffix),
+        )
+    }
+}
 
-impl WithPrefix<PackedPath<'_>> {
-    #[cfg(not(feature = "branch_factor_256"))]
-    pub fn to_packed_key(self) -> Box<[u8]> {
-        #![expect(clippy::indexing_slicing)]
-        let mut out = Vec::with_capacity(self.0.tail.div_ceil(2));
-        out.copy_from_slice(&self.0.bytes[..self.0.tail.div_ceil(2)]);
-        if let Some(last) = out.last_mut()
-            && self.0.tail % 2 != 0
-        {
-            *last &= 0xF0;
+impl<L: Nibbles, R: Nibbles> Nibbles for either::Either<L, R> {
+    fn nibbles_iter(&self) -> impl Iterator<Item = u8> + Clone + '_ {
+        match self {
+            either::Left(l) => either::Left(l.nibbles_iter()),
+            either::Right(r) => either::Right(r.nibbles_iter()),
         }
-        out.into_boxed_slice()
     }
 
-    #[cfg(feature = "branch_factor_256")]
-    pub fn to_packed_key(self) -> Box<[u8]> {
-        #![expect(clippy::indexing_slicing)]
-        self.0.bytes[..self.0.tail].to_vec().into_boxed_slice()
-    }
-}
-
-impl<'a> WithPrefix<WidenedPath<'a>> {
-    pub fn nibbles_iter(self) -> impl Iterator<Item = u8> + use<'a> {
-        WidenedPath {
-            bytes: self.0.bytes,
-            head: 0,
-            tail: self.0.tail,
+    fn len(&self) -> usize {
+        match self {
+            either::Left(l) => l.len(),
+            either::Right(r) => r.len(),
         }
-        .nibbles_iter()
     }
 
-    #[cfg(not(feature = "branch_factor_256"))]
-    pub fn to_packed_key(self) -> Box<[u8]> {
-        #![expect(clippy::indexing_slicing)]
-        firewood_storage::padded_packed_path(self.0.bytes[..self.0.tail].iter().copied())
-    }
-
-    #[cfg(feature = "branch_factor_256")]
-    pub fn to_packed_key(self) -> Box<[u8]> {
-        #![expect(clippy::indexing_slicing)]
-        self.0.bytes[..self.0.tail].to_vec().into_boxed_slice()
+    fn is_empty(&self) -> bool {
+        match self {
+            either::Left(l) => l.is_empty(),
+            either::Right(r) => r.is_empty(),
+        }
     }
 }
 
-impl<'a> From<PackedPath<'a>> for RangeProofPath<'a> {
-    fn from(p: PackedPath<'a>) -> Self {
-        Self::Packed(p)
+impl<T: Nibbles + ?Sized> Nibbles for &T {
+    fn nibbles_iter(&self) -> impl Iterator<Item = u8> + Clone + '_ {
+        (**self).nibbles_iter()
+    }
+
+    fn len(&self) -> usize {
+        (**self).len()
+    }
+
+    fn is_empty(&self) -> bool {
+        (**self).is_empty()
     }
 }
 
-impl<'a> From<WidenedPath<'a>> for RangeProofPath<'a> {
-    fn from(w: WidenedPath<'a>) -> Self {
-        Self::Widened(w)
+impl<T: Nibbles> Nibbles for Option<T> {
+    fn nibbles_iter(&self) -> impl Iterator<Item = u8> + Clone + '_ {
+        self.as_ref().into_iter().flat_map(T::nibbles_iter)
+    }
+
+    fn len(&self) -> usize {
+        self.as_ref().map_or(0, T::len)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.as_ref().is_none_or(T::is_empty)
     }
 }
 
-pub(super) trait Nibbles<'a>: Sized {
-    fn nibbles_iter(self) -> impl Iterator<Item = u8> + Clone + 'a;
-
+pub(super) trait SplitNibbles: Nibbles + Sized {
     fn split_at(self, mid: usize) -> (Self, Self);
 
-    fn len(&self) -> usize;
+    fn split_first(self) -> (Option<PathNibble>, Self);
+}
 
-    fn is_empty(&self) -> bool;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub(super) struct PathNibble(pub(super) u8);
 
-    fn split_first(self) -> (Option<u8>, Self);
+impl Nibbles for PathNibble {
+    fn nibbles_iter(&self) -> impl Iterator<Item = u8> + Clone + '_ {
+        std::iter::once(self.0)
+    }
 
-    fn with_prefix(self) -> WithPrefix<Self> {
-        WithPrefix(self)
+    fn len(&self) -> usize {
+        1
+    }
+
+    fn is_empty(&self) -> bool {
+        false
     }
 }
 
-impl<'a> Nibbles<'a> for PackedPath<'a> {
-    fn nibbles_iter(self) -> impl Iterator<Item = u8> + Clone + 'a {
+impl Nibbles for CollectedNibbles {
+    fn nibbles_iter(&self) -> impl Iterator<Item = u8> + Clone + '_ {
+        self.nibbles.iter().copied()
+    }
+
+    fn len(&self) -> usize {
+        self.nibbles.len()
+    }
+
+    fn is_empty(&self) -> bool {
+        self.nibbles.is_empty()
+    }
+}
+
+#[cfg(not(feature = "branch_factor_256"))]
+impl Nibbles for PackedPath<'_> {
+    fn nibbles_iter(&self) -> impl Iterator<Item = u8> + Clone + '_ {
         let (first, middle, last) = self.as_parts();
         first
             .into_iter()
@@ -279,6 +294,17 @@ impl<'a> Nibbles<'a> for PackedPath<'a> {
             .chain(last)
     }
 
+    fn len(&self) -> usize {
+        self.tail.saturating_sub(self.head)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tail <= self.head
+    }
+}
+
+#[cfg(not(feature = "branch_factor_256"))]
+impl SplitNibbles for PackedPath<'_> {
     fn split_at(self, mid: usize) -> (Self, Self) {
         let len = self.len();
         assert!(mid <= len, "split index out of bounds");
@@ -297,19 +323,11 @@ impl<'a> Nibbles<'a> for PackedPath<'a> {
         (left, right)
     }
 
-    fn len(&self) -> usize {
-        self.tail.saturating_sub(self.head)
-    }
-
-    fn is_empty(&self) -> bool {
-        self.tail <= self.head
-    }
-
-    fn split_first(self) -> (Option<u8>, Self) {
+    fn split_first(self) -> (Option<PathNibble>, Self) {
         if self.is_empty() {
             (None, self)
         } else {
-            let first = self.nibbles_iter().next();
+            let first = self.nibbles_iter().next().map(PathNibble);
             let rest = Self {
                 bytes: self.bytes,
                 #[expect(clippy::arithmetic_side_effects)]
@@ -321,12 +339,22 @@ impl<'a> Nibbles<'a> for PackedPath<'a> {
     }
 }
 
-impl<'a> Nibbles<'a> for WidenedPath<'a> {
-    fn nibbles_iter(self) -> impl Iterator<Item = u8> + Clone + 'a {
+impl Nibbles for WidenedPath<'_> {
+    fn nibbles_iter(&self) -> impl Iterator<Item = u8> + Clone + '_ {
         #![expect(clippy::indexing_slicing)]
         self.bytes[self.head..self.tail].iter().copied()
     }
 
+    fn len(&self) -> usize {
+        self.tail.saturating_sub(self.head)
+    }
+
+    fn is_empty(&self) -> bool {
+        self.tail <= self.head
+    }
+}
+
+impl SplitNibbles for WidenedPath<'_> {
     fn split_at(self, mid: usize) -> (Self, Self) {
         let len = self.len();
         assert!(mid <= len, "split index out of bounds");
@@ -345,19 +373,11 @@ impl<'a> Nibbles<'a> for WidenedPath<'a> {
         (left, right)
     }
 
-    fn len(&self) -> usize {
-        self.tail.saturating_sub(self.head)
-    }
-
-    fn is_empty(&self) -> bool {
-        self.tail <= self.head
-    }
-
-    fn split_first(self) -> (Option<u8>, Self) {
+    fn split_first(self) -> (Option<PathNibble>, Self) {
         if self.is_empty() {
             (None, self)
         } else {
-            let first = self.nibbles_iter().next();
+            let first = self.nibbles_iter().next().map(PathNibble);
             let rest = Self {
                 bytes: self.bytes,
                 #[expect(clippy::arithmetic_side_effects)]
@@ -369,181 +389,104 @@ impl<'a> Nibbles<'a> for WidenedPath<'a> {
     }
 }
 
-impl<'a> Nibbles<'a> for RangeProofPath<'a> {
-    fn nibbles_iter(self) -> impl Iterator<Item = u8> + Clone + 'a {
-        match self {
-            RangeProofPath::Packed(p) => EitherIter::A(p.nibbles_iter()),
-            RangeProofPath::Widened(w) => EitherIter::B(w.nibbles_iter()),
-        }
-    }
+#[derive(Clone, Copy)]
+pub(crate) struct JoinedPath<A, B> {
+    a: A,
+    b: B,
+}
 
-    fn split_at(self, mid: usize) -> (Self, Self) {
-        match self {
-            RangeProofPath::Packed(p) => {
-                let (l, r) = p.split_at(mid);
-                (RangeProofPath::Packed(l), RangeProofPath::Packed(r))
-            }
-            RangeProofPath::Widened(w) => {
-                let (l, r) = w.split_at(mid);
-                (RangeProofPath::Widened(l), RangeProofPath::Widened(r))
-            }
-        }
+impl<T: Nibbles, U: Nibbles> Nibbles for JoinedPath<T, U> {
+    fn nibbles_iter(&self) -> impl Iterator<Item = u8> + Clone + '_ {
+        self.a.nibbles_iter().chain(self.b.nibbles_iter())
     }
 
     fn len(&self) -> usize {
-        match self {
-            RangeProofPath::Packed(p) => p.len(),
-            RangeProofPath::Widened(w) => w.len(),
-        }
+        self.a.len().saturating_add(self.b.len())
     }
 
     fn is_empty(&self) -> bool {
-        match self {
-            RangeProofPath::Packed(p) => p.is_empty(),
-            RangeProofPath::Widened(w) => w.is_empty(),
-        }
-    }
-
-    fn split_first(self) -> (Option<u8>, Self) {
-        match self {
-            RangeProofPath::Packed(p) => {
-                let (first, rest) = p.split_first();
-                (first, RangeProofPath::Packed(rest))
-            }
-            RangeProofPath::Widened(w) => {
-                let (first, rest) = w.split_first();
-                (first, RangeProofPath::Widened(rest))
-            }
-        }
+        self.a.is_empty() && self.b.is_empty()
     }
 }
 
-impl<'a, T: Nibbles<'a> + Copy> PartialEq<T> for PackedPath<'a> {
-    fn eq(&self, other: &T) -> bool {
-        self.len() == other.len() && self.nibbles_iter().eq(other.nibbles_iter())
+#[derive(Clone)]
+pub(crate) struct BytesIter<I> {
+    iter: I,
+}
+
+impl<I: Iterator<Item = u8>> BytesIter<I> {
+    pub const fn new(iter: I) -> Self {
+        Self { iter }
     }
 }
 
-impl Eq for PackedPath<'_> {}
-
-impl<'a, T: Nibbles<'a> + Copy> PartialEq<T> for WidenedPath<'a> {
-    fn eq(&self, other: &T) -> bool {
-        self.len() == other.len() && self.nibbles_iter().eq(other.nibbles_iter())
-    }
-}
-
-impl Eq for WidenedPath<'_> {}
-
-impl<'a, T: Nibbles<'a> + Copy> PartialEq<T> for RangeProofPath<'a> {
-    fn eq(&self, other: &T) -> bool {
-        self.len() == other.len() && self.nibbles_iter().eq(other.nibbles_iter())
-    }
-}
-
-impl Eq for RangeProofPath<'_> {}
-
-#[derive(Debug, Clone)]
-enum EitherIter<A, B> {
-    A(A),
-    B(B),
-}
-
-impl<A, B, T> Iterator for EitherIter<A, B>
-where
-    A: Iterator<Item = T>,
-    B: Iterator<Item = T>,
-{
-    type Item = T;
+#[cfg(not(feature = "branch_factor_256"))]
+impl<I: Iterator<Item = u8>> Iterator for BytesIter<I> {
+    type Item = u8;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::A(a) => a.next(),
-            Self::B(b) => b.next(),
-        }
+        let high = self.iter.next()?;
+        let low = self.iter.next().unwrap_or(0);
+        Some((high << 4) | (low & 0x0F))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            Self::A(a) => a.size_hint(),
-            Self::B(b) => b.size_hint(),
-        }
-    }
-
-    fn count(self) -> usize {
-        match self {
-            Self::A(a) => a.count(),
-            Self::B(b) => b.count(),
-        }
-    }
-
-    fn last(self) -> Option<Self::Item> {
-        match self {
-            Self::A(a) => a.last(),
-            Self::B(b) => b.last(),
-        }
-    }
-
-    fn nth(&mut self, n: usize) -> Option<Self::Item> {
-        match self {
-            Self::A(a) => a.nth(n),
-            Self::B(b) => b.nth(n),
-        }
-    }
-
-    fn for_each<F: FnMut(Self::Item)>(self, f: F) {
-        match self {
-            Self::A(a) => a.for_each(f),
-            Self::B(b) => b.for_each(f),
-        }
-    }
-
-    fn fold<V, F: FnMut(V, Self::Item) -> V>(self, init: V, f: F) -> V {
-        match self {
-            Self::A(a) => a.fold(init, f),
-            Self::B(b) => b.fold(init, f),
-        }
+        let (low, high) = self.iter.size_hint();
+        let low = low.div_ceil(2);
+        let high = high.map(|h| h.div_ceil(2));
+        (low, high)
     }
 }
 
-impl<A, B, T> DoubleEndedIterator for EitherIter<A, B>
-where
-    A: DoubleEndedIterator<Item = T>,
-    B: DoubleEndedIterator<Item = T>,
-{
-    fn next_back(&mut self) -> Option<Self::Item> {
-        match self {
-            Self::A(a) => a.next_back(),
-            Self::B(b) => b.next_back(),
-        }
+#[cfg(feature = "branch_factor_256")]
+impl<I: Iterator<Item = u8>> Iterator for BytesIter<I> {
+    type Item = u8;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next()
     }
 
-    fn rfold<V, F: FnMut(V, Self::Item) -> V>(self, init: V, f: F) -> V {
-        match self {
-            Self::A(a) => a.rfold(init, f),
-            Self::B(b) => b.rfold(init, f),
-        }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
     }
 }
 
-impl<A, B, T> ExactSizeIterator for EitherIter<A, B>
-where
-    A: ExactSizeIterator<Item = T>,
-    B: ExactSizeIterator<Item = T>,
-{
-    fn len(&self) -> usize {
-        match self {
-            Self::A(a) => a.len(),
-            Self::B(b) => b.len(),
+/// $Type is the type to implement the traits for an is expected to already
+/// implement [`Nibbles`]
+macro_rules! impl_common_nibbles_traits {
+    ($({$($gen:tt)*},)? $Type:ty) => {
+        impl$(<$($gen)*>)? ::std::fmt::Debug for $Type {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                display_nibbles(f, self.nibbles_iter())
+            }
         }
-    }
+
+        impl$(<$($gen)*>)? ::std::fmt::Display for $Type {
+            fn fmt(&self, f: &mut ::std::fmt::Formatter<'_>) -> ::std::fmt::Result {
+                display_nibbles(f, self.nibbles_iter())
+            }
+        }
+
+        impl<__Other: Nibbles + ?Sized, $($($gen)*)?> PartialEq<__Other> for $Type {
+            fn eq(&self, other: &__Other) -> bool {
+                self.len() == other.len() && self.nibbles_iter().eq(other.nibbles_iter())
+            }
+        }
+
+        impl$(<$($gen)*>)? Eq for $Type {}
+    };
+    ($Type:ty, $($Other:ty),+ $(,)?) => {
+        impl_common_nibbles_traits!($Type);
+        impl_common_nibbles_traits!($($Other),+);
+    };
 }
 
-impl<A, B, T> std::iter::FusedIterator for EitherIter<A, B>
-where
-    A: std::iter::FusedIterator<Item = T>,
-    B: std::iter::FusedIterator<Item = T>,
-{
-}
+impl_common_nibbles_traits!(CollectedNibbles, WidenedPath<'_>);
+
+#[cfg(not(feature = "branch_factor_256"))]
+impl_common_nibbles_traits!(PackedPath<'_>);
+
+impl_common_nibbles_traits!({T: Nibbles, U: Nibbles}, JoinedPath<T, U>);
 
 #[cfg(not(feature = "branch_factor_256"))]
 pub(super) fn display_nibbles(
@@ -609,24 +552,24 @@ mod tests {
         };
     }
 
-    #[test_case(b"", b"", SplitKey { common_prefix: path!(""), lhs_suffix: path!(""), rhs_suffix: path!("") }; "both empty")]
-    #[test_case(b"a", b"a", SplitKey { common_prefix: path!("a"), lhs_suffix: path!("a", 1), rhs_suffix: path!("a", 1) }; "both same single byte")]
-    #[test_case(b"a", b"b", SplitKey {
+    #[test_case(b"", b"", SplitPath { common_prefix: path!(""), lhs_suffix: path!(""), rhs_suffix: path!("") }; "both empty")]
+    #[test_case(b"a", b"a", SplitPath { common_prefix: path!("a"), lhs_suffix: path!("a", 1), rhs_suffix: path!("a", 1) }; "both same single byte")]
+    #[test_case(b"a", b"b", SplitPath {
         common_prefix: PackedPath { bytes: b"a", head: 0, tail: HALF },
         lhs_suffix: PackedPath { bytes: b"a", head: HALF, tail: MULT },
         rhs_suffix: PackedPath { bytes: b"b", head: HALF, tail: MULT },
     }; "both different single byte")]
-    #[test_case(b"abc", b"abc", SplitKey { common_prefix: path!("abc"), lhs_suffix: path!("abc", 3), rhs_suffix: path!("abc", 3) }; "both same multiple bytes")]
-    #[test_case(b"abc", b"abd", SplitKey {
+    #[test_case(b"abc", b"abc", SplitPath { common_prefix: path!("abc"), lhs_suffix: path!("abc", 3), rhs_suffix: path!("abc", 3) }; "both same multiple bytes")]
+    #[test_case(b"abc", b"abd", SplitPath {
         common_prefix: PackedPath { bytes: b"abc", head: 0, tail: 2 * MULT + HALF },
         lhs_suffix: PackedPath { bytes: b"abc", head: 2 * MULT + HALF, tail: 3 * MULT },
         rhs_suffix: PackedPath { bytes: b"abd", head: 2 * MULT + HALF, tail: 3 * MULT },
     }; "same prefix, different last byte")]
-    #[test_case(b"abc", b"ab", SplitKey { common_prefix: path!("abc", 0, 2), lhs_suffix: path!("abc", 2), rhs_suffix: path!("ab", 2) }; "lhs longer than rhs")]
-    #[test_case(b"ab", b"abc", SplitKey { common_prefix: path!("ab"), lhs_suffix: path!("ab", 2), rhs_suffix: path!("abc", 2) }; "rhs longer than lhs")]
-    #[test_case(b"abc", b"xyz", SplitKey { common_prefix: path!("abc", 0, 0), lhs_suffix: path!("abc"), rhs_suffix: path!("xyz") }; "no common prefix")]
-    fn test_split_key(a: &[u8], b: &[u8], split: SplitKey<PackedPath<'_>>) {
-        let actual = SplitKey::new(PackedPath::new(a), PackedPath::new(b));
+    #[test_case(b"abc", b"ab", SplitPath { common_prefix: path!("abc", 0, 2), lhs_suffix: path!("abc", 2), rhs_suffix: path!("ab", 2) }; "lhs longer than rhs")]
+    #[test_case(b"ab", b"abc", SplitPath { common_prefix: path!("ab"), lhs_suffix: path!("ab", 2), rhs_suffix: path!("abc", 2) }; "rhs longer than lhs")]
+    #[test_case(b"abc", b"xyz", SplitPath { common_prefix: path!("abc", 0, 0), lhs_suffix: path!("abc"), rhs_suffix: path!("xyz") }; "no common prefix")]
+    fn test_split_key(a: &[u8], b: &[u8], split: SplitPath<PackedPath<'_>>) {
+        let actual = SplitPath::new(PackedPath::new(a), PackedPath::new(b));
         assert_eq!(actual.common_prefix, split.common_prefix);
         assert_eq!(actual.lhs_suffix, split.lhs_suffix);
         assert_eq!(actual.rhs_suffix, split.rhs_suffix);
