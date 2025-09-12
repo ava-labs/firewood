@@ -43,7 +43,7 @@ pub mod macros;
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
-pub use node::path::{NibblesIterator, Path};
+pub use node::path::{NibblesIterator, Path, padded_packed_path};
 pub use node::{
     BranchNode, Child, Children, LeafNode, Node, PathIterItem,
     branch::{HashType, IntoHashType},

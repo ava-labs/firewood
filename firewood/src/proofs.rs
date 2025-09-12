@@ -4,11 +4,13 @@
 mod bitmap;
 mod de;
 mod header;
+mod path;
 mod proof_type;
 mod reader;
 mod ser;
 #[cfg(test)]
 mod tests;
+mod trie;
 
 pub use self::header::InvalidHeader;
 pub use self::reader::ReadError;

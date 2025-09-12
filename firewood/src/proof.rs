@@ -12,7 +12,7 @@
 
 use firewood_storage::{
     BranchNode, Children, FileIoError, HashType, Hashable, IntoHashType, NibblesIterator, Path,
-    PathIterItem, Preimage, TrieHash, ValueDigest,
+    PathIterItem, Preimage, TrieHash, ValueDigest, padded_packed_path,
 };
 use thiserror::Error;
 
@@ -26,8 +26,18 @@ pub enum ProofError {
     NonMonotonicIncreaseRange,
 
     /// Unexpected hash
-    #[error("unexpected hash")]
-    UnexpectedHash,
+    #[error(
+        "unexpected hash for key {}: expected {expected:?} but got {actual:?}",
+        hex::encode(key)
+    )]
+    UnexpectedHash {
+        /// The key where the unexpected hash was found
+        key: Key,
+        /// The expected hash
+        expected: HashType,
+        /// The actual hash found in the proof
+        actual: HashType,
+    },
 
     /// Unexpected value
     #[error("unexpected value")]
@@ -50,20 +60,66 @@ pub enum ProofError {
     ShouldBePrefixOfProvenKey,
 
     /// Each proof node key should be a prefix of the next key
-    #[error("each proof node key should be a prefix of the next key")]
-    ShouldBePrefixOfNextKey,
+    #[error(
+        "each proof node key should be a prefix of the next key; found {} before {}",
+        hex::encode(parent),
+        hex::encode(child)
+    )]
+    ShouldBePrefixOfNextKey {
+        /// The key of the parent node that is supposedly a parent of the child node, but
+        /// the key is not a strict prefix of the child's key.
+        parent: Key,
+        /// The key of the child node that is supposedly a child of the parent node, but
+        /// the parent's key is not a strict prefix of the child's key.
+        child: Key,
+    },
+
+    /// The two edges of the range proof are from disjoint tries.
+    ///
+    /// This means they do not share a common ancestor.
+    #[error(
+        "the two edges of the range proof are from disjoint tries; they diverge at {} and {} where both are expected to have the same key",
+        hex::encode(lower),
+        hex::encode(upper)
+    )]
+    DisjointEdges {
+        /// The key of the node in the lower edge proof that unexpectedly diverges
+        /// from the upper edge proof.
+        lower: Key,
+        /// The key of the node in the upper edge proof that unexpectedly diverges
+        /// from the lower edge proof.
+        upper: Key,
+    },
 
     /// Child index is out of bounds
-    #[error("child index is out of bounds")]
-    ChildIndexOutOfBounds,
+    #[error("child index is out of bounds, raw key: {}", hex::encode(_0))]
+    ChildIndexOutOfBounds(Key),
 
     /// Only nodes with even length key can have values
     #[error("only nodes with even length key can have values")]
     ValueAtOddNibbleLength,
 
     /// Node not in trie
-    #[error("node not in trie")]
-    NodeNotInTrie,
+    #[error(
+        "parent node {} does not have a child at index {child_nibble}, but child node {} exists",
+        hex::encode(parent),
+        hex::encode(child)
+    )]
+    NodeNotInTrie {
+        /// The key of the parent node that is missing the child at the given index.
+        parent: Key,
+        /// The index of the missing child in the parent's children.
+        ///
+        /// This is equivalent to;
+        ///
+        /// ```ignore
+        /// next_nibble(NibblesIterator::new(parent), NibblesIterator::new(child)).unwrap()
+        /// ```
+        child_nibble: u8,
+        /// The key of the child node that exists in the proof, but is missing
+        /// from the parent's children.
+        child: Key,
+    },
 
     /// Error from the merkle package
     #[error("{0:?}")]
@@ -102,6 +158,17 @@ pub enum ProofError {
     /// node diverges from the penultimate node's differently than the target key.
     #[error("invalid node for exclusion proof")]
     ExclusionProofInvalidNode,
+
+    /// Error when there are duplicate keys in the proof with different values.
+    #[error("duplicate keys in proof: {key:?} with values {value1:?} and {value2:?}")]
+    DuplicateKeysInProof {
+        /// The duplicate key.
+        key: Key,
+        /// The first value.
+        value1: Value,
+        /// The second value.
+        value2: Value,
+    },
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -211,7 +278,8 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         key: K,
         root_hash: &TrieHash,
     ) -> Result<Option<ValueDigest<&[u8]>>, ProofError> {
-        let key = Path(NibblesIterator::new(key.as_ref()).collect());
+        let key_bytes = key.as_ref();
+        let key = Path(NibblesIterator::new(key_bytes).collect());
 
         let Some(last_node) = self.0.as_ref().last() else {
             return Err(ProofError::Empty);
@@ -221,8 +289,13 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
 
         let mut iter = self.0.as_ref().iter().peekable();
         while let Some(node) = iter.next() {
-            if node.to_hash() != expected_hash {
-                return Err(ProofError::UnexpectedHash);
+            let actual_hash = node.to_hash();
+            if actual_hash != expected_hash {
+                return Err(ProofError::UnexpectedHash {
+                    key: key_bytes.into(),
+                    expected: expected_hash,
+                    actual: actual_hash,
+                });
             }
 
             // Assert that only nodes whose keys are an even number of nibbles
@@ -243,15 +316,24 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                 let next_node_index = next_nibble(node.full_path(), next_node.full_path());
 
                 let Some(next_nibble) = next_node_index else {
-                    return Err(ProofError::ShouldBePrefixOfNextKey);
+                    return Err(ProofError::ShouldBePrefixOfNextKey {
+                        parent: padded_packed_path(node.full_path()),
+                        child: padded_packed_path(next_node.full_path()),
+                    });
                 };
 
                 expected_hash = node
                     .children()
                     .get(usize::from(next_nibble))
-                    .ok_or(ProofError::ChildIndexOutOfBounds)?
+                    .ok_or_else(|| {
+                        ProofError::ChildIndexOutOfBounds(next_node.full_path().collect())
+                    })?
                     .as_ref()
-                    .ok_or(ProofError::NodeNotInTrie)?
+                    .ok_or_else(|| ProofError::NodeNotInTrie {
+                        parent: padded_packed_path(node.full_path()),
+                        child_nibble: next_nibble,
+                        child: padded_packed_path(next_node.full_path()),
+                    })?
                     .clone();
             }
         }
@@ -264,13 +346,18 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         Ok(None)
     }
 
+    /// Verify the structure of the proof path for the given `key`.
+    ///
+    /// This does not verify any hashes or values, only the structure of the proof
+    /// path with respect to the given `key`.
+    ///
     /// If the last element in `proof` is `key`, this is an inclusion proof.
     /// Otherwise, this is an exclusion proof and `key` must not be in `proof`.
     ///
     /// Returns [`Ok`] if and only if all the following hold:
     ///
-    ///   - Any node with a partial byte length, should not have a value associated with it
-    ///     since all keys with values are written in complete bytes.
+    ///   - Any node with a partial byte length does not have a value associated
+    ///     with it since all keys with values are written in complete bytes.
     ///
     ///   - Each key in `proof` is a strict prefix of the following key.
     ///
@@ -310,7 +397,10 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
 
             // Each node's key should be a prefix of next node's key
             if next_nibble(node.full_path(), next_node.full_path()).is_none() {
-                return Err(ProofError::ShouldBePrefixOfNextKey);
+                return Err(ProofError::ShouldBePrefixOfNextKey {
+                    parent: padded_packed_path(node.full_path()),
+                    child: padded_packed_path(next_node.full_path()),
+                });
             }
         }
 
@@ -331,7 +421,7 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                 if last_node
                     .children()
                     .get(next_nibble as usize)
-                    .ok_or(ProofError::ChildIndexOutOfBounds)?
+                    .ok_or_else(|| ProofError::ChildIndexOutOfBounds(last_key.as_ref().into()))?
                     .is_some()
                 {
                     // exclusion proof, but the last node has a child at the next nibble
@@ -508,6 +598,10 @@ pub trait ProofCollection: AsRef<[Self::Node]> {
 }
 
 impl<T: Hashable> ProofCollection for [T] {
+    type Node = T;
+}
+
+impl<T: Hashable> ProofCollection for &[T] {
     type Node = T;
 }
 

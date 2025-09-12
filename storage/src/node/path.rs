@@ -280,6 +280,40 @@ impl DoubleEndedIterator for NibblesIterator<'_> {
     }
 }
 
+/// Packs an iterator of nibbles into a boxed slice of bytes.
+///
+/// An odd nibble at the end is padded with a zero nibble on the lower bits.
+///
+/// This is intended for building debugging messages for paths, not for storage
+/// or reconstruction.
+#[cfg(not(feature = "branch_factor_256"))]
+pub fn padded_packed_path(nibbles: impl Iterator<Item = u8>) -> Box<[u8]> {
+    let bytes = Vec::with_capacity(nibbles.size_hint().0.div_ceil(2));
+    let (mut bytes, last_nibble) =
+        nibbles.fold((bytes, None), |(mut bytes, prev_nibble), nibble| {
+            if let Some(prev) = prev_nibble {
+                bytes.push((prev << 4) | nibble);
+                (bytes, None)
+            } else {
+                (bytes, Some(nibble))
+            }
+        });
+
+    if let Some(nibble) = last_nibble {
+        bytes.push(nibble << 4);
+    }
+
+    bytes.into_boxed_slice()
+}
+
+/// Packs an iterator of nibbles into a boxed slice of bytes.
+///
+/// Because branch_factor_256 is enabled, each nibble is already a full byte.
+#[cfg(feature = "branch_factor_256")]
+pub fn padded_packed_path(nibbles: impl Iterator<Item = u8>) -> Box<[u8]> {
+    nibbles.collect()
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
