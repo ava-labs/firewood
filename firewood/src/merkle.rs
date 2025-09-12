@@ -11,7 +11,7 @@ use crate::v2::api::{self, FrozenProof, FrozenRangeProof, HashKey, KeyType, Valu
 use firewood_storage::{
     BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader, ImmutableProposal,
     IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore,
-    Parentable, Path, ReadableStorage, SharedNode, TrieHash, TrieReader, ValueDigest,
+    Parentable, Path, ReadableStorage, SharedNode, TrieReader, ValueDigest,
 };
 use metrics::counter;
 use smallvec::SmallVec;
@@ -256,7 +256,7 @@ impl<T: TrieReader> Merkle<T> {
         &self,
         first_key: Option<impl KeyType>,
         last_key: Option<impl KeyType>,
-        root_hash: &TrieHash,
+        root_hash: &HashKey,
         proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
     ) -> Result<(), api::Error> {
         let first_key = first_key.map(Path::from).unwrap_or_default();
@@ -452,8 +452,8 @@ impl<T: TrieReader> Merkle<T> {
             counter!("firewood.proofs.invalid_range_proof").increment(1);
             Err(api::Error::InvalidHash {
                 reason: api::InvalidHashReason::MismatchedHash,
-                invalid: Some(result.computed.into()),
-                expected: Some(root_hash.clone()),
+                invalid: Some(result.computed),
+                expected: Some(root_hash.clone().into_hash_type()),
             })
         }
     }

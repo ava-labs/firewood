@@ -4,7 +4,7 @@
 use crate::manager::RevisionManagerError;
 use crate::merkle::{Key, Value};
 use crate::proof::{Proof, ProofError, ProofNode};
-use firewood_storage::{FileIoError, TrieHash};
+use firewood_storage::{FileIoError, HashType, IntoHashType, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -114,9 +114,9 @@ pub enum Error {
         /// Why the hash is invalid
         reason: InvalidHashReason,
         /// the provided root hash
-        invalid: Option<HashKey>,
+        invalid: Option<HashType>,
         /// the expected root hash
-        expected: Option<HashKey>,
+        expected: Option<HashType>,
     },
 
     /// Invalid range
@@ -175,8 +175,8 @@ impl From<RevisionManagerError> for Error {
         match err {
             NotLatest { provided, expected } => Self::InvalidHash {
                 reason: InvalidHashReason::ParentNotLatest,
-                invalid: provided,
-                expected,
+                invalid: provided.map(IntoHashType::into_hash_type),
+                expected: expected.map(IntoHashType::into_hash_type),
             },
             RevisionNotFound { provided } => Self::RevisionNotFound {
                 provided: Some(provided),

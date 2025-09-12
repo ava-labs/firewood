@@ -832,7 +832,7 @@ impl<'a, P: Nibbles<'a> + Copy, I: Iterator<Item = u8> + Clone> Hashable for Shu
     }
 
     fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {
-        self.value
+        self.value.clone()
     }
 
     fn children(&self) -> Children<HashType> {
