@@ -14,6 +14,7 @@ mod trie;
 
 pub use self::header::InvalidHeader;
 pub use self::reader::ReadError;
+pub(crate) use self::trie::HashedRangeProofTrieRoot;
 
 mod magic {
     pub const PROOF_HEADER: &[u8; 8] = b"fwdproof";

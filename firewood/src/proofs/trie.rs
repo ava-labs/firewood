@@ -1,25 +1,57 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::{BranchNode, Children, HashType, ValueDigest};
+use firewood_storage::{BranchNode, Children, HashType, Hashable, ValueDigest};
 
 use crate::{
-    proof::{ProofError, ProofNode},
+    proof::{Proof, ProofCollection, ProofError, ProofNode},
     proofs::path::{Nibbles, PackedPath, RangeProofPath, SplitKey, WidenedPath},
-    v2::api::FrozenRangeProof,
+    range_proof::RangeProof,
+    v2::api::{KeyType, ValueType},
 };
+
+#[derive(Debug)]
+struct HashedKeyValueTrieRoot<'a> {
+    computed: HashType,
+    #[expect(unused)]
+    key: PackedPath<'a>,
+    #[expect(unused)]
+    value: Option<&'a [u8]>,
+    #[expect(unused)]
+    children: Children<Box<HashedKeyValueTrieRoot<'a>>>,
+}
+
+#[derive(Debug)]
+pub(crate) struct HashedRangeProofTrieRoot<'a> {
+    pub(crate) computed: HashType,
+    #[expect(unused)]
+    key: RangeProofPath<'a>,
+    #[expect(unused)]
+    value_digest: Option<ValueDigest<&'a [u8]>>,
+    #[expect(unused)]
+    children: Children<Box<HashedRangeProofTrieEdge<'a>>>,
+}
+
+/// The edge of a trie formed by hashing a range proof.
+///
+/// The hash stored on the enum variants is the hash discovered from the proof
+/// trie. The hash stored within the root is the hash we computed.
+#[derive(Debug)]
+enum HashedRangeProofTrieEdge<'a> {
+    Distant(HashType),
+    Partial(HashType, HashedKeyValueTrieRoot<'a>),
+    Complete(HashType, HashedRangeProofTrieRoot<'a>),
+}
 
 /// A root node within a trie formed by a range proof.
 #[derive(Debug)]
-#[allow(unused)]
-pub(super) struct RangeProofTrieRoot<'a> {
+struct RangeProofTrieRoot<'a> {
     key: RangeProofPath<'a>,
     value_digest: Option<ValueDigest<&'a [u8]>>,
     children: Children<Box<RangeProofTrieEdge<'a>>>,
 }
 
 #[derive(Debug)]
-#[allow(unused)]
 enum RangeProofTrieEdge<'a> {
     /// Distant edge nodes are the nodes we discovered from the proof trie but
     /// do not have any additional information. We only know that it exists with
@@ -66,19 +98,120 @@ enum KeyProofTrieEdge<'a> {
     Described(HashType, KeyProofTrieRoot<'a>),
 }
 
-impl<'a> RangeProofTrieRoot<'a> {
-    #[allow(unused)]
-    pub(super) fn from_range_proof(range_proof: &'a FrozenRangeProof) -> Result<Self, ProofError> {
-        let start_proof = KeyProofTrieRoot::from_proof(range_proof.start_proof())?;
-        let end_proof = KeyProofTrieRoot::from_proof(range_proof.end_proof())?;
+impl<'a> HashedRangeProofTrieRoot<'a> {
+    pub(crate) fn from_range_proof(
+        proof: &'a RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
+    ) -> Result<Self, ProofError> {
+        let root = RangeProofTrieRoot::from_range_proof(proof)?;
+        Ok(Self::new(std::iter::empty(), root))
+    }
 
-        let proof = KeyProofTrieRoot::merge_proof_roots(start_proof, end_proof)?
+    fn new(parent_path: impl Iterator<Item = u8> + Clone, node: RangeProofTrieRoot<'a>) -> Self {
+        let mut nibble = 0_u8;
+        let children = node.children.map(|maybe| {
+            let this_nibble = nibble;
+            nibble = nibble.wrapping_add(1);
+
+            maybe.map(|child| {
+                HashedRangeProofTrieEdge::new(parent_path.clone().chain(Some(this_nibble)), *child)
+            })
+        });
+
+        Self {
+            computed: Shunt::new(
+                parent_path,
+                node.key,
+                node.value_digest.as_ref().map(ValueDigest::as_ref),
+                children
+                    .each_ref()
+                    .map(|maybe| maybe.as_ref().map(HashedRangeProofTrieEdge::hash).cloned()),
+            )
+            .to_hash(),
+            key: node.key,
+            value_digest: node.value_digest,
+            children: boxed_children(children),
+        }
+    }
+}
+
+impl<'a> HashedRangeProofTrieEdge<'a> {
+    fn new(parent_path: impl Iterator<Item = u8> + Clone, edge: RangeProofTrieEdge<'a>) -> Self {
+        match edge {
+            RangeProofTrieEdge::Distant(hash) => Self::Distant(hash),
+            RangeProofTrieEdge::Partial(hash, root) => {
+                Self::Partial(hash, HashedKeyValueTrieRoot::new(parent_path, root))
+            }
+            RangeProofTrieEdge::Complete(hash, root) => {
+                Self::Complete(hash, HashedRangeProofTrieRoot::new(parent_path, root))
+            }
+        }
+    }
+
+    const fn discovered_hash(&self) -> &HashType {
+        match self {
+            Self::Distant(id) | Self::Partial(id, _) | Self::Complete(id, _) => id,
+        }
+    }
+
+    const fn computed_hash(&self) -> Option<&HashType> {
+        match self {
+            Self::Distant(_) => None,
+            Self::Partial(_, kvp) => Some(&kvp.computed),
+            Self::Complete(_, proof) => Some(&proof.computed),
+        }
+    }
+
+    const fn hash(&self) -> &HashType {
+        match self.computed_hash() {
+            Some(hash) => hash,
+            None => self.discovered_hash(),
+        }
+    }
+}
+
+impl<'a> HashedKeyValueTrieRoot<'a> {
+    fn new(parent_path: impl Iterator<Item = u8> + Clone, node: KeyValueTrieRoot<'a>) -> Self {
+        let mut nibble = 0_u8;
+        let children = node.children.map(|maybe| {
+            let this_nibble = nibble;
+            nibble = nibble.wrapping_add(1);
+
+            maybe.map(|child| Self::new(parent_path.clone().chain(Some(this_nibble)), *child))
+        });
+
+        let child_hashes = children
+            .each_ref()
+            .map(|maybe| maybe.as_ref().map(|child| child.computed.clone()));
+
+        HashedKeyValueTrieRoot {
+            computed: Shunt::new(
+                parent_path,
+                node.key,
+                node.value.map(ValueDigest::Value),
+                child_hashes,
+            )
+            .to_hash(),
+            key: node.key,
+            value: node.value,
+            children: boxed_children(children),
+        }
+    }
+}
+
+impl<'a> RangeProofTrieRoot<'a> {
+    fn from_range_proof(
+        proof: &'a RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
+    ) -> Result<Self, ProofError> {
+        let start_proof = KeyProofTrieRoot::from_proof(proof.start_proof())?;
+        let end_proof = KeyProofTrieRoot::from_proof(proof.end_proof())?;
+
+        let key_proof = KeyProofTrieRoot::merge_proof_roots(start_proof, end_proof)?
             .unwrap_or_else(KeyProofTrieRoot::empty);
 
-        let kvp = KeyValueTrieRoot::from_pairs(range_proof.key_values())?
+        let kvp = KeyValueTrieRoot::from_pairs(proof.key_values())?
             .unwrap_or_else(KeyValueTrieRoot::empty);
 
-        Self::join(proof, kvp)
+        Self::join(key_proof, kvp)
     }
 
     /// Recursively joins a proof trie with a key-value trie.
@@ -431,8 +564,11 @@ impl<'a> KeyProofTrieRoot<'a> {
     ///
     /// Each node in the slice must be a strict prefix of the following node. And,
     /// each child node must be referenced by its parent.
-    fn from_proof(nodes: &'a [ProofNode]) -> Result<Option<Self>, ProofError> {
+    fn from_proof(
+        nodes: &'a Proof<impl ProofCollection<Node = ProofNode>>,
+    ) -> Result<Option<Self>, ProofError> {
         nodes
+            .as_ref()
             .iter()
             .rev()
             .try_fold(None::<Self>, |child, parent| match child {
@@ -621,6 +757,86 @@ impl KeyProofTrieEdge<'_> {
                 }
             }
         }
+    }
+}
+
+struct Shunt<'a, P, I> {
+    parent_path: I,
+    key: P,
+    value: Option<ValueDigest<&'a [u8]>>,
+    child_hashes: Children<HashType>,
+}
+
+impl<'a, P, I> Shunt<'a, P, I>
+where
+    P: Nibbles<'a> + Copy,
+    I: Iterator<Item = u8> + Clone,
+{
+    const fn new(
+        parent_path: I,
+        key: P,
+        value: Option<ValueDigest<&'a [u8]>>,
+        child_hashes: Children<HashType>,
+    ) -> Self {
+        Self {
+            parent_path,
+            key,
+            value,
+            child_hashes,
+        }
+    }
+
+    fn to_hash(&self) -> HashType {
+        firewood_storage::Preimage::to_hash(self)
+    }
+}
+
+impl<'a, P, I> std::fmt::Debug for Shunt<'a, P, I>
+where
+    P: Nibbles<'a> + Copy,
+    I: Iterator<Item = u8> + Clone,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        struct ParentPath<'a, I>(&'a I);
+
+        impl<I: Iterator<Item = u8> + Clone> std::fmt::Debug for ParentPath<'_, I> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                super::path::display_nibbles(f, self.0.clone())
+            }
+        }
+
+        struct DebugNibbles<P>(P);
+
+        impl<'a, P: Nibbles<'a> + Copy> std::fmt::Debug for DebugNibbles<P> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                super::path::display_nibbles(f, self.0.nibbles_iter())
+            }
+        }
+
+        f.debug_struct("Shunt")
+            .field("parent_path", &ParentPath(&self.parent_path))
+            .field("key", &DebugNibbles(self.key))
+            .field("value", &self.value.as_ref().map(hex::encode))
+            .field("child_hashes", &self.child_hashes)
+            .finish()
+    }
+}
+
+impl<'a, P: Nibbles<'a> + Copy, I: Iterator<Item = u8> + Clone> Hashable for Shunt<'a, P, I> {
+    fn parent_prefix_path(&self) -> impl Iterator<Item = u8> + Clone {
+        self.parent_path.clone()
+    }
+
+    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
+        self.key.nibbles_iter()
+    }
+
+    fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {
+        self.value
+    }
+
+    fn children(&self) -> Children<HashType> {
+        self.child_hashes.clone()
     }
 }
 

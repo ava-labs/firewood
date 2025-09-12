@@ -159,6 +159,15 @@ pub(super) enum RangeProofPath<'a> {
     Widened(WidenedPath<'a>),
 }
 
+impl std::fmt::Display for RangeProofPath<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            RangeProofPath::Packed(p) => write!(f, "{p}"),
+            RangeProofPath::Widened(w) => write!(f, "{w}"),
+        }
+    }
+}
+
 pub(super) struct SplitKey<L, R = L> {
     pub common_prefix: L,
     pub lhs_suffix: L,
@@ -246,7 +255,7 @@ impl<'a> From<WidenedPath<'a>> for RangeProofPath<'a> {
 }
 
 pub(super) trait Nibbles<'a>: Sized {
-    fn nibbles_iter(self) -> impl Iterator<Item = u8> + 'a;
+    fn nibbles_iter(self) -> impl Iterator<Item = u8> + Clone + 'a;
 
     fn split_at(self, mid: usize) -> (Self, Self);
 
@@ -262,7 +271,7 @@ pub(super) trait Nibbles<'a>: Sized {
 }
 
 impl<'a> Nibbles<'a> for PackedPath<'a> {
-    fn nibbles_iter(self) -> impl Iterator<Item = u8> + 'a {
+    fn nibbles_iter(self) -> impl Iterator<Item = u8> + Clone + 'a {
         let (first, middle, last) = self.as_parts();
         first
             .into_iter()
@@ -313,7 +322,7 @@ impl<'a> Nibbles<'a> for PackedPath<'a> {
 }
 
 impl<'a> Nibbles<'a> for WidenedPath<'a> {
-    fn nibbles_iter(self) -> impl Iterator<Item = u8> + 'a {
+    fn nibbles_iter(self) -> impl Iterator<Item = u8> + Clone + 'a {
         #![expect(clippy::indexing_slicing)]
         self.bytes[self.head..self.tail].iter().copied()
     }
@@ -361,7 +370,7 @@ impl<'a> Nibbles<'a> for WidenedPath<'a> {
 }
 
 impl<'a> Nibbles<'a> for RangeProofPath<'a> {
-    fn nibbles_iter(self) -> impl Iterator<Item = u8> + 'a {
+    fn nibbles_iter(self) -> impl Iterator<Item = u8> + Clone + 'a {
         match self {
             RangeProofPath::Packed(p) => EitherIter::A(p.nibbles_iter()),
             RangeProofPath::Widened(w) => EitherIter::B(w.nibbles_iter()),
@@ -537,7 +546,7 @@ where
 }
 
 #[cfg(not(feature = "branch_factor_256"))]
-fn display_nibbles(
+pub(super) fn display_nibbles(
     mut f: impl std::fmt::Write,
     nibbles: impl Iterator<Item = u8>,
 ) -> std::fmt::Result {
@@ -553,7 +562,7 @@ fn display_nibbles(
 }
 
 #[cfg(feature = "branch_factor_256")]
-fn display_nibbles(
+pub(super) fn display_nibbles(
     mut f: impl std::fmt::Write,
     nibbles: impl Iterator<Item = u8>,
 ) -> std::fmt::Result {

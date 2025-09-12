@@ -7,7 +7,7 @@ pub(crate) mod tests;
 use crate::iter::{MerkleKeyValueIter, PathIterator, TryExtend};
 use crate::proof::{Proof, ProofCollection, ProofError, ProofNode, verify_opt_value_digest};
 use crate::range_proof::RangeProof;
-use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
+use crate::v2::api::{self, FrozenProof, FrozenRangeProof, HashKey, KeyType, ValueType};
 use firewood_storage::{
     BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader, ImmutableProposal,
     IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore,
@@ -257,7 +257,7 @@ impl<T: TrieReader> Merkle<T> {
         first_key: Option<impl KeyType>,
         last_key: Option<impl KeyType>,
         root_hash: &TrieHash,
-        proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
+        proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
     ) -> Result<(), api::Error> {
         let first_key = first_key.map(Path::from).unwrap_or_default();
         let last_key = last_key.map(Path::from).unwrap_or_default();
@@ -441,12 +441,21 @@ impl<T: TrieReader> Merkle<T> {
 
     fn verify_reconstructed_trie_root(
         &self,
-        _proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
-        _root_hash: &TrieHash,
+        proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
+        root_hash: &HashKey,
     ) -> Result<(), api::Error> {
-        todo!(
-            "implement verify_reconstructed_trie_root by replacing hashes where needed and reconstructing the root"
-        )
+        let result = crate::proofs::HashedRangeProofTrieRoot::from_range_proof(proof)?;
+        if *root_hash == result.computed {
+            counter!("firewood.proofs.valid_range_proof").increment(1);
+            Ok(())
+        } else {
+            counter!("firewood.proofs.invalid_range_proof").increment(1);
+            Err(api::Error::InvalidHash {
+                reason: api::InvalidHashReason::MismatchedHash,
+                invalid: Some(result.computed.into()),
+                expected: Some(root_hash.clone()),
+            })
+        }
     }
 
     /// Get the value for the given key from the proof key-values. If not found,
