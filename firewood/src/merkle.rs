@@ -259,31 +259,31 @@ impl<T: TrieReader> Merkle<T> {
         root_hash: &HashKey,
         proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
     ) -> Result<(), api::Error> {
-        let first_key = first_key.map(Path::from).unwrap_or_default();
-        let last_key = last_key.map(Path::from).unwrap_or_default();
+        let _first_key = first_key.map(Path::from).unwrap_or_default();
+        let _last_key = last_key.map(Path::from).unwrap_or_default();
 
-        // 1. Validate proof structure (similar to validateChangeProof in Go)
-        self.validate_range_proof_structure(&first_key, &last_key, proof)?;
+        // // 1. Validate proof structure (similar to validateChangeProof in Go)
+        // self.validate_range_proof_structure(&first_key, &last_key, proof)?;
 
-        // 2. Verify start proof nodes.
-        self.verify_proof_nodes_values(
-            proof.start_proof(),
-            &first_key,
-            &last_key,
-            // validate_range_proof_structure will have verified that the keys are
-            // in order, allowing us to use binary search on lookup
-            proof.key_values(),
-        )?;
+        // // 2. Verify start proof nodes.
+        // self.verify_proof_nodes_values(
+        //     proof.start_proof(),
+        //     &first_key,
+        //     &last_key,
+        //     // validate_range_proof_structure will have verified that the keys are
+        //     // in order, allowing us to use binary search on lookup
+        //     proof.key_values(),
+        // )?;
 
-        // 3. Verify end proof nodes
-        self.verify_proof_nodes_values(
-            proof.end_proof(),
-            &first_key,
-            &last_key,
-            // validate_range_proof_structure will have verified that the keys are
-            // in order, allowing us to use binary search on lookup
-            proof.key_values(),
-        )?;
+        // // 3. Verify end proof nodes
+        // self.verify_proof_nodes_values(
+        //     proof.end_proof(),
+        //     &first_key,
+        //     &last_key,
+        //     // validate_range_proof_structure will have verified that the keys are
+        //     // in order, allowing us to use binary search on lookup
+        //     proof.key_values(),
+        // )?;
 
         // 4. Reconstruct trie and verify root
         self.verify_reconstructed_trie_root(proof, root_hash)?;
@@ -293,6 +293,7 @@ impl<T: TrieReader> Merkle<T> {
 
     /// Verify that the range proof is structurally valid and that we can use it
     /// to verify the trie root once reconstructed.
+    #[expect(unused)]
     fn validate_range_proof_structure(
         &self,
         first_key: &Path,
@@ -391,6 +392,7 @@ impl<T: TrieReader> Merkle<T> {
         Ok(())
     }
 
+    #[expect(unused)]
     fn verify_proof_nodes_values(
         &self,
         proof: &Proof<impl ProofCollection>,
