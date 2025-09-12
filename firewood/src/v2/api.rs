@@ -98,7 +98,7 @@ pub enum InvalidHashReason {
 }
 
 /// Errors returned through the API
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
     /// A given hash key is not available in the database
@@ -167,6 +167,12 @@ pub enum Error {
     /// An invalid root hash was provided
     #[error(transparent)]
     InvalidRootHash(#[from] firewood_storage::InvalidTrieHashLength),
+}
+
+impl std::fmt::Debug for Error {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:#}")
+    }
 }
 
 impl From<RevisionManagerError> for Error {

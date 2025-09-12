@@ -18,7 +18,7 @@ use thiserror::Error;
 
 use crate::merkle::{Key, Value};
 
-#[derive(Debug, Error)]
+#[derive(Error)]
 /// Reasons why a proof is invalid
 pub enum ProofError {
     /// Error when the kev-values in in the provided proof are not in strict ascending order
@@ -27,12 +27,14 @@ pub enum ProofError {
 
     /// Unexpected hash
     #[error(
-        "unexpected hash for key {}: expected {expected:?} but got {actual:?}",
+        "unexpected hash for key {} while {context}: expected {expected:?} but got {actual:?}",
         hex::encode(key)
     )]
     UnexpectedHash {
         /// The key where the unexpected hash was found
         key: Key,
+        /// The context of the error
+        context: &'static str,
         /// The expected hash
         expected: HashType,
         /// The actual hash found in the proof
@@ -171,6 +173,12 @@ pub enum ProofError {
     },
 }
 
+impl std::fmt::Debug for ProofError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:#}")
+    }
+}
+
 #[derive(Clone, PartialEq, Eq)]
 /// A node in a proof.
 pub struct ProofNode {
@@ -293,6 +301,7 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             if actual_hash != expected_hash {
                 return Err(ProofError::UnexpectedHash {
                     key: key_bytes.into(),
+                    context: "verifying value digest",
                     expected: expected_hash,
                     actual: actual_hash,
                 });

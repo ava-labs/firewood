@@ -740,6 +740,7 @@ impl KeyProofTrieEdge<'_> {
                                 .nibbles_iter()
                                 .chain(Some(child_nibble)),
                         ),
+                        context: "merging two remote edges with different hashes",
                         expected: lhs,
                         actual: rhs,
                     })
@@ -752,6 +753,7 @@ impl KeyProofTrieEdge<'_> {
                 } else {
                     Err(ProofError::UnexpectedHash {
                         key: root.key.with_prefix().to_packed_key(),
+                        context: "merging a remote edge with a described edge with different hashes",
                         expected: hash,
                         actual: id,
                     })
@@ -767,6 +769,7 @@ impl KeyProofTrieEdge<'_> {
                 } else {
                     Err(ProofError::UnexpectedHash {
                         key: l_root.key.with_prefix().to_packed_key(),
+                        context: "merging two described edges with different hashes",
                         expected: l_id,
                         actual: r_id,
                     })

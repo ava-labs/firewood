@@ -20,6 +20,7 @@ fn test_missing_key_proof() {
         assert!(!proof.is_empty());
         assert!(proof.len() == 1);
 
+        firewood_storage::logger::trace!("Proof: {proof:#?}");
         proof.verify(key, None::<&[u8]>, &root_hash).unwrap(); // called `Result::unwrap()` on an `Err` value: UnexpectedHash
     }
 }
