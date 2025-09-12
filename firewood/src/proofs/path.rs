@@ -110,7 +110,7 @@ impl std::fmt::Display for PackedPath<'_> {
     }
 }
 
-/// Represents a view over a [`Path`] where each nibble has already been widened
+/// Represents a view over a `Path` where each nibble has already been widened
 /// into a full byte.
 ///
 /// Also acts as a double-ended cursor over the nibbles, but we do not need to

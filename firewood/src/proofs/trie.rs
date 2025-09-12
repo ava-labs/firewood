@@ -219,7 +219,7 @@ impl<'a> RangeProofTrieRoot<'a> {
     /// The key-value trie must be a subset of the proof trie and must not introduce
     /// any new children to discovered [`KeyProofTrieRoot`] nodes. However, key-
     /// value nodes may introduce any number of nodes that fill in a
-    /// [`KeyProofTrieNode::Remote`] node.
+    /// [`KeyProofTrieEdge::Remote`] node.
     fn join(proof: KeyProofTrieRoot<'a>, kvp: KeyValueTrieRoot<'a>) -> Result<Self, ProofError> {
         // provide kvp first so SplitKey uses the PackedKey for the common prefix
         let split = SplitKey::new(kvp.key, proof.key);
@@ -580,11 +580,11 @@ impl<'a> KeyProofTrieRoot<'a> {
 
     /// Merges two trie roots, as returned by [`Self::from_proof`].
     ///
-    /// Every node in both tries must be equal by hash. [`KeyProofTrieNode::Local`]
+    /// Every node in both tries must be equal by hash. [`KeyProofTrieEdge::Described`]
     /// nodes in both tries must have the same key and value digest. The resulting
     /// trie will contain all nodes from both tries and resolve any
-    /// [`KeyProofTrieNode::Remote`] nodes to the corresponding
-    /// [`KeyProofTrieNode::Local`] if one is present in the opposite trie.
+    /// [`KeyProofTrieEdge::Remote`] nodes to the corresponding
+    /// [`KeyProofTrieEdge::Described`] if one is present in the opposite trie.
     ///
     /// Children that are present in both tries will be merged recursively. Nodes
     /// that are in both tries must have the same key and value digest.

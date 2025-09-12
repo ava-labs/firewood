@@ -62,7 +62,6 @@ test-case.workspace = true
 hash-db = "0.16.0"
 plain_hasher = "0.2.3"
 rlp = "0.6.1"
-sha2.workspace = true
 sha3 = "0.10.8"
 
 [[bench]]
