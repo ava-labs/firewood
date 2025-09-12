@@ -9,7 +9,7 @@ use crate::value::BorrowedBytes;
 
 /// A `KeyValue` represents a key-value pair, passed to the FFI.
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Hash)]
 pub struct KeyValuePair<'a> {
     pub key: BorrowedBytes<'a>,
     pub value: BorrowedBytes<'a>,

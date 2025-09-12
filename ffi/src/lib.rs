@@ -36,6 +36,7 @@ mod value;
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char};
 use std::fmt::{self, Display, Formatter, LowerHex};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::ops::Deref;
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -65,6 +66,19 @@ static ID_COUNTER: AtomicU32 = AtomicU32::new(1);
 #[doc(hidden)]
 fn next_id() -> ProposalId {
     ID_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Computes the hash of key-value pairs if debug logging is enabled.
+/// Returns Some(hash) if debug is enabled, None otherwise.
+#[doc(hidden)]
+fn compute_values_hash_if_debug(values: &[KeyValuePair<'_>]) -> Option<u64> {
+    if firewood::logger::debug_enabled() {
+        let mut hasher = DefaultHasher::new();
+        values.hash(&mut hasher);
+        Some(hasher.finish())
+    } else {
+        None
+    }
 }
 
 /// Invokes a closure and returns the result as a [`CResult`].
@@ -285,7 +299,9 @@ fn propose_on_db<'p>(
         .insert(new_id, proposal);
 
     // Note: do this before storing the ID in Value; at that point it is not safe to print it.
-    debug!("propose_on_db: id={new_id} hash={root_hash:x}");
+    if let Some(values_hash) = compute_values_hash_if_debug(values) {
+        debug!("propose_on_db: vh={values_hash} id={new_id} hash={root_hash:x}");
+    }
 
     root_hash.len = new_id as usize; // Set the length to the proposal ID
     Ok(root_hash)
@@ -349,8 +365,12 @@ fn propose_on_proposal(
         .map_err(|_| "proposal lock is poisoned")?
         .insert(new_id, new_proposal);
 
-    // Note: do this before storing the ID in Value; at that point it is not safe to print it.
-    debug!("propose_on_proposal: id={new_id} hash={root_hash:x}");
+    // Note: do this before storing the ID in root_hash; at that point it is not safe to print it.
+    if let Some(values_hash) = compute_values_hash_if_debug(values) {
+        debug!(
+            "propose_on_proposal({proposal_id}): vh={values_hash} id={new_id} hash={root_hash:x}"
+        );
+    }
 
     root_hash.len = new_id as usize; // Set the length to the proposal ID
     Ok(root_hash)
