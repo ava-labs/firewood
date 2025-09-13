@@ -8,13 +8,13 @@ mod merged;
 mod proof;
 mod shunt;
 
-use firewood_storage::Path;
+use firewood_storage::logger::trace;
 
 use crate::{
     proof::{ProofCollection, ProofError, ProofNode, UnexpectedHashError},
     proofs::{
         VerifyRangeProofArguments,
-        path::{Nibbles, PackedPath, PathGuard, WidenedPath},
+        path::PathGuard,
         trie::{keyvalues::KeyValueTrieRoot, merged::RangeProofTrieRoot, proof::KeyProofTrieRoot},
     },
     v2::api::{KeyType, ValueType},
@@ -52,6 +52,7 @@ where
         let kvp_bounds = kvp
             .as_ref()
             .map(|kvp| (kvp.lower_bound(), kvp.upper_bound()));
+        trace!("KVP bounds: {kvp_bounds:?}");
 
         let lower_bound_proof = KeyProofTrieRoot::new(self.range_proof.start_proof())?;
         let upper_bound_proof = KeyProofTrieRoot::new(self.range_proof.end_proof())?;
@@ -59,6 +60,7 @@ where
         let proof_bounds = proof
             .as_ref()
             .map(|proof| (proof.lower_bound(), proof.upper_bound()));
+        trace!("Proof bounds: {proof_bounds:?}");
 
         let root = match (proof, kvp) {
             (None, None) => Ok(either::Left(RangeProofTrieRoot::empty())),

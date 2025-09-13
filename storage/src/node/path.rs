@@ -241,7 +241,7 @@ impl<'a> NibblesIterator<'a> {
 
     #[inline(always)]
     const fn is_empty(&self) -> bool {
-        self.head == self.tail
+        self.head >= self.tail
     }
 
     /// Returns a new `NibblesIterator` over the given `data`.

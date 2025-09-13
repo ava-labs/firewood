@@ -1,6 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use assert_matches::assert_matches;
+
 use super::*;
 use crate::range_proof::RangeProof;
 
@@ -68,7 +70,35 @@ fn test_range_proof() {
     }
 }
 
+/// The nature of the error makes an indeterminate error possible, so we match
+/// on the generic proof error.
+fn default_verify_error(err: &api::Error, msg: &str) {
+    assert_matches!(err, api::Error::ProofError(_), "{msg}");
+}
+fn expect_value_mismatch(err: &api::Error, msg: &str) {
+    assert_matches!(
+        err,
+        api::Error::ProofError(ProofError::ValueMismatch),
+        "{msg}, got {err}"
+    );
+}
+fn expect_unexpected_hash(err: &api::Error, msg: &str) {
+    assert_matches!(
+        err,
+        api::Error::ProofError(ProofError::UnexpectedHash(_)),
+        "{msg}, got {err}"
+    );
+}
+fn expect_non_monotonic_error(err: &api::Error, msg: &str) {
+    assert_matches!(
+        err,
+        api::Error::ProofError(ProofError::NonMonotonicIncreaseRange),
+        "{msg}, got {err}"
+    );
+}
+
 #[test]
+#[expect(clippy::too_many_lines)]
 // Tests a few cases which the proof is wrong.
 // The prover is expected to detect the error.
 // FIXME: 30.213s runtime
@@ -79,6 +109,7 @@ fn test_bad_range_proof() {
     let mut items = set.iter().collect::<Vec<_>>();
     items.sort_unstable();
     let merkle = init_merkle(items.clone());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
 
     for _ in 0..10 {
         let start = rng.random_range(0..items.len());
@@ -88,10 +119,8 @@ fn test_bad_range_proof() {
             continue;
         }
 
-        let _proof = merkle
-            .prove(items[start].0)
-            .unwrap()
-            .join(merkle.prove(items[end - 1].0).unwrap());
+        let start_proof = merkle.prove(items[start].0).unwrap();
+        let end_proof = merkle.prove(items[end - 1].0).unwrap();
 
         let mut keys: Vec<[u8; 32]> = Vec::new();
         let mut vals: Vec<[u8; 20]> = Vec::new();
@@ -102,22 +131,44 @@ fn test_bad_range_proof() {
 
         let test_case: u32 = rng.random_range(0..6);
         let index = rng.random_range(0..end - start);
+        let message;
+        let verify_error: fn(&api::Error, &str);
         match test_case {
             0 => {
                 // Modified key
-                keys[index] = rng.random::<[u8; 32]>(); // In theory it can't be same
+                // In theory it can't be same
+                let old_key = std::mem::replace(&mut keys[index], rng.random::<[u8; 32]>());
+                message = format!(
+                    "test_case {test_case}: modified index {index} key from {} to {}",
+                    hex::encode(old_key),
+                    hex::encode(keys[index]),
+                );
+                verify_error = default_verify_error;
             }
             1 => {
                 // Modified val
-                vals[index] = rng.random::<[u8; 20]>(); // In theory it can't be same
+                // In theory it can't be same
+                let old_val = std::mem::replace(&mut vals[index], rng.random::<[u8; 20]>());
+                message = format!(
+                    "test_case {test_case}: modified index {index} val from {} to {}",
+                    hex::encode(old_val),
+                    hex::encode(vals[index]),
+                );
+                verify_error = expect_value_mismatch;
             }
             2 => {
                 // Gapped entry slice
                 if index == 0 || index == end - start - 1 {
                     continue;
                 }
-                keys.remove(index);
-                vals.remove(index);
+                let removed_key = keys.remove(index);
+                let removed_val = vals.remove(index);
+                message = format!(
+                    "test_case {test_case}: removed index {index} key {} val {}",
+                    hex::encode(removed_key),
+                    hex::encode(removed_val),
+                );
+                verify_error = expect_unexpected_hash;
             }
             3 => {
                 // Out of order
@@ -128,41 +179,49 @@ fn test_bad_range_proof() {
                 }
                 keys.swap(index_1, index_2);
                 vals.swap(index_1, index_2);
+                message = format!(
+                    "test_case {test_case}: swapped index {index_1} and {index_2} (key {} with key {})",
+                    hex::encode(keys[index_2]),
+                    hex::encode(keys[index_1]),
+                );
+                verify_error = expect_non_monotonic_error;
             }
             4 => {
                 // Set random key to empty, do nothing
-                keys[index] = [0; 32];
+                let old_key = std::mem::take(&mut keys[index]);
+                message = format!(
+                    "test_case {test_case}: modified index {index} key from {} to {}",
+                    hex::encode(old_key),
+                    hex::encode(keys[index]),
+                );
+                verify_error = default_verify_error;
             }
             5 => {
                 // Set random value to nil
-                vals[index] = [0; 20];
+                let old_val = std::mem::take(&mut vals[index]);
+                message = format!(
+                    "test_case {test_case}: modified index {index} val from {} to {}",
+                    hex::encode(old_val),
+                    hex::encode(vals[index]),
+                );
+                verify_error = expect_unexpected_hash;
             }
             _ => unreachable!(),
         }
 
-        let key_values: KeyValuePairs = keys
-            .iter()
-            .zip(vals.iter())
-            .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-            .collect();
-
-        let start_proof = merkle.prove(items[start].0).unwrap();
-        let end_proof = merkle.prove(items[end - 1].0).unwrap();
-
+        let key_values = keys.iter().zip(vals.iter()).collect::<Vec<_>>();
         let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
 
-        let root_hash = merkle.nodestore().root_hash().unwrap();
+        let err = merkle
+            .verify_range_proof(
+                Some(items[start].0),
+                Some(items[end - 1].0),
+                &root_hash,
+                &range_proof,
+            )
+            .expect_err(&message);
 
-        assert!(
-            merkle
-                .verify_range_proof(
-                    Some(items[start].0),
-                    Some(items[end - 1].0),
-                    &root_hash,
-                    &range_proof,
-                )
-                .is_err()
-        );
+        verify_error(&err, &message);
     }
 }
 

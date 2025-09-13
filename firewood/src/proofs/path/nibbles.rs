@@ -49,10 +49,20 @@ pub(crate) struct CollectedNibbles {
 }
 
 impl CollectedNibbles {
+    pub fn empty() -> Self {
+        Self {
+            nibbles: smallvec::SmallVec::new(),
+        }
+    }
+
     pub fn new(nibbles: impl Nibbles) -> Self {
         Self {
             nibbles: nibbles.nibbles_iter().collect(),
         }
+    }
+
+    pub fn extend(&mut self, nibbles: impl Nibbles) {
+        self.nibbles.extend(nibbles.nibbles_iter());
     }
 }
 
@@ -159,7 +169,7 @@ pub(super) fn display_nibbles(
     if let Some(n) = iter.next() {
         write!(f, "{n:x}")?;
         for n in iter {
-            write!(f, " {n:x}")?;
+            write!(f, "{n:x}")?;
         }
     }
     f.write_str(">")
@@ -175,7 +185,7 @@ pub(super) fn display_nibbles(
     if let Some(n) = iter.next() {
         write!(f, "{n:x}")?;
         for n in iter {
-            write!(f, " {n:02x}")?;
+            write!(f, "{n:02x}")?;
         }
     }
     f.write_str(">")

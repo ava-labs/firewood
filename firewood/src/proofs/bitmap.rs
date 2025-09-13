@@ -11,21 +11,47 @@ pub(super) struct ChildrenMap([u8; ChildrenMap::SIZE]);
 impl ChildrenMap {
     const SIZE: usize = firewood_storage::BranchNode::MAX_CHILDREN / 8;
 
+    pub const fn empty() -> Self {
+        Self([0; Self::SIZE])
+    }
+
+    pub const fn get(self, index: usize) -> bool {
+        #![expect(clippy::indexing_slicing)]
+        self.0[index / 8] & (1 << (index % 8)) != 0
+    }
+
+    pub const fn set(&mut self, index: usize) {
+        #![expect(clippy::indexing_slicing)]
+        self.0[index / 8] |= 1 << (index % 8);
+    }
+
+    #[expect(unused)]
+    pub const fn unset(&mut self, index: usize) {
+        #![expect(clippy::indexing_slicing)]
+        self.0[index / 8] &= !(1 << (index % 8));
+    }
+
+    #[expect(unused)]
+    pub fn first(self) -> Option<usize> {
+        self.iter_indices().next()
+    }
+
+    #[expect(unused)]
+    pub fn last(self) -> Option<usize> {
+        self.iter_indices().last()
+    }
+
     /// Create a new `ChildrenMap` from the given children array.
     pub fn new<T>(children: &Children<T>) -> Self {
-        let mut map = [0_u8; Self::SIZE];
+        let mut map = Self::empty();
 
         for (i, child) in children.iter().enumerate() {
             if child.is_some() {
-                let (idx, bit) = (i / 8, i % 8);
-                #[expect(clippy::indexing_slicing)]
-                {
-                    map[idx] |= 1 << bit;
-                }
+                map.set(i);
             }
         }
 
-        Self(map)
+        map
     }
 
     #[cfg(test)]
@@ -34,10 +60,7 @@ impl ChildrenMap {
     }
 
     pub fn iter_indices(self) -> impl Iterator<Item = usize> {
-        (0..firewood_storage::BranchNode::MAX_CHILDREN).filter(
-            #[expect(clippy::indexing_slicing)]
-            move |i| self.0[i / 8] & (1 << (i % 8)) != 0,
-        )
+        (0..firewood_storage::BranchNode::MAX_CHILDREN).filter(move |&i| self.get(i))
     }
 }
 
@@ -64,7 +87,12 @@ impl std::fmt::Binary for ChildrenMap {
         let [a, b] = bytemuck::cast::<_, [[u8; 16]; 2]>(self.0);
         let a = u128::from_le_bytes(a);
         let b = u128::from_le_bytes(b);
-        write!(f, "{a:0128b}{b:0128b}")
+        // NOTE: print `b` before `a` so that the bits are in the expected order.
+        //
+        // Bytes are displayed in big-endian order (most to least significant),
+        // but stored in little-endian order (least to most significant), so the
+        // swap is necessary to display the bits in the expected order.
+        write!(f, "{b:0128b}{a:0128b}")
     }
 }
 

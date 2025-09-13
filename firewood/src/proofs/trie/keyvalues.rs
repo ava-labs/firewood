@@ -1,12 +1,14 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::{BranchNode, Children, Path};
+use firewood_storage::{BranchNode, Children};
 
 use crate::{
     proof::{DuplicateKeysInProofError, ProofError},
     proofs::{
-        path::{Nibbles, PackedPath, PathGuard, PathNibble, SplitNibbles, SplitPath},
+        path::{
+            CollectedNibbles, Nibbles, PackedPath, PathGuard, PathNibble, SplitNibbles, SplitPath,
+        },
         trie::counter::NibbleCounter,
     },
 };
@@ -49,11 +51,30 @@ impl<'a> KeyValueTrieRoot<'a> {
         }
     }
 
-    pub fn lower_bound(&self) -> (Path, &Self) {
-        let mut path = Path::new();
+    #[expect(unused)]
+    fn new_v2<K, V>(
+        mut leading_path: PathGuard<'_>,
+        pairs: &'a [(K, V)],
+    ) -> Result<Option<Self>, ProofError>
+    where
+        K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
+    {
+        // we need to ensure that the keys are sorted so that we can efficiently build a trie.
+        if !pairs.iter().is_sorted_by_key(|(k, _)| k.as_ref()) {
+            return Err(ProofError::NonMonotonicIncreaseRange);
+        }
+
+        let mut bitmap = crate::proofs::bitmap::ChildrenMap::empty();
+
+        todo!();
+    }
+
+    pub fn lower_bound(&self) -> (CollectedNibbles, &Self) {
+        let mut path = CollectedNibbles::empty();
         let mut this = self;
         loop {
-            path.extend(this.partial_path.nibbles_iter());
+            path.extend(this.partial_path);
             let Some((nibble, node)) = this
                 .children
                 .iter()
@@ -62,16 +83,16 @@ impl<'a> KeyValueTrieRoot<'a> {
             else {
                 return (path, this);
             };
-            path.extend([nibble]);
+            path.extend(PathNibble(nibble));
             this = node;
         }
     }
 
-    pub fn upper_bound(&self) -> (Path, &Self) {
-        let mut path = Path::new();
+    pub fn upper_bound(&self) -> (CollectedNibbles, &Self) {
+        let mut path = CollectedNibbles::empty();
         let mut this = self;
         loop {
-            path.extend(this.partial_path.nibbles_iter());
+            path.extend(this.partial_path);
             let Some((nibble, node)) = this
                 .children
                 .iter()
@@ -81,7 +102,7 @@ impl<'a> KeyValueTrieRoot<'a> {
             else {
                 break (path, this);
             };
-            path.extend([nibble]);
+            path.extend(PathNibble(nibble));
             this = node;
         }
     }

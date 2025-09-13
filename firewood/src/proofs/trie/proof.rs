@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::{BranchNode, Children, HashType, Path, ValueDigest, logger::trace};
+use firewood_storage::{BranchNode, Children, HashType, ValueDigest, logger::trace};
 
 use crate::{
     proof::{
@@ -9,7 +9,9 @@ use crate::{
         UnexpectedHashError,
     },
     proofs::{
-        path::{Nibbles, PathGuard, SplitNibbles, SplitPath, WidenedPath},
+        path::{
+            CollectedNibbles, Nibbles, PathGuard, PathNibble, SplitNibbles, SplitPath, WidenedPath,
+        },
         trie::counter::NibbleCounter,
     },
 };
@@ -56,11 +58,11 @@ impl<'a> KeyProofTrieRoot<'a> {
             })
     }
 
-    pub fn lower_bound(&self) -> (Path, &KeyProofTrieRoot<'_>) {
-        let mut path = Path::new();
+    pub fn lower_bound(&self) -> (CollectedNibbles, &KeyProofTrieRoot<'_>) {
+        let mut path = CollectedNibbles::empty();
         let mut this = self;
         loop {
-            path.extend(this.partial_path.nibbles_iter());
+            path.extend(this.partial_path);
             let Some((nibble, child)) = this.children.iter().enumerate().find_map(|(i, child)| {
                 child
                     .as_deref()
@@ -69,16 +71,16 @@ impl<'a> KeyProofTrieRoot<'a> {
             }) else {
                 return (path, this);
             };
-            path.extend([nibble]);
+            path.extend(PathNibble(nibble));
             this = child;
         }
     }
 
-    pub fn upper_bound(&self) -> (Path, &KeyProofTrieRoot<'_>) {
-        let mut path = Path::new();
+    pub fn upper_bound(&self) -> (CollectedNibbles, &KeyProofTrieRoot<'_>) {
+        let mut path = CollectedNibbles::empty();
         let mut this = self;
         loop {
-            path.extend(this.partial_path.nibbles_iter());
+            path.extend(this.partial_path);
             let Some((nibble, child)) =
                 this.children
                     .iter()
@@ -93,7 +95,7 @@ impl<'a> KeyProofTrieRoot<'a> {
             else {
                 return (path, this);
             };
-            path.extend([nibble]);
+            path.extend(PathNibble(nibble));
             this = child;
         }
     }
