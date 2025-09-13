@@ -4,14 +4,18 @@
 mod bitmap;
 mod de;
 mod header;
+mod path;
 mod proof_type;
 mod reader;
 mod ser;
 #[cfg(test)]
 mod tests;
+mod trie;
 
 pub use self::header::InvalidHeader;
+pub(crate) use self::path::BytesIter;
 pub use self::reader::ReadError;
+pub(crate) use self::trie::HashedRangeProof;
 
 mod magic {
     pub const PROOF_HEADER: &[u8; 8] = b"fwdproof";

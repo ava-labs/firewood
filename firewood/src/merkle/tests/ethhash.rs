@@ -86,11 +86,6 @@ fn test_eth_compatible_accounts(
     use sha3::Digest as _;
     use sha3::Keccak256;
 
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace"))
-        .is_test(true)
-        .try_init()
-        .ok();
-
     let account = make_key(account);
     let expected_key_hash = Keccak256::digest(&account);
 
@@ -126,6 +121,7 @@ fn make_key(hex_str: &str) -> Key {
 #[test]
 fn test_root_hash_random_deletions() {
     use rand::seq::SliceRandom;
+
     let rng = firewood_storage::SeededRng::from_option(Some(42));
     let max_len0 = 8;
     let max_len1 = 4;

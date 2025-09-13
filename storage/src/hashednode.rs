@@ -92,6 +92,17 @@ pub enum ValueDigest<T> {
     Hash(HashType),
 }
 
+impl<T> ValueDigest<T> {
+    /// Map the the inner value using the given function.
+    pub fn map<U, F: FnOnce(T) -> U>(self, f: F) -> ValueDigest<U> {
+        match self {
+            Self::Value(v) => ValueDigest::Value(f(v)),
+            #[cfg(not(feature = "ethhash"))]
+            Self::Hash(h) => ValueDigest::Hash(h),
+        }
+    }
+}
+
 impl<T: AsRef<[u8]>> ValueDigest<T> {
     /// Verifies that the value or hash matches the expected value.
     pub fn verify(&self, expected: impl AsRef<[u8]>) -> bool {

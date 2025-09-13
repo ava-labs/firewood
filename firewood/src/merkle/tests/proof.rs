@@ -278,7 +278,8 @@ fn proof_path_construction_and_corruption() {
     // Node traversal should fail
     assert!(matches!(
         err,
-        crate::proof::ProofError::NodeNotInTrie | crate::proof::ProofError::UnexpectedHash
+        crate::proof::ProofError::NodeNotInTrie { .. }
+            | crate::proof::ProofError::UnexpectedHash { .. }
     ));
 }
 

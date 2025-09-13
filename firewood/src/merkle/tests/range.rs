@@ -20,7 +20,8 @@ fn test_missing_key_proof() {
         assert!(!proof.is_empty());
         assert!(proof.len() == 1);
 
-        proof.verify(key, None::<&[u8]>, &root_hash).unwrap();
+        firewood_storage::logger::trace!("Proof: {proof:#?}");
+        proof.verify(key, None::<&[u8]>, &root_hash).unwrap(); // called `Result::unwrap()` on an `Err` value: UnexpectedHash
     }
 }
 
@@ -63,14 +64,14 @@ fn test_range_proof() {
                 &root_hash,
                 &range_proof,
             )
-            .unwrap();
+            .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
     }
 }
 
 #[test]
 // Tests a few cases which the proof is wrong.
 // The prover is expected to detect the error.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 30.213s runtime
 fn test_bad_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -218,7 +219,7 @@ fn test_range_proof_with_non_existent_proof() {
 
         merkle
             .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof)
-            .unwrap();
+            .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
     }
 
     // Special case, two edge proofs for two edge key.
@@ -246,7 +247,7 @@ fn test_range_proof_with_non_existent_proof() {
 // Tests such scenarios:
 // - There exists a gap between the first element and the left edge proof
 // - There exists a gap between the last element and the right edge proof
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 29.882s runtime
 fn test_range_proof_with_invalid_non_existent_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -353,7 +354,7 @@ fn test_one_element_range_proof() {
             &root_hash,
             &range_proof,
         )
-        .unwrap();
+        .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
 
     // One element with left non-existent edge proof
     let first = decrease_key(items[start].0);
@@ -473,7 +474,7 @@ fn test_all_elements_proof() {
 
     merkle
         .verify_range_proof(Some(&empty_key), Some(&empty_key), &root_hash, &range_proof)
-        .unwrap();
+        .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(ExpectedEndProof)
 
     // With edge proofs, it should still work.
     let start = 0;
@@ -551,7 +552,7 @@ fn test_empty_range_proof() {
         } else {
             merkle
                 .verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof)
-                .unwrap();
+                .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(ShouldBePrefixOfProvenKey)
         }
     }
 }
@@ -559,7 +560,6 @@ fn test_empty_range_proof() {
 #[test]
 // Focuses on the small trie with embedded nodes. If the gapped
 // node is embedded in the trie, it should be detected too.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_gapped_range_proof() {
     let mut items = Vec::new();
     // Sorted entries
@@ -608,7 +608,7 @@ fn test_gapped_range_proof() {
 
 #[test]
 // Tests the element is not in the range covered by proofs.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 29.993s runtime
 fn test_same_side_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -698,7 +698,7 @@ fn test_single_side_range_proof() {
 
             merkle
                 .verify_range_proof(Some(start), Some(items[case].0), &root_hash, &range_proof)
-                .unwrap();
+                .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
         }
     }
 }
@@ -740,7 +740,7 @@ fn test_reverse_single_side_range_proof() {
 
             merkle
                 .verify_range_proof(Some(items[case].0), Some(end), &root_hash, &range_proof)
-                .unwrap();
+                .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
         }
     }
 }
@@ -778,7 +778,7 @@ fn test_both_sides_range_proof() {
 
         merkle
             .verify_range_proof(Some(start), Some(end), &root_hash, &range_proof)
-            .unwrap();
+            .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
     }
 }
 
@@ -786,7 +786,6 @@ fn test_both_sides_range_proof() {
 // Tests normal range proof with both edge proofs
 // as the existent proof, but with an extra empty value included, which is a
 // noop technically, but practically should be rejected.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_empty_value_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -834,7 +833,6 @@ fn test_empty_value_range_proof() {
 // Tests the range proof with all elements,
 // but with an extra empty value included, which is a noop technically, but
 // practically should be rejected.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_all_elements_empty_value_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -912,7 +910,7 @@ fn test_range_proof_keys_with_shared_prefix() {
 
     merkle
         .verify_range_proof(Some(&start), Some(&end), &root_hash, &range_proof)
-        .unwrap();
+        .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
 }
 
 #[test]
@@ -970,5 +968,5 @@ fn test_bloadted_range_proof() {
             &root_hash,
             &range_proof,
         )
-        .unwrap();
+        .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
 }
