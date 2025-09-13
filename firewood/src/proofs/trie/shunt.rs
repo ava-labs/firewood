@@ -5,6 +5,8 @@ use firewood_storage::{Children, HashType, Hashable, ValueDigest};
 
 use crate::proofs::path::Nibbles;
 
+/// A shunt for a hasheable trie that we can use to compute the hash of a node
+/// using component parts.
 pub(super) struct HashableShunt<'a, P1, P2> {
     parent_nibbles: P1,
     partial_path: P2,
@@ -42,6 +44,7 @@ impl<P1: Nibbles, P2: Nibbles> std::fmt::Debug for HashableShunt<'_, P1, P2> {
                 &self.value.as_ref().map(|v| v.as_ref().map(hex::encode)),
             )
             .field("child_hashes", &self.child_hashes)
+            .field("hash", &self.to_hash())
             .finish()
     }
 }

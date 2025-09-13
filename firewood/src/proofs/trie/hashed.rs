@@ -18,20 +18,37 @@ use crate::{
     v2::api::{KeyType, ValueType},
 };
 
-pub(super) type EitherProof<'a> = either::Either<RangeProofTrieRoot<'a>, KeyValueTrieRoot<'a>>;
-
+/// A hashed trie over a range proof.
+///
+/// A range proof is constructed over zero, one, or two proof nodes and a collection
+/// of many key-value pairs. This structure represents the hashed version of that
+/// trie and can be used to verify the integrity of the range proof.
+///
+/// If there were zero proof nodes, the trie consists solely of the key-value pairs. If
+/// the root hash verifies, then the trie is complete and valid. However, if the hash
+/// does not verify then the trie is incomplete and invalid and it is not possible to
+/// determine which nodes are missing or wrong.
+///
+/// If there was one or two proof nodes, they were first merged into a single proof trie
+/// that describes as many branches of the trie as possible; but, only along the paths
+/// to the lower and/or upper bound keys. Distant branches of the trie are only known
+/// by their hashes. This merged trie is then combined with the key-value pairs to form
+/// the complete range proof trie. If this trie's root hash verifies, then the proof
+/// is complete and valid. However, the trie may still be incomplete as some branches
+/// may be distant and only their parents have been verified.
 #[derive(Debug)]
 pub(crate) struct HashedRangeProof<'a> {
     either: either::Either<HashedRangeProofTrieRoot<'a>, HashedKeyValueTrieRoot<'a>>,
 }
 
-#[derive(Debug)]
+/// A reference to a trie node in a [`HashedRangeProof`].
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct HashedRangeProofRef<'a, 'b> {
     either: either::Either<&'b HashedRangeProofTrieRoot<'a>, &'b HashedKeyValueTrieRoot<'a>>,
 }
 
 #[derive(Debug)]
-pub(super) struct HashedRangeProofTrieRoot<'a> {
+struct HashedRangeProofTrieRoot<'a> {
     computed: HashType,
     leading_path: CollectedNibbles,
     partial_path: WidenedPath<'a>,
@@ -40,7 +57,7 @@ pub(super) struct HashedRangeProofTrieRoot<'a> {
 }
 
 #[derive(Debug)]
-pub(super) struct HashedKeyValueTrieRoot<'a> {
+struct HashedKeyValueTrieRoot<'a> {
     computed: HashType,
     leading_path: CollectedNibbles,
     partial_path: PackedPath<'a>,
@@ -49,66 +66,60 @@ pub(super) struct HashedKeyValueTrieRoot<'a> {
 }
 
 #[derive(Debug)]
-pub(super) enum HashedRangeProofTrieEdge<'a> {
+enum HashedRangeProofTrieEdge<'a> {
     Distant(HashType),
     Partial(HashType, HashedKeyValueTrieRoot<'a>),
     Complete(HashType, HashedRangeProofTrieRoot<'a>),
 }
 
 impl<'a> HashedRangeProof<'a> {
-    pub const fn computed(&self) -> &HashType {
-        match &self.either {
-            either::Left(proof) => &proof.computed,
-            either::Right(kvp) => &kvp.computed,
-        }
-    }
-
-    #[expect(unused)]
-    pub(crate) const fn leading_path(&self) -> &CollectedNibbles {
-        match &self.either {
-            either::Left(proof) => &proof.leading_path,
-            either::Right(kvp) => &kvp.leading_path,
-        }
-    }
-
-    #[expect(unused)]
-    pub(crate) const fn partial_path(&self) -> either::Either<&WidenedPath<'a>, &PackedPath<'a>> {
-        match &self.either {
-            either::Left(proof) => either::Left(&proof.partial_path),
-            either::Right(kvp) => either::Right(&kvp.partial_path),
-        }
-    }
-
-    #[expect(unused)]
-    pub(crate) fn value_digest(&self) -> Option<ValueDigest<&'a [u8]>> {
-        match &self.either {
-            either::Left(proof) => proof.value_digest.clone(),
-            either::Right(kvp) => kvp.value.map(ValueDigest::Value),
-        }
-    }
-
-    #[expect(unused)]
-    pub(crate) fn children(&self) -> Children<HashedRangeProofRef<'a, '_>> {
-        match &self.either {
-            either::Left(proof) => proof.children.each_ref().map(HashedRangeProofRef::left),
-            either::Right(kvp) => kvp.children.each_ref().map(HashedRangeProofRef::right),
-        }
-    }
-
     pub fn new<K, V, P>(proof: &'a RangeProof<K, V, P>) -> Result<Self, ProofError>
     where
         K: KeyType,
         V: ValueType,
         P: ProofCollection<Node = ProofNode>,
     {
-        let mut path_buf = Vec::new();
-        let mut p = PathGuard::new(&mut path_buf);
+        let mut path = Vec::new();
+        let mut path = PathGuard::new(&mut path);
         Ok(Self {
-            either: match RangeProofTrieRoot::new(p.fork(), proof)? {
-                either::Left(node) => either::Left(HashedRangeProofTrieRoot::new(p, node)),
-                either::Right(node) => either::Right(HashedKeyValueTrieRoot::new(p, node)),
+            either: match RangeProofTrieRoot::new(path.fork(), proof)? {
+                either::Left(node) => either::Left(HashedRangeProofTrieRoot::new(path, node)),
+                either::Right(node) => either::Right(HashedKeyValueTrieRoot::new(path, node)),
             },
         })
+    }
+
+    pub const fn as_ref(&self) -> HashedRangeProofRef<'a, '_> {
+        HashedRangeProofRef {
+            either: match self.either {
+                either::Left(ref proof) => either::Left(proof),
+                either::Right(ref kvp) => either::Right(kvp),
+            },
+        }
+    }
+
+    pub const fn computed(&self) -> &HashType {
+        self.as_ref().computed()
+    }
+
+    #[expect(unused)]
+    pub const fn leading_path(&self) -> &CollectedNibbles {
+        self.as_ref().leading_path()
+    }
+
+    #[expect(unused)]
+    pub const fn partial_path(&self) -> either::Either<&WidenedPath<'a>, &PackedPath<'a>> {
+        self.as_ref().partial_path()
+    }
+
+    #[expect(unused)]
+    pub fn value_digest(&self) -> Option<ValueDigest<&'a [u8]>> {
+        self.as_ref().value_digest()
+    }
+
+    #[expect(unused)]
+    pub fn children(&self) -> Children<HashedRangeProofRef<'a, '_>> {
+        self.as_ref().children()
     }
 }
 
@@ -133,43 +144,38 @@ impl<'a, 'b> HashedRangeProofRef<'a, 'b> {
         })
     }
 
-    #[expect(unused)]
-    pub const fn computed(&self) -> &HashType {
-        match &self.either {
+    pub const fn computed(self) -> &'b HashType {
+        match self.either {
             either::Left(proof) => &proof.computed,
             either::Right(kvp) => &kvp.computed,
         }
     }
 
-    #[expect(unused)]
-    pub(crate) const fn leading_path(&self) -> &CollectedNibbles {
-        match &self.either {
+    pub const fn leading_path(self) -> &'b CollectedNibbles {
+        match self.either {
             either::Left(proof) => &proof.leading_path,
             either::Right(kvp) => &kvp.leading_path,
         }
     }
 
-    #[expect(unused)]
-    pub(crate) const fn partial_path(&self) -> either::Either<&WidenedPath<'a>, &PackedPath<'a>> {
-        match &self.either {
+    pub const fn partial_path(self) -> either::Either<&'b WidenedPath<'a>, &'b PackedPath<'a>> {
+        match self.either {
             either::Left(proof) => either::Left(&proof.partial_path),
             either::Right(kvp) => either::Right(&kvp.partial_path),
         }
     }
 
-    #[expect(unused)]
-    pub(crate) fn value_digest(&self) -> Option<ValueDigest<&'a [u8]>> {
-        match &self.either {
+    pub fn value_digest(self) -> Option<ValueDigest<&'a [u8]>> {
+        match self.either {
             either::Left(proof) => proof.value_digest.clone(),
             either::Right(kvp) => kvp.value.map(ValueDigest::Value),
         }
     }
 
-    #[expect(unused)]
-    pub(crate) fn children(&self) -> Children<HashedRangeProofRef<'a, '_>> {
+    pub fn children(self) -> Children<Self> {
         match &self.either {
-            either::Left(proof) => proof.children.each_ref().map(HashedRangeProofRef::left),
-            either::Right(kvp) => kvp.children.each_ref().map(HashedRangeProofRef::right),
+            either::Left(proof) => proof.children.each_ref().map(Self::left),
+            either::Right(kvp) => kvp.children.each_ref().map(Self::right),
         }
     }
 }

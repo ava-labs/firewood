@@ -11,7 +11,6 @@ use crate::{
         path::{Nibbles, PathGuard, PathNibble, SplitNibbles, SplitPath, WidenedPath},
         trie::{
             counter::NibbleCounter,
-            hashed::EitherProof,
             keyvalues::KeyValueTrieRoot,
             proof::{KeyProofTrieEdge, KeyProofTrieRoot},
         },
@@ -19,6 +18,8 @@ use crate::{
     range_proof::RangeProof,
     v2::api::{KeyType, ValueType},
 };
+
+pub(super) type EitherProof<'a> = either::Either<RangeProofTrieRoot<'a>, KeyValueTrieRoot<'a>>;
 
 #[derive(Debug)]
 pub(super) struct RangeProofTrieRoot<'a> {
