@@ -6,6 +6,7 @@ pub(crate) mod tests;
 
 use crate::iter::{MerkleKeyValueIter, PathIterator, TryExtend};
 use crate::proof::{Proof, ProofCollection, ProofError, ProofNode, verify_opt_value_digest};
+use crate::proofs::VerifyRangeProofArguments;
 use crate::range_proof::RangeProof;
 use crate::v2::api::{self, FrozenProof, FrozenRangeProof, HashKey, KeyType, ValueType};
 use firewood_storage::{
@@ -259,8 +260,13 @@ impl<T: TrieReader> Merkle<T> {
         root_hash: &HashKey,
         proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
     ) -> Result<(), api::Error> {
-        let _first_key = first_key.map(Path::from).unwrap_or_default();
-        let _last_key = last_key.map(Path::from).unwrap_or_default();
+        VerifyRangeProofArguments::new(
+            first_key.as_ref().map(AsRef::as_ref),
+            last_key.as_ref().map(AsRef::as_ref),
+            root_hash,
+            proof,
+        )
+        .verify()?;
 
         // // 1. Validate proof structure (similar to validateChangeProof in Go)
         // self.validate_range_proof_structure(&first_key, &last_key, proof)?;
@@ -286,7 +292,7 @@ impl<T: TrieReader> Merkle<T> {
         // )?;
 
         // 4. Reconstruct trie and verify root
-        self.verify_reconstructed_trie_root(proof, root_hash)?;
+        // self.verify_reconstructed_trie_root(proof, root_hash)?;
 
         Ok(())
     }
@@ -441,24 +447,30 @@ impl<T: TrieReader> Merkle<T> {
         Ok(())
     }
 
-    fn verify_reconstructed_trie_root(
-        &self,
-        proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
-        root_hash: &HashKey,
-    ) -> Result<(), api::Error> {
-        let result = crate::proofs::HashedRangeProof::new(proof)?;
-        if *root_hash == *result.computed() {
-            counter!("firewood.proofs.valid_range_proof").increment(1);
-            Ok(())
-        } else {
-            counter!("firewood.proofs.invalid_range_proof").increment(1);
-            Err(api::Error::InvalidHash {
-                reason: api::InvalidHashReason::MismatchedHash,
-                invalid: Some(result.computed().clone()),
-                expected: Some(root_hash.clone().into_hash_type()),
-            })
-        }
-    }
+    // fn verify_reconstructed_trie_root(
+    //     &self,
+    //     // proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
+    //     // root_hash: &HashKey,
+    //     args: VerifyRangeProofArguments<
+    //         '_,
+    //         impl KeyType,
+    //         impl ValueType,
+    //         impl ProofCollection<Node = ProofNode>,
+    //     >,
+    // ) -> Result<(), api::Error> {
+    //     let result = crate::proofs::HashedRangeProof::new(args)?;
+    //     if *root_hash == *result.computed() {
+    //         counter!("firewood.proofs.valid_range_proof").increment(1);
+    //         Ok(())
+    //     } else {
+    //         counter!("firewood.proofs.invalid_range_proof").increment(1);
+    //         Err(api::Error::InvalidHash {
+    //             reason: api::InvalidHashReason::MismatchedHash,
+    //             invalid: Some(result.computed().clone()),
+    //             expected: Some(root_hash.clone().into_hash_type()),
+    //         })
+    //     }
+    // }
 
     /// Get the value for the given key from the proof key-values. If not found,
     /// it will look for the value in the trie.

@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::{BranchNode, Children, logger::trace};
+use firewood_storage::{BranchNode, Children, Path};
 
 use crate::{
     proof::{DuplicateKeysInProofError, ProofError},
@@ -49,6 +49,43 @@ impl<'a> KeyValueTrieRoot<'a> {
         }
     }
 
+    pub fn lower_bound(&self) -> (Path, &Self) {
+        let mut path = Path::new();
+        let mut this = self;
+        loop {
+            path.extend(this.partial_path.nibbles_iter());
+            let Some((nibble, node)) = this
+                .children
+                .iter()
+                .enumerate()
+                .find_map(|(nibble, child)| child.as_deref().map(|child| (nibble as u8, child)))
+            else {
+                return (path, this);
+            };
+            path.extend([nibble]);
+            this = node;
+        }
+    }
+
+    pub fn upper_bound(&self) -> (Path, &Self) {
+        let mut path = Path::new();
+        let mut this = self;
+        loop {
+            path.extend(this.partial_path.nibbles_iter());
+            let Some((nibble, node)) = this
+                .children
+                .iter()
+                .enumerate()
+                .rev()
+                .find_map(|(nibble, child)| child.as_deref().map(|child| (nibble as u8, child)))
+            else {
+                break (path, this);
+            };
+            path.extend([nibble]);
+            this = node;
+        }
+    }
+
     fn merge_root(
         leading_path: PathGuard<'_>,
         lhs: Option<Self>,
@@ -68,10 +105,6 @@ impl<'a> KeyValueTrieRoot<'a> {
             split.rhs_suffix.split_first(),
         ) {
             ((Some(lhs_nibble), lhs_path), (Some(rhs_nibble), rhs_path)) => {
-                trace!(
-                    "KeyValueTrieRoot: merging two diverging keys; leading_path: {}, {split}",
-                    leading_path.display(),
-                );
                 // both keys diverge at some point after the common prefix, we
                 // need a new parent node with no value and both nodes as children
                 Ok(Self::from_siblings(
@@ -89,10 +122,6 @@ impl<'a> KeyValueTrieRoot<'a> {
                 ))
             }
             ((None, _), (Some(nibble), partial_path)) => {
-                trace!(
-                    "KeyValueTrieRoot: merging where lhs is a prefix of rhs; leading_path: {}, {split}",
-                    leading_path.display(),
-                );
                 // lhs is a strict prefix of rhs, so lhs becomes the parent of rhs
                 lhs.merge_child(
                     leading_path,
@@ -104,10 +133,6 @@ impl<'a> KeyValueTrieRoot<'a> {
                 )
             }
             ((Some(nibble), partial_path), (None, _)) => {
-                trace!(
-                    "KeyValueTrieRoot: merging where rhs is a prefix of lhs; leading_path: {}, {split}",
-                    leading_path.display(),
-                );
                 // rhs is a strict prefix of lhs, so rhs becomes the parent of lhs
                 rhs.merge_child(
                     leading_path,
@@ -119,10 +144,6 @@ impl<'a> KeyValueTrieRoot<'a> {
                 )
             }
             ((None, _), (None, _)) => {
-                trace!(
-                    "KeyValueTrieRoot: merging where both keys are identical; leading_path: {}, {split}",
-                    leading_path.display(),
-                );
                 // both keys are identical, this is invalid if they both have
                 // values, otherwise we can merge their children
                 Self::deep_merge(leading_path, lhs, rhs)

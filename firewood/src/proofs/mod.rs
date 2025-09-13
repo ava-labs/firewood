@@ -12,10 +12,15 @@ mod ser;
 mod tests;
 mod trie;
 
+use crate::{
+    proof::{ProofCollection, ProofNode},
+    range_proof::RangeProof,
+    v2::api::{HashKey, KeyType, ValueType},
+};
+
 pub use self::header::InvalidHeader;
 pub(crate) use self::path::BytesIter;
 pub use self::reader::ReadError;
-pub(crate) use self::trie::HashedRangeProof;
 
 mod magic {
     pub const PROOF_HEADER: &[u8; 8] = b"fwdproof";
@@ -44,6 +49,35 @@ mod magic {
         match v {
             0 => 256,
             _ => v as u16,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct VerifyRangeProofArguments<'a, K, V, H> {
+    lower_bound: Option<&'a [u8]>,
+    upper_bound: Option<&'a [u8]>,
+    expected_root: &'a HashKey,
+    range_proof: &'a RangeProof<K, V, H>,
+}
+
+impl<'a, K, V, H> VerifyRangeProofArguments<'a, K, V, H>
+where
+    K: KeyType,
+    V: ValueType,
+    H: ProofCollection<Node = ProofNode>,
+{
+    pub(crate) const fn new(
+        lower_bound: Option<&'a [u8]>,
+        upper_bound: Option<&'a [u8]>,
+        expected_root: &'a HashKey,
+        range_proof: &'a RangeProof<K, V, H>,
+    ) -> Self {
+        Self {
+            lower_bound,
+            upper_bound,
+            expected_root,
+            range_proof,
         }
     }
 }

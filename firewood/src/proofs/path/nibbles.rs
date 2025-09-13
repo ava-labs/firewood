@@ -31,6 +31,10 @@ pub(crate) trait Nibbles {
     {
         JoinedPath::new(self, other)
     }
+
+    fn eq(&self, other: &(impl Nibbles + ?Sized)) -> bool {
+        self.len() == other.len() && self.nibbles_iter().eq(other.nibbles_iter())
+    }
 }
 
 pub(in crate::proofs) trait SplitNibbles: Nibbles + Sized {
@@ -195,7 +199,7 @@ macro_rules! impl_common_nibbles_traits {
 
         impl<__Other: Nibbles + ?Sized, $($($gen)*)?> PartialEq<__Other> for $Type {
             fn eq(&self, other: &__Other) -> bool {
-                self.len() == other.len() && self.nibbles_iter().eq(other.nibbles_iter())
+                Nibbles::eq(self, other)
             }
         }
 

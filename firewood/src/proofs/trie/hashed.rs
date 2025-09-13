@@ -4,18 +4,16 @@
 use firewood_storage::{Children, HashType, ValueDigest};
 
 use crate::{
-    proof::{ProofCollection, ProofError, ProofNode},
+    proof::ProofError,
     proofs::{
         path::{CollectedNibbles, Nibbles, PackedPath, PathGuard, WidenedPath},
         trie::{
             counter::NibbleCounter,
             keyvalues::KeyValueTrieRoot,
-            merged::{RangeProofTrieEdge, RangeProofTrieRoot},
+            merged::{EitherProof, RangeProofTrieEdge, RangeProofTrieRoot},
             shunt::HashableShunt,
         },
     },
-    range_proof::RangeProof,
-    v2::api::{KeyType, ValueType},
 };
 
 /// A hashed trie over a range proof.
@@ -73,18 +71,18 @@ enum HashedRangeProofTrieEdge<'a> {
 }
 
 impl<'a> HashedRangeProof<'a> {
-    pub fn new<K, V, P>(proof: &'a RangeProof<K, V, P>) -> Result<Self, ProofError>
-    where
-        K: KeyType,
-        V: ValueType,
-        P: ProofCollection<Node = ProofNode>,
-    {
-        let mut path = Vec::new();
-        let mut path = PathGuard::new(&mut path);
+    pub(super) fn new(
+        leading_path: PathGuard<'_>,
+        root: EitherProof<'a>,
+    ) -> Result<Self, ProofError> {
         Ok(Self {
-            either: match RangeProofTrieRoot::new(path.fork(), proof)? {
-                either::Left(node) => either::Left(HashedRangeProofTrieRoot::new(path, node)),
-                either::Right(node) => either::Right(HashedKeyValueTrieRoot::new(path, node)),
+            either: match root {
+                either::Left(node) => {
+                    either::Left(HashedRangeProofTrieRoot::new(leading_path, node))
+                }
+                either::Right(node) => {
+                    either::Right(HashedKeyValueTrieRoot::new(leading_path, node))
+                }
             },
         })
     }
@@ -124,8 +122,7 @@ impl<'a> HashedRangeProof<'a> {
 }
 
 impl<'a, 'b> HashedRangeProofRef<'a, 'b> {
-    #[expect(clippy::ref_option)]
-    fn left(proof: &'b Option<Box<HashedRangeProofTrieEdge<'a>>>) -> Option<Self> {
+    fn left(proof: Option<&'b HashedRangeProofTrieEdge<'a>>) -> Option<Self> {
         proof.as_ref().and_then(|p| match **p {
             HashedRangeProofTrieEdge::Distant(_) => None,
             HashedRangeProofTrieEdge::Partial(_, ref root) => Some(Self {
@@ -137,8 +134,7 @@ impl<'a, 'b> HashedRangeProofRef<'a, 'b> {
         })
     }
 
-    #[expect(clippy::ref_option)]
-    fn right(kvp: &'b Option<Box<HashedKeyValueTrieRoot<'a>>>) -> Option<Self> {
+    fn right(kvp: Option<&'b HashedKeyValueTrieRoot<'a>>) -> Option<Self> {
         kvp.as_ref().map(|k| Self {
             either: either::Right(k),
         })
@@ -174,8 +170,16 @@ impl<'a, 'b> HashedRangeProofRef<'a, 'b> {
 
     pub fn children(self) -> Children<Self> {
         match &self.either {
-            either::Left(proof) => proof.children.each_ref().map(Self::left),
-            either::Right(kvp) => kvp.children.each_ref().map(Self::right),
+            either::Left(proof) => proof
+                .children
+                .each_ref()
+                .map(Option::as_deref)
+                .map(Self::left),
+            either::Right(kvp) => kvp
+                .children
+                .each_ref()
+                .map(Option::as_deref)
+                .map(Self::right),
         }
     }
 }

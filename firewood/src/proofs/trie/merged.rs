@@ -6,7 +6,7 @@ use std::convert::Infallible;
 use firewood_storage::{BranchNode, Children, HashType, ValueDigest};
 
 use crate::{
-    proof::{ProofCollection, ProofError, ProofNode},
+    proof::ProofError,
     proofs::{
         path::{Nibbles, PathGuard, PathNibble, SplitNibbles, SplitPath, WidenedPath},
         trie::{
@@ -15,8 +15,6 @@ use crate::{
             proof::{KeyProofTrieEdge, KeyProofTrieRoot},
         },
     },
-    range_proof::RangeProof,
-    v2::api::{KeyType, ValueType},
 };
 
 pub(super) type EitherProof<'a> = either::Either<RangeProofTrieRoot<'a>, KeyValueTrieRoot<'a>>;
@@ -46,36 +44,11 @@ pub(super) enum RangeProofTrieEdge<'a> {
 }
 
 impl<'a> RangeProofTrieRoot<'a> {
-    const fn empty() -> Self {
+    pub(super) const fn empty() -> Self {
         Self {
             partial_path: WidenedPath::new(&[]),
             value_digest: None,
             children: BranchNode::empty_children(),
-        }
-    }
-
-    pub(super) fn new<K, V, P>(
-        mut leading_path: PathGuard<'_>,
-        proof: &'a RangeProof<K, V, P>,
-    ) -> Result<EitherProof<'a>, ProofError>
-    where
-        K: KeyType,
-        V: ValueType,
-        P: ProofCollection<Node = ProofNode>,
-    {
-        let kvp = KeyValueTrieRoot::new(leading_path.fork(), proof.key_values())?;
-
-        let lhs = KeyProofTrieRoot::new(proof.start_proof())?;
-        let rhs = KeyProofTrieRoot::new(proof.end_proof())?;
-        let proof = KeyProofTrieRoot::merge_opt(leading_path.fork(), lhs, rhs)?;
-
-        match (proof, kvp) {
-            (None, None) => Ok(either::Left(Self::empty())),
-            // no values, return the root as is
-            (Some(proof), None) => Ok(either::Left(Self::from_proof_root(proof))),
-            // no proof, so we have an unbounded range of key-values
-            (None, Some(kvp)) => Ok(either::Right(kvp)),
-            (Some(proof), Some(kvp)) => Self::join(leading_path, proof, kvp).map(either::Left),
         }
     }
 
@@ -85,7 +58,7 @@ impl<'a> RangeProofTrieRoot<'a> {
     /// any new children to discovered [`KeyProofTrieRoot`] nodes. However, key-
     /// value nodes may introduce any number of nodes that fill in a
     /// [`KeyProofTrieEdge::Remote`] node.
-    fn join(
+    pub(super) fn join(
         leading_path: PathGuard<'_>,
         proof: KeyProofTrieRoot<'a>,
         kvp: KeyValueTrieRoot<'a>,
@@ -194,7 +167,7 @@ impl<'a> RangeProofTrieRoot<'a> {
         })
     }
 
-    fn from_proof_root(proof: KeyProofTrieRoot<'a>) -> Self {
+    pub(super) fn from_proof_root(proof: KeyProofTrieRoot<'a>) -> Self {
         Self {
             partial_path: proof.partial_path,
             value_digest: proof.value_digest,

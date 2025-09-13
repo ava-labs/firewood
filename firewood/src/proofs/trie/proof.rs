@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::{BranchNode, Children, HashType, ValueDigest, logger::trace};
+use firewood_storage::{BranchNode, Children, HashType, Path, ValueDigest, logger::trace};
 
 use crate::{
     proof::{
@@ -54,6 +54,48 @@ impl<'a> KeyProofTrieRoot<'a> {
                 Some(child) => child.new_parent_node(parent).map(Some),
                 None => Ok(Some(Self::new_tail_node(parent))),
             })
+    }
+
+    pub fn lower_bound(&self) -> (Path, &KeyProofTrieRoot<'_>) {
+        let mut path = Path::new();
+        let mut this = self;
+        loop {
+            path.extend(this.partial_path.nibbles_iter());
+            let Some((nibble, child)) = this.children.iter().enumerate().find_map(|(i, child)| {
+                child
+                    .as_deref()
+                    .and_then(KeyProofTrieEdge::root)
+                    .map(|child| (i as u8, child))
+            }) else {
+                return (path, this);
+            };
+            path.extend([nibble]);
+            this = child;
+        }
+    }
+
+    pub fn upper_bound(&self) -> (Path, &KeyProofTrieRoot<'_>) {
+        let mut path = Path::new();
+        let mut this = self;
+        loop {
+            path.extend(this.partial_path.nibbles_iter());
+            let Some((nibble, child)) =
+                this.children
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find_map(|(i, child)| {
+                        child
+                            .as_deref()
+                            .and_then(KeyProofTrieEdge::root)
+                            .map(|child| (i as u8, child))
+                    })
+            else {
+                return (path, this);
+            };
+            path.extend([nibble]);
+            this = child;
+        }
     }
 
     fn new_tail_node(node: &'a ProofNode) -> Self {
@@ -263,6 +305,13 @@ impl KeyProofTrieEdge<'_> {
                     })))
                 }
             }
+        }
+    }
+
+    const fn root(&self) -> Option<&KeyProofTrieRoot<'_>> {
+        match self {
+            Self::Remote(_) => None,
+            Self::Described(_, root) => Some(root),
         }
     }
 }
