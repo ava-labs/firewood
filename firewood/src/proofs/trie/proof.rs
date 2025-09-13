@@ -317,3 +317,28 @@ impl KeyProofTrieEdge<'_> {
         }
     }
 }
+
+impl<'a> super::TrieNode<'a> for &'a KeyProofTrieRoot<'a> {
+    type Nibbles = WidenedPath<'a>;
+
+    fn partial_path(self) -> Self::Nibbles {
+        self.partial_path
+    }
+
+    fn value_digest(self) -> Option<ValueDigest<&'a [u8]>> {
+        self.value_digest.clone()
+    }
+
+    fn computed_hash(self) -> Option<HashType> {
+        None
+    }
+
+    fn children(self) -> Children<super::Child<Self>> {
+        self.children.each_ref().map(|child| {
+            child.as_deref().map(|child| match child {
+                KeyProofTrieEdge::Remote(hash) => super::Child::Remote(hash.clone()),
+                KeyProofTrieEdge::Described(hash, node) => super::Child::Hashed(hash.clone(), node),
+            })
+        })
+    }
+}

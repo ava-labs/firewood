@@ -276,3 +276,60 @@ impl<'a> HashedRangeProofTrieEdge<'a> {
         }
     }
 }
+
+impl<'a> super::TrieNode<'a> for HashedRangeProofRef<'a, 'a> {
+    type Nibbles = either::Either<WidenedPath<'a>, PackedPath<'a>>;
+
+    fn partial_path(self) -> Self::Nibbles {
+        match self.either {
+            either::Left(proof) => either::Left(proof.partial_path),
+            either::Right(kvp) => either::Right(kvp.partial_path),
+        }
+    }
+
+    fn value_digest(self) -> Option<ValueDigest<&'a [u8]>> {
+        match self.either {
+            either::Left(proof) => proof.value_digest.clone(),
+            either::Right(kvp) => kvp.value.map(ValueDigest::Value),
+        }
+    }
+
+    fn computed_hash(self) -> Option<HashType> {
+        match self.either {
+            either::Left(proof) => Some(proof.computed.clone()),
+            either::Right(kvp) => Some(kvp.computed.clone()),
+        }
+    }
+
+    fn children(self) -> Children<super::Child<Self>> {
+        match self.either {
+            either::Left(proof) => proof.children.each_ref().map(|maybe| {
+                maybe.as_deref().map(|child| match child {
+                    HashedRangeProofTrieEdge::Distant(hash) => super::Child::Remote(hash.clone()),
+                    HashedRangeProofTrieEdge::Partial(hash, root) => super::Child::Hashed(
+                        hash.clone(),
+                        Self {
+                            either: either::Right(root),
+                        },
+                    ),
+                    HashedRangeProofTrieEdge::Complete(hash, root) => super::Child::Hashed(
+                        hash.clone(),
+                        Self {
+                            either: either::Left(root),
+                        },
+                    ),
+                })
+            }),
+            either::Right(kvp) => kvp.children.each_ref().map(|maybe| {
+                maybe.as_deref().map(|child| {
+                    super::Child::Hashed(
+                        child.computed.clone(),
+                        Self {
+                            either: either::Right(child),
+                        },
+                    )
+                })
+            }),
+        }
+    }
+}

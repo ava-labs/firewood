@@ -15,7 +15,9 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use super::*;
-use firewood_storage::{Committed, MemStore, MutableProposal, NodeStore, RootReader, TrieHash};
+use firewood_storage::{
+    Committed, MemStore, MutableProposal, NodeStore, RootReader, TrieHash, logger::trace,
+};
 
 // Returns n random key-value pairs.
 fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
@@ -51,6 +53,14 @@ where
     K: AsRef<[u8]>,
     V: AsRef<[u8]>,
 {
+    // 32 bytes for the key, 20 bytes for the value, and an extra 76 bytes for overhead
+    let hint = iter
+        .clone()
+        .into_iter()
+        .count()
+        .saturating_mul(128)
+        .saturating_add(2048); // 2048 for storage header
+    trace!("init_merkle: allocating {hint} initial bytes for memstore");
     let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024)));
     let base = Merkle::from(NodeStore::new_empty_committed(memstore.clone()).unwrap());
     let mut merkle = base.fork().unwrap();

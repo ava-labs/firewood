@@ -254,3 +254,25 @@ impl<'a> KeyValueTrieRoot<'a> {
         Ok(Self { children, ..self })
     }
 }
+
+impl<'a> super::TrieNode<'a> for &'a KeyValueTrieRoot<'a> {
+    type Nibbles = PackedPath<'a>;
+
+    fn partial_path(self) -> Self::Nibbles {
+        self.partial_path
+    }
+
+    fn value_digest(self) -> Option<firewood_storage::ValueDigest<&'a [u8]>> {
+        self.value.map(firewood_storage::ValueDigest::Value)
+    }
+
+    fn computed_hash(self) -> Option<firewood_storage::HashType> {
+        None
+    }
+
+    fn children(self) -> Children<super::Child<Self>> {
+        self.children
+            .each_ref()
+            .map(|child| child.as_deref().map(super::Child::Unhashed))
+    }
+}

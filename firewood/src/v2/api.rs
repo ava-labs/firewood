@@ -161,7 +161,7 @@ pub enum Error {
     SiblingCommitted,
 
     /// Proof error
-    #[error("proof error")]
+    #[error(transparent)]
     ProofError(#[from] ProofError),
 
     /// An invalid root hash was provided

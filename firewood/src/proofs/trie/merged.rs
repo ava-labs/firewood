@@ -8,7 +8,7 @@ use firewood_storage::{BranchNode, Children, HashType, ValueDigest};
 use crate::{
     proof::ProofError,
     proofs::{
-        path::{Nibbles, PathGuard, PathNibble, SplitNibbles, SplitPath, WidenedPath},
+        path::{Nibbles, PackedPath, PathGuard, PathNibble, SplitNibbles, SplitPath, WidenedPath},
         trie::{
             counter::NibbleCounter,
             keyvalues::KeyValueTrieRoot,
@@ -232,6 +232,49 @@ impl<'a> RangeProofTrieEdge<'a> {
                 id,
                 RangeProofTrieRoot::join(leading_path, proof, kvp)?,
             ))),
+        }
+    }
+}
+
+impl<'a> super::TrieNode<'a>
+    for either::Either<&'a RangeProofTrieRoot<'a>, &'a KeyValueTrieRoot<'a>>
+{
+    type Nibbles = either::Either<WidenedPath<'a>, PackedPath<'a>>;
+
+    fn partial_path(self) -> Self::Nibbles {
+        match self {
+            either::Left(root) => either::Left(root.partial_path),
+            either::Right(root) => either::Right(root.partial_path),
+        }
+    }
+
+    fn value_digest(self) -> Option<ValueDigest<&'a [u8]>> {
+        match self {
+            either::Left(root) => root.value_digest.clone(),
+            either::Right(root) => root.value_digest(),
+        }
+    }
+
+    fn computed_hash(self) -> Option<HashType> {
+        None
+    }
+
+    fn children(self) -> Children<super::Child<Self>> {
+        match self {
+            either::Left(root) => root.children.each_ref().map(|maybe| {
+                maybe.as_deref().map(|child| match child {
+                    RangeProofTrieEdge::Distant(hash) => super::Child::Remote(hash.clone()),
+                    RangeProofTrieEdge::Partial(hash, node) => {
+                        super::Child::Hashed(hash.clone(), either::Right(node))
+                    }
+                    RangeProofTrieEdge::Complete(hash, node) => {
+                        super::Child::Hashed(hash.clone(), either::Left(node))
+                    }
+                })
+            }),
+            either::Right(root) => root
+                .children()
+                .map(|maybe| maybe.map(|child| child.map(either::Right))),
         }
     }
 }

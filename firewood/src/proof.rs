@@ -21,7 +21,7 @@ use crate::merkle::{Key, Value};
 /// Unexpected hash
 #[derive(Debug, Error)]
 #[error(
-    "unexpected hash for key {} while {context}: expected {expected:?} but got {actual:?}",
+    "unexpected hash for key <{}> while {context}: expected {expected:?} but got {actual:?}",
     hex::encode(key)
 )]
 pub struct UnexpectedHashError {
