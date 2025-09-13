@@ -1,0 +1,214 @@
+// Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE.md for licensing terms.
+
+use firewood_storage::{BranchNode, Children, logger::trace};
+
+use crate::{
+    proof::{DuplicateKeysInProofError, ProofError},
+    proofs::{
+        path::{Nibbles, PackedPath, PathGuard, PathNibble, SplitNibbles, SplitPath},
+        trie::counter::NibbleCounter,
+    },
+};
+
+/// A collected of key-value pairs organized into a trie.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) struct KeyValueTrieRoot<'a> {
+    pub(super) partial_path: PackedPath<'a>,
+    pub(super) value: Option<&'a [u8]>,
+    pub(super) children: Children<Box<KeyValueTrieRoot<'a>>>,
+}
+
+impl<'a> KeyValueTrieRoot<'a> {
+    const fn leaf(key: &'a [u8], value: &'a [u8]) -> Self {
+        Self {
+            partial_path: PackedPath::new(key),
+            value: Some(value),
+            children: BranchNode::empty_children(),
+        }
+    }
+
+    pub(super) fn new<K, V>(
+        mut leading_path: PathGuard<'_>,
+        pairs: &'a [(K, V)],
+    ) -> Result<Option<Self>, ProofError>
+    where
+        K: AsRef<[u8]>,
+        V: AsRef<[u8]>,
+    {
+        match pairs {
+            [] => Ok(None),
+            [(k, v)] => Ok(Some(Self::leaf(k.as_ref(), v.as_ref()))),
+            many => {
+                let mid = many.len() / 2;
+                let (lhs, rhs) = many.split_at(mid);
+                let lhs = Self::new(leading_path.fork(), lhs)?;
+                let rhs = Self::new(leading_path.fork(), rhs)?;
+                Self::merge_root(leading_path, lhs, rhs)
+            }
+        }
+    }
+
+    fn merge_root(
+        leading_path: PathGuard<'_>,
+        lhs: Option<Self>,
+        rhs: Option<Self>,
+    ) -> Result<Option<Self>, ProofError> {
+        match (lhs, rhs) {
+            (None, None) => Ok(None),
+            (Some(root), None) | (None, Some(root)) => Ok(Some(root)),
+            (Some(lhs), Some(rhs)) => Self::merge(leading_path, lhs, rhs).map(Some),
+        }
+    }
+
+    fn merge(leading_path: PathGuard<'_>, lhs: Self, rhs: Self) -> Result<Self, ProofError> {
+        let split = SplitPath::new(lhs.partial_path, rhs.partial_path);
+        match (
+            split.lhs_suffix.split_first(),
+            split.rhs_suffix.split_first(),
+        ) {
+            ((Some(lhs_nibble), lhs_path), (Some(rhs_nibble), rhs_path)) => {
+                trace!(
+                    "KeyValueTrieRoot: merging two diverging keys; leading_path: {}, {split}",
+                    leading_path.display(),
+                );
+                // both keys diverge at some point after the common prefix, we
+                // need a new parent node with no value and both nodes as children
+                Ok(Self::from_siblings(
+                    split.common_prefix,
+                    lhs_nibble,
+                    Self {
+                        partial_path: lhs_path,
+                        ..lhs
+                    },
+                    rhs_nibble,
+                    Self {
+                        partial_path: rhs_path,
+                        ..rhs
+                    },
+                ))
+            }
+            ((None, _), (Some(nibble), partial_path)) => {
+                trace!(
+                    "KeyValueTrieRoot: merging where lhs is a prefix of rhs; leading_path: {}, {split}",
+                    leading_path.display(),
+                );
+                // lhs is a strict prefix of rhs, so lhs becomes the parent of rhs
+                lhs.merge_child(
+                    leading_path,
+                    nibble,
+                    Self {
+                        partial_path,
+                        ..rhs
+                    },
+                )
+            }
+            ((Some(nibble), partial_path), (None, _)) => {
+                trace!(
+                    "KeyValueTrieRoot: merging where rhs is a prefix of lhs; leading_path: {}, {split}",
+                    leading_path.display(),
+                );
+                // rhs is a strict prefix of lhs, so rhs becomes the parent of lhs
+                rhs.merge_child(
+                    leading_path,
+                    nibble,
+                    Self {
+                        partial_path,
+                        ..lhs
+                    },
+                )
+            }
+            ((None, _), (None, _)) => {
+                trace!(
+                    "KeyValueTrieRoot: merging where both keys are identical; leading_path: {}, {split}",
+                    leading_path.display(),
+                );
+                // both keys are identical, this is invalid if they both have
+                // values, otherwise we can merge their children
+                Self::deep_merge(leading_path, lhs, rhs)
+            }
+        }
+    }
+
+    /// Deeply merges two nodes.
+    ///
+    /// Used when the keys are identical. Errors if both nodes have values
+    /// and they are not equal.
+    fn deep_merge(
+        mut leading_path: PathGuard<'_>,
+        lhs: Self,
+        rhs: Self,
+    ) -> Result<Self, ProofError> {
+        leading_path.extend(lhs.partial_path.nibbles_iter());
+
+        let value = match (lhs.value, rhs.value) {
+            (Some(lhs), Some(rhs)) if lhs == rhs => Some(lhs),
+            (Some(value1), Some(value2)) => {
+                return Err(ProofError::DuplicateKeysInProof(Box::new(
+                    DuplicateKeysInProofError {
+                        key: leading_path.bytes_iter().collect(),
+                        value1: hex::encode(value1),
+                        value2: hex::encode(value2),
+                    },
+                )));
+            }
+            (Some(v), None) | (None, Some(v)) => Some(v),
+            (None, None) => None,
+        };
+
+        let mut nibble = NibbleCounter::new();
+        let children = super::merge_array(lhs.children, rhs.children, |lhs, rhs| {
+            Self::merge_root(
+                leading_path.fork_push(nibble.next()),
+                lhs.map(|v| *v),
+                rhs.map(|v| *v),
+            )
+        })?;
+
+        Ok(Self {
+            partial_path: lhs.partial_path,
+            value,
+            children: super::boxed_children(children),
+        })
+    }
+
+    fn from_siblings(
+        partial_path: PackedPath<'a>,
+        lhs_nibble: PathNibble,
+        lhs: Self,
+        rhs_nibble: PathNibble,
+        rhs: Self,
+    ) -> Self {
+        #![expect(clippy::indexing_slicing)]
+        debug_assert_ne!(lhs_nibble, rhs_nibble);
+        let mut children = BranchNode::empty_children();
+        children[lhs_nibble.0 as usize] = Some(Box::new(lhs));
+        children[rhs_nibble.0 as usize] = Some(Box::new(rhs));
+
+        Self {
+            partial_path,
+            value: None,
+            children,
+        }
+    }
+
+    fn merge_child(
+        self,
+        mut leading_path: PathGuard<'_>,
+        nibble: PathNibble,
+        child: Self,
+    ) -> Result<Self, ProofError> {
+        #![expect(clippy::indexing_slicing)]
+
+        leading_path.extend(self.partial_path.nibbles_iter());
+        leading_path.push(nibble.0);
+
+        let mut children = self.children;
+        children[nibble.0 as usize] = Some(Box::new(match children[nibble.0 as usize].take() {
+            Some(existing) => Self::merge(leading_path, *existing, child)?,
+            None => child,
+        }));
+
+        Ok(Self { children, ..self })
+    }
+}

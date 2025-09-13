@@ -18,6 +18,38 @@ use thiserror::Error;
 
 use crate::merkle::{Key, Value};
 
+/// Unexpected hash
+#[derive(Debug, Error)]
+#[error(
+    "unexpected hash for key {} while {context}: expected {expected:?} but got {actual:?}",
+    hex::encode(key)
+)]
+pub struct UnexpectedHashError {
+    /// The key where the unexpected hash was found
+    pub key: Key,
+    /// The context of the error
+    pub context: &'static str,
+    /// The expected hash
+    pub expected: HashType,
+    /// The actual hash found in the proof
+    pub actual: HashType,
+}
+
+/// Error when there are duplicate keys in the proof with different values.
+#[derive(Debug, Error)]
+#[error(
+    "duplicate keys in proof: {} with values {value1} and {value2}",
+    hex::encode(key)
+)]
+pub struct DuplicateKeysInProofError {
+    /// The duplicate key.
+    pub key: Key,
+    /// The first value.
+    pub value1: String,
+    /// The second value.
+    pub value2: String,
+}
+
 #[derive(Error)]
 /// Reasons why a proof is invalid
 pub enum ProofError {
@@ -26,20 +58,8 @@ pub enum ProofError {
     NonMonotonicIncreaseRange,
 
     /// Unexpected hash
-    #[error(
-        "unexpected hash for key {} while {context}: expected {expected:?} but got {actual:?}",
-        hex::encode(key)
-    )]
-    UnexpectedHash {
-        /// The key where the unexpected hash was found
-        key: Key,
-        /// The context of the error
-        context: &'static str,
-        /// The expected hash
-        expected: HashType,
-        /// The actual hash found in the proof
-        actual: HashType,
-    },
+    #[error(transparent)]
+    UnexpectedHash(#[from] Box<UnexpectedHashError>),
 
     /// Unexpected value
     #[error("unexpected value")]
@@ -116,12 +136,12 @@ pub enum ProofError {
     },
 
     /// Error from the merkle package
-    #[error("{0:?}")]
+    #[error(transparent)]
     IO(#[from] FileIoError),
 
     /// Error deserializing a proof
-    #[error("error deserializing a proof: {0}")]
-    Deserialization(crate::proofs::ReadError),
+    #[error(transparent)]
+    Deserialization(#[from] Box<crate::proofs::ReadError>),
 
     /// Error when the first key is greater than the last key in a provided range proof
     #[error("first key must come before the last key in a range proof")]
@@ -154,15 +174,8 @@ pub enum ProofError {
     ExclusionProofInvalidNode,
 
     /// Error when there are duplicate keys in the proof with different values.
-    #[error("duplicate keys in proof: {key:?} with values {value1} and {value2}")]
-    DuplicateKeysInProof {
-        /// The duplicate key.
-        key: Key,
-        /// The first value.
-        value1: String,
-        /// The second value.
-        value2: String,
-    },
+    #[error(transparent)]
+    DuplicateKeysInProof(#[from] Box<DuplicateKeysInProofError>),
 }
 
 impl std::fmt::Debug for ProofError {
@@ -291,12 +304,12 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         while let Some(node) = iter.next() {
             let actual_hash = node.to_hash();
             if actual_hash != expected_hash {
-                return Err(ProofError::UnexpectedHash {
+                return Err(ProofError::UnexpectedHash(Box::new(UnexpectedHashError {
                     key: key_bytes.into(),
                     context: "verifying value digest",
                     expected: expected_hash,
                     actual: actual_hash,
-                });
+                })));
             }
 
             // Assert that only nodes whose keys are an even number of nibbles

@@ -48,7 +48,6 @@ where
     K: AsRef<[u8]> + Ord,
     V: AsRef<[u8]>,
 {
-    crate::init_logger();
     let merkle = init_merkle(kvs.clone());
     let firewood_hash = merkle.nodestore.root_hash().unwrap_or_else(TrieHash::empty);
     let eth_hash: TrieHash = KeccakHasher::trie_root(kvs).to_fixed_bytes().into();
@@ -87,8 +86,6 @@ fn test_eth_compatible_accounts(
     use sha3::Digest as _;
     use sha3::Keccak256;
 
-    crate::init_logger();
-
     let account = make_key(account);
     let expected_key_hash = Keccak256::digest(&account);
 
@@ -124,8 +121,6 @@ fn make_key(hex_str: &str) -> Key {
 #[test]
 fn test_root_hash_random_deletions() {
     use rand::seq::SliceRandom;
-
-    crate::init_logger();
 
     let rng = firewood_storage::SeededRng::from_option(Some(42));
     let max_len0 = 8;
