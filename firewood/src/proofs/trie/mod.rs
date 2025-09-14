@@ -109,6 +109,7 @@ where
                 }),
             })
             .collect::<Vec<_>>();
+        trace!("Holes: {holes:#?}");
         if let Some((lower_path, upper_path)) = kvp_bounds {
             let bounds = lower_path..=upper_path;
             let missing_keys = holes

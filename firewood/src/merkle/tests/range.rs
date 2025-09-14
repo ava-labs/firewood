@@ -82,6 +82,9 @@ fn expect_unexpected_hash(err: &api::Error, msg: &str) {
         "{msg}, got {err}"
     );
 }
+fn encode(b: &(impl AsRef<[u8]> + ?Sized)) -> std::borrow::Cow<'_, str> {
+    str::from_utf8(b.as_ref()).map_or_else(|_| hex::encode(b).into(), Into::into)
+}
 
 #[test]
 #[expect(clippy::too_many_lines)]
@@ -93,8 +96,11 @@ fn test_bad_range_proof() {
 
     let now = coarsetime::Instant::now();
     let set = fixed_and_pseudorandom_data(&rng, 4096);
-    let mut items = set.iter().collect::<Vec<_>>();
-    items.sort_unstable();
+    let items = {
+        let mut items = set.into_iter().collect::<Vec<_>>();
+        items.sort_unstable();
+        items
+    };
     trace!(
         "Data generation took {:?}",
         std::time::Duration::from(now.elapsed())
@@ -110,53 +116,50 @@ fn test_bad_range_proof() {
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     for loop_iter in 0..10 {
-        let start = rng.random_range(0..items.len());
-        let end = rng.random_range(0..items.len() - start) + start - 1;
+        let (start, end) = loop {
+            let start = rng.random_range(0..items.len());
+            let end = rng.random_range(0..items.len() - start) + start - 1;
 
-        if end <= start {
-            continue;
-        }
+            if end <= start {
+                continue;
+            }
 
-        let now = coarsetime::Instant::now();
-        let start_proof = merkle.prove(items[start].0).unwrap();
-        let end_proof = merkle.prove(items[end - 1].0).unwrap();
-        trace!(
-            "{loop_iter}: Proof generation took {:?}",
-            std::time::Duration::from(now.elapsed())
-        );
+            break (start, end);
+        };
 
-        let mut keys: Vec<[u8; 32]> = Vec::new();
-        let mut vals: Vec<[u8; 20]> = Vec::new();
-        for item in &items[start..end] {
-            keys.push(*item.0);
-            vals.push(*item.1);
-        }
+        let start_proof = merkle.prove(&items[start].0).unwrap();
+        let end_proof = merkle.prove(&items[end - 1].0).unwrap();
 
-        let index = rng.random_range(0..end - start);
+        let mut key_vals = items[start..end].to_vec();
+
+        let index = rng.random_range(0..key_vals.len());
+        let (key_slot, value_slot) = &mut key_vals[index];
+
         let message;
         let verify_error: fn(&api::Error, &str);
         loop {
-            let test_case: u32 = rng.random_range(0..6);
+            let test_case: u32 = rng.random_range(0..5);
             match test_case {
                 0 => {
                     // Modified key
                     // In theory it can't be same
-                    let old_key = std::mem::replace(&mut keys[index], rng.random::<[u8; 32]>());
+                    let old_key = std::mem::replace(key_slot, rng.random::<[u8; 32]>());
                     message = format!(
                         "{loop_iter}: test_case {test_case}: modified index {index} key from {} to {}",
-                        hex::encode(old_key),
-                        hex::encode(keys[index]),
+                        encode(&old_key),
+                        encode(key_slot),
                     );
                     verify_error = default_verify_error;
                 }
                 1 => {
                     // Modified val
                     // In theory it can't be same
-                    let old_val = std::mem::replace(&mut vals[index], rng.random::<[u8; 20]>());
+                    let old_val = std::mem::replace(value_slot, rng.random::<[u8; 20]>());
                     message = format!(
-                        "{loop_iter}: test_case {test_case}: modified index {index} val from {} to {}",
-                        hex::encode(old_val),
-                        hex::encode(vals[index]),
+                        "{loop_iter}: test_case {test_case}: modified index {index} val for key {} from {} to {}",
+                        encode(key_slot),
+                        encode(&old_val),
+                        encode(value_slot),
                     );
                     verify_error = expect_unexpected_hash;
                 }
@@ -165,49 +168,32 @@ fn test_bad_range_proof() {
                     if index == 0 || index == end - start - 1 {
                         continue;
                     }
-                    let removed_key = keys.remove(index);
-                    let removed_val = vals.remove(index);
+                    let (removed_key, removed_val) = key_vals.remove(index);
                     message = format!(
                         "{loop_iter}: test_case {test_case}: removed index {index} key {} val {}",
-                        hex::encode(removed_key),
-                        hex::encode(removed_val),
+                        encode(&removed_key),
+                        encode(&removed_val),
                     );
                     verify_error = expect_unexpected_hash;
                 }
                 3 => {
-                    continue;
-                    // // Out of order
-                    // let index_1 = rng.random_range(0..end - start);
-                    // let index_2 = rng.random_range(0..end - start);
-                    // if index_1 == index_2 {
-                    //     continue;
-                    // }
-                    // keys.swap(index_1, index_2);
-                    // vals.swap(index_1, index_2);
-                    // message = format!(
-                    //     "{loop_iter}: test_case {test_case}: swapped index {index_1} and {index_2} (key {} with key {})",
-                    //     hex::encode(keys[index_2]),
-                    //     hex::encode(keys[index_1]),
-                    // );
-                    // verify_error = expect_non_monotonic_error;
-                }
-                4 => {
                     // Set random key to empty, do nothing
-                    let old_key = std::mem::take(&mut keys[index]);
+                    let old_key = std::mem::take(key_slot);
                     message = format!(
                         "{loop_iter}: test_case {test_case}: modified index {index} key from {} to {}",
-                        hex::encode(old_key),
-                        hex::encode(keys[index]),
+                        encode(&old_key),
+                        encode(key_slot),
                     );
                     verify_error = default_verify_error;
                 }
-                5 => {
+                4 => {
                     // Set random value to nil
-                    let old_val = std::mem::take(&mut vals[index]);
+                    let old_val = std::mem::take(value_slot);
                     message = format!(
-                        "{loop_iter}: test_case {test_case}: modified index {index} val from {} to {}",
-                        hex::encode(old_val),
-                        hex::encode(vals[index]),
+                        "{loop_iter}: test_case {test_case}: modified index {index} val for key {} from {} to {}",
+                        encode(key_slot),
+                        encode(&old_val),
+                        encode(value_slot),
                     );
                     verify_error = expect_unexpected_hash;
                 }
@@ -217,9 +203,9 @@ fn test_bad_range_proof() {
             break;
         }
 
-        let key_values = keys.iter().zip(vals.iter()).collect::<Vec<_>>();
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+        let range_proof = RangeProof::new(start_proof, end_proof, key_vals.into_boxed_slice());
 
+        trace!("{:->128}", "");
         let now = coarsetime::Instant::now();
         let err = merkle
             .verify_range_proof(
