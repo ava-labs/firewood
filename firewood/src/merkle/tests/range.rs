@@ -31,6 +31,7 @@ fn test_missing_key_proof() {
 // Tests normal range proof with both edge proofs as the existent proof.
 // The test cases are generated randomly.
 #[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 42.607s runtime; 4096 elements takes ~30s
 fn test_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -723,6 +724,7 @@ fn test_same_side_proof() {
 #[test]
 // Tests the range starts from zero.
 #[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 300.145s runtime
 fn test_single_side_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -806,6 +808,7 @@ fn test_reverse_single_side_range_proof() {
 #[test]
 // Tests the range starts with zero and ends with 0xffff...fff.
 #[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 297.025s runtime
 fn test_both_sides_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 

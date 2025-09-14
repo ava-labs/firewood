@@ -16,7 +16,8 @@ use std::fmt::Write;
 
 use super::*;
 use firewood_storage::{
-    Committed, MemStore, MutableProposal, NodeStore, RootReader, TrieHash, logger::trace,
+    Committed, MemStore, MutableProposal, NodeStore, ReadableStorage, RootReader, TrieHash,
+    logger::trace,
 };
 
 // Returns n random key-value pairs.
@@ -53,18 +54,17 @@ where
     K: AsRef<[u8]>,
     V: AsRef<[u8]>,
 {
-    // 32 bytes for the key, 20 bytes for the value, and an extra 76 bytes for overhead
-    let hint = iter
-        .clone()
-        .into_iter()
-        .count()
-        .saturating_mul(128)
-        .saturating_add(2048); // 2048 for storage header
+    let init_start = coarsetime::Instant::now();
+
+    let item_count = iter.clone().into_iter().count();
+    let hint = item_count.saturating_mul(256).saturating_add(2048); // 2048 for storage header
     trace!("init_merkle: allocating {hint} initial bytes for memstore");
-    let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024)));
+    let memstore = Arc::new(MemStore::new(Vec::with_capacity(hint)));
     let base = Merkle::from(NodeStore::new_empty_committed(memstore.clone()).unwrap());
     let mut merkle = base.fork().unwrap();
 
+    // ~9s for 4096 items
+    let now = coarsetime::Instant::now();
     for (k, v) in iter.clone() {
         let key = k.as_ref();
         let value = v.as_ref();
@@ -77,7 +77,13 @@ where
             "Failed to insert key: {key:?}",
         );
     }
+    trace!(
+        "init_merkle: inserted {item_count} items in {:?}",
+        std::time::Duration::from(now.elapsed())
+    );
 
+    // NB: this is the longest step in init_merkle: ~18s for 4096 items
+    let now = coarsetime::Instant::now();
     for (k, v) in iter.clone() {
         let key = k.as_ref();
         let value = v.as_ref();
@@ -88,9 +94,21 @@ where
             "Failed to get key after insert: {key:?}",
         );
     }
+    trace!(
+        "init_merkle: verified {item_count} items in {:?}",
+        std::time::Duration::from(now.elapsed())
+    );
 
+    // ~552ms for 4096 items
+    let now = coarsetime::Instant::now();
     let merkle = merkle.hash();
+    trace!(
+        "init_merkle: hashed merkle in {:?}",
+        std::time::Duration::from(now.elapsed())
+    );
 
+    // ~13ms for 4096 items
+    let now = coarsetime::Instant::now();
     for (k, v) in iter.clone() {
         let key = k.as_ref();
         let value = v.as_ref();
@@ -101,9 +119,22 @@ where
             "Failed to get key after hashing: {key:?}"
         );
     }
+    trace!(
+        "init_merkle: verified {item_count} items after hashing in {:?}",
+        std::time::Duration::from(now.elapsed())
+    );
 
+    // 175ms for 4096 items
+    let now = coarsetime::Instant::now();
     let merkle = into_committed(merkle, base.nodestore());
+    trace!(
+        "init_merkle: committed merkle size {} in {:?}",
+        memstore.size().unwrap(),
+        std::time::Duration::from(now.elapsed())
+    );
 
+    // 13ms for 4096 items
+    let now = coarsetime::Instant::now();
     for (k, v) in iter {
         let key = k.as_ref();
         let value = v.as_ref();
@@ -114,6 +145,11 @@ where
             "Failed to get key after committing: {key:?}"
         );
     }
+    trace!(
+        "init_merkle: verified {item_count} items after committing in {:?} (total {:?})",
+        std::time::Duration::from(now.elapsed()),
+        std::time::Duration::from(init_start.elapsed())
+    );
 
     merkle
 }
