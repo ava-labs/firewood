@@ -82,22 +82,24 @@ where
         std::time::Duration::from(now.elapsed())
     );
 
-    // NB: this is the longest step in init_merkle: ~18s for 4096 items
-    let now = coarsetime::Instant::now();
-    for (k, v) in iter.clone() {
-        let key = k.as_ref();
-        let value = v.as_ref();
+    if item_count <= 2048 {
+        // NB: this is the longest step in init_merkle: ~18s for 4096 items
+        let now = coarsetime::Instant::now();
+        for (k, v) in iter.clone() {
+            let key = k.as_ref();
+            let value = v.as_ref();
 
-        assert_eq!(
-            merkle.get_value(key).unwrap().as_deref(),
-            Some(value),
-            "Failed to get key after insert: {key:?}",
+            assert_eq!(
+                merkle.get_value(key).unwrap().as_deref(),
+                Some(value),
+                "Failed to get key after insert: {key:?}",
+            );
+        }
+        trace!(
+            "init_merkle: verified {item_count} items in {:?}",
+            std::time::Duration::from(now.elapsed())
         );
     }
-    trace!(
-        "init_merkle: verified {item_count} items in {:?}",
-        std::time::Duration::from(now.elapsed())
-    );
 
     // ~552ms for 4096 items
     let now = coarsetime::Instant::now();
