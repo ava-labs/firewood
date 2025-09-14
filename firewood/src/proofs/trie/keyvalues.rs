@@ -9,7 +9,7 @@ use crate::{
         path::{
             CollectedNibbles, Nibbles, PackedPath, PathGuard, PathNibble, SplitNibbles, SplitPath,
         },
-        trie::counter::NibbleCounter,
+        trie::{counter::NibbleCounter, iter::Child},
     },
 };
 
@@ -186,13 +186,13 @@ impl<'a> KeyValueTrieRoot<'a> {
         let value = match (lhs.value, rhs.value) {
             (Some(lhs), Some(rhs)) if lhs == rhs => Some(lhs),
             (Some(value1), Some(value2)) => {
-                return Err(ProofError::DuplicateKeysInProof(Box::new(
+                return Err(ProofError::DuplicateKeysInProof(
                     DuplicateKeysInProofError {
                         key: leading_path.bytes_iter().collect(),
                         value1: hex::encode(value1),
                         value2: hex::encode(value2),
                     },
-                )));
+                ));
             }
             (Some(v), None) | (None, Some(v)) => Some(v),
             (None, None) => None,
@@ -270,9 +270,9 @@ impl<'a> super::TrieNode<'a> for &'a KeyValueTrieRoot<'a> {
         None
     }
 
-    fn children(self) -> Children<super::Child<Self>> {
+    fn children(self) -> Children<Child<Self>> {
         self.children
             .each_ref()
-            .map(|child| child.as_deref().map(super::Child::Unhashed))
+            .map(|child| child.as_deref().map(Child::Unhashed))
     }
 }

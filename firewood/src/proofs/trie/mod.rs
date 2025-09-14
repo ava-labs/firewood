@@ -2,43 +2,33 @@
 // See the file LICENSE.md for licensing terms.
 
 mod counter;
+mod dump;
 mod hashed;
+mod iter;
 mod keyvalues;
 mod merged;
 mod proof;
 mod shunt;
 
-use std::borrow::Cow;
-
 use firewood_storage::{Children, HashType, ValueDigest, logger::trace};
 
+pub(crate) use self::hashed::HashedRangeProof;
+pub use self::iter::MissingKeys;
 use crate::{
     proof::{ProofCollection, ProofError, ProofNode, UnexpectedHashError},
     proofs::{
         VerifyRangeProofArguments,
-        path::{Nibbles, PathGuard, PathNibble},
-        trie::{keyvalues::KeyValueTrieRoot, merged::RangeProofTrieRoot, proof::KeyProofTrieRoot},
+        path::{Nibbles, PathGuard},
+        trie::{
+            dump::DumpTrie,
+            iter::{Child, PreOrderIter},
+            keyvalues::KeyValueTrieRoot,
+            merged::RangeProofTrieRoot,
+            proof::KeyProofTrieRoot,
+        },
     },
     v2::api::{KeyType, ValueType},
 };
-
-pub(crate) use self::hashed::HashedRangeProof;
-
-fn merge_array<T, U, V, E, const N: usize>(
-    lhs: [T; N],
-    rhs: [U; N],
-    mut merge: impl FnMut(T, U) -> Result<Option<V>, E>,
-) -> Result<[Option<V>; N], E> {
-    let mut output = [const { None::<V> }; N];
-    for (slot, (l, r)) in output.iter_mut().zip(lhs.into_iter().zip(rhs)) {
-        *slot = merge(l, r)?;
-    }
-    Ok(output)
-}
-
-fn boxed_children<T, const N: usize>(children: [Option<T>; N]) -> [Option<Box<T>>; N] {
-    children.map(|maybe| maybe.map(Box::new))
-}
 
 impl<K, V, H> VerifyRangeProofArguments<'_, K, V, H>
 where
@@ -46,47 +36,45 @@ where
     V: ValueType,
     H: ProofCollection<Node = ProofNode>,
 {
-    pub fn verify(self) -> Result<(), ProofError> {
+    pub fn verify(self) -> Result<Vec<MissingKeys>, ProofError> {
+        macro_rules! trace_trie {
+            ($prefix:expr, Some($trie:expr)) => {
+                trace!("{} trie\n{}", $prefix, $trie.display());
+            };
+            ($prefix:expr, $maybe_trie:expr) => {
+                if let Some(ref trie) = $maybe_trie {
+                    trace_trie!($prefix, Some(trie));
+                } else {
+                    trace!("{} trie: <empty>", $prefix);
+                }
+            };
+        }
+
         let mut path = Vec::new();
         let mut path = PathGuard::new(&mut path);
 
         let kvp = KeyValueTrieRoot::new(path.fork(), self.range_proof.key_values())?;
-        if let Some(ref trie) = kvp {
-            trace!("KVP trie\n{}", trie.display());
-        } else {
-            trace!("KVP trie: <empty>");
-        }
+        trace_trie!("KVP", kvp);
 
         let kvp_bounds = kvp
             .as_ref()
             .map(|kvp| (kvp.lower_bound(), kvp.upper_bound()));
         trace!("KVP bounds: {kvp_bounds:#?}");
+        let kvp_bounds = kvp_bounds.map(|((l, _), (r, _))| (l, r));
 
         let lower_bound_proof = KeyProofTrieRoot::new(self.range_proof.start_proof())?;
-        if let Some(ref trie) = lower_bound_proof {
-            trace!("Lower bound proof trie\n{}", trie.display());
-        } else {
-            trace!("Lower bound proof trie: <empty>");
-        }
+        trace_trie!("Lower bound proof", lower_bound_proof);
 
         let upper_bound_proof = KeyProofTrieRoot::new(self.range_proof.end_proof())?;
-        if let Some(ref trie) = upper_bound_proof {
-            trace!("Upper bound proof trie\n{}", trie.display());
-        } else {
-            trace!("Upper bound proof trie: <empty>");
-        }
+        trace_trie!("Upper bound proof", upper_bound_proof);
 
         let proof = KeyProofTrieRoot::merge_opt(path.fork(), lower_bound_proof, upper_bound_proof)?;
-        if let Some(ref trie) = proof {
-            trace!("Merged bound proof trie\n{}", trie.display());
-        } else {
-            trace!("Merged bound proof trie: <empty>");
-        }
+        trace_trie!("Merged bound proof", proof);
 
         let proof_bounds = proof
             .as_ref()
             .map(|proof| (proof.lower_bound(), proof.upper_bound()));
-        trace!("Proof bounds: {proof_bounds:?}");
+        trace!("Proof bounds: {proof_bounds:#?}");
 
         let root = match (proof, kvp) {
             (None, None) => Ok(either::Left(RangeProofTrieRoot::empty())),
@@ -98,10 +86,47 @@ where
                 RangeProofTrieRoot::join(path.fork(), proof, kvp).map(either::Left)
             }
         }?;
-        trace!("Merged trie: {}", root.as_ref().display());
+        trace_trie!("Combined", Some(root.as_ref()));
 
         let root = HashedRangeProof::new(path, root)?;
-        trace!("Hashed trie: {}", root.as_ref().display());
+        trace_trie!("Hashed", Some(root.as_ref()));
+
+        // range proofs are not allowed to have holes within the range defined by
+        // the lower and upper bound keys; but, they may outside of that range.
+        //
+        // Callers will be interested in the holes outside of the range in order
+        // to continue fetching data if desired. So, we collect them here for
+        // both verification and to return to the caller.
+        let holes = root
+            .as_ref()
+            .pre_order_iter()
+            .filter_map(|item| match item.node {
+                Child::Unhashed(_) | Child::Hashed(_, _) => None,
+                Child::Remote(hash) => Some(MissingKeys {
+                    depth: item.depth,
+                    leading_path: item.leading_path,
+                    hash,
+                }),
+            })
+            .collect::<Vec<_>>();
+        if let Some((lower_path, upper_path)) = kvp_bounds {
+            let bounds = lower_path..=upper_path;
+            let missing_keys = holes
+                .iter()
+                .filter(|hole| bounds.contains(&hole.leading_path))
+                .cloned()
+                .collect::<Vec<_>>();
+            if !missing_keys.is_empty() {
+                let (lower_bound, upper_bound) = bounds.into_inner();
+                return Err(ProofError::MissingKeys(Box::new(
+                    crate::proof::MissingKeys {
+                        lower_bound,
+                        upper_bound,
+                        missing_keys,
+                    },
+                )));
+            }
+        }
 
         if root.computed() != self.expected_root {
             return Err(ProofError::UnexpectedHash(Box::new(UnexpectedHashError {
@@ -112,23 +137,7 @@ where
             })));
         }
 
-        Ok(())
-    }
-}
-
-enum Child<T> {
-    Unhashed(T),
-    Hashed(HashType, T),
-    Remote(HashType),
-}
-
-impl<T> Child<T> {
-    fn map<U>(self, f: impl FnOnce(T) -> U) -> Child<U> {
-        match self {
-            Child::Unhashed(node) => Child::Unhashed(f(node)),
-            Child::Hashed(hash, node) => Child::Hashed(hash, f(node)),
-            Child::Remote(hash) => Child::Remote(hash),
-        }
+        Ok(holes)
     }
 }
 
@@ -140,7 +149,11 @@ trait TrieNode<'a>: Sized + Copy {
     fn children(self) -> Children<Child<Self>>;
 
     fn display(self) -> DumpTrie<Self> {
-        DumpTrie(self)
+        DumpTrie::new(self)
+    }
+
+    fn pre_order_iter(self) -> PreOrderIter<Self> {
+        PreOrderIter::new(self)
     }
 }
 
@@ -174,102 +187,18 @@ impl<'a, L: TrieNode<'a>, R: TrieNode<'a>> TrieNode<'a> for either::Either<L, R>
     }
 }
 
-struct DumpTrie<T>(T);
-
-impl<'a, T: TrieNode<'a>> std::fmt::Debug for DumpTrie<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        dump_trie(f, self.0)
+fn merge_array<T, U, V, E, const N: usize>(
+    lhs: [T; N],
+    rhs: [U; N],
+    mut merge: impl FnMut(T, U) -> Result<Option<V>, E>,
+) -> Result<[Option<V>; N], E> {
+    let mut output = [const { None::<V> }; N];
+    for (slot, (l, r)) in output.iter_mut().zip(lhs.into_iter().zip(rhs)) {
+        *slot = merge(l, r)?;
     }
+    Ok(output)
 }
 
-impl<'a, T: TrieNode<'a>> std::fmt::Display for DumpTrie<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        dump_trie(f, self.0)
-    }
-}
-
-/// Dumps a trie to the given writer, for debugging purposes.
-///
-/// The output format is not stable and is only for human readable consumption.
-///
-/// This will walk the trie in pre-order and print each node's partial path, value
-/// digest (if any), previously computed hash (if any), and the children recursively.
-///
-/// Children in the trie may either be by reference (hash only) or by value (full
-/// node) and full nodes will be dumped recursively.
-fn dump_trie<'a, W, T>(w: &mut W, node: T) -> std::fmt::Result
-where
-    W: std::fmt::Write + ?Sized,
-    T: TrieNode<'a>,
-{
-    fn inner_dump<'a, W, T>(
-        w: &mut W,
-        node: T,
-        depth: usize,
-        mut path: PathGuard<'_>,
-    ) -> std::fmt::Result
-    where
-        W: std::fmt::Write + ?Sized,
-        T: TrieNode<'a>,
-    {
-        const INDENT: usize = 2;
-
-        #[cfg(not(feature = "branch_factor_256"))]
-        const NIBBLE_WIDTH: usize = 1;
-        #[cfg(feature = "branch_factor_256")]
-        const NIBBLE_WIDTH: usize = 2;
-
-        // empty string, the width is used to pad with `depth` spaces
-        const WS: &str = "";
-
-        path.extend(node.partial_path().nibbles_iter());
-        writeln!(w, "{WS:>depth$}Path: {}", path.display())?;
-
-        if let Some(vd) = node.value_digest() {
-            match vd {
-                ValueDigest::Value(value) => {
-                    let value = str::from_utf8(value)
-                        .map_or_else(|_| hex::encode(value).into(), Cow::Borrowed);
-                    writeln!(w, "{WS:>depth$}- Value: {value}")?;
-                }
-                #[cfg(not(feature = "ethhash"))]
-                ValueDigest::Hash(digest) => {
-                    writeln!(w, "{WS:>depth$}- Value Digest: {digest}")?;
-                }
-            }
-        }
-
-        if let Some(ch) = node.computed_hash() {
-            writeln!(w, "{WS:>depth$}- Computed Hash: {ch:.64}")?;
-        }
-
-        for (idx, slot) in node.children().into_iter().enumerate() {
-            let path = path.fork_push(PathNibble(idx as u8));
-            write!(w, "{WS:>depth$}- Child {idx:0NIBBLE_WIDTH$x} ")?;
-            match slot {
-                Some(Child::Unhashed(node)) => {
-                    writeln!(w, "(unhashed):")?;
-                    inner_dump(w, node, depth.wrapping_add(INDENT), path)?;
-                }
-                Some(Child::Hashed(hash, node)) => {
-                    writeln!(w, "(hashed: {hash}):")?;
-                    inner_dump(w, node, depth.wrapping_add(INDENT), path)?;
-                }
-                Some(Child::Remote(hash)) => {
-                    writeln!(w, "(remote: {hash})")?;
-                }
-                None => {
-                    writeln!(w, "(empty)")?;
-                }
-            }
-        }
-
-        if depth > 0 {
-            writeln!(w)?;
-        }
-
-        Ok(())
-    }
-
-    inner_dump(w, node, 0, PathGuard::new(&mut Vec::new()))
+fn boxed_children<T, const N: usize>(children: [Option<T>; N]) -> [Option<Box<T>>; N] {
+    children.map(|maybe| maybe.map(Box::new))
 }

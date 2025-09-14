@@ -35,6 +35,10 @@ pub(crate) trait Nibbles {
     fn eq(&self, other: &(impl Nibbles + ?Sized)) -> bool {
         self.len() == other.len() && self.nibbles_iter().eq(other.nibbles_iter())
     }
+
+    fn by_ref(&self) -> &Self {
+        self
+    }
 }
 
 pub(in crate::proofs) trait SplitNibbles: Nibbles + Sized {
@@ -43,26 +47,36 @@ pub(in crate::proofs) trait SplitNibbles: Nibbles + Sized {
     fn split_first(self) -> (Option<PathNibble>, Self);
 }
 
+/// A view of a path where each byte is widened to represent two nibbles.
 #[derive(Clone)]
-pub(crate) struct CollectedNibbles {
-    nibbles: smallvec::SmallVec<[u8; 32]>,
+pub struct CollectedNibbles {
+    nibbles: smallvec::SmallVec<[u8; 64]>,
 }
 
 impl CollectedNibbles {
+    /// Creates an empty collection of nibbles.
+    #[must_use]
     pub fn empty() -> Self {
         Self {
             nibbles: smallvec::SmallVec::new(),
         }
     }
 
-    pub fn new(nibbles: impl Nibbles) -> Self {
+    #[must_use]
+    pub(crate) fn new(nibbles: impl Nibbles) -> Self {
         Self {
             nibbles: nibbles.nibbles_iter().collect(),
         }
     }
 
-    pub fn extend(&mut self, nibbles: impl Nibbles) {
+    pub(crate) fn extend(&mut self, nibbles: impl Nibbles) {
         self.nibbles.extend(nibbles.nibbles_iter());
+    }
+
+    /// Returns the nibbles as a slice.
+    #[must_use]
+    pub fn as_slice(&self) -> &[u8] {
+        &self.nibbles
     }
 }
 
@@ -214,6 +228,18 @@ macro_rules! impl_common_nibbles_traits {
         }
 
         impl$(<$($gen)*>)? Eq for $Type {}
+
+        impl<__Other: Nibbles + ?Sized, $($($gen)*)?> PartialOrd<__Other> for $Type {
+            fn partial_cmp(&self, other: &__Other) -> Option<::std::cmp::Ordering> {
+                Some(self.nibbles_iter().cmp(other.nibbles_iter()))
+            }
+        }
+
+        impl$(<$($gen)*>)? Ord for $Type {
+            fn cmp(&self, other: &Self) -> ::std::cmp::Ordering {
+                self.nibbles_iter().cmp(other.nibbles_iter())
+            }
+        }
     };
     ($Type:ty, $($Other:ty),+ $(,)?) => {
         impl_common_nibbles_traits!($Type);

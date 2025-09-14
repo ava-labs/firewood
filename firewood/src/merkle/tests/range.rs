@@ -78,7 +78,7 @@ fn default_verify_error(err: &api::Error, msg: &str) {
 fn expect_unexpected_hash(err: &api::Error, msg: &str) {
     assert_matches!(
         err,
-        api::Error::ProofError(ProofError::UnexpectedHash(_)),
+        api::Error::ProofError(ProofError::UnexpectedHash(_) | ProofError::ValueMismatch),
         "{msg}, got {err}"
     );
 }

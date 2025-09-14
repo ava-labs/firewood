@@ -18,6 +18,7 @@ pub(crate) use self::widened::WidenedPath;
 pub(crate) type PackedPath<'a> = WidenedPath<'a>;
 pub(crate) use self::guard::PathGuard;
 pub(crate) use self::joined::JoinedPath;
+pub use self::nibbles::CollectedNibbles;
 pub(super) use self::nibbles::SplitNibbles;
-pub(crate) use self::nibbles::{CollectedNibbles, Nibbles, PathNibble};
+pub(crate) use self::nibbles::{Nibbles, PathNibble};
 pub(super) use self::split::SplitPath;

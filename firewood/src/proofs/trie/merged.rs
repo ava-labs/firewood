@@ -11,6 +11,7 @@ use crate::{
         path::{Nibbles, PackedPath, PathGuard, PathNibble, SplitNibbles, SplitPath, WidenedPath},
         trie::{
             counter::NibbleCounter,
+            iter::Child,
             keyvalues::KeyValueTrieRoot,
             proof::{KeyProofTrieEdge, KeyProofTrieRoot},
         },
@@ -259,16 +260,16 @@ impl<'a> super::TrieNode<'a>
         None
     }
 
-    fn children(self) -> Children<super::Child<Self>> {
+    fn children(self) -> Children<Child<Self>> {
         match self {
             either::Left(root) => root.children.each_ref().map(|maybe| {
                 maybe.as_deref().map(|child| match child {
-                    RangeProofTrieEdge::Distant(hash) => super::Child::Remote(hash.clone()),
+                    RangeProofTrieEdge::Distant(hash) => Child::Remote(hash.clone()),
                     RangeProofTrieEdge::Partial(hash, node) => {
-                        super::Child::Hashed(hash.clone(), either::Right(node))
+                        Child::Hashed(hash.clone(), either::Right(node))
                     }
                     RangeProofTrieEdge::Complete(hash, node) => {
-                        super::Child::Hashed(hash.clone(), either::Left(node))
+                        Child::Hashed(hash.clone(), either::Left(node))
                     }
                 })
             }),

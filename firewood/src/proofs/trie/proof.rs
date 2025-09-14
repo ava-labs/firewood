@@ -12,7 +12,7 @@ use crate::{
         path::{
             CollectedNibbles, Nibbles, PathGuard, PathNibble, SplitNibbles, SplitPath, WidenedPath,
         },
-        trie::counter::NibbleCounter,
+        trie::{counter::NibbleCounter, iter::Child},
     },
 };
 
@@ -227,13 +227,13 @@ impl<'a> KeyProofTrieRoot<'a> {
         let mut leading_path = leading_path.fork_push(lhs.partial_path);
 
         if lhs.value_digest != rhs.value_digest {
-            return Err(ProofError::DuplicateKeysInProof(Box::new(
+            return Err(ProofError::DuplicateKeysInProof(
                 DuplicateKeysInProofError {
                     key: leading_path.bytes_iter().collect(),
                     value1: format!("{:?}", lhs.value_digest),
                     value2: format!("{:?}", rhs.value_digest),
                 },
-            )));
+            ));
         }
 
         let mut nibble = NibbleCounter::new();
@@ -333,11 +333,11 @@ impl<'a> super::TrieNode<'a> for &'a KeyProofTrieRoot<'a> {
         None
     }
 
-    fn children(self) -> Children<super::Child<Self>> {
+    fn children(self) -> Children<Child<Self>> {
         self.children.each_ref().map(|child| {
             child.as_deref().map(|child| match child {
-                KeyProofTrieEdge::Remote(hash) => super::Child::Remote(hash.clone()),
-                KeyProofTrieEdge::Described(hash, node) => super::Child::Hashed(hash.clone(), node),
+                KeyProofTrieEdge::Remote(hash) => Child::Remote(hash.clone()),
+                KeyProofTrieEdge::Described(hash, node) => Child::Hashed(hash.clone(), node),
             })
         })
     }

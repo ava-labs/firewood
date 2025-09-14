@@ -9,6 +9,7 @@ use crate::{
         path::{CollectedNibbles, Nibbles, PackedPath, PathGuard, WidenedPath},
         trie::{
             counter::NibbleCounter,
+            iter::Child,
             keyvalues::KeyValueTrieRoot,
             merged::{EitherProof, RangeProofTrieEdge, RangeProofTrieRoot},
             shunt::HashableShunt,
@@ -301,18 +302,18 @@ impl<'a> super::TrieNode<'a> for HashedRangeProofRef<'a, 'a> {
         }
     }
 
-    fn children(self) -> Children<super::Child<Self>> {
+    fn children(self) -> Children<Child<Self>> {
         match self.either {
             either::Left(proof) => proof.children.each_ref().map(|maybe| {
                 maybe.as_deref().map(|child| match child {
-                    HashedRangeProofTrieEdge::Distant(hash) => super::Child::Remote(hash.clone()),
-                    HashedRangeProofTrieEdge::Partial(hash, root) => super::Child::Hashed(
+                    HashedRangeProofTrieEdge::Distant(hash) => Child::Remote(hash.clone()),
+                    HashedRangeProofTrieEdge::Partial(hash, root) => Child::Hashed(
                         hash.clone(),
                         Self {
                             either: either::Right(root),
                         },
                     ),
-                    HashedRangeProofTrieEdge::Complete(hash, root) => super::Child::Hashed(
+                    HashedRangeProofTrieEdge::Complete(hash, root) => Child::Hashed(
                         hash.clone(),
                         Self {
                             either: either::Left(root),
@@ -322,7 +323,7 @@ impl<'a> super::TrieNode<'a> for HashedRangeProofRef<'a, 'a> {
             }),
             either::Right(kvp) => kvp.children.each_ref().map(|maybe| {
                 maybe.as_deref().map(|child| {
-                    super::Child::Hashed(
+                    Child::Hashed(
                         child.computed.clone(),
                         Self {
                             either: either::Right(child),

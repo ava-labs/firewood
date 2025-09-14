@@ -50,6 +50,20 @@ pub struct DuplicateKeysInProofError {
     pub value2: String,
 }
 
+/// Error when there are missing values detected in the key-value pairs provided.
+#[derive(Debug, Error)]
+#[error(
+    "missing key prefixes in range proof between {lower_bound} and {upper_bound}: {missing_keys:?}"
+)]
+pub struct MissingKeys {
+    /// The lower bound of the range where keys are missing.
+    pub lower_bound: crate::proofs::CollectedNibbles,
+    /// The upper bound of the range where keys are missing.
+    pub upper_bound: crate::proofs::CollectedNibbles,
+    /// The missing keys detected in the provided key-value pairs.
+    pub missing_keys: Vec<crate::proofs::MissingKeys>,
+}
+
 #[derive(Error)]
 /// Reasons why a proof is invalid
 pub enum ProofError {
@@ -137,7 +151,7 @@ pub enum ProofError {
 
     /// Error from the merkle package
     #[error(transparent)]
-    IO(#[from] FileIoError),
+    IO(#[from] Box<FileIoError>),
 
     /// Error deserializing a proof
     #[error(transparent)]
@@ -175,7 +189,17 @@ pub enum ProofError {
 
     /// Error when there are duplicate keys in the proof with different values.
     #[error(transparent)]
-    DuplicateKeysInProof(#[from] Box<DuplicateKeysInProofError>),
+    DuplicateKeysInProof(#[from] DuplicateKeysInProofError),
+
+    /// Error when there are missing values detected in the key-value pairs provided.
+    #[error(transparent)]
+    MissingKeys(#[from] Box<MissingKeys>),
+}
+
+impl From<FileIoError> for ProofError {
+    fn from(e: FileIoError) -> Self {
+        Self::IO(Box::new(e))
+    }
 }
 
 impl std::fmt::Debug for ProofError {
