@@ -1,6 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::proof::ProofError;
+
 use super::{Nibbles, PathNibble, SplitNibbles};
 
 /// Represents a view over a `Path` where each nibble has already been widened
@@ -16,12 +18,24 @@ pub(crate) struct WidenedPath<'a> {
 }
 
 impl<'a> WidenedPath<'a> {
-    pub const fn new(key: &'a [u8]) -> Self {
+    pub const fn empty() -> Self {
         Self {
+            bytes: &[],
+            head: 0,
+            tail: 0,
+        }
+    }
+
+    pub fn try_new(key: &'a [u8]) -> Result<Self, ProofError> {
+        if key.iter().any(|&v| v >= 16) {
+            return Err(ProofError::ChildIndexOutOfBounds(key.into()));
+        }
+
+        Ok(Self {
             bytes: key,
             head: 0,
             tail: key.len(),
-        }
+        })
     }
 }
 

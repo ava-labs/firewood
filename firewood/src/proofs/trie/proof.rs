@@ -47,15 +47,16 @@ impl<'a> KeyProofTrieRoot<'a> {
     where
         P: ProofCollection<Node = ProofNode>,
     {
-        nodes
-            .as_ref()
-            .iter()
-            .rev()
-            .try_fold(None::<Self>, |child, parent| match child {
+        let nodes = nodes.as_ref();
+        trace!("KeyProofTrieRoot::new({nodes:?}");
+        nodes.iter().rev().try_fold(None::<Self>, |child, parent| {
+            match child {
                 // each node in the slice must be a strict prefix of the following node
-                Some(child) => child.new_parent_node(parent).map(Some),
-                None => Ok(Some(Self::new_tail_node(parent))),
-            })
+                Some(child) => child.new_parent_node(parent),
+                None => Self::new_tail_node(parent),
+            }
+            .map(Some)
+        })
     }
 
     pub fn lower_bound(&self) -> (CollectedNibbles, &KeyProofTrieRoot<'_>) {
@@ -100,14 +101,14 @@ impl<'a> KeyProofTrieRoot<'a> {
         }
     }
 
-    fn new_tail_node(node: &'a ProofNode) -> Self {
-        let partial_path = WidenedPath::new(node.key.as_ref());
+    fn new_tail_node(node: &'a ProofNode) -> Result<Self, ProofError> {
+        let partial_path = WidenedPath::try_new(&node.key)?;
         trace!(
             "KeyProofTrieRoot: creating tail node for key {}",
             hex::encode(partial_path.bytes_iter().collect::<Vec<_>>()),
         );
 
-        Self {
+        Ok(Self {
             partial_path,
             value_digest: node.value_digest.as_ref().map(ValueDigest::as_ref),
             // A tail node is allowed to have children; they will all be remote.
@@ -118,7 +119,7 @@ impl<'a> KeyProofTrieRoot<'a> {
                     .clone()
                     .map(|maybe| maybe.map(KeyProofTrieEdge::Remote)),
             ),
-        }
+        })
     }
 
     /// Creates a new trie root by making this node a child of the given parent.
@@ -127,7 +128,7 @@ impl<'a> KeyProofTrieRoot<'a> {
     /// must reference this node in its children by hash (the hash is not verified
     /// here).
     fn new_parent_node(self, parent: &'a ProofNode) -> Result<Self, ProofError> {
-        let parent_path = WidenedPath::new(&parent.key);
+        let parent_path = WidenedPath::try_new(&parent.key)?;
         trace!(
             "KeyProofTrieRoot: adding parent for key {}; parent: {}",
             hex::encode(self.partial_path.bytes_iter().collect::<Vec<_>>()),
@@ -206,8 +207,8 @@ impl<'a> KeyProofTrieRoot<'a> {
         trace!(
             "KeyProofTrieRoot: merging two proof roots; leading_path: {}, lhs: {}, rhs: {}",
             leading_path.display(),
-            lhs.partial_path.display(),
-            rhs.partial_path.display(),
+            lhs.partial_path,
+            rhs.partial_path,
         );
 
         // at this level, keys must be identical

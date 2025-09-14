@@ -47,7 +47,7 @@ pub(super) enum RangeProofTrieEdge<'a> {
 impl<'a> RangeProofTrieRoot<'a> {
     pub(super) const fn empty() -> Self {
         Self {
-            partial_path: WidenedPath::new(&[]),
+            partial_path: WidenedPath::empty(),
             value_digest: None,
             children: BranchNode::empty_children(),
         }

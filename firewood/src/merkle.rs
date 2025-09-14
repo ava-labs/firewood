@@ -167,7 +167,8 @@ impl<T: TrieReader> Merkle<T> {
             };
 
             proof.push(ProofNode {
-                key: root.partial_path().bytes(),
+                // this needs to be nibbles, not bytes
+                key: root.partial_path().iter().copied().collect(),
                 partial_len: root.partial_path().0.len(),
                 value_digest: root
                     .value()
