@@ -82,7 +82,7 @@ where
         std::time::Duration::from(now.elapsed())
     );
 
-    if item_count <= 2048 {
+    if item_count <= 1024 {
         // NB: this is the longest step in init_merkle: ~18s for 4096 items
         let now = coarsetime::Instant::now();
         for (k, v) in iter.clone() {
