@@ -15,6 +15,7 @@ fn test_missing_key_proof() {
     let items = [("k", "v")];
     let merkle = init_merkle(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
+    trace!("root hash: {root_hash}");
 
     for key in ["a", "j", "l", "z"] {
         let proof = merkle.prove(key.as_ref()).unwrap();

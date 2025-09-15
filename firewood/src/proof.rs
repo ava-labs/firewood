@@ -268,6 +268,8 @@ impl Hashable for ProofNode {
 
 impl From<PathIterItem> for ProofNode {
     fn from(item: PathIterItem) -> Self {
+        firewood_storage::logger::trace!("ProofNode from PathIterItem: {item:#?}");
+
         let child_hashes = if let Some(branch) = item.node.as_branch() {
             branch.children_hashes()
         } else {

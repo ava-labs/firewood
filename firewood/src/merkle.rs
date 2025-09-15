@@ -168,7 +168,7 @@ impl<T: TrieReader> Merkle<T> {
 
             proof.push(ProofNode {
                 key: root.partial_path().iter().copied().collect(),
-                partial_len: root.partial_path().0.len(),
+                partial_len: 0,
                 value_digest: root
                     .value()
                     .map(|value| ValueDigest::Value(value.to_vec().into_boxed_slice())),
