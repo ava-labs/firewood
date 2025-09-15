@@ -467,14 +467,20 @@ impl NodeStore<Committed, FileBacked> {
             node.allocate_at(persisted_address);
             cached_nodes.push(node);
         }
-        let pending = saved_pinned_buffers
+        let mut pending = saved_pinned_buffers
             .iter()
             .filter(|pbe| pbe.node.is_some())
             .count();
-        ring.submit_and_wait(pending).map_err(|e| {
-            self.storage
-                .file_io_error(e, 0, Some("io-uring final submit_and_wait".to_string()))
-        })?;
+        while pending > 0 {
+            pending = pending
+                - ring.submit_and_wait(pending).map_err(|e| {
+                    self.storage.file_io_error(
+                        e,
+                        0,
+                        Some("io-uring final submit_and_wait".to_string()),
+                    )
+                })?;
+        }
 
         let final_completed_writes =
             handle_completion_queue(&self.storage, ring.completion(), &mut saved_pinned_buffers)?;
