@@ -467,32 +467,30 @@ impl NodeStore<Committed, FileBacked> {
             node.allocate_at(persisted_address);
             cached_nodes.push(node);
         }
-        let mut pending = saved_pinned_buffers
+        while let pending = saved_pinned_buffers
             .iter()
             .filter(|pbe| pbe.node.is_some())
-            .count();
-        while pending > 0 {
-            pending = pending
-                - ring.submit_and_wait(pending).map_err(|e| {
-                    self.storage.file_io_error(
-                        e,
-                        0,
-                        Some("io-uring final submit_and_wait".to_string()),
-                    )
-                })?;
-        }
-
-        let final_completed_writes =
-            handle_completion_queue(&self.storage, ring.completion(), &mut saved_pinned_buffers)?;
-
-        // Decrement gauge for final batch of writes that completed
-        if final_completed_writes > 0 {
-            #[expect(clippy::cast_precision_loss)]
-            firewood_gauge!(
-                "firewood.nodes.unwritten",
-                "current number of unwritten nodes"
-            )
-            .decrement(final_completed_writes as f64);
+            .count()
+            > 0
+        {
+            ring.submit_and_wait(pending).map_err(|e| {
+                self.storage
+                    .file_io_error(e, 0, Some("io-uring final submit_and_wait".to_string()))
+            })?;
+            let final_completed_writes = handle_completion_queue(
+                &self.storage,
+                ring.completion(),
+                &mut saved_pinned_buffers,
+            )?;
+            // Decrement gauge for final batch of writes that completed
+            if final_completed_writes > 0 {
+                #[expect(clippy::cast_precision_loss)]
+                firewood_gauge!(
+                    "firewood.nodes.unwritten",
+                    "current number of unwritten nodes"
+                )
+                .decrement(final_completed_writes as f64);
+            }
         }
 
         debug_assert!(
