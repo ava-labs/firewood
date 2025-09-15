@@ -285,7 +285,11 @@ fn propose_on_db<'p>(
     // TODO: This is a hack to ensure that the batch is sorted by key.
     // remove this once we find the bug
     let mut batch = batch.collect::<Vec<_>>();
-    trace!("propose_on_db: batch before sorting: {batch:?}");
+    if firewood_storage::logger::trace_enabled() {
+        for op in &batch {
+            trace!("op: {op}");
+        }
+    }
     batch.sort_by_key(|batch| *batch.key());
 
     // Propose the batch of operations.

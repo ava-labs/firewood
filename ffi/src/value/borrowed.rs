@@ -123,7 +123,7 @@ impl<T: Ord> Ord for BorrowedSlice<'_, T> {
     }
 }
 
-impl fmt::Display for BorrowedBytes<'_> {
+impl fmt::Display for BorrowedSlice<'_, u8> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let precision = f.precision().unwrap_or(64);
         write!(f, "{:.precision$}", super::DisplayHex(self.as_slice()))

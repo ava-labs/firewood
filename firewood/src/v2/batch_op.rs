@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::v2::api::{KeyType, ValueType};
+use std::fmt;
 
 /// A key/value pair operation. Only put (upsert) and delete are
 /// supported
@@ -26,6 +27,16 @@ pub enum BatchOp<K: KeyType, V: ValueType> {
         /// The prefix of the keys to delete
         prefix: K,
     },
+}
+
+impl<K: KeyType + fmt::Display, V: ValueType + fmt::Display> fmt::Display for BatchOp<K, V> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            BatchOp::Put { key, value } => write!(f, "Put {{ key: {key}, value: {value} }}"),
+            BatchOp::Delete { key } => write!(f, "Delete {{ key: {key} }}"),
+            BatchOp::DeleteRange { prefix } => write!(f, "DeleteRange {{ prefix: {prefix} }}"),
+        }
+    }
 }
 
 impl<K: KeyType, V: ValueType> BatchOp<K, V> {
