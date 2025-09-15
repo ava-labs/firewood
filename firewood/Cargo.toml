@@ -36,7 +36,7 @@ smallvec.workspace = true
 thiserror.workspace = true
 # Regular dependencies
 either = "1.15.0"
-typed-builder = "0.21.0"
+typed-builder = "0.22.0"
 
 [features]
 default = []
