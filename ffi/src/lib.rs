@@ -282,6 +282,11 @@ fn propose_on_db<'p>(
     // Create a batch of operations to perform.
     let batch = values.iter().map_into_batch();
 
+    // TODO: This is a hack to ensure that the batch is sorted by key.
+    // remove this once we find the bug
+    let mut batch = batch.collect::<Vec<_>>();
+    batch.sort_by_key(|batch| *batch.key());
+
     // Propose the batch of operations.
     let proposal = db.propose(batch).map_err(|e| e.to_string())?;
 
