@@ -352,6 +352,16 @@ fn propose_on_proposal(
     // Create a batch of operations to perform.
     let batch = values.iter().map_into_batch();
 
+    // TODO: This is a hack to ensure that the batch is sorted by key.
+    // remove this once we find the bug
+    let mut batch = batch.collect::<Vec<_>>();
+    if firewood_storage::logger::trace_enabled() {
+        for op in &batch {
+            trace!("op: {op}");
+        }
+    }
+    batch.sort_by_key(|batch| *batch.key());
+
     // Get proposal from ID.
     // We need write access to add the proposal after we create it.
     let guard = db
