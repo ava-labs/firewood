@@ -333,16 +333,14 @@ fn test_range_proof_with_invalid_non_existent_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    assert!(
-        merkle
-            .verify_range_proof(
-                Some(&first),
-                Some(items[end - 1].0),
-                &root_hash,
-                &range_proof,
-            )
-            .is_err()
-    );
+    merkle
+        .verify_range_proof(
+            Some(&first),
+            Some(items[end - 1].0),
+            &root_hash,
+            &range_proof,
+        )
+        .unwrap_err();
 
     // Case 2
     start = 100;
@@ -363,16 +361,14 @@ fn test_range_proof_with_invalid_non_existent_proof() {
 
     let root_hash_2 = merkle.nodestore().root_hash().unwrap();
 
-    assert!(
-        merkle
-            .verify_range_proof(
-                Some(items[start].0),
-                Some(&last),
-                &root_hash_2,
-                &range_proof_2,
-            )
-            .is_err()
-    );
+    merkle
+        .verify_range_proof(
+            Some(items[start].0),
+            Some(&last),
+            &root_hash_2,
+            &range_proof_2,
+        )
+        .unwrap_err();
 }
 
 #[test]
@@ -603,11 +599,9 @@ fn test_empty_range_proof() {
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
         if c.1 {
-            assert!(
-                merkle
-                    .verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof,)
-                    .is_err()
-            );
+            merkle
+                .verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof)
+                .unwrap_err();
         } else {
             merkle
                 .verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof)
@@ -653,16 +647,14 @@ fn test_gapped_range_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    assert!(
-        merkle
-            .verify_range_proof(
-                Some(&items[0].0),
-                Some(&items[items.len() - 1].0),
-                &root_hash,
-                &range_proof,
-            )
-            .is_err()
-    );
+    merkle
+        .verify_range_proof(
+            Some(&items[0].0),
+            Some(&items[items.len() - 1].0),
+            &root_hash,
+            &range_proof,
+        )
+        .unwrap_err();
 }
 
 #[test]
@@ -693,11 +685,9 @@ fn test_same_side_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    assert!(
-        merkle
-            .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof,)
-            .is_err()
-    );
+    merkle
+        .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof)
+        .unwrap_err();
 
     first = increase_key(items[pos].0);
     last = first;
@@ -714,11 +704,9 @@ fn test_same_side_proof() {
     let range_proof_2 =
         RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
 
-    assert!(
-        merkle
-            .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_2,)
-            .is_err()
-    );
+    merkle
+        .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_2)
+        .unwrap_err();
 }
 
 #[test]
@@ -878,16 +866,14 @@ fn test_empty_value_range_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    assert!(
-        merkle
-            .verify_range_proof(
-                Some(items[start].0),
-                Some(items[end - 1].0),
-                &root_hash,
-                &range_proof,
-            )
-            .is_err()
-    );
+    merkle
+        .verify_range_proof(
+            Some(items[start].0),
+            Some(items[end - 1].0),
+            &root_hash,
+            &range_proof,
+        )
+        .unwrap_err();
 }
 
 #[test]
@@ -923,16 +909,14 @@ fn test_all_elements_empty_value_range_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    assert!(
-        merkle
-            .verify_range_proof(
-                Some(items[start].0),
-                Some(items[end].0),
-                &root_hash,
-                &range_proof,
-            )
-            .is_err()
-    );
+    merkle
+        .verify_range_proof(
+            Some(items[start].0),
+            Some(items[end].0),
+            &root_hash,
+            &range_proof,
+        )
+        .unwrap_err();
 }
 
 #[test]
