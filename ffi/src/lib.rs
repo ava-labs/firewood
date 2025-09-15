@@ -222,7 +222,7 @@ pub extern "C" fn fwd_get_from_root(
     let result = invoke_with_handle(db, move |db| {
         db.get_from_root(root.as_ref().try_into()?, key)
     });
-    trace!("get_from_root: root={root:?} key={key:?} -> {result:?}");
+    trace!("get_from_root: root={root} key={key} -> {result:?}");
     result
 }
 
