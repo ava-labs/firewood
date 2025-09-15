@@ -194,6 +194,15 @@ pub unsafe extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) 
     invoke_with_handle(handle, IteratorHandle::next)
 }
 
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_exhaust_iterator(
+    iterator: Option<&mut IteratorHandle<'_>>,
+) -> VoidResult {
+    invoke_with_handle(iterator, |it| {
+        Iterator::count(it);
+    })
+}
+
 /// Retrieves the next batch of items from the iterator
 ///
 /// # Arguments

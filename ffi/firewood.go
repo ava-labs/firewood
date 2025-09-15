@@ -16,8 +16,8 @@ package ffi
 // // #cgo darwin,arm64 LDFLAGS: -L${SRCDIR}/libs/aarch64-apple-darwin
 // // FIREWOOD_CGO_END_STATIC_LIBS
 // // FIREWOOD_CGO_BEGIN_LOCAL_LIBS
-// #cgo LDFLAGS: -L${SRCDIR}/../target/debug
 // #cgo LDFLAGS: -L${SRCDIR}/../target/release
+// #cgo LDFLAGS: -L${SRCDIR}/../target/debug
 // #cgo LDFLAGS: -L${SRCDIR}/../target/maxperf
 // // FIREWOOD_CGO_END_LOCAL_LIBS
 // #cgo LDFLAGS: -lfirewood_ffi -lm

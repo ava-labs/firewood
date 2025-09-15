@@ -66,12 +66,12 @@ func (it *Iterator) nextInternal() error {
 		return e
 	}
 	if it.batchSize <= 1 {
-		kv, e := getKeyValueFromResult(C.fwd_iter_next(it.handle))
-		if e != nil {
+	kv, e := getKeyValueFromResult(C.fwd_iter_next(it.handle))
+	if e != nil {
 			return e
-		}
+	}
 		it.currentPair = kv
-		it.currentResource = kv
+	it.currentResource = kv
 	} else {
 		batch, e := getKeyValueBatchFromResult(C.fwd_iter_next_n(it.handle, C.size_t(it.batchSize)))
 		if e != nil {
@@ -95,7 +95,10 @@ func (it *Iterator) SetBatchSize(batchSize int) {
 }
 
 func (it *Iterator) Exhaust(totalLen int) error {
-	C.fwd_iter_next_n(it.handle, C.size_t(totalLen))
+	if it.handle == nil {
+		return nil
+	}
+	C.fwd_exhaust_iterator(it.handle)
 	return nil
 }
 
@@ -126,7 +129,7 @@ func (it *Iterator) NextBorrowed() bool {
 	it.err = it.nextInternal()
 	if it.currentPair == nil || it.err != nil {
 		return false
-	}
+}
 	it.currentKey = it.currentPair.key.BorrowedBytes()
 	it.currentValue = it.currentPair.value.BorrowedBytes()
 	it.err = nil
@@ -160,9 +163,11 @@ func (it *Iterator) Drop() error {
 	if it.handle != nil {
 		// Always free the iterator even if releasing the current KV/batch failed.
 		// The iterator holds a NodeStore ref that must be dropped.
-		return errors.Join(
-			err,
-			getErrorFromVoidResult(C.fwd_free_iterator(it.handle)))
+		err_free := getErrorFromVoidResult(C.fwd_free_iterator(it.handle))
+		if err_free == nil {
+			it.handle = nil // prevent double free
+		}
+		return errors.Join(err, err_free)
 	}
 	return err
 }

@@ -1281,6 +1281,8 @@ struct VoidResult fwd_db_verify_change_proof(const struct DatabaseHandle *_db,
 struct VoidResult fwd_db_verify_range_proof(const struct DatabaseHandle *_db,
                                             struct VerifyRangeProofArgs _args);
 
+struct VoidResult fwd_exhaust_iterator(struct IteratorHandle *iterator);
+
 /**
  * Frees the memory associated with a `ChangeProofContext`.
  *

@@ -293,8 +293,8 @@ func kvForBench(num int) ([][]byte, [][]byte) {
 	vals := make([][]byte, num)
 
 	for i := range keys {
-		keys[i] = randomBytes(32)
-		vals[i] = randomBytes(128)
+		keys[i] = randomBytes(64)
+		vals[i] = randomBytes(1024)
 	}
 	_ = sortKV(keys, vals)
 	return keys, vals
@@ -1281,7 +1281,7 @@ func TestIterExhaust(t *testing.T) {
 func BenchmarkIterator(b *testing.B) {
 	r := require.New(b)
 	db := newTestDatabase(b)
-	n := 10000
+	n := 100000
 	batchSizes := make([]int, 0)
 	base := 4
 	for i := base; i <= n; i *= base {
@@ -1291,43 +1291,6 @@ func BenchmarkIterator(b *testing.B) {
 	keys, vals := kvForBench(n)
 	root, err := db.Update(keys, vals)
 	r.NoError(err)
-
-	dataModes := []struct {
-		name     string
-		configFn func(it *Iterator) kvIter
-	}{
-		{"Owned", func(it *Iterator) kvIter { return it }},
-		{"Borrowed", func(it *Iterator) kvIter { return &borrowIter{it: it} }},
-	}
-
-	type benchMode struct {
-		name     string
-		configFn func(it *Iterator)
-	}
-	batchModes := []benchMode{
-		{"Single", func(it *Iterator) {
-			it.SetBatchSize(1)
-		}},
-	}
-
-	for _, batchSize := range batchSizes {
-		batchModes = append(batchModes, benchMode{name: fmt.Sprintf("Batched-%d", batchSize), configFn: func(it *Iterator) {
-			it.SetBatchSize(batchSize)
-		}})
-	}
-
-	runForAllModes := func(parentB *testing.B, name string, fn func(*testing.B, func(it *Iterator) kvIter)) {
-		for _, dataMode := range dataModes {
-			for _, batchMode := range batchModes {
-				parentB.Run(fmt.Sprintf("%s/%s/%s", name, dataMode.name, batchMode.name), func(b *testing.B) {
-					fn(b, func(it *Iterator) kvIter {
-						batchMode.configFn(it)
-						return dataMode.configFn(it)
-					})
-				})
-			}
-		}
-	}
 
 	b.Run("ExhaustInRust", func(b *testing.B) {
 		r := require.New(b)
@@ -1339,17 +1302,25 @@ func BenchmarkIterator(b *testing.B) {
 		}
 	})
 
-	runForAllModes(b, "Next", func(b *testing.B, configureIterator func(it *Iterator) kvIter) {
-		r := require.New(b)
-		for range b.N {
-			iter, err := db.IterOnRoot(root, nil)
-			r.NoError(err)
-			it := configureIterator(iter)
-			for it.Next() {
-			}
-			r.NoError(it.Err())
+	for _, dataMode := range []string{"borrow", "own"} {
+		for _, batchSize := range batchSizes {
+			b.Run(fmt.Sprintf("Next/%s/%d", dataMode, batchSize), func(b *testing.B) {
+				r := require.New(b)
+				for range b.N {
+					iter, err := db.IterOnRoot(root, nil)
+					r.NoError(err)
+					iter.SetBatchSize(batchSize)
+					nextFn := iter.Next
+					if dataMode == "borrow" {
+						nextFn = iter.NextBorrowed
+					}
+					for nextFn() {
+					}
+					r.NoError(iter.Err())
+				}
+			})
 		}
-	})
+	}
 }
 
 // Tests that the iterator still works after proposal is committed
@@ -1400,4 +1371,51 @@ func TestIterUpdate(t *testing.T) {
 	// iterate after commit
 	// because iterator is fixed on the revision hash, it should return the initial values
 	assertIteratorYields(r, it, keys, vals)
+}
+
+func newDbOpen(t testing.TB, fileP string) *Database {
+	t.Helper()
+	r := require.New(t)
+
+	db, closeDB, err := newDatabase(fileP)
+	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(closeDB())
+	})
+	return db
+}
+
+func opDatabase(dbFile string) (*Database, func() error, error) {
+	conf := DefaultConfig()
+	// conf.Truncate = true // in tests, we use filepath.Join, which creates an empty file
+
+	f, err := New(dbFile, conf)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
+	}
+	return f, f.Close, nil
+}
+
+func openTestDatabase(t testing.TB, fileP string) *Database {
+	t.Helper()
+	r := require.New(t)
+
+	db, closeDB, err := opDatabase(fileP)
+	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(closeDB())
+	})
+	return db
+}
+
+func TestBigDb(t *testing.T) {
+	r := require.New(t)
+	db := newDbOpen(t, "big_db")
+
+	for i := 0; i < 2; i++ {
+		keys, vals := kvForBench(1_000_000)
+		_, err := db.Update(keys, vals)
+		r.NoError(err)
+		t.Logf("wrote %d \n", i)
+	}
 }
