@@ -11,7 +11,6 @@ type KeyValuePairs = Vec<(Box<[u8]>, Box<[u8]>)>;
 #[test]
 // Tests that missing keys can also be proven. The test explicitly uses a single
 // entry trie and checks for missing keys both before and after the single entry.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_missing_key_proof() {
     let items = [("k", "v")];
     let merkle = init_merkle(items);
@@ -22,8 +21,8 @@ fn test_missing_key_proof() {
         assert!(!proof.is_empty());
         assert!(proof.len() == 1);
 
-        firewood_storage::logger::trace!("Proof: {proof:#?}");
-        proof.verify(key, None::<&[u8]>, &root_hash).unwrap(); // called `Result::unwrap()` on an `Err` value: UnexpectedHash
+        firewood_storage::logger::trace!("key: {key}, proof: {proof:#?}");
+        proof.verify(key, None::<&[u8]>, &root_hash).unwrap();
     }
 }
 
