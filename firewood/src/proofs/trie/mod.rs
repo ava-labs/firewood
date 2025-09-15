@@ -10,7 +10,7 @@ mod merged;
 mod proof;
 mod shunt;
 
-use firewood_storage::{Children, HashType, ValueDigest, logger::trace};
+use firewood_storage::{Children, HashType, IntoHashType, ValueDigest, logger::trace};
 
 pub(crate) use self::hashed::HashedRangeProof;
 pub use self::iter::MissingKeys;
@@ -133,7 +133,7 @@ where
             return Err(ProofError::UnexpectedHash(Box::new(UnexpectedHashError {
                 key: Box::new([]),
                 context: "hashing trie root",
-                expected: self.expected_root.clone(),
+                expected: self.expected_root.clone().into_hash_type(),
                 actual: root.computed().clone(),
             })));
         }
