@@ -32,6 +32,16 @@ pub(crate) trait Nibbles {
         JoinedPath::new(self, other)
     }
 
+    /// Returns true if `self` is a prefix of `other`.
+    fn is_prefix_of(&self, other: &(impl Nibbles + ?Sized)) -> bool {
+        if self.len() > other.len() {
+            return false;
+        }
+        self.nibbles_iter()
+            .zip(other.nibbles_iter())
+            .all(|(a, b)| a == b)
+    }
+
     fn eq(&self, other: &(impl Nibbles + ?Sized)) -> bool {
         self.len() == other.len() && self.nibbles_iter().eq(other.nibbles_iter())
     }
@@ -48,7 +58,7 @@ pub(in crate::proofs) trait SplitNibbles: Nibbles + Sized {
 }
 
 /// A view of a path where each byte is widened to represent two nibbles.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct CollectedNibbles {
     nibbles: smallvec::SmallVec<[u8; 64]>,
 }

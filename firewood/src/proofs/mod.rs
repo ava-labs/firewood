@@ -57,9 +57,7 @@ mod magic {
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct VerifyRangeProofArguments<'a, K, V, H> {
-    #[expect(unused)]
     lower_bound: Option<&'a [u8]>,
-    #[expect(unused)]
     upper_bound: Option<&'a [u8]>,
     expected_root: &'a HashKey,
     range_proof: &'a RangeProof<K, V, H>,

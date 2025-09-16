@@ -669,9 +669,11 @@ fn test_same_side_proof() {
     let merkle = init_merkle(items.clone());
 
     let pos = 1000;
+    trace!("{:?}", items[pos]);
     let mut last = decrease_key(items[pos].0);
     let mut first = last;
     first = decrease_key(&first);
+    trace!("first={}, last={}", hex::encode(first), hex::encode(last));
 
     let start_proof = merkle.prove(&first).unwrap();
     let end_proof = merkle.prove(&last).unwrap();
@@ -692,6 +694,7 @@ fn test_same_side_proof() {
     first = increase_key(items[pos].0);
     last = first;
     last = increase_key(&last);
+    trace!("first={}, last={}", hex::encode(first), hex::encode(last));
 
     let start_proof_2 = merkle.prove(&first).unwrap();
     let end_proof_2 = merkle.prove(&last).unwrap();

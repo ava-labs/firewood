@@ -10,6 +10,8 @@ mod merged;
 mod proof;
 mod shunt;
 
+use std::ops::RangeBounds;
+
 use firewood_storage::{Children, HashType, IntoHashType, ValueDigest, logger::trace};
 
 pub(crate) use self::hashed::HashedRangeProof;
@@ -17,8 +19,8 @@ pub use self::iter::MissingKeys;
 use crate::{
     proof::{ProofCollection, ProofError, ProofNode, UnexpectedHashError},
     proofs::{
-        VerifyRangeProofArguments,
-        path::{Nibbles, PathGuard},
+        CollectedNibbles, VerifyRangeProofArguments,
+        path::{Nibbles, PackedPath, PathGuard},
         trie::{
             dump::DumpTrie,
             iter::{Child, PreOrderIter},
@@ -30,51 +32,163 @@ use crate::{
     v2::api::{KeyType, ValueType},
 };
 
+macro_rules! trace_trie {
+    ($prefix:expr, Some($trie:expr)) => {
+        trace!("{} trie\n{}", $prefix, $trie.display());
+    };
+    ($prefix:expr, $maybe_trie:expr) => {
+        if let Some(ref trie) = $maybe_trie {
+            trace_trie!($prefix, Some(trie));
+        } else {
+            trace!("{} trie: <empty>", $prefix);
+        }
+    };
+}
+
+#[derive(Debug)]
+struct KeyBounds {
+    lower: Option<CollectedNibbles>,
+    upper: Option<CollectedNibbles>,
+}
+
+type ProofBoundFn<'a, 'b> =
+    fn(&'a KeyProofTrieRoot<'b>) -> (CollectedNibbles, &'a KeyProofTrieRoot<'b>);
+
+impl KeyBounds {
+    const fn unbounded() -> Self {
+        Self {
+            lower: None,
+            upper: None,
+        }
+    }
+
+    fn edge_bound<'a, 'b>(
+        bound: Option<PackedPath<'_>>,
+        proof: Option<&'a KeyProofTrieRoot<'b>>,
+        proof_bound_fn: ProofBoundFn<'a, 'b>,
+        compare: fn(&CollectedNibbles, &PackedPath<'_>) -> bool,
+    ) -> Result<Option<CollectedNibbles>, ProofError> {
+        match (bound, proof) {
+            (_, None) => Ok(None),
+            (None, Some(proof)) => {
+                // only a proof, so bounded by the proof
+                let (proof_bound, _) = proof_bound_fn(proof);
+                Ok(Some(proof_bound))
+            }
+            (Some(bound), Some(proof)) => {
+                // both a bound and a proof, so bounded by the tighter of the two
+                let (proof_bound, _) = proof_bound_fn(proof);
+                if compare(&proof_bound, &bound) && !proof_bound.is_prefix_of(&bound) {
+                    return Err(ProofError::InvalidRange);
+                }
+                Ok(Some(bound.collect()))
+            }
+        }
+    }
+}
+
+impl RangeBounds<CollectedNibbles> for KeyBounds {
+    fn start_bound(&self) -> std::ops::Bound<&CollectedNibbles> {
+        match self.lower {
+            None => std::ops::Bound::Unbounded,
+            Some(ref lower) => std::ops::Bound::Included(lower),
+        }
+    }
+
+    fn end_bound(&self) -> std::ops::Bound<&CollectedNibbles> {
+        match self.upper {
+            None => std::ops::Bound::Unbounded,
+            Some(ref upper) => std::ops::Bound::Included(upper),
+        }
+    }
+}
+
 impl<K, V, H> VerifyRangeProofArguments<'_, K, V, H>
 where
     K: KeyType,
     V: ValueType,
     H: ProofCollection<Node = ProofNode>,
 {
-    pub fn verify(self) -> Result<Vec<MissingKeys>, ProofError> {
-        macro_rules! trace_trie {
-            ($prefix:expr, Some($trie:expr)) => {
-                trace!("{} trie\n{}", $prefix, $trie.display());
-            };
-            ($prefix:expr, $maybe_trie:expr) => {
-                if let Some(ref trie) = $maybe_trie {
-                    trace_trie!($prefix, Some(trie));
-                } else {
-                    trace!("{} trie: <empty>", $prefix);
-                }
-            };
+    /// Shrink the bounds, if applicable, and return the resulting bounds, if any.
+    ///
+    /// - If there is no proof for the respective bound, then the edge is unbounded.
+    /// - If there is a proof for the respective bound, then the bound must be
+    ///   within the bounds specified in the parameters. However, if the bound
+    ///   is smaller than the specified bound (but still within it), then the
+    ///   smaller bound is used.
+    /// - Proof bounds may be truncated at the node where the proof ends. In this
+    ///   case, the proof bound must be a strict prefix of the specified bound.
+    /// - Additionally, the key value pairs must be within the bounds of the
+    ///   proof, which may be smaller than the specified bounds.
+    ///
+    /// The resulting bounds are inclusive in their respective directions.
+    fn key_bounds(
+        &self,
+        kvp: Option<&KeyValueTrieRoot<'_>>,
+        left_proof: Option<&KeyProofTrieRoot<'_>>,
+        right_proof: Option<&KeyProofTrieRoot<'_>>,
+    ) -> Result<KeyBounds, ProofError> {
+        let mut bounds = KeyBounds::unbounded();
+        bounds.lower = KeyBounds::edge_bound(
+            self.lower_bound.map(PackedPath::new),
+            left_proof,
+            KeyProofTrieRoot::lower_bound,
+            |a, b| a < b,
+        )?;
+        bounds.upper = KeyBounds::edge_bound(
+            self.upper_bound.map(PackedPath::new),
+            right_proof,
+            KeyProofTrieRoot::upper_bound,
+            |a, b| a > b,
+        )?;
+
+        if let (Some(lower), Some(upper)) = (bounds.lower.as_ref(), bounds.upper.as_ref())
+            && lower > upper
+        {
+            return Err(ProofError::InvalidRange);
         }
 
+        if let Some(kvp) = kvp {
+            let (lower_bound, _) = kvp.lower_bound();
+            let (upper_bound, _) = kvp.upper_bound();
+            if bounds.contains(&lower_bound) && bounds.contains(&upper_bound) {
+                trace!(
+                    "kvp bounds {lower_bound:?}, {upper_bound:?} within proof bounds {bounds:?}"
+                );
+                bounds.lower = Some(lower_bound);
+                bounds.upper = Some(upper_bound);
+            } else {
+                trace!(
+                    "kvp bounds {lower_bound:?}, {upper_bound:?} not within proof bounds {bounds:?}"
+                );
+                return Err(ProofError::StateFromOutsideOfRange);
+            }
+        }
+
+        Ok(bounds)
+    }
+
+    pub fn verify(self) -> Result<Vec<MissingKeys>, ProofError> {
         let mut path = Vec::new();
         let mut path = PathGuard::new(&mut path);
 
         let kvp = KeyValueTrieRoot::new(path.fork(), self.range_proof.key_values())?;
         trace_trie!("KVP", kvp);
 
-        let kvp_bounds = kvp
-            .as_ref()
-            .map(|kvp| (kvp.lower_bound(), kvp.upper_bound()));
-        trace!("KVP bounds: {kvp_bounds:#?}");
-        let kvp_bounds = kvp_bounds.map(|((l, _), (r, _))| (l, r));
-
         let lower_bound_proof = KeyProofTrieRoot::new(self.range_proof.start_proof())?;
         trace_trie!("Lower bound proof", lower_bound_proof);
-
         let upper_bound_proof = KeyProofTrieRoot::new(self.range_proof.end_proof())?;
         trace_trie!("Upper bound proof", upper_bound_proof);
 
+        let key_bounds = self.key_bounds(
+            kvp.as_ref(),
+            lower_bound_proof.as_ref(),
+            upper_bound_proof.as_ref(),
+        )?;
+        trace!("Bounds: {key_bounds:#?}");
+
         let proof = KeyProofTrieRoot::merge_opt(path.fork(), lower_bound_proof, upper_bound_proof)?;
         trace_trie!("Merged bound proof", proof);
-
-        let proof_bounds = proof
-            .as_ref()
-            .map(|proof| (proof.lower_bound(), proof.upper_bound()));
-        trace!("Proof bounds: {proof_bounds:#?}");
 
         let root = match (proof, kvp) {
             (None, None) => Ok(either::Left(RangeProofTrieRoot::empty())),
@@ -110,23 +224,21 @@ where
             })
             .collect::<Vec<_>>();
         trace!("Holes: {holes:#?}");
-        if let Some((lower_path, upper_path)) = kvp_bounds {
-            let bounds = lower_path..=upper_path;
-            let missing_keys = holes
-                .iter()
-                .filter(|hole| bounds.contains(&hole.leading_path))
-                .cloned()
-                .collect::<Vec<_>>();
-            if !missing_keys.is_empty() {
-                let (lower_bound, upper_bound) = bounds.into_inner();
-                return Err(ProofError::MissingKeys(Box::new(
-                    crate::proof::MissingKeys {
-                        lower_bound,
-                        upper_bound,
-                        missing_keys,
-                    },
-                )));
-            }
+
+        let missing_keys = holes
+            .iter()
+            .filter(|hole| key_bounds.contains(&hole.leading_path))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !missing_keys.is_empty() {
+            // let (lower_bound, upper_bound) = bounds.into_inner();
+            return Err(ProofError::MissingKeys(Box::new(
+                crate::proof::MissingKeys {
+                    lower_bound: key_bounds.lower.unwrap_or_default(),
+                    upper_bound: key_bounds.upper.unwrap_or_default(),
+                    missing_keys,
+                },
+            )));
         }
 
         if root.computed() != self.expected_root {
