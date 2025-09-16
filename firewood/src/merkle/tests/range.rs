@@ -1,6 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use assert_matches::assert_matches;
+
 use super::*;
 use crate::range_proof::RangeProof;
 
@@ -13,12 +15,14 @@ fn test_missing_key_proof() {
     let items = [("k", "v")];
     let merkle = init_merkle(items);
     let root_hash = merkle.nodestore().root_hash().unwrap();
+    trace!("root hash: {root_hash}");
 
     for key in ["a", "j", "l", "z"] {
         let proof = merkle.prove(key.as_ref()).unwrap();
         assert!(!proof.is_empty());
         assert!(proof.len() == 1);
 
+        firewood_storage::logger::trace!("key: {key}, proof: {proof:#?}");
         proof.verify(key, None::<&[u8]>, &root_hash).unwrap();
     }
 }
@@ -26,7 +30,7 @@ fn test_missing_key_proof() {
 #[test]
 // Tests normal range proof with both edge proofs as the existent proof.
 // The test cases are generated randomly.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 42.607s runtime; 4096 elements takes ~30s
 fn test_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -62,112 +66,167 @@ fn test_range_proof() {
                 &root_hash,
                 &range_proof,
             )
-            .unwrap();
+            .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
     }
 }
 
+/// The nature of the error makes an indeterminate error possible, so we match
+/// on the generic proof error.
+fn default_verify_error(err: &api::Error, msg: &str) {
+    assert_matches!(err, api::Error::ProofError(_), "{msg}");
+}
+fn expect_unexpected_hash(err: &api::Error, msg: &str) {
+    assert_matches!(
+        err,
+        api::Error::ProofError(ProofError::UnexpectedHash(_) | ProofError::ValueMismatch),
+        "{msg}, got {err}"
+    );
+}
+fn encode(b: &(impl AsRef<[u8]> + ?Sized)) -> std::borrow::Cow<'_, str> {
+    str::from_utf8(b.as_ref()).map_or_else(|_| hex::encode(b).into(), Into::into)
+}
+
 #[test]
+#[expect(clippy::too_many_lines)]
 // Tests a few cases which the proof is wrong.
 // The prover is expected to detect the error.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 30.213s runtime
 fn test_bad_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
+    let now = coarsetime::Instant::now();
     let set = fixed_and_pseudorandom_data(&rng, 4096);
-    let mut items = set.iter().collect::<Vec<_>>();
-    items.sort_unstable();
+    let items = {
+        let mut items = set.into_iter().collect::<Vec<_>>();
+        items.sort_unstable();
+        items
+    };
+    trace!(
+        "Data generation took {:?}",
+        std::time::Duration::from(now.elapsed())
+    );
+
+    let now = coarsetime::Instant::now();
     let merkle = init_merkle(items.clone());
+    trace!(
+        "Merkle init took {:?}",
+        std::time::Duration::from(now.elapsed())
+    );
 
-    for _ in 0..10 {
-        let start = rng.random_range(0..items.len());
-        let end = rng.random_range(0..items.len() - start) + start - 1;
+    let root_hash = merkle.nodestore().root_hash().unwrap();
 
-        if end <= start {
-            continue;
-        }
+    for loop_iter in 0..10 {
+        let (start, end) = loop {
+            let start = rng.random_range(0..items.len());
+            let end = rng.random_range(0..items.len() - start) + start - 1;
 
-        let _proof = merkle
-            .prove(items[start].0)
-            .unwrap()
-            .join(merkle.prove(items[end - 1].0).unwrap());
-
-        let mut keys: Vec<[u8; 32]> = Vec::new();
-        let mut vals: Vec<[u8; 20]> = Vec::new();
-        for item in &items[start..end] {
-            keys.push(*item.0);
-            vals.push(*item.1);
-        }
-
-        let test_case: u32 = rng.random_range(0..6);
-        let index = rng.random_range(0..end - start);
-        match test_case {
-            0 => {
-                // Modified key
-                keys[index] = rng.random::<[u8; 32]>(); // In theory it can't be same
+            if end <= start {
+                continue;
             }
-            1 => {
-                // Modified val
-                vals[index] = rng.random::<[u8; 20]>(); // In theory it can't be same
-            }
-            2 => {
-                // Gapped entry slice
-                if index == 0 || index == end - start - 1 {
-                    continue;
+
+            break (start, end);
+        };
+
+        let start_proof = merkle.prove(&items[start].0).unwrap();
+        let end_proof = merkle.prove(&items[end - 1].0).unwrap();
+
+        let mut key_vals = items[start..end].to_vec();
+
+        let index = rng.random_range(0..key_vals.len());
+        let (key_slot, value_slot) = &mut key_vals[index];
+
+        let message;
+        let verify_error: fn(&api::Error, &str);
+        loop {
+            let test_case: u32 = rng.random_range(0..5);
+            match test_case {
+                0 => {
+                    // Modified key
+                    // In theory it can't be same
+                    let old_key = std::mem::replace(key_slot, rng.random::<[u8; 32]>());
+                    message = format!(
+                        "{loop_iter}: test_case {test_case}: modified index {index} key from {} to {}",
+                        encode(&old_key),
+                        encode(key_slot),
+                    );
+                    verify_error = default_verify_error;
                 }
-                keys.remove(index);
-                vals.remove(index);
-            }
-            3 => {
-                // Out of order
-                let index_1 = rng.random_range(0..end - start);
-                let index_2 = rng.random_range(0..end - start);
-                if index_1 == index_2 {
-                    continue;
+                1 => {
+                    // Modified val
+                    // In theory it can't be same
+                    let old_val = std::mem::replace(value_slot, rng.random::<[u8; 20]>());
+                    message = format!(
+                        "{loop_iter}: test_case {test_case}: modified index {index} val for key {} from {} to {}",
+                        encode(key_slot),
+                        encode(&old_val),
+                        encode(value_slot),
+                    );
+                    verify_error = expect_unexpected_hash;
                 }
-                keys.swap(index_1, index_2);
-                vals.swap(index_1, index_2);
+                2 => {
+                    // Gapped entry slice
+                    if index == 0 || index == end - start - 1 {
+                        continue;
+                    }
+                    let (removed_key, removed_val) = key_vals.remove(index);
+                    message = format!(
+                        "{loop_iter}: test_case {test_case}: removed index {index} key {} val {}",
+                        encode(&removed_key),
+                        encode(&removed_val),
+                    );
+                    verify_error = expect_unexpected_hash;
+                }
+                3 => {
+                    // Set random key to empty, do nothing
+                    let old_key = std::mem::take(key_slot);
+                    message = format!(
+                        "{loop_iter}: test_case {test_case}: modified index {index} key from {} to {}",
+                        encode(&old_key),
+                        encode(key_slot),
+                    );
+                    verify_error = default_verify_error;
+                }
+                4 => {
+                    // Set random value to nil
+                    let old_val = std::mem::take(value_slot);
+                    message = format!(
+                        "{loop_iter}: test_case {test_case}: modified index {index} val for key {} from {} to {}",
+                        encode(key_slot),
+                        encode(&old_val),
+                        encode(value_slot),
+                    );
+                    verify_error = expect_unexpected_hash;
+                }
+                _ => unreachable!(),
             }
-            4 => {
-                // Set random key to empty, do nothing
-                keys[index] = [0; 32];
-            }
-            5 => {
-                // Set random value to nil
-                vals[index] = [0; 20];
-            }
-            _ => unreachable!(),
+
+            break;
         }
 
-        let key_values: KeyValuePairs = keys
-            .iter()
-            .zip(vals.iter())
-            .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-            .collect();
+        let range_proof = RangeProof::new(start_proof, end_proof, key_vals.into_boxed_slice());
 
-        let start_proof = merkle.prove(items[start].0).unwrap();
-        let end_proof = merkle.prove(items[end - 1].0).unwrap();
-
-        let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
-
-        let root_hash = merkle.nodestore().root_hash().unwrap();
-
-        assert!(
-            merkle
-                .verify_range_proof(
-                    Some(items[start].0),
-                    Some(items[end - 1].0),
-                    &root_hash,
-                    &range_proof,
-                )
-                .is_err()
+        trace!("{:->128}", "");
+        let now = coarsetime::Instant::now();
+        let err = merkle
+            .verify_range_proof(
+                Some(items[start].0),
+                Some(items[end - 1].0),
+                &root_hash,
+                &range_proof,
+            )
+            .expect_err(&message);
+        trace!(
+            "{loop_iter}: Proof verification took {:?}",
+            std::time::Duration::from(now.elapsed())
         );
+
+        verify_error(&err, &message);
     }
 }
 
 #[test]
 // Tests normal range proof with two non-existent proofs.
 // The test cases are generated randomly.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_range_proof_with_non_existent_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -217,7 +276,7 @@ fn test_range_proof_with_non_existent_proof() {
 
         merkle
             .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof)
-            .unwrap();
+            .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
     }
 
     // Special case, two edge proofs for two edge key.
@@ -245,7 +304,7 @@ fn test_range_proof_with_non_existent_proof() {
 // Tests such scenarios:
 // - There exists a gap between the first element and the left edge proof
 // - There exists a gap between the last element and the right edge proof
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 29.882s runtime
 fn test_range_proof_with_invalid_non_existent_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -272,16 +331,14 @@ fn test_range_proof_with_invalid_non_existent_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    assert!(
-        merkle
-            .verify_range_proof(
-                Some(&first),
-                Some(items[end - 1].0),
-                &root_hash,
-                &range_proof,
-            )
-            .is_err()
-    );
+    merkle
+        .verify_range_proof(
+            Some(&first),
+            Some(items[end - 1].0),
+            &root_hash,
+            &range_proof,
+        )
+        .unwrap_err();
 
     // Case 2
     start = 100;
@@ -302,22 +359,19 @@ fn test_range_proof_with_invalid_non_existent_proof() {
 
     let root_hash_2 = merkle.nodestore().root_hash().unwrap();
 
-    assert!(
-        merkle
-            .verify_range_proof(
-                Some(items[start].0),
-                Some(&last),
-                &root_hash_2,
-                &range_proof_2,
-            )
-            .is_err()
-    );
+    merkle
+        .verify_range_proof(
+            Some(items[start].0),
+            Some(&last),
+            &root_hash_2,
+            &range_proof_2,
+        )
+        .unwrap_err();
 }
 
 #[test]
 // Tests the proof with only one element. The first edge proof can be existent one or
 // non-existent one.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_one_element_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -352,7 +406,7 @@ fn test_one_element_range_proof() {
             &root_hash,
             &range_proof,
         )
-        .unwrap();
+        .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
 
     // One element with left non-existent edge proof
     let first = decrease_key(items[start].0);
@@ -441,7 +495,6 @@ fn test_one_element_range_proof() {
 #[test]
 // Tests the range proof with all elements.
 // The edge proofs can be nil.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_all_elements_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -472,7 +525,7 @@ fn test_all_elements_proof() {
 
     merkle
         .verify_range_proof(Some(&empty_key), Some(&empty_key), &root_hash, &range_proof)
-        .unwrap();
+        .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(ExpectedEndProof)
 
     // With edge proofs, it should still work.
     let start = 0;
@@ -519,7 +572,6 @@ fn test_all_elements_proof() {
 #[test]
 // Tests the range proof with "no" element. The first edge proof must
 // be a non-existent proof.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_empty_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -542,15 +594,13 @@ fn test_empty_range_proof() {
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
         if c.1 {
-            assert!(
-                merkle
-                    .verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof,)
-                    .is_err()
-            );
+            merkle
+                .verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof)
+                .unwrap_err();
         } else {
             merkle
                 .verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof)
-                .unwrap();
+                .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(ShouldBePrefixOfProvenKey)
         }
     }
 }
@@ -558,7 +608,6 @@ fn test_empty_range_proof() {
 #[test]
 // Focuses on the small trie with embedded nodes. If the gapped
 // node is embedded in the trie, it should be detected too.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_gapped_range_proof() {
     let mut items = Vec::new();
     // Sorted entries
@@ -593,21 +642,19 @@ fn test_gapped_range_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    assert!(
-        merkle
-            .verify_range_proof(
-                Some(&items[0].0),
-                Some(&items[items.len() - 1].0),
-                &root_hash,
-                &range_proof,
-            )
-            .is_err()
-    );
+    merkle
+        .verify_range_proof(
+            Some(&items[0].0),
+            Some(&items[items.len() - 1].0),
+            &root_hash,
+            &range_proof,
+        )
+        .unwrap_err();
 }
 
 #[test]
 // Tests the element is not in the range covered by proofs.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 29.993s runtime
 fn test_same_side_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -617,9 +664,11 @@ fn test_same_side_proof() {
     let merkle = init_merkle(items.clone());
 
     let pos = 1000;
+    trace!("{:?}", items[pos]);
     let mut last = decrease_key(items[pos].0);
     let mut first = last;
     first = decrease_key(&first);
+    trace!("first={}, last={}", hex::encode(first), hex::encode(last));
 
     let start_proof = merkle.prove(&first).unwrap();
     let end_proof = merkle.prove(&last).unwrap();
@@ -633,15 +682,14 @@ fn test_same_side_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    assert!(
-        merkle
-            .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof,)
-            .is_err()
-    );
+    merkle
+        .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof)
+        .unwrap_err();
 
     first = increase_key(items[pos].0);
     last = first;
     last = increase_key(&last);
+    trace!("first={}, last={}", hex::encode(first), hex::encode(last));
 
     let start_proof_2 = merkle.prove(&first).unwrap();
     let end_proof_2 = merkle.prove(&last).unwrap();
@@ -654,16 +702,14 @@ fn test_same_side_proof() {
     let range_proof_2 =
         RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
 
-    assert!(
-        merkle
-            .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_2,)
-            .is_err()
-    );
+    merkle
+        .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_2)
+        .unwrap_err();
 }
 
 #[test]
 // Tests the range starts from zero.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 300.145s runtime
 fn test_single_side_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -697,14 +743,13 @@ fn test_single_side_range_proof() {
 
             merkle
                 .verify_range_proof(Some(start), Some(items[case].0), &root_hash, &range_proof)
-                .unwrap();
+                .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
         }
     }
 }
 
 #[test]
 // Tests the range ends with 0xffff...fff.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_reverse_single_side_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -739,14 +784,14 @@ fn test_reverse_single_side_range_proof() {
 
             merkle
                 .verify_range_proof(Some(items[case].0), Some(end), &root_hash, &range_proof)
-                .unwrap();
+                .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
         }
     }
 }
 
 #[test]
 // Tests the range starts with zero and ends with 0xffff...fff.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
+// FIXME: 297.025s runtime
 fn test_both_sides_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -777,7 +822,7 @@ fn test_both_sides_range_proof() {
 
         merkle
             .verify_range_proof(Some(start), Some(end), &root_hash, &range_proof)
-            .unwrap();
+            .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
     }
 }
 
@@ -785,7 +830,6 @@ fn test_both_sides_range_proof() {
 // Tests normal range proof with both edge proofs
 // as the existent proof, but with an extra empty value included, which is a
 // noop technically, but practically should be rejected.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_empty_value_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -817,23 +861,20 @@ fn test_empty_value_range_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    assert!(
-        merkle
-            .verify_range_proof(
-                Some(items[start].0),
-                Some(items[end - 1].0),
-                &root_hash,
-                &range_proof,
-            )
-            .is_err()
-    );
+    merkle
+        .verify_range_proof(
+            Some(items[start].0),
+            Some(items[end - 1].0),
+            &root_hash,
+            &range_proof,
+        )
+        .unwrap_err();
 }
 
 #[test]
 // Tests the range proof with all elements,
 // but with an extra empty value included, which is a noop technically, but
 // practically should be rejected.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_all_elements_empty_value_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -863,20 +904,17 @@ fn test_all_elements_empty_value_range_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    assert!(
-        merkle
-            .verify_range_proof(
-                Some(items[start].0),
-                Some(items[end].0),
-                &root_hash,
-                &range_proof,
-            )
-            .is_err()
-    );
+    merkle
+        .verify_range_proof(
+            Some(items[start].0),
+            Some(items[end].0),
+            &root_hash,
+            &range_proof,
+        )
+        .unwrap_err();
 }
 
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_range_proof_keys_with_shared_prefix() {
     let items = vec![
         (
@@ -911,13 +949,12 @@ fn test_range_proof_keys_with_shared_prefix() {
 
     merkle
         .verify_range_proof(Some(&start), Some(&end), &root_hash, &range_proof)
-        .unwrap();
+        .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
 }
 
 #[test]
 // Tests a malicious proof, where the proof is more or less the
 // whole trie. This is to match corresponding test in geth.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_bloadted_range_proof() {
     // Use a small trie
     let mut items = Vec::new();
@@ -969,5 +1006,5 @@ fn test_bloadted_range_proof() {
             &root_hash,
             &range_proof,
         )
-        .unwrap();
+        .unwrap(); // called `Result::unwrap()` on an `Err` value: ProofError(StateFromOutsideOfRange)
 }

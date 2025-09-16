@@ -18,16 +18,47 @@ use thiserror::Error;
 
 use crate::merkle::{Key, Value};
 
+/// Unexpected hash
 #[derive(Debug, Error)]
+#[error(
+    "unexpected hash for key <{}> while {context}: expected {expected:?} but got {actual:?}",
+    hex::encode(key)
+)]
+pub struct UnexpectedHashError {
+    /// The key where the unexpected hash was found
+    pub key: Key,
+    /// The context of the error
+    pub context: &'static str,
+    /// The expected hash
+    pub expected: HashType,
+    /// The actual hash found in the proof
+    pub actual: HashType,
+}
+
+/// Error when there are missing values detected in the key-value pairs provided.
+#[derive(Debug, Error)]
+#[error(
+    "missing key prefixes in range proof between {lower_bound} and {upper_bound}: {missing_keys:?}"
+)]
+pub struct MissingKeys {
+    /// The lower bound of the range where keys are missing.
+    pub lower_bound: crate::proofs::CollectedNibbles,
+    /// The upper bound of the range where keys are missing.
+    pub upper_bound: crate::proofs::CollectedNibbles,
+    /// The missing keys detected in the provided key-value pairs.
+    pub missing_keys: Vec<crate::proofs::MissingKeys>,
+}
+
+#[derive(Error)]
 /// Reasons why a proof is invalid
 pub enum ProofError {
-    /// Non-monotonic range decrease
-    #[error("non-monotonic range increase")]
+    /// Error when the kev-values in in the provided proof are not in strict ascending order
+    #[error("key-values in the provided proof are not in strict ascending order")]
     NonMonotonicIncreaseRange,
 
     /// Unexpected hash
-    #[error("unexpected hash")]
-    UnexpectedHash,
+    #[error(transparent)]
+    UnexpectedHash(#[from] Box<UnexpectedHashError>),
 
     /// Unexpected value
     #[error("unexpected value")]
@@ -50,32 +81,126 @@ pub enum ProofError {
     ShouldBePrefixOfProvenKey,
 
     /// Each proof node key should be a prefix of the next key
-    #[error("each proof node key should be a prefix of the next key")]
-    ShouldBePrefixOfNextKey,
+    #[error(
+        "each proof node key should be a prefix of the next key; found {} before {}",
+        hex::encode(parent),
+        hex::encode(child)
+    )]
+    ShouldBePrefixOfNextKey {
+        /// The key of the parent node that is supposedly a parent of the child node, but
+        /// the key is not a strict prefix of the child's key.
+        parent: Key,
+        /// The key of the child node that is supposedly a child of the parent node, but
+        /// the parent's key is not a strict prefix of the child's key.
+        child: Key,
+    },
+
+    /// The two edges of the range proof are from disjoint tries.
+    ///
+    /// This means they do not share a common ancestor.
+    #[error(
+        "the two edges of the range proof are from disjoint tries; they diverge at {} and {} where both are expected to have the same key",
+        hex::encode(lower),
+        hex::encode(upper)
+    )]
+    DisjointEdges {
+        /// The key of the node in the lower edge proof that unexpectedly diverges
+        /// from the upper edge proof.
+        lower: Key,
+        /// The key of the node in the upper edge proof that unexpectedly diverges
+        /// from the lower edge proof.
+        upper: Key,
+    },
 
     /// Child index is out of bounds
-    #[error("child index is out of bounds")]
-    ChildIndexOutOfBounds,
+    #[error("child index is out of bounds, raw key: {}", hex::encode(_0))]
+    ChildIndexOutOfBounds(Key),
 
     /// Only nodes with even length key can have values
     #[error("only nodes with even length key can have values")]
     ValueAtOddNibbleLength,
 
     /// Node not in trie
-    #[error("node not in trie")]
-    NodeNotInTrie,
+    #[error(
+        "parent node {} does not have a child for {}",
+        hex::encode(parent),
+        hex::encode(child)
+    )]
+    NodeNotInTrie {
+        /// The key of the parent node that is missing the child at the given index.
+        parent: Key,
+        /// The key of the child node that exists in the proof, but is missing
+        /// from the parent's children.
+        child: Key,
+    },
 
     /// Error from the merkle package
-    #[error("{0:?}")]
-    IO(#[from] FileIoError),
+    #[error(transparent)]
+    IO(#[from] Box<FileIoError>),
 
     /// Error deserializing a proof
-    #[error("error deserializing a proof: {0}")]
-    Deserialization(crate::proofs::ReadError),
+    #[error(transparent)]
+    Deserialization(#[from] crate::proofs::ReadError),
 
-    /// Empty range
-    #[error("empty range")]
-    EmptyRange,
+    /// Error when the first key is greater than the last key in a provided range proof
+    #[error("first key must come before the last key in a range proof")]
+    InvalidRange,
+
+    /// Error when the caller provides an end key proof but no end key or key-values.
+    #[error("unexpected end key proof when no end key and no key-values were provided")]
+    UnexpectedEndProof,
+
+    /// Error when the caller provides a start key proof but no start key to verify
+    #[error("unexpected start key proof when no start key was provided")]
+    UnexpectedStartProof,
+
+    /// Error when the caller provided key-values or an end key but no end key proof.
+    #[error("expected an end key proof when an end key is provided or key-values are present")]
+    ExpectedEndProof,
+
+    /// Error when the key-values are outsided of the expected [start, end] range
+    /// where start and end are inclusive, but optional.
+    #[error("expected key-values to be within the provided [start, end] range")]
+    StateFromOutsideOfRange,
+
+    /// Error when the exclusion proof is missing end nodes for the provided key.
+    #[error("exclusion proof is missing end nodes for target path")]
+    ExclusionProofMissingEndNodes,
+
+    /// Error when the proof is invalid for an exclusion proof because the final
+    /// node diverges from the penultimate node's differently than the target key.
+    #[error("invalid node for exclusion proof")]
+    ExclusionProofInvalidNode,
+
+    /// Error when there are duplicate keys in the proof with different values.
+    #[error(
+        "duplicate keys in proof: {} with values {value1} and {value2}",
+        hex::encode(key)
+    )]
+    DuplicateKeysInProof {
+        /// The duplicate key.
+        key: Key,
+        /// The first value.
+        value1: String,
+        /// The second value.
+        value2: String,
+    },
+
+    /// Error when there are missing values detected in the key-value pairs provided.
+    #[error(transparent)]
+    MissingKeys(#[from] Box<MissingKeys>),
+}
+
+impl From<FileIoError> for ProofError {
+    fn from(e: FileIoError) -> Self {
+        Self::IO(Box::new(e))
+    }
+}
+
+impl std::fmt::Debug for ProofError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{self:#}")
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -138,6 +263,8 @@ impl Hashable for ProofNode {
 
 impl From<PathIterItem> for ProofNode {
     fn from(item: PathIterItem) -> Self {
+        firewood_storage::logger::trace!("ProofNode from PathIterItem: {item:#?}");
+
         let child_hashes = if let Some(branch) = item.node.as_branch() {
             branch.children_hashes()
         } else {
@@ -185,7 +312,8 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         key: K,
         root_hash: &TrieHash,
     ) -> Result<Option<ValueDigest<&[u8]>>, ProofError> {
-        let key = Path(NibblesIterator::new(key.as_ref()).collect());
+        let key_bytes = key.as_ref();
+        let key = Path(NibblesIterator::new(key_bytes).collect());
 
         let Some(last_node) = self.0.as_ref().last() else {
             return Err(ProofError::Empty);
@@ -195,8 +323,14 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
 
         let mut iter = self.0.as_ref().iter().peekable();
         while let Some(node) = iter.next() {
-            if node.to_hash() != expected_hash {
-                return Err(ProofError::UnexpectedHash);
+            let actual_hash = node.to_hash();
+            if actual_hash != expected_hash {
+                return Err(ProofError::UnexpectedHash(Box::new(UnexpectedHashError {
+                    key: key_bytes.into(),
+                    context: "verifying value digest",
+                    expected: expected_hash,
+                    actual: actual_hash,
+                })));
             }
 
             // Assert that only nodes whose keys are an even number of nibbles
@@ -217,15 +351,23 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                 let next_node_index = next_nibble(node.full_path(), next_node.full_path());
 
                 let Some(next_nibble) = next_node_index else {
-                    return Err(ProofError::ShouldBePrefixOfNextKey);
+                    return Err(ProofError::ShouldBePrefixOfNextKey {
+                        parent: crate::proofs::BytesIter::new(node.full_path()).collect(),
+                        child: crate::proofs::BytesIter::new(next_node.full_path()).collect(),
+                    });
                 };
 
                 expected_hash = node
                     .children()
                     .get(usize::from(next_nibble))
-                    .ok_or(ProofError::ChildIndexOutOfBounds)?
+                    .ok_or_else(|| {
+                        ProofError::ChildIndexOutOfBounds(next_node.full_path().collect())
+                    })?
                     .as_ref()
-                    .ok_or(ProofError::NodeNotInTrie)?
+                    .ok_or_else(|| ProofError::NodeNotInTrie {
+                        parent: crate::proofs::BytesIter::new(node.full_path()).collect(),
+                        child: crate::proofs::BytesIter::new(next_node.full_path()).collect(),
+                    })?
                     .clone();
             }
         }
@@ -236,6 +378,136 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
 
         // This is an exclusion proof.
         Ok(None)
+    }
+
+    /// Verify the structure of the proof path for the given `key`.
+    ///
+    /// This does not verify any hashes or values, only the structure of the proof
+    /// path with respect to the given `key`.
+    ///
+    /// If the last element in `proof` is `key`, this is an inclusion proof.
+    /// Otherwise, this is an exclusion proof and `key` must not be in `proof`.
+    ///
+    /// Returns [`Ok`] if and only if all the following hold:
+    ///
+    ///   - Any node with a partial byte length does not have a value associated
+    ///     with it since all keys with values are written in complete bytes.
+    ///
+    ///   - Each key in `proof` is a strict prefix of the following key.
+    ///
+    ///   - Each key in `proof` is a strict prefix of `key`, except possibly the last.
+    ///
+    ///   - If this is an inclusion proof, the last key in `proof` is the `key`.
+    ///
+    ///   - If this is an exclusion proof:
+    ///     - the last key in `proof` is the replacement child and is at the
+    ///       corresponding index of the parent's children.
+    ///     - the last key in `proof` is the possible parent and it doesn't
+    ///       have a child at the corresponding index.
+    pub fn verify_proof_path_structure(&self, key: &Path) -> Result<(), ProofError> {
+        let proof_nodes = self.as_ref();
+
+        let Some(last_node) = proof_nodes.last() else {
+            // empty proof
+            return Ok(());
+        };
+
+        // Validate all nodes except the last
+        for window in proof_nodes.windows(2) {
+            let [node, next_node] = window else {
+                unreachable!("windows(2) will always return a slice of length 2");
+            };
+
+            // Check partial byte constraint
+            #[cfg(not(feature = "branch_factor_256"))]
+            if node.full_path().count() % 2 != 0 && node.value_digest().is_some() {
+                return Err(ProofError::ValueAtOddNibbleLength);
+            }
+
+            // Each node's key should be a prefix of target key
+            if next_nibble(node.full_path(), key.iter().copied()).is_none() {
+                return Err(ProofError::ShouldBePrefixOfProvenKey);
+            }
+
+            // Each node's key should be a prefix of next node's key
+            if next_nibble(node.full_path(), next_node.full_path()).is_none() {
+                return Err(ProofError::ShouldBePrefixOfNextKey {
+                    parent: crate::proofs::BytesIter::new(node.full_path()).collect(),
+                    child: crate::proofs::BytesIter::new(next_node.full_path()).collect(),
+                });
+            }
+        }
+
+        // Validate last node
+        let last_key = Path(last_node.full_path().collect());
+
+        #[cfg(not(feature = "branch_factor_256"))]
+        if last_key.len() % 2 != 0 && last_node.value_digest().is_some() {
+            return Err(ProofError::ValueAtOddNibbleLength);
+        }
+
+        match key.strip_prefix(last_key.as_ref()) {
+            Some(&[]) => {
+                // inclusion proof, all done
+                Ok(())
+            }
+            Some(&[next_nibble, ..]) => {
+                if last_node
+                    .children()
+                    .get(next_nibble as usize)
+                    .ok_or_else(|| ProofError::ChildIndexOutOfBounds(last_key.as_ref().into()))?
+                    .is_some()
+                {
+                    // exclusion proof, but the last node has a child at the next nibble
+                    // for our target key, so the proof is invalid because we need more
+                    // proof nodes to fully verify the exclusion.
+                    Err(ProofError::ExclusionProofMissingEndNodes)
+                } else {
+                    // exclusion proof, the last node is a parent of the target key and
+                    // there is no child at the next nibble.
+                    Ok(())
+                }
+            }
+            None => {
+                let [.., penultimate_node, _] = proof_nodes else {
+                    // there is no penultimate node, so the last node is the only node
+                    // (it is also the root node). Its existence is enough to verify
+                    // that the target key is excluded.
+                    return Ok(());
+                };
+
+                // replacement child, example:
+                //
+                // penultimate: "ab"
+                // target:      "abd"
+                // final:       "abef"
+                // Note: shares prefix with target but diverges later
+                //
+                // for `last_node` to be a valid exclusion proof, it must be located
+                // at the same index in penultimate_node's children as where the
+                // next nibble would be in the target key.
+                //
+                // The example is invalid because the target key diverges
+                // from the final key at the last nibble (`d != e`).
+                //
+                // the earlier windows loop guarantees that penultimate_node is strict prefix
+                // of both the target key and the final key. Therefore, we can safely use the
+                // result of `next_nibble` to check if the last node is a valid replacement
+                // for the target key.
+
+                let last_index =
+                    next_nibble(penultimate_node.full_path(), last_key.iter().copied());
+                let target_index = next_nibble(penultimate_node.full_path(), key.iter().copied());
+
+                if matches!((last_index, target_index), (Some(a), Some(b)) if a == b) {
+                    // otherwise, the last node is a valid replacement for the target
+                    // and it is excluded from the trie.
+                    Ok(())
+                } else {
+                    Err(ProofError::ExclusionProofInvalidNode)
+                }
+            }
+        }
     }
 
     /// Returns the length of the proof.
@@ -363,6 +635,10 @@ impl<T: Hashable> ProofCollection for [T] {
     type Node = T;
 }
 
+impl<T: Hashable> ProofCollection for &[T] {
+    type Node = T;
+}
+
 impl<T: Hashable> ProofCollection for Box<[T]> {
     type Node = T;
 }
@@ -388,7 +664,7 @@ impl ProofCollection for EmptyProofCollection {
 
 /// Returns the next nibble in `c` after `b`.
 /// Returns None if `b` is not a strict prefix of `c`.
-fn next_nibble<B, C>(b: B, c: C) -> Option<u8>
+pub(crate) fn next_nibble<B, C>(b: B, c: C) -> Option<u8>
 where
     B: IntoIterator<Item = u8>,
     C: IntoIterator<Item = u8>,
@@ -407,7 +683,7 @@ where
     c.next()
 }
 
-fn verify_opt_value_digest(
+pub(crate) fn verify_opt_value_digest(
     expected_value: Option<impl AsRef<[u8]>>,
     found_value: Option<ValueDigest<impl AsRef<[u8]>>>,
 ) -> Result<(), ProofError> {

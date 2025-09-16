@@ -61,7 +61,7 @@ firewood-triehash = { path = "triehash", version = "0.0.12" }
 
 # common dependencies
 aquamarine = "0.6.0"
-bytemuck = "1.23.1"
+bytemuck = { version = "1.23.1", features = ["must_cast"] }
 bytemuck_derive = "1.10.0"
 clap = { version = "4.5.41", features = ["derive"] }
 coarsetime = "0.1.36"
@@ -75,7 +75,7 @@ metrics-util = "0.20.0"
 nonzero_ext = "0.3.0"
 rand_distr = "0.5.1"
 sha2 = "0.10.9"
-smallvec = "1.15.1"
+smallvec = { version = "1.15.1", features = ["write", "union"] }
 test-case = "3.3.1"
 thiserror = "2.0.12"
 

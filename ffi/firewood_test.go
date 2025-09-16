@@ -26,7 +26,7 @@ const (
 	insert100Key      = "100"
 	emptyEthhashRoot  = "56e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421"
 	emptyFirewoodRoot = "0000000000000000000000000000000000000000000000000000000000000000"
-	errWrongParent    = "The proposal cannot be committed since it is not a direct child of the most recent commit. "
+	errWrongParent    = "; The parent of the current proposal is not the latest committed revision; "
 )
 
 // expectedRoots contains the expected root hashes for different use cases across both default

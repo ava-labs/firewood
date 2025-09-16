@@ -5,15 +5,17 @@
 pub(crate) mod tests;
 
 use crate::iter::{MerkleKeyValueIter, PathIterator, TryExtend};
-use crate::proof::{Proof, ProofCollection, ProofError, ProofNode};
+use crate::proof::{Proof, ProofCollection, ProofError, ProofNode, verify_opt_value_digest};
+use crate::proofs::VerifyRangeProofArguments;
 use crate::range_proof::RangeProof;
-use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
+use crate::v2::api::{self, FrozenProof, FrozenRangeProof, HashKey, KeyType, ValueType};
 use firewood_storage::{
-    BranchNode, Child, FileIoError, HashType, HashedNodeReader, ImmutableProposal, IntoHashType,
-    LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore, Parentable,
-    Path, ReadableStorage, SharedNode, TrieHash, TrieReader, ValueDigest,
+    BranchNode, Child, FileIoError, HashType, Hashable, HashedNodeReader, ImmutableProposal,
+    IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore,
+    Parentable, Path, ReadableStorage, SharedNode, TrieReader, ValueDigest,
 };
 use metrics::counter;
+use smallvec::SmallVec;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::io::Error;
@@ -158,7 +160,6 @@ impl<T: TrieReader> Merkle<T> {
         if proof.is_empty() {
             // No nodes, even the root, are before `key`.
             // The root alone proves the non-existence of `key`.
-            // TODO reduce duplicate code with ProofNode::from<PathIterItem>
             let child_hashes = if let Some(branch) = root.as_branch() {
                 branch.children_hashes()
             } else {
@@ -232,7 +233,7 @@ impl<T: TrieReader> Merkle<T> {
     ///
     /// * [`api::Error::ProofError`] - The proof structure is malformed or inconsistent
     /// * [`api::Error::InvalidRange`] - The proof boundaries don't match the requested range
-    /// * [`api::Error::ParentNotLatest`] - The computed root hash doesn't match the expected hash
+    /// * [`api::Error::InvalidHash`] - The computed root hash doesn't match the expected hash
     /// * [`api::Error`] - Other errors during proposal construction or verification
     ///
     /// # Examples
@@ -257,12 +258,284 @@ impl<T: TrieReader> Merkle<T> {
     ///   incremental range proof verification
     pub fn verify_range_proof(
         &self,
-        _first_key: Option<impl KeyType>,
-        _last_key: Option<impl KeyType>,
-        _root_hash: &TrieHash,
-        _proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
+        first_key: Option<impl KeyType>,
+        last_key: Option<impl KeyType>,
+        root_hash: &HashKey,
+        proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
     ) -> Result<(), api::Error> {
-        todo!()
+        VerifyRangeProofArguments::new(
+            first_key.as_ref().map(AsRef::as_ref),
+            last_key.as_ref().map(AsRef::as_ref),
+            root_hash,
+            proof,
+        )
+        .verify()?;
+
+        // // 1. Validate proof structure (similar to validateChangeProof in Go)
+        // self.validate_range_proof_structure(&first_key, &last_key, proof)?;
+
+        // // 2. Verify start proof nodes.
+        // self.verify_proof_nodes_values(
+        //     proof.start_proof(),
+        //     &first_key,
+        //     &last_key,
+        //     // validate_range_proof_structure will have verified that the keys are
+        //     // in order, allowing us to use binary search on lookup
+        //     proof.key_values(),
+        // )?;
+
+        // // 3. Verify end proof nodes
+        // self.verify_proof_nodes_values(
+        //     proof.end_proof(),
+        //     &first_key,
+        //     &last_key,
+        //     // validate_range_proof_structure will have verified that the keys are
+        //     // in order, allowing us to use binary search on lookup
+        //     proof.key_values(),
+        // )?;
+
+        // 4. Reconstruct trie and verify root
+        // self.verify_reconstructed_trie_root(proof, root_hash)?;
+
+        Ok(())
+    }
+
+    /// Verify that the range proof is structurally valid and that we can use it
+    /// to verify the trie root once reconstructed.
+    #[expect(unused)]
+    fn validate_range_proof_structure(
+        &self,
+        first_key: &Path,
+        last_key: &Path,
+        proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
+    ) -> Result<(), ProofError> {
+        // 1. Basic validation
+        if proof.is_empty() {
+            return Err(ProofError::Empty);
+        }
+
+        // 2. Range validation
+        if !first_key.is_empty() && !last_key.is_empty() && first_key > last_key {
+            return Err(ProofError::InvalidRange);
+        }
+
+        // 3. Proof structure validation
+        match (
+            first_key.is_empty(),
+            last_key.is_empty(),
+            proof.key_values().is_empty(),
+        ) {
+            (_, true, true) if !proof.end_proof().is_empty() => {
+                return Err(ProofError::UnexpectedEndProof);
+            }
+            (true, _, _) if !proof.start_proof().is_empty() => {
+                return Err(ProofError::UnexpectedStartProof);
+            }
+            (_, false, _) | (_, _, false) if proof.end_proof().is_empty() => {
+                return Err(ProofError::ExpectedEndProof);
+            }
+            _ => {} // Valid combination
+        }
+
+        let last_key = if proof.key_values().is_empty() {
+            // no key-values, `last_key` remains the `last_key` provided by the caller
+            last_key
+        } else {
+            // two re-usable buffers to expand the keys into nibbles. re-using
+            // these buffers avoids multiple allocations and deallocations in the
+            // loop below.
+            //
+            // Uses a smallvec so we can convert directly to a Path without
+            // an extra copy step.
+            let mut this_key_buf = SmallVec::<[u8; 64]>::new();
+            let mut last_key_buf = SmallVec::<[u8; 64]>::new();
+
+            // 4. verify key-values are in strict order by key (no duplicates either)
+            for (key, _) in proof.key_values() {
+                this_key_buf.clear();
+                this_key_buf.extend(NibblesIterator::new(key.as_ref()));
+                debug_assert!(!this_key_buf.is_empty(), "key must not be empty");
+                debug_assert!(this_key_buf.len() % 2 == 0, "key must be even length");
+
+                // verify that the first key is not larger than the first key
+                // in the range. Only check the first key as all remaining keys
+                // are implicitly larger if other checks hold.
+                if last_key_buf.is_empty() && !first_key.is_empty() && *this_key_buf < **first_key {
+                    return Err(ProofError::StateFromOutsideOfRange);
+                }
+
+                // For every key, check that it is less than or equal to the last
+                // key in the range.
+                if !last_key.is_empty() && *this_key_buf <= **last_key {
+                    return Err(ProofError::StateFromOutsideOfRange);
+                }
+
+                if !last_key_buf.is_empty() && this_key_buf < last_key_buf {
+                    // we have a last key but it is greater than the current key
+                    // therefore, the list is not sorted or has duplicates
+                    return Err(ProofError::NonMonotonicIncreaseRange);
+                }
+
+                // swap the buffers so that `last_key_buf` contains the key we
+                // processed in this iteration.
+                std::mem::swap(&mut last_key_buf, &mut this_key_buf);
+            }
+
+            // at this point, `last_key_buf` is filled with the nibbles of the last
+            // and largest key in the key-values. We can re-use it for the
+            // verification below. It overrides the `last_key` provided by the
+            // caller in order to verify the end proof.
+
+            &Path(last_key_buf)
+        };
+
+        // 5. Validate proof paths (structural only, not root verification)
+        if !proof.start_proof().is_empty() {
+            proof.start_proof().verify_proof_path_structure(first_key)?;
+        }
+
+        if !proof.end_proof().is_empty() {
+            proof.end_proof().verify_proof_path_structure(last_key)?;
+        }
+
+        Ok(())
+    }
+
+    #[expect(unused)]
+    fn verify_proof_nodes_values(
+        &self,
+        proof: &Proof<impl ProofCollection>,
+        first_key: &Path,
+        last_key: &Path,
+        key_values_sorted_by_key: &[(impl KeyType, impl ValueType)],
+    ) -> Result<(), ProofError> {
+        // cache the root node to avoid multiple lookups
+        let root = self.root();
+        let root = root.as_deref();
+
+        let mut node_key = Path::default();
+        for node in proof.as_ref() {
+            node_key.0.clear();
+            node_key.0.extend(node.full_path());
+
+            // skip partial paths as they cannot have values
+            #[cfg(not(feature = "branch_factor_256"))]
+            if node_key.len() % 2 != 0 {
+                continue;
+            }
+
+            if !first_key.is_empty() && *node_key < **first_key
+                || !last_key.is_empty() && *node_key > **last_key
+            {
+                // node not in range, ignore it
+                continue;
+            }
+
+            verify_opt_value_digest(
+                // must be inline with the call to verify_opt_value_digest
+                // in order for the lifetime of the temp storage to be valid,
+                // which ends before the semicolon
+                self.get_node_value_for_proof(
+                    key_values_sorted_by_key,
+                    &node_key,
+                    root,
+                    // temp storage for the fetched node so we don't need to
+                    // copy the value off the node
+                    &mut None,
+                )?,
+                node.value_digest(),
+            )?; // temp storage is dropped here
+        }
+
+        Ok(())
+    }
+
+    // fn verify_reconstructed_trie_root(
+    //     &self,
+    //     // proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection<Node = ProofNode>>,
+    //     // root_hash: &HashKey,
+    //     args: VerifyRangeProofArguments<
+    //         '_,
+    //         impl KeyType,
+    //         impl ValueType,
+    //         impl ProofCollection<Node = ProofNode>,
+    //     >,
+    // ) -> Result<(), api::Error> {
+    //     let result = crate::proofs::HashedRangeProof::new(args)?;
+    //     if *root_hash == *result.computed() {
+    //         counter!("firewood.proofs.valid_range_proof").increment(1);
+    //         Ok(())
+    //     } else {
+    //         counter!("firewood.proofs.invalid_range_proof").increment(1);
+    //         Err(api::Error::InvalidHash {
+    //             reason: api::InvalidHashReason::MismatchedHash,
+    //             invalid: Some(result.computed().clone()),
+    //             expected: Some(root_hash.clone().into_hash_type()),
+    //         })
+    //     }
+    // }
+
+    /// Get the value for the given key from the proof key-values. If not found,
+    /// it will look for the value in the trie.
+    ///
+    /// This lifetime means `'out` is dependent on `'this`, `'kvs`, and `'store`.
+    ///
+    /// This allows us to return a reference to the value in the node without
+    /// copying it to a new buffer.
+    fn get_node_value_for_proof<'this: 'out, 'kvs: 'out, 'store: 'out, 'out>(
+        &'this self,
+        key_values_sorted_by_key: &'kvs [(impl KeyType, impl ValueType)],
+        path: &Path,
+        root: Option<&Node>,
+        fetched_node: &'store mut Option<SharedNode>,
+    ) -> Result<Option<&'out [u8]>, FileIoError> {
+        use std::cmp::Ordering::{self, Equal, Greater, Less};
+
+        fn cmp_path_with_key(path: &Path, key: &[u8]) -> Ordering {
+            let mut path = path.iter();
+            let mut key = NibblesIterator::new(key);
+            loop {
+                break match (path.next(), key.next()) {
+                    (Some(path), Some(key)) => match path.cmp(&key) {
+                        Equal => continue, // all other branches break
+                        ord => ord,
+                    },
+                    (Some(_), None) => Greater, // path is longer than key
+                    (None, Some(_)) => Less,    // key is longer than path
+                    (None, None) => Equal,      // both are empty
+                };
+            }
+        }
+
+        // use binary search to find the value for the key in `key_values_sorted_by_key`
+        // (if it exists)
+        if let Ok(found) = key_values_sorted_by_key
+            .binary_search_by(|(key, _)| cmp_path_with_key(path, key.as_ref()))
+            .map(
+                #[expect(
+                    clippy::indexing_slicing,
+                    reason = "binary_search guarantees the index is in bounds"
+                )]
+                |index| key_values_sorted_by_key[index].1.as_ref(),
+            )
+        {
+            return Ok(Some(found));
+        }
+
+        // otherwise, look for it in the trie
+        let Some(root) = root else {
+            // no root, so no value
+            return Ok(None);
+        };
+
+        let Some(node) = get_helper(&self.nodestore, root, path.as_ref())? else {
+            // node was not found, so no value
+            return Ok(None);
+        };
+
+        let node = &*fetched_node.insert(node);
+
+        Ok(node.value())
     }
 
     pub(crate) fn path_iter<'a>(
