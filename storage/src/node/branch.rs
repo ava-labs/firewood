@@ -239,7 +239,10 @@ mod ethhash {
 
     impl PartialEq<HashOrRlp> for TrieHash {
         fn eq(&self, other: &HashOrRlp) -> bool {
-            *other == *self
+            match other {
+                HashOrRlp::Hash(h) => h == self,
+                HashOrRlp::Rlp(r) => Keccak256::digest(r.as_ref()).as_slice() == self.as_ref(),
+            }
         }
     }
 
