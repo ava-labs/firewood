@@ -66,19 +66,21 @@ impl KeyBounds {
         bound: Option<PackedPath<'_>>,
         proof: Option<&'a KeyProofTrieRoot<'b>>,
         proof_bound_fn: ProofBoundFn<'a, 'b>,
-        compare: fn(&CollectedNibbles, &PackedPath<'_>) -> bool,
+        is_valid: fn(&PackedPath<'_>, &CollectedNibbles) -> bool,
     ) -> Result<Option<CollectedNibbles>, ProofError> {
         match (bound, proof) {
+            // no proof, edge is unbounded
             (_, None) => Ok(None),
+            // only a proof, so bounded by the proof
             (None, Some(proof)) => {
-                // only a proof, so bounded by the proof
                 let (proof_bound, _) = proof_bound_fn(proof);
                 Ok(Some(proof_bound))
             }
+            // both a bound and a proof, so bounded by the tighter of the two
             (Some(bound), Some(proof)) => {
-                // both a bound and a proof, so bounded by the tighter of the two
                 let (proof_bound, _) = proof_bound_fn(proof);
-                if compare(&proof_bound, &bound) && !proof_bound.is_prefix_of(&bound) {
+                if !is_valid(&bound, &proof_bound) {
+                    trace!("Invalid bound: {bound:?} vs proof bound: {proof_bound:?}");
                     return Err(ProofError::InvalidRange);
                 }
                 Ok(Some(bound.collect()))
@@ -89,16 +91,16 @@ impl KeyBounds {
 
 impl RangeBounds<CollectedNibbles> for KeyBounds {
     fn start_bound(&self) -> std::ops::Bound<&CollectedNibbles> {
-        match self.lower {
+        match self.lower.as_ref() {
+            Some(bound) => std::ops::Bound::Included(bound),
             None => std::ops::Bound::Unbounded,
-            Some(ref lower) => std::ops::Bound::Included(lower),
         }
     }
 
     fn end_bound(&self) -> std::ops::Bound<&CollectedNibbles> {
-        match self.upper {
+        match self.upper.as_ref() {
+            Some(bound) => std::ops::Bound::Included(bound),
             None => std::ops::Bound::Unbounded,
-            Some(ref upper) => std::ops::Bound::Included(upper),
         }
     }
 }
@@ -112,7 +114,7 @@ where
     /// Shrink the bounds, if applicable, and return the resulting bounds, if any.
     ///
     /// - If there is no proof for the respective bound, then the edge is unbounded.
-    /// - If there is a proof for the respective bound, then the bound must be
+    /// - If there is a proof for the respective bound, then its bound must be
     ///   within the bounds specified in the parameters. However, if the bound
     ///   is smaller than the specified bound (but still within it), then the
     ///   smaller bound is used.
@@ -133,13 +135,15 @@ where
             self.lower_bound.map(PackedPath::new),
             left_proof,
             KeyProofTrieRoot::lower_bound,
-            |a, b| a < b,
+            // if the proof bound is a strict prefix of the specified bound, then it will
+            // be "less than" the bound but only if it is a strict prefix is this valid
+            |bound, proof| bound <= proof || proof.is_prefix_of(bound),
         )?;
         bounds.upper = KeyBounds::edge_bound(
             self.upper_bound.map(PackedPath::new),
             right_proof,
             KeyProofTrieRoot::upper_bound,
-            |a, b| a > b,
+            |bound, proof| bound >= proof,
         )?;
 
         if let (Some(lower), Some(upper)) = (bounds.lower.as_ref(), bounds.upper.as_ref())

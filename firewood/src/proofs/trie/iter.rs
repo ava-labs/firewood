@@ -101,7 +101,7 @@ impl<'a, T: TrieNode<'a>> Iterator for PreOrderIter<T> {
                 // push nodes onto the stack to traverse their children on the next iteration
                 Child::Unhashed(node) | Child::Hashed(_, node) => Some(Box::new(PreOrderState {
                     depth: depth.saturating_add(1),
-                    leading_path: leading_path.clone(),
+                    leading_path: leading_path.by_ref().join(node.partial_path()).collect(),
                     node: *node,
                     children: Some(node.children().into_iter().enumerate()),
                     parent: Some(this),
