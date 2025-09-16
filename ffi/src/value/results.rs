@@ -1,13 +1,13 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use firewood::merkle;
+use firewood::v2::api;
 use std::fmt;
 
-use firewood::v2::api;
-
 use crate::{
-    ChangeProofContext, CreateProposalResult, HashKey, NextKeyRange, OwnedBytes, ProposalHandle,
-    RangeProofContext,
+    ChangeProofContext, CreateIteratorResult, CreateProposalResult, HashKey, IteratorHandle,
+    NextKeyRange, OwnedBytes, OwnedKeyValuePair, ProposalHandle, RangeProofContext,
 };
 
 /// The result type returned from an FFI function that returns no value but may
@@ -306,6 +306,84 @@ pub enum ProposalResult<'db> {
     Err(OwnedBytes),
 }
 
+/// A result type returned from FFI functions that create an iterator
+#[derive(Debug)]
+#[repr(C)]
+pub enum IteratorResult<'db> {
+    /// The caller provided a null pointer to a database/proposal handle.
+    NullHandlePointer,
+    /// Building the iterator was successful and the iterator handle is returned
+    Ok {
+        /// An opaque pointer to the [`IteratorHandle`].
+        /// The value should be freed with [`fwd_free_iterator`]
+        ///
+        /// [`fwd_free_iterator`]: crate::fwd_free_iterator
+        handle: Box<IteratorHandle<'db>>,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. The
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+/// A result type returned from iterator FFI functions
+#[derive(Debug)]
+#[repr(C)]
+pub enum KeyValueResult {
+    /// The caller provided a null pointer to an iterator handle.
+    NullHandlePointer,
+    /// The iterator is exhausted
+    None,
+    /// The next item is returned.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with the key and the value of this pair.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Some(OwnedKeyValuePair),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. The
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl<E: fmt::Display> From<Option<Result<(merkle::Key, merkle::Value), E>>> for KeyValueResult {
+    fn from(value: Option<Result<(merkle::Key, merkle::Value), E>>) -> Self {
+        match value {
+            Some(value) => match value {
+                Ok(value) => KeyValueResult::Some(value.into()),
+                Err(err) => KeyValueResult::Err(err.to_string().into_bytes().into()),
+            },
+            None => KeyValueResult::None,
+        }
+    }
+}
+
+impl<'db> From<CreateIteratorResult<'db>> for IteratorResult<'db> {
+    fn from(value: CreateIteratorResult<'db>) -> Self {
+        IteratorResult::Ok {
+            handle: Box::new(value.handle),
+        }
+    }
+}
+
+impl<'db, E: fmt::Display> From<Result<CreateIteratorResult<'db>, E>> for IteratorResult<'db> {
+    fn from(value: Result<CreateIteratorResult<'db>, E>) -> Self {
+        match value {
+            Ok(res) => res.into(),
+            Err(err) => IteratorResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 impl<'db, E: fmt::Display> From<Result<CreateProposalResult<'db>, E>> for ProposalResult<'db> {
     fn from(value: Result<CreateProposalResult<'db>, E>) -> Self {
         match value {
@@ -395,6 +473,30 @@ impl_cresult!(
     NextKeyRangeResult,
     ProposalResult<'_>,
 );
+
+impl NullHandleResult for IteratorResult<'_> {
+    fn null_handle_pointer_error() -> Self {
+        Self::NullHandlePointer
+    }
+}
+
+impl CResult for IteratorResult<'_> {
+    fn from_err(err: impl ToString) -> Self {
+        Self::Err(err.to_string().into_bytes().into())
+    }
+}
+
+impl NullHandleResult for KeyValueResult {
+    fn null_handle_pointer_error() -> Self {
+        Self::NullHandlePointer
+    }
+}
+
+impl CResult for KeyValueResult {
+    fn from_err(err: impl ToString) -> Self {
+        Self::Err(err.to_string().into_bytes().into())
+    }
+}
 
 enum Panic {
     Static(&'static str),
