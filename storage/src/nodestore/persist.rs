@@ -471,7 +471,6 @@ impl NodeStore<Committed, FileBacked> {
             .iter()
             .filter(|pbe| pbe.node.is_some())
             .count()
-            > 0
         {
             ring.submit_and_wait(pending).map_err(|e| {
                 self.storage
