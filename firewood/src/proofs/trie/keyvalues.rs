@@ -4,7 +4,7 @@
 use firewood_storage::{BranchNode, Children};
 
 use crate::{
-    proof::{DuplicateKeysInProofError, ProofError},
+    proof::ProofError,
     proofs::{
         path::{
             CollectedNibbles, Nibbles, PackedPath, PathGuard, PathNibble, SplitNibbles, SplitPath,
@@ -186,13 +186,11 @@ impl<'a> KeyValueTrieRoot<'a> {
         let value = match (lhs.value, rhs.value) {
             (Some(lhs), Some(rhs)) if lhs == rhs => Some(lhs),
             (Some(value1), Some(value2)) => {
-                return Err(ProofError::DuplicateKeysInProof(
-                    DuplicateKeysInProofError {
-                        key: leading_path.bytes_iter().collect(),
-                        value1: hex::encode(value1),
-                        value2: hex::encode(value2),
-                    },
-                ));
+                return Err(ProofError::DuplicateKeysInProof {
+                    key: leading_path.bytes_iter().collect(),
+                    value1: hex::encode(value1),
+                    value2: hex::encode(value2),
+                });
             }
             (Some(v), None) | (None, Some(v)) => Some(v),
             (None, None) => None,

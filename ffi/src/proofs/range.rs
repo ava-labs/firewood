@@ -299,7 +299,7 @@ pub extern "C" fn fwd_range_proof_to_bytes(proof: Option<&RangeProofContext>) ->
 pub extern "C" fn fwd_range_proof_from_bytes(bytes: BorrowedBytes) -> RangeProofResult {
     crate::invoke(move || {
         FrozenRangeProof::from_slice(&bytes).map_err(|err| {
-            api::Error::ProofError(firewood::proof::ProofError::Deserialization(Box::new(err)))
+            api::Error::ProofError(firewood::proof::ProofError::Deserialization(err))
         })
     })
 }

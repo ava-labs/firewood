@@ -121,7 +121,6 @@ fn make_key(hex_str: &str) -> Key {
 #[test]
 fn test_root_hash_random_deletions() {
     use rand::seq::SliceRandom;
-
     let rng = firewood_storage::SeededRng::from_option(Some(42));
     let max_len0 = 8;
     let max_len1 = 4;

@@ -35,21 +35,6 @@ pub struct UnexpectedHashError {
     pub actual: HashType,
 }
 
-/// Error when there are duplicate keys in the proof with different values.
-#[derive(Debug, Error)]
-#[error(
-    "duplicate keys in proof: {} with values {value1} and {value2}",
-    hex::encode(key)
-)]
-pub struct DuplicateKeysInProofError {
-    /// The duplicate key.
-    pub key: Key,
-    /// The first value.
-    pub value1: String,
-    /// The second value.
-    pub value2: String,
-}
-
 /// Error when there are missing values detected in the key-value pairs provided.
 #[derive(Debug, Error)]
 #[error(
@@ -155,7 +140,7 @@ pub enum ProofError {
 
     /// Error deserializing a proof
     #[error(transparent)]
-    Deserialization(#[from] Box<crate::proofs::ReadError>),
+    Deserialization(#[from] crate::proofs::ReadError),
 
     /// Error when the first key is greater than the last key in a provided range proof
     #[error("first key must come before the last key in a range proof")]
@@ -188,8 +173,18 @@ pub enum ProofError {
     ExclusionProofInvalidNode,
 
     /// Error when there are duplicate keys in the proof with different values.
-    #[error(transparent)]
-    DuplicateKeysInProof(#[from] DuplicateKeysInProofError),
+    #[error(
+        "duplicate keys in proof: {} with values {value1} and {value2}",
+        hex::encode(key)
+    )]
+    DuplicateKeysInProof {
+        /// The duplicate key.
+        key: Key,
+        /// The first value.
+        value1: String,
+        /// The second value.
+        value2: String,
+    },
 
     /// Error when there are missing values detected in the key-value pairs provided.
     #[error(transparent)]

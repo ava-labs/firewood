@@ -4,10 +4,7 @@
 use firewood_storage::{BranchNode, Children, HashType, ValueDigest, logger::trace};
 
 use crate::{
-    proof::{
-        DuplicateKeysInProofError, Proof, ProofCollection, ProofError, ProofNode,
-        UnexpectedHashError,
-    },
+    proof::{Proof, ProofCollection, ProofError, ProofNode, UnexpectedHashError},
     proofs::{
         path::{
             CollectedNibbles, Nibbles, PathGuard, PathNibble, SplitNibbles, SplitPath, WidenedPath,
@@ -228,13 +225,11 @@ impl<'a> KeyProofTrieRoot<'a> {
         let mut leading_path = leading_path.fork_push(lhs.partial_path);
 
         if lhs.value_digest != rhs.value_digest {
-            return Err(ProofError::DuplicateKeysInProof(
-                DuplicateKeysInProofError {
-                    key: leading_path.bytes_iter().collect(),
-                    value1: format!("{:?}", lhs.value_digest),
-                    value2: format!("{:?}", rhs.value_digest),
-                },
-            ));
+            return Err(ProofError::DuplicateKeysInProof {
+                key: leading_path.bytes_iter().collect(),
+                value1: format!("{:?}", lhs.value_digest),
+                value2: format!("{:?}", rhs.value_digest),
+            });
         }
 
         let mut nibble = NibbleCounter::new();

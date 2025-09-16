@@ -226,32 +226,13 @@ mod ethhash {
         pub(crate) fn into_triehash(self) -> TrieHash {
             self.into()
         }
-
-        /// Compares the two [`HashOrRlp`] and Ok only if they are equal otherwise an
-        /// Err with both values is returned.
-        ///
-        /// Equal means that if both are hashes, they must be byte-for-byte equal.
-        /// If one is a hash and the other is an RLP, the hash of the RLP must match the hash.
-        /// If both are RLPs, they must be byte-for-byte equal.
-        ///
-        /// The return value prefers the RLP if one exists, otherwise the hash.
-        pub fn reduce(self, other: Self) -> Result<Self, (Self, Self)> {
-            if self == other {
-                Ok(match (self, other) {
-                    (rlp @ Self::Rlp(_), _) | (_, rlp @ Self::Rlp(_)) => rlp,
-                    (this, _) => this,
-                })
-            } else {
-                Err((self, other))
-            }
-        }
     }
 
     impl PartialEq<TrieHash> for HashOrRlp {
         fn eq(&self, other: &TrieHash) -> bool {
             match self {
-                Self::Hash(h) => h == other,
-                Self::Rlp(r) => Keccak256::digest(r.as_ref()).as_slice() == other.as_ref(),
+                HashOrRlp::Hash(h) => h == other,
+                HashOrRlp::Rlp(r) => Keccak256::digest(r.as_ref()).as_slice() == other.as_ref(),
             }
         }
     }
@@ -265,9 +246,10 @@ mod ethhash {
     impl PartialEq for HashOrRlp {
         fn eq(&self, other: &Self) -> bool {
             match (self, other) {
-                (Self::Hash(h1), Self::Hash(h2)) => h1 == h2,
-                (Self::Rlp(r1), Self::Rlp(r2)) => r1 == r2,
-                (Self::Hash(h), Self::Rlp(r)) | (Self::Rlp(r), Self::Hash(h)) => {
+                (HashOrRlp::Hash(h1), HashOrRlp::Hash(h2)) => h1 == h2,
+                (HashOrRlp::Rlp(r1), HashOrRlp::Rlp(r2)) => r1 == r2,
+                (HashOrRlp::Hash(h), HashOrRlp::Rlp(r))
+                | (HashOrRlp::Rlp(r), HashOrRlp::Hash(h)) => {
                     Keccak256::digest(r.as_ref()).as_slice() == h.as_ref()
                 }
             }
