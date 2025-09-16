@@ -13,6 +13,9 @@ repository.workspace = true
 readme.workspace = true
 rust-version.workspace = true
 
+[package.metadata.cargo-machete]
+ignored = ["opentelemetry-proto"]
+
 [[bin]]
 name = "benchmark"
 path = "src/main.rs"
