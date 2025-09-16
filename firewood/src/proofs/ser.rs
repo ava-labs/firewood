@@ -66,7 +66,7 @@ impl FrozenRangeProof {
     ///
     /// Variable-length integers are encoded using unsigned LEB128.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
-        Header::new(ProofType::Range).write_item(out);
+        Header::from(ProofType::Range).write_item(out);
         self.write_item(out);
     }
 }

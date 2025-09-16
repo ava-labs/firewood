@@ -30,10 +30,8 @@ const _: () = {
     assert!(size_of::<Header>() == 32);
 };
 
-impl Header {
-    /// Construct a new header for the given proof type.
-    #[must_use]
-    pub(crate) const fn new(proof_type: ProofType) -> Self {
+impl From<ProofType> for Header {
+    fn from(proof_type: ProofType) -> Self {
         Self {
             magic: *magic::PROOF_HEADER,
             version: magic::PROOF_VERSION,
