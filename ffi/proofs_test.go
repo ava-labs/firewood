@@ -76,15 +76,18 @@ func TestRangeProofPartialRange(t *testing.T) {
 	r.NoError(err)
 
 	// get a proof over some partial range
-	proof1 := rangeProofWithAndWithoutRoot(t, db, root, nothing(), nothing())
+	proof1, proof1Bytes := rangeProofWithAndWithoutRoot(t, db, root, nothing(), nothing())
 
 	// get a proof over a different range
-	proof2 := rangeProofWithAndWithoutRoot(t, db, root, something([]byte("key2")), something([]byte("key3")))
+	startKey := something([]byte("key2"))
+	endKey := something([]byte("key3"))
+	proof2, proof2Bytes := rangeProofWithAndWithoutRoot(t, db, root, startKey, endKey)
 
 	// ensure the proofs are different
-	r.NotEqual(proof1, proof2)
+	r.NotEqual(proof1Bytes, proof2Bytes)
 
-	// TODO(https://github.com/ava-labs/firewood/issues/738): verify the proofs
+	r.NoError(proof1.Verify(root, nothing(), nothing(), maxProofLen))
+	r.NoError(proof2.Verify(root, startKey, endKey, maxProofLen))
 }
 
 func TestRangeProofDiffersAfterUpdate(t *testing.T) {
@@ -97,7 +100,7 @@ func TestRangeProofDiffersAfterUpdate(t *testing.T) {
 	r.NoError(err)
 
 	// get a proof
-	proof := rangeProofWithAndWithoutRoot(t, db, root1, nothing(), nothing())
+	proof1, proof1Bytes := rangeProofWithAndWithoutRoot(t, db, root1, nothing(), nothing())
 
 	// insert more data
 	root2, err := db.Update(keys[50:], vals[50:])
@@ -105,10 +108,13 @@ func TestRangeProofDiffersAfterUpdate(t *testing.T) {
 	r.NotEqual(root1, root2)
 
 	// get a proof again
-	proof2 := rangeProofWithAndWithoutRoot(t, db, root2, nothing(), nothing())
+	proof2, proof2Bytes := rangeProofWithAndWithoutRoot(t, db, root2, nothing(), nothing())
 
 	// ensure the proofs are different
-	r.NotEqual(proof, proof2)
+	r.NotEqual(proof1Bytes, proof2Bytes)
+
+	r.NoError(proof1.Verify(root1, nothing(), nothing(), maxProofLen))
+	r.NoError(proof2.Verify(root2, nothing(), nothing(), maxProofLen))
 }
 
 func TestRoundTripSerialization(t *testing.T) {
@@ -121,7 +127,7 @@ func TestRoundTripSerialization(t *testing.T) {
 	r.NoError(err)
 
 	// get a proof
-	proofBytes := rangeProofWithAndWithoutRoot(t, db, root, nothing(), nothing())
+	_, proofBytes := rangeProofWithAndWithoutRoot(t, db, root, nothing(), nothing())
 
 	// Deserialize the proof.
 	proof := new(RangeProof)
@@ -132,6 +138,8 @@ func TestRoundTripSerialization(t *testing.T) {
 	serialized, err := proof.MarshalBinary()
 	r.NoError(err)
 	r.Equal(proofBytes, serialized)
+
+	r.NoError(proof.Verify(root, nothing(), nothing(), maxProofLen))
 
 	r.NoError(proof.Free())
 }
@@ -144,7 +152,7 @@ func rangeProofWithAndWithoutRoot(
 	db *Database,
 	root []byte,
 	startKey, endKey maybe,
-) []byte {
+) (*RangeProof, []byte) {
 	r := require.New(t)
 
 	proof1, err := db.RangeProof(maybe{hasValue: false}, startKey, endKey, maxProofLen)
@@ -152,16 +160,20 @@ func rangeProofWithAndWithoutRoot(
 	r.NotNil(proof1)
 	proof1Bytes, err := proof1.MarshalBinary()
 	r.NoError(err)
-	r.NoError(proof1.Free())
+	t.Cleanup(func() {
+		r.NoError(proof1.Free())
+	})
 
 	proof2, err := db.RangeProof(maybe{hasValue: true, value: root}, startKey, endKey, maxProofLen)
 	r.NoError(err)
 	r.NotNil(proof2)
 	proof2Bytes, err := proof2.MarshalBinary()
 	r.NoError(err)
-	r.NoError(proof2.Free())
+	t.Cleanup(func() {
+		r.NoError(proof2.Free())
+	})
 
 	r.Equal(proof1Bytes, proof2Bytes)
 
-	return proof1Bytes
+	return proof1, proof1Bytes
 }

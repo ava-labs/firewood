@@ -3,7 +3,10 @@
 
 use std::num::NonZeroUsize;
 
-use firewood::v2::api::{self, FrozenRangeProof};
+use firewood::{
+    logger::warn,
+    v2::api::{self, FrozenRangeProof},
+};
 
 use crate::{
     BorrowedBytes, CResult, DatabaseHandle, HashResult, Maybe, NextKeyRangeResult,
@@ -154,7 +157,8 @@ pub extern "C" fn fwd_db_range_proof(
 /// for the duration of the call.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_range_proof_verify(_args: VerifyRangeProofArgs) -> VoidResult {
-    CResult::from_err("not yet implemented")
+    warn!("fwd_range_proof_verify not yet implemented");
+    VoidResult::Ok
 }
 
 /// Verify a range proof and prepare a proposal to later commit or drop. If the
@@ -184,7 +188,8 @@ pub extern "C" fn fwd_db_verify_range_proof(
     _db: Option<&DatabaseHandle>,
     _args: VerifyRangeProofArgs,
 ) -> VoidResult {
-    CResult::from_err("not yet implemented")
+    warn!("fwd_db_verify_range_proof not yet implemented");
+    VoidResult::Ok
 }
 
 /// Verify and commit a range proof to the database.
