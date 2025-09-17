@@ -1367,7 +1367,7 @@ struct Value fwd_propose_on_proposal(const struct DatabaseHandle *db,
  * concurrently. The caller must ensure exclusive access to the proof context
  * for the duration of the call.
  */
-struct NextKeyRangeResult fwd_range_proof_find_next_key(struct RangeProofContext *_proof);
+struct NextKeyRangeResult fwd_range_proof_find_next_key(struct RangeProofContext *proof);
 
 /**
  * Deserialize a `RangeProof` from bytes.

@@ -9,7 +9,7 @@ use firewood::{
 };
 
 use crate::{
-    BorrowedBytes, CResult, DatabaseHandle, HashResult, Maybe, NextKeyRangeResult,
+    BorrowedBytes, DatabaseHandle, HashResult, Maybe, NextKeyRange, NextKeyRangeResult,
     RangeProofResult, ValueResult, VoidResult,
 };
 
@@ -264,9 +264,19 @@ pub extern "C" fn fwd_db_verify_and_commit_range_proof(
 /// for the duration of the call.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_range_proof_find_next_key(
-    _proof: Option<&mut RangeProofContext>,
+    proof: Option<&mut RangeProofContext>,
 ) -> NextKeyRangeResult {
-    CResult::from_err("not yet implemented")
+    crate::invoke_with_handle(proof, |ctx| {
+        Ok::<_, api::Error>(
+            ctx.proof
+                .key_values()
+                .last()
+                .map(|(last_key, _)| NextKeyRange {
+                    start_key: last_key.to_vec().into(),
+                    end_key: Maybe::None,
+                }),
+        )
+    })
 }
 
 /// Serialize a `RangeProof` to bytes.
