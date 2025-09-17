@@ -363,7 +363,7 @@ func (r *NextKeyRange) Free() error {
 	var err1, err2 error
 
 	err1 = r.startKey.Free()
-	if r.endKey.HasValue() {
+	if r.endKey != nil && r.endKey.HasValue() {
 		err2 = r.endKey.Value().Free()
 	}
 
