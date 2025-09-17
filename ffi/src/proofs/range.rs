@@ -224,10 +224,14 @@ pub extern "C" fn fwd_db_verify_range_proof(
 /// for the duration of the call.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_verify_and_commit_range_proof(
-    _db: Option<&DatabaseHandle>,
-    _args: VerifyRangeProofArgs,
+    db: Option<&DatabaseHandle>,
+    args: VerifyRangeProofArgs,
 ) -> HashResult {
-    CResult::from_err("not yet implemented")
+    let handle = match (db, args.proof) {
+        (Some(db), Some(proof)) => Some((db, proof)),
+        _ => None,
+    };
+    crate::invoke_with_handle(handle, |(db, proof)| db.create_batch(&proof.proof))
 }
 
 /// Returns the next key range that should be fetched after processing the

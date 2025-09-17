@@ -5,11 +5,14 @@ use firewood::{
     db::{Db, DbConfig},
     manager::RevisionManagerConfig,
     merkle::Value,
-    v2::api::{self, ArcDynDbView, Db as _, DbView, HashKey, HashKeyExt, KeyType, Proposal as _},
+    v2::api::{
+        self, ArcDynDbView, Db as _, DbView, HashKey, HashKeyExt, KeyType, KeyValuePairIter,
+        Proposal as _,
+    },
 };
 use metrics::counter;
 
-use crate::{BorrowedBytes, DatabaseHandle, KeyValuePair};
+use crate::{BorrowedBytes, DatabaseHandle};
 
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
 ///
@@ -147,11 +150,12 @@ impl DatabaseHandle<'_> {
     /// An error is returned if the proposal could not be created.
     pub fn create_batch<'kvp>(
         &self,
-        values: impl AsRef<[KeyValuePair<'kvp>]> + 'kvp,
+        // values: impl AsRef<[KeyValuePair<'kvp>]> + 'kvp,
+        values: impl IntoIterator<IntoIter: KeyValuePairIter> + 'kvp,
     ) -> Result<Option<HashKey>, api::Error> {
         let start = coarsetime::Instant::now();
 
-        let proposal = self.db.propose(values.as_ref())?;
+        let proposal = self.db.propose(values)?;
 
         let propose_time = start.elapsed().as_millis();
         counter!("firewood.ffi.propose_ms").increment(propose_time);
