@@ -800,6 +800,15 @@ mod test {
         fn reopen(self) -> Self {
             let path = self.path();
             drop(self.db);
+
+            #[cfg(feature = "io-uring")]
+            // NB: in release mode (specifically, with `maxperf`), the reopen
+            // operation can race with the io-uring kthread terminating, causing
+            // the advisory lock to not be released in time for the immediate
+            // reopen to succeed. So, we add a tiny sleep here to avoid that
+            // problem in CI.
+            std::thread::sleep(std::time::Duration::from_millis(10));
+
             let dbconfig = DbConfig::builder().truncate(false).build();
 
             let db = Db::new(path, dbconfig).unwrap();
