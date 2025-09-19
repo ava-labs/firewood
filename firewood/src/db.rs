@@ -809,7 +809,7 @@ mod test {
             // the advisory lock to not be released in time for the immediate
             // reopen to succeed. So, we add a tiny sleep here to avoid that
             // problem in CI.
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(std::time::Duration::from_millis(50));
 
             let dbconfig = DbConfig::builder().truncate(false).build();
 
