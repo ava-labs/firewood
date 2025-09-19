@@ -32,6 +32,14 @@ jobs:
           - profile-key: debug-no-features
             profile-args: ""
             os: macos-latest
+          - profile-key: debug-io-uring-logger
+            profile-args: "--features io-uring,logger"
+          - profile-key: maxperf-io-uring-logger
+            profile-args: "--profile maxperf --features io-uring,logger"
+          - profile-key: debug-io-uring-ethhash-logger
+            profile-args: "--features io-uring,ethhash,logger"
+          - profile-key: maxperf-io-uring-ethhash-logger
+            profile-args: "--profile maxperf --features io-uring,ethhash,logger"
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
           - profile-key: maxperf-ethhash-logger
@@ -77,6 +85,8 @@ jobs:
           - profile-key: debug-no-features
             profile-args: ""
             os: macos-latest
+          - profile-key: debug-io-uring-logger
+            profile-args: "--features io-uring,logger"
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
@@ -107,6 +117,8 @@ jobs:
           - profile-key: debug-no-features
             profile-args: ""
             os: macos-latest
+          - profile-key: debug-io-uring-logger
+            profile-args: "--features io-uring,logger"
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
@@ -134,6 +146,14 @@ jobs:
           - profile-key: debug-no-features
             profile-args: ""
             os: macos-latest
+          - profile-key: debug-io-uring-logger
+            profile-args: "--features io-uring,logger"
+          - profile-key: maxperf-io-uring-logger
+            profile-args: "--profile maxperf --features io-uring,logger"
+          - profile-key: debug-io-uring-ethhash-logger
+            profile-args: "--features io-uring,ethhash,logger"
+          - profile-key: maxperf-io-uring-ethhash-logger
+            profile-args: "--profile maxperf --features io-uring,ethhash,logger"
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
           - profile-key: maxperf-ethhash-logger
@@ -161,6 +181,14 @@ jobs:
           - profile-key: debug-no-features
             profile-args: ""
             os: macos-latest
+          - profile-key: debug-io-uring-logger
+            profile-args: "--features io-uring,logger"
+          - profile-key: maxperf-io-uring-logger
+            profile-args: "--profile maxperf --features io-uring,logger"
+          - profile-key: debug-io-uring-ethhash-logger
+            profile-args: "--features io-uring,ethhash,logger"
+          - profile-key: maxperf-io-uring-ethhash-logger
+            profile-args: "--profile maxperf --features io-uring,ethhash,logger"
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
           - profile-key: maxperf-ethhash-logger
