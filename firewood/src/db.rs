@@ -153,7 +153,7 @@ impl api::Db for Db {
                 BatchOp::Delete { key } => {
                     merkle.remove(key.as_ref())?;
                 }
-                BatchOp::DeletePrefix { prefix } => {
+                BatchOp::DeleteRange { prefix } => {
                     merkle.remove_prefix(prefix.as_ref())?;
                 }
             }
@@ -291,7 +291,7 @@ impl Proposal<'_> {
                 BatchOp::Delete { key } => {
                     merkle.remove(key.as_ref())?;
                 }
-                BatchOp::DeletePrefix { prefix } => {
+                BatchOp::DeleteRange { prefix } => {
                     merkle.remove_prefix(prefix.as_ref())?;
                 }
             }

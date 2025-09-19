@@ -25,7 +25,7 @@ pub enum BatchOp<K: KeyType, V: ValueType> {
     },
 
     /// Delete a range of keys by prefix
-    DeletePrefix {
+    DeleteRange {
         /// The prefix of the keys to delete
         prefix: K,
     },
@@ -38,7 +38,7 @@ impl<K: KeyType, V: ValueType> BatchOp<K, V> {
         match self {
             BatchOp::Put { key, .. }
             | BatchOp::Delete { key }
-            | BatchOp::DeletePrefix { prefix: key } => key,
+            | BatchOp::DeleteRange { prefix: key } => key,
         }
     }
 
@@ -58,7 +58,7 @@ impl<K: KeyType, V: ValueType> BatchOp<K, V> {
         match self {
             BatchOp::Put { key, value } => BatchOp::Put { key, value },
             BatchOp::Delete { key } => BatchOp::Delete { key },
-            BatchOp::DeletePrefix { prefix } => BatchOp::DeletePrefix { prefix },
+            BatchOp::DeleteRange { prefix } => BatchOp::DeleteRange { prefix },
         }
     }
 
@@ -73,7 +73,7 @@ impl<K: KeyType, V: ValueType> BatchOp<K, V> {
                 value: value.as_ref(),
             },
             BatchOp::Delete { key } => BatchOp::Delete { key: key.as_ref() },
-            BatchOp::DeletePrefix { prefix } => BatchOp::DeletePrefix {
+            BatchOp::DeleteRange { prefix } => BatchOp::DeleteRange {
                 prefix: prefix.as_ref(),
             },
         }
@@ -150,7 +150,7 @@ impl<K: KeyType, V: ValueType> KeyValuePair for (K, V) {
     fn into_batch(self) -> BatchOp<Self::Key, Self::Value> {
         let (key, value) = self;
         if value.as_ref().is_empty() {
-            BatchOp::DeletePrefix { prefix: key }
+            BatchOp::DeleteRange { prefix: key }
         } else {
             BatchOp::Put { key, value }
         }
