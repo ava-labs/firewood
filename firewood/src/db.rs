@@ -28,6 +28,7 @@ use thiserror::Error;
 use typed_builder::TypedBuilder;
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 /// Represents the different types of errors that can occur in the database.
 pub enum DbError {
     /// I/O error
@@ -93,6 +94,7 @@ where
 
 /// Database configuration.
 #[derive(Clone, TypedBuilder, Debug)]
+#[non_exhaustive]
 pub struct DbConfig {
     /// Whether to create the DB if it doesn't exist.
     #[builder(default = true)]
@@ -151,7 +153,7 @@ impl api::Db for Db {
                 BatchOp::Delete { key } => {
                     merkle.remove(key.as_ref())?;
                 }
-                BatchOp::DeleteRange { prefix } => {
+                BatchOp::DeletePrefix { prefix } => {
                     merkle.remove_prefix(prefix.as_ref())?;
                 }
             }
@@ -289,7 +291,7 @@ impl Proposal<'_> {
                 BatchOp::Delete { key } => {
                     merkle.remove(key.as_ref())?;
                 }
-                BatchOp::DeleteRange { prefix } => {
+                BatchOp::DeletePrefix { prefix } => {
                     merkle.remove_prefix(prefix.as_ref())?;
                 }
             }

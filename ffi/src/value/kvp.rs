@@ -42,7 +42,7 @@ impl<'a> api::KeyValuePair for KeyValuePair<'a> {
     #[inline]
     fn into_batch(self) -> api::BatchOp<Self::Key, Self::Value> {
         if self.value.is_empty() {
-            api::BatchOp::DeleteRange { prefix: self.key }
+            api::BatchOp::DeletePrefix { prefix: self.key }
         } else {
             api::BatchOp::Put {
                 key: self.key,

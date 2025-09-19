@@ -3,14 +3,17 @@
 
 use crate::v2::api::{KeyType, ValueType};
 
-/// A key/value pair operation. Only put (upsert) and delete are
-/// supported
+/// A key/value pair operation.
+///
+/// Put (upsert), Delete (single key), or Prefix Delete (range) are supported.
+#[non_exhaustive]
 #[derive(Debug, Clone, Copy)]
 pub enum BatchOp<K: KeyType, V: ValueType> {
     /// Upsert a key/value pair
     Put {
         /// the key
         key: K,
+
         /// the value
         value: V,
     },
@@ -22,7 +25,7 @@ pub enum BatchOp<K: KeyType, V: ValueType> {
     },
 
     /// Delete a range of keys by prefix
-    DeleteRange {
+    DeletePrefix {
         /// The prefix of the keys to delete
         prefix: K,
     },
@@ -35,7 +38,7 @@ impl<K: KeyType, V: ValueType> BatchOp<K, V> {
         match self {
             BatchOp::Put { key, .. }
             | BatchOp::Delete { key }
-            | BatchOp::DeleteRange { prefix: key } => key,
+            | BatchOp::DeletePrefix { prefix: key } => key,
         }
     }
 
@@ -55,7 +58,7 @@ impl<K: KeyType, V: ValueType> BatchOp<K, V> {
         match self {
             BatchOp::Put { key, value } => BatchOp::Put { key, value },
             BatchOp::Delete { key } => BatchOp::Delete { key },
-            BatchOp::DeleteRange { prefix } => BatchOp::DeleteRange { prefix },
+            BatchOp::DeletePrefix { prefix } => BatchOp::DeletePrefix { prefix },
         }
     }
 
@@ -70,7 +73,7 @@ impl<K: KeyType, V: ValueType> BatchOp<K, V> {
                 value: value.as_ref(),
             },
             BatchOp::Delete { key } => BatchOp::Delete { key: key.as_ref() },
-            BatchOp::DeleteRange { prefix } => BatchOp::DeleteRange {
+            BatchOp::DeletePrefix { prefix } => BatchOp::DeletePrefix {
                 prefix: prefix.as_ref(),
             },
         }
@@ -147,7 +150,7 @@ impl<K: KeyType, V: ValueType> KeyValuePair for (K, V) {
     fn into_batch(self) -> BatchOp<Self::Key, Self::Value> {
         let (key, value) = self;
         if value.as_ref().is_empty() {
-            BatchOp::DeleteRange { prefix: key }
+            BatchOp::DeletePrefix { prefix: key }
         } else {
             BatchOp::Put { key, value }
         }
