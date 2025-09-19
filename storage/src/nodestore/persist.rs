@@ -489,7 +489,7 @@ impl NodeStore<Committed, FileBacked> {
             .decrement(final_completed_writes as f64);
         }
 
-        debug_assert!(
+        assert!(
             !saved_pinned_buffers.iter().any(|pbe| pbe.node.is_some()),
             "Found entry with node still set: {:?}",
             saved_pinned_buffers.iter().find(|pbe| pbe.node.is_some())
