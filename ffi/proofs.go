@@ -343,7 +343,7 @@ func (r *NextKeyRange) StartKey() []byte {
 
 // HasEndKey returns true if this key range has an exclusive end key.
 func (r *NextKeyRange) HasEndKey() bool {
-	return r.endKey.HasValue()
+	return r.endKey != nil && r.endKey.HasValue()
 }
 
 // EndKey returns the exclusive end key of this key range if it exists or nil if
@@ -363,7 +363,7 @@ func (r *NextKeyRange) Free() error {
 	var err1, err2 error
 
 	err1 = r.startKey.Free()
-	if r.endKey.HasValue() {
+	if r.endKey != nil && r.endKey.HasValue() {
 		err2 = r.endKey.Value().Free()
 	}
 

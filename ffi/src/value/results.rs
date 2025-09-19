@@ -272,6 +272,19 @@ pub enum NextKeyRangeResult {
     Err(OwnedBytes),
 }
 
+impl<E> From<Result<Option<NextKeyRange>, E>> for NextKeyRangeResult
+where
+    E: fmt::Display,
+{
+    fn from(value: Result<Option<NextKeyRange>, E>) -> Self {
+        match value {
+            Ok(None) => NextKeyRangeResult::None,
+            Ok(Some(range)) => NextKeyRangeResult::Some(range),
+            Err(err) => NextKeyRangeResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 /// Helper trait to handle the different result types returned from FFI functions.
 ///
 /// Once Try trait is stable, we can use that instead of this trait:
