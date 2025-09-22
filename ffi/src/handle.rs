@@ -151,7 +151,7 @@ impl DatabaseHandle<'_> {
     ) -> Result<Option<HashKey>, api::Error> {
         let start = coarsetime::Instant::now();
 
-        let proposal = self.db.propose(values.as_ref())?;
+        let proposal = self.db.propose_parallel(values.as_ref())?;
 
         let propose_time = start.elapsed().as_millis();
         counter!("firewood.ffi.propose_ms").increment(propose_time);

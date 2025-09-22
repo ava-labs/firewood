@@ -41,7 +41,7 @@ use std::sync::RwLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use firewood::db::{Db, Proposal};
-use firewood::v2::api::{self, Db as _, DbView, KeyValuePairIter, Proposal as _};
+use firewood::v2::api::{self, DbView, KeyValuePairIter, Proposal as _};
 
 use crate::arc_cache::ArcCache;
 pub use crate::handle::*;
@@ -303,7 +303,7 @@ fn propose_on_db<'p>(
     let batch = values.iter().map_into_batch();
 
     // Propose the batch of operations.
-    let proposal = db.propose(batch).map_err(|e| e.to_string())?;
+    let proposal = db.propose_parallel(batch).map_err(|e| e.to_string())?;
 
     // Get the root hash of the new proposal.
     let mut root_hash: Value = match proposal.root_hash().map_err(|e| e.to_string())? {
