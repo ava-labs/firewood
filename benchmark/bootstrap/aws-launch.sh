@@ -164,6 +164,10 @@ if [ "$DRY_RUN" = true ]; then
 fi
 echo ""
 
+if [ -z "$TYPE" ]; then 
+  export TYPE="arm64"
+fi
+
 if [ "$DRY_RUN" = true ]; then
     # For dry run, use placeholder values
     AMI_ID="ami-placeholder"
