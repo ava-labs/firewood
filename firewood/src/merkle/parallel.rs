@@ -227,32 +227,42 @@ impl ParallelMerkle {
                     }
                     // Sent from the coordinator to the workers to signal that the batch is done.
                     Request::Done => {
+                        //let mut nodestore = merkle.into_inner();
+                        //let root = nodestore.root_mut();
                         let root = merkle.nodestore.root_mut();
                         let Some(root_node) = std::mem::take(root) else {
+                            println!("Empty root");
                             worker_sender
                                 .send(Response::Root(
                                     first_nibble,
                                     merkle.into_inner().into(),
+                                    //nodestore.into(),
                                     None,
                                 ))
                                 .expect("send from worker error");
                             break; // Allow the worker to return to the thread pool.
                         };
 
+                        
                         let (root_node, root_hash, _unwritten_count) =
-                            NodeStore::<MutableProposal, FileBacked>::hash_helper(root_node)
+                            NodeStore::<MutableProposal, FileBacked>::hash_helper_index(root_node, first_nibble)
                                 .expect("TODO");
-
-                        // Maybe add root_node, root_hash to the Response.  (Return a child. The child is added to the children
-                        // array to the root node by the main thread)
-
+                        
+                        
+                        println!("$$$$$$$$$$ root_node: {root_node:?} root_hash: {root_hash:?}");
                         let hashed_root = Some(Child::MaybePersisted(root_node, root_hash));
+                        
+                        
+                        //println!("!!!!!!!!!!");
+                        //*merkle.nodestore.root_mut() = Some(root_node);
 
                         worker_sender
                             .send(Response::Root(
                                 first_nibble,
                                 merkle.into_inner().into(),
+                                //nodestore.into(),
                                 hashed_root,
+                                //None,
                             ))
                             .expect("send from worker error");
                         break; // Allow the worker to return to the thread pool.
@@ -284,11 +294,13 @@ impl ParallelMerkle {
 
                     // Set the child at index using the root from the child nodestore.
                     if let Some(child) = child_root {
+                        println!("----- Adding child at index: {index:?}");
                         *root_branch
                             .children
                             .get_mut(index as usize)
                             .expect("index error") = Some(child);
                     } else {
+                        println!("###### Not used");
                         *root_branch
                             .children
                             .get_mut(index as usize)

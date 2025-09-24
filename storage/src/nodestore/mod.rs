@@ -588,9 +588,6 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     }
 }
 
-// TODO (Bernard): Add a Hash function here to hash mutable proposal.
-
-
 impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
     for NodeStore<Arc<ImmutableProposal>, S>
 {
@@ -627,6 +624,8 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
         #[cfg(not(feature = "ethhash"))]
         let (root, root_hash, unwritten_count) =
             NodeStore::<MutableProposal, S>::hash_helper(root)?;
+
+        println!("****** root: {root:?} and root_hash: {root_hash:?}");
 
         let immutable_proposal =
             Arc::into_inner(nodestore.kind).expect("no other references to the proposal");

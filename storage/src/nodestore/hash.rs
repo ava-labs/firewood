@@ -16,6 +16,7 @@ use crate::{Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorag
 
 use super::NodeReader;
 
+use std::iter::once;
 use std::ops::{Deref, DerefMut};
 
 /// Wrapper around a path that makes sure we truncate what gets extended to the path after it goes out of scope
@@ -113,6 +114,28 @@ where
         )
     }
 
+    /// TODO
+    #[allow(clippy::missing_errors_doc)]
+    pub fn hash_helper_index(
+        #[cfg(feature = "ethhash")] &self,
+        node: Node,
+        child_index: u8,
+    ) -> Result<(MaybePersistedNode, HashType, usize), FileIoError> {
+        let mut root_path = Path::from_nibbles_iterator(
+                    once(child_index));
+
+        //let mut root_path = Path::new();
+        //let mut root_path = node.partial_path();
+        //root_path.
+        //let mut root_path = Path::clone(node.partial_path());
+        //root_path.copy_from_slice(node.partial_path());
+        #[cfg(not(feature = "ethhash"))]
+        let res = Self::hash_helper_inner(node, PathGuard::from_path(&mut root_path))?;
+        #[cfg(feature = "ethhash")]
+        let res = self.hash_helper_inner(node, PathGuard::from_path(&mut root_path), None)?;
+        Ok(res)
+    }
+
     /// Hashes the given `node` and the subtree rooted at it.
     /// Returns the hashed node and its hash.
     //pub(super) fn hash_helper(
@@ -122,6 +145,10 @@ where
         node: Node,
     ) -> Result<(MaybePersistedNode, HashType, usize), FileIoError> {
         let mut root_path = Path::new();
+        //let mut root_path = node.partial_path();
+        //root_path.
+        //let mut root_path = Path::clone(node.partial_path());
+        //root_path.copy_from_slice(node.partial_path());
         #[cfg(not(feature = "ethhash"))]
         let res = Self::hash_helper_inner(node, PathGuard::from_path(&mut root_path))?;
         #[cfg(feature = "ethhash")]
@@ -141,6 +168,7 @@ where
     ) -> Result<(MaybePersistedNode, HashType, usize), FileIoError> {
         // If this is a branch, find all unhashed children and recursively hash them.
         trace!("hashing {node:?} at {path_prefix:?}");
+        println!("hashing {node:?} at {path_prefix:?}");
         let mut nodes_processed = 1usize; // Count this node
         if let Node::Branch(ref mut b) = node {
             // special case code for ethereum hashes at the account level
@@ -231,7 +259,8 @@ where
 
                 nodes_processed = nodes_processed.saturating_add(child_count);
                 *child = Some(Child::MaybePersisted(child_node, child_hash));
-                trace!("child now {child:?}");
+                //trace!("child now {child:?}");
+                println!("child now {child:?}");
             }
         }
         // At this point, we either have a leaf or a branch with all children hashed.
