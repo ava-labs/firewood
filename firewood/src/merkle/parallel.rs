@@ -37,7 +37,7 @@ enum Request {
 #[derive(Debug)]
 enum Response<S> {
     // return the new root of the subtrie at the given nibble
-    Root(u8, Box<NodeStore<MutableProposal, S>>),
+    Root(u8, Box<NodeStore<MutableProposal, S>>, Option<Child>),
     Error(FileIoError),
 }
 
@@ -227,8 +227,33 @@ impl ParallelMerkle {
                     }
                     // Sent from the coordinator to the workers to signal that the batch is done.
                     Request::Done => {
+                        let root = merkle.nodestore.root_mut();
+                        let Some(root_node) = std::mem::take(root) else {
+                            worker_sender
+                                .send(Response::Root(
+                                    first_nibble,
+                                    merkle.into_inner().into(),
+                                    None,
+                                ))
+                                .expect("send from worker error");
+                            break; // Allow the worker to return to the thread pool.
+                        };
+
+                        let (root_node, root_hash, _unwritten_count) =
+                            NodeStore::<MutableProposal, FileBacked>::hash_helper(root_node)
+                                .expect("TODO");
+
+                        // Maybe add root_node, root_hash to the Response.  (Return a child. The child is added to the children
+                        // array to the root node by the main thread)
+
+                        let hashed_root = Some(Child::MaybePersisted(root_node, root_hash));
+
                         worker_sender
-                            .send(Response::Root(first_nibble, merkle.into_inner().into()))
+                            .send(Response::Root(
+                                first_nibble,
+                                merkle.into_inner().into(),
+                                hashed_root,
+                            ))
                             .expect("send from worker error");
                         break; // Allow the worker to return to the thread pool.
                     }
@@ -253,15 +278,22 @@ impl ParallelMerkle {
 
         while let Ok(response) = response_channel.recv() {
             match response {
-                Response::Root(index, child_nodestore) => {
+                Response::Root(index, child_nodestore, child_root) => {
                     // Adding deleted nodes (from calling read_for_update) from child nodestores.
                     proposal.delete_nodes(child_nodestore.deleted_as_slice());
 
                     // Set the child at index using the root from the child nodestore.
-                    *root_branch
-                        .children
-                        .get_mut(index as usize)
-                        .expect("index error") = child_nodestore.into_root().map(Child::Node);
+                    if let Some(child) = child_root {
+                        *root_branch
+                            .children
+                            .get_mut(index as usize)
+                            .expect("index error") = Some(child);
+                    } else {
+                        *root_branch
+                            .children
+                            .get_mut(index as usize)
+                            .expect("index error") = child_nodestore.into_root().map(Child::Node);
+                    }
                 }
                 Response::Error(err) => {
                     return Err(err); // Early termination.

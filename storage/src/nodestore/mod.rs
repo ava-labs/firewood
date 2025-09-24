@@ -588,6 +588,9 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     }
 }
 
+// TODO (Bernard): Add a Hash function here to hash mutable proposal.
+
+
 impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
     for NodeStore<Arc<ImmutableProposal>, S>
 {

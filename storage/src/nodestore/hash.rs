@@ -115,7 +115,9 @@ where
 
     /// Hashes the given `node` and the subtree rooted at it.
     /// Returns the hashed node and its hash.
-    pub(super) fn hash_helper(
+    //pub(super) fn hash_helper(
+    #[allow(clippy::missing_errors_doc)]
+    pub fn hash_helper(    
         #[cfg(feature = "ethhash")] &self,
         node: Node,
     ) -> Result<(MaybePersistedNode, HashType, usize), FileIoError> {
