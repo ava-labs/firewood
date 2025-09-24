@@ -2,12 +2,13 @@
 set +e
 
 # Default values
-INSTANCE_TYPE=i4g.large
-FIREWOOD_BRANCH=""
-AVALANCHEGO_BRANCH=""
-CORETH_BRANCH=""
-LIBEVM_BRANCH=""
-NBLOCKS="1m"
+INSTANCE_TYPE=c6gd.2xlarge
+FIREWOOD_BRANCH="rkuris/metrics-error"
+# FIREWOOD_BRANCH="amin/bernard-parallel-insert-integrate"
+AVALANCHEGO_BRANCH="master"
+CORETH_BRANCH="amin/firewood-metrics"
+LIBEVM_BRANCH="main"
+NBLOCKS="50m"
 REGION="us-west-2"
 DRY_RUN=false
 SPOT_INSTANCE=false
@@ -379,6 +380,7 @@ USERDATA=$(echo "$USERDATA_TEMPLATE" | \
   sed "s|__END_BLOCK__|$END_BLOCK|g" | \
   base64)
 export USERDATA
+
 
 fi  # End of DRY_RUN=false conditional
 
