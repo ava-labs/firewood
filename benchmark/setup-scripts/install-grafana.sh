@@ -46,6 +46,37 @@ if ! grep -q '^http_port = 80$' /etc/grafana/grafana.ini; then
   perl -pi -e 's/^;?http_port = .*/http_port = 80/' /etc/grafana/grafana.ini
 fi
 
+sed -i -E "s|^;?\s*admin_user\s*=.*|admin_user = admin|" /etc/grafana/grafana.ini
+sed -i -E "s|^;?\s*admin_password\s*=.*|admin_password = firewoodisfast|" /etc/grafana/grafana.ini
+
+{
+  echo 'apiVersion: 1'
+  echo 'datasources:'
+  echo '  - name: Prometheus'
+  echo '    type: prometheus'
+  echo '    access: proxy'
+  echo '    orgId: 1'
+  echo '    url: http://localhost:9090'
+  echo '    isDefault: true'
+  echo '    editable: true'
+} | sudo tee /etc/grafana/provisioning/datasources/prometheus.yml >/dev/null
+
+{
+  echo 'apiVersion: 1'
+  echo 'providers:'
+  echo "  - name: 'files'"
+  echo '    orgId: 1'
+  echo "    folder: 'Provisioned'"
+  echo '    type: file'
+  echo '    disableDeletion: false'
+  echo '    editable: true'
+  echo '    options:'
+  echo '      path: /var/lib/grafana/dashboards'
+} | sudo tee /etc/grafana/provisioning/dashboards/dashboards.yaml >/dev/null
+
+sudo mkdir -p /var/lib/grafana/dashboards
+sudo wget -O /var/lib/grafana/dashboards/firewood.json https://github.com/ava-labs/firewood/raw/refs/heads/main/benchmark/Grafana-dashboard.json 
+
 # configure prometheus to scrape firewood
 if ! grep -q '^  - job_name: firewood$' /etc/prometheus/prometheus.yml; then
   cat >> /etc/prometheus/prometheus.yml <<!
