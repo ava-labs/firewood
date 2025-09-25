@@ -159,7 +159,6 @@ where
     ) -> Result<(MaybePersistedNode, HashType, usize), FileIoError> {
         // If this is a branch, find all unhashed children and recursively hash them.
         trace!("hashing {node:?} at {path_prefix:?}");
-        println!("hashing {node:?} at {path_prefix:?}");
         let mut nodes_processed = 1usize; // Count this node
         if let Node::Branch(ref mut b) = node {
             // special case code for ethereum hashes at the account level
@@ -250,8 +249,7 @@ where
 
                 nodes_processed = nodes_processed.saturating_add(child_count);
                 *child = Some(Child::MaybePersisted(child_node, child_hash));
-                //trace!("child now {child:?}");
-                println!("child now {child:?}");
+                trace!("child now {child:?}");
             }
         }
         // At this point, we either have a leaf or a branch with all children hashed.
