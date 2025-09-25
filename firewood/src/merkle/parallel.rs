@@ -281,7 +281,7 @@ impl ParallelMerkle {
                     // Adding deleted nodes (from calling read_for_update) from the child's nodestore.
                     proposal.delete_nodes(deleted_nodes.as_slice());
 
-                    // Set the child at index to child_root.
+                    // Set the child at index to child_root which is the root of the child's subtrie.
                     *root_branch
                         .children
                         .get_mut(index as usize)
