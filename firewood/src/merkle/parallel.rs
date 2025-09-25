@@ -36,7 +36,7 @@ enum Request {
 
 #[derive(Debug)]
 enum Response {
-    // returns both the new root of the subtrie at the given nibble and the deleted nodes.
+    // return both the new root of the subtrie at the given nibble and the deleted nodes.
     Root(u8, Option<Child>, Vec<MaybePersistedNode>),
     Error(FileIoError),
 }
