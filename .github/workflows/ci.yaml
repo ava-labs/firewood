@@ -40,7 +40,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        - components: clippy
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ${{ matrix.profile-key }}
@@ -54,7 +55,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        - components: rustfmt
+        with:
+          components: rustfmt
       - name: Check license headers
         uses: viperproject/check-license-header@v2
         with:
@@ -85,7 +87,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        - components: clippy
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
@@ -116,7 +119,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        - components: clippy
+        with:
+          components: clippy
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
