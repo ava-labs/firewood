@@ -45,7 +45,7 @@ fn into_committed(
     ns.into()
 }
 
-fn init_merkle<I, K, V>(iter: I) -> Merkle<NodeStore<Committed, MemStore>>
+pub(crate) fn init_merkle<I, K, V>(iter: I) -> Merkle<NodeStore<Committed, MemStore>>
 where
     I: Clone + IntoIterator<Item = (K, V)>,
     K: AsRef<[u8]>,
@@ -707,8 +707,6 @@ fn test_delete_some() {
 
 #[test]
 fn test_root_hash_reversed_deletions() -> Result<(), FileIoError> {
-    let _ = env_logger::Builder::new().is_test(true).try_init();
-
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let max_len0 = 8;

@@ -30,6 +30,7 @@ use typed_builder::TypedBuilder;
 use crate::merkle::parallel::ParallelMerkle;
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 /// Represents the different types of errors that can occur in the database.
 pub enum DbError {
     /// I/O error
@@ -95,6 +96,7 @@ where
 
 /// Database configuration.
 #[derive(Clone, TypedBuilder, Debug)]
+#[non_exhaustive]
 pub struct DbConfig {
     /// Whether to create the DB if it doesn't exist.
     #[builder(default = true)]
@@ -754,8 +756,6 @@ mod test {
 
     #[test]
     fn fuzz_checker() {
-        let _ = env_logger::Builder::new().is_test(true).try_init();
-
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
         let db = testdb();
