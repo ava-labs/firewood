@@ -760,7 +760,9 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         trace!("There are {} nodes to reap", self.kind.deleted.len());
         let mut allocator = NodeAllocator::new(self.storage.as_ref(), &mut proposal.header);
         for node in take(&mut self.kind.deleted) {
-            allocator.delete_node(node)?;
+            if false {
+                allocator.delete_node(node)?;
+            }
         }
         Ok(())
     }
