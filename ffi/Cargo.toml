@@ -31,9 +31,12 @@ chrono = "0.4.41"
 oxhttp = "0.3.1"
 # Optional dependencies
 env_logger = { workspace = true, optional = true }
+axum = "0.8.4"
+tokio = { version = "1.47.1" , features = ["rt-multi-thread"]}
 
 [target.'cfg(unix)'.dependencies]
-tikv-jemallocator = "0.6.0"
+tikv-jemallocator = { version = "0.6.0", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
+jemalloc_pprof = { version = "0.8.1", features = ["flamegraph", "symbolize"] }
 
 [dev-dependencies]
 # Workspace dependencies

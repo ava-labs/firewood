@@ -32,6 +32,7 @@ mod logging;
 mod metrics_setup;
 mod proofs;
 mod value;
+mod profiler;
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString, c_char};
@@ -46,6 +47,7 @@ use firewood::v2::api::{self, Db as _, DbView, KeyValuePairIter, Proposal as _};
 use crate::arc_cache::ArcCache;
 pub use crate::handle::*;
 pub use crate::logging::*;
+use crate::profiler::setup_profiler_server_sync;
 pub use crate::proofs::*;
 pub use crate::value::*;
 
@@ -53,6 +55,10 @@ pub use crate::value::*;
 #[global_allocator]
 #[doc(hidden)]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
+#[allow(non_upper_case_globals)]
+#[unsafe(export_name = "malloc_conf")]
+pub static malloc_conf: &[u8] = b"prof:true,prof_active:true,lg_prof_sample:19\0";
 
 type ProposalId = u32;
 
@@ -672,6 +678,8 @@ pub extern "C" fn fwd_gather() -> ValueResult {
 ///   all proposals created on it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_open_db(args: DatabaseHandleArgs) -> HandleResult {
+    // TODO(amin): temp, move out
+    setup_profiler_server_sync();
     invoke(move || DatabaseHandle::new(args))
 }
 
