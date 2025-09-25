@@ -114,21 +114,18 @@ where
         )
     }
 
-    /// TODO
-    #[allow(clippy::missing_errors_doc)]
-    pub fn hash_helper_index(
+    /// Hashes the given `node` and its subtree with `child_index` added to the root path.
+    /// Returns the hashed node and its hash.
+    ///
+    /// # Errors
+    ///
+    /// Can return a `FileIoError` if it is unable to read a node that it is hashing.
+    pub fn hash_subtrie_with_index(
         #[cfg(feature = "ethhash")] &self,
         node: Node,
         child_index: u8,
     ) -> Result<(MaybePersistedNode, HashType, usize), FileIoError> {
-        let mut root_path = Path::from_nibbles_iterator(
-                    once(child_index));
-
-        //let mut root_path = Path::new();
-        //let mut root_path = node.partial_path();
-        //root_path.
-        //let mut root_path = Path::clone(node.partial_path());
-        //root_path.copy_from_slice(node.partial_path());
+        let mut root_path = Path::from_nibbles_iterator(once(child_index));
         #[cfg(not(feature = "ethhash"))]
         let res = Self::hash_helper_inner(node, PathGuard::from_path(&mut root_path))?;
         #[cfg(feature = "ethhash")]
@@ -138,17 +135,11 @@ where
 
     /// Hashes the given `node` and the subtree rooted at it.
     /// Returns the hashed node and its hash.
-    //pub(super) fn hash_helper(
-    #[allow(clippy::missing_errors_doc)]
-    pub fn hash_helper(    
+    pub(super) fn hash_helper(
         #[cfg(feature = "ethhash")] &self,
         node: Node,
     ) -> Result<(MaybePersistedNode, HashType, usize), FileIoError> {
         let mut root_path = Path::new();
-        //let mut root_path = node.partial_path();
-        //root_path.
-        //let mut root_path = Path::clone(node.partial_path());
-        //root_path.copy_from_slice(node.partial_path());
         #[cfg(not(feature = "ethhash"))]
         let res = Self::hash_helper_inner(node, PathGuard::from_path(&mut root_path))?;
         #[cfg(feature = "ethhash")]

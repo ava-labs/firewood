@@ -233,23 +233,21 @@ impl ParallelMerkle {
                             .root_mut()
                             .take()
                             .map(|root| {
-                                let (root_node, root_hash, _) =
-                                    NodeStore::<MutableProposal, FileBacked>::hash_helper_index(
-                                        root,
-                                        first_nibble,
-                                    )?;
+                                let (root_node, root_hash, _) = NodeStore::<
+                                    MutableProposal,
+                                    FileBacked,
+                                >::hash_subtrie_with_index(
+                                    root, first_nibble
+                                )?;
                                 Ok(Child::MaybePersisted(root_node, root_hash))
                             })
                             .transpose();
-
-                        //let a = merkle.nodestore.deleted_as_slice();
-                        //let a= merkle.nodestore.deleted_as_slice().to_vec();
 
                         let response = match hashed_result {
                             Ok(hashed_root) => Response::Root(
                                 first_nibble,
                                 hashed_root,
-                                merkle.nodestore.deleted_as_slice().to_vec(),
+                                merkle.nodestore.take_deleted_nodes(),
                             ),
                             Err(err) => Response::Error(err),
                         };
