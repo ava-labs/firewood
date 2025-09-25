@@ -26,6 +26,7 @@ declare -A VALID_INSTANCES=(
     ["r6id.2xlarge"]="amd64"
     ["x2gd.2xlarge"]="arm64"
     ["z1d.2xlarge"]="amd64"
+    ["i8ge.12xlarge"]="arm64"
 )
 
 # Maximum spot prices for each instance type (from the pricing table)
@@ -42,6 +43,7 @@ declare -A MAX_SPOT_PRICES=(
     ["r6id.2xlarge"]="0.6048"
     ["x2gd.2xlarge"]="0.6680"
     ["z1d.2xlarge"]="0.7440"
+    ["i8ge.12xlarge"]="5.6952"
 )
 
 # Valid nblocks values
@@ -77,6 +79,7 @@ show_usage() {
     echo "  r6id.2xlarge   amd64 474  8    64 GiB   \$0.6048 Intel Xeon Scalable"
     echo "  x2gd.2xlarge   arm64 475  8    128 GiB  \$0.6680 Graviton2 memory-optimized"
     echo "  z1d.2xlarge    amd64 300  8    64 GiB   \$0.7440 High-frequency Intel Xeon CPUs"
+    echo "  i8ge.12xlarge  arm64 11250 48  384 GiB  \$5.5952 Careful, very expensive"
     echo ""
     echo "Valid nblocks values: ${VALID_NBLOCKS[*]}"
 }
