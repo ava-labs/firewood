@@ -54,37 +54,37 @@ sed -i -E "s|^;?\s*admin_user\s*=.*|admin_user = admin|" /etc/grafana/grafana.in
 sed -i -E "s|^;?\s*admin_password\s*=.*|admin_password = firewoodisfast|" /etc/grafana/grafana.ini
 
 # provision data source and dashboards
-{
-  echo 'apiVersion: 1'
-  echo 'datasources:'
-  echo '  - name: Prometheus'
-  echo '    type: prometheus'
-  echo '    access: proxy'
-  echo '    orgId: 1'
-  echo '    url: http://localhost:9090'
-  echo '    isDefault: true'
-  echo '    editable: true'
-} | sudo tee /etc/grafana/provisioning/datasources/prometheus.yml >/dev/null
+cat > /etc/grafana/provisioning/datasources/prometheus.yml <<EOF
+apiVersion: 1
+datasources:
+ - name: Prometheus
+    type: prometheus
+    access: proxy
+    orgId: 1
+    url: http://localhost:9090
+    isDefault: true
+    editable: true
+EOF
 
-{
-  echo 'apiVersion: 1'
-  echo 'providers:'
-  echo "  - name: 'files'"
-  echo '    orgId: 1'
-  echo "    folder: 'Provisioned'"
-  echo '    type: file'
-  echo '    disableDeletion: false'
-  echo '    editable: true'
-  echo '    options:'
-  echo '      path: /var/lib/grafana/dashboards'
-  echo '      foldersFromFilesStructure: true'
-} | sudo tee /etc/grafana/provisioning/dashboards/dashboards.yaml >/dev/null
+cat > /etc/grafana/provisioning/dashboards/dashboards.yaml <<EOF
+apiVersion: 1
+providers:
+  - name: 'files'
+    orgId: 1
+    folder: 'Provisioned'
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: true
+EOF
 
 # add firewood's dashboard and also node exporter full
-sudo mkdir -p /var/lib/grafana/dashboards
+mkdir -p /var/lib/grafana/dashboards
 # TODO(amin): replace this with script dir
-sudo wget -O /var/lib/grafana/dashboards/firewood.json https://github.com/ava-labs/firewood/raw/refs/heads/main/benchmark/Grafana-dashboard.json
-sudo wget -O /var/lib/grafana/dashboards/node_exporter_full.json https://grafana.com/api/dashboards/1860/revisions/latest/download
+wget -O /var/lib/grafana/dashboards/firewood.json https://github.com/ava-labs/firewood/raw/refs/heads/main/benchmark/Grafana-dashboard.json
+wget -O /var/lib/grafana/dashboards/node_exporter_full.json https://grafana.com/api/dashboards/1860/revisions/latest/download
 
 # configure prometheus to scrape firewood
 if ! grep -q '^  - job_name: firewood$' /etc/prometheus/prometheus.yml; then
