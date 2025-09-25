@@ -227,43 +227,28 @@ impl ParallelMerkle {
                     }
                     // Sent from the coordinator to the workers to signal that the batch is done.
                     Request::Done => {
-                        //let mut nodestore = merkle.into_inner();
-                        //let root = nodestore.root_mut();
                         let root = merkle.nodestore.root_mut();
-                        let Some(root_node) = std::mem::take(root) else {
-                            println!("Empty root");
-                            worker_sender
-                                .send(Response::Root(
-                                    first_nibble,
-                                    merkle.into_inner().into(),
-                                    //nodestore.into(),
-                                    None,
-                                ))
-                                .expect("send from worker error");
-                            break; // Allow the worker to return to the thread pool.
-                        };
+                        let hashed_result = std::mem::take(root)
+                            .map(|root_node| {
+                                let (root_node, root_hash, _unwritten_count) =
+                                    NodeStore::<MutableProposal, FileBacked>::hash_helper_index(
+                                        root_node,
+                                        first_nibble,
+                                    )?;
+                                Ok(Child::MaybePersisted(root_node, root_hash))
+                            })
+                            .transpose();
 
-                        
-                        let (root_node, root_hash, _unwritten_count) =
-                            NodeStore::<MutableProposal, FileBacked>::hash_helper_index(root_node, first_nibble)
-                                .expect("TODO");
-                        
-                        
-                        println!("$$$$$$$$$$ root_node: {root_node:?} root_hash: {root_hash:?}");
-                        let hashed_root = Some(Child::MaybePersisted(root_node, root_hash));
-                        
-                        
-                        //println!("!!!!!!!!!!");
-                        //*merkle.nodestore.root_mut() = Some(root_node);
-
-                        worker_sender
-                            .send(Response::Root(
+                        let response = match hashed_result {
+                            Ok(hashed_root) => Response::Root(
                                 first_nibble,
                                 merkle.into_inner().into(),
-                                //nodestore.into(),
                                 hashed_root,
-                                //None,
-                            ))
+                            ),
+                            Err(err) => Response::Error(err),
+                        };
+                        worker_sender
+                            .send(response)
                             .expect("send from worker error");
                         break; // Allow the worker to return to the thread pool.
                     }
