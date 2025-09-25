@@ -77,10 +77,12 @@ sed -i -E "s|^;?\s*admin_password\s*=.*|admin_password = firewoodisfast|" /etc/g
   echo '    editable: true'
   echo '    options:'
   echo '      path: /var/lib/grafana/dashboards'
+  echo '      foldersFromFilesStructure: true'
 } | sudo tee /etc/grafana/provisioning/dashboards/dashboards.yaml >/dev/null
 
 # add firewood's dashboard and also node exporter full
 sudo mkdir -p /var/lib/grafana/dashboards
+# TODO(amin): replace this with script dir
 sudo wget -O /var/lib/grafana/dashboards/firewood.json https://github.com/ava-labs/firewood/raw/refs/heads/main/benchmark/Grafana-dashboard.json
 sudo wget -O /var/lib/grafana/dashboards/node_exporter_full.json https://grafana.com/api/dashboards/1860/revisions/latest/download
 
