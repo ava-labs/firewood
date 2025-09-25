@@ -227,12 +227,15 @@ impl ParallelMerkle {
                     }
                     // Sent from the coordinator to the workers to signal that the batch is done.
                     Request::Done => {
-                        let root = merkle.nodestore.root_mut();
-                        let hashed_result = std::mem::take(root)
-                            .map(|root_node| {
-                                let (root_node, root_hash, _unwritten_count) =
+                        // Hash this subtrie and return the root as a Child::MaybePersisted.
+                        let hashed_result = merkle
+                            .nodestore
+                            .root_mut()
+                            .take()
+                            .map(|root| {
+                                let (root_node, root_hash, _) =
                                     NodeStore::<MutableProposal, FileBacked>::hash_helper_index(
-                                        root_node,
+                                        root,
                                         first_nibble,
                                     )?;
                                 Ok(Child::MaybePersisted(root_node, root_hash))
