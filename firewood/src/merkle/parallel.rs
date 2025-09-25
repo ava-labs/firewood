@@ -234,16 +234,16 @@ impl ParallelMerkle {
                             .take()
                             .map(|root| {
                                 #[cfg(not(feature = "ethhash"))]
-                                let (root_node, root_hash, _) = NodeStore::<
-                                    MutableProposal,
-                                    FileBacked,
-                                >::hash_subtrie_with_index(
-                                    root, first_nibble
-                                )?;
+                                let (root_node, root_hash, _) =
+                                    NodeStore::<MutableProposal, FileBacked>::hash_helper(
+                                        root,
+                                        Path::from_nibbles_iterator(once(first_nibble)),
+                                    )?;
                                 #[cfg(feature = "ethhash")]
-                                let (root_node, root_hash, _) = merkle
-                                    .nodestore
-                                    .hash_subtrie_with_index(root, first_nibble)?;
+                                let (root_node, root_hash, _) = merkle.nodestore.hash_helper(
+                                    root,
+                                    Path::from_nibbles_iterator(once(first_nibble)),
+                                )?;
                                 Ok(Child::MaybePersisted(root_node, root_hash))
                             })
                             .transpose();

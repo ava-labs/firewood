@@ -16,7 +16,6 @@ use crate::{Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorag
 
 use super::NodeReader;
 
-use std::iter::once;
 use std::ops::{Deref, DerefMut};
 
 /// Wrapper around a path that makes sure we truncate what gets extended to the path after it goes out of scope
@@ -114,32 +113,18 @@ where
         )
     }
 
-    /// Hashes the given `node` and its subtree with `child_index` added to the root path.
-    /// Returns the hashed node and its hash.
+    /// Hashes the given `node` and the subtree rooted at it. The `root_path` should be empty
+    /// if this is called from the root, or it should include the partial path if this is called
+    /// on a subtrie. Returns the hashed node and its hash.
     ///
     /// # Errors
     ///
     /// Can return a `FileIoError` if it is unable to read a node that it is hashing.
-    pub fn hash_subtrie_with_index(
+    pub fn hash_helper(
         #[cfg(feature = "ethhash")] &self,
         node: Node,
-        child_index: u8,
+        mut root_path: Path,
     ) -> Result<(MaybePersistedNode, HashType, usize), FileIoError> {
-        let mut root_path = Path::from_nibbles_iterator(once(child_index));
-        #[cfg(not(feature = "ethhash"))]
-        let res = Self::hash_helper_inner(node, PathGuard::from_path(&mut root_path))?;
-        #[cfg(feature = "ethhash")]
-        let res = self.hash_helper_inner(node, PathGuard::from_path(&mut root_path), None)?;
-        Ok(res)
-    }
-
-    /// Hashes the given `node` and the subtree rooted at it.
-    /// Returns the hashed node and its hash.
-    pub(super) fn hash_helper(
-        #[cfg(feature = "ethhash")] &self,
-        node: Node,
-    ) -> Result<(MaybePersistedNode, HashType, usize), FileIoError> {
-        let mut root_path = Path::new();
         #[cfg(not(feature = "ethhash"))]
         let res = Self::hash_helper_inner(node, PathGuard::from_path(&mut root_path))?;
         #[cfg(feature = "ethhash")]
