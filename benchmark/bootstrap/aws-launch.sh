@@ -12,42 +12,89 @@ REGION="us-west-2"
 DRY_RUN=false
 SPOT_INSTANCE=false
 
-# Valid instance types and their architectures
-declare -A VALID_INSTANCES=(
-    ["i4g.large"]="arm64"
-    ["i4g.xlarge"]="arm64"
-    ["i4i.large"]="amd64"
-    ["i4i.xlarge"]="amd64"
-    ["m6id.xlarge"]="amd64"
-    ["c6gd.2xlarge"]="arm64"
-    ["x2gd.xlarge"]="arm64"
-    ["m5ad.2xlarge"]="arm64"
-    ["r6gd.2xlarge"]="arm64"
-    ["r6id.2xlarge"]="amd64"
-    ["x2gd.2xlarge"]="arm64"
-    ["z1d.2xlarge"]="amd64"
-    ["i8ge.12xlarge"]="arm64"
-)
-
-# Maximum spot prices for each instance type (from the pricing table)
-declare -A MAX_SPOT_PRICES=(
-    ["i4g.large"]="0.1544"
-    ["i4g.xlarge"]="0.3088"
-    ["i4i.large"]="0.1720"
-    ["i4i.xlarge"]="0.3440"
-    ["m6id.xlarge"]="0.2373"
-    ["c6gd.2xlarge"]="0.3072"
-    ["x2gd.xlarge"]="0.3340"
-    ["m5ad.2xlarge"]="0.4120"
-    ["r6gd.2xlarge"]="0.4608"
-    ["r6id.2xlarge"]="0.6048"
-    ["x2gd.2xlarge"]="0.6680"
-    ["z1d.2xlarge"]="0.7440"
-    ["i8ge.12xlarge"]="5.6952"
+# Instance information: architecture:spot_price:swap_size:disk:vcpu:memory:notes
+declare -A INSTANCE_INFO=(
+    ["i4g.large"]="arm64:0.1544:32G:468:2:16 GiB:Graviton2-powered"
+    ["i4i.large"]="amd64:0.1720:32G:468:2:16 GiB:Intel Xeon Scalable"
+    ["m6id.xlarge"]="amd64:0.2373:32G:237:4:16 GiB:Intel Xeon Scalable"
+    ["c6gd.2xlarge"]="arm64:0.3072:32G:474:8:16 GiB:Graviton2 compute-optimized"
+    ["i4g.xlarge"]="arm64:0.3088:16G:937:4:32 GiB:Graviton2-powered"
+    ["x2gd.xlarge"]="arm64:0.3340:0:237:4:64 GiB:Graviton2 memory-optimized"
+    ["i4i.xlarge"]="amd64:0.3440:16G:937:4:32 GiB:Intel Xeon Scalable"
+    ["m5ad.2xlarge"]="arm64:0.4120:16G:300:8:32 GiB:AMD EPYC processors"
+    ["r6gd.2xlarge"]="arm64:0.4608:0:474:8:64 GiB:Graviton2 memory-optimized"
+    ["r6id.2xlarge"]="amd64:0.6048:0:474:8:64 GiB:Intel Xeon Scalable"
+    ["x2gd.2xlarge"]="arm64:0.6680:0:475:8:128 GiB:Graviton2 memory-optimized"
+    ["z1d.2xlarge"]="amd64:0.7440:0:300:8:64 GiB:High-frequency Intel Xeon CPUs"
+    ["i8ge.12xlarge"]="arm64:5.6952:0:11250:48:384 GiB:Careful, very expensive"
 )
 
 # Valid nblocks values
 VALID_NBLOCKS=("1m" "10m" "50m")
+
+# Helper functions to extract instance information
+get_instance_arch() {
+    local instance_type=$1
+    echo "${INSTANCE_INFO[$instance_type]}" | cut -d: -f1
+}
+
+get_instance_spot_price() {
+    local instance_type=$1
+    echo "${INSTANCE_INFO[$instance_type]}" | cut -d: -f2
+}
+
+get_instance_swap_size() {
+    local instance_type=$1
+    echo "${INSTANCE_INFO[$instance_type]}" | cut -d: -f3
+}
+
+get_instance_disk() {
+    local instance_type=$1
+    echo "${INSTANCE_INFO[$instance_type]}" | cut -d: -f4
+}
+
+get_instance_vcpu() {
+    local instance_type=$1
+    echo "${INSTANCE_INFO[$instance_type]}" | cut -d: -f5
+}
+
+get_instance_memory() {
+    local instance_type=$1
+    echo "${INSTANCE_INFO[$instance_type]}" | cut -d: -f6
+}
+
+get_instance_notes() {
+    local instance_type=$1
+    echo "${INSTANCE_INFO[$instance_type]}" | cut -d: -f7
+}
+
+# Function to generate instance table
+generate_instance_table() {
+    echo "  # name         Type  disk  vcpu memory   \$/hr    notes"
+    
+    # Create array of instance types with their prices for sorting
+    local instances_with_prices=()
+    local spot_price
+    for instance_type in "${!INSTANCE_INFO[@]}"; do
+        spot_price=$(get_instance_spot_price "$instance_type")
+        instances_with_prices+=("$spot_price:$instance_type")
+    done
+    
+    # Sort by price and print table
+    local instance_type arch disk vcpu memory notes
+    for entry in $(printf '%s\n' "${instances_with_prices[@]}" | sort -t: -k1 -n); do
+        instance_type=$(echo "$entry" | cut -d: -f2)
+        arch=$(get_instance_arch "$instance_type")
+        spot_price=$(get_instance_spot_price "$instance_type")
+        disk=$(get_instance_disk "$instance_type")
+        vcpu=$(get_instance_vcpu "$instance_type")
+        memory=$(get_instance_memory "$instance_type")
+        notes=$(get_instance_notes "$instance_type")
+        
+        printf "  %-13s  %-5s %-5s %-4s %-8s \$%-6s %s\n" \
+            "$instance_type" "$arch" "$disk" "$vcpu" "$memory" "$spot_price" "$notes"
+    done
+}
 
 # Function to show usage
 show_usage() {
@@ -66,20 +113,7 @@ show_usage() {
     echo "  --help                      Show this help message"
     echo ""
     echo "Valid instance types:"
-    echo "  # name         Type  disk vcpu memory   $/hr    notes"
-    echo "  i4g.large      arm64 468  2    16 GiB   \$0.1544 Graviton2-powered"
-    echo "  i4i.large      amd64 468  2    16 GiB   \$0.1720 Intel Xeon Scalable"
-    echo "  m6id.xlarge    arm64 237  4    16 GiB   \$0.2373 Intel Xeon Scalable"
-    echo "  c6gd.2xlarge   arm64 474  8    16 GiB   \$0.3072 Graviton2 compute-optimized"
-    echo "  i4g.xlarge     arm64 937  4    32 GiB   \$0.3088 Graviton2-powered"
-    echo "  i4i.xlarge     amd64 937  4    32 GiB   \$0.3440 Intel Xeon Scalable"
-    echo "  x2gd.xlarge    arm64 237  4    64 GiB   \$0.3340 Graviton2 memory-optimized"
-    echo "  m5ad.2xlarge   arm64 300  8    32 GiB   \$0.4120 AMD EPYC processors"
-    echo "  r6gd.2xlarge   arm64 474  8    64 GiB   \$0.4608 Graviton2 memory-optimized"
-    echo "  r6id.2xlarge   amd64 474  8    64 GiB   \$0.6048 Intel Xeon Scalable"
-    echo "  x2gd.2xlarge   arm64 475  8    128 GiB  \$0.6680 Graviton2 memory-optimized"
-    echo "  z1d.2xlarge    amd64 300  8    64 GiB   \$0.7440 High-frequency Intel Xeon CPUs"
-    echo "  i8ge.12xlarge  arm64 11250 48  384 GiB  \$5.5952 Careful, very expensive"
+    generate_instance_table
     echo ""
     echo "Valid nblocks values: ${VALID_NBLOCKS[*]}"
 }
@@ -89,9 +123,9 @@ while [[ $# -gt 0 ]]; do
     case $1 in
         --instance-type)
             INSTANCE_TYPE="$2"
-            if [[ ! ${VALID_INSTANCES[$INSTANCE_TYPE]+_} ]]; then
+            if [[ ! ${INSTANCE_INFO[$INSTANCE_TYPE]+_} ]]; then
                 echo "Error: Invalid instance type '$INSTANCE_TYPE'"
-                echo "Valid types: ${!VALID_INSTANCES[*]}"
+                echo "Valid types: ${!INSTANCE_INFO[*]}"
                 exit 1
             fi
             shift 2
@@ -147,7 +181,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 # Set architecture type based on instance type
-TYPE=${VALID_INSTANCES[$INSTANCE_TYPE]}
+TYPE=$(get_instance_arch "$INSTANCE_TYPE")
 
 echo "Configuration:"
 echo "  Instance Type: $INSTANCE_TYPE ($TYPE)"
@@ -157,8 +191,15 @@ echo "  Coreth Branch: ${CORETH_BRANCH:-default}"
 echo "  LibEVM Branch: ${LIBEVM_BRANCH:-default}"
 echo "  Number of Blocks: $NBLOCKS"
 echo "  Region: $REGION"
+SWAP_SIZE=$(get_instance_swap_size "$INSTANCE_TYPE")
+if [ "$SWAP_SIZE" = "0" ]; then
+    echo "  Swap: Disabled (sufficient RAM)"
+else
+    echo "  Swap: $SWAP_SIZE"
+fi
 if [ "$SPOT_INSTANCE" = true ]; then
-    echo "  Spot Instance: Yes (max price: \$${MAX_SPOT_PRICES[$INSTANCE_TYPE]})"
+    SPOT_PRICE=$(get_instance_spot_price "$INSTANCE_TYPE")
+    echo "  Spot Instance: Yes (max price: \$$SPOT_PRICE)"
 else
     echo "  Spot Instance: No"
 fi
@@ -201,6 +242,17 @@ if [ -n "$CORETH_BRANCH" ]; then
 fi
 if [ -n "$LIBEVM_BRANCH" ]; then
     LIBEVM_BRANCH_ARG="--branch $LIBEVM_BRANCH"
+fi
+
+# Generate swap configuration based on instance type
+SWAP_SIZE=$(get_instance_swap_size "$INSTANCE_TYPE")
+if [ "$SWAP_SIZE" = "0" ]; then
+    SWAP_CONFIG=""
+else
+    SWAP_CONFIG="swap:
+  filename: /swapfile
+  size: $SWAP_SIZE
+  maxsize: $SWAP_SIZE"
 fi
 
 # set up this script to run at startup, installing a few packages, creating user accounts,
@@ -263,10 +315,7 @@ users:
     ssh_authorized_keys:
       - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE/1C8JVL0g6qqMw1p0TwJMqJqERxYTX+7PnP+gXP4km cardno:19_155_748 bernard
 
-swap:
-  filename: /swapfile
-  size: 16G
-  maxsize: 16G
+__SWAP_CONFIG__
 
 # anyone can use the -D option
 write_files:
@@ -365,15 +414,22 @@ case $NBLOCKS in
     *)      END_BLOCK="1000000" ;;  # Default fallback
 esac
 
-# Substitute branch arguments and block values in the userdata template
-USERDATA=$(echo "$USERDATA_TEMPLATE" | \
+# Substitute branch arguments, swap config, and block values in the userdata template
+# Use a temporary variable to handle potential newlines in SWAP_CONFIG
+TEMP_USERDATA=$(echo "$USERDATA_TEMPLATE" | \
   sed "s|__FIREWOOD_BRANCH_ARG__|$FIREWOOD_BRANCH_ARG|g" | \
   sed "s|__AVALANCHEGO_BRANCH_ARG__|$AVALANCHEGO_BRANCH_ARG|g" | \
   sed "s|__CORETH_BRANCH_ARG__|$CORETH_BRANCH_ARG|g" | \
   sed "s|__LIBEVM_BRANCH_ARG__|$LIBEVM_BRANCH_ARG|g" | \
   sed "s|__NBLOCKS__|$NBLOCKS|g" | \
-  sed "s|__END_BLOCK__|$END_BLOCK|g" | \
-  base64)
+  sed "s|__END_BLOCK__|$END_BLOCK|g")
+
+# Replace swap config using a different approach to handle multiline content
+if [ -n "$SWAP_CONFIG" ]; then
+    USERDATA=$(echo "$TEMP_USERDATA" | sed "s|__SWAP_CONFIG__|$SWAP_CONFIG|g" | base64)
+else
+    USERDATA=$(echo "$TEMP_USERDATA" | sed "s|__SWAP_CONFIG__||g" | base64)
+fi
 export USERDATA
 
 fi  # End of DRY_RUN=false conditional
@@ -399,7 +455,7 @@ fi
 # Build spot instance market options if requested
 SPOT_OPTIONS=""
 if [ "$SPOT_INSTANCE" = true ]; then
-    MAX_PRICE=${MAX_SPOT_PRICES[$INSTANCE_TYPE]}
+    MAX_PRICE=$(get_instance_spot_price "$INSTANCE_TYPE")
     SPOT_OPTIONS="--instance-market-options '{\"MarketType\":\"spot\", \"SpotOptions\": {\"MaxPrice\":\"$MAX_PRICE\"}}'"
 fi
 
