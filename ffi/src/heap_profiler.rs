@@ -2,6 +2,7 @@
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
 use std::panic;
+use std::path::Path;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -15,6 +16,30 @@ pub struct HeapReporter {
 }
 
 impl HeapReporter {
+    pub fn start_dumper(period: Duration) -> Self {
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop2 = stop.clone();
+
+        let handle = thread::spawn(move || {
+            loop {
+                let reports_dir = std::env::var("RUST_HEAP_PATH").unwrap_or("rust_heap_reports/".to_string());
+                let n = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
+                let report_path = Path::new(&reports_dir).join(n);
+                let _profiler = dhat::Profiler::builder().file_name(report_path).build();
+                thread::sleep(period);
+                if stop2.load(Ordering::Relaxed) {
+                    break;
+                }
+                // here the profiler is dropped, forcing it to dump to report_path
+            }
+        });
+
+        Self {
+            stop,
+            handle: Some(handle),
+        }
+    }
+
     pub fn start(period: Duration) -> Self {
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = stop.clone();

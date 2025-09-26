@@ -678,7 +678,7 @@ pub extern "C" fn fwd_gather() -> ValueResult {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_open_db(args: DatabaseHandleArgs) -> HandleResult {
     #[cfg(feature = "dhat-heap")]
-    let _reporter = HeapReporter::start(std::time::Duration::from_secs(5));
+    let _reporter = HeapReporter::start_dumper(std::time::Duration::from_secs(5));
     invoke(move || DatabaseHandle::new(args))
 }
 
