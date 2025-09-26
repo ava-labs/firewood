@@ -40,7 +40,7 @@ metrics-exporter-prometheus = { version = "0.17.2", optional = true }
 opentelemetry = "=0.30.0"
 opentelemetry-otlp = { version = "=0.30.0", features = ["grpc-tonic"] }
 opentelemetry-proto = "=0.30.0"
-opentelemetry_sdk = "=0.30.0"
+opentelemetry_sdk = "=0.31.0"
 pretty-duration = "0.1.1"
 
 [dependencies.tokio]
