@@ -244,6 +244,9 @@ impl RevisionManager {
             .expect("poisoned lock")
             .retain(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1);
 
+
+        gauge!("firewood.active_proposals")
+            .set(self.proposals.lock().expect("poisoned lock").len() as f64);
         // then reparent any proposals that have this proposal as a parent
         for p in &*self.proposals.lock().expect("poisoned lock") {
             proposal.commit_reparent(p);
