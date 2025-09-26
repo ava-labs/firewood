@@ -46,9 +46,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: ${{ matrix.profile-key }}
-          cache-directories: |
-            ~/.cargo/registry/src
           cache-all-crates: true
+          cache-workspace-crates: true
       # Require Cargo.lock to be up to date and ensure the registry cache is populated
       - name: Cargo Fetch (run `cargo generate-lockfile` if this fails)
         run: cargo fetch --locked --verbose
