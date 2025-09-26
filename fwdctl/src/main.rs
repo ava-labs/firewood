@@ -15,6 +15,7 @@ pub mod dump;
 pub mod get;
 pub mod graph;
 pub mod insert;
+pub mod launch;
 pub mod root;
 
 #[derive(Clone, Debug, Parser)]
@@ -69,6 +70,8 @@ enum Commands {
     Graph(graph::Options),
     /// Runs the checker on the database
     Check(check::Options),
+    /// Launch AWS instance for benchmarking
+    Launch(launch::Options),
 }
 
 fn main() -> Result<(), api::Error> {
@@ -87,6 +90,7 @@ fn main() -> Result<(), api::Error> {
         Commands::Dump(opts) => dump::run(opts),
         Commands::Graph(opts) => graph::run(opts),
         Commands::Check(opts) => check::run(opts),
+        Commands::Launch(opts) => launch::run(opts),
     }
 }
 

@@ -1,0 +1,15 @@
+{
+  "i4g.large":      {"arch": "Arm64", "spot": 0.1544, "swap": 32, "disk":   468, "vcpu":  2, "memory":  16, "notes": "Graviton2-powered"},
+  "i4i.large":      {"arch": "Amd64", "spot": 0.1720, "swap": 32, "disk":   468, "vcpu":  2, "memory":  16, "notes": "Intel Xeon Scalable"},
+  "m6id.xlarge":    {"arch": "Amd64", "spot": 0.2373, "swap": 32, "disk":   237, "vcpu":  4, "memory":  16, "notes": "Intel Xeon Scalable"},
+  "c6gd.2xlarge":   {"arch": "Arm64", "spot": 0.3072, "swap": 32, "disk":   474, "vcpu":  8, "memory":  16, "notes": "Graviton2 compute-optimized"},
+  "i4g.xlarge":     {"arch": "Arm64", "spot": 0.3088, "swap": 16, "disk":   937, "vcpu":  4, "memory":  32, "notes": "Graviton2-powered"},
+  "x2gd.xlarge":    {"arch": "Arm64", "spot": 0.3340, "swap":  0, "disk":   237, "vcpu":  4, "memory":  64, "notes": "Graviton2 memory-optimized"},
+  "i4i.xlarge":     {"arch": "Amd64", "spot": 0.3440, "swap": 16, "disk":   937, "vcpu":  4, "memory":  32, "notes": "Intel Xeon Scalable"},
+  "m5ad.2xlarge":   {"arch": "Arm64", "spot": 0.4120, "swap": 16, "disk":   300, "vcpu":  8, "memory":  32, "notes": "AMD EPYC processors"},
+  "r6gd.2xlarge":   {"arch": "Arm64", "spot": 0.4608, "swap":  0, "disk":   474, "vcpu":  8, "memory":  64, "notes": "Graviton2 memory-optimized"},
+  "r6id.2xlarge":   {"arch": "Amd64", "spot": 0.6048, "swap":  0, "disk":   474, "vcpu":  8, "memory":  64, "notes": "Intel Xeon Scalable"},
+  "x2gd.2xlarge":   {"arch": "Arm64", "spot": 0.6680, "swap":  0, "disk":   475, "vcpu":  8, "memory": 128, "notes": "Graviton2 memory-optimized"},
+  "z1d.2xlarge":    {"arch": "Amd64", "spot": 0.7440, "swap":  0, "disk":   300, "vcpu":  8, "memory":  64, "notes": "High-frequency Intel Xeon CPUs"},
+  "i8ge.12xlarge":  {"arch": "Arm64", "spot": 5.6952, "swap":  0, "disk": 11250, "vcpu": 48, "memory": 384, "notes": "Careful, very expensive"}
+}
