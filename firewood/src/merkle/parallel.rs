@@ -240,7 +240,7 @@ impl ParallelMerkle {
                                         Path::from_nibbles_iterator(once(first_nibble)),
                                     )?;
                                 #[cfg(feature = "ethhash")]
-                                let (root_node, root_hash, _) = merkle.nodestore.hash_helper(
+                                let (root_node, root_hash) = merkle.nodestore.hash_helper(
                                     root,
                                     Path::from_nibbles_iterator(once(first_nibble)),
                                 )?;
