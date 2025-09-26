@@ -103,7 +103,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           name: ${{ matrix.profile-key }}
-          args: --frozen ${{ matrix.profile-args }} --workspace --all-targets
+          args: --locked ${{ matrix.profile-args }} --workspace --all-targets
 
   rust-lint:
     needs: build
@@ -132,7 +132,7 @@ jobs:
           save-if: "false"
           shared-key: ${{ matrix.profile-key }}
       - name: Clippy
-        run: cargo clippy --frozen ${{ matrix.profile-args }} --workspace --all-targets -- -D warnings
+        run: cargo clippy --locked ${{ matrix.profile-args }} --workspace --all-targets -- -D warnings
 
   test:
     needs: build
@@ -161,7 +161,7 @@ jobs:
           save-if: "false"
           shared-key: ${{ matrix.profile-key }}
       - name: Run tests with features enabled
-        run: cargo test --frozen --verbose ${{ matrix.profile-args }}
+        run: cargo test --locked --verbose ${{ matrix.profile-args }}
 
   examples:
     needs: build
@@ -188,9 +188,9 @@ jobs:
           save-if: "false"
           shared-key: ${{ matrix.profile-key }}
       - name: Run benchmark example
-        run: cargo run --frozen ${{ matrix.profile-args }} --bin benchmark -- --number-of-batches 100 --batch-size 1000 create
+        run: cargo run --locked ${{ matrix.profile-args }} --bin benchmark -- --number-of-batches 100 --batch-size 1000 create
       - name: Run insert example
-        run: cargo run --frozen ${{ matrix.profile-args }} --example insert
+        run: cargo run --locked ${{ matrix.profile-args }} --example insert
 
   docs:
     needs: build
@@ -211,7 +211,7 @@ jobs:
             !CHANGELOG.md
             !target/**
       - name: doc generation
-        run: RUSTDOCFLAGS="-D warnings" cargo doc --frozen --document-private-items --no-deps
+        run: RUSTDOCFLAGS="-D warnings" cargo doc --locked --document-private-items --no-deps
 
   ffi:
     needs: build
@@ -228,7 +228,7 @@ jobs:
           shared-key: "debug-no-features"
       - name: Build Firewood FFI
         working-directory: ffi
-        run: cargo build --frozen --release
+        run: cargo build --locked --release
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -254,8 +254,6 @@ jobs:
         with:
           save-if: "false"
           shared-key: "debug-ethhash-logger"
-      - name: Build Firewood FFI (with ethhash)
-        run: cargo build --frozen --features ethhash,logger
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -286,8 +284,6 @@ jobs:
         with:
           save-if: "false"
           shared-key: "debug-no-features"
-      - name: Build Firewood FFI
-        run: cargo build --frozen -p firewood-ffi
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -317,4 +313,4 @@ jobs:
       - name: Install cargo-machete
         run: cargo install cargo-machete
       - name: Check for stale dependencies
-        run: cargo machete --frozen --with-metadata
+        run: cargo machete --locked --with-metadata
