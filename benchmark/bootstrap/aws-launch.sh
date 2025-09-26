@@ -47,7 +47,7 @@ declare -A MAX_SPOT_PRICES=(
 )
 
 # Valid nblocks values
-VALID_NBLOCKS=("1m" "10m" "20m" "30m" "40m" "50m")
+VALID_NBLOCKS=("1m" "10m" "50m")
 
 # Function to show usage
 show_usage() {
@@ -361,9 +361,6 @@ END_HEREDOC
 case $NBLOCKS in
     "1m")   END_BLOCK="1000000" ;;
     "10m")  END_BLOCK="10000000" ;;
-    "20m")  END_BLOCK="20000000" ;;
-    "30m")  END_BLOCK="30000000" ;;
-    "40m")  END_BLOCK="40000000" ;;
     "50m")  END_BLOCK="50000000" ;;
     *)      END_BLOCK="1000000" ;;  # Default fallback
 esac
