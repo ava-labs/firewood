@@ -234,7 +234,7 @@ impl ParallelMerkle {
                             .take()
                             .map(|root| {
                                 #[cfg(not(feature = "ethhash"))]
-                                let (root_node, root_hash, _) =
+                                let (root_node, root_hash) =
                                     NodeStore::<MutableProposal, FileBacked>::hash_helper(
                                         root,
                                         Path::from_nibbles_iterator(once(first_nibble)),
