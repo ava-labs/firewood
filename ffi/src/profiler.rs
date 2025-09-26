@@ -23,14 +23,12 @@ pub(crate) fn setup_profiler_server_sync() {
 }
 
 async fn setup_profiler_server() {
-    tokio::spawn(async move {
-        let app = axum::Router::new()
-            .route("/debug/pprof/allocs", axum::routing::get(handle_get_heap))
-            .route("/debug/pprof/allocs/flamegraph", axum::routing::get(handle_get_heap_flamegraph));
+    let app = axum::Router::new()
+        .route("/debug/pprof/allocs", axum::routing::get(handle_get_heap))
+        .route("/debug/pprof/allocs/flamegraph", axum::routing::get(handle_get_heap_flamegraph));
 
-        let listener = tokio::net::TcpListener::bind("0.0.0.0:7421").await.unwrap();
-        axum::serve(listener, app).await.unwrap();
-    });
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:7421").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
 }
 
 
