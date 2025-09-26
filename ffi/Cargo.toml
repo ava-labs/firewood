@@ -31,6 +31,7 @@ chrono = "0.4.41"
 oxhttp = "0.3.1"
 # Optional dependencies
 env_logger = { workspace = true, optional = true }
+dhat = "0.3.3"
 
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = "0.6.0"
@@ -40,6 +41,7 @@ tikv-jemallocator = "0.6.0"
 test-case.workspace = true
 
 [features]
+dhat-heap = []
 logger = ["dep:env_logger", "firewood/logger"]
 ethhash = ["firewood/ethhash"]
 

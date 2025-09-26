@@ -28,6 +28,8 @@
 
 mod arc_cache;
 mod handle;
+#[cfg(feature = "dhat-heap")]
+mod heap_profiler;
 mod logging;
 mod metrics_setup;
 mod proofs;
@@ -49,10 +51,13 @@ pub use crate::logging::*;
 pub use crate::proofs::*;
 pub use crate::value::*;
 
-#[cfg(unix)]
+#[cfg(feature = "dhat-heap")]
+use crate::heap_profiler::HeapReporter;
+
+#[cfg(all(unix, not(feature = "dhat-heap")))]
 #[global_allocator]
 #[doc(hidden)]
-static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 type ProposalId = u32;
 
@@ -672,6 +677,8 @@ pub extern "C" fn fwd_gather() -> ValueResult {
 ///   all proposals created on it.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_open_db(args: DatabaseHandleArgs) -> HandleResult {
+    #[cfg(feature = "dhat-heap")]
+    let _reporter = HeapReporter::start(std::time::Duration::from_secs(5));
     invoke(move || DatabaseHandle::new(args))
 }
 
