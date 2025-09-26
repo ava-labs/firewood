@@ -317,4 +317,4 @@ jobs:
       - name: Install cargo-machete
         run: cargo install cargo-machete
       - name: Check for stale dependencies
-        run: cargo machete --locked --with-metadata
+        run: cargo machete --with-metadata
