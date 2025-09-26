@@ -16,13 +16,19 @@ pub struct HeapReporter {
 }
 
 impl HeapReporter {
-    pub fn start_dumper(period: Duration) -> Self {
+    pub fn start_dumper(period: Option<Duration>) -> Self {
+        let period = period.unwrap_or_else(|| {
+            let secs =
+                std::env::var("RUST_HEAP_INTERVAL").map_or(0, |val| val.parse().unwrap_or(10u64));
+            Duration::from_secs(secs)
+        });
         let stop = Arc::new(AtomicBool::new(false));
         let stop2 = stop.clone();
 
         let handle = thread::spawn(move || {
             loop {
-                let reports_dir = std::env::var("RUST_HEAP_PATH").unwrap_or("rust_heap_reports/".to_string());
+                let reports_dir =
+                    std::env::var("RUST_HEAP_PATH").unwrap_or("rust_heap_reports/".to_string());
                 let n = chrono::Local::now().format("%Y%m%d-%H%M%S").to_string();
                 let report_path = Path::new(&reports_dir).join(n);
                 let _profiler = dhat::Profiler::builder().file_name(report_path).build();
