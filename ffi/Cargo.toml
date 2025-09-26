@@ -36,7 +36,7 @@ tokio = { version = "1.47.1" , features = ["rt-multi-thread"]}
 
 [target.'cfg(unix)'.dependencies]
 tikv-jemallocator = { version = "0.6.0", features = ["profiling", "unprefixed_malloc_on_supported_platforms"] }
-jemalloc_pprof = { version = "0.8.1", features = ["flamegraph", "symbolize"] }
+jemalloc_pprof = { version = "0.8.1", features = ["flamegraph"] }
 
 [dev-dependencies]
 # Workspace dependencies
