@@ -353,7 +353,7 @@ runcmd:
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego --login
     time task reexecute-cchain-range CURRENT_STATE_DIR=/mnt/nvme/ubuntu/exec-data/current-state BLOCK_DIR=/mnt/nvme/ubuntu/exec-data/blocks START_BLOCK=1 END_BLOCK=__END_BLOCK__ CONFIG=firewood METRICS_ENABLED=false
-    > bootstrap.log 2>&1
+    > /var/log/bootstrap.log 2>&1
 END_HEREDOC
 )
 
