@@ -238,7 +238,7 @@ runs:
         fi
         
         # Set output parameter
-        echo "ffi-path=$FFI_PATH" >> $GITHUB_OUTPUT
+        echo "ffi-path=$(realpath "$FFI_PATH")" >> $GITHUB_OUTPUT
         
         # Set environment variable for other actions
         echo "FIREWOOD_FFI_PATH=$FFI_PATH" >> $GITHUB_ENV
