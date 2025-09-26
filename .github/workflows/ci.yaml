@@ -254,6 +254,8 @@ jobs:
         with:
           save-if: "false"
           shared-key: "debug-ethhash-logger"
+      - name: Build Firewood FFI (with ethhash)
+        run: cargo build --features ethhash,logger
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
