@@ -46,6 +46,46 @@ if ! grep -q '^http_port = 80$' /etc/grafana/grafana.ini; then
   perl -pi -e 's/^;?http_port = .*/http_port = 80/' /etc/grafana/grafana.ini
 fi
 
+# configure username and password
+# TODO(amin): auto-generate some password for more security
+# TODO(amin): another possible option here is enabling google oauth, and this could give access
+# to anyone within our org emails
+sed -i -E "s|^;?\s*admin_user\s*=.*|admin_user = admin|" /etc/grafana/grafana.ini
+sed -i -E "s|^;?\s*admin_password\s*=.*|admin_password = firewoodisfast|" /etc/grafana/grafana.ini
+
+# provision data source and dashboards
+cat > /etc/grafana/provisioning/datasources/prometheus.yml <<EOF
+apiVersion: 1
+datasources:
+ - name: Prometheus
+    type: prometheus
+    access: proxy
+    orgId: 1
+    url: http://localhost:9090
+    isDefault: true
+    editable: true
+EOF
+
+cat > /etc/grafana/provisioning/dashboards/dashboards.yaml <<EOF
+apiVersion: 1
+providers:
+  - name: 'files'
+    orgId: 1
+    folder: 'Provisioned'
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: true
+EOF
+
+# add firewood's dashboard and also node exporter full
+mkdir -p /var/lib/grafana/dashboards
+# TODO(amin): replace this with script dir
+wget -O /var/lib/grafana/dashboards/firewood.json https://github.com/ava-labs/firewood/raw/refs/heads/main/benchmark/Grafana-dashboard.json
+wget -O /var/lib/grafana/dashboards/node_exporter_full.json https://grafana.com/api/dashboards/1860/revisions/latest/download
+
 # configure prometheus to scrape firewood
 if ! grep -q '^  - job_name: firewood$' /etc/prometheus/prometheus.yml; then
   cat >> /etc/prometheus/prometheus.yml <<!
