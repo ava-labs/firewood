@@ -284,6 +284,8 @@ jobs:
         with:
           save-if: "false"
           shared-key: "debug-no-features"
+      - name: Build Firewood FFI
+        run: cargo build -p firewood-ffi
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
