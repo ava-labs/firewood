@@ -1,12 +1,12 @@
 name: 'Setup Firewood'
-description: 'Sets up Firewood FFI from pre-built binaries or builds from source with optimal storage detection'
+description: 'Sets up Firewood FFI from pre-built binaries or builds from source'
 
 inputs:
   version:
     description: 'Firewood version. Format: ffi/vX.Y.Z for pre-built FFI, commit/branch for source build'
     required: true
   workspace-path:
-    description: 'Custom workspace path (auto-detects NVMe if not specified)'
+    description: 'Custom workspace path (default: ./firewood-workspace)'
     required: false
     default: ''
   target:
@@ -29,227 +29,67 @@ inputs:
 outputs:
   ffi-path:
     description: 'Absolute path to Firewood FFI directory'
-    value: ${{ steps.setup-ffi.outputs.ffi-path }}
-  build-type:
-    description: 'Whether this used pre-built or source build'
-    value: ${{ steps.detect-type.outputs.build-type }}
-  storage-type:
-    description: 'Storage type detected/used (nvme, standard, or custom)'
-    value: ${{ steps.detect-storage.outputs.storage-type }}
-  workspace-path:
-    description: 'Actual workspace path used'
-    value: ${{ steps.detect-storage.outputs.workspace-path }}
+    value: ${{ steps.build.outputs.ffi-path }}
   target-platform:
     description: 'Target platform used for build'
-    value: ${{ steps.detect-platform.outputs.target-platform }}
+    value: ${{ steps.build.outputs.target-platform }}
 
 runs:
   using: 'composite'
   steps:
-    - name: Detect target platform
-      id: detect-platform
-      shell: bash
-      run: |
-        if [ -n "${{ inputs.target }}" ]; then
-          TARGET_PLATFORM="${{ inputs.target }}"
-          echo "Using specified target: $TARGET_PLATFORM"
-        else
-          # Auto-detect platform using same logic as Firewood's workflow
-          case "${{ runner.os }}-${{ runner.arch }}" in
-            "Linux-X64")
-              TARGET_PLATFORM="x86_64-unknown-linux-gnu"
-              ;;
-            "Linux-ARM64")
-              TARGET_PLATFORM="aarch64-unknown-linux-gnu"
-              ;;
-            "macOS-X64")
-              TARGET_PLATFORM="x86_64-apple-darwin"
-              ;;
-            "macOS-ARM64")
-              TARGET_PLATFORM="aarch64-apple-darwin"
-              ;;
-            *)
-              echo "Unsupported platform: ${{ runner.os }}-${{ runner.arch }}"
-              echo "Supported: Linux-X64, Linux-ARM64, macOS-X64, macOS-ARM64"
-              exit 1
-              ;;
-          esac
-          echo "Auto-detected target: $TARGET_PLATFORM"
-        fi
-        echo "target-platform=$TARGET_PLATFORM" >> $GITHUB_OUTPUT
-
-    - name: Detect optimal storage and workspace
-      id: detect-storage
-      shell: bash
-      run: |
-        if [ -n "${{ inputs.workspace-path }}" ]; then
-          WORKSPACE_PATH="${{ inputs.workspace-path }}"
-          echo "Using specified workspace: $WORKSPACE_PATH"
-          echo "storage-type=custom" >> $GITHUB_OUTPUT
-        else
-          # Auto-detect optimal storage (hybrid approach)
-          if ls /dev/nvme* >/dev/null 2>&1; then
-            WORKSPACE_PATH="/tmp/firewood-nvme-workspace"
-            echo "NVMe detected, using fast storage workspace"
-            echo "storage-type=nvme" >> $GITHUB_OUTPUT
-          else
-            WORKSPACE_PATH="./firewood-workspace" 
-            echo "Standard storage detected, using default workspace"
-            echo "storage-type=standard" >> $GITHUB_OUTPUT
-          fi
-        fi
-        
-        mkdir -p "$WORKSPACE_PATH"
-        echo "workspace-path=$WORKSPACE_PATH" >> $GITHUB_OUTPUT
-
-    - name: Detect build type
-      id: detect-type
-      shell: bash
-      run: |
-        if [[ "${{ inputs.version }}" =~ ^ffi/ ]]; then
-          echo "build-type=prebuilt" >> $GITHUB_OUTPUT
-          echo "Using pre-built binaries for ${{ inputs.version }}"
-        else
-          echo "build-type=source" >> $GITHUB_OUTPUT
-          echo "Building from source at ${{ inputs.version }}"
-        fi
-
-    # === Pre-built path: leverage Firewood's existing infrastructure ===
-    - name: Checkout pre-built Firewood FFI
-      if: steps.detect-type.outputs.build-type == 'prebuilt'
-      uses: actions/checkout@v4
-      with:
-        repository: 'ava-labs/firewood-go-ethhash'
-        ref: ${{ inputs.version }}
-        path: ${{ steps.detect-storage.outputs.workspace-path }}/firewood-ffi
-
-    - name: Verify pre-built library for target platform
-      if: steps.detect-type.outputs.build-type == 'prebuilt'
-      shell: bash
-      run: |
-        WORKSPACE=${{ steps.detect-storage.outputs.workspace-path }}
-        TARGET_PLATFORM=${{ steps.detect-platform.outputs.target-platform }}
-        
-        EXPECTED_LIB="$WORKSPACE/firewood-ffi/ffi/libs/$TARGET_PLATFORM/libfirewood_ffi.a"
-        
-        if [ ! -f "$EXPECTED_LIB" ]; then
-          echo "Error: Pre-built library not found for platform $TARGET_PLATFORM"
-          echo "Expected: $EXPECTED_LIB"
-          echo "Available platforms:"
-          find "$WORKSPACE/firewood-ffi/ffi/libs/" -name "libfirewood_ffi.a" 2>/dev/null || echo "No libraries found"
-          exit 1
-        fi
-        
-        echo "Pre-built library verified for $TARGET_PLATFORM"
-
-    # === Source build path: use Firewood's build patterns ===
     - name: Install Rust toolchain for source build
-      if: steps.detect-type.outputs.build-type == 'source'
+      if: ${{ !startsWith(inputs.version, 'ffi/') }}
       uses: dtolnay/rust-toolchain@stable
       with:
         toolchain: ${{ inputs.rust-version }}
-        targets: ${{ steps.detect-platform.outputs.target-platform }}
 
     - name: Setup Rust cache
-      if: steps.detect-type.outputs.build-type == 'source'
+      if: ${{ !startsWith(inputs.version, 'ffi/') }}
       uses: Swatinem/rust-cache@v2
       with:
-        shared-key: ${{ inputs.profile }}-${{ inputs.features }}-${{ steps.detect-platform.outputs.target-platform }}
+        shared-key: ${{ inputs.profile }}-${{ inputs.features }}
 
-    - name: Install build dependencies for Linux
-      if: steps.detect-type.outputs.build-type == 'source' && runner.os == 'Linux'
+    - name: Install build dependencies
+      if: ${{ !startsWith(inputs.version, 'ffi/') }}
       shell: bash
       run: |
         sudo apt-get update
         sudo apt-get install -y build-essential
 
-    - name: Set macOS deployment target
-      if: steps.detect-type.outputs.build-type == 'source' && runner.os == 'macOS'
-      shell: bash
-      run: echo "MACOSX_DEPLOYMENT_TARGET=15.0" >> "$GITHUB_ENV"
-
-    - name: Checkout Firewood source
-      if: steps.detect-type.outputs.build-type == 'source'
-      uses: actions/checkout@v4
-      with:
-        repository: 'ava-labs/firewood'
-        ref: ${{ inputs.version }}
-        path: ${{ steps.detect-storage.outputs.workspace-path }}/firewood-src
-
     - name: Build Firewood FFI
-      if: steps.detect-type.outputs.build-type == 'source'
+      id: build
       shell: bash
-      working-directory: ${{ steps.detect-storage.outputs.workspace-path }}/firewood-src
       run: |
-        TARGET_PLATFORM=${{ steps.detect-platform.outputs.target-platform }}
-        FEATURES="${{ inputs.features }}"
-        PROFILE="${{ inputs.profile }}"
+        # Build script arguments
+        ARGS="${{ inputs.version }}"
         
-        echo "Building Firewood FFI for $TARGET_PLATFORM with profile=$PROFILE features=$FEATURES on ${{ steps.detect-storage.outputs.storage-type }} storage"
-        
-        cargo build --profile $PROFILE --features $FEATURES --target $TARGET_PLATFORM -p firewood-ffi
-        
-        # Verify FFI library exists - fail fast if not found
-        EXPECTED_LIB="target/$TARGET_PLATFORM/$PROFILE/libfirewood_ffi.a"
-        if [ ! -f "$EXPECTED_LIB" ]; then
-          echo "Error: $EXPECTED_LIB not found after build"
-          echo "Build failed - expected library missing"
-          exit 1
+        if [ -n "${{ inputs.workspace-path }}" ]; then
+          ARGS="$ARGS --workspace ${{ inputs.workspace-path }}"
         fi
+        
+        if [ -n "${{ inputs.target }}" ]; then
+          ARGS="$ARGS --target ${{ inputs.target }}"
+        fi
+        
+        if [ -n "${{ inputs.features }}" ]; then
+          ARGS="$ARGS --features ${{ inputs.features }}"
+        fi
+        
+        if [ -n "${{ inputs.profile }}" ]; then
+          ARGS="$ARGS --profile ${{ inputs.profile }}"
+        fi
+        
+        # Run build script and capture FFI path
+        FFI_PATH=$($GITHUB_ACTION_PATH/scripts/build.sh $ARGS)
+        
+        # Set outputs
+        echo "ffi-path=$FFI_PATH" >> $GITHUB_OUTPUT
 
-    - name: Setup FFI directory structure for source build
-      if: steps.detect-type.outputs.build-type == 'source'
-      shell: bash
-      run: |
-        WORKSPACE=${{ steps.detect-storage.outputs.workspace-path }}
-        TARGET_PLATFORM=${{ steps.detect-platform.outputs.target-platform }}
-        PROFILE=${{ inputs.profile }}
-        
-        # Use the actual ffi/ directory from Firewood workspace
-        # No need to create artificial structure - just copy the real ffi directory
-        mkdir -p $WORKSPACE/firewood-ffi
-        cp -r $WORKSPACE/firewood-src/ffi $WORKSPACE/firewood-ffi/
-        
-        # Copy built library to platform-specific location for consistency with pre-built
-        mkdir -p "$WORKSPACE/firewood-ffi/ffi/libs/$TARGET_PLATFORM"
-        cp "$WORKSPACE/firewood-src/target/$TARGET_PLATFORM/$PROFILE/libfirewood_ffi.a" "$WORKSPACE/firewood-ffi/ffi/libs/$TARGET_PLATFORM/"
-
-    - name: Setup outputs and environment
-      id: setup-ffi
-      shell: bash
-      run: |
-        WORKSPACE=${{ steps.detect-storage.outputs.workspace-path }}
-        FFI_PATH="$WORKSPACE/firewood-ffi/ffi"
-        
-        # Verify FFI directory exists - fail fast if setup failed
-        if [ ! -d "$FFI_PATH" ]; then
-          echo "Error: FFI directory not found at $FFI_PATH"
-          echo "Firewood setup failed"
-          exit 1
-        fi
-        
-        # Verify the required library exists for the target platform
-        TARGET_PLATFORM=${{ steps.detect-platform.outputs.target-platform }}
-        REQUIRED_LIB="$FFI_PATH/libs/$TARGET_PLATFORM/libfirewood_ffi.a"
-        if [ ! -f "$REQUIRED_LIB" ]; then
-          echo "Error: Required library not found at $REQUIRED_LIB"
-          echo "Platform $TARGET_PLATFORM may not be supported"
-          exit 1
-        fi
-        
-        # Set output parameter
-        echo "ffi-path=$(realpath "$FFI_PATH")" >> $GITHUB_OUTPUT
+        # Extract target platform from FFI path structure
+        TARGET_PLATFORM=$(basename $(dirname $(find "$FFI_PATH/libs" -name "libfirewood_ffi.a" | head -1)))
+        echo "target-platform=$TARGET_PLATFORM" >> $GITHUB_OUTPUT
         
         # Set environment variable for other actions
         echo "FIREWOOD_FFI_PATH=$FFI_PATH" >> $GITHUB_ENV
         
-        # Create standard location symlink for predictability
-        rm -rf ./ffi
-        ln -s "$FFI_PATH" ./ffi
-        
         echo "Firewood FFI ready at: $FFI_PATH"
-        echo "Environment variable FIREWOOD_FFI_PATH set"
-        echo "Standard symlink ./ffi created"
-        echo "Target platform: ${{ steps.detect-platform.outputs.target-platform }}"
-        echo "Storage type: ${{ steps.detect-storage.outputs.storage-type }}"
-        echo "Build type: ${{ steps.detect-type.outputs.build-type }}"
