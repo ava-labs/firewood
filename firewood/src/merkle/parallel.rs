@@ -5,8 +5,8 @@ use crate::db::BatchOp;
 use crate::merkle::{Key, Merkle, Value};
 use crate::v2::api::KeyValuePairIter;
 use firewood_storage::{
-    BranchNode, Child, FileBacked, FileIoError, ImmutableProposal, LeafNode, MutableProposal,
-    NibblesIterator, Node, NodeReader, NodeStore, Parentable, Path,
+    BranchNode, Child, FileBacked, FileIoError, ImmutableProposal, LeafNode, MaybePersistedNode,
+    MutableProposal, NibblesIterator, Node, NodeReader, NodeStore, Parentable, Path,
 };
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::iter::once;
@@ -35,9 +35,9 @@ enum Request {
 }
 
 #[derive(Debug)]
-enum Response<S> {
-    // return the new root of the subtrie at the given nibble
-    Root(u8, Box<NodeStore<MutableProposal, S>>),
+enum Response {
+    // return both the new root of the subtrie at the given nibble and the deleted nodes.
+    Root(u8, Option<Child>, Vec<MaybePersistedNode>),
     Error(FileIoError),
 }
 
@@ -165,7 +165,7 @@ impl ParallelMerkle {
         proposal: &NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut Box<BranchNode>,
         first_nibble: u8,
-        worker_sender: Sender<Response<FileBacked>>,
+        worker_sender: Sender<Response>,
     ) -> Result<WorkerSender, FileIoError> {
         // Create a channel for the coordinator (main thread) to send messages to this worker.
         let (child_sender, child_receiver) = mpsc::channel();
@@ -227,8 +227,37 @@ impl ParallelMerkle {
                     }
                     // Sent from the coordinator to the workers to signal that the batch is done.
                     Request::Done => {
+                        // Hash this subtrie and return the root as a Child::MaybePersisted.
+                        let hashed_result = merkle
+                            .nodestore
+                            .root_mut()
+                            .take()
+                            .map(|root| {
+                                #[cfg(not(feature = "ethhash"))]
+                                let (root_node, root_hash) =
+                                    NodeStore::<MutableProposal, FileBacked>::hash_helper(
+                                        root,
+                                        Path::from_nibbles_iterator(once(first_nibble)),
+                                    )?;
+                                #[cfg(feature = "ethhash")]
+                                let (root_node, root_hash) = merkle.nodestore.hash_helper(
+                                    root,
+                                    Path::from_nibbles_iterator(once(first_nibble)),
+                                )?;
+                                Ok(Child::MaybePersisted(root_node, root_hash))
+                            })
+                            .transpose();
+
+                        let response = match hashed_result {
+                            Ok(hashed_root) => Response::Root(
+                                first_nibble,
+                                hashed_root,
+                                merkle.nodestore.take_deleted_nodes(),
+                            ),
+                            Err(err) => Response::Error(err),
+                        };
                         worker_sender
-                            .send(Response::Root(first_nibble, merkle.into_inner().into()))
+                            .send(response)
                             .expect("send from worker error");
                         break; // Allow the worker to return to the thread pool.
                     }
@@ -242,7 +271,7 @@ impl ParallelMerkle {
     // subtrie, and merge them into the root node of the main trie.
     fn merge_children(
         &mut self,
-        response_channel: Receiver<Response<FileBacked>>,
+        response_channel: Receiver<Response>,
         proposal: &mut NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut Box<BranchNode>,
     ) -> Result<(), FileIoError> {
@@ -253,15 +282,15 @@ impl ParallelMerkle {
 
         while let Ok(response) = response_channel.recv() {
             match response {
-                Response::Root(index, child_nodestore) => {
-                    // Adding deleted nodes (from calling read_for_update) from child nodestores.
-                    proposal.delete_nodes(child_nodestore.deleted_as_slice());
+                Response::Root(index, child_root, deleted_nodes) => {
+                    // Adding deleted nodes (from calling read_for_update) from the child's nodestore.
+                    proposal.delete_nodes(deleted_nodes.as_slice());
 
-                    // Set the child at index using the root from the child nodestore.
+                    // Set the child at index to child_root which is the root of the child's subtrie.
                     *root_branch
                         .children
                         .get_mut(index as usize)
-                        .expect("index error") = child_nodestore.into_root().map(Child::Node);
+                        .expect("index error") = child_root;
                 }
                 Response::Error(err) => {
                     return Err(err); // Early termination.
@@ -279,7 +308,7 @@ impl ParallelMerkle {
         proposal: &NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut Box<BranchNode>,
         first_nibble: u8,
-        worker_sender: Sender<Response<FileBacked>>,
+        worker_sender: Sender<Response>,
     ) -> Result<&mut WorkerSender, FileIoError> {
         // Find the worker's state corresponding to the first nibble which are stored in an array.
         let worker_option = self

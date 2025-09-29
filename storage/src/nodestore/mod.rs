@@ -247,10 +247,9 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
         self.kind.deleted.push(node);
     }
 
-    /// Return nodes that have been maked as deleted in this proposal as a slice.
-    #[must_use]
-    pub const fn deleted_as_slice(&self) -> &[MaybePersistedNode] {
-        self.kind.deleted.as_slice()
+    /// Take the nodes that have been marked as deleted in this proposal.
+    pub fn take_deleted_nodes(&mut self) -> Vec<MaybePersistedNode> {
+        std::mem::take(&mut self.kind.deleted)
     }
 
     /// Adds to the nodes deleted in this proposal.
@@ -580,11 +579,11 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
             return Ok(nodestore);
         };
 
-        // Hashes the trie and returns the address of the new root.
+        // Hashes the trie with an empty path and returns the address of the new root.
         #[cfg(feature = "ethhash")]
-        let (root, root_hash) = nodestore.hash_helper(root)?;
+        let (root, root_hash) = nodestore.hash_helper(root, Path::new())?;
         #[cfg(not(feature = "ethhash"))]
-        let (root, root_hash) = NodeStore::<MutableProposal, S>::hash_helper(root)?;
+        let (root, root_hash) = NodeStore::<MutableProposal, S>::hash_helper(root, Path::new())?;
 
         let immutable_proposal =
             Arc::into_inner(nodestore.kind).expect("no other references to the proposal");
