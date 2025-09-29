@@ -289,11 +289,21 @@ runcmd:
     | RUSTUP_HOME=/usr/local/rust CARGO_HOME=/usr/local/rust
     sh -s -- -y --no-modify-path
   - sudo -u ubuntu --login rustup default stable
-  # install firewood
-  - git clone --depth 1 __FIREWOOD_BRANCH_ARG__ https://github.com/ava-labs/firewood.git /tmp/firewood
-  - bash /tmp/firewood/benchmark/setup-scripts/build-environment.sh
-  - bash -c 'mkdir ~ubuntu/firewood; mv /tmp/firewood/{.[!.],}* ~ubuntu/firewood/'
-  # fix up the directories so that anyone is group 'users' has r/w access
+  # download build_firewood.sh script and build firewood
+  - git clone --depth 1 __FIREWOOD_BRANCH_ARG__ https://github.com/ava-labs/firewood.git /tmp/firewood-clone
+  - cp /tmp/firewood-clone/benchmark/setup-scripts/build-firewood.sh /tmp/build-firewood.sh
+  - chmod +x /tmp/build-firewood.sh
+  - >
+    FFI_PATH=$(sudo -u ubuntu --login
+    /tmp/build_firewood.sh ${FIREWOOD_BRANCH:-main}
+    --workspace /mnt/nvme/ubuntu/firewood-workspace
+    --features ethhash,logger
+    --profile maxperf 2>&1 | tee /mnt/nvme/ubuntu/firewood-build.log | tail -1)
+  - echo "Firewood FFI built at: $FFI_PATH" >> /mnt/nvme/ubuntu/firewood-build.log
+  # setup firewood directories and run build-environment.sh
+  - sudo -u ubuntu ln -s /mnt/nvme/ubuntu/firewood-workspace/firewood-src /mnt/nvme/ubuntu/firewood
+  - bash /mnt/nvme/ubuntu/firewood/benchmark/setup-scripts/build-environment.sh
+  # fix up the directories so that anyone in group 'users' has r/w access
   - chown -R ubuntu:users /mnt/nvme/ubuntu
   - chmod -R g=u /mnt/nvme/ubuntu
   - find /mnt/nvme/ubuntu -type d -print0 | xargs -0 chmod g+s
@@ -327,12 +337,6 @@ runcmd:
     sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego
     /usr/local/go/bin/go mod edit -replace
     github.com/ava-labs/libevm=../libevm
-  # build firewood in maxperf mode
-  - >
-    sudo -u ubuntu -D /mnt/nvme/ubuntu/firewood/ffi --login time cargo build
-    --profile maxperf
-    --features ethhash,logger
-    > /mnt/nvme/ubuntu/firewood/build.log 2>&1
   # build avalanchego
   - sudo -u ubuntu --login -D /mnt/nvme/ubuntu/avalanchego go mod tidy
   - >
