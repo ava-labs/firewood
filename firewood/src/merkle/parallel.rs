@@ -388,7 +388,7 @@ impl ParallelMerkle {
             .expect("Root should be a branch after prepare step");
 
         // Create a response channel the workers use to send messages back to the coordinator (us)
-        let response_channel = mpsc::channel();
+        let (response_sender, response_receiver) = mpsc::channel();
 
         // Split step: for each operation in the batch, send a request to the worker that is
         // responsible for the sub-trie corresponding to the operation's first nibble.
@@ -431,7 +431,7 @@ impl ParallelMerkle {
                 &proposal,
                 &mut root_branch,
                 first_nibble,
-                response_channel.0.clone(),
+                response_sender.clone(),
             )?;
 
             // Send the current operation to the worker.
@@ -466,11 +466,11 @@ impl ParallelMerkle {
         }
 
         // Drop the sender response channel from the parent thread.
-        drop(response_channel.0);
+        drop(response_sender);
 
         // Merge step: send a done message to all of the workers to indicate that the batch is complete.
         // Collect the results from the workers and merge them as children to the root.
-        self.merge_children(response_channel.1, &mut proposal, &mut root_branch)?;
+        self.merge_children(response_receiver, &mut proposal, &mut root_branch)?;
 
         // Post-process step: return the trie to its canonical form.
         *proposal.root_mut() = self.postprocess_trie(&mut proposal, root_branch)?;
