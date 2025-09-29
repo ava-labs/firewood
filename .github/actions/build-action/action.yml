@@ -80,7 +80,7 @@ runs:
         fi
         
         # Run build script and capture FFI path
-        FFI_PATH=$($GITHUB_ACTION_PATH/scripts/build.sh $ARGS)
+        FFI_PATH=$(./benchmark/setup-scripts/build-firewood.sh $ARGS)
         
         # Set outputs
         echo "ffi-path=$FFI_PATH" >> $GITHUB_OUTPUT
