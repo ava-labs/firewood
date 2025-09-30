@@ -1,4 +1,9 @@
 {
+  # To use:
+  #  - Install nix: https://github.com/DeterminateSystems/nix-installer?tab=readme-ov-file#install-nix
+  #  - Run from ffi/ dir: `nix build .#firewood-ffi`
+  #  - Run from anywhere: `nix develop 'github:ava-labs/firewood?dir=ffi&ref=[SHA]'`
+
   description = "Firewood FFI library and development environment";
 
   inputs = {
