@@ -10,7 +10,7 @@ pub struct RevisionHandle {
 }
 
 impl RevisionHandle {
-    /// Creates a new revision handle for the provided root hash and database view.
+    /// Creates a new revision handle for the provided database view.
     pub(crate) fn new(view: ArcDynDbView) -> RevisionHandle {
         RevisionHandle { view }
     }

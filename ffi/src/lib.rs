@@ -139,6 +139,27 @@ pub unsafe extern "C" fn fwd_get_revision(
     invoke_with_handle(db, move |db| db.get_revision(root.as_ref().try_into()?))
 }
 
+/// Gets the value associated with the given key from the provided revision handle.
+///
+/// # Arguments
+///
+/// * `revision` - The revision handle returned by [`fwd_get_revision`].
+/// * `key` - The key to look up as a [`BorrowedBytes`].
+///
+/// # Returns
+///
+/// - [`ValueResult::NullHandlePointer`] if the provided revision handle is null.
+/// - [`ValueResult::None`] if the key was not found in the revision.
+/// - [`ValueResult::Some`] if the key was found with the associated value.
+/// - [`ValueResult::Err`] if an error occurred while retrieving the value.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `revision` is a valid pointer to a [`RevisionHandle`].
+/// * ensure that `key` is valid for [`BorrowedBytes`].
+/// * call [`fwd_free_owned_bytes`] to free the memory associated with the [`OwnedBytes`]
+///   returned in the result.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_get_from_revision(
     revision: Option<&RevisionHandle>,
@@ -149,6 +170,23 @@ pub unsafe extern "C" fn fwd_get_from_revision(
     })
 }
 
+/// Consumes the [`RevisionHandle`] and frees the memory associated with it.
+///
+/// # Arguments
+///
+/// * `revision` - A pointer to a [`RevisionHandle`] previously returned by
+///   [`fwd_get_revision`].
+///
+/// # Returns
+///
+/// - [`VoidResult::NullHandlePointer`] if the provided revision handle is null.
+/// - [`VoidResult::Ok`] if the revision handle was successfully freed.
+/// - [`VoidResult::Err`] if the process panics while freeing the memory.
+///
+/// # Safety
+///
+/// The caller must ensure that the revision handle is valid and is not used again after
+/// this function is called.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_free_revision(
     revision: Option<&RevisionHandle>,
