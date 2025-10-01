@@ -37,6 +37,7 @@ pub use crate::handle::*;
 pub use crate::logging::*;
 pub use crate::proofs::*;
 pub use crate::proposal::*;
+use crate::revision::RevisionHandle;
 pub use crate::value::*;
 
 #[cfg(unix)]
@@ -136,6 +137,23 @@ pub unsafe extern "C" fn fwd_get_revision(
     root: BorrowedBytes,
 ) -> RevisionResult {
     invoke_with_handle(db, move |db| db.get_revision(root.as_ref().try_into()?))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_get_from_revision(
+    revision: Option<&RevisionHandle>,
+    key: BorrowedBytes,
+) -> ValueResult {
+    invoke_with_handle(revision, move |db| {
+        db.val(key)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_free_revision(
+    revision: Option<&RevisionHandle>,
+) -> VoidResult {
+    invoke_with_handle(revision, drop)
 }
 
 /// Gets the value associated with the given key from the proposal provided.

@@ -189,7 +189,7 @@ impl DatabaseHandle {
         root: HashKey,
     ) -> Result<GetRevisionResult, api::Error> {
         let view = self.db.view(root.clone())?;
-        Ok(GetRevisionResult { handle: RevisionHandle::new(root, view) })
+        Ok(GetRevisionResult { handle: RevisionHandle::new(view) })
     }
 
     pub(crate) fn get_root(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {

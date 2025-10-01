@@ -1236,6 +1236,8 @@ struct VoidResult fwd_free_proposal(struct ProposalHandle *proposal);
  */
 struct VoidResult fwd_free_range_proof(struct RangeProofContext *proof);
 
+struct VoidResult fwd_free_revision(const struct RevisionHandle *revision);
+
 /**
  * Gather latest metrics for this process.
  *
@@ -1279,6 +1281,8 @@ struct ValueResult fwd_gather(void);
  *   returned in the result.
  */
 struct ValueResult fwd_get_from_proposal(const struct ProposalHandle *handle, BorrowedBytes key);
+
+struct ValueResult fwd_get_from_revision(const struct RevisionHandle *revision, BorrowedBytes key);
 
 /**
  * Gets a value assoicated with the given root hash and key.
