@@ -67,7 +67,7 @@
         # Install the static library and header
         postInstall = ''
           mkdir -p $out/lib $out/include
-          cp target/*/libfirewood_ffi.a $out/lib/ || cp target/release/libfirewood_ffi.a $out/lib/
+          cp target/maxperf/libfirewood_ffi.a $out/lib/ || cp target/release/libfirewood_ffi.a $out/lib/
           cp ffi/firewood.h $out/include/
         '';
 
