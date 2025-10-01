@@ -244,6 +244,24 @@ jobs:
         # cgocheck2 is expensive but provides complete pointer checks
         run: GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=firewood go test -race ./...
 
+  ffi-nix:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 #v20
+      - uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 #v13
+      - name: Build Firewood FFI
+        working-directory: ffi
+        run: nix build .#firewood-ffi
+      - name: Test Go FFI bindings
+        working-directory: ffi
+        # - cgocheck2 is expensive but provides complete pointer checks
+        # - the nix flake builds with `--features ethhash`
+        run: nix develop --command env GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=ethhash go test ./... -v
+
   firewood-ethhash-differential-fuzz:
     needs: build
     runs-on: ubuntu-latest
