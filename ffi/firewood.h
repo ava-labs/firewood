@@ -1342,6 +1342,30 @@ struct ValueResult fwd_get_from_root(const struct DatabaseHandle *db,
  */
 struct ValueResult fwd_get_latest(const struct DatabaseHandle *db, BorrowedBytes key);
 
+/**
+ * Gets a handle to the revision identified by the provided root hash.
+ *
+ * # Arguments
+ *
+ * * `db` - The database handle returned by [`fwd_open_db`].
+ * * `root` - The hash of the revision as a [`BorrowedBytes`].
+ *
+ * # Returns
+ *
+ * - [`RevisionResult::NullHandlePointer`] if the provided database handle is null.
+ * - [`RevisionResult::Ok`] containing a [`RevisionHandle`] if the revision exists.
+ * - [`RevisionResult::Err`] if the revision cannot be fetched or the root hash is invalid.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`DatabaseHandle`].
+ * * ensure that `root` is valid for [`BorrowedBytes`].
+ * * call [`fwd_free_revision`] to free the returned handle when it is no longer needed.
+ *
+ * [`BorrowedBytes`]: crate::value::BorrowedBytes
+ * [`RevisionHandle`]: crate::revision::RevisionHandle
+ */
 struct RevisionResult fwd_get_revision(const struct DatabaseHandle *db, BorrowedBytes root);
 
 /**

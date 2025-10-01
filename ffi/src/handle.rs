@@ -177,6 +177,13 @@ impl DatabaseHandle {
         Ok(root_hash)
     }
 
+    /// Returns an owned handle to the revision corresponding to the provided root hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if could not get the view from underlying database for the specified
+    /// root hash, for example when the revision does not exist or an I/O error occurs while
+    /// accessing the database.
     pub fn get_revision(
         &self,
         root: HashKey,
