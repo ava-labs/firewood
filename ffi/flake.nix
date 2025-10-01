@@ -40,6 +40,7 @@
       commonArgs = {
         inherit src;
         strictDeps = true;
+        dontStrip = true;
 
         # Build only the firewood-ffi crate
         pname = ffiCargoToml.package.name;
