@@ -23,12 +23,19 @@ var (
 	errDroppedRevision   = errors.New("revision already dropped")
 )
 
+// Revision is an immutable snapshot view over the database at a specific root hash.
+// Instances are created via Database.Revision and provide read-only access to the
+// state at that revision.
 type Revision struct {
 	handle *C.RevisionHandle
 	// The revision root
 	root []byte
 }
 
+// Get reads the value stored at the provided key within the revision.
+//
+// It returns errDroppedRevision if the underlying native handle has already been
+// released.
 func (r *Revision) Get(key []byte) ([]byte, error) {
 	if r.handle == nil {
 		return nil, errDroppedRevision
