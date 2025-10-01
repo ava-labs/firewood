@@ -50,6 +50,25 @@ func (r *Revision) Get(key []byte) ([]byte, error) {
 	))
 }
 
+// Drop releases the memory associated with the Revision.
+//
+// This is safe to call if the pointer is nil, in which case it does nothing.
+//
+// The pointer will be set to nil after freeing to prevent double free.
+func (r *Revision) Drop() error {
+	if r.handle == nil {
+		return nil
+	}
+
+	if err := getErrorFromVoidResult(C.fwd_free_revision(r.handle)); err != nil {
+		return fmt.Errorf("%w: %w", errFreeingValue, err)
+	}
+
+	r.handle = nil // Prevent double free
+
+	return nil
+}
+
 // getRevisionFromResult converts a C.RevisionResult to a Revision or error.
 func getRevisionFromResult(result C.RevisionResult) (*Revision, error) {
 	switch result.tag {
