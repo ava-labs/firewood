@@ -35,6 +35,8 @@ typedef struct ProposalHandle ProposalHandle;
  */
 typedef struct RangeProofContext RangeProofContext;
 
+typedef struct RevisionHandle RevisionHandle;
+
 /**
  * A database hash key, used in FFI functions that require hashes.
  * This type requires no allocation and can be copied freely and
@@ -644,6 +646,50 @@ typedef struct VerifyRangeProofArgs {
    */
   uint32_t max_length;
 } VerifyRangeProofArgs;
+
+/**
+ * A result type returned from FFI functions that get a revision
+ */
+typedef enum RevisionResult_Tag {
+  /**
+   * The caller provided a null pointer to a database handle.
+   */
+  RevisionResult_NullHandlePointer,
+  /**
+   * Building the iterator was successful and the iterator handle is returned
+   */
+  RevisionResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. The
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  RevisionResult_Err,
+} RevisionResult_Tag;
+
+typedef struct RevisionResult_Ok_Body {
+  /**
+   * An opaque pointer to the [`RevisionHandle`].
+   * The value should be freed with [`fwd_free_revision`]
+   *
+   * [`fwd_free_revision`]: crate::fwd_free_revision
+   */
+  struct RevisionHandle *handle;
+} RevisionResult_Ok_Body;
+
+typedef struct RevisionResult {
+  RevisionResult_Tag tag;
+  union {
+    RevisionResult_Ok_Body ok;
+    struct {
+      OwnedBytes err;
+    };
+  };
+} RevisionResult;
 
 /**
  * The result type returned from the open or create database functions.
@@ -1295,6 +1341,8 @@ struct ValueResult fwd_get_from_root(const struct DatabaseHandle *db,
  * [`BorrowedBytes`]: crate::value::BorrowedBytes
  */
 struct ValueResult fwd_get_latest(const struct DatabaseHandle *db, BorrowedBytes key);
+
+struct RevisionResult fwd_get_revision(const struct DatabaseHandle *db, BorrowedBytes root);
 
 /**
  * Open a database with the given arguments.

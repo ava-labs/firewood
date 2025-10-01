@@ -9,6 +9,7 @@ use crate::{
     ChangeProofContext, CreateProposalResult, HashKey, NextKeyRange, OwnedBytes, ProposalHandle,
     RangeProofContext,
 };
+use crate::revision::{GetRevisionResult, RevisionHandle};
 
 /// The result type returned from an FFI function that returns no value but may
 /// return an error.
@@ -306,6 +307,47 @@ pub enum ProposalResult<'db> {
     Err(OwnedBytes),
 }
 
+/// A result type returned from FFI functions that get a revision
+#[derive(Debug)]
+#[repr(C)]
+pub enum RevisionResult {
+    /// The caller provided a null pointer to a database handle.
+    NullHandlePointer,
+    /// Building the iterator was successful and the iterator handle is returned
+    Ok {
+        /// An opaque pointer to the [`RevisionHandle`].
+        /// The value should be freed with [`fwd_free_revision`]
+        ///
+        /// [`fwd_free_revision`]: crate::fwd_free_revision
+        handle: Box<RevisionHandle>,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. The
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl<'db> From<GetRevisionResult> for RevisionResult {
+    fn from(value: GetRevisionResult) -> Self {
+        RevisionResult::Ok {
+            handle: Box::new(value.handle),
+        }
+    }
+}
+
+impl<E: fmt::Display> From<Result<GetRevisionResult, E>> for RevisionResult {
+    fn from(value: Result<GetRevisionResult, E>) -> Self {
+        match value {
+            Ok(res) => res.into(),
+            Err(err) => RevisionResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 impl<'db, E: fmt::Display> From<Result<CreateProposalResult<'db>, E>> for ProposalResult<'db> {
     fn from(value: Result<CreateProposalResult<'db>, E>) -> Self {
         match value {
@@ -383,6 +425,7 @@ impl_null_handle_result!(
     ChangeProofResult,
     NextKeyRangeResult,
     ProposalResult<'_>,
+    RevisionResult,
 );
 
 impl_cresult!(
@@ -394,6 +437,7 @@ impl_cresult!(
     ChangeProofResult,
     NextKeyRangeResult,
     ProposalResult<'_>,
+    RevisionResult,
 );
 
 enum Panic {

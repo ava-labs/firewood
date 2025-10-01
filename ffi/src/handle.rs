@@ -10,6 +10,7 @@ use firewood::{
 use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
 
 use metrics::counter;
+use crate::revision::{GetRevisionResult, RevisionHandle};
 
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
 ///
@@ -174,6 +175,14 @@ impl DatabaseHandle {
         counter!("firewood.ffi.batch").increment(1);
 
         Ok(root_hash)
+    }
+
+    pub fn get_revision(
+        &self,
+        root: HashKey,
+    ) -> Result<GetRevisionResult, api::Error> {
+        let view = self.db.view(root.clone())?;
+        Ok(GetRevisionResult { handle: RevisionHandle::new(root, view) })
     }
 
     pub(crate) fn get_root(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {

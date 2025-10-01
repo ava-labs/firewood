@@ -29,6 +29,7 @@ mod metrics_setup;
 mod proofs;
 mod proposal;
 mod value;
+mod revision;
 
 use firewood::v2::api::DbView;
 
@@ -105,6 +106,14 @@ pub unsafe extern "C" fn fwd_get_latest(
     key: BorrowedBytes,
 ) -> ValueResult {
     invoke_with_handle(db, move |db| db.get_latest(key))
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_get_revision(
+    db: Option<&DatabaseHandle>,
+    root: BorrowedBytes,
+) -> RevisionResult {
+    invoke_with_handle(db, move |db| db.get_revision(root.as_ref().try_into()?))
 }
 
 /// Gets the value associated with the given key from the proposal provided.
