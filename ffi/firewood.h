@@ -656,6 +656,10 @@ typedef enum RevisionResult_Tag {
    */
   RevisionResult_NullHandlePointer,
   /**
+   * The provided root was not found in the database.
+   */
+  RevisionResult_RevisionNotFound,
+  /**
    * Building the iterator was successful and the iterator handle is returned
    */
   RevisionResult_Ok,
@@ -684,6 +688,9 @@ typedef struct RevisionResult_Ok_Body {
 typedef struct RevisionResult {
   RevisionResult_Tag tag;
   union {
+    struct {
+      struct HashKey revision_not_found;
+    };
     RevisionResult_Ok_Body ok;
     struct {
       OwnedBytes err;
@@ -1236,6 +1243,25 @@ struct VoidResult fwd_free_proposal(struct ProposalHandle *proposal);
  */
 struct VoidResult fwd_free_range_proof(struct RangeProofContext *proof);
 
+/**
+ * Consumes the [`RevisionHandle`] and frees the memory associated with it.
+ *
+ * # Arguments
+ *
+ * * `revision` - A pointer to a [`RevisionHandle`] previously returned by
+ *   [`fwd_get_revision`].
+ *
+ * # Returns
+ *
+ * - [`VoidResult::NullHandlePointer`] if the provided revision handle is null.
+ * - [`VoidResult::Ok`] if the revision handle was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ *
+ * # Safety
+ *
+ * The caller must ensure that the revision handle is valid and is not used again after
+ * this function is called.
+ */
 struct VoidResult fwd_free_revision(const struct RevisionHandle *revision);
 
 /**
@@ -1282,6 +1308,29 @@ struct ValueResult fwd_gather(void);
  */
 struct ValueResult fwd_get_from_proposal(const struct ProposalHandle *handle, BorrowedBytes key);
 
+/**
+ * Gets the value associated with the given key from the provided revision handle.
+ *
+ * # Arguments
+ *
+ * * `revision` - The revision handle returned by [`fwd_get_revision`].
+ * * `key` - The key to look up as a [`BorrowedBytes`].
+ *
+ * # Returns
+ *
+ * - [`ValueResult::NullHandlePointer`] if the provided revision handle is null.
+ * - [`ValueResult::None`] if the key was not found in the revision.
+ * - [`ValueResult::Some`] if the key was found with the associated value.
+ * - [`ValueResult::Err`] if an error occurred while retrieving the value.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `revision` is a valid pointer to a [`RevisionHandle`].
+ * * ensure that `key` is valid for [`BorrowedBytes`].
+ * * call [`fwd_free_owned_bytes`] to free the memory associated with the [`OwnedBytes`]
+ *   returned in the result.
+ */
 struct ValueResult fwd_get_from_revision(const struct RevisionHandle *revision, BorrowedBytes key);
 
 /**

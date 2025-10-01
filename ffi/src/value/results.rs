@@ -313,6 +313,8 @@ pub enum ProposalResult<'db> {
 pub enum RevisionResult {
     /// The caller provided a null pointer to a database handle.
     NullHandlePointer,
+    /// The provided root was not found in the database.
+    RevisionNotFound(HashKey),
     /// Building the iterator was successful and the iterator handle is returned
     Ok {
         /// An opaque pointer to the [`RevisionHandle`].
@@ -339,10 +341,13 @@ impl<'db> From<GetRevisionResult> for RevisionResult {
     }
 }
 
-impl<E: fmt::Display> From<Result<GetRevisionResult, E>> for RevisionResult {
-    fn from(value: Result<GetRevisionResult, E>) -> Self {
+impl From<Result<GetRevisionResult, api::Error>> for RevisionResult {
+    fn from(value: Result<GetRevisionResult, api::Error>) -> Self {
         match value {
             Ok(res) => res.into(),
+            Err(api::Error::RevisionNotFound { provided }) => RevisionResult::RevisionNotFound(
+                HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
+            ),
             Err(err) => RevisionResult::Err(err.to_string().into_bytes().into()),
         }
     }
