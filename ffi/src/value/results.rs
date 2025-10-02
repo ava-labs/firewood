@@ -8,7 +8,8 @@ use std::fmt;
 use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CreateIteratorResult, CreateProposalResult, HashKey, IteratorHandle,
-    NextKeyRange, OwnedBytes, OwnedKeyValuePair, ProposalHandle, RangeProofContext,
+    NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair, ProposalHandle,
+    RangeProofContext,
 };
 
 /// The result type returned from an FFI function that returns no value but may
@@ -373,6 +374,49 @@ impl From<Option<Result<(merkle::Key, merkle::Value), api::Error>>> for KeyValue
     }
 }
 
+/// A result type returned from iterator FFI functions
+#[derive(Debug)]
+#[repr(C)]
+pub enum KeyValueBatchResult {
+    /// The caller provided a null pointer to an iterator handle.
+    NullHandlePointer,
+    /// The provided root was not found in the database.
+    RevisionNotFound(HashKey),
+    /// The next batch of items on iterator are returned.
+    Some(OwnedKeyValueBatch),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl From<Result<Vec<(merkle::Key, merkle::Value)>, api::Error>> for KeyValueBatchResult {
+    fn from(value: Result<Vec<(merkle::Key, merkle::Value)>, api::Error>) -> Self {
+        match value {
+            Ok(pairs) => {
+                let values: Vec<_> = pairs
+                    .into_iter()
+                    .map(|(k, v)| OwnedKeyValuePair {
+                        key: k.into(),
+                        value: v.into(),
+                    })
+                    .collect();
+                KeyValueBatchResult::Some(values.into())
+            }
+            Err(api::Error::RevisionNotFound { provided }) => {
+                KeyValueBatchResult::RevisionNotFound(HashKey::from(
+                    provided.unwrap_or_else(api::HashKey::empty),
+                ))
+            }
+            Err(err) => KeyValueBatchResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 impl<'db> From<CreateIteratorResult<'db>> for IteratorResult<'db> {
     fn from(value: CreateIteratorResult<'db>) -> Self {
         IteratorResult::Ok {
@@ -515,6 +559,7 @@ impl_null_handle_result!(
     ProposalResult<'_>,
     IteratorResult<'_>,
     RevisionResult,
+    KeyValueBatchResult,
     KeyValueResult,
 );
 
@@ -529,6 +574,7 @@ impl_cresult!(
     ProposalResult<'_>,
     IteratorResult<'_>,
     RevisionResult,
+    KeyValueBatchResult,
     KeyValueResult,
 );
 

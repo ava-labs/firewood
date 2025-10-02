@@ -195,6 +195,36 @@ pub unsafe extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) 
     invoke_with_handle(handle, IteratorHandle::next)
 }
 
+/// Retrieves the next batch of items from the iterator
+///
+/// # Arguments
+///
+/// * `handle` - The iterator handle returned by [`fwd_iter_on_revision`] or
+///   [`fwd_iter_on_proposal`].
+///
+/// # Returns
+///
+/// - [`KeyValueResult::NullHandlePointer`] if the provided iterator handle is null.
+/// - [`KeyValueResult::None`] if the iterator doesn't have any remaining values/exhausted.
+/// - [`KeyValueResult::Some`] if the next item on iterator was retrieved, with the associated
+///   key value pair.
+/// - [`KeyValueResult::Err`] if an error occurred while retrieving the next item on iterator.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `handle` is a valid pointer to a [`IteratorHandle`].
+/// * call [`fwd_free_owned_bytes`] on [`OwnedKeyValuePair::key`] and [`OwnedKeyValuePair::value`]
+///   to free the memory associated with the returned error or value.
+///
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_iter_next_n(
+    handle: Option<&mut IteratorHandle<'_>>,
+    n: usize,
+) -> KeyValueBatchResult {
+    invoke_with_handle(handle, |it| it.iter_next_n(n))
+}
+
 /// Consumes the [`IteratorHandle`], destroys the iterator, and frees the memory.
 ///
 /// # Arguments
@@ -688,4 +718,26 @@ pub unsafe extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidRe
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_free_owned_bytes(bytes: OwnedBytes) -> VoidResult {
     invoke(move || drop(bytes))
+}
+
+/// Consumes the [`OwnedKeyValueBatch`] and frees the memory associated with it.
+///
+/// # Arguments
+///
+/// * `batch` - The [`OwnedKeyValueBatch`] struct to free, previously returned from any
+///   function from this library.
+///
+/// # Returns
+///
+/// - [`VoidResult::Ok`] if the memory was successfully freed.
+/// - [`VoidResult::Err`] if the process panics while freeing the memory.
+///
+/// # Safety
+///
+/// The caller must ensure that the `batch` struct is valid and that the memory
+/// it points to is uniquely owned by this object. However, if `batch.ptr` is null,
+/// this function does nothing.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_free_owned_key_value_batch(batch: OwnedKeyValueBatch) -> VoidResult {
+    invoke(move || drop(batch))
 }
