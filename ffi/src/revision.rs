@@ -40,14 +40,19 @@ impl<'db> DbView for RevisionHandle {
         last_key: Option<K>,
         limit: Option<std::num::NonZeroUsize>,
     ) -> Result<api::FrozenRangeProof, api::Error> {
-        self.view.range_proof(first_key.as_ref().map(|k| k.as_ref()), last_key.as_ref().map(|k| k.as_ref()), limit)
+        self.view.range_proof(
+            first_key.as_ref().map(|k| k.as_ref()),
+            last_key.as_ref().map(|k| k.as_ref()),
+            limit,
+        )
     }
 
     fn iter_option<K: api::KeyType>(
         &self,
         first_key: Option<K>,
     ) -> Result<Self::Iter<'_>, api::Error> {
-        self.view.iter_option(first_key.as_ref().map(|k| k.as_ref()))
+        self.view
+            .iter_option(first_key.as_ref().map(|k| k.as_ref()))
     }
 }
 

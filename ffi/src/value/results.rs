@@ -5,11 +5,11 @@ use std::fmt;
 
 use firewood::v2::api;
 
+use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CreateProposalResult, HashKey, NextKeyRange, OwnedBytes, ProposalHandle,
     RangeProofContext,
 };
-use crate::revision::{GetRevisionResult, RevisionHandle};
 
 /// The result type returned from an FFI function that returns no value but may
 /// return an error.

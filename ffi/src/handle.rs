@@ -9,8 +9,8 @@ use firewood::{
 
 use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
 
-use metrics::counter;
 use crate::revision::{GetRevisionResult, RevisionHandle};
+use metrics::counter;
 
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
 ///
@@ -184,12 +184,11 @@ impl DatabaseHandle {
     /// Returns an error if could not get the view from underlying database for the specified
     /// root hash, for example when the revision does not exist or an I/O error occurs while
     /// accessing the database.
-    pub fn get_revision(
-        &self,
-        root: HashKey,
-    ) -> Result<GetRevisionResult, api::Error> {
+    pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult, api::Error> {
         let view = self.db.view(root.clone())?;
-        Ok(GetRevisionResult { handle: RevisionHandle::new(view) })
+        Ok(GetRevisionResult {
+            handle: RevisionHandle::new(view),
+        })
     }
 
     pub(crate) fn get_root(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {

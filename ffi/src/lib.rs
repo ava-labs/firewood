@@ -28,8 +28,8 @@ mod logging;
 mod metrics_setup;
 mod proofs;
 mod proposal;
-mod value;
 mod revision;
+mod value;
 
 use firewood::v2::api::DbView;
 
@@ -165,9 +165,7 @@ pub unsafe extern "C" fn fwd_get_from_revision(
     revision: Option<&RevisionHandle>,
     key: BorrowedBytes,
 ) -> ValueResult {
-    invoke_with_handle(revision, move |db| {
-        db.val(key)
-    })
+    invoke_with_handle(revision, move |db| db.val(key))
 }
 
 /// Consumes the [`RevisionHandle`] and frees the memory associated with it.
@@ -188,9 +186,7 @@ pub unsafe extern "C" fn fwd_get_from_revision(
 /// The caller must ensure that the revision handle is valid and is not used again after
 /// this function is called.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_revision(
-    revision: Option<&RevisionHandle>,
-) -> VoidResult {
+pub unsafe extern "C" fn fwd_free_revision(revision: Option<&RevisionHandle>) -> VoidResult {
     invoke_with_handle(revision, drop)
 }
 
