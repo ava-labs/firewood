@@ -100,15 +100,11 @@ impl ProposalHandle<'_> {
     }
 
     /// Creates an iterator on the proposal starting from the given key.
-    #[expect(clippy::missing_errors_doc)]
-    pub fn iter_from(
-        &self,
-        first_key: Option<&[u8]>,
-    ) -> Result<CreateIteratorResult<'_>, api::Error> {
-        let it = self.iter_option(first_key)?;
-        Ok(CreateIteratorResult {
-            handle: (Box::new(it) as BoxKeyValueIter<'_>).into(),
-        })
+    #[must_use]
+    #[allow(clippy::missing_panics_doc)]
+    pub fn iter_from(&self, first_key: Option<&[u8]>) -> CreateIteratorResult<'_> {
+        let it = self.iter_option(first_key).expect("infallible");
+        CreateIteratorResult((Box::new(it) as BoxKeyValueIter<'_>).into())
     }
 }
 #[derive(Debug)]

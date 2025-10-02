@@ -321,8 +321,7 @@ pub enum IteratorResult<'db> {
         /// [`fwd_free_iterator`]: crate::fwd_free_iterator
         handle: Box<IteratorHandle<'db>>,
     },
-    /// An error occurred and the message is returned as an [`OwnedBytes`]. The
-    /// value is guaranteed to contain only valid UTF-8.
+    /// An error occurred and the message is returned as an [`OwnedBytes`].
     ///
     /// The caller must call [`fwd_free_owned_bytes`] to free the memory
     /// associated with this error.
@@ -371,7 +370,7 @@ impl<E: fmt::Display> From<Option<Result<(merkle::Key, merkle::Value), E>>> for 
 impl<'db> From<CreateIteratorResult<'db>> for IteratorResult<'db> {
     fn from(value: CreateIteratorResult<'db>) -> Self {
         IteratorResult::Ok {
-            handle: Box::new(value.handle),
+            handle: Box::new(value.0),
         }
     }
 }

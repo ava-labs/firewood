@@ -62,7 +62,10 @@ impl<'a> api::KeyValuePair for &KeyValuePair<'a> {
     }
 }
 
-/// Owned version of `KeyValuePair`, returned to the FFI.
+/// Owned version of `KeyValuePair`, returned to ffi callers.
+///
+/// C callers must free this memory using the respective FFI function for the
+/// concrete type (but not using the `free` function from the C standard library).
 #[repr(C)]
 #[derive(Debug, Clone)]
 pub struct OwnedKeyValuePair {
