@@ -761,7 +761,7 @@ typedef struct KeyValueResult {
  */
 typedef enum IteratorResult_Tag {
   /**
-   * The caller provided a null pointer to a database/proposal handle.
+   * The caller provided a null pointer to a revision/proposal handle.
    */
   IteratorResult_NullHandlePointer,
   /**
@@ -1550,7 +1550,7 @@ struct RevisionResult fwd_get_revision(const struct DatabaseHandle *db, Borrowed
  *
  * # Arguments
  *
- * * `handle` - The iterator handle returned by [`fwd_iter_on_root`] or
+ * * `handle` - The iterator handle returned by [`fwd_iter_on_revision`] or
  *   [`fwd_iter_on_proposal`].
  *
  * # Returns
@@ -1597,19 +1597,23 @@ struct KeyValueResult fwd_iter_next(struct IteratorHandle *handle);
 struct IteratorResult fwd_iter_on_proposal(const struct ProposalHandle *handle, BorrowedBytes key);
 
 /**
- * Returns an iterator optionally starting from a key in the provided database
+ * Returns an iterator optionally starting from a key in the provided revision.
  *
  * # Arguments
  *
- * * `db` - The database handle returned by [`fwd_open_db`]
- * * `root` - The root hash to look up as a [`BorrowedBytes`]
+ * * `revision` - The revision handle returned by [`fwd_get_revision`].
  * * `key` - The key to look up as a [`BorrowedBytes`]
+ *
+ * # Returns
+ *
+ * - [`IteratorResult::NullHandlePointer`] if the provided revision handle is null.
+ * - [`IteratorResult::Ok`] if the iterator was created, with the iterator handle.
+ * - [`IteratorResult::Err`] if an error occurred while creating the iterator.
  *
  * # Safety
  *
  * The caller must:
- * * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
- * * ensure that `root` is a valid [`BorrowedBytes`]
+ * * ensure that `revision` is a valid pointer to a [`RevisionHandle`]
  * * ensure that `key` is a valid [`BorrowedBytes`]
  * * call [`fwd_free_iterator`] to free the memory associated with the iterator.
  *

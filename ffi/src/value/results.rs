@@ -311,7 +311,7 @@ pub enum ProposalResult<'db> {
 #[derive(Debug)]
 #[repr(C)]
 pub enum IteratorResult<'db> {
-    /// The caller provided a null pointer to a database/proposal handle.
+    /// The caller provided a null pointer to a revision/proposal handle.
     NullHandlePointer,
     /// Building the iterator was successful and the iterator handle is returned
     Ok {
