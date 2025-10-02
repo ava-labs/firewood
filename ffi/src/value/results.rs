@@ -5,6 +5,7 @@ use firewood::merkle;
 use firewood::v2::api;
 use std::fmt;
 
+use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CreateIteratorResult, CreateProposalResult, HashKey, IteratorHandle,
     NextKeyRange, OwnedBytes, OwnedKeyValuePair, ProposalHandle, RangeProofContext,
@@ -384,6 +385,52 @@ impl<'db, E: fmt::Display> From<Result<CreateIteratorResult<'db>, E>> for Iterat
     }
 }
 
+/// A result type returned from FFI functions that get a revision
+#[derive(Debug)]
+#[repr(C)]
+pub enum RevisionResult {
+    /// The caller provided a null pointer to a database handle.
+    NullHandlePointer,
+    /// The provided root was not found in the database.
+    RevisionNotFound(HashKey),
+    /// Getting the revision was successful and the revision handle is returned
+    Ok {
+        /// An opaque pointer to the [`RevisionHandle`].
+        /// The value should be freed with [`fwd_free_revision`]
+        ///
+        /// [`fwd_free_revision`]: crate::fwd_free_revision
+        handle: Box<RevisionHandle>,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. The
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl From<GetRevisionResult> for RevisionResult {
+    fn from(value: GetRevisionResult) -> Self {
+        RevisionResult::Ok {
+            handle: Box::new(value.handle),
+        }
+    }
+}
+
+impl From<Result<GetRevisionResult, api::Error>> for RevisionResult {
+    fn from(value: Result<GetRevisionResult, api::Error>) -> Self {
+        match value {
+            Ok(res) => res.into(),
+            Err(api::Error::RevisionNotFound { provided }) => RevisionResult::RevisionNotFound(
+                HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
+            ),
+            Err(err) => RevisionResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 impl<'db, E: fmt::Display> From<Result<CreateProposalResult<'db>, E>> for ProposalResult<'db> {
     fn from(value: Result<CreateProposalResult<'db>, E>) -> Self {
         match value {
@@ -461,6 +508,9 @@ impl_null_handle_result!(
     ChangeProofResult,
     NextKeyRangeResult,
     ProposalResult<'_>,
+    IteratorResult<'_>,
+    RevisionResult,
+    KeyValueResult,
 );
 
 impl_cresult!(
@@ -472,31 +522,10 @@ impl_cresult!(
     ChangeProofResult,
     NextKeyRangeResult,
     ProposalResult<'_>,
+    IteratorResult<'_>,
+    RevisionResult,
+    KeyValueResult,
 );
-
-impl NullHandleResult for IteratorResult<'_> {
-    fn null_handle_pointer_error() -> Self {
-        Self::NullHandlePointer
-    }
-}
-
-impl CResult for IteratorResult<'_> {
-    fn from_err(err: impl ToString) -> Self {
-        Self::Err(err.to_string().into_bytes().into())
-    }
-}
-
-impl NullHandleResult for KeyValueResult {
-    fn null_handle_pointer_error() -> Self {
-        Self::NullHandlePointer
-    }
-}
-
-impl CResult for KeyValueResult {
-    fn from_err(err: impl ToString) -> Self {
-        Self::Err(err.to_string().into_bytes().into())
-    }
-}
 
 enum Panic {
     Static(&'static str),

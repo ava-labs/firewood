@@ -28,6 +28,7 @@ impl Iterator for IteratorHandle<'_> {
     }
 }
 
+#[derive(Debug)]
 pub struct CreateIteratorResult<'db> {
     pub handle: IteratorHandle<'db>,
 }

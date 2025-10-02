@@ -11,6 +11,7 @@ use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache:
 
 use crate::iterator::CreateIteratorResult;
 use firewood::v2::api::OwnedIterView;
+use crate::revision::{GetRevisionResult, RevisionHandle};
 use metrics::counter;
 
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
@@ -192,6 +193,20 @@ impl DatabaseHandle {
         let it = view.iter_owned(first_key);
 
         Ok(CreateIteratorResult { handle: it.into() })
+    }
+    
+    /// Returns an owned handle to the revision corresponding to the provided root hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if could not get the view from underlying database for the specified
+    /// root hash, for example when the revision does not exist or an I/O error occurs while
+    /// accessing the database.
+    pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult, api::Error> {
+        let view = self.db.view(root.clone())?;
+        Ok(GetRevisionResult {
+            handle: RevisionHandle::new(view),
+        })
     }
 
     pub(crate) fn get_root(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {
