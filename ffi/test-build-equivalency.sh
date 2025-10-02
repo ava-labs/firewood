@@ -16,7 +16,7 @@ TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
 echo "Building with cargo (using nix dev shell)..."
-nix develop ./ffi#default --command bash -c "cargo build --frozen --profile maxperf --package firewood-ffi --features ethhash,logger"
+nix develop ./ffi#default --command bash -c "cargo fetch --locked --verbose && cargo build --frozen --profile maxperf --package firewood-ffi --features ethhash,logger"
 
 echo "Building with nix..."
 cd ffi && nix build .#firewood-ffi --rebuild && cd ..
