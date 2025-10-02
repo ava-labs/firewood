@@ -315,7 +315,7 @@ pub enum RevisionResult {
     NullHandlePointer,
     /// The provided root was not found in the database.
     RevisionNotFound(HashKey),
-    /// Building the iterator was successful and the iterator handle is returned
+    /// Getting the revision was successful and the revision handle is returned
     Ok {
         /// An opaque pointer to the [`RevisionHandle`].
         /// The value should be freed with [`fwd_free_revision`]
