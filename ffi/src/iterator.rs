@@ -8,15 +8,18 @@ use firewood::v2::api::{self, BoxKeyValueIter};
 type KeyValueItem = Result<(merkle::Key, merkle::Value), api::Error>;
 
 /// An opaque wrapper around an Iterator.
+#[derive(Default)]
 #[derive_where(Debug)]
-#[derive_where(skip_inner)]
+#[derive_where(skip_inner(Debug))]
 pub struct IteratorHandle<'view> {
-    iterator: BoxKeyValueIter<'view>,
+    iterator: Option<BoxKeyValueIter<'view>>,
 }
 
 impl<'view> From<BoxKeyValueIter<'view>> for IteratorHandle<'view> {
     fn from(value: BoxKeyValueIter<'view>) -> Self {
-        IteratorHandle { iterator: value }
+        IteratorHandle {
+            iterator: Some(value),
+        }
     }
 }
 
@@ -24,11 +27,16 @@ impl Iterator for IteratorHandle<'_> {
     type Item = KeyValueItem;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.iterator.next()
+        let out = self.iterator.as_mut()?.next();
+        if out.is_none() {
+            // iterator exhausted; drop it so the NodeStore can be released
+            self.iterator.take();
+        }
+        out
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct CreateIteratorResult<'db> {
     pub handle: IteratorHandle<'db>,
 }
