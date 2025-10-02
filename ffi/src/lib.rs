@@ -39,7 +39,7 @@ pub use crate::iterator::*;
 pub use crate::logging::*;
 pub use crate::proofs::*;
 pub use crate::proposal::*;
-use crate::revision::*;
+pub use crate::revision::*;
 pub use crate::value::*;
 
 #[cfg(unix)]
@@ -128,13 +128,12 @@ pub unsafe extern "C" fn fwd_get_latest(
 /// * call [`fwd_free_iterator`] to free the memory associated with the iterator.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_iter_on_root<'db>(
-    db: Option<&'db DatabaseHandle>,
-    root: BorrowedBytes,
+pub unsafe extern "C" fn fwd_iter_on_revision<'view>(
+    revision: Option<&'view RevisionHandle>,
     key: BorrowedBytes,
-) -> IteratorResult<'db> {
-    invoke_with_handle(db, move |db| {
-        db.iter_on_root(root.as_ref().try_into()?, Some(key.as_slice()))
+) -> IteratorResult<'view> {
+    invoke_with_handle(revision, move |rev| {
+        rev.iter_from(Some(key.as_slice()))
     })
 }
 
@@ -160,10 +159,10 @@ pub unsafe extern "C" fn fwd_iter_on_root<'db>(
 /// * call [`fwd_free_iterator`] to free the memory associated with the iterator.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_iter_on_proposal<'db>(
-    handle: Option<&ProposalHandle<'db>>,
+pub unsafe extern "C" fn fwd_iter_on_proposal<'p>(
+    handle: Option<&'p ProposalHandle<'_>>,
     key: BorrowedBytes,
-) -> IteratorResult<'db> {
+) -> IteratorResult<'p> {
     invoke_with_handle(handle, move |p| p.iter_from(Some(key.as_slice())))
 }
 

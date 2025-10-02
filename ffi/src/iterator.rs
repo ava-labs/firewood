@@ -3,19 +3,19 @@
 
 use derive_where::derive_where;
 use firewood::merkle;
-use firewood::v2::api::{self};
+use firewood::v2::api::{self, BoxKeyValueIter};
 
 type KeyValueItem = Result<(merkle::Key, merkle::Value), api::Error>;
 
 /// An opaque wrapper around an Iterator.
 #[derive_where(Debug)]
 #[derive_where(skip_inner)]
-pub struct IteratorHandle<'db> {
-    iterator: Box<dyn Iterator<Item = KeyValueItem> + 'db>,
+pub struct IteratorHandle<'view> {
+    iterator: BoxKeyValueIter<'view>,
 }
 
-impl From<Box<dyn Iterator<Item = KeyValueItem>>> for IteratorHandle<'_> {
-    fn from(value: Box<dyn Iterator<Item = KeyValueItem>>) -> Self {
+impl<'view> From<BoxKeyValueIter<'view>> for IteratorHandle<'view> {
+    fn from(value: BoxKeyValueIter<'view>) -> Self {
         IteratorHandle { iterator: value }
     }
 }

@@ -3,6 +3,7 @@
 
 use firewood::v2::api;
 use firewood::v2::api::{ArcDynDbView, BoxKeyValueIter, DbView, HashKey};
+use crate::CreateIteratorResult;
 
 #[derive(Debug)]
 pub struct RevisionHandle {
@@ -13,6 +14,17 @@ impl RevisionHandle {
     /// Creates a new revision handle for the provided database view.
     pub(crate) fn new(view: ArcDynDbView) -> RevisionHandle {
         RevisionHandle { view }
+    }
+
+
+    /// Creates an iterator on the revision starting from the given key.
+    #[expect(clippy::missing_errors_doc)]
+    pub fn iter_from(
+        &self,
+        first_key: Option<&[u8]>,
+    ) -> Result<CreateIteratorResult<'_>, api::Error> {
+        let it = self.view.iter_option(first_key)?;
+        Ok(CreateIteratorResult { handle: it.into() })
     }
 }
 

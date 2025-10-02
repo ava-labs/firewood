@@ -1614,9 +1614,8 @@ struct IteratorResult fwd_iter_on_proposal(const struct ProposalHandle *handle, 
  * * call [`fwd_free_iterator`] to free the memory associated with the iterator.
  *
  */
-struct IteratorResult fwd_iter_on_root(const struct DatabaseHandle *db,
-                                       BorrowedBytes root,
-                                       BorrowedBytes key);
+struct IteratorResult fwd_iter_on_revision(const struct RevisionHandle *revision,
+                                           BorrowedBytes key);
 
 /**
  * Open a database with the given arguments.
