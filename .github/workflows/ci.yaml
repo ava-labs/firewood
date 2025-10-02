@@ -250,9 +250,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 #v20
       - uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 #v13
-      - name: Build Firewood FFI
-        working-directory: ffi
-        run: nix build .#firewood-ffi
+      - name: Test build equivalency between Nix and Cargo
+        run: bash -x ./ffi/test-build-equivalency.sh
       - name: Test Go FFI bindings
         working-directory: ffi
         # - cgocheck2 is expensive but provides complete pointer checks
