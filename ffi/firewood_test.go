@@ -1070,20 +1070,6 @@ func assertIteratorYields(r *require.Assertions, it *Iterator, keys [][]byte, va
 	r.Equal(len(keys), i)
 }
 
-// Tests that iterator isn't created for empty database
-func TestIterEmptyDb(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	it, err := db.Iter(nil)
-	r.NoError(err)
-	t.Cleanup(func() {
-		r.NoError(it.Drop())
-	})
-
-	r.False(it.Next())
-}
-
 // Tests that basic iterator functionality works
 func TestIter(t *testing.T) {
 	r := require.New(t)
@@ -1093,10 +1079,13 @@ func TestIter(t *testing.T) {
 	_, err := db.Update(keys, vals)
 	r.NoError(err)
 
-	it, err := db.Iter(nil)
+	rev, err := db.LatestRevision()
+	r.NoError(err)
+	it, err := rev.Iter(nil)
 	r.NoError(err)
 	t.Cleanup(func() {
 		r.NoError(it.Drop())
+		r.NoError(rev.Drop())
 	})
 
 	assertIteratorYields(r, it, keys, vals)
@@ -1119,16 +1108,22 @@ func TestIterOnRoot(t *testing.T) {
 	secondRoot, err := db.Update(keys, vals2)
 	r.NoError(err)
 
-	h1, err := db.IterOnRoot(firstRoot, nil)
+	r1, err := db.Revision(firstRoot)
+	r.NoError(err)
+	h1, err := r1.Iter(nil)
 	r.NoError(err)
 	t.Cleanup(func() {
 		r.NoError(h1.Drop())
+		r.NoError(r1.Drop())
 	})
 
-	h2, err := db.IterOnRoot(secondRoot, nil)
+	r2, err := db.Revision(secondRoot)
+	r.NoError(err)
+	h2, err := r2.Iter(nil)
 	r.NoError(err)
 	t.Cleanup(func() {
 		r.NoError(h2.Drop())
+		r.NoError(r2.Drop())
 	})
 
 	assertIteratorYields(r, h1, keys, vals1)
@@ -1187,10 +1182,13 @@ func TestIterUpdate(t *testing.T) {
 	r.NoError(err)
 
 	// get an iterator on latest revision
-	it, err := db.Iter(nil)
+	rev, err := db.LatestRevision()
+	r.NoError(err)
+	it, err := rev.Iter(nil)
 	r.NoError(err)
 	t.Cleanup(func() {
 		r.NoError(it.Drop())
+		r.NoError(rev.Drop())
 	})
 
 	// update the database

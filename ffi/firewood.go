@@ -198,28 +198,6 @@ func (db *Database) GetFromRoot(root, key []byte) ([]byte, error) {
 	))
 }
 
-// Iter creates and iterator starting from the provided key on the latest root hash.
-// pass empty slice to start from beginning
-func (db *Database) Iter(key []byte) (*Iterator, error) {
-	return db.IterOnRoot(nil, key)
-}
-
-// IterOnRoot creates and iterator starting from the provided key on a specific root hash.
-// If the root is not found, it returns as an error.
-// pass empty slice to start from beginning
-func (db *Database) IterOnRoot(root, key []byte) (*Iterator, error) {
-	if db.handle == nil {
-		return nil, errDBClosed
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	itResult := C.fwd_iter_on_root(db.handle, newBorrowedBytes(root, &pinner), newBorrowedBytes(key, &pinner))
-
-	return getIteratorFromIteratorResult(itResult, db)
-}
-
 // Root returns the current root hash of the trie.
 // Empty trie must return common.Hash{}.
 func (db *Database) Root() ([]byte, error) {
@@ -234,6 +212,17 @@ func (db *Database) Root() ([]byte, error) {
 		bytes = EmptyRoot
 	}
 	return bytes, err
+}
+
+func (db *Database) LatestRevision() (*Revision, error) {
+	root, err := db.Root()
+	if err != nil {
+		return nil, err
+	}
+	if bytes.Equal(root, EmptyRoot) {
+		return nil, errRevisionNotFound
+	}
+	return db.Revision(root)
 }
 
 // Revision returns a historical revision of the database.

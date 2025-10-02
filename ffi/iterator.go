@@ -7,12 +7,12 @@ package ffi
 // #include "firewood.h"
 import "C"
 
-type Iterator struct {
-	// The database this iterator is associated with. We hold onto this to ensure
-	// the database handle outlives the iterator handle, which is required for
-	// the iterator to be valid.
-	db *Database
+import (
+	"fmt"
+	"unsafe"
+)
 
+type Iterator struct {
 	// handle is an opaque pointer to the iterator within Firewood. It should be
 	// passed to the C FFI functions that operate on iterators
 	//
@@ -70,4 +70,23 @@ func (it *Iterator) Drop() error {
 		return getErrorFromVoidResult(C.fwd_free_iterator(it.handle))
 	}
 	return nil
+}
+
+// getIteratorFromIteratorResult converts a C.IteratorResult to an Iterator or error.
+func getIteratorFromIteratorResult(result C.IteratorResult) (*Iterator, error) {
+	switch result.tag {
+	case C.IteratorResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.IteratorResult_Ok:
+		body := (*C.IteratorResult_Ok_Body)(unsafe.Pointer(&result.anon0))
+		proposal := &Iterator{
+			handle: body.handle,
+		}
+		return proposal, nil
+	case C.IteratorResult_Err:
+		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return nil, err
+	default:
+		return nil, fmt.Errorf("unknown C.IteratorResult tag: %d", result.tag)
+	}
 }

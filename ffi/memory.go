@@ -379,23 +379,3 @@ func getDatabaseFromHandleResult(result C.HandleResult) (*Database, error) {
 		return nil, fmt.Errorf("unknown C.HandleResult tag: %d", result.tag)
 	}
 }
-
-// getIteratorFromIteratorResult converts a C.IteratorResult to an Iterator or error.
-func getIteratorFromIteratorResult(result C.IteratorResult, db *Database) (*Iterator, error) {
-	switch result.tag {
-	case C.IteratorResult_NullHandlePointer:
-		return nil, errDBClosed
-	case C.IteratorResult_Ok:
-		body := (*C.IteratorResult_Ok_Body)(unsafe.Pointer(&result.anon0))
-		proposal := &Iterator{
-			db:     db,
-			handle: body.handle,
-		}
-		return proposal, nil
-	case C.IteratorResult_Err:
-		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
-		return nil, err
-	default:
-		return nil, fmt.Errorf("unknown C.IteratorResult tag: %d", result.tag)
-	}
-}
