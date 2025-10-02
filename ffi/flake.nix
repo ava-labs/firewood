@@ -51,6 +51,9 @@
         nativeBuildInputs = with pkgs; [
           pkg-config
         ];
+      } // lib.optionalAttrs pkgs.stdenv.isDarwin {
+        # Set macOS deployment target for Darwin builds
+        MACOSX_DEPLOYMENT_TARGET = "13.0";
       };
 
       cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
@@ -77,9 +80,6 @@
           };
           platforms = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
         };
-      } // lib.optionalAttrs pkgs.stdenv.isDarwin {
-        # Set macOS deployment target for Darwin builds
-        MACOSX_DEPLOYMENT_TARGET = "13.0";
       });
     in
     {
