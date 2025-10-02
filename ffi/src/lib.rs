@@ -136,9 +136,7 @@ pub unsafe extern "C" fn fwd_iter_on_revision<'view>(
     revision: Option<&'view RevisionHandle>,
     key: BorrowedBytes,
 ) -> IteratorResult<'view> {
-    invoke_with_handle(revision, move |rev| {
-        rev.iter_from(Some(key.as_slice()))
-    })
+    invoke_with_handle(revision, move |rev| rev.iter_from(Some(key.as_slice())))
 }
 
 /// Returns an iterator on the provided proposal optionally starting from a key

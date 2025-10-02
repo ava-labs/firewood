@@ -176,7 +176,7 @@ impl DatabaseHandle {
 
         Ok(root_hash)
     }
-    
+
     /// Returns an owned handle to the revision corresponding to the provided root hash.
     ///
     /// # Errors

@@ -1,9 +1,9 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::CreateIteratorResult;
 use firewood::v2::api;
 use firewood::v2::api::{ArcDynDbView, BoxKeyValueIter, DbView, HashKey};
-use crate::CreateIteratorResult;
 
 #[derive(Debug)]
 pub struct RevisionHandle {
@@ -15,7 +15,6 @@ impl RevisionHandle {
     pub(crate) fn new(view: ArcDynDbView) -> RevisionHandle {
         RevisionHandle { view }
     }
-
 
     /// Creates an iterator on the revision starting from the given key.
     #[expect(clippy::missing_errors_doc)]
