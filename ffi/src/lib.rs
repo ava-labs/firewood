@@ -199,7 +199,7 @@ pub unsafe extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) 
 ///
 /// # Arguments
 ///
-/// * `handle` - The iterator handle returned by [`fwd_iter_on_root`] or
+/// * `handle` - The iterator handle returned by [`fwd_iter_on_revision`] or
 ///   [`fwd_iter_on_proposal`].
 ///
 /// # Returns

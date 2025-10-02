@@ -1663,7 +1663,7 @@ struct KeyValueResult fwd_iter_next(struct IteratorHandle *handle);
  *
  * # Arguments
  *
- * * `handle` - The iterator handle returned by [`fwd_iter_on_root`] or
+ * * `handle` - The iterator handle returned by [`fwd_iter_on_revision`] or
  *   [`fwd_iter_on_proposal`].
  *
  * # Returns
