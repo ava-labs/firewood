@@ -23,9 +23,9 @@ var (
 	errDroppedRevision   = errors.New("revision already dropped")
 )
 
-// Revision is an immutable snapshot view over the database at a specific root hash.
-// Instances are created via Database.Revision and provide read-only access to the
-// state at that revision.
+// Revision is an immutable view over the database at a specific root hash.
+// Instances are created via Database.Revision, provide read-only access to the revision,
+// and must be released with Drop when no longer needed.
 type Revision struct {
 	handle *C.RevisionHandle
 	// The revision root
@@ -34,8 +34,8 @@ type Revision struct {
 
 // Get reads the value stored at the provided key within the revision.
 //
-// It returns errDroppedRevision if the underlying native handle has already been
-// released.
+// It returns errDroppedRevision if Drop has already been called and the underlying
+// handle is no longer available.
 func (r *Revision) Get(key []byte) ([]byte, error) {
 	if r.handle == nil {
 		return nil, errDroppedRevision
@@ -50,11 +50,9 @@ func (r *Revision) Get(key []byte) ([]byte, error) {
 	))
 }
 
-// Drop releases the memory associated with the Revision.
+// Drop releases the resources backed by the revision handle.
 //
-// This is safe to call if the pointer is nil, in which case it does nothing.
-//
-// The pointer will be set to nil after freeing to prevent double free.
+// It is safe to call Drop multiple times; subsequent calls after the first are no-ops.
 func (r *Revision) Drop() error {
 	if r.handle == nil {
 		return nil

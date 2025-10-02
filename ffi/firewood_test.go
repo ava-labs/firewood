@@ -783,6 +783,9 @@ func TestRevision(t *testing.T) {
 	// Create a revision from this root.
 	revision, err := db.Revision(root)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(revision.Drop())
+	})
 
 	// Check that all keys can be retrieved from the revision.
 	for i := range keys {
@@ -807,6 +810,9 @@ func TestRevision(t *testing.T) {
 	// Create a "new" revision from the first old root.
 	revision, err = db.Revision(root)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(revision.Drop())
+	})
 	// Check that all keys can be retrieved from the revision.
 	for i := range keys {
 		got, err := revision.Get(keys[i])
@@ -850,6 +856,9 @@ func TestGetNilCases(t *testing.T) {
 	r.NoError(err)
 	revision, err := db.Revision(root)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(revision.Drop())
+	})
 
 	// Create edge case keys.
 	specialKeys := [][]byte{
