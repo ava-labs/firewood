@@ -7,11 +7,11 @@
 )]
 
 use crate::iter::MerkleKeyValueIter;
-use crate::merkle::{Key, Merkle, Value};
+use crate::merkle::{Merkle, Value};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
-    self, ArcDynDbView, Error, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair,
-    KeyValuePairIter, OptionalHashKeyExt, OwnedIterView,
+    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair,
+    KeyValuePairIter, OptionalHashKeyExt,
 };
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
@@ -28,6 +28,7 @@ use thiserror::Error;
 use typed_builder::TypedBuilder;
 
 #[derive(Error, Debug)]
+#[non_exhaustive]
 /// Represents the different types of errors that can occur in the database.
 pub enum DbError {
     /// I/O error
@@ -91,20 +92,9 @@ where
     }
 }
 
-impl<T: TrieReader + 'static> OwnedIterView for Arc<T> {
-    fn iter_owned(
-        &self,
-        first_key: Option<&[u8]>,
-    ) -> Box<dyn Iterator<Item = Result<(Key, Value), Error>>> {
-        Box::new(MerkleKeyValueIter::owned_from_key(
-            self.clone(),
-            first_key.unwrap_or(&[]),
-        ))
-    }
-}
-
 /// Database configuration.
 #[derive(Clone, TypedBuilder, Debug)]
+#[non_exhaustive]
 pub struct DbConfig {
     /// Whether to create the DB if it doesn't exist.
     #[builder(default = true)]
@@ -207,14 +197,6 @@ impl Db {
 
     /// Synchronously get a view, either committed or proposed
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, api::Error> {
-        self.manager
-            .view(root_hash)
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
-    /// Synchronously get an owned iterator view, either over a committed or a proposed revision
-    pub fn iter_view(&self, root_hash: HashKey) -> Result<impl OwnedIterView, api::Error> {
         self.manager.view(root_hash).map_err(Into::into)
     }
 
@@ -273,15 +255,6 @@ impl api::DbView for Proposal<'_> {
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
         api::DbView::iter_option(&*self.nodestore, first_key)
-    }
-}
-
-impl OwnedIterView for Proposal<'_> {
-    fn iter_owned(
-        &self,
-        first_key: Option<&[u8]>,
-    ) -> Box<dyn Iterator<Item = Result<(Key, Value), Error>>> {
-        self.nodestore.iter_owned(first_key)
     }
 }
 
@@ -648,8 +621,6 @@ mod test {
 
     #[test]
     fn fuzz_checker() {
-        let _ = env_logger::Builder::new().is_test(true).try_init();
-
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
         let db = testdb();

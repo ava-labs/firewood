@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood::v2::api::{self, DbView, HashKey, OwnedIterView, Proposal as _};
+use firewood::v2::api::{self, BoxKeyValueIter, DbView, HashKey, Proposal as _};
 
 use crate::value::KeyValuePair;
 
@@ -52,7 +52,7 @@ impl<'db> DbView for ProposalHandle<'db> {
     }
 }
 
-impl<'db> ProposalHandle<'db> {
+impl ProposalHandle<'_> {
     /// Returns the root hash of the proposal.
     #[must_use]
     pub fn hash_key(&self) -> Option<crate::HashKey> {
@@ -100,10 +100,15 @@ impl<'db> ProposalHandle<'db> {
     }
 
     /// Creates an iterator on the proposal starting from the given key.
-    #[must_use]
-    pub fn iter_from(&self, first_key: Option<&[u8]>) -> CreateIteratorResult<'db> {
-        let it = self.proposal.iter_owned(first_key);
-        CreateIteratorResult { handle: it.into() }
+    #[expect(clippy::missing_errors_doc)]
+    pub fn iter_from(
+        &self,
+        first_key: Option<&[u8]>,
+    ) -> Result<CreateIteratorResult<'_>, api::Error> {
+        let it = self.iter_option(first_key)?;
+        Ok(CreateIteratorResult {
+            handle: (Box::new(it) as BoxKeyValueIter<'_>).into(),
+        })
     }
 }
 #[derive(Debug)]

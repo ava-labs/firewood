@@ -6,9 +6,10 @@
 #[cfg(feature = "ethhash")]
 mod ethhash;
 // TODO: get the hashes from merkledb and verify compatibility with branch factor 256
+mod proof;
+mod range;
 #[cfg(not(any(feature = "ethhash", feature = "branch_factor_256")))]
 mod triehash;
-mod unvalidated;
 
 use std::collections::HashMap;
 use std::fmt::Write;
@@ -44,7 +45,7 @@ fn into_committed(
     ns.into()
 }
 
-fn init_merkle<I, K, V>(iter: I) -> Merkle<NodeStore<Committed, MemStore>>
+pub(crate) fn init_merkle<I, K, V>(iter: I) -> Merkle<NodeStore<Committed, MemStore>>
 where
     I: Clone + IntoIterator<Item = (K, V)>,
     K: AsRef<[u8]>,
@@ -227,6 +228,29 @@ fn test_insert_and_get() {
 
         assert_eq!(fetched_val.as_deref(), val.as_slice().into());
     }
+}
+
+#[test]
+fn overwrite_leaf() {
+    let key = &[0x00];
+    let val = &[1];
+    let overwrite = &[2];
+
+    let mut merkle = create_in_memory_merkle();
+
+    merkle.insert(key, val[..].into()).unwrap();
+
+    assert_eq!(
+        merkle.get_value(key).unwrap().as_deref(),
+        Some(val.as_slice())
+    );
+
+    merkle.insert(key, overwrite[..].into()).unwrap();
+
+    assert_eq!(
+        merkle.get_value(key).unwrap().as_deref(),
+        Some(overwrite.as_slice())
+    );
 }
 
 #[test]
@@ -683,8 +707,6 @@ fn test_delete_some() {
 
 #[test]
 fn test_root_hash_reversed_deletions() -> Result<(), FileIoError> {
-    let _ = env_logger::Builder::new().is_test(true).try_init();
-
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
     let max_len0 = 8;

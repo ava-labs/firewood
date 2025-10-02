@@ -138,12 +138,6 @@ impl Path {
             nibbles_iter: self.iter(),
         }
     }
-
-    /// Create a boxed set of bytes from the Path
-    #[must_use]
-    pub fn bytes(&self) -> Box<[u8]> {
-        self.bytes_iter().collect()
-    }
 }
 
 /// Returns the nibbles in `nibbles_iter` as compressed bytes.
@@ -211,7 +205,7 @@ impl Iterator for NibblesIterator<'_> {
         if self.is_empty() {
             return None;
         }
-        let result = if self.head % 2 == 0 {
+        let result = if self.head.is_multiple_of(2) {
             #[expect(clippy::indexing_slicing)]
             NIBBLES[(self.data[self.head / 2] >> 4) as usize]
         } else {
@@ -262,7 +256,7 @@ impl DoubleEndedIterator for NibblesIterator<'_> {
             return None;
         }
 
-        let result = if self.tail % 2 == 0 {
+        let result = if self.tail.is_multiple_of(2) {
             #[expect(clippy::indexing_slicing)]
             NIBBLES[(self.data[self.tail / 2 - 1] & 0xf) as usize]
         } else {

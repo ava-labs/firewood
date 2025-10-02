@@ -12,8 +12,6 @@ use firewood_storage::{
 };
 use std::cmp::Ordering;
 use std::iter::FusedIterator;
-use std::ops::Deref;
-use std::sync::Arc;
 
 /// Represents an ongoing iteration over a node and its children.
 enum IterationNode {
@@ -64,45 +62,11 @@ enum NodeIterState {
     },
 }
 
-/// A reference to the merkle, could be borrowed, or behind an Arc
-#[derive(Debug)]
-pub enum MerkleRef<'a, T> {
-    /// borrowing the merkle
-    Borrowed(&'a T),
-    /// referencing the merkle via Arc
-    Owned(Arc<T>),
-}
-
-impl<T> Deref for MerkleRef<'_, T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        match self {
-            Self::Borrowed(borrowed) => borrowed,
-            Self::Owned(arc) => arc,
-        }
-    }
-}
-
-impl<T> Clone for MerkleRef<'_, T> {
-    fn clone(&self) -> Self {
-        match self {
-            MerkleRef::Borrowed(r) => MerkleRef::Borrowed(r),
-            MerkleRef::Owned(arc) => MerkleRef::Owned(arc.clone()),
-        }
-    }
-}
-
-impl<'a, T> From<&'a T> for MerkleRef<'a, T> {
-    fn from(value: &'a T) -> Self {
-        MerkleRef::Borrowed(value)
-    }
-}
-
 #[derive(Debug)]
 /// An iterator of nodes in order starting from a specific point in the trie.
 pub struct MerkleNodeIter<'a, T> {
     state: NodeIterState,
-    merkle: MerkleRef<'a, T>,
+    merkle: &'a T,
 }
 
 impl From<Key> for NodeIterState {
@@ -114,7 +78,7 @@ impl From<Key> for NodeIterState {
 impl<'a, T: TrieReader> MerkleNodeIter<'a, T> {
     /// Returns a new iterator that will iterate over all the nodes in `merkle`
     /// with keys greater than or equal to `key`.
-    pub(super) fn new(merkle: MerkleRef<'a, T>, key: Key) -> Self {
+    pub(super) fn new(merkle: &'a T, key: Key) -> Self {
         Self {
             state: NodeIterState::from(key),
             merkle,
@@ -129,7 +93,7 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
         'outer: loop {
             match &mut self.state {
                 NodeIterState::StartFromKey(key) => {
-                    match get_iterator_intial_state(&self.merkle, key) {
+                    match get_iterator_intial_state(self.merkle, key) {
                         Ok(state) => self.state = state,
                         Err(e) => return Some(Err(e)),
                     }
@@ -174,7 +138,7 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
                                     Child::Node(node) => node.clone().into(),
                                     Child::MaybePersisted(maybe_persisted, _) => {
                                         // For MaybePersisted, we need to get the node
-                                        match maybe_persisted.as_shared_node(&self.merkle) {
+                                        match maybe_persisted.as_shared_node(self.merkle) {
                                             Ok(node) => node,
                                             Err(e) => return Some(Err(e)),
                                         }
@@ -316,15 +280,7 @@ pub struct MerkleKeyValueIter<'a, T> {
 impl<'a, T: TrieReader> From<&'a T> for MerkleKeyValueIter<'a, T> {
     fn from(merkle: &'a T) -> Self {
         Self {
-            iter: MerkleNodeIter::new(MerkleRef::Borrowed(merkle), Box::new([])),
-        }
-    }
-}
-
-impl<T: TrieReader> From<Arc<T>> for MerkleKeyValueIter<'_, T> {
-    fn from(merkle: Arc<T>) -> Self {
-        Self {
-            iter: MerkleNodeIter::new(MerkleRef::Owned(merkle), Box::new([])),
+            iter: MerkleNodeIter::new(merkle, Box::new([])),
         }
     }
 }
@@ -334,15 +290,7 @@ impl<'a, T: TrieReader> MerkleKeyValueIter<'a, T> {
     /// starting from a particular key
     pub fn from_key<K: AsRef<[u8]>>(merkle: &'a T, key: K) -> Self {
         Self {
-            iter: MerkleNodeIter::new(MerkleRef::Borrowed(merkle), key.as_ref().into()),
-        }
-    }
-
-    /// Construct a [`MerkleKeyValueIter`] that will iterate over all the key-value pairs in `merkle`
-    /// starting from a particular key
-    pub fn owned_from_key<K: AsRef<[u8]>>(merkle: Arc<T>, key: K) -> Self {
-        Self {
-            iter: MerkleNodeIter::new(MerkleRef::Owned(merkle), key.as_ref().into()),
+            iter: MerkleNodeIter::new(merkle, key.as_ref().into()),
         }
     }
 }
@@ -467,13 +415,13 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                             Node::Branch(branch) => {
                                 // We're at a branch whose key is a prefix of `key`.
                                 // Find its child (if any) that matches the next nibble in the key.
+                                let saved_node = node.clone();
                                 let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
                                     // We're at the node at `key` so we're done.
-                                    let node = node.clone();
                                     self.state = PathIteratorState::Exhausted;
                                     return Some(Ok(PathIterItem {
                                         key_nibbles: node_key.clone(),
-                                        node,
+                                        node: saved_node,
                                         next_nibble: None,
                                     }));
                                 };
@@ -484,11 +432,10 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                     None => {
                                         // There's no child at the index of the next nibble in the key.
                                         // There's no node at `key` in this trie so we're done.
-                                        let node = node.clone();
                                         self.state = PathIteratorState::Exhausted;
                                         Some(Ok(PathIterItem {
                                             key_nibbles: node_key.clone(),
-                                            node,
+                                            node: saved_node,
                                             next_nibble: None,
                                         }))
                                     }
@@ -501,12 +448,11 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                         let node_key = matched_key.clone().into_boxed_slice();
                                         matched_key.push(next_unmatched_key_nibble);
 
-                                        let ret = node.clone();
                                         *node = child;
 
                                         Some(Ok(PathIterItem {
                                             key_nibbles: node_key,
-                                            node: ret,
+                                            node: saved_node,
                                             next_nibble: Some(next_unmatched_key_nibble),
                                         }))
                                     }
@@ -514,12 +460,11 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                         let node_key = matched_key.clone().into_boxed_slice();
                                         matched_key.push(next_unmatched_key_nibble);
 
-                                        let ret = node.clone();
                                         *node = child.clone().into();
 
                                         Some(Ok(PathIterItem {
                                             key_nibbles: node_key,
-                                            node: ret,
+                                            node: saved_node,
                                             next_nibble: Some(next_unmatched_key_nibble),
                                         }))
                                     }
@@ -531,10 +476,11 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
 
                                         let node_key = matched_key.clone().into_boxed_slice();
                                         matched_key.push(next_unmatched_key_nibble);
+                                        *node = child;
 
                                         Some(Ok(PathIterItem {
                                             key_nibbles: node_key,
-                                            node: child,
+                                            node: saved_node,
                                             next_nibble: Some(next_unmatched_key_nibble),
                                         }))
                                     }
@@ -778,7 +724,7 @@ mod tests {
     #[test]
     fn node_iterate_empty() {
         let merkle = create_test_merkle();
-        let iter = MerkleNodeIter::new(merkle.nodestore().into(), Box::new([]));
+        let iter = MerkleNodeIter::new(merkle.nodestore(), Box::new([]));
         assert_iterator_is_exhausted(iter);
     }
 
@@ -788,7 +734,7 @@ mod tests {
 
         merkle.insert(&[0x00], Box::new([0x00])).unwrap();
 
-        let mut iter = MerkleNodeIter::new(merkle.nodestore().into(), Box::new([]));
+        let mut iter = MerkleNodeIter::new(merkle.nodestore(), Box::new([]));
 
         let (key, node) = iter.next().unwrap().unwrap();
 
@@ -845,7 +791,7 @@ mod tests {
     fn node_iterator_no_start_key() {
         let merkle = created_populated_merkle();
 
-        let mut iter = MerkleNodeIter::new(merkle.nodestore().into(), Box::new([]));
+        let mut iter = MerkleNodeIter::new(merkle.nodestore(), Box::new([]));
 
         // Covers case of branch with no value
         let (key, node) = iter.next().unwrap().unwrap();
@@ -889,7 +835,7 @@ mod tests {
         let merkle = created_populated_merkle();
 
         let mut iter = MerkleNodeIter::new(
-            merkle.nodestore().into(),
+            merkle.nodestore(),
             vec![0x00, 0x00, 0x01].into_boxed_slice(),
         );
 
@@ -916,7 +862,7 @@ mod tests {
         let merkle = created_populated_merkle();
 
         let mut iter = MerkleNodeIter::new(
-            merkle.nodestore().into(),
+            merkle.nodestore(),
             vec![0x00, 0xD0, 0xD0].into_boxed_slice(),
         );
 
@@ -942,7 +888,7 @@ mod tests {
     fn node_iterator_start_key_after_last_key() {
         let merkle = created_populated_merkle();
 
-        let iter = MerkleNodeIter::new(merkle.nodestore().into(), vec![0xFF].into_boxed_slice());
+        let iter = MerkleNodeIter::new(merkle.nodestore(), vec![0xFF].into_boxed_slice());
 
         assert_iterator_is_exhausted(iter);
     }

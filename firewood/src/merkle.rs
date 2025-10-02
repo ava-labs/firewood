@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use crate::iter::{MerkleKeyValueIter, PathIterator, TryExtend};
 use crate::proof::{Proof, ProofCollection, ProofError, ProofNode};
@@ -166,9 +166,11 @@ impl<T: TrieReader> Merkle<T> {
             };
 
             proof.push(ProofNode {
-                key: root.partial_path().bytes(),
-                #[cfg(feature = "ethhash")]
-                partial_len: root.partial_path().0.len(),
+                // key is expected to be in nibbles
+                key: root.partial_path().iter().copied().collect(),
+                // partial len is the number of nibbles in the path leading to this node,
+                // which is always zero for the root node.
+                partial_len: 0,
                 value_digest: root
                     .value()
                     .map(|value| ValueDigest::Value(value.to_vec().into_boxed_slice())),
