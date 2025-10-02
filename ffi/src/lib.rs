@@ -37,7 +37,7 @@ pub use crate::handle::*;
 pub use crate::logging::*;
 pub use crate::proofs::*;
 pub use crate::proposal::*;
-use crate::revision::RevisionHandle;
+pub use crate::revision::*;
 pub use crate::value::*;
 
 #[cfg(unix)]
