@@ -660,7 +660,7 @@ typedef enum RevisionResult_Tag {
    */
   RevisionResult_RevisionNotFound,
   /**
-   * Building the iterator was successful and the iterator handle is returned
+   * Getting the revision was successful and the revision handle is returned
    */
   RevisionResult_Ok,
   /**

@@ -16,7 +16,7 @@ impl RevisionHandle {
     }
 }
 
-impl<'db> DbView for RevisionHandle {
+impl DbView for RevisionHandle {
     type Iter<'view>
         = BoxKeyValueIter<'view>
     where
@@ -41,8 +41,8 @@ impl<'db> DbView for RevisionHandle {
         limit: Option<std::num::NonZeroUsize>,
     ) -> Result<api::FrozenRangeProof, api::Error> {
         self.view.range_proof(
-            first_key.as_ref().map(|k| k.as_ref()),
-            last_key.as_ref().map(|k| k.as_ref()),
+            first_key.as_ref().map(AsRef::as_ref),
+            last_key.as_ref().map(AsRef::as_ref),
             limit,
         )
     }
@@ -52,7 +52,7 @@ impl<'db> DbView for RevisionHandle {
         first_key: Option<K>,
     ) -> Result<Self::Iter<'_>, api::Error> {
         self.view
-            .iter_option(first_key.as_ref().map(|k| k.as_ref()))
+            .iter_option(first_key.as_ref().map(AsRef::as_ref))
     }
 }
 

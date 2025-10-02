@@ -333,7 +333,7 @@ pub enum RevisionResult {
     Err(OwnedBytes),
 }
 
-impl<'db> From<GetRevisionResult> for RevisionResult {
+impl From<GetRevisionResult> for RevisionResult {
     fn from(value: GetRevisionResult) -> Self {
         RevisionResult::Ok {
             handle: Box::new(value.handle),
