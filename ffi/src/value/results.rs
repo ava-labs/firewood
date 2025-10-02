@@ -5,6 +5,7 @@ use firewood::merkle;
 use firewood::v2::api;
 use std::fmt;
 
+use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CreateIteratorResult, CreateProposalResult, HashKey, IteratorHandle,
     NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair, ProposalHandle,
@@ -134,6 +135,18 @@ impl From<Result<Option<Box<[u8]>>, firewood::db::DbError>> for ValueResult {
     }
 }
 
+impl From<Vec<u8>> for ValueResult {
+    fn from(value: Vec<u8>) -> Self {
+        value.into_boxed_slice().into()
+    }
+}
+
+impl From<Box<[u8]>> for ValueResult {
+    fn from(value: Box<[u8]>) -> Self {
+        ValueResult::Some(value.into())
+    }
+}
+
 /// A result type returned from FFI functions return the database root hash. This
 /// may or may not be after a mutation.
 #[derive(Debug)]
@@ -182,6 +195,8 @@ pub enum RangeProofResult {
     NullHandlePointer,
     /// The provided root was not found in the database.
     RevisionNotFound(HashKey),
+    /// A range proof was requested on an empty trie.
+    EmptyTrie,
     /// The proof was successfully created or parsed.
     ///
     /// If the value was parsed from a serialized proof, this does not imply that
@@ -196,6 +211,19 @@ pub enum RangeProofResult {
     ///
     /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
     Err(OwnedBytes),
+}
+
+impl From<Result<api::FrozenRangeProof, api::Error>> for RangeProofResult {
+    fn from(value: Result<api::FrozenRangeProof, api::Error>) -> Self {
+        match value {
+            Ok(proof) => RangeProofResult::Ok(Box::new(proof.into())),
+            Err(api::Error::RevisionNotFound { provided }) => RangeProofResult::RevisionNotFound(
+                HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
+            ),
+            Err(api::Error::RangeProofOnEmptyTrie) => RangeProofResult::EmptyTrie,
+            Err(err) => RangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
 }
 
 /// A result type returned from FFI functions that create or parse change proofs.
@@ -284,7 +312,7 @@ pub enum ProposalResult<'db> {
 #[derive(Debug)]
 #[repr(C)]
 pub enum IteratorResult<'db> {
-    /// The caller provided a null pointer to a database/proposal handle.
+    /// The caller provided a null pointer to a revision/proposal handle.
     NullHandlePointer,
     /// Building the iterator was successful and the iterator handle is returned
     Ok {
@@ -406,6 +434,52 @@ impl<'db, E: fmt::Display> From<Result<CreateIteratorResult<'db>, E>> for Iterat
     }
 }
 
+/// A result type returned from FFI functions that get a revision
+#[derive(Debug)]
+#[repr(C)]
+pub enum RevisionResult {
+    /// The caller provided a null pointer to a database handle.
+    NullHandlePointer,
+    /// The provided root was not found in the database.
+    RevisionNotFound(HashKey),
+    /// Getting the revision was successful and the revision handle is returned
+    Ok {
+        /// An opaque pointer to the [`RevisionHandle`].
+        /// The value should be freed with [`fwd_free_revision`]
+        ///
+        /// [`fwd_free_revision`]: crate::fwd_free_revision
+        handle: Box<RevisionHandle>,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. The
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl From<GetRevisionResult> for RevisionResult {
+    fn from(value: GetRevisionResult) -> Self {
+        RevisionResult::Ok {
+            handle: Box::new(value.handle),
+        }
+    }
+}
+
+impl From<Result<GetRevisionResult, api::Error>> for RevisionResult {
+    fn from(value: Result<GetRevisionResult, api::Error>) -> Self {
+        match value {
+            Ok(res) => res.into(),
+            Err(api::Error::RevisionNotFound { provided }) => RevisionResult::RevisionNotFound(
+                HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
+            ),
+            Err(err) => RevisionResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 impl<'db, E: fmt::Display> From<Result<CreateProposalResult<'db>, E>> for ProposalResult<'db> {
     fn from(value: Result<CreateProposalResult<'db>, E>) -> Self {
         match value {
@@ -483,6 +557,10 @@ impl_null_handle_result!(
     ChangeProofResult,
     NextKeyRangeResult,
     ProposalResult<'_>,
+    IteratorResult<'_>,
+    RevisionResult,
+    KeyValueBatchResult,
+    KeyValueResult,
 );
 
 impl_cresult!(
@@ -494,43 +572,11 @@ impl_cresult!(
     ChangeProofResult,
     NextKeyRangeResult,
     ProposalResult<'_>,
+    IteratorResult<'_>,
+    RevisionResult,
+    KeyValueBatchResult,
+    KeyValueResult,
 );
-
-impl NullHandleResult for IteratorResult<'_> {
-    fn null_handle_pointer_error() -> Self {
-        Self::NullHandlePointer
-    }
-}
-
-impl CResult for IteratorResult<'_> {
-    fn from_err(err: impl ToString) -> Self {
-        Self::Err(err.to_string().into_bytes().into())
-    }
-}
-
-impl NullHandleResult for KeyValueResult {
-    fn null_handle_pointer_error() -> Self {
-        Self::NullHandlePointer
-    }
-}
-
-impl CResult for KeyValueResult {
-    fn from_err(err: impl ToString) -> Self {
-        Self::Err(err.to_string().into_bytes().into())
-    }
-}
-
-impl NullHandleResult for KeyValueBatchResult {
-    fn null_handle_pointer_error() -> Self {
-        Self::NullHandlePointer
-    }
-}
-
-impl CResult for KeyValueBatchResult {
-    fn from_err(err: impl ToString) -> Self {
-        Self::Err(err.to_string().into_bytes().into())
-    }
-}
 
 enum Panic {
     Static(&'static str),

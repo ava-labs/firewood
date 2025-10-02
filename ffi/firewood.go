@@ -176,7 +176,7 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 }
 
 // GetFromRoot retrieves the value for the given key from a specific root hash.
-// If the root is not found, it returnas an error.
+// If the root is not found, it returns an error.
 // If key is not found, it returns (nil, nil).
 func (db *Database) GetFromRoot(root, key []byte) ([]byte, error) {
 	if db.handle == nil {
@@ -198,28 +198,6 @@ func (db *Database) GetFromRoot(root, key []byte) ([]byte, error) {
 	))
 }
 
-// Iter creates and iterator starting from the provided key on the latest root hash.
-// pass empty slice to start from beginning
-func (db *Database) Iter(key []byte) (*Iterator, error) {
-	return db.IterOnRoot(nil, key)
-}
-
-// IterOnRoot creates and iterator starting from the provided key on a specific root hash.
-// If the root is not found, it returns as an error.
-// pass empty slice to start from beginning
-func (db *Database) IterOnRoot(root, key []byte) (*Iterator, error) {
-	if db.handle == nil {
-		return nil, errDBClosed
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	itResult := C.fwd_iter_on_root(db.handle, newBorrowedBytes(root, &pinner), newBorrowedBytes(key, &pinner))
-
-	return getIteratorFromIteratorResult(itResult, db)
-}
-
 // Root returns the current root hash of the trie.
 // Empty trie must return common.Hash{}.
 func (db *Database) Root() ([]byte, error) {
@@ -236,21 +214,36 @@ func (db *Database) Root() ([]byte, error) {
 	return bytes, err
 }
 
+func (db *Database) LatestRevision() (*Revision, error) {
+	root, err := db.Root()
+	if err != nil {
+		return nil, err
+	}
+	if bytes.Equal(root, EmptyRoot) {
+		return nil, errRevisionNotFound
+	}
+	return db.Revision(root)
+}
+
 // Revision returns a historical revision of the database.
 func (db *Database) Revision(root []byte) (*Revision, error) {
 	if root == nil || len(root) != RootLength {
 		return nil, errInvalidRootLength
 	}
 
-	// Attempt to get any value from the root.
-	// This will verify that the root is valid and accessible.
-	// If the root is not valid, this will return an error.
-	_, err := db.GetFromRoot(root, []byte{})
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	rev, err := getRevisionFromResult(C.fwd_get_revision(
+		db.handle,
+		newBorrowedBytes(root, &pinner),
+	))
 	if err != nil {
 		return nil, err
 	}
+	rev.root = root
 
-	return &Revision{database: db, root: root}, nil
+	return rev, nil
 }
 
 // Close releases the memory associated with the Database.

@@ -70,7 +70,7 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 
 	itResult := C.fwd_iter_on_proposal(p.handle, newBorrowedBytes(key, &pinner))
 
-	return getIteratorFromIteratorResult(itResult, p.db)
+	return getIteratorFromIteratorResult(itResult)
 }
 
 // Propose creates a new proposal with the given keys and values.

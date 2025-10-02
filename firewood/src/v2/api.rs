@@ -369,20 +369,6 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     }
 }
 
-/// A database view for getting an owned iterator from.
-/// This trait is implemented for [`Arc`]<[`NodeStore`]<P: [`Parentable`], S: [`ReadableStorage`]>> and [`Proposal`]
-///
-/// [`NodeStore`]: firewood_storage::NodeStore
-/// [`Parentable`]: firewood_storage::Parentable
-/// [`ReadableStorage`]: firewood_storage::ReadableStorage
-pub trait OwnedIterView {
-    /// Obtain an owned stream over the key/values, starting at a specific key
-    fn iter_owned(
-        &self,
-        first_key: Option<&[u8]>,
-    ) -> Box<dyn Iterator<Item = Result<(Key, Value), Error>>>;
-}
-
 impl<T: Debug + DbView + Send + Sync + 'static> DynDbView for T
 where
     for<'view> T::Iter<'view>: Sized,

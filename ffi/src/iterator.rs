@@ -3,7 +3,7 @@
 
 use derive_where::derive_where;
 use firewood::merkle;
-use firewood::v2::api;
+use firewood::v2::api::{self, BoxKeyValueIter};
 
 type KeyValueItem = (merkle::Key, merkle::Value);
 
@@ -11,12 +11,12 @@ type KeyValueItem = (merkle::Key, merkle::Value);
 #[derive(Default)]
 #[derive_where(Debug)]
 #[derive_where(skip_inner(Debug))]
-pub struct IteratorHandle<'db> {
-    iterator: Option<Box<dyn Iterator<Item = Result<KeyValueItem, api::Error>> + 'db>>,
+pub struct IteratorHandle<'view> {
+    iterator: Option<BoxKeyValueIter<'view>>,
 }
 
-impl From<Box<dyn Iterator<Item = Result<KeyValueItem, api::Error>>>> for IteratorHandle<'_> {
-    fn from(value: Box<dyn Iterator<Item = Result<KeyValueItem, api::Error>>>) -> Self {
+impl<'view> From<BoxKeyValueIter<'view>> for IteratorHandle<'view> {
+    fn from(value: BoxKeyValueIter<'view>) -> Self {
         IteratorHandle {
             iterator: Some(value),
         }
@@ -52,7 +52,7 @@ impl IteratorHandle<'_> {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct CreateIteratorResult<'db> {
     pub handle: IteratorHandle<'db>,
 }

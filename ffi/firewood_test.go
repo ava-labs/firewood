@@ -548,6 +548,13 @@ func TestDropProposal(t *testing.T) {
 	r.ErrorIs(err, errDroppedProposal)
 	_, err = proposal.Root()
 	r.NoError(err, "Root of dropped proposal should still be accessible")
+
+	// Check that the keys are not in the database.
+	for i := range keys {
+		got, err := db.Get(keys[i])
+		r.NoError(err, "Get(%d)", i)
+		r.Empty(got, "Get(%d)", i)
+	}
 }
 
 // Create a proposal with 10 key-value pairs.
@@ -810,6 +817,9 @@ func TestRevision(t *testing.T) {
 	// Create a revision from this root.
 	revision, err := db.Revision(root)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(revision.Drop())
+	})
 
 	// Check that all keys can be retrieved from the revision.
 	for i := range keys {
@@ -834,6 +844,9 @@ func TestRevision(t *testing.T) {
 	// Create a "new" revision from the first old root.
 	revision, err = db.Revision(root)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(revision.Drop())
+	})
 	// Check that all keys can be retrieved from the revision.
 	for i := range keys {
 		got, err := revision.Get(keys[i])
@@ -877,6 +890,9 @@ func TestGetNilCases(t *testing.T) {
 	r.NoError(err)
 	revision, err := db.Revision(root)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(revision.Drop())
+	})
 
 	// Create edge case keys.
 	specialKeys := [][]byte{
@@ -1078,20 +1094,6 @@ func TestGetFromRootParallel(t *testing.T) {
 	}
 }
 
-// Tests that iterator isn't created for empty database
-func TestIterEmptyDb(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	it, err := db.Iter(nil)
-	r.NoError(err)
-	t.Cleanup(func() {
-		r.NoError(it.Drop())
-	})
-
-	r.False(it.Next())
-}
-
 type kvIter interface {
 	SetBatchSize(int)
 	Next() bool
@@ -1157,6 +1159,7 @@ func runIteratorTestForAllModes(parentT *testing.T, fn func(*testing.T, iterator
 	}
 }
 
+// Tests that basic iterator functionality works
 func TestIter(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
@@ -1166,10 +1169,13 @@ func TestIter(t *testing.T) {
 
 	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
 		r := require.New(t)
-		it, err := db.Iter(nil)
+		rev, err := db.LatestRevision()
+		r.NoError(err)
+		it, err := rev.Iter(nil)
 		r.NoError(err)
 		t.Cleanup(func() {
 			r.NoError(it.Drop())
+			r.NoError(rev.Drop())
 		})
 
 		assertIteratorYields(r, cfn(it), keys, vals)
@@ -1189,22 +1195,31 @@ func TestIterOnRoot(t *testing.T) {
 
 	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
 		r := require.New(t)
-		h1, err := db.IterOnRoot(firstRoot, nil)
+		r1, err := db.Revision(firstRoot)
+		r.NoError(err)
+		h1, err := r1.Iter(nil)
 		r.NoError(err)
 		t.Cleanup(func() {
 			r.NoError(h1.Drop())
+			r.NoError(r1.Drop())
 		})
 
-		h2, err := db.IterOnRoot(secondRoot, nil)
+		r2, err := db.Revision(secondRoot)
+		r.NoError(err)
+		h2, err := r2.Iter(nil)
 		r.NoError(err)
 		t.Cleanup(func() {
 			r.NoError(h2.Drop())
+			r.NoError(r2.Drop())
 		})
 
-		h3, err := db.IterOnRoot(thirdRoot, nil)
+		r3, err := db.Revision(thirdRoot)
+		r.NoError(err)
+		h3, err := r3.Iter(nil)
 		r.NoError(err)
 		t.Cleanup(func() {
 			r.NoError(h3.Drop())
+			r.NoError(r3.Drop())
 		})
 
 		assertIteratorYields(r, cfn(h1), keys[:80], vals[:80])
@@ -1279,10 +1294,13 @@ func TestIterUpdate(t *testing.T) {
 	r.NoError(err)
 
 	// get an iterator on latest revision
-	it, err := db.Iter(nil)
+	rev, err := db.LatestRevision()
+	r.NoError(err)
+	it, err := rev.Iter(nil)
 	r.NoError(err)
 	t.Cleanup(func() {
 		r.NoError(it.Drop())
+		r.NoError(rev.Drop())
 	})
 
 	// update the database

@@ -14,11 +14,6 @@ import (
 )
 
 type Iterator struct {
-	// The database this iterator is associated with. We hold onto this to ensure
-	// the database handle outlives the iterator handle, which is required for
-	// the iterator to be valid.
-	db *Database
-
 	// handle is an opaque pointer to the iterator within Firewood. It should be
 	// passed to the C FFI functions that operate on iterators
 	//
@@ -163,14 +158,13 @@ func (it *Iterator) Drop() error {
 }
 
 // getIteratorFromIteratorResult converts a C.IteratorResult to an Iterator or error.
-func getIteratorFromIteratorResult(result C.IteratorResult, db *Database) (*Iterator, error) {
+func getIteratorFromIteratorResult(result C.IteratorResult) (*Iterator, error) {
 	switch result.tag {
 	case C.IteratorResult_NullHandlePointer:
 		return nil, errDBClosed
 	case C.IteratorResult_Ok:
 		body := (*C.IteratorResult_Ok_Body)(unsafe.Pointer(&result.anon0))
 		proposal := &Iterator{
-			db:     db,
 			handle: body.handle,
 		}
 		return proposal, nil
