@@ -51,8 +51,7 @@ impl DbView for RevisionHandle {
         &self,
         first_key: Option<K>,
     ) -> Result<Self::Iter<'_>, api::Error> {
-        self.view
-            .iter_option(first_key.as_ref().map(AsRef::as_ref))
+        self.view.iter_option(first_key.as_ref().map(AsRef::as_ref))
     }
 }
 
