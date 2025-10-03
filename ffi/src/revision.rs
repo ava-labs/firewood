@@ -17,13 +17,14 @@ impl RevisionHandle {
     }
 
     /// Creates an iterator on the revision starting from the given key.
-    #[expect(clippy::missing_errors_doc)]
-    pub fn iter_from(
-        &self,
-        first_key: Option<&[u8]>,
-    ) -> Result<CreateIteratorResult<'_>, api::Error> {
-        let it = self.view.iter_option(first_key)?;
-        Ok(CreateIteratorResult { handle: it.into() })
+    #[must_use]
+    #[allow(clippy::missing_panics_doc)]
+    pub fn iter_from(&self, first_key: Option<&[u8]>) -> CreateIteratorResult<'_> {
+        let it = self
+            .view
+            .iter_option(first_key)
+            .expect("infallible; see issue #1329");
+        CreateIteratorResult(it.into())
     }
 }
 

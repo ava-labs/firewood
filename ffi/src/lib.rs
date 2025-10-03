@@ -192,7 +192,7 @@ pub unsafe extern "C" fn fwd_iter_on_proposal<'p>(
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) -> KeyValueResult {
-    invoke_with_handle(handle, IteratorHandle::next)
+    invoke_with_handle(handle, |it| it.next())
 }
 
 /// Consumes the [`IteratorHandle`], destroys the iterator, and frees the memory.
@@ -688,4 +688,24 @@ pub unsafe extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidRe
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_free_owned_bytes(bytes: OwnedBytes) -> VoidResult {
     invoke(move || drop(bytes))
+}
+
+/// Consumes the [`OwnedKeyValuePair`] and frees the memory associated with it.
+///
+/// # Arguments
+///
+/// * `kv` - The [`OwnedKeyValuePair`] struct to free, previously returned from any
+///   function from this library.
+///
+/// # Returns
+///
+/// - [`VoidResult::Ok`] if the memory was successfully freed.
+/// - [`VoidResult::Err`] if the process panics while freeing the memory.
+///
+/// # Safety
+///
+/// The caller must ensure that the `kv` struct is valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_free_owned_kv_pair(kv: OwnedKeyValuePair) -> VoidResult {
+    invoke(move || drop(kv))
 }

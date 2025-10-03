@@ -25,7 +25,7 @@ typedef struct ChangeProofContext ChangeProofContext;
 typedef struct DatabaseHandle DatabaseHandle;
 
 /**
- * An opaque wrapper around an Iterator.
+ * An opaque wrapper around a [`BoxKeyValueIter`].
  */
 typedef struct IteratorHandle IteratorHandle;
 
@@ -653,6 +653,17 @@ typedef struct VerifyRangeProofArgs {
 } VerifyRangeProofArgs;
 
 /**
+ * Owned version of `KeyValuePair`, returned to ffi callers.
+ *
+ * C callers must free this using [`crate::fwd_free_owned_kv_pair`],
+ * not the C standard library's `free` function.
+ */
+typedef struct OwnedKeyValuePair {
+  OwnedBytes key;
+  OwnedBytes value;
+} OwnedKeyValuePair;
+
+/**
  * A result type returned from FFI functions that get a revision
  */
 typedef enum RevisionResult_Tag {
@@ -702,14 +713,6 @@ typedef struct RevisionResult {
     };
   };
 } RevisionResult;
-
-/**
- * Owned version of `KeyValuePair`, returned to the FFI.
- */
-typedef struct OwnedKeyValuePair {
-  OwnedBytes key;
-  OwnedBytes value;
-} OwnedKeyValuePair;
 
 /**
  * A result type returned from iterator FFI functions
@@ -776,8 +779,7 @@ typedef enum IteratorResult_Tag {
    */
   IteratorResult_Ok,
   /**
-   * An error occurred and the message is returned as an [`OwnedBytes`]. The
-   * value is guaranteed to contain only valid UTF-8.
+   * An error occurred and the message is returned as an [`OwnedBytes`].
    *
    * The caller must call [`fwd_free_owned_bytes`] to free the memory
    * associated with this error.
@@ -1335,6 +1337,25 @@ struct VoidResult fwd_free_iterator(struct IteratorHandle *iterator);
  * this function does nothing.
  */
 struct VoidResult fwd_free_owned_bytes(OwnedBytes bytes);
+
+/**
+ * Consumes the [`OwnedKeyValuePair`] and frees the memory associated with it.
+ *
+ * # Arguments
+ *
+ * * `kv` - The [`OwnedKeyValuePair`] struct to free, previously returned from any
+ *   function from this library.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ *
+ * # Safety
+ *
+ * The caller must ensure that the `kv` struct is valid.
+ */
+struct VoidResult fwd_free_owned_kv_pair(struct OwnedKeyValuePair kv);
 
 /**
  * Consumes the [`ProposalHandle`], cancels the proposal, and frees the memory.
