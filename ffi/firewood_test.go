@@ -783,6 +783,9 @@ func TestRevision(t *testing.T) {
 	// Create a revision from this root.
 	revision, err := db.Revision(root)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(revision.Drop())
+	})
 
 	// Check that all keys can be retrieved from the revision.
 	for i := range keys {
@@ -807,12 +810,48 @@ func TestRevision(t *testing.T) {
 	// Create a "new" revision from the first old root.
 	revision, err = db.Revision(root)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(revision.Drop())
+	})
 	// Check that all keys can be retrieved from the revision.
 	for i := range keys {
 		got, err := revision.Get(keys[i])
 		r.NoError(err, "Get(%d)", i)
 		r.Equal(valForTest(i), got, "Get(%d)", i)
 	}
+}
+
+// Tests that even if a proposal is committed, the corresponding revision will not go away
+// as we're holding on to it
+func TestRevisionOutlivesProposal(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(20)
+	_, err := db.Update(keys[:10], vals[:10])
+	r.NoError(err)
+
+	// Create a proposal with 10 key-value pairs.
+	nKeys, nVals := keys[10:], vals[10:]
+	proposal, err := db.Propose(nKeys, nVals)
+	r.NoError(err)
+	root, err := proposal.Root()
+	r.NoError(err)
+
+	rev, err := db.Revision(root)
+	r.NoError(err)
+
+	// we drop the proposal
+	r.NoError(proposal.Drop())
+
+	// revision should outlive the proposal, as we're still referencing its node store
+	for i, key := range nKeys {
+		val, err := rev.Get(key)
+		r.NoError(err)
+		r.Equal(val, nVals[i])
+	}
+
+	r.NoError(rev.Drop())
 }
 
 func TestInvalidRevision(t *testing.T) {
@@ -850,6 +889,9 @@ func TestGetNilCases(t *testing.T) {
 	r.NoError(err)
 	revision, err := db.Revision(root)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(revision.Drop())
+	})
 
 	// Create edge case keys.
 	specialKeys := [][]byte{
