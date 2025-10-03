@@ -92,4 +92,5 @@ if [ "$NIX_SYMBOLS" -eq "$CARGO_SYMBOLS" ] && [ "$NIX_RELOCS" -eq "$CARGO_RELOCS
     echo "✅ Builds are equivalent - both using maxperf profile"
 else
     echo "❌ Builds differ"
+    exit 1
 fi
