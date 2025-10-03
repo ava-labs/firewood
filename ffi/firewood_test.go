@@ -821,6 +821,39 @@ func TestRevision(t *testing.T) {
 	}
 }
 
+// Tests that even if a proposal is committed, the corresponding revision will not go away
+// as we're holding on to it
+func TestRevisionOutlivesProposal(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(20)
+	_, err := db.Update(keys[:10], vals[:10])
+	r.NoError(err)
+
+	// Create a proposal with 10 key-value pairs.
+	nKeys, nVals := keys[10:], vals[10:]
+	proposal, err := db.Propose(nKeys, nVals)
+	r.NoError(err)
+	root, err := proposal.Root()
+	r.NoError(err)
+
+	rev, err := db.Revision(root)
+	r.NoError(err)
+
+	// we drop the proposal
+	r.NoError(proposal.Drop())
+
+	// revision should outlive the proposal, as we're still referencing its node store
+	for i, key := range nKeys {
+		val, err := rev.Get(key)
+		r.NoError(err)
+		r.Equal(val, nVals[i])
+	}
+
+	r.NoError(rev.Drop())
+}
+
 func TestInvalidRevision(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
