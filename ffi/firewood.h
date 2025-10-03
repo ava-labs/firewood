@@ -655,8 +655,8 @@ typedef struct VerifyRangeProofArgs {
 /**
  * Owned version of `KeyValuePair`, returned to ffi callers.
  *
- * C callers must free this memory using the respective FFI function for the
- * concrete type (but not using the `free` function from the C standard library).
+ * C callers must free this using [`crate::fwd_free_owned_kv_pair`],
+ * not the C standard library's `free` function.
  */
 typedef struct OwnedKeyValuePair {
   OwnedBytes key;

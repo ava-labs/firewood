@@ -20,7 +20,7 @@ impl RevisionHandle {
     #[must_use]
     #[allow(clippy::missing_panics_doc)]
     pub fn iter_from(&self, first_key: Option<&[u8]>) -> CreateIteratorResult<'_> {
-        let it = self.view.iter_option(first_key).expect("infallible");
+        let it = self.view.iter_option(first_key).expect("infallible; see issue #1329");
         CreateIteratorResult(it.into())
     }
 }
