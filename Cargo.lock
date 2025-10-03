@@ -1083,6 +1083,7 @@ dependencies = [
  "cbindgen",
  "chrono",
  "coarsetime",
+ "derive-where",
  "env_logger",
  "firewood",
  "firewood-storage",
