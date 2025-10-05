@@ -20,11 +20,13 @@ use metrics::gauge;
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
+use crate::root_store::{RocksDBStore, RootStore, RootStoreBuilder};
 use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash,
+    Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
+    NodeStoreHeader, TrieHash,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
@@ -65,7 +67,7 @@ type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
 #[derive(Debug)]
-pub(crate) struct RevisionManager {
+pub(crate) struct RevisionManager<T: RootStore> {
     /// Maximum number of revisions to keep on disk
     max_revisions: usize,
 
@@ -75,6 +77,8 @@ pub(crate) struct RevisionManager {
     proposals: Mutex<Vec<ProposedRevision>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
+    // Underlying persistent store of root addresses
+    root_store: T,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -92,46 +96,7 @@ pub(crate) enum RevisionManagerError {
     FileIoError(#[from] FileIoError),
 }
 
-impl RevisionManager {
-    pub fn new(filename: PathBuf, config: ConfigManager) -> Result<Self, FileIoError> {
-        let fb = FileBacked::new(
-            filename,
-            config.manager.node_cache_size,
-            config.manager.free_list_cache_size,
-            config.truncate,
-            config.create,
-            config.manager.cache_read_strategy,
-        )?;
-
-        // Acquire an advisory lock on the database file to prevent multiple processes
-        // from opening the same database simultaneously
-        fb.lock()?;
-
-        let storage = Arc::new(fb);
-        let nodestore = Arc::new(NodeStore::open(storage.clone())?);
-        let manager = Self {
-            max_revisions: config.manager.max_revisions,
-            historical: RwLock::new(VecDeque::from([nodestore.clone()])),
-            by_hash: RwLock::new(Default::default()),
-            proposals: Mutex::new(Default::default()),
-            // committing_proposals: Default::default(),
-        };
-
-        if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
-            manager
-                .by_hash
-                .write()
-                .expect("poisoned lock")
-                .insert(hash, nodestore.clone());
-        }
-
-        if config.truncate {
-            nodestore.flush_header_with_padding()?;
-        }
-
-        Ok(manager)
-    }
-
+impl<T: RootStore> RevisionManager<T> {
     pub fn all_hashes(&self) -> Vec<TrieHash> {
         self.historical
             .read()
@@ -236,6 +201,13 @@ impl RevisionManager {
                 .insert(hash, committed.clone());
         }
 
+        // 5b. Persist revision to root store
+        if let (Some(hash), Some(address)) = (committed.root_hash(), committed.root_address()) {
+            self.root_store
+                .add_root(&hash, &address)
+                .expect("persisting root should work");
+        }
+
         // 6. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
         // referenced by anyone else.
@@ -260,7 +232,77 @@ impl RevisionManager {
     }
 }
 
-impl RevisionManager {
+impl RevisionManager<RocksDBStore> {
+    // Returns an instance of RevisionManager that uses LMDBStore
+    pub fn new(filename: PathBuf, config: ConfigManager) -> Result<Self, FileIoError> {
+        let filename_copy = filename.clone();
+        let fb = FileBacked::new(
+            filename,
+            config.manager.node_cache_size,
+            config.manager.free_list_cache_size,
+            config.truncate,
+            config.create,
+            config.manager.cache_read_strategy,
+        )?;
+
+        // Acquire an advisory lock on the database file to prevent multiple processes
+        // from opening the same database simultaneously
+        fb.lock()?;
+
+        let parent_dir = filename_copy
+            .parent()
+            .ok_or(FileIoError::from_generic_no_file(
+                std::io::Error::new(std::io::ErrorKind::NotFound, "parent directory not found"),
+                "",
+            ))?;
+        let root_store = RocksDBStore::new(parent_dir).map_err(|e| {
+            FileIoError::from_generic_no_file(
+                std::io::Error::other(e),
+                "failed to create root store",
+            )
+        })?;
+
+        let storage = Arc::new(fb);
+        let nodestore = Arc::new(NodeStore::open(storage.clone())?);
+        let manager = Self {
+            max_revisions: config.manager.max_revisions,
+            historical: RwLock::new(VecDeque::from([nodestore.clone()])),
+            by_hash: RwLock::new(Default::default()),
+            proposals: Mutex::new(Default::default()),
+            // committing_proposals: Default::default(),
+            root_store,
+        };
+
+        if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
+            manager
+                .by_hash
+                .write()
+                .expect("poisoned lock")
+                .insert(hash, nodestore.clone());
+        }
+
+        if config.truncate {
+            nodestore.flush_header_with_padding()?;
+        }
+
+        // On startup, we always write the latest revision to RootStore
+        if let Some(root_hash) = manager.current_revision().root_hash() {
+            let root_address = manager
+                .current_revision()
+                .root_address()
+                .expect("persisted revision should have root address");
+
+            manager
+                .root_store
+                .add_root(&root_hash, &root_address)
+                .expect("poisoned root store")
+        }
+
+        Ok(manager)
+    }
+}
+
+impl<T: RootStore> RevisionManager<T> {
     pub fn add_proposal(&self, proposal: ProposedRevision) {
         self.proposals.lock().expect("poisoned lock").push(proposal);
     }
@@ -278,12 +320,27 @@ impl RevisionManager {
             .expect("poisoned lock")
             .iter()
             .find(|p| p.root_hash().as_ref() == Some(&root_hash))
-            .cloned()
-            .ok_or(RevisionManagerError::RevisionNotFound {
-                provided: root_hash,
-            })?;
+            .cloned();
 
-        Ok(proposal)
+        if let Some(v) = proposal {
+            return Ok(v);
+        }
+
+        // Get linear address
+        let addr = self.root_store.get(&root_hash.clone()).map_err(|_| {
+            RevisionManagerError::RevisionNotFound {
+                provided: root_hash.clone(),
+            }
+        })?;
+
+        let cr = self.current_revision().get_underlying_storage();
+
+        let mut header = NodeStoreHeader::new();
+        header.set_root_address(Some(addr));
+
+        let node_store = NodeStore::new_committed(header, root_hash.into(), addr, cr);
+
+        Ok(Arc::new(node_store))
     }
 
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {

@@ -8,6 +8,7 @@
 
 use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
+use crate::root_store::RocksDBStore;
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
     self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair,
@@ -112,7 +113,7 @@ pub struct DbConfig {
 /// A database instance.
 pub struct Db {
     metrics: Arc<DbMetrics>,
-    manager: RevisionManager,
+    manager: RevisionManager<RocksDBStore>,
 }
 
 impl api::Db for Db {
@@ -321,6 +322,7 @@ mod test {
     use firewood_storage::{CheckOpt, CheckerError};
 
     use crate::db::{Db, Proposal};
+    use crate::manager::RevisionManagerConfig;
     use crate::v2::api::{Db as _, DbView as _, KeyValuePairIter, Proposal as _};
 
     use super::{BatchOp, DbConfig};
@@ -764,6 +766,52 @@ mod test {
                 drop(tx);
             });
         });
+    }
+
+    /// `test_root_store` tests that we can fetch a revision that is no longer
+    /// cached (i.e. has to be retrieved from RootStore)
+    ///
+    /// XXX: this test currently yields a false positive as setting the number
+    /// of revisions in-memory to 1 still results in 2 revisions being kept in
+    /// memory - more debugging is needed here.
+    #[test]
+    fn test_root_store() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let db_path = tmpdir.path().join("firewood.db");
+
+        let rmconfig = RevisionManagerConfig::builder().max_revisions(1).build();
+        let dbconfig = DbConfig::builder().manager(rmconfig).build();
+        let db = Db::new(&db_path, dbconfig).unwrap();
+
+        let key = "hello";
+        let value = "world";
+        let batch: Vec<BatchOp<&str, &str>> = vec![BatchOp::Put {
+            key: key,
+            value: value,
+        }];
+        let proposal = db.propose(batch).unwrap();
+        let root_hash = proposal.root_hash().unwrap().unwrap();
+
+        proposal.commit().unwrap();
+
+        let new_value = "goodbye";
+        let batch: Vec<BatchOp<&str, &str>> = vec![BatchOp::Put {
+            key: key,
+            value: new_value,
+        }];
+        let proposal = db.propose(batch).unwrap();
+
+        proposal.commit().unwrap();
+
+        // At this point now, we should still be able to query the key "hello"
+        // from the first revision.
+        let view = db.view(root_hash).unwrap();
+
+        let actual_value = view.val(key.as_bytes()).unwrap().unwrap();
+
+        assert_eq!(actual_value.as_ref(), value.as_bytes());
+
+        tmpdir.close().unwrap();
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
