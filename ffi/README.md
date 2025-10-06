@@ -86,7 +86,7 @@ If set to `true`, an empty database will be created, overriding any existing fil
 
 #### `Parallel` - `bool`
 
-If set to `true`, proposals are created in parallel. This can improve performance by supporting both concurrent reads and concurrent hashing during proposal creation.
+If set to `true`, proposals are created in parallel. This can improve performance by supporting both parallel reads and parallel hashing during proposal creation.
 
 *Default*: `false`
 
