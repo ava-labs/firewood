@@ -8,7 +8,7 @@ use super::{PathComponent, TriePath};
 /// A trie path that can be (cheaply) split into two sub-paths.
 ///
 /// Implementations are expected to be cheap to split (i.e. no allocations).
-pub trait SplitPath: AsSplittablePath + TriePath + Default {
+pub trait SplitPath: TriePath + Default + Copy {
     /// Splits the path at the given index within the path.
     ///
     /// The returned tuple contains the two sub-paths `(prefix, suffix)`.
@@ -31,15 +31,29 @@ pub trait SplitPath: AsSplittablePath + TriePath + Default {
     }
 }
 
-/// A type that can be cheaply converted into a splittable path.
-pub trait AsSplittablePath {
-    /// The splittable path type.
-    type Path<'a>: SplitPath + 'a
-    where
-        Self: 'a;
+/// A type that can be converted into a splittable path.
+///
+/// This trait is analogous to [`IntoIterator`] for [`Iterator`] but for trie
+/// paths instead of iterators.
+///
+/// Like `IntoIterator`, a blanket implementation is provided for all types that
+/// already implement [`SplitPath`].
+pub trait IntoSplitPath {
+    /// The splittable path type derived from this type.
+    type Path: SplitPath;
 
-    /// Converts this type into a splittable path, borrowing data as needed.
-    fn as_splittable_path(&self) -> Self::Path<'_>;
+    /// Converts this type into a splittable path.
+    #[must_use]
+    fn into_split_path(self) -> Self::Path;
+}
+
+impl<T: SplitPath> IntoSplitPath for T {
+    type Path = T;
+
+    #[inline]
+    fn into_split_path(self) -> Self::Path {
+        self
+    }
 }
 
 /// The common prefix of two paths, along with their respective suffixes.
@@ -71,61 +85,6 @@ impl<A: SplitPath, B: SplitPath> PathCommonPrefix<A, B> {
     }
 }
 
-impl<T: AsSplittablePath + ?Sized> AsSplittablePath for &T {
-    type Path<'a>
-        = T::Path<'a>
-    where
-        Self: 'a;
-
-    fn as_splittable_path(&self) -> Self::Path<'_> {
-        (**self).as_splittable_path()
-    }
-}
-
-impl<T: AsSplittablePath + ?Sized> AsSplittablePath for &mut T {
-    type Path<'a>
-        = T::Path<'a>
-    where
-        Self: 'a;
-
-    fn as_splittable_path(&self) -> Self::Path<'_> {
-        (**self).as_splittable_path()
-    }
-}
-
-impl<T: AsSplittablePath + ?Sized> AsSplittablePath for Box<T> {
-    type Path<'a>
-        = T::Path<'a>
-    where
-        Self: 'a;
-
-    fn as_splittable_path(&self) -> Self::Path<'_> {
-        (**self).as_splittable_path()
-    }
-}
-
-impl<T: AsSplittablePath + ?Sized> AsSplittablePath for std::rc::Rc<T> {
-    type Path<'a>
-        = T::Path<'a>
-    where
-        Self: 'a;
-
-    fn as_splittable_path(&self) -> Self::Path<'_> {
-        (**self).as_splittable_path()
-    }
-}
-
-impl<T: AsSplittablePath + ?Sized> AsSplittablePath for std::sync::Arc<T> {
-    type Path<'a>
-        = T::Path<'a>
-    where
-        Self: 'a;
-
-    fn as_splittable_path(&self) -> Self::Path<'_> {
-        (**self).as_splittable_path()
-    }
-}
-
 impl SplitPath for &[PathComponent] {
     fn split_at(self, mid: usize) -> (Self, Self) {
         self.split_at(mid)
@@ -139,46 +98,26 @@ impl SplitPath for &[PathComponent] {
     }
 }
 
-impl AsSplittablePath for [PathComponent] {
-    type Path<'a>
-        = &'a [PathComponent]
-    where
-        Self: 'a;
+impl<'a, const N: usize> IntoSplitPath for &'a [PathComponent; N] {
+    type Path = &'a [PathComponent];
 
-    fn as_splittable_path(&self) -> Self::Path<'_> {
+    fn into_split_path(self) -> Self::Path {
         self
     }
 }
 
-impl<const N: usize> AsSplittablePath for [PathComponent; N] {
-    type Path<'a>
-        = &'a [PathComponent]
-    where
-        Self: 'a;
+impl<'a> IntoSplitPath for &'a Vec<PathComponent> {
+    type Path = &'a [PathComponent];
 
-    fn as_splittable_path(&self) -> Self::Path<'_> {
+    fn into_split_path(self) -> Self::Path {
         self
     }
 }
 
-impl AsSplittablePath for Vec<PathComponent> {
-    type Path<'a>
-        = &'a [PathComponent]
-    where
-        Self: 'a;
+impl<'a, A: smallvec::Array<Item = PathComponent>> IntoSplitPath for &'a SmallVec<A> {
+    type Path = &'a [PathComponent];
 
-    fn as_splittable_path(&self) -> Self::Path<'_> {
-        self
-    }
-}
-
-impl<A: smallvec::Array<Item = PathComponent>> AsSplittablePath for SmallVec<A> {
-    type Path<'a>
-        = &'a [PathComponent]
-    where
-        Self: 'a;
-
-    fn as_splittable_path(&self) -> Self::Path<'_> {
+    fn into_split_path(self) -> Self::Path {
         self
     }
 }

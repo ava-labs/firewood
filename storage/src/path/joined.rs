@@ -3,7 +3,7 @@
 
 use std::iter::Chain;
 
-use super::{AsSplittablePath, SplitPath, TriePath};
+use super::{SplitPath, TriePath};
 
 /// Joins two path segments into a single path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
@@ -35,20 +35,6 @@ impl<P: TriePath, S: TriePath> TriePath for JoinedPath<P, S> {
 
     fn components(&self) -> Self::Components<'_> {
         self.prefix.components().chain(self.suffix.components())
-    }
-}
-
-impl<P: AsSplittablePath, S: AsSplittablePath> AsSplittablePath for JoinedPath<P, S> {
-    type Path<'a>
-        = JoinedPath<P::Path<'a>, S::Path<'a>>
-    where
-        Self: 'a;
-
-    fn as_splittable_path(&self) -> Self::Path<'_> {
-        JoinedPath {
-            prefix: self.prefix.as_splittable_path(),
-            suffix: self.suffix.as_splittable_path(),
-        }
     }
 }
 

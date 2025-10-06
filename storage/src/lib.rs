@@ -55,7 +55,7 @@ pub use nodestore::{
     NodeReader, NodeStore, Parentable, RootReader, TrieReader,
 };
 pub use path::{
-    AsSplittablePath, JoinedPath, PathCommonPrefix, PathComponent, SplitPath, TriePath,
+    IntoSplitPath, JoinedPath, PathCommonPrefix, PathComponent, SplitPath, TriePath,
     TriePathFromUnpackedBytes,
 };
 pub use u4::{TryFromIntError, U4};

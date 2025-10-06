@@ -7,7 +7,7 @@ mod split;
 
 pub use self::component::PathComponent;
 pub use self::joined::JoinedPath;
-pub use self::split::{AsSplittablePath, PathCommonPrefix, SplitPath};
+pub use self::split::{IntoSplitPath, PathCommonPrefix, SplitPath};
 
 /// A trie path of components with different underlying representations.
 ///
