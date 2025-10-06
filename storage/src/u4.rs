@@ -279,6 +279,7 @@ mod tests {
     #[test_case(0x20, U4(Repr::Ox0); "0x20 -> 0")]
     #[test_case(0x30, U4(Repr::Ox0); "0x30 -> 0")]
     #[test_case(0x40, U4(Repr::Ox0); "0x40 -> 0")]
+    #[test_case(0x50, U4(Repr::Ox0); "0x50 -> 0")]
     #[test_case(0x60, U4(Repr::Ox0); "0x60 -> 0")]
     #[test_case(0x70, U4(Repr::Ox0); "0x70 -> 0")]
     #[test_case(0x80, U4(Repr::Ox0); "0x80 -> 0")]
