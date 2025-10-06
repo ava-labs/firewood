@@ -34,11 +34,13 @@ enum Request {
     Done,
 }
 
+/// Response returned from a worker to the main thread. Includes the new root of the subtrie 
+/// at the given nibble and the deleted nodes.
 #[derive(Debug)]
-enum Response {
-    // return both the new root of the subtrie at the given nibble and the deleted nodes.
-    Root(u8, Option<Child>, Vec<MaybePersistedNode>),
-    Error(FileIoError),
+struct Response {
+    nibble: u8,
+    root: Option<Child>,
+    deleted_nodes: Vec<MaybePersistedNode>,
 }
 
 /// `ParallelMerkle` safely performs parallel modifications to a Merkle trie. It does this
@@ -165,7 +167,7 @@ impl ParallelMerkle {
         proposal: &NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut Box<BranchNode>,
         first_nibble: u8,
-        worker_sender: Sender<Response>,
+        worker_sender: Sender<Result<Response, FileIoError>>,
     ) -> Result<WorkerSender, FileIoError> {
         // Create a channel for the coordinator (main thread) to send messages to this worker.
         let (child_sender, child_receiver) = mpsc::channel();
@@ -203,7 +205,7 @@ impl ParallelMerkle {
                             merkle.insert_from_iter(nibbles_iter, value.as_ref().into())
                         {
                             worker_sender
-                                .send(Response::Error(err))
+                                .send(Err(err))
                                 .expect("send from worker error");
                         }
                     }
@@ -212,7 +214,7 @@ impl ParallelMerkle {
                         nibbles_iter.next(); // Skip the first nibble
                         if let Err(err) = merkle.remove_from_iter(nibbles_iter) {
                             worker_sender
-                                .send(Response::Error(err))
+                                .send(Err(err))
                                 .expect("send from worker error");
                         }
                     }
@@ -221,15 +223,16 @@ impl ParallelMerkle {
                         nibbles_iter.next(); // Skip the first nibble
                         if let Err(err) = merkle.remove_prefix_from_iter(nibbles_iter) {
                             worker_sender
-                                .send(Response::Error(err))
+                                .send(Err(err))
                                 .expect("send from worker error");
                         }
                     }
                     // Sent from the coordinator to the workers to signal that the batch is done.
                     Request::Done => {
-                        // Hash this subtrie and return the root as a Child::MaybePersisted.
-                        let hashed_result = merkle
-                            .nodestore
+                        // Hash this subtrie and return a worker response where the root is a
+                        // Child::MaybePersisted.
+                        let mut nodestore = merkle.into_inner();
+                        let response = nodestore
                             .root_mut()
                             .take()
                             .map(|root| {
@@ -237,25 +240,21 @@ impl ParallelMerkle {
                                 let (root_node, root_hash) =
                                     NodeStore::<MutableProposal, FileBacked>::hash_helper(
                                         root,
-                                        Path::from_nibbles_iterator(once(first_nibble)),
+                                        Path::from(&[first_nibble]),
                                     )?;
                                 #[cfg(feature = "ethhash")]
-                                let (root_node, root_hash) = merkle.nodestore.hash_helper(
-                                    root,
-                                    Path::from_nibbles_iterator(once(first_nibble)),
-                                )?;
+                                let (root_node, root_hash) = merkle
+                                    .nodestore
+                                    .hash_helper(root, Path::from(&[first_nibble]))?;
                                 Ok(Child::MaybePersisted(root_node, root_hash))
                             })
-                            .transpose();
+                            .transpose()
+                            .map(|hashed_root| Response {
+                                nibble: first_nibble,
+                                root: hashed_root,
+                                deleted_nodes: nodestore.take_deleted_nodes(),
+                            });
 
-                        let response = match hashed_result {
-                            Ok(hashed_root) => Response::Root(
-                                first_nibble,
-                                hashed_root,
-                                merkle.nodestore.take_deleted_nodes(),
-                            ),
-                            Err(err) => Response::Error(err),
-                        };
                         worker_sender
                             .send(response)
                             .expect("send from worker error");
@@ -271,7 +270,7 @@ impl ParallelMerkle {
     // subtrie, and merge them into the root node of the main trie.
     fn merge_children(
         &mut self,
-        response_channel: Receiver<Response>,
+        response_channel: Receiver<Result<Response, FileIoError>>,
         proposal: &mut NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut Box<BranchNode>,
     ) -> Result<(), FileIoError> {
@@ -282,17 +281,17 @@ impl ParallelMerkle {
 
         while let Ok(response) = response_channel.recv() {
             match response {
-                Response::Root(index, child_root, deleted_nodes) => {
+                Ok(response) => {
                     // Adding deleted nodes (from calling read_for_update) from the child's nodestore.
-                    proposal.delete_nodes(deleted_nodes.as_slice());
+                    proposal.delete_nodes(response.deleted_nodes.as_slice());
 
                     // Set the child at index to child_root which is the root of the child's subtrie.
                     *root_branch
                         .children
-                        .get_mut(index as usize)
-                        .expect("index error") = child_root;
+                        .get_mut(response.nibble as usize)
+                        .expect("index error") = response.root;
                 }
-                Response::Error(err) => {
+                Err(err) => {
                     return Err(err); // Early termination.
                 }
             }
@@ -308,7 +307,7 @@ impl ParallelMerkle {
         proposal: &NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut Box<BranchNode>,
         first_nibble: u8,
-        worker_sender: Sender<Response>,
+        worker_sender: Sender<Result<Response, FileIoError>>,
     ) -> Result<&mut WorkerSender, FileIoError> {
         // Find the worker's state corresponding to the first nibble which are stored in an array.
         let worker_option = self

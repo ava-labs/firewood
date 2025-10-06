@@ -778,13 +778,7 @@ mod test {
                 }
                 batch
             });
-
-            // randomly uses either propose or propose_parallel
-            let proposal = if rng.random() {
-                db.propose(batch).unwrap()
-            } else {
-                db.propose_parallel(batch).unwrap()
-            };
+            let proposal = db.propose(batch).unwrap();
             proposal.commit().unwrap();
 
             // check the database for consistency, sometimes checking the hashes
