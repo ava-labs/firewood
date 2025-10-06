@@ -249,7 +249,7 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
 
     /// Take the nodes that have been marked as deleted in this proposal.
     pub fn take_deleted_nodes(&mut self) -> Vec<MaybePersistedNode> {
-        std::mem::take(&mut self.kind.deleted)
+        take(&mut self.kind.deleted)
     }
 
     /// Adds to the nodes deleted in this proposal.
