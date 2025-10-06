@@ -58,9 +58,9 @@ impl<T: SplitPath> IntoSplitPath for T {
 
 /// The common prefix of two paths, along with their respective suffixes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PathCommonPrefix<A, B> {
+pub struct PathCommonPrefix<A, B, C = A> {
     /// The common prefix of the two paths.
-    pub common: A,
+    pub common: C,
     /// The suffix of the first path after the common prefix.
     pub a_suffix: A,
     /// The suffix of the second path after the common prefix.
