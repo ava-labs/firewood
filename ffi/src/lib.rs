@@ -186,7 +186,7 @@ pub unsafe extern "C" fn fwd_get_from_revision(
 /// The caller must ensure that the revision handle is valid and is not used again after
 /// this function is called.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_revision(revision: Option<&RevisionHandle>) -> VoidResult {
+pub unsafe extern "C" fn fwd_free_revision(revision: Option<Box<RevisionHandle>>) -> VoidResult {
     invoke_with_handle(revision, drop)
 }
 

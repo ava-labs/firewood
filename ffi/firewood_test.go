@@ -126,12 +126,12 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func newTestDatabase(t *testing.T) *Database {
+func newTestDatabase(t *testing.T, configureFns ...func(*Config)) *Database {
 	t.Helper()
 	r := require.New(t)
 
 	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, closeDB, err := newDatabase(dbFile)
+	db, closeDB, err := newDatabase(dbFile, configureFns...)
 	r.NoError(err)
 	t.Cleanup(func() {
 		r.NoError(closeDB())
@@ -139,9 +139,12 @@ func newTestDatabase(t *testing.T) *Database {
 	return db
 }
 
-func newDatabase(dbFile string) (*Database, func() error, error) {
+func newDatabase(dbFile string, configureFns ...func(*Config)) (*Database, func() error, error) {
 	conf := DefaultConfig()
 	conf.Truncate = true // in tests, we use filepath.Join, which creates an empty file
+	for _, fn := range configureFns {
+		fn(conf)
+	}
 
 	f, err := New(dbFile, conf)
 	if err != nil {
@@ -852,6 +855,46 @@ func TestRevisionOutlivesProposal(t *testing.T) {
 	}
 
 	r.NoError(rev.Drop())
+}
+
+// Tests that holding a reference to revision will prevent from it being reaped
+func TestRevisionOutlivesReaping(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t, func(config *Config) {
+		config.Revisions = 2
+	})
+
+	keys, vals := kvForTest(40)
+	firstRoot, err := db.Update(keys[:10], vals[:10])
+	r.NoError(err)
+	// let's get a revision at root
+	rev, err := db.Revision(firstRoot)
+	r.NoError(err)
+
+	// commit two times, this would normally reap the first revision
+	secondRoot, err := db.Update(keys[10:20], vals[10:20])
+	r.NoError(err)
+	_, err = db.Update(keys[20:30], vals[20:30])
+	r.NoError(err)
+
+	// revision should be still accessible, as we're hanging on to it, prevent reaping
+	nKeys, nVals := keys[:10], vals[:10]
+	for i, key := range nKeys {
+		val, err := rev.Get(key)
+		r.NoError(err)
+		r.Equal(val, nVals[i])
+	}
+	r.NoError(rev.Drop())
+
+	// since we dropped the revision, if we commit, reaping will happen (cleaning first two revisions)
+	_, err = db.Update(keys[30:], vals[30:])
+	r.NoError(err)
+
+	_, err = db.Revision(firstRoot)
+	r.Error(err)
+
+	_, err = db.Revision(secondRoot)
+	r.Error(err)
 }
 
 func TestInvalidRevision(t *testing.T) {

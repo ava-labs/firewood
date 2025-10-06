@@ -1262,7 +1262,7 @@ struct VoidResult fwd_free_range_proof(struct RangeProofContext *proof);
  * The caller must ensure that the revision handle is valid and is not used again after
  * this function is called.
  */
-struct VoidResult fwd_free_revision(const struct RevisionHandle *revision);
+struct VoidResult fwd_free_revision(struct RevisionHandle *revision);
 
 /**
  * Gather latest metrics for this process.
