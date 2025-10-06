@@ -233,13 +233,15 @@ mod tests {
         SplitFirstTest{
             path: &path![1],
             expected: Some((pc!(1), &path![])),
-        }; "single element path"
+        };
+        "single element path"
     )]
     #[test_case(
         SplitFirstTest{
             path: &path![1, 2, 3],
             expected: Some((pc!(1), &path![2, 3])),
-        }; "path with multiple elements"
+        };
+        "path with multiple elements"
     )]
     fn test_split_first(case: SplitFirstTest<'_>) {
         let result = SplitPath::split_first(case.path);
