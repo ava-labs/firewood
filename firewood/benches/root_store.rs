@@ -99,7 +99,7 @@ fn bench_reads_with_prepopulated_root_state<T: RootStore + RootStoreBuilder<T>>(
         .sample_size(20)
         .bench_function("reads against prepopulated state", |b| {
             b.iter(|| {
-                for (key, _) in &pairs {
+                for key in pairs.keys() {
                     root_store.get(key).unwrap();
                 }
             });

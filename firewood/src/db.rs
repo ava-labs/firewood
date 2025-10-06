@@ -769,7 +769,7 @@ mod test {
     }
 
     /// `test_root_store` tests that we can fetch a revision that is no longer
-    /// cached (i.e. has to be retrieved from RootStore)
+    /// cached (i.e. has to be retrieved from `RootStore`)
     ///
     /// XXX: this test currently yields a false positive as setting the number
     /// of revisions in-memory to 1 still results in 2 revisions being kept in
@@ -785,10 +785,7 @@ mod test {
 
         let key = "hello";
         let value = "world";
-        let batch: Vec<BatchOp<&str, &str>> = vec![BatchOp::Put {
-            key: key,
-            value: value,
-        }];
+        let batch: Vec<BatchOp<&str, &str>> = vec![BatchOp::Put { key, value }];
         let proposal = db.propose(batch).unwrap();
         let root_hash = proposal.root_hash().unwrap().unwrap();
 
@@ -796,7 +793,7 @@ mod test {
 
         let new_value = "goodbye";
         let batch: Vec<BatchOp<&str, &str>> = vec![BatchOp::Put {
-            key: key,
+            key,
             value: new_value,
         }];
         let proposal = db.propose(batch).unwrap();
