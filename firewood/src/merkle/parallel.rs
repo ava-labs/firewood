@@ -34,7 +34,7 @@ enum Request {
     Done,
 }
 
-/// Response returned from a worker to the main thread. Includes the new root of the subtrie 
+/// Response returned from a worker to the main thread. Includes the new root of the subtrie
 /// at the given nibble and the deleted nodes.
 #[derive(Debug)]
 struct Response {
@@ -243,9 +243,8 @@ impl ParallelMerkle {
                                         Path::from(&[first_nibble]),
                                     )?;
                                 #[cfg(feature = "ethhash")]
-                                let (root_node, root_hash) = merkle
-                                    .nodestore
-                                    .hash_helper(root, Path::from(&[first_nibble]))?;
+                                let (root_node, root_hash) =
+                                    nodestore.hash_helper(root, Path::from(&[first_nibble]))?;
                                 Ok(Child::MaybePersisted(root_node, root_hash))
                             })
                             .transpose()
