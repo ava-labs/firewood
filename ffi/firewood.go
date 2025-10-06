@@ -59,6 +59,7 @@ type Config struct {
 	FreeListCacheEntries uint
 	Revisions            uint
 	ReadCacheStrategy    CacheStrategy
+	Parallel             bool
 }
 
 // DefaultConfig returns a sensible default Config.
@@ -68,6 +69,7 @@ func DefaultConfig() *Config {
 		FreeListCacheEntries: 40_000,
 		Revisions:            100,
 		ReadCacheStrategy:    OnlyCacheWrites,
+		Parallel:             false,
 	}
 }
 
@@ -113,6 +115,7 @@ func New(filePath string, conf *Config) (*Database, error) {
 		revisions:            C.size_t(conf.Revisions),
 		strategy:             C.uint8_t(conf.ReadCacheStrategy),
 		truncate:             C.bool(conf.Truncate),
+		parallel:             C.bool(conf.Parallel),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))
