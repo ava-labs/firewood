@@ -60,6 +60,9 @@ pub struct ConfigManager {
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
+    /// Whether to turn on parallel insert and hashing for proposal
+    #[builder(default = false)]
+    pub parallel: bool,
 }
 
 type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
@@ -76,7 +79,7 @@ pub(crate) struct RevisionManager {
     proposals: Mutex<Vec<ProposedRevision>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
-    threadpool: OnceLock<ThreadPool>,
+    threadpool: Option<OnceLock<ThreadPool>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -117,7 +120,11 @@ impl RevisionManager {
             by_hash: RwLock::new(Default::default()),
             proposals: Mutex::new(Default::default()),
             // committing_proposals: Default::default(),
-            threadpool: OnceLock::new(),
+            threadpool: if config.parallel {
+                Some(OnceLock::new())
+            } else {
+                None
+            },
         };
 
         if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
@@ -313,8 +320,8 @@ impl RevisionManager {
             .clone()
     }
 
-    pub const fn threadpool(&self) -> &OnceLock<ThreadPool> {
-        &self.threadpool
+    pub const fn threadpool(&self) -> Option<&OnceLock<ThreadPool>> {
+        self.threadpool.as_ref()
     }
 }
 
