@@ -446,14 +446,14 @@ impl<T, S> NodeStore<T, S> {
 }
 
 impl NodeStore<Committed, FileBacked> {
-    /// `new_committed` returns a committed instance of NodeStore
-    /// This is called by RootStore to construct prior committed revisions
+    /// `new_committed` returns a committed instance of `NodeStore`
+    /// This is called by `RootStore` to construct prior committed revisions
     ///
     /// Args:
-    /// - header: the header of the committed nodestore
-    /// - root_hash: the hash of the nodestore
-    /// - root_address: the address of the nodestore
-    /// - storage: the underlying storage to access the nodestore
+    /// - `header`: the header of the committed nodestore
+    /// - `root_hash`: the hash of the nodestore
+    /// - `root_address`: the address of the nodestore
+    /// - `storage`: the underlying storage to access the nodestore
     pub fn new_committed(
         header: NodeStoreHeader,
         root_hash: HashType,
@@ -471,7 +471,8 @@ impl NodeStore<Committed, FileBacked> {
     }
 
     /// `get_underlying_storage` returns the underlying storage of this nodestore.
-    /// This is called by the RootStore to construct prior committed revisions.
+    /// This is called by the `RootStore` to construct prior committed revisions.
+    #[must_use]
     pub fn get_underlying_storage(&self) -> Arc<FileBacked> {
         self.storage.clone()
     }

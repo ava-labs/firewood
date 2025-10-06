@@ -80,6 +80,7 @@ pub trait RootStoreBuilder<T: RootStore> {
     /// XXX: this method is a facilitator for creating instances of `RootStore`
     /// during benchmarking - this will be deleted once the final implementation
     /// of `RootStore` is decided.
+    #[allow(clippy::new_ret_no_self)]
     fn new<P: AsRef<Path>>(path: P) -> Result<T, RootStoreError>;
 }
 

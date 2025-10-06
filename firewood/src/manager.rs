@@ -295,7 +295,7 @@ impl RevisionManager<RocksDBStore> {
             manager
                 .root_store
                 .add_root(&root_hash, &root_address)
-                .expect("poisoned root store")
+                .expect("poisoned root store");
         }
 
         Ok(manager)
@@ -338,6 +338,7 @@ impl<T: RootStore> RevisionManager<T> {
         let mut header = NodeStoreHeader::new();
         header.set_root_address(Some(addr));
 
+        #[allow(clippy::useless_conversion)]
         let node_store = NodeStore::new_committed(header, root_hash.into(), addr, cr);
 
         Ok(Arc::new(node_store))
