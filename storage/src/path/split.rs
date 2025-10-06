@@ -132,7 +132,7 @@ mod tests {
     /// not a valid path component.
     macro_rules! pc {
         ($elem:expr) => {
-            const { PathComponent::try_new($elem).unwrap() }
+            const { PathComponent::ALL[$elem] }
         };
     }
 
