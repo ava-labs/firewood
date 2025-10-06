@@ -10,7 +10,8 @@
 #[error("out of range integral type conversion attempted")]
 pub struct TryFromIntError;
 
-/// A 4-bit unsigned integer representing a path component in a hexary (16-ary) trie.
+/// A 4-bit unsigned integer representing a hexary digit (0-15, inclusive) used
+/// as a path component in hexary tries.
 ///
 /// The internal representation is a `u8` where only the lower 4 bits are used.
 ///
@@ -22,7 +23,7 @@ pub struct TryFromIntError;
 pub struct U4(Repr);
 
 impl U4 {
-    /// The number of bits required to represent a single path component.
+    /// The number of bits required to represent a single u4.
     pub const BITS: u32 = 4;
 
     /// The minimum value of a [`U4`], representing zero and the leftmost child
@@ -97,14 +98,14 @@ impl U4 {
         (Self::new_shifted(v), Self::new_masked(v))
     }
 
-    /// Casts the [`PathComponent`] to a `u8`.
+    /// Casts the [`U4`] to a `u8`.
     #[inline]
     #[must_use]
     pub const fn as_u8(self) -> u8 {
         self.0 as u8
     }
 
-    /// Casts the [`PathComponent`] to a `usize`.
+    /// Casts the [`U4`] to a `usize`.
     #[inline]
     #[must_use]
     pub const fn as_usize(self) -> usize {
