@@ -50,6 +50,9 @@ pub struct DatabaseHandleArgs<'a> {
 
     /// Whether to truncate the database file if it exists.
     pub truncate: bool,
+
+    /// Whether to use parallel insert and hashing for propose
+    pub parallel: bool,
 }
 
 impl DatabaseHandleArgs<'_> {
@@ -102,6 +105,7 @@ impl DatabaseHandle {
         let cfg = DbConfig::builder()
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
+            .parallel(args.parallel)
             .build();
 
         let path = args
