@@ -315,13 +315,16 @@ pub enum RevisionResult {
     NullHandlePointer,
     /// The provided root was not found in the database.
     RevisionNotFound(HashKey),
-    /// Getting the revision was successful and the revision handle is returned
+    /// Getting the revision was successful and the revision handle and root
+    /// hash are returned.
     Ok {
         /// An opaque pointer to the [`RevisionHandle`].
         /// The value should be freed with [`fwd_free_revision`]
         ///
         /// [`fwd_free_revision`]: crate::fwd_free_revision
         handle: Box<RevisionHandle>,
+        /// The root hash of the revision.
+        root_hash: HashKey,
     },
     /// An error occurred and the message is returned as an [`OwnedBytes`]. The
     /// value is guaranteed to contain only valid UTF-8.
@@ -337,6 +340,7 @@ impl From<GetRevisionResult> for RevisionResult {
     fn from(value: GetRevisionResult) -> Self {
         RevisionResult::Ok {
             handle: Box::new(value.handle),
+            root_hash: HashKey::from(value.root_hash),
         }
     }
 }

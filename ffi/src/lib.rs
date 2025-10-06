@@ -119,7 +119,7 @@ pub unsafe extern "C" fn fwd_get_latest(
 /// # Returns
 ///
 /// - [`RevisionResult::NullHandlePointer`] if the provided database handle is null.
-/// - [`RevisionResult::Ok`] containing a [`RevisionHandle`] if the revision exists.
+/// - [`RevisionResult::Ok`] containing a [`RevisionHandle`] and root hash if the revision exists.
 /// - [`RevisionResult::Err`] if the revision cannot be fetched or the root hash is invalid.
 ///
 /// # Safety

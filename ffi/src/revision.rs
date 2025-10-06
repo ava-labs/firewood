@@ -58,4 +58,5 @@ impl DbView for RevisionHandle {
 #[derive(Debug)]
 pub struct GetRevisionResult {
     pub handle: RevisionHandle,
+    pub root_hash: HashKey,
 }

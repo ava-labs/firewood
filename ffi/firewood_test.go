@@ -813,6 +813,7 @@ func TestRevision(t *testing.T) {
 	// Create a "new" revision from the first old root.
 	revision, err = db.Revision(root)
 	r.NoError(err)
+	r.Equal(revision.Root(), root)
 	t.Cleanup(func() {
 		r.NoError(revision.Drop())
 	})
