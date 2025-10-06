@@ -121,3 +121,128 @@ impl<'a, A: smallvec::Array<Item = PathComponent>> IntoSplitPath for &'a SmallVe
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use test_case::test_case;
+
+    use super::*;
+
+    /// Yields a [`PathComponent`] failing to compile if the given expression is
+    /// not a valid path component.
+    macro_rules! pc {
+        ($elem:expr) => {
+            const { PathComponent::try_new($elem).unwrap() }
+        };
+    }
+
+    /// Yields an array of [`PathComponent`]s failing to compile if any of the
+    /// given expressions are not valid path components.
+    ///
+    /// The expression yields an array, not a slice, and a reference must be taken
+    /// to convert it to a slice.
+    macro_rules! path {
+        ($($elem:expr),* $(,)?) => {
+            [ $( pc!($elem), )* ]
+        };
+    }
+
+    struct LcpTest<'a> {
+        a: &'a [PathComponent],
+        b: &'a [PathComponent],
+        expected_common: &'a [PathComponent],
+        expected_a_suffix: &'a [PathComponent],
+        expected_b_suffix: &'a [PathComponent],
+    }
+
+    #[test_case(
+        LcpTest {
+            a: &path![1, 2, 3],
+            b: &path![1, 2, 3],
+            expected_common: &path![1, 2, 3],
+            expected_a_suffix: &path![],
+            expected_b_suffix: &path![],
+        };
+        "identical paths"
+    )]
+    #[test_case(
+        LcpTest {
+            a: &path![1, 2, 3],
+            b: &path![1, 2, 4],
+            expected_common: &path![1, 2],
+            expected_a_suffix: &path![3],
+            expected_b_suffix: &path![4],
+        };
+        "diverging paths"
+    )]
+    #[test_case(
+        LcpTest {
+            a: &path![1, 2, 3],
+            b: &path![1, 2, 3, 4, 5],
+            expected_common: &path![1, 2, 3],
+            expected_a_suffix: &path![],
+            expected_b_suffix: &path![4, 5],
+        };
+        "a is a strict prefix of b"
+    )]
+    #[test_case(
+        LcpTest {
+            a: &path![1, 2, 3, 4, 5],
+            b: &path![1, 2, 3],
+            expected_common: &path![1, 2, 3],
+            expected_a_suffix: &path![4, 5],
+            expected_b_suffix: &path![],
+        };
+        "b is a strict prefix of a"
+    )]
+    #[test_case(
+        LcpTest {
+            a: &path![1, 2, 3],
+            b: &path![4, 5, 6],
+            expected_common: &path![],
+            expected_a_suffix: &path![1, 2, 3],
+            expected_b_suffix: &path![4, 5, 6],
+        };
+        "no common prefix"
+    )]
+    fn test_longest_common_prefix(case: LcpTest<'_>) {
+        let PathCommonPrefix {
+            common,
+            a_suffix,
+            b_suffix,
+        } = SplitPath::longest_common_prefix(case.a, case.b);
+
+        assert_eq!(common, case.expected_common);
+        assert_eq!(a_suffix, case.expected_a_suffix);
+        assert_eq!(b_suffix, case.expected_b_suffix);
+    }
+
+    struct SplitFirstTest<'a> {
+        path: &'a [PathComponent],
+        expected: Option<(PathComponent, &'a [PathComponent])>,
+    }
+
+    #[test_case(
+        SplitFirstTest {
+            path: &path![],
+            expected: None,
+        };
+        "empty path"
+    )]
+    #[test_case(
+        SplitFirstTest{
+            path: &path![1],
+            expected: Some((pc!(1), &path![])),
+        }; "single element path"
+    )]
+    #[test_case(
+        SplitFirstTest{
+            path: &path![1, 2, 3],
+            expected: Some((pc!(1), &path![2, 3])),
+        }; "path with multiple elements"
+    )]
+    fn test_split_first(case: SplitFirstTest<'_>) {
+        let result = SplitPath::split_first(case.path);
+        assert_eq!(result, case.expected);
+    }
+}
