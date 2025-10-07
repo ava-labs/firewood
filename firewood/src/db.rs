@@ -10,8 +10,8 @@ use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
-    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair,
-    KeyValuePairIter, OptionalHashKeyExt,
+    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePairIter,
+    OptionalHashKeyExt,
 };
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
@@ -141,56 +141,12 @@ impl api::Db for Db {
         Ok(self.manager.all_hashes())
     }
 
-    #[fastrace::trace(short_name = true)]
     fn propose(
         &self,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
     ) -> Result<Self::Proposal<'_>, api::Error> {
         let parent = self.manager.current_revision();
-
-        // If threadpool exists, then use the parallel propose implementation
-        let immutable = if let Some(threadpool) = self.manager.threadpool() {
-            let mut parallel_merkle = ParallelMerkle::default();
-            let span = fastrace::Span::enter_with_local_parent("parallel_merkle");
-            let immutable = parallel_merkle.create_proposal(&parent, batch, threadpool)?;
-            drop(span);
-            immutable
-        } else {
-            let proposal = NodeStore::new(&parent)?;
-            let mut merkle = Merkle::from(proposal);
-            let span = fastrace::Span::enter_with_local_parent("merkleops");
-            for op in batch.into_iter().map_into_batch() {
-                match op {
-                    BatchOp::Put { key, value } => {
-                        merkle.insert(key.as_ref(), value.as_ref().into())?;
-                    }
-                    BatchOp::Delete { key } => {
-                        merkle.remove(key.as_ref())?;
-                    }
-                    BatchOp::DeleteRange { prefix } => {
-                        merkle.remove_prefix(prefix.as_ref())?;
-                    }
-                }
-            }
-
-            drop(span);
-            let span = fastrace::Span::enter_with_local_parent("freeze");
-
-            let nodestore = merkle.into_inner();
-            let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-                Arc::new(nodestore.try_into()?);
-
-            drop(span);
-            immutable
-        };
-        self.manager.add_proposal(immutable.clone());
-
-        self.metrics.proposals.increment(1);
-
-        Ok(Self::Proposal {
-            nodestore: immutable,
-            db: self,
-        })
+        self.propose_helper(batch, parent)
     }
 }
 
@@ -233,6 +189,57 @@ impl Db {
     pub fn check(&self, opt: CheckOpt) -> CheckerReport {
         let latest_rev_nodestore = self.manager.current_revision();
         latest_rev_nodestore.check(opt)
+    }
+
+    #[fastrace::trace(short_name = true)]
+    fn propose_helper<F: Parentable>(
+        &self,
+        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
+        parent: Arc<NodeStore<F, FileBacked>>,
+    ) -> Result<Proposal<'_>, api::Error> {
+        // If threadpool exists, then use the parallel propose implementation
+        let immutable = if let Some(threadpool) = self.manager.threadpool() {
+            let mut parallel_merkle = ParallelMerkle::default();
+            let span = fastrace::Span::enter_with_local_parent("parallel_merkle");
+            let immutable = parallel_merkle.create_proposal(&parent, batch, threadpool)?;
+            drop(span);
+            immutable
+        } else {
+            let proposal = NodeStore::new(&parent)?;
+            let mut merkle = Merkle::from(proposal);
+            let span = fastrace::Span::enter_with_local_parent("merkleops");
+            for op in batch.into_iter().map_into_batch() {
+                match op {
+                    BatchOp::Put { key, value } => {
+                        merkle.insert(key.as_ref(), value.as_ref().into())?;
+                    }
+                    BatchOp::Delete { key } => {
+                        merkle.remove(key.as_ref())?;
+                    }
+                    BatchOp::DeleteRange { prefix } => {
+                        merkle.remove_prefix(prefix.as_ref())?;
+                    }
+                }
+            }
+
+            drop(span);
+            let span = fastrace::Span::enter_with_local_parent("freeze");
+
+            let nodestore = merkle.into_inner();
+            let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
+                Arc::new(nodestore.try_into()?);
+
+            drop(span);
+            immutable
+        };
+        self.manager.add_proposal(immutable.clone());
+
+        self.metrics.proposals.increment(1);
+
+        Ok(Proposal {
+            nodestore: immutable,
+            db: self,
+        })
     }
 }
 
@@ -298,30 +305,7 @@ impl Proposal<'_> {
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
     ) -> Result<Self, api::Error> {
         let parent = self.nodestore.clone();
-        let proposal = NodeStore::new(&parent)?;
-        let mut merkle = Merkle::from(proposal);
-        for op in batch {
-            match op.into_batch() {
-                BatchOp::Put { key, value } => {
-                    merkle.insert(key.as_ref(), value.as_ref().into())?;
-                }
-                BatchOp::Delete { key } => {
-                    merkle.remove(key.as_ref())?;
-                }
-                BatchOp::DeleteRange { prefix } => {
-                    merkle.remove_prefix(prefix.as_ref())?;
-                }
-            }
-        }
-        let nodestore = merkle.into_inner();
-        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.try_into()?);
-        self.db.manager.add_proposal(immutable.clone());
-
-        Ok(Self {
-            nodestore: immutable,
-            db: self.db,
-        })
+        self.db.propose_helper(batch, parent)
     }
 }
 
