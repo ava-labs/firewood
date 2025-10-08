@@ -123,6 +123,13 @@ impl PathComponent {
         let (upper, lower) = crate::u4::U4::new_pair(v);
         (Self(upper), Self(lower))
     }
+
+    /// Joins two path components into a single byte.
+    #[cfg(not(feature = "branch_factor_256"))]
+    #[must_use]
+    pub const fn join(self, other: Self) -> u8 {
+        self.0.join(other.0)
+    }
 }
 
 impl std::fmt::Display for PathComponent {
@@ -281,6 +288,28 @@ impl<A: smallvec::Array<Item = PathComponent>> TriePathFromUnpackedBytes<'_> for
     }
 }
 
+#[cfg(not(feature = "branch_factor_256"))]
+impl super::TriePathFromPackedBytes<'_> for Vec<PathComponent> {
+    fn path_from_packed_bytes(bytes: &'_ [u8]) -> Self {
+        let path = super::PackedPathRef::path_from_packed_bytes(bytes);
+        let mut this = Vec::new();
+        this.reserve_exact(path.len());
+        this.extend(path.components());
+        this
+    }
+}
+
+#[cfg(not(feature = "branch_factor_256"))]
+impl<A: smallvec::Array<Item = PathComponent>> super::TriePathFromPackedBytes<'_> for SmallVec<A> {
+    fn path_from_packed_bytes(bytes: &'_ [u8]) -> Self {
+        let path = super::PackedPathRef::path_from_packed_bytes(bytes);
+        let mut this = SmallVec::<A>::new();
+        this.reserve_exact(path.len());
+        this.extend(path.components());
+        this
+    }
+}
+
 #[cfg(feature = "branch_factor_256")]
 impl<'input> TriePathFromUnpackedBytes<'input> for &'input [PathComponent] {
     type Error = std::convert::Infallible;
@@ -331,6 +360,31 @@ impl<'input> TriePathFromUnpackedBytes<'input> for std::sync::Arc<[PathComponent
 
     fn path_from_unpacked_bytes(bytes: &'input [u8]) -> Result<Self, Self::Error> {
         Vec::<PathComponent>::path_from_unpacked_bytes(bytes).map(Into::into)
+    }
+}
+
+// these must also only be included when `branch_factor_256` is not enabled otherwise
+// they would conflict with the blanket impl of TriePathFromPackedBytes over
+// TriePathFromUnpackedBytes
+
+#[cfg(not(feature = "branch_factor_256"))]
+impl super::TriePathFromPackedBytes<'_> for Box<[PathComponent]> {
+    fn path_from_packed_bytes(bytes: &[u8]) -> Self {
+        Vec::<PathComponent>::path_from_packed_bytes(bytes).into()
+    }
+}
+
+#[cfg(not(feature = "branch_factor_256"))]
+impl super::TriePathFromPackedBytes<'_> for std::rc::Rc<[PathComponent]> {
+    fn path_from_packed_bytes(bytes: &[u8]) -> Self {
+        Vec::<PathComponent>::path_from_packed_bytes(bytes).into()
+    }
+}
+
+#[cfg(not(feature = "branch_factor_256"))]
+impl super::TriePathFromPackedBytes<'_> for std::sync::Arc<[PathComponent]> {
+    fn path_from_packed_bytes(bytes: &[u8]) -> Self {
+        Vec::<PathComponent>::path_from_packed_bytes(bytes).into()
     }
 }
 

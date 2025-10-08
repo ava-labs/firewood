@@ -56,8 +56,10 @@ pub use nodestore::{
 };
 pub use path::{
     IntoSplitPath, JoinedPath, PathCommonPrefix, PathComponent, SplitPath, TriePath,
-    TriePathFromUnpackedBytes,
+    TriePathAsPackedBytes, TriePathFromPackedBytes, TriePathFromUnpackedBytes,
 };
+#[cfg(not(feature = "branch_factor_256"))]
+pub use path::{PackedBytes, PackedPathComponents, PackedPathRef};
 pub use u4::{TryFromIntError, U4};
 
 pub use linear::filebacked::FileBacked;
