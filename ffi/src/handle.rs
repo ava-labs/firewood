@@ -105,7 +105,7 @@ impl DatabaseHandle {
         let cfg = DbConfig::builder()
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
-            .parallel(args.parallel)
+            .parallel(true)
             .build();
 
         let path = args
