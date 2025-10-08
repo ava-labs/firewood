@@ -35,11 +35,12 @@ pub trait TriePath {
     /// Returns an iterator over the components of this path.
     fn components(&self) -> Self::Components<'_>;
 
-    /// Joins this path with the given suffix, returning a new joined path.
+    /// Appends the provided path segment to this path, returning a new joined
+    /// path that represents the concatenation of the two paths.
     ///
-    /// The returned path is a view over the two input paths and does not allocate.
-    /// The input paths are consumed and ownership is taken.
-    fn join_path<S>(self, suffix: S) -> JoinedPath<Self, S>
+    /// The returned path is a view over the two input paths and does not
+    /// allocate. The input paths are consumed and ownership is taken.
+    fn append<S>(self, suffix: S) -> JoinedPath<Self, S>
     where
         Self: Sized,
         S: TriePath,
@@ -47,24 +48,40 @@ pub trait TriePath {
         JoinedPath::new(self, suffix)
     }
 
-    /// The inverse of [`TriePath::join_path`]; joins the given prefix with this path.
-    fn join_prefix<P>(self, prefix: P) -> JoinedPath<P, Self>
+    /// Prepends the provided path segment to this path, returning a new joined
+    /// path that represents the concatenation of the two paths.
+    ///
+    /// The inverse of [`TriePath::append`].
+    ///
+    /// The returned path is a view over the two input paths and does not
+    /// allocate. The input paths are consumed and ownership is taken.
+    fn prepend<P>(self, prefix: P) -> JoinedPath<P, Self>
     where
         Self: Sized,
         P: TriePath,
     {
-        prefix.join_path(self)
+        prefix.append(self)
     }
 
     /// Compares this path against another path for equality using path component
     /// equality.
-    fn path_eq<T: TriePath>(&self, other: &T) -> bool {
+    ///
+    /// This is analogous to [`Iterator::eq`] and is different than [`PartialEq`]
+    /// which may have different semantics depending on the underlying type and
+    /// representation as well as may not be implemented for the cross-type
+    /// comparisons.
+    fn path_eq<T: TriePath + ?Sized>(&self, other: &T) -> bool {
         self.len() == other.len() && self.components().eq(other.components())
     }
 
     /// Compares this path against another path using path-component lexicographic
     /// ordering. Strict prefixes are less than their longer counterparts.
-    fn path_cmp<T: TriePath>(&self, other: &T) -> core::cmp::Ordering {
+    ///
+    /// This is analogous to [`Iterator::cmp`] and is different than [`Ord`]
+    /// which may have different semantics depending on the underlying type and
+    /// representation as well as may not be implemented for the cross-type
+    /// comparisons.
+    fn path_cmp<T: TriePath + ?Sized>(&self, other: &T) -> std::cmp::Ordering {
         self.components().cmp(other.components())
     }
 
@@ -162,8 +179,8 @@ fn display_path(
     comp.try_for_each(|c| write!(f, "{c}"))
 }
 
-/// A wrapper type that implements [`std::fmt::Display`] and [`std::fmt::Debug`]
-/// for any type that implements [`TriePath`].
+/// A wrapper type that implements [`Display`](std::fmt::Display) and
+/// [`Debug`](std::fmt::Debug) for any type that implements [`TriePath`].
 pub struct DisplayPath<'a, P: TriePath + ?Sized> {
     path: &'a P,
 }

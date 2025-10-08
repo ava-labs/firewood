@@ -474,7 +474,7 @@ mod tests {
         ])
         .expect("valid input");
 
-        let with_suffix = path.join_path(PathComponent::try_new(0x0D).expect("valid"));
+        let with_suffix = path.append(PathComponent::try_new(0x0D).expect("valid"));
         assert_eq!(with_suffix.len(), 4);
         assert_eq!(
             with_suffix
@@ -484,7 +484,7 @@ mod tests {
             vec![0x0A, 0x0B, 0x0C, 0x0D],
         );
 
-        let with_prefix = with_suffix.join_prefix(PathComponent::try_new(0x09).expect("valid"));
+        let with_prefix = with_suffix.prepend(PathComponent::try_new(0x09).expect("valid"));
         assert_eq!(with_prefix.len(), 5);
         assert_eq!(
             with_prefix
