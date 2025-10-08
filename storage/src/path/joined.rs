@@ -5,11 +5,13 @@ use std::iter::Chain;
 
 use super::TriePath;
 
-/// Joins two path segments into a single path.
+/// Joins two path segments into a single path, retaining the original segments
+/// without needing to allocate a new contiguous array.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct JoinedPath<P, S> {
     /// The prefix segment of the path.
     pub prefix: P,
+
     /// The suffix segment of the path.
     pub suffix: S,
 }
@@ -30,7 +32,14 @@ impl<P: TriePath, S: TriePath> TriePath for JoinedPath<P, S> {
         Self: 'a;
 
     fn len(&self) -> usize {
-        self.prefix.len().wrapping_add(self.suffix.len())
+        self.prefix
+            .len()
+            .checked_add(self.suffix.len())
+            .expect("joined path length overflowed usize")
+    }
+
+    fn is_empty(&self) -> bool {
+        self.prefix.is_empty() && self.suffix.is_empty()
     }
 
     fn components(&self) -> Self::Components<'_> {
