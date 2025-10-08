@@ -116,7 +116,9 @@ impl PathComponent {
         }
     }
 
-    /// Creates a pair of path components from a single byte.
+    /// Creates a pair of path components from a single byte where the
+    /// upper 4 bits are the first component and the lower 4 bits are the
+    /// second component.
     #[cfg(not(feature = "branch_factor_256"))]
     #[must_use]
     pub const fn new_pair(v: u8) -> (Self, Self) {
@@ -124,7 +126,9 @@ impl PathComponent {
         (Self(upper), Self(lower))
     }
 
-    /// Joins two path components into a single byte.
+    /// Joins this [`PathComponent`] with another to create a single [`u8`] where
+    /// this component is the upper 4 bits and the provided component is the
+    /// lower 4 bits.
     #[cfg(not(feature = "branch_factor_256"))]
     #[must_use]
     pub const fn join(self, other: Self) -> u8 {

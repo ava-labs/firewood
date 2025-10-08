@@ -290,14 +290,23 @@ mod tests {
     fn test_from_packed_bytes(case: FromPackedBytesTest<'_>) {
         let path = PackedPathRef::path_from_packed_bytes(case.bytes);
         assert_eq!(path.len(), case.components.len());
+
         assert!(path.components().eq(case.components.iter().copied()));
-        assert!(TriePath::path_eq(&path, &case.components));
+        assert!(
+            path.components()
+                .rev()
+                .eq(case.components.iter().copied().rev())
+        );
+
         assert!(path.as_packed_bytes().eq(case.bytes.iter().copied()));
         assert!(
             path.as_packed_bytes()
                 .rev()
                 .eq(case.bytes.iter().copied().rev())
         );
+
+        assert!(TriePath::path_eq(&path, &case.components));
+        assert!(TriePath::path_cmp(&path, &case.components).is_eq());
     }
 
     struct SplitAtTest<'a> {
@@ -354,12 +363,11 @@ mod tests {
     )]
     fn test_split_at(case: SplitAtTest<'_>) {
         let (a, b) = case.path.split_at(case.mid);
-        assert!(a.components().eq(case.a.iter().copied()));
-        assert!(b.components().eq(case.b.iter().copied()));
+        assert_eq!(a.len(), case.mid);
         assert_eq!(a.len().wrapping_add(b.len()), case.path.len());
-        assert_eq!(a.len(), case.a.len());
-        assert_eq!(b.len(), case.b.len());
-        assert_eq!(case.mid, a.len());
+        assert!(a.path_eq(&case.a));
+        assert!(b.path_eq(&case.b));
+        assert!(a.append(b).path_eq(&case.path));
     }
 
     struct AsPackedBytesTest<'a, T> {
