@@ -215,7 +215,7 @@ impl<'db> CView<'db> for &'db crate::DatabaseHandle {
         self,
         values: impl AsRef<[KeyValuePair<'kvp>]> + 'kvp,
     ) -> Result<firewood::db::Proposal<'db>, api::Error> {
-        self.db.propose(values.as_ref().iter())
+        self.db.propose_parallel(values.as_ref().iter())
     }
 }
 
