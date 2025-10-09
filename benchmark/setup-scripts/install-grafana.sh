@@ -6,8 +6,8 @@ if ! [ -d /etc/apt/keyrings ]; then
   mkdir -p /etc/apt/keyrings/
 fi
 if ! [ -f /etc/apt/keyrings/grafana.gpg ]; then
-  wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor | sudo tee /etc/apt/keyrings/grafana.gpg > /dev/null
-  echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" | sudo tee -a /etc/apt/sources.list.d/grafana.list
+  wget -q -O - https://apt.grafana.com/gpg.key | gpg --dearmor > /etc/apt/keyrings/grafana.gpg
+  echo "deb [signed-by=/etc/apt/keyrings/grafana.gpg] https://apt.grafana.com stable main" >> /etc/apt/sources.list.d/grafana.list
 fi
 apt-get update
 
@@ -51,7 +51,7 @@ fi
 # TODO(amin): another possible option here is enabling google oauth, and this could give access
 # to anyone within our org emails
 sed -i -E "s|^;?\s*admin_user\s*=.*|admin_user = admin|" /etc/grafana/grafana.ini
-sed -i -E "s|^;?\s*admin_password\s*=.*|admin_password = firewoodisfast|" /etc/grafana/grafana.ini
+sed -i -E "s|^;?\s*admin_password\s*=.*|admin_password = firewood_is_fast|" /etc/grafana/grafana.ini
 
 # provision data source and dashboards
 cat > /etc/grafana/provisioning/datasources/prometheus.yml <<EOF
