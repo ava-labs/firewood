@@ -26,14 +26,12 @@
 //! - Metrics are collected for flush operation timing
 //! - Memory-efficient serialization with pre-allocated buffers
 //! - Ring buffer management for io-uring operations
-//!
-//!
 
 use std::iter::FusedIterator;
 
 use crate::linear::FileIoError;
 use crate::nodestore::AreaIndex;
-use crate::{firewood_counter, firewood_gauge};
+use crate::{Child, firewood_counter};
 use coarsetime::Instant;
 
 #[cfg(feature = "io-uring")]
@@ -259,13 +257,6 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
             self.storage
                 .write(persisted_address.get(), serialized.as_slice())?;
 
-            // Decrement gauge immediately after node is written to storage
-            firewood_gauge!(
-                "firewood.nodes.unwritten",
-                "current number of unwritten nodes"
-            )
-            .decrement(1.0);
-
             // Allocate the node to store the address, then collect for caching and persistence
             node.allocate_at(persisted_address);
             cached_nodes.push(node);
@@ -297,20 +288,11 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
         self.header = self.flush_nodes()?;
 
         // Set the root address in the header based on the persisted root
-        let root_address = self
-            .kind
-            .root
-            .as_ref()
-            .and_then(crate::MaybePersistedNode::as_linear_address);
+        let root_address = self.kind.root.as_ref().and_then(Child::persisted_address);
         self.header.set_root_address(root_address);
 
         // Finally persist the header
         self.flush_header()?;
-
-        // Reset unwritten nodes counter to zero since all nodes are now persisted
-        self.kind
-            .unwritten_nodes
-            .store(0, std::sync::atomic::Ordering::Relaxed);
 
         Ok(())
     }
@@ -335,13 +317,11 @@ impl NodeStore<Committed, FileBacked> {
         }
 
         /// Helper function to handle completion queue entries and check for errors
-        /// Returns the number of completed operations
         fn handle_completion_queue(
             storage: &FileBacked,
             completion_queue: io_uring::cqueue::CompletionQueue<'_>,
             saved_pinned_buffers: &mut [PinnedBufferEntry],
-        ) -> Result<usize, FileIoError> {
-            let mut completed_count = 0usize;
+        ) -> Result<(), FileIoError> {
             for entry in completion_queue {
                 let item = entry.user_data() as usize;
                 let pbe = saved_pinned_buffers
@@ -369,9 +349,8 @@ impl NodeStore<Committed, FileBacked> {
                 }
                 // I/O completed successfully
                 pbe.node = None;
-                completed_count = completed_count.wrapping_add(1);
             }
-            Ok(completed_count)
+            Ok(())
         }
 
         const RINGSIZE: usize = FileBacked::RINGSIZE as usize;
@@ -446,21 +425,11 @@ impl NodeStore<Committed, FileBacked> {
                 })?;
                 let completion_queue = ring.completion();
                 trace!("competion queue length: {}", completion_queue.len());
-                let completed_writes = handle_completion_queue(
+                handle_completion_queue(
                     &self.storage,
                     completion_queue,
                     &mut saved_pinned_buffers,
                 )?;
-
-                // Decrement gauge for writes that have actually completed
-                if completed_writes > 0 {
-                    #[expect(clippy::cast_precision_loss)]
-                    firewood_gauge!(
-                        "firewood.nodes.unwritten",
-                        "current number of unwritten nodes"
-                    )
-                    .decrement(completed_writes as f64);
-                }
             }
 
             // Allocate the node to store the address, then collect for caching and persistence
@@ -476,18 +445,7 @@ impl NodeStore<Committed, FileBacked> {
                 .file_io_error(e, 0, Some("io-uring final submit_and_wait".to_string()))
         })?;
 
-        let final_completed_writes =
-            handle_completion_queue(&self.storage, ring.completion(), &mut saved_pinned_buffers)?;
-
-        // Decrement gauge for final batch of writes that completed
-        if final_completed_writes > 0 {
-            #[expect(clippy::cast_precision_loss)]
-            firewood_gauge!(
-                "firewood.nodes.unwritten",
-                "current number of unwritten nodes"
-            )
-            .decrement(final_completed_writes as f64);
-        }
+        handle_completion_queue(&self.storage, ring.completion(), &mut saved_pinned_buffers)?;
 
         debug_assert!(
             !saved_pinned_buffers.iter().any(|pbe| pbe.node.is_some()),
@@ -745,7 +703,10 @@ mod tests {
 
         // Verify the committed store has the expected values
         let root = committed_store.kind.root.as_ref().unwrap();
-        let root_node = root.as_shared_node(&committed_store).unwrap();
+        let root_maybe_persisted = root.as_maybe_persisted_node();
+        let root_node = root_maybe_persisted
+            .as_shared_node(&committed_store)
+            .unwrap();
         assert_eq!(*root_node.partial_path(), Path::from(&[0]));
         assert_eq!(root_node.value(), Some(&b"branch_value"[..]));
         assert!(root_node.is_branch());
@@ -756,16 +717,16 @@ mod tests {
         );
 
         let child1 = root_branch.children[1].as_ref().unwrap();
-        let child1_node = child1
-            .as_maybe_persisted_node()
+        let child1_maybe_persisted = child1.as_maybe_persisted_node();
+        let child1_node = child1_maybe_persisted
             .as_shared_node(&committed_store)
             .unwrap();
         assert_eq!(*child1_node.partial_path(), Path::from(&[1, 2, 3]));
         assert_eq!(child1_node.value(), Some(&b"value1"[..]));
 
         let child2 = root_branch.children[2].as_ref().unwrap();
-        let child2_node = child2
-            .as_maybe_persisted_node()
+        let child2_maybe_persisted = child2.as_maybe_persisted_node();
+        let child2_node = child2_maybe_persisted
             .as_shared_node(&committed_store)
             .unwrap();
         assert_eq!(*child2_node.partial_path(), Path::from(&[4, 5, 6]));
