@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sync"
 )
 
 // These constants are used to identify errors returned by the Firewood Rust FFI.
@@ -49,7 +50,8 @@ type Database struct {
 	// handle is returned and accepted by cgo functions. It MUST be treated as
 	// an opaque value without special meaning.
 	// https://en.wikipedia.org/wiki/Blinkenlights
-	handle *C.DatabaseHandle
+	handle    *C.DatabaseHandle
+	proposals sync.WaitGroup
 }
 
 // Config configures the opening of a [Database].
@@ -139,6 +141,9 @@ func (db *Database) Update(keys, vals [][]byte) ([]byte, error) {
 	return getHashKeyFromHashResult(C.fwd_batch(db.handle, kvp))
 }
 
+// Propose creates a new proposal with the given keys and values. The proposal
+// is not committed until [Proposal.Commit] is called. See [Database.Close] re
+// freeing proposals.
 func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 	if db.handle == nil {
 		return nil, errDBClosed
@@ -151,8 +156,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), db)
+	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.proposals)
 }
 
 // Get retrieves the value for the given key. It always returns a nil error.
@@ -233,16 +237,22 @@ func (db *Database) Revision(root []byte) (*Revision, error) {
 
 // Close releases the memory associated with the Database.
 //
-// This is not safe to call while there are any outstanding Proposals. All proposals
-// must be freed or committed before calling this.
+// This blocks until all outstanding Proposals are either unreachable or one of
+// [Proposal.Commit] or [Proposal.Drop] has been called on them. Unreachable
+// proposals will be automatically dropped before Close returns, unless an
+// alternate GC finalizer is set on them.
 //
-// This is safe to call if the pointer is nil, in which case it does nothing. The
-// pointer will be set to nil after freeing to prevent double free. However, it is
-// not safe to call this method concurrently from multiple goroutines.
+// This is safe to call if the handle pointer is nil, in which case it does
+// nothing. The pointer will be set to nil after freeing to prevent double free.
+// However, it is not safe to call this method concurrently from multiple
+// goroutines.
 func (db *Database) Close() error {
 	if db.handle == nil {
 		return nil
 	}
+
+	runtime.GC()
+	db.proposals.Wait()
 
 	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
 		return fmt.Errorf("unexpected error when closing database: %w", err)

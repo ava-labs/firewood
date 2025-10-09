@@ -1050,3 +1050,59 @@ func TestGetFromRootParallel(t *testing.T) {
 		r.NoError(err, "Parallel operation failed")
 	}
 }
+
+func TestProposalHandlesFreed(t *testing.T) {
+	t.Parallel()
+
+	db, _, err := newDatabase(filepath.Join(t.TempDir(), "test_GC_drops_proposal.db"))
+	require.NoError(t, err)
+
+	// These MUST NOT be committed nor dropped as they demonstrate that the GC
+	// finalizer does it for us.
+	p0, err := db.Propose(kvForTest(1))
+	require.NoErrorf(t, err, "%T.Propose(...)", db)
+	p1, err := p0.Propose(kvForTest(1))
+	require.NoErrorf(t, err, "%T.Propose(...)", p0)
+
+	// Demonstrates that explicit [Proposal.Commit] and [Proposal.Drop] calls
+	// are sufficient to unblock [Database.Close].
+	var keep []*Proposal
+	for name, free := range map[string](func(*Proposal) error){
+		"Commit": (*Proposal).Commit,
+		"Drop":   (*Proposal).Drop,
+	} {
+		p, err := db.Propose(kvForTest(1))
+		require.NoErrorf(t, err, "%T.Propose(...)", db)
+		require.NoErrorf(t, free(p), "%T.%s()", p, name)
+		keep = append(keep, p)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		require.NoErrorf(t, db.Close(), "%T.Close()", db)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Errorf("%T.Close() returned with undropped %T", db, p0)
+	case <-time.After(300 * time.Millisecond):
+		// TODO(arr4n) use `synctest` package when at Go 1.25
+	}
+
+	runtime.KeepAlive(p0)
+	runtime.KeepAlive(p1)
+	p0 = nil
+	p1 = nil
+	// In practice there's no need to call [runtime.GC] if [Database.Close] is
+	// called after all proposals are unreachable, as it does it itself.
+	runtime.GC()
+	// Note that [Database.Close] waits for outstanding proposals, so this would
+	// block permanently if the unreachability of `p0` and `p1` didn't result in
+	// their [Proposal.Drop] methods being called.
+	<-done
+
+	for _, p := range keep {
+		runtime.KeepAlive(p)
+	}
+}
