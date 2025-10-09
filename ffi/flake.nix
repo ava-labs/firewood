@@ -46,8 +46,6 @@
         pname = ffiCargoToml.package.name;
         version = workspaceCargoToml.workspace.package.version;
 
-        CARGO_PROFILE = "maxperf";
-
         nativeBuildInputs = with pkgs; [
           pkg-config
         ];
@@ -57,12 +55,14 @@
       };
 
       cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
-        cargoExtraArgs = "--package ${ffiCargoToml.package.name} --features ethhash,logger";
+        # Use cargo alias defined in .cargo/config.toml
+        cargoBuildCommand = "cargo build-static-ffi";
       });
 
       firewood-ffi = craneLib.buildPackage (commonArgs // {
         inherit cargoArtifacts;
-        cargoExtraArgs = "--package ${ffiCargoToml.package.name} --features ethhash,logger --frozen";
+        # Use cargo alias defined in .cargo/config.toml
+        cargoBuildCommand = "cargo build-static-ffi";
 
         # Install the static library and header
         postInstall = ''
