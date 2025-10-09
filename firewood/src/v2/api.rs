@@ -4,6 +4,7 @@
 use crate::manager::RevisionManagerError;
 use crate::merkle::{Key, Value};
 use crate::proof::{Proof, ProofError, ProofNode};
+use crate::root_store;
 use firewood_storage::{FileIoError, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
@@ -125,6 +126,9 @@ pub enum Error {
     /// A file I/O error occurred
     FileIO(#[from] FileIoError),
 
+    #[error("A RootStore error occurred")]
+    RootStoreError(root_store::RootStoreError),
+
     /// Cannot commit a committed proposal
     #[error("Cannot commit a committed proposal")]
     AlreadyCommitted,
@@ -160,13 +164,14 @@ pub enum Error {
 
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
-        use RevisionManagerError::{FileIoError, NotLatest, RevisionNotFound};
+        use RevisionManagerError::{FileIoError, NotLatest, RevisionNotFound, RootStoreError};
         match err {
             NotLatest { provided, expected } => Self::ParentNotLatest { provided, expected },
             RevisionNotFound { provided } => Self::RevisionNotFound {
                 provided: Some(provided),
             },
             FileIoError(io_err) => Self::FileIO(io_err),
+            RootStoreError(err) => Self::RootStoreError(err),
         }
     }
 }

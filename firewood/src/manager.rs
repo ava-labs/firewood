@@ -20,11 +20,13 @@ use metrics::gauge;
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
+use crate::root_store::{NoOpStore, RootStore, RootStoreError};
 use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash,
+    Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, IntoHashType,
+    NodeStore, TrieHash,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
@@ -65,7 +67,7 @@ type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
 #[derive(Debug)]
-pub(crate) struct RevisionManager {
+pub(crate) struct RevisionManager<T: RootStore = NoOpStore> {
     /// Maximum number of revisions to keep on disk
     max_revisions: usize,
 
@@ -75,6 +77,7 @@ pub(crate) struct RevisionManager {
     proposals: Mutex<Vec<ProposedRevision>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
+    root_store: T,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -90,10 +93,16 @@ pub(crate) enum RevisionManagerError {
     },
     #[error("An IO error occurred during the commit")]
     FileIoError(#[from] FileIoError),
+    #[error("A RootStore error occurred")]
+    RootStoreError(RootStoreError),
 }
 
-impl RevisionManager {
-    pub fn new(filename: PathBuf, config: ConfigManager) -> Result<Self, FileIoError> {
+impl<T: RootStore> RevisionManager<T> {
+    pub fn new(
+        filename: PathBuf,
+        config: ConfigManager,
+        root_store: T,
+    ) -> Result<Self, FileIoError> {
         let fb = FileBacked::new(
             filename,
             config.manager.node_cache_size,
@@ -115,6 +124,7 @@ impl RevisionManager {
             by_hash: RwLock::new(Default::default()),
             proposals: Mutex::new(Default::default()),
             // committing_proposals: Default::default(),
+            root_store,
         };
 
         if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
@@ -127,6 +137,19 @@ impl RevisionManager {
 
         if config.truncate {
             nodestore.flush_header_with_padding()?;
+        }
+
+        // On startup, we always write the latest revision to RootStore
+        if let Some(root_hash) = manager.current_revision().root_hash() {
+            let root_address = manager
+                .current_revision()
+                .root_address()
+                .expect("persisted revision should have root address");
+
+            manager
+                .root_store
+                .add_root(&root_hash, &root_address)
+                .expect("poisoned root store");
         }
 
         Ok(manager)
@@ -162,7 +185,8 @@ impl RevisionManager {
     /// 4. Persist to disk. This includes flushing everything to disk.
     /// 5. Set last committed revision.
     ///    Set last committed revision in memory.
-    /// 6. Proposal Cleanup.
+    /// 6. Persist the revision to `RootStore`.
+    /// 7. Proposal Cleanup.
     ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
     #[fastrace::trace(short_name = true)]
     #[crate::metrics("firewood.proposal.commit", "proposal commit to storage")]
@@ -236,7 +260,14 @@ impl RevisionManager {
                 .insert(hash, committed.clone());
         }
 
-        // 6. Proposal Cleanup
+        // 6. Persist revision to root store
+        if let (Some(hash), Some(address)) = (committed.root_hash(), committed.root_address()) {
+            self.root_store
+                .add_root(&hash, &address)
+                .map_err(RevisionManagerError::RootStoreError)?;
+        }
+
+        // 7. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
         // referenced by anyone else.
         self.proposals
@@ -260,30 +291,51 @@ impl RevisionManager {
     }
 }
 
-impl RevisionManager {
+impl<T: RootStore> RevisionManager<T> {
     pub fn add_proposal(&self, proposal: ProposedRevision) {
         self.proposals.lock().expect("poisoned lock").push(proposal);
     }
 
+    /// View the database at a specific time.
+    /// To view the database at a specific time involves a few steps:
+    /// 1. Try to find it in committed revisions.
+    /// 2. Try to find it in proposals.
+    /// 3. Try to find it in `RootStore`.
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, RevisionManagerError> {
-        // First try to find it in committed revisions
+        // 1. Try to find it in committed revisions.
         if let Ok(committed) = self.revision(root_hash.clone()) {
             return Ok(committed);
         }
 
-        // If not found in committed revisions, try proposals
+        // 2. Try to find it in proposals.
         let proposal = self
             .proposals
             .lock()
             .expect("poisoned lock")
             .iter()
             .find(|p| p.root_hash().as_ref() == Some(&root_hash))
-            .cloned()
+            .cloned();
+
+        if let Some(v) = proposal {
+            return Ok(v);
+        }
+
+        // 3. Try to find it in `RootStore`.
+        let revision_addr = self
+            .root_store
+            .get(&root_hash)
+            .map_err(RevisionManagerError::RootStoreError)?
             .ok_or(RevisionManagerError::RevisionNotFound {
-                provided: root_hash,
+                provided: root_hash.clone(),
             })?;
 
-        Ok(proposal)
+        let node_store = NodeStore::with_root(
+            root_hash.into_hash_type(),
+            revision_addr,
+            self.current_revision(),
+        );
+
+        Ok(Arc::new(node_store))
     }
 
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
@@ -329,14 +381,14 @@ mod tests {
             .build();
 
         // First database instance should open successfully
-        let first_manager = RevisionManager::new(db_path.clone(), config.clone());
+        let first_manager = RevisionManager::new(db_path.clone(), config.clone(), NoOpStore {});
         assert!(
             first_manager.is_ok(),
             "First database should open successfully"
         );
 
         // Second database instance should fail to open due to file locking
-        let second_manager = RevisionManager::new(db_path.clone(), config.clone());
+        let second_manager = RevisionManager::new(db_path.clone(), config.clone(), NoOpStore {});
         assert!(
             second_manager.is_err(),
             "Second database should fail to open"
@@ -356,7 +408,7 @@ mod tests {
         drop(first_manager.unwrap());
 
         // Now the second database should open successfully
-        let third_manager = RevisionManager::new(db_path, config);
+        let third_manager = RevisionManager::new(db_path, config, NoOpStore {});
         assert!(
             third_manager.is_ok(),
             "Database should open after first instance is dropped"
