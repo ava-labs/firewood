@@ -256,7 +256,12 @@ jobs:
         working-directory: ffi
         # - cgocheck2 is expensive but provides complete pointer checks
         # - use hash mode ethhash since the flake builds with `--features ethhash,logger`
-        run: nix develop --command env GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=ethhash go test ./... -v
+        # - run golang outside a nix shell to validate viability without the env setup performed by a nix shell
+        run: |
+          GOLANG="nix run $PWD#go"
+          cd result/ffi
+          GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=ethhash ${GOLANG} test ./...
+        shell: bash
 
   firewood-ethhash-differential-fuzz:
     needs: build
