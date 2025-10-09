@@ -8,7 +8,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
 # Define paths to libraries (relative to repo root)
-NIX_LIB="ffi/result/lib/libfirewood_ffi.a"
+NIX_LIB="ffi/result/lib/libfirewood_ffi.a" # Default path for the nix build
 CARGO_LIB="target/maxperf/libfirewood_ffi.a"
 
 # Create temporary directory and ensure cleanup on exit
@@ -19,7 +19,7 @@ echo "Building with cargo (using nix dev shell)..."
 nix develop ./ffi#default --command bash -c "cargo fetch --locked --verbose && cargo build-static-ffi"
 
 echo "Building with nix..."
-cd ffi && nix build .#firewood-ffi --rebuild && cd ..
+cd ffi && nix build .#firewood-ffi && cd ..
 
 echo ""
 echo "=== File Size Comparison ==="
