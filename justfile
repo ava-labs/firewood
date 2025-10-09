@@ -47,7 +47,7 @@ test-ffi-nix-go-bindings: build-ffi-nix
 
     # This runs golang outside a nix shell to validate viability
     # without the env setup performed by a nix shell
-    GO="nix run $PWD#go"
+    GO="nix run $FLAKE_PATH#go"
 
     cd result/ffi
 
