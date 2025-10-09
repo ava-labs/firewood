@@ -26,7 +26,7 @@ check-ffi-flake-current: check-nix
     set -euo pipefail
     cd ffi
     nix flake lock --update-input golang
-    ./scripts/run_just.sh check-clean-branch
+    ../run-just.sh check-clean-branch
 
 # Check if nix is installed
 check-nix:
@@ -69,7 +69,7 @@ test-ffi-nix-go-bindings: build-ffi-nix
 
     # This runs golang outside a nix shell to validate viability
     # without the env setup performed by a nix shell
-    GO="nix run $PWD#go"
+    GO="nix run $FLAKE_PATH#go"
 
     cd result/ffi
 
