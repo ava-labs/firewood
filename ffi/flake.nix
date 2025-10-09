@@ -1,8 +1,9 @@
 {
-  # To use:
+  # To test with arbitrary firewood versions (alternative to firewood-go-ethhash):
   #  - Install nix: https://github.com/DeterminateSystems/nix-installer?tab=readme-ov-file#install-nix
-  #  - Run from ffi/ dir: `nix build .#firewood-ffi`
-  #  - Run from anywhere: `nix develop 'github:ava-labs/firewood?dir=ffi&ref=[SHA]'`
+  #  - Clone firewood locally at desired version/commit
+  #  - Build: `cd ffi && nix build`
+  #  - In your Go project: `go mod edit -replace github.com/ava-labs/firewood-go-ethhash/ffi=/path/to/firewood/ffi/result/ffi`
 
   description = "Firewood FFI library and development environment";
 
@@ -34,6 +35,10 @@
         src = craneLib.path ./..;
         filter = path: type:
           (lib.hasSuffix "\.md" path) ||
+          (lib.hasSuffix "\.go" path) ||
+          (lib.hasSuffix "go.mod" path) ||
+          (lib.hasSuffix "go.sum" path) ||
+          (lib.hasSuffix "firewood.h" path) ||
           (craneLib.filterCargoSources path type);
       };
 
@@ -64,11 +69,20 @@
         # Use cargo alias defined in .cargo/config.toml
         cargoBuildCommand = "cargo build-static-ffi";
 
+        # Disable tests - we only need to build the static library
+        doCheck = false;
+
         # Install the static library and header
         postInstall = ''
-          mkdir -p $out/lib $out/include
-          cp target/maxperf/libfirewood_ffi.a $out/lib/ || cp target/release/libfirewood_ffi.a $out/lib/
-          cp ffi/firewood.h $out/include/
+          # Create a package structure compatible with FIREWOOD_LD_MODE=STATIC_LIBS
+          mkdir -p $out/ffi
+          cp -R ./ffi/* $out/ffi/
+          mkdir -p $out/ffi/libs/${pkgs.stdenv.hostPlatform.config}
+          cp target/maxperf/libfirewood_ffi.a $out/ffi/libs/${pkgs.stdenv.hostPlatform.config}/
+
+          # Run go generate to switch CGO directives to STATIC_LIBS mode
+          cd $out/ffi
+          HOME=$TMPDIR GOTOOLCHAIN=local FIREWOOD_LD_MODE=STATIC_LIBS ${pkgs.go}/bin/go generate
         '';
 
         meta = with lib; {
@@ -88,28 +102,26 @@
         default = firewood-ffi;
       };
 
+      apps.go = {
+        type = "app";
+        program = "${pkgs.go}/bin/go";
+      };
+
       devShells.default = craneLib.devShell {
         inputsFrom = [ firewood-ffi ];
 
         packages = with pkgs; [
+          firewood-ffi
           rustToolchain
           go
         ];
 
         shellHook = ''
-          echo "Firewood FFI development environment"
-          echo "Use 'nix build .#firewood-ffi' to build the FFI package"
-
-          # Set up CGO environment
-          export CGO_LDFLAGS="-L${firewood-ffi}/lib -lfirewood_ffi -lm"
-          export CGO_CFLAGS="-I${firewood-ffi}/include"
-
-          # TODO(marun) Maybe add a script?
-          echo ""
-          echo "To run Go tests:"
-          echo "  export GOEXPERIMENT=cgocheck2"
-          echo "  export TEST_FIREWOOD_HASH_MODE=ethhash"
-          echo "  go test ./... -v"
+          # Ensure golang bin is in the path
+          GOBIN="$(go env GOPATH)/bin"
+          if [[ ":$PATH:" != *":$GOBIN:"* ]]; then
+            export PATH="$GOBIN:$PATH"
+          fi
         '';
       };
     });
