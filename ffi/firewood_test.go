@@ -1066,7 +1066,7 @@ func TestProposalHandlesFreed(t *testing.T) {
 
 	// Demonstrates that explicit [Proposal.Commit] and [Proposal.Drop] calls
 	// are sufficient to unblock [Database.Close].
-	var keep []*Proposal
+	var keep []*Proposal //nolint:prealloc
 	for name, free := range map[string](func(*Proposal) error){
 		"Commit": (*Proposal).Commit,
 		"Drop":   (*Proposal).Drop,
@@ -1085,7 +1085,7 @@ func TestProposalHandlesFreed(t *testing.T) {
 
 	select {
 	case <-done:
-		t.Errorf("%T.Close() returned with undropped %T", db, p0)
+		t.Errorf("%T.Close() returned with undropped %T", db, p0) //nolint:forbidigo // Use of require is impossible without a hack like require.False(true)
 	case <-time.After(300 * time.Millisecond):
 		// TODO(arr4n) use `synctest` package when at Go 1.25
 	}
@@ -1093,7 +1093,8 @@ func TestProposalHandlesFreed(t *testing.T) {
 	runtime.KeepAlive(p0)
 	runtime.KeepAlive(p1)
 	p0 = nil
-	p1 = nil
+	p1 = nil //nolint:ineffassign // Makes the value unreachable, allowing the finalizer to call Drop()
+
 	// In practice there's no need to call [runtime.GC] if [Database.Close] is
 	// called after all proposals are unreachable, as it does it itself.
 	runtime.GC()
