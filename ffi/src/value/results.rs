@@ -322,8 +322,7 @@ pub enum IteratorResult<'db> {
         /// [`fwd_free_iterator`]: crate::fwd_free_iterator
         handle: Box<IteratorHandle<'db>>,
     },
-    /// An error occurred and the message is returned as an [`OwnedBytes`]. The
-    /// value is guaranteed to contain only valid UTF-8.
+    /// An error occurred and the message is returned as an [`OwnedBytes`].
     ///
     /// The caller must call [`fwd_free_owned_bytes`] to free the memory
     /// associated with this error.
@@ -402,7 +401,7 @@ impl From<Result<Vec<(merkle::Key, merkle::Value)>, api::Error>> for KeyValueBat
 impl<'db> From<CreateIteratorResult<'db>> for IteratorResult<'db> {
     fn from(value: CreateIteratorResult<'db>) -> Self {
         IteratorResult::Ok {
-            handle: Box::new(value.handle),
+            handle: Box::new(value.0),
         }
     }
 }
@@ -424,13 +423,16 @@ pub enum RevisionResult {
     NullHandlePointer,
     /// The provided root was not found in the database.
     RevisionNotFound(HashKey),
-    /// Getting the revision was successful and the revision handle is returned
+    /// Getting the revision was successful and the revision handle and root
+    /// hash are returned.
     Ok {
         /// An opaque pointer to the [`RevisionHandle`].
         /// The value should be freed with [`fwd_free_revision`]
         ///
         /// [`fwd_free_revision`]: crate::fwd_free_revision
         handle: Box<RevisionHandle>,
+        /// The root hash of the revision.
+        root_hash: HashKey,
     },
     /// An error occurred and the message is returned as an [`OwnedBytes`]. The
     /// value is guaranteed to contain only valid UTF-8.
@@ -446,6 +448,7 @@ impl From<GetRevisionResult> for RevisionResult {
     fn from(value: GetRevisionResult) -> Self {
         RevisionResult::Ok {
             handle: Box::new(value.handle),
+            root_hash: HashKey::from(value.root_hash),
         }
     }
 }

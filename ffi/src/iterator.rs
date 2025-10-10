@@ -8,19 +8,15 @@ use std::iter::FusedIterator;
 
 type KeyValueItem = (merkle::Key, merkle::Value);
 
-/// An opaque wrapper around an Iterator.
+/// An opaque wrapper around a [`BoxKeyValueIter`].
 #[derive(Default)]
 #[derive_where(Debug)]
-#[derive_where(skip_inner(Debug))]
-pub struct IteratorHandle<'view> {
-    iterator: Option<BoxKeyValueIter<'view>>,
-}
+#[derive_where(skip_inner)]
+pub struct IteratorHandle<'view>(Option<BoxKeyValueIter<'view>>);
 
 impl<'view> From<BoxKeyValueIter<'view>> for IteratorHandle<'view> {
     fn from(value: BoxKeyValueIter<'view>) -> Self {
-        IteratorHandle {
-            iterator: Some(value),
-        }
+        IteratorHandle(Some(value))
     }
 }
 
@@ -28,10 +24,10 @@ impl Iterator for IteratorHandle<'_> {
     type Item = Result<KeyValueItem, api::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let out = self.iterator.as_mut()?.next();
+        let out = self.0.as_mut()?.next();
         if out.is_none() {
             // iterator exhausted; drop it so the NodeStore can be released
-            self.iterator.take();
+            self.0 = None;
         }
         out
     }
@@ -51,6 +47,4 @@ impl IteratorHandle<'_> {
 }
 
 #[derive(Debug, Default)]
-pub struct CreateIteratorResult<'db> {
-    pub handle: IteratorHandle<'db>,
-}
+pub struct CreateIteratorResult<'db>(pub IteratorHandle<'db>);

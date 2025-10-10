@@ -237,11 +237,10 @@ func (db *Database) Revision(root []byte) (*Revision, error) {
 	rev, err := getRevisionFromResult(C.fwd_get_revision(
 		db.handle,
 		newBorrowedBytes(root, &pinner),
-	))
+	), db)
 	if err != nil {
 		return nil, err
 	}
-	rev.root = root
 
 	return rev, nil
 }

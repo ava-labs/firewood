@@ -27,6 +27,9 @@ var (
 // Instances are created via Database.Revision, provide read-only access to the revision,
 // and must be released with Drop when no longer needed.
 type Revision struct {
+	// The database this revision is associated with. Holding this ensures
+	// the DB outlives the revision for cleanup ordering.
+	db     *Database
 	handle *C.RevisionHandle
 	// The revision root
 	root []byte
@@ -82,8 +85,12 @@ func (r *Revision) Drop() error {
 	return nil
 }
 
+func (r *Revision) Root() []byte {
+	return r.root
+}
+
 // getRevisionFromResult converts a C.RevisionResult to a Revision or error.
-func getRevisionFromResult(result C.RevisionResult) (*Revision, error) {
+func getRevisionFromResult(result C.RevisionResult, db *Database) (*Revision, error) {
 	switch result.tag {
 	case C.RevisionResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -91,10 +98,13 @@ func getRevisionFromResult(result C.RevisionResult) (*Revision, error) {
 		return nil, errRevisionNotFound
 	case C.RevisionResult_Ok:
 		body := (*C.RevisionResult_Ok_Body)(unsafe.Pointer(&result.anon0))
-		proposal := &Revision{
+		hashKey := *(*[32]byte)(unsafe.Pointer(&body.root_hash._0))
+		rev := &Revision{
+			db:     db,
 			handle: body.handle,
+			root:   hashKey[:],
 		}
-		return proposal, nil
+		return rev, nil
 	case C.RevisionResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err

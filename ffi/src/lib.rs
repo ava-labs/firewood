@@ -194,7 +194,7 @@ pub unsafe extern "C" fn fwd_iter_on_proposal<'p>(
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) -> KeyValueResult {
-    invoke_with_handle(handle, IteratorHandle::next)
+    invoke_with_handle(handle, Iterator::next)
 }
 
 /// Retrieves the next batch of items from the iterator.
@@ -264,7 +264,7 @@ pub unsafe extern "C" fn fwd_free_iterator(
 /// # Returns
 ///
 /// - [`RevisionResult::NullHandlePointer`] if the provided database handle is null.
-/// - [`RevisionResult::Ok`] containing a [`RevisionHandle`] if the revision exists.
+/// - [`RevisionResult::Ok`] containing a [`RevisionHandle`] and root hash if the revision exists.
 /// - [`RevisionResult::Err`] if the revision cannot be fetched or the root hash is invalid.
 ///
 /// # Safety
@@ -331,7 +331,7 @@ pub unsafe extern "C" fn fwd_get_from_revision(
 /// The caller must ensure that the revision handle is valid and is not used again after
 /// this function is called.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_revision(revision: Option<&RevisionHandle>) -> VoidResult {
+pub unsafe extern "C" fn fwd_free_revision(revision: Option<Box<RevisionHandle>>) -> VoidResult {
     invoke_with_handle(revision, drop)
 }
 
@@ -744,4 +744,24 @@ pub unsafe extern "C" fn fwd_free_owned_bytes(bytes: OwnedBytes) -> VoidResult {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_free_owned_key_value_batch(batch: OwnedKeyValueBatch) -> VoidResult {
     invoke(move || drop(batch))
+}
+
+/// Consumes the [`OwnedKeyValuePair`] and frees the memory associated with it.
+///
+/// # Arguments
+///
+/// * `kv` - The [`OwnedKeyValuePair`] struct to free, previously returned from any
+///   function from this library.
+///
+/// # Returns
+///
+/// - [`VoidResult::Ok`] if the memory was successfully freed.
+/// - [`VoidResult::Err`] if the process panics while freeing the memory.
+///
+/// # Safety
+///
+/// The caller must ensure that the `kv` struct is valid.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_free_owned_kv_pair(kv: OwnedKeyValuePair) -> VoidResult {
+    invoke(move || drop(kv))
 }
