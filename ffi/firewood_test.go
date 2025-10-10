@@ -1389,3 +1389,39 @@ func TestIterUpdate(t *testing.T) {
 	// because iterator is fixed on the revision hash, it should return the initial values
 	assertIteratorYields(r, it, keys, vals)
 }
+
+// Tests the iterator's behavior after exhaustion, should safely return empty item/batch, indicating done
+func TestIterDone(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(18)
+	_, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	// get an iterator on latest revision
+	rev, err := db.LatestRevision()
+	r.NoError(err)
+	it, err := rev.Iter(nil)
+	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(it.Drop())
+		r.NoError(rev.Drop())
+	})
+	// consume the iterator
+	assertIteratorYields(r, it, keys, vals)
+	// calling next again should be safe and return false
+	r.False(it.Next())
+	r.NoError(it.Err())
+
+	// get a new iterator
+	it2, err := rev.Iter(nil)
+	r.NoError(err)
+	// set batch size to 5
+	it2.SetBatchSize(5)
+	// consume the iterator
+	assertIteratorYields(r, it2, keys, vals)
+	// calling next again should be safe and return false
+	r.False(it.Next())
+	r.NoError(it.Err())
+}
