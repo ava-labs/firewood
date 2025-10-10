@@ -1133,6 +1133,9 @@ struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *_p
  * - `db` is a valid pointer to a [`DatabaseHandle`] returned by [`fwd_open_db`].
  * - There are no handles to any open proposals. If so, they must be freed first
  *   using [`fwd_free_proposal`].
+ * - Freeing the database handle does not free outstanding [`RevisionHandle`]s
+ *   returned by [`fwd_get_revision`]. To prevent leaks, free them separately
+ *   with [`fwd_free_revision`].
  * - The database handle is not used after this function is called.
  */
 struct VoidResult fwd_close_db(struct DatabaseHandle *db);
