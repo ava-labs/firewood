@@ -676,7 +676,8 @@ typedef enum RevisionResult_Tag {
    */
   RevisionResult_RevisionNotFound,
   /**
-   * Getting the revision was successful and the revision handle is returned
+   * Getting the revision was successful and the revision handle and root
+   * hash are returned.
    */
   RevisionResult_Ok,
   /**
@@ -699,6 +700,10 @@ typedef struct RevisionResult_Ok_Body {
    * [`fwd_free_revision`]: crate::fwd_free_revision
    */
   struct RevisionHandle *handle;
+  /**
+   * The root hash of the revision.
+   */
+  struct HashKey root_hash;
 } RevisionResult_Ok_Body;
 
 typedef struct RevisionResult {
@@ -1414,7 +1419,7 @@ struct VoidResult fwd_free_range_proof(struct RangeProofContext *proof);
  * The caller must ensure that the revision handle is valid and is not used again after
  * this function is called.
  */
-struct VoidResult fwd_free_revision(const struct RevisionHandle *revision);
+struct VoidResult fwd_free_revision(struct RevisionHandle *revision);
 
 /**
  * Gather latest metrics for this process.
@@ -1558,7 +1563,7 @@ struct ValueResult fwd_get_latest(const struct DatabaseHandle *db, BorrowedBytes
  * # Returns
  *
  * - [`RevisionResult::NullHandlePointer`] if the provided database handle is null.
- * - [`RevisionResult::Ok`] containing a [`RevisionHandle`] if the revision exists.
+ * - [`RevisionResult::Ok`] containing a [`RevisionHandle`] and root hash if the revision exists.
  * - [`RevisionResult::Err`] if the revision cannot be fetched or the root hash is invalid.
  *
  * # Safety

@@ -188,6 +188,7 @@ impl DatabaseHandle {
         let view = self.db.view(root.clone())?;
         Ok(GetRevisionResult {
             handle: RevisionHandle::new(view),
+            root_hash: root,
         })
     }
 
