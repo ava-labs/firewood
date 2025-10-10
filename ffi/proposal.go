@@ -56,7 +56,7 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 	return getValueFromValueResult(C.fwd_get_from_proposal(p.handle, newBorrowedBytes(key, &pinner)))
 }
 
-// Propose is equivalent to [Database.Close] except that the new proposal is
+// Propose is equivalent to [Database.Propose] except that the new proposal is
 // based on `p`.
 func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 	if p.handle == nil {
