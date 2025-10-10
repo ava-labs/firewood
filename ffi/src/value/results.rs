@@ -338,8 +338,6 @@ pub enum IteratorResult<'db> {
 pub enum KeyValueResult {
     /// The caller provided a null pointer to an iterator handle.
     NullHandlePointer,
-    /// The provided root was not found in the database.
-    RevisionNotFound(HashKey),
     /// The iterator is exhausted
     None,
     /// The next item is returned.
@@ -364,9 +362,6 @@ impl From<Option<Result<(merkle::Key, merkle::Value), api::Error>>> for KeyValue
         match value {
             Some(value) => match value {
                 Ok(value) => KeyValueResult::Some(value.into()),
-                Err(api::Error::RevisionNotFound { provided }) => KeyValueResult::RevisionNotFound(
-                    HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
-                ),
                 Err(err) => KeyValueResult::Err(err.to_string().into_bytes().into()),
             },
             None => KeyValueResult::None,
@@ -380,8 +375,6 @@ impl From<Option<Result<(merkle::Key, merkle::Value), api::Error>>> for KeyValue
 pub enum KeyValueBatchResult {
     /// The caller provided a null pointer to an iterator handle.
     NullHandlePointer,
-    /// The provided root was not found in the database.
-    RevisionNotFound(HashKey),
     /// The next batch of items on iterator are returned.
     Some(OwnedKeyValueBatch),
     /// An error occurred and the message is returned as an [`OwnedBytes`]. If
@@ -398,19 +391,8 @@ impl From<Result<Vec<(merkle::Key, merkle::Value)>, api::Error>> for KeyValueBat
     fn from(value: Result<Vec<(merkle::Key, merkle::Value)>, api::Error>) -> Self {
         match value {
             Ok(pairs) => {
-                let values: Vec<_> = pairs
-                    .into_iter()
-                    .map(|(k, v)| OwnedKeyValuePair {
-                        key: k.into(),
-                        value: v.into(),
-                    })
-                    .collect();
+                let values: Vec<_> = pairs.into_iter().map(Into::into).collect();
                 KeyValueBatchResult::Some(values.into())
-            }
-            Err(api::Error::RevisionNotFound { provided }) => {
-                KeyValueBatchResult::RevisionNotFound(HashKey::from(
-                    provided.unwrap_or_else(api::HashKey::empty),
-                ))
             }
             Err(err) => KeyValueBatchResult::Err(err.to_string().into_bytes().into()),
         }

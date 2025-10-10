@@ -4,6 +4,7 @@
 use derive_where::derive_where;
 use firewood::merkle;
 use firewood::v2::api::{self, BoxKeyValueIter};
+use std::iter::FusedIterator;
 
 type KeyValueItem = (merkle::Key, merkle::Value);
 
@@ -36,19 +37,16 @@ impl Iterator for IteratorHandle<'_> {
     }
 }
 
+impl FusedIterator for IteratorHandle<'_> {}
+
 #[expect(clippy::missing_errors_doc)]
 impl IteratorHandle<'_> {
     pub fn iter_next_n(&mut self, n: usize) -> Result<Vec<KeyValueItem>, api::Error> {
-        let mut items = Vec::<KeyValueItem>::new();
-        for _ in 0..n {
-            let item = self.next();
-            if let Some(item) = item {
-                items.push(item?);
-            } else {
-                break;
-            }
-        }
-        Ok(items)
+        // Take up to n items from this iterator; if the iterator is
+        // exhausted before n items are produced, we return fewer.
+        // The iterator is fused; once exhausted, subsequent calls will
+        // continue to yield no items.
+        self.by_ref().take(n).collect()
     }
 }
 

@@ -401,10 +401,6 @@ func getKeyValueFromResult(result C.KeyValueResult) (*ownedKeyValue, error) {
 	switch result.tag {
 	case C.KeyValueResult_NullHandlePointer:
 		return nil, errDBClosed
-	case C.ValueResult_RevisionNotFound:
-		// NOTE: the result value contains the provided root hash, we could use
-		// it in the error message if needed.
-		return nil, errRevisionNotFound
 	case C.KeyValueResult_None:
 		return nil, nil
 	case C.KeyValueResult_Some:
@@ -427,10 +423,6 @@ func getKeyValueBatchFromResult(result C.KeyValueBatchResult) (*ownedKeyValueBat
 	switch result.tag {
 	case C.KeyValueBatchResult_NullHandlePointer:
 		return nil, errDBClosed
-	case C.KeyValueBatchResult_RevisionNotFound:
-		// NOTE: the result value contains the provided root hash, we could use
-		// it in the error message if needed.
-		return nil, errRevisionNotFound
 	case C.KeyValueBatchResult_Some:
 		ownedBatch := newOwnedKeyValueBatch(*(*C.OwnedKeyValueBatch)(unsafe.Pointer(&result.anon0)))
 		return ownedBatch, nil

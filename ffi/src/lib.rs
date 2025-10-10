@@ -168,7 +168,7 @@ pub unsafe extern "C" fn fwd_iter_on_proposal<'p>(
     invoke_with_handle(handle, move |p| p.iter_from(Some(key.as_slice())))
 }
 
-/// Retrieves the next item from the iterator
+/// Retrieves the next item from the iterator.
 ///
 /// # Arguments
 ///
@@ -178,10 +178,12 @@ pub unsafe extern "C" fn fwd_iter_on_proposal<'p>(
 /// # Returns
 ///
 /// - [`KeyValueResult::NullHandlePointer`] if the provided iterator handle is null.
-/// - [`KeyValueResult::None`] if the iterator doesn't have any remaining values/exhausted.
+/// - [`KeyValueResult::None`] if the iterator is exhausted (no remaining values). Once returned,
+///   subsequent calls will continue returning [`KeyValueResult::None`]. You may still call this
+///   safely, but freeing the iterator with [`fwd_free_iterator`] is recommended.
 /// - [`KeyValueResult::Some`] if the next item on iterator was retrieved, with the associated
 ///   key value pair.
-/// - [`KeyValueResult::Err`] if an error occurred while retrieving the next item on iterator.
+/// - [`KeyValueResult::Err`] if an I/O error occurred while retrieving the next item
 ///
 /// # Safety
 ///
@@ -195,7 +197,7 @@ pub unsafe extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) 
     invoke_with_handle(handle, IteratorHandle::next)
 }
 
-/// Retrieves the next batch of items from the iterator
+/// Retrieves the next batch of items from the iterator.
 ///
 /// # Arguments
 ///
@@ -204,18 +206,20 @@ pub unsafe extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) 
 ///
 /// # Returns
 ///
-/// - [`KeyValueResult::NullHandlePointer`] if the provided iterator handle is null.
-/// - [`KeyValueResult::None`] if the iterator doesn't have any remaining values/exhausted.
-/// - [`KeyValueResult::Some`] if the next item on iterator was retrieved, with the associated
-///   key value pair.
-/// - [`KeyValueResult::Err`] if an error occurred while retrieving the next item on iterator.
+/// - [`KeyValueBatchResult::NullHandlePointer`] if the provided iterator handle is null.
+/// - [`KeyValueBatchResult::Some`] with up to `n` key/value pairs. If the iterator is
+///   exhausted, this may be fewer than `n`, including zero items.
+/// - [`KeyValueBatchResult::Err`] if an I/O error occurred while retrieving items
+///
+/// Once an empty batch or items fewer than `n` is returned (iterator exhausted), subsequent calls
+/// will continue returning empty batches. You may still call this safely, but freeing the
+/// iterator with [`fwd_free_iterator`] is recommended.
 ///
 /// # Safety
 ///
 /// The caller must:
 /// * ensure that `handle` is a valid pointer to a [`IteratorHandle`].
-/// * call [`fwd_free_owned_bytes`] on [`OwnedKeyValuePair::key`] and [`OwnedKeyValuePair::value`]
-///   to free the memory associated with the returned error or value.
+/// * call [`fwd_free_owned_key_value_batch`] on the returned batch to free any allocated memory.
 ///
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_iter_next_n(
