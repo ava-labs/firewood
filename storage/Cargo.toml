@@ -44,6 +44,7 @@ triomphe = "0.1.14"
 # Optional dependencies
 bytes = { version = "1.10.1", optional = true }
 io-uring = { version = "0.7.10", optional = true }
+libc = { version = "0.2.177", optional = true }
 log = { version = "0.4.28", optional = true }
 rlp = { version = "0.6.1", optional = true }
 sha3 = { version = "0.10.8", optional = true }
@@ -59,7 +60,7 @@ test-case.workspace = true
 [features]
 logger = ["log"]
 branch_factor_256 = []
-io-uring = ["dep:io-uring"]
+io-uring = ["dep:io-uring", "dep:libc"]
 ethhash = ["dep:rlp", "dep:sha3", "dep:bytes"]
 test_utils = ["dep:rand"]
 
