@@ -308,6 +308,7 @@ impl NodeStore<Committed, FileBacked> {
     #[cfg(feature = "io-uring")]
     fn flush_nodes_io_uring(&mut self) -> Result<NodeStoreHeader, FileIoError> {
         use crate::LinearAddress;
+        use std::io::ErrorKind::Interrupted;
         use std::pin::Pin;
 
         #[derive(Clone, Debug)]
@@ -327,9 +328,8 @@ impl NodeStore<Committed, FileBacked> {
                 match ring.submit_and_wait(wait_nr as usize) {
                     Ok(_) => return Ok(()),
                     Err(e) => {
-                        // Check if the error is EINTR (interrupted system call)
-                        if e.raw_os_error() == Some(libc::EINTR) {
-                            // Retry on EINTR
+                        // Retry if the error is an interrupted system call
+                        if e.kind() == Interrupted {
                             continue;
                         }
                         // For other errors, return the error
