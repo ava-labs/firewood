@@ -756,14 +756,14 @@ mod tests {
                 .unwrap(),
             );
 
-            let mut ns = NodeStore::new_empty_committed(fb.clone()).unwrap();
+            let mut ns = NodeStore::new_empty_committed(fb.clone());
 
             assert!(ns.downcast_to_file_backed().is_some());
         }
 
         {
             let ms = Arc::new(MemStore::new(vec![]));
-            let mut ns = NodeStore::new_empty_committed(ms.clone()).unwrap();
+            let mut ns = NodeStore::new_empty_committed(ms.clone());
             assert!(ns.downcast_to_file_backed().is_none());
         }
     }
