@@ -1,8 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::node::ExtendableBytes;
 use crate::node::branch::Serializable;
-use crate::{HashType, node::ExtendableBytes};
 use sha2::digest::generic_array::GenericArray;
 use sha2::digest::typenum;
 use std::fmt::{self, Debug, Display, Formatter};
@@ -100,28 +100,6 @@ impl TrieHash {
     /// This function is a no-op, as `HashType` is a `TrieHash` in this context.
     #[must_use]
     pub const fn into_triehash(self) -> Self {
-        self
-    }
-
-    /// Converts this `TrieHash` into a `HashType`.
-    ///
-    /// When the `ethhash` feature is enabled, this converts the `TrieHash` into a
-    /// `HashOrRlp::Hash` variant. Otherwise, this is a no-op since `HashType` is
-    /// a type alias for `TrieHash`.
-    #[must_use]
-    #[cfg(feature = "ethhash")]
-    pub fn into_hashtype(self) -> HashType {
-        self.into()
-    }
-
-    /// Converts this `TrieHash` into a `HashType`.
-    ///
-    /// When the `ethhash` feature is enabled, this converts the `TrieHash` into a
-    /// `HashOrRlp::Hash` variant. Otherwise, this is a no-op since `HashType` is
-    /// a type alias for `TrieHash`.
-    #[must_use]
-    #[cfg(not(feature = "ethhash"))]
-    pub const fn into_hashtype(self) -> HashType {
         self
     }
 
