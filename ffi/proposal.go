@@ -28,7 +28,11 @@ type Proposal struct {
 	//
 	// Calls to `C.fwd_commit_proposal` and `C.fwd_free_proposal` will invalidate
 	// this handle, so it should not be used after those calls.
-	handle        *C.ProposalHandle
+	handle *C.ProposalHandle
+
+	// [Database.Close] blocks on this WaitGroup, which is incremented by
+	// [getProposalFromProposalResult], and decremented by either
+	// [Proposal.Commit] or [Proposal.Done].
 	openProposals *sync.WaitGroup
 	freeOnce      sync.Once
 
