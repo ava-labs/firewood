@@ -38,10 +38,6 @@ impl FusedIterator for IteratorHandle<'_> {}
 #[expect(clippy::missing_errors_doc)]
 impl IteratorHandle<'_> {
     pub fn iter_next_n(&mut self, n: usize) -> Result<Vec<KeyValueItem>, api::Error> {
-        // Take up to n items from this iterator; if the iterator is
-        // exhausted before n items are produced, we return fewer.
-        // The iterator is fused; once exhausted, subsequent calls will
-        // continue to yield no items.
         self.by_ref().take(n).collect()
     }
 }

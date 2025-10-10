@@ -1666,8 +1666,8 @@ struct RevisionResult fwd_get_revision(const struct DatabaseHandle *db, Borrowed
  *
  * The caller must:
  * * ensure that `handle` is a valid pointer to a [`IteratorHandle`].
- * * call [`fwd_free_owned_bytes`] on [`OwnedKeyValuePair::key`] and [`OwnedKeyValuePair::value`]
- *   to free the memory associated with the returned error or value.
+ * * call [`fwd_free_owned_kv_pair`] on returned [`OwnedKeyValuePair`]
+ *   to free the memory associated with the returned value.
  *
  */
 struct KeyValueResult fwd_iter_next(struct IteratorHandle *handle);
