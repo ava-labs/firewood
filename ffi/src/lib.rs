@@ -230,7 +230,7 @@ pub unsafe extern "C" fn fwd_free_iterator(
 /// # Returns
 ///
 /// - [`RevisionResult::NullHandlePointer`] if the provided database handle is null.
-/// - [`RevisionResult::Ok`] containing a [`RevisionHandle`] if the revision exists.
+/// - [`RevisionResult::Ok`] containing a [`RevisionHandle`] and root hash if the revision exists.
 /// - [`RevisionResult::Err`] if the revision cannot be fetched or the root hash is invalid.
 ///
 /// # Safety
@@ -297,7 +297,7 @@ pub unsafe extern "C" fn fwd_get_from_revision(
 /// The caller must ensure that the revision handle is valid and is not used again after
 /// this function is called.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_revision(revision: Option<&RevisionHandle>) -> VoidResult {
+pub unsafe extern "C" fn fwd_free_revision(revision: Option<Box<RevisionHandle>>) -> VoidResult {
     invoke_with_handle(revision, drop)
 }
 
