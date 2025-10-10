@@ -728,10 +728,6 @@ typedef enum KeyValueResult_Tag {
    */
   KeyValueResult_NullHandlePointer,
   /**
-   * The provided root was not found in the database.
-   */
-  KeyValueResult_RevisionNotFound,
-  /**
    * The iterator is exhausted
    */
   KeyValueResult_None,
@@ -759,9 +755,6 @@ typedef enum KeyValueResult_Tag {
 typedef struct KeyValueResult {
   KeyValueResult_Tag tag;
   union {
-    struct {
-      struct HashKey revision_not_found;
-    };
     struct {
       struct OwnedKeyValuePair some;
     };
