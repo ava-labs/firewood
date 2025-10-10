@@ -653,7 +653,10 @@ typedef struct VerifyRangeProofArgs {
 } VerifyRangeProofArgs;
 
 /**
- * Owned version of `KeyValuePair`, returned to the FFI.
+ * Owned version of `KeyValuePair`, returned to ffi callers.
+ *
+ * C callers must free this using [`crate::fwd_free_owned_kv_pair`],
+ * not the C standard library's `free` function.
  */
 typedef struct OwnedKeyValuePair {
   OwnedBytes key;
@@ -1405,6 +1408,25 @@ struct VoidResult fwd_free_owned_bytes(OwnedBytes bytes);
  * this function does nothing.
  */
 struct VoidResult fwd_free_owned_key_value_batch(OwnedKeyValueBatch batch);
+
+/**
+ * Consumes the [`OwnedKeyValuePair`] and frees the memory associated with it.
+ *
+ * # Arguments
+ *
+ * * `kv` - The [`OwnedKeyValuePair`] struct to free, previously returned from any
+ *   function from this library.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ *
+ * # Safety
+ *
+ * The caller must ensure that the `kv` struct is valid.
+ */
+struct VoidResult fwd_free_owned_kv_pair(struct OwnedKeyValuePair kv);
 
 /**
  * Consumes the [`ProposalHandle`], cancels the proposal, and frees the memory.
