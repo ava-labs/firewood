@@ -678,7 +678,7 @@ mod tests {
     fn test_into_committed_with_generic_storage() {
         // Create a base committed store with MemStore
         let mem_store = MemStore::new(vec![]);
-        let base_committed = NodeStore::new_empty_committed(mem_store.into()).unwrap();
+        let base_committed = NodeStore::new_empty_committed(mem_store.into());
 
         // Create a mutable proposal from the base
         let mut mutable_store = NodeStore::new(&base_committed).unwrap();
