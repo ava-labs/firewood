@@ -165,7 +165,7 @@ pub unsafe extern "C" fn fwd_get_from_revision(
     revision: Option<&RevisionHandle>,
     key: BorrowedBytes,
 ) -> ValueResult {
-    invoke_with_handle(revision, move |db| db.val(key))
+    invoke_with_handle(revision, move |rev| rev.val(key))
 }
 
 /// Consumes the [`RevisionHandle`] and frees the memory associated with it.
@@ -551,6 +551,9 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 /// - `db` is a valid pointer to a [`DatabaseHandle`] returned by [`fwd_open_db`].
 /// - There are no handles to any open proposals. If so, they must be freed first
 ///   using [`fwd_free_proposal`].
+/// - Freeing the database handle does not free outstanding [`RevisionHandle`]s
+///   returned by [`fwd_get_revision`]. To prevent leaks, free them separately
+///   with [`fwd_free_revision`].
 /// - The database handle is not used after this function is called.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidResult {
