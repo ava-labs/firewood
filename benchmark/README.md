@@ -133,6 +133,7 @@ If you want to install grafana and prometheus on an AWS host (using Ubuntu as a 
 6. A Prometheus data source, the Firewood dashboard, and a [system statistics dashboard](https://grafana.com/grafana/dashboards/1860-node-exporter-full/) are preconfigured and ready to use.
 
 ### Updating the dashboard
+
 If you want to update the dashboard and commit it, do not enable "Export for sharing externally" when exporting. These dashboards are provisioned and reference the default Prometheus data source, with the option to pick from available data sources.
 
 ## Usage
