@@ -804,11 +804,8 @@ mod test {
         let latest_value = latest_revision.val(key).unwrap().unwrap();
         assert_eq!(new_value, latest_value.as_ref());
 
-        let node_store = NodeStore::with_root(
-            root_hash.into_hash_type(),
-            root_address,
-            latest_revision.underlying_storage(),
-        );
+        let node_store =
+            NodeStore::with_root(root_hash.into_hash_type(), root_address, latest_revision);
 
         let retrieved_value = node_store.val(key).unwrap().unwrap();
         assert_eq!(value, retrieved_value.as_ref());
