@@ -767,7 +767,7 @@ mod test {
     }
 
     #[test]
-    fn test_committed_nodestore_retrieval() {
+    fn test_resurrect_unpersisted_root() {
         let db = TestDb::new();
 
         // First, create a revision to retrieve
