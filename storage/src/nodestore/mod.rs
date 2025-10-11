@@ -157,11 +157,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// This constructor is used when you have an existing root node at a known
     /// address and hash, typically when reconstructing a [`NodeStore`] from
     /// a committed state.
-    pub fn new_committed(
-        root_hash: HashType,
-        root_address: LinearAddress,
-        storage: Arc<S>,
-    ) -> Self {
+    pub fn with_root(root_hash: HashType, root_address: LinearAddress, storage: Arc<S>) -> Self {
         let mut header = NodeStoreHeader::new();
         header.set_root_address(Some(root_address));
 
