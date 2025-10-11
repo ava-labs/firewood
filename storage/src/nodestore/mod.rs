@@ -159,6 +159,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// a committed state. The `latest_nodestore` provides access to the underlying
     /// storage backend containing the persisted trie data.
     #[must_use]
+    #[allow(clippy::missing_panics_doc)]
     pub fn with_root(
         root_hash: HashType,
         root_address: LinearAddress,
@@ -167,14 +168,28 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         let header = NodeStoreHeader::with_root(Some(root_address));
         let storage = latest_nodestore.storage.clone();
 
-        NodeStore {
+        let nodestore = NodeStore {
             header,
             kind: Committed {
                 deleted: Box::default(),
                 root: Some(Child::AddressWithHash(root_address, root_hash)),
             },
             storage,
-        }
+        };
+
+        debug_assert_eq!(
+            nodestore
+                .root_hash()
+                .expect("Nodestore should have root hash"),
+            hash_node(
+                &nodestore
+                    .read_node(root_address)
+                    .expect("Root node read should succeed"),
+                &Path(SmallVec::default())
+            )
+        );
+
+        nodestore
     }
 }
 
