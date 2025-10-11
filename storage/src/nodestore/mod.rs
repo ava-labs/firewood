@@ -158,8 +158,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// address and hash, typically when reconstructing a [`NodeStore`] from
     /// a committed state.
     pub fn with_root(root_hash: HashType, root_address: LinearAddress, storage: Arc<S>) -> Self {
-        let mut header = NodeStoreHeader::new();
-        header.set_root_address(Some(root_address));
+        let header = NodeStoreHeader::with_root(Some(root_address));
 
         NodeStore {
             header,
