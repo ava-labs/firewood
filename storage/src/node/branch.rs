@@ -419,12 +419,6 @@ impl BranchNode {
     /// The maximum number of children a branch node can have.
     pub const MAX_CHILDREN: usize = super::children::MAX_CHILDREN;
 
-    // /// Convenience function to create a new array of empty children.
-    // #[must_use]
-    // pub const fn empty_children<T>() -> Children<Option<T>> {
-    //     Children::new()
-    // }
-
     /// Returns a set of persistence information (address and hash) for each child that
     /// is persisted.
     ///
