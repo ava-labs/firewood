@@ -317,10 +317,10 @@ impl<A: smallvec::Array<Item = PathComponent>> super::TriePathFromPackedBytes<'_
     fn path_from_packed_bytes(bytes: &'_ [u8]) -> Self {
         let path = super::PackedPathRef::path_from_packed_bytes(bytes);
         let mut this = SmallVec::<A>::new();
-        this.reserve_exact(path.len());
         // reserve_exact is used because we trust that `TriePath::len` returns the exact
         // length but `SmallVec::extend` won't trust `Iterator::size_hint` and may
         // over/under-allocate.
+        this.reserve_exact(path.len());
         this.extend(path.components());
         this
     }
