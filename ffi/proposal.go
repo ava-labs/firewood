@@ -29,12 +29,11 @@ type Proposal struct {
 	// Calls to `C.fwd_commit_proposal` and `C.fwd_free_proposal` will invalidate
 	// this handle, so it should not be used after those calls.
 	handle *C.ProposalHandle
-
+	disown sync.Mutex
 	// [Database.Close] blocks on this WaitGroup, which is incremented by
 	// [getProposalFromProposalResult], and decremented by either
-	// [Proposal.Commit] or [Proposal.Done].
+	// [Proposal.Commit] or [Proposal.Done] (when the handle is disowned).
 	openProposals *sync.WaitGroup
-	freeOnce      sync.Once
 
 	// The proposal root hash.
 	root []byte
@@ -77,17 +76,33 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.handle, kvp), p.openProposals)
 }
 
+// disownHandle is the common path of [Proposal.Commit] and [Proposal.Drop], the
+// `fn` argument defining the method-specific behaviour.
+func (p *Proposal) disownHandle(fn func(*C.ProposalHandle) error, disownEvenOnErr bool) error {
+	p.disown.Lock()
+	defer p.disown.Unlock()
+
+	if p.handle == nil {
+		return errDroppedProposal
+	}
+	err := fn(p.handle)
+	if disownEvenOnErr || err == nil {
+		p.handle = nil
+		p.openProposals.Done()
+	}
+	return err
+}
+
 // Commit commits the proposal and returns any errors.
 //
 // The proposal handle is no longer valid after this call, but the root
 // hash can still be retrieved using Root().
 func (p *Proposal) Commit() error {
-	if p.handle == nil {
-		return errDroppedProposal
-	}
+	return p.disownHandle(commitProposal, true)
+}
 
-	_, err := getHashKeyFromHashResult(C.fwd_commit_proposal(p.handle))
-	p.afterDisowned()
+func commitProposal(h *C.ProposalHandle) error {
+	_, err := getHashKeyFromHashResult(C.fwd_commit_proposal(h))
 	return err
 }
 
@@ -97,22 +112,17 @@ func (p *Proposal) Commit() error {
 //
 // The pointer will be set to nil after freeing to prevent double free.
 func (p *Proposal) Drop() error {
-	if p.handle == nil {
-		return nil
+	if err := p.disownHandle(dropProposal, false); err != nil && err != errDroppedProposal {
+		return err
 	}
-
-	if err := getErrorFromVoidResult(C.fwd_free_proposal(p.handle)); err != nil {
-		return fmt.Errorf("%w: %w", errFreeingValue, err)
-	}
-	p.afterDisowned()
 	return nil
 }
 
-func (p *Proposal) afterDisowned() {
-	p.freeOnce.Do(func() {
-		p.handle = nil
-		p.openProposals.Done()
-	})
+func dropProposal(h *C.ProposalHandle) error {
+	if err := getErrorFromVoidResult(C.fwd_free_proposal(h)); err != nil {
+		return fmt.Errorf("%w: %w", errFreeingValue, err)
+	}
+	return nil
 }
 
 // getProposalFromProposalResult converts a C.ProposalResult to a Proposal or error.
