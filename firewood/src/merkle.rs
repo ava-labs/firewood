@@ -10,15 +10,14 @@ use crate::range_proof::RangeProof;
 use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashedNodeReader, ImmutableProposal,
-    IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore,
-    Parentable, Path, PathComponent, ReadableStorage, SharedNode, TrieHash, TrieReader,
-    ValueDigest,
+    IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, Node, NodeStore, PackedPathRef,
+    Parentable, ReadableStorage, SharedNode, SplitPath, TrieHash, TriePath,
+    TriePathFromPackedBytes, TrieReader, ValueDigest,
 };
 use metrics::counter;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::io::Error;
-use std::iter::once;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
@@ -30,8 +29,8 @@ pub type Value = Box<[u8]>;
 
 macro_rules! write_attributes {
     ($writer:ident, $node:expr, $value:expr) => {
-        if !$node.partial_path.0.is_empty() {
-            write!($writer, " pp={:x}", $node.partial_path)
+        if !$node.partial_path.is_empty() {
+            write!($writer, " pp={:}", $node.partial_path.display())
                 .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
         }
         if !$value.is_empty() {
@@ -64,28 +63,20 @@ macro_rules! write_attributes {
 fn get_helper<T: TrieReader>(
     nodestore: &T,
     node: &Node,
-    key: &[u8],
+    key: PackedPathRef<'_>,
 ) -> Result<Option<SharedNode>, FileIoError> {
     // 4 possibilities for the position of the `key` relative to `node`:
     // 1. The node is at `key`
     // 2. The key is above the node (i.e. its ancestor)
     // 3. The key is below the node (i.e. its descendant)
     // 4. Neither is an ancestor of the other
-    let path_overlap = PrefixOverlap::from(key, node.partial_path());
-    let unique_key = path_overlap.unique_a;
-    let unique_node = path_overlap.unique_b;
-
-    match (
-        unique_key.split_first().map(|(index, path)| (*index, path)),
-        unique_node.split_first(),
-    ) {
-        (_, Some(_)) => {
+    match key.longest_common_prefix(node.partial_path()).split_parts() {
+        (_, Some(_), _) => {
             // Case (2) or (4)
             Ok(None)
         }
-        (None, None) => Ok(Some(node.clone().into())), // 1. The node is at `key`
-        (Some((child_index, remaining_key)), None) => {
-            let child_index = PathComponent::try_new(child_index).expect("index is in bounds");
+        (None, None, _) => Ok(Some(node.clone().into())), // 1. The node is at `key`
+        (Some((child_index, remaining_key)), None, _) => {
             // 3. The key is below the node (i.e. its descendant)
             match node {
                 Node::Leaf(_) => Ok(None),
@@ -443,8 +434,11 @@ impl<T: TrieReader> Merkle<T> {
             return Ok(None);
         };
 
-        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
-        get_helper(&self.nodestore, &root, &key)
+        get_helper(
+            &self.nodestore,
+            &root,
+            PackedPathRef::path_from_packed_bytes(key),
+        )
     }
 }
 
@@ -593,7 +587,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Map `key` to `value` in the trie.
     /// Each element of key is 2 nibbles.
     pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), FileIoError> {
-        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        let key = PackedPathRef::path_from_packed_bytes(key);
 
         let root = self.nodestore.root_mut();
 
@@ -601,14 +595,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             // The trie is empty. Create a new leaf node with `value` and set
             // it as the root.
             let root_node = Node::Leaf(LeafNode {
-                partial_path: key,
+                partial_path: key.components().collect(),
                 value,
             });
             *root = root_node.into();
             return Ok(());
         };
 
-        let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
+        let root_node = self.insert_helper(root_node, key, value)?;
         *self.nodestore.root_mut() = root_node.into();
         Ok(())
     }
@@ -616,11 +610,10 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Map `key` to `value` into the subtrie rooted at `node`.
     /// Each element of `key` is 1 nibble.
     /// Returns the new root of the subtrie.
-    #[expect(clippy::missing_panics_doc)]
     pub fn insert_helper(
         &mut self,
         mut node: Node,
-        key: &[u8],
+        key: PackedPathRef<'_>,
         value: Value,
     ) -> Result<Node, FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
@@ -628,27 +621,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
-        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
-
-        let unique_key = path_overlap.unique_a;
-        let unique_node = path_overlap.unique_b;
-
-        match (
-            unique_key
-                .split_first()
-                .map(|(index, path)| (*index, path.into())),
-            unique_node
-                .split_first()
-                .map(|(index, path)| (*index, path.into())),
-        ) {
-            (None, None) => {
+        match key.longest_common_prefix(node.partial_path()).split_parts() {
+            (None, None, _) => {
                 // 1. The node is at `key`
                 node.update_value(value);
                 counter!("firewood.insert", "merkle" => "update").increment(1);
                 Ok(node)
             }
-            (None, Some((child_index, partial_path))) => {
-                let child_index = PathComponent::try_new(child_index).expect("valid component");
+            (None, Some((child_index, partial_path)), common) => {
                 // 2. The key is above the node (i.e. its ancestor)
                 // Make a new branch node and insert the current node as a child.
                 //    ...                ...
@@ -657,20 +637,19 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 //                        |
                 //                       node
                 let mut branch = BranchNode {
-                    partial_path: path_overlap.shared.into(),
+                    partial_path: common.components().collect(),
                     value: Some(value),
                     children: Children::new(),
                 };
 
                 // Shorten the node's partial path since it has a new parent.
-                node.update_partial_path(partial_path);
+                node.update_partial_path(partial_path.into());
                 branch.children[child_index] = Some(Child::Node(node));
                 counter!("firewood.insert", "merkle"=>"above").increment(1);
 
                 Ok(Node::Branch(Box::new(branch)))
             }
-            (Some((child_index, partial_path)), None) => {
-                let child_index = PathComponent::try_new(child_index).expect("valid component");
+            (Some((child_index, partial_path)), None, _) => {
                 // 3. The key is below the node (i.e. its descendant)
                 //    ...                         ...
                 //     |                           |
@@ -684,14 +663,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             // Create a new leaf and put it here.
                             let new_leaf = Node::Leaf(LeafNode {
                                 value,
-                                partial_path,
+                                partial_path: partial_path.components().collect(),
                             });
                             branch.children[child_index] = Some(Child::Node(new_leaf));
                             counter!("firewood.insert", "merkle"=>"below").increment(1);
                             return Ok(node);
                         };
                         let child = self.read_for_update(child)?;
-                        let child = self.insert_helper(child, partial_path.as_ref(), value)?;
+                        let child = self.insert_helper(child, partial_path, value)?;
                         branch.children[child_index] = Some(Child::Node(child));
                         Ok(node)
                     }
@@ -705,7 +684,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
                         let new_leaf = Node::Leaf(LeafNode {
                             value,
-                            partial_path,
+                            partial_path: partial_path.components().collect(),
                         });
 
                         branch.children[child_index] = Some(Child::Node(new_leaf));
@@ -715,9 +694,11 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     }
                 }
             }
-            (Some((key_index, key_partial_path)), Some((node_index, node_partial_path))) => {
-                let key_index = PathComponent::try_new(key_index).expect("valid component");
-                let node_index = PathComponent::try_new(node_index).expect("valid component");
+            (
+                Some((key_index, key_partial_path)),
+                Some((node_index, node_partial_path)),
+                common,
+            ) => {
                 // 4. Neither is an ancestor of the other
                 //    ...                         ...
                 //     |                           |
@@ -726,17 +707,17 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 //                               node   key
                 // Make a branch node that has both the current node and a new leaf node as children.
                 let mut branch = BranchNode {
-                    partial_path: path_overlap.shared.into(),
+                    partial_path: common.components().collect(),
                     value: None,
                     children: Children::new(),
                 };
 
-                node.update_partial_path(node_partial_path);
+                node.update_partial_path(node_partial_path.into());
                 branch.children[node_index] = Some(Child::Node(node));
 
                 let new_leaf = Node::Leaf(LeafNode {
                     value,
-                    partial_path: key_partial_path,
+                    partial_path: key_partial_path.components().collect(),
                 });
                 branch.children[key_index] = Some(Child::Node(new_leaf));
 
@@ -751,7 +732,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Otherwise returns `None`.
     /// Each element of `key` is 2 nibbles.
     pub fn remove(&mut self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
-        let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
+        let key = PackedPathRef::path_from_packed_bytes(key);
 
         let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
@@ -761,7 +742,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             return Ok(None);
         };
 
-        let (root_node, removed_value) = self.remove_helper(root_node, &key)?;
+        let (root_node, removed_value) = self.remove_helper(root_node, key)?;
         *self.nodestore.root_mut() = root_node;
         if removed_value.is_some() {
             counter!("firewood.remove", "prefix" => "false", "result" => "success").increment(1);
@@ -778,29 +759,19 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     fn remove_helper(
         &mut self,
         node: Node,
-        key: &[u8],
+        key: PackedPathRef<'_>,
     ) -> Result<(Option<Node>, Option<Value>), FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
-        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
-
-        let unique_key = path_overlap.unique_a;
-        let unique_node = path_overlap.unique_b;
-
-        match (
-            unique_key
-                .split_first()
-                .map(|(index, path)| (*index, Path::from(path))),
-            unique_node.split_first(),
-        ) {
-            (_, Some(_)) => {
+        match key.longest_common_prefix(node.partial_path()).split_parts() {
+            (_, Some(_), _) => {
                 // Case (2) or (4)
                 Ok((Some(node), None))
             }
-            (None, None) => {
+            (None, None, _) => {
                 // 1. The node is at `key`
                 match node {
                     Node::Branch(mut branch) => {
@@ -814,8 +785,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                     Node::Leaf(leaf) => Ok((None, Some(leaf.value))),
                 }
             }
-            (Some((child_index, child_partial_path)), None) => {
-                let child_index = PathComponent::try_new(child_index).expect("valid component");
+            (Some((child_index, child_partial_path)), None, _) => {
                 // 3. The key is below the node (i.e. its descendant)
                 match node {
                     // we found a non-matching leaf node, so the value does not exist
@@ -828,7 +798,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         let child = self.read_for_update(child)?;
 
                         let (child, removed_value) =
-                            self.remove_helper(child, child_partial_path.as_ref())?;
+                            self.remove_helper(child, child_partial_path)?;
 
                         branch.children[child_index] = child.map(Child::Node);
 
@@ -842,7 +812,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Removes any key-value pairs with keys that have the given `prefix`.
     /// Returns the number of key-value pairs removed.
     pub fn remove_prefix(&mut self, prefix: &[u8]) -> Result<usize, FileIoError> {
-        let prefix = Path::from_nibbles_iterator(NibblesIterator::new(prefix));
+        let prefix = PackedPathRef::path_from_packed_bytes(prefix);
 
         let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
@@ -852,7 +822,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         };
 
         let mut deleted = 0;
-        let root_node = self.remove_prefix_helper(root_node, &prefix, &mut deleted)?;
+        let root_node = self.remove_prefix_helper(root_node, prefix, &mut deleted)?;
         counter!("firewood.remove", "prefix" => "true", "result" => "success")
             .increment(deleted as u64);
         *self.nodestore.root_mut() = root_node;
@@ -862,7 +832,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     fn remove_prefix_helper(
         &mut self,
         node: Node,
-        key: &[u8],
+        key: PackedPathRef<'_>,
         deleted: &mut usize,
     ) -> Result<Option<Node>, FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
@@ -870,18 +840,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         // 2. The key is above the node (i.e. its ancestor), so the parent needs to be restructured (TODO).
         // 3. The key is below the node (i.e. its descendant), so continue traversing the trie.
         // 4. Neither is an ancestor of the other, in which case there's no work to do.
-        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
-
-        let unique_key = path_overlap.unique_a;
-        let unique_node = path_overlap.unique_b;
-
-        match (
-            unique_key
-                .split_first()
-                .map(|(index, path)| (*index, Path::from(path))),
-            unique_node.split_first(),
-        ) {
-            (None, _) => {
+        match key.longest_common_prefix(node.partial_path()).split_parts() {
+            (None, _, _) => {
                 // 1. The node is at `key`, or we're just above it
                 // so we can start deleting below here
                 match node {
@@ -899,12 +859,11 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 }
                 Ok(None)
             }
-            (_, Some(_)) => {
+            (_, Some(_), _) => {
                 // Case (2) or (4)
                 Ok(Some(node))
             }
-            (Some((child_index, child_partial_path)), None) => {
-                let child_index = PathComponent::try_new(child_index).expect("valid component");
+            (Some((child_index, child_partial_path)), None, _) => {
                 // 3. The key is below the node (i.e. its descendant)
                 match node {
                     Node::Leaf(_) => Ok(Some(node)),
@@ -915,7 +874,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         let child = self.read_for_update(child)?;
 
                         let child =
-                            self.remove_prefix_helper(child, child_partial_path.as_ref(), deleted)?;
+                            self.remove_prefix_helper(child, child_partial_path, deleted)?;
 
                         branch.children[child_index] = child.map(Child::Node);
 
@@ -988,15 +947,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
         // The child's partial path is the concatenation of its (now removed) parent,
         // its (former) child index, and its partial path.
-        let child_partial_path = Path::from_nibbles_iterator(
+        child.update_partial_path(
             branch_node
                 .partial_path
-                .iter()
-                .chain(once(&child_index.as_u8()))
-                .chain(child.partial_path().iter())
-                .copied(),
+                .append(child_index)
+                .append(child.partial_path())
+                .components()
+                .collect(),
         );
-        child.update_partial_path(child_partial_path);
 
         Ok(Some(child))
     }
@@ -1009,34 +967,4 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> {
     debug_assert_eq!(nibbles.len() & 1, 0);
     #[expect(clippy::indexing_slicing)]
     nibbles.chunks_exact(2).map(|p| (p[0] << 4) | p[1])
-}
-
-/// The [`PrefixOverlap`] type represents the _shared_ and _unique_ parts of two potentially overlapping slices.
-/// As the type-name implies, the `shared` property only constitues a shared *prefix*.
-/// The `unique_*` properties, [`unique_a`][`PrefixOverlap::unique_a`] and [`unique_b`][`PrefixOverlap::unique_b`]
-/// are set based on the argument order passed into the [`from`][`PrefixOverlap::from`] constructor.
-#[derive(Debug)]
-struct PrefixOverlap<'a, T> {
-    shared: &'a [T],
-    unique_a: &'a [T],
-    unique_b: &'a [T],
-}
-
-impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
-    fn from(a: &'a [T], b: &'a [T]) -> Self {
-        let split_index = a
-            .iter()
-            .zip(b)
-            .position(|(a, b)| *a != *b)
-            .unwrap_or_else(|| std::cmp::min(a.len(), b.len()));
-
-        let (shared, unique_a) = a.split_at(split_index);
-        let unique_b = b.get(split_index..).expect("");
-
-        Self {
-            shared,
-            unique_a,
-            unique_b,
-        }
-    }
 }

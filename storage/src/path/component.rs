@@ -15,6 +15,16 @@ pub struct PathComponent(pub crate::u4::U4);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PathComponent(pub u8);
 
+/// An extension trait for slices of [`PathComponent`]s.
+pub trait PathComponentSliceExt {
+    /// Returns the path components as a byte slice where each byte is the
+    /// underlying byte of the path component.
+    ///
+    /// For hexary tries, this means that each byte is in the range 0x00 to 0x0F
+    /// inclusive.
+    fn as_byte_slice(&self) -> &[u8];
+}
+
 impl PathComponent {
     /// All possible path components.
     ///
@@ -414,6 +424,32 @@ const unsafe fn byte_slice_as_path_components_unchecked(bytes: &[u8]) -> &[PathC
     // lifetime as `bytes` so it cannot outlive the original slice.
     unsafe {
         &*(std::ptr::slice_from_raw_parts(bytes.as_ptr().cast::<PathComponent>(), bytes.len()))
+    }
+}
+
+impl PathComponentSliceExt for [PathComponent] {
+    fn as_byte_slice(&self) -> &[u8] {
+        components_as_byte_slice(self)
+    }
+}
+
+impl<T: std::ops::Deref<Target = [PathComponent]>> PathComponentSliceExt for T {
+    fn as_byte_slice(&self) -> &[u8] {
+        components_as_byte_slice(self)
+    }
+}
+
+const fn components_as_byte_slice(components: &[PathComponent]) -> &[u8] {
+    #![expect(unsafe_code)]
+
+    // SAFETY: We rely on the fact that `PathComponent` is a single element type
+    // over `u8` (or `u4` which looks like a `u8` for this purpose).
+    //
+    // borrow rules ensure that the pointer for `components` is not null and
+    // `components.len()` is always valid. The returned reference will have the same
+    // lifetime as `components` so it cannot outlive the original slice.
+    unsafe {
+        &*(std::ptr::slice_from_raw_parts(components.as_ptr().cast::<u8>(), components.len()))
     }
 }
 

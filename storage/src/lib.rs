@@ -45,7 +45,6 @@ pub mod macros;
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
-pub use node::path::{NibblesIterator, Path};
 pub use node::{
     BranchNode, Child, Children, ChildrenSlots, LeafNode, Node, PathIterItem,
     branch::{HashType, IntoHashType},
@@ -55,11 +54,12 @@ pub use nodestore::{
     NodeReader, NodeStore, Parentable, RootReader, TrieReader,
 };
 pub use path::{
-    IntoSplitPath, JoinedPath, PathCommonPrefix, PathComponent, SplitPath, TriePath,
-    TriePathAsPackedBytes, TriePathFromPackedBytes, TriePathFromUnpackedBytes,
+    IntoSplitPath, JoinedPath, PackedPathRef, PathCommonPrefix, PathComponent,
+    PathComponentSliceExt, SplitPath, TriePath, TriePathAsPackedBytes, TriePathFromPackedBytes,
+    TriePathFromUnpackedBytes,
 };
 #[cfg(not(feature = "branch_factor_256"))]
-pub use path::{PackedBytes, PackedPathComponents, PackedPathRef};
+pub use path::{PackedBytes, PackedPathComponents};
 pub use u4::{TryFromIntError, U4};
 
 pub use linear::filebacked::FileBacked;
@@ -71,6 +71,9 @@ pub use trie_hash::{InvalidTrieHashLength, TrieHash};
 
 /// A shared node, which is just a triophe Arc of a node
 pub type SharedNode = triomphe::Arc<Node>;
+
+/// A path that is composed of individual components.
+pub type PartialPath = smallvec::SmallVec<[PathComponent; 32]>;
 
 /// The strategy for caching nodes that are read
 /// from the storage layer. Generally, we only want to
@@ -182,11 +185,12 @@ pub enum CheckerError {
 
     /// Hash mismatch for a node
     #[error(
-        "Hash mismatch for node {path:?} at address {address}: parent stored {parent_stored_hash}, computed {computed_hash}"
+        "Hash mismatch for node {path} at address {address}: parent stored {parent_stored_hash}, computed {computed_hash}",
+        path = path.display(),
     )]
     HashMismatch {
         /// The path of the node
-        path: Path,
+        path: PartialPath,
         /// The address of the node
         address: LinearAddress,
         /// The parent of the node
@@ -281,14 +285,15 @@ pub enum CheckerError {
     UnpersistedRoot,
 
     #[error(
-        "The node {key:#x} at {address:#x} (parent: {parent:#x}) has a value but its path is not 32 or 64 bytes long"
+        "The node {key} at {address:#x} (parent: {parent:#x}) has a value but its path is not 32 or 64 bytes long",
+        key = key.display(),
     )]
     /// A value is found corresponding to an invalid key.
     /// With ethhash, keys must be 32 or 64 bytes long.
     /// Without ethhash, keys cannot contain half-bytes (i.e., odd number of nibbles).
     InvalidKey {
         /// The key found, or equivalently the path of the node that stores the value
-        key: Path,
+        key: PartialPath,
         /// Address of the node
         address: LinearAddress,
         /// Parent of the node

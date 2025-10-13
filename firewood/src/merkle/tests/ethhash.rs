@@ -89,7 +89,7 @@ fn test_eth_compatible_accounts(
     let account = make_key(account);
     let expected_key_hash = Keccak256::digest(&account);
 
-    let items = once((
+    let items = std::iter::once((
         Box::from(expected_key_hash.as_slice()),
         make_key(account_value),
     ))

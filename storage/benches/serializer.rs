@@ -15,9 +15,10 @@ use std::os::raw::c_int;
 
 use criterion::profiler::Profiler;
 use criterion::{Bencher, Criterion, criterion_group, criterion_main};
-use firewood_storage::{Children, LeafNode, Node, Path, PathComponent};
+use firewood_storage::{
+    Children, LeafNode, Node, PartialPath, PathComponent, TriePathFromUnpackedBytes,
+};
 use pprof::ProfilerGuard;
-use smallvec::SmallVec;
 
 use std::path::Path as FsPath;
 
@@ -82,7 +83,7 @@ fn to_bytes(input: &Node) -> Vec<u8> {
 fn leaf(c: &mut Criterion) {
     let mut group = c.benchmark_group("leaf");
     let input = Node::Leaf(LeafNode {
-        partial_path: Path(SmallVec::from_slice(&[0, 1])),
+        partial_path: PartialPath::path_from_unpacked_bytes(&[0, 1]).unwrap(),
         value: Box::new([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]),
     });
 
@@ -94,7 +95,7 @@ fn leaf(c: &mut Criterion) {
 fn branch(c: &mut Criterion) {
     let mut group = c.benchmark_group("has_value");
     let mut input = Node::Branch(Box::new(firewood_storage::BranchNode {
-        partial_path: Path(SmallVec::from_slice(&[0, 1])),
+        partial_path: PartialPath::path_from_unpacked_bytes(&[0, 1]).unwrap(),
         value: Some(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9].into_boxed_slice()),
         children: Children::from_fn(|i| {
             if i.as_u8() == 0 {

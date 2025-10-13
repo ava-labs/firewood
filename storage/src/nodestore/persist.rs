@@ -460,8 +460,8 @@ impl NodeStore<Committed, FileBacked> {
 mod tests {
     use super::*;
     use crate::{
-        Child, Children, HashType, ImmutableProposal, LinearAddress, NodeStore, Path,
-        PathComponent, SharedNode,
+        Child, Children, HashType, ImmutableProposal, LinearAddress, NodeStore, PartialPath,
+        PathComponent, SharedNode, TriePathFromUnpackedBytes,
         linear::memory::MemStore,
         node::{BranchNode, LeafNode, Node},
         nodestore::MutableProposal,
@@ -490,7 +490,7 @@ mod tests {
     /// Helper to create a leaf node
     fn create_leaf(path: &[u8], value: &[u8]) -> Node {
         Node::Leaf(LeafNode {
-            partial_path: Path::from(path),
+            partial_path: PartialPath::path_from_unpacked_bytes(path).unwrap(),
             value: value.to_vec().into_boxed_slice(),
         })
     }
@@ -502,7 +502,7 @@ mod tests {
         children: Vec<(PathComponent, Node)>,
     ) -> Node {
         let mut branch = BranchNode {
-            partial_path: Path::from(path),
+            partial_path: PartialPath::path_from_unpacked_bytes(path).unwrap(),
             value: value.map(|v| v.to_vec().into_boxed_slice()),
             children: Children::new(),
         };
@@ -649,7 +649,7 @@ mod tests {
         }
 
         let root_branch: Node = BranchNode {
-            partial_path: Path::new(),
+            partial_path: PartialPath::new_const(),
             value: None,
             children,
         }
@@ -715,7 +715,7 @@ mod tests {
         let root_node = root_maybe_persisted
             .as_shared_node(&committed_store)
             .unwrap();
-        assert_eq!(*root_node.partial_path(), Path::from(&[0]));
+        assert_eq!(*root_node.partial_path(), [PathComponent::ALL[0]]);
         assert_eq!(root_node.value(), Some(&b"branch_value"[..]));
         assert!(root_node.is_branch());
         let root_branch = root_node.as_branch().unwrap();
@@ -728,7 +728,7 @@ mod tests {
         let child1_node = child1_maybe_persisted
             .as_shared_node(&committed_store)
             .unwrap();
-        assert_eq!(*child1_node.partial_path(), Path::from(&[1, 2, 3]));
+        assert_eq!(*child1_node.partial_path(), PathComponent::ALL[1..=3]);
         assert_eq!(child1_node.value(), Some(&b"value1"[..]));
 
         let child2 = root_branch.children[PathComponent::ALL[2]]
@@ -738,7 +738,7 @@ mod tests {
         let child2_node = child2_maybe_persisted
             .as_shared_node(&committed_store)
             .unwrap();
-        assert_eq!(*child2_node.partial_path(), Path::from(&[4, 5, 6]));
+        assert_eq!(*child2_node.partial_path(), PathComponent::ALL[4..=6]);
         assert_eq!(child2_node.value(), Some(&b"value2"[..]));
     }
 

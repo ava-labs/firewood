@@ -5,18 +5,15 @@
     clippy::missing_errors_doc,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![expect(
-    clippy::needless_continue,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
 
 use firewood_storage::{
-    Children, FileIoError, HashType, Hashable, IntoHashType, NibblesIterator, Path, PathComponent,
-    PathIterItem, Preimage, TrieHash, ValueDigest,
+    Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, PackedPathRef,
+    PartialPath, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath,
+    TriePathFromPackedBytes, ValueDigest,
 };
 use thiserror::Error;
 
-use crate::merkle::{Key, Value};
+use crate::merkle::Value;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -84,7 +81,7 @@ pub enum ProofError {
 /// A node in a proof.
 pub struct ProofNode {
     /// The key this node is at. Each byte is a nibble.
-    pub key: Key,
+    pub key: PartialPath,
     /// The length of the key prefix that is shared with the previous node.
     pub partial_len: usize,
     /// None if the node does not have a value.
@@ -112,16 +109,22 @@ impl std::fmt::Debug for ProofNode {
 }
 
 impl Hashable for ProofNode {
-    fn parent_prefix_path(&self) -> impl Iterator<Item = u8> + Clone {
-        self.full_path().take(self.partial_len)
+    fn parent_prefix_path(&self) -> impl IntoSplitPath + '_ {
+        self.full_path()
+            .into_split_path()
+            .split_at(self.partial_len)
+            .0
     }
 
-    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
-        self.full_path().skip(self.partial_len)
+    fn partial_path(&self) -> impl IntoSplitPath + '_ {
+        self.full_path()
+            .into_split_path()
+            .split_at(self.partial_len)
+            .1
     }
 
-    fn full_path(&self) -> impl Iterator<Item = u8> + Clone {
-        self.key.as_ref().iter().copied()
+    fn full_path(&self) -> impl IntoSplitPath + '_ {
+        &self.key
     }
 
     fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {
@@ -182,7 +185,7 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         key: K,
         root_hash: &TrieHash,
     ) -> Result<Option<ValueDigest<&[u8]>>, ProofError> {
-        let key = Path(NibblesIterator::new(key.as_ref()).collect());
+        let key = PackedPathRef::path_from_packed_bytes(key.as_ref());
 
         let Some(last_node) = self.0.as_ref().last() else {
             return Err(ProofError::Empty);
@@ -199,14 +202,14 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             // Assert that only nodes whose keys are an even number of nibbles
             // have a `value_digest`.
             #[cfg(not(feature = "branch_factor_256"))]
-            if node.full_path().count() % 2 != 0 && node.value_digest().is_some() {
+            if node.full_path().len() % 2 != 0 && node.value_digest().is_some() {
                 return Err(ProofError::ValueAtOddNibbleLength);
             }
 
             if let Some(next_node) = iter.peek() {
                 // Assert that every node's key is a prefix of `key`, except for the last node,
                 // whose key can be equal to or a suffix of `key` in an exclusion proof.
-                if next_nibble(node.full_path(), key.iter().copied()).is_none() {
+                if next_nibble(node.full_path(), key).is_none() {
                     return Err(ProofError::ShouldBePrefixOfProvenKey);
                 }
 
@@ -217,8 +220,6 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                     return Err(ProofError::ShouldBePrefixOfNextKey);
                 };
 
-                let next_nibble =
-                    PathComponent::try_new(next_nibble).ok_or(ProofError::ChildIndexOutOfBounds)?;
                 expected_hash = node.children()[next_nibble]
                     .as_ref()
                     .ok_or(ProofError::NodeNotInTrie)?
@@ -226,7 +227,7 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             }
         }
 
-        if last_node.full_path().eq(key.iter().copied()) {
+        if last_node.full_path().path_eq(&key) {
             return Ok(last_node.value_digest());
         }
 
@@ -384,23 +385,18 @@ impl ProofCollection for EmptyProofCollection {
 
 /// Returns the next nibble in `c` after `b`.
 /// Returns None if `b` is not a strict prefix of `c`.
-fn next_nibble<B, C>(b: B, c: C) -> Option<u8>
+fn next_nibble<B, C>(b: B, c: C) -> Option<PathComponent>
 where
-    B: IntoIterator<Item = u8>,
-    C: IntoIterator<Item = u8>,
+    B: IntoSplitPath,
+    C: IntoSplitPath,
 {
-    let b = b.into_iter();
-    let mut c = c.into_iter();
-
-    // Check if b is a prefix of c
-    for b_item in b {
-        match c.next() {
-            Some(c_item) if b_item == c_item => continue,
-            _ => return None,
-        }
+    let common = b
+        .into_split_path()
+        .longest_common_prefix(c.into_split_path());
+    match (common.a_suffix.split_first(), common.b_suffix.split_first()) {
+        (None, Some((next, _))) => Some(next),
+        _ => None,
     }
-
-    c.next()
 }
 
 fn verify_opt_value_digest(

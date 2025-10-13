@@ -215,7 +215,7 @@ enum MaybePersisted {
 mod test {
     use nonzero_ext::nonzero;
 
-    use crate::{LeafNode, MemStore, Node, NodeStore, Path};
+    use crate::{LeafNode, MemStore, Node, NodeStore, PartialPath};
 
     use super::*;
 
@@ -224,7 +224,7 @@ mod test {
         let mem_store = MemStore::new(vec![]).into();
         let store = NodeStore::new_empty_committed(mem_store)?;
         let node = SharedNode::new(Node::Leaf(LeafNode {
-            partial_path: Path::new(),
+            partial_path: PartialPath::new_const(),
             value: vec![0].into(),
         }));
         // create as unpersisted
@@ -255,7 +255,7 @@ mod test {
         let mem_store = MemStore::new(vec![]).into();
         let store = NodeStore::new_empty_committed(mem_store)?;
         let node = SharedNode::new(Node::Leaf(LeafNode {
-            partial_path: Path::new(),
+            partial_path: PartialPath::new_const(),
             value: vec![42].into(),
         }));
 
@@ -291,7 +291,7 @@ mod test {
     #[test]
     fn test_allocated_info() {
         let node = SharedNode::new(Node::Leaf(LeafNode {
-            partial_path: Path::new(),
+            partial_path: PartialPath::new_const(),
             value: vec![123].into(),
         }));
 

@@ -8,7 +8,7 @@
 
 use crate::node::ExtendableBytes;
 use crate::node::children::Children;
-use crate::{LeafNode, LinearAddress, MaybePersistedNode, Node, Path, SharedNode};
+use crate::{LeafNode, LinearAddress, MaybePersistedNode, Node, PartialPath, SharedNode, TriePath};
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
 
@@ -370,7 +370,7 @@ mod ethhash {
 /// A branch node
 pub struct BranchNode {
     /// The partial path for this branch
-    pub partial_path: Path,
+    pub partial_path: PartialPath,
 
     /// The value of the data for this branch, if any
     pub value: Option<Box<[u8]>>,
@@ -385,7 +385,7 @@ pub struct BranchNode {
 impl Debug for BranchNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "[BranchNode")?;
-        write!(f, r#" path="{:?}""#, self.partial_path)?;
+        write!(f, r#" path="{}""#, self.partial_path.display())?;
 
         for (i, c) in &self.children {
             match c {
