@@ -102,12 +102,6 @@ pub enum Child {
     MaybePersisted(MaybePersistedNode, HashType),
 }
 
-// impl Default for Child {
-//     fn default() -> Self {
-//         Child::Node(Node::default())
-//     }
-// }
-
 impl Child {
     /// Return a mutable reference to the underlying Node if the child
     /// is a [`Child::Node`] variant, otherwise None.
