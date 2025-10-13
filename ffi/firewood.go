@@ -251,7 +251,7 @@ func (db *Database) Close() error {
 		return nil
 	}
 
-	runtime.GC()
+	go runtime.GC()
 	db.proposals.Wait()
 
 	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
