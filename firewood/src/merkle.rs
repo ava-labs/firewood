@@ -965,26 +965,41 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         &mut self,
         mut branch_node: Box<BranchNode>,
     ) -> Result<Option<Node>, FileIoError> {
-        let mut children_iter = branch_node.children.each_mut().iter_present();
-        let Some((child_index, child)) = children_iter.next() else {
-            // The branch has no children. Turn it into a leaf.
-            return match branch_node.value {
-                Some(value) => Ok(Some(Node::Leaf(LeafNode {
-                    value,
-                    partial_path: branch_node.partial_path,
-                }))),
-                None => Ok(None),
+        let mut children_iter = branch_node.children.each_mut().into_iter();
+
+        let (child_index, child) = loop {
+            let Some((child_index, child_slot)) = children_iter.next() else {
+                // The branch has no children. Turn it into a leaf.
+                return match branch_node.value {
+                    Some(value) => Ok(Some(Node::Leaf(LeafNode {
+                        value,
+                        partial_path: branch_node.partial_path,
+                    }))),
+                    None => Ok(None),
+                };
             };
+
+            let Some(child) = child_slot.take() else {
+                continue;
+            };
+
+            if branch_node.value.is_some() || children_iter.any(|(_, slot)| slot.is_some()) {
+                // put the child back in its slot since we removed it
+                child_slot.replace(child);
+
+                // explicitly drop the iterator to release the mutable borrow on branch_node
+                drop(children_iter);
+
+                // The branch has a value or more than 1 child, so it can't be flattened.
+                return Ok(Some(Node::Branch(branch_node)));
+            }
+
+            // we have found the only child
+            break (child_index, child);
         };
 
-        if children_iter.next().is_some() || branch_node.value.is_some() {
-            drop(children_iter);
-            // The branch has more than 1 child or has a value, so it can't be flattened.
-            return Ok(Some(Node::Branch(branch_node)));
-        }
-
         // The branch has only 1 child. Remove the branch and return the child.
-        let mut child = self.read_for_update(std::mem::take(child))?;
+        let mut child = self.read_for_update(child)?;
 
         // The child's partial path is the concatenation of its (now removed) parent,
         // its (former) child index, and its partial path.
