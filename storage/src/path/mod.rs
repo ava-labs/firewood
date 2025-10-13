@@ -7,11 +7,17 @@ mod joined;
 mod packed;
 mod split;
 
-pub use self::component::PathComponent;
+pub use self::component::{PathComponent, PathComponentSliceExt};
 pub use self::joined::JoinedPath;
 #[cfg(not(feature = "branch_factor_256"))]
 pub use self::packed::{PackedBytes, PackedPathComponents, PackedPathRef};
 pub use self::split::{IntoSplitPath, PathCommonPrefix, SplitPath};
+
+/// A reference to a packed path.
+///
+/// For 256-ary tries, this is no different than a slice of path components.
+#[cfg(feature = "branch_factor_256")]
+pub type PackedPathRef<'a> = &'a [PathComponent];
 
 /// A trie path of components with different underlying representations.
 ///
@@ -20,7 +26,7 @@ pub use self::split::{IntoSplitPath, PathCommonPrefix, SplitPath};
 /// as well as have a known length.
 pub trait TriePath {
     /// The iterator returned by [`TriePath::components`].
-    type Components<'a>: Iterator<Item = PathComponent> + Clone + 'a
+    type Components<'a>: DoubleEndedIterator<Item = PathComponent> + Clone + 'a
     where
         Self: 'a;
 
@@ -176,6 +182,10 @@ fn display_path(
     f: &mut std::fmt::Formatter<'_>,
     mut comp: impl Iterator<Item = PathComponent>,
 ) -> std::fmt::Result {
+    if f.alternate() {
+        f.write_str("0x")?;
+    }
+
     comp.try_for_each(|c| write!(f, "{c}"))
 }
 

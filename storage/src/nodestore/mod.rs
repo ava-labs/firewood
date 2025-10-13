@@ -49,7 +49,6 @@ use crate::logger::trace;
 use crate::node::branch::ReadSerializable as _;
 use arc_swap::ArcSwap;
 use arc_swap::access::DynAccess;
-use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind, Read};
 
@@ -90,7 +89,7 @@ use crate::hashednode::hash_node;
 use crate::node::Node;
 use crate::node::persist::MaybePersistedNode;
 use crate::{
-    CacheReadStrategy, Child, FileIoError, HashType, Path, ReadableStorage, SharedNode, TrieHash,
+    CacheReadStrategy, Child, FileIoError, HashType, ReadableStorage, SharedNode, TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -130,7 +129,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
         if let Some(root_address) = header.root_address() {
             let node = nodestore.read_node_from_disk(root_address, "open");
-            let root_hash = node.map(|n| hash_node(&n, &Path(SmallVec::default())))?;
+            let root_hash = node.map(|n| hash_node(&n, &[]))?;
             nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
         }
 
@@ -794,8 +793,8 @@ where
 #[expect(clippy::cast_possible_truncation)]
 mod tests {
 
-    use crate::LeafNode;
     use crate::linear::memory::MemStore;
+    use crate::{LeafNode, PartialPath, TriePathFromUnpackedBytes};
     use arc_swap::access::DynGuard;
 
     use super::*;
@@ -877,7 +876,7 @@ mod tests {
         let huge_value = vec![0u8; AreaIndex::MAX_AREA_SIZE as usize];
 
         let giant_leaf = Node::Leaf(LeafNode {
-            partial_path: Path::from([0, 1, 2]),
+            partial_path: PartialPath::path_from_unpacked_bytes(&[0, 1, 2]).unwrap(),
             value: huge_value.into_boxed_slice(),
         });
 

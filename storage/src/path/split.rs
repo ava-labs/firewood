@@ -29,6 +29,15 @@ pub trait SplitPath: TriePath + Default + Copy {
     fn longest_common_prefix<T: SplitPath>(self, other: T) -> PathCommonPrefix<Self, T> {
         PathCommonPrefix::new(self, other)
     }
+
+    /// Splits the first path component off of this path in place, returning it.
+    ///
+    /// Returns [`None`] if the path is empty.
+    fn split_first_in_place(&mut self) -> Option<PathComponent> {
+        let (first, rest) = self.split_first()?;
+        *self = rest;
+        Some(first)
+    }
 }
 
 /// A type that can be converted into a splittable path.
@@ -38,7 +47,7 @@ pub trait SplitPath: TriePath + Default + Copy {
 ///
 /// Like `IntoIterator`, a blanket implementation is provided for all types that
 /// already implement [`SplitPath`].
-pub trait IntoSplitPath {
+pub trait IntoSplitPath: TriePath {
     /// The splittable path type derived from this type.
     type Path: SplitPath;
 
@@ -82,6 +91,19 @@ impl<A: SplitPath, B: SplitPath> PathCommonPrefix<A, B> {
             a_suffix,
             b_suffix,
         }
+    }
+}
+
+impl<A: SplitPath, B: SplitPath, C> PathCommonPrefix<A, B, C> {
+    /// Splits the first path component off of each suffix, returning them along
+    /// with the common prefix.
+    #[expect(clippy::type_complexity)]
+    pub fn split_parts(self) -> (Option<(PathComponent, A)>, Option<(PathComponent, B)>, C) {
+        (
+            self.a_suffix.split_first(),
+            self.b_suffix.split_first(),
+            self.common,
+        )
     }
 }
 

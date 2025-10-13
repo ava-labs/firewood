@@ -1,12 +1,12 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{BranchNode, Children, HashType, LeafNode, Node, Path};
+use crate::{BranchNode, Children, HashType, IntoSplitPath, LeafNode, Node, SplitPath, TriePath};
 use smallvec::SmallVec;
 
-/// Returns the hash of `node`, which is at the given `path_prefix`.
+/// Returns the hash of `node`, which is at the given `prefix`.
 #[must_use]
-pub fn hash_node(node: &Node, path_prefix: &Path) -> HashType {
+pub fn hash_node(node: &Node, prefix: impl IntoSplitPath) -> HashType {
     match node {
         Node::Branch(node) => {
             // All child hashes should be filled in.
@@ -20,37 +20,37 @@ pub fn hash_node(node: &Node, path_prefix: &Path) -> HashType {
             );
             NodeAndPrefix {
                 node: node.as_ref(),
-                prefix: path_prefix,
+                prefix: prefix.into_split_path(),
             }
             .into()
         }
         Node::Leaf(node) => NodeAndPrefix {
             node,
-            prefix: path_prefix,
+            prefix: prefix.into_split_path(),
         }
         .into(),
     }
 }
 
 /// Returns the serialized representation of `node` used as the pre-image
-/// when hashing the node. The node is at the given `path_prefix`.
+/// when hashing the node. The node is at the given `prefix`.
 #[must_use]
-pub fn hash_preimage(node: &Node, path_prefix: &Path) -> Box<[u8]> {
+pub fn hash_preimage(node: &Node, prefix: impl IntoSplitPath) -> Box<[u8]> {
     // Key, 3 options, value digest
     #[expect(clippy::arithmetic_side_effects)]
-    let est_len = node.partial_path().len() + path_prefix.len() + 3 + HashType::empty().len();
+    let est_len = node.partial_path().len() + prefix.len() + 3 + HashType::empty().len();
     let mut buf = Vec::with_capacity(est_len);
     match node {
         Node::Branch(node) => {
             NodeAndPrefix {
                 node: node.as_ref(),
-                prefix: path_prefix,
+                prefix: prefix.into_split_path(),
             }
             .write(&mut buf);
         }
         Node::Leaf(node) => NodeAndPrefix {
             node,
-            prefix: path_prefix,
+            prefix: prefix.into_split_path(),
         }
         .write(&mut buf),
     }
@@ -63,20 +63,13 @@ pub trait HasUpdate {
 
 impl HasUpdate for Vec<u8> {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
-        self.extend(data.as_ref().iter().copied());
+        self.extend_from_slice(data.as_ref());
     }
 }
 
-// TODO: make it work with any size SmallVec
-// impl<T: AsRef<[u8]> + smallvec::Array> HasUpdate for SmallVec<T> {
-//     fn update<U: AsRef<[u8]>>(&mut self, data: U) {
-//         self.extend(data.as_ref());
-//     }
-// }
-
-impl HasUpdate for SmallVec<[u8; 32]> {
+impl<A: smallvec::Array<Item = u8>> HasUpdate for SmallVec<A> {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
-        self.extend(data.as_ref().iter().copied());
+        self.extend_from_slice(data.as_ref());
     }
 }
 
@@ -153,9 +146,9 @@ impl<T: AsRef<[u8]>> AsRef<[u8]> for ValueDigest<T> {
 /// A node in the trie that can be hashed.
 pub trait Hashable: std::fmt::Debug {
     /// The full path of this node's parent where each byte is a nibble.
-    fn parent_prefix_path(&self) -> impl Iterator<Item = u8> + Clone;
+    fn parent_prefix_path(&self) -> impl IntoSplitPath + '_;
     /// The partial path of this node where each byte is a nibble.
-    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone;
+    fn partial_path(&self) -> impl IntoSplitPath + '_;
     /// The node's value or hash.
     fn value_digest(&self) -> Option<ValueDigest<&[u8]>>;
     /// Each element is a child's index and hash.
@@ -163,8 +156,10 @@ pub trait Hashable: std::fmt::Debug {
     fn children(&self) -> Children<Option<HashType>>;
 
     /// The full path of this node including the parent's prefix where each byte is a nibble.
-    fn full_path(&self) -> impl Iterator<Item = u8> + Clone {
-        self.parent_prefix_path().chain(self.partial_path())
+    fn full_path(&self) -> impl IntoSplitPath + '_ {
+        self.parent_prefix_path()
+            .into_split_path()
+            .append(self.partial_path().into_split_path())
     }
 }
 
@@ -177,14 +172,14 @@ pub trait Preimage: std::fmt::Debug {
 }
 
 trait HashableNode: std::fmt::Debug {
-    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone;
+    fn partial_path(&self) -> impl IntoSplitPath + '_;
     fn value(&self) -> Option<&[u8]>;
     fn child_hashes(&self) -> Children<Option<HashType>>;
 }
 
 impl HashableNode for BranchNode {
-    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
-        self.partial_path.0.iter().copied()
+    fn partial_path(&self) -> impl IntoSplitPath + '_ {
+        &self.partial_path
     }
 
     fn value(&self) -> Option<&[u8]> {
@@ -197,8 +192,8 @@ impl HashableNode for BranchNode {
 }
 
 impl HashableNode for LeafNode {
-    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
-        self.partial_path.0.iter().copied()
+    fn partial_path(&self) -> impl IntoSplitPath + '_ {
+        &self.partial_path
     }
 
     fn value(&self) -> Option<&[u8]> {
@@ -210,24 +205,32 @@ impl HashableNode for LeafNode {
     }
 }
 
-#[derive(Debug)]
-struct NodeAndPrefix<'a, N: HashableNode> {
+struct NodeAndPrefix<'a, N: HashableNode, P: SplitPath> {
     node: &'a N,
-    prefix: &'a Path,
+    prefix: P,
 }
 
-impl<'a, N: HashableNode> From<NodeAndPrefix<'a, N>> for HashType {
-    fn from(node: NodeAndPrefix<'a, N>) -> Self {
+impl<N: HashableNode, P: SplitPath> std::fmt::Debug for NodeAndPrefix<'_, N, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NodeAndPrefix")
+            .field("node", &self.node)
+            .field("prefix", &self.prefix.display())
+            .finish()
+    }
+}
+
+impl<'a, N: HashableNode, P: SplitPath> From<NodeAndPrefix<'a, N, P>> for HashType {
+    fn from(node: NodeAndPrefix<'a, N, P>) -> Self {
         node.to_hash()
     }
 }
 
-impl<'a, N: HashableNode> Hashable for NodeAndPrefix<'a, N> {
-    fn parent_prefix_path(&self) -> impl Iterator<Item = u8> + Clone {
-        self.prefix.0.iter().copied()
+impl<'a, N: HashableNode, P: SplitPath> Hashable for NodeAndPrefix<'a, N, P> {
+    fn parent_prefix_path(&self) -> impl IntoSplitPath + '_ {
+        self.prefix
     }
 
-    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
+    fn partial_path(&self) -> impl IntoSplitPath + '_ {
         self.node.partial_path()
     }
 

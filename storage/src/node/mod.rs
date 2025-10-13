@@ -16,7 +16,10 @@
 
 use crate::node::branch::ReadSerializable;
 use crate::nodestore::AreaIndex;
-use crate::{HashType, LinearAddress, Path, PathComponent, SharedNode};
+use crate::{
+    HashType, LinearAddress, PartialPath, PathComponent, PathComponentSliceExt, SharedNode,
+    TriePathFromUnpackedBytes,
+};
 use bitfield::bitfield;
 use branch::Serializable as _;
 pub use branch::{BranchNode, Child};
@@ -30,7 +33,6 @@ use std::io::{Error, Read, Write};
 pub mod branch;
 pub mod children;
 mod leaf;
-pub mod path;
 pub mod persist;
 /// A node, either a Branch or Leaf
 
@@ -46,10 +48,7 @@ pub enum Node {
 
 impl Default for Node {
     fn default() -> Self {
-        Node::Leaf(LeafNode {
-            partial_path: Path::new(),
-            value: Box::default(),
-        })
+        Node::Leaf(LeafNode::default())
     }
 }
 
@@ -152,7 +151,7 @@ impl ExtendableBytes for Vec<u8> {
 impl Node {
     /// Returns the partial path of the node.
     #[must_use]
-    pub fn partial_path(&self) -> &Path {
+    pub fn partial_path(&self) -> &[PathComponent] {
         match self {
             Node::Branch(b) => &b.partial_path,
             Node::Leaf(l) => &l.partial_path,
@@ -160,7 +159,7 @@ impl Node {
     }
 
     /// Updates the partial path of the node to `partial_path`.
-    pub fn update_partial_path(&mut self, partial_path: Path) {
+    pub fn update_partial_path(&mut self, partial_path: PartialPath) {
         match self {
             Node::Branch(b) => b.partial_path = partial_path,
             Node::Leaf(l) => l.partial_path = partial_path,
@@ -254,7 +253,7 @@ impl Node {
                 if pp_len == BRANCH_PARTIAL_PATH_LEN_OVERFLOW {
                     encoded.extend_var_int(b.partial_path.len());
                 }
-                encoded.extend_from_slice(&b.partial_path);
+                encoded.extend_from_slice(b.partial_path.as_byte_slice());
 
                 // encode the value. For tries that have the same length keys, this is always empty
                 if let Some(v) = &b.value {
@@ -299,7 +298,7 @@ impl Node {
                 if pp_len == LEAF_PARTIAL_PATH_LEN_OVERFLOW {
                     encoded.extend_var_int(l.partial_path.len());
                 }
-                encoded.extend_from_slice(&l.partial_path);
+                encoded.extend_from_slice(l.partial_path.as_byte_slice());
 
                 // encode the value
                 encoded.extend_var_int(l.value.len());
@@ -410,7 +409,7 @@ impl Node {
 #[derive(Debug)]
 pub struct PathIterItem {
     /// The key of the node at `address` as nibbles.
-    pub key_nibbles: Box<[u8]>,
+    pub key_nibbles: PartialPath,
     /// A reference to the node
     pub node: SharedNode,
     /// The next item returned by the iterator is a child of `node`.
@@ -424,7 +423,7 @@ fn read_path_with_overflow_length(
     reader: &mut impl Read,
     value: u8,
     overflow: u8,
-) -> std::io::Result<Path> {
+) -> std::io::Result<PartialPath> {
     if value < overflow {
         // the value is less than the overflow, so we can read it directly
         read_path_with_provided_length(reader, value as usize)
@@ -435,14 +434,23 @@ fn read_path_with_overflow_length(
 
 #[cold]
 #[inline(never)]
-fn read_path_with_prefix_length(reader: &mut impl Read) -> std::io::Result<Path> {
+fn read_path_with_prefix_length(reader: &mut impl Read) -> std::io::Result<PartialPath> {
     let len = reader.read_varint()?;
     read_path_with_provided_length(reader, len)
 }
 
 #[inline]
-fn read_path_with_provided_length(reader: &mut impl Read, len: usize) -> std::io::Result<Path> {
-    reader.read_fixed_len(len).map(Path::from)
+fn read_path_with_provided_length(
+    reader: &mut impl Read,
+    len: usize,
+) -> std::io::Result<PartialPath> {
+    let path = reader.read_fixed_len(len)?;
+    PartialPath::path_from_unpacked_bytes(&path).map_err(|_| {
+        Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("invalid path component in path: {path:x?}"),
+        )
+    })
 }
 
 #[cfg(test)]
@@ -451,21 +459,42 @@ mod test {
 
     use crate::node::{BranchNode, LeafNode, Node};
     use crate::nodestore::AreaIndex;
-    use crate::{Child, Children, LinearAddress, NibblesIterator, Path};
+    use crate::{
+        Child, Children, LinearAddress, PartialPath, PathComponent, TriePathFromPackedBytes,
+    };
     use test_case::test_case;
+
+    /// Yields a [`PathComponent`] failing to compile if the given expression is
+    /// not a valid path component.
+    macro_rules! pc {
+        ($elem:expr) => {
+            const { PathComponent::ALL[$elem] }
+        };
+    }
+
+    /// Yields an array of [`PathComponent`]s failing to compile if any of the
+    /// given expressions are not valid path components.
+    ///
+    /// The expression yields an array, not a slice, and a reference must be taken
+    /// to convert it to a slice.
+    macro_rules! path {
+        ($($elem:expr),* $(,)?) => {
+            [ $( pc!($elem), )* ]
+        };
+    }
 
     #[test_case(
         Node::Leaf(LeafNode {
-            partial_path: Path::from(vec![0, 1, 2, 3]),
+            partial_path: path![0, 1, 2, 3].as_slice().into(),
             value: vec![4, 5, 6, 7].into()
         }), 11; "leaf node with value")]
     #[test_case(
         Node::Leaf(LeafNode {
-            partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056.")),
+            partial_path: PartialPath::path_from_packed_bytes(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056."),
             value: vec![4, 5, 6, 7].into()
         }), 211; "leaf node obnoxiously long partial path")]
     #[test_case(Node::Branch(Box::new(BranchNode {
-        partial_path: Path::from(vec![0, 1]),
+        partial_path: path![0, 1].as_slice().into(),
         value: None,
         children: Children::from_fn(|i| {
             if i.as_u8() == 15 {
@@ -476,21 +505,21 @@ mod test {
         })})), 45; "one child branch node with short partial path and no value"
     )]
     #[test_case(Node::Branch(Box::new(BranchNode {
-        partial_path: Path::from(vec![0, 1, 2, 3]),
+        partial_path: path![0, 1, 2, 3].as_slice().into(),
         value: Some(vec![4, 5, 6, 7].into()),
         children: Children::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
         )})), 652; "full branch node with long partial path and value"
     )]
     #[test_case(Node::Branch(Box::new(BranchNode {
-        partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056.")),
+        partial_path: PartialPath::path_from_packed_bytes(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056."),
         value: Some(vec![4, 5, 6, 7].into()),
         children: Children::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
         )})), 851; "full branch node with obnoxiously long partial path"
     )]
     #[test_case(Node::Branch(Box::new(BranchNode {
-        partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056.")),
+        partial_path: PartialPath::path_from_packed_bytes(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056."),
         value: Some((*br"
 We also need to test values that have a length longer than 255 bytes so that we
 verify that we decode the entire value every time. previously, we would only read

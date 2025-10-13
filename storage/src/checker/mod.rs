@@ -9,8 +9,8 @@ use crate::nodestore::alloc::FreeAreaWithMetadata;
 use crate::nodestore::primitives::{AreaIndex, area_size_iter};
 use crate::{
     CheckerError, Committed, FileIoError, HashType, HashedNodeReader, ImmutableProposal,
-    IntoHashType, LinearAddress, MutableProposal, Node, NodeReader, NodeStore, Path,
-    ReadableStorage, RootReader, StoredAreaParent, TrieNodeParent, WritableStorage,
+    IntoHashType, LinearAddress, MutableProposal, Node, NodeReader, NodeStore, PartialPath,
+    ReadableStorage, RootReader, StoredAreaParent, TrieNodeParent, TriePath, WritableStorage,
 };
 
 #[cfg(not(feature = "ethhash"))]
@@ -40,14 +40,14 @@ fn extra_read_pages(addr: LinearAddress, bytes: u64) -> Option<u64> {
 }
 
 #[cfg(feature = "ethhash")]
-fn is_valid_key(key: &Path) -> bool {
+fn is_valid_key(key: &(impl TriePath + ?Sized)) -> bool {
     const VALID_ETH_KEY_SIZES: [usize; 2] = [64, 128]; // in number of nibbles - two nibbles make a byte
-    VALID_ETH_KEY_SIZES.contains(&key.0.len())
+    VALID_ETH_KEY_SIZES.contains(&key.len())
 }
 
 #[cfg(not(feature = "ethhash"))]
-fn is_valid_key(key: &Path) -> bool {
-    key.0.len().is_multiple_of(2)
+fn is_valid_key(key: &(impl TriePath + ?Sized)) -> bool {
+    key.len().is_multiple_of(2)
 }
 
 /// Options for the checker
@@ -150,7 +150,7 @@ struct SubTrieMetadata {
     root_hash: HashType,
     parent: TrieNodeParent,
     depth: usize,
-    path_prefix: Path,
+    path_prefix: PartialPath,
     #[cfg(feature = "ethhash")]
     has_peers: bool,
 }
@@ -250,7 +250,7 @@ where
             root_hash,
             parent: TrieNodeParent::Root,
             depth: 0,
-            path_prefix: Path::new(),
+            path_prefix: PartialPath::new_const(),
             #[cfg(feature = "ethhash")]
             has_peers: false,
         };
@@ -315,7 +315,7 @@ where
 
         // if the node has a value, check that the key is valid
         let mut current_path_prefix = path_prefix.clone();
-        current_path_prefix.0.extend_from_slice(node.partial_path());
+        current_path_prefix.extend_from_slice(node.partial_path());
         if node.value().is_some() && !is_valid_key(&current_path_prefix) {
             return Err(vec![CheckerError::InvalidKey {
                 key: current_path_prefix,
@@ -357,7 +357,7 @@ where
                 // collect kv count
                 trie_stats.kv_count = trie_stats.kv_count.saturating_add(1);
                 // collect kv pair bytes - this is the minimum number of bytes needed to store the data
-                let key_bytes = current_path_prefix.0.len().div_ceil(2);
+                let key_bytes = current_path_prefix.len().div_ceil(2);
                 let value_bytes = value.len();
                 trie_stats.kv_bytes = trie_stats
                     .kv_bytes
@@ -419,7 +419,7 @@ where
                 {
                     let parent = TrieNodeParent::Parent(subtrie_root_address, nibble);
                     let mut child_path_prefix = current_path_prefix.clone();
-                    child_path_prefix.0.push(nibble.as_u8());
+                    child_path_prefix.push(nibble);
                     let child_subtrie = SubTrieMetadata {
                         root_address: address,
                         root_hash: hash.clone(),
@@ -764,9 +764,28 @@ mod test {
     };
     use crate::nodestore::primitives::area_size_iter;
     use crate::{
-        BranchNode, Child, Children, FreeListParent, LeafNode, NodeStore, Path, PathComponent,
+        BranchNode, Child, Children, FreeListParent, LeafNode, NodeStore, PathComponent,
         area_index, hash_node,
     };
+
+    /// Yields a [`PathComponent`] failing to compile if the given expression is
+    /// not a valid path component.
+    macro_rules! pc {
+        ($elem:expr) => {
+            const { PathComponent::ALL[$elem] }
+        };
+    }
+
+    /// Yields an array of [`PathComponent`]s failing to compile if any of the
+    /// given expressions are not valid path components.
+    ///
+    /// The expression yields an array, not a slice, and a reference must be taken
+    /// to convert it to a slice.
+    macro_rules! path {
+        ($($elem:expr),* $(,)?) => {
+            [ $( pc!($elem), )* ]
+        };
+    }
 
     #[derive(Debug)]
     struct TestTrie {
@@ -799,11 +818,11 @@ mod test {
         let mut leaf_area_counts: BTreeMap<u64, u64> =
             area_size_iter().map(|(_, size)| (size, 0)).collect();
         let leaf = Node::Leaf(LeafNode {
-            partial_path: Path::from_nibbles_iterator(std::iter::repeat_n([4, 5], 30).flatten()),
+            partial_path: std::iter::repeat_n(path![4, 5], 30).flatten().collect(),
             value: Box::new([6, 7, 8]),
         });
         let leaf_addr = LinearAddress::new(high_watermark).unwrap();
-        let leaf_hash = hash_node(&leaf, &Path::from([2, 0, 3, 1]));
+        let leaf_hash = hash_node(&leaf, &path![2, 0, 3, 1]);
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &leaf, high_watermark);
         high_watermark += stored_area_size;
@@ -814,12 +833,12 @@ mod test {
         let mut branch_children = Children::new();
         branch_children[PathComponent::ALL[1]] = Some(Child::AddressWithHash(leaf_addr, leaf_hash));
         let branch = Node::Branch(Box::new(BranchNode {
-            partial_path: Path::from([3]),
+            partial_path: path![3].as_slice().into(),
             value: None,
             children: branch_children,
         }));
         let branch_addr = LinearAddress::new(high_watermark).unwrap();
-        let branch_hash = hash_node(&branch, &Path::from([2, 0]));
+        let branch_hash = hash_node(&branch, &path![2, 0]);
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &branch, high_watermark);
         high_watermark += stored_area_size;
@@ -831,12 +850,12 @@ mod test {
         root_children[PathComponent::ALL[0]] =
             Some(Child::AddressWithHash(branch_addr, branch_hash));
         let root = Node::Branch(Box::new(BranchNode {
-            partial_path: Path::from([2]),
+            partial_path: path![2].as_slice().into(),
             value: None,
             children: root_children,
         }));
         let root_addr = LinearAddress::new(high_watermark).unwrap();
-        let root_hash = hash_node(&root, &Path::new());
+        let root_hash = hash_node(&root, &[]);
         let (bytes_written, stored_area_size) =
             test_write_new_node(nodestore, &root, high_watermark);
         high_watermark += stored_area_size;
@@ -1034,7 +1053,7 @@ mod test {
         let (branch_node, branch_addr) = test_trie
             .nodes
             .iter_mut()
-            .find(|(node, _)| matches!(node, Node::Branch(b) if *b.partial_path.0 == [3]))
+            .find(|(node, _)| matches!(node, Node::Branch(b) if *b.partial_path == path![3]))
             .unwrap();
 
         let branch = branch_node.as_branch_mut().unwrap();
@@ -1054,17 +1073,17 @@ mod test {
         #[cfg(feature = "ethhash")]
         let computed_hash = NodeStore::<Committed, MemStore>::compute_node_ethhash(
             branch_node,
-            &Path::from([2, 0]),
+            &path![2, 0],
             false,
         );
         #[cfg(not(feature = "ethhash"))]
-        let computed_hash = hash_node(branch_node, &Path::from([2, 0]));
+        let computed_hash = hash_node(branch_node, &path![2, 0]);
 
         // Get parent stored hash
         let (root_node, _) = test_trie
             .nodes
             .iter()
-            .find(|(node, _)| matches!(node, Node::Branch(b) if *b.partial_path.0 == [2]))
+            .find(|(node, _)| matches!(node, Node::Branch(b) if *b.partial_path == path![2]))
             .unwrap();
         let root_branch = root_node.as_branch().unwrap();
         let (_, parent_stored_hash) = root_branch.children[PathComponent::ALL[0]]
@@ -1086,7 +1105,7 @@ mod test {
 
         let expected_error = CheckerError::HashMismatch {
             address: branch_addr,
-            path: Path::from([2, 0, 3]),
+            path: path![2, 0, 3].as_slice().into(),
             parent: TrieNodeParent::Parent(root_addr, PathComponent::ALL[0]),
             parent_stored_hash,
             computed_hash,
