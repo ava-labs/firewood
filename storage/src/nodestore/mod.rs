@@ -158,8 +158,12 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// address and hash, typically when reconstructing a [`NodeStore`] from
     /// a committed state. The `latest_nodestore` provides access to the underlying
     /// storage backend containing the persisted trie data.
+    ///
+    /// ## Panics
+    ///
+    /// Panics in debug builds if the hash of the node at `root_address` does
+    /// not equal `root_hash`.
     #[must_use]
-    #[allow(clippy::missing_panics_doc)]
     pub fn with_root(
         root_hash: HashType,
         root_address: LinearAddress,
