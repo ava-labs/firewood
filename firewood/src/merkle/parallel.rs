@@ -4,14 +4,15 @@
 use crate::db::BatchOp;
 use crate::merkle::{Key, Merkle, Value};
 use crate::v2::api::KeyValuePairIter;
+use firewood_storage::logger::error;
 use firewood_storage::{
-    BranchNode, Child, FileBacked, FileIoError, ImmutableProposal, LeafNode, MutableProposal,
-    NibblesIterator, Node, NodeReader, NodeStore, Parentable, Path,
+    BranchNode, Child, FileBacked, FileIoError, ImmutableProposal, LeafNode, MaybePersistedNode,
+    MutableProposal, NibblesIterator, Node, NodeReader, NodeStore, Parentable, Path,
 };
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::iter::once;
 use std::ops::Deref;
-use std::sync::mpsc::{Receiver, Sender};
+use std::sync::mpsc::{Receiver, SendError, Sender};
 use std::sync::{Arc, OnceLock, mpsc};
 
 #[derive(Debug)]
@@ -31,14 +32,15 @@ enum Request {
     Insert { key: Key, value: Value },
     Delete { key: Key },
     DeleteRange { prefix: Key },
-    Done,
 }
 
+/// Response returned from a worker to the main thread. Includes the new root of the subtrie
+/// at the given nibble and the deleted nodes.
 #[derive(Debug)]
-enum Response<S> {
-    // return the new root of the subtrie at the given nibble
-    Root(u8, Box<NodeStore<MutableProposal, S>>),
-    Error(FileIoError),
+struct Response {
+    nibble: u8,
+    root: Option<Child>,
+    deleted_nodes: Vec<MaybePersistedNode>,
 }
 
 /// `ParallelMerkle` safely performs parallel modifications to a Merkle trie. It does this
@@ -158,6 +160,56 @@ impl ParallelMerkle {
         }
     }
 
+    /// Call by a worker to processes requests from `child_receiver` and send back a response on
+    /// `response_sender` once the main thread closes the child sender.
+    fn worker_event_loop(
+        mut merkle: Merkle<NodeStore<MutableProposal, FileBacked>>,
+        first_nibble: u8,
+        child_receiver: Receiver<Request>,
+        response_sender: Sender<Result<Response, FileIoError>>,
+    ) -> Result<(), Box<SendError<Result<Response, FileIoError>>>> {
+        // Wait for a message on the receiver child channel. Break out of loop when the sender has
+        // closed the child sender.
+        while let Ok(request) = child_receiver.recv() {
+            match request {
+                // insert a key-value pair into the subtrie
+                Request::Insert { key, value } => {
+                    let mut nibbles_iter = NibblesIterator::new(&key);
+                    nibbles_iter.next(); // Skip the first nibble
+                    if let Err(err) = merkle.insert_from_iter(nibbles_iter, value.as_ref().into()) {
+                        response_sender.send(Err(err))?;
+                        break; // Stop handling additional requests
+                    }
+                }
+                Request::Delete { key } => {
+                    let mut nibbles_iter = NibblesIterator::new(&key);
+                    nibbles_iter.next(); // Skip the first nibble
+                    if let Err(err) = merkle.remove_from_iter(nibbles_iter) {
+                        response_sender.send(Err(err))?;
+                        break; // Stop handling additional requests
+                    }
+                }
+                Request::DeleteRange { prefix } => {
+                    let mut nibbles_iter = NibblesIterator::new(&prefix);
+                    nibbles_iter.next(); // Skip the first nibble
+                    if let Err(err) = merkle.remove_prefix_from_iter(nibbles_iter) {
+                        response_sender.send(Err(err))?;
+                        break; // Stop handling additional requests
+                    }
+                }
+            }
+        }
+        // The main thread has closed the channel. Send back the worker's response.
+        let mut nodestore = merkle.into_inner();
+        let response = Response {
+            nibble: first_nibble,
+            root: nodestore.root_mut().take().map(Child::Node),
+            deleted_nodes: nodestore.take_deleted_nodes(),
+        };
+        response_sender.send(Ok(response))?;
+        Ok(())
+    }
+
     /// Creates a worker for performing operations on a subtrie, with the subtrie being determined
     /// by the value of the `first_nibble`.
     fn create_worker(
@@ -165,7 +217,7 @@ impl ParallelMerkle {
         proposal: &NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut Box<BranchNode>,
         first_nibble: u8,
-        worker_sender: Sender<Response<FileBacked>>,
+        response_sender: Sender<Result<Response, FileIoError>>,
     ) -> Result<WorkerSender, FileIoError> {
         // Create a channel for the coordinator (main thread) to send messages to this worker.
         let (child_sender, child_receiver) = mpsc::channel();
@@ -190,80 +242,39 @@ impl ParallelMerkle {
         // Spawn a worker from the threadpool for this nibble. The worker will send messages to the coordinator
         // using `worker_sender`.
         pool.spawn(move || {
-            let mut merkle = Merkle::from(worker_nodestore);
-
-            // Wait for a message on the receiver child channel. Break out of loop if there is an error.
-            while let Ok(request) = child_receiver.recv() {
-                match request {
-                    // insert a key-value pair into the subtrie
-                    Request::Insert { key, value } => {
-                        let mut nibbles_iter = NibblesIterator::new(&key);
-                        nibbles_iter.next(); // Skip the first nibble
-                        if let Err(err) =
-                            merkle.insert_from_iter(nibbles_iter, value.as_ref().into())
-                        {
-                            worker_sender
-                                .send(Response::Error(err))
-                                .expect("send from worker error");
-                        }
-                    }
-                    Request::Delete { key } => {
-                        let mut nibbles_iter = NibblesIterator::new(&key);
-                        nibbles_iter.next(); // Skip the first nibble
-                        if let Err(err) = merkle.remove_from_iter(nibbles_iter) {
-                            worker_sender
-                                .send(Response::Error(err))
-                                .expect("send from worker error");
-                        }
-                    }
-                    Request::DeleteRange { prefix } => {
-                        let mut nibbles_iter = NibblesIterator::new(&prefix);
-                        nibbles_iter.next(); // Skip the first nibble
-                        if let Err(err) = merkle.remove_prefix_from_iter(nibbles_iter) {
-                            worker_sender
-                                .send(Response::Error(err))
-                                .expect("send from worker error");
-                        }
-                    }
-                    // Sent from the coordinator to the workers to signal that the batch is done.
-                    Request::Done => {
-                        worker_sender
-                            .send(Response::Root(first_nibble, merkle.into_inner().into()))
-                            .expect("send from worker error");
-                        break; // Allow the worker to return to the thread pool.
-                    }
-                }
+            if let Err(err) = ParallelMerkle::worker_event_loop(
+                Merkle::from(worker_nodestore),
+                first_nibble,
+                child_receiver,
+                response_sender,
+            ) {
+                error!("Worker cannot send to main thread using response channel: {err:?}");
             }
         });
         Ok(WorkerSender(child_sender))
     }
 
-    // Send a done message to all of the workers. Collect the responses, each representing the root of a
-    // subtrie, and merge them into the root node of the main trie.
+    // Collect responses from the workers, each representing the root of a subtrie and merge them into the
+    // root node of the main trie.
     fn merge_children(
         &mut self,
-        response_channel: Receiver<Response<FileBacked>>,
+        response_channel: Receiver<Result<Response, FileIoError>>,
         proposal: &mut NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut Box<BranchNode>,
     ) -> Result<(), FileIoError> {
-        // We have processed all the ops in the batch, so send a Done message to each worker
-        for worker in self.workers.iter().flatten() {
-            worker.send(Request::Done).expect("send to worker error");
-        }
-
         while let Ok(response) = response_channel.recv() {
             match response {
-                Response::Root(index, child_nodestore) => {
-                    // Adding deleted nodes (from calling read_for_update) from child nodestores.
-                    proposal.delete_nodes(child_nodestore.deleted_as_slice());
+                Ok(response) => {
+                    // Adding deleted nodes (from calling read_for_update) from the child's nodestore.
+                    proposal.delete_nodes(response.deleted_nodes.as_slice());
 
-                    // Set the child at index using the root from the child nodestore.
+                    // Set the child at index to response.root which is the root of the child's subtrie.
                     *root_branch
                         .children
-                        .get_mut(index as usize)
-                        .expect("index error") = child_nodestore.into_root().map(Child::Node);
+                        .get_mut(response.nibble as usize)
+                        .expect("index error") = response.root;
                 }
-                Response::Error(err) => {
+                Err(err) => {
                     return Err(err); // Early termination.
                 }
             }
@@ -279,7 +290,7 @@ impl ParallelMerkle {
         proposal: &NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut Box<BranchNode>,
         first_nibble: u8,
-        worker_sender: Sender<Response<FileBacked>>,
+        response_sender: Sender<Result<Response, FileIoError>>,
     ) -> Result<&mut WorkerSender, FileIoError> {
         // Find the worker's state corresponding to the first nibble which are stored in an array.
         let worker_option = self
@@ -296,7 +307,7 @@ impl ParallelMerkle {
                 proposal,
                 root_branch,
                 first_nibble,
-                worker_sender,
+                response_sender,
             )?)),
         }
     }
@@ -439,16 +450,15 @@ impl ParallelMerkle {
         // Drop the sender response channel from the parent thread.
         drop(response_sender);
 
-        // Merge step: send a done message to all of the workers to indicate that the batch is complete.
-        // Collect the results from the workers and merge them as children to the root.
+        // Setting the workers to None will close the senders to the workers. In response, the workers
+        // will send back their responses.
+        self.workers = [(); BranchNode::MAX_CHILDREN].map(|()| None);
+
+        // Merge step: Collect the results from the workers and merge them as children to the root.
         self.merge_children(response_receiver, &mut proposal, &mut root_branch)?;
 
         // Post-process step: return the trie to its canonical form.
         *proposal.root_mut() = self.postprocess_trie(&mut proposal, root_branch)?;
-
-        // Done with these worker senders. Setting the workers to None will allow the next create
-        // proposal from the same ParallelMerkle to reuse the thread pool.
-        self.workers = [(); BranchNode::MAX_CHILDREN].map(|()| None);
 
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
             Arc::new(proposal.try_into().expect("error creating immutable"));

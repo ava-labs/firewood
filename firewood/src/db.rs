@@ -143,6 +143,7 @@ impl api::Db for Db {
         &self,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
     ) -> Result<Self::Proposal<'_>, api::Error> {
+        /* 
         let parent = self.manager.current_revision();
         let proposal = NodeStore::new(&parent)?;
         let mut merkle = Merkle::from(proposal);
@@ -177,6 +178,8 @@ impl api::Db for Db {
             nodestore: immutable,
             db: self,
         })
+        */
+        self.propose_parallel(batch)
     }
 }
 
