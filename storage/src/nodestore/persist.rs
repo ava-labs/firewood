@@ -300,12 +300,39 @@ impl NodeStore<Committed, FileBacked> {
     #[cfg(feature = "io-uring")]
     fn flush_nodes_io_uring(&mut self) -> Result<NodeStoreHeader, FileIoError> {
         use crate::LinearAddress;
+        use std::io::ErrorKind::Interrupted;
         use std::pin::Pin;
 
         #[derive(Clone, Debug)]
         struct PinnedBufferEntry {
             pinned_buffer: Pin<Box<[u8]>>,
             node: Option<(LinearAddress, MaybePersistedNode)>,
+        }
+
+        /// Helper function to retry `submit_and_wait` on EINTR
+        fn submit_and_wait_with_retry(
+            ring: &mut io_uring::IoUring,
+            wait_nr: u32,
+            storage: &FileBacked,
+            operation_name: &str,
+        ) -> Result<(), FileIoError> {
+            loop {
+                match ring.submit_and_wait(wait_nr as usize) {
+                    Ok(_) => return Ok(()),
+                    Err(e) => {
+                        // Retry if the error is an interrupted system call
+                        if e.kind() == Interrupted {
+                            continue;
+                        }
+                        // For other errors, return the error
+                        return Err(storage.file_io_error(
+                            e,
+                            0,
+                            Some(format!("io-uring {operation_name}")),
+                        ));
+                    }
+                }
+            }
         }
 
         /// Helper function to handle completion queue entries and check for errors
@@ -411,10 +438,7 @@ impl NodeStore<Committed, FileBacked> {
                 // if we get here, that means we couldn't find a place to queue the request, so wait for at least one operation
                 // to complete, then handle the completion queue
                 firewood_counter!("ring.full", "amount of full ring").increment(1);
-                ring.submit_and_wait(1).map_err(|e| {
-                    self.storage
-                        .file_io_error(e, 0, Some("io-uring submit_and_wait".to_string()))
-                })?;
+                submit_and_wait_with_retry(&mut ring, 1, &self.storage, "submit_and_wait")?;
                 let completion_queue = ring.completion();
                 trace!("competion queue length: {}", completion_queue.len());
                 handle_completion_queue(
@@ -432,10 +456,12 @@ impl NodeStore<Committed, FileBacked> {
             .iter()
             .filter(|pbe| pbe.node.is_some())
             .count();
-        ring.submit_and_wait(pending).map_err(|e| {
-            self.storage
-                .file_io_error(e, 0, Some("io-uring final submit_and_wait".to_string()))
-        })?;
+        submit_and_wait_with_retry(
+            &mut ring,
+            pending as u32,
+            &self.storage,
+            "final submit_and_wait",
+        )?;
 
         handle_completion_queue(&self.storage, ring.completion(), &mut saved_pinned_buffers)?;
 
@@ -683,7 +709,7 @@ mod tests {
     fn test_into_committed_with_generic_storage() {
         // Create a base committed store with MemStore
         let mem_store = MemStore::new(vec![]);
-        let base_committed = NodeStore::new_empty_committed(mem_store.into()).unwrap();
+        let base_committed = NodeStore::new_empty_committed(mem_store.into());
 
         // Create a mutable proposal from the base
         let mut mutable_store = NodeStore::new(&base_committed).unwrap();
@@ -765,14 +791,14 @@ mod tests {
                 .unwrap(),
             );
 
-            let mut ns = NodeStore::new_empty_committed(fb.clone()).unwrap();
+            let mut ns = NodeStore::new_empty_committed(fb.clone());
 
             assert!(ns.downcast_to_file_backed().is_some());
         }
 
         {
             let ms = Arc::new(MemStore::new(vec![]));
-            let mut ns = NodeStore::new_empty_committed(ms.clone()).unwrap();
+            let mut ns = NodeStore::new_empty_committed(ms.clone());
             assert!(ns.downcast_to_file_backed().is_none());
         }
     }
