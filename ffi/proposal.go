@@ -59,6 +59,21 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 	return getValueFromValueResult(C.fwd_get_from_proposal(p.handle, newBorrowedBytes(key, &pinner)))
 }
 
+// Iter creates and iterator starting from the provided key on proposal.
+// pass empty slice to start from beginning
+func (p *Proposal) Iter(key []byte) (*Iterator, error) {
+	if p.handle == nil {
+		return nil, errDBClosed
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	itResult := C.fwd_iter_on_proposal(p.handle, newBorrowedBytes(key, &pinner))
+
+	return getIteratorFromIteratorResult(itResult)
+}
+
 // Propose is equivalent to [Database.Propose] except that the new proposal is
 // based on `p`.
 func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
