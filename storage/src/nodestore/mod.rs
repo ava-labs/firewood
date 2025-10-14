@@ -107,7 +107,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         let mut header_bytes = vec![0u8; std::mem::size_of::<NodeStoreHeader>()];
         if let Err(e) = stream.read_exact(&mut header_bytes) {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                return Self::new_empty_committed(storage.clone());
+                return Ok(Self::new_empty_committed(storage.clone()));
             }
             return Err(storage.file_io_error(e, 0, Some("header read".to_string())));
         }
@@ -139,21 +139,61 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
     /// Create a new, empty, Committed [`NodeStore`] and clobber
     /// the underlying store with an empty freelist and no root node
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the storage cannot be accessed.
-    pub fn new_empty_committed(storage: Arc<S>) -> Result<Self, FileIoError> {
+    pub fn new_empty_committed(storage: Arc<S>) -> Self {
         let header = NodeStoreHeader::new();
 
-        Ok(Self {
+        Self {
             header,
             storage,
             kind: Committed {
                 deleted: Box::default(),
                 root: None,
             },
-        })
+        }
+    }
+
+    /// Create a new Committed [`NodeStore`] with a specified root node.
+    ///
+    /// This constructor is used when you have an existing root node at a known
+    /// address and hash, typically when reconstructing a [`NodeStore`] from
+    /// a committed state. The `latest_nodestore` provides access to the underlying
+    /// storage backend containing the persisted trie data.
+    ///
+    /// ## Panics
+    ///
+    /// Panics in debug builds if the hash of the node at `root_address` does
+    /// not equal `root_hash`.
+    #[must_use]
+    pub fn with_root(
+        root_hash: HashType,
+        root_address: LinearAddress,
+        latest_nodestore: Arc<NodeStore<Committed, S>>,
+    ) -> Self {
+        let header = NodeStoreHeader::with_root(Some(root_address));
+        let storage = latest_nodestore.storage.clone();
+
+        let nodestore = NodeStore {
+            header,
+            kind: Committed {
+                deleted: Box::default(),
+                root: Some(Child::AddressWithHash(root_address, root_hash)),
+            },
+            storage,
+        };
+
+        debug_assert_eq!(
+            nodestore
+                .root_hash()
+                .expect("Nodestore should have root hash"),
+            hash_node(
+                &nodestore
+                    .read_node(root_address)
+                    .expect("Root node read should succeed"),
+                &Path(SmallVec::default())
+            )
+        );
+
+        nodestore
     }
 }
 
@@ -872,7 +912,7 @@ mod tests {
     fn test_reparent() {
         // create an empty base revision
         let memstore = MemStore::new(vec![]);
-        let base = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let base = NodeStore::new_empty_committed(memstore.into());
 
         // create an empty r1, check that it's parent is the empty committed version
         let r1 = NodeStore::new(&base).unwrap();
