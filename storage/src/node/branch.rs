@@ -443,6 +443,7 @@ impl BranchNode {
     /// Takes the child at the given index.
     /// Panics if `child_index` >= [`BranchNode::MAX_CHILDREN`].
     pub fn take_child(&mut self, child_index: u8) -> Option<Child> {
+        // Note: Should update to use u4 index to avoid expect when it is available.
         self.children
             .get_mut(child_index as usize)
             .expect("index error")
