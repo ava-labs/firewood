@@ -3,19 +3,7 @@
 
 use crate::PathComponent;
 
-/// The maximum number of children in a [`Children`] array and also the arity
-/// of a branch node.
-///
-/// This cannot be defined on the `Children` struct because it is generic, and
-/// Rust no longer allows using associated constants of generic types within
-/// generic other contexts. This means that while we can define the const in the
-/// impl block for `Children<T>`, we cannot use `Children::<T>::MAX_CHILDREN` in
-/// contexts where `T` is generic, which doesn't make it very useful.
-pub const MAX_CHILDREN: usize = if cfg!(feature = "branch_factor_256") {
-    256
-} else {
-    16
-};
+const MAX_CHILDREN: usize = PathComponent::LEN;
 
 /// Type alias for an iterator over the slots of a branch node's children
 /// with its corresponding [`PathComponent`].
@@ -37,8 +25,16 @@ pub type IterPresentMut<'a, T> = std::iter::FilterMap<
 >;
 
 /// Type alias for a collection of children in a branch node.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Children<T>([T; MAX_CHILDREN]);
+
+impl<T: std::fmt::Debug> std::fmt::Debug for Children<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_map()
+            .entries(self.iter().map(|(pc, child)| (pc.as_u8(), child)))
+            .finish()
+    }
+}
 
 impl<T> Children<T> {
     /// Creates a new [`Children`] by calling `f` for each possible
@@ -91,8 +87,13 @@ impl<T> Children<T> {
     /// Maps each element to another value using `f`, returning a new
     /// [`Children`] containing the results.
     #[must_use]
-    pub fn map<O>(self, f: impl FnMut(T) -> O) -> Children<O> {
-        Children(self.0.map(f))
+    pub fn map<O>(self, mut f: impl FnMut(PathComponent, T) -> O) -> Children<O> {
+        let mut pc = const { PathComponent::ALL[0] };
+        Children(self.0.map(|child| {
+            let out = f(pc, child);
+            pc = pc.wrapping_next();
+            out
+        }))
     }
 
     /// Returns an iterator over each element with its corresponding
@@ -105,6 +106,28 @@ impl<T> Children<T> {
     /// [`PathComponent`].
     pub fn iter_mut(&mut self) -> ChildrenSlots<&mut T> {
         self.into_iter()
+    }
+
+    /// Merges this collection of children with another collection of children
+    /// using the given function.
+    ///
+    /// If the function returns an error, the merge is aborted and the error is
+    /// returned. Because this method takes `self` and `other` by value, they
+    /// will be dropped if the merge fails.
+    pub fn merge<U, V, E>(
+        self,
+        other: Children<U>,
+        mut merge: impl FnMut(PathComponent, T, U) -> Result<Option<V>, E>,
+    ) -> Result<Children<Option<V>>, E> {
+        let iter = self.0.into_iter().zip(other.0);
+        let mut output = [const { None }; MAX_CHILDREN];
+        for (slot, (pc, (a, b))) in output
+            .iter_mut()
+            .zip(PathComponent::ALL.into_iter().zip(iter))
+        {
+            *slot = merge(pc, a, b)?;
+        }
+        Ok(Children(output))
     }
 }
 
