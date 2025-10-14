@@ -101,17 +101,7 @@ impl SplitPath for PackedPathRef<'_> {
             }
         } else {
             // `prefix` is some and `mid` is zero
-            let prefix = Self {
-                prefix: self.prefix,
-                middle: &[],
-                suffix: None,
-            };
-            let suffix = Self {
-                prefix: None,
-                middle: self.middle,
-                suffix: self.suffix,
-            };
-            (prefix, suffix)
+            (Self::default(), self)
         }
     }
 
@@ -235,6 +225,8 @@ impl<T: TriePath + ?Sized> TriePathAsPackedBytes for T {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::unwrap_used)]
+
     // NB: tests do not need to worry about 256-ary tries because this module is
     // only compiled when the "branch_factor_256" feature is not enabled.
 
@@ -368,6 +360,17 @@ mod tests {
         assert!(a.path_eq(&case.a));
         assert!(b.path_eq(&case.b));
         assert!(a.append(b).path_eq(&case.path));
+        if let Some(mid) = case.mid.checked_sub(1) {
+            let (_, path) = case.path.split_first().unwrap();
+            let (_, b) = path.split_at(mid);
+            assert!(
+                b.path_eq(&case.b),
+                "{} != {} ({}) (mid = {mid})",
+                b.display(),
+                case.b.display(),
+                path.display(),
+            );
+        }
     }
 
     struct AsPackedBytesTest<'a, T> {
