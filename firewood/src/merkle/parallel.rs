@@ -43,6 +43,24 @@ struct Response {
     deleted_nodes: Vec<MaybePersistedNode>,
 }
 
+#[derive(Debug)]
+pub enum CreateProposalError {
+    FileIoError(FileIoError),
+    SendError,
+}
+
+impl From<FileIoError> for CreateProposalError {
+    fn from(err: FileIoError) -> Self {
+        CreateProposalError::FileIoError(err)
+    }
+}
+
+impl From<SendError<Request>> for CreateProposalError {
+    fn from(_err: SendError<Request>) -> Self {
+        CreateProposalError::SendError
+    }
+}
+
 /// `ParallelMerkle` safely performs parallel modifications to a Merkle trie. It does this
 /// by creating a worker for each subtrie from the root, and allowing the the workers to
 /// perform inserts and removes to their subtries.
@@ -68,7 +86,10 @@ impl ParallelMerkle {
 
     /// Normalize the root to allow clean separation of the trie into an array of subtries that
     /// can be operated on independently by the worker threads.
-    fn normalize_root(&self, proposal: &mut NodeStore<MutableProposal, FileBacked>) {
+    fn normalize_root(
+        &self,
+        proposal: &mut NodeStore<MutableProposal, FileBacked>,
+    ) -> Box<BranchNode> {
         // There are 3 different cases to handle depending on the value of the root node.
         //
         // 1. If root is None, create a branch node with an empty partial path and a None for
@@ -80,20 +101,19 @@ impl ParallelMerkle {
         // 3. If the existing root does not have a partial path, then there is nothing we need
         //    to do if it is a branch. If it is a leaf, then convert it into a branch.
         //
-        // Cases 2 and 3 are handled by `normalize_for_insert`. The result after normalization
-        // is that there is a branch node at the root with an empty partial path.
+        // Cases 2 and 3 are handled by `normalize_for_insert`. This function returns a branch
+        // node with an empty partial path.
         let root_node = proposal.root_mut().take();
         if let Some(node) = root_node {
-            *proposal.root_mut() = Some(node.normalize_for_insert());
-        } else {
-            // Empty trie. Create a branch node with an empty partial path and a None for a value.
-            let branch = BranchNode {
-                partial_path: Path::new(),
-                value: None,
-                children: BranchNode::empty_children(),
-            };
-            *proposal.root_mut() = Some(branch.into());
+            return node.normalize_for_insert();
         }
+        // Empty trie. Create a branch node with an empty partial path and a None for a value.
+        BranchNode {
+            partial_path: Path::new(),
+            value: None,
+            children: BranchNode::empty_children(),
+        }
+        .into()
     }
 
     /// After performing parallel modifications, it may be necessary to perform post processing
@@ -135,7 +155,7 @@ impl ParallelMerkle {
                 // Check if the root has a value or if there is more than one child. If yes, then
                 // just return the root unmodified
                 if branch.value.is_some() || children_iter.next().is_some() {
-                    return Ok(Some((*branch).into()));
+                    return Ok(Some(Node::Branch(branch)));
                 }
 
                 // Return the child as the new root. Update its partial path to include the index value.
@@ -215,7 +235,7 @@ impl ParallelMerkle {
     fn create_worker(
         pool: &ThreadPool,
         proposal: &NodeStore<MutableProposal, FileBacked>,
-        root_branch: &mut Box<BranchNode>,
+        root_branch: &mut BranchNode,
         first_nibble: u8,
         response_sender: Sender<Result<Response, FileIoError>>,
     ) -> Result<WorkerSender, FileIoError> {
@@ -260,7 +280,7 @@ impl ParallelMerkle {
         &mut self,
         response_channel: Receiver<Result<Response, FileIoError>>,
         proposal: &mut NodeStore<MutableProposal, FileBacked>,
-        root_branch: &mut Box<BranchNode>,
+        root_branch: &mut BranchNode,
     ) -> Result<(), FileIoError> {
         while let Ok(response) = response_channel.recv() {
             match response {
@@ -269,6 +289,7 @@ impl ParallelMerkle {
                     proposal.delete_nodes(response.deleted_nodes.as_slice());
 
                     // Set the child at index to response.root which is the root of the child's subtrie.
+                    // Note: Should update to use u4 index to avoid expect when it is available.
                     *root_branch
                         .children
                         .get_mut(response.nibble as usize)
@@ -284,15 +305,16 @@ impl ParallelMerkle {
 
     /// Get a worker from the worker pool based on the `first_nibble` value. Create a worker if
     /// it doesn't exist already.
-    fn get_worker(
+    fn worker(
         &mut self,
         pool: &ThreadPool,
         proposal: &NodeStore<MutableProposal, FileBacked>,
-        root_branch: &mut Box<BranchNode>,
+        root_branch: &mut BranchNode,
         first_nibble: u8,
         response_sender: Sender<Result<Response, FileIoError>>,
     ) -> Result<&mut WorkerSender, FileIoError> {
         // Find the worker's state corresponding to the first nibble which are stored in an array.
+        // Note: Should update to use u4 index to avoid expect when it is available.
         let worker_option = self
             .workers
             .get_mut(first_nibble as usize)
@@ -314,16 +336,30 @@ impl ParallelMerkle {
 
     /// Removes all of the entries in the trie. For the root entry, the value is removed but the
     /// root itself will remain. An empty root will only be removed during post processing.
-    fn remove_all_entries(&self, root_branch: &mut Box<BranchNode>) {
+    fn remove_all_entries(&self, root_branch: &mut BranchNode) -> Result<(), SendError<Request>> {
         for worker in self.workers.iter().flatten() {
-            worker
-                .send(Request::DeleteRange {
-                    prefix: Box::default(), // Empty prefix
-                })
-                .expect("TODO: handle error");
+            worker.send(Request::DeleteRange {
+                prefix: Box::default(), // Empty prefix
+            })?;
         }
         // Also set the root value to None but does not delete the root.
         root_branch.value = None;
+        Ok(())
+    }
+
+    /// The parent thread may receive a `SendError` if the worker that it is sending to has
+    /// returned to the threadpool after encountering a `FileIoError`. This function should
+    /// be called after receiving a `SendError` to find and propagate the `FileIoError`.
+    fn find_fileio_error(
+        response_receiver: &Receiver<Result<Response, FileIoError>>,
+    ) -> Result<(), FileIoError> {
+        // Go through the messages in the response channel without blocking to see if we can
+        // find the FileIoError that caused the worker to close the channel, resulting in a
+        // send error. If we can find it, then we propagate the FileIoError.
+        while let Ok(resp) = response_receiver.try_recv() {
+            resp?; // Propagate the error (if it exists)
+        }
+        Ok(())
     }
 
     /// Creates a parallel proposal in 4 steps: Prepare, Split, Merge, and Post-process. In the
@@ -346,8 +382,11 @@ impl ParallelMerkle {
         parent: &NodeStore<T, FileBacked>,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
         threadpool: &OnceLock<ThreadPool>,
-    ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, FileIoError> {
-        // Get (or create) a threadpool
+    ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, CreateProposalError> {
+        // Get (or create) a threadpool. Note that OnceLock currently doesn't support
+        // get_or_try_init (it is available in a nightly release). The get_or_init should
+        // be replaced with get_or_try_init once it is available to allow the error to be
+        // passed back to the caller.
         let pool = threadpool.get_or_init(|| {
             ThreadPoolBuilder::new()
                 .num_threads(BranchNode::MAX_CHILDREN)
@@ -360,14 +399,7 @@ impl ParallelMerkle {
 
         // Prepare step: normalize the root in preparation for performing parallel modifications
         // to the trie.
-        self.normalize_root(&mut proposal);
-
-        let mut root_branch = proposal
-            .root_mut()
-            .take()
-            .expect("Should have a root node after prepare step")
-            .into_branch()
-            .expect("Root should be a branch after prepare step");
+        let mut root_branch = self.normalize_root(&mut proposal);
 
         // Create a response channel the workers use to send messages back to the coordinator (us)
         let (response_sender, response_receiver) = mpsc::channel();
@@ -400,7 +432,13 @@ impl ParallelMerkle {
                     }
                     BatchOp::DeleteRange { prefix: _ } => {
                         // Calling remove prefix with an empty prefix is equivalent to a remove all.
-                        self.remove_all_entries(&mut root_branch);
+                        if let Err(err) = self.remove_all_entries(&mut root_branch) {
+                            // A send error is most likely due to a worker returning to the thread pool
+                            // after it encountered a FileIoError. Try to find the FileIoError in the
+                            // response channel and return that instead.
+                            ParallelMerkle::find_fileio_error(&response_receiver)?;
+                            return Err(err.into());
+                        }
                     }
                 }
                 continue; // Done with this empty key operation.
@@ -408,7 +446,7 @@ impl ParallelMerkle {
 
             // Get the worker that is responsible for this nibble. The worker will be created if it
             // doesn't already exist.
-            let worker = self.get_worker(
+            let worker = self.worker(
                 pool,
                 &proposal,
                 &mut root_branch,
@@ -421,37 +459,31 @@ impl ParallelMerkle {
             //       to the worker. It may be possible to send a nibble iterator instead of a
             //       Box<[u8]> to the worker if we use rayon scoped threads. This change would
             //       eliminate a memory copy but may require some code refactoring.
-            match &op {
-                BatchOp::Put { key: _, value } => {
-                    worker
-                        .send(Request::Insert {
-                            key: op.key().as_ref().into(),
-                            value: value.as_ref().into(),
-                        })
-                        .expect("send to worker error");
-                }
-                BatchOp::Delete { key: _ } => {
-                    worker
-                        .send(Request::Delete {
-                            key: op.key().as_ref().into(),
-                        })
-                        .expect("send to worker error");
-                }
-                BatchOp::DeleteRange { prefix: _ } => {
-                    worker
-                        .send(Request::DeleteRange {
-                            prefix: op.key().as_ref().into(),
-                        })
-                        .expect("send to worker error");
-                }
+            if let Err(err) = match &op {
+                BatchOp::Put { key: _, value } => worker.send(Request::Insert {
+                    key: op.key().as_ref().into(),
+                    value: value.as_ref().into(),
+                }),
+                BatchOp::Delete { key: _ } => worker.send(Request::Delete {
+                    key: op.key().as_ref().into(),
+                }),
+                BatchOp::DeleteRange { prefix: _ } => worker.send(Request::DeleteRange {
+                    prefix: op.key().as_ref().into(),
+                }),
+            } {
+                // A send error is most likely due to a worker returning to the thread pool
+                // after it encountered a FileIoError. Try to find the FileIoError in the
+                // response channel and return that instead.
+                ParallelMerkle::find_fileio_error(&response_receiver)?;
+                return Err(err.into());
             }
         }
 
         // Drop the sender response channel from the parent thread.
         drop(response_sender);
 
-        // Setting the workers to None will close the senders to the workers. In response, the workers
-        // will send back their responses.
+        // Setting the workers to None will close the senders to the workers. This will casue the
+        // workers to send back their responses.
         self.workers = [(); BranchNode::MAX_CHILDREN].map(|()| None);
 
         // Merge step: Collect the results from the workers and merge them as children to the root.
@@ -461,7 +493,7 @@ impl ParallelMerkle {
         *proposal.root_mut() = self.postprocess_trie(&mut proposal, root_branch)?;
 
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(proposal.try_into().expect("error creating immutable"));
+            Arc::new(proposal.try_into()?);
 
         Ok(immutable)
     }
