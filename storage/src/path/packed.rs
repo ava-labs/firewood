@@ -102,10 +102,13 @@ impl SplitPath for PackedPathRef<'_> {
                 // prefix of `suffix`
                 let (a_middle, b_middle) = self.middle.split_at(mid / 2);
                 let Some((&middle_byte, b_middle)) = b_middle.split_first() else {
-                    // `mid` is oob of `b_middle`, which is impossible since `mid` is
-                    // less than `self.len()`
-                    unreachable!();
+                    // `mid` is oob of `b_middle`, which happens if self.suffix is Some,
+                    // middle is empty, and `mid` is 1
+                    debug_assert!(self.middle.is_empty());
+                    debug_assert!(self.suffix.is_some());
+                    return (self, Self::default());
                 };
+
                 let (upper, lower) = PathComponent::new_pair(middle_byte);
                 let prefix = Self {
                     prefix: self.prefix,
@@ -381,13 +384,26 @@ mod tests {
         assert!(b.path_eq(&case.b));
         assert!(a.append(b).path_eq(&case.path));
         if let Some(mid) = case.mid.checked_sub(1) {
-            let (_, path) = case.path.split_first().unwrap();
-            let (_, b) = path.split_at(mid);
+            let (_, path) = dbg!(case.path.split_first()).unwrap();
+            let (_, b) = dbg!(path.split_at(mid));
             assert!(
                 b.path_eq(&case.b),
                 "{} != {} ({}) (mid = {mid})",
                 b.display(),
                 case.b.display(),
+                path.display(),
+            );
+        }
+        if let Some(len) = case.path.len().checked_sub(1)
+            && len >= case.mid
+        {
+            let (path, _) = dbg!(case.path.split_at(len));
+            let (a, _) = dbg!(path.split_at(case.mid));
+            assert!(
+                a.path_eq(&case.a),
+                "{} != {} ({}) (len = {len})",
+                a.display(),
+                case.a.display(),
                 path.display(),
             );
         }
