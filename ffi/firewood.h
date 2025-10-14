@@ -1663,7 +1663,9 @@ struct RevisionResult fwd_get_revision(const struct DatabaseHandle *db, Borrowed
  *   safely, but freeing the iterator with [`fwd_free_iterator`] is recommended.
  * - [`KeyValueResult::Some`] if the next item on iterator was retrieved, with the associated
  *   key value pair.
- * - [`KeyValueResult::Err`] if an I/O error occurred while retrieving the next item
+ * - [`KeyValueResult::Err`] if an I/O error occurred while retrieving the next item. Most
+ *   iterator errors are non-reentrant. Once returned, the iterator should be considered
+ *   invalid and must be freed with [`fwd_free_iterator`].
  *
  * # Safety
  *
@@ -1688,7 +1690,9 @@ struct KeyValueResult fwd_iter_next(struct IteratorHandle *handle);
  * - [`KeyValueBatchResult::NullHandlePointer`] if the provided iterator handle is null.
  * - [`KeyValueBatchResult::Some`] with up to `n` key/value pairs. If the iterator is
  *   exhausted, this may be fewer than `n`, including zero items.
- * - [`KeyValueBatchResult::Err`] if an I/O error occurred while retrieving items
+ * - [`KeyValueBatchResult::Err`] if an I/O error occurred while retrieving items. Most
+ *   iterator errors are non-reentrant. Once returned, the iterator should be considered
+ *   invalid and must be freed with [`fwd_free_iterator`].
  *
  * Once an empty batch or items fewer than `n` is returned (iterator exhausted), subsequent calls
  * will continue returning empty batches. You may still call this safely, but freeing the
