@@ -94,7 +94,7 @@ pub(crate) enum RevisionManagerError {
     #[error("An IO error occurred during the commit")]
     FileIoError(#[from] FileIoError),
     #[error("A RootStore error occurred")]
-    RootStoreError(RootStoreError),
+    RootStoreError(#[from] RootStoreError),
 }
 
 impl<T: RootStore> RevisionManager<T> {
@@ -262,9 +262,7 @@ impl<T: RootStore> RevisionManager<T> {
 
         // 6. Persist revision to root store
         if let (Some(hash), Some(address)) = (committed.root_hash(), committed.root_address()) {
-            self.root_store
-                .add_root(&hash, &address)
-                .map_err(RevisionManagerError::RootStoreError)?;
+            self.root_store.add_root(&hash, &address)?;
         }
 
         // 7. Proposal Cleanup
@@ -323,8 +321,7 @@ impl<T: RootStore> RevisionManager<T> {
         // 3. Try to find it in `RootStore`.
         let revision_addr = self
             .root_store
-            .get(&root_hash)
-            .map_err(RevisionManagerError::RootStoreError)?
+            .get(&root_hash)?
             .ok_or(RevisionManagerError::RevisionNotFound {
                 provided: root_hash.clone(),
             })?;

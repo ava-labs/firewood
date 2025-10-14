@@ -6,9 +6,11 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use firewood_storage::{LinearAddress, TrieHash};
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
 pub enum RootStoreError {
+    #[error("Failed to add root")]
     Add,
+    #[error("Failed to get root")]
     Get,
 }
 
