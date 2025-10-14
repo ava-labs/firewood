@@ -359,8 +359,12 @@ func newOwnedKeyValueBatch(owned C.OwnedKeyValueBatch) *ownedKeyValueBatch {
 }
 
 type ownedKeyValue struct {
-	key   *ownedBytes
-	value *ownedBytes
+    // owned holds the original C-provided pair so we can free it
+    // with fwd_free_owned_kv_pair instead of freeing key/value separately.
+    owned C.OwnedKeyValuePair
+    // key and value wrappers provide Borrowed/Copied accessors
+    key   *ownedBytes
+    value *ownedBytes
 }
 
 func (kv *ownedKeyValue) copy() ([]byte, []byte) {
@@ -370,15 +374,18 @@ func (kv *ownedKeyValue) copy() ([]byte, []byte) {
 }
 
 func (kv *ownedKeyValue) free() error {
-	if kv == nil {
-		// we want ownedKeyValue to be typed-nil safe
-		return nil
-	}
-	err := errors.Join(kv.key.Free(), kv.value.Free())
-	if err != nil {
-		return fmt.Errorf("%w: %w", errFreeingValue, err)
-	}
-	return nil
+    if kv == nil {
+        // we want ownedKeyValue to be typed-nil safe
+        return nil
+    }
+    if err := getErrorFromVoidResult(C.fwd_free_owned_kv_pair(kv.owned)); err != nil {
+        return fmt.Errorf("%w: %w", errFreeingValue, err)
+    }
+    // zero out fields to avoid accidental reuse/double free
+    kv.owned = C.OwnedKeyValuePair{}
+    kv.key = nil
+    kv.value = nil
+    return nil
 }
 
 // newOwnedKeyValue creates a ownedKeyValue from a C.OwnedKeyValuePair.
@@ -386,10 +393,11 @@ func (kv *ownedKeyValue) free() error {
 // The caller is responsible for calling Free() on the returned ownedKeyValue
 // when it is no longer needed otherwise memory will leak.
 func newOwnedKeyValue(owned C.OwnedKeyValuePair) *ownedKeyValue {
-	return &ownedKeyValue{
-		key:   newOwnedBytes(owned.key),
-		value: newOwnedBytes(owned.value),
-	}
+    return &ownedKeyValue{
+        owned: owned,
+        key:   newOwnedBytes(owned.key),
+        value: newOwnedBytes(owned.value),
+    }
 }
 
 // getKeyValueFromResult converts a C.KeyValueResult to a key value pair or error.
