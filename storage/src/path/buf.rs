@@ -1,9 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{IntoSplitPath, TriePath};
-
-use super::PathComponent;
+use crate::{ComponentIter, IntoSplitPath, PathComponent, TriePath};
 
 /// An owned buffer of path components.
 pub type PathBuf = smallvec::SmallVec<[PathComponent; 32]>;
@@ -105,7 +103,7 @@ impl AsRef<[PathComponent]> for PartialPath<'_> {
 
 impl TriePath for PartialPath<'_> {
     type Components<'a>
-        = std::iter::Copied<std::slice::Iter<'a, PathComponent>>
+        = ComponentIter<'a>
     where
         Self: 'a;
 

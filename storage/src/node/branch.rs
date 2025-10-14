@@ -8,7 +8,7 @@
 
 use crate::node::ExtendableBytes;
 use crate::node::children::Children;
-use crate::{LeafNode, LinearAddress, MaybePersistedNode, Node, Path, SharedNode};
+use crate::{LeafNode, LinearAddress, MaybePersistedNode, Node, Path, PathComponent, SharedNode};
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
 
@@ -414,7 +414,7 @@ impl Debug for BranchNode {
 
 impl BranchNode {
     /// The maximum number of children a branch node can have.
-    pub const MAX_CHILDREN: usize = super::children::MAX_CHILDREN;
+    pub const MAX_CHILDREN: usize = PathComponent::LEN;
 
     /// Returns a set of persistence information (address and hash) for each child that
     /// is persisted.
@@ -426,7 +426,7 @@ impl BranchNode {
     pub fn persist_info(&self) -> Children<Option<(LinearAddress, &HashType)>> {
         self.children
             .each_ref()
-            .map(|c| c.as_ref().and_then(Child::persist_info))
+            .map(|_, c| c.as_ref().and_then(Child::persist_info))
     }
 
     /// Returns a set of hashes for each child that has a hash set.
@@ -443,7 +443,7 @@ impl BranchNode {
     pub fn children_hashes(&self) -> Children<Option<HashType>> {
         self.children
             .each_ref()
-            .map(|c| c.as_ref().and_then(Child::hash).cloned())
+            .map(|_, c| c.as_ref().and_then(Child::hash).cloned())
     }
 
     /// Returns a set of addresses for each child that has an address set.
@@ -462,7 +462,7 @@ impl BranchNode {
     pub fn children_addresses(&self) -> Children<Option<LinearAddress>> {
         self.children
             .each_ref()
-            .map(|c| c.as_ref().and_then(Child::persisted_address))
+            .map(|_, c| c.as_ref().and_then(Child::persisted_address))
     }
 }
 
