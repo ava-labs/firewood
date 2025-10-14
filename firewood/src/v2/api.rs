@@ -4,7 +4,7 @@
 use crate::manager::RevisionManagerError;
 use crate::merkle::{Key, Value};
 use crate::proof::{Proof, ProofError, ProofNode};
-use crate::root_store;
+use crate::root_store::RootStoreError;
 use firewood_storage::{FileIoError, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
@@ -126,8 +126,8 @@ pub enum Error {
     /// A file I/O error occurred
     FileIO(#[from] FileIoError),
 
-    #[error("A RootStore error occurred")]
-    RootStoreError(root_store::RootStoreError),
+    #[error("RootStore error: {0}")]
+    RootStoreError(#[from] RootStoreError),
 
     /// Cannot commit a committed proposal
     #[error("Cannot commit a committed proposal")]
