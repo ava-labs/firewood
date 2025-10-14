@@ -319,12 +319,12 @@ impl<T: RootStore> RevisionManager<T> {
         }
 
         // 3. Try to find it in `RootStore`.
-        let revision_addr = self
-            .root_store
-            .get(&root_hash)?
-            .ok_or(RevisionManagerError::RevisionNotFound {
-                provided: root_hash.clone(),
-            })?;
+        let revision_addr =
+            self.root_store
+                .get(&root_hash)?
+                .ok_or(RevisionManagerError::RevisionNotFound {
+                    provided: root_hash.clone(),
+                })?;
 
         let node_store = NodeStore::with_root(
             root_hash.into_hash_type(),
