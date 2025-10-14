@@ -326,13 +326,10 @@ mod test {
     #![expect(clippy::unwrap_used)]
 
     use core::iter::Take;
-    use std::cell::RefCell;
-    use std::collections::HashMap;
     use std::iter::Peekable;
     use std::num::NonZeroUsize;
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
-    use std::rc::Rc;
 
     use firewood_storage::{
         CheckOpt, CheckerError, HashedNodeReader, IntoHashType, NodeStore, TrieHash,
@@ -835,26 +832,36 @@ mod test {
         let mock_store = MockStore::new();
         let db = TestDb::with_mockstore(mock_store.clone());
 
-        let batch = vec![BatchOp::Put {
-            key: b"k",
-            value: b"v",
-        }];
+        // First, create a revision to retrieve
+        let key = b"key";
+        let value = b"value";
+        let batch = vec![BatchOp::Put { key, value }];
 
         let proposal = db.propose(batch).unwrap();
         let root_hash = proposal.root_hash().unwrap().unwrap();
         proposal.commit().unwrap();
 
-        assert_eq!(1, mock_store.roots.borrow().len());
-        assert!(mock_store.roots.borrow().contains_key(&root_hash));
+        // Next, overwrite the kv-pair with a new revision
+        let new_value = b"new_value";
+        let batch = vec![BatchOp::Put {
+            key,
+            value: new_value,
+        }];
+
+        let proposal = db.propose(batch).unwrap();
+        proposal.commit().unwrap();
+
+        // Reopen the database and verify that the database can access a persisted revision
+        let db = db.reopen(mock_store);
+
+        let view = db.view(root_hash).unwrap();
+        let retrieved_value = view.val(key).unwrap().unwrap();
+        assert_eq!(value, retrieved_value.as_ref());
     }
 
     #[test]
     fn test_root_store_errs() {
-        let mock_store = MockStore {
-            roots: Rc::new(RefCell::new(HashMap::new())),
-            should_add_root_fail: true,
-            should_get_fail: true,
-        };
+        let mock_store = MockStore::with_failures();
         let db = TestDb::with_mockstore(mock_store.clone());
 
         let view = db.view(TrieHash::empty());
@@ -896,12 +903,6 @@ mod test {
             let db = Db::new(dbpath, dbconfig).unwrap();
             TestDb { db, tmpdir }
         }
-
-        fn path(&self) -> PathBuf {
-            [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-                .iter()
-                .collect()
-        }
         fn reopen(self) -> Self {
             let path = self.path();
             drop(self.db);
@@ -926,6 +927,14 @@ mod test {
         }
     }
 
+    impl<T: RootStore> TestDb<T> {
+        fn path(&self) -> PathBuf {
+            [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
+                .iter()
+                .collect()
+        }
+    }
+
     impl TestDb<MockStore> {
         fn with_mockstore(mock_store: MockStore) -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
@@ -935,6 +944,18 @@ mod test {
             let dbconfig = DbConfig::builder().build();
             let db = Db::new_with_root_store(dbpath, dbconfig, mock_store).unwrap();
             TestDb { db, tmpdir }
+        }
+
+        fn reopen(self, mock_store: MockStore) -> Self {
+            let path = self.path();
+            drop(self.db);
+            let dbconfig = DbConfig::builder().truncate(false).build();
+
+            let db = Db::new_with_root_store(path, dbconfig, mock_store).unwrap();
+            TestDb {
+                db,
+                tmpdir: self.tmpdir,
+            }
         }
     }
 }

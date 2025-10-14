@@ -70,6 +70,16 @@ impl MockStore {
             should_get_fail: false,
         }
     }
+
+    /// Returns an instance of `MockStore` that fails for all `add_root` and `get` calls.
+    #[must_use]
+    pub fn with_failures() -> Self {
+        Self {
+            roots: Rc::new(RefCell::new(HashMap::new())),
+            should_add_root_fail: true,
+            should_get_fail: true,
+        }
+    }
 }
 
 #[cfg(test)]
