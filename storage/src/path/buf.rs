@@ -128,3 +128,68 @@ impl<'a> IntoSplitPath for &'a PartialPath<'_> {
         self
     }
 }
+
+/// A RAII guard that resets a path buffer to its original length when dropped.
+#[must_use]
+pub struct PathGuard<'a> {
+    buf: &'a mut PathBuf,
+    len: usize,
+}
+
+impl std::fmt::Debug for PathGuard<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.buf.display().fmt(f)
+    }
+}
+
+impl Drop for PathGuard<'_> {
+    fn drop(&mut self) {
+        self.buf.truncate(self.len);
+    }
+}
+
+impl<'a> PathGuard<'a> {
+    /// Creates a new guard that will reset the provided buffer to its current
+    /// length when dropped.
+    pub fn new(buf: &'a mut PathBuf) -> Self {
+        Self {
+            len: buf.len(),
+            buf,
+        }
+    }
+
+    /// Creates a new guard that will reset this guard's buffer to its current
+    /// length when dropped.
+    ///
+    /// This allows for nested guards that can be used in recursive algorithms.
+    pub fn fork(&mut self) -> PathGuard<'_> {
+        PathGuard::new(self.buf)
+    }
+
+    /// Fork this guard and append the given segment to the path buffer.
+    ///
+    /// This is a convenience method that combines `fork` then `extend` in a
+    /// single operation for ergonomic one-liners.
+    ///
+    /// The returned guard will reset the path buffer to its original length,
+    /// before appending the given segment, when dropped.
+    pub fn fork_append(&mut self, path: impl TriePath) -> PathGuard<'_> {
+        let mut fork = self.fork();
+        fork.extend(path.components());
+        fork
+    }
+}
+
+impl std::ops::Deref for PathGuard<'_> {
+    type Target = PathBuf;
+
+    fn deref(&self) -> &Self::Target {
+        self.buf
+    }
+}
+
+impl std::ops::DerefMut for PathGuard<'_> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.buf
+    }
+}
