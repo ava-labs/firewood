@@ -298,6 +298,9 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     }
 }
 
+#[cfg(feature = "io-uring")]
+use crate::{LinearAddress, SharedNode};
+
 impl NodeStore<Committed, FileBacked> {
     /// Persist all the nodes of a proposal to storage.
     ///
@@ -307,14 +310,68 @@ impl NodeStore<Committed, FileBacked> {
     #[fastrace::trace(short_name = true)]
     #[cfg(feature = "io-uring")]
     fn flush_nodes_io_uring(&mut self) -> Result<NodeStoreHeader, FileIoError> {
-        use crate::LinearAddress;
-        use std::pin::Pin;
+        const INITIAL_BUMP_SIZE: usize = AREA_SIZE_INDEX::MAX_AREA_SIZE as usize;
 
+        const RINGSIZE: usize = FileBacked::RINGSIZE as usize;
+
+        let flush_start = Instant::now();
+
+        let mut header = self.header;
+        let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
+
+        // Collect addresses and nodes for caching
+        let mut cached_nodes = Vec::new();
+
+        let mut saved_pinned_buffers = vec![
+            PinnedBufferEntry {
+                pinned_buffer: Pin::new(Box::new([0; 0])),
+                node: None,
+            };
+            RINGSIZE
+        ];
+
+        let bump = Bump::with_capacity(INITIAL_BUMP_SIZE);
+
+        // Process each unpersisted node directly from the iterator
+        let mut last_bump_size = bump.allocated_bytes();
+        let mut allocated_objects = Vec::new();
+        for node in UnPersistedNodeIterator::new(self) {
+            let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
+            let mut serialized = bumpalo::collections::Vec::new_in(&bump);
+            shared_node.as_bytes(AreaIndex::MIN, &mut serialized);
+            let (persisted_address, area_size_index) =
+                node_allocator.allocate_node(serialized.as_slice())?;
+            *serialized.get_mut(0).expect("byte was reserved") = area_size_index.get();
+            let mut serialized = serialized.into_boxed_slice();
+            allocated_objects.push((serialized, persisted_address, shared_node));
+
+            // we pause if we can't allocate another node of the same size as the last one
+            // This isn't a guarantee that we won't exceed INITIAL_BUMP_SIZE
+            // but it's a good enough approximation
+            if bump.allocated_bytes() > INITIAL_BUMP_SIZE - area_size_index.size() as usize {
+                // must persist freelist before writing anything
+                node_allocator.persist_freelist_header()?;
+                self.ring_writes(&allocated_objects)?;
+                allocated_objects.clear();
+                bump.reset();
+            }
+        }
+        if !allocated_objects.is_empty() {
+            node_allocator.persist_freelist_header()?;
+            self.ring_writes(&allocated_objects)?;
+        }
+        Ok(header)
+    }
+    #[cfg(feature = "io-uring")]
+    fn ring_writes(&self, allocated_objects: &Vec<(Vec<u8>, LinearAddress, SharedNode)>) -> Result<(), FileIoError> {
+        use std::pin::Pin;
         #[derive(Clone, Debug)]
         struct PinnedBufferEntry {
             pinned_buffer: Pin<Box<[u8]>>,
             node: Option<(LinearAddress, MaybePersistedNode)>,
         }
+
+        let mut ring = self.storage.ring.lock().expect("poisoned lock");
 
         /// Helper function to handle completion queue entries and check for errors
         fn handle_completion_queue(
@@ -352,36 +409,7 @@ impl NodeStore<Committed, FileBacked> {
             }
             Ok(())
         }
-
-        const RINGSIZE: usize = FileBacked::RINGSIZE as usize;
-
-        let flush_start = Instant::now();
-
-        let mut header = self.header;
-        let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
-
-        // Collect addresses and nodes for caching
-        let mut cached_nodes = Vec::new();
-
-        let mut ring = self.storage.ring.lock().expect("poisoned lock");
-        let mut saved_pinned_buffers = vec![
-            PinnedBufferEntry {
-                pinned_buffer: Pin::new(Box::new([0; 0])),
-                node: None,
-            };
-            RINGSIZE
-        ];
-
-        // Process each unpersisted node directly from the iterator
-        for node in UnPersistedNodeIterator::new(self) {
-            let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
-            let mut serialized = Vec::with_capacity(100); // TODO: better size? we can guess branches are larger
-            shared_node.as_bytes(AreaIndex::MIN, &mut serialized);
-            let (persisted_address, area_size_index) =
-                node_allocator.allocate_node(serialized.as_slice())?;
-            *serialized.get_mut(0).expect("byte was reserved") = area_size_index.get();
-            let mut serialized = serialized.into_boxed_slice();
-
+        for (serialized, persisted_address, shared_node) in allocated_objects {
             loop {
                 // Find the first available write buffer, enumerate to get the position for marking it completed
                 if let Some((pos, pbe)) = saved_pinned_buffers
