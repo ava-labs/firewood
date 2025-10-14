@@ -13,6 +13,8 @@ use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::Node;
 use crate::{Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode};
+use crate::firewood_counter;
+use coarsetime::Instant;
 
 use super::NodeReader;
 
@@ -120,10 +122,16 @@ where
         node: Node,
     ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
         let mut root_path = Path::new();
+        let hash_start = Instant::now();
         #[cfg(not(feature = "ethhash"))]
         let res = Self::hash_helper_inner(node, PathGuard::from_path(&mut root_path))?;
         #[cfg(feature = "ethhash")]
         let res = self.hash_helper_inner(node, PathGuard::from_path(&mut root_path), None)?;
+        firewood_counter!(
+            "firewood.storage.hash_ms",
+            "Milliseconds spent hashing nodes and subtrees"
+        )
+        .increment(hash_start.elapsed().as_millis());
         Ok(res)
     }
 

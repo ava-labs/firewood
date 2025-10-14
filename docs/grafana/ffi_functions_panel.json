@@ -1,0 +1,53 @@
+{
+  "id": 1004,
+  "type": "timeseries",
+  "title": "FFI Functions %",
+  "gridPos": { "x": 12, "y": 26, "h": 9, "w": 12 },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineInterpolation": "linear",
+        "barAlignment": 0,
+        "barWidthFactor": 0.6,
+        "lineWidth": 1,
+        "fillOpacity": 50,
+        "gradientMode": "none",
+        "spanNulls": false,
+        "insertNulls": false,
+        "showPoints": "auto",
+        "showValues": false,
+        "pointSize": 5,
+        "stacking": { "mode": "percent", "group": "D" },
+        "axisPlacement": "auto",
+        "axisLabel": "",
+        "axisColorMode": "text",
+        "axisBorderShow": false,
+        "scaleDistribution": { "type": "linear" },
+        "axisCenteredZero": false,
+        "hideFrom": { "tooltip": false, "viz": false, "legend": false },
+        "thresholdsStyle": { "mode": "off" }
+      },
+      "color": { "mode": "palette-classic" },
+      "mappings": [],
+      "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 80 } ] },
+      "max": 1,
+      "min": 0,
+      "unit": "percentunit"
+    },
+    "overrides": []
+  },
+  "pluginVersion": "12.2.0",
+  "targets": [
+    { "expr": "sum(rate(firewood_ffi_propose_ms[1m])) / (\n      (\n        sum(rate(firewood_ffi_open_db_ms[1m])) +\n        sum(rate(firewood_ffi_get_latest_ms[1m])) +\n        sum(rate(firewood_ffi_get_from_root_ms[1m])) +\n        sum(rate(firewood_ffi_get_revision_ms[1m])) +\n        sum(rate(firewood_ffi_cached_view_lookup_ms[1m])) +\n        sum(rate(firewood_ffi_propose_ms[1m])) +\n        sum(rate(firewood_ffi_commit_ms[1m]))\n      ) + 0.000001\n    )", "legendFormat": "Propose %", "refId": "A" },
+    { "expr": "sum(rate(firewood_ffi_commit_ms[1m])) / (\n      (\n        sum(rate(firewood_ffi_open_db_ms[1m])) +\n        sum(rate(firewood_ffi_get_latest_ms[1m])) +\n        sum(rate(firewood_ffi_get_from_root_ms[1m])) +\n        sum(rate(firewood_ffi_get_revision_ms[1m])) +\n        sum(rate(firewood_ffi_cached_view_lookup_ms[1m])) +\n        sum(rate(firewood_ffi_propose_ms[1m])) +\n        sum(rate(firewood_ffi_commit_ms[1m]))\n      ) + 0.000001\n    )", "legendFormat": "Commit %", "refId": "B" },
+    { "expr": "sum(rate(firewood_ffi_cached_view_lookup_ms[1m])) / (\n      (\n        sum(rate(firewood_ffi_open_db_ms[1m])) +\n        sum(rate(firewood_ffi_get_latest_ms[1m])) +\n        sum(rate(firewood_ffi_get_from_root_ms[1m])) +\n        sum(rate(firewood_ffi_get_revision_ms[1m])) +\n        sum(rate(firewood_ffi_cached_view_lookup_ms[1m])) +\n        sum(rate(firewood_ffi_propose_ms[1m])) +\n        sum(rate(firewood_ffi_commit_ms[1m]))\n      ) + 0.000001\n    )", "legendFormat": "Cached View Lookup %", "refId": "C" },
+    { "expr": "sum(rate(firewood_ffi_open_db_ms[1m])) / (\n      (\n        sum(rate(firewood_ffi_open_db_ms[1m])) +\n        sum(rate(firewood_ffi_get_latest_ms[1m])) +\n        sum(rate(firewood_ffi_get_from_root_ms[1m])) +\n        sum(rate(firewood_ffi_get_revision_ms[1m])) +\n        sum(rate(firewood_ffi_cached_view_lookup_ms[1m])) +\n        sum(rate(firewood_ffi_propose_ms[1m])) +\n        sum(rate(firewood_ffi_commit_ms[1m]))\n      ) + 0.000001\n    )", "legendFormat": "Open DB %", "refId": "D" },
+    { "expr": "sum(rate(firewood_ffi_get_latest_ms[1m])) / (\n      (\n        sum(rate(firewood_ffi_open_db_ms[1m])) +\n        sum(rate(firewood_ffi_get_latest_ms[1m])) +\n        sum(rate(firewood_ffi_get_from_root_ms[1m])) +\n        sum(rate(firewood_ffi_get_revision_ms[1m])) +\n        sum(rate(firewood_ffi_cached_view_lookup_ms[1m])) +\n        sum(rate(firewood_ffi_propose_ms[1m])) +\n        sum(rate(firewood_ffi_commit_ms[1m]))\n      ) + 0.000001\n    )", "legendFormat": "Get Latest %", "refId": "E" },
+    { "expr": "sum(rate(firewood_ffi_get_from_root_ms[1m])) / (\n      (\n        sum(rate(firewood_ffi_open_db_ms[1m])) +\n        sum(rate(firewood_ffi_get_latest_ms[1m])) +\n        sum(rate(firewood_ffi_get_from_root_ms[1m])) +\n        sum(rate(firewood_ffi_get_revision_ms[1m])) +\n        sum(rate(firewood_ffi_cached_view_lookup_ms[1m])) +\n        sum(rate(firewood_ffi_propose_ms[1m])) +\n        sum(rate(firewood_ffi_commit_ms[1m]))\n      ) + 0.000001\n    )", "legendFormat": "Get From Root %", "refId": "F" },
+    { "expr": "sum(rate(firewood_ffi_get_revision_ms[1m])) / (\n      (\n        sum(rate(firewood_ffi_open_db_ms[1m])) +\n        sum(rate(firewood_ffi_get_latest_ms[1m])) +\n        sum(rate(firewood_ffi_get_from_root_ms[1m])) +\n        sum(rate(firewood_ffi_get_revision_ms[1m])) +\n        sum(rate(firewood_ffi_cached_view_lookup_ms[1m])) +\n        sum(rate(firewood_ffi_propose_ms[1m])) +\n        sum(rate(firewood_ffi_commit_ms[1m]))\n      ) + 0.000001\n    )", "legendFormat": "Get Revision %", "refId": "G" }
+  ],
+  "datasource": { "type": "prometheus", "uid": "${datasource}" },
+  "options": { "tooltip": { "mode": "single", "sort": "none", "hideZeros": false }, "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom", "calcs": [] } }
+}
+

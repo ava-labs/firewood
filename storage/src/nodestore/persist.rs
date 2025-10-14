@@ -60,7 +60,13 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     /// Returns a [`FileIoError`] if the header cannot be written.
     pub fn flush_header(&self) -> Result<(), FileIoError> {
         let header_bytes = bytemuck::bytes_of(&self.header);
+        let start = Instant::now();
         self.storage.write(0, header_bytes)?;
+        firewood_counter!(
+            "firewood.storage.flush_header_ms",
+            "Milliseconds spent flushing nodestore header"
+        )
+        .increment(start.elapsed().as_millis());
         Ok(())
     }
 
@@ -75,7 +81,13 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
         header_bytes.resize(NodeStoreHeader::SIZE as usize, 0);
         debug_assert_eq!(header_bytes.len(), NodeStoreHeader::SIZE as usize);
 
+        let start = Instant::now();
         self.storage.write(0, &header_bytes)?;
+        firewood_counter!(
+            "firewood.storage.flush_header_ms",
+            "Milliseconds spent flushing nodestore header"
+        )
+        .increment(start.elapsed().as_millis());
         Ok(())
     }
 
@@ -89,7 +101,13 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
         // Write the free lists to storage
         let free_list_bytes = bytemuck::bytes_of(self.header.free_lists());
         let free_list_offset = NodeStoreHeader::free_lists_offset();
+        let start = Instant::now();
         self.storage.write(free_list_offset, free_list_bytes)?;
+        firewood_counter!(
+            "firewood.storage.flush_freelist_ms",
+            "Milliseconds spent flushing freelist header"
+        )
+        .increment(start.elapsed().as_millis());
         Ok(())
     }
 }
@@ -249,7 +267,13 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
         for node in UnPersistedNodeIterator::new(self) {
             let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
             let mut serialized = Vec::new();
+            let ser_start = Instant::now();
             shared_node.as_bytes(AreaIndex::MIN, &mut serialized);
+            firewood_counter!(
+                "firewood.storage.serialize_ms",
+                "Milliseconds spent serializing nodes to bytes"
+            )
+            .increment(ser_start.elapsed().as_millis());
 
             let (persisted_address, area_size_index) =
                 allocator.allocate_node(serialized.as_slice())?;
@@ -284,6 +308,7 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     /// Returns a [`FileIoError`] if any of the persistence operations fail.
     #[fastrace::trace(short_name = true)]
     pub fn persist(&mut self) -> Result<(), FileIoError> {
+        let persist_start = Instant::now();
         // First persist all the nodes
         self.header = self.flush_nodes()?;
 
@@ -293,6 +318,12 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
 
         // Finally persist the header
         self.flush_header()?;
+
+        firewood_counter!(
+            "firewood.storage.persist_ms",
+            "Milliseconds spent persisting a nodestore (end-to-end)"
+        )
+        .increment(persist_start.elapsed().as_millis());
 
         Ok(())
     }
@@ -430,6 +461,7 @@ impl NodeStore<Committed, FileBacked> {
                     // SAFETY: the submission_queue_entry's found buffer must not move or go out of scope
                     // until the operation has been completed. This is ensured by having a Some(offset)
                     // and not marking it None until the kernel has said it's done below.
+                    let submit_start = Instant::now();
                     while unsafe { ring.submission().push(&submission_queue_entry) }.is_err() {
                         ring.submitter().squeue_wait().map_err(|e| {
                             self.storage.file_io_error(
@@ -441,12 +473,25 @@ impl NodeStore<Committed, FileBacked> {
                         trace!("submission queue is full");
                         firewood_counter!("ring.full", "amount of full ring").increment(1);
                     }
+                    firewood_counter!(
+                        "firewood.io.uring_submit_ms",
+                        "Milliseconds spent preparing/submitting io_uring writes",
+                        "backend" => "io_uring"
+                    )
+                    .increment(submit_start.elapsed().as_millis());
                     break;
                 }
                 // if we get here, that means we couldn't find a place to queue the request, so wait for at least one operation
                 // to complete, then handle the completion queue
                 firewood_counter!("ring.full", "amount of full ring").increment(1);
+                let wait_start = Instant::now();
                 submit_and_wait_with_retry(&mut ring, 1, &self.storage, "submit_and_wait")?;
+                firewood_counter!(
+                    "firewood.io.uring_wait_ms",
+                    "Milliseconds spent waiting for io_uring completions",
+                    "backend" => "io_uring"
+                )
+                .increment(wait_start.elapsed().as_millis());
                 let completion_queue = ring.completion();
                 trace!("competion queue length: {}", completion_queue.len());
                 handle_completion_queue(
@@ -464,12 +509,19 @@ impl NodeStore<Committed, FileBacked> {
             .iter()
             .filter(|pbe| pbe.node.is_some())
             .count();
+        let wait_start = Instant::now();
         submit_and_wait_with_retry(
             &mut ring,
             pending as u32,
             &self.storage,
             "final submit_and_wait",
         )?;
+        firewood_counter!(
+            "firewood.io.uring_wait_ms",
+            "Milliseconds spent waiting for io_uring completions",
+            "backend" => "io_uring"
+        )
+        .increment(wait_start.elapsed().as_millis());
 
         handle_completion_queue(&self.storage, ring.completion(), &mut saved_pinned_buffers)?;
 

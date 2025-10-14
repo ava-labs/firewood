@@ -1,0 +1,49 @@
+{
+  "id": 1003,
+  "type": "timeseries",
+  "title": "FFI Batch %",
+  "gridPos": { "x": 12, "y": 17, "h": 9, "w": 12 },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineInterpolation": "linear",
+        "barAlignment": 0,
+        "barWidthFactor": 0.6,
+        "lineWidth": 1,
+        "fillOpacity": 50,
+        "gradientMode": "none",
+        "spanNulls": false,
+        "insertNulls": false,
+        "showPoints": "auto",
+        "showValues": false,
+        "pointSize": 5,
+        "stacking": { "mode": "percent", "group": "C" },
+        "axisPlacement": "auto",
+        "axisLabel": "",
+        "axisColorMode": "text",
+        "axisBorderShow": false,
+        "scaleDistribution": { "type": "linear" },
+        "axisCenteredZero": false,
+        "hideFrom": { "tooltip": false, "viz": false, "legend": false },
+        "thresholdsStyle": { "mode": "off" }
+      },
+      "color": { "mode": "palette-classic" },
+      "mappings": [],
+      "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 80 } ] },
+      "max": 1,
+      "min": 0,
+      "unit": "percentunit"
+    },
+    "overrides": []
+  },
+  "pluginVersion": "12.2.0",
+  "targets": [
+    { "expr": "sum(rate(firewood_ffi_propose_ms[1m])) / (sum(rate(firewood_ffi_batch_ms[1m])) + 0.000001)", "legendFormat": "Propose %", "refId": "A" },
+    { "expr": "sum(rate(firewood_ffi_commit_ms[1m])) / (sum(rate(firewood_ffi_batch_ms[1m])) + 0.000001)", "legendFormat": "Commit %", "refId": "B" },
+    { "expr": "clamp_min(sum(rate(firewood_ffi_batch_ms[1m])) - (sum(rate(firewood_ffi_propose_ms[1m])) + sum(rate(firewood_ffi_commit_ms[1m]))), 0) / (sum(rate(firewood_ffi_batch_ms[1m])) + 0.000001)", "legendFormat": "Other %", "refId": "Z" }
+  ],
+  "datasource": { "type": "prometheus", "uid": "${datasource}" },
+  "options": { "tooltip": { "mode": "single", "sort": "none", "hideZeros": false }, "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom", "calcs": [] } }
+}
+

@@ -1,0 +1,58 @@
+{
+  "id": 1002,
+  "type": "timeseries",
+  "title": "Storage Commit % of Persist",
+  "gridPos": { "x": 0, "y": 17, "h": 9, "w": 12 },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineInterpolation": "linear",
+        "barAlignment": 0,
+        "barWidthFactor": 0.6,
+        "lineWidth": 1,
+        "fillOpacity": 50,
+        "gradientMode": "none",
+        "spanNulls": false,
+        "insertNulls": false,
+        "showPoints": "auto",
+        "showValues": false,
+        "pointSize": 5,
+        "stacking": { "mode": "percent", "group": "B" },
+        "axisPlacement": "auto",
+        "axisLabel": "",
+        "axisColorMode": "text",
+        "axisBorderShow": false,
+        "scaleDistribution": { "type": "linear" },
+        "axisCenteredZero": false,
+        "hideFrom": { "tooltip": false, "viz": false, "legend": false },
+        "thresholdsStyle": { "mode": "off" }
+      },
+      "color": { "mode": "palette-classic" },
+      "mappings": [],
+      "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 80 } ] },
+      "max": 1,
+      "min": 0,
+      "unit": "percentunit"
+    },
+    "overrides": []
+  },
+  "pluginVersion": "12.2.0",
+  "targets": [
+    { "expr": "sum(rate(firewood_storage_hash_ms[1m])) / (sum(rate(firewood_storage_persist_ms[1m])) + 0.000001)", "legendFormat": "Hash %", "refId": "A" },
+    { "expr": "sum(rate(firewood_storage_serialize_ms[1m])) / (sum(rate(firewood_storage_persist_ms[1m])) + 0.000001)", "legendFormat": "Serialize %", "refId": "B" },
+    { "expr": "sum(rate(firewood_storage_alloc_freelist_ms[1m])) / (sum(rate(firewood_storage_persist_ms[1m])) + 0.000001)", "legendFormat": "Alloc (Freelist) %", "refId": "C" },
+    { "expr": "sum(rate(firewood_storage_alloc_end_ms[1m])) / (sum(rate(firewood_storage_persist_ms[1m])) + 0.000001)", "legendFormat": "Alloc (End) %", "refId": "D" },
+    { "expr": "sum(rate(firewood_io_read_ms{backend=\"file\"}[1m])) / (sum(rate(firewood_storage_persist_ms[1m])) + 0.000001)", "legendFormat": "Read I/O %", "refId": "E" },
+    { "expr": "sum(rate(firewood_io_write_ms{backend=\"file\"}[1m])) / (sum(rate(firewood_storage_persist_ms[1m])) + 0.000001)", "legendFormat": "Write (file) %", "refId": "F" },
+    { "expr": "sum(rate(firewood_io_uring_wait_ms[1m])) / (sum(rate(firewood_storage_persist_ms[1m])) + 0.000001)", "legendFormat": "io_uring Wait %", "refId": "G2" },
+    { "expr": "sum(rate(firewood_io_uring_submit_ms[1m])) / (sum(rate(firewood_storage_persist_ms[1m])) + 0.000001)", "legendFormat": "io_uring Submit %", "refId": "G" },
+    { "expr": "sum(rate(firewood_storage_flush_header_ms[1m])) / (sum(rate(firewood_storage_persist_ms[1m])) + 0.000001)", "legendFormat": "Flush Header %", "refId": "H" },
+    { "expr": "sum(rate(firewood_storage_flush_freelist_ms[1m])) / (sum(rate(firewood_storage_persist_ms[1m])) + 0.000001)", "legendFormat": "Flush Freelist %", "refId": "I" },
+    { "expr": "sum(rate(firewood_storage_deserialize_ms[1m])) / (sum(rate(firewood_storage_persist_ms[1m])) + 0.000001)", "legendFormat": "Deserialize %", "refId": "J" },
+    { "expr": "clamp_min(sum(rate(firewood_storage_persist_ms[1m])) - (sum(rate(firewood_storage_hash_ms[1m])) + sum(rate(firewood_storage_serialize_ms[1m])) + sum(rate(firewood_storage_alloc_freelist_ms[1m])) + sum(rate(firewood_storage_alloc_end_ms[1m])) + sum(rate(firewood_io_read_ms{backend=\"file\"}[1m])) + sum(rate(firewood_io_write_ms{backend=\"file\"}[1m])) + sum(rate(firewood_io_uring_wait_ms[1m])) + sum(rate(firewood_io_uring_submit_ms[1m])) + sum(rate(firewood_storage_flush_header_ms[1m])) + sum(rate(firewood_storage_flush_freelist_ms[1m])) + sum(rate(firewood_storage_deserialize_ms[1m]))), 0) / (sum(rate(firewood_storage_persist_ms[1m])) + 0.000001)", "legendFormat": "Other %", "refId": "Z" }
+  ],
+  "datasource": { "type": "prometheus", "uid": "${datasource}" },
+  "options": { "tooltip": { "mode": "single", "sort": "none", "hideZeros": false }, "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom", "calcs": [] } }
+}
+

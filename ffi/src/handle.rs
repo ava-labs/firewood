@@ -11,6 +11,7 @@ use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache:
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
 use metrics::counter;
+use coarsetime::Instant;
 
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
 ///
@@ -100,21 +101,29 @@ impl DatabaseHandle {
     ///
     /// If the path is empty, or if the configuration is invalid, this will return an error.
     pub fn new(args: DatabaseHandleArgs<'_>) -> Result<Self, api::Error> {
-        let cfg = DbConfig::builder()
-            .truncate(args.truncate)
-            .manager(args.as_rev_manager_config()?)
-            .build();
+        let start = Instant::now();
+        let res: Result<Self, api::Error> = (|| {
+            let cfg = DbConfig::builder()
+                .truncate(args.truncate)
+                .manager(args.as_rev_manager_config()?)
+                .build();
 
-        let path = args
-            .path
-            .as_str()
-            .map_err(|err| invalid_data(format!("database path contains invalid utf-8: {err}")))?;
+            let path = args
+                .path
+                .as_str()
+                .map_err(|err| invalid_data(format!("database path contains invalid utf-8: {err}")))?;
 
-        if path.is_empty() {
-            return Err(invalid_data("database path cannot be empty"));
-        }
+            if path.is_empty() {
+                return Err(invalid_data("database path cannot be empty"));
+            }
 
-        Db::new(path, cfg).map(Self::from)
+            Db::new(path, cfg).map(Self::from)
+        })();
+        let success = if res.is_ok() { "true" } else { "false" };
+        let elapsed = start.elapsed().as_millis();
+        counter!("firewood.ffi.open_db", "success" => success).increment(1);
+        counter!("firewood.ffi.open_db_ms", "success" => success).increment(elapsed);
+        res
     }
 
     /// Returns the current root hash of the database.
@@ -123,7 +132,13 @@ impl DatabaseHandle {
     ///
     /// An error is returned if there was an i/o error while reading the root hash.
     pub fn current_root_hash(&self) -> Result<Option<HashKey>, api::Error> {
-        self.db.root_hash()
+        let start = Instant::now();
+        let res = self.db.root_hash();
+        let success = if res.is_ok() { "true" } else { "false" };
+        counter!("firewood.ffi.current_root_hash", "success" => success).increment(1);
+        counter!("firewood.ffi.current_root_hash_ms", "success" => success)
+            .increment(start.elapsed().as_millis());
+        res
     }
 
     /// Returns a value from the database for the given key from the latest root hash.
@@ -132,13 +147,19 @@ impl DatabaseHandle {
     ///
     /// An error is returned if there was an i/o error while reading the value.
     pub fn get_latest(&self, key: impl KeyType) -> Result<Option<Box<[u8]>>, api::Error> {
-        let Some(root) = self.current_root_hash()? else {
-            return Err(api::Error::RevisionNotFound {
-                provided: HashKey::default_root_hash(),
-            });
-        };
-
-        self.db.revision(root)?.val(key)
+        let start = Instant::now();
+        let res = (|| {
+            let Some(root) = self.current_root_hash()? else {
+                return Err(api::Error::RevisionNotFound {
+                    provided: HashKey::default_root_hash(),
+                });
+            };
+            self.db.revision(root)?.val(key)
+        })();
+        let success = if res.is_ok() { "true" } else { "false" };
+        counter!("firewood.ffi.get_latest", "success" => success).increment(1);
+        counter!("firewood.ffi.get_latest_ms", "success" => success).increment(start.elapsed().as_millis());
+        res
     }
 
     /// Returns a value from the database for the given key from the specified root hash.
@@ -152,7 +173,13 @@ impl DatabaseHandle {
         root: HashKey,
         key: impl KeyType,
     ) -> Result<Option<Box<[u8]>>, api::Error> {
-        self.get_root(root)?.val(key.as_ref())
+        let start = Instant::now();
+        let res = self.get_root(root).and_then(|v| v.val(key.as_ref()));
+        let success = if res.is_ok() { "true" } else { "false" };
+        counter!("firewood.ffi.get_from_root", "success" => success).increment(1);
+        counter!("firewood.ffi.get_from_root_ms", "success" => success)
+            .increment(start.elapsed().as_millis());
+        res
     }
 
     /// Creates a proposal with the given values and returns the proposal and the start time.
@@ -185,27 +212,50 @@ impl DatabaseHandle {
     /// root hash, for example when the revision does not exist or an I/O error occurs while
     /// accessing the database.
     pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult, api::Error> {
-        let view = self.db.view(root.clone())?;
-        Ok(GetRevisionResult {
-            handle: RevisionHandle::new(view),
-            root_hash: root,
-        })
+        let start = Instant::now();
+        let res = (|| {
+            let view = self.db.view(root.clone())?;
+            Ok(GetRevisionResult {
+                handle: RevisionHandle::new(view),
+                root_hash: root,
+            })
+        })();
+        let success = if res.is_ok() { "true" } else { "false" };
+        counter!("firewood.ffi.get_revision", "success" => success).increment(1);
+        counter!("firewood.ffi.get_revision_ms", "success" => success)
+            .increment(start.elapsed().as_millis());
+        res
     }
 
     pub(crate) fn get_root(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {
+        let start = Instant::now();
         let mut cache_miss = false;
-        let view = self.cached_view.get_or_try_insert_with(root, |key| {
+        let res = self.cached_view.get_or_try_insert_with(root, |key| {
             cache_miss = true;
             self.db.view(HashKey::clone(key))
-        })?;
+        });
 
-        if cache_miss {
-            counter!("firewood.ffi.cached_view.miss").increment(1);
-        } else {
-            counter!("firewood.ffi.cached_view.hit").increment(1);
+        match res {
+            Ok(view) => {
+                if cache_miss {
+                    counter!("firewood.ffi.cached_view.miss").increment(1);
+                } else {
+                    counter!("firewood.ffi.cached_view.hit").increment(1);
+                }
+                let cached = if cache_miss { "miss" } else { "hit" };
+                counter!(
+                    "firewood.ffi.cached_view_lookup_ms",
+                    "cached" => cached
+                )
+                .increment(start.elapsed().as_millis());
+                Ok(view)
+            }
+            Err(e) => {
+                counter!("firewood.ffi.cached_view_lookup_ms", "cached" => "error")
+                    .increment(start.elapsed().as_millis());
+                Err(e)
+            }
         }
-
-        Ok(view)
     }
 
     pub(crate) fn clear_cached_view(&self) {

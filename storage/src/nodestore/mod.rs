@@ -52,6 +52,8 @@ use arc_swap::access::DynAccess;
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind, Read};
+use coarsetime::Instant;
+use crate::firewood_counter;
 
 // Re-export types from alloc module
 pub use alloc::NodeAllocator;
@@ -738,12 +740,21 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
 
         let mut area_stream = self.storage.stream_from(actual_addr)?;
         let offset_before = area_stream.offset();
+        // Measure deserialization time (excluding IO which is tracked separately)
+        let deserialize_start = Instant::now();
         let node: SharedNode = Node::from_reader(&mut area_stream)
             .map_err(|e| {
                 self.storage
                     .file_io_error(e, actual_addr, Some("read_node_from_disk".to_string()))
             })?
             .into();
+        let deserialize_elapsed = deserialize_start.elapsed().as_millis();
+        firewood_counter!(
+            "firewood.storage.deserialize_ms",
+            "Milliseconds spent deserializing nodes from storage",
+            "path" => "nodestore"
+        )
+        .increment(deserialize_elapsed);
         let length = area_stream
             .offset()
             .checked_sub(offset_before)

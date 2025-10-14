@@ -35,6 +35,7 @@ use crate::node::ExtendableBytes;
 use crate::{
     FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage, firewood_counter,
 };
+use coarsetime::Instant;
 
 /// Returns the maximum size needed to encode a `VarInt`.
 const fn var_int_max_size<VI>() -> usize {
@@ -222,6 +223,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         &mut self,
         n: u64,
     ) -> Result<Option<(LinearAddress, AreaIndex)>, FileIoError> {
+        let alloc_timer_start = Instant::now();
         // Find the smallest free list that can fit this size.
         let index = AreaIndex::from_size(n).map_err(|e| {
             self.storage
@@ -262,6 +264,13 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
 
             // Return the address of the newly allocated block.
             trace!("Allocating from free list: addr: {address:?}, size: {index}");
+            // time spent allocating from freelist (including any freelist reads)
+            firewood_counter!(
+                "firewood.storage.alloc_freelist_ms",
+                "Milliseconds spent allocating from freelist by index",
+                "index" => index_name(index)
+            )
+            .increment(alloc_timer_start.elapsed().as_millis());
             return Ok(Some((address, index)));
         }
 
@@ -272,10 +281,18 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
             "index" => index_name(index)
         )
         .increment(index.size());
+        // record time even when allocation falls back to end-of-store
+        firewood_counter!(
+            "firewood.storage.alloc_freelist_ms",
+            "Milliseconds spent allocating from freelist by index",
+            "index" => index_name(index)
+        )
+        .increment(alloc_timer_start.elapsed().as_millis());
         Ok(None)
     }
 
     fn allocate_from_end(&mut self, n: u64) -> Result<(LinearAddress, AreaIndex), FileIoError> {
+        let alloc_timer_start = Instant::now();
         let index = AreaIndex::from_size(n).map_err(|e| {
             self.storage
                 .file_io_error(e, 0, Some("allocate_from_end".to_string()))
@@ -286,6 +303,12 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
             .set_size(self.header.size().saturating_add(area_size));
         debug_assert!(addr.is_aligned());
         trace!("Allocating from end: addr: {addr:?}, size: {index}");
+        firewood_counter!(
+            "firewood.storage.alloc_end_ms",
+            "Milliseconds spent allocating from end by index",
+            "index" => index_name(index)
+        )
+        .increment(alloc_timer_start.elapsed().as_millis());
         Ok((addr, index))
     }
 

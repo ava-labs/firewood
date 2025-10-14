@@ -37,6 +37,7 @@ use std::sync::Mutex;
 
 use lru::LruCache;
 use metrics::counter;
+use coarsetime::Instant;
 
 use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
 
@@ -239,18 +240,23 @@ impl ReadableStorage for FileBacked {
 
 impl WritableStorage for FileBacked {
     fn write(&self, offset: u64, object: &[u8]) -> Result<usize, FileIoError> {
+        let start = Instant::now();
         #[cfg(unix)]
-        {
+        let res = {
             self.fd
                 .write_at(object, offset)
                 .map_err(|e| self.file_io_error(e, offset, Some("write".to_string())))
-        }
+        };
         #[cfg(windows)]
-        {
+        let res = {
             self.fd
                 .seek_write(object, offset)
                 .map_err(|e| self.file_io_error(e, offset, Some("write".to_string())))
-        }
+        };
+        let elapsed_ms = start.elapsed().as_millis();
+        counter!("firewood.io.write_ms", "backend" => "file").increment(elapsed_ms);
+        counter!("firewood.io.write", "backend" => "file").increment(1);
+        res
     }
 
     fn write_cached_nodes(
@@ -314,8 +320,8 @@ impl<'a> PredictiveReader<'a> {
 impl Drop for PredictiveReader<'_> {
     fn drop(&mut self) {
         let elapsed = self.started.elapsed();
-        counter!("firewood.io.read_ms").increment(elapsed.as_millis());
-        counter!("firewood.io.read").increment(1);
+        counter!("firewood.io.read_ms", "backend" => "file").increment(elapsed.as_millis());
+        counter!("firewood.io.read", "backend" => "file").increment(1);
     }
 }
 
