@@ -4,9 +4,9 @@
 mod iter;
 mod kvp;
 
-use crate::{HashType, IntoSplitPath, PathComponent};
+use crate::{HashType, IntoSplitPath, PathComponent, SplitPath};
 
-pub use self::iter::{IterAscending, IterDescending, TrieEdgeIter, TrieValueIter};
+pub use self::iter::{IterAscending, IterDescending, TrieEdgeIter, TriePathIter, TrieValueIter};
 pub use self::kvp::{DuplicateKeyError, HashedKeyValueTrieRoot, KeyValueTrieRoot};
 
 /// The state of an edge from a parent node to a child node in a trie.
@@ -90,6 +90,17 @@ pub trait TrieNode<V: AsRef<[u8]> + ?Sized> {
             (None, Some(hash)) => Some(TrieEdgeState::RemoteChild { hash }),
             (None, None) => None,
         }
+    }
+
+    /// Returns an iterator over the edges along a specified path in this trie
+    /// terminating at the node corresponding to the path, if it exists;
+    /// otherwise, terminating at the deepest existing edge along the path.
+    ///
+    /// The returned iterator yields each edge along the path as a tuple where
+    /// the first element is full path to the edge, inclusive of the edge's
+    /// leading path components, and the second element is the edge state.
+    fn iter_path<P: SplitPath>(&self, path: P) -> TriePathIter<'_, P, Self, V> {
+        TriePathIter::new(self, None, path)
     }
 
     /// Returns a breadth-first iterator over the edges in this trie in ascending
