@@ -33,7 +33,42 @@
         "type": "github"
       }
     },
+    "golang": {
+      "inputs": {
+        "nixpkgs": "nixpkgs"
+      },
+      "locked": {
+        "dir": "nix/go",
+        "lastModified": 1760457933,
+        "narHash": "sha256-/OztRdmXd3cL6ycrzRYAgFkPTv9v5WWlcdtVlERaRKI=",
+        "owner": "ava-labs",
+        "repo": "avalanchego",
+        "rev": "edf67505fee7c95837c2220467de86fea0efc860",
+        "type": "github"
+      },
+      "original": {
+        "dir": "nix/go",
+        "owner": "ava-labs",
+        "ref": "edf67505fee7c95837c2220467de86fea0efc860",
+        "repo": "avalanchego",
+        "type": "github"
+      }
+    },
     "nixpkgs": {
+      "locked": {
+        "lastModified": 1759735786,
+        "narHash": "sha256-a0+h02lyP2KwSNrZz4wLJTu9ikujNsTWIC874Bv7IJ0=",
+        "rev": "20c4598c84a671783f741e02bf05cbfaf4907cff",
+        "revCount": 810859,
+        "type": "tarball",
+        "url": "https://api.flakehub.com/f/pinned/NixOS/nixpkgs/0.2505.810859%2Brev-20c4598c84a671783f741e02bf05cbfaf4907cff/0199bc43-02e2-7036-8e2c-e43f6d6b4ede/source.tar.gz"
+      },
+      "original": {
+        "type": "tarball",
+        "url": "https://flakehub.com/f/NixOS/nixpkgs/0.2505.%2A.tar.gz"
+      }
+    },
+    "nixpkgs_2": {
       "locked": {
         "lastModified": 1758589230,
         "narHash": "sha256-zMTCFGe8aVGTEr2RqUi/QzC1nOIQ0N1HRsbqB4f646k=",
@@ -47,7 +82,7 @@
         "url": "https://flakehub.com/f/NixOS/nixpkgs/0.2505.%2A.tar.gz"
       }
     },
-    "nixpkgs_2": {
+    "nixpkgs_3": {
       "locked": {
         "lastModified": 1744536153,
         "narHash": "sha256-awS2zRgF4uTwrOKwwiJcByDzDOdo3Q1rPZbiHQg/N38=",
@@ -67,13 +102,14 @@
       "inputs": {
         "crane": "crane",
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs",
+        "golang": "golang",
+        "nixpkgs": "nixpkgs_2",
         "rust-overlay": "rust-overlay"
       }
     },
     "rust-overlay": {
       "inputs": {
-        "nixpkgs": "nixpkgs_2"
+        "nixpkgs": "nixpkgs_3"
       },
       "locked": {
         "lastModified": 1758854041,
