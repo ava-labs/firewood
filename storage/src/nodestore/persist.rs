@@ -84,14 +84,27 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the free list cannot be written to storage.
-    #[fastrace::trace(short_name = true)]
     pub fn flush_freelist(&self) -> Result<(), FileIoError> {
-        // Write the free lists to storage
-        let free_list_bytes = bytemuck::bytes_of(self.header.free_lists());
+        self.flush_freelist_from(&self.header)
+    }
+
+    /// Persist the freelist from the given header to storage
+    /// 
+    /// This function is used to ensure that the freelist is advanced after allocating
+    /// nodes for writing. This allows the database to be recovered from an I/O error while
+    /// persisting a revision to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the free list cannot be written to storage.
+    #[fastrace::trace(name = "firewood.flush_freelist")]
+    pub fn flush_freelist_from(&self, header: &NodeStoreHeader) -> Result<(), FileIoError> {
+        let free_list_bytes = bytemuck::bytes_of(header.free_lists());
         let free_list_offset = NodeStoreHeader::free_lists_offset();
         self.storage.write(free_list_offset, free_list_bytes)?;
         Ok(())
     }
+
 }
 
 /// Iterator that returns unpersisted nodes in depth first order.
@@ -206,7 +219,7 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     ///
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
-    pub fn flush_nodes(&mut self) -> Result<(), FileIoError> {
+    pub fn flush_nodes(&mut self) -> Result<NodeStoreHeader, FileIoError> {
         #[cfg(feature = "io-uring")]
         if let Some(this) = self.downcast_to_file_backed() {
             return this.flush_nodes_io_uring();
@@ -238,7 +251,7 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
-    fn flush_nodes_generic(&self) -> Result<(), FileIoError> {
+    fn flush_nodes_generic(&self) -> Result<NodeStoreHeader, FileIoError> {
         let flush_start = Instant::now();
 
         // keep MaybePersistedNodes to add them to cache and persist them
@@ -264,12 +277,12 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
 
         self.storage.write_cached_nodes(cached_nodes)?;
 
-        self.flush_freelist()?;
+        allocator.flush_freelist()?;
 
         let flush_time = flush_start.elapsed().as_millis();
         firewood_counter!("firewood.flush_nodes", "flushed node amount").increment(flush_time);
 
-        Ok(())
+        Ok(header)
     }
 }
 
@@ -287,7 +300,7 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     #[fastrace::trace(short_name = true)]
     pub fn persist(&mut self) -> Result<(), FileIoError> {
         // First persist all the nodes
-        self.flush_nodes()?;
+        self.header = self.flush_nodes()?;
 
         // Set the root address in the header based on the persisted root
         let root_address = self.kind.root.as_ref().and_then(Child::persisted_address);
@@ -337,7 +350,7 @@ impl NodeStore<Committed, FileBacked> {
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
     #[cfg(feature = "io-uring")]
-    fn flush_nodes_io_uring(&mut self) -> Result<(), FileIoError> {
+    fn flush_nodes_io_uring(&mut self) -> Result<NodeStoreHeader, FileIoError> {
         let flush_start = Instant::now();
 
         let mut header = self.header;
@@ -357,6 +370,7 @@ impl NodeStore<Committed, FileBacked> {
                 let (persisted_address, area_size_index) =
                     node_allocator.allocate_node(bytes.as_slice())?;
                 *bytes.get_mut(0).expect("byte was reserved") = area_size_index.get();
+                bytes.shrink_to_fit();
                 let slice = bytes.into_bump_slice();
                 (slice, persisted_address, area_size_index.size() as usize)
             };
@@ -370,19 +384,19 @@ impl NodeStore<Committed, FileBacked> {
                 batch.bump.allocated_bytes() > Batch::INITIAL_BUMP_SIZE.saturating_sub(idx_size);
             if might_overflow {
                 // must persist freelist before writing anything
-                self.flush_freelist()?;
+                node_allocator.flush_freelist()?;
                 self.ring_writes(allocated_objects)?;
                 allocated_objects = Vec::new();
                 batch.bump.reset();
             }
         }
         if !allocated_objects.is_empty() {
-            self.flush_freelist()?;
+            self.flush_freelist_from(&header)?;
             self.ring_writes(allocated_objects)?;
         }
         let flush_time = flush_start.elapsed().as_millis();
         firewood_counter!("firewood.flush_nodes", "amount flushed nodes").increment(flush_time);
-        Ok(())
+        Ok(header)
     }
     #[cfg(feature = "io-uring")]
     fn ring_writes(
