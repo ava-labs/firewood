@@ -145,8 +145,7 @@ impl api::Db for Db {
         &self,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
     ) -> Result<Self::Proposal<'_>, api::Error> {
-        let parent = self.manager.current_revision();
-        self.propose_helper(batch, parent)
+        self.propose_with_parent(batch, &self.manager.current_revision())
     }
 }
 
@@ -191,21 +190,23 @@ impl Db {
         latest_rev_nodestore.check(opt)
     }
 
-    #[fastrace::trace(short_name = true)]
-    fn propose_helper<F: Parentable>(
+    /// Create a proposal with a specified parent. Currently, the parent can be another proposal or
+    /// the current revision.
+    #[fastrace::trace(name = "propose")]
+    fn propose_with_parent<F: Parentable>(
         &self,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
-        parent: Arc<NodeStore<F, FileBacked>>,
+        parent: &NodeStore<F, FileBacked>,
     ) -> Result<Proposal<'_>, api::Error> {
         // If threadpool exists, then use the parallel propose implementation
         let immutable = if let Some(threadpool) = self.manager.threadpool() {
             let mut parallel_merkle = ParallelMerkle::default();
             let span = fastrace::Span::enter_with_local_parent("parallel_merkle");
-            let immutable = parallel_merkle.create_proposal(&parent, batch, threadpool)?;
+            let immutable = parallel_merkle.create_proposal(parent, batch, threadpool)?;
             drop(span);
             immutable
         } else {
-            let proposal = NodeStore::new(&parent)?;
+            let proposal = NodeStore::new(parent)?;
             let mut merkle = Merkle::from(proposal);
             let span = fastrace::Span::enter_with_local_parent("merkleops");
             for op in batch.into_iter().map_into_batch() {
@@ -304,8 +305,7 @@ impl Proposal<'_> {
         &self,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
     ) -> Result<Self, api::Error> {
-        let parent = self.nodestore.clone();
-        self.db.propose_helper(batch, parent)
+        self.db.propose_with_parent(batch, &self.nodestore)
     }
 }
 
