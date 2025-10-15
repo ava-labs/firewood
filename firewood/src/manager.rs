@@ -20,6 +20,8 @@ use metrics::gauge;
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
+#[cfg(test)]
+use crate::root_store::MockStore;
 use crate::root_store::{RootStore, RootStoreError};
 use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
@@ -357,6 +359,13 @@ impl<T: RootStore> RevisionManager<T> {
             .back()
             .expect("there is always one revision")
             .clone()
+    }
+}
+
+#[cfg(test)]
+impl RevisionManager<MockStore> {
+    pub fn mock_store(&self) -> MockStore {
+        self.root_store.clone()
     }
 }
 

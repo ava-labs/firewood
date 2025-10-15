@@ -830,7 +830,7 @@ mod test {
     #[test]
     fn test_root_store() {
         let mock_store = MockStore::new();
-        let db = TestDb::with_mockstore(mock_store.clone());
+        let db = TestDb::with_mockstore(mock_store);
 
         // First, create a revision to retrieve
         let key = b"key";
@@ -852,7 +852,7 @@ mod test {
         proposal.commit().unwrap();
 
         // Reopen the database and verify that the database can access a persisted revision
-        let db = db.reopen(mock_store);
+        let db = db.reopen();
 
         let view = db.view(root_hash).unwrap();
         let retrieved_value = view.val(key).unwrap().unwrap();
@@ -862,7 +862,7 @@ mod test {
     #[test]
     fn test_root_store_errs() {
         let mock_store = MockStore::with_failures();
-        let db = TestDb::with_mockstore(mock_store.clone());
+        let db = TestDb::with_mockstore(mock_store);
 
         let view = db.view(TrieHash::empty());
         assert!(view.is_err());
@@ -946,11 +946,11 @@ mod test {
             TestDb { db, tmpdir }
         }
 
-        fn reopen(self, mock_store: MockStore) -> Self {
+        fn reopen(self) -> Self {
             let path = self.path();
+            let mock_store = self.manager.mock_store();
             drop(self.db);
             let dbconfig = DbConfig::builder().truncate(false).build();
-
             let db = Db::new_with_root_store(path, dbconfig, mock_store).unwrap();
             TestDb {
                 db,
