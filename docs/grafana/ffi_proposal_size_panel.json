@@ -1,0 +1,21 @@
+{
+  "id": 1006,
+  "type": "timeseries",
+  "title": "FFI Proposal Size (Avg)",
+  "gridPos": { "x": 0, "y": 35, "h": 9, "w": 12 },
+  "fieldConfig": {
+    "defaults": {
+      "custom": { "drawStyle": "line", "showPoints": "auto" },
+      "unit": "decbytes"
+    },
+    "overrides": []
+  },
+  "pluginVersion": "12.2.0",
+  "targets": [
+    { "expr": "(sum(rate(firewood_ffi_propose_total_bytes{success=\"true\"}[5m])) ) / (sum(rate(firewood_ffi_propose_overall{success=\"true\"}[5m])) + 0.000001)", "legendFormat": "Avg bytes/proposal (success)", "refId": "A" },
+    { "expr": "(sum(rate(firewood_ffi_propose_items{success=\"true\"}[5m])) ) / (sum(rate(firewood_ffi_propose_overall{success=\"true\"}[5m])) + 0.000001)", "legendFormat": "Avg items/proposal (success)", "refId": "B" }
+  ],
+  "datasource": { "type": "prometheus", "uid": "${datasource}" },
+  "options": { "tooltip": { "mode": "single", "sort": "none", "hideZeros": false }, "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom", "calcs": [] } }
+}
+

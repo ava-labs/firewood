@@ -426,6 +426,17 @@ pub unsafe extern "C" fn fwd_propose_on_db<'db>(
     values: BorrowedKeyValuePairs<'_>,
 ) -> ProposalResult<'db> {
     invoke_with_handle(db, move |db| {
+        // compute proposal size stats before passing values along
+        let slice = values.as_ref();
+        let items = slice.len() as u64;
+        let mut key_bytes: u64 = 0;
+        let mut value_bytes: u64 = 0;
+        for kv in slice {
+            key_bytes = key_bytes.saturating_add(kv.key.as_slice().len() as u64);
+            value_bytes = value_bytes.saturating_add(kv.value.as_slice().len() as u64);
+        }
+        let total_bytes = key_bytes.saturating_add(value_bytes);
+
         let overall_start = coarsetime::Instant::now();
         let res = db.create_proposal_handle(values);
         let elapsed = overall_start.elapsed().as_millis();
@@ -434,6 +445,15 @@ pub unsafe extern "C" fn fwd_propose_on_db<'db>(
             .increment(1);
         metrics::counter!("firewood.ffi.propose_overall_ms", "where" => "db", "success" => success)
             .increment(elapsed);
+        // record size metrics
+        metrics::counter!("firewood.ffi.propose_items", "where" => "db", "success" => success)
+            .increment(items);
+        metrics::counter!("firewood.ffi.propose_key_bytes", "where" => "db", "success" => success)
+            .increment(key_bytes);
+        metrics::counter!("firewood.ffi.propose_value_bytes", "where" => "db", "success" => success)
+            .increment(value_bytes);
+        metrics::counter!("firewood.ffi.propose_total_bytes", "where" => "db", "success" => success)
+            .increment(total_bytes);
         res
     })
 }
@@ -467,6 +487,17 @@ pub unsafe extern "C" fn fwd_propose_on_proposal<'db>(
     values: BorrowedKeyValuePairs<'_>,
 ) -> ProposalResult<'db> {
     invoke_with_handle(handle, move |p| {
+        // compute proposal size stats before passing values along
+        let slice = values.as_ref();
+        let items = slice.len() as u64;
+        let mut key_bytes: u64 = 0;
+        let mut value_bytes: u64 = 0;
+        for kv in slice {
+            key_bytes = key_bytes.saturating_add(kv.key.as_slice().len() as u64);
+            value_bytes = value_bytes.saturating_add(kv.value.as_slice().len() as u64);
+        }
+        let total_bytes = key_bytes.saturating_add(value_bytes);
+
         let overall_start = coarsetime::Instant::now();
         let res = p.create_proposal_handle(values);
         let elapsed = overall_start.elapsed().as_millis();
@@ -475,6 +506,15 @@ pub unsafe extern "C" fn fwd_propose_on_proposal<'db>(
             .increment(1);
         metrics::counter!("firewood.ffi.propose_overall_ms", "where" => "proposal", "success" => success)
             .increment(elapsed);
+        // record size metrics
+        metrics::counter!("firewood.ffi.propose_items", "where" => "proposal", "success" => success)
+            .increment(items);
+        metrics::counter!("firewood.ffi.propose_key_bytes", "where" => "proposal", "success" => success)
+            .increment(key_bytes);
+        metrics::counter!("firewood.ffi.propose_value_bytes", "where" => "proposal", "success" => success)
+            .increment(value_bytes);
+        metrics::counter!("firewood.ffi.propose_total_bytes", "where" => "proposal", "success" => success)
+            .increment(total_bytes);
         res
     })
 }
