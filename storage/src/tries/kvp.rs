@@ -1,15 +1,11 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#[cfg(not(feature = "branch_factor_256"))]
-use crate::PackedPathRef;
 use crate::{
-    Children, HashType, Hashable, HashableShunt, HashedTrieNode, JoinedPath, PathBuf,
-    PathComponent, PathGuard, SplitPath, TrieNode, TriePath, TriePathFromPackedBytes, ValueDigest,
+    Children, HashType, Hashable, HashableShunt, HashedTrieNode, JoinedPath, PackedPathRef,
+    PathBuf, PathComponent, PathGuard, SplitPath, TrieNode, TriePath, TriePathFromPackedBytes,
+    ValueDigest,
 };
-
-#[cfg(feature = "branch_factor_256")]
-type PackedPathRef<'a> = &'a [PathComponent];
 
 /// A duplicate key error when merging two key-value tries.
 #[non_exhaustive]

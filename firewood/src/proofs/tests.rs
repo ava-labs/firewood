@@ -3,6 +3,10 @@
 
 #![expect(clippy::unwrap_used, clippy::indexing_slicing)]
 
+use firewood_storage::{
+    KeyProofTrieRoot, PackedPathRef, PathComponent, TrieNode, TriePath, TriePathFromPackedBytes,
+    ValueDigest,
+};
 use integer_encoding::VarInt;
 use test_case::test_case;
 
@@ -223,4 +227,101 @@ fn test_empty_proof() {
         }
         Err(err) => panic!("Expected valid empty proof, got error: {err}"),
     }
+}
+
+#[test]
+fn test_proof_trie_construction() {
+    let merkle = crate::merkle::tests::init_merkle((0u8..=10).map(|k| ([k], [k])));
+    let proof = merkle
+        .range_proof(Some(&[2u8]), Some(&[8u8]), std::num::NonZeroUsize::new(5))
+        .unwrap();
+
+    let lower_trie = KeyProofTrieRoot::new(&**proof.start_proof())
+        .unwrap()
+        .unwrap();
+    let upper_trie = KeyProofTrieRoot::new(&**proof.end_proof())
+        .unwrap()
+        .unwrap();
+
+    let mut iter = lower_trie.iter_path(PackedPathRef::path_from_packed_bytes(&[0x2_u8]));
+    let (path, edge) = iter.next().unwrap();
+    assert!(path.is_empty());
+    assert!(edge.is_unhashed());
+    let root = edge.node().unwrap();
+
+    #[cfg(feature = "branch_factor_256")]
+    assert!(root.partial_path().is_empty());
+    #[cfg(not(feature = "branch_factor_256"))]
+    assert!(root.partial_path().path_eq(&[PathComponent::ALL[0]]));
+
+    assert_eq!(root.value(), None);
+    assert!(root.child_hash(PathComponent::ALL[2]).is_some());
+    assert!(root.child_hash(PathComponent::ALL[6]).is_some());
+    assert!(root.child_hash(PathComponent::ALL[10]).is_some());
+    assert!(root.child_hash(PathComponent::ALL[11]).is_none());
+    assert!(root.child_node(PathComponent::ALL[6]).is_none());
+    assert!(root.child_node(PathComponent::ALL[10]).is_none());
+    assert!(root.child_node(PathComponent::ALL[11]).is_none());
+    let child = root.child_node(PathComponent::ALL[2]).unwrap();
+    assert!(child.partial_path().is_empty());
+    assert_eq!(child.value(), Some(&ValueDigest::Value(&[2_u8][..])));
+
+    let (path, edge) = iter.next().unwrap();
+    #[cfg(feature = "branch_factor_256")]
+    assert!(path.path_eq(&[PathComponent::ALL[2]]));
+    #[cfg(not(feature = "branch_factor_256"))]
+    assert!(path.path_eq(&[PathComponent::ALL[0], PathComponent::ALL[2]]));
+
+    assert!(
+        edge.is_local(),
+        "edge from root to child has both hash and node"
+    );
+    let root = edge.node().unwrap();
+    assert!(
+        std::ptr::eq(root, child),
+        "expected not just equal, but identical references to the same node"
+    );
+    assert!(root.partial_path().is_empty());
+    assert_eq!(root.value(), Some(&ValueDigest::Value(&[2_u8][..])));
+
+    let mut iter = upper_trie.iter_path(PackedPathRef::path_from_packed_bytes(&[0x6_u8]));
+    let (path, edge) = iter.next().unwrap();
+    assert!(path.is_empty());
+    assert!(edge.is_unhashed());
+    let root = edge.node().unwrap();
+
+    #[cfg(feature = "branch_factor_256")]
+    assert!(root.partial_path().is_empty());
+    #[cfg(not(feature = "branch_factor_256"))]
+    assert!(root.partial_path().path_eq(&[PathComponent::ALL[0]]));
+
+    assert_eq!(root.value(), None);
+    assert!(root.child_hash(PathComponent::ALL[2]).is_some());
+    assert!(root.child_hash(PathComponent::ALL[6]).is_some());
+    assert!(root.child_hash(PathComponent::ALL[10]).is_some());
+    assert!(root.child_hash(PathComponent::ALL[11]).is_none());
+    assert!(root.child_node(PathComponent::ALL[2]).is_none());
+    assert!(root.child_node(PathComponent::ALL[10]).is_none());
+    assert!(root.child_node(PathComponent::ALL[11]).is_none());
+    let child = root.child_node(PathComponent::ALL[6]).unwrap();
+    assert!(child.partial_path().is_empty());
+    assert_eq!(child.value(), Some(&ValueDigest::Value(&[6_u8][..])));
+
+    let (path, edge) = iter.next().unwrap();
+    #[cfg(feature = "branch_factor_256")]
+    assert!(path.path_eq(&[PathComponent::ALL[6]]));
+    #[cfg(not(feature = "branch_factor_256"))]
+    assert!(path.path_eq(&[PathComponent::ALL[0], PathComponent::ALL[6]]));
+
+    assert!(
+        edge.is_local(),
+        "edge from root to child has both hash and node"
+    );
+    let root = edge.node().unwrap();
+    assert!(
+        std::ptr::eq(root, child),
+        "expected not just equal, but identical references to the same node"
+    );
+    assert!(root.partial_path().is_empty());
+    assert_eq!(root.value(), Some(&ValueDigest::Value(&[6_u8][..])));
 }
