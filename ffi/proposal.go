@@ -32,7 +32,7 @@ type Proposal struct {
 	disown sync.Mutex
 	// [Database.Close] blocks on this WaitGroup, which is incremented by
 	// [getProposalFromProposalResult], and decremented by either
-	// [Proposal.Commit] or [Proposal.Done] (when the handle is disowned).
+	// [Proposal.Commit] or [Proposal.Drop] (when the handle is disowned).
 	openProposals *sync.WaitGroup
 
 	// The proposal root hash.
