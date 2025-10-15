@@ -456,12 +456,12 @@ impl NodeStore<Committed, FileBacked> {
                         .offset(persisted_address.get())
                         .build()
                         .user_data(pos as u64);
-
+                    
+                    let submit_start = Instant::now();
                     #[expect(unsafe_code)]
                     // SAFETY: the submission_queue_entry's found buffer must not move or go out of scope
                     // until the operation has been completed. This is ensured by having a Some(offset)
                     // and not marking it None until the kernel has said it's done below.
-                    let submit_start = Instant::now();
                     while unsafe { ring.submission().push(&submission_queue_entry) }.is_err() {
                         ring.submitter().squeue_wait().map_err(|e| {
                             self.storage.file_io_error(
