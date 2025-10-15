@@ -15,6 +15,10 @@ pub use self::joined::JoinedPath;
 pub use self::packed::{PackedBytes, PackedPathComponents, PackedPathRef};
 pub use self::split::{IntoSplitPath, PathCommonPrefix, SplitPath};
 
+/// If the branch factor is 256, a packed path is just a slice of path components.
+#[cfg(feature = "branch_factor_256")]
+pub type PackedPathRef<'a> = &'a [PathComponent];
+
 /// A trie path of components with different underlying representations.
 ///
 /// The underlying representation does not need to be a contiguous array of
