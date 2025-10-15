@@ -180,13 +180,13 @@ impl<T: RootStore> api::Db for Db<T> {
 }
 
 impl Db {
+    /// Create a new database instance.
     pub fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
         Self::new_with_root_store(db_path, cfg, NoOpStore {})
     }
 }
 
 impl<T: RootStore> Db<T> {
-    /// Create a new database instance.
     fn new_with_root_store<P: AsRef<Path>>(
         db_path: P,
         cfg: DbConfig,
