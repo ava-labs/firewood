@@ -425,7 +425,17 @@ pub unsafe extern "C" fn fwd_propose_on_db<'db>(
     db: Option<&'db DatabaseHandle>,
     values: BorrowedKeyValuePairs<'_>,
 ) -> ProposalResult<'db> {
-    invoke_with_handle(db, move |db| db.create_proposal_handle(values))
+    invoke_with_handle(db, move |db| {
+        let overall_start = coarsetime::Instant::now();
+        let res = db.create_proposal_handle(values);
+        let elapsed = overall_start.elapsed().as_millis();
+        let success = if res.is_ok() { "true" } else { "false" };
+        metrics::counter!("firewood.ffi.propose_overall", "where" => "db", "success" => success)
+            .increment(1);
+        metrics::counter!("firewood.ffi.propose_overall_ms", "where" => "db", "success" => success)
+            .increment(elapsed);
+        res
+    })
 }
 
 /// Proposes a batch of operations to the database on top of an existing proposal.
@@ -456,7 +466,17 @@ pub unsafe extern "C" fn fwd_propose_on_proposal<'db>(
     handle: Option<&ProposalHandle<'db>>,
     values: BorrowedKeyValuePairs<'_>,
 ) -> ProposalResult<'db> {
-    invoke_with_handle(handle, move |p| p.create_proposal_handle(values))
+    invoke_with_handle(handle, move |p| {
+        let overall_start = coarsetime::Instant::now();
+        let res = p.create_proposal_handle(values);
+        let elapsed = overall_start.elapsed().as_millis();
+        let success = if res.is_ok() { "true" } else { "false" };
+        metrics::counter!("firewood.ffi.propose_overall", "where" => "proposal", "success" => success)
+            .increment(1);
+        metrics::counter!("firewood.ffi.propose_overall_ms", "where" => "proposal", "success" => success)
+            .increment(elapsed);
+        res
+    })
 }
 
 /// Commits a proposal to the database.
@@ -491,10 +511,16 @@ pub unsafe extern "C" fn fwd_commit_proposal(
     proposal: Option<Box<ProposalHandle<'_>>>,
 ) -> HashResult {
     invoke_with_handle(proposal, move |proposal| {
-        proposal.commit_proposal(|commit_time| {
+        let overall_start = coarsetime::Instant::now();
+        let res = proposal.commit_proposal(|commit_time| {
             metrics::counter!("firewood.ffi.commit_ms").increment(commit_time.as_millis());
             metrics::counter!("firewood.ffi.commit").increment(1);
-        })
+        });
+        let elapsed = overall_start.elapsed().as_millis();
+        let success = if res.is_ok() { "true" } else { "false" };
+        metrics::counter!("firewood.ffi.commit_overall", "success" => success).increment(1);
+        metrics::counter!("firewood.ffi.commit_overall_ms", "success" => success).increment(elapsed);
+        res
     })
 }
 

@@ -1,0 +1,26 @@
+{
+  "id": 1005,
+  "type": "timeseries",
+  "title": "FFI Scoped vs Overall",
+  "gridPos": { "x": 0, "y": 26, "h": 9, "w": 12 },
+  "fieldConfig": {
+    "defaults": {
+      "custom": {
+        "drawStyle": "line",
+        "lineInterpolation": "linear",
+        "showPoints": "auto",
+        "stacking": { "mode": "none" }
+      },
+      "unit": "percentunit"
+    },
+    "overrides": []
+  },
+  "pluginVersion": "12.2.0",
+  "targets": [
+    { "expr": "sum(rate(firewood_ffi_propose_ms[1m])) / (sum(rate(firewood_ffi_propose_overall_ms[1m])) + 0.000001)", "legendFormat": "Propose internal / overall", "refId": "A" },
+    { "expr": "sum(rate(firewood_ffi_commit_ms[1m])) / (sum(rate(firewood_ffi_commit_overall_ms[1m])) + 0.000001)", "legendFormat": "Commit internal / overall", "refId": "B" }
+  ],
+  "datasource": { "type": "prometheus", "uid": "${datasource}" },
+  "options": { "tooltip": { "mode": "single", "sort": "none", "hideZeros": false }, "legend": { "showLegend": true, "displayMode": "list", "placement": "bottom", "calcs": [] } }
+}
+
