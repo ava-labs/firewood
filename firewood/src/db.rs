@@ -793,9 +793,6 @@ mod test {
         for (k, v) in keys.into_iter().zip(vals.into_iter()) {
             assert_eq!(revision.val(k).unwrap().unwrap(), v);
         }
-
-        // Reopen test
-        // create, insert, close, open, insert
     }
 
     #[test]
