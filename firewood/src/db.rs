@@ -574,6 +574,47 @@ mod test {
     }
 
     #[test]
+    fn test_propose_parallel_reopen() {
+        fn insert_commit(db: &TestDb, kv: u8) {
+            let keys: Vec<[u8; 1]> = vec![[kv; 1]];
+            let vals: Vec<Box<[u8]>> = vec![Box::new([kv; 1])];
+            let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+            let proposal = db.propose_parallel(kviter).unwrap();
+            proposal.commit().unwrap();
+        }
+
+        // Create, insert, close, open, insert
+        let db = TestDb::new();
+        insert_commit(&db, 1);
+        let db = db.reopen();
+        insert_commit(&db, 2);
+        // Check that the keys are still there after the commits
+        let parent = db.manager.current_revision();
+        let keys: Vec<[u8; 1]> = vec![[1; 1], [2; 1]];
+        let vals: Vec<Box<[u8]>> = vec![Box::new([1; 1]), Box::new([2; 1])];
+        let kviter = keys.iter().zip(vals.iter());
+        for (k, v) in kviter {
+            assert_eq!(&parent.val(k).unwrap().unwrap(), v);
+        }
+        drop(db);
+
+        // Open-db1, insert, open-db2, insert
+        let db1 = TestDb::new();
+        insert_commit(&db1, 1);
+        let db2 = TestDb::new();
+        insert_commit(&db2, 2);
+        let parent1 = db1.manager.current_revision();
+        let parent2 = db2.manager.current_revision();
+        let keys: Vec<[u8; 1]> = vec![[1; 1], [2; 1]];
+        let vals: Vec<Box<[u8]>> = vec![Box::new([1; 1]), Box::new([2; 1])];
+        let mut kviter = keys.iter().zip(vals.iter());
+        let (k, v) = kviter.next().unwrap();
+        assert_eq!(&parent1.val(k).unwrap().unwrap(), v);
+        let (k, v) = kviter.next().unwrap();
+        assert_eq!(&parent2.val(k).unwrap().unwrap(), v);
+    }
+
+    #[test]
     fn test_propose_parallel() {
         const N: usize = 100;
         let db = TestDb::new();
@@ -752,6 +793,9 @@ mod test {
         for (k, v) in keys.into_iter().zip(vals.into_iter()) {
             assert_eq!(revision.val(k).unwrap().unwrap(), v);
         }
+
+        // Reopen test
+        // create, insert, close, open, insert
     }
 
     #[test]
