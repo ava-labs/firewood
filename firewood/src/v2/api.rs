@@ -131,7 +131,7 @@ pub enum Error {
     FileIO(#[from] FileIoError),
 
     #[error("RootStore error: {0}")]
-    /// A RootStore error occurred
+    /// A `RootStore` error occurred
     RootStoreError(#[from] RootStoreError),
 
     /// Cannot commit a committed proposal
