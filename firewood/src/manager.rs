@@ -84,6 +84,8 @@ pub(crate) struct RevisionManager<T: RootStore> {
 pub(crate) enum RevisionManagerError {
     #[error("Revision for {provided:?} not found")]
     RevisionNotFound { provided: HashKey },
+    #[error("Revision for {provided:?} has no address")]
+    RevisionWithoutAddress { provided: HashKey },
     #[error(
         "The proposal cannot be committed since it is not a direct child of the most recent commit. Proposal parent: {provided:?}, current root: {expected:?}"
     )]
@@ -91,7 +93,7 @@ pub(crate) enum RevisionManagerError {
         provided: Option<HashKey>,
         expected: Option<HashKey>,
     },
-    #[error("An IO error occurred during the commit")]
+    #[error("An IO error occurred during the commit: {0}")]
     FileIoError(#[from] FileIoError),
     #[error("A RootStore error occurred")]
     RootStoreError(#[from] RootStoreError),
@@ -102,7 +104,7 @@ impl<T: RootStore> RevisionManager<T> {
         filename: PathBuf,
         config: ConfigManager,
         root_store: T,
-    ) -> Result<Self, FileIoError> {
+    ) -> Result<Self, RevisionManagerError> {
         let fb = FileBacked::new(
             filename,
             config.manager.node_cache_size,
@@ -141,15 +143,13 @@ impl<T: RootStore> RevisionManager<T> {
 
         // On startup, we always write the latest revision to RootStore
         if let Some(root_hash) = manager.current_revision().root_hash() {
-            let root_address = manager
-                .current_revision()
-                .root_address()
-                .expect("persisted revision should have root address");
+            let root_address = manager.current_revision().root_address().ok_or(
+                RevisionManagerError::RevisionWithoutAddress {
+                    provided: root_hash.clone(),
+                },
+            )?;
 
-            manager
-                .root_store
-                .add_root(&root_hash, &root_address)
-                .expect("poisoned root store");
+            manager.root_store.add_root(&root_hash, &root_address)?;
         }
 
         Ok(manager)

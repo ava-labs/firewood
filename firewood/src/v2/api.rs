@@ -98,6 +98,10 @@ pub enum Error {
         provided: Option<HashKey>,
     },
 
+    /// A committed revision does not have an address.
+    #[error("Revision for {provided:?} has no address")]
+    RevisionWithoutAddress { provided: HashKey },
+
     /// Incorrect root hash for commit
     #[error(
         "The proposal cannot be committed since it is not a direct child of the most recent commit. Proposal parent: {provided:?}, current root: {expected:?}"
@@ -164,12 +168,15 @@ pub enum Error {
 
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
-        use RevisionManagerError::{FileIoError, NotLatest, RevisionNotFound, RootStoreError};
+        use RevisionManagerError::{
+            FileIoError, NotLatest, RevisionNotFound, RevisionWithoutAddress, RootStoreError,
+        };
         match err {
             NotLatest { provided, expected } => Self::ParentNotLatest { provided, expected },
             RevisionNotFound { provided } => Self::RevisionNotFound {
                 provided: Some(provided),
             },
+            RevisionWithoutAddress { provided } => Self::RevisionWithoutAddress { provided },
             FileIoError(io_err) => Self::FileIO(io_err),
             RootStoreError(err) => Self::RootStoreError(err),
         }
