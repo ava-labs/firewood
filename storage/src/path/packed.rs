@@ -103,9 +103,7 @@ impl SplitPath for PackedPathRef<'_> {
                 let (a_middle, b_middle) = self.middle.split_at(mid / 2);
                 let Some((&middle_byte, b_middle)) = b_middle.split_first() else {
                     // `mid` is oob of `b_middle`, which happens if self.suffix is Some,
-                    // middle is empty, and `mid` is 1
-                    debug_assert!(self.middle.is_empty());
-                    debug_assert!(self.suffix.is_some());
+                    // and `mid` is self.len()
                     return (self, Self::default());
                 };
 
