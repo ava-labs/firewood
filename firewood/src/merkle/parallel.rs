@@ -86,7 +86,7 @@ impl ParallelMerkle {
         // 3. If the existing root does not have a partial path, then there is nothing we need
         //    to do if it is a branch. If it is a leaf, then convert it into a branch.
         //
-        // Cases 2 and 3 are handled by `normalize_for_insert`. This function returns a branch
+        // Cases 2 and 3 are handled by `force_branch_for_insert`. This function returns a branch
         // node with an empty partial path.
         proposal.root_mut().take().map_or_else(
             || {
@@ -98,7 +98,7 @@ impl ParallelMerkle {
                 }
                 .into()
             },
-            Node::normalize_for_insert,
+            Node::force_branch_for_insert,
         )
     }
 

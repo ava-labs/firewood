@@ -403,9 +403,9 @@ impl Node {
         }
     }
 
-    /// Normalizes the node (which should be a root for a trie) in preparation for a parallel
-    /// insert. In its normalized form, a node will always be a branch with no partial path.
-    /// There are two cases to handle depending on whether the node has a partial path.
+    /// Force the node (which should be a root of a trie) into a branch with no partial path
+    /// in preparation for a parallel insert. There are two cases to handle depending on whether
+    /// the node has a partial path.
     ///
     /// 1.  If the node has a partial path, then create a new node with an empty partial path
     ///     and a None for a value. Push down the previous node as a child and return the
@@ -413,7 +413,7 @@ impl Node {
     /// 2.  If the existing node does not have a partial path, then there is nothing we need
     ///     to do if it is a branch. If it is a leaf, then convert it into a branch.
     #[must_use]
-    pub fn normalize_for_insert(mut self) -> Box<BranchNode> {
+    pub fn force_branch_for_insert(mut self) -> Box<BranchNode> {
         // If the `partial_path` is non-empty, then create a branch that will be the new
         // root with the previous root as the child at the index returned from split_first.
         if let Some((child_index, child_path)) = self
@@ -428,19 +428,20 @@ impl Node {
             };
             self.update_partial_path(child_path);
             branch.update_child(child_index, Some(Child::Node(self)));
-            return branch.into();
-        }
-        match self {
-            Node::Leaf(mut leaf) => {
-                // Root is a leaf with an empty partial path. Replace it with a branch.
-                BranchNode {
-                    partial_path: Path::new(),
-                    value: Some(std::mem::take(&mut leaf.value)),
-                    children: BranchNode::empty_children(),
+            branch.into()
+        } else {
+            match self {
+                Node::Leaf(mut leaf) => {
+                    // Root is a leaf with an empty partial path. Replace it with a branch.
+                    BranchNode {
+                        partial_path: Path::new(),
+                        value: Some(std::mem::take(&mut leaf.value)),
+                        children: BranchNode::empty_children(),
+                    }
+                    .into()
                 }
-                .into()
+                Node::Branch(branch) => branch,
             }
-            Node::Branch(branch) => branch,
         }
     }
 }
