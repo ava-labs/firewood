@@ -20,7 +20,7 @@ use metrics::gauge;
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
-use crate::root_store::{NoOpStore, RootStore, RootStoreError};
+use crate::root_store::{RootStore, RootStoreError};
 use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
 pub use firewood_storage::CacheReadStrategy;
@@ -67,7 +67,7 @@ type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
 #[derive(Debug)]
-pub(crate) struct RevisionManager<T: RootStore = NoOpStore> {
+pub(crate) struct RevisionManager<T: RootStore> {
     /// Maximum number of revisions to keep on disk
     max_revisions: usize,
 
@@ -364,6 +364,7 @@ impl<T: RootStore> RevisionManager<T> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::root_store::NoOpStore;
     use tempfile::NamedTempFile;
 
     #[test]
