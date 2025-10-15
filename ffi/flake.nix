@@ -12,14 +12,17 @@
     rust-overlay.url = "github:oxalica/rust-overlay";
     crane.url = "github:ipetkov/crane";
     flake-utils.url = "github:numtide/flake-utils";
+    golang.url = "github:ava-labs/avalanchego?dir=nix/go&ref=f10757d594eedf0f016bc1400739788c542f005f";
   };
 
-  outputs = { self, nixpkgs, rust-overlay, crane, flake-utils }:
+  outputs = { self, nixpkgs, rust-overlay, crane, flake-utils, golang }:
     flake-utils.lib.eachDefaultSystem (system:
     let
       overlays = [ (import rust-overlay) ];
       pkgs = import nixpkgs { inherit system overlays; };
       inherit (pkgs) lib;
+
+      go = golang.packages.${system}.default;
 
       rustToolchain = pkgs.rust-bin.stable.latest.default.override {
         extensions = [ "rust-src" "rustfmt" "clippy" ];
@@ -82,7 +85,7 @@
 
           # Run go generate to switch CGO directives to STATIC_LIBS mode
           cd $out/ffi
-          HOME=$TMPDIR GOTOOLCHAIN=local FIREWOOD_LD_MODE=STATIC_LIBS ${pkgs.go}/bin/go generate
+          HOME=$TMPDIR GOTOOLCHAIN=local FIREWOOD_LD_MODE=STATIC_LIBS ${go}/bin/go generate
         '';
 
         meta = with lib; {
@@ -104,7 +107,7 @@
 
       apps.go = {
         type = "app";
-        program = "${pkgs.go}/bin/go";
+        program = "${go}/bin/go";
       };
 
       devShells.default = craneLib.devShell {
