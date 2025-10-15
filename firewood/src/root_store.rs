@@ -54,9 +54,9 @@ impl RootStore for NoOpStore {
 #[cfg(test)]
 #[derive(Debug, Clone)]
 pub struct MockStore {
-    pub roots: Rc<RefCell<HashMap<TrieHash, LinearAddress>>>,
-    pub should_add_root_fail: bool,
-    pub should_get_fail: bool,
+    roots: Rc<RefCell<HashMap<TrieHash, LinearAddress>>>,
+    should_add_root_fail: bool,
+    should_get_fail: bool,
 }
 
 #[allow(clippy::new_without_default)]
