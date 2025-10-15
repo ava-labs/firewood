@@ -89,7 +89,7 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     }
 
     /// Persist the freelist from the given header to storage
-    /// 
+    ///
     /// This function is used to ensure that the freelist is advanced after allocating
     /// nodes for writing. This allows the database to be recovered from an I/O error while
     /// persisting a revision to disk.
@@ -104,7 +104,6 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
         self.storage.write(free_list_offset, free_list_bytes)?;
         Ok(())
     }
-
 }
 
 /// Iterator that returns unpersisted nodes in depth first order.
@@ -334,12 +333,44 @@ impl Batch {
     }
 }
 
+#[cfg(feature = "io-uring")]
 use std::pin::Pin;
+
+#[cfg(feature = "io-uring")]
 #[derive(Clone, Debug)]
 struct PinnedBufferEntry<'a> {
     pinned_buffer: Pin<&'a [u8]>,
     address: LinearAddress,
     node: MaybePersistedNode,
+}
+
+#[cfg(feature = "io-uring")]
+/// Helper function to retry `submit_and_wait` on EINTR
+fn submit_and_wait_with_retry(
+    ring: &mut io_uring::IoUring,
+    wait_nr: u32,
+    storage: &FileBacked,
+    operation_name: &str,
+) -> Result<(), FileIoError> {
+    use std::io::ErrorKind::Interrupted;
+
+    loop {
+        match ring.submit_and_wait(wait_nr as usize) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                // Retry if the error is an interrupted system call
+                if e.kind() == Interrupted {
+                    continue;
+                }
+                // For other errors, return the error
+                return Err(storage.file_io_error(
+                    e,
+                    0,
+                    Some(format!("io-uring {operation_name}")),
+                ));
+            }
+        }
+    }
 }
 
 impl NodeStore<Committed, FileBacked> {
@@ -453,10 +484,7 @@ impl NodeStore<Committed, FileBacked> {
                 // if we get here, that means we couldn't find a place to queue the request, so wait for at least one operation
                 // to complete, then handle the completion queue
                 firewood_counter!("ring.full", "amount of full ring").increment(1);
-                ring.submit_and_wait(1).map_err(|e| {
-                    self.storage
-                        .file_io_error(e, 0, Some("io-uring submit_and_wait".to_string()))
-                })?;
+                submit_and_wait_with_retry(&mut ring, 1, &self.storage, "submit_and_wait")?;
                 let completion_queue = ring.completion();
                 trace!("competion queue length: {}", completion_queue.len());
                 handle_completion_queue(
@@ -471,10 +499,12 @@ impl NodeStore<Committed, FileBacked> {
             .iter()
             .filter(|pbe| pbe.is_some())
             .count();
-        ring.submit_and_wait(pending).map_err(|e| {
-            self.storage
-                .file_io_error(e, 0, Some("io-uring final submit_and_wait".to_string()))
-        })?;
+        submit_and_wait_with_retry(
+            &mut ring,
+            pending as u32,
+            &self.storage,
+            "final submit_and_wait",
+        )?;
 
         handle_completion_queue(
             &self.storage,
@@ -499,47 +529,47 @@ impl NodeStore<Committed, FileBacked> {
     }
 }
 
-    #[cfg(feature = "io-uring")]
-    /// Helper function to handle completion queue entries and check for errors
-    fn handle_completion_queue(
-        storage: &FileBacked,
-        completion_queue: io_uring::cqueue::CompletionQueue<'_>,
-        saved_pinned_buffers: &mut [Option<PinnedBufferEntry<'_>>],
-        cached_nodes: &mut Vec<MaybePersistedNode>,
-    ) -> Result<(), FileIoError> {
-        for entry in completion_queue {
-            // user data contains the index of the entry in the saved_pinned_buffers array
-            let item = entry.user_data() as usize;
-            let pbe = saved_pinned_buffers
-                .get_mut(item)
-                .expect("completed item user_data should point to an entry");
+#[cfg(feature = "io-uring")]
+/// Helper function to handle completion queue entries and check for errors
+fn handle_completion_queue(
+    storage: &FileBacked,
+    completion_queue: io_uring::cqueue::CompletionQueue<'_>,
+    saved_pinned_buffers: &mut [Option<PinnedBufferEntry<'_>>],
+    cached_nodes: &mut Vec<MaybePersistedNode>,
+) -> Result<(), FileIoError> {
+    for entry in completion_queue {
+        // user data contains the index of the entry in the saved_pinned_buffers array
+        let item = entry.user_data() as usize;
+        let pbe = saved_pinned_buffers
+            .get_mut(item)
+            .expect("completed item user_data should point to an entry");
 
-            let pbe_ref = pbe.as_ref().expect("completed items are always in use");
+        let pbe_ref = pbe.as_ref().expect("completed items are always in use");
 
-            let expected_len: i32 = pbe_ref
-                .pinned_buffer
-                .len()
-                .try_into()
-                .expect("buffer length will fit into an i32");
-            if entry.result() != expected_len {
-                let error = if entry.result() >= 0 {
-                    std::io::Error::other("Partial write")
-                } else {
-                    std::io::Error::from_raw_os_error(0 - entry.result())
-                };
-                return Err(storage.file_io_error(
-                    error,
-                    pbe_ref.address.get(),
-                    Some("write failure".to_string()),
-                ));
-            }
-            // I/O completed successfully - mark node as persisted and cache it
-            let entry = pbe.take().expect("already checked it's Some");
-            entry.node.allocate_at(entry.address);
-            cached_nodes.push(entry.node);
+        let expected_len: i32 = pbe_ref
+            .pinned_buffer
+            .len()
+            .try_into()
+            .expect("buffer length will fit into an i32");
+        if entry.result() != expected_len {
+            let error = if entry.result() >= 0 {
+                std::io::Error::other("Partial write")
+            } else {
+                std::io::Error::from_raw_os_error(0 - entry.result())
+            };
+            return Err(storage.file_io_error(
+                error,
+                pbe_ref.address.get(),
+                Some("write failure".to_string()),
+            ));
         }
-        Ok(())
+        // I/O completed successfully - mark node as persisted and cache it
+        let entry = pbe.take().expect("already checked it's Some");
+        entry.node.allocate_at(entry.address);
+        cached_nodes.push(entry.node);
     }
+    Ok(())
+}
 
 #[cfg(test)]
 #[expect(clippy::unwrap_used, clippy::indexing_slicing)]
