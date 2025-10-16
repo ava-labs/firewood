@@ -9,7 +9,9 @@ use crate::{HashType, IntoSplitPath, PathComponent, SplitPath};
 
 pub use self::iter::{IterAscending, IterDescending, TrieEdgeIter, TriePathIter, TrieValueIter};
 pub use self::kvp::{DuplicateKeyError, HashedKeyValueTrieRoot, KeyValueTrieRoot};
-pub use self::proof::{FromKeyProofError, KeyProofTrieRoot};
+pub use self::proof::{
+    FromKeyProofError, KeyProofTrieRoot, KeyRangeProofTrieRoot, MergeKeyProofError,
+};
 
 /// The state of an edge from a parent node to a child node in a trie.
 #[derive(Debug, PartialEq, Eq, Hash)]

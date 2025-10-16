@@ -66,8 +66,8 @@ pub use path::{
 pub use path::{PackedBytes, PackedPathComponents};
 pub use tries::{
     DuplicateKeyError, FromKeyProofError, HashedKeyValueTrieRoot, HashedTrieNode, IterAscending,
-    IterDescending, KeyProofTrieRoot, KeyValueTrieRoot, TrieEdgeIter, TrieEdgeState, TrieNode,
-    TriePathIter, TrieValueIter,
+    IterDescending, KeyProofTrieRoot, KeyRangeProofTrieRoot, KeyValueTrieRoot, MergeKeyProofError,
+    TrieEdgeIter, TrieEdgeState, TrieNode, TriePathIter, TrieValueIter,
 };
 pub use u4::{TryFromIntError, U4};
 
