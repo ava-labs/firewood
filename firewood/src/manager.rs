@@ -67,7 +67,7 @@ type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
 #[derive(Debug)]
-pub(crate) struct RevisionManager<T: RootStore> {
+pub(crate) struct RevisionManager<T> {
     /// Maximum number of revisions to keep on disk
     max_revisions: usize,
 
@@ -153,22 +153,6 @@ impl<T: RootStore> RevisionManager<T> {
         }
 
         Ok(manager)
-    }
-
-    pub fn all_hashes(&self) -> Vec<TrieHash> {
-        self.historical
-            .read()
-            .expect("poisoned lock")
-            .iter()
-            .filter_map(|r| r.root_hash().or_default_root_hash())
-            .chain(
-                self.proposals
-                    .lock()
-                    .expect("poisoned lock")
-                    .iter()
-                    .filter_map(|p| p.root_hash().or_default_root_hash()),
-            )
-            .collect()
     }
 
     /// Commit a proposal
@@ -287,12 +271,6 @@ impl<T: RootStore> RevisionManager<T> {
 
         Ok(())
     }
-}
-
-impl<T: RootStore> RevisionManager<T> {
-    pub fn add_proposal(&self, proposal: ProposedRevision) {
-        self.proposals.lock().expect("poisoned lock").push(proposal);
-    }
 
     /// View the database at a specific hash.
     /// To view the database at a specific hash involves a few steps:
@@ -333,6 +311,28 @@ impl<T: RootStore> RevisionManager<T> {
         );
 
         Ok(Arc::new(node_store))
+    }
+}
+
+impl<T> RevisionManager<T> {
+    pub fn add_proposal(&self, proposal: ProposedRevision) {
+        self.proposals.lock().expect("poisoned lock").push(proposal);
+    }
+
+    pub fn all_hashes(&self) -> Vec<TrieHash> {
+        self.historical
+            .read()
+            .expect("poisoned lock")
+            .iter()
+            .filter_map(|r| r.root_hash().or_default_root_hash())
+            .chain(
+                self.proposals
+                    .lock()
+                    .expect("poisoned lock")
+                    .iter()
+                    .filter_map(|p| p.root_hash().or_default_root_hash()),
+            )
+            .collect()
     }
 
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {

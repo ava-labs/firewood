@@ -111,7 +111,7 @@ pub struct DbConfig {
 
 #[derive(Debug)]
 /// A database instance.
-pub struct Db<T: RootStore = NoOpStore> {
+pub struct Db<T = NoOpStore> {
     metrics: Arc<DbMetrics>,
     manager: RevisionManager<T>,
 }
@@ -179,7 +179,7 @@ impl<T: RootStore> api::Db for Db<T> {
     }
 }
 
-impl Db {
+impl Db<NoOpStore> {
     /// Create a new database instance.
     pub fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
         Self::new_with_root_store(db_path, cfg, NoOpStore {})
@@ -234,12 +234,12 @@ impl<T: RootStore> Db<T> {
 
 #[derive(Debug)]
 /// A user-visible database proposal
-pub struct Proposal<'db, T: RootStore> {
+pub struct Proposal<'db, T> {
     nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
     db: &'db Db<T>,
 }
 
-impl<T: RootStore> api::DbView for Proposal<'_, T> {
+impl<T> api::DbView for Proposal<'_, T> {
     type Iter<'view>
         = MerkleKeyValueIter<'view, NodeStore<Arc<ImmutableProposal>, FileBacked>>
     where
@@ -287,7 +287,7 @@ impl<'db, T: RootStore> api::Proposal for Proposal<'db, T> {
     }
 }
 
-impl<T: RootStore> Proposal<'_, T> {
+impl<T> Proposal<'_, T> {
     #[crate::metrics("firewood.proposal.create", "database proposal creation")]
     fn create_proposal(
         &self,
