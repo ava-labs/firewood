@@ -472,7 +472,7 @@ impl ParallelMerkle {
         // Drop the sender response channel from the parent thread.
         drop(response_sender);
 
-        // Setting the workers to None will close the senders to the workers. This will cause the
+        // Setting the workers to default will close the senders to the workers. This will cause the
         // workers to send back their responses.
         self.workers = Children::default();
 
