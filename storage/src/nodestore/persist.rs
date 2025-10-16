@@ -125,12 +125,8 @@ impl<'a, N: NodeReader + RootReader> UnPersistedNodeIterator<'a, N> {
                 // Create an iterator over unpersisted children
                 let unpersisted_children: Vec<MaybePersistedNode> = branch
                     .children
-                    .iter()
-                    .filter_map(|child_opt| {
-                        child_opt
-                            .as_ref()
-                            .and_then(|child| child.unpersisted().cloned())
-                    })
+                    .iter_present()
+                    .filter_map(|(_, child)| child.unpersisted().cloned())
                     .collect();
 
                 (
@@ -170,12 +166,8 @@ impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
                     // Create an iterator over unpersisted children
                     let unpersisted_children: Vec<MaybePersistedNode> = branch
                         .children
-                        .iter()
-                        .filter_map(|child_opt| {
-                            child_opt
-                                .as_ref()
-                                .and_then(|child| child.unpersisted().cloned())
-                        })
+                        .iter_present()
+                        .filter_map(|(_, child)| child.unpersisted().cloned())
                         .collect();
 
                     // Push new child iterator to the stack
@@ -308,12 +300,39 @@ impl NodeStore<Committed, FileBacked> {
     #[cfg(feature = "io-uring")]
     fn flush_nodes_io_uring(&mut self) -> Result<NodeStoreHeader, FileIoError> {
         use crate::LinearAddress;
+        use std::io::ErrorKind::Interrupted;
         use std::pin::Pin;
 
         #[derive(Clone, Debug)]
         struct PinnedBufferEntry {
             pinned_buffer: Pin<Box<[u8]>>,
             node: Option<(LinearAddress, MaybePersistedNode)>,
+        }
+
+        /// Helper function to retry `submit_and_wait` on EINTR
+        fn submit_and_wait_with_retry(
+            ring: &mut io_uring::IoUring,
+            wait_nr: u32,
+            storage: &FileBacked,
+            operation_name: &str,
+        ) -> Result<(), FileIoError> {
+            loop {
+                match ring.submit_and_wait(wait_nr as usize) {
+                    Ok(_) => return Ok(()),
+                    Err(e) => {
+                        // Retry if the error is an interrupted system call
+                        if e.kind() == Interrupted {
+                            continue;
+                        }
+                        // For other errors, return the error
+                        return Err(storage.file_io_error(
+                            e,
+                            0,
+                            Some(format!("io-uring {operation_name}")),
+                        ));
+                    }
+                }
+            }
         }
 
         /// Helper function to handle completion queue entries and check for errors
@@ -419,10 +438,7 @@ impl NodeStore<Committed, FileBacked> {
                 // if we get here, that means we couldn't find a place to queue the request, so wait for at least one operation
                 // to complete, then handle the completion queue
                 firewood_counter!("ring.full", "amount of full ring").increment(1);
-                ring.submit_and_wait(1).map_err(|e| {
-                    self.storage
-                        .file_io_error(e, 0, Some("io-uring submit_and_wait".to_string()))
-                })?;
+                submit_and_wait_with_retry(&mut ring, 1, &self.storage, "submit_and_wait")?;
                 let completion_queue = ring.completion();
                 trace!("competion queue length: {}", completion_queue.len());
                 handle_completion_queue(
@@ -440,10 +456,12 @@ impl NodeStore<Committed, FileBacked> {
             .iter()
             .filter(|pbe| pbe.node.is_some())
             .count();
-        ring.submit_and_wait(pending).map_err(|e| {
-            self.storage
-                .file_io_error(e, 0, Some("io-uring final submit_and_wait".to_string()))
-        })?;
+        submit_and_wait_with_retry(
+            &mut ring,
+            pending as u32,
+            &self.storage,
+            "final submit_and_wait",
+        )?;
 
         handle_completion_queue(&self.storage, ring.completion(), &mut saved_pinned_buffers)?;
 
@@ -468,7 +486,8 @@ impl NodeStore<Committed, FileBacked> {
 mod tests {
     use super::*;
     use crate::{
-        Child, HashType, ImmutableProposal, LinearAddress, NodeStore, Path, SharedNode,
+        Child, Children, HashType, ImmutableProposal, LinearAddress, NodeStore, Path,
+        PathComponent, SharedNode,
         linear::memory::MemStore,
         node::{BranchNode, LeafNode, Node},
         nodestore::MutableProposal,
@@ -503,18 +522,22 @@ mod tests {
     }
 
     /// Helper to create a branch node with children
-    fn create_branch(path: &[u8], value: Option<&[u8]>, children: Vec<(u8, Node)>) -> Node {
+    fn create_branch(
+        path: &[u8],
+        value: Option<&[u8]>,
+        children: Vec<(PathComponent, Node)>,
+    ) -> Node {
         let mut branch = BranchNode {
             partial_path: Path::from(path),
             value: value.map(|v| v.to_vec().into_boxed_slice()),
-            children: std::array::from_fn(|_| None),
+            children: Children::new(),
         };
 
         for (index, child) in children {
             let shared_child = SharedNode::new(child);
             let maybe_persisted = MaybePersistedNode::from(shared_child);
             let hash = HashType::empty();
-            branch.children[index as usize] = Some(Child::MaybePersisted(maybe_persisted, hash));
+            branch.children[index] = Some(Child::MaybePersisted(maybe_persisted, hash));
         }
 
         Node::Branch(Box::new(branch))
@@ -547,7 +570,11 @@ mod tests {
     #[test]
     fn test_branch_with_single_child() {
         let leaf = create_leaf(&[7, 8], &[9, 10]);
-        let branch = create_branch(&[1, 2], Some(&[3, 4]), vec![(5, leaf.clone())]);
+        let branch = create_branch(
+            &[1, 2],
+            Some(&[3, 4]),
+            vec![(PathComponent::ALL[5], leaf.clone())],
+        );
         let store = create_test_store_with_root(branch.clone());
         let mut iter =
             UnPersistedNodeIterator::new(&store).map(|node| node.as_shared_node(&store).unwrap());
@@ -577,9 +604,9 @@ mod tests {
             &[0],
             None,
             vec![
-                (1, leaves[0].clone()),
-                (5, leaves[1].clone()),
-                (10, leaves[2].clone()),
+                (PathComponent::ALL[1], leaves[0].clone()),
+                (PathComponent::ALL[5], leaves[1].clone()),
+                (PathComponent::ALL[10], leaves[2].clone()),
             ],
         );
         let store = create_test_store_with_root(branch.clone());
@@ -613,10 +640,14 @@ mod tests {
         // Create a nested structure: root -> branch1 -> leaf[0]
         //                                -> leaf[1]
         //                                -> branch2 -> leaf[2]
-        let inner_branch = create_branch(&[10], Some(&[50]), vec![(0, leaves[2].clone())]);
+        let inner_branch = create_branch(
+            &[10],
+            Some(&[50]),
+            vec![(PathComponent::ALL[0], leaves[2].clone())],
+        );
 
-        let mut children = BranchNode::empty_children();
-        for (value, slot) in [
+        let mut children = Children::new();
+        for (value, (_, slot)) in [
             // unpersisted leaves
             Child::MaybePersisted(
                 MaybePersistedNode::from(SharedNode::new(leaves[0].clone())),
@@ -678,7 +709,7 @@ mod tests {
     fn test_into_committed_with_generic_storage() {
         // Create a base committed store with MemStore
         let mem_store = MemStore::new(vec![]);
-        let base_committed = NodeStore::new_empty_committed(mem_store.into()).unwrap();
+        let base_committed = NodeStore::new_empty_committed(mem_store.into());
 
         // Create a mutable proposal from the base
         let mut mutable_store = NodeStore::new(&base_committed).unwrap();
@@ -689,7 +720,10 @@ mod tests {
         let branch = create_branch(
             &[0],
             Some(b"branch_value"),
-            vec![(1, leaf1.clone()), (2, leaf2.clone())],
+            vec![
+                (PathComponent::ALL[1], leaf1.clone()),
+                (PathComponent::ALL[2], leaf2.clone()),
+            ],
         );
 
         mutable_store.root_mut().replace(branch.clone());
@@ -711,12 +745,11 @@ mod tests {
         assert_eq!(root_node.value(), Some(&b"branch_value"[..]));
         assert!(root_node.is_branch());
         let root_branch = root_node.as_branch().unwrap();
-        assert_eq!(
-            root_branch.children.iter().filter(|c| c.is_some()).count(),
-            2
-        );
+        assert_eq!(root_branch.children.count(), 2);
 
-        let child1 = root_branch.children[1].as_ref().unwrap();
+        let child1 = root_branch.children[PathComponent::ALL[1]]
+            .as_ref()
+            .unwrap();
         let child1_maybe_persisted = child1.as_maybe_persisted_node();
         let child1_node = child1_maybe_persisted
             .as_shared_node(&committed_store)
@@ -724,7 +757,9 @@ mod tests {
         assert_eq!(*child1_node.partial_path(), Path::from(&[1, 2, 3]));
         assert_eq!(child1_node.value(), Some(&b"value1"[..]));
 
-        let child2 = root_branch.children[2].as_ref().unwrap();
+        let child2 = root_branch.children[PathComponent::ALL[2]]
+            .as_ref()
+            .unwrap();
         let child2_maybe_persisted = child2.as_maybe_persisted_node();
         let child2_node = child2_maybe_persisted
             .as_shared_node(&committed_store)
@@ -756,14 +791,14 @@ mod tests {
                 .unwrap(),
             );
 
-            let mut ns = NodeStore::new_empty_committed(fb.clone()).unwrap();
+            let mut ns = NodeStore::new_empty_committed(fb.clone());
 
             assert!(ns.downcast_to_file_backed().is_some());
         }
 
         {
             let ms = Arc::new(MemStore::new(vec![]));
-            let mut ns = NodeStore::new_empty_committed(ms.clone()).unwrap();
+            let mut ns = NodeStore::new_empty_committed(ms.clone());
             assert!(ns.downcast_to_file_backed().is_none());
         }
     }

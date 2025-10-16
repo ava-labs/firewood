@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::manager::RevisionManagerError;
+use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
 use crate::proof::{Proof, ProofError, ProofNode};
 use firewood_storage::{FileIoError, TrieHash};
@@ -156,6 +157,14 @@ pub enum Error {
     /// An invalid root hash was provided
     #[error(transparent)]
     InvalidRootHash(#[from] firewood_storage::InvalidTrieHashLength),
+
+    // Error sending to worker
+    #[error("send error to worker")]
+    SendErrorToWorker,
+
+    // Error indexing into the workers array
+    #[error("error indexing into the workers array")]
+    IndexErrorInWorkers,
 }
 
 impl From<RevisionManagerError> for Error {
@@ -175,6 +184,16 @@ impl From<crate::db::DbError> for Error {
     fn from(value: crate::db::DbError) -> Self {
         match value {
             crate::db::DbError::FileIo(err) => Error::FileIO(err),
+        }
+    }
+}
+
+impl From<CreateProposalError> for Error {
+    fn from(value: CreateProposalError) -> Self {
+        match value {
+            CreateProposalError::FileIoError(err) => Error::FileIO(err),
+            CreateProposalError::SendError => Error::SendErrorToWorker,
+            CreateProposalError::IndexError => Error::IndexErrorInWorkers,
         }
     }
 }
@@ -445,6 +464,7 @@ mod tests {
 
     #[test]
     #[cfg(feature = "ethhash")]
+    #[expect(deprecated, reason = "transitive dependency on generic-array")]
     fn test_ethhash_compat_default_root_hash_equals_empty_rlp_hash() {
         use sha3::Digest as _;
 
