@@ -431,9 +431,8 @@ impl ParallelMerkle {
             };
 
             // Verify that the worker index taken from the first nibble is valid.
-            let Some(first_path_component) = PathComponent::try_new(first_path_component) else {
-                return Err(CreateProposalError::InvalidIndexToPathComponent);
-            };
+            let first_path_component = PathComponent::try_new(first_path_component)
+                .ok_or(CreateProposalError::InvalidIndexToPathComponent)?;
 
             // Get the worker that is responsible for this nibble. The worker will be created if it
             // doesn't already exist.
