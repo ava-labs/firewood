@@ -141,7 +141,7 @@ enum KeyProofTrieNode<'a, P> {
     Remote { hash: HashType },
 }
 
-impl<'a, P: SplitPath + 'a> KeyProofTrieRoot<'a, P> {
+impl<'root, P: SplitPath + 'root> KeyProofTrieRoot<'root, P> {
     /// Constructs a trie root from a slice of proof nodes.
     ///
     /// Each node in the slice must be a strict prefix of the following node. And,
@@ -155,10 +155,10 @@ impl<'a, P: SplitPath + 'a> KeyProofTrieRoot<'a, P> {
     ///   prefix of the following node's path.
     /// - [`FromKeyProofError::MissingChild`] if any parent node does not reference
     ///   the following child node at the path component leading to the child.
-    pub fn new<T, N>(proof: &'a T) -> Result<Option<Box<Self>>, FromKeyProofError>
+    pub fn new<T, N>(proof: &'root T) -> Result<Option<Box<Self>>, FromKeyProofError>
     where
         T: AsRef<[N]> + ?Sized,
-        N: Hashable<FullPath<'a>: IntoSplitPath<Path = P>> + 'a,
+        N: Hashable<FullPath<'root>: IntoSplitPath<Path = P>> + 'root,
     {
         proof
             .as_ref()
@@ -171,9 +171,9 @@ impl<'a, P: SplitPath + 'a> KeyProofTrieRoot<'a, P> {
     }
 
     /// Creates a new trie root from the tail node of a proof.
-    fn new_tail_node<N>(node: &'a N) -> Box<Self>
+    fn new_tail_node<N>(node: &'root N) -> Box<Self>
     where
-        N: Hashable<FullPath<'a>: IntoSplitPath<Path = P>>,
+        N: Hashable<FullPath<'root>: IntoSplitPath<Path = P>>,
     {
         Box::new(Self {
             partial_path: node.full_path().into_split_path(),
@@ -191,10 +191,10 @@ impl<'a, P: SplitPath + 'a> KeyProofTrieRoot<'a, P> {
     /// here).
     fn new_parent_node<N>(
         mut self: Box<Self>,
-        parent: &'a N,
+        parent: &'root N,
     ) -> Result<Box<Self>, FromKeyProofError>
     where
-        N: Hashable<FullPath<'a>: IntoSplitPath<Path = P>>,
+        N: Hashable<FullPath<'root>: IntoSplitPath<Path = P>>,
     {
         match parent
             .full_path()
@@ -271,7 +271,7 @@ impl<'a, P: SplitPath + 'a> KeyProofTrieRoot<'a, P> {
     }
 }
 
-impl<'a, P: SplitPath + 'a> KeyRangeProofTrieRoot<'a, P> {
+impl<'root, P: SplitPath + 'root> KeyRangeProofTrieRoot<'root, P> {
     /// Constructs a key range proof trie from the optional lower and upper
     /// bounding key proof tries.
     ///
@@ -291,8 +291,8 @@ impl<'a, P: SplitPath + 'a> KeyRangeProofTrieRoot<'a, P> {
     /// - [`MergeKeyProofError::DuplicateKeys`] if both bounding key proofs are
     ///   provided but both contain the same key with different values.
     pub fn new(
-        lower: Option<Box<KeyProofTrieRoot<'a, P>>>,
-        upper: Option<Box<KeyProofTrieRoot<'a, P>>>,
+        lower: Option<Box<KeyProofTrieRoot<'root, P>>>,
+        upper: Option<Box<KeyProofTrieRoot<'root, P>>>,
     ) -> Result<Option<Self>, MergeKeyProofError> {
         KeyProofTrieRoot::merge_opt(PathGuard::new(&mut PathBuf::new_const()), lower, upper)
             .map(|root| root.map(|root| Self { root }))
@@ -301,28 +301,31 @@ impl<'a, P: SplitPath + 'a> KeyRangeProofTrieRoot<'a, P> {
     /// Returns the root key proof trie that was created by merging the two
     /// bounding key proofs.
     #[must_use]
-    pub const fn root(&self) -> &KeyProofTrieRoot<'a, P> {
+    pub const fn root(&self) -> &KeyProofTrieRoot<'root, P> {
         &self.root
     }
 }
 
-impl<'a, P: SplitPath + 'a> KeyProofTrieNode<'a, P> {
-    const fn hash(&self) -> &HashType {
+impl<'root, P: SplitPath + 'root> KeyProofTrieNode<'root, P> {
+    const fn hash(&'root self) -> &'root HashType {
         match self {
             KeyProofTrieNode::Described { hash, .. } | KeyProofTrieNode::Remote { hash } => hash,
         }
     }
 
-    const fn node(&self) -> Option<&KeyProofTrieRoot<'a, P>> {
+    const fn node(&'root self) -> Option<&'root KeyProofTrieRoot<'root, P>> {
         match self {
             KeyProofTrieNode::Described { node, .. } => Some(node),
             KeyProofTrieNode::Remote { .. } => None,
         }
     }
 
-    const fn as_edge_state(&self) -> TrieEdgeState<'_, KeyProofTrieRoot<'a, P>> {
+    const fn as_edge_state(&'root self) -> TrieEdgeState<'root, &'root KeyProofTrieRoot<'root, P>> {
         match self {
-            KeyProofTrieNode::Described { node, hash } => TrieEdgeState::LocalChild { node, hash },
+            KeyProofTrieNode::Described { node, hash } => TrieEdgeState::LocalChild {
+                node: &**node,
+                hash,
+            },
             KeyProofTrieNode::Remote { hash } => TrieEdgeState::RemoteChild { hash },
         }
     }
@@ -372,29 +375,29 @@ impl<'a, P: SplitPath + 'a> KeyProofTrieNode<'a, P> {
     }
 }
 
-impl<'a, P: SplitPath + 'a> TrieNode<ValueDigest<&'a [u8]>> for KeyProofTrieRoot<'a, P> {
-    type PartialPath<'b>
-        = P
-    where
-        Self: 'b;
+impl<'root, P> TrieNode<'root, ValueDigest<&'root [u8]>> for &'root KeyProofTrieRoot<'root, P>
+where
+    P: SplitPath + 'root,
+{
+    type PartialPath = P;
 
-    fn partial_path(&self) -> Self::PartialPath<'_> {
+    fn partial_path(self) -> Self::PartialPath {
         self.partial_path
     }
 
-    fn value(&self) -> Option<&ValueDigest<&'a [u8]>> {
+    fn value(self) -> Option<&'root ValueDigest<&'root [u8]>> {
         self.value_digest.as_ref()
     }
 
-    fn child_hash(&self, pc: PathComponent) -> Option<&HashType> {
+    fn child_hash(self, pc: PathComponent) -> Option<&'root HashType> {
         self.children[pc].as_ref().map(KeyProofTrieNode::hash)
     }
 
-    fn child_node(&self, pc: PathComponent) -> Option<&Self> {
+    fn child_node(self, pc: PathComponent) -> Option<Self> {
         self.children[pc].as_ref().and_then(KeyProofTrieNode::node)
     }
 
-    fn child_state(&self, pc: PathComponent) -> Option<super::TrieEdgeState<'_, Self>> {
+    fn child_state(self, pc: PathComponent) -> Option<super::TrieEdgeState<'root, Self>> {
         self.children[pc]
             .as_ref()
             .map(KeyProofTrieNode::as_edge_state)
