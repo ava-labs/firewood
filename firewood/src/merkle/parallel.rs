@@ -17,22 +17,14 @@ use std::sync::mpsc::{Receiver, SendError, Sender};
 use std::sync::{Arc, OnceLock, mpsc};
 
 #[derive(Debug)]
-struct WorkerSender(mpsc::Sender<Request>);
+struct WorkerSender(mpsc::Sender<BatchOp<Key, Value>>);
 
 impl std::ops::Deref for WorkerSender {
-    type Target = mpsc::Sender<Request>;
+    type Target = mpsc::Sender<BatchOp<Key, Value>>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
-}
-
-/// A request to the worker.
-#[derive(Debug)]
-enum Request {
-    Insert { key: Key, value: Value },
-    Delete { key: Key },
-    DeleteRange { prefix: Key },
 }
 
 /// Response returned from a worker to the main thread. Includes the new root of the subtrie
@@ -56,8 +48,8 @@ impl From<FileIoError> for CreateProposalError {
     }
 }
 
-impl From<SendError<Request>> for CreateProposalError {
-    fn from(_err: SendError<Request>) -> Self {
+impl From<SendError<BatchOp<Key, Value>>> for CreateProposalError {
+    fn from(_err: SendError<BatchOp<Key, Value>>) -> Self {
         CreateProposalError::SendError
     }
 }
@@ -92,7 +84,7 @@ impl ParallelMerkle {
             || {
                 // Empty trie. Create a branch node with an empty partial path and a None for a value.
                 BranchNode {
-                    partial_path: Path::new(),
+                    partial_path: Path::default(),
                     value: None,
                     children: BranchNode::empty_children(),
                 }
@@ -168,7 +160,7 @@ impl ParallelMerkle {
     fn worker_event_loop(
         mut merkle: Merkle<NodeStore<MutableProposal, FileBacked>>,
         first_path_component: u8,
-        child_receiver: Receiver<Request>,
+        child_receiver: Receiver<BatchOp<Key, Value>>,
         response_sender: Sender<Result<Response, FileIoError>>,
     ) -> Result<(), Box<SendError<Result<Response, FileIoError>>>> {
         // Wait for a message on the receiver child channel. Break out of loop when the sender has
@@ -176,15 +168,15 @@ impl ParallelMerkle {
         while let Ok(request) = child_receiver.recv() {
             match request {
                 // insert a key-value pair into the subtrie
-                Request::Insert { key, value } => {
+                BatchOp::Put { key, value } => {
                     let mut nibbles_iter = NibblesIterator::new(&key);
                     nibbles_iter.next(); // Skip the first nibble
-                    if let Err(err) = merkle.insert_from_iter(nibbles_iter, value.as_ref().into()) {
+                    if let Err(err) = merkle.insert_from_iter(nibbles_iter, value) {
                         response_sender.send(Err(err))?;
                         break; // Stop handling additional requests
                     }
                 }
-                Request::Delete { key } => {
+                BatchOp::Delete { key } => {
                     let mut nibbles_iter = NibblesIterator::new(&key);
                     nibbles_iter.next(); // Skip the first nibble
                     if let Err(err) = merkle.remove_from_iter(nibbles_iter) {
@@ -192,7 +184,7 @@ impl ParallelMerkle {
                         break; // Stop handling additional requests
                     }
                 }
-                Request::DeleteRange { prefix } => {
+                BatchOp::DeleteRange { prefix } => {
                     let mut nibbles_iter = NibblesIterator::new(&prefix);
                     nibbles_iter.next(); // Skip the first nibble
                     if let Err(err) = merkle.remove_prefix_from_iter(nibbles_iter) {
@@ -319,9 +311,12 @@ impl ParallelMerkle {
 
     /// Removes all of the entries in the trie. For the root entry, the value is removed but the
     /// root itself will remain. An empty root will only be removed during post processing.
-    fn remove_all_entries(&self, root_branch: &mut BranchNode) -> Result<(), SendError<Request>> {
+    fn remove_all_entries(
+        &self,
+        root_branch: &mut BranchNode,
+    ) -> Result<(), SendError<BatchOp<Key, Value>>> {
         for worker in self.workers.iter().flatten() {
-            worker.send(Request::DeleteRange {
+            worker.send(BatchOp::DeleteRange {
                 prefix: Box::default(), // Empty prefix
             })?;
         }
@@ -443,14 +438,14 @@ impl ParallelMerkle {
             //       Box<[u8]> to the worker if we use rayon scoped threads. This change would
             //       eliminate a memory copy but may require some code refactoring.
             if let Err(err) = match &op {
-                BatchOp::Put { key: _, value } => worker.send(Request::Insert {
+                BatchOp::Put { key: _, value } => worker.send(BatchOp::Put {
                     key: op.key().as_ref().into(),
                     value: value.as_ref().into(),
                 }),
-                BatchOp::Delete { key: _ } => worker.send(Request::Delete {
+                BatchOp::Delete { key: _ } => worker.send(BatchOp::Delete {
                     key: op.key().as_ref().into(),
                 }),
-                BatchOp::DeleteRange { prefix: _ } => worker.send(Request::DeleteRange {
+                BatchOp::DeleteRange { prefix: _ } => worker.send(BatchOp::DeleteRange {
                     prefix: op.key().as_ref().into(),
                 }),
             } {
