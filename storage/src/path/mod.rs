@@ -1,12 +1,18 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+mod buf;
 mod component;
 mod joined;
+#[cfg(not(feature = "branch_factor_256"))]
+mod packed;
 mod split;
 
-pub use self::component::PathComponent;
+pub use self::buf::{PartialPath, PathBuf};
+pub use self::component::{ComponentIter, PathComponent, PathComponentSliceExt};
 pub use self::joined::JoinedPath;
+#[cfg(not(feature = "branch_factor_256"))]
+pub use self::packed::{PackedBytes, PackedPathComponents, PackedPathRef};
 pub use self::split::{IntoSplitPath, PathCommonPrefix, SplitPath};
 
 /// A trie path of components with different underlying representations.
@@ -30,6 +36,13 @@ pub trait TriePath {
 
     /// Returns an iterator over the components of this path.
     fn components(&self) -> Self::Components<'_>;
+
+    /// Returns a contiguous view of this path's components.
+    ///
+    /// If the underlying representation is already contiguous, this should be a
+    /// cheap operation (i.e. no allocations or copies). If not, this may allocate
+    /// and copy the components into a contiguous buffer.
+    fn as_component_slice(&self) -> PartialPath<'_>;
 
     /// Appends the provided path segment to this path, returning a new joined
     /// path that represents the concatenation of the two paths.
@@ -110,6 +123,63 @@ pub trait TriePathFromUnpackedBytes<'input>: TriePath + Sized {
     fn path_from_unpacked_bytes(bytes: &'input [u8]) -> Result<Self, Self::Error>;
 }
 
+/// Constructor for a trie path from a set of packed bytes; where each byte contains
+/// as many path components as possible.
+///
+/// For 256-ary tries, this is just the bytes as-is.
+///
+/// For hexary tries, each byte contains two path components; one in the upper 4
+/// bits and one in the lower 4 bits, in big-endian order. The resulting path
+/// will always have an even length (`bytes.len() * 2`).
+///
+/// For future compatibility, this trait only supports paths where the width of
+/// a path component is a factor of 8 (i.e. 1, 2, 4, or 8 bits).
+pub trait TriePathFromPackedBytes<'input>: Sized {
+    /// Constructs a path from the given packed bytes.
+    fn path_from_packed_bytes(bytes: &'input [u8]) -> Self;
+}
+
+/// Converts this path to an iterator over its packed bytes.
+pub trait TriePathAsPackedBytes {
+    /// The iterator type returned by [`TriePathAsPackedBytes::as_packed_bytes`].
+    type PackedBytesIter<'a>: Iterator<Item = u8>
+    where
+        Self: 'a;
+
+    /// Returns an iterator over the packed bytes of this path.
+    ///
+    /// If the final path component does not fill a whole byte, it is padded with zero.
+    fn as_packed_bytes(&self) -> Self::PackedBytesIter<'_>;
+}
+
+/// Blanket implementation of [`TriePathFromPackedBytes`] for 256-ary tries
+/// because packed bytes and unpacked bytes are identical.
+#[cfg(feature = "branch_factor_256")]
+impl<'input, T> TriePathFromPackedBytes<'input> for T
+where
+    T: TriePathFromUnpackedBytes<'input, Error = std::convert::Infallible>,
+{
+    fn path_from_packed_bytes(bytes: &'input [u8]) -> Self {
+        match Self::path_from_unpacked_bytes(bytes) {
+            Ok(p) => p,
+            // no Err(_) branch because Infallible is an uninhabited type and
+            // cannot be represented, therefore a match on is impossible
+        }
+    }
+}
+
+#[cfg(feature = "branch_factor_256")]
+impl<T: TriePath + ?Sized> TriePathAsPackedBytes for T {
+    type PackedBytesIter<'a>
+        = std::iter::Map<T::Components<'a>, fn(PathComponent) -> u8>
+    where
+        Self: 'a;
+
+    fn as_packed_bytes(&self) -> Self::PackedBytesIter<'_> {
+        self.components().map(PathComponent::as_u8)
+    }
+}
+
 #[inline]
 fn display_path(
     f: &mut std::fmt::Formatter<'_>,
@@ -149,6 +219,10 @@ impl<T: TriePath + ?Sized> TriePath for &T {
     fn components(&self) -> Self::Components<'_> {
         (**self).components()
     }
+
+    fn as_component_slice(&self) -> PartialPath<'_> {
+        (**self).as_component_slice()
+    }
 }
 
 impl<T: TriePath + ?Sized> TriePath for &mut T {
@@ -163,6 +237,10 @@ impl<T: TriePath + ?Sized> TriePath for &mut T {
 
     fn components(&self) -> Self::Components<'_> {
         (**self).components()
+    }
+
+    fn as_component_slice(&self) -> PartialPath<'_> {
+        (**self).as_component_slice()
     }
 }
 
@@ -179,6 +257,10 @@ impl<T: TriePath + ?Sized> TriePath for Box<T> {
     fn components(&self) -> Self::Components<'_> {
         (**self).components()
     }
+
+    fn as_component_slice(&self) -> PartialPath<'_> {
+        (**self).as_component_slice()
+    }
 }
 
 impl<T: TriePath + ?Sized> TriePath for std::rc::Rc<T> {
@@ -194,6 +276,10 @@ impl<T: TriePath + ?Sized> TriePath for std::rc::Rc<T> {
     fn components(&self) -> Self::Components<'_> {
         (**self).components()
     }
+
+    fn as_component_slice(&self) -> PartialPath<'_> {
+        (**self).as_component_slice()
+    }
 }
 
 impl<T: TriePath + ?Sized> TriePath for std::sync::Arc<T> {
@@ -208,5 +294,9 @@ impl<T: TriePath + ?Sized> TriePath for std::sync::Arc<T> {
 
     fn components(&self) -> Self::Components<'_> {
         (**self).components()
+    }
+
+    fn as_component_slice(&self) -> PartialPath<'_> {
+        (**self).as_component_slice()
     }
 }

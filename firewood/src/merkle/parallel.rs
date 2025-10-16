@@ -6,8 +6,9 @@ use crate::merkle::{Key, Merkle, Value};
 use crate::v2::api::KeyValuePairIter;
 use firewood_storage::logger::error;
 use firewood_storage::{
-    BranchNode, Child, FileBacked, FileIoError, ImmutableProposal, LeafNode, MaybePersistedNode,
-    MutableProposal, NibblesIterator, Node, NodeReader, NodeStore, Parentable, Path,
+    BranchNode, Child, Children, FileBacked, FileIoError, ImmutableProposal, LeafNode,
+    MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeReader, NodeStore, Parentable,
+    Path, PathComponent,
 };
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use std::array::from_fn;
@@ -86,7 +87,7 @@ impl ParallelMerkle {
                 BranchNode {
                     partial_path: Path::default(),
                     value: None,
-                    children: BranchNode::empty_children(),
+                    children: Children::default(),
                 }
                 .into()
             },
@@ -112,9 +113,7 @@ impl ParallelMerkle {
         let mut children_iter = branch
             .children
             .iter_mut()
-            .enumerate()
             .filter_map(|(index, child)| child.as_mut().map(|child| (index, child)));
-
         let first_child = children_iter.next();
         match first_child {
             None => {
@@ -130,6 +129,7 @@ impl ParallelMerkle {
                 // Check if the root has a value or if there is more than one child. If yes, then
                 // just return the root unmodified
                 if branch.value.is_some() || children_iter.next().is_some() {
+                    drop(children_iter);
                     return Ok(Some(Node::Branch(branch)));
                 }
 
@@ -147,7 +147,7 @@ impl ParallelMerkle {
                 // its partial path. Because the parent's partial path should always be empty, we
                 // can omit it and start with the `child_index`.
                 let partial_path = Path::from_nibbles_iterator(
-                    once(child_index as u8).chain(child.partial_path().iter().copied()),
+                    once(child_index.as_u8()).chain(child.partial_path().iter().copied()),
                 );
                 child.update_partial_path(partial_path);
                 Ok(Some(child))
@@ -219,7 +219,9 @@ impl ParallelMerkle {
 
         // The root's child becomes the root node of the worker
         let child_root = root_branch
-            .take_child(first_path_component)
+            .children
+            .get_mut(PathComponent::try_new(first_path_component).expect("index error"))
+            .take()
             .map(|child| match child {
                 Child::Node(node) => Ok(node),
                 Child::AddressWithHash(address, _) => {
@@ -265,10 +267,9 @@ impl ParallelMerkle {
 
                     // Set the child at index to response.root which is the root of the child's subtrie.
                     // TODO: Should update to use u4 index to avoid expect when it is available.
-                    *root_branch
-                        .children
-                        .get_mut(response.first_path_component as usize)
-                        .expect("index error") = response.root;
+                    *root_branch.children.get_mut(
+                        PathComponent::try_new(response.first_path_component).expect("index error"),
+                    ) = response.root;
                 }
                 Err(err) => {
                     return Err(err); // Early termination.
