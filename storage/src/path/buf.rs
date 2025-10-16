@@ -189,6 +189,20 @@ impl<'a> PathGuard<'a> {
     pub fn push(&mut self, component: PathComponent) {
         self.buf.push(component);
     }
+
+    /// A convenience method for cloning the inner path buffer.
+    ///
+    /// This is a convenience method that avoids needing to deref the guard in
+    /// order to correctly clone the inner buffer.
+    ///
+    /// ```ignore
+    /// (*guard).clone() // works, but is cumbersome
+    /// guard.cloned()   // same thing, but doesn't require the parens and deref
+    /// ```
+    #[must_use]
+    pub fn cloned(&self) -> PathBuf {
+        self.buf.clone()
+    }
 }
 
 impl std::ops::Deref for PathGuard<'_> {
