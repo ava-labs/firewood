@@ -459,7 +459,8 @@ impl ParallelMerkle {
         self.merge_children(response_receiver, &mut mutable_nodestore, &mut root_branch)?;
 
         // Post-process step: return the trie to its canonical form.
-        *mutable_nodestore.root_mut() = self.postprocess_trie(&mut mutable_nodestore, root_branch)?;
+        *mutable_nodestore.root_mut() =
+            self.postprocess_trie(&mut mutable_nodestore, root_branch)?;
 
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
             Arc::new(mutable_nodestore.try_into()?);
