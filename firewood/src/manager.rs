@@ -20,8 +20,6 @@ use metrics::gauge;
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
-#[cfg(test)]
-use crate::root_store::MockStore;
 use crate::root_store::{RootStore, RootStoreError};
 use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
@@ -366,7 +364,7 @@ impl<T: RootStore> RevisionManager<T> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::root_store::NoOpStore;
+    use crate::root_store::{MockStore, NoOpStore};
     use tempfile::NamedTempFile;
 
     impl RevisionManager<MockStore> {
