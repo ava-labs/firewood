@@ -96,7 +96,7 @@ impl FileBacked {
     // The size of the kernel ring buffer. This buffer will control how many writes we do with
     // a single system call.
     // TODO: make this configurable
-    pub(crate) const RINGSIZE: u32 = 32;
+    pub(crate) const RINGSIZE: u32 = 256;
 
     /// Create or open a file at a given path
     pub fn new(
