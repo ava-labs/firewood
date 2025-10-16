@@ -296,8 +296,8 @@ impl<T: RootStore> RevisionManager<T> {
         self.proposals.lock().expect("poisoned lock").push(proposal);
     }
 
-    /// View the database at a specific time.
-    /// To view the database at a specific time involves a few steps:
+    /// View the database at a specific hash.
+    /// To view the database at a specific hash involves a few steps:
     /// 1. Try to find it in committed revisions.
     /// 2. Try to find it in proposals.
     /// 3. Try to find it in `RootStore`.
