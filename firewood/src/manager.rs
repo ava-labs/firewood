@@ -363,18 +363,17 @@ impl<T: RootStore> RevisionManager<T> {
 }
 
 #[cfg(test)]
-impl RevisionManager<MockStore> {
-    pub fn mock_store(&self) -> MockStore {
-        self.root_store.clone()
-    }
-}
-
-#[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::root_store::NoOpStore;
     use tempfile::NamedTempFile;
+
+    impl RevisionManager<MockStore> {
+        pub fn mock_store(&self) -> MockStore {
+            self.root_store.clone()
+        }
+    }
 
     #[test]
     fn test_file_advisory_lock() {
