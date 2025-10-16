@@ -11,7 +11,6 @@ use firewood_storage::{
     Path, PathComponent,
 };
 use rayon::{ThreadPool, ThreadPoolBuilder};
-use std::array::from_fn;
 use std::iter::once;
 use std::ops::Deref;
 use std::sync::mpsc::{Receiver, SendError, Sender};
@@ -32,7 +31,7 @@ impl std::ops::Deref for WorkerSender {
 /// at the given first path component and the deleted nodes.
 #[derive(Debug)]
 struct Response {
-    first_path_component: u8,
+    first_path_component: PathComponent,
     root: Option<Child>,
     deleted_nodes: Vec<MaybePersistedNode>,
 }
@@ -41,6 +40,7 @@ struct Response {
 pub enum CreateProposalError {
     FileIoError(FileIoError),
     SendError,
+    IndexError,
 }
 
 impl From<FileIoError> for CreateProposalError {
@@ -60,7 +60,7 @@ impl From<SendError<BatchOp<Key, Value>>> for CreateProposalError {
 /// perform inserts and removes to their subtries.
 #[derive(Debug, Default)]
 pub struct ParallelMerkle {
-    workers: [Option<WorkerSender>; BranchNode::MAX_CHILDREN],
+    workers: Children<Option<WorkerSender>>,
 }
 
 impl ParallelMerkle {
@@ -159,7 +159,7 @@ impl ParallelMerkle {
     /// `response_sender` once the main thread closes the child sender.
     fn worker_event_loop(
         mut merkle: Merkle<NodeStore<MutableProposal, FileBacked>>,
-        first_path_component: u8,
+        first_path_component: PathComponent,
         child_receiver: Receiver<BatchOp<Key, Value>>,
         response_sender: Sender<Result<Response, FileIoError>>,
     ) -> Result<(), Box<SendError<Result<Response, FileIoError>>>> {
@@ -211,7 +211,7 @@ impl ParallelMerkle {
         pool: &ThreadPool,
         proposal: &NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut BranchNode,
-        first_path_component: u8,
+        first_path_component: PathComponent,
         response_sender: Sender<Result<Response, FileIoError>>,
     ) -> Result<WorkerSender, FileIoError> {
         // Create a channel for the coordinator (main thread) to send messages to this worker.
@@ -220,7 +220,7 @@ impl ParallelMerkle {
         // The root's child becomes the root node of the worker
         let child_root = root_branch
             .children
-            .get_mut(PathComponent::try_new(first_path_component).expect("index error"))
+            .get_mut(first_path_component)
             .take()
             .map(|child| match child {
                 Child::Node(node) => Ok(node),
@@ -266,10 +266,7 @@ impl ParallelMerkle {
                     proposal.delete_nodes(response.deleted_nodes.as_slice());
 
                     // Set the child at index to response.root which is the root of the child's subtrie.
-                    // TODO: Should update to use u4 index to avoid expect when it is available.
-                    *root_branch.children.get_mut(
-                        PathComponent::try_new(response.first_path_component).expect("index error"),
-                    ) = response.root;
+                    *root_branch.children.get_mut(response.first_path_component) = response.root;
                 }
                 Err(err) => {
                     return Err(err); // Early termination.
@@ -286,15 +283,11 @@ impl ParallelMerkle {
         pool: &ThreadPool,
         proposal: &NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut BranchNode,
-        first_path_component: u8,
+        first_path_component: PathComponent,
         response_sender: Sender<Result<Response, FileIoError>>,
     ) -> Result<&mut WorkerSender, FileIoError> {
         // Find the worker's state corresponding to the first nibble which is stored in an array.
-        // TODO: Should update to use u4 index to avoid expect when it is available.
-        let worker_option = self
-            .workers
-            .get_mut(first_path_component as usize)
-            .expect("index out of bounds");
+        let worker_option = self.workers.get_mut(first_path_component);
 
         // Create a new worker if it doesn't exist. Not using `get_or_insert_with` with worker_option
         // because it is possible to generate a FileIoError within the closure.
@@ -316,7 +309,11 @@ impl ParallelMerkle {
         &self,
         root_branch: &mut BranchNode,
     ) -> Result<(), SendError<BatchOp<Key, Value>>> {
-        for worker in self.workers.iter().flatten() {
+        for worker in self
+            .workers
+            .iter()
+            .filter_map(|(_, worker)| worker.as_ref())
+        {
             worker.send(BatchOp::DeleteRange {
                 prefix: Box::default(), // Empty prefix
             })?;
@@ -423,6 +420,11 @@ impl ParallelMerkle {
                 continue; // Done with this empty key operation.
             };
 
+            // Verify that the worker index taken from the first nibble is valid.
+            let Some(first_path_component) = PathComponent::try_new(first_path_component) else {
+                return Err(CreateProposalError::IndexError);
+            };
+
             // Get the worker that is responsible for this nibble. The worker will be created if it
             // doesn't already exist.
             let worker = self.worker(
@@ -463,7 +465,7 @@ impl ParallelMerkle {
 
         // Setting the workers to None will close the senders to the workers. This will cause the
         // workers to send back their responses.
-        self.workers = from_fn(|_| None);
+        self.workers = Children::default();
 
         // Merge step: Collect the results from the workers and merge them as children to the root.
         self.merge_children(response_receiver, &mut proposal, &mut root_branch)?;
