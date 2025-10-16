@@ -4,8 +4,8 @@
 #![expect(clippy::unwrap_used, clippy::indexing_slicing)]
 
 use firewood_storage::{
-    KeyProofTrieRoot, PackedPathRef, PathComponent, TrieNode, TriePath, TriePathFromPackedBytes,
-    ValueDigest,
+    KeyProofTrieRoot, KeyRangeProofTrieRoot, PackedPathRef, PathComponent, TrieNode, TriePath,
+    TriePathFromPackedBytes, ValueDigest,
 };
 use integer_encoding::VarInt;
 use test_case::test_case;
@@ -324,4 +324,113 @@ fn test_proof_trie_construction() {
     );
     assert!(root.partial_path().is_empty());
     assert_eq!(root.value(), Some(&ValueDigest::Value(&[6_u8][..])));
+}
+
+#[test]
+fn test_range_proof_trie_merging() {
+    let merkle = crate::merkle::tests::init_merkle((0u8..=10).map(|k| ([k], [k])));
+    let proof = merkle
+        .range_proof(Some(&[2u8]), Some(&[8u8]), std::num::NonZeroUsize::new(5))
+        .unwrap();
+
+    let lower_trie = KeyProofTrieRoot::new(&**proof.start_proof())
+        .unwrap()
+        .unwrap();
+    let upper_trie = KeyProofTrieRoot::new(&**proof.end_proof())
+        .unwrap()
+        .unwrap();
+
+    let trie = KeyRangeProofTrieRoot::new(Some(lower_trie), Some(upper_trie))
+        .unwrap()
+        .unwrap();
+
+    let edges = trie.root().iter_edges().collect::<Vec<_>>();
+
+    let mut edges = edges.into_iter();
+    let (path, edge) = edges.next().unwrap();
+    assert!(edge.is_unhashed());
+
+    #[cfg(not(feature = "branch_factor_256"))]
+    assert!(path.path_eq(&PathComponent::ALL[0]));
+
+    let included = [PathComponent::ALL[2], PathComponent::ALL[6]];
+    let node = edge.node().unwrap();
+    assert!(node.value().is_none());
+    for &pc in &PathComponent::ALL[0..=10] {
+        assert!(node.child_hash(pc).is_some());
+        if included.contains(&pc) {
+            assert!(node.child_node(pc).is_some());
+        } else {
+            assert!(node.child_node(pc).is_none());
+        }
+    }
+
+    let (path, edge) = edges.next().unwrap();
+    assert!(path.path_eq(&PackedPathRef::path_from_packed_bytes(&[0x00_u8])));
+    assert!(edge.is_remote());
+    assert!(edge.hash().is_some());
+
+    let (path, edge) = edges.next().unwrap();
+    assert!(path.path_eq(&PackedPathRef::path_from_packed_bytes(&[0x01_u8])));
+    assert!(edge.is_remote());
+    assert!(edge.hash().is_some());
+
+    let (path, edge) = edges.next().unwrap();
+    assert!(path.path_eq(&PackedPathRef::path_from_packed_bytes(&[0x02_u8])));
+    assert!(edge.is_local());
+    assert!(edge.hash().is_some());
+    let node = edge.node().unwrap();
+    assert_eq!(node.value(), Some(&ValueDigest::Value(&[2_u8][..])));
+    for pc in PathComponent::ALL {
+        assert!(node.child_hash(pc).is_none());
+        assert!(node.child_node(pc).is_none());
+    }
+
+    let (path, edge) = edges.next().unwrap();
+    assert!(path.path_eq(&PackedPathRef::path_from_packed_bytes(&[0x03_u8])));
+    assert!(edge.is_remote());
+    assert!(edge.hash().is_some());
+
+    let (path, edge) = edges.next().unwrap();
+    assert!(path.path_eq(&PackedPathRef::path_from_packed_bytes(&[0x04_u8])));
+    assert!(edge.is_remote());
+    assert!(edge.hash().is_some());
+
+    let (path, edge) = edges.next().unwrap();
+    assert!(path.path_eq(&PackedPathRef::path_from_packed_bytes(&[0x05_u8])));
+    assert!(edge.is_remote());
+    assert!(edge.hash().is_some());
+
+    let (path, edge) = edges.next().unwrap();
+    assert!(path.path_eq(&PackedPathRef::path_from_packed_bytes(&[0x06_u8])));
+    assert!(edge.is_local());
+    assert!(edge.hash().is_some());
+    let node = edge.node().unwrap();
+    assert_eq!(node.value(), Some(&ValueDigest::Value(&[6_u8][..])));
+    for pc in PathComponent::ALL {
+        assert!(node.child_hash(pc).is_none());
+        assert!(node.child_node(pc).is_none());
+    }
+
+    let (path, edge) = edges.next().unwrap();
+    assert!(path.path_eq(&PackedPathRef::path_from_packed_bytes(&[0x07_u8])));
+    assert!(edge.is_remote());
+    assert!(edge.hash().is_some());
+
+    let (path, edge) = edges.next().unwrap();
+    assert!(path.path_eq(&PackedPathRef::path_from_packed_bytes(&[0x08_u8])));
+    assert!(edge.is_remote());
+    assert!(edge.hash().is_some());
+
+    let (path, edge) = edges.next().unwrap();
+    assert!(path.path_eq(&PackedPathRef::path_from_packed_bytes(&[0x09_u8])));
+    assert!(edge.is_remote());
+    assert!(edge.hash().is_some());
+
+    let (path, edge) = edges.next().unwrap();
+    assert!(path.path_eq(&PackedPathRef::path_from_packed_bytes(&[0x0a_u8])));
+    assert!(edge.is_remote());
+    assert!(edge.hash().is_some());
+
+    assert!(edges.next().is_none());
 }
