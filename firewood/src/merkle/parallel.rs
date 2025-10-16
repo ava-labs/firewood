@@ -40,7 +40,7 @@ struct Response {
 pub enum CreateProposalError {
     FileIoError(FileIoError),
     SendError,
-    IndexError,
+    InvalidIndexToPathComponent,
 }
 
 impl From<FileIoError> for CreateProposalError {
@@ -67,7 +67,10 @@ impl ParallelMerkle {
     /// Force the root (if necessary) into a branch with no partial path to allow the clean
     /// separation of the trie into an array of subtries that can be operated on independently
     /// by the worker threads.
-    fn force_root(&self, proposal: &mut NodeStore<MutableProposal, FileBacked>) -> Box<BranchNode> {
+    fn force_root(
+        &self,
+        proposal: &mut NodeStore<MutableProposal, FileBacked>,
+    ) -> Result<Box<BranchNode>, CreateProposalError> {
         // There are 3 different cases to handle depending on the value of the root node.
         //
         // 1. If root is None, create a branch node with an empty partial path and a None for
@@ -84,14 +87,18 @@ impl ParallelMerkle {
         proposal.root_mut().take().map_or_else(
             || {
                 // Empty trie. Create a branch node with an empty partial path and a None for a value.
-                BranchNode {
+                Ok(BranchNode {
                     partial_path: Path::default(),
                     value: None,
                     children: Children::default(),
                 }
-                .into()
+                .into())
             },
-            Node::force_branch_for_insert,
+            |node| {
+                // Returns an error if it cannot convert a child index into a path component.
+                node.force_branch_for_insert()
+                    .map_err(|_| CreateProposalError::InvalidIndexToPathComponent)
+            },
         )
     }
 
@@ -348,12 +355,14 @@ impl ParallelMerkle {
     ///
     /// # Errors
     ///
-    /// Can return a `FileIoError` when it fetches nodes from storage.
+    /// Returns a `CreateProposalError::FileIoError` if it encounters an error fetching nodes
+    /// from storage, a `CreateProposalError::SendError` if it is unable to send messages to
+    /// the workers, and a `CreateProposalError::InvalidIndexToPathComponent` if it is unable
+    /// to convert an index into a path component.
     ///
     /// # Panics
     ///
-    /// Panics on errors when sending or receiving messages from workers. Can also panic if the
-    /// thread pool cannot be created, or logic errors regarding the state of the trie.
+    /// Panics if it cannot create a thread pool for the workers.
     pub fn create_proposal<T: Parentable>(
         &mut self,
         parent: &NodeStore<T, FileBacked>,
@@ -376,7 +385,7 @@ impl ParallelMerkle {
 
         // Prepare step: Force the root into a branch with no partial path in preparation for
         // performing parallel modifications to the trie.
-        let mut root_branch = self.force_root(&mut proposal);
+        let mut root_branch = self.force_root(&mut proposal)?;
 
         // Create a response channel the workers use to send messages back to the coordinator (us)
         let (response_sender, response_receiver) = mpsc::channel();
@@ -423,7 +432,7 @@ impl ParallelMerkle {
 
             // Verify that the worker index taken from the first nibble is valid.
             let Some(first_path_component) = PathComponent::try_new(first_path_component) else {
-                return Err(CreateProposalError::IndexError);
+                return Err(CreateProposalError::InvalidIndexToPathComponent);
             };
 
             // Get the worker that is responsible for this nibble. The worker will be created if it
