@@ -174,32 +174,26 @@ impl ParallelMerkle {
         // Wait for a message on the receiver child channel. Break out of loop when the sender has
         // closed the child sender.
         while let Ok(request) = child_receiver.recv() {
-            match request {
+            if let Err(err) = match request {
                 // insert a key-value pair into the subtrie
                 BatchOp::Put { key, value } => {
                     let mut nibbles_iter = NibblesIterator::new(&key);
                     nibbles_iter.next(); // Skip the first nibble
-                    if let Err(err) = merkle.insert_from_iter(nibbles_iter, value) {
-                        response_sender.send(Err(err))?;
-                        break; // Stop handling additional requests
-                    }
+                    merkle.insert_from_iter(nibbles_iter, value)
                 }
                 BatchOp::Delete { key } => {
                     let mut nibbles_iter = NibblesIterator::new(&key);
                     nibbles_iter.next(); // Skip the first nibble
-                    if let Err(err) = merkle.remove_from_iter(nibbles_iter) {
-                        response_sender.send(Err(err))?;
-                        break; // Stop handling additional requests
-                    }
+                    merkle.remove_from_iter(nibbles_iter).map(|_| ())
                 }
                 BatchOp::DeleteRange { prefix } => {
                     let mut nibbles_iter = NibblesIterator::new(&prefix);
                     nibbles_iter.next(); // Skip the first nibble
-                    if let Err(err) = merkle.remove_prefix_from_iter(nibbles_iter) {
-                        response_sender.send(Err(err))?;
-                        break; // Stop handling additional requests
-                    }
+                    merkle.remove_prefix_from_iter(nibbles_iter).map(|_| ())
                 }
+            } {
+                response_sender.send(Err(err))?;
+                break; // Stop handling additional requests
             }
         }
         // The main thread has closed the channel. Hash this subtrie and return a worker response
@@ -488,7 +482,7 @@ impl ParallelMerkle {
         // Drop the sender response channel from the parent thread.
         drop(response_sender);
 
-        // Setting the workers to None will close the senders to the workers. This will cause the
+        // Setting the workers to default will close the senders to the workers. This will cause the
         // workers to send back their responses.
         self.workers = Children::default();
 
