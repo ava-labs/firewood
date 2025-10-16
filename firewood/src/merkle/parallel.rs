@@ -209,7 +209,7 @@ impl ParallelMerkle {
                 )?;
                 #[cfg(feature = "ethhash")]
                 let (root_node, root_hash) =
-                    nodestore.hash_helper(root, Path::from(&[first_nibble]))?;
+                    nodestore.hash_helper(root, Path::from(&[first_path_component.as_u8()]))?;
                 Ok(Child::MaybePersisted(root_node, root_hash))
             })
             .transpose()
