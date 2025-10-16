@@ -55,8 +55,7 @@ impl RootStore for NoOpStore {
 #[derive(Debug, Clone)]
 pub struct MockStore {
     roots: Rc<RefCell<HashMap<TrieHash, LinearAddress>>>,
-    should_add_root_fail: bool,
-    should_get_fail: bool,
+    should_fail: bool,
 }
 
 #[allow(clippy::new_without_default)]
@@ -66,8 +65,7 @@ impl MockStore {
     pub fn new() -> Self {
         Self {
             roots: Rc::new(RefCell::new(HashMap::new())),
-            should_add_root_fail: false,
-            should_get_fail: false,
+            should_fail: false,
         }
     }
 
@@ -76,8 +74,7 @@ impl MockStore {
     pub fn with_failures() -> Self {
         Self {
             roots: Rc::new(RefCell::new(HashMap::new())),
-            should_add_root_fail: true,
-            should_get_fail: true,
+            should_fail: true,
         }
     }
 }
@@ -85,7 +82,7 @@ impl MockStore {
 #[cfg(test)]
 impl RootStore for MockStore {
     fn add_root(&self, hash: &TrieHash, address: &LinearAddress) -> Result<(), RootStoreError> {
-        if self.should_add_root_fail {
+        if self.should_fail {
             return Err(RootStoreError::Add);
         }
 
@@ -94,7 +91,7 @@ impl RootStore for MockStore {
     }
 
     fn get(&self, hash: &TrieHash) -> Result<Option<LinearAddress>, RootStoreError> {
-        if self.should_get_fail {
+        if self.should_fail {
             return Err(RootStoreError::Get);
         }
 
