@@ -114,6 +114,7 @@ impl ParallelMerkle {
             .children
             .iter_mut()
             .filter_map(|(index, child)| child.as_mut().map(|child| (index, child)));
+
         let first_child = children_iter.next();
         match first_child {
             None => {
