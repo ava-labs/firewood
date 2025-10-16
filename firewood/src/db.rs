@@ -829,7 +829,7 @@ mod test {
 
     #[test]
     fn test_root_store() {
-        let mock_store = MockStore::new();
+        let mock_store = MockStore::default();
         let db = TestDb::with_mockstore(mock_store);
 
         // First, create a revision to retrieve
