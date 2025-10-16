@@ -333,7 +333,10 @@ impl ParallelMerkle {
     ) -> Result<(), FileIoError> {
         // Go through the messages in the response channel without blocking to see if we can
         // find the FileIoError that caused the worker to close the channel, resulting in a
-        // send error. If we can find it, then we propagate the FileIoError.
+        // send error. If we can find it, then we propagate the FileIoError. Note that
+        // successful responses can be in the response channel ahead of the FileIoError.
+        // These are sent from workers that completed their requests without encountering
+        // a FileIoError.
         for result in response_receiver.try_iter() {
             let _ = result?; // explicitly ignore the successful Response
         }
