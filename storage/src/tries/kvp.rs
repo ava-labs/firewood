@@ -275,67 +275,70 @@ impl<'a, T: AsRef<[u8]> + ?Sized> HashedKeyValueTrieRoot<'a, T> {
     }
 }
 
-impl<T: AsRef<[u8]> + ?Sized> TrieNode<T> for KeyValueTrieRoot<'_, T> {
-    type PartialPath<'a>
-        = PackedPathRef<'a>
-    where
-        Self: 'a;
+impl<'root, T> TrieNode<'root, T> for &'root KeyValueTrieRoot<'root, T>
+where
+    T: AsRef<[u8]> + ?Sized + 'root,
+{
+    type PartialPath = PackedPathRef<'root>;
 
-    fn partial_path(&self) -> Self::PartialPath<'_> {
+    fn partial_path(self) -> Self::PartialPath {
         self.partial_path
     }
 
-    fn value(&self) -> Option<&T> {
+    fn value(self) -> Option<&'root T> {
         self.value
     }
 
-    fn child_hash(&self, pc: PathComponent) -> Option<&HashType> {
+    fn child_hash(self, pc: PathComponent) -> Option<&'root HashType> {
         let _ = pc;
         None
     }
 
-    fn child_node(&self, pc: PathComponent) -> Option<&Self> {
+    fn child_node(self, pc: PathComponent) -> Option<Self> {
         self.children[pc].as_deref()
     }
 
-    fn child_state(&self, pc: PathComponent) -> Option<super::TrieEdgeState<'_, Self>> {
+    fn child_state(self, pc: PathComponent) -> Option<super::TrieEdgeState<'root, Self>> {
         self.children[pc]
             .as_deref()
             .map(|node| super::TrieEdgeState::UnhashedChild { node })
     }
 }
 
-impl<T: AsRef<[u8]> + ?Sized> TrieNode<T> for HashedKeyValueTrieRoot<'_, T> {
-    type PartialPath<'a>
-        = PackedPathRef<'a>
-    where
-        Self: 'a;
+impl<'root, T> TrieNode<'root, T> for &'root HashedKeyValueTrieRoot<'root, T>
+where
+    T: AsRef<[u8]> + ?Sized + 'root,
+{
+    type PartialPath = PackedPathRef<'root>;
 
-    fn partial_path(&self) -> Self::PartialPath<'_> {
+    fn partial_path(self) -> Self::PartialPath {
         self.partial_path
     }
 
-    fn value(&self) -> Option<&T> {
+    fn value(self) -> Option<&'root T> {
         self.value
     }
 
-    fn child_hash(&self, pc: PathComponent) -> Option<&HashType> {
+    fn child_hash(self, pc: PathComponent) -> Option<&'root HashType> {
         self.children[pc].as_deref().map(|c| &c.computed)
     }
 
-    fn child_node(&self, pc: PathComponent) -> Option<&Self> {
+    fn child_node(self, pc: PathComponent) -> Option<Self> {
         self.children[pc].as_deref()
     }
 
-    fn child_state(&self, pc: PathComponent) -> Option<super::TrieEdgeState<'_, Self>> {
+    fn child_state(self, pc: PathComponent) -> Option<super::TrieEdgeState<'root, Self>> {
         self.children[pc]
             .as_deref()
             .map(|node| super::TrieEdgeState::from_node(node, Some(&node.computed)))
     }
 }
 
-impl<T: AsRef<[u8]> + ?Sized> HashedTrieNode<T> for HashedKeyValueTrieRoot<'_, T> {
-    fn computed(&self) -> &HashType {
+impl<'root, T> HashedTrieNode<'root, T> for &'root HashedKeyValueTrieRoot<'root, T>
+where
+    T: AsRef<[u8]> + ?Sized + 'root,
+{
+    fn computed(self) -> &'root HashType {
         &self.computed
     }
 }
