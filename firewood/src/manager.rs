@@ -316,8 +316,8 @@ impl<T: RootStore> RevisionManager<T> {
             .find(|p| p.root_hash().as_ref() == Some(&root_hash))
             .cloned();
 
-        if let Some(v) = proposal {
-            return Ok(v);
+        if let Some(proposal) = proposal {
+            return Ok(proposal);
         }
 
         // 3. Try to find it in `RootStore`.
