@@ -36,8 +36,6 @@ struct Response {
     deleted_nodes: Vec<MaybePersistedNode>,
 }
 
-/// Response returned from a worker to the main thread. Includes the new root of the subtrie
-/// at the given nibble and the deleted nodes.
 #[derive(Debug)]
 pub enum CreateProposalError {
     FileIoError(FileIoError),
