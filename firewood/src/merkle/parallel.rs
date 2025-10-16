@@ -174,32 +174,26 @@ impl ParallelMerkle {
         // Wait for a message on the receiver child channel. Break out of loop when the sender has
         // closed the child sender.
         while let Ok(request) = child_receiver.recv() {
-            match request {
+            if let Err(err) = match request {
                 // insert a key-value pair into the subtrie
                 BatchOp::Put { key, value } => {
                     let mut nibbles_iter = NibblesIterator::new(&key);
                     nibbles_iter.next(); // Skip the first nibble
-                    if let Err(err) = merkle.insert_from_iter(nibbles_iter, value) {
-                        response_sender.send(Err(err))?;
-                        break; // Stop handling additional requests
-                    }
+                    merkle.insert_from_iter(nibbles_iter, value)
                 }
                 BatchOp::Delete { key } => {
                     let mut nibbles_iter = NibblesIterator::new(&key);
                     nibbles_iter.next(); // Skip the first nibble
-                    if let Err(err) = merkle.remove_from_iter(nibbles_iter) {
-                        response_sender.send(Err(err))?;
-                        break; // Stop handling additional requests
-                    }
+                    merkle.remove_from_iter(nibbles_iter).map(|_| ())
                 }
                 BatchOp::DeleteRange { prefix } => {
                     let mut nibbles_iter = NibblesIterator::new(&prefix);
                     nibbles_iter.next(); // Skip the first nibble
-                    if let Err(err) = merkle.remove_prefix_from_iter(nibbles_iter) {
-                        response_sender.send(Err(err))?;
-                        break; // Stop handling additional requests
-                    }
+                    merkle.remove_prefix_from_iter(nibbles_iter).map(|_| ())
                 }
+            } {
+                response_sender.send(Err(err))?;
+                break; // Stop handling additional requests
             }
         }
         // The main thread has closed the channel. Send back the worker's response.
