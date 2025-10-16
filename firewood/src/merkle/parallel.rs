@@ -10,11 +10,11 @@ use firewood_storage::{
     MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeReader, NodeStore, Parentable,
     Path, PathComponent,
 };
-use rayon::{ThreadPool, ThreadPoolBuilder};
+use rayon::ThreadPool;
 use std::iter::once;
 use std::ops::Deref;
 use std::sync::mpsc::{Receiver, SendError, Sender};
-use std::sync::{Arc, OnceLock, mpsc};
+use std::sync::{Arc, mpsc};
 
 #[derive(Debug)]
 struct WorkerSender(mpsc::Sender<BatchOp<Key, Value>>);
@@ -334,8 +334,8 @@ impl ParallelMerkle {
         // Go through the messages in the response channel without blocking to see if we can
         // find the FileIoError that caused the worker to close the channel, resulting in a
         // send error. If we can find it, then we propagate the FileIoError.
-        while let Ok(resp) = response_receiver.try_recv() {
-            resp?; // Propagate the error (if it exists)
+        for result in response_receiver.try_iter() {
+            let _ = result?; // explicitly ignore the successful Response
         }
         Ok(())
     }
@@ -353,33 +353,18 @@ impl ParallelMerkle {
     /// from storage, a `CreateProposalError::SendError` if it is unable to send messages to
     /// the workers, and a `CreateProposalError::InvalidIndexToPathComponent` if it is unable
     /// to convert an index into a path component.
-    ///
-    /// # Panics
-    ///
-    /// Panics if it cannot create a thread pool for the workers.
     pub fn create_proposal<T: Parentable>(
         &mut self,
         parent: &NodeStore<T, FileBacked>,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
-        threadpool: &OnceLock<ThreadPool>,
+        pool: &ThreadPool,
     ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, CreateProposalError> {
-        // Get (or create) a threadpool. Note that OnceLock currently doesn't support
-        // get_or_try_init (it is available in a nightly release). The get_or_init should
-        // be replaced with get_or_try_init once it is available to allow the error to be
-        // passed back to the caller.
-        let pool = threadpool.get_or_init(|| {
-            ThreadPoolBuilder::new()
-                .num_threads(BranchNode::MAX_CHILDREN)
-                .build()
-                .expect("Error in creating threadpool")
-        });
-
-        // Create a proposal from the parent
-        let mut proposal = NodeStore::new(parent)?;
+        // Create a mutable nodestore from the parent
+        let mut mutable_nodestore = NodeStore::new(parent)?;
 
         // Prepare step: Force the root into a branch with no partial path in preparation for
         // performing parallel modifications to the trie.
-        let mut root_branch = self.force_root(&mut proposal)?;
+        let mut root_branch = self.force_root(&mut mutable_nodestore)?;
 
         // Create a response channel the workers use to send messages back to the coordinator (us)
         let (response_sender, response_receiver) = mpsc::channel();
@@ -432,7 +417,7 @@ impl ParallelMerkle {
             // doesn't already exist.
             let worker = self.worker(
                 pool,
-                &proposal,
+                &mutable_nodestore,
                 &mut root_branch,
                 first_path_component,
                 response_sender.clone(),
@@ -471,13 +456,13 @@ impl ParallelMerkle {
         self.workers = Children::default();
 
         // Merge step: Collect the results from the workers and merge them as children to the root.
-        self.merge_children(response_receiver, &mut proposal, &mut root_branch)?;
+        self.merge_children(response_receiver, &mut mutable_nodestore, &mut root_branch)?;
 
         // Post-process step: return the trie to its canonical form.
-        *proposal.root_mut() = self.postprocess_trie(&mut proposal, root_branch)?;
+        *mutable_nodestore.root_mut() = self.postprocess_trie(&mut mutable_nodestore, root_branch)?;
 
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(proposal.try_into()?);
+            Arc::new(mutable_nodestore.try_into()?);
 
         Ok(immutable)
     }

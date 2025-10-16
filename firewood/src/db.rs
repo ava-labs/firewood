@@ -202,7 +202,11 @@ impl Db {
         self.manager.view(root_hash).map_err(Into::into)
     }
 
-    /// propose a new batch that is processed in parallel.
+    /// Propose a new batch that is processed in parallel.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the revision manager cannot create a thread pool.
     pub fn propose_parallel(
         &self,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
@@ -589,12 +593,12 @@ mod test {
         let db = db.reopen();
         insert_commit(&db, 2);
         // Check that the keys are still there after the commits
-        let parent = db.manager.current_revision();
+        let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
         let keys: Vec<[u8; 1]> = vec![[1; 1], [2; 1]];
         let vals: Vec<Box<[u8]>> = vec![Box::new([1; 1]), Box::new([2; 1])];
         let kviter = keys.iter().zip(vals.iter());
         for (k, v) in kviter {
-            assert_eq!(&parent.val(k).unwrap().unwrap(), v);
+            assert_eq!(&committed.val(k).unwrap().unwrap(), v);
         }
         drop(db);
 
@@ -603,15 +607,15 @@ mod test {
         insert_commit(&db1, 1);
         let db2 = TestDb::new();
         insert_commit(&db2, 2);
-        let parent1 = db1.manager.current_revision();
-        let parent2 = db2.manager.current_revision();
+        let committed1 = db1.revision(db1.root_hash().unwrap().unwrap()).unwrap();
+        let committed2 = db2.revision(db2.root_hash().unwrap().unwrap()).unwrap();
         let keys: Vec<[u8; 1]> = vec![[1; 1], [2; 1]];
         let vals: Vec<Box<[u8]>> = vec![Box::new([1; 1]), Box::new([2; 1])];
         let mut kviter = keys.iter().zip(vals.iter());
         let (k, v) = kviter.next().unwrap();
-        assert_eq!(&parent1.val(k).unwrap().unwrap(), v);
+        assert_eq!(&committed1.val(k).unwrap().unwrap(), v);
         let (k, v) = kviter.next().unwrap();
-        assert_eq!(&parent2.val(k).unwrap().unwrap(), v);
+        assert_eq!(&committed2.val(k).unwrap().unwrap(), v);
     }
 
     #[test]
@@ -644,10 +648,10 @@ mod test {
         proposal.commit().unwrap();
 
         // Check that the key is still there after the commit
-        let parent = db.manager.current_revision();
+        let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
         let kviter = keys.iter().zip(vals.iter());
         for (k, v) in kviter {
-            assert_eq!(&parent.val(k).unwrap().unwrap(), v);
+            assert_eq!(&committed.val(k).unwrap().unwrap(), v);
         }
 
         // Create a proposal that deletes the previous entry
