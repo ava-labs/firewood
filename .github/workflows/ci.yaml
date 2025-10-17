@@ -262,7 +262,11 @@ jobs:
           go-version-file: "ffi/tests/eth/go.mod"
           cache-dependency-path: "ffi/tests/eth/go.sum"
       - name: Set MEMLOCK to unlimited
-        run: echo "$USER - memlock unlimited" | sudo tee /etc/security/limits.d/memlock.conf
+        run: |
+          {
+            echo "$USER hard memlock unlimited"
+            echo "$USER soft memlock unlimited"
+          } | sudo tee /etc/security/limits.d/memlock.conf
       - name: Print ulimits
         run: |
           ulimit -Sa
@@ -300,7 +304,11 @@ jobs:
           go-version-file: "ffi/tests/firewood/go.mod"
           cache-dependency-path: "ffi/tests/firewood/go.sum"
       - name: Set MEMLOCK to unlimited
-        run: echo "$USER - memlock unlimited" | sudo tee /etc/security/limits.d/memlock.conf
+        run: |
+          {
+            echo "$USER hard memlock unlimited"
+            echo "$USER soft memlock unlimited"
+          } | sudo tee /etc/security/limits.d/memlock.conf
       - name: Print ulimits
         run: |
           ulimit -Sa
