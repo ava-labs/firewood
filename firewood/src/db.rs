@@ -876,6 +876,14 @@ mod test {
         assert!(proposal.commit().is_err());
     }
 
+    #[test]
+    fn test_rootstore_empty_db_reopen() {
+        let mock_store = MockStore::default();
+        let db = TestDb::with_mockstore(mock_store);
+
+        db.reopen();
+    }
+
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
     struct TestDb<T = NoOpStore> {
         db: Db<T>,
