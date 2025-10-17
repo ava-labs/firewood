@@ -267,7 +267,7 @@ jobs:
           ulimit -Ha
       - name: Set MEMLOCK to unlimited
         run: |
-          tee "$USER - memlock unlimited" | sudo tee /etc/security/limits.d/memlock.conf
+          echo "$USER - memlock unlimited" | sudo tee /etc/security/limits.d/memlock.conf
           ulimit -Hl unlimited
           ulimit -Sa
           ulimit -Ha
@@ -309,7 +309,7 @@ jobs:
           ulimit -Ha
       - name: Set MEMLOCK to unlimited
         run: |
-          tee "$USER - memlock unlimited" | sudo tee /etc/security/limits.d/memlock.conf
+          echo "$USER - memlock unlimited" | sudo tee /etc/security/limits.d/memlock.conf
           ulimit -Hl unlimited
           ulimit -Sa
           ulimit -Ha
