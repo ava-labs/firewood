@@ -184,12 +184,12 @@ impl<T: RootStore> api::Db for Db<T> {
 impl Db<NoOpStore> {
     /// Create a new database instance.
     pub fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
-        Self::new_with_root_store(db_path, cfg, NoOpStore {})
+        Self::with_root_store(db_path, cfg, NoOpStore {})
     }
 }
 
 impl<T: RootStore> Db<T> {
-    fn new_with_root_store<P: AsRef<Path>>(
+    fn with_root_store<P: AsRef<Path>>(
         db_path: P,
         cfg: DbConfig,
         root_store: T,
@@ -1102,7 +1102,7 @@ mod test {
                 .iter()
                 .collect();
             let dbconfig = DbConfig::builder().build();
-            let db = Db::new_with_root_store(dbpath, dbconfig, mock_store).unwrap();
+            let db = Db::with_root_store(dbpath, dbconfig, mock_store).unwrap();
             TestDb { db, tmpdir }
         }
     }
@@ -1114,7 +1114,7 @@ mod test {
             drop(self.db);
             let dbconfig = DbConfig::builder().truncate(false).build();
 
-            let db = Db::new_with_root_store(path, dbconfig, root_store).unwrap();
+            let db = Db::with_root_store(path, dbconfig, root_store).unwrap();
             TestDb {
                 db,
                 tmpdir: self.tmpdir,
@@ -1126,7 +1126,7 @@ mod test {
             drop(self.db);
             let dbconfig = DbConfig::builder().truncate(true).build();
 
-            let db = Db::new_with_root_store(path, dbconfig, root_store).unwrap();
+            let db = Db::with_root_store(path, dbconfig, root_store).unwrap();
             TestDb {
                 db,
                 tmpdir: self.tmpdir,
