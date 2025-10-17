@@ -267,10 +267,6 @@ jobs:
             echo "$USER hard memlock unlimited"
             echo "$USER soft memlock unlimited"
           } | sudo tee /etc/security/limits.d/memlock.conf
-      - name: Print ulimits
-        run: |
-          ulimit -Sa
-          ulimit -Ha
       - name: Test Go FFI bindings
         working-directory: ffi
         # cgocheck2 is expensive but provides complete pointer checks
@@ -279,7 +275,11 @@ jobs:
         working-directory: ffi/tests/eth
         run: |
           # Set memlock to unlimited for the shell invoking the fuzz tests
-          sudo prlimit --pid $$ --memlock=-1:-1
+          ulimit -Sa
+          ulimit -Ha
+          sudo prlimit --pid $$ --memlock=-1:-1 || echo "prlimit not available, locking kernel memory may fail when setting up io-uring"
+          ulimit -Sa
+          ulimit -Ha
           go test -fuzz=. -fuzztime=1m
       - name: Upload Fuzz testdata
         if: failure()
@@ -306,15 +306,15 @@ jobs:
         with:
           go-version-file: "ffi/tests/firewood/go.mod"
           cache-dependency-path: "ffi/tests/firewood/go.sum"
-      - name: Print ulimits
-        run: |
-          ulimit -Sa
-          ulimit -Ha
       - name: Test Firewood <> MerkleDB Differential fuzz
         working-directory: ffi/tests/firewood
         run: |
           # Set memlock to unlimited for the shell invoking the fuzz tests
-          sudo prlimit --pid $$ --memlock=-1:-1
+          ulimit -Sa
+          ulimit -Ha
+          sudo prlimit --pid $$ --memlock=-1:-1 || echo "prlimit not available, locking kernel memory may fail when setting up io-uring"
+          ulimit -Sa
+          ulimit -Ha
           go test -fuzz=. -fuzztime=1m
       - name: Upload Fuzz testdata
         if: failure()
