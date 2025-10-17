@@ -162,8 +162,8 @@ pub enum Error {
     #[error("send error to worker")]
     SendErrorToWorker,
 
-    // Error converting an u8 index into a path component
-    #[error("error converting an u8 index into a path component")]
+    // Error converting a u8 index into a path component
+    #[error("error converting a u8 index into a path component")]
     InvalidConversionToPathComponent,
 }
 

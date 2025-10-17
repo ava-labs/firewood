@@ -355,7 +355,7 @@ impl ParallelMerkle {
     /// Returns a `CreateProposalError::FileIoError` if it encounters an error fetching nodes
     /// from storage, a `CreateProposalError::SendError` if it is unable to send messages to
     /// the workers, and a `CreateProposalError::InvalidConversionToPathComponent` if it is
-    /// unable to convert an u8 index into a path component.
+    /// unable to convert a u8 index into a path component.
     pub fn create_proposal<T: Parentable>(
         &mut self,
         parent: &NodeStore<T, FileBacked>,
