@@ -40,18 +40,19 @@ fi
 echo ""
 echo "=== Relocation Count Comparison ==="
 
-# Detect OS and use appropriate tool
+# Determine os-specific reloc config
 if [[ "$OSTYPE" == "darwin"* ]]; then
     # macOS
-    otool -rv "$NIX_LIB" > "$TMPDIR/nix-relocs.txt"
-    otool -rv "$CARGO_LIB" > "$TMPDIR/cargo-relocs.txt"
+    RELOC_CMD="otool -rv"
     RELOC_PATTERN='[A-Z_]+_RELOC_[A-Z0-9_]+'
 else
     # Linux
-    readelf -r "$NIX_LIB" > "$TMPDIR/nix-relocs.txt"
-    readelf -r "$CARGO_LIB" > "$TMPDIR/cargo-relocs.txt"
+    RELOC_CMD="readelf -r"
     RELOC_PATTERN='R_[A-Z0-9_]+'
 fi
+
+$RELOC_CMD "$NIX_LIB" > "$TMPDIR/nix-relocs.txt"
+$RELOC_CMD "$CARGO_LIB" > "$TMPDIR/cargo-relocs.txt"
 
 NIX_RELOCS=$(wc -l < "$TMPDIR/nix-relocs.txt")
 CARGO_RELOCS=$(wc -l < "$TMPDIR/cargo-relocs.txt")
@@ -67,13 +68,8 @@ echo ""
 echo "=== Relocation Type Comparison ==="
 
 # Use grep with -E for better portability (avoid -P which isn't available on macOS)
-if [[ "$OSTYPE" == "darwin"* ]]; then
-    grep -Eo "$RELOC_PATTERN" "$TMPDIR/nix-relocs.txt" | sort | uniq -c > "$TMPDIR/nix-reloc-types.txt"
-    grep -Eo "$RELOC_PATTERN" "$TMPDIR/cargo-relocs.txt" | sort | uniq -c > "$TMPDIR/cargo-reloc-types.txt"
-else
-    grep -oP "$RELOC_PATTERN" "$TMPDIR/nix-relocs.txt" | sort | uniq -c > "$TMPDIR/nix-reloc-types.txt"
-    grep -oP "$RELOC_PATTERN" "$TMPDIR/cargo-relocs.txt" | sort | uniq -c > "$TMPDIR/cargo-reloc-types.txt"
-fi
+grep -Eo "$RELOC_PATTERN" "$TMPDIR/nix-relocs.txt" | sort | uniq -c > "$TMPDIR/nix-reloc-types.txt"
+grep -Eo "$RELOC_PATTERN" "$TMPDIR/cargo-relocs.txt" | sort | uniq -c > "$TMPDIR/cargo-reloc-types.txt"
 
 if diff "$TMPDIR/nix-reloc-types.txt" "$TMPDIR/cargo-reloc-types.txt" > /dev/null; then
     echo "✅ Relocation types match"
