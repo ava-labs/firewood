@@ -167,9 +167,9 @@ impl<T: RootStore> RevisionManager<T> {
     /// 3. Revision reaping. If more than the maximum number of revisions are kept in memory, the
     ///    oldest revision is reaped.
     /// 4. Persist to disk. This includes flushing everything to disk.
-    /// 5. Set last committed revision.
+    /// 5. Persist the revision to `RootStore`.
+    /// 6. Set last committed revision.
     ///    Set last committed revision in memory.
-    /// 6. Persist the revision to `RootStore`.
     /// 7. Proposal Cleanup.
     ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
     #[fastrace::trace(short_name = true)]
@@ -231,7 +231,12 @@ impl<T: RootStore> RevisionManager<T> {
         // we move the header out of NodeStore, which is in a future PR.
         committed.persist()?;
 
-        // 5. Set last committed revision
+        // 5. Persist revision to root store
+        if let (Some(hash), Some(address)) = (committed.root_hash(), committed.root_address()) {
+            self.root_store.add_root(&hash, &address)?;
+        }
+
+        // 6. Set last committed revision
         let committed: CommittedRevision = committed.into();
         self.historical
             .write()
@@ -242,11 +247,6 @@ impl<T: RootStore> RevisionManager<T> {
                 .write()
                 .expect("poisoned lock")
                 .insert(hash, committed.clone());
-        }
-
-        // 6. Persist revision to root store
-        if let (Some(hash), Some(address)) = (committed.root_hash(), committed.root_address()) {
-            self.root_store.add_root(&hash, &address)?;
         }
 
         // 7. Proposal Cleanup
