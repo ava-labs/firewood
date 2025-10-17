@@ -338,7 +338,7 @@ mod test {
     };
 
     use crate::db::{Db, Proposal};
-    use crate::root_store::{MockStore, NoOpStore};
+    use crate::root_store::{MockStore, NoOpStore, RootStore};
     use crate::v2::api::{Db as _, DbView, KeyValuePairIter, Proposal as _};
 
     use super::{BatchOp, DbConfig};
@@ -913,36 +913,6 @@ mod test {
             let db = Db::new(dbpath, dbconfig).unwrap();
             TestDb { db, tmpdir }
         }
-        fn reopen(self) -> Self {
-            let path = self.path();
-            drop(self.db);
-            let dbconfig = DbConfig::builder().truncate(false).build();
-
-            let db = Db::new(path, dbconfig).unwrap();
-            TestDb {
-                db,
-                tmpdir: self.tmpdir,
-            }
-        }
-        fn replace(self) -> Self {
-            let path = self.path();
-            drop(self.db);
-            let dbconfig = DbConfig::builder().truncate(true).build();
-
-            let db = Db::new(path, dbconfig).unwrap();
-            TestDb {
-                db,
-                tmpdir: self.tmpdir,
-            }
-        }
-    }
-
-    impl<T> TestDb<T> {
-        fn path(&self) -> PathBuf {
-            [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-                .iter()
-                .collect()
-        }
     }
 
     impl TestDb<MockStore> {
@@ -955,17 +925,40 @@ mod test {
             let db = Db::new_with_root_store(dbpath, dbconfig, mock_store).unwrap();
             TestDb { db, tmpdir }
         }
+    }
 
+    impl<T: Clone + RootStore> TestDb<T> {
         fn reopen(self) -> Self {
             let path = self.path();
-            let mock_store = self.manager.mock_store();
+            let root_store = self.manager.root_store();
             drop(self.db);
             let dbconfig = DbConfig::builder().truncate(false).build();
-            let db = Db::new_with_root_store(path, dbconfig, mock_store).unwrap();
+
+            let db = Db::new_with_root_store(path, dbconfig, root_store).unwrap();
             TestDb {
                 db,
                 tmpdir: self.tmpdir,
             }
+        }
+        fn replace(self) -> Self {
+            let path = self.path();
+            let root_store = self.manager.root_store();
+            drop(self.db);
+            let dbconfig = DbConfig::builder().truncate(true).build();
+
+            let db = Db::new_with_root_store(path, dbconfig, root_store).unwrap();
+            TestDb {
+                db,
+                tmpdir: self.tmpdir,
+            }
+        }
+    }
+
+    impl<T> TestDb<T> {
+        fn path(&self) -> PathBuf {
+            [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
+                .iter()
+                .collect()
         }
     }
 }

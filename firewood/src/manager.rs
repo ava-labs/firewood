@@ -364,11 +364,11 @@ impl<T> RevisionManager<T> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::root_store::{MockStore, NoOpStore};
+    use crate::root_store::NoOpStore;
     use tempfile::NamedTempFile;
 
-    impl RevisionManager<MockStore> {
-        pub fn mock_store(&self) -> MockStore {
+    impl<T: Clone> RevisionManager<T> {
+        pub fn root_store(&self) -> T {
             self.root_store.clone()
         }
     }
