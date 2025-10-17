@@ -264,7 +264,7 @@ jobs:
       - name: Print ulimits
         run: ulimit -a
       - name: Set MEMLOCK to unlimited
-        run: ulimit -l unlimited
+        run: sudo ulimit -l unlimited
       - name: Test Go FFI bindings
         working-directory: ffi
         # cgocheck2 is expensive but provides complete pointer checks
@@ -300,7 +300,7 @@ jobs:
       - name: Print ulimits
         run: ulimit -a
       - name: Set MEMLOCK to unlimited
-        run: ulimit -l unlimited
+        run: sudo ulimit -l unlimited
       - name: Test Firewood <> MerkleDB Differential fuzz
         working-directory: ffi/tests/firewood
         run: go test -fuzz=. -fuzztime=1m
