@@ -262,7 +262,7 @@ jobs:
           go-version-file: "ffi/tests/eth/go.mod"
           cache-dependency-path: "ffi/tests/eth/go.sum"
       - name: Print ulimits
-        run: ulimit -a
+        run: ulimit -H -l
       - name: Set MEMLOCK to unlimited
         run: sudo ulimit -l unlimited
       - name: Test Go FFI bindings
