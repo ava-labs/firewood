@@ -291,7 +291,8 @@ where
     }
 }
 
-// auto-derived implementations would require N: Clone, V: Clone which is too much
+// auto-derived implementations would require V: Clone which is too much and the
+// derive_where crate does not implement this correctly for our use case
 
 impl<N: Copy, V: ?Sized, D> Clone for TrieEdgeIter<'_, N, V, D> {
     fn clone(&self) -> Self {

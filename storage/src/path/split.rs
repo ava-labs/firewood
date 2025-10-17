@@ -8,7 +8,10 @@ use super::{PathComponent, TriePath};
 /// A trie path that can be (cheaply) split into two sub-paths.
 ///
 /// Implementations are expected to be cheap to split (i.e. no allocations).
-pub trait SplitPath: TriePath + Default + Copy {
+pub trait SplitPath: TriePath + Copy {
+    /// Creates an empty path.
+    fn empty() -> Self;
+
     /// Splits the path at the given index within the path.
     ///
     /// The returned tuple contains the two sub-paths `(prefix, suffix)`.
@@ -99,6 +102,10 @@ impl<A: SplitPath, B: SplitPath, C> PathCommonPrefix<A, B, C> {
 }
 
 impl SplitPath for &[PathComponent] {
+    fn empty() -> Self {
+        &[]
+    }
+
     fn split_at(self, mid: usize) -> (Self, Self) {
         self.split_at(mid)
     }

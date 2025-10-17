@@ -4,6 +4,7 @@
 use crate::{
     Children, HashType, Hashable, IntoSplitPath, PathBuf, PathComponent, PathGuard, SplitPath,
     TrieEdgeState, TrieNode, TriePath, ValueDigest,
+    tries::debug::{DebugChildren, DebugValue},
 };
 
 /// An error indicating that a slice of proof nodes is invalid.
@@ -91,11 +92,20 @@ pub enum MergeKeyProofError {
 /// In the proof, each node will include the value or value digest at that node,
 /// depending on what is required by the hasher. Additionally, the hashes of each
 /// child node that branches off the node along the path are included.
-#[derive(Debug)]
 pub struct KeyProofTrieRoot<'a, P> {
-    partial_path: P,
-    value_digest: Option<ValueDigest<&'a [u8]>>,
-    children: Children<Option<KeyProofTrieNode<'a, P>>>,
+    pub(super) partial_path: P,
+    pub(super) value_digest: Option<ValueDigest<&'a [u8]>>,
+    pub(super) children: Children<Option<KeyProofTrieNode<'a, P>>>,
+}
+
+impl<P: SplitPath> std::fmt::Debug for KeyProofTrieRoot<'_, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyProofTrieRoot")
+            .field("partial_path", &self.partial_path.display())
+            .field("value_digest", &DebugValue::new(self.value_digest.as_ref()))
+            .field("children", &DebugChildren::new(&self.children))
+            .finish()
+    }
 }
 
 /// A key range proof is a combination of zero, one, or two key proofs.
@@ -120,13 +130,19 @@ pub struct KeyProofTrieRoot<'a, P> {
 ///
 /// When merging the key-value pairs into this trie, key-values must be within
 /// the bounds set by the two key proofs, if they exist.
-#[derive(Debug)]
 pub struct KeyRangeProofTrieRoot<'a, P> {
     root: Box<KeyProofTrieRoot<'a, P>>,
 }
 
-#[derive(Debug)]
-enum KeyProofTrieNode<'a, P> {
+impl<P: SplitPath> std::fmt::Debug for KeyRangeProofTrieRoot<'_, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("KeyRangeProofTrieRoot")
+            .field("root", &self.root)
+            .finish()
+    }
+}
+
+pub(super) enum KeyProofTrieNode<'a, P> {
     /// Described nodes are proof nodes where we have the data necessary to
     /// reconstruct the hash. The value digest may be a value or a digest. We can
     /// verify the hash of theses nodes using the value or digest, but may not
@@ -139,6 +155,19 @@ enum KeyProofTrieNode<'a, P> {
     /// from a proof node. If we only have the child, we can't infer anything
     /// else about the node.
     Remote { hash: HashType },
+}
+
+impl<P: SplitPath> std::fmt::Debug for KeyProofTrieNode<'_, P> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Described { node, hash } => f
+                .debug_struct("Described")
+                .field("node", node)
+                .field("hash", hash)
+                .finish(),
+            Self::Remote { hash } => f.debug_struct("Remote").field("hash", hash).finish(),
+        }
+    }
 }
 
 impl<'root, P: SplitPath + 'root> KeyProofTrieRoot<'root, P> {
@@ -303,6 +332,10 @@ impl<'root, P: SplitPath + 'root> KeyRangeProofTrieRoot<'root, P> {
     #[must_use]
     pub const fn root(&self) -> &KeyProofTrieRoot<'root, P> {
         &self.root
+    }
+
+    pub(super) fn into_root(self) -> Box<KeyProofTrieRoot<'root, P>> {
+        self.root
     }
 }
 

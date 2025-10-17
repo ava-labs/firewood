@@ -12,12 +12,17 @@ pub use self::buf::{PartialPath, PathBuf, PathGuard};
 pub use self::component::{ComponentIter, PathComponent, PathComponentSliceExt};
 pub use self::joined::JoinedPath;
 #[cfg(not(feature = "branch_factor_256"))]
-pub use self::packed::{PackedBytes, PackedPathComponents, PackedPathRef};
+pub use self::packed::{MaybePackedPath, PackedBytes, PackedPathComponents, PackedPathRef};
 pub use self::split::{IntoSplitPath, PathCommonPrefix, SplitPath};
 
 /// If the branch factor is 256, a packed path is just a slice of path components.
 #[cfg(feature = "branch_factor_256")]
 pub type PackedPathRef<'a> = &'a [PathComponent];
+
+/// If the branch factor is 256, a packed path is just a slice of path components,
+/// therefore, a maybe-packed path is also just a slice of path components.
+#[cfg(feature = "branch_factor_256")]
+pub type MaybePackedPath<'a> = &'a [PathComponent];
 
 /// A trie path of components with different underlying representations.
 ///
@@ -302,5 +307,53 @@ impl<T: TriePath + ?Sized> TriePath for std::sync::Arc<T> {
 
     fn as_component_slice(&self) -> PartialPath<'_> {
         (**self).as_component_slice()
+    }
+}
+
+impl<L: TriePath, R: TriePath> TriePath for either::Either<L, R> {
+    type Components<'a>
+        = either::Either<L::Components<'a>, R::Components<'a>>
+    where
+        Self: 'a;
+
+    fn len(&self) -> usize {
+        either::for_both!(self, this => this.len())
+    }
+
+    fn components(&self) -> Self::Components<'_> {
+        match self {
+            either::Left(l) => either::Left(l.components()),
+            either::Right(r) => either::Right(r.components()),
+        }
+    }
+
+    fn as_component_slice(&self) -> PartialPath<'_> {
+        either::for_both!(self, this => this.as_component_slice())
+    }
+}
+
+impl<L: SplitPath, R: SplitPath> SplitPath for either::Either<L, R> {
+    fn empty() -> Self {
+        either::Either::Left(L::empty())
+    }
+
+    fn split_at(self, mid: usize) -> (Self, Self) {
+        match self {
+            either::Either::Left(l) => {
+                let (a, b) = l.split_at(mid);
+                (either::Either::Left(a), either::Either::Left(b))
+            }
+            either::Either::Right(r) => {
+                let (a, b) = r.split_at(mid);
+                (either::Either::Right(a), either::Either::Right(b))
+            }
+        }
+    }
+
+    fn split_first(self) -> Option<(PathComponent, Self)> {
+        match self {
+            either::Either::Left(l) => l.split_first().map(|(c, p)| (c, either::Either::Left(p))),
+            either::Either::Right(r) => r.split_first().map(|(c, p)| (c, either::Either::Right(p))),
+        }
     }
 }

@@ -5,6 +5,7 @@ mod debug;
 mod iter;
 mod kvp;
 mod proof;
+mod range;
 
 use crate::{HashType, IntoSplitPath, PathComponent, SplitPath};
 
@@ -13,6 +14,7 @@ pub use self::kvp::{DuplicateKeyError, HashedKeyValueTrieRoot, KeyValueTrieRoot}
 pub use self::proof::{
     FromKeyProofError, KeyProofTrieRoot, KeyRangeProofTrieRoot, MergeKeyProofError,
 };
+pub use self::range::{RangeProofTrieNode, RangeProofTrieRoot, RangeProofTrieRootRef};
 
 /// The state of an edge from a parent node to a child node in a trie.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -156,6 +158,19 @@ impl<'root, N> TrieEdgeState<'root, N> {
         N: TrieNode<'root, V>,
     {
         self.node().and_then(TrieNode::value)
+    }
+
+    /// Maps the child node using the given function, preserving the edge state.
+    #[must_use]
+    pub fn map_node<O>(self, f: impl FnOnce(N) -> O) -> TrieEdgeState<'root, O> {
+        match self {
+            TrieEdgeState::LocalChild { node, hash } => TrieEdgeState::LocalChild {
+                node: f(node),
+                hash,
+            },
+            TrieEdgeState::RemoteChild { hash } => TrieEdgeState::RemoteChild { hash },
+            TrieEdgeState::UnhashedChild { node } => TrieEdgeState::UnhashedChild { node: f(node) },
+        }
     }
 
     /// Returns `true` if this edge state represents a local child node with a known hash.
