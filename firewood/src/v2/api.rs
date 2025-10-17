@@ -162,9 +162,9 @@ pub enum Error {
     #[error("send error to worker")]
     SendErrorToWorker,
 
-    // Error converting an index into a path component
-    #[error("error converting an index into a path component")]
-    InvalidIndexToPathComponent,
+    // Error converting an u8 index into a path component
+    #[error("error converting an u8 index into a path component")]
+    InvalidConversionToPathComponent,
 }
 
 impl From<RevisionManagerError> for Error {
@@ -193,7 +193,9 @@ impl From<CreateProposalError> for Error {
         match value {
             CreateProposalError::FileIoError(err) => Error::FileIO(err),
             CreateProposalError::SendError => Error::SendErrorToWorker,
-            CreateProposalError::InvalidIndexToPathComponent => Error::InvalidIndexToPathComponent,
+            CreateProposalError::InvalidConversionToPathComponent => {
+                Error::InvalidConversionToPathComponent
+            }
         }
     }
 }

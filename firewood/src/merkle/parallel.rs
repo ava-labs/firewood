@@ -40,7 +40,7 @@ struct Response {
 pub enum CreateProposalError {
     FileIoError(FileIoError),
     SendError,
-    InvalidIndexToPathComponent,
+    InvalidConversionToPathComponent,
 }
 
 impl From<FileIoError> for CreateProposalError {
@@ -97,7 +97,7 @@ impl ParallelMerkle {
             |node| {
                 // Returns an error if it cannot convert a child index into a path component.
                 node.force_branch_for_insert()
-                    .map_err(|_| CreateProposalError::InvalidIndexToPathComponent)
+                    .map_err(|_| CreateProposalError::InvalidConversionToPathComponent)
             },
         )
     }
@@ -354,8 +354,8 @@ impl ParallelMerkle {
     ///
     /// Returns a `CreateProposalError::FileIoError` if it encounters an error fetching nodes
     /// from storage, a `CreateProposalError::SendError` if it is unable to send messages to
-    /// the workers, and a `CreateProposalError::InvalidIndexToPathComponent` if it is unable
-    /// to convert an index into a path component.
+    /// the workers, and a `CreateProposalError::InvalidConversionToPathComponent` if it is 
+    /// unable to convert an u8 index into a path component.
     pub fn create_proposal<T: Parentable>(
         &mut self,
         parent: &NodeStore<T, FileBacked>,
@@ -414,7 +414,7 @@ impl ParallelMerkle {
 
             // Verify that the worker index taken from the first nibble is valid.
             let first_path_component = PathComponent::try_new(first_path_component)
-                .ok_or(CreateProposalError::InvalidIndexToPathComponent)?;
+                .ok_or(CreateProposalError::InvalidConversionToPathComponent)?;
 
             // Get the worker that is responsible for this nibble. The worker will be created if it
             // doesn't already exist.

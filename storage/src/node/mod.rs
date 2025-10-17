@@ -415,7 +415,7 @@ impl Node {
     ///
     /// # Errors
     ///
-    /// Returns an `Error` if it cannot create a `PathComponent` from a child index.
+    /// Returns an `Error` if it cannot create a `PathComponent` from an u8 index.
     pub fn force_branch_for_insert(mut self) -> Result<Box<BranchNode>, Error> {
         // If the `partial_path` is non-empty, then create a branch that will be the new
         // root with the previous root as the child at the index returned from split_first.
@@ -436,11 +436,11 @@ impl Node {
             Ok(branch.into())
         } else {
             Ok(match self {
-                Node::Leaf(mut leaf) => {
+                Node::Leaf(leaf) => {
                     // Root is a leaf with an empty partial path. Replace it with a branch.
                     BranchNode {
                         partial_path: Path::new(),
-                        value: Some(std::mem::take(&mut leaf.value)),
+                        value: Some(leaf.value),
                         children: Children::default(),
                     }
                     .into()
