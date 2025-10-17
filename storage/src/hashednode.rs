@@ -138,6 +138,15 @@ impl<T: AsRef<[u8]>> ValueDigest<T> {
             Self::Hash(h) => ValueDigest::Hash(h),
         }
     }
+
+    /// Returns the value if it is present.
+    pub const fn value(&self) -> Option<&T> {
+        match self {
+            Self::Value(v) => Some(v),
+            #[cfg(not(feature = "ethhash"))]
+            Self::Hash(_) => None,
+        }
+    }
 }
 
 impl<T: AsRef<[u8]>> AsRef<[u8]> for ValueDigest<T> {

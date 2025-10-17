@@ -58,7 +58,7 @@ pub use nodestore::{
     NodeReader, NodeStore, Parentable, RootReader, TrieReader,
 };
 pub use path::{
-    ComponentIter, IntoSplitPath, JoinedPath, PackedPathRef, PartialPath, PathBuf,
+    ComponentIter, IntoSplitPath, JoinedPath, MaybePackedPath, PackedPathRef, PartialPath, PathBuf,
     PathCommonPrefix, PathComponent, PathComponentSliceExt, PathGuard, SplitPath, TriePath,
     TriePathAsPackedBytes, TriePathFromPackedBytes, TriePathFromUnpackedBytes,
 };
@@ -67,7 +67,8 @@ pub use path::{PackedBytes, PackedPathComponents};
 pub use tries::{
     DuplicateKeyError, FromKeyProofError, HashedKeyValueTrieRoot, HashedTrieNode, IterAscending,
     IterDescending, KeyProofTrieRoot, KeyRangeProofTrieRoot, KeyValueTrieRoot, MergeKeyProofError,
-    TrieEdgeIter, TrieEdgeState, TrieNode, TriePathIter, TrieValueIter,
+    RangeProofTrieNode, RangeProofTrieRoot, RangeProofTrieRootRef, TrieEdgeIter, TrieEdgeState,
+    TrieNode, TriePathIter, TrieValueIter,
 };
 pub use u4::{TryFromIntError, U4};
 

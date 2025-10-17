@@ -61,6 +61,13 @@ impl<P: TriePath, S: TriePath> TriePath for JoinedPath<P, S> {
 }
 
 impl<P: SplitPath, S: SplitPath> SplitPath for JoinedPath<P, S> {
+    fn empty() -> Self {
+        Self {
+            prefix: P::empty(),
+            suffix: S::empty(),
+        }
+    }
+
     fn split_at(self, mid: usize) -> (Self, Self) {
         if let Some(mid) = mid.checked_sub(self.prefix.len()) {
             let (a_suffix, b_suffix) = self.suffix.split_at(mid);
@@ -69,7 +76,7 @@ impl<P: SplitPath, S: SplitPath> SplitPath for JoinedPath<P, S> {
                 suffix: a_suffix,
             };
             let suffix = Self {
-                prefix: P::default(),
+                prefix: P::empty(),
                 suffix: b_suffix,
             };
             (prefix, suffix)
@@ -77,7 +84,7 @@ impl<P: SplitPath, S: SplitPath> SplitPath for JoinedPath<P, S> {
             let (a_prefix, b_prefix) = self.prefix.split_at(mid);
             let prefix = Self {
                 prefix: a_prefix,
-                suffix: S::default(),
+                suffix: S::empty(),
             };
             let suffix: Self = Self {
                 prefix: b_prefix,
@@ -100,7 +107,7 @@ impl<P: SplitPath, S: SplitPath> SplitPath for JoinedPath<P, S> {
             Some((
                 first,
                 Self {
-                    prefix: P::default(),
+                    prefix: P::empty(),
                     suffix,
                 },
             ))

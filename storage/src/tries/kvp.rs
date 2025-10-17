@@ -30,15 +30,15 @@ pub struct DuplicateKeyError {
 ///   extending the current node's path.
 pub struct KeyValueTrieRoot<'a, T: ?Sized> {
     /// The partial path from this node's parent to itself.
-    pub partial_path: PackedPathRef<'a>,
+    partial_path: PackedPathRef<'a>,
     /// The value associated with the path to this node, if any.
     ///
     /// If [`None`], this node does not correspond to a key in the trie and is
     /// expected to have two or more children. If [`Some`], this node may have
     /// zero or more children.
-    pub value: Option<&'a T>,
+    pub(super) value: Option<&'a T>,
     /// The children of this node, indexed by their leading path component.
-    pub children: Children<Option<Box<Self>>>,
+    pub(super) children: Children<Option<Box<Self>>>,
 }
 
 /// The root of a hashed key-value trie.

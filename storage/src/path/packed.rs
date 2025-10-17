@@ -1,9 +1,9 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::TriePathAsPackedBytes;
+use crate::TriePathFromUnpackedBytes;
 
-use super::{PathComponent, SplitPath, TriePath, TriePathFromPackedBytes};
+use super::{PathComponent, SplitPath, TriePath, TriePathAsPackedBytes, TriePathFromPackedBytes};
 
 /// A packed representation of a trie path where each byte encodes two path components.
 ///
@@ -14,6 +14,9 @@ pub struct PackedPathRef<'a> {
     middle: &'a [u8],
     suffix: Option<PathComponent>,
 }
+
+/// A path that may be either packed or unpacked.
+pub type MaybePackedPath<'a> = either::Either<PackedPathRef<'a>, &'a [PathComponent]>;
 
 /// An iterator over the components of a [`PackedPathRef`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -78,6 +81,14 @@ impl TriePath for PackedPathRef<'_> {
 }
 
 impl SplitPath for PackedPathRef<'_> {
+    fn empty() -> Self {
+        Self {
+            prefix: None,
+            middle: &[],
+            suffix: None,
+        }
+    }
+
     fn split_at(self, mid: usize) -> (Self, Self) {
         assert!(mid <= self.len(), "mid > self.len()");
 
@@ -241,6 +252,20 @@ impl<T: TriePath + ?Sized> TriePathAsPackedBytes for T {
 
     fn as_packed_bytes(&self) -> Self::PackedBytesIter<'_> {
         PackedBytes::new(self.components())
+    }
+}
+
+impl<'a> TriePathFromPackedBytes<'a> for MaybePackedPath<'a> {
+    fn path_from_packed_bytes(bytes: &'a [u8]) -> Self {
+        either::Left(PackedPathRef::path_from_packed_bytes(bytes))
+    }
+}
+
+impl<'a> TriePathFromUnpackedBytes<'a> for MaybePackedPath<'a> {
+    type Error = crate::u4::TryFromIntError;
+
+    fn path_from_unpacked_bytes(bytes: &'a [u8]) -> Result<Self, Self::Error> {
+        TriePathFromUnpackedBytes::path_from_unpacked_bytes(bytes).map(either::Right)
     }
 }
 
