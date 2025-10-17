@@ -336,7 +336,7 @@ mod test {
     };
 
     use crate::db::{Db, Proposal};
-    use crate::root_store::{MockStore, NoOpStore, RootStore};
+    use crate::root_store::{MockStore, NoOpStore};
     use crate::v2::api::{Db as _, DbView, KeyValuePairIter, Proposal as _};
 
     use super::{BatchOp, DbConfig};
@@ -877,17 +877,17 @@ mod test {
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
-    struct TestDb<T: RootStore = NoOpStore> {
+    struct TestDb<T = NoOpStore> {
         db: Db<T>,
         tmpdir: tempfile::TempDir,
     }
-    impl<T: RootStore> Deref for TestDb<T> {
+    impl<T> Deref for TestDb<T> {
         type Target = Db<T>;
         fn deref(&self) -> &Self::Target {
             &self.db
         }
     }
-    impl<T: RootStore> DerefMut for TestDb<T> {
+    impl<T> DerefMut for TestDb<T> {
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.db
         }
@@ -927,7 +927,7 @@ mod test {
         }
     }
 
-    impl<T: RootStore> TestDb<T> {
+    impl<T> TestDb<T> {
         fn path(&self) -> PathBuf {
             [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()
