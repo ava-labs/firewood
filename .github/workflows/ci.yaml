@@ -261,12 +261,6 @@ jobs:
         with:
           go-version-file: "ffi/tests/eth/go.mod"
           cache-dependency-path: "ffi/tests/eth/go.sum"
-      - name: Set MEMLOCK to unlimited
-        run: |
-          {
-            echo "$USER hard memlock unlimited"
-            echo "$USER soft memlock unlimited"
-          } | sudo tee /etc/security/limits.d/memlock.conf
       - name: Test Go FFI bindings
         working-directory: ffi
         # cgocheck2 is expensive but provides complete pointer checks
