@@ -58,15 +58,16 @@ pub use nodestore::{
     NodeReader, NodeStore, Parentable, RootReader, TrieReader,
 };
 pub use path::{
-    ComponentIter, IntoSplitPath, JoinedPath, PartialPath, PathBuf, PathCommonPrefix,
-    PathComponent, PathComponentSliceExt, PathGuard, SplitPath, TriePath, TriePathAsPackedBytes,
-    TriePathFromPackedBytes, TriePathFromUnpackedBytes,
+    ComponentIter, IntoSplitPath, JoinedPath, PackedPathRef, PartialPath, PathBuf,
+    PathCommonPrefix, PathComponent, PathComponentSliceExt, PathGuard, SplitPath, TriePath,
+    TriePathAsPackedBytes, TriePathFromPackedBytes, TriePathFromUnpackedBytes,
 };
 #[cfg(not(feature = "branch_factor_256"))]
-pub use path::{PackedBytes, PackedPathComponents, PackedPathRef};
+pub use path::{PackedBytes, PackedPathComponents};
 pub use tries::{
-    DuplicateKeyError, HashedKeyValueTrieRoot, HashedTrieNode, IterAscending, IterDescending,
-    KeyValueTrieRoot, TrieEdgeIter, TrieEdgeState, TrieNode, TriePathIter, TrieValueIter,
+    DuplicateKeyError, FromKeyProofError, HashedKeyValueTrieRoot, HashedTrieNode, IterAscending,
+    IterDescending, KeyProofTrieRoot, KeyValueTrieRoot, TrieEdgeIter, TrieEdgeState, TrieNode,
+    TriePathIter, TrieValueIter,
 };
 pub use u4::{TryFromIntError, U4};
 
