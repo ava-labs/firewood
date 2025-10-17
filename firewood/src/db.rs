@@ -212,7 +212,9 @@ impl<T: RootStore> Db<T> {
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, api::Error> {
         self.manager.view(root_hash).map_err(Into::into)
     }
+}
 
+impl<T> Db<T> {
     /// Dump the Trie of the latest revision.
     pub fn dump(&self, w: &mut dyn Write) -> Result<(), std::io::Error> {
         let latest_rev_nodestore = self.manager.current_revision();
