@@ -54,7 +54,7 @@ pub use node::{
 };
 pub use nodestore::{
     AreaIndex, Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal,
-    NodeReader, NodeStore, NodeStoreHeader, Parentable, RootReader, TrieReader,
+    NodeReader, NodeStore, Parentable, RootReader, TrieReader,
 };
 pub use path::{
     ComponentIter, IntoSplitPath, JoinedPath, PartialPath, PathBuf, PathCommonPrefix,

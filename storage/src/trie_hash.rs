@@ -107,8 +107,8 @@ impl TrieHash {
 
     /// Converts `TrieHash` to an array of bytes.
     #[must_use]
-    pub fn to_bytes(&self) -> [u8; TRIE_HASH_LEN] {
-        self.0.into()
+    pub const fn to_bytes(&self) -> [u8; TRIE_HASH_LEN] {
+        self.0
     }
 
     /// Creates a new `TrieHash` from an array of bytes.

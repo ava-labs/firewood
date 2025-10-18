@@ -183,17 +183,10 @@ impl NodeStoreHeader {
     const _ASSERT_SIZE: () = assert!(Self::SIZE as usize >= std::mem::size_of::<NodeStoreHeader>());
 
     /// Deserialize a `NodeStoreHeader` from bytes using bytemuck
-    #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> &Self {
         bytemuck::from_bytes(bytes)
     }
 
-    /// new returns a new `NodeStoreHeader`
-    ///
-    /// # Panics
-    ///
-    /// Will panic if area size hash cannot be converted to a fixed-length array
-    #[must_use]
     pub fn new() -> Self {
         Self::with_root(None)
     }
@@ -217,11 +210,6 @@ impl NodeStoreHeader {
         }
     }
 
-    /// Validate checks if a `NodeStoreHeader` is valid
-    ///
-    /// # Errors
-    ///
-    /// Will error if the `NodeStoreHeader` is not valid
     pub fn validate(&self) -> Result<(), Error> {
         trace!("Checking version...");
         self.version.validate()?;
@@ -239,7 +227,6 @@ impl NodeStoreHeader {
     }
 
     /// Get the size of the nodestore
-    #[must_use]
     pub const fn size(&self) -> u64 {
         self.size
     }
@@ -250,7 +237,6 @@ impl NodeStoreHeader {
     }
 
     /// Get the free lists
-    #[must_use]
     pub const fn free_lists(&self) -> &FreeLists {
         &self.free_lists
     }
@@ -261,7 +247,6 @@ impl NodeStoreHeader {
     }
 
     /// Get the root address
-    #[must_use]
     pub const fn root_address(&self) -> Option<LinearAddress> {
         self.root_address
     }
@@ -272,7 +257,6 @@ impl NodeStoreHeader {
     }
 
     /// Get the offset of the `free_lists` field for use with `offset_of`!
-    #[must_use]
     pub const fn free_lists_offset() -> u64 {
         std::mem::offset_of!(NodeStoreHeader, free_lists) as u64
     }

@@ -90,8 +90,7 @@ use crate::hashednode::hash_node;
 use crate::node::Node;
 use crate::node::persist::MaybePersistedNode;
 use crate::{
-    CacheReadStrategy, Child, FileBacked, FileIoError, HashType, Path, ReadableStorage, SharedNode,
-    TrieHash,
+    CacheReadStrategy, Child, FileIoError, HashType, Path, ReadableStorage, SharedNode, TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -514,39 +513,6 @@ impl<T, S> NodeStore<T, S> {
 
     pub(crate) const fn freelists_mut(&mut self) -> &mut alloc::FreeLists {
         self.header.free_lists_mut()
-    }
-}
-
-impl NodeStore<Committed, FileBacked> {
-    /// `new_committed` returns a committed instance of `NodeStore`
-    /// This is called by `RootStore` to construct prior committed revisions
-    ///
-    /// Args:
-    /// - `header`: the header of the committed nodestore
-    /// - `root_hash`: the hash of the nodestore
-    /// - `root_address`: the address of the nodestore
-    /// - `storage`: the underlying storage to access the nodestore
-    pub fn new_committed(
-        header: NodeStoreHeader,
-        root_hash: HashType,
-        root_address: LinearAddress,
-        storage: Arc<FileBacked>,
-    ) -> Self {
-        NodeStore {
-            header,
-            kind: Committed {
-                deleted: Box::new([]),
-                root: Some(Child::AddressWithHash(root_address, root_hash)),
-            },
-            storage,
-        }
-    }
-
-    /// `get_underlying_storage` returns the underlying storage of this nodestore.
-    /// This is called by the `RootStore` to construct prior committed revisions.
-    #[must_use]
-    pub fn get_underlying_storage(&self) -> Arc<FileBacked> {
-        self.storage.clone()
     }
 }
 
