@@ -34,16 +34,16 @@ use crate::nodestore::AreaIndex;
 use crate::{Child, firewood_counter};
 use coarsetime::Instant;
 
-#[cfg(feature = "io-uring")]
-use crate::logger::trace;
-
 use crate::{FileBacked, MaybePersistedNode, NodeReader, WritableStorage};
-
-#[cfg(test)]
-use crate::RootReader;
 
 #[cfg(feature = "io-uring")]
 use crate::ReadableStorage;
+
+#[cfg(feature = "io-uring")]
+use crate::logger::trace;
+
+#[cfg(test)]
+use crate::RootReader;
 
 use super::alloc::NodeAllocator;
 use super::header::NodeStoreHeader;
@@ -84,10 +84,22 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the free list cannot be written to storage.
-    #[fastrace::trace(short_name = true)]
     pub fn flush_freelist(&self) -> Result<(), FileIoError> {
-        // Write the free lists to storage
-        let free_list_bytes = bytemuck::bytes_of(self.header.free_lists());
+        self.flush_freelist_from(&self.header)
+    }
+
+    /// Persist the freelist from the given header to storage
+    ///
+    /// This function is used to ensure that the freelist is advanced after allocating
+    /// nodes for writing. This allows the database to be recovered from an I/O error while
+    /// persisting a revision to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the free list cannot be written to storage.
+    #[fastrace::trace(name = "firewood.flush_freelist")]
+    pub fn flush_freelist_from(&self, header: &NodeStoreHeader) -> Result<(), FileIoError> {
+        let free_list_bytes = bytemuck::bytes_of(header.free_lists());
         let free_list_offset = NodeStoreHeader::free_lists_offset();
         self.storage.write(free_list_offset, free_list_bytes)?;
         Ok(())
@@ -256,6 +268,8 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
 
         self.storage.write_cached_nodes(cached_nodes)?;
 
+        allocator.flush_freelist()?;
+
         let flush_time = flush_start.elapsed().as_millis();
         firewood_counter!("firewood.flush_nodes", "flushed node amount").increment(flush_time);
 
@@ -290,6 +304,67 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     }
 }
 
+#[cfg(feature = "io-uring")]
+use crate::LinearAddress;
+#[cfg(feature = "io-uring")]
+use bumpalo::Bump;
+
+#[cfg(feature = "io-uring")]
+struct Batch {
+    bump: bumpalo::Bump,
+}
+
+#[cfg(feature = "io-uring")]
+impl Batch {
+    const INITIAL_BUMP_SIZE: usize = AreaIndex::MAX_AREA_SIZE as usize;
+
+    fn new() -> Self {
+        Self {
+            bump: Bump::with_capacity(Self::INITIAL_BUMP_SIZE),
+        }
+    }
+}
+
+#[cfg(feature = "io-uring")]
+use std::pin::Pin;
+
+#[cfg(feature = "io-uring")]
+#[derive(Clone, Debug)]
+struct PinnedBufferEntry<'a> {
+    pinned_buffer: Pin<&'a [u8]>,
+    address: LinearAddress,
+    node: MaybePersistedNode,
+}
+
+#[cfg(feature = "io-uring")]
+/// Helper function to retry `submit_and_wait` on EINTR
+fn submit_and_wait_with_retry(
+    ring: &mut io_uring::IoUring,
+    wait_nr: u32,
+    storage: &FileBacked,
+    operation_name: &str,
+) -> Result<(), FileIoError> {
+    use std::io::ErrorKind::Interrupted;
+
+    loop {
+        match ring.submit_and_wait(wait_nr as usize) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                // Retry if the error is an interrupted system call
+                if e.kind() == Interrupted {
+                    continue;
+                }
+                // For other errors, return the error
+                return Err(storage.file_io_error(
+                    e,
+                    0,
+                    Some(format!("io-uring {operation_name}")),
+                ));
+            }
+        }
+    }
+}
+
 impl NodeStore<Committed, FileBacked> {
     /// Persist all the nodes of a proposal to storage.
     ///
@@ -299,121 +374,84 @@ impl NodeStore<Committed, FileBacked> {
     #[fastrace::trace(short_name = true)]
     #[cfg(feature = "io-uring")]
     fn flush_nodes_io_uring(&mut self) -> Result<NodeStoreHeader, FileIoError> {
-        use crate::LinearAddress;
-        use std::io::ErrorKind::Interrupted;
-        use std::pin::Pin;
-
-        #[derive(Clone, Debug)]
-        struct PinnedBufferEntry {
-            pinned_buffer: Pin<Box<[u8]>>,
-            node: Option<(LinearAddress, MaybePersistedNode)>,
-        }
-
-        /// Helper function to retry `submit_and_wait` on EINTR
-        fn submit_and_wait_with_retry(
-            ring: &mut io_uring::IoUring,
-            wait_nr: u32,
-            storage: &FileBacked,
-            operation_name: &str,
-        ) -> Result<(), FileIoError> {
-            loop {
-                match ring.submit_and_wait(wait_nr as usize) {
-                    Ok(_) => return Ok(()),
-                    Err(e) => {
-                        // Retry if the error is an interrupted system call
-                        if e.kind() == Interrupted {
-                            continue;
-                        }
-                        // For other errors, return the error
-                        return Err(storage.file_io_error(
-                            e,
-                            0,
-                            Some(format!("io-uring {operation_name}")),
-                        ));
-                    }
-                }
-            }
-        }
-
-        /// Helper function to handle completion queue entries and check for errors
-        fn handle_completion_queue(
-            storage: &FileBacked,
-            completion_queue: io_uring::cqueue::CompletionQueue<'_>,
-            saved_pinned_buffers: &mut [PinnedBufferEntry],
-        ) -> Result<(), FileIoError> {
-            for entry in completion_queue {
-                let item = entry.user_data() as usize;
-                let pbe = saved_pinned_buffers
-                    .get_mut(item)
-                    .expect("should be an index into the array");
-
-                if entry.result()
-                    != pbe
-                        .pinned_buffer
-                        .len()
-                        .try_into()
-                        .expect("buffer should be small enough")
-                {
-                    let error = if entry.result() >= 0 {
-                        std::io::Error::other("Partial write")
-                    } else {
-                        std::io::Error::from_raw_os_error(0 - entry.result())
-                    };
-                    let (addr, _) = pbe.node.as_ref().expect("node should be Some");
-                    return Err(storage.file_io_error(
-                        error,
-                        addr.get(),
-                        Some("write failure".to_string()),
-                    ));
-                }
-                // I/O completed successfully
-                pbe.node = None;
-            }
-            Ok(())
-        }
-
-        const RINGSIZE: usize = FileBacked::RINGSIZE as usize;
-
         let flush_start = Instant::now();
 
         let mut header = self.header;
         let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
 
-        // Collect addresses and nodes for caching
-        let mut cached_nodes = Vec::new();
-
-        let mut ring = self.storage.ring.lock().expect("poisoned lock");
-        let mut saved_pinned_buffers = vec![
-            PinnedBufferEntry {
-                pinned_buffer: Pin::new(Box::new([0; 0])),
-                node: None,
-            };
-            RINGSIZE
-        ];
+        let mut batch = Batch::new();
+        let mut allocated_objects = Vec::new();
 
         // Process each unpersisted node directly from the iterator
         for node in UnPersistedNodeIterator::new(self) {
             let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
-            let mut serialized = Vec::with_capacity(100); // TODO: better size? we can guess branches are larger
-            shared_node.as_bytes(AreaIndex::MIN, &mut serialized);
-            let (persisted_address, area_size_index) =
-                node_allocator.allocate_node(serialized.as_slice())?;
-            *serialized.get_mut(0).expect("byte was reserved") = area_size_index.get();
-            let mut serialized = serialized.into_boxed_slice();
 
+            // Serialize the node into the bump allocator
+            let (slice, persisted_address, idx_size) = {
+                let mut bytes = bumpalo::collections::Vec::new_in(&batch.bump);
+                shared_node.as_bytes(AreaIndex::MIN, &mut bytes);
+                let (persisted_address, area_size_index) =
+                    node_allocator.allocate_node(bytes.as_slice())?;
+                *bytes.get_mut(0).expect("byte was reserved") = area_size_index.get();
+                bytes.shrink_to_fit();
+                let slice = bytes.into_bump_slice();
+                (slice, persisted_address, area_size_index.size() as usize)
+            };
+
+            allocated_objects.push((slice, persisted_address, node));
+
+            // we pause if we can't allocate another node of the same size as the last one
+            // This isn't a guarantee that we won't exceed INITIAL_BUMP_SIZE
+            // but it's a good enough approximation
+            let might_overflow =
+                batch.bump.allocated_bytes() > Batch::INITIAL_BUMP_SIZE.saturating_sub(idx_size);
+            if might_overflow {
+                // must persist freelist before writing anything
+                node_allocator.flush_freelist()?;
+                self.ring_writes(allocated_objects)?;
+                allocated_objects = Vec::new();
+                batch.bump.reset();
+            }
+        }
+        if !allocated_objects.is_empty() {
+            self.flush_freelist_from(&header)?;
+            self.ring_writes(allocated_objects)?;
+        }
+        let flush_time = flush_start.elapsed().as_millis();
+        firewood_counter!("firewood.flush_nodes", "amount flushed nodes").increment(flush_time);
+        Ok(header)
+    }
+    #[cfg(feature = "io-uring")]
+    fn ring_writes(
+        &self,
+        allocated_objects: Vec<(&[u8], LinearAddress, MaybePersistedNode)>,
+    ) -> Result<(), FileIoError> {
+        let mut ring = self.storage.ring.lock().expect("poisoned lock");
+
+        let mut saved_pinned_buffers =
+            vec![Option::<PinnedBufferEntry<'_>>::None; FileBacked::RINGSIZE as usize];
+
+        // Collect addresses and nodes for caching
+        let mut cached_nodes = Vec::new();
+
+        for (serialized, persisted_address, node) in allocated_objects {
             loop {
                 // Find the first available write buffer, enumerate to get the position for marking it completed
                 if let Some((pos, pbe)) = saved_pinned_buffers
                     .iter_mut()
                     .enumerate()
-                    .find(|(_, pbe)| pbe.node.is_none())
+                    .find(|(_, pbe)| pbe.is_none())
                 {
-                    pbe.pinned_buffer = std::pin::Pin::new(std::mem::take(&mut serialized));
-                    pbe.node = Some((persisted_address, node.clone()));
+                    let pinned_buffer = std::pin::Pin::new(serialized);
+                    *pbe = Some(PinnedBufferEntry {
+                        pinned_buffer,
+                        address: persisted_address,
+                        node: node.clone(),
+                    });
 
                     let submission_queue_entry = self
                         .storage
-                        .make_op(&pbe.pinned_buffer)
+                        .make_op(&pinned_buffer)
                         .offset(persisted_address.get())
                         .build()
                         .user_data(pos as u64);
@@ -445,16 +483,13 @@ impl NodeStore<Committed, FileBacked> {
                     &self.storage,
                     completion_queue,
                     &mut saved_pinned_buffers,
+                    &mut cached_nodes,
                 )?;
             }
-
-            // Allocate the node to store the address, then collect for caching and persistence
-            node.allocate_at(persisted_address);
-            cached_nodes.push(node);
         }
         let pending = saved_pinned_buffers
             .iter()
-            .filter(|pbe| pbe.node.is_some())
+            .filter(|pbe| pbe.is_some())
             .count();
         submit_and_wait_with_retry(
             &mut ring,
@@ -463,22 +498,69 @@ impl NodeStore<Committed, FileBacked> {
             "final submit_and_wait",
         )?;
 
-        handle_completion_queue(&self.storage, ring.completion(), &mut saved_pinned_buffers)?;
+        handle_completion_queue(
+            &self.storage,
+            ring.completion(),
+            &mut saved_pinned_buffers,
+            &mut cached_nodes,
+        )?;
 
         debug_assert!(
-            !saved_pinned_buffers.iter().any(|pbe| pbe.node.is_some()),
+            !saved_pinned_buffers
+                .iter()
+                .any(std::option::Option::is_some),
             "Found entry with node still set: {:?}",
-            saved_pinned_buffers.iter().find(|pbe| pbe.node.is_some())
+            saved_pinned_buffers.iter().find(|pbe| pbe.is_some())
         );
 
         self.storage.write_cached_nodes(cached_nodes)?;
         debug_assert!(ring.completion().is_empty());
 
-        let flush_time = flush_start.elapsed().as_millis();
-        firewood_counter!("firewood.flush_nodes", "amount flushed nodes").increment(flush_time);
-
-        Ok(header)
+        // All references to batch.bump are now dropped, caller can reset it
+        Ok(())
     }
+}
+
+#[cfg(feature = "io-uring")]
+/// Helper function to handle completion queue entries and check for errors
+fn handle_completion_queue(
+    storage: &FileBacked,
+    completion_queue: io_uring::cqueue::CompletionQueue<'_>,
+    saved_pinned_buffers: &mut [Option<PinnedBufferEntry<'_>>],
+    cached_nodes: &mut Vec<MaybePersistedNode>,
+) -> Result<(), FileIoError> {
+    for entry in completion_queue {
+        // user data contains the index of the entry in the saved_pinned_buffers array
+        let item = entry.user_data() as usize;
+        let pbe = saved_pinned_buffers
+            .get_mut(item)
+            .expect("completed item user_data should point to an entry");
+
+        let pbe_ref = pbe.as_ref().expect("completed items are always in use");
+
+        let expected_len: i32 = pbe_ref
+            .pinned_buffer
+            .len()
+            .try_into()
+            .expect("buffer length will fit into an i32");
+        if entry.result() != expected_len {
+            let error = if entry.result() >= 0 {
+                std::io::Error::other("Partial write")
+            } else {
+                std::io::Error::from_raw_os_error(0 - entry.result())
+            };
+            return Err(storage.file_io_error(
+                error,
+                pbe_ref.address.get(),
+                Some("write failure".to_string()),
+            ));
+        }
+        // I/O completed successfully - mark node as persisted and cache it
+        let entry = pbe.take().expect("already checked it's Some");
+        entry.node.allocate_at(entry.address);
+        cached_nodes.push(entry.node);
+    }
+    Ok(())
 }
 
 #[cfg(test)]
