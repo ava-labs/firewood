@@ -108,7 +108,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         let mut header_bytes = vec![0u8; std::mem::size_of::<NodeStoreHeader>()];
         if let Err(e) = stream.read_exact(&mut header_bytes) {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                return Self::new_empty_committed(storage.clone());
+                return Ok(Self::new_empty_committed(storage.clone()));
             }
             return Err(storage.file_io_error(e, 0, Some("header read".to_string())));
         }
@@ -140,21 +140,61 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
     /// Create a new, empty, Committed [`NodeStore`] and clobber
     /// the underlying store with an empty freelist and no root node
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the storage cannot be accessed.
-    pub fn new_empty_committed(storage: Arc<S>) -> Result<Self, FileIoError> {
+    pub fn new_empty_committed(storage: Arc<S>) -> Self {
         let header = NodeStoreHeader::new();
 
-        Ok(Self {
+        Self {
             header,
             storage,
             kind: Committed {
                 deleted: Box::default(),
                 root: None,
             },
-        })
+        }
+    }
+
+    /// Create a new Committed [`NodeStore`] with a specified root node.
+    ///
+    /// This constructor is used when you have an existing root node at a known
+    /// address and hash, typically when reconstructing a [`NodeStore`] from
+    /// a committed state. The `latest_nodestore` provides access to the underlying
+    /// storage backend containing the persisted trie data.
+    ///
+    /// ## Panics
+    ///
+    /// Panics in debug builds if the hash of the node at `root_address` does
+    /// not equal `root_hash`.
+    #[must_use]
+    pub fn with_root(
+        root_hash: HashType,
+        root_address: LinearAddress,
+        latest_nodestore: Arc<NodeStore<Committed, S>>,
+    ) -> Self {
+        let header = NodeStoreHeader::with_root(Some(root_address));
+        let storage = latest_nodestore.storage.clone();
+
+        let nodestore = NodeStore {
+            header,
+            kind: Committed {
+                deleted: Box::default(),
+                root: Some(Child::AddressWithHash(root_address, root_hash)),
+            },
+            storage,
+        };
+
+        debug_assert_eq!(
+            nodestore
+                .root_hash()
+                .expect("Nodestore should have root hash"),
+            hash_node(
+                &nodestore
+                    .read_node(root_address)
+                    .expect("Root node read should succeed"),
+                &Path(SmallVec::default())
+            )
+        );
+
+        nodestore
     }
 }
 
@@ -256,6 +296,16 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
         self.kind.deleted.push(node);
     }
 
+    /// Take the nodes that have been marked as deleted in this proposal.
+    pub fn take_deleted_nodes(&mut self) -> Vec<MaybePersistedNode> {
+        take(&mut self.kind.deleted)
+    }
+
+    /// Adds to the nodes deleted in this proposal.
+    pub fn delete_nodes(&mut self, nodes: &[MaybePersistedNode]) {
+        self.kind.deleted.extend_from_slice(nodes);
+    }
+
     /// Reads a node for update, marking it as deleted in this proposal.
     /// We get an arc from cache (reading it from disk if necessary) then
     /// copy/clone the node and return it.
@@ -272,6 +322,28 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     /// Returns the root of this proposal.
     pub const fn root_mut(&mut self) -> &mut Option<Node> {
         &mut self.kind.root
+    }
+}
+
+impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
+    /// Creates a new [`NodeStore`] from a root node.
+    #[must_use]
+    pub fn from_root(parent: &NodeStore<MutableProposal, S>, root: Option<Node>) -> Self {
+        NodeStore {
+            header: parent.header,
+            kind: MutableProposal {
+                root,
+                deleted: Vec::default(),
+                parent: parent.kind.parent.clone(),
+            },
+            storage: parent.storage.clone(),
+        }
+    }
+
+    /// Consumes the `NodeStore` and returns the root of the trie
+    #[must_use]
+    pub fn into_root(self) -> Option<Node> {
+        self.kind.root
     }
 }
 
@@ -874,7 +946,7 @@ mod tests {
     fn test_reparent() {
         // create an empty base revision
         let memstore = MemStore::new(vec![]);
-        let base = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let base = NodeStore::new_empty_committed(memstore.into());
 
         // create an empty r1, check that it's parent is the empty committed version
         let r1 = NodeStore::new(&base).unwrap();

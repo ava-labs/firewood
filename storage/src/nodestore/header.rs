@@ -195,11 +195,15 @@ impl NodeStoreHeader {
     /// Will panic if area size hash cannot be converted to a fixed-length array
     #[must_use]
     pub fn new() -> Self {
+        Self::with_root(None)
+    }
+
+    pub fn with_root(root_address: Option<LinearAddress>) -> Self {
         Self {
             // The store just contains the header at this point
             size: Self::SIZE,
             endian_test: 1,
-            root_address: None,
+            root_address,
             version: Version::new(),
             free_lists: Default::default(),
             area_size_hash: area_size_hash()

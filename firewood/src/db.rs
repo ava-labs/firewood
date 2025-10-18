@@ -8,7 +8,7 @@
 
 use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
-use crate::root_store::RocksDBStore;
+use crate::root_store::{NoOpStore, RootStore};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
     self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair,
@@ -27,6 +27,8 @@ use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
+
+use crate::merkle::parallel::ParallelMerkle;
 
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -111,16 +113,16 @@ pub struct DbConfig {
 
 #[derive(Debug)]
 /// A database instance.
-pub struct Db {
+pub struct Db<T = NoOpStore> {
     metrics: Arc<DbMetrics>,
-    manager: RevisionManager<RocksDBStore>,
+    manager: RevisionManager<T>,
 }
 
-impl api::Db for Db {
+impl<T: RootStore> api::Db for Db<T> {
     type Historical = NodeStore<Committed, FileBacked>;
 
     type Proposal<'db>
-        = Proposal<'db>
+        = Proposal<'db, T>
     where
         Self: 'db;
 
@@ -179,9 +181,19 @@ impl api::Db for Db {
     }
 }
 
-impl Db {
+impl Db<NoOpStore> {
     /// Create a new database instance.
     pub fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
+        Self::with_root_store(db_path, cfg, NoOpStore {})
+    }
+}
+
+impl<T: RootStore> Db<T> {
+    fn with_root_store<P: AsRef<Path>>(
+        db_path: P,
+        cfg: DbConfig,
+        root_store: T,
+    ) -> Result<Self, api::Error> {
         let metrics = Arc::new(DbMetrics {
             proposals: counter!("firewood.proposals"),
         });
@@ -191,7 +203,9 @@ impl Db {
             .truncate(cfg.truncate)
             .manager(cfg.manager)
             .build();
-        let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
+
+        let manager =
+            RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager, root_store)?;
         let db = Self { metrics, manager };
         Ok(db)
     }
@@ -200,7 +214,9 @@ impl Db {
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, api::Error> {
         self.manager.view(root_hash).map_err(Into::into)
     }
+}
 
+impl<T> Db<T> {
     /// Dump the Trie of the latest revision.
     pub fn dump(&self, w: &mut dyn Write) -> Result<(), std::io::Error> {
         let latest_rev_nodestore = self.manager.current_revision();
@@ -218,16 +234,36 @@ impl Db {
         let latest_rev_nodestore = self.manager.current_revision();
         latest_rev_nodestore.check(opt)
     }
+
+    /// Propose a new batch that is processed in parallel.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the revision manager cannot create a thread pool.
+    pub fn propose_parallel(
+        &self,
+        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
+    ) -> Result<Proposal<'_, T>, api::Error> {
+        let parent = self.manager.current_revision();
+        let mut parallel_merkle = ParallelMerkle::default();
+        let immutable =
+            parallel_merkle.create_proposal(&parent, batch, self.manager.threadpool())?;
+        self.manager.add_proposal(immutable.clone());
+        Ok(Proposal {
+            nodestore: immutable,
+            db: self,
+        })
+    }
 }
 
 #[derive(Debug)]
 /// A user-visible database proposal
-pub struct Proposal<'db> {
+pub struct Proposal<'db, T> {
     nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
-    db: &'db Db,
+    db: &'db Db<T>,
 }
 
-impl api::DbView for Proposal<'_> {
+impl<T> api::DbView for Proposal<'_, T> {
     type Iter<'view>
         = MerkleKeyValueIter<'view, NodeStore<Arc<ImmutableProposal>, FileBacked>>
     where
@@ -259,8 +295,8 @@ impl api::DbView for Proposal<'_> {
     }
 }
 
-impl<'db> api::Proposal for Proposal<'db> {
-    type Proposal = Proposal<'db>;
+impl<'db, T: RootStore> api::Proposal for Proposal<'db, T> {
+    type Proposal = Proposal<'db, T>;
 
     #[fastrace::trace(short_name = true)]
     fn propose(
@@ -275,7 +311,7 @@ impl<'db> api::Proposal for Proposal<'db> {
     }
 }
 
-impl Proposal<'_> {
+impl<T> Proposal<'_, T> {
     #[crate::metrics("firewood.proposal.create", "database proposal creation")]
     fn create_proposal(
         &self,
@@ -319,11 +355,13 @@ mod test {
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
 
-    use firewood_storage::{CheckOpt, CheckerError};
+    use firewood_storage::{
+        CheckOpt, CheckerError, HashedNodeReader, IntoHashType, NodeStore, TrieHash,
+    };
 
     use crate::db::{Db, Proposal};
-    use crate::manager::RevisionManagerConfig;
-    use crate::v2::api::{Db as _, DbView as _, KeyValuePairIter, Proposal as _};
+    use crate::root_store::{MockStore, NoOpStore, RootStore};
+    use crate::v2::api::{Db as _, DbView, KeyValuePairIter, Proposal as _};
 
     use super::{BatchOp, DbConfig};
 
@@ -365,7 +403,7 @@ mod test {
 
     #[test]
     fn test_proposal_reads() {
-        let db = testdb();
+        let db = TestDb::new();
         let batch = vec![BatchOp::Put {
             key: b"k",
             value: b"v",
@@ -390,7 +428,7 @@ mod test {
 
     #[test]
     fn reopen_test() {
-        let db = testdb();
+        let db = TestDb::new();
         let initial_root = db.root_hash().unwrap();
         let batch = vec![
             BatchOp::Put {
@@ -424,7 +462,7 @@ mod test {
     // R1 --> P2 - will get dropped
     //    \-> P3 - will get orphaned, but it's still known
     fn test_proposal_scope_historic() {
-        let db = testdb();
+        let db = TestDb::new();
         let batch1 = vec![BatchOp::Put {
             key: b"k1",
             value: b"v1",
@@ -476,7 +514,7 @@ mod test {
     //   \-> P2 - will get dropped
     //    \-> P3 - will get orphaned, but it's still known
     fn test_proposal_scope_orphan() {
-        let db = testdb();
+        let db = TestDb::new();
         let batch1 = vec![BatchOp::Put {
             key: b"k1",
             value: b"v1",
@@ -527,7 +565,7 @@ mod test {
 
     #[test]
     fn test_view_sync() {
-        let db = testdb();
+        let db = TestDb::new();
 
         // Create and commit some data to get a historical revision
         let batch = vec![BatchOp::Put {
@@ -557,6 +595,164 @@ mod test {
         assert_eq!(&*value, b"proposal_value");
     }
 
+    #[test]
+    fn test_propose_parallel_reopen() {
+        fn insert_commit(db: &TestDb, kv: u8) {
+            let keys: Vec<[u8; 1]> = vec![[kv; 1]];
+            let vals: Vec<Box<[u8]>> = vec![Box::new([kv; 1])];
+            let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+            let proposal = db.propose_parallel(kviter).unwrap();
+            proposal.commit().unwrap();
+        }
+
+        // Create, insert, close, open, insert
+        let db = TestDb::new();
+        insert_commit(&db, 1);
+        let db = db.reopen();
+        insert_commit(&db, 2);
+        // Check that the keys are still there after the commits
+        let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+        let keys: Vec<[u8; 1]> = vec![[1; 1], [2; 1]];
+        let vals: Vec<Box<[u8]>> = vec![Box::new([1; 1]), Box::new([2; 1])];
+        let kviter = keys.iter().zip(vals.iter());
+        for (k, v) in kviter {
+            assert_eq!(&committed.val(k).unwrap().unwrap(), v);
+        }
+        drop(db);
+
+        // Open-db1, insert, open-db2, insert
+        let db1 = TestDb::new();
+        insert_commit(&db1, 1);
+        let db2 = TestDb::new();
+        insert_commit(&db2, 2);
+        let committed1 = db1.revision(db1.root_hash().unwrap().unwrap()).unwrap();
+        let committed2 = db2.revision(db2.root_hash().unwrap().unwrap()).unwrap();
+        let keys: Vec<[u8; 1]> = vec![[1; 1], [2; 1]];
+        let vals: Vec<Box<[u8]>> = vec![Box::new([1; 1]), Box::new([2; 1])];
+        let mut kviter = keys.iter().zip(vals.iter());
+        let (k, v) = kviter.next().unwrap();
+        assert_eq!(&committed1.val(k).unwrap().unwrap(), v);
+        let (k, v) = kviter.next().unwrap();
+        assert_eq!(&committed2.val(k).unwrap().unwrap(), v);
+    }
+
+    #[test]
+    fn test_propose_parallel() {
+        const N: usize = 100;
+        let db = TestDb::new();
+
+        // Test an empty proposal
+        let keys: Vec<[u8; 0]> = Vec::new();
+        let vals: Vec<Box<[u8]>> = Vec::new();
+
+        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let proposal = db.propose_parallel(kviter).unwrap();
+        proposal.commit().unwrap();
+
+        // Create a proposal consisting of a single entry and an empty key.
+        let keys: Vec<[u8; 0]> = vec![[0; 0]];
+
+        // Note that if the value is [], then it is interpreted as a DeleteRange.
+        // Instead, set value to [0]
+        let vals: Vec<Box<[u8]>> = vec![Box::new([0; 1])];
+
+        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let proposal = db.propose_parallel(kviter).unwrap();
+
+        let kviter = keys.iter().zip(vals.iter());
+        for (k, v) in kviter {
+            assert_eq!(&proposal.val(k).unwrap().unwrap(), v);
+        }
+        proposal.commit().unwrap();
+
+        // Check that the key is still there after the commit
+        let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+        let kviter = keys.iter().zip(vals.iter());
+        for (k, v) in kviter {
+            assert_eq!(&committed.val(k).unwrap().unwrap(), v);
+        }
+
+        // Create a proposal that deletes the previous entry
+        let vals: Vec<Box<[u8]>> = vec![Box::new([0; 0])];
+        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let proposal = db.propose_parallel(kviter).unwrap();
+
+        let kviter = keys.iter().zip(vals.iter());
+        for (k, _v) in kviter {
+            assert_eq!(proposal.val(k).unwrap(), None);
+        }
+        proposal.commit().unwrap();
+
+        // Create a proposal that inserts 0 to 999
+        let (keys, vals): (Vec<_>, Vec<_>) = (0..1000)
+            .map(|i| {
+                (
+                    format!("key{i}").into_bytes(),
+                    Box::from(format!("value{i}").as_bytes()),
+                )
+            })
+            .unzip();
+
+        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let proposal = db.propose_parallel(kviter).unwrap();
+        let kviter = keys.iter().zip(vals.iter());
+        for (k, v) in kviter {
+            assert_eq!(&proposal.val(k).unwrap().unwrap(), v);
+        }
+        proposal.commit().unwrap();
+
+        // Create a proposal that deletes all of the even entries
+        let (keys, vals): (Vec<_>, Vec<_>) = (0..1000)
+            .filter_map(|i| {
+                if i % 2 != 0 {
+                    Some::<(Vec<u8>, Box<[u8]>)>((format!("key{i}").into_bytes(), Box::new([])))
+                } else {
+                    None
+                }
+            })
+            .unzip();
+
+        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let proposal = db.propose_parallel(kviter).unwrap();
+        let kviter = keys.iter().zip(vals.iter());
+        for (k, _v) in kviter {
+            assert_eq!(proposal.val(k).unwrap(), None);
+        }
+        proposal.commit().unwrap();
+
+        // Create a proposal that deletes using empty prefix
+        let keys: Vec<[u8; 0]> = vec![[0; 0]];
+        let vals: Vec<Box<[u8]>> = vec![Box::new([0; 0])];
+        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let proposal = db.propose_parallel(kviter).unwrap();
+        proposal.commit().unwrap();
+
+        // Create N keys and values like (key0, value0)..(keyN, valueN)
+        let rng = firewood_storage::SeededRng::from_env_or_random();
+        let (keys, vals): (Vec<_>, Vec<_>) = (0..N)
+            .map(|i| {
+                (
+                    rng.random::<[u8; 32]>(),
+                    Box::from(format!("value{i}").as_bytes()),
+                )
+            })
+            .unzip();
+
+        // Looping twice to test that we are reusing the thread pool.
+        for _ in 0..2 {
+            let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+            let proposal = db.propose_parallel(kviter).unwrap();
+
+            // iterate over the keys and values again, checking that the values are in the correct proposal
+            let kviter = keys.iter().zip(vals.iter());
+
+            for (k, v) in kviter {
+                assert_eq!(&proposal.val(k).unwrap().unwrap(), v);
+            }
+            proposal.commit().unwrap();
+        }
+    }
+
     /// Test that proposing on a proposal works as expected
     ///
     /// Test creates two batches and proposes them, and verifies that the values are in the correct proposal.
@@ -566,7 +762,7 @@ mod test {
         // number of keys and values to create for this test
         const N: usize = 20;
 
-        let db = testdb();
+        let db = TestDb::new();
 
         // create N keys and values like (key0, value0)..(keyN, valueN)
         let (keys, vals): (Vec<_>, Vec<_>) = (0..N)
@@ -625,7 +821,7 @@ mod test {
     fn fuzz_checker() {
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
-        let db = testdb();
+        let db = TestDb::new();
 
         // takes about 0.3s on a mac to run 50 times
         for _ in 0..50 {
@@ -672,7 +868,7 @@ mod test {
         const NUM_KEYS: NonZeroUsize = const { NonZeroUsize::new(2).unwrap() };
         const NUM_PROPOSALS: usize = 100;
 
-        let db = testdb();
+        let db = TestDb::new();
 
         let ops = (0..(NUM_KEYS.get() * NUM_PROPOSALS))
             .map(|i| (format!("key{i}"), format!("value{i}")))
@@ -680,7 +876,7 @@ mod test {
 
         let proposals = ops.iter().chunk_fold(
             NUM_KEYS,
-            Vec::<Proposal<'_>>::with_capacity(NUM_PROPOSALS),
+            Vec::<Proposal<'_, _>>::with_capacity(NUM_PROPOSALS),
             |mut proposals, ops| {
                 let proposal = if let Some(parent) = proposals.last() {
                     parent.propose(ops).unwrap()
@@ -725,10 +921,10 @@ mod test {
 
         const CHANNEL_CAPACITY: usize = 8;
 
-        let testdb = testdb();
+        let testdb = TestDb::new();
         let db = &testdb.db;
 
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Proposal<'_>>(CHANNEL_CAPACITY);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Proposal<'_, _>>(CHANNEL_CAPACITY);
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(CHANNEL_CAPACITY);
 
         // scope will block until all scope-spawned threads finish
@@ -768,88 +964,157 @@ mod test {
         });
     }
 
-    /// `test_root_store` tests that we can fetch a revision that is no longer
-    /// cached (i.e. has to be retrieved from `RootStore`)
-    ///
-    /// XXX: this test currently yields a false positive as setting the number
-    /// of revisions in-memory to 1 still results in 2 revisions being kept in
-    /// memory - more debugging is needed here.
     #[test]
-    fn test_root_store() {
-        let tmpdir = tempfile::tempdir().unwrap();
-        let db_path = tmpdir.path().join("firewood.db");
+    fn test_resurrect_unpersisted_root() {
+        let db = TestDb::new();
 
-        let rmconfig = RevisionManagerConfig::builder().max_revisions(1).build();
-        let dbconfig = DbConfig::builder().manager(rmconfig).build();
-        let db = Db::new(&db_path, dbconfig).unwrap();
+        // First, create a revision to retrieve
+        let key = b"key";
+        let value = b"value";
+        let batch = vec![BatchOp::Put { key, value }];
 
-        let key = "hello";
-        let value = "world";
-        let batch: Vec<BatchOp<&str, &str>> = vec![BatchOp::Put { key, value }];
         let proposal = db.propose(batch).unwrap();
         let root_hash = proposal.root_hash().unwrap().unwrap();
-
         proposal.commit().unwrap();
 
-        let new_value = "goodbye";
-        let batch: Vec<BatchOp<&str, &str>> = vec![BatchOp::Put {
+        let root_address = db
+            .revision(root_hash.clone())
+            .unwrap()
+            .root_address()
+            .unwrap();
+
+        // Next, overwrite the kv-pair with a new revision
+        let new_value = b"new_value";
+        let batch = vec![BatchOp::Put {
             key,
             value: new_value,
         }];
-        let proposal = db.propose(batch).unwrap();
 
+        let proposal = db.propose(batch).unwrap();
         proposal.commit().unwrap();
 
-        // At this point now, we should still be able to query the key "hello"
-        // from the first revision.
+        // Finally, reopen the database and make sure that we can retrieve the first revision
+        let db = db.reopen();
+
+        let latest_root_hash = db.root_hash().unwrap().unwrap();
+        let latest_revision = db.revision(latest_root_hash).unwrap();
+
+        let latest_value = latest_revision.val(key).unwrap().unwrap();
+        assert_eq!(new_value, latest_value.as_ref());
+
+        let node_store =
+            NodeStore::with_root(root_hash.into_hash_type(), root_address, latest_revision);
+
+        let retrieved_value = node_store.val(key).unwrap().unwrap();
+        assert_eq!(value, retrieved_value.as_ref());
+    }
+
+    #[test]
+    fn test_root_store() {
+        let mock_store = MockStore::default();
+        let db = TestDb::with_mockstore(mock_store);
+
+        // First, create a revision to retrieve
+        let key = b"key";
+        let value = b"value";
+        let batch = vec![BatchOp::Put { key, value }];
+
+        let proposal = db.propose(batch).unwrap();
+        let root_hash = proposal.root_hash().unwrap().unwrap();
+        proposal.commit().unwrap();
+
+        // Next, overwrite the kv-pair with a new revision
+        let new_value = b"new_value";
+        let batch = vec![BatchOp::Put {
+            key,
+            value: new_value,
+        }];
+
+        let proposal = db.propose(batch).unwrap();
+        proposal.commit().unwrap();
+
+        // Reopen the database and verify that the database can access a persisted revision
+        let db = db.reopen();
+
         let view = db.view(root_hash).unwrap();
+        let retrieved_value = view.val(key).unwrap().unwrap();
+        assert_eq!(value, retrieved_value.as_ref());
+    }
 
-        let actual_value = view.val(key.as_bytes()).unwrap().unwrap();
+    #[test]
+    fn test_root_store_errs() {
+        let mock_store = MockStore::with_failures();
+        let db = TestDb::with_mockstore(mock_store);
 
-        assert_eq!(actual_value.as_ref(), value.as_bytes());
+        let view = db.view(TrieHash::empty());
+        assert!(view.is_err());
 
-        tmpdir.close().unwrap();
+        let batch = vec![BatchOp::Put {
+            key: b"k",
+            value: b"v",
+        }];
+
+        let proposal = db.propose(batch).unwrap();
+        assert!(proposal.commit().is_err());
+    }
+
+    #[test]
+    fn test_rootstore_empty_db_reopen() {
+        let mock_store = MockStore::default();
+        let db = TestDb::with_mockstore(mock_store);
+
+        db.reopen();
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
-    struct TestDb {
-        db: Db,
+    struct TestDb<T = NoOpStore> {
+        db: Db<T>,
         tmpdir: tempfile::TempDir,
     }
-    impl Deref for TestDb {
-        type Target = Db;
+    impl<T> Deref for TestDb<T> {
+        type Target = Db<T>;
         fn deref(&self) -> &Self::Target {
             &self.db
         }
     }
-    impl DerefMut for TestDb {
+    impl<T> DerefMut for TestDb<T> {
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.db
         }
     }
 
-    fn testdb() -> TestDb {
-        let tmpdir = tempfile::tempdir().unwrap();
-        let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-            .iter()
-            .collect();
-        let dbconfig = DbConfig::builder().build();
-        let db = Db::new(dbpath, dbconfig).unwrap();
-        TestDb { db, tmpdir }
+    impl TestDb {
+        fn new() -> Self {
+            let tmpdir = tempfile::tempdir().unwrap();
+            let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
+                .iter()
+                .collect();
+            let dbconfig = DbConfig::builder().build();
+            let db = Db::new(dbpath, dbconfig).unwrap();
+            TestDb { db, tmpdir }
+        }
     }
 
-    impl TestDb {
-        fn path(&self) -> PathBuf {
-            [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
+    impl TestDb<MockStore> {
+        fn with_mockstore(mock_store: MockStore) -> Self {
+            let tmpdir = tempfile::tempdir().unwrap();
+            let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()
-                .collect()
+                .collect();
+            let dbconfig = DbConfig::builder().build();
+            let db = Db::with_root_store(dbpath, dbconfig, mock_store).unwrap();
+            TestDb { db, tmpdir }
         }
+    }
+
+    impl<T: Clone + RootStore> TestDb<T> {
         fn reopen(self) -> Self {
             let path = self.path();
+            let root_store = self.manager.root_store();
             drop(self.db);
             let dbconfig = DbConfig::builder().truncate(false).build();
 
-            let db = Db::new(path, dbconfig).unwrap();
+            let db = Db::with_root_store(path, dbconfig, root_store).unwrap();
             TestDb {
                 db,
                 tmpdir: self.tmpdir,
@@ -857,14 +1122,23 @@ mod test {
         }
         fn replace(self) -> Self {
             let path = self.path();
+            let root_store = self.manager.root_store();
             drop(self.db);
             let dbconfig = DbConfig::builder().truncate(true).build();
 
-            let db = Db::new(path, dbconfig).unwrap();
+            let db = Db::with_root_store(path, dbconfig, root_store).unwrap();
             TestDb {
                 db,
                 tmpdir: self.tmpdir,
             }
+        }
+    }
+
+    impl<T> TestDb<T> {
+        fn path(&self) -> PathBuf {
+            [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
+                .iter()
+                .collect()
         }
     }
 }

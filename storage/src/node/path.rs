@@ -21,6 +21,8 @@ use std::fmt::{self, Debug, LowerHex};
 use std::iter::{FusedIterator, once};
 use std::ops::Add;
 
+use crate::{PathComponent, TriePathFromUnpackedBytes};
+
 static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
 /// Path is part or all of a node's path in the trie.
@@ -138,6 +140,13 @@ impl Path {
             nibbles_iter: self.iter(),
         }
     }
+
+    /// Casts the path to a slice of its components.
+    #[must_use]
+    pub fn as_components(&self) -> &[PathComponent] {
+        TriePathFromUnpackedBytes::path_from_unpacked_bytes(&self.0)
+            .expect("path should contain only nibbles")
+    }
 }
 
 /// Returns the nibbles in `nibbles_iter` as compressed bytes.
@@ -192,6 +201,7 @@ impl Iterator for NibblesIterator<'_> {
 
     #[cfg(feature = "branch_factor_256")]
     fn next(&mut self) -> Option<Self::Item> {
+        #![expect(clippy::indexing_slicing)]
         if self.is_empty() {
             return None;
         }

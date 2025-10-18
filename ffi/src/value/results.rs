@@ -1,12 +1,14 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use firewood::merkle;
+use firewood::v2::api;
 use std::fmt;
 
-use firewood::v2::api;
-
+use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
-    ChangeProofContext, CreateProposalResult, HashKey, NextKeyRange, OwnedBytes, ProposalHandle,
+    ChangeProofContext, CreateIteratorResult, CreateProposalResult, HashKey, IteratorHandle,
+    NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair, ProposalHandle,
     RangeProofContext,
 };
 
@@ -306,6 +308,163 @@ pub enum ProposalResult<'db> {
     Err(OwnedBytes),
 }
 
+/// A result type returned from FFI functions that create an iterator
+#[derive(Debug)]
+#[repr(C)]
+pub enum IteratorResult<'db> {
+    /// The caller provided a null pointer to a revision/proposal handle.
+    NullHandlePointer,
+    /// Building the iterator was successful and the iterator handle is returned
+    Ok {
+        /// An opaque pointer to the [`IteratorHandle`].
+        /// The value should be freed with [`fwd_free_iterator`]
+        ///
+        /// [`fwd_free_iterator`]: crate::fwd_free_iterator
+        handle: Box<IteratorHandle<'db>>,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`].
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+/// A result type returned from iterator FFI functions
+#[derive(Debug)]
+#[repr(C)]
+pub enum KeyValueResult {
+    /// The caller provided a null pointer to an iterator handle.
+    NullHandlePointer,
+    /// The iterator is exhausted
+    None,
+    /// The next item is returned.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with the key and the value of this pair.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Some(OwnedKeyValuePair),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. The
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl From<Option<Result<(merkle::Key, merkle::Value), api::Error>>> for KeyValueResult {
+    fn from(value: Option<Result<(merkle::Key, merkle::Value), api::Error>>) -> Self {
+        match value {
+            Some(value) => match value {
+                Ok(value) => KeyValueResult::Some(value.into()),
+                Err(err) => KeyValueResult::Err(err.to_string().into_bytes().into()),
+            },
+            None => KeyValueResult::None,
+        }
+    }
+}
+
+/// A result type returned from iterator FFI functions
+#[derive(Debug)]
+#[repr(C)]
+pub enum KeyValueBatchResult {
+    /// The caller provided a null pointer to an iterator handle.
+    NullHandlePointer,
+    /// The next batch of items on iterator are returned.
+    Some(OwnedKeyValueBatch),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl From<Result<Vec<(merkle::Key, merkle::Value)>, api::Error>> for KeyValueBatchResult {
+    fn from(value: Result<Vec<(merkle::Key, merkle::Value)>, api::Error>) -> Self {
+        match value {
+            Ok(pairs) => {
+                let values: Vec<_> = pairs.into_iter().map(Into::into).collect();
+                KeyValueBatchResult::Some(values.into())
+            }
+            Err(err) => KeyValueBatchResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+impl<'db> From<CreateIteratorResult<'db>> for IteratorResult<'db> {
+    fn from(value: CreateIteratorResult<'db>) -> Self {
+        IteratorResult::Ok {
+            handle: Box::new(value.0),
+        }
+    }
+}
+
+impl<'db, E: fmt::Display> From<Result<CreateIteratorResult<'db>, E>> for IteratorResult<'db> {
+    fn from(value: Result<CreateIteratorResult<'db>, E>) -> Self {
+        match value {
+            Ok(res) => res.into(),
+            Err(err) => IteratorResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+/// A result type returned from FFI functions that get a revision
+#[derive(Debug)]
+#[repr(C)]
+pub enum RevisionResult {
+    /// The caller provided a null pointer to a database handle.
+    NullHandlePointer,
+    /// The provided root was not found in the database.
+    RevisionNotFound(HashKey),
+    /// Getting the revision was successful and the revision handle and root
+    /// hash are returned.
+    Ok {
+        /// An opaque pointer to the [`RevisionHandle`].
+        /// The value should be freed with [`fwd_free_revision`]
+        ///
+        /// [`fwd_free_revision`]: crate::fwd_free_revision
+        handle: Box<RevisionHandle>,
+        /// The root hash of the revision.
+        root_hash: HashKey,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. The
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl From<GetRevisionResult> for RevisionResult {
+    fn from(value: GetRevisionResult) -> Self {
+        RevisionResult::Ok {
+            handle: Box::new(value.handle),
+            root_hash: HashKey::from(value.root_hash),
+        }
+    }
+}
+
+impl From<Result<GetRevisionResult, api::Error>> for RevisionResult {
+    fn from(value: Result<GetRevisionResult, api::Error>) -> Self {
+        match value {
+            Ok(res) => res.into(),
+            Err(api::Error::RevisionNotFound { provided }) => RevisionResult::RevisionNotFound(
+                HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
+            ),
+            Err(err) => RevisionResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 impl<'db, E: fmt::Display> From<Result<CreateProposalResult<'db>, E>> for ProposalResult<'db> {
     fn from(value: Result<CreateProposalResult<'db>, E>) -> Self {
         match value {
@@ -383,6 +542,10 @@ impl_null_handle_result!(
     ChangeProofResult,
     NextKeyRangeResult,
     ProposalResult<'_>,
+    IteratorResult<'_>,
+    RevisionResult,
+    KeyValueBatchResult,
+    KeyValueResult,
 );
 
 impl_cresult!(
@@ -394,6 +557,10 @@ impl_cresult!(
     ChangeProofResult,
     NextKeyRangeResult,
     ProposalResult<'_>,
+    IteratorResult<'_>,
+    RevisionResult,
+    KeyValueBatchResult,
+    KeyValueResult,
 );
 
 enum Panic {

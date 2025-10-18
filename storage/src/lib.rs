@@ -24,14 +24,17 @@ use std::ops::Range;
 
 mod checker;
 mod hashednode;
+mod hashedshunt;
 mod hashers;
 mod iter;
 mod linear;
 mod node;
 mod nodestore;
+mod path;
 #[cfg(any(test, feature = "test_utils"))]
 mod test_utils;
 mod trie_hash;
+mod u4;
 
 /// Logger module for handling logging functionality
 pub mod logger;
@@ -42,16 +45,25 @@ pub mod macros;
 // re-export these so callers don't need to know where they are
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
+pub use hashedshunt::HashableShunt;
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{
-    BranchNode, Child, Children, LeafNode, Node, PathIterItem,
+    BranchNode, Child, Children, ChildrenSlots, LeafNode, Node, PathIterItem,
     branch::{HashType, IntoHashType},
 };
 pub use nodestore::{
     AreaIndex, Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal,
     NodeReader, NodeStore, NodeStoreHeader, Parentable, RootReader, TrieReader,
 };
+pub use path::{
+    ComponentIter, IntoSplitPath, JoinedPath, PartialPath, PathBuf, PathCommonPrefix,
+    PathComponent, PathComponentSliceExt, SplitPath, TriePath, TriePathAsPackedBytes,
+    TriePathFromPackedBytes, TriePathFromUnpackedBytes,
+};
+#[cfg(not(feature = "branch_factor_256"))]
+pub use path::{PackedBytes, PackedPathComponents, PackedPathRef};
+pub use u4::{TryFromIntError, U4};
 
 pub use linear::filebacked::FileBacked;
 pub use linear::memory::MemStore;
@@ -101,7 +113,7 @@ pub enum TrieNodeParent {
     /// The stored area is the root of the trie, so the header points to it
     Root,
     /// The stored area is not the root of the trie, so a parent trie node points to it
-    Parent(LinearAddress, usize),
+    Parent(LinearAddress, PathComponent),
 }
 
 /// This enum encapsulates what points to the stored area allocated for a free list.

@@ -4,7 +4,9 @@
 use std::collections::HashMap;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use firewood::root_store::{LMDBStore, RocksDBStore, RootStore, RootStoreBuilder, SQLiteStore};
+use firewood::root_store::{
+    LMDBStore, RocksDBStore, RootStore, RootStoreBatch, RootStoreBuilder, SQLiteStore,
+};
 use firewood_storage::{LinearAddress, SeededRng, TrieHash};
 use rand::Rng;
 
@@ -36,7 +38,9 @@ fn bench_sqlite_reads_prepopulated<const NKEYS: usize>(criterion: &mut Criterion
 // first prepopulating it with 1 million key-value pairs before benchmarking
 // its write performance
 #[expect(clippy::unwrap_used)]
-fn bench_writes_with_prepopulated_root_store<T: RootStore + RootStoreBuilder<T>>(
+fn bench_writes_with_prepopulated_root_store<
+    T: RootStore + RootStoreBuilder<T> + RootStoreBatch,
+>(
     criterion: &mut Criterion,
     n_keys: usize,
     group_name: &str,
@@ -74,7 +78,7 @@ fn bench_writes_with_prepopulated_root_store<T: RootStore + RootStoreBuilder<T>>
 // first prepopulating it with 1 million key-value pairs before benchmarking
 // its read performance
 #[expect(clippy::unwrap_used)]
-fn bench_reads_with_prepopulated_root_state<T: RootStore + RootStoreBuilder<T>>(
+fn bench_reads_with_prepopulated_root_state<T: RootStore + RootStoreBuilder<T> + RootStoreBatch>(
     criterion: &mut Criterion,
     n_keys: usize,
     group_name: &str,

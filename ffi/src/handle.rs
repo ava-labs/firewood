@@ -4,11 +4,13 @@
 use firewood::{
     db::{Db, DbConfig},
     manager::RevisionManagerConfig,
+    root_store::NoOpStore,
     v2::api::{self, ArcDynDbView, Db as _, DbView, HashKey, HashKeyExt, KeyType},
 };
 
 use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
 
+use crate::revision::{GetRevisionResult, RevisionHandle};
 use metrics::counter;
 
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
@@ -176,6 +178,21 @@ impl DatabaseHandle {
         Ok(root_hash)
     }
 
+    /// Returns an owned handle to the revision corresponding to the provided root hash.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if could not get the view from underlying database for the specified
+    /// root hash, for example when the revision does not exist or an I/O error occurs while
+    /// accessing the database.
+    pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult, api::Error> {
+        let view = self.db.view(root.clone())?;
+        Ok(GetRevisionResult {
+            handle: RevisionHandle::new(view),
+            root_hash: root,
+        })
+    }
+
     pub(crate) fn get_root(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {
         let mut cache_miss = false;
         let view = self.cached_view.get_or_try_insert_with(root, |key| {
@@ -214,7 +231,7 @@ impl<'db> CView<'db> for &'db crate::DatabaseHandle {
     fn create_proposal<'kvp>(
         self,
         values: impl AsRef<[KeyValuePair<'kvp>]> + 'kvp,
-    ) -> Result<firewood::db::Proposal<'db>, api::Error> {
+    ) -> Result<firewood::db::Proposal<'db, NoOpStore>, api::Error> {
         self.db.propose(values.as_ref().iter())
     }
 }
