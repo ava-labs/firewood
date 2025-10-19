@@ -253,9 +253,9 @@ jobs:
       - name: Check golang flake input is up to date
         working-directory: ffi
         run: |
-          nix flake lock --update-input golang
+          nix flake update golang
           if ! git diff --exit-code flake.lock; then
-            echo "Error: ffi/flake.lock is out of date. Run 'nix flake lock --update-input golang' in the ffi directory and commit the changes."
+            echo "Error: ffi/flake.lock is out of date. Run 'nix flake update golang' in the ffi directory and commit the changes."
             exit 1
           fi
       - name: Test build equivalency between Nix and Cargo
