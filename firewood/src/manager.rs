@@ -322,6 +322,7 @@ impl<RS> RevisionManager<RS> {
         self.proposals.lock().expect("poisoned lock").push(proposal);
     }
 
+    /// TODO: should we support fetching all hashes from `RootStore`?
     pub fn all_hashes(&self) -> Vec<TrieHash> {
         self.historical
             .read()
