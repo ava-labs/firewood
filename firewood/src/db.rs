@@ -113,16 +113,16 @@ pub struct DbConfig {
 
 #[derive(Debug)]
 /// A database instance.
-pub struct Db<T = NoOpStore> {
+pub struct Db<RS = NoOpStore> {
     metrics: Arc<DbMetrics>,
-    manager: RevisionManager<T>,
+    manager: RevisionManager<RS>,
 }
 
-impl<T: RootStore> api::Db for Db<T> {
+impl<RS: RootStore> api::Db for Db<RS> {
     type Historical = NodeStore<Committed, FileBacked>;
 
     type Proposal<'db>
-        = Proposal<'db, T>
+        = Proposal<'db, RS>
     where
         Self: 'db;
 
@@ -188,11 +188,11 @@ impl Db<NoOpStore> {
     }
 }
 
-impl<T: RootStore> Db<T> {
+impl<RS: RootStore> Db<RS> {
     fn with_root_store<P: AsRef<Path>>(
         db_path: P,
         cfg: DbConfig,
-        root_store: T,
+        root_store: RS,
     ) -> Result<Self, api::Error> {
         let metrics = Arc::new(DbMetrics {
             proposals: counter!("firewood.proposals"),
@@ -295,8 +295,8 @@ impl<T> api::DbView for Proposal<'_, T> {
     }
 }
 
-impl<'db, T: RootStore> api::Proposal for Proposal<'db, T> {
-    type Proposal = Proposal<'db, T>;
+impl<'db, RS: RootStore> api::Proposal for Proposal<'db, RS> {
+    type Proposal = Proposal<'db, RS>;
 
     #[fastrace::trace(short_name = true)]
     fn propose(
@@ -1067,8 +1067,8 @@ mod test {
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
-    struct TestDb<T = NoOpStore> {
-        db: Db<T>,
+    struct TestDb<RS = NoOpStore> {
+        db: Db<RS>,
         tmpdir: tempfile::TempDir,
     }
     impl<T> Deref for TestDb<T> {

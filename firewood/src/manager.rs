@@ -101,11 +101,11 @@ pub(crate) enum RevisionManagerError {
     RootStoreError(#[from] RootStoreError),
 }
 
-impl<T: RootStore> RevisionManager<T> {
+impl<RS: RootStore> RevisionManager<RS> {
     pub fn new(
         filename: PathBuf,
         config: ConfigManager,
-        root_store: T,
+        root_store: RS,
     ) -> Result<Self, RevisionManagerError> {
         let fb = FileBacked::new(
             filename,
