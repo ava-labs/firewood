@@ -21,12 +21,9 @@ check-clean-branch:
     git diff-index --quiet HEAD
 
 # Check if the FFI flake (requires clean git tree)
-check-ffi-flake-current: check-nix
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd ffi
-    nix flake update golang
-    ../run-just.sh check-clean-branch
+check-ffi-flake: check-nix
+    ./run-just.sh update-check-ffi-flake
+    ./run-just.sh check-clean-branch
 
 # Check if nix is installed
 check-nix:
@@ -76,3 +73,10 @@ test-ffi-nix-go-bindings: build-ffi-nix
     # - cgocheck2 is expensive but provides complete pointer checks
     # - use hash mode ethhash since the flake builds with `--features ethhash,logger`
     GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=ethhash ${GO} test ./...
+
+# Ensure the FFI flake is up-to-date
+update-check-ffi-flake: check-nix
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ffi
+    nix flake update golang
