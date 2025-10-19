@@ -1,6 +1,6 @@
 # List available recipes
 default:
-    @just --list
+    ./scripts/run-just.sh --list
 
 # Build ffi with nix
 build-ffi-nix: check-nix
@@ -22,8 +22,10 @@ check-clean-branch:
 
 # Check if the FFI flake (requires clean git tree)
 check-ffi-flake: check-nix
-    ./run-just.sh update-check-ffi-flake
-    ./run-just.sh check-clean-branch
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./scripts/run-just.sh update-ffi-flake
+    ./scripts/run-just.sh check-clean-branch
 
 # Check if nix is installed
 check-nix:
@@ -75,7 +77,7 @@ test-ffi-nix-go-bindings: build-ffi-nix
     GOEXPERIMENT=cgocheck2 TEST_FIREWOOD_HASH_MODE=ethhash ${GO} test ./...
 
 # Ensure the FFI flake is up-to-date
-update-check-ffi-flake: check-nix
+update-ffi-flake: check-nix
     #!/usr/bin/env bash
     set -euo pipefail
     cd ffi
