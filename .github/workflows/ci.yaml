@@ -251,9 +251,9 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 #v20
       - uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 #v13
       - name: Check that FFI flake is up-to-date
-        run: ./run-just.sh check-ffi-flake
+        run: ./scripts/run-just.sh check-ffi-flake
       - name: Test nix build of Golang FFI bindings
-        run: ./run-just.sh test-ffi-nix
+        run: ./scripts/run-just.sh test-ffi-nix
 
   firewood-ethhash-differential-fuzz:
     needs: build

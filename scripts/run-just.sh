@@ -4,7 +4,7 @@ set -euo pipefail
 if command -v just &> /dev/null; then
     exec just "$@"
 elif command -v nix &> /dev/null; then
-    exec nix run ./ffi#just -- "$@"
+    exec nix run nixpkgs#just -- "$@"
 else
     echo "Error: Neither 'just' nor 'nix' is installed." >&2
     echo "" >&2
