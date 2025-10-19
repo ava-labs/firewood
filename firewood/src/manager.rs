@@ -68,7 +68,7 @@ type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
 #[derive(Debug)]
-pub(crate) struct RevisionManager<T> {
+pub(crate) struct RevisionManager<RS> {
     /// Maximum number of revisions to keep on disk
     max_revisions: usize,
 
@@ -79,7 +79,7 @@ pub(crate) struct RevisionManager<T> {
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
     threadpool: OnceLock<ThreadPool>,
-    root_store: T,
+    root_store: RS,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -317,7 +317,7 @@ impl<RS: RootStore> RevisionManager<RS> {
     }
 }
 
-impl<T> RevisionManager<T> {
+impl<RS> RevisionManager<RS> {
     pub fn add_proposal(&self, proposal: ProposedRevision) {
         self.proposals.lock().expect("poisoned lock").push(proposal);
     }
@@ -387,8 +387,8 @@ mod tests {
     use crate::root_store::NoOpStore;
     use tempfile::NamedTempFile;
 
-    impl<T: Clone> RevisionManager<T> {
-        pub fn root_store(&self) -> T {
+    impl<RS: Clone> RevisionManager<RS> {
+        pub fn root_store(&self) -> RS {
             self.root_store.clone()
         }
     }

@@ -216,7 +216,7 @@ impl<RS: RootStore> Db<RS> {
     }
 }
 
-impl<T> Db<T> {
+impl<RS> Db<RS> {
     /// Dump the Trie of the latest revision.
     pub fn dump(&self, w: &mut dyn Write) -> Result<(), std::io::Error> {
         let latest_rev_nodestore = self.manager.current_revision();
@@ -243,7 +243,7 @@ impl<T> Db<T> {
     pub fn propose_parallel(
         &self,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
-    ) -> Result<Proposal<'_, T>, api::Error> {
+    ) -> Result<Proposal<'_, RS>, api::Error> {
         let parent = self.manager.current_revision();
         let mut parallel_merkle = ParallelMerkle::default();
         let immutable =
@@ -258,12 +258,12 @@ impl<T> Db<T> {
 
 #[derive(Debug)]
 /// A user-visible database proposal
-pub struct Proposal<'db, T> {
+pub struct Proposal<'db, RS> {
     nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
-    db: &'db Db<T>,
+    db: &'db Db<RS>,
 }
 
-impl<T> api::DbView for Proposal<'_, T> {
+impl<RS> api::DbView for Proposal<'_, RS> {
     type Iter<'view>
         = MerkleKeyValueIter<'view, NodeStore<Arc<ImmutableProposal>, FileBacked>>
     where
@@ -311,7 +311,7 @@ impl<'db, RS: RootStore> api::Proposal for Proposal<'db, RS> {
     }
 }
 
-impl<T> Proposal<'_, T> {
+impl<RS> Proposal<'_, RS> {
     #[crate::metrics("firewood.proposal.create", "database proposal creation")]
     fn create_proposal(
         &self,
@@ -1071,13 +1071,13 @@ mod test {
         db: Db<RS>,
         tmpdir: tempfile::TempDir,
     }
-    impl<T> Deref for TestDb<T> {
-        type Target = Db<T>;
+    impl<RS> Deref for TestDb<RS> {
+        type Target = Db<RS>;
         fn deref(&self) -> &Self::Target {
             &self.db
         }
     }
-    impl<T> DerefMut for TestDb<T> {
+    impl<RS> DerefMut for TestDb<RS> {
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.db
         }
@@ -1107,7 +1107,7 @@ mod test {
         }
     }
 
-    impl<T: Clone + RootStore> TestDb<T> {
+    impl<RS: Clone + RootStore> TestDb<RS> {
         fn reopen(self) -> Self {
             let path = self.path();
             let root_store = self.manager.root_store();
@@ -1134,7 +1134,7 @@ mod test {
         }
     }
 
-    impl<T> TestDb<T> {
+    impl<RS> TestDb<RS> {
         fn path(&self) -> PathBuf {
             [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()
