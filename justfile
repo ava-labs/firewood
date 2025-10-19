@@ -25,7 +25,7 @@ check-ffi-flake-current: check-nix
     #!/usr/bin/env bash
     set -euo pipefail
     cd ffi
-    nix flake lock --update-input golang
+    nix flake update golang
     ../run-just.sh check-clean-branch
 
 # Check if nix is installed
