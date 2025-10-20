@@ -196,8 +196,8 @@ impl ParallelMerkle {
                 break; // Stop handling additional requests
             }
         }
-        // The main thread has closed the channel. Hash this subtrie and send a worker response
-        // where the root is a Child::MaybePersisted.
+        // The main thread has closed the channel. Hash this subtrie and send back the worker's
+        // response where the root is a Child::MaybePersisted.
         let mut nodestore = merkle.into_inner();
         let response = nodestore
             .root_mut()
