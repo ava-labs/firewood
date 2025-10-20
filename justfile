@@ -20,18 +20,19 @@ check-clean-branch:
     # Exits if any uncommitted changes are found.
     git diff-index --quiet HEAD
 
-# Check if the FFI flake (requires clean git tree)
+# Check if the FFI flake is up-to-date (requires clean git tree)
 check-ffi-flake: check-nix
     #!/usr/bin/env bash
     set -euo pipefail
     ./scripts/run-just.sh update-ffi-flake
     ./scripts/run-just.sh check-clean-branch
 
-# Check if the golang version is set consistently for all (requires clean git tree)
+# Check if the golang version is set consistently (requires clean git tree)
 check-golang-version: check-nix
     #!/usr/bin/env bash
     set -euo pipefail
 
+    # Exit only at the end if any of the checks set FAILED=1
     FAILED=
 
     cd ffi
