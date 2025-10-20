@@ -25,6 +25,11 @@ typedef struct ChangeProofContext ChangeProofContext;
 typedef struct DatabaseHandle DatabaseHandle;
 
 /**
+ * An opaque wrapper around a [`BoxKeyValueIter`].
+ */
+typedef struct IteratorHandle IteratorHandle;
+
+/**
  * An opaque wrapper around a Proposal that also retains a reference to the
  * database handle it was created from.
  */
@@ -34,6 +39,8 @@ typedef struct ProposalHandle ProposalHandle;
  * FFI context for for a parsed or generated range proof.
  */
 typedef struct RangeProofContext RangeProofContext;
+
+typedef struct RevisionHandle RevisionHandle;
 
 /**
  * A database hash key, used in FFI functions that require hashes.
@@ -646,6 +653,213 @@ typedef struct VerifyRangeProofArgs {
 } VerifyRangeProofArgs;
 
 /**
+ * Owned version of `KeyValuePair`, returned to ffi callers.
+ *
+ * C callers must free this using [`crate::fwd_free_owned_kv_pair`],
+ * not the C standard library's `free` function.
+ */
+typedef struct OwnedKeyValuePair {
+  OwnedBytes key;
+  OwnedBytes value;
+} OwnedKeyValuePair;
+
+/**
+ * A Rust-owned vector of bytes that can be passed to C code.
+ *
+ * C callers must free this memory using the respective FFI function for the
+ * concrete type (but not using the `free` function from the C standard library).
+ */
+typedef struct OwnedSlice_OwnedKeyValuePair {
+  struct OwnedKeyValuePair *ptr;
+  size_t len;
+} OwnedSlice_OwnedKeyValuePair;
+
+/**
+ * A type alias for a rust-owned byte slice.
+ */
+typedef struct OwnedSlice_OwnedKeyValuePair OwnedKeyValueBatch;
+
+/**
+ * A result type returned from FFI functions that get a revision
+ */
+typedef enum RevisionResult_Tag {
+  /**
+   * The caller provided a null pointer to a database handle.
+   */
+  RevisionResult_NullHandlePointer,
+  /**
+   * The provided root was not found in the database.
+   */
+  RevisionResult_RevisionNotFound,
+  /**
+   * Getting the revision was successful and the revision handle and root
+   * hash are returned.
+   */
+  RevisionResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. The
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  RevisionResult_Err,
+} RevisionResult_Tag;
+
+typedef struct RevisionResult_Ok_Body {
+  /**
+   * An opaque pointer to the [`RevisionHandle`].
+   * The value should be freed with [`fwd_free_revision`]
+   *
+   * [`fwd_free_revision`]: crate::fwd_free_revision
+   */
+  struct RevisionHandle *handle;
+  /**
+   * The root hash of the revision.
+   */
+  struct HashKey root_hash;
+} RevisionResult_Ok_Body;
+
+typedef struct RevisionResult {
+  RevisionResult_Tag tag;
+  union {
+    struct {
+      struct HashKey revision_not_found;
+    };
+    RevisionResult_Ok_Body ok;
+    struct {
+      OwnedBytes err;
+    };
+  };
+} RevisionResult;
+
+/**
+ * A result type returned from iterator FFI functions
+ */
+typedef enum KeyValueResult_Tag {
+  /**
+   * The caller provided a null pointer to an iterator handle.
+   */
+  KeyValueResult_NullHandlePointer,
+  /**
+   * The iterator is exhausted
+   */
+  KeyValueResult_None,
+  /**
+   * The next item is returned.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with the key and the value of this pair.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  KeyValueResult_Some,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. The
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  KeyValueResult_Err,
+} KeyValueResult_Tag;
+
+typedef struct KeyValueResult {
+  KeyValueResult_Tag tag;
+  union {
+    struct {
+      struct OwnedKeyValuePair some;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} KeyValueResult;
+
+/**
+ * A result type returned from iterator FFI functions
+ */
+typedef enum KeyValueBatchResult_Tag {
+  /**
+   * The caller provided a null pointer to an iterator handle.
+   */
+  KeyValueBatchResult_NullHandlePointer,
+  /**
+   * The next batch of items on iterator are returned.
+   */
+  KeyValueBatchResult_Some,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. If
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  KeyValueBatchResult_Err,
+} KeyValueBatchResult_Tag;
+
+typedef struct KeyValueBatchResult {
+  KeyValueBatchResult_Tag tag;
+  union {
+    struct {
+      OwnedKeyValueBatch some;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} KeyValueBatchResult;
+
+/**
+ * A result type returned from FFI functions that create an iterator
+ */
+typedef enum IteratorResult_Tag {
+  /**
+   * The caller provided a null pointer to a revision/proposal handle.
+   */
+  IteratorResult_NullHandlePointer,
+  /**
+   * Building the iterator was successful and the iterator handle is returned
+   */
+  IteratorResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`].
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  IteratorResult_Err,
+} IteratorResult_Tag;
+
+typedef struct IteratorResult_Ok_Body {
+  /**
+   * An opaque pointer to the [`IteratorHandle`].
+   * The value should be freed with [`fwd_free_iterator`]
+   *
+   * [`fwd_free_iterator`]: crate::fwd_free_iterator
+   */
+  struct IteratorHandle *handle;
+} IteratorResult_Ok_Body;
+
+typedef struct IteratorResult {
+  IteratorResult_Tag tag;
+  union {
+    IteratorResult_Ok_Body ok;
+    struct {
+      OwnedBytes err;
+    };
+  };
+} IteratorResult;
+
+/**
  * The result type returned from the open or create database functions.
  */
 typedef enum HandleResult_Tag {
@@ -923,6 +1137,9 @@ struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *_p
  * - `db` is a valid pointer to a [`DatabaseHandle`] returned by [`fwd_open_db`].
  * - There are no handles to any open proposals. If so, they must be freed first
  *   using [`fwd_free_proposal`].
+ * - Freeing the database handle does not free outstanding [`RevisionHandle`]s
+ *   returned by [`fwd_get_revision`]. To prevent leaks, free them separately
+ *   with [`fwd_free_revision`].
  * - The database handle is not used after this function is called.
  */
 struct VoidResult fwd_close_db(struct DatabaseHandle *db);
@@ -1136,6 +1353,28 @@ struct VoidResult fwd_db_verify_range_proof(const struct DatabaseHandle *_db,
 struct VoidResult fwd_free_change_proof(struct ChangeProofContext *proof);
 
 /**
+ * Consumes the [`IteratorHandle`], destroys the iterator, and frees the memory.
+ *
+ * # Arguments
+ *
+ * * `iterator` - A pointer to a [`IteratorHandle`] previously returned from a
+ *   function from this library.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::NullHandlePointer`] if the provided iterator handle is null.
+ * - [`VoidResult::Ok`] if the iterator was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ *
+ * # Safety
+ *
+ * The caller must ensure that the `iterator` is not null and that it points to
+ * a valid [`IteratorHandle`] previously returned by a function from this library.
+ *
+ */
+struct VoidResult fwd_free_iterator(struct IteratorHandle *iterator);
+
+/**
  * Consumes the [`OwnedBytes`] and frees the memory associated with it.
  *
  * # Arguments
@@ -1155,6 +1394,46 @@ struct VoidResult fwd_free_change_proof(struct ChangeProofContext *proof);
  * this function does nothing.
  */
 struct VoidResult fwd_free_owned_bytes(OwnedBytes bytes);
+
+/**
+ * Consumes the [`OwnedKeyValueBatch`] and frees the memory associated with it.
+ *
+ * # Arguments
+ *
+ * * `batch` - The [`OwnedKeyValueBatch`] struct to free, previously returned from any
+ *   function from this library.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ *
+ * # Safety
+ *
+ * The caller must ensure that the `batch` struct is valid and that the memory
+ * it points to is uniquely owned by this object. However, if `batch.ptr` is null,
+ * this function does nothing.
+ */
+struct VoidResult fwd_free_owned_key_value_batch(OwnedKeyValueBatch batch);
+
+/**
+ * Consumes the [`OwnedKeyValuePair`] and frees the memory associated with it.
+ *
+ * # Arguments
+ *
+ * * `kv` - The [`OwnedKeyValuePair`] struct to free, previously returned from any
+ *   function from this library.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ *
+ * # Safety
+ *
+ * The caller must ensure that the `kv` struct is valid.
+ */
+struct VoidResult fwd_free_owned_kv_pair(struct OwnedKeyValuePair kv);
 
 /**
  * Consumes the [`ProposalHandle`], cancels the proposal, and frees the memory.
@@ -1193,6 +1472,27 @@ struct VoidResult fwd_free_proposal(struct ProposalHandle *proposal);
  * - [`VoidResult::Err`] if the process panics while freeing the memory.
  */
 struct VoidResult fwd_free_range_proof(struct RangeProofContext *proof);
+
+/**
+ * Consumes the [`RevisionHandle`] and frees the memory associated with it.
+ *
+ * # Arguments
+ *
+ * * `revision` - A pointer to a [`RevisionHandle`] previously returned by
+ *   [`fwd_get_revision`].
+ *
+ * # Returns
+ *
+ * - [`VoidResult::NullHandlePointer`] if the provided revision handle is null.
+ * - [`VoidResult::Ok`] if the revision handle was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ *
+ * # Safety
+ *
+ * The caller must ensure that the revision handle is valid and is not used again after
+ * this function is called.
+ */
+struct VoidResult fwd_free_revision(struct RevisionHandle *revision);
 
 /**
  * Gather latest metrics for this process.
@@ -1237,6 +1537,31 @@ struct ValueResult fwd_gather(void);
  *   returned in the result.
  */
 struct ValueResult fwd_get_from_proposal(const struct ProposalHandle *handle, BorrowedBytes key);
+
+/**
+ * Gets the value associated with the given key from the provided revision handle.
+ *
+ * # Arguments
+ *
+ * * `revision` - The revision handle returned by [`fwd_get_revision`].
+ * * `key` - The key to look up as a [`BorrowedBytes`].
+ *
+ * # Returns
+ *
+ * - [`ValueResult::NullHandlePointer`] if the provided revision handle is null.
+ * - [`ValueResult::None`] if the key was not found in the revision.
+ * - [`ValueResult::Some`] if the key was found with the associated value.
+ * - [`ValueResult::Err`] if an error occurred while retrieving the value.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `revision` is a valid pointer to a [`RevisionHandle`].
+ * * ensure that `key` is valid for [`BorrowedBytes`].
+ * * call [`fwd_free_owned_bytes`] to free the memory associated with the [`OwnedBytes`]
+ *   returned in the result.
+ */
+struct ValueResult fwd_get_from_revision(const struct RevisionHandle *revision, BorrowedBytes key);
 
 /**
  * Gets a value assoicated with the given root hash and key.
@@ -1299,6 +1624,142 @@ struct ValueResult fwd_get_from_root(const struct DatabaseHandle *db,
  * [`BorrowedBytes`]: crate::value::BorrowedBytes
  */
 struct ValueResult fwd_get_latest(const struct DatabaseHandle *db, BorrowedBytes key);
+
+/**
+ * Gets a handle to the revision identified by the provided root hash.
+ *
+ * # Arguments
+ *
+ * * `db` - The database handle returned by [`fwd_open_db`].
+ * * `root` - The hash of the revision as a [`BorrowedBytes`].
+ *
+ * # Returns
+ *
+ * - [`RevisionResult::NullHandlePointer`] if the provided database handle is null.
+ * - [`RevisionResult::Ok`] containing a [`RevisionHandle`] and root hash if the revision exists.
+ * - [`RevisionResult::Err`] if the revision cannot be fetched or the root hash is invalid.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`DatabaseHandle`].
+ * * ensure that `root` is valid for [`BorrowedBytes`].
+ * * call [`fwd_free_revision`] to free the returned handle when it is no longer needed.
+ *
+ * [`BorrowedBytes`]: crate::value::BorrowedBytes
+ * [`RevisionHandle`]: crate::revision::RevisionHandle
+ */
+struct RevisionResult fwd_get_revision(const struct DatabaseHandle *db, BorrowedBytes root);
+
+/**
+ * Retrieves the next item from the iterator.
+ *
+ * # Arguments
+ *
+ * * `handle` - The iterator handle returned by [`fwd_iter_on_revision`] or
+ *   [`fwd_iter_on_proposal`].
+ *
+ * # Returns
+ *
+ * - [`KeyValueResult::NullHandlePointer`] if the provided iterator handle is null.
+ * - [`KeyValueResult::None`] if the iterator is exhausted (no remaining values). Once returned,
+ *   subsequent calls will continue returning [`KeyValueResult::None`]. You may still call this
+ *   safely, but freeing the iterator with [`fwd_free_iterator`] is recommended.
+ * - [`KeyValueResult::Some`] if the next item on iterator was retrieved, with the associated
+ *   key value pair.
+ * - [`KeyValueResult::Err`] if an I/O error occurred while retrieving the next item. Most
+ *   iterator errors are non-reentrant. Once returned, the iterator should be considered
+ *   invalid and must be freed with [`fwd_free_iterator`].
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `handle` is a valid pointer to a [`IteratorHandle`].
+ * * call [`fwd_free_owned_kv_pair`] on returned [`OwnedKeyValuePair`]
+ *   to free the memory associated with the returned value.
+ *
+ */
+struct KeyValueResult fwd_iter_next(struct IteratorHandle *handle);
+
+/**
+ * Retrieves the next batch of items from the iterator.
+ *
+ * # Arguments
+ *
+ * * `handle` - The iterator handle returned by [`fwd_iter_on_revision`] or
+ *   [`fwd_iter_on_proposal`].
+ *
+ * # Returns
+ *
+ * - [`KeyValueBatchResult::NullHandlePointer`] if the provided iterator handle is null.
+ * - [`KeyValueBatchResult::Some`] with up to `n` key/value pairs. If the iterator is
+ *   exhausted, this may be fewer than `n`, including zero items.
+ * - [`KeyValueBatchResult::Err`] if an I/O error occurred while retrieving items. Most
+ *   iterator errors are non-reentrant. Once returned, the iterator should be considered
+ *   invalid and must be freed with [`fwd_free_iterator`].
+ *
+ * Once an empty batch or items fewer than `n` is returned (iterator exhausted), subsequent calls
+ * will continue returning empty batches. You may still call this safely, but freeing the
+ * iterator with [`fwd_free_iterator`] is recommended.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `handle` is a valid pointer to a [`IteratorHandle`].
+ * * call [`fwd_free_owned_key_value_batch`] on the returned batch to free any allocated memory.
+ *
+ */
+struct KeyValueBatchResult fwd_iter_next_n(struct IteratorHandle *handle, size_t n);
+
+/**
+ * Returns an iterator on the provided proposal optionally starting from a key
+ *
+ * # Arguments
+ *
+ * * `handle` - The proposal handle returned by [`fwd_propose_on_db`] or
+ *   [`fwd_propose_on_proposal`].
+ * * `key` - The key to look up as a [`BorrowedBytes`]
+ *
+ * # Returns
+ *
+ * - [`IteratorResult::NullHandlePointer`] if the provided proposal handle is null.
+ * - [`IteratorResult::Ok`] if the iterator was created, with the iterator handle.
+ * - [`IteratorResult::Err`] if an error occurred while creating the iterator.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `handle` is a valid pointer to a [`ProposalHandle`]
+ * * ensure that `key` is a valid for [`BorrowedBytes`]
+ * * call [`fwd_free_iterator`] to free the memory associated with the iterator.
+ *
+ */
+struct IteratorResult fwd_iter_on_proposal(const struct ProposalHandle *handle, BorrowedBytes key);
+
+/**
+ * Returns an iterator optionally starting from a key in the provided revision.
+ *
+ * # Arguments
+ *
+ * * `revision` - The revision handle returned by [`fwd_get_revision`].
+ * * `key` - The key to look up as a [`BorrowedBytes`]
+ *
+ * # Returns
+ *
+ * - [`IteratorResult::NullHandlePointer`] if the provided revision handle is null.
+ * - [`IteratorResult::Ok`] if the iterator was created, with the iterator handle.
+ * - [`IteratorResult::Err`] if an error occurred while creating the iterator.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `revision` is a valid pointer to a [`RevisionHandle`]
+ * * ensure that `key` is a valid [`BorrowedBytes`]
+ * * call [`fwd_free_iterator`] to free the memory associated with the iterator.
+ *
+ */
+struct IteratorResult fwd_iter_on_revision(const struct RevisionHandle *revision,
+                                           BorrowedBytes key);
 
 /**
  * Open a database with the given arguments.

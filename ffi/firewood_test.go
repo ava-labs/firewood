@@ -6,10 +6,12 @@ package ffi
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -126,18 +128,12 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-func newTestDatabase(t *testing.T) *Database {
-	conf := DefaultConfig()
-	conf.Truncate = true // in tests, we use filepath.Join, which creates an empty file
-	return newTestDatabaseConfig(conf, t)
-}
-
-func newTestDatabaseConfig(conf *Config, t *testing.T) *Database {
+func newTestDatabase(t *testing.T, configureFns ...func(*Config)) *Database {
 	t.Helper()
 	r := require.New(t)
 
 	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, closeDB, err := newDatabaseConfig(dbFile, conf)
+	db, closeDB, err := newDatabase(dbFile, configureFns...)
 	r.NoError(err)
 	t.Cleanup(func() {
 		r.NoError(closeDB())
@@ -145,11 +141,12 @@ func newTestDatabaseConfig(conf *Config, t *testing.T) *Database {
 	return db
 }
 
-func newDatabase(dbFile string) (*Database, func() error, error) {
+func newDatabase(dbFile string, configureFns ...func(*Config)) (*Database, func() error, error) {
 	conf := DefaultConfig()
 	conf.Truncate = true // in tests, we use filepath.Join, which creates an empty file
-	return newDatabaseConfig(dbFile, conf)
-}
+	for _, fn := range configureFns {
+		fn(conf)
+	}
 
 func newDatabaseConfig(dbFile string, conf *Config) (*Database, func() error, error) {
 	f, err := New(dbFile, conf)
@@ -253,7 +250,39 @@ func kvForTest(num int) ([][]byte, [][]byte) {
 		keys[i] = keyForTest(i)
 		vals[i] = valForTest(i)
 	}
+	_ = sortKV(keys, vals)
 	return keys, vals
+}
+
+// sortKV sorts keys lexicographically and keeps vals paired.
+func sortKV(keys, vals [][]byte) error {
+	if len(keys) != len(vals) {
+		return errors.New("keys/vals length mismatch")
+	}
+	n := len(keys)
+	if n <= 1 {
+		return nil
+	}
+	ord := make([]int, n)
+	for i := range ord {
+		ord[i] = i
+	}
+	slices.SortFunc(ord, func(i, j int) int {
+		return bytes.Compare(keys[i], keys[j])
+	})
+	perm := make([]int, n)
+	for dest, orig := range ord {
+		perm[orig] = dest
+	}
+	for i := 0; i < n; i++ {
+		for perm[i] != i {
+			j := perm[i]
+			keys[i], keys[j] = keys[j], keys[i]
+			vals[i], vals[j] = vals[j], vals[i]
+			perm[i], perm[j] = perm[j], j
+		}
+	}
+	return nil
 }
 
 // Tests that 100 key-value pairs can be inserted and retrieved.
@@ -829,6 +858,9 @@ func TestRevision(t *testing.T) {
 	// Create a revision from this root.
 	revision, err := db.Revision(root)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(revision.Drop())
+	})
 
 	// Check that all keys can be retrieved from the revision.
 	for i := range keys {
@@ -853,12 +885,89 @@ func TestRevision(t *testing.T) {
 	// Create a "new" revision from the first old root.
 	revision, err = db.Revision(root)
 	r.NoError(err)
+	r.Equal(revision.Root(), root)
+	t.Cleanup(func() {
+		r.NoError(revision.Drop())
+	})
 	// Check that all keys can be retrieved from the revision.
 	for i := range keys {
 		got, err := revision.Get(keys[i])
 		r.NoError(err, "Get(%d)", i)
 		r.Equal(valForTest(i), got, "Get(%d)", i)
 	}
+}
+
+// Tests that even if a proposal is committed, the corresponding revision will not go away
+// as we're holding on to it
+func TestRevisionOutlivesProposal(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(20)
+	_, err := db.Update(keys[:10], vals[:10])
+	r.NoError(err)
+
+	// Create a proposal with 10 key-value pairs.
+	nKeys, nVals := keys[10:], vals[10:]
+	proposal, err := db.Propose(nKeys, nVals)
+	r.NoError(err)
+	root, err := proposal.Root()
+	r.NoError(err)
+
+	rev, err := db.Revision(root)
+	r.NoError(err)
+
+	// we drop the proposal
+	r.NoError(proposal.Drop())
+
+	// revision should outlive the proposal, as we're still referencing its node store
+	for i, key := range nKeys {
+		val, err := rev.Get(key)
+		r.NoError(err)
+		r.Equal(val, nVals[i])
+	}
+
+	r.NoError(rev.Drop())
+}
+
+// Tests that holding a reference to revision will prevent from it being reaped
+func TestRevisionOutlivesReaping(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t, func(config *Config) {
+		config.Revisions = 2
+	})
+
+	keys, vals := kvForTest(40)
+	firstRoot, err := db.Update(keys[:10], vals[:10])
+	r.NoError(err)
+	// let's get a revision at root
+	rev, err := db.Revision(firstRoot)
+	r.NoError(err)
+
+	// commit two times, this would normally reap the first revision
+	secondRoot, err := db.Update(keys[10:20], vals[10:20])
+	r.NoError(err)
+	_, err = db.Update(keys[20:30], vals[20:30])
+	r.NoError(err)
+
+	// revision should be still accessible, as we're hanging on to it, prevent reaping
+	nKeys, nVals := keys[:10], vals[:10]
+	for i, key := range nKeys {
+		val, err := rev.Get(key)
+		r.NoError(err)
+		r.Equal(val, nVals[i])
+	}
+	r.NoError(rev.Drop())
+
+	// since we dropped the revision, if we commit, reaping will happen (cleaning first two revisions)
+	_, err = db.Update(keys[30:], vals[30:])
+	r.NoError(err)
+
+	_, err = db.Revision(firstRoot)
+	r.Error(err)
+
+	_, err = db.Revision(secondRoot)
+	r.Error(err)
 }
 
 func TestInvalidRevision(t *testing.T) {
@@ -896,6 +1005,9 @@ func TestGetNilCases(t *testing.T) {
 	r.NoError(err)
 	revision, err := db.Revision(root)
 	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(revision.Drop())
+	})
 
 	// Create edge case keys.
 	specialKeys := [][]byte{
@@ -1095,4 +1207,259 @@ func TestGetFromRootParallel(t *testing.T) {
 		err := <-results
 		r.NoError(err, "Parallel operation failed")
 	}
+}
+
+type kvIter interface {
+	SetBatchSize(int)
+	Next() bool
+	Key() []byte
+	Value() []byte
+	Err() error
+	Drop() error
+}
+type borrowIter struct{ it *Iterator }
+
+func (b *borrowIter) SetBatchSize(batchSize int) { b.it.SetBatchSize(batchSize) }
+func (b *borrowIter) Next() bool                 { return b.it.NextBorrowed() }
+func (b *borrowIter) Key() []byte                { return b.it.Key() }
+func (b *borrowIter) Value() []byte              { return b.it.Value() }
+func (b *borrowIter) Err() error                 { return b.it.Err() }
+func (b *borrowIter) Drop() error                { return b.it.Drop() }
+
+func assertIteratorYields(r *require.Assertions, it kvIter, keys [][]byte, vals [][]byte) {
+	i := 0
+	for ; it.Next(); i += 1 {
+		r.Equal(keys[i], it.Key())
+		r.Equal(vals[i], it.Value())
+	}
+	r.NoError(it.Err())
+	r.Equal(len(keys), i)
+}
+
+type iteratorConfigFn = func(it kvIter) kvIter
+
+var iterConfigs = map[string]iteratorConfigFn{
+	"Owned":    func(it kvIter) kvIter { return it },
+	"Borrowed": func(it kvIter) kvIter { return &borrowIter{it: it.(*Iterator)} },
+	"Single": func(it kvIter) kvIter {
+		it.SetBatchSize(1)
+		return it
+	},
+	"Batched": func(it kvIter) kvIter {
+		it.SetBatchSize(100)
+		return it
+	},
+}
+
+func runIteratorTestForModes(t *testing.T, fn func(*testing.T, iteratorConfigFn), modes ...string) {
+	testName := strings.Join(modes, "/")
+	t.Run(testName, func(t *testing.T) {
+		r := require.New(t)
+		fn(t, func(it kvIter) kvIter {
+			for _, m := range modes {
+				config, ok := iterConfigs[m]
+				r.Truef(ok, "specified config mode %s does not exist", m)
+				it = config(it)
+			}
+			return it
+		})
+	})
+}
+
+func runIteratorTestForAllModes(parentT *testing.T, fn func(*testing.T, iteratorConfigFn)) {
+	for _, dataMode := range []string{"Owned", "Borrowed"} {
+		for _, batchMode := range []string{"Single", "Batched"} {
+			runIteratorTestForModes(parentT, fn, batchMode, dataMode)
+		}
+	}
+}
+
+// Tests that basic iterator functionality works
+func TestIter(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+	keys, vals := kvForTest(100)
+	_, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
+		r := require.New(t)
+		rev, err := db.LatestRevision()
+		r.NoError(err)
+		it, err := rev.Iter(nil)
+		r.NoError(err)
+		t.Cleanup(func() {
+			r.NoError(it.Drop())
+			r.NoError(rev.Drop())
+		})
+
+		assertIteratorYields(r, cfn(it), keys, vals)
+	})
+}
+
+func TestIterOnRoot(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+	keys, vals := kvForTest(240)
+	firstRoot, err := db.Update(keys[:80], vals[:80])
+	r.NoError(err)
+	secondRoot, err := db.Update(keys[80:160], vals[80:160])
+	r.NoError(err)
+	thirdRoot, err := db.Update(keys[160:], vals[160:])
+	r.NoError(err)
+
+	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
+		r := require.New(t)
+		r1, err := db.Revision(firstRoot)
+		r.NoError(err)
+		h1, err := r1.Iter(nil)
+		r.NoError(err)
+		t.Cleanup(func() {
+			r.NoError(h1.Drop())
+			r.NoError(r1.Drop())
+		})
+
+		r2, err := db.Revision(secondRoot)
+		r.NoError(err)
+		h2, err := r2.Iter(nil)
+		r.NoError(err)
+		t.Cleanup(func() {
+			r.NoError(h2.Drop())
+			r.NoError(r2.Drop())
+		})
+
+		r3, err := db.Revision(thirdRoot)
+		r.NoError(err)
+		h3, err := r3.Iter(nil)
+		r.NoError(err)
+		t.Cleanup(func() {
+			r.NoError(h3.Drop())
+			r.NoError(r3.Drop())
+		})
+
+		assertIteratorYields(r, cfn(h1), keys[:80], vals[:80])
+		assertIteratorYields(r, cfn(h2), keys[:160], vals[:160])
+		assertIteratorYields(r, cfn(h3), keys, vals)
+	})
+}
+
+func TestIterOnProposal(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+	keys, vals := kvForTest(240)
+	_, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
+		r := require.New(t)
+		updatedValues := make([][]byte, len(vals))
+		copy(updatedValues, vals)
+
+		changedKeys := make([][]byte, 0)
+		changedVals := make([][]byte, 0)
+		for i := 0; i < len(vals); i += 4 {
+			changedKeys = append(changedKeys, keys[i])
+			newVal := []byte{byte(i)}
+			changedVals = append(changedVals, newVal)
+			updatedValues[i] = newVal
+		}
+		p, err := db.Propose(changedKeys, changedVals)
+		r.NoError(err)
+		it, err := p.Iter(nil)
+		r.NoError(err)
+		t.Cleanup(func() {
+			r.NoError(it.Drop())
+		})
+
+		assertIteratorYields(r, cfn(it), keys, updatedValues)
+	})
+}
+
+// Tests that the iterator still works after proposal is committed
+func TestIterAfterProposalCommit(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(10)
+	p, err := db.Propose(keys, vals)
+	r.NoError(err)
+
+	it, err := p.Iter(nil)
+	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(it.Drop())
+	})
+
+	err = p.Commit()
+	r.NoError(err)
+
+	// iterate after commit
+	// because iterator hangs on the nodestore reference of proposal
+	// the nodestore won't be dropped until we drop the iterator
+	assertIteratorYields(r, it, keys, vals)
+}
+
+// Tests that the iterator on latest revision works properly after a proposal commit
+func TestIterUpdate(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(10)
+	_, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	// get an iterator on latest revision
+	rev, err := db.LatestRevision()
+	r.NoError(err)
+	it, err := rev.Iter(nil)
+	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(it.Drop())
+		r.NoError(rev.Drop())
+	})
+
+	// update the database
+	keys2, vals2 := kvForTest(10)
+	_, err = db.Update(keys2, vals2)
+	r.NoError(err)
+
+	// iterate after commit
+	// because iterator is fixed on the revision hash, it should return the initial values
+	assertIteratorYields(r, it, keys, vals)
+}
+
+// Tests the iterator's behavior after exhaustion, should safely return empty item/batch, indicating done
+func TestIterDone(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(18)
+	_, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	// get an iterator on latest revision
+	rev, err := db.LatestRevision()
+	r.NoError(err)
+	it, err := rev.Iter(nil)
+	r.NoError(err)
+	t.Cleanup(func() {
+		r.NoError(it.Drop())
+		r.NoError(rev.Drop())
+	})
+	// consume the iterator
+	assertIteratorYields(r, it, keys, vals)
+	// calling next again should be safe and return false
+	r.False(it.Next())
+	r.NoError(it.Err())
+
+	// get a new iterator
+	it2, err := rev.Iter(nil)
+	r.NoError(err)
+	// set batch size to 5
+	it2.SetBatchSize(5)
+	// consume the iterator
+	assertIteratorYields(r, it2, keys, vals)
+	// calling next again should be safe and return false
+	r.False(it.Next())
+	r.NoError(it.Err())
 }

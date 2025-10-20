@@ -5,18 +5,14 @@
     clippy::missing_errors_doc,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![expect(
-    clippy::needless_continue,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
 
 use firewood_storage::{
-    BranchNode, Children, FileIoError, HashType, Hashable, IntoHashType, NibblesIterator, Path,
-    PathIterItem, Preimage, TrieHash, ValueDigest,
+    Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, Path,
+    PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath, ValueDigest,
 };
 use thiserror::Error;
 
-use crate::merkle::{Key, Value};
+use crate::merkle::Value;
 
 #[derive(Debug, Error)]
 #[non_exhaustive]
@@ -84,25 +80,20 @@ pub enum ProofError {
 /// A node in a proof.
 pub struct ProofNode {
     /// The key this node is at. Each byte is a nibble.
-    pub key: Key,
+    pub key: PathBuf,
     /// The length of the key prefix that is shared with the previous node.
     pub partial_len: usize,
     /// None if the node does not have a value.
     /// Otherwise, the node's value or the hash of its value.
     pub value_digest: Option<ValueDigest<Value>>,
     /// The hash of each child, or None if the child does not exist.
-    pub child_hashes: Children<HashType>,
+    pub child_hashes: Children<Option<HashType>>,
 }
 
 impl std::fmt::Debug for ProofNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Filter the missing children and only show the present ones with their indices
-        let child_hashes = self
-            .child_hashes
-            .iter()
-            .enumerate()
-            .filter_map(|(i, h)| h.as_ref().map(|h| (i, h)))
-            .collect::<Vec<_>>();
+        let child_hashes = self.child_hashes.iter_present().collect::<Vec<_>>();
         // Compute the hash and render it as well
         let hash = firewood_storage::Preimage::to_hash(self);
 
@@ -117,23 +108,25 @@ impl std::fmt::Debug for ProofNode {
 }
 
 impl Hashable for ProofNode {
-    fn parent_prefix_path(&self) -> impl Iterator<Item = u8> + Clone {
-        self.full_path().take(self.partial_len)
+    fn parent_prefix_path(&self) -> impl IntoSplitPath + '_ {
+        let (prefix, _) = self.key.split_at(self.partial_len);
+        prefix
     }
 
-    fn partial_path(&self) -> impl Iterator<Item = u8> + Clone {
-        self.full_path().skip(self.partial_len)
+    fn partial_path(&self) -> impl IntoSplitPath + '_ {
+        let (_, suffix) = self.key.split_at(self.partial_len);
+        suffix
     }
 
-    fn full_path(&self) -> impl Iterator<Item = u8> + Clone {
-        self.key.as_ref().iter().copied()
+    fn full_path(&self) -> impl IntoSplitPath + '_ {
+        &self.key
     }
 
     fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {
         self.value_digest.as_ref().map(ValueDigest::as_ref)
     }
 
-    fn children(&self) -> Children<HashType> {
+    fn children(&self) -> Children<Option<HashType>> {
         self.child_hashes.clone()
     }
 }
@@ -143,7 +136,7 @@ impl From<PathIterItem> for ProofNode {
         let child_hashes = if let Some(branch) = item.node.as_branch() {
             branch.children_hashes()
         } else {
-            BranchNode::empty_children()
+            Children::new()
         };
 
         let partial_len = item
@@ -204,14 +197,14 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
             // Assert that only nodes whose keys are an even number of nibbles
             // have a `value_digest`.
             #[cfg(not(feature = "branch_factor_256"))]
-            if node.full_path().count() % 2 != 0 && node.value_digest().is_some() {
+            if !node.full_path().len().is_multiple_of(2) && node.value_digest().is_some() {
                 return Err(ProofError::ValueAtOddNibbleLength);
             }
 
             if let Some(next_node) = iter.peek() {
                 // Assert that every node's key is a prefix of `key`, except for the last node,
                 // whose key can be equal to or a suffix of `key` in an exclusion proof.
-                if next_nibble(node.full_path(), key.iter().copied()).is_none() {
+                if next_nibble(node.full_path(), key.as_components()).is_none() {
                     return Err(ProofError::ShouldBePrefixOfProvenKey);
                 }
 
@@ -222,17 +215,14 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
                     return Err(ProofError::ShouldBePrefixOfNextKey);
                 };
 
-                expected_hash = node
-                    .children()
-                    .get(usize::from(next_nibble))
-                    .ok_or(ProofError::ChildIndexOutOfBounds)?
+                expected_hash = node.children()[next_nibble]
                     .as_ref()
                     .ok_or(ProofError::NodeNotInTrie)?
                     .clone();
             }
         }
 
-        if last_node.full_path().eq(key.iter().copied()) {
+        if last_node.full_path().path_eq(key.as_components()) {
             return Ok(last_node.value_digest());
         }
 
@@ -390,23 +380,13 @@ impl ProofCollection for EmptyProofCollection {
 
 /// Returns the next nibble in `c` after `b`.
 /// Returns None if `b` is not a strict prefix of `c`.
-fn next_nibble<B, C>(b: B, c: C) -> Option<u8>
-where
-    B: IntoIterator<Item = u8>,
-    C: IntoIterator<Item = u8>,
-{
-    let b = b.into_iter();
-    let mut c = c.into_iter();
-
-    // Check if b is a prefix of c
-    for b_item in b {
-        match c.next() {
-            Some(c_item) if b_item == c_item => continue,
-            _ => return None,
-        }
+fn next_nibble(b: impl IntoSplitPath, c: impl IntoSplitPath) -> Option<PathComponent> {
+    let b = b.into_split_path();
+    let c = c.into_split_path();
+    match b.longest_common_prefix(c).split_first_parts() {
+        (None, Some((c, _)), _) => Some(c),
+        _ => None,
     }
-
-    c.next()
 }
 
 fn verify_opt_value_digest(

@@ -17,15 +17,17 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use firewood_storage::logger::{trace, warn};
 use metrics::gauge;
-use rayon::ThreadPool;
+use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
+use crate::root_store::{RootStore, RootStoreError};
 use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore, TrieHash,
+    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal,
+    IntoHashType, NodeStore, TrieHash,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
@@ -69,7 +71,7 @@ type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
 #[derive(Debug)]
-pub(crate) struct RevisionManager {
+pub(crate) struct RevisionManager<RS> {
     /// Maximum number of revisions to keep on disk
     max_revisions: usize,
 
@@ -79,13 +81,16 @@ pub(crate) struct RevisionManager {
     proposals: Mutex<Vec<ProposedRevision>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
-    threadpool: Option<OnceLock<ThreadPool>>,
+    threadpool: OnceLock<ThreadPool>,
+    root_store: RS,
 }
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum RevisionManagerError {
     #[error("Revision for {provided:?} not found")]
     RevisionNotFound { provided: HashKey },
+    #[error("Revision for {provided:?} has no address")]
+    RevisionWithoutAddress { provided: HashKey },
     #[error(
         "The proposal cannot be committed since it is not a direct child of the most recent commit. Proposal parent: {provided:?}, current root: {expected:?}"
     )]
@@ -93,12 +98,18 @@ pub(crate) enum RevisionManagerError {
         provided: Option<HashKey>,
         expected: Option<HashKey>,
     },
-    #[error("An IO error occurred during the commit")]
+    #[error("An IO error occurred during the commit: {0}")]
     FileIoError(#[from] FileIoError),
+    #[error("A RootStore error occurred")]
+    RootStoreError(#[from] RootStoreError),
 }
 
-impl RevisionManager {
-    pub fn new(filename: PathBuf, config: ConfigManager) -> Result<Self, FileIoError> {
+impl<RS: RootStore> RevisionManager<RS> {
+    pub fn new(
+        filename: PathBuf,
+        config: ConfigManager,
+        root_store: RS,
+    ) -> Result<Self, RevisionManagerError> {
         let fb = FileBacked::new(
             filename,
             config.manager.node_cache_size,
@@ -120,11 +131,8 @@ impl RevisionManager {
             by_hash: RwLock::new(Default::default()),
             proposals: Mutex::new(Default::default()),
             // committing_proposals: Default::default(),
-            threadpool: if config.parallel {
-                Some(OnceLock::new())
-            } else {
-                None
-            },
+            threadpool: OnceLock::new(),
+            root_store,
         };
 
         if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
@@ -139,23 +147,18 @@ impl RevisionManager {
             nodestore.flush_header_with_padding()?;
         }
 
-        Ok(manager)
-    }
+        // On startup, we always write the latest revision to RootStore
+        if let Some(root_hash) = manager.current_revision().root_hash() {
+            let root_address = manager.current_revision().root_address().ok_or(
+                RevisionManagerError::RevisionWithoutAddress {
+                    provided: root_hash.clone(),
+                },
+            )?;
 
-    pub fn all_hashes(&self) -> Vec<TrieHash> {
-        self.historical
-            .read()
-            .expect("poisoned lock")
-            .iter()
-            .filter_map(|r| r.root_hash().or_default_root_hash())
-            .chain(
-                self.proposals
-                    .lock()
-                    .expect("poisoned lock")
-                    .iter()
-                    .filter_map(|p| p.root_hash().or_default_root_hash()),
-            )
-            .collect()
+            manager.root_store.add_root(&root_hash, &root_address)?;
+        }
+
+        Ok(manager)
     }
 
     /// Commit a proposal
@@ -170,9 +173,10 @@ impl RevisionManager {
     /// 3. Revision reaping. If more than the maximum number of revisions are kept in memory, the
     ///    oldest revision is reaped.
     /// 4. Persist to disk. This includes flushing everything to disk.
-    /// 5. Set last committed revision.
+    /// 5. Persist the revision to `RootStore`.
+    /// 6. Set last committed revision.
     ///    Set last committed revision in memory.
-    /// 6. Proposal Cleanup.
+    /// 7. Proposal Cleanup.
     ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
     #[fastrace::trace(short_name = true)]
     #[crate::metrics("firewood.proposal.commit", "proposal commit to storage")]
@@ -233,7 +237,12 @@ impl RevisionManager {
         // we move the header out of NodeStore, which is in a future PR.
         committed.persist()?;
 
-        // 5. Set last committed revision
+        // 5. Persist revision to root store
+        if let (Some(hash), Some(address)) = (committed.root_hash(), committed.root_address()) {
+            self.root_store.add_root(&hash, &address)?;
+        }
+
+        // 6. Set last committed revision
         let committed: CommittedRevision = committed.into();
         self.historical
             .write()
@@ -246,7 +255,7 @@ impl RevisionManager {
                 .insert(hash, committed.clone());
         }
 
-        // 6. Proposal Cleanup
+        // 7. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
         // referenced by anyone else.
         self.proposals
@@ -268,32 +277,69 @@ impl RevisionManager {
 
         Ok(())
     }
-}
 
-impl RevisionManager {
-    pub fn add_proposal(&self, proposal: ProposedRevision) {
-        self.proposals.lock().expect("poisoned lock").push(proposal);
-    }
-
+    /// View the database at a specific hash.
+    /// To view the database at a specific hash involves a few steps:
+    /// 1. Try to find it in committed revisions.
+    /// 2. Try to find it in proposals.
+    /// 3. Try to find it in `RootStore`.
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, RevisionManagerError> {
-        // First try to find it in committed revisions
+        // 1. Try to find it in committed revisions.
         if let Ok(committed) = self.revision(root_hash.clone()) {
             return Ok(committed);
         }
 
-        // If not found in committed revisions, try proposals
+        // 2. Try to find it in proposals.
         let proposal = self
             .proposals
             .lock()
             .expect("poisoned lock")
             .iter()
             .find(|p| p.root_hash().as_ref() == Some(&root_hash))
-            .cloned()
-            .ok_or(RevisionManagerError::RevisionNotFound {
-                provided: root_hash,
-            })?;
+            .cloned();
 
-        Ok(proposal)
+        if let Some(proposal) = proposal {
+            return Ok(proposal);
+        }
+
+        // 3. Try to find it in `RootStore`.
+        let revision_addr =
+            self.root_store
+                .get(&root_hash)?
+                .ok_or(RevisionManagerError::RevisionNotFound {
+                    provided: root_hash.clone(),
+                })?;
+
+        let node_store = NodeStore::with_root(
+            root_hash.into_hash_type(),
+            revision_addr,
+            self.current_revision(),
+        );
+
+        Ok(Arc::new(node_store))
+    }
+}
+
+impl<RS> RevisionManager<RS> {
+    pub fn add_proposal(&self, proposal: ProposedRevision) {
+        self.proposals.lock().expect("poisoned lock").push(proposal);
+    }
+
+    /// TODO: should we support fetching all hashes from `RootStore`?
+    pub fn all_hashes(&self) -> Vec<TrieHash> {
+        self.historical
+            .read()
+            .expect("poisoned lock")
+            .iter()
+            .filter_map(|r| r.root_hash().or_default_root_hash())
+            .chain(
+                self.proposals
+                    .lock()
+                    .expect("poisoned lock")
+                    .iter()
+                    .filter_map(|p| p.root_hash().or_default_root_hash()),
+            )
+            .collect()
     }
 
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
@@ -320,8 +366,21 @@ impl RevisionManager {
             .clone()
     }
 
-    pub const fn threadpool(&self) -> Option<&OnceLock<ThreadPool>> {
-        self.threadpool.as_ref()
+    /// Gets or creates a threadpool associated with the revision manager.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the it cannot create a thread pool.
+    pub fn threadpool(&self) -> &ThreadPool {
+        // Note that OnceLock currently doesn't support get_or_try_init (it is available in a
+        // nightly release). The get_or_init should be replaced with get_or_try_init once it
+        // is available to allow the error to be passed back to the caller.
+        self.threadpool.get_or_init(|| {
+            ThreadPoolBuilder::new()
+                .num_threads(BranchNode::MAX_CHILDREN)
+                .build()
+                .expect("Error in creating threadpool")
+        })
     }
 }
 
@@ -329,7 +388,14 @@ impl RevisionManager {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::root_store::NoOpStore;
     use tempfile::NamedTempFile;
+
+    impl<RS: Clone> RevisionManager<RS> {
+        pub fn root_store(&self) -> RS {
+            self.root_store.clone()
+        }
+    }
 
     #[test]
     fn test_file_advisory_lock() {
@@ -343,14 +409,14 @@ mod tests {
             .build();
 
         // First database instance should open successfully
-        let first_manager = RevisionManager::new(db_path.clone(), config.clone());
+        let first_manager = RevisionManager::new(db_path.clone(), config.clone(), NoOpStore {});
         assert!(
             first_manager.is_ok(),
             "First database should open successfully"
         );
 
         // Second database instance should fail to open due to file locking
-        let second_manager = RevisionManager::new(db_path.clone(), config.clone());
+        let second_manager = RevisionManager::new(db_path.clone(), config.clone(), NoOpStore {});
         assert!(
             second_manager.is_err(),
             "Second database should fail to open"
@@ -370,7 +436,7 @@ mod tests {
         drop(first_manager.unwrap());
 
         // Now the second database should open successfully
-        let third_manager = RevisionManager::new(db_path, config);
+        let third_manager = RevisionManager::new(db_path, config, NoOpStore {});
         assert!(
             third_manager.is_ok(),
             "Database should open after first instance is dropped"
