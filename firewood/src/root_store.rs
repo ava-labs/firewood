@@ -6,12 +6,18 @@ use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
 use firewood_storage::{LinearAddress, TrieHash};
 
-#[derive(Debug, thiserror::Error)]
-pub enum RootStoreError {
-    #[error("Failed to add root")]
+#[derive(Debug)]
+pub enum RootStoreMethod {
     Add,
-    #[error("Failed to get root")]
     Get,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("A RootStore error occurred.")]
+pub struct RootStoreError {
+    pub method: RootStoreMethod,
+    #[source]
+    pub source: Box<dyn std::error::Error + Send + Sync>,
 }
 
 pub trait RootStore {
@@ -76,7 +82,10 @@ impl MockStore {
 impl RootStore for MockStore {
     fn add_root(&self, hash: &TrieHash, address: &LinearAddress) -> Result<(), RootStoreError> {
         if self.should_fail {
-            return Err(RootStoreError::Add);
+            return Err(RootStoreError {
+                method: RootStoreMethod::Add,
+                source: "Adding roots should fail".into(),
+            });
         }
 
         self.roots.borrow_mut().insert(hash.clone(), *address);
@@ -85,7 +94,10 @@ impl RootStore for MockStore {
 
     fn get(&self, hash: &TrieHash) -> Result<Option<LinearAddress>, RootStoreError> {
         if self.should_fail {
-            return Err(RootStoreError::Get);
+            return Err(RootStoreError {
+                method: RootStoreMethod::Get,
+                source: "Getting roots should fail".into(),
+            });
         }
 
         Ok(self.roots.borrow().get(hash).copied())
