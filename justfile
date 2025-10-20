@@ -27,6 +27,47 @@ check-ffi-flake: check-nix
     ./scripts/run-just.sh update-ffi-flake
     ./scripts/run-just.sh check-clean-branch
 
+# Check if the golang version is set consistently for all (requires clean git tree)
+check-golang-version: check-nix
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    FAILED=
+
+    cd ffi
+
+    TOOLCHAIN_VERSION=$(nix develop --command bash -c "go mod edit -json | jq -r '.Toolchain'")
+    echo "toolchain version in ffi/go.mod is ${TOOLCHAIN_VERSION}"
+
+    ETH_TESTS_VERSION=$(nix develop --command bash -c "cd tests/eth && go mod edit -json | jq -r '.Toolchain'")
+    echo "toolchain version in ffi/tests/eth/go.mod is ${ETH_TESTS_VERSION}"
+
+    if [[ "${TOOLCHAIN_VERSION}" != "${ETH_TESTS_VERSION}" ]]; then
+        echo "❌ toolchain version in ffi/tests/eth/go.mod should be ${TOOLCHAIN_VERSION}"
+        FAILED=1
+    fi
+
+    FIREWOOD_TESTS_VERSION=$(nix develop --command bash -c "cd tests/firewood && go mod edit -json | jq -r '.Toolchain'")
+    echo "toolchain version in ffi/tests/firewood/go.mod is ${FIREWOOD_TESTS_VERSION}"
+
+    if [[ "${TOOLCHAIN_VERSION}" != "${FIREWOOD_TESTS_VERSION}" ]]; then
+        echo "❌ toolchain version in ffi/tests/firewood/go.mod should be ${TOOLCHAIN_VERSION}"
+        FAILED=1
+    fi
+
+    NIX_VERSION=$(nix run .#go -- version | awk '{print $3}')
+    echo "golang provided by ffi/flake.nix is ${NIX_VERSION}"
+
+    if [[ "${TOOLCHAIN_VERSION}" != "${NIX_VERSION}" ]]; then
+        echo "❌ golang provided by ffi/flake/nix should be ${TOOLCHAIN_VERSION}"
+        echo "It will be necessary to update the golang.url in ffi/flake.nix to point to a SHA of"\
+             "AvalancheGo whose nix/go/flake.nix provides ${TOOLCHAIN_VERSION}."
+    fi
+
+    if [[ -n "${FAILED}" ]]; then
+        exit 1
+    fi
+
 # Check if nix is installed
 check-nix:
     #!/usr/bin/env bash
@@ -57,7 +98,7 @@ test-ffi-nix-go-bindings: build-ffi-nix
     #!/usr/bin/env bash
     set -euo pipefail
 
-    echo "Running ffi tests against bindings built by nix..."
+    echo "running ffi tests against bindings built by nix..."
 
     cd ffi
 
@@ -81,4 +122,9 @@ update-ffi-flake: check-nix
     #!/usr/bin/env bash
     set -euo pipefail
     cd ffi
+
+    echo "ensuring flake lock file is current for golang"
     nix flake update golang
+
+    echo "checking for a consistent golang verion"
+    ../scripts/run-just.sh check-golang-version

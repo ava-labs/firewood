@@ -116,6 +116,11 @@
         program = "${go}/bin/go";
       };
 
+      apps.jq = {
+        type = "app";
+        program = "${pkgs.jq}/bin/jq";
+      };
+
       apps.just = {
         type = "app";
         program = "${pkgs.just}/bin/just";
@@ -127,6 +132,7 @@
         packages = with pkgs; [
           firewood-ffi
           go
+          jq
           just
           rustToolchain
         ];

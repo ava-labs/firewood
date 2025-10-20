@@ -7,6 +7,7 @@ go 1.24
 //   - ffi/flake.nix (update golang.url to a version of avalanchego's nix/go/flake.nix that uses the desired version and run `just update-ffi-flake`)
 //   - ffi/tests/eth/go.mod
 //   - ffi/tests/firewood/go.mod
+// `just check-golang-version` validates that these versions are in sync and will run in CI as part of the ffi-nix job.
 toolchain go1.24.9
 
 require (
