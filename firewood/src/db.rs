@@ -205,6 +205,10 @@ impl<RS> Db<RS> {
 
     /// Create a proposal with a specified parent. Currently, the parent can be another proposal or
     /// the current revision.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the revision manager cannot create a thread pool.
     #[fastrace::trace(name = "propose")]
     fn propose_with_parent<F: Parentable>(
         &self,
