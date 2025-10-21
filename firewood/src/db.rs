@@ -109,9 +109,6 @@ pub struct DbConfig {
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
-    // Whether to use parallel insert and hashing for propose.
-    #[builder(default = false)]
-    pub parallel: bool,
 }
 
 #[derive(Debug)]
