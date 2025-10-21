@@ -62,9 +62,6 @@ pub struct ConfigManager {
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
-    /// Whether to turn on parallel insert and hashing for propose.
-    #[builder(default = false)]
-    pub parallel: bool,
 }
 
 type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
