@@ -216,8 +216,9 @@ impl<RS> Db<RS> {
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
         parent: &NodeStore<F, FileBacked>,
     ) -> Result<Proposal<'_, RS>, api::Error> {
-        // If the size of the batch is >= MIN_BATCH_SIZE_FOR_PARALLEL, then use the parallel implementation.
-        // TODO: Experimentally determine the right value for the constant.
+        // Only perform parallel proposal creation if the batch size is >= MIN_BATCH_SIZE_FOR_PARALLEL.
+        // Otherwise perform serial proposal creation as it is faster than parallel for small batches.
+        // TODO: Experimentally determine the right value for MIN_BATCH_SIZE_FOR_PARALLEL.
         let batch = batch.into_iter();
         let immutable = if batch.size_hint().0 >= Db::<RS>::MIN_BATCH_SIZE_FOR_PARALLEL {
             let mut parallel_merkle = ParallelMerkle::default();
