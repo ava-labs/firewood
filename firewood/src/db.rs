@@ -214,7 +214,7 @@ impl<RS> Db<RS> {
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
         parent: &NodeStore<F, FileBacked>,
     ) -> Result<Proposal<'_, RS>, api::Error> {
-        // If the size of the batch is >= MIN_BATCH_SIZE_FOR_PARALLEL, then use the parallel implementation. 
+        // If the size of the batch is >= MIN_BATCH_SIZE_FOR_PARALLEL, then use the parallel implementation.
         // TODO: Experimentally determine the right value to for the constant.
         let batch = batch.into_iter();
         let immutable = if batch.size_hint().0 >= Db::<RS>::MIN_BATCH_SIZE_FOR_PARALLEL {
