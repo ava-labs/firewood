@@ -72,7 +72,6 @@ A `Config` should be provided when creating the database. A default config is pr
     FreeListCacheEntries: 40000,
     Revisions:            100,
     ReadCacheStrategy:    OnlyCacheWrites,
-    Parallel:             false,
 }
 ```
 
@@ -81,12 +80,6 @@ If no config is provided (`config == nil`), the default config is used. A descri
 #### `Truncate` - `bool`
 
 If set to `true`, an empty database will be created, overriding any existing file. Otherwise, if a file exists, that file will be loaded to create the database. In either case, if the file doesn't exist, it will be created.
-
-*Default*: `false`
-
-#### `Parallel` - `bool`
-
-If set to `true`, proposals are created in parallel. This can improve performance by supporting both parallel reads and parallel hashing during proposal creation.
 
 *Default*: `false`
 

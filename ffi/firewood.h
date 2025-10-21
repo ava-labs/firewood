@@ -943,10 +943,6 @@ typedef struct DatabaseHandleArgs {
    * Whether to truncate the database file if it exists.
    */
   bool truncate;
-  /**
-   * Whether to use parallel insert and hashing for propose
-   */
-  bool parallel;
 } DatabaseHandleArgs;
 
 /**
