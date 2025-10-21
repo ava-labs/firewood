@@ -203,8 +203,9 @@ impl<RS> Db<RS> {
         latest_rev_nodestore.check(opt)
     }
 
-    /// Create a proposal with a specified parent. Currently, the parent can be another proposal or
-    /// the current revision.
+    /// Create a proposal with a specified parent. Currently, the parent can be another proposal or the
+    /// current revision. Proposals with a batch size larger than or equal to MIN_BATCH_SIZE_FOR_PARALLEL
+    /// are processed in parallel.
     ///
     /// # Panics
     ///
@@ -216,7 +217,7 @@ impl<RS> Db<RS> {
         parent: &NodeStore<F, FileBacked>,
     ) -> Result<Proposal<'_, RS>, api::Error> {
         // If the size of the batch is >= MIN_BATCH_SIZE_FOR_PARALLEL, then use the parallel implementation.
-        // TODO: Experimentally determine the right value to for the constant.
+        // TODO: Experimentally determine the right value for the constant.
         let batch = batch.into_iter();
         let immutable = if batch.size_hint().0 >= Db::<RS>::MIN_BATCH_SIZE_FOR_PARALLEL {
             let mut parallel_merkle = ParallelMerkle::default();
