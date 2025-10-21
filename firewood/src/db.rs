@@ -204,7 +204,7 @@ impl<RS> Db<RS> {
     }
 
     /// Create a proposal with a specified parent. Currently, the parent can be another proposal or the
-    /// current revision. Proposals with a batch size larger than or equal to MIN_BATCH_SIZE_FOR_PARALLEL
+    /// current revision. Proposals with a batch size larger than or equal to `MIN_BATCH_SIZE_FOR_PARALLEL`
     /// are processed in parallel.
     ///
     /// # Panics
