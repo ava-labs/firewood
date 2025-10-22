@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 use firewood_storage::logger::{trace, warn};
 use metrics::gauge;
-use rayon::{ThreadPool, ThreadPoolBuilder};
+use threadpool::ThreadPool;
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
@@ -372,12 +372,8 @@ impl<RS> RevisionManager<RS> {
         // Note that OnceLock currently doesn't support get_or_try_init (it is available in a
         // nightly release). The get_or_init should be replaced with get_or_try_init once it
         // is available to allow the error to be passed back to the caller.
-        self.threadpool.get_or_init(|| {
-            ThreadPoolBuilder::new()
-                .num_threads(BranchNode::MAX_CHILDREN)
-                .build()
-                .expect("Error in creating threadpool")
-        })
+        self.threadpool
+            .get_or_init(|| ThreadPool::new(BranchNode::MAX_CHILDREN))
     }
 }
 

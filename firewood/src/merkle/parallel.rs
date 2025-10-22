@@ -10,11 +10,11 @@ use firewood_storage::{
     MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeReader, NodeStore, Parentable,
     Path, PathComponent,
 };
-use rayon::ThreadPool;
 use std::iter::once;
 use std::ops::Deref;
 use std::sync::mpsc::{Receiver, SendError, Sender};
 use std::sync::{Arc, mpsc};
+use threadpool::ThreadPool;
 
 #[derive(Debug)]
 struct WorkerSender(mpsc::Sender<BatchOp<Key, Value>>);
@@ -256,7 +256,7 @@ impl ParallelMerkle {
 
         // Spawn a worker from the threadpool for this nibble. The worker will send messages to the coordinator
         // using `worker_sender`.
-        pool.spawn(move || {
+        pool.execute(move || {
             if let Err(err) = ParallelMerkle::worker_event_loop(
                 Merkle::from(worker_nodestore),
                 first_path_component,
