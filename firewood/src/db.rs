@@ -11,8 +11,8 @@ use crate::merkle::{Merkle, Value};
 use crate::root_store::{NoOpStore, RootStore};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
-    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair,
-    KeyValuePairIter, OptionalHashKeyExt,
+    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePairIter,
+    OptionalHashKeyExt,
 };
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
@@ -116,6 +116,8 @@ pub struct DbConfig {
 pub struct Db<RS = NoOpStore> {
     metrics: Arc<DbMetrics>,
     manager: RevisionManager<RS>,
+    #[cfg(test)]
+    force_parallel: bool,
 }
 
 impl<RS: RootStore> api::Db for Db<RS> {
@@ -139,45 +141,11 @@ impl<RS: RootStore> api::Db for Db<RS> {
         Ok(self.manager.all_hashes())
     }
 
-    #[fastrace::trace(short_name = true)]
     fn propose(
         &self,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
     ) -> Result<Self::Proposal<'_>, api::Error> {
-        let parent = self.manager.current_revision();
-        let proposal = NodeStore::new(&parent)?;
-        let mut merkle = Merkle::from(proposal);
-        let span = fastrace::Span::enter_with_local_parent("merkleops");
-        for op in batch.into_iter().map_into_batch() {
-            match op {
-                BatchOp::Put { key, value } => {
-                    merkle.insert(key.as_ref(), value.as_ref().into())?;
-                }
-                BatchOp::Delete { key } => {
-                    merkle.remove(key.as_ref())?;
-                }
-                BatchOp::DeleteRange { prefix } => {
-                    merkle.remove_prefix(prefix.as_ref())?;
-                }
-            }
-        }
-
-        drop(span);
-        let span = fastrace::Span::enter_with_local_parent("freeze");
-
-        let nodestore = merkle.into_inner();
-        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.try_into()?);
-
-        drop(span);
-        self.manager.add_proposal(immutable.clone());
-
-        self.metrics.proposals.increment(1);
-
-        Ok(Self::Proposal {
-            nodestore: immutable,
-            db: self,
-        })
+        self.propose_with_parent(batch, &self.manager.current_revision())
     }
 }
 
@@ -206,6 +174,13 @@ impl<RS: RootStore> Db<RS> {
 
         let manager =
             RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager, root_store)?;
+        #[cfg(test)]
+        let db = Self {
+            metrics,
+            manager,
+            force_parallel: false,
+        };
+        #[cfg(not(test))]
         let db = Self { metrics, manager };
         Ok(db)
     }
@@ -217,6 +192,8 @@ impl<RS: RootStore> Db<RS> {
 }
 
 impl<RS> Db<RS> {
+    const MIN_BATCH_SIZE_FOR_PARALLEL: usize = 8;
+
     /// Dump the Trie of the latest revision.
     pub fn dump(&self, w: &mut dyn Write) -> Result<(), std::io::Error> {
         let latest_rev_nodestore = self.manager.current_revision();
@@ -235,20 +212,68 @@ impl<RS> Db<RS> {
         latest_rev_nodestore.check(opt)
     }
 
-    /// Propose a new batch that is processed in parallel.
+    /// Create a proposal with a specified parent. Currently, the parent can be another proposal or the
+    /// current revision. Proposals with a batch size larger than or equal to `MIN_BATCH_SIZE_FOR_PARALLEL`
+    /// are processed in parallel.
     ///
     /// # Panics
     ///
     /// Panics if the revision manager cannot create a thread pool.
-    pub fn propose_parallel(
+    #[fastrace::trace(name = "propose")]
+    fn propose_with_parent<F: Parentable>(
         &self,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
+        parent: &NodeStore<F, FileBacked>,
     ) -> Result<Proposal<'_, RS>, api::Error> {
-        let parent = self.manager.current_revision();
-        let mut parallel_merkle = ParallelMerkle::default();
-        let immutable =
-            parallel_merkle.create_proposal(&parent, batch, self.manager.threadpool())?;
+        // Perform parallel proposal creation if the batch size is >= MIN_BATCH_SIZE_FOR_PARALLEL.
+        // Otherwise create the proposal serially as it is faster for small batches.
+        // TODO: Experimentally determine the right value for MIN_BATCH_SIZE_FOR_PARALLEL.
+        let batch = batch.into_iter();
+        #[cfg(test)]
+        let use_parallel =
+            self.force_parallel || batch.size_hint().0 >= Db::<RS>::MIN_BATCH_SIZE_FOR_PARALLEL;
+        #[cfg(not(test))]
+        let use_parallel = batch.size_hint().0 >= Db::<RS>::MIN_BATCH_SIZE_FOR_PARALLEL;
+
+        let immutable = if use_parallel {
+            let mut parallel_merkle = ParallelMerkle::default();
+            let span = fastrace::Span::enter_with_local_parent("parallel_merkle");
+            let immutable =
+                parallel_merkle.create_proposal(parent, batch, self.manager.threadpool())?;
+            drop(span);
+            immutable
+        } else {
+            let proposal = NodeStore::new(parent)?;
+            let mut merkle = Merkle::from(proposal);
+            let span = fastrace::Span::enter_with_local_parent("merkleops");
+            for op in batch.into_iter().map_into_batch() {
+                match op {
+                    BatchOp::Put { key, value } => {
+                        merkle.insert(key.as_ref(), value.as_ref().into())?;
+                    }
+                    BatchOp::Delete { key } => {
+                        merkle.remove(key.as_ref())?;
+                    }
+                    BatchOp::DeleteRange { prefix } => {
+                        merkle.remove_prefix(prefix.as_ref())?;
+                    }
+                }
+            }
+
+            drop(span);
+            let span = fastrace::Span::enter_with_local_parent("freeze");
+
+            let nodestore = merkle.into_inner();
+            let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
+                Arc::new(nodestore.try_into()?);
+
+            drop(span);
+            immutable
+        };
         self.manager.add_proposal(immutable.clone());
+
+        self.metrics.proposals.increment(1);
+
         Ok(Proposal {
             nodestore: immutable,
             db: self,
@@ -317,31 +342,7 @@ impl<RS> Proposal<'_, RS> {
         &self,
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
     ) -> Result<Self, api::Error> {
-        let parent = self.nodestore.clone();
-        let proposal = NodeStore::new(&parent)?;
-        let mut merkle = Merkle::from(proposal);
-        for op in batch {
-            match op.into_batch() {
-                BatchOp::Put { key, value } => {
-                    merkle.insert(key.as_ref(), value.as_ref().into())?;
-                }
-                BatchOp::Delete { key } => {
-                    merkle.remove(key.as_ref())?;
-                }
-                BatchOp::DeleteRange { prefix } => {
-                    merkle.remove_prefix(prefix.as_ref())?;
-                }
-            }
-        }
-        let nodestore = merkle.into_inner();
-        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.try_into()?);
-        self.db.manager.add_proposal(immutable.clone());
-
-        Ok(Self {
-            nodestore: immutable,
-            db: self.db,
-        })
+        self.db.propose_with_parent(batch, &self.nodestore)
     }
 }
 
@@ -601,12 +602,13 @@ mod test {
             let keys: Vec<[u8; 1]> = vec![[kv; 1]];
             let vals: Vec<Box<[u8]>> = vec![Box::new([kv; 1])];
             let kviter = keys.iter().zip(vals.iter()).map_into_batch();
-            let proposal = db.propose_parallel(kviter).unwrap();
+            let proposal = db.propose(kviter).unwrap();
             proposal.commit().unwrap();
         }
 
         // Create, insert, close, open, insert
-        let db = TestDb::new();
+        let mut db = TestDb::new();
+        db.force_parallel = true;
         insert_commit(&db, 1);
         let db = db.reopen();
         insert_commit(&db, 2);
@@ -621,9 +623,11 @@ mod test {
         drop(db);
 
         // Open-db1, insert, open-db2, insert
-        let db1 = TestDb::new();
+        let mut db1 = TestDb::new();
+        db1.force_parallel = true;
         insert_commit(&db1, 1);
-        let db2 = TestDb::new();
+        let mut db2 = TestDb::new();
+        db2.force_parallel = true;
         insert_commit(&db2, 2);
         let committed1 = db1.revision(db1.root_hash().unwrap().unwrap()).unwrap();
         let committed2 = db2.revision(db2.root_hash().unwrap().unwrap()).unwrap();
@@ -639,14 +643,15 @@ mod test {
     #[test]
     fn test_propose_parallel() {
         const N: usize = 100;
-        let db = TestDb::new();
+        let mut db = TestDb::new();
+        db.force_parallel = true;
 
         // Test an empty proposal
         let keys: Vec<[u8; 0]> = Vec::new();
         let vals: Vec<Box<[u8]>> = Vec::new();
 
         let kviter = keys.iter().zip(vals.iter()).map_into_batch();
-        let proposal = db.propose_parallel(kviter).unwrap();
+        let proposal = db.propose(kviter).unwrap();
         proposal.commit().unwrap();
 
         // Create a proposal consisting of a single entry and an empty key.
@@ -657,7 +662,7 @@ mod test {
         let vals: Vec<Box<[u8]>> = vec![Box::new([0; 1])];
 
         let kviter = keys.iter().zip(vals.iter()).map_into_batch();
-        let proposal = db.propose_parallel(kviter).unwrap();
+        let proposal = db.propose(kviter).unwrap();
 
         let kviter = keys.iter().zip(vals.iter());
         for (k, v) in kviter {
@@ -675,7 +680,7 @@ mod test {
         // Create a proposal that deletes the previous entry
         let vals: Vec<Box<[u8]>> = vec![Box::new([0; 0])];
         let kviter = keys.iter().zip(vals.iter()).map_into_batch();
-        let proposal = db.propose_parallel(kviter).unwrap();
+        let proposal = db.propose(kviter).unwrap();
 
         let kviter = keys.iter().zip(vals.iter());
         for (k, _v) in kviter {
@@ -694,7 +699,7 @@ mod test {
             .unzip();
 
         let kviter = keys.iter().zip(vals.iter()).map_into_batch();
-        let proposal = db.propose_parallel(kviter).unwrap();
+        let proposal = db.propose(kviter).unwrap();
         let kviter = keys.iter().zip(vals.iter());
         for (k, v) in kviter {
             assert_eq!(&proposal.val(k).unwrap().unwrap(), v);
@@ -713,7 +718,7 @@ mod test {
             .unzip();
 
         let kviter = keys.iter().zip(vals.iter()).map_into_batch();
-        let proposal = db.propose_parallel(kviter).unwrap();
+        let proposal = db.propose(kviter).unwrap();
         let kviter = keys.iter().zip(vals.iter());
         for (k, _v) in kviter {
             assert_eq!(proposal.val(k).unwrap(), None);
@@ -724,7 +729,7 @@ mod test {
         let keys: Vec<[u8; 0]> = vec![[0; 0]];
         let vals: Vec<Box<[u8]>> = vec![Box::new([0; 0])];
         let kviter = keys.iter().zip(vals.iter()).map_into_batch();
-        let proposal = db.propose_parallel(kviter).unwrap();
+        let proposal = db.propose(kviter).unwrap();
         proposal.commit().unwrap();
 
         // Create N keys and values like (key0, value0)..(keyN, valueN)
@@ -741,7 +746,7 @@ mod test {
         // Looping twice to test that we are reusing the thread pool.
         for _ in 0..2 {
             let kviter = keys.iter().zip(vals.iter()).map_into_batch();
-            let proposal = db.propose_parallel(kviter).unwrap();
+            let proposal = db.propose(kviter).unwrap();
 
             // iterate over the keys and values again, checking that the values are in the correct proposal
             let kviter = keys.iter().zip(vals.iter());
