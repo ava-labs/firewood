@@ -116,6 +116,8 @@ pub struct DbConfig {
 pub struct Db<RS = NoOpStore> {
     metrics: Arc<DbMetrics>,
     manager: RevisionManager<RS>,
+    #[cfg(test)]
+    force_parallel: bool,
 }
 
 impl<RS: RootStore> api::Db for Db<RS> {
@@ -172,6 +174,13 @@ impl<RS: RootStore> Db<RS> {
 
         let manager =
             RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager, root_store)?;
+        #[cfg(test)]
+        let db = Self {
+            metrics,
+            manager,
+            force_parallel: false,
+        };
+        #[cfg(not(test))]
         let db = Self { metrics, manager };
         Ok(db)
     }
@@ -216,11 +225,17 @@ impl<RS> Db<RS> {
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
         parent: &NodeStore<F, FileBacked>,
     ) -> Result<Proposal<'_, RS>, api::Error> {
-        // Only perform parallel proposal creation if the batch size is >= MIN_BATCH_SIZE_FOR_PARALLEL.
-        // Otherwise perform serial proposal creation as it is faster than parallel for small batches.
+        // Perform parallel proposal creation if the batch size is >= MIN_BATCH_SIZE_FOR_PARALLEL.
+        // Otherwise create the proposal serially as it is faster for small batches.
         // TODO: Experimentally determine the right value for MIN_BATCH_SIZE_FOR_PARALLEL.
         let batch = batch.into_iter();
-        let immutable = if batch.size_hint().0 >= Db::<RS>::MIN_BATCH_SIZE_FOR_PARALLEL {
+        #[cfg(test)]
+        let use_parallel =
+            self.force_parallel || batch.size_hint().0 >= Db::<RS>::MIN_BATCH_SIZE_FOR_PARALLEL;
+        #[cfg(not(test))]
+        let use_parallel = batch.size_hint().0 >= Db::<RS>::MIN_BATCH_SIZE_FOR_PARALLEL;
+
+        let immutable = if use_parallel {
             let mut parallel_merkle = ParallelMerkle::default();
             let span = fastrace::Span::enter_with_local_parent("parallel_merkle");
             let immutable =
@@ -592,7 +607,8 @@ mod test {
         }
 
         // Create, insert, close, open, insert
-        let db = TestDb::new();
+        let mut db = TestDb::new();
+        db.force_parallel = true;
         insert_commit(&db, 1);
         let db = db.reopen();
         insert_commit(&db, 2);
@@ -607,9 +623,11 @@ mod test {
         drop(db);
 
         // Open-db1, insert, open-db2, insert
-        let db1 = TestDb::new();
+        let mut db1 = TestDb::new();
+        db1.force_parallel = true;
         insert_commit(&db1, 1);
-        let db2 = TestDb::new();
+        let mut db2 = TestDb::new();
+        db2.force_parallel = true;
         insert_commit(&db2, 2);
         let committed1 = db1.revision(db1.root_hash().unwrap().unwrap()).unwrap();
         let committed2 = db2.revision(db2.root_hash().unwrap().unwrap()).unwrap();
@@ -625,7 +643,8 @@ mod test {
     #[test]
     fn test_propose_parallel() {
         const N: usize = 100;
-        let db = TestDb::new();
+        let mut db = TestDb::new();
+        db.force_parallel = true;
 
         // Test an empty proposal
         let keys: Vec<[u8; 0]> = Vec::new();
