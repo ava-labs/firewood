@@ -386,6 +386,7 @@ mod tests {
     use crate::root_store::NoOpStore;
     use tempfile::NamedTempFile;
 
+    #[cfg(test)]
     impl RevisionManager {
         /// Extract the root store by consuming the revision manager instance.
         pub fn into_root_store(self) -> Box<dyn RootStore + Send + Sync> {

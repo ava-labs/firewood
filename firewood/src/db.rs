@@ -397,6 +397,7 @@ mod test {
 
     impl<T: Iterator> IterExt for T {}
 
+    #[cfg(test)]
     impl Db {
         /// Extract the root store by consuming the database instance.
         /// This is primarily used for reopening or replacing the database with the same root store.
@@ -1112,9 +1113,7 @@ mod test {
             let path = self.path();
             let TestDb { db, tmpdir } = self;
 
-            // Explicit scope ensures the database is fully dropped before we
-            // attempt to open a new database instance
-            let root_store = { db.into_root_store() };
+            let root_store = db.into_root_store();
 
             let dbconfig = DbConfig::builder().truncate(false).build();
             let db = Db::with_root_store(path, dbconfig, root_store).unwrap();
@@ -1124,9 +1123,7 @@ mod test {
             let path = self.path();
             let TestDb { db, tmpdir } = self;
 
-            // Explicit scope ensures the database is fully dropped before we
-            // attempt to open a new database instance
-            let root_store = { db.into_root_store() };
+            let root_store = db.into_root_store();
 
             let dbconfig = DbConfig::builder().truncate(true).build();
             let db = Db::with_root_store(path, dbconfig, root_store).unwrap();
