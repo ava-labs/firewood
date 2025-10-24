@@ -48,7 +48,7 @@ pub trait RootStore: Debug {
     fn get(&self, hash: &TrieHash) -> Result<Option<LinearAddress>, RootStoreError>;
 }
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct NoOpStore {}
 
 impl RootStore for NoOpStore {
@@ -62,7 +62,6 @@ impl RootStore for NoOpStore {
 }
 
 #[cfg(test)]
-#[cfg_attr(test, derive(Clone))]
 #[derive(Debug, Default)]
 pub struct MockStore {
     roots: Arc<Mutex<HashMap<TrieHash, LinearAddress>>>,
