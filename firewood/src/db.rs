@@ -184,7 +184,7 @@ impl api::Db for Db {
 impl Db {
     /// Create a new database instance.
     pub fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
-        Self::with_root_store(db_path, cfg, Arc::new(NoOpStore {}))
+        Self::with_root_store(db_path, cfg, Box::new(NoOpStore {}))
     }
 }
 
@@ -192,7 +192,7 @@ impl Db {
     fn with_root_store<P: AsRef<Path>>(
         db_path: P,
         cfg: DbConfig,
-        root_store: Arc<dyn RootStore + Send + Sync>,
+        root_store: Box<dyn RootStore + Send + Sync>,
     ) -> Result<Self, api::Error> {
         let metrics = Arc::new(DbMetrics {
             proposals: counter!("firewood.proposals"),
@@ -354,14 +354,13 @@ mod test {
     use std::num::NonZeroUsize;
     use std::ops::{Deref, DerefMut};
     use std::path::PathBuf;
-    use std::sync::Arc;
 
     use firewood_storage::{
         CheckOpt, CheckerError, HashedNodeReader, IntoHashType, NodeStore, TrieHash,
     };
 
     use crate::db::{Db, Proposal};
-    use crate::root_store::MockStore;
+    use crate::root_store::{MockStore, RootStore};
     use crate::v2::api::{Db as _, DbView, KeyValuePairIter, Proposal as _};
 
     use super::{BatchOp, DbConfig};
@@ -401,6 +400,14 @@ mod test {
     }
 
     impl<T: Iterator> IterExt for T {}
+
+    impl Db {
+        /// Extract the root store by consuming the database instance.
+        /// This is primarily used for reopening or replacing the database with the same root store.
+        pub fn into_root_store(self) -> Box<dyn RootStore + Send + Sync> {
+            self.manager.into_root_store()
+        }
+    }
 
     #[test]
     fn test_proposal_reads() {
@@ -1103,7 +1110,7 @@ mod test {
                 .iter()
                 .collect();
             let dbconfig = DbConfig::builder().build();
-            let db = Db::with_root_store(dbpath, dbconfig, Arc::new(mock_store)).unwrap();
+            let db = Db::with_root_store(dbpath, dbconfig, Box::new(mock_store)).unwrap();
             TestDb { db, tmpdir }
         }
     }
@@ -1111,27 +1118,27 @@ mod test {
     impl TestDb {
         fn reopen(self) -> Self {
             let path = self.path();
-            let root_store = self.manager.root_store();
-            drop(self.db);
-            let dbconfig = DbConfig::builder().truncate(false).build();
+            let TestDb { db, tmpdir } = self;
 
+            // Explicit scope ensures the database is fully dropped before we
+            // attempt to open a new database instance
+            let root_store = { db.into_root_store() };
+
+            let dbconfig = DbConfig::builder().truncate(false).build();
             let db = Db::with_root_store(path, dbconfig, root_store).unwrap();
-            TestDb {
-                db,
-                tmpdir: self.tmpdir,
-            }
+            TestDb { db, tmpdir }
         }
         fn replace(self) -> Self {
             let path = self.path();
-            let root_store = self.manager.root_store();
-            drop(self.db);
-            let dbconfig = DbConfig::builder().truncate(true).build();
+            let TestDb { db, tmpdir } = self;
 
+            // Explicit scope ensures the database is fully dropped before we
+            // attempt to open a new database instance
+            let root_store = { db.into_root_store() };
+
+            let dbconfig = DbConfig::builder().truncate(true).build();
             let db = Db::with_root_store(path, dbconfig, root_store).unwrap();
-            TestDb {
-                db,
-                tmpdir: self.tmpdir,
-            }
+            TestDb { db, tmpdir }
         }
     }
 

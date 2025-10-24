@@ -79,7 +79,7 @@ pub(crate) struct RevisionManager {
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
     threadpool: OnceLock<ThreadPool>,
-    root_store: Arc<dyn RootStore + Send + Sync>,
+    root_store: Box<dyn RootStore + Send + Sync>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -105,7 +105,7 @@ impl RevisionManager {
     pub fn new(
         filename: PathBuf,
         config: ConfigManager,
-        root_store: Arc<dyn RootStore + Send + Sync>,
+        root_store: Box<dyn RootStore + Send + Sync>,
     ) -> Result<Self, RevisionManagerError> {
         let fb = FileBacked::new(
             filename,
@@ -389,8 +389,9 @@ mod tests {
     use tempfile::NamedTempFile;
 
     impl RevisionManager {
-        pub fn root_store(&self) -> Arc<dyn RootStore + Send + Sync> {
-            self.root_store.clone()
+        /// Extract the root store by consuming the revision manager instance.
+        pub fn into_root_store(self) -> Box<dyn RootStore + Send + Sync> {
+            self.root_store
         }
     }
 
@@ -407,7 +408,7 @@ mod tests {
 
         // First database instance should open successfully
         let first_manager =
-            RevisionManager::new(db_path.clone(), config.clone(), Arc::new(NoOpStore {}));
+            RevisionManager::new(db_path.clone(), config.clone(), Box::new(NoOpStore {}));
         assert!(
             first_manager.is_ok(),
             "First database should open successfully"
@@ -415,7 +416,7 @@ mod tests {
 
         // Second database instance should fail to open due to file locking
         let second_manager =
-            RevisionManager::new(db_path.clone(), config.clone(), Arc::new(NoOpStore {}));
+            RevisionManager::new(db_path.clone(), config.clone(), Box::new(NoOpStore {}));
         assert!(
             second_manager.is_err(),
             "Second database should fail to open"
@@ -435,7 +436,7 @@ mod tests {
         drop(first_manager.unwrap());
 
         // Now the second database should open successfully
-        let third_manager = RevisionManager::new(db_path, config, Arc::new(NoOpStore {}));
+        let third_manager = RevisionManager::new(db_path, config, Box::new(NoOpStore {}));
         assert!(
             third_manager.is_ok(),
             "Database should open after first instance is dropped"
