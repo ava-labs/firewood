@@ -315,9 +315,7 @@ impl RevisionManager {
 
         Ok(Arc::new(node_store))
     }
-}
 
-impl RevisionManager {
     pub fn add_proposal(&self, proposal: ProposedRevision) {
         self.proposals.lock().expect("poisoned lock").push(proposal);
     }

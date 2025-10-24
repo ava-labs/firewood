@@ -186,9 +186,7 @@ impl Db {
     pub fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
         Self::with_root_store(db_path, cfg, Box::new(NoOpStore {}))
     }
-}
 
-impl Db {
     fn with_root_store<P: AsRef<Path>>(
         db_path: P,
         cfg: DbConfig,
@@ -214,9 +212,7 @@ impl Db {
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, api::Error> {
         self.manager.view(root_hash).map_err(Into::into)
     }
-}
 
-impl Db {
     /// Dump the Trie of the latest revision.
     pub fn dump(&self, w: &mut dyn Write) -> Result<(), std::io::Error> {
         let latest_rev_nodestore = self.manager.current_revision();
@@ -1101,9 +1097,7 @@ mod test {
             let db = Db::new(dbpath, dbconfig).unwrap();
             TestDb { db, tmpdir }
         }
-    }
 
-    impl TestDb {
         fn with_mockstore(mock_store: MockStore) -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
             let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
@@ -1113,9 +1107,7 @@ mod test {
             let db = Db::with_root_store(dbpath, dbconfig, Box::new(mock_store)).unwrap();
             TestDb { db, tmpdir }
         }
-    }
 
-    impl TestDb {
         fn reopen(self) -> Self {
             let path = self.path();
             let TestDb { db, tmpdir } = self;
@@ -1140,9 +1132,7 @@ mod test {
             let db = Db::with_root_store(path, dbconfig, root_store).unwrap();
             TestDb { db, tmpdir }
         }
-    }
 
-    impl TestDb {
         fn path(&self) -> PathBuf {
             [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()
