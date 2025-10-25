@@ -1,0 +1,145 @@
+#cloud-config
+package_update: true
+package_upgrade: true
+packages:
+  - git
+  - build-essential
+  - curl
+  - protobuf-compiler
+  - make
+  - apt-transport-https
+  - net-tools
+  - unzip
+users:
+  - default
+  - name: rkuris
+    lock_passwd: true
+    groups: users, adm, sudo
+    shell: /usr/bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIL2RVmfpoKYi0tJd2DhQEp8tB3m2PSuaYxIfnLwqt03u cardno:23_537_110 ron
+  - name: austin
+    lock_passwd: true
+    groups: users, adm, sudo
+    shell: /usr/bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAICoGgX8nCin3FPc1V3YYN1M9g039wMbzZSAXZJCqzBt3 cardno:31_786_961 austin
+  - name: aaron
+    lock_passwd: true
+    groups: users, adm, sudo
+    shell: /usr/bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMj2j6ySwsFx7Y6FW2UXlkjCZfFDQKHWh0GTBjkK9ruV cardno:19_236_959 aaron
+  - name: brandon
+    lock_passwd: true
+    groups: users, adm, sudo
+    shell: /usr/bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFuwpEMnsBLdfr7V9SFRTm9XWHEFX3yQQP7nmsFHetBo cardno:26_763_547 brandon
+  - name: amin
+    lock_passwd: true
+    groups: users, adm, sudo
+    shell: /usr/bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE8iR1X8/ELrzjczZvCkrTGCEoN6/dtlP01QFGuUpYxV cardno:33_317_839 amin
+  - name: bernard
+    lock_passwd: true
+    groups: users, adm, sudo
+    shell: /usr/bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    ssh_authorized_keys:
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIE/1C8JVL0g6qqMw1p0TwJMqJqERxYTX+7PnP+gXP4km cardno:19_155_748 bernard
+
+!custom swap_config: {}
+
+# anyone can use the -D option
+write_files:
+- content: |
+   Defaults runcwd=*
+  path: "/etc/sudoers.d/91-cloud-init-enable-D-option"
+  permissions: '0440'
+- content: |
+    export PATH="$PATH:/usr/local/go/bin"
+  permissions: "0644"
+  path: "/etc/profile.d/go_path.sh"
+- content: |
+    export RUSTUP_HOME=/usr/local/rust
+    export PATH="$PATH:/usr/local/rust/bin"
+  permissions: "0644"
+  path: "/etc/profile.d/rust_path.sh"
+
+runcmd:
+  # install rust
+  - echo 'PATH=/usr/local/go/bin:$HOME/.cargo/bin:$PATH' >> ~ubuntu/.profile
+  - >
+    curl https://sh.rustup.rs -sSf
+    | RUSTUP_HOME=/usr/local/rust CARGO_HOME=/usr/local/rust
+    sh -s -- -y --no-modify-path
+  - sudo -u ubuntu --login rustup default stable
+  # install firewood
+  - git clone --depth 1 __FIREWOOD_BRANCH_ARG__ https://github.com/ava-labs/firewood.git /tmp/firewood
+  - bash /tmp/firewood/benchmark/setup-scripts/build-environment.sh
+  - bash -c 'mkdir ~ubuntu/firewood; mv /tmp/firewood/{.[!.],}* ~ubuntu/firewood/'
+  # fix up the directories so that anyone is group 'users' has r/w access
+  - chown -R ubuntu:users /mnt/nvme/ubuntu
+  - chmod -R g=u /mnt/nvme/ubuntu
+  - find /mnt/nvme/ubuntu -type d -print0 | xargs -0 chmod g+s
+  # helpful symbolic links from home directories
+  - sudo -u ubuntu ln -s /mnt/nvme/ubuntu/data /home/ubuntu/data
+  - sudo -u ubuntu ln -s /mnt/nvme/ubuntu/avalanchego /home/ubuntu/avalanchego
+  # install go and grafana
+  - bash /mnt/nvme/ubuntu/firewood/benchmark/setup-scripts/install-golang.sh
+  - bash /mnt/nvme/ubuntu/firewood/benchmark/setup-scripts/install-grafana.sh
+  # install task, avalanchego, coreth
+  - snap install task --classic
+  - >
+    sudo -u ubuntu -D /mnt/nvme/ubuntu
+    git clone --depth 100 __AVALANCHEGO_BRANCH_ARG__ https://github.com/ava-labs/avalanchego.git
+  - >
+    sudo -u ubuntu -D /mnt/nvme/ubuntu
+    git clone --depth 100 __CORETH_BRANCH_ARG__ https://github.com/ava-labs/coreth.git
+  - >
+    sudo -u ubuntu -D /mnt/nvme/ubuntu
+    git clone --depth 100 __LIBEVM_BRANCH_ARG__ https://github.com/ava-labs/libevm.git
+  # force avalanchego to use the checked-out versions of coreth, libevm, and firewood
+  - >
+    sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego
+    /usr/local/go/bin/go mod edit -replace
+    github.com/ava-labs/firewood-go-ethhash/ffi=../firewood/ffi
+  - >
+    sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego
+    /usr/local/go/bin/go mod edit -replace
+    github.com/ava-labs/coreth=../coreth
+  - >
+    sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego
+    /usr/local/go/bin/go mod edit -replace
+    github.com/ava-labs/libevm=../libevm
+  # build firewood in maxperf mode
+  - >
+    sudo -u ubuntu -D /mnt/nvme/ubuntu/firewood/ffi --login time cargo build
+    --profile maxperf
+    --features ethhash,logger
+    > /mnt/nvme/ubuntu/firewood/build.log 2>&1
+  # build avalanchego
+  - sudo -u ubuntu --login -D /mnt/nvme/ubuntu/avalanchego go mod tidy
+  - >
+    sudo -u ubuntu --login -D /mnt/nvme/ubuntu/avalanchego time scripts/build.sh
+    > /mnt/nvme/ubuntu/avalanchego/build.log 2>&1 &
+  # install s5cmd
+  - curl -L -o /tmp/s5cmd.deb $(curl -s https://api.github.com/repos/peak/s5cmd/releases/latest | grep "browser_download_url" | grep "linux_$(dpkg --print-architecture).deb" | cut -d '"' -f 4) && dpkg -i /tmp/s5cmd.deb
+  # download and extract mainnet blocks
+  - echo 'downloading mainnet blocks'
+  - sudo -u ubuntu mkdir -p /mnt/nvme/ubuntu/exec-data/blocks
+  - s5cmd cp s3://avalanchego-bootstrap-testing/cchain-mainnet-blocks-__NBLOCKS__-ldb/\* /mnt/nvme/ubuntu/exec-data/blocks/ >/dev/null
+  - chown -R ubuntu /mnt/nvme/ubuntu/exec-data
+  - chmod -R g=u /mnt/nvme/ubuntu/exec-data
+  # execute bootstrapping
+  - >
+    sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego --login
+    time task reexecute-cchain-range CURRENT_STATE_DIR=/mnt/nvme/ubuntu/exec-data/current-state BLOCK_DIR=/mnt/nvme/ubuntu/exec-data/blocks START_BLOCK=1 END_BLOCK=__END_BLOCK__ CONFIG=firewood METRICS_ENABLED=false
+    > /var/log/bootstrap.log 2>&1
