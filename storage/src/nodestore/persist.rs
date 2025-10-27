@@ -34,13 +34,7 @@ use crate::nodestore::AreaIndex;
 use crate::{Child, firewood_counter};
 use coarsetime::Instant;
 
-use crate::{FileBacked, MaybePersistedNode, NodeReader, WritableStorage};
-
-#[cfg(feature = "io-uring")]
-use crate::ReadableStorage;
-
-#[cfg(feature = "io-uring")]
-use crate::logger::trace;
+use crate::{MaybePersistedNode, NodeReader, WritableStorage};
 
 #[cfg(test)]
 use crate::RootReader;
@@ -51,6 +45,7 @@ use super::{Committed, NodeStore};
 
 #[cfg(not(test))]
 use super::RootReader;
+
 
 impl<T, S: WritableStorage> NodeStore<T, S> {
     /// Persist the header from this proposal to storage.
@@ -98,7 +93,7 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
     ///
     /// Returns a [`FileIoError`] if the free list cannot be written to storage.
     #[fastrace::trace(name = "firewood.flush_freelist")]
-    pub fn flush_freelist_from(&self, header: &NodeStoreHeader) -> Result<(), FileIoError> {
+    pub(crate) fn flush_freelist_from(&self, header: &NodeStoreHeader) -> Result<(), FileIoError> {
         let free_list_bytes = bytemuck::bytes_of(header.free_lists());
         let free_list_offset = NodeStoreHeader::free_lists_offset();
         self.storage.write(free_list_offset, free_list_bytes)?;
@@ -285,30 +280,30 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
     pub fn flush_nodes(&mut self) -> Result<NodeStoreHeader, FileIoError> {
-        #[cfg(feature = "io-uring")]
-        if let Some(this) = self.downcast_to_file_backed() {
-            return this.flush_nodes_io_uring();
-        }
-        self.flush_nodes_generic()
-    }
+        let flush_start = Instant::now();
 
-    #[cfg(feature = "io-uring")]
-    #[inline]
-    fn downcast_to_file_backed(&mut self) -> Option<&mut NodeStore<Committed, FileBacked>> {
-        /*
-         * FIXME(rust-lang/rfcs#1210, rust-lang/rust#31844):
-         *
-         * This is a slight hack that exists because rust trait specialization
-         * is not yet stable. If the `io-uring` feature is enabled, we attempt to
-         * downcast `self` into a `NodeStore<Committed, FileBacked>`, and if successful,
-         * we call the specialized `flush_nodes_io_uring` method.
-         *
-         * During monomorphization, this will be completely optimized out as the
-         * type id comparison is done with constants that the compiler can resolve
-         * and use to detect dead branches.
-         */
-        let this = self as &mut dyn std::any::Any;
-        this.downcast_mut::<NodeStore<Committed, FileBacked>>()
+        let header = {
+            #[cfg(feature = "io-uring")]
+            {
+                use crate::FileBacked;
+                // Try to use io-uring if available and storage type supports it
+                let this = self as &mut dyn std::any::Any;
+                if let Some(file_backed) = this.downcast_mut::<NodeStore<Committed, FileBacked>>() {
+                    file_backed.flush_nodes_io_uring()?
+                } else {
+                    self.flush_nodes_generic()?
+                }
+            }
+            #[cfg(not(feature = "io-uring"))]
+            {
+                self.flush_nodes_generic()?
+            }
+        };
+
+        let flush_time = flush_start.elapsed().as_millis();
+        firewood_counter!("firewood.flush_nodes", "amount flushed nodes").increment(flush_time);
+
+        Ok(header)
     }
 
     /// Persist all the nodes of a proposal to storage.
@@ -319,24 +314,17 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     fn flush_nodes_generic(&self) -> Result<NodeStoreHeader, FileIoError> {
         use bumpalo::Bump;
 
-        const INITIAL_BUMP_SIZE: usize = AreaIndex::MAX_AREA_SIZE as usize;
-
-        let flush_start = Instant::now();
-
         let mut header = self.header;
         let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
-        let mut bump = Bump::with_capacity(INITIAL_BUMP_SIZE);
+        let mut bump = Bump::with_capacity(super::INITIAL_BUMP_SIZE);
 
         process_unpersisted_nodes(
             &mut bump,
             &mut node_allocator,
             self,
-            INITIAL_BUMP_SIZE,
+            super::INITIAL_BUMP_SIZE,
             |allocated_objects| self.write_nodes_generic(allocated_objects),
         )?;
-
-        let flush_time = flush_start.elapsed().as_millis();
-        firewood_counter!("firewood.flush_nodes", "flushed node amount").increment(flush_time);
 
         Ok(header)
     }
@@ -392,236 +380,6 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
 
         Ok(())
     }
-}
-
-#[cfg(feature = "io-uring")]
-use crate::LinearAddress;
-#[cfg(feature = "io-uring")]
-use bumpalo::Bump;
-
-#[cfg(feature = "io-uring")]
-struct Batch {
-    bump: bumpalo::Bump,
-}
-
-#[cfg(feature = "io-uring")]
-impl Batch {
-    const INITIAL_BUMP_SIZE: usize = AreaIndex::MAX_AREA_SIZE as usize;
-
-    fn new() -> Self {
-        Self {
-            bump: Bump::with_capacity(Self::INITIAL_BUMP_SIZE),
-        }
-    }
-}
-
-#[cfg(feature = "io-uring")]
-use std::pin::Pin;
-
-#[cfg(feature = "io-uring")]
-#[derive(Clone, Debug)]
-struct PinnedBufferEntry<'a> {
-    pinned_buffer: Pin<&'a [u8]>,
-    address: LinearAddress,
-    node: MaybePersistedNode,
-}
-
-#[cfg(feature = "io-uring")]
-/// Helper function to retry `submit_and_wait` on EINTR
-fn submit_and_wait_with_retry(
-    ring: &mut io_uring::IoUring,
-    wait_nr: u32,
-    storage: &FileBacked,
-    operation_name: &str,
-) -> Result<(), FileIoError> {
-    use std::io::ErrorKind::Interrupted;
-
-    loop {
-        match ring.submit_and_wait(wait_nr as usize) {
-            Ok(_) => return Ok(()),
-            Err(e) => {
-                // Retry if the error is an interrupted system call
-                if e.kind() == Interrupted {
-                    continue;
-                }
-                // For other errors, return the error
-                return Err(storage.file_io_error(
-                    e,
-                    0,
-                    Some(format!("io-uring {operation_name}")),
-                ));
-            }
-        }
-    }
-}
-
-impl NodeStore<Committed, FileBacked> {
-    /// Persist all the nodes of a proposal to storage.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if any node cannot be written to storage.
-    #[fastrace::trace(short_name = true)]
-    #[cfg(feature = "io-uring")]
-    fn flush_nodes_io_uring(&mut self) -> Result<NodeStoreHeader, FileIoError> {
-        let flush_start = Instant::now();
-
-        let mut header = self.header;
-        let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
-        let mut batch = Batch::new();
-
-        process_unpersisted_nodes(
-            &mut batch.bump,
-            &mut node_allocator,
-            self,
-            Batch::INITIAL_BUMP_SIZE,
-            |allocated_objects| self.ring_writes(allocated_objects),
-        )?;
-
-        let flush_time = flush_start.elapsed().as_millis();
-        firewood_counter!("firewood.flush_nodes", "amount flushed nodes").increment(flush_time);
-        Ok(header)
-    }
-    #[cfg(feature = "io-uring")]
-    fn ring_writes(
-        &self,
-        allocated_objects: Vec<(&[u8], LinearAddress, MaybePersistedNode)>,
-    ) -> Result<(), FileIoError> {
-        let mut ring = self.storage.ring.lock().expect("poisoned lock");
-
-        let mut saved_pinned_buffers =
-            vec![Option::<PinnedBufferEntry<'_>>::None; FileBacked::RINGSIZE as usize];
-
-        // Collect addresses and nodes for caching
-        let mut cached_nodes = Vec::new();
-
-        for (serialized, persisted_address, node) in allocated_objects {
-            loop {
-                // Find the first available write buffer, enumerate to get the position for marking it completed
-                if let Some((pos, pbe)) = saved_pinned_buffers
-                    .iter_mut()
-                    .enumerate()
-                    .find(|(_, pbe)| pbe.is_none())
-                {
-                    let pinned_buffer = std::pin::Pin::new(serialized);
-                    *pbe = Some(PinnedBufferEntry {
-                        pinned_buffer,
-                        address: persisted_address,
-                        node: node.clone(),
-                    });
-
-                    let submission_queue_entry = self
-                        .storage
-                        .make_op(&pinned_buffer)
-                        .offset(persisted_address.get())
-                        .build()
-                        .user_data(pos as u64);
-
-                    #[expect(unsafe_code)]
-                    // SAFETY: the submission_queue_entry's found buffer must not move or go out of scope
-                    // until the operation has been completed. This is ensured by having a Some(offset)
-                    // and not marking it None until the kernel has said it's done below.
-                    while unsafe { ring.submission().push(&submission_queue_entry) }.is_err() {
-                        ring.submitter().squeue_wait().map_err(|e| {
-                            self.storage.file_io_error(
-                                e,
-                                persisted_address.get(),
-                                Some("io-uring squeue_wait".to_string()),
-                            )
-                        })?;
-                        trace!("submission queue is full");
-                        firewood_counter!("ring.full", "amount of full ring").increment(1);
-                    }
-                    break;
-                }
-                // if we get here, that means we couldn't find a place to queue the request, so wait for at least one operation
-                // to complete, then handle the completion queue
-                firewood_counter!("ring.full", "amount of full ring").increment(1);
-                submit_and_wait_with_retry(&mut ring, 1, &self.storage, "submit_and_wait")?;
-                let completion_queue = ring.completion();
-                trace!("competion queue length: {}", completion_queue.len());
-                handle_completion_queue(
-                    &self.storage,
-                    completion_queue,
-                    &mut saved_pinned_buffers,
-                    &mut cached_nodes,
-                )?;
-            }
-        }
-        let pending = saved_pinned_buffers
-            .iter()
-            .filter(|pbe| pbe.is_some())
-            .count();
-        submit_and_wait_with_retry(
-            &mut ring,
-            pending as u32,
-            &self.storage,
-            "final submit_and_wait",
-        )?;
-
-        handle_completion_queue(
-            &self.storage,
-            ring.completion(),
-            &mut saved_pinned_buffers,
-            &mut cached_nodes,
-        )?;
-
-        debug_assert!(
-            !saved_pinned_buffers
-                .iter()
-                .any(std::option::Option::is_some),
-            "Found entry with node still set: {:?}",
-            saved_pinned_buffers.iter().find(|pbe| pbe.is_some())
-        );
-
-        self.storage.write_cached_nodes(cached_nodes)?;
-        debug_assert!(ring.completion().is_empty());
-
-        // All references to batch.bump are now dropped, caller can reset it
-        Ok(())
-    }
-}
-
-#[cfg(feature = "io-uring")]
-/// Helper function to handle completion queue entries and check for errors
-fn handle_completion_queue(
-    storage: &FileBacked,
-    completion_queue: io_uring::cqueue::CompletionQueue<'_>,
-    saved_pinned_buffers: &mut [Option<PinnedBufferEntry<'_>>],
-    cached_nodes: &mut Vec<MaybePersistedNode>,
-) -> Result<(), FileIoError> {
-    for entry in completion_queue {
-        // user data contains the index of the entry in the saved_pinned_buffers array
-        let item = entry.user_data() as usize;
-        let pbe = saved_pinned_buffers
-            .get_mut(item)
-            .expect("completed item user_data should point to an entry");
-
-        let pbe_ref = pbe.as_ref().expect("completed items are always in use");
-
-        let expected_len: i32 = pbe_ref
-            .pinned_buffer
-            .len()
-            .try_into()
-            .expect("buffer length will fit into an i32");
-        if entry.result() != expected_len {
-            let error = if entry.result() >= 0 {
-                std::io::Error::other("Partial write")
-            } else {
-                std::io::Error::from_raw_os_error(0 - entry.result())
-            };
-            return Err(storage.file_io_error(
-                error,
-                pbe_ref.address.get(),
-                Some("write failure".to_string()),
-            ));
-        }
-        // I/O completed successfully - mark node as persisted and cache it
-        let entry = pbe.take().expect("already checked it's Some");
-        entry.node.allocate_at(entry.address);
-        cached_nodes.push(entry.node);
-    }
-    Ok(())
 }
 
 #[cfg(test)]
@@ -909,40 +667,5 @@ mod tests {
             .unwrap();
         assert_eq!(*child2_node.partial_path(), Path::from(&[4, 5, 6]));
         assert_eq!(child2_node.value(), Some(&b"value2"[..]));
-    }
-
-    #[cfg(feature = "io-uring")]
-    #[test]
-    fn test_downcast_to_file_backed() {
-        use nonzero_ext::nonzero;
-
-        use crate::CacheReadStrategy;
-
-        {
-            let tf = tempfile::NamedTempFile::new().unwrap();
-            let path = tf.path().to_owned();
-
-            let fb = Arc::new(
-                FileBacked::new(
-                    path,
-                    nonzero!(10usize),
-                    nonzero!(10usize),
-                    false,
-                    true,
-                    CacheReadStrategy::WritesOnly,
-                )
-                .unwrap(),
-            );
-
-            let mut ns = NodeStore::new_empty_committed(fb.clone());
-
-            assert!(ns.downcast_to_file_backed().is_some());
-        }
-
-        {
-            let ms = Arc::new(MemStore::new(vec![]));
-            let mut ns = NodeStore::new_empty_committed(ms.clone());
-            assert!(ns.downcast_to_file_backed().is_none());
-        }
     }
 }

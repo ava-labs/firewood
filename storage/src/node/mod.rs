@@ -154,7 +154,7 @@ impl ExtendableBytes for bumpalo::collections::Vec<'_, u8> {
         std::iter::Extend::extend(self, other);
     }
     fn reserve(&mut self, reserve: usize) {
-        self.reserve(reserve);
+        bumpalo::collections::Vec::reserve(self, reserve);
     }
     fn push(&mut self, value: u8) {
         bumpalo::collections::Vec::push(self, value);
