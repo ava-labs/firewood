@@ -46,7 +46,6 @@ use super::{Committed, NodeStore};
 #[cfg(not(test))]
 use super::RootReader;
 
-
 impl<T, S: WritableStorage> NodeStore<T, S> {
     /// Persist the header from this proposal to storage.
     ///
@@ -225,7 +224,7 @@ fn serialize_node_to_bump<'a>(
 /// # Errors
 ///
 /// Returns a [`FileIoError`] if any node cannot be serialized, allocated, or written to storage.
-fn process_unpersisted_nodes<N, S, F>(
+pub(super) fn process_unpersisted_nodes<N, S, F>(
     bump: &mut bumpalo::Bump,
     node_allocator: &mut NodeAllocator<'_, S>,
     node_store: &N,

@@ -8,11 +8,11 @@
 
 use super::alloc::NodeAllocator;
 use super::header::NodeStoreHeader;
+use super::persist::process_unpersisted_nodes;
 use super::{Committed, NodeStore};
 use crate::LinearAddress;
-use crate::linear::FileIoError;
+use crate::linear::{FileIoError, ReadableStorage, WritableStorage};
 use crate::logger::trace;
-use crate::nodestore::AreaIndex;
 use crate::{FileBacked, MaybePersistedNode, firewood_counter};
 
 /// Entry in the pinned buffer array tracking in-flight io-uring operations
@@ -105,7 +105,7 @@ impl NodeStore<Committed, FileBacked> {
         let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
         let mut bump = Bump::with_capacity(super::INITIAL_BUMP_SIZE);
 
-        super::process_unpersisted_nodes(
+        process_unpersisted_nodes(
             &mut bump,
             &mut node_allocator,
             self,
