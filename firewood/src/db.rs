@@ -95,6 +95,14 @@ where
     }
 }
 
+#[allow(dead_code)]
+#[derive(Clone, Debug)]
+pub enum UseParallel {
+    Never,
+    BatchSize(usize),
+    Always,
+}
+
 /// Database configuration.
 #[derive(Clone, TypedBuilder, Debug)]
 #[non_exhaustive]
@@ -109,11 +117,11 @@ pub struct DbConfig {
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
-    // Whether to use parallel insert and hashing for propose. If None then firewood
-    // decides automatically based on the size of the batch. Otherwise the value of
-    // force_parallel determines if we perform parallel or serial insert/hashing.
-    #[builder(default = None)]
-    pub force_parallel: Option<bool>,
+    // Whether to perform parallel proposal creation. If set to BatchSize, then firewood
+    // performs parallel proposal creation if the batch is >= to the BatchSize value.
+    // TODO: Experimentally determine the right value for BatchSize.
+    #[builder(default = UseParallel::BatchSize(8))]
+    pub use_parallel: UseParallel,
 }
 
 #[derive(Debug)]
@@ -121,7 +129,7 @@ pub struct DbConfig {
 pub struct Db<RS = NoOpStore> {
     metrics: Arc<DbMetrics>,
     manager: RevisionManager<RS>,
-    force_parallel: Option<bool>,
+    use_parallel: UseParallel,
 }
 
 impl<RS: RootStore> api::Db for Db<RS> {
@@ -181,7 +189,7 @@ impl<RS: RootStore> Db<RS> {
         let db = Self {
             metrics,
             manager,
-            force_parallel: cfg.force_parallel,
+            use_parallel: cfg.use_parallel,
         };
         Ok(db)
     }
@@ -193,9 +201,6 @@ impl<RS: RootStore> Db<RS> {
 }
 
 impl<RS> Db<RS> {
-    // TODO: Experimentally determine the right value for MIN_BATCH_SIZE_FOR_PARALLEL.
-    const MIN_BATCH_SIZE_FOR_PARALLEL: usize = 8;
-
     /// Dump the Trie of the latest revision.
     pub fn dump(&self, w: &mut dyn Write) -> Result<(), std::io::Error> {
         let latest_rev_nodestore = self.manager.current_revision();
@@ -214,8 +219,8 @@ impl<RS> Db<RS> {
         latest_rev_nodestore.check(opt)
     }
 
-    /// Create a proposal with a specified parent. Proposals with a batch size larger than or equal
-    /// to `MIN_BATCH_SIZE_FOR_PARALLEL` are processed in parallel if `force_parallel` is None.
+    /// Create a proposal with a specified parent. Proposals are created in parallel if `use_parallel`
+    /// is `Always` or if `use_parallel` is `BatchSize` and the batch is >= to the `BatchSize` value.
     ///
     /// # Panics
     ///
@@ -226,13 +231,13 @@ impl<RS> Db<RS> {
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
         parent: &NodeStore<F, FileBacked>,
     ) -> Result<Proposal<'_, RS>, api::Error> {
-        // If force_parallel is None, then perform parallel proposal creation if the batch
-        // size is >= MIN_BATCH_SIZE_FOR_PARALLEL. Otherwise use the force_parallel value
-        // to determine whether to create the proposal serially or in parallel.
+        // If use_parallel is BatchSize, then perform parallel proposal creation if the batch
+        // size is >= BatchSize.
         let batch = batch.into_iter();
-        let use_parallel = match self.force_parallel {
-            Some(parallel) => parallel,
-            None => batch.size_hint().0 >= Db::<RS>::MIN_BATCH_SIZE_FOR_PARALLEL,
+        let use_parallel = match self.use_parallel {
+            UseParallel::Never => false,
+            UseParallel::Always => true,
+            UseParallel::BatchSize(required_size) => batch.size_hint().0 >= required_size,
         };
         let immutable = if use_parallel {
             let mut parallel_merkle = ParallelMerkle::default();
@@ -359,7 +364,7 @@ mod test {
         CheckOpt, CheckerError, HashedNodeReader, IntoHashType, NodeStore, TrieHash,
     };
 
-    use crate::db::{Db, Proposal};
+    use crate::db::{Db, Proposal, UseParallel};
     use crate::root_store::{MockStore, NoOpStore, RootStore};
     use crate::v2::api::{Db as _, DbView, KeyValuePairIter, Proposal as _};
 
@@ -606,12 +611,16 @@ mod test {
         }
 
         // Create, insert, close, open, insert
-        let db = TestDb::new_with_config(DbConfig::builder().force_parallel(Some(true)).build());
+        let db = TestDb::new_with_config(
+            DbConfig::builder()
+                .use_parallel(UseParallel::Always)
+                .build(),
+        );
         insert_commit(&db, 1);
         let db = db.reopen_with_config(
             DbConfig::builder()
                 .truncate(false)
-                .force_parallel(Some(true))
+                .use_parallel(UseParallel::Always)
                 .build(),
         );
         insert_commit(&db, 2);
@@ -626,9 +635,17 @@ mod test {
         drop(db);
 
         // Open-db1, insert, open-db2, insert
-        let db1 = TestDb::new_with_config(DbConfig::builder().force_parallel(Some(true)).build());
+        let db1 = TestDb::new_with_config(
+            DbConfig::builder()
+                .use_parallel(UseParallel::Always)
+                .build(),
+        );
         insert_commit(&db1, 1);
-        let db2 = TestDb::new_with_config(DbConfig::builder().force_parallel(Some(true)).build());
+        let db2 = TestDb::new_with_config(
+            DbConfig::builder()
+                .use_parallel(UseParallel::Always)
+                .build(),
+        );
         insert_commit(&db2, 2);
         let committed1 = db1.revision(db1.root_hash().unwrap().unwrap()).unwrap();
         let committed2 = db2.revision(db2.root_hash().unwrap().unwrap()).unwrap();
@@ -644,7 +661,11 @@ mod test {
     #[test]
     fn test_propose_parallel() {
         const N: usize = 100;
-        let db = TestDb::new_with_config(DbConfig::builder().force_parallel(Some(true)).build());
+        let db = TestDb::new_with_config(
+            DbConfig::builder()
+                .use_parallel(UseParallel::Always)
+                .build(),
+        );
 
         // Test an empty proposal
         let keys: Vec<[u8; 0]> = Vec::new();
