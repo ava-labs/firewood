@@ -109,6 +109,11 @@ pub struct DbConfig {
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
+    // Whether to use parallel insert and hashing for propose. If None then firewood
+    // decides automatically based on the size of the batch. Otherwise the value of
+    // force_parallel determines if we perform parallel or serial insert/hashing.
+    #[builder(default = None)]
+    pub force_parallel: Option<bool>,
 }
 
 #[derive(Debug)]
@@ -116,8 +121,7 @@ pub struct DbConfig {
 pub struct Db<RS = NoOpStore> {
     metrics: Arc<DbMetrics>,
     manager: RevisionManager<RS>,
-    #[cfg(test)]
-    force_parallel: bool,
+    force_parallel: Option<bool>,
 }
 
 impl<RS: RootStore> api::Db for Db<RS> {
@@ -174,14 +178,11 @@ impl<RS: RootStore> Db<RS> {
 
         let manager =
             RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager, root_store)?;
-        #[cfg(test)]
         let db = Self {
             metrics,
             manager,
-            force_parallel: false,
+            force_parallel: cfg.force_parallel,
         };
-        #[cfg(not(test))]
-        let db = Self { metrics, manager };
         Ok(db)
     }
 
@@ -192,6 +193,7 @@ impl<RS: RootStore> Db<RS> {
 }
 
 impl<RS> Db<RS> {
+    // TODO: Experimentally determine the right value for MIN_BATCH_SIZE_FOR_PARALLEL.
     const MIN_BATCH_SIZE_FOR_PARALLEL: usize = 8;
 
     /// Dump the Trie of the latest revision.
@@ -212,9 +214,8 @@ impl<RS> Db<RS> {
         latest_rev_nodestore.check(opt)
     }
 
-    /// Create a proposal with a specified parent. Currently, the parent can be another proposal or the
-    /// current revision. Proposals with a batch size larger than or equal to `MIN_BATCH_SIZE_FOR_PARALLEL`
-    /// are processed in parallel.
+    /// Create a proposal with a specified parent. Proposals with a batch size larger than or equal
+    /// to `MIN_BATCH_SIZE_FOR_PARALLEL` are processed in parallel if `force_parallel` is None.
     ///
     /// # Panics
     ///
@@ -225,16 +226,14 @@ impl<RS> Db<RS> {
         batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
         parent: &NodeStore<F, FileBacked>,
     ) -> Result<Proposal<'_, RS>, api::Error> {
-        // Perform parallel proposal creation if the batch size is >= MIN_BATCH_SIZE_FOR_PARALLEL.
-        // Otherwise create the proposal serially as it is faster for small batches.
-        // TODO: Experimentally determine the right value for MIN_BATCH_SIZE_FOR_PARALLEL.
+        // If force_parallel is None, then perform parallel proposal creation if the batch
+        // size is >= MIN_BATCH_SIZE_FOR_PARALLEL. Otherwise use the force_parallel value
+        // to determine whether to create the proposal serially or in parallel.
         let batch = batch.into_iter();
-        #[cfg(test)]
-        let use_parallel =
-            self.force_parallel || batch.size_hint().0 >= Db::<RS>::MIN_BATCH_SIZE_FOR_PARALLEL;
-        #[cfg(not(test))]
-        let use_parallel = batch.size_hint().0 >= Db::<RS>::MIN_BATCH_SIZE_FOR_PARALLEL;
-
+        let use_parallel = match self.force_parallel {
+            Some(parallel) => parallel,
+            None => batch.size_hint().0 >= Db::<RS>::MIN_BATCH_SIZE_FOR_PARALLEL,
+        };
         let immutable = if use_parallel {
             let mut parallel_merkle = ParallelMerkle::default();
             let span = fastrace::Span::enter_with_local_parent("parallel_merkle");
@@ -607,10 +606,14 @@ mod test {
         }
 
         // Create, insert, close, open, insert
-        let mut db = TestDb::new();
-        db.force_parallel = true;
+        let db = TestDb::new_with_config(DbConfig::builder().force_parallel(Some(true)).build());
         insert_commit(&db, 1);
-        let db = db.reopen();
+        let db = db.reopen_with_config(
+            DbConfig::builder()
+                .truncate(false)
+                .force_parallel(Some(true))
+                .build(),
+        );
         insert_commit(&db, 2);
         // Check that the keys are still there after the commits
         let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
@@ -623,11 +626,9 @@ mod test {
         drop(db);
 
         // Open-db1, insert, open-db2, insert
-        let mut db1 = TestDb::new();
-        db1.force_parallel = true;
+        let db1 = TestDb::new_with_config(DbConfig::builder().force_parallel(Some(true)).build());
         insert_commit(&db1, 1);
-        let mut db2 = TestDb::new();
-        db2.force_parallel = true;
+        let db2 = TestDb::new_with_config(DbConfig::builder().force_parallel(Some(true)).build());
         insert_commit(&db2, 2);
         let committed1 = db1.revision(db1.root_hash().unwrap().unwrap()).unwrap();
         let committed2 = db2.revision(db2.root_hash().unwrap().unwrap()).unwrap();
@@ -643,8 +644,7 @@ mod test {
     #[test]
     fn test_propose_parallel() {
         const N: usize = 100;
-        let mut db = TestDb::new();
-        db.force_parallel = true;
+        let db = TestDb::new_with_config(DbConfig::builder().force_parallel(Some(true)).build());
 
         // Test an empty proposal
         let keys: Vec<[u8; 0]> = Vec::new();
@@ -1090,11 +1090,14 @@ mod test {
 
     impl TestDb {
         fn new() -> Self {
+            TestDb::new_with_config(DbConfig::builder().build())
+        }
+
+        fn new_with_config(dbconfig: DbConfig) -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
             let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()
                 .collect();
-            let dbconfig = DbConfig::builder().build();
             let db = Db::new(dbpath, dbconfig).unwrap();
             TestDb { db, tmpdir }
         }
@@ -1114,17 +1117,20 @@ mod test {
 
     impl<RS: Clone + RootStore> TestDb<RS> {
         fn reopen(self) -> Self {
+            self.reopen_with_config(DbConfig::builder().truncate(false).build())
+        }
+
+        fn reopen_with_config(self, dbconfig: DbConfig) -> Self {
             let path = self.path();
             let root_store = self.manager.root_store();
             drop(self.db);
-            let dbconfig = DbConfig::builder().truncate(false).build();
-
             let db = Db::with_root_store(path, dbconfig, root_store).unwrap();
             TestDb {
                 db,
                 tmpdir: self.tmpdir,
             }
         }
+
         fn replace(self) -> Self {
             let path = self.path();
             let root_store = self.manager.root_store();
