@@ -215,7 +215,7 @@ impl Db {
         latest_rev_nodestore.check(opt)
     }
 
-    /// Create a proposal with a specified parent. Proposals are created in parallel if `use_parallel`
+    /// Create a proposal with a specified parent. A proposal is created in parallel if `use_parallel`
     /// is `Always` or if `use_parallel` is `BatchSize` and the batch is >= to the `BatchSize` value.
     ///
     /// # Panics
