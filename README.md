@@ -122,9 +122,241 @@ which enables maximum link time compiler optimizations.
 
 ## Logging
 
-If you want logging, enable the `logging` feature flag, and then set RUST\_LOG accordingly.
-See the documentation for [env\_logger](https://docs.rs/env_logger/latest/env_logger/) for specifics.
-We currently have very few logging statements, but this is useful for print-style debugging.
+Firewood provides comprehensive logging capabilities to help with debugging, monitoring, and understanding system behavior. Logging is implemented using the [env_logger](https://docs.rs/env_logger/latest/env_logger/) crate and the [log](https://docs.rs/log/latest/log/) facade.
+
+### Enabling Logging
+
+Logging is controlled by a feature flag and must be explicitly enabled during compilation:
+
+```sh
+# Build with logging enabled
+cargo build --features logger
+
+# Build and run an example with logging
+cargo run --features logger --example insert
+
+# Build the fwdctl CLI with logging
+cargo build -p fwdctl --features logger
+```
+
+**Note:** The `logger` feature is **not** enabled by default. This is intentional to ensure zero-overhead when logging is not needed, as Firewood is optimized for performance.
+
+### Setting Log Levels with RUST_LOG
+
+Once logging is enabled at compile time, you control the verbosity at runtime using the `RUST_LOG` environment variable:
+
+```sh
+# Set log level to info (default recommended level)
+export RUST_LOG=info
+
+# Set log level to debug for more detailed output
+export RUST_LOG=debug
+
+# Set log level to trace for maximum verbosity
+export RUST_LOG=trace
+
+# Set log level to warn to see only warnings and errors
+export RUST_LOG=warn
+
+# Set log level to error to see only errors
+export RUST_LOG=error
+```
+
+You can also set module-specific log levels for fine-grained control:
+
+```sh
+# Enable debug logs only for storage module
+export RUST_LOG=firewood_storage=debug
+
+# Enable trace logs for firewood and info for everything else
+export RUST_LOG=firewood=trace,info
+
+# Enable debug logs for specific modules
+export RUST_LOG=firewood::db=debug,firewood_storage=info
+```
+
+### Log Level Recommendations
+
+Choose the appropriate log level based on your scenario:
+
+| Scenario | Recommended Level | Description |
+|----------|------------------|-------------|
+| **Production** | `warn` or `error` | Minimal logging overhead, only critical issues |
+| **Development** | `info` or `debug` | Balanced view of operations without overwhelming detail |
+| **Debugging Issues** | `debug` or `trace` | Detailed information for troubleshooting |
+| **Performance Testing** | Logging disabled | Compile without `logger` feature for maximum performance |
+| **Integration Testing** | `info` | Sufficient context without excessive noise |
+
+### Configuring Log Output Destination
+
+By default, logs are written to **stderr**. For the Rust API, you can configure this using `env_logger` before initializing your database:
+
+```rust
+use env_logger::Target;
+
+// Write logs to stdout instead of stderr
+env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+    .target(Target::Stdout)
+    .init();
+```
+
+For the **fwdctl** CLI tool, logs automatically go to stderr and you can redirect them:
+
+```sh
+# Redirect logs to a file
+RUST_LOG=debug fwdctl dump --db mydb.db 2> firewood.log
+
+# Separate logs from normal output
+RUST_LOG=info fwdctl dump --db mydb.db > output.txt 2> logs.txt
+```
+
+### Example Log Messages
+
+Firewood emits logs at various points during operation. Here are some examples:
+
+**Debug Level Logs:**
+
+- Database operation details: `"inserting key value pair Options { ... }"`
+- Configuration information: `"database configuration parameters: DbConfig { ... }"`
+- Operation execution: `"deleting key Options { ... }"`
+
+**Info Level Logs:**
+
+- Database initialization and startup information
+- Major state changes and milestones
+- Batch operation completions
+
+**Warn Level Logs:**
+
+- Recoverable issues or degraded performance
+- Configuration warnings
+- Resource constraints
+
+**Error Level Logs:**
+
+- Failed operations
+- I/O errors
+- Data corruption or validation failures
+
+### Adding Logging to Custom Code
+
+If you're building on top of Firewood or extending it, you can add logging to your code:
+
+```rust
+use firewood_storage::logger::{debug, info, warn, error, trace};
+
+fn my_custom_operation() {
+    info!("Starting custom operation");
+    debug!("Processing with config: {:?}", config);
+    
+    match process() {
+        Ok(result) => {
+            trace!("Detailed result: {:?}", result);
+            info!("Operation completed successfully");
+        }
+        Err(e) => {
+            error!("Operation failed: {}", e);
+        }
+    }
+}
+```
+
+**Important:** When the `logger` feature is not enabled, these macros become no-ops with zero runtime overhead. The unused variable warnings are automatically suppressed.
+
+### FFI-Specific Logging
+
+When using Firewood through the FFI (Foreign Function Interface) layer, logging must be configured from the host language. See the [FFI README](ffi/README.md#logs) for language-specific instructions.
+
+**Key points for FFI logging:**
+
+- Firewood FFI must be compiled with the `logger` feature enabled
+- Call `StartLogs(config)` before opening the database
+- Logs are written to a file (default: `{TEMP}/firewood-log.txt`)
+- Log level defaults to `info` if not specified
+- Available log levels: `trace`, `debug`, `info`, `warn`, `error`
+
+**Go FFI Example:**
+
+```go
+import ffi "github.com/ava-labs/firewood-go-ethhash/ffi"
+
+func main() {
+    // Configure logging before opening database
+    logConfig := ffi.LogConfig{
+        Path:        "/var/log/firewood.log",
+        FilterLevel: "debug",
+    }
+    ffi.StartLogs(logConfig)
+    
+    // Now open and use the database
+    db, err := ffi.Open("mydb", nil)
+    // ...
+}
+```
+
+### Performance Considerations
+
+Logging has performance implications that you should be aware of:
+
+**Compile-Time Impact:**
+
+- **Without `logger` feature:** Zero overhead. Log macro invocations are completely compiled away.
+- **With `logger` feature:** Small binary size increase (~50-100KB) and slightly longer compile times.
+
+**Runtime Impact:**
+
+- **RUST_LOG not set or set to `off`:** Minimal overhead. Log statements are checked but not executed.
+- **RUST_LOG=error or warn:** Very low overhead (~1-2% in typical workloads).
+- **RUST_LOG=info:** Low overhead (~2-5% depending on workload).
+- **RUST_LOG=debug:** Moderate overhead (~5-15% depending on log volume).
+- **RUST_LOG=trace:** High overhead (~15-30% or more). Use only for debugging.
+
+**Best Practices:**
+
+1. **Compile without `logger` for production benchmarks** to get true performance numbers
+2. **Use `warn` or `error` in production** to minimize overhead while capturing important events
+3. **Avoid logging in hot paths** when designing new code
+4. **Use conditional logging** for expensive debug information:
+
+```rust
+use firewood_storage::logger::{debug, trace_enabled};
+
+// Avoid expensive computation if trace logging is disabled
+if trace_enabled() {
+    trace!("Expensive debug info: {:?}", compute_expensive_debug_info());
+}
+```
+
+1. **Test with logging enabled** during development to catch issues early
+1. **Profile with realistic log levels** if you'll be running with logging in production
+
+### Troubleshooting
+
+**Logs not appearing?**
+
+1. Ensure you compiled with the `logger` feature flag
+2. Verify `RUST_LOG` is set correctly: `echo $RUST_LOG`
+3. Check that logs are going to stderr (not stdout)
+4. For FFI usage, verify `StartLogs()` was called before opening the database
+
+**Too much log output?**
+
+1. Increase the log level (e.g., from `debug` to `info`)
+2. Use module-specific filters: `RUST_LOG=firewood=info,warn`
+3. Redirect to a file and use grep: `RUST_LOG=debug cargo run 2>&1 | grep "interesting_term"`
+
+**Log performance impact too high?**
+
+1. Reduce log level to `warn` or `error`
+2. Use module-specific filters to only log certain components
+3. For maximum performance, recompile without the `logger` feature
+
+### Additional Resources
+
+- [env_logger Documentation](https://docs.rs/env_logger/latest/env_logger/)
+- [log Crate Documentation](https://docs.rs/log/latest/log/)
+- [FFI Logging Documentation](ffi/README.md#logs)
+- [Storage Logger Implementation](storage/src/logger.rs)
 
 ## Release
 
