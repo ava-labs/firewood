@@ -40,6 +40,103 @@ as well as carefully managing the free list during the creation and expiration o
 
 ![architecture diagram](./docs/assets/architecture.svg)
 
+## Supported Platforms
+
+### Operating Systems
+
+Firewood officially supports the following operating systems:
+
+- **Linux**: Ubuntu 22.04 LTS and later (tested on ubuntu-latest in CI)
+- **macOS**: macOS 13.0 (Ventura) and later (tested on macos-13 and macos-latest in CI)
+
+Other Linux distributions may work but are not regularly tested. Windows is not currently supported.
+
+### Architectures
+
+Firewood supports the following CPU architectures:
+
+- **x86_64** (Intel/AMD 64-bit): Fully supported on Linux and macOS
+- **aarch64** (ARM64): Fully supported on Linux and macOS (including Apple Silicon and AWS Graviton processors)
+
+### Rust Version
+
+- **Minimum Rust version**: 1.89.0
+- Firewood uses the latest stable Rust features and requires a recent Rust toolchain
+
+### System Dependencies
+
+The following dependencies must be installed before building Firewood:
+
+- **protoc** (Protocol Buffers compiler) - See [installation instructions](https://grpc.io/docs/protoc-installation/)
+- **cargo** (Rust package manager) - See [installation instructions](https://doc.rust-lang.org/cargo/getting-started/installation.html)
+- **make** - See [download instructions](https://www.gnu.org/software/make/#download) or run `sudo apt install build-essential` on Linux
+
+For Go FFI bindings:
+
+- **Go 1.21+** - Required for building and testing the FFI layer
+
+### Tested Configurations
+
+The following configurations are continuously tested in CI:
+
+- Ubuntu latest (x86_64): All feature combinations
+- Ubuntu 22.04 ARM (aarch64): Static library builds
+- macOS latest (Apple Silicon, aarch64): Core features
+- macOS 13 (Intel, x86_64): Core features
+
+### Container Support
+
+Firewood can be built and run in Docker containers. See [README.docker.md](README.docker.md) for detailed instructions on:
+
+- Setting up Docker Desktop on macOS
+- Configuring development environments
+- Volume mounting considerations
+- Performance optimizations for containerized builds
+
+### Cloud Platform Compatibility
+
+Firewood has been extensively tested and optimized for cloud environments:
+
+#### AWS (Amazon Web Services)
+
+Fully supported with optimized configurations for various instance types:
+
+- **Graviton-based instances** (ARM64): i4g.large, i4g.xlarge, c6gd.2xlarge, x2gd.xlarge, r6gd.2xlarge, m5ad.2xlarge
+- **Intel-based instances** (x86_64): i4i.large, i4i.xlarge, m6id.xlarge, r6id.2xlarge, z1d.2xlarge
+
+See [benchmark/bootstrap/aws-launch.sh](benchmark/bootstrap/aws-launch.sh) for automated deployment scripts and instance recommendations.
+
+#### Other Cloud Providers
+
+While not explicitly tested in CI, Firewood should work on:
+
+- **Google Cloud Platform (GCP)**: Compute Engine instances with Ubuntu or equivalent
+- **Microsoft Azure**: Linux VMs with Ubuntu or equivalent
+
+### Platform-Specific Notes
+
+#### Linux
+
+- Firewood uses io_uring on Linux for optimal I/O performance
+- Some operations may require increased memlock limits (configurable via `ulimit`)
+- NVMe storage is recommended for best performance
+
+#### macOS
+
+- Docker volume mounting uses VirtioFS which has concurrency limitations
+- A separate `CARGO_TARGET_DIR` is recommended when building in Docker containers
+- Native builds (outside Docker) perform better than containerized builds
+
+#### Performance Characteristics
+
+Performance varies by platform:
+
+- **NVMe storage**: Strongly recommended for production use
+- **ARM64 (Graviton/Apple Silicon)**: Comparable or better performance than x86_64 in most workloads
+- **x86_64**: Mature platform with excellent performance characteristics
+
+For benchmark results and performance tuning, see the [benchmark](benchmark) directory.
+
 ## Terminology
 
 - `Revision` - A historical point-in-time state/version of the trie. This
