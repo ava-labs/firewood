@@ -136,7 +136,7 @@ cargo build --features logger
 cargo run --features logger --example insert
 
 # Build the fwdctl CLI with logging
-cargo build -p fwdctl --features logger
+cargo build -p firewood-fwdctl --features logger
 ```
 
 **Note:** The `logger` feature is **not** enabled by default. This is intentional to ensure zero-overhead when logging is not needed, as Firewood is optimized for performance.
