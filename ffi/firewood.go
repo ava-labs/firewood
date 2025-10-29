@@ -59,6 +59,7 @@ type Config struct {
 	FreeListCacheEntries uint
 	Revisions            uint
 	ReadCacheStrategy    CacheStrategy
+	RootStoreDir         string
 }
 
 // DefaultConfig returns a sensible default Config.
@@ -102,6 +103,9 @@ func New(filePath string, conf *Config) (*Database, error) {
 	if conf.FreeListCacheEntries < 1 {
 		return nil, fmt.Errorf("%T.FreeListCacheEntries must be >= 1", conf)
 	}
+	if conf.RootStoreDir != "" {
+		fmt.Println("root store dir: ", conf.RootStoreDir)
+	}
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
@@ -113,6 +117,7 @@ func New(filePath string, conf *Config) (*Database, error) {
 		revisions:            C.size_t(conf.Revisions),
 		strategy:             C.uint8_t(conf.ReadCacheStrategy),
 		truncate:             C.bool(conf.Truncate),
+		root_store_path:      newBorrowedBytes([]byte(conf.RootStoreDir), &pinner),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))

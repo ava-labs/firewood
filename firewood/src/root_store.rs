@@ -1,12 +1,12 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::fmt::Debug;
 #[cfg(test)]
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
 };
+use std::{fmt::Debug, path::Path};
 
 use firewood_storage::{LinearAddress, TrieHash};
 
@@ -14,6 +14,7 @@ use firewood_storage::{LinearAddress, TrieHash};
 pub enum RootStoreMethod {
     Add,
     Get,
+    New,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -106,5 +107,85 @@ impl RootStore for MockStore {
         }
 
         Ok(self.roots.lock().expect("poisoned lock").get(hash).copied())
+    }
+}
+
+use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle, PersistMode};
+
+pub struct FjallStore {
+    keyspace: Keyspace,
+    items: PartitionHandle,
+}
+
+impl Debug for FjallStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FjallStore")
+            .field("keyspace", &"<Keyspace>")
+            .field("items", &"<PartitionHandle>")
+            .finish()
+    }
+}
+
+impl FjallStore {
+    /// Creates or opens an instance of `FjallStore`.
+    ///
+    /// Args:
+    /// - path: the directory where `FjallStore` will write to.
+    ///
+    /// # Errors
+    ///
+    /// Will return an error if unable to create or open an instance of `FjallStore`.
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<FjallStore, RootStoreError> {
+        let keyspace = Config::new(path).open().map_err(|e| RootStoreError {
+            method: RootStoreMethod::New,
+            source: Box::new(e),
+        })?;
+        let items = keyspace
+            .open_partition("firewood", PartitionCreateOptions::default())
+            .map_err(|e| RootStoreError {
+                method: RootStoreMethod::New,
+                source: Box::new(e),
+            })?;
+
+        Ok(Self { keyspace, items })
+    }
+}
+
+impl RootStore for FjallStore {
+    fn add_root(&self, hash: &TrieHash, address: &LinearAddress) -> Result<(), RootStoreError> {
+        self.items
+            .insert(hash.to_bytes(), address.get().to_be_bytes())
+            .map_err(|e| RootStoreError {
+                method: RootStoreMethod::Add,
+                source: Box::new(e),
+            })?;
+
+        self.keyspace
+            .persist(PersistMode::Buffer)
+            .map_err(|e| RootStoreError {
+                method: RootStoreMethod::Add,
+                source: Box::new(e),
+            })
+    }
+
+    fn get(&self, hash: &TrieHash) -> Result<Option<LinearAddress>, RootStoreError> {
+        let v = self
+            .items
+            .get(hash.to_bytes())
+            .map_err(|e| RootStoreError {
+                method: RootStoreMethod::Get,
+                source: Box::new(e),
+            })?
+            .ok_or(RootStoreError {
+                method: RootStoreMethod::Add,
+                source: "empty value".into(),
+            })?;
+
+        let array: [u8; 8] = v.as_ref().try_into().map_err(|_| RootStoreError {
+            method: RootStoreMethod::Get,
+            source: "Invalid byte length for u64".into(),
+        })?;
+
+        Ok(LinearAddress::new(u64::from_be_bytes(array)))
     }
 }

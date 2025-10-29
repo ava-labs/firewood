@@ -141,6 +141,28 @@ func newTestDatabase(t *testing.T, configureFns ...func(*Config)) *Database {
 	return db
 }
 
+func newTestDatabaseWithFjallStore(t *testing.T) *Database {
+	t.Helper()
+	r := require.New(t)
+
+	tmpDir := t.TempDir()
+	dbFile := filepath.Join(tmpDir, "test.db")
+	rootStoreDir := filepath.Join(tmpDir, "root_store")
+
+	opt := func(c *Config) {
+		c.RootStoreDir = rootStoreDir
+	}
+
+	db, closeDB, err := newDatabase(dbFile, opt)
+	r.NoError(err)
+
+	t.Cleanup(func() {
+		r.NoError(closeDB())
+	})
+
+	return db
+}
+
 func newDatabase(dbFile string, configureFns ...func(*Config)) (*Database, func() error, error) {
 	conf := DefaultConfig()
 	conf.Truncate = true // in tests, we use filepath.Join, which creates an empty file
@@ -1168,6 +1190,54 @@ func TestGetFromRootParallel(t *testing.T) {
 	for i := 0; i < numReaders; i++ {
 		err := <-results
 		r.NoError(err, "Parallel operation failed")
+	}
+}
+
+// XXX: need to clean up this code
+func TestFjallStore(t *testing.T) {
+	r := require.New(t)
+
+	tmpdir := t.TempDir()
+	dbFile := filepath.Join(tmpdir, "test.db")
+	rootStoreDir := filepath.Join(tmpdir, "root_store_dir")
+	// Create a new database
+	config := DefaultConfig()
+	config.RootStoreDir = rootStoreDir
+
+	db, err := New(dbFile, config)
+	r.NoError(err)
+
+	// Insert some data.
+	numRevisions := 10
+	key := []byte("root_store")
+	_, vals := kvForTest(numRevisions)
+	revisionRoots := make([][]byte, numRevisions)
+	for i := range numRevisions {
+		proposal, err := db.Propose([][]byte{key}, [][]byte{vals[i]})
+		r.NoError(err)
+		r.NoError(proposal.Commit())
+
+		revisionRoots[i], err = proposal.Root()
+		r.NoError(err)
+	}
+
+	// Close the database.
+	r.NoError(db.Close())
+
+	// Reopen the database
+	db, err = New(dbFile, config)
+	r.NoError(err)
+
+	// Verify that we can access all revisions
+	for i := range numRevisions {
+		revision, err := db.Revision(revisionRoots[i])
+		r.NoError(err)
+
+		v, err := revision.Get(key)
+		r.NoError(err)
+
+		r.Equal(vals[i], v)
+		revision.Drop()
 	}
 }
 
