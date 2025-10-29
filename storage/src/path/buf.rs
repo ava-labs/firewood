@@ -130,6 +130,10 @@ impl<'a> IntoSplitPath for &'a PartialPath<'_> {
 }
 
 /// A RAII guard that resets a path buffer to its original length when dropped.
+///
+/// The guard exposes append-only methods to add components to the path buffer
+/// but not remove them without dropping the guard. This ensures that the guard
+/// will always restore the path buffer to its original state when dropped.
 #[must_use]
 pub struct PathGuard<'a> {
     buf: &'a mut PathBuf,
@@ -178,6 +182,13 @@ impl<'a> PathGuard<'a> {
         fork.extend(path.components());
         fork
     }
+
+    /// Appends the given component to the path buffer.
+    ///
+    /// This component will be removed when the guard is dropped.
+    pub fn push(&mut self, component: PathComponent) {
+        self.buf.push(component);
+    }
 }
 
 impl std::ops::Deref for PathGuard<'_> {
@@ -188,8 +199,8 @@ impl std::ops::Deref for PathGuard<'_> {
     }
 }
 
-impl std::ops::DerefMut for PathGuard<'_> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.buf
+impl Extend<PathComponent> for PathGuard<'_> {
+    fn extend<T: IntoIterator<Item = PathComponent>>(&mut self, iter: T) {
+        self.buf.extend(iter);
     }
 }
