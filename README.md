@@ -106,6 +106,14 @@ and use that directly to modify the value in-place
 when hashing the node.
 See [replace\_hash](firewood/storage/src/hashers/ethhash.rs) for more details.
 
+## API Documentation
+
+For comprehensive API documentation:
+
+- **Rust API**: See [docs/api/rust.md](docs/api/rust.md) for detailed Rust API reference with examples
+- **Go API (FFI)**: See [docs/api/go.md](docs/api/go.md) for comprehensive Go FFI API reference
+- **Cargo Docs**: Run `cargo doc --open` to view complete Rust documentation locally
+
 ## Run
 
 Example(s) are in the [examples](firewood/examples) directory, that simulate real world

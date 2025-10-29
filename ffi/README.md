@@ -2,6 +2,15 @@
 
 The FFI package provides a golang FFI layer for Firewood.
 
+## API Documentation
+
+For comprehensive API documentation, see the [Go API Reference](../docs/api/go.md), which includes:
+- Complete function reference for all FFI operations
+- Memory management guidelines
+- Error handling patterns
+- Usage examples
+- Type reference
+
 ## Building Firewood Golang FFI
 
 The Golang FFI layer uses a CGO directive to locate a C-API compatible binary built from Firewood. Firewood supports both seamless local development and a single-step compilation process for Go projects that depend or transitively depend on Firewood.
