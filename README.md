@@ -78,6 +78,8 @@ as well as carefully managing the free list during the creation and expiration o
 
 Firewood provides comprehensive metrics for monitoring database performance, resource utilization, and operational characteristics. These metrics are built using the [Prometheus](https://prometheus.io/) format and can be exposed for collection by monitoring systems.
 
+**Note**: Metric names in this documentation use dots (e.g., `firewood.proposal.commit`), but when exported to Prometheus, dots are automatically converted to underscores (e.g., `firewood_proposal_commit`) following Prometheus naming conventions.
+
 ### Enabling Metrics
 
 Metrics are available when Firewood is built with the `metrics` feature. By default, metrics collection is enabled in the library but needs to be explicitly started in applications.
@@ -213,8 +215,8 @@ See the [FFI README](ffi/README.md) for more details on FFI metrics configuratio
 ##### Node Persistence
 
 - **`firewood.flush_nodes`** (counter)
-  - Description: Time spent flushing nodes to disk in milliseconds
-  - Use: Monitor flush performance and identify slow disk writes
+  - Description: Cumulative time spent flushing nodes to disk in milliseconds (counter incremented by flush duration)
+  - Use: Monitor flush performance and identify slow disk writes; calculate average flush time using rate()
 
 #### Memory Management
 
@@ -344,7 +346,7 @@ These metrics are specific to the Foreign Function Interface (Go) layer:
 
 ### Example Monitoring Queries
 
-For Prometheus-based monitoring:
+For Prometheus-based monitoring (note: metric names use underscores in queries):
 
 ```promql
 # Average commit latency over 5 minutes
