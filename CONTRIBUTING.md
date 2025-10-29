@@ -31,7 +31,7 @@ Resolve any warnings or errors before making your PR.
 
 ## [How to submit changes]
 
-To create a PR, fork firewood, and use github to create the PR. We typically prioritize reviews in the middle of our the next work day,
+To create a PR, fork firewood, and use GitHub to create the PR. We typically prioritize reviews in the middle of the next work day,
 so you should expect a response during the week within 24 hours.
 
 ## [Code Review Process]
