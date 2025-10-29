@@ -27,10 +27,12 @@ import "C"
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"runtime"
 	"sync"
+	"time"
 )
 
 // These constants are used to identify errors returned by the Firewood Rust FFI.
@@ -260,13 +262,26 @@ func (db *Database) Revision(root []byte) (*Revision, error) {
 // nothing. The pointer will be set to nil after freeing to prevent double free.
 // However, it is not safe to call this method concurrently from multiple
 // goroutines.
-func (db *Database) Close() error {
+func (db *Database) Close(ctx context.Context) error {
 	if db.handle == nil {
 		return nil
 	}
 
 	go runtime.GC()
-	db.proposals.Wait()
+
+	done := make(chan struct{})
+	go func() {
+		db.proposals.Wait()
+		close(done)
+	}()
+
+	ctx, cancel := context.WithTimeout(ctx, time.Minute /*arbitrary but definitely long enough*/)
+	defer cancel()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return fmt.Errorf("at least one reachable %T neither dropped nor committed", &Proposal{})
+	}
 
 	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
 		return fmt.Errorf("unexpected error when closing database: %w", err)
