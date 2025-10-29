@@ -36,9 +36,150 @@ and each branch node points to the disk offset of that other node.
 Firewood guarantees recoverability by not referencing the new nodes in a new revision before they are flushed to disk,
 as well as carefully managing the free list during the creation and expiration of revisions.
 
-## Architecture Diagram
+## Architecture
 
-![architecture diagram](./docs/assets/architecture.svg)
+Firewood is designed as a layered system where each component has specific responsibilities. The following diagram illustrates the major components and their relationships:
+
+```mermaid
+graph TB
+    subgraph "Application Layer"
+        APP[Application Code]
+        FFI[FFI Layer<br/>ffi/src]
+    end
+    
+    subgraph "Database API Layer"
+        DB[Database API<br/>firewood/src/db.rs]
+        V2API[V2 API<br/>firewood/src/v2/api.rs]
+    end
+    
+    subgraph "Core Logic Layer"
+        RM[Revision Manager<br/>firewood/src/manager.rs]
+        MERKLE[Merkle Trie<br/>firewood/src/merkle]
+        PROOF[Proof Generation<br/>firewood/src/proof.rs]
+        RS[Root Store<br/>firewood/src/root_store.rs]
+    end
+    
+    subgraph "Storage Layer"
+        NS[Node Store<br/>storage/src/nodestore]
+        STORAGE[Linear Storage<br/>storage/src/linear]
+        HASHER[Hashers<br/>storage/src/hashers]
+    end
+    
+    subgraph "Persistence"
+        DISK[(Disk Storage)]
+    end
+    
+    APP --> DB
+    APP --> FFI
+    FFI --> DB
+    DB --> V2API
+    V2API --> RM
+    RM --> MERKLE
+    RM --> RS
+    MERKLE --> PROOF
+    MERKLE --> NS
+    PROOF --> NS
+    NS --> STORAGE
+    NS --> HASHER
+    STORAGE --> DISK
+    RS -.-> DISK
+    
+    style APP fill:#e1f5ff
+    style FFI fill:#e1f5ff
+    style DB fill:#fff4e1
+    style V2API fill:#fff4e1
+    style RM fill:#f0e1ff
+    style MERKLE fill:#f0e1ff
+    style PROOF fill:#f0e1ff
+    style RS fill:#f0e1ff
+    style NS fill:#e1ffe1
+    style STORAGE fill:#e1ffe1
+    style HASHER fill:#e1ffe1
+    style DISK fill:#ffe1e1
+```
+
+### Component Descriptions
+
+#### Database API Layer
+
+- **Database API** (`firewood/src/db.rs`): The primary interface for interacting with Firewood. Provides methods for creating proposals, committing changes, and querying data.
+- **V2 API** (`firewood/src/v2/api.rs`): Modern API surface exposing batch operations, view interfaces, and proof generation capabilities.
+
+#### Core Logic Layer
+
+- **Revision Manager** (`firewood/src/manager.rs`): Manages the lifecycle of revisions, keeping a configurable number of historical states in memory and coordinating proposal creation and commits.
+- **Merkle Trie** (`firewood/src/merkle`): Implements the core Merkle Patricia Trie data structure used to organize and hash blockchain state efficiently.
+- **Proof Generation** (`firewood/src/proof.rs`, `firewood/src/proofs`): Generates cryptographic proofs including key proofs, range proofs, and change proofs for state verification.
+- **Root Store** (`firewood/src/root_store.rs`): Maps root hashes to their corresponding storage addresses, enabling historical revision access.
+
+#### Storage Layer
+
+- **Node Store** (`storage/src/nodestore`): Manages serialization, deserialization, and addressing of trie nodes. Handles free space management using a sophisticated allocation strategy.
+- **Linear Storage** (`storage/src/linear`): Provides abstraction over the underlying storage medium (file-backed or in-memory). Nodes are stored at linear addresses (disk offsets).
+- **Hashers** (`storage/src/hashers`): Implements different hashing strategies (SHA-256 for MerkleDB compatibility, Keccak-256 for Ethereum compatibility).
+
+#### FFI Layer
+
+- **Foreign Function Interface** (`ffi/src`): Provides C-compatible bindings and Go wrappers, enabling integration with applications written in other languages.
+
+### Data Flow
+
+#### Write Path (Proposal → Commit)
+
+1. Application creates a **Proposal** containing batch operations (puts/deletes)
+2. **Revision Manager** creates a new `NodeStore<MutableProposal>` based on the latest committed revision
+3. **Merkle Trie** processes batch operations, creating or modifying trie nodes in memory
+4. When proposal is committed, **Merkle Trie** computes hashes for all modified nodes
+5. **Node Store** assigns disk addresses to new nodes and updates parent references
+6. **Linear Storage** persists nodes and metadata to disk
+7. **Revision Manager** atomically updates the current root and adds the new committed revision
+8. **Root Store** records the mapping from root hash to storage address
+9. Old revisions beyond the retention limit are expired, and their space is reclaimed
+
+#### Read Path (Query)
+
+1. Application requests a view at a specific root hash (or latest)
+2. **Revision Manager** locates the corresponding committed `NodeStore`
+3. Application performs key lookups through the **Database API**
+4. **Merkle Trie** traverses the trie structure via **Node Store**
+5. **Node Store** reads nodes from **Linear Storage** using cached or disk-based retrieval
+6. Values are returned to the application
+
+#### Proof Generation Path
+
+1. Application requests a proof (key proof, range proof, or change proof)
+2. **Proof Generation** component traverses the trie via **Merkle Trie**
+3. Relevant nodes and their hashes are collected along the path
+4. Proof structure is serialized and returned to the application
+5. Proofs can be independently verified without access to the database
+
+### Common Operations
+
+#### Read Operation
+
+```text
+Application → DB API → Revision Manager → Merkle Trie → Node Store → Linear Storage → Disk
+                                                            ↓
+                                                      Node Cache (if available)
+```
+
+#### Write Operation (Commit)
+
+```text
+Application → DB API → Revision Manager → Merkle Trie (hash) → Node Store (allocate) → Linear Storage → Disk
+                          ↓
+                    Root Store (update mapping)
+```
+
+#### Proof Generation
+
+```text
+Application → DB API → Proof Generator → Merkle Trie → Node Store → Linear Storage
+                                             ↓
+                                    Collect proof nodes and hashes
+```
+
+For a visual representation, see the [architecture diagram](./docs/assets/architecture.svg).
 
 ## Terminology
 
