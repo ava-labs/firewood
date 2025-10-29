@@ -47,7 +47,7 @@ as well as carefully managing the free list during the creation and expiration o
 Firewood officially supports the following operating systems:
 
 - **Linux**: Ubuntu 22.04 LTS and later (tested on ubuntu-latest in CI)
-- **macOS**: macOS 13.0 (Ventura) and later (tested on macos-latest in CI for both Apple Silicon and Intel architectures)
+- **macOS**: macOS 13.0 (Ventura) and later (tested on macos-latest for Apple Silicon in CI)
 
 Other Linux distributions may work but are not regularly tested. Windows is not currently supported.
 
