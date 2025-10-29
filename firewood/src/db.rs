@@ -881,7 +881,7 @@ mod test {
 
         let proposals = ops.iter().chunk_fold(
             NUM_KEYS,
-            Vec::<Proposal<'_, _>>::with_capacity(NUM_PROPOSALS),
+            Vec::<Proposal<'_>>::with_capacity(NUM_PROPOSALS),
             |mut proposals, ops| {
                 let proposal = if let Some(parent) = proposals.last() {
                     parent.propose(ops).unwrap()
@@ -929,7 +929,7 @@ mod test {
         let testdb = TestDb::new();
         let db = &testdb.db;
 
-        let (tx, rx) = std::sync::mpsc::sync_channel::<Proposal<'_, _>>(CHANNEL_CAPACITY);
+        let (tx, rx) = std::sync::mpsc::sync_channel::<Proposal<'_>>(CHANNEL_CAPACITY);
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(CHANNEL_CAPACITY);
 
         // scope will block until all scope-spawned threads finish
@@ -1072,17 +1072,17 @@ mod test {
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
-    struct TestDb<RS = NoOpStore> {
-        db: Db<RS>,
+    struct TestDb {
+        db: Db,
         tmpdir: tempfile::TempDir,
     }
-    impl<RS> Deref for TestDb<RS> {
-        type Target = Db<RS>;
+    impl Deref for TestDb {
+        type Target = Db;
         fn deref(&self) -> &Self::Target {
             &self.db
         }
     }
-    impl<RS> DerefMut for TestDb<RS> {
+    impl DerefMut for TestDb {
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.db
         }
@@ -1131,17 +1131,6 @@ mod test {
             TestDb { db, tmpdir }
         }
 
-        fn path(&self) -> PathBuf {
-            [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-                .iter()
-                .collect();
-            let dbconfig = DbConfig::builder().build();
-            let db = Db::with_root_store(dbpath, dbconfig, mock_store).unwrap();
-            TestDb { db, tmpdir }
-        }
-    }
-
-    impl<RS> TestDb<RS> {
         fn path(&self) -> PathBuf {
             [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()
