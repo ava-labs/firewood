@@ -9,6 +9,7 @@ code and resources for the Firewood project.
 - [Benchmark Description](#benchmark-description)
 - [Installation](#installation)
 - [Usage](#usage)
+- [Understanding Metrics](#understanding-metrics)
 
 ## Introduction
 
