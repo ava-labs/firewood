@@ -201,6 +201,9 @@ mod ethhash {
         Rlp(SmallVec<[u8; 32]>),
     }
 
+    /// Manual implementation of [`Debug`](std::fmt::Debug) so that the RLP bytes
+    /// are displayed as hex rather than raw bytes, which is more useful for
+    /// debugging purposes.
     impl std::fmt::Debug for HashOrRlp {
         fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             match self {
