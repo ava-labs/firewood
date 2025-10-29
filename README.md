@@ -47,7 +47,7 @@ as well as carefully managing the free list during the creation and expiration o
 Firewood officially supports the following operating systems:
 
 - **Linux**: Ubuntu 22.04 LTS and later (tested on ubuntu-latest in CI)
-- **macOS**: macOS 13.0 (Ventura) and later (tested on macos-13 and macos-latest in CI)
+- **macOS**: macOS 13.0 (Ventura) and later (tested on macos-latest in CI for both Apple Silicon and Intel architectures)
 
 Other Linux distributions may work but are not regularly tested. Windows is not currently supported.
 
@@ -73,16 +73,16 @@ The following dependencies must be installed before building Firewood:
 
 For Go FFI bindings:
 
-- **Go 1.21+** - Required for building and testing the FFI layer
+- **Go 1.24+** - Required for building and testing the FFI layer
 
 ### Tested Configurations
 
 The following configurations are continuously tested in CI:
 
-- Ubuntu latest (x86_64): All feature combinations
-- Ubuntu 22.04 ARM (aarch64): Static library builds
-- macOS latest (Apple Silicon, aarch64): Core features
-- macOS 13 (Intel, x86_64): Core features
+- Ubuntu latest (x86_64): All feature combinations in main CI workflow
+- Ubuntu 22.04 ARM (aarch64): Static library builds for FFI
+- macOS latest (Apple Silicon, aarch64): Core features in main CI workflow; static library builds for FFI
+- macOS 13 (Intel, x86_64): Static library builds for FFI only
 
 ### Container Support
 
@@ -101,8 +101,8 @@ Firewood has been extensively tested and optimized for cloud environments:
 
 Fully supported with optimized configurations for various instance types:
 
-- **Graviton-based instances** (ARM64): i4g.large, i4g.xlarge, c6gd.2xlarge, x2gd.xlarge, r6gd.2xlarge, m5ad.2xlarge
-- **Intel-based instances** (x86_64): i4i.large, i4i.xlarge, m6id.xlarge, r6id.2xlarge, z1d.2xlarge
+- **Graviton-based instances** (ARM64): i4g.large, i4g.xlarge, c6gd.2xlarge, x2gd.xlarge, r6gd.2xlarge, i8ge.12xlarge
+- **Intel/AMD-based instances** (x86_64): i4i.large, i4i.xlarge, m6id.xlarge, r6id.2xlarge, z1d.2xlarge, m5ad.2xlarge (AMD EPYC)
 
 See [benchmark/bootstrap/aws-launch.sh](benchmark/bootstrap/aws-launch.sh) for automated deployment scripts and instance recommendations.
 
