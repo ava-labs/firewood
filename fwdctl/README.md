@@ -684,7 +684,7 @@ class FirewoodDB:
     
     def insert(self, key, value):
         """Insert a key-value pair"""
-        subprocess.run([self.fwctl, "insert", key, value, "--db", self.db_path], check=True)
+        subprocess.run([self.fwdctl, "insert", key, value, "--db", self.db_path], check=True)
     
     def get(self, key):
         """Get a value by key"""
