@@ -141,28 +141,6 @@ func newTestDatabase(t *testing.T, configureFns ...func(*Config)) *Database {
 	return db
 }
 
-func newTestDatabaseWithFjallStore(t *testing.T) *Database {
-	t.Helper()
-	r := require.New(t)
-
-	tmpDir := t.TempDir()
-	dbFile := filepath.Join(tmpDir, "test.db")
-	rootStoreDir := filepath.Join(tmpDir, "root_store")
-
-	opt := func(c *Config) {
-		c.RootStoreDir = rootStoreDir
-	}
-
-	db, closeDB, err := newDatabase(dbFile, opt)
-	r.NoError(err)
-
-	t.Cleanup(func() {
-		r.NoError(closeDB())
-	})
-
-	return db
-}
-
 func newDatabase(dbFile string, configureFns ...func(*Config)) (*Database, func() error, error) {
 	conf := DefaultConfig()
 	conf.Truncate = true // in tests, we use filepath.Join, which creates an empty file
@@ -1237,7 +1215,7 @@ func TestFjallStore(t *testing.T) {
 		r.NoError(err)
 
 		r.Equal(vals[i], v)
-		revision.Drop()
+		r.NoError(revision.Drop())
 	}
 }
 

@@ -103,9 +103,6 @@ func New(filePath string, conf *Config) (*Database, error) {
 	if conf.FreeListCacheEntries < 1 {
 		return nil, fmt.Errorf("%T.FreeListCacheEntries must be >= 1", conf)
 	}
-	if conf.RootStoreDir != "" {
-		fmt.Println("root store dir: ", conf.RootStoreDir)
-	}
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
