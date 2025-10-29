@@ -427,11 +427,21 @@ mod tests {
 
     use super::*;
 
-    /// in constant context, convert an ASCII hex string to a byte array
+    /// In constant context, convert an ASCII hex string to a byte array.
+    ///
+    /// `FROM` must be exactly twice `TO`. This is workaround because generic
+    /// parameters cannot be used in constant expressions yet (see [upstream]).
+    ///
+    /// The [`expected_hash`] macro is able to work around this limitation by
+    /// evaluating the length at macro expansion time which provides a constant
+    /// value for both generic parameters at compile time.
     ///
     /// # Panics
     ///
-    /// Panics if the input is not valid hex.
+    /// Panics if the input is not valid hex. Because this panic occurs in constant
+    /// context, this will result in an "erroneous constant error" during compilation.
+    ///
+    /// [upstream]: https://github.com/rust-lang/rust/issues/76560
     const fn from_ascii<const FROM: usize, const TO: usize>(hex: &[u8; FROM]) -> [u8; TO] {
         #![expect(clippy::arithmetic_side_effects, clippy::indexing_slicing)]
 
@@ -462,6 +472,32 @@ mod tests {
         bytes
     }
 
+    /// A macro to select the expected hash based on the enabled cargo features.
+    ///
+    /// For both merkledb hash types, only a 64-character hex string (32 bytes)
+    /// is expected. For the ethereum hash type, either a 64-character hex string
+    /// or an RLP-encoded byte string of arbitrary length can be provided, if
+    /// wrapped in `rlp(...)`.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// expected_hash!{
+    ///     merkledb16: b"749390713e51d3e4e50ba492a669c1644a6d9cb7e48b2a14d556e7f953da92fc",
+    ///     merkledb256: b"30dbf15b59c97d2997f4fbed1ae86d1eab8e7aa2dd84337029fe898f47aeb8e6",
+    ///     ethereum: b"2e636399fae96dc07abaf21167a34b8a5514d6594e777635987e319c76f28a75",
+    /// }
+    /// ```
+    ///
+    /// or with RLP:
+    ///
+    /// ```ignore
+    /// expected_hash!{
+    ///     merkledb16: b"1ffe11ce995a9c07021d6f8a8c5b1817e6375dd0ea27296b91a8d48db2858bc9",
+    ///     merkledb256: b"831a115e52af616bd2df8cd7a0993e21e544d7d201e151a7f61dcdd1a6bd557c",
+    ///     ethereum: rlp(b"c482206131"),
+    /// }
+    /// ```
     macro_rules! expected_hash {
         (
             merkledb16: $hex16:expr,
