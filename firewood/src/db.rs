@@ -1151,6 +1151,7 @@ mod test {
             let db = Db::with_root_store(path, dbconfig, root_store).unwrap();
             TestDb { db, tmpdir }
         }
+
         fn replace(self) -> Self {
             let path = self.path();
             let TestDb { db, tmpdir } = self;
