@@ -1171,21 +1171,23 @@ func TestGetFromRootParallel(t *testing.T) {
 	}
 }
 
-// XXX: need to clean up this code
 func TestFjallStore(t *testing.T) {
 	r := require.New(t)
 
-	tmpdir := t.TempDir()
-	dbFile := filepath.Join(tmpdir, "test.db")
-	rootStoreDir := filepath.Join(tmpdir, "root_store_dir")
-	// Create a new database
+	var (
+		tmpdir       = t.TempDir()
+		dbFile       = filepath.Join(tmpdir, "test.db")
+		rootStoreDir = filepath.Join(tmpdir, "root_store_dir")
+	)
+
+	// Create a new database with RootStore enabled
 	config := DefaultConfig()
 	config.RootStoreDir = rootStoreDir
 
 	db, err := New(dbFile, config)
 	r.NoError(err)
 
-	// Insert some data.
+	// Create and commit 10 proposals
 	numRevisions := 10
 	key := []byte("root_store")
 	_, vals := kvForTest(numRevisions)
@@ -1199,10 +1201,9 @@ func TestFjallStore(t *testing.T) {
 		r.NoError(err)
 	}
 
-	// Close the database.
+	// Close and reopen the database
 	r.NoError(db.Close())
 
-	// Reopen the database
 	db, err = New(dbFile, config)
 	r.NoError(err)
 
