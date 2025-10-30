@@ -181,9 +181,9 @@ impl RootStore for FjallStore {
                 source: "empty value".into(),
             })?;
 
-        let array: [u8; 8] = v.as_ref().try_into().map_err(|_| RootStoreError {
+        let array: [u8; 8] = v.as_ref().try_into().map_err(|e| RootStoreError {
             method: RootStoreMethod::Get,
-            source: "Invalid byte length for u64".into(),
+            source: Box::new(e),
         })?;
 
         Ok(LinearAddress::new(u64::from_be_bytes(array)))
