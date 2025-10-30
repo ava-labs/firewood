@@ -109,9 +109,10 @@ impl DatabaseHandle {
     ///
     /// If the path is empty, or if the configuration is invalid, this will return an error.
     pub fn new(args: DatabaseHandleArgs<'_>) -> Result<Self, api::Error> {
-        let root_store_path = args.root_store_path.as_str().map_err(|err| {
-            invalid_data(format!("root store path contains invalid utf-8: {err}"))
-        })?;
+        let root_store_path = args
+            .root_store_path
+            .as_str()
+            .map_err(|e| invalid_data(format!("root store path contains invalid utf-8: {e}")))?;
 
         let root_store_dir = Some(root_store_path)
             .filter(|s| !s.is_empty())
