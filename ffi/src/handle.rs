@@ -67,7 +67,7 @@ impl DatabaseHandleArgs<'_> {
                     .map_err(|_| invalid_data("cache size should be non-zero"))?,
             )
             .max_revisions(self.revisions)
-            .cache_read_strategy(cache_read_strategy)
+            .cache_read_strategy(firewood::manager::CacheReadStrategy::WritesOnly)
             .free_list_cache_size(
                 self.free_list_cache_size
                     .try_into()
