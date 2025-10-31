@@ -1476,7 +1476,7 @@ func TestNilVsEmptyValue(t *testing.T) {
 	value3 := []byte("value3")
 	key4 := []byte("key4")
 	emptyValue4 := []byte{}
-	
+
 	_, err = db.Update(
 		[][]byte{key3, key4},
 		[][]byte{value3, emptyValue4},
