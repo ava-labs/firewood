@@ -66,7 +66,7 @@ func newBorrowedBytes(slice []byte, pinner Pinner) C.BorrowedBytes {
 	// Get the pointer first to distinguish between nil slice and empty slice
 	ptr := unsafe.SliceData(slice)
 	sliceLen := len(slice)
-	
+
 	// If ptr is nil (which means the slice itself is nil), return nil pointer
 	if ptr == nil {
 		return C.BorrowedBytes{ptr: nil, len: 0}
