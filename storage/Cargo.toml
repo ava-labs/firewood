@@ -32,7 +32,7 @@ sha2.workspace = true
 smallvec = { workspace = true, features = ["write", "union"] }
 thiserror.workspace = true
 # Regular dependencies
-arc-swap = "1.7.1"
+arc-swap = { version="1.7.1", features = ["internal-test-strategies"] }
 bitfield = "0.19.2"
 bitflags = "2.9.4"
 derive-where = "1.6.0"
@@ -47,6 +47,7 @@ io-uring = { version = "0.7.10", optional = true }
 log = { version = "0.4.28", optional = true }
 rlp = { version = "0.6.1", optional = true }
 sha3 = { version = "0.10.8", optional = true }
+parking_lot = {version = "0.12.5", optional = true }
 
 [dev-dependencies]
 # Workspace dependencies
@@ -62,6 +63,9 @@ branch_factor_256 = []
 io-uring = ["dep:io-uring"]
 ethhash = ["dep:rlp", "dep:sha3", "dep:bytes"]
 test_utils = ["dep:rand"]
+parking_lot_swap = ["dep:parking_lot"]
+arc_swap = []
+std_rwlock = []
 
 [[bench]]
 name = "serializer"

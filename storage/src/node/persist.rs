@@ -2,8 +2,16 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::{fmt::Display, sync::Arc};
+use std::fmt::Formatter;
 
+#[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+use std::sync::RwLock;
+
+#[cfg(feature = "arc_swap")]
 use arc_swap::ArcSwap;
+
+#[cfg(feature = "parking_lot_swap")]
+use parking_lot::RwLock;
 
 use crate::{FileIoError, LinearAddress, NodeReader, SharedNode};
 
@@ -37,12 +45,51 @@ use crate::{FileIoError, LinearAddress, NodeReader, SharedNode};
 /// a new `Arc` is created to the new `MaybePersisted::Persisted` variant and the `ArcSwap`
 /// is updated atomically. Subsequent accesses to any instance of it, including any clones,
 /// will see the `Persisted` node address.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
+#[cfg(feature = "parking_lot_swap")]
+pub struct MaybePersistedNode(Arc<RwLock<Arc<MaybePersisted>>>);
+#[derive(Clone)]
+#[cfg(feature = "arc_swap")]
 pub struct MaybePersistedNode(Arc<ArcSwap<MaybePersisted>>);
+#[derive(Clone)]
+#[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+pub struct MaybePersistedNode(Arc<RwLock<Arc<MaybePersisted>>>);
+
+impl std::fmt::Debug for MaybePersistedNode {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        #[cfg(feature = "arc_swap")]
+        {
+            write!(f, "MaybePersistedNode({:?})", self.0.load().as_ref())
+        }
+
+        #[cfg(feature = "parking_lot_swap")]
+        {
+            write!(f, "MaybePersistedNode({:?})", self.0.read().as_ref())
+        }
+
+        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        {
+            write!(f, "MaybePersistedNode({:?})", self.0.read().expect("poisoned lock").as_ref())
+        }
+    }
+}
 
 impl PartialEq<MaybePersistedNode> for MaybePersistedNode {
     fn eq(&self, other: &MaybePersistedNode) -> bool {
-        self.0.load().as_ref() == other.0.load().as_ref()
+        #[cfg(feature = "arc_swap")]
+        {
+            self.0.load().as_ref() == other.0.load().as_ref()
+        }
+
+        #[cfg(feature = "parking_lot_swap")]
+        {
+            self.0.read().as_ref() == other.0.read().as_ref()
+        }
+
+        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        {
+            self.0.read().expect("poisoned lock").as_ref() == other.0.read().expect("poisoned lock").as_ref()
+        }
     }
 }
 
@@ -50,26 +97,83 @@ impl Eq for MaybePersistedNode {}
 
 impl From<SharedNode> for MaybePersistedNode {
     fn from(node: SharedNode) -> Self {
-        MaybePersistedNode(Arc::new(ArcSwap::new(Arc::new(
-            MaybePersisted::Unpersisted(node),
-        ))))
+        #[cfg(feature = "arc_swap")]
+        {
+            MaybePersistedNode(Arc::new(ArcSwap::new(Arc::new(
+                MaybePersisted::Unpersisted(node),
+            ))))
+        }
+
+        #[cfg(feature = "parking_lot_swap")]
+        {
+            MaybePersistedNode(Arc::new(RwLock::new(Arc::new(
+                MaybePersisted::Unpersisted(node),
+            ))))
+        }
+
+        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        {
+            MaybePersistedNode(Arc::new(RwLock::new(Arc::new(
+                MaybePersisted::Unpersisted(node),
+            ))))
+        }
     }
 }
 
 impl From<LinearAddress> for MaybePersistedNode {
     fn from(address: LinearAddress) -> Self {
-        MaybePersistedNode(Arc::new(ArcSwap::new(Arc::new(MaybePersisted::Persisted(
-            address,
-        )))))
+        #[cfg(feature = "arc_swap")]
+        {
+            MaybePersistedNode(Arc::new(ArcSwap::new(Arc::new(
+                MaybePersisted::Persisted(address),
+            ))))
+        }
+
+        #[cfg(feature = "parking_lot_swap")]
+        {
+            MaybePersistedNode(Arc::new(RwLock::new(Arc::new(
+                MaybePersisted::Persisted(address),
+            ))))
+        }
+
+        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        {
+            MaybePersistedNode(Arc::new(RwLock::new(Arc::new(
+                MaybePersisted::Persisted(address),
+            ))))
+        }
     }
 }
 
 impl From<&MaybePersistedNode> for Option<LinearAddress> {
     fn from(node: &MaybePersistedNode) -> Option<LinearAddress> {
-        match node.0.load().as_ref() {
-            MaybePersisted::Unpersisted(_) => None,
-            MaybePersisted::Allocated(address, _) | MaybePersisted::Persisted(address) => {
-                Some(*address)
+        #[cfg(feature = "arc_swap")]
+        {
+            match node.0.load().as_ref() {
+                MaybePersisted::Unpersisted(_) => None,
+                MaybePersisted::Allocated(address, _) | MaybePersisted::Persisted(address) => {
+                    Some(*address)
+                }
+            }
+        }
+
+        #[cfg(feature = "parking_lot_swap")]
+        {
+            match node.0.read().as_ref() {
+                MaybePersisted::Unpersisted(_) => None,
+                MaybePersisted::Allocated(address, _) | MaybePersisted::Persisted(address) => {
+                    Some(*address)
+                }
+            }
+        }
+
+        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        {
+            match node.0.read().expect("poisoned lock").as_ref() {
+                MaybePersisted::Unpersisted(_) => None,
+                MaybePersisted::Allocated(address, _) | MaybePersisted::Persisted(address) => {
+                    Some(*address)
+                }
             }
         }
     }
@@ -91,11 +195,34 @@ impl MaybePersistedNode {
     /// - `Ok(SharedNode)` contains the node if successfully retrieved
     /// - `Err(FileIoError)` if there was an error reading from storage
     pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
-        match self.0.load().as_ref() {
-            MaybePersisted::Allocated(_, node) | MaybePersisted::Unpersisted(node) => {
-                Ok(node.clone())
+        #[cfg(feature = "arc_swap")]
+        {
+            match self.0.load().as_ref() {
+                MaybePersisted::Allocated(_, node) | MaybePersisted::Unpersisted(node) => {
+                    Ok(node.clone())
+                }
+                MaybePersisted::Persisted(address) => storage.read_node(*address),
             }
-            MaybePersisted::Persisted(address) => storage.read_node(*address),
+        }
+
+        #[cfg(feature = "parking_lot_swap")]
+        {
+            match self.0.read().as_ref() {
+                MaybePersisted::Allocated(_, node) | MaybePersisted::Unpersisted(node) => {
+                    Ok(node.clone())
+                }
+                MaybePersisted::Persisted(address) => storage.read_node(*address),
+            }
+        }
+
+        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        {
+            match self.0.read().expect("poisoned lock").as_ref() {
+                MaybePersisted::Allocated(_, node) | MaybePersisted::Unpersisted(node) => {
+                    Ok(node.clone())
+                }
+                MaybePersisted::Persisted(address) => storage.read_node(*address),
+            }
         }
     }
 
@@ -106,10 +233,33 @@ impl MaybePersistedNode {
     /// Returns `Some(LinearAddress)` if the node is persisted on disk, otherwise `None`.
     #[must_use]
     pub fn as_linear_address(&self) -> Option<LinearAddress> {
-        match self.0.load().as_ref() {
-            MaybePersisted::Unpersisted(_) => None,
-            MaybePersisted::Allocated(address, _) | MaybePersisted::Persisted(address) => {
-                Some(*address)
+        #[cfg(feature = "arc_swap")]
+        {
+            match self.0.load().as_ref() {
+                MaybePersisted::Unpersisted(_) => None,
+                MaybePersisted::Allocated(address, _) | MaybePersisted::Persisted(address) => {
+                    Some(*address)
+                }
+            }
+        }
+
+        #[cfg(feature = "parking_lot_swap")]
+        {
+            match self.0.read().as_ref() {
+                MaybePersisted::Unpersisted(_) => None,
+                MaybePersisted::Allocated(address, _) | MaybePersisted::Persisted(address) => {
+                    Some(*address)
+                }
+            }
+        }
+
+        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        {
+            match self.0.read().expect("poisoned lock").as_ref() {
+                MaybePersisted::Unpersisted(_) => None,
+                MaybePersisted::Allocated(address, _) | MaybePersisted::Persisted(address) => {
+                    Some(*address)
+                }
             }
         }
     }
@@ -121,9 +271,28 @@ impl MaybePersistedNode {
     /// Returns `Some(&Self)` if the node is unpersisted, otherwise `None`.
     #[must_use]
     pub fn unpersisted(&self) -> Option<&Self> {
-        match self.0.load().as_ref() {
-            MaybePersisted::Allocated(_, _) | MaybePersisted::Unpersisted(_) => Some(self),
-            MaybePersisted::Persisted(_) => None,
+        #[cfg(feature = "arc_swap")]
+        {
+            match self.0.load().as_ref() {
+                MaybePersisted::Allocated(_, _) | MaybePersisted::Unpersisted(_) => Some(self),
+                MaybePersisted::Persisted(_) => None,
+            }
+        }
+
+        #[cfg(feature = "parking_lot_swap")]
+        {
+            match self.0.read().as_ref() {
+                MaybePersisted::Allocated(_, _) | MaybePersisted::Unpersisted(_) => Some(self),
+                MaybePersisted::Persisted(_) => None,
+            }
+        }
+
+        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        {
+            match self.0.read().expect("poisoned lock").as_ref() {
+                MaybePersisted::Allocated(_, _) | MaybePersisted::Unpersisted(_) => Some(self),
+                MaybePersisted::Persisted(_) => None,
+            }
         }
     }
 
@@ -138,7 +307,20 @@ impl MaybePersistedNode {
     ///
     /// * `addr` - The `LinearAddress` where the node has been persisted on disk
     pub fn persist_at(&self, addr: LinearAddress) {
-        self.0.store(Arc::new(MaybePersisted::Persisted(addr)));
+        #[cfg(feature = "arc_swap")]
+        {
+            self.0.store(Arc::new(MaybePersisted::Persisted(addr)));
+        }
+
+        #[cfg(feature = "parking_lot_swap")]
+        {
+            *self.0.write() = Arc::new(MaybePersisted::Persisted(addr));
+        }
+
+        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        {
+            *self.0.write().expect("poisoned lock") = Arc::new(MaybePersisted::Persisted(addr));
+        }
     }
 
     /// Updates the internal state to indicate this node is allocated at the specified disk address.
@@ -152,14 +334,49 @@ impl MaybePersistedNode {
     ///
     /// * `addr` - The `LinearAddress` where the node has been allocated on disk
     pub fn allocate_at(&self, addr: LinearAddress) {
-        match self.0.load().as_ref() {
-            MaybePersisted::Unpersisted(node) | MaybePersisted::Allocated(_, node) => {
-                self.0
-                    .store(Arc::new(MaybePersisted::Allocated(addr, node.clone())));
+        #[cfg(feature = "arc_swap")]
+        {
+            match self.0.load().as_ref() {
+                MaybePersisted::Unpersisted(node) | MaybePersisted::Allocated(_, node) => {
+                    self.0
+                        .store(Arc::new(MaybePersisted::Allocated(addr, node.clone())));
+                }
+                MaybePersisted::Persisted(_) => {
+                    unreachable!("Cannot allocate a node that is already persisted on disk");
+                }
             }
-            MaybePersisted::Persisted(_) => {
-                unreachable!("Cannot allocate a node that is already persisted on disk");
-            }
+        }
+
+        #[cfg(feature = "parking_lot_swap")]
+        {
+            let node = {
+                let guard = self.0.read();
+                match guard.as_ref() {
+                    MaybePersisted::Unpersisted(node) | MaybePersisted::Allocated(_, node) => {
+                        node.clone()
+                    }
+                    MaybePersisted::Persisted(_) => {
+                        unreachable!("Cannot allocate a node that is already persisted on disk");
+                    }
+                }
+            };
+            *self.0.write() = Arc::new(MaybePersisted::Allocated(addr, node));
+        }
+
+        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        {
+            let node = {
+                let guard = self.0.read().expect("poisoned lock");
+                match guard.as_ref() {
+                    MaybePersisted::Unpersisted(node) | MaybePersisted::Allocated(_, node) => {
+                        node.clone()
+                    }
+                    MaybePersisted::Persisted(_) => {
+                        unreachable!("Cannot allocate a node that is already persisted on disk");
+                    }
+                }
+            };
+            *self.0.write().expect("poisoned lock") = Arc::new(MaybePersisted::Allocated(addr, node));
         }
     }
 
@@ -171,9 +388,28 @@ impl MaybePersistedNode {
     /// otherwise `None`.
     #[must_use]
     pub fn allocated_info(&self) -> Option<(LinearAddress, SharedNode)> {
-        match self.0.load().as_ref() {
-            MaybePersisted::Allocated(addr, node) => Some((*addr, node.clone())),
-            _ => None,
+        #[cfg(feature = "arc_swap")]
+        {
+            match self.0.load().as_ref() {
+                MaybePersisted::Allocated(addr, node) => Some((*addr, node.clone())),
+                _ => None,
+            }
+        }
+
+        #[cfg(feature = "parking_lot_swap")]
+        {
+            match self.0.read().as_ref() {
+                MaybePersisted::Allocated(addr, node) => Some((*addr, node.clone())),
+                _ => None,
+            }
+        }
+
+        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        {
+            match self.0.read().expect("poisoned lock").as_ref() {
+                MaybePersisted::Allocated(addr, node) => Some((*addr, node.clone())),
+                _ => None,
+            }
         }
     }
 }
@@ -189,10 +425,31 @@ impl MaybePersistedNode {
 /// If instead you want the node itself, use [`MaybePersistedNode::as_shared_node`] first.
 impl Display for MaybePersistedNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0.load().as_ref() {
-            MaybePersisted::Unpersisted(node) => write!(f, "M{:p}", (*node).as_ptr()),
-            MaybePersisted::Allocated(addr, node) => write!(f, "A{:p}@{addr}", (*node).as_ptr()),
-            MaybePersisted::Persisted(addr) => write!(f, "{addr}"),
+        #[cfg(feature = "arc_swap")]
+        {
+            match self.0.load().as_ref() {
+                MaybePersisted::Unpersisted(node) => write!(f, "M{:p}", (*node).as_ptr()),
+                MaybePersisted::Allocated(addr, node) => write!(f, "A{:p}@{addr}", (*node).as_ptr()),
+                MaybePersisted::Persisted(addr) => write!(f, "{addr}"),
+            }
+        }
+
+        #[cfg(feature = "parking_lot_swap")]
+        {
+            match self.0.read().as_ref() {
+                MaybePersisted::Unpersisted(node) => write!(f, "M{:p}", (*node).as_ptr()),
+                MaybePersisted::Allocated(addr, node) => write!(f, "A{:p}@{addr}", (*node).as_ptr()),
+                MaybePersisted::Persisted(addr) => write!(f, "{addr}"),
+            }
+        }
+
+        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        {
+            match self.0.read().expect("poisoned lock").as_ref() {
+                MaybePersisted::Unpersisted(node) => write!(f, "M{:p}", (*node).as_ptr()),
+                MaybePersisted::Allocated(addr, node) => write!(f, "A{:p}@{addr}", (*node).as_ptr()),
+                MaybePersisted::Persisted(addr) => write!(f, "{addr}"),
+            }
         }
     }
 }

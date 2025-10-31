@@ -1157,6 +1157,7 @@ dependencies = [
  "lru",
  "metrics",
  "nonzero_ext",
+ "parking_lot",
  "pprof",
  "rand 0.9.2",
  "rlp",
