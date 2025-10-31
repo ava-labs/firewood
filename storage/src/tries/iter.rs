@@ -1,7 +1,9 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{HashType, PathBuf, PathComponent, TrieNode, TriePath, tries::TrieEdgeState};
+use crate::{
+    HashType, IntoSplitPath, PathBuf, PathComponent, SplitPath, TrieEdgeState, TrieNode, TriePath,
+};
 
 /// A marker type for [`TrieEdgeIter`] that indicates that the iterator traverses
 /// the trie in ascending order.
@@ -31,6 +33,18 @@ pub struct TrieEdgeIter<'a, N: ?Sized, V: ?Sized, D> {
 #[must_use = "iterators are lazy and do nothing unless consumed"]
 pub struct TrieValueIter<'a, N: ?Sized, V: ?Sized, D> {
     edges: TrieEdgeIter<'a, N, V, D>,
+}
+
+/// An iterator over the edges along a specified path in a key-value trie
+/// terminating at the node corresponding to the path, if it exists; otherwise,
+/// terminating at the deepest existing edge along the path.
+#[derive(Debug)]
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+pub struct TriePathIter<'a, P, N: ?Sized, V: ?Sized> {
+    needle: P,
+    current_path: PathBuf,
+    current_edge: Option<TrieEdgeState<'a, N>>,
+    marker: std::marker::PhantomData<V>,
 }
 
 #[derive(Debug)]
@@ -80,6 +94,26 @@ where
         self.stack.push(frame);
         self.leading_path.extend(leading_component);
         self.leading_path.extend(node.partial_path().components());
+    }
+}
+
+impl<'a, P, N, V> TriePathIter<'a, P, N, V>
+where
+    P: SplitPath,
+    N: TrieNode<V> + ?Sized,
+    V: AsRef<[u8]> + ?Sized,
+{
+    /// Creates a new iterator over the edges along the given path in the
+    /// specified key-value trie.
+    pub const fn new(root: &'a N, root_hash: Option<&'a HashType>, path: P) -> Self {
+        let mut this = Self {
+            needle: path,
+            current_path: PathBuf::new_const(),
+            current_edge: None,
+            marker: std::marker::PhantomData,
+        };
+        this.current_edge = Some(TrieEdgeState::from_node(root, root_hash));
+        this
     }
 }
 
@@ -218,6 +252,45 @@ where
     }
 }
 
+impl<'a, P, N, V> Iterator for TriePathIter<'a, P, N, V>
+where
+    P: SplitPath,
+    N: TrieNode<V> + ?Sized,
+    V: AsRef<[u8]> + ?Sized,
+{
+    type Item = (PathBuf, TrieEdgeState<'a, N>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        // qualified path to `Option::take` because rust-analyzer thinks
+        // `self.current_edge` is an `Iterator` and displays an error for
+        // `self.current_edge.take()` where `rustc` does not
+        let edge = Option::take(&mut self.current_edge)?;
+        let path = self.current_path.clone();
+
+        let Some(node) = edge.node() else {
+            // the current edge is remote, so we cannot descend further
+            return Some((path, edge));
+        };
+
+        self.current_path.extend(node.partial_path().components());
+
+        if let (None, Some((pc, needle_suffix)), _) = node
+            .partial_path()
+            .into_split_path()
+            .longest_common_prefix(self.needle)
+            .split_first_parts()
+        {
+            // the target path continues beyond the current node, descend
+            // into it if there's a child along the path
+            self.current_path.push(pc);
+            self.current_edge = node.child_state(pc);
+            self.needle = needle_suffix;
+        }
+
+        Some((path, edge))
+    }
+}
+
 // auto-derived implementations would require N: Clone, V: Clone which is too much
 
 impl<N: ?Sized, V: ?Sized, D> Clone for TrieEdgeIter<'_, N, V, D> {
@@ -244,6 +317,23 @@ impl<N: ?Sized, V: ?Sized, D> Clone for TrieValueIter<'_, N, V, D> {
 
     fn clone_from(&mut self, source: &Self) {
         self.edges.clone_from(&source.edges);
+    }
+}
+
+impl<P: SplitPath, N: ?Sized, V: ?Sized> Clone for TriePathIter<'_, P, N, V> {
+    fn clone(&self) -> Self {
+        Self {
+            needle: self.needle,
+            current_path: self.current_path.clone(),
+            current_edge: self.current_edge,
+            marker: std::marker::PhantomData,
+        }
+    }
+
+    fn clone_from(&mut self, source: &Self) {
+        self.needle = source.needle;
+        self.current_path.clone_from(&source.current_path);
+        self.current_edge = source.current_edge;
     }
 }
 
