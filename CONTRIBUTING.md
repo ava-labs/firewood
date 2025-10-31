@@ -49,7 +49,7 @@ When reviewing code, your goal is to help the author improve the quality of the 
 Use this when the code is an improvement over the current state of the codebase.
 
 * It's okay to request minor changes in comments and still approve the pull request.
-* Perfection is not the goal—progress is. If the submitted code is better than what's in production, it's acceptable to approve even if small improvements remain. Consider adding a new issue or request adding a code TODO for larger changes.
+* Perfection is not the goal — progress is. If the submitted code is better than what's in production, it's acceptable to approve even if small improvements remain. Consider adding a new issue or request adding a code TODO for larger changes.
 
 #### 💬 Comment (Comment Only)
 
