@@ -8,7 +8,7 @@
 
 use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
-use crate::root_store::{NoOpStore, RootStore};
+use crate::root_store::{FjallStore, NoOpStore, RootStore};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
     self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair,
@@ -23,7 +23,7 @@ use firewood_storage::{
 use metrics::{counter, describe_counter};
 use std::io::Write;
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
@@ -109,6 +109,9 @@ pub struct DbConfig {
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
+    /// `RootStore` directory path
+    #[builder(default = None)]
+    pub root_store_dir: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -184,7 +187,12 @@ impl api::Db for Db {
 impl Db {
     /// Create a new database instance.
     pub fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
-        Self::with_root_store(db_path, cfg, Box::new(NoOpStore {}))
+        let root_store: Box<dyn RootStore + Send + Sync> = match &cfg.root_store_dir {
+            Some(path) => Box::new(FjallStore::new(path)?),
+            None => Box::new(NoOpStore {}),
+        };
+
+        Self::with_root_store(db_path, cfg, root_store)
     }
 
     fn with_root_store<P: AsRef<Path>>(
@@ -1019,6 +1027,26 @@ mod test {
         let mock_store = MockStore::default();
         let db = TestDb::with_mockstore(mock_store);
 
+        test_root_store_helper(db);
+    }
+
+    #[test]
+    fn test_fjall_store() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
+            .iter()
+            .collect();
+        let root_store_path = tmpdir.as_ref().join("fjall_store");
+        let dbconfig = DbConfig::builder()
+            .root_store_dir(Some(root_store_path))
+            .build();
+        let db = Db::new(dbpath, dbconfig).unwrap();
+        let db = TestDb { db, tmpdir };
+
+        test_root_store_helper(db);
+    }
+
+    fn test_root_store_helper(db: TestDb) {
         // First, create a revision to retrieve
         let key = b"key";
         let value = b"value";
