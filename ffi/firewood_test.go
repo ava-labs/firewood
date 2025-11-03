@@ -137,7 +137,7 @@ func newTestDatabase(t *testing.T, configureFns ...func(*Config)) *Database {
 	db, err := newDatabase(dbFile, configureFns...)
 	r.NoError(err)
 	t.Cleanup(func() {
-		r.NoError(db.Close(context.Background())) // t.Context() will already be cancelled
+		r.NoError(db.Close(context.Background())) //nolint:usetesting // t.Context() will already be cancelled
 	})
 	return db
 }
@@ -1187,7 +1187,7 @@ func TestProposalHandlesFreed(t *testing.T) {
 
 	// Demonstrates that explicit [Proposal.Commit] and [Proposal.Drop] calls
 	// are sufficient to unblock [Database.Close].
-	var keep []*Proposal //nolint:prealloc
+	var keep []*Proposal
 	for name, free := range map[string](func(*Proposal) error){
 		"Commit": (*Proposal).Commit,
 		"Drop":   (*Proposal).Drop,
