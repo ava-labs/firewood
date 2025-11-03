@@ -251,6 +251,11 @@ func (db *Database) Revision(root []byte) (*Revision, error) {
 	return rev, nil
 }
 
+// defaultCloseTimeout is the duration by which the [context.Context] passed to
+// [Database.Close] is limited. A minute is arbitrary but well above what is
+// reasonably required, and is chosen simply to avoid permanently blocking.
+var defaultCloseTimeout = time.Minute
+
 // Close releases the memory associated with the Database.
 //
 // This blocks until all outstanding Proposals are either unreachable or one of
@@ -275,7 +280,7 @@ func (db *Database) Close(ctx context.Context) error {
 		close(done)
 	}()
 
-	ctx, cancel := context.WithTimeout(ctx, time.Minute /*arbitrary but definitely long enough*/)
+	ctx, cancel := context.WithTimeout(ctx, defaultCloseTimeout)
 	defer cancel()
 	select {
 	case <-done:
