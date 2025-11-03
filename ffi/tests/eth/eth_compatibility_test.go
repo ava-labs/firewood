@@ -203,7 +203,7 @@ func (tr *merkleTriePair) deleteAccount(accountIndex int) {
 	})
 
 	tr.pendingFwdKeys = append(tr.pendingFwdKeys, accHash[:])
-	tr.pendingFwdVals = append(tr.pendingFwdVals, []byte{})
+	tr.pendingFwdVals = append(tr.pendingFwdVals, nil)
 }
 
 // openStorageTrie opens the storage trie for the provided account address.
@@ -292,7 +292,7 @@ func (tr *merkleTriePair) deleteStorage(accountIndex int, storageIndexInput uint
 	tr.require.NoError(str.DeleteStorage(addr, storageKey[:]))
 
 	tr.pendingFwdKeys = append(tr.pendingFwdKeys, append(accHash[:], storageKeyHash[:]...))
-	tr.pendingFwdVals = append(tr.pendingFwdVals, []byte{})
+	tr.pendingFwdVals = append(tr.pendingFwdVals, nil)
 }
 
 func FuzzFirewoodTree(f *testing.F) {
