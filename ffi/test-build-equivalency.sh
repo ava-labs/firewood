@@ -43,9 +43,11 @@ else
     echo ""
     echo "=== Symbol Differences ==="
     echo "Symbols only in Nix build:"
+    # Show lines that exist in the old file (nix) but not in the new file (cargo)
     diff --unchanged-line-format="" --old-line-format="%L" --new-line-format="" "$TMPDIR/nix-symbols.txt" "$TMPDIR/cargo-symbols.txt" || true
     echo ""
     echo "Symbols only in Cargo build:"
+    # Show lines that exist in the new file (cargo) but not in the old file (nix)
     diff --unchanged-line-format="" --old-line-format="" --new-line-format="%L" "$TMPDIR/nix-symbols.txt" "$TMPDIR/cargo-symbols.txt" || true
 fi
 
