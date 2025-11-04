@@ -32,23 +32,27 @@ The `aws-launch.sh` script automatically:
 ```
 
 For a complete list of options, run:
+
 ```bash
 ./aws-launch.sh --help
 ```
 
 ## Examples
 
-### Run a large benchmark with spot pricing:
+### Run a large benchmark with spot pricing
+
 ```bash
 ./aws-launch.sh --instance-type i4i.xlarge --nblocks 10m --spot
 ```
 
-### Test multiple component branches together:
+### Test multiple component branches together
+
 ```bash
 ./aws-launch.sh --firewood-branch my-firewood-branch --avalanchego-branch develop --coreth-branch foo --libevm-branch bar
 ```
 
-### Preview a configuration without launching:
+### Preview a configuration without launching
+
 ```bash
 ./aws-launch.sh --dry-run --firewood-branch my-branch --nblocks 1m
 ```
@@ -58,18 +62,20 @@ For a complete list of options, run:
 After launching, the script outputs an instance ID. You can:
 
 1. **SSH to the instance** - Only authorized team members (rkuris, austin, aaron, brandon, amin, bernard, rodrigo) can SSH using their configured GPG hardware keys. Note: Your GPG agent must be properly configured for SSH support on your local machine.
+
    ```bash
    ssh <username>@<instance-public-ip>
    ```
 
 2. **Monitor benchmark progress**:
+
    ```bash
    tail -f /var/log/bootstrap.log
    ```
 
 3. **Check build logs**:
+
    ```bash
    tail -f /mnt/nvme/ubuntu/firewood/build.log
    tail -f /mnt/nvme/ubuntu/avalanchego/build.log
    ```
-
