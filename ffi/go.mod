@@ -7,6 +7,7 @@ go 1.24
 //   - ffi/flake.nix (update golang.url to a version of avalanchego's nix/go/flake.nix that uses the desired version)
 //   - ffi/tests/eth/go.mod
 //   - ffi/tests/firewood/go.mod
+//   - go.work
 toolchain go1.24.9
 
 require (
