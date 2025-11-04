@@ -11,8 +11,8 @@ use crate::merkle::{Merkle, Value};
 use crate::root_store::{NoOpStore, RootStore};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
-    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, KeyType, KeyValuePair,
-    KeyValuePairIter, OptionalHashKeyExt,
+    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter, KeyType,
+    KeyValuePair, OptionalHashKeyExt,
 };
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
@@ -140,44 +140,9 @@ impl api::Db for Db {
     }
 
     #[fastrace::trace(short_name = true)]
-    fn propose(
-        &self,
-        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
-    ) -> Result<Self::Proposal<'_>, api::Error> {
+    fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal<'_>, api::Error> {
         let parent = self.manager.current_revision();
-        let proposal = NodeStore::new(&parent)?;
-        let mut merkle = Merkle::from(proposal);
-        let span = fastrace::Span::enter_with_local_parent("merkleops");
-        for op in batch.into_iter().map_into_batch() {
-            match op {
-                BatchOp::Put { key, value } => {
-                    merkle.insert(key.as_ref(), value.as_ref().into())?;
-                }
-                BatchOp::Delete { key } => {
-                    merkle.remove(key.as_ref())?;
-                }
-                BatchOp::DeleteRange { prefix } => {
-                    merkle.remove_prefix(prefix.as_ref())?;
-                }
-            }
-        }
-
-        drop(span);
-        let span = fastrace::Span::enter_with_local_parent("freeze");
-
-        let nodestore = merkle.into_inner();
-        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(nodestore.try_into()?);
-
-        drop(span);
-        self.manager.add_proposal(immutable.clone());
-
-        self.metrics.proposals.increment(1);
-
-        Ok(Self::Proposal {
-            nodestore: immutable,
-            db: self,
-        })
+        self.propose_on_revision(parent, batch)
     }
 }
 
@@ -236,11 +201,65 @@ impl Db {
     /// # Panics
     ///
     /// Panics if the revision manager cannot create a thread pool.
-    pub fn propose_parallel(
-        &self,
-        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
-    ) -> Result<Proposal<'_>, api::Error> {
+    pub fn propose_parallel(&self, batch: impl IntoBatchIter) -> Result<Proposal<'_>, api::Error> {
         let parent = self.manager.current_revision();
+        self.parallel_propose_on_revision(parent, batch)
+    }
+
+    fn propose_on_revision(
+        &self,
+        parent: Arc<NodeStore<Committed, FileBacked>>,
+        batch: impl IntoBatchIter,
+    ) -> Result<Proposal<'_>, api::Error> {
+        // TODO: decide between serial and parallel based on batch size or config
+        self.serial_propose_on_revision(parent, batch)
+    }
+
+    fn serial_propose_on_revision(
+        &self,
+        parent: Arc<NodeStore<Committed, FileBacked>>,
+        batch: impl IntoBatchIter,
+    ) -> Result<Proposal<'_>, api::Error> {
+        let proposal = NodeStore::new(&parent)?;
+        let mut merkle = Merkle::from(proposal);
+        let span = fastrace::Span::enter_with_local_parent("merkleops");
+        for res in batch.into_batch_iter::<api::Error>() {
+            match res? {
+                BatchOp::Put { key, value } => {
+                    merkle.insert(key.as_ref(), value.as_ref().into())?;
+                }
+                BatchOp::Delete { key } => {
+                    merkle.remove(key.as_ref())?;
+                }
+                BatchOp::DeleteRange { prefix } => {
+                    merkle.remove_prefix(prefix.as_ref())?;
+                }
+            }
+        }
+
+        drop(span);
+        let span = fastrace::Span::enter_with_local_parent("freeze");
+
+        let nodestore = merkle.into_inner();
+        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
+            Arc::new(nodestore.try_into()?);
+
+        drop(span);
+        self.manager.add_proposal(immutable.clone());
+
+        self.metrics.proposals.increment(1);
+
+        Ok(Proposal {
+            nodestore: immutable,
+            db: self,
+        })
+    }
+
+    fn parallel_propose_on_revision(
+        &self,
+        parent: Arc<NodeStore<Committed, FileBacked>>,
+        batch: impl IntoBatchIter,
+    ) -> Result<Proposal<'_>, api::Error> {
         let mut parallel_merkle = ParallelMerkle::default();
         let immutable =
             parallel_merkle.create_proposal(&parent, batch, self.manager.threadpool())?;
@@ -249,6 +268,26 @@ impl Db {
             nodestore: immutable,
             db: self,
         })
+    }
+
+    /// Merge a range of key-values into a new proposal.
+    ///
+    /// All items within the range `(first_key..=last_key)` will be replaced with
+    /// the provided key-values from the iterator. I.e., any existing keys within
+    /// the range that are not present in the provided key-values will be deleted,
+    /// any duplicate keys will be overwritten, and any new keys will be inserted.
+    ///
+    /// Invariant: `key_values` must be sorted by key in ascending order; however,
+    /// because debug assertions are disabled, this is not checked.
+    pub fn merge_key_value_range(
+        &self,
+        first_key: Option<impl KeyType>,
+        last_key: Option<impl KeyType>,
+        key_values: impl IntoIterator<Item: KeyValuePair>,
+    ) -> Result<Proposal<'_>, api::Error> {
+        let merkle = Merkle::from(self.manager.current_revision());
+        let merge_ops = merkle.merge_key_value_range(first_key, last_key, key_values);
+        self.propose_on_revision(Arc::clone(merkle.nodestore()), merge_ops)
     }
 }
 
@@ -295,10 +334,7 @@ impl<'db> api::Proposal for Proposal<'db> {
     type Proposal = Proposal<'db>;
 
     #[fastrace::trace(short_name = true)]
-    fn propose(
-        &self,
-        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
-    ) -> Result<Self::Proposal, api::Error> {
+    fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal, api::Error> {
         self.create_proposal(batch)
     }
 
@@ -309,15 +345,12 @@ impl<'db> api::Proposal for Proposal<'db> {
 
 impl Proposal<'_> {
     #[crate::metrics("firewood.proposal.create", "database proposal creation")]
-    fn create_proposal(
-        &self,
-        batch: impl IntoIterator<IntoIter: KeyValuePairIter>,
-    ) -> Result<Self, api::Error> {
+    fn create_proposal(&self, batch: impl IntoBatchIter) -> Result<Self, api::Error> {
         let parent = self.nodestore.clone();
         let proposal = NodeStore::new(&parent)?;
         let mut merkle = Merkle::from(proposal);
-        for op in batch {
-            match op.into_batch() {
+        for op in batch.into_batch_iter::<api::Error>() {
+            match op? {
                 BatchOp::Put { key, value } => {
                     merkle.insert(key.as_ref(), value.as_ref().into())?;
                 }
@@ -357,9 +390,11 @@ mod test {
 
     use crate::db::{Db, Proposal};
     use crate::root_store::{MockStore, RootStore};
-    use crate::v2::api::{Db as _, DbView, KeyValuePairIter, Proposal as _};
+    use crate::v2::api::{Db as _, DbView, Proposal as _};
 
     use super::{BatchOp, DbConfig};
+
+    use test_case::test_case;
 
     /// A chunk of an iterator, provided by [`IterExt::chunk_fold`] to the folding
     /// function.
@@ -605,7 +640,7 @@ mod test {
         fn insert_commit(db: &TestDb, kv: u8) {
             let keys: Vec<[u8; 1]> = vec![[kv; 1]];
             let vals: Vec<Box<[u8]>> = vec![Box::new([kv; 1])];
-            let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+            let kviter = keys.iter().zip(vals.iter());
             let proposal = db.propose_parallel(kviter).unwrap();
             proposal.commit().unwrap();
         }
@@ -650,7 +685,7 @@ mod test {
         let keys: Vec<[u8; 0]> = Vec::new();
         let vals: Vec<Box<[u8]>> = Vec::new();
 
-        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let kviter = keys.iter().zip(vals.iter());
         let proposal = db.propose_parallel(kviter).unwrap();
         proposal.commit().unwrap();
 
@@ -661,7 +696,7 @@ mod test {
         // Instead, set value to [0]
         let vals: Vec<Box<[u8]>> = vec![Box::new([0; 1])];
 
-        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let kviter = keys.iter().zip(vals.iter());
         let proposal = db.propose_parallel(kviter).unwrap();
 
         let kviter = keys.iter().zip(vals.iter());
@@ -679,7 +714,7 @@ mod test {
 
         // Create a proposal that deletes the previous entry
         let vals: Vec<Box<[u8]>> = vec![Box::new([0; 0])];
-        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let kviter = keys.iter().zip(vals.iter());
         let proposal = db.propose_parallel(kviter).unwrap();
 
         let kviter = keys.iter().zip(vals.iter());
@@ -698,7 +733,7 @@ mod test {
             })
             .unzip();
 
-        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let kviter = keys.iter().zip(vals.iter());
         let proposal = db.propose_parallel(kviter).unwrap();
         let kviter = keys.iter().zip(vals.iter());
         for (k, v) in kviter {
@@ -717,7 +752,7 @@ mod test {
             })
             .unzip();
 
-        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let kviter = keys.iter().zip(vals.iter());
         let proposal = db.propose_parallel(kviter).unwrap();
         let kviter = keys.iter().zip(vals.iter());
         for (k, _v) in kviter {
@@ -728,7 +763,7 @@ mod test {
         // Create a proposal that deletes using empty prefix
         let keys: Vec<[u8; 0]> = vec![[0; 0]];
         let vals: Vec<Box<[u8]>> = vec![Box::new([0; 0])];
-        let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let kviter = keys.iter().zip(vals.iter());
         let proposal = db.propose_parallel(kviter).unwrap();
         proposal.commit().unwrap();
 
@@ -745,7 +780,7 @@ mod test {
 
         // Looping twice to test that we are reusing the thread pool.
         for _ in 0..2 {
-            let kviter = keys.iter().zip(vals.iter()).map_into_batch();
+            let kviter = keys.iter().zip(vals.iter());
             let proposal = db.propose_parallel(kviter).unwrap();
 
             // iterate over the keys and values again, checking that the values are in the correct proposal
@@ -780,7 +815,7 @@ mod test {
             .unzip();
 
         // create two batches, one with the first half of keys and values, and one with the last half keys and values
-        let mut kviter = keys.iter().zip(vals.iter()).map_into_batch();
+        let mut kviter = keys.iter().zip(vals.iter());
 
         // create two proposals, second one has a base of the first one
         let proposal1 = db.propose(kviter.by_ref().take(N / 2)).unwrap();
@@ -1135,6 +1170,248 @@ mod test {
             [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()
                 .collect()
+        }
+    }
+
+    #[test_case(
+        &[],
+        None,
+        None,
+        &[],
+        &[];
+        "empty everything - no initial data, no merge data"
+    )]
+    #[test_case(
+        &[(b"key1", b"val1"), (b"key2", b"val2"), (b"key3", b"val3")],
+        Some(b"key1".as_slice()),
+        Some(b"key3".as_slice()),
+        &[(b"key1", b"new1"), (b"key2", b"new2"), (b"key3", b"new3")],
+        &[(b"key1", Some(b"new1")), (b"key2", Some(b"new2")), (b"key3", Some(b"new3"))];
+        "basic happy path - update all values in range"
+    )]
+    #[test_case(
+        &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3"), (b"d", b"4")],
+        Some(b"b".as_slice()),
+        Some(b"c".as_slice()),
+        &[],
+        &[(b"a", Some(b"1")), (b"b", None), (b"c", None), (b"d", Some(b"4"))];
+        "empty input iterator - deletes all keys in range"
+    )]
+    #[test_case(
+        &[],
+        None,
+        None,
+        &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3")],
+        &[(b"a", Some(b"1")), (b"b", Some(b"2")), (b"c", Some(b"3"))];
+        "empty base trie - insert all keys"
+    )]
+    #[test_case(
+        &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3")],
+        None,
+        None,
+        &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3")],
+        &[(b"a", Some(b"1")), (b"b", Some(b"2")), (b"c", Some(b"3"))];
+        "no changes - identical key-values"
+    )]
+    #[test_case(
+        &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3")],
+        Some(b"a".as_slice()),
+        Some(b"c".as_slice()),
+        &[(b"x", b"10"), (b"y", b"20"), (b"z", b"30")],
+        &[(b"a", None), (b"b", None), (b"c", None), (b"x", Some(b"10")), (b"y", Some(b"20")), (b"z", Some(b"30"))];
+        "full replacement - completely different keys"
+    )]
+    #[test_case(
+        &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3"), (b"d", b"4")],
+        Some(b"b".as_slice()),
+        Some(b"c".as_slice()),
+        &[(b"b", b"new2"), (b"c2", b"inserted")],
+        &[(b"a", Some(b"1")), (b"b", Some(b"new2")), (b"c", None), (b"c2", Some(b"inserted")), (b"d", Some(b"4"))];
+        "partial overlap - mix of updates, inserts, deletes"
+    )]
+    #[test_case(
+        &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3")],
+        Some(b"b".as_slice()),
+        Some(b"b".as_slice()),
+        &[(b"b", b"updated")],
+        &[(b"a", Some(b"1")), (b"b", Some(b"updated")), (b"c", Some(b"3"))];
+        "single key range - first_key equals last_key"
+    )]
+    #[test_case(
+        &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3")],
+        None,
+        None,
+        &[(b"x", b"10"), (b"y", b"20")],
+        &[(b"a", None), (b"b", None), (b"c", None), (b"x", Some(b"10")), (b"y", Some(b"20"))];
+        "unbounded range - replace entire trie"
+    )]
+    #[test_case(
+        &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3"), (b"d", b"4")],
+        Some(b"b".as_slice()),
+        None,
+        &[(b"b", b"new2"), (b"c", b"new3")],
+        &[(b"a", Some(b"1")), (b"b", Some(b"new2")), (b"c", Some(b"new3")), (b"d", None)];
+        "left-bounded only - from key b to end"
+    )]
+    #[test_case(
+        &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3"), (b"d", b"4")],
+        None,
+        Some(b"c".as_slice()),
+        &[(b"a", b"new1"), (b"b", b"new2")],
+        &[(b"a", Some(b"new1")), (b"b", Some(b"new2")), (b"c", None), (b"d", Some(b"4"))];
+        "right-bounded only - from start to key c"
+    )]
+    #[test_case(
+        &[(b"a", b"1"), (b"e", b"5"), (b"f", b"6")],
+        Some(b"b".as_slice()),
+        Some(b"d".as_slice()),
+        &[(b"b", b"2"), (b"c", b"3"), (b"d", b"4")],
+        &[(b"a", Some(b"1")), (b"b", Some(b"2")), (b"c", Some(b"3")), (b"d", Some(b"4")), (b"e", Some(b"5")), (b"f", Some(b"6"))];
+        "gap range - merge into range with no existing keys"
+    )]
+    #[test_case(
+        &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3")],
+        Some(b"b".as_slice()),
+        Some(b"c".as_slice()),
+        &[(b"b", b"updated"), (b"c", b"3")],
+        &[(b"a", Some(b"1")), (b"b", Some(b"updated")), (b"c", Some(b"3"))];
+        "value updates only - same keys, one different value"
+    )]
+    #[test_case(
+        &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3"), (b"d", b"4"), (b"e", b"5")],
+        Some(b"b".as_slice()),
+        Some(b"d".as_slice()),
+        &[],
+        &[(b"a", Some(b"1")), (b"b", None), (b"c", None), (b"d", None), (b"e", Some(b"5"))];
+        "delete middle range - empty iterator deletes b, c, d"
+    )]
+    #[test_case(
+        &[(b"app", b"1"), (b"apple", b"2"), (b"application", b"3")],
+        Some(b"app".as_slice()),
+        Some(b"application".as_slice()),
+        &[(b"app", b"new1"), (b"apply", b"4")],
+        &[(b"app", Some(b"new1")), (b"apple", None), (b"application", None), (b"apply", Some(b"4"))];
+        "common prefix keys - test branch navigation"
+    )]
+    #[test_case(
+        &[(b"a", b"1"), (b"b", b"2"), (b"c", b"3"), (b"d", b"4"), (b"e", b"5")],
+        Some(b"b".as_slice()),
+        Some(b"d".as_slice()),
+        &[(b"b2", b"new"), (b"c", b"updated")],
+        &[(b"a", Some(b"1")), (b"b", None), (b"b2", Some(b"new")), (b"c", Some(b"updated")), (b"d", None), (b"e", Some(b"5"))];
+        "boundary precision - a and e should remain unchanged"
+    )]
+    fn test_merge_key_value_range(
+        initial_kvs: &[(&[u8], &[u8])],
+        first_key: Option<&[u8]>,
+        last_key: Option<&[u8]>,
+        merge_kvs: &[(&[u8], &[u8])],
+        expected_kvs: &[(&[u8], Option<&[u8]>)],
+    ) {
+        let db = TestDb::new();
+
+        if !initial_kvs.is_empty() {
+            db.propose(initial_kvs).unwrap().commit().unwrap();
+        }
+
+        let proposal = db
+            .merge_key_value_range(first_key, last_key, merge_kvs)
+            .unwrap();
+
+        for (key, expected_value) in expected_kvs {
+            let actual_value = proposal.val(key).unwrap();
+            match expected_value {
+                Some(v) => {
+                    assert_eq!(
+                        actual_value.as_deref(),
+                        Some(*v),
+                        "Key {key:?} should have value {v:?}, but got {actual_value:?}"
+                    );
+                }
+                None => {
+                    assert!(
+                        actual_value.is_none(),
+                        "Key {key:?} should be deleted, but got {actual_value:?}"
+                    );
+                }
+            }
+        }
+
+        let merge_root_hash = proposal.root_hash().unwrap();
+
+        // Create a fresh database with the same initial state
+        let db2 = TestDb::new();
+        if !initial_kvs.is_empty() {
+            db2.propose(initial_kvs).unwrap().commit().unwrap();
+        }
+
+        // Apply the expected operations manually
+        let mut batch = Vec::new();
+        if let Some(root) = db2.root_hash().unwrap() {
+            batch.extend(
+                db2.revision(root)
+                    .unwrap()
+                    .iter_option(first_key)
+                    .unwrap()
+                    .take_while(|res| {
+                        if let Some(last_key) = last_key {
+                            match res {
+                                Ok((key, _)) => **key <= *last_key,
+                                Err(_) => true,
+                            }
+                        } else {
+                            true
+                        }
+                    })
+                    .map(|res| res.map(|(key, _)| BatchOp::Delete { key })),
+            );
+        }
+        batch.extend(merge_kvs.iter().map(|(key, value)| {
+            Ok(BatchOp::Put {
+                key: (*key).into(),
+                value,
+            })
+        }));
+
+        let manual_proposal = db2.propose(batch).unwrap();
+        let manual_root_hash = manual_proposal.root_hash().unwrap();
+
+        assert_eq!(
+            merge_root_hash, manual_root_hash,
+            "Root hash from merge should match root hash from manual operations"
+        );
+
+        // Commit the proposal and verify persistence
+        proposal.commit().unwrap();
+
+        // Verify the committed state
+        if let Some(root) = db.root_hash().unwrap() {
+            let committed = db.revision(root).unwrap();
+            for (key, expected_value) in expected_kvs {
+                let actual_value = committed.val(key).unwrap();
+                match expected_value {
+                    Some(v) => {
+                        assert_eq!(
+                            actual_value.as_deref(),
+                            Some(*v),
+                            "After commit, key {key:?} should have value {v:?}, but got {actual_value:?}"
+                        );
+                    }
+                    None => {
+                        assert!(
+                            actual_value.is_none(),
+                            "After commit, key {key:?} should be deleted, but got {actual_value:?}"
+                        );
+                    }
+                }
+            }
+        } else {
+            for (key, expected_value) in expected_kvs {
+                assert!(
+                    expected_value.is_none(),
+                    "Database is empty, but expected key {key:?} to have value {expected_value:?}"
+                );
+            }
         }
     }
 }
