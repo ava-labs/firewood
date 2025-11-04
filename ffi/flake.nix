@@ -58,8 +58,29 @@
           pkg-config
         ];
 
+        # Fix non-deterministic jemalloc builds on x86_64
+        # Problem: tikv-jemalloc-sys vendors and builds jemalloc from source, which
+        # uses -O3 optimization by default. This causes the symbol rtree_read.constprop.0
+        # to appear inconsistently across builds, breaking reproducibility.
+        # See: https://github.com/ava-labs/firewood/pull/1423
+        #
+        # Solution: Override jemalloc's -O3 with -O2 (compiler uses last flag)
+        # This is the same fix applied to nixpkgs' system jemalloc package:
+        # https://github.com/NixOS/nixpkgs/pull/393724 (o3-to-o2.patch)
+        #
+        # Note: The nixpkgs fix applies to the system jemalloc C library package
+        # (pkgs/development/libraries/jemalloc), not to Rust's tikv-jemalloc-sys.
+        # tikv-jemalloc-sys vendors its own jemalloc source, so we must apply
+        # the fix here via CFLAGS, which tikv-jemalloc-sys passes to jemalloc's
+        # configure script during the cargo build.
+        # See: https://github.com/tikv/jemallocator/blob/master/jemalloc-sys/build.rs
+        #
+        # Note: As of this addition, tkiv-jemalloc-sys is the only C code in the
+        # dependency tree. If this changes in the future, this flag may need to be
+        # localized to only jemalloc builds.
+        CFLAGS = "-O2";
+
         # Force sequential build of vendored jemalloc to avoid race conditions
-        # that cause non-deterministic symbol generation on x86_64
         # MAKEFLAGS only affects make invocations (jemalloc), not cargo parallelism
         # See: https://github.com/NixOS/nixpkgs/issues/380852
         MAKEFLAGS = "-j1";
