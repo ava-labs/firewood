@@ -44,7 +44,7 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             pre-build-cmd: echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> "$GITHUB_ENV"
-          - os: macos-15
+          - os: macos-latest
             target: x86_64-apple-darwin
             pre-build-cmd: echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> "$GITHUB_ENV"
     outputs:
@@ -186,7 +186,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, ubuntu-22.04-arm, macos-latest, macos-15]
+        os: [ubuntu-latest, ubuntu-22.04-arm, macos-latest]
     needs: push-firewood-ffi-libs
     continue-on-error: true
     steps:
