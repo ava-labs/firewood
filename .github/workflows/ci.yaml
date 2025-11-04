@@ -246,6 +246,7 @@ jobs:
 
   ffi-nix:
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main' || github.ref == 'refs/heads/copilot/fix-ffi-nix-test-flakiness'
     steps:
       - uses: actions/checkout@v4
       - uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 #v20
