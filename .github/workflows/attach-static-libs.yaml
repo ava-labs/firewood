@@ -44,7 +44,7 @@ jobs:
           - os: macos-latest
             target: aarch64-apple-darwin
             pre-build-cmd: echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> "$GITHUB_ENV"
-          - os: macos-13
+          - os: macos-15
             target: x86_64-apple-darwin
             pre-build-cmd: echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> "$GITHUB_ENV"
     outputs:
@@ -53,6 +53,9 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+
+      - name: Add target for cross-compilation
+        run: rustup target add ${{ matrix.target }}
 
       - name: Run pre-build command
         if: matrix.pre-build-cmd != ''
@@ -183,7 +186,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, ubuntu-22.04-arm, macos-latest, macos-13]
+        os: [ubuntu-latest, ubuntu-22.04-arm, macos-latest, macos-15]
     needs: push-firewood-ffi-libs
     continue-on-error: true
     steps:
