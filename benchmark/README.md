@@ -223,11 +223,12 @@ Firewood exposes Prometheus metrics that are visualized in the Grafana dashboard
   - Indicates the I/O amplification factor for write operations
   - Lower values mean more efficient inserts
   - Varies by benchmark type due to different access patterns
+  - This number will steadily grow as the trie size increases and more splitting occurs, typically stabilizing at tree depth 6-7
 - **Expected values**:
-  - `single`: ~2-5 (minimal tree traversal)
-  - `zipf`: ~5-15 (skewed access pattern reduces tree depth)
-  - `tenkrandom`: ~10-30 (uniform random access requires deeper traversals)
-- **Poor performance**: Values 2-3x higher than expected may indicate cache or index issues
+  - `single`: ~2-3 (minimal tree traversal, single node update)
+  - `zipf`: ~4-7 (skewed access pattern with hot keys)
+  - `tenkrandom`: ~6-8 (uniform random access across the trie)
+- **Poor performance**: Values significantly higher than expected (>10) may indicate cache issues or data with identical prefixes causing excessive depth
 
 #### Operation Rate Metrics
 
@@ -246,8 +247,9 @@ Firewood exposes Prometheus metrics that are visualized in the Grafana dashboard
 - **Good performance**:
   - Depends on hardware and benchmark type
   - Rates should be stable over time during steady-state
-  - `single` benchmark: 10k-50k ops/sec (limited by commit overhead)
-  - `zipf`/`tenkrandom`: 50k-200k ops/sec (batched commits)
+  - `single` benchmark: 50k-200k ops/sec (highest due to cache hits and minimal I/O)
+  - `zipf`: 25k-100k ops/sec (moderate performance with skewed access)
+  - `tenkrandom`: 25k-100k ops/sec (slowest due to random access patterns)
 - **Poor performance**:
   - Declining operation rates over time
   - High variance in operation rates
@@ -333,9 +335,9 @@ Different benchmarks exhibit different metric patterns:
 - **Expected pattern**:
   - Nearly all operations are `update` type
   - Very high cache hit rate (> 99%)
-  - Low reads per insert (~2)
-  - Highest proposals/sec rate
-- **What constitutes good performance**: 10k-50k commits/sec depending on hardware
+  - Low reads per insert (~2-3)
+  - Highest proposals/sec rate due to cache hits and minimal I/O
+- **What constitutes good performance**: 50k-200k commits/sec depending on hardware
 
 #### `zipf` Benchmark
 
@@ -344,8 +346,8 @@ Different benchmarks exhibit different metric patterns:
 - **Expected pattern**:
   - High cache hit rate (90%+) due to hot key concentration
   - Mostly `update` operations with some `split`
-  - Medium reads per insert (~5-15)
-- **What constitutes good performance**: 50k-150k ops/sec with > 90% cache hit rate
+  - Medium reads per insert (~4-7)
+- **What constitutes good performance**: 25k-100k ops/sec with > 90% cache hit rate
 
 #### `tenkrandom` Benchmark
 
@@ -354,9 +356,9 @@ Different benchmarks exhibit different metric patterns:
 - **Expected pattern**:
   - Moderate cache hit rate (depends on cache size vs. database size)
   - Mix of all insert types
-  - Higher reads per insert (~10-30)
+  - Higher reads per insert (~6-8)
   - Balanced insert/update/delete rates
-- **What constitutes good performance**: 50k-100k ops/sec with stable cache metrics
+- **What constitutes good performance**: 25k-100k ops/sec with stable cache metrics
 
 ### Comparing Results Across Runs
 
