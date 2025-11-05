@@ -91,6 +91,14 @@
         # MAKEFLAGS only affects make invocations (jemalloc), not cargo parallelism
         # See: https://github.com/NixOS/nixpkgs/issues/380852
         MAKEFLAGS = "-j1";
+      } // lib.optionalAttrs (!pkgs.stdenv.hostPlatform.isAarch64) {
+        # Set jemalloc page size to 4KB (2^12) for x86_64 reproducibility
+        # Problem: On x86_64, jemalloc's autodetection can produce different page sizes
+        # across builds, breaking reproducibility.
+        # Solution: Explicitly set lg-page=12 (4KB) for x86_64, matching nixpkgs fix:
+        # https://github.com/NixOS/nixpkgs/pull/393724
+        # Note: aarch64 uses default page size (varies 4KB-16KB but is reproducible)
+        JEMALLOC_SYS_WITH_LG_PAGE = "12";
       } // lib.optionalAttrs pkgs.stdenv.isDarwin {
         # Set macOS deployment target for Darwin builds
         MACOSX_DEPLOYMENT_TARGET = "13.0";

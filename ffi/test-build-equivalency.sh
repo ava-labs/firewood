@@ -15,9 +15,20 @@ CARGO_LIB="target/maxperf/libfirewood_ffi.a"
 TMPDIR=$(mktemp -d)
 trap "rm -rf $TMPDIR" EXIT
 
-# Build with CFLAGS='-O2' and MAKEFLAGS='-j1' for consistency with the flake build
+# Detect architecture and set jemalloc page size for x86_64 reproducibility
+ARCH=$(uname -m)
+if [[ "$ARCH" == "x86_64" ]]; then
+    # On x86_64, explicitly set jemalloc page size to 4KB (2^12) for reproducibility
+    # This matches the flake.nix configuration and nixpkgs fix:
+    # https://github.com/NixOS/nixpkgs/pull/393724
+    JEMALLOC_PAGE_SIZE="export JEMALLOC_SYS_WITH_LG_PAGE='12' &&"
+else
+    JEMALLOC_PAGE_SIZE=""
+fi
+
+# Build with CFLAGS='-O2', MAKEFLAGS='-j1', and conditional JEMALLOC_SYS_WITH_LG_PAGE for consistency with the flake build
 echo "Building with cargo (using nix dev shell)..."
-nix develop ./ffi#default --command bash -c "export CFLAGS='-O2' && export MAKEFLAGS='-j1' && cargo fetch --locked --verbose && cargo build-static-ffi"
+nix develop ./ffi#default --command bash -c "${JEMALLOC_PAGE_SIZE} export CFLAGS='-O2' && export MAKEFLAGS='-j1' && cargo fetch --locked --verbose && cargo build-static-ffi"
 
 echo "Building with nix..."
 cd ffi && nix build .#firewood-ffi && cd ..
