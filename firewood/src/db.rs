@@ -237,11 +237,8 @@ impl Db {
         };
         let immutable = if use_parallel {
             let mut parallel_merkle = ParallelMerkle::default();
-            let span = fastrace::Span::enter_with_local_parent("parallel_merkle");
-            let immutable =
-                parallel_merkle.create_proposal(parent, batch, self.manager.threadpool())?;
-            drop(span);
-            immutable
+            let _span = fastrace::Span::enter_with_local_parent("parallel_merkle");
+            parallel_merkle.create_proposal(parent, batch, self.manager.threadpool())?
         } else {
             let proposal = NodeStore::new(parent)?;
             let mut merkle = Merkle::from(proposal);
@@ -261,14 +258,9 @@ impl Db {
             }
 
             drop(span);
-            let span = fastrace::Span::enter_with_local_parent("freeze");
-
+            let _span = fastrace::Span::enter_with_local_parent("freeze");
             let nodestore = merkle.into_inner();
-            let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-                Arc::new(nodestore.try_into()?);
-
-            drop(span);
-            immutable
+            Arc::new(nodestore.try_into()?)
         };
         self.manager.add_proposal(immutable.clone());
 
