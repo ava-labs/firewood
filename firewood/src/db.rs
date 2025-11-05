@@ -272,7 +272,8 @@ impl Db {
         })
     }
 
-    /// Merge a range of key-values into a new proposal.
+    /// Merge a range of key-values into a new proposal on top of the current
+    /// root revision.
     ///
     /// All items within the range `(first_key..=last_key)` will be replaced with
     /// the provided key-values from the iterator. I.e., any existing keys within
@@ -287,7 +288,34 @@ impl Db {
         last_key: Option<impl KeyType>,
         key_values: impl IntoIterator<Item: KeyValuePair>,
     ) -> Result<Proposal<'_>, api::Error> {
-        let merkle = Merkle::from(self.manager.current_revision());
+        self.merge_key_value_range_with_parent(
+            first_key,
+            last_key,
+            key_values,
+            &self.manager.current_revision(),
+        )
+    }
+
+    /// Merge a range of key-values into a new proposal on top of a specified parent.
+    ///
+    /// All items within the range `(first_key..=last_key)` will be replaced with
+    /// the provided key-values from the iterator. I.e., any existing keys within
+    /// the range that are not present in the provided key-values will be deleted,
+    /// any duplicate keys will be overwritten, and any new keys will be inserted.
+    ///
+    /// Invariant: `key_values` must be sorted by key in ascending order; however,
+    /// because debug assertions are disabled, this is not checked.
+    pub fn merge_key_value_range_with_parent<F: Parentable>(
+        &self,
+        first_key: Option<impl KeyType>,
+        last_key: Option<impl KeyType>,
+        key_values: impl IntoIterator<Item: KeyValuePair>,
+        parent: &NodeStore<F, FileBacked>,
+    ) -> Result<Proposal<'_>, api::Error>
+    where
+        NodeStore<F, FileBacked>: TrieReader,
+    {
+        let merkle = Merkle::from(parent);
         let merge_ops = merkle.merge_key_value_range(first_key, last_key, key_values);
         self.propose_with_parent(merge_ops, merkle.nodestore())
     }
