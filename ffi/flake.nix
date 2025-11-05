@@ -24,6 +24,13 @@
 
       go = golang.packages.${system}.default;
 
+      # Fix Darwin platform config for CGO directives
+      # Linux: pkgs.stdenv.hostPlatform.config already returns correct values (e.g. aarch64-unknown-linux-gnu)
+      # Darwin: pkgs.stdenv.hostPlatform.config returns arm64-apple-darwin but we need aarch64-apple-darwin
+      cgoHostPlatform = if pkgs.stdenv.isDarwin
+        then builtins.replaceStrings ["arm64"] ["aarch64"] pkgs.stdenv.hostPlatform.config
+        else pkgs.stdenv.hostPlatform.config;
+
       rustToolchain = pkgs.rust-bin.stable.latest.default.override {
         extensions = [ "rust-src" "rustfmt" "clippy" ];
       };
@@ -107,8 +114,8 @@
           # Create a package structure compatible with FIREWOOD_LD_MODE=STATIC_LIBS
           mkdir -p $out/ffi
           cp -R ./ffi/* $out/ffi/
-          mkdir -p $out/ffi/libs/${pkgs.stdenv.hostPlatform.config}
-          cp target/maxperf/libfirewood_ffi.a $out/ffi/libs/${pkgs.stdenv.hostPlatform.config}/
+          mkdir -p $out/ffi/libs/${cgoHostPlatform}
+          cp target/maxperf/libfirewood_ffi.a $out/ffi/libs/${cgoHostPlatform}/
 
           # Run go generate to switch CGO directives to STATIC_LIBS mode
           cd $out/ffi
