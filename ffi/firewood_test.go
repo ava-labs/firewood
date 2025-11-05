@@ -1236,7 +1236,7 @@ func TestHandlesFreeImplicitly(t *testing.T) {
 
 	select {
 	case <-done:
-		require.Failf(t, "%T.Close() returned with undropped %T", db, p0)
+		require.Failf(t, "Unexpected return", "%T.Close() returned with undropped %T", db, p0)
 	case <-time.After(300 * time.Millisecond):
 		// TODO(arr4n) use `synctest` package when at Go 1.25
 	}
