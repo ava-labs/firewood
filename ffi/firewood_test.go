@@ -1229,6 +1229,65 @@ func TestProposalHandlesFreed(t *testing.T) {
 	}
 }
 
+func TestRevisionHandlesFreed(t *testing.T) {
+	t.Parallel()
+
+	db, err := newDatabase(filepath.Join(t.TempDir(), "test_GC_drops_revision.db"))
+	require.NoError(t, err)
+
+	// Create three revisions:
+	// - r0 is explicilty dropped
+	// - r1 is created from a revision, and relies on GC to be dropped
+	// - r2 is created from a proposal, and relies on GC to be dropped
+	keys, vals := kvForTest(1)
+	_, err = db.Update(keys, vals)
+	require.NoErrorf(t, err, "%T.Update(...)", db)
+
+	r0, err := db.LatestRevision()
+	require.NoErrorf(t, err, "%T.LatestRevision()", db)
+	require.NoErrorf(t, r0.Drop(), "%T.Drop()", r0)
+
+	r1, err := db.LatestRevision()
+	require.NoErrorf(t, err, "%T.LatestRevision()", db)
+
+	keys, vals = kvForTest(1)
+	p, err := db.Propose(keys, vals)
+	require.NoErrorf(t, err, "%T.Propose(...)", db)
+	root, err := p.Root()
+	require.NoErrorf(t, err, "%T.Root()", p)
+	r2, err := db.Revision(root)
+	require.NoErrorf(t, err, "%T.Proposal.Revision()", p)
+
+	done := make(chan struct{})
+	go func() {
+		require.NoErrorf(t, db.Close(t.Context()), "%T.Close()", db)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Errorf("%T.Close() returned with undropped %T", db, r1) //nolint:forbidigo // Use of require is impossible without a hack like require.False(true)
+	case <-time.After(300 * time.Millisecond):
+		// TODO(arr4n) use `synctest` package when at Go 1.25
+	}
+
+	runtime.KeepAlive(r1)
+	runtime.KeepAlive(r2)
+	r1 = nil
+	r2 = nil //nolint:ineffassign // Makes the value unreachable, allowing the finalizer to call Drop()
+
+	// In practice there's no need to call [runtime.GC] if [Database.Close] is
+	// called after all proposals are unreachable, as it does it itself.
+	runtime.GC()
+	// Note that [Database.Close] waits for outstanding revisions, so this would
+	// block permanently if the unreachability of `r0` and `r1` didn't result in
+	// their [Revision.Drop] methods being called.
+	<-done
+
+	// Ensure that the garbage collector does not call the finalizer for the explictly dropped revision.
+	runtime.KeepAlive(r0)
+}
+
 type kvIter interface {
 	SetBatchSize(int)
 	Next() bool
