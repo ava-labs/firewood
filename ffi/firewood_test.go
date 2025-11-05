@@ -1172,30 +1172,60 @@ func TestGetFromRootParallel(t *testing.T) {
 	}
 }
 
-func TestProposalHandlesFreed(t *testing.T) {
+func TestHandlesFreeImplicitly(t *testing.T) {
 	t.Parallel()
 
-	db, err := newDatabase(filepath.Join(t.TempDir(), "test_GC_drops_proposal.db"))
+	db, err := newDatabase(filepath.Join(t.TempDir(), "test_GC_drops_implicitly.db"))
 	require.NoError(t, err)
+
+	var (
+		explicitlyDropped []any
+		implicitlyDropped []any
+	)
+
+	// Grab one revision initially. All proposals can also be revisions, so
+	// this is the only case in which we don't add both a proposal and a revision.
+	historicExplicit, err := db.LatestRevision()
+	require.NoErrorf(t, err, "%T.LatestRevision()", db)
+	require.NoError(t, historicExplicit.Drop())
+	explicitlyDropped = append(explicitlyDropped, historicExplicit)
+	historicImplicit, err := db.LatestRevision()
+	require.NoErrorf(t, err, "%T.LatestRevision()", db)
+	implicitlyDropped = append(implicitlyDropped, historicImplicit)
 
 	// These MUST NOT be committed nor dropped as they demonstrate that the GC
 	// finalizer does it for us.
 	p0, err := db.Propose(kvForTest(1))
 	require.NoErrorf(t, err, "%T.Propose(...)", db)
+	root0, err := p0.Root()
+	require.NoErrorf(t, err, "%T.Root()", p0)
+	rev0, err := db.Revision(root0)
+	require.NoErrorf(t, err, "%T.Revision(...)", db)
+	implicitlyDropped = append(implicitlyDropped, p0, rev0)
 	p1, err := p0.Propose(kvForTest(1))
 	require.NoErrorf(t, err, "%T.Propose(...)", p0)
+	root1, err := p1.Root()
+	require.NoErrorf(t, err, "%T.Root()", p1)
+	rev1, err := db.Revision(root1)
+	require.NoErrorf(t, err, "%T.Revision(...)", db)
+	implicitlyDropped = append(implicitlyDropped, p1, rev1)
 
 	// Demonstrates that explicit [Proposal.Commit] and [Proposal.Drop] calls
 	// are sufficient to unblock [Database.Close].
-	var keep []*Proposal
+	// Each proposal has a corresponding revision to drop as well.
 	for name, free := range map[string](func(*Proposal) error){
 		"Commit": (*Proposal).Commit,
 		"Drop":   (*Proposal).Drop,
 	} {
 		p, err := db.Propose(kvForTest(1))
 		require.NoErrorf(t, err, "%T.Propose(...)", db)
+		root, err := p.Root()
+		require.NoErrorf(t, err, "%T.Root()", p)
+		rev, err := db.Revision(root)
+		require.NoErrorf(t, err, "%T.Revision(...)", db)
 		require.NoErrorf(t, free(p), "%T.%s()", p, name)
-		keep = append(keep, p)
+		require.NoErrorf(t, rev.Drop(), "%T.Drop()", rev)
+		explicitlyDropped = append(explicitlyDropped, p, rev)
 	}
 
 	done := make(chan struct{})
@@ -1206,86 +1236,28 @@ func TestProposalHandlesFreed(t *testing.T) {
 
 	select {
 	case <-done:
-		t.Errorf("%T.Close() returned with undropped %T", db, p0) //nolint:forbidigo // Use of require is impossible without a hack like require.False(true)
+		require.Failf(t, "%T.Close() returned with undropped %T", db, p0)
 	case <-time.After(300 * time.Millisecond):
 		// TODO(arr4n) use `synctest` package when at Go 1.25
 	}
 
-	runtime.KeepAlive(p0)
-	runtime.KeepAlive(p1)
-	p0 = nil
-	p1 = nil //nolint:ineffassign // Makes the value unreachable, allowing the finalizer to call Drop()
+	// This is the last time we must guarantee that these handles are reachable.
+	// After this, they must be unreachable so that the GC can collect them.
+	for _, h := range implicitlyDropped {
+		runtime.KeepAlive(h)
+	}
 
 	// In practice there's no need to call [runtime.GC] if [Database.Close] is
 	// called after all proposals are unreachable, as it does it itself.
 	runtime.GC()
-	// Note that [Database.Close] waits for outstanding proposals, so this would
-	// block permanently if the unreachability of `p0` and `p1` didn't result in
-	// their [Proposal.Drop] methods being called.
+	// Note that [Database.Close] waits for outstanding handles, so this would
+	// block permanently if the unreachability of implicitly dropped handles didn't
+	// result in their Drop methods being called.
 	<-done
 
-	for _, p := range keep {
+	for _, p := range explicitlyDropped {
 		runtime.KeepAlive(p)
 	}
-}
-
-func TestRevisionHandlesFreed(t *testing.T) {
-	t.Parallel()
-
-	db, err := newDatabase(filepath.Join(t.TempDir(), "test_GC_drops_revision.db"))
-	require.NoError(t, err)
-
-	// Create three revisions:
-	// - r0 is explicilty dropped
-	// - r1 is created from a revision, and relies on GC to be dropped
-	// - r2 is created from a proposal, and relies on GC to be dropped
-	keys, vals := kvForTest(1)
-	_, err = db.Update(keys, vals)
-	require.NoErrorf(t, err, "%T.Update(...)", db)
-
-	r0, err := db.LatestRevision()
-	require.NoErrorf(t, err, "%T.LatestRevision()", db)
-	require.NoErrorf(t, r0.Drop(), "%T.Drop()", r0)
-
-	r1, err := db.LatestRevision()
-	require.NoErrorf(t, err, "%T.LatestRevision()", db)
-
-	keys, vals = kvForTest(1)
-	p, err := db.Propose(keys, vals)
-	require.NoErrorf(t, err, "%T.Propose(...)", db)
-	root, err := p.Root()
-	require.NoErrorf(t, err, "%T.Root()", p)
-	r2, err := db.Revision(root)
-	require.NoErrorf(t, err, "%T.Proposal.Revision()", p)
-
-	done := make(chan struct{})
-	go func() {
-		require.NoErrorf(t, db.Close(t.Context()), "%T.Close()", db)
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		t.Errorf("%T.Close() returned with undropped %T", db, r1) //nolint:forbidigo // Use of require is impossible without a hack like require.False(true)
-	case <-time.After(300 * time.Millisecond):
-		// TODO(arr4n) use `synctest` package when at Go 1.25
-	}
-
-	runtime.KeepAlive(r1)
-	runtime.KeepAlive(r2)
-	r1 = nil
-	r2 = nil //nolint:ineffassign // Makes the value unreachable, allowing the finalizer to call Drop()
-
-	// In practice there's no need to call [runtime.GC] if [Database.Close] is
-	// called after all proposals are unreachable, as it does it itself.
-	runtime.GC()
-	// Note that [Database.Close] waits for outstanding revisions, so this would
-	// block permanently if the unreachability of `r0` and `r1` didn't result in
-	// their [Revision.Drop] methods being called.
-	<-done
-
-	// Ensure that the garbage collector does not call the finalizer for the explictly dropped revision.
-	runtime.KeepAlive(r0)
 }
 
 type kvIter interface {
