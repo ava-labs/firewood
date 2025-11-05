@@ -32,6 +32,10 @@ pub struct DatabaseHandleArgs<'a> {
     /// This must be a valid UTF-8 string, even on Windows.
     ///
     /// If this is empty, then the archival feature is disabled.
+    ///
+    /// Note: Setting this directory will only track new revisions going forward
+    /// and will not contain revisions from a prior database instance that didn't
+    /// set a `root_store_path`.
     pub root_store_path: BorrowedBytes<'a>,
 
     /// The size of the node cache.
