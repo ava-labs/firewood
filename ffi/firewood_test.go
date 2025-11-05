@@ -1178,6 +1178,10 @@ func TestHandlesFreeImplicitly(t *testing.T) {
 	db, err := newDatabase(filepath.Join(t.TempDir(), "test_GC_drops_implicitly.db"))
 	require.NoError(t, err)
 
+	// make the db non-empty
+	_, err = db.Update([][]byte{keyForTest(1)}, [][]byte{valForTest(1)})
+	require.NoError(t, err)
+
 	var (
 		explicitlyDropped []any
 		implicitlyDropped []any
