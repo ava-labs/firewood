@@ -153,7 +153,6 @@ impl api::Db for Db {
         Ok(self.manager.all_hashes())
     }
 
-    #[fastrace::trace(short_name = true)]
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal<'_>, api::Error> {
         self.propose_with_parent(batch, &self.manager.current_revision())
     }
@@ -333,7 +332,6 @@ impl api::DbView for Proposal<'_> {
 impl<'db> api::Proposal for Proposal<'db> {
     type Proposal = Proposal<'db>;
 
-    #[fastrace::trace(short_name = true)]
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal, api::Error> {
         self.create_proposal(batch)
     }
