@@ -31,7 +31,7 @@ echo "Building with cargo (using nix dev shell)..."
 nix develop ./ffi#default --command bash -c "${JEMALLOC_PAGE_SIZE} export CFLAGS='-O2' && export MAKEFLAGS='-j1' && cargo fetch --locked --verbose && cargo build-static-ffi"
 
 echo "Building with nix..."
-cd ffi && nix build .#firewood-ffi && cd ..
+cd ffi && nix build --rebuild .#firewood-ffi && cd ..
 
 echo ""
 echo "=== File Size Comparison ==="
