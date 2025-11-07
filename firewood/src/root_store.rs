@@ -150,7 +150,7 @@ impl FjallStore {
 impl RootStore for FjallStore {
     fn add_root(&self, hash: &TrieHash, address: &LinearAddress) -> Result<(), RootStoreError> {
         self.items
-            .insert(hash.to_bytes(), address.get().to_be_bytes())
+            .insert(**hash, address.get().to_be_bytes())
             .map_err(|e| RootStoreError {
                 method: RootStoreMethod::Add,
                 source: Box::new(e),
@@ -167,7 +167,7 @@ impl RootStore for FjallStore {
     fn get(&self, hash: &TrieHash) -> Result<Option<LinearAddress>, RootStoreError> {
         let v = self
             .items
-            .get(hash.to_bytes())
+            .get(**hash)
             .map_err(|e| RootStoreError {
                 method: RootStoreMethod::Get,
                 source: Box::new(e),
