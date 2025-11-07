@@ -1098,6 +1098,7 @@ dependencies = [
  "coarsetime",
  "criterion",
  "ctor",
+ "derive-where",
  "env_logger",
  "ethereum-types",
  "fastrace",

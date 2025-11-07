@@ -8,6 +8,7 @@ use std::{
 };
 use std::{fmt::Debug, path::Path};
 
+use derive_where::derive_where;
 use firewood_storage::{LinearAddress, TrieHash};
 
 const FJALL_PARTITION_NAME: &str = "firewood";
@@ -114,18 +115,11 @@ impl RootStore for MockStore {
 
 use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle, PersistMode};
 
+#[derive_where(Debug)]
+#[derive_where(skip_inner)]
 pub struct FjallStore {
     keyspace: Keyspace,
     items: PartitionHandle,
-}
-
-impl Debug for FjallStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FjallStore")
-            .field("keyspace", &"<Keyspace>")
-            .field("items", &"<PartitionHandle>")
-            .finish()
-    }
 }
 
 impl FjallStore {
