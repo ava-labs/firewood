@@ -10,6 +10,8 @@ use std::{fmt::Debug, path::Path};
 
 use firewood_storage::{LinearAddress, TrieHash};
 
+const FJALL_PARTITION_NAME: &str = "firewood";
+
 #[derive(Debug)]
 pub enum RootStoreMethod {
     Add,
@@ -141,7 +143,7 @@ impl FjallStore {
             source: Box::new(e),
         })?;
         let items = keyspace
-            .open_partition("firewood", PartitionCreateOptions::default())
+            .open_partition(FJALL_PARTITION_NAME, PartitionCreateOptions::default())
             .map_err(|e| RootStoreError {
                 method: RootStoreMethod::New,
                 source: Box::new(e),
