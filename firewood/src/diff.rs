@@ -1400,14 +1400,16 @@ mod tests {
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
 
         let op1 = diff_iter.next().unwrap().unwrap();
-        assert!(
-            matches!(op1, BatchOp::Put { key, value } if key == Box::from(b"key1".as_slice()) && value == b"value1")
-        );
+        assert!(matches!(
+            op1,
+            BatchOp::Put { key, value } if key == Box::from(b"key1".as_slice()) && value.as_ref() == b"value1"
+        ));
 
         let op2 = diff_iter.next().unwrap().unwrap();
-        assert!(
-            matches!(op2, BatchOp::Put { key, value } if key == Box::from(b"key2".as_slice()) && value == b"value2")
-        );
+        assert!(matches!(
+            op2,
+            BatchOp::Put { key, value } if key == Box::from(b"key2".as_slice()) && value.as_ref() == b"value2"
+        ));
 
         assert!(diff_iter.next().is_none());
     }
@@ -1441,9 +1443,10 @@ mod tests {
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
 
         let op = diff_iter.next().unwrap().unwrap();
-        assert!(
-            matches!(op, BatchOp::Put { key, value } if key == Box::from(b"key1".as_slice()) && value == b"new_value")
-        );
+        assert!(matches!(
+            op,
+            BatchOp::Put { key, value } if key == Box::from(b"key1".as_slice()) && value.as_ref() == b"new_value"
+        ));
 
         assert!(diff_iter.next().is_none());
     }
@@ -1474,17 +1477,19 @@ mod tests {
         assert!(matches!(op1, BatchOp::Delete { key } if key == Box::from(b"key1".as_slice())));
 
         let op2 = diff_iter.next().unwrap().unwrap();
-        assert!(
-            matches!(op2, BatchOp::Put { key, value } if key == Box::from(b"key2".as_slice()) && value == b"new_value")
-        );
+        assert!(matches!(
+            op2,
+            BatchOp::Put { key, value } if key == Box::from(b"key2".as_slice()) && value.as_ref() == b"new_value"
+        ));
 
         let op3 = diff_iter.next().unwrap().unwrap();
         assert!(matches!(op3, BatchOp::Delete { key } if key == Box::from(b"key3".as_slice())));
 
         let op4 = diff_iter.next().unwrap().unwrap();
-        assert!(
-            matches!(op4, BatchOp::Put { key, value } if key == Box::from(b"key4".as_slice()) && value == b"value4")
-        );
+        assert!(matches!(
+            op4,
+            BatchOp::Put { key, value } if key == Box::from(b"key4".as_slice()) && value.as_ref() == b"value4"
+        ));
 
         assert!(diff_iter.next().is_none());
     }
@@ -1522,9 +1527,10 @@ mod tests {
         assert!(matches!(op2, BatchOp::Delete { key } if key == Box::from(b"ccc".as_slice())));
 
         let op3 = diff_iter.next().unwrap().unwrap();
-        assert!(
-            matches!(op3, BatchOp::Put { key, value } if key == Box::from(b"ddd".as_slice()) && value == b"value4")
-        );
+        assert!(matches!(
+            op3,
+            BatchOp::Put { key, value } if key == Box::from(b"ddd".as_slice()) && value.as_ref() == b"value4"
+        ));
 
         assert!(diff_iter.next().is_none());
     }
@@ -1648,7 +1654,7 @@ mod tests {
         //println!("expected delete for key {:x?}", deleted_key2);
 
         // Convert to the appropriate type based on test parameters
-        let ops: Vec<BatchOp<Box<[u8]>, Vec<u8>>> = if trie1_mutable && trie2_mutable {
+        let ops: Vec<BatchOp<Box<[u8]>, Box<[u8]>>> = if trie1_mutable && trie2_mutable {
             // Both mutable
             diff_merkle_iterator(&m1, &m2, Box::new([]))
                 .collect::<Result<Vec<_>, _>>()
@@ -1673,8 +1679,8 @@ mod tests {
                 m1.try_into().unwrap();
             let m2_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
                 m2.try_into().unwrap();
-            println!("---m1\n{}", m1_immut.dump().unwrap());
-            println!("---m2\n{}", m2_immut.dump().unwrap());
+            println!("---m1\n{}", m1_immut.dump_to_string().unwrap());
+            println!("---m2\n{}", m2_immut.dump_to_string().unwrap());
             diff_merkle_iterator(&m1_immut, &m2_immut, Box::new([]))
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap()
