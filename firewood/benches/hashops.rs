@@ -10,9 +10,7 @@ use firewood::merkle::Merkle;
 use firewood::v2::api::{Db as _, Proposal as _};
 use firewood_storage::{MemStore, NodeStore};
 use pprof::ProfilerGuard;
-use rand::rngs::StdRng;
-use rand::{Rng, SeedableRng};
-use rand_distr::Alphanumeric;
+use rand::{Rng, distr::Alphanumeric};
 use std::fs::File;
 use std::iter::repeat_with;
 use std::os::raw::c_int;
@@ -62,7 +60,7 @@ impl Profiler for FlamegraphProfiler {
 // This benchmark peeks into the merkle layer and times how long it takes
 // to insert NKEYS with a key length of KEYSIZE
 fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criterion) {
-    let mut rng = StdRng::seed_from_u64(1234);
+    let rng = &firewood_storage::SeededRng::from_option(Some(1234));
 
     criterion
         .benchmark_group("Merkle")
@@ -74,21 +72,18 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
                     let nodestore = NodeStore::new_empty_proposal(store);
                     let merkle = Merkle::from(nodestore);
 
-                    let keys: Vec<Vec<u8>> = repeat_with(|| {
-                        (&mut rng)
-                            .sample_iter(&Alphanumeric)
-                            .take(KEYSIZE)
-                            .collect()
-                    })
-                    .take(NKEYS)
-                    .collect();
+                    let keys: Vec<Vec<u8>> =
+                        repeat_with(|| rng.sample_iter(&Alphanumeric).take(KEYSIZE).collect())
+                            .take(NKEYS)
+                            .collect();
 
                     (merkle, keys)
                 },
                 #[expect(clippy::unwrap_used)]
                 |(mut merkle, keys)| {
-                    keys.into_iter()
-                        .for_each(|key| merkle.insert(&key, Box::new(*b"v")).unwrap());
+                    for key in keys {
+                        merkle.insert(&key, Box::new(*b"v")).unwrap();
+                    }
                     let _frozen = merkle.hash();
                 },
                 BatchSize::SmallInput,
@@ -99,42 +94,36 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
 #[expect(clippy::unwrap_used)]
 fn bench_db<const N: usize>(criterion: &mut Criterion) {
     const KEY_LEN: usize = 4;
-    let mut rng = StdRng::seed_from_u64(1234);
+    let rng = &firewood_storage::SeededRng::from_option(Some(1234));
 
     criterion
         .benchmark_group("Db")
         .sample_size(30)
         .bench_function("commit", |b| {
-            b.to_async(tokio::runtime::Runtime::new().unwrap())
-                .iter_batched(
-                    || {
-                        let batch_ops: Vec<_> = repeat_with(|| {
-                            (&mut rng)
-                                .sample_iter(&Alphanumeric)
-                                .take(KEY_LEN)
-                                .collect()
-                        })
-                        .map(|key: Vec<_>| BatchOp::Put {
-                            key,
-                            value: vec![b'v'],
-                        })
-                        .take(N)
-                        .collect();
-                        batch_ops
-                    },
-                    |batch_ops| async {
-                        let db_path = std::env::temp_dir();
-                        let db_path = db_path.join("benchmark_db");
-                        let cfg = DbConfig::builder();
+            b.iter_batched(
+                || {
+                    let batch_ops: Vec<_> =
+                        repeat_with(|| rng.sample_iter(&Alphanumeric).take(KEY_LEN).collect())
+                            .map(|key: Vec<_>| BatchOp::Put {
+                                key,
+                                value: vec![b'v'],
+                            })
+                            .take(N)
+                            .collect();
+                    batch_ops
+                },
+                |batch_ops| {
+                    let db_path = std::env::temp_dir();
+                    let db_path = db_path.join("benchmark_db");
+                    let cfg = DbConfig::builder();
 
-                        let db = firewood::db::Db::new(db_path, cfg.clone().truncate(true).build())
-                            .await
-                            .unwrap();
+                    let db =
+                        firewood::db::Db::new(db_path, cfg.clone().truncate(true).build()).unwrap();
 
-                        db.propose(batch_ops).await.unwrap().commit().await.unwrap();
-                    },
-                    BatchSize::SmallInput,
-                );
+                    db.propose(batch_ops).unwrap().commit().unwrap();
+                },
+                BatchSize::SmallInput,
+            );
         });
 }
 

@@ -16,16 +16,18 @@
 
 // TODO: remove bitflags, we only use one bit
 use bitflags::bitflags;
-use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-use std::fmt::{self, Debug};
+use std::fmt::{self, Debug, LowerHex};
 use std::iter::{FusedIterator, once};
+use std::ops::Add;
+
+use crate::{PathComponent, TriePathFromUnpackedBytes};
 
 static NIBBLES: [u8; 16] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 
 /// Path is part or all of a node's path in the trie.
 /// Each element is a nibble.
-#[derive(PartialEq, Eq, Clone, Serialize, Deserialize, PartialOrd, Ord)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Default)]
 pub struct Path(pub SmallVec<[u8; 64]>);
 
 impl Debug for Path {
@@ -38,6 +40,23 @@ impl Debug for Path {
             }
         }
         Ok(())
+    }
+}
+
+impl LowerHex for Path {
+    // TODO: handle fill / alignment / etc
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
+        if self.0.is_empty() {
+            write!(f, "[]")
+        } else {
+            if f.alternate() {
+                write!(f, "0x")?;
+            }
+            for nib in &self.0 {
+                write!(f, "{:x}", *nib)?;
+            }
+            Ok(())
+        }
     }
 }
 
@@ -122,22 +141,15 @@ impl Path {
         }
     }
 
-    /// Create a boxed set of bytes from the Path
+    /// Casts the path to a slice of its components.
     #[must_use]
-    pub fn bytes(&self) -> Box<[u8]> {
-        self.bytes_iter().collect()
+    pub fn as_components(&self) -> &[PathComponent] {
+        TriePathFromUnpackedBytes::path_from_unpacked_bytes(&self.0)
+            .expect("path should contain only nibbles")
     }
 }
 
-impl std::ops::Add<Path> for Path {
-    type Output = Path;
-
-    fn add(self, other: Path) -> Self::Output {
-        let mut new_path = self;
-        new_path.extend(other.iter().copied());
-        new_path
-    }
-}
+// (impl Add<Path> for Path) is defined below
 
 /// Returns the nibbles in `nibbles_iter` as compressed bytes.
 /// That is, each two nibbles are combined into a single byte.
@@ -146,13 +158,22 @@ pub struct BytesIterator<'a> {
     nibbles_iter: std::slice::Iter<'a, u8>,
 }
 
+impl Add<Path> for Path {
+    type Output = Path;
+    fn add(self, other: Path) -> Self::Output {
+        let mut new = self.clone();
+        new.extend(other.iter().copied());
+        new
+    }
+}
+
 impl Iterator for BytesIterator<'_> {
     type Item = u8;
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(&hi) = self.nibbles_iter.next() {
-            if let Some(&lo) = self.nibbles_iter.next() {
-                return Some(hi * 16 + lo);
-            }
+        if let Some(&hi) = self.nibbles_iter.next()
+            && let Some(&lo) = self.nibbles_iter.next()
+        {
+            return Some(hi * 16 + lo);
         }
         None
     }
@@ -182,6 +203,7 @@ impl Iterator for NibblesIterator<'_> {
 
     #[cfg(feature = "branch_factor_256")]
     fn next(&mut self) -> Option<Self::Item> {
+        #![expect(clippy::indexing_slicing)]
         if self.is_empty() {
             return None;
         }
@@ -195,7 +217,7 @@ impl Iterator for NibblesIterator<'_> {
         if self.is_empty() {
             return None;
         }
-        let result = if self.head % 2 == 0 {
+        let result = if self.head.is_multiple_of(2) {
             #[expect(clippy::indexing_slicing)]
             NIBBLES[(self.data[self.head / 2] >> 4) as usize]
         } else {
@@ -246,7 +268,7 @@ impl DoubleEndedIterator for NibblesIterator<'_> {
             return None;
         }
 
-        let result = if self.tail % 2 == 0 {
+        let result = if self.tail.is_multiple_of(2) {
             #[expect(clippy::indexing_slicing)]
             NIBBLES[(self.data[self.tail / 2 - 1] & 0xf) as usize]
         } else {
@@ -266,8 +288,6 @@ impl DoubleEndedIterator for NibblesIterator<'_> {
 
 #[cfg(test)]
 mod test {
-    #![expect(clippy::needless_pass_by_value)]
-
     use super::*;
     use std::fmt::Debug;
     use test_case::test_case;
@@ -347,5 +367,12 @@ mod test {
         );
         let to_encoded = from_encoded.iter_encoded().collect::<SmallVec<[u8; 32]>>();
         assert_eq!(encode.as_ref(), to_encoded.as_ref());
+    }
+
+    #[test_case(Path::new(), "[]", "[]")]
+    #[test_case(Path::from([0x12, 0x34, 0x56, 0x78]), "12345678", "0x12345678")]
+    fn test_fmt_lower_hex(path: Path, expected: &str, expected_with_prefix: &str) {
+        assert_eq!(format!("{path:x}"), expected);
+        assert_eq!(format!("{path:#x}"), expected_with_prefix);
     }
 }

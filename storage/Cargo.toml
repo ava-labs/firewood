@@ -1,57 +1,68 @@
 [package]
 name = "firewood-storage"
-version = "0.0.6"
-edition = "2024"
-rust-version = "1.85.0"
+version.workspace = true
+edition.workspace = true
 authors = [
      "Aaron Buchwald <aaron.buchwald56@gmail.com>",
      "Ron Kuris <ron.kuris@avalabs.org>",
      "Suyan Qu <36519575+qusuyan@users.noreply.github.com>",
 ]
 description = "Storage layer for Firewood, an embedded key-value store optimized for blockchain state."
-license-file = "../LICENSE.md"
-homepage = "https://avalabs.org"
-repository = "https://github.com/ava-labs/firewood"
+license-file.workspace = true
+homepage.workspace = true
+repository.workspace = true
+readme.workspace = true
+rust-version.workspace = true
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-bincode = "1.3.3"
-bitflags = "2.5.0"
-enum-as-inner = "0.6.0"
-hex = "0.4.3"
-serde = { version = "1.0.199", features = ["derive"] }
-smallvec = { version = "1.13.2", features = ["serde", "write", "union"] }
-sha2 = "0.10.8"
-integer-encoding = "4.0.0"
+# Workspace dependencies
+aquamarine.workspace = true
+bytemuck.workspace = true
+bytemuck_derive.workspace = true
+coarsetime.workspace = true
+fastrace.workspace = true
+hex.workspace = true
+integer-encoding.workspace = true
+metrics.workspace = true
+nonzero_ext.workspace = true
+rand = { workspace = true, optional = true }
+sha2.workspace = true
+smallvec.workspace = true
+thiserror.workspace = true
+# Regular dependencies
 arc-swap = "1.7.1"
-lru = "0.14.0"
-metrics = "0.24.0"
-log = { version = "0.4.20", optional = true }
-bytemuck = "1.7.0"
-bytemuck_derive = "1.7.0"
-bitfield = "0.19.0"
-fastrace = { version = "0.7.4" }
-io-uring = { version = "0.7.4", optional = true }
-triomphe = "0.1.14"
-coarsetime = "0.1.35"
+bitfield = "0.19.3"
+bitflags = "2.10.0"
+derive-where = "1.6.0"
+enum-as-inner = "0.6.1"
+indicatif = "0.18.2"
+lru = "0.16.2"
+semver = "1.0.27"
+triomphe = "0.1.15"
+# Optional dependencies
+bytes = { version = "1.10.1", optional = true }
+io-uring = { version = "0.7.11", optional = true }
+log = { version = "0.4.28", optional = true }
 rlp = { version = "0.6.1", optional = true }
 sha3 = { version = "0.10.8", optional = true }
-bytes = { version = "1.10.1", optional = true }
-semver = "1.0.26"
+bumpalo = { version = "3.19.0", features = ["collections", "std"] }
 
 [dev-dependencies]
-rand = "0.9.0"
-test-case = "3.3.1"
-criterion = { version = "0.6.0", features = ["async_tokio", "html_reports"] }
-pprof = { version = "0.15.0", features = ["flamegraph"] }
-tempfile = "3.12.0"
+# Workspace dependencies
+criterion = { workspace = true, features = ["html_reports"] }
+pprof = { workspace = true, features = ["flamegraph"] }
+rand.workspace = true
+tempfile.workspace = true
+test-case.workspace = true
 
 [features]
 logger = ["log"]
 branch_factor_256 = []
 io-uring = ["dep:io-uring"]
-ethhash = [ "dep:rlp", "dep:sha3", "dep:bytes" ]
+ethhash = ["dep:rlp", "dep:sha3", "dep:bytes"]
+test_utils = ["dep:rand"]
 
 [[bench]]
 name = "serializer"

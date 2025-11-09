@@ -6,32 +6,22 @@
 #![cfg_attr(
     feature = "ethhash",
     expect(
-        clippy::indexing_slicing,
-        reason = "Found 4 occurrences after enabling the lint."
-    )
-)]
-#![cfg_attr(
-    feature = "ethhash",
-    expect(
         clippy::too_many_lines,
         reason = "Found 1 occurrences after enabling the lint."
     )
 )]
 
-use std::iter::once;
-
 use crate::logger::warn;
 use crate::{
-    HashType, Hashable, Preimage, TrieHash, ValueDigest,
-    hashednode::HasUpdate,
-    logger::{trace, trace_enabled},
+    BranchNode, HashType, Hashable, Preimage, TrieHash, TriePath, ValueDigest,
+    hashednode::HasUpdate, logger::trace,
 };
 use bitfield::bitfield;
 use bytes::BytesMut;
+use rlp::{Rlp, RlpStream};
 use sha3::{Digest, Keccak256};
 use smallvec::SmallVec;
-
-use rlp::{Rlp, RlpStream};
+use std::iter::once;
 
 impl HasUpdate for Keccak256 {
     fn update<T: AsRef<[u8]>>(&mut self, data: T) {
@@ -50,7 +40,7 @@ impl HasUpdate for Keccak256 {
 // B is 1 if the input had an odd number of nibbles
 // CCCC is the first nibble if B is 1, otherwise it is all 0s
 
-fn nibbles_to_eth_compact<T: AsRef<[u8]>>(nibbles: T, is_leaf: bool) -> SmallVec<[u8; 32]> {
+fn nibbles_to_eth_compact<T: TriePath>(nibbles: T, is_leaf: bool) -> SmallVec<[u8; 32]> {
     // This is a bitfield that represents the first byte of the output, documented above
     bitfield! {
         struct CompactFirstByte(u8);
@@ -62,31 +52,24 @@ fn nibbles_to_eth_compact<T: AsRef<[u8]>>(nibbles: T, is_leaf: bool) -> SmallVec
         low_nibble, set_low_nibble: 3, 0;
     }
 
-    let nibbles = nibbles.as_ref();
+    let nibbles = nibbles.as_component_slice();
 
-    // nibble_pairs points to the first nibble that will be combined with the next nibble
-    // so we skip the first byte if there's an odd length and set the odd_nibbles bit to true
-    let (nibble_pairs, first_byte) = if nibbles.len() & 1 == 1 {
-        let low_nibble = nibbles[0];
-        debug_assert!(low_nibble < 16);
-        (
-            &nibbles[1..],
-            CompactFirstByte::new(is_leaf, true, low_nibble),
-        )
+    let mut first_byte = CompactFirstByte(0);
+    first_byte.set_is_leaf(is_leaf);
+
+    let (maybe_low_nibble, nibble_pairs) = nibbles.as_rchunks::<2>();
+    if let &[low_nibble] = maybe_low_nibble {
+        // we have an odd number of nibbles
+        first_byte.set_odd_nibbles(true);
+        first_byte.set_low_nibble(low_nibble.as_u8());
     } else {
-        (nibbles, CompactFirstByte::new(is_leaf, false, 0))
-    };
-
-    // at this point, we can be sure that nibble_pairs has an even length
-    debug_assert!(nibble_pairs.len() % 2 == 0);
+        // as_rchunks can only return 0 or 1 element in the first slice if N is 2
+        debug_assert!(maybe_low_nibble.is_empty());
+    }
 
     // now assemble everything: the first byte, and the nibble pairs compacted back together
     once(first_byte.0)
-        .chain(
-            nibble_pairs
-                .chunks(2)
-                .map(|chunk| (chunk[0] << 4) | chunk[1]),
-        )
+        .chain(nibble_pairs.iter().map(|&[hi, lo]| hi.join(lo)))
         .collect()
 }
 
@@ -97,17 +80,11 @@ impl<T: Hashable> Preimage for T {
         let mut collector = SmallVec::with_capacity(32);
         self.write(&mut collector);
 
-        if trace_enabled() {
-            if self.key().size_hint().0 == 64 {
-                trace!("SIZE WAS 64 {}", hex::encode(&collector));
-            } else {
-                trace!(
-                    "SIZE WAS {1} {0}",
-                    hex::encode(&collector),
-                    self.key().size_hint().0
-                );
-            }
-        }
+        trace!(
+            "SIZE WAS {} {}",
+            self.full_path().len(),
+            hex::encode(&collector),
+        );
 
         if collector.len() >= 32 {
             HashType::Hash(Keccak256::digest(collector).into())
@@ -117,10 +94,12 @@ impl<T: Hashable> Preimage for T {
     }
 
     fn write(&self, buf: &mut impl HasUpdate) {
-        let is_account = self.key().size_hint().0 == 64;
+        let is_account = self.full_path().len() == 64;
         trace!("is_account: {is_account}");
 
-        let children = self.children().count();
+        let child_hashes = self.children();
+
+        let children = child_hashes.count();
 
         if children == 0 {
             // since there are no children, this must be a leaf
@@ -130,14 +109,12 @@ impl<T: Hashable> Preimage for T {
 
             let mut rlp = RlpStream::new_list(2);
 
-            rlp.append(&&*nibbles_to_eth_compact(
-                self.partial_path().collect::<Box<_>>(),
-                true,
-            ));
+            rlp.append(&&*nibbles_to_eth_compact(self.partial_path(), true));
 
             if is_account {
                 // we are a leaf that is at depth 32
                 match self.value_digest() {
+                    #[expect(deprecated, reason = "transitive dependency on generic-array")]
                     Some(ValueDigest::Value(bytes)) => {
                         let new_hash = Keccak256::digest(rlp::NULL_RLP).as_slice().to_vec();
                         let bytes_mut = BytesMut::from(bytes);
@@ -147,9 +124,6 @@ impl<T: Hashable> Preimage for T {
                             rlp.append(&bytes);
                         }
                     }
-                    Some(ValueDigest::Hash(hash)) => {
-                        rlp.append(&hash);
-                    }
                     None => {
                         rlp.append_empty_data();
                     }
@@ -157,59 +131,42 @@ impl<T: Hashable> Preimage for T {
             } else {
                 match self.value_digest() {
                     Some(ValueDigest::Value(bytes)) => rlp.append(&bytes),
-                    Some(ValueDigest::Hash(hash)) => rlp.append(&hash),
                     None => rlp.append_empty_data(),
                 };
             }
 
             let bytes = rlp.out();
-            if crate::logger::trace_enabled() {
-                trace!(
-                    "partial path {:?}",
-                    hex::encode(self.partial_path().collect::<Box<_>>())
-                );
-                trace!("serialized leaf-rlp: {:?}", hex::encode(&bytes));
-            }
+            trace!("partial path {:?}", self.partial_path().display());
+            trace!("serialized leaf-rlp: {:?}", hex::encode(&bytes));
             buf.update(&bytes);
         } else {
             // for a branch, there are always 16 children and a value
             // Child::None we encode as RLP empty_data (0x80)
-            let mut rlp = RlpStream::new_list(17);
-            let mut child_iter = self.children().peekable();
-            for index in 0..=15 {
-                if let Some(&(child_index, digest)) = child_iter.peek() {
-                    if child_index == index {
-                        match digest {
-                            HashType::Hash(hash) => rlp.append(&hash.as_slice()),
-                            HashType::Rlp(rlp_bytes) => rlp.append_raw(rlp_bytes, 1),
-                        };
-                        child_iter.next();
-                    } else {
-                        rlp.append_empty_data();
-                    }
-                } else {
-                    // exhausted all indexes
-                    rlp.append_empty_data();
-                }
+            let mut rlp = RlpStream::new_list(const { BranchNode::MAX_CHILDREN + 1 });
+            for (_, child) in &child_hashes {
+                match child {
+                    Some(HashType::Hash(hash)) => rlp.append(&hash.as_slice()),
+                    Some(HashType::Rlp(rlp_bytes)) => rlp.append_raw(rlp_bytes, 1),
+                    None => rlp.append_empty_data(),
+                };
             }
 
-            if let Some(digest) = self.value_digest() {
-                if is_account {
-                    rlp.append_empty_data();
-                } else {
-                    rlp.append(&*digest);
-                }
+            // For branch nodes, we need to append the value as the 17th element in the RLP list.
+            // However, account nodes (depth 32) handle values differently - they don't store
+            // the value directly in the branch node, but rather in the account structure itself.
+            // This is because account nodes have special handling where the storage root hash
+            // gets replaced in the account data structure during serialization.
+            let digest = (!is_account).then(|| self.value_digest()).flatten();
+            if let Some(ValueDigest::Value(digest)) = digest {
+                rlp.append(&digest);
             } else {
                 rlp.append_empty_data();
             }
             let bytes = rlp.out();
-            if crate::logger::trace_enabled() {
-                trace!("pass 1 bytes {:02X?}", hex::encode(&bytes));
-            }
+            trace!("pass 1 bytes {:02X?}", hex::encode(&bytes));
 
             // we've collected all the children in bytes
 
-            #[allow(clippy::let_and_return)]
             let updated_bytes = if is_account {
                 // need to get the value again
                 if let Some(ValueDigest::Value(rlp_encoded_bytes)) = self.value_digest() {
@@ -224,14 +181,15 @@ impl<T: Hashable> Preimage for T {
                     let replacement_hash = if children == 1 {
                         // we need to treat this child like it's a root node, so the partial path is
                         // actually one longer than it is reported
-                        match self.children().next().expect("we know there is one").1 {
+                        match child_hashes
+                            .iter()
+                            .find_map(|(_, c)| c.as_ref())
+                            .expect("we know there is exactly one child")
+                        {
                             HashType::Hash(hash) => hash.clone(),
                             HashType::Rlp(rlp_bytes) => {
                                 let mut rlp = RlpStream::new_list(2);
-                                rlp.append(&&*nibbles_to_eth_compact(
-                                    self.partial_path().collect::<Box<_>>(),
-                                    true,
-                                ));
+                                rlp.append(&&*nibbles_to_eth_compact(self.partial_path(), true));
                                 rlp.append_raw(rlp_bytes, 1);
                                 let bytes = rlp.out();
                                 TrieHash::from(Keccak256::digest(bytes))
@@ -250,7 +208,7 @@ impl<T: Hashable> Preimage for T {
                     // treat like non-account since it didn't have a value
                     warn!(
                         "Account node {:x?} without value",
-                        self.key().collect::<Vec<_>>()
+                        self.full_path().display(),
                     );
                     bytes.as_ref().into()
                 }
@@ -258,17 +216,16 @@ impl<T: Hashable> Preimage for T {
                 bytes.as_ref().into()
             };
 
-            let partial_path = self.partial_path().collect::<Box<_>>();
+            let partial_path = self.partial_path();
             if partial_path.is_empty() {
-                if crate::logger::trace_enabled() {
-                    trace!("pass 2=bytes {:02X?}", hex::encode(&updated_bytes));
-                }
+                trace!("pass 2=bytes {:02X?}", hex::encode(&updated_bytes));
                 buf.update(updated_bytes);
             } else {
                 let mut final_bytes = RlpStream::new_list(2);
                 final_bytes.append(&&*nibbles_to_eth_compact(partial_path, is_account));
                 // if the RLP is short enough, we can use it as-is, otherwise we hash it
                 // to make the maximum length 32 bytes
+                #[expect(deprecated, reason = "transitive dependency on generic-array")]
                 if updated_bytes.len() > 31 && !is_account {
                     let hashed_bytes = Keccak256::digest(updated_bytes);
                     final_bytes.append(&hashed_bytes.as_slice());
@@ -276,9 +233,7 @@ impl<T: Hashable> Preimage for T {
                     final_bytes.append(&updated_bytes);
                 }
                 let final_bytes = final_bytes.out();
-                if crate::logger::trace_enabled() {
-                    trace!("pass 2 bytes {:02X?}", hex::encode(&final_bytes));
-                }
+                trace!("pass 2 bytes {:02X?}", hex::encode(&final_bytes));
                 buf.update(final_bytes);
             }
         }
@@ -293,26 +248,24 @@ fn replace_hash<T: AsRef<[u8]>, U: AsRef<[u8]>>(bytes: T, new_hash: U) -> Option
     let replace = list.get_mut(2)?;
     *replace = Vec::from(new_hash.as_ref());
 
-    if trace_enabled() {
-        trace!("inbound bytes: {}", hex::encode(bytes.as_ref()));
-        trace!("list length was {}", list.len());
-        trace!("replacement hash {:?}", hex::encode(&new_hash));
-    }
+    trace!("inbound bytes: {}", hex::encode(bytes.as_ref()));
+    trace!("list length was {}", list.len());
+    trace!("replacement hash {:?}", hex::encode(&new_hash));
 
     let mut rlp = RlpStream::new_list(list.len());
     for item in list {
         rlp.append(&item);
     }
     let bytes = rlp.out();
-    if trace_enabled() {
-        trace!("updated encoded value {:02X?}", hex::encode(&bytes));
-    }
+    trace!("updated encoded value {:02X?}", hex::encode(&bytes));
     Some(bytes)
 }
 
 #[cfg(test)]
 mod test {
     use test_case::test_case;
+
+    use crate::{PathComponent, TriePathFromUnpackedBytes};
 
     #[test_case(&[], false, &[0x00])]
     #[test_case(&[], true, &[0x20])]
@@ -321,8 +274,9 @@ mod test {
     #[test_case(&[15, 1, 12, 11, 8], true, &[0x3f, 0x1c, 0xb8])]
     #[test_case(&[0, 15, 1, 12, 11, 8], true, &[0x20, 0x0f, 0x1c, 0xb8])]
     fn test_hex_to_compact(hex: &[u8], has_value: bool, expected_compact: &[u8]) {
+        let path = <&[PathComponent]>::path_from_unpacked_bytes(hex).expect("valid path");
         assert_eq!(
-            &*super::nibbles_to_eth_compact(hex, has_value),
+            &*super::nibbles_to_eth_compact(path, has_value),
             expected_compact
         );
     }

@@ -15,6 +15,11 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: full
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 # Build, upload, and collect static libraries for each target architecture,
 # so that golang projects can import the FFI package without needing to
@@ -25,7 +30,7 @@ env:
 # - x86_64-apple-darwin
 # - aarch64-apple-darwin
 jobs:
-  # Build the static libraries for each target architecture and upload 
+  # Build the static libraries for each target architecture and upload
   # them as artifacts to collect and attach in the next job.
   build-firewood-ffi-libs:
     runs-on: ${{ matrix.os }}
@@ -38,27 +43,33 @@ jobs:
             target: aarch64-unknown-linux-gnu
           - os: macos-latest
             target: aarch64-apple-darwin
-            pre-build-cmd: echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> "$GITHUB_ENV"
-          - os: macos-13
+            pre-build-cmd: echo "MACOSX_DEPLOYMENT_TARGET=15.0" >> "$GITHUB_ENV"
+          - os: macos-latest
             target: x86_64-apple-darwin
-            pre-build-cmd: echo "MACOSX_DEPLOYMENT_TARGET=13.0" >> "$GITHUB_ENV"
+            pre-build-cmd: echo "MACOSX_DEPLOYMENT_TARGET=15.0" >> "$GITHUB_ENV"
     outputs:
       has_secrets: ${{ steps.check_secrets.outputs.has_secrets }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - uses: arduino/setup-protoc@v3
-        with:
-          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: ${{ matrix.target }}
+
+      - name: Add target for cross-compilation
+        run: rustup target add ${{ matrix.target }}
 
       - name: Run pre-build command
         if: matrix.pre-build-cmd != ''
         run: ${{ matrix.pre-build-cmd }}
 
+      # Require Cargo.lock to be up to date and ensure the registry cache is populated
+      - name: Cargo Fetch (run `cargo generate-lockfile` if this fails)
+        run: cargo fetch --locked --verbose
+
       - name: Build for ${{ matrix.target }}
-        run: cargo build --profile maxperf --features ethhash,logger --target ${{ matrix.target }} -p firewood-ffi
-        
+        run: cargo build-static-ffi --target ${{ matrix.target }}
+
       - name: Upload binary
         uses: actions/upload-artifact@v4
         with:
@@ -152,7 +163,7 @@ jobs:
           git add .
           git commit -m "firewood ci ${{ github.sha }}: attach firewood static libs"
           git push -u origin ${{ steps.determine_branch.outputs.target_branch }} --force
-          
+
           if [[ "${{ github.ref_type }}" == "tag" ]]; then
             # If the tag is a semantic version, prefix it with "ffi/" to ensure go get correctly
             # fetches the submodule. Otherwise, use the tag name as is.
@@ -177,7 +188,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, ubuntu-22.04-arm, macos-latest, macos-13]
+        os: [ubuntu-latest, ubuntu-22.04-arm, macos-latest]
     needs: push-firewood-ffi-libs
     continue-on-error: true
     steps:

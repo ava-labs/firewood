@@ -1,3 +1,6 @@
+// Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE.md for licensing terms.
+
 package firewood
 
 import (
@@ -50,24 +53,21 @@ func newTestFirewoodDatabase(t *testing.T) *firewood.Database {
 	t.Helper()
 
 	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, closeDB, err := newFirewoodDatabase(dbFile)
+	db, err := newFirewoodDatabase(dbFile)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, closeDB())
+		require.NoError(t, db.Close(context.Background())) //nolint:usetesting // t.Context() will already be cancelled
 	})
 	return db
 }
 
-func newFirewoodDatabase(dbFile string) (*firewood.Database, func() error, error) {
+func newFirewoodDatabase(dbFile string) (*firewood.Database, error) {
 	conf := firewood.DefaultConfig()
-	conf.MetricsPort = 0
-	conf.Create = true
-
 	f, err := firewood.New(dbFile, conf)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
+		return nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
 	}
-	return f, f.Close, nil
+	return f, nil
 }
 
 type tree struct {
@@ -153,7 +153,7 @@ func (tr *tree) dbUpdate() {
 
 func (tr *tree) createRandomBatch(numKeys int) ([][]byte, [][]byte) {
 	keys := tr.selectRandomKeys(numKeys)
-	vals := createRandomByteSlices(numKeys, valSize, tr.rand)
+	vals := createRandomByteSlices(len(keys), valSize, tr.rand)
 	return keys, vals
 }
 

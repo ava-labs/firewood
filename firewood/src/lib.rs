@@ -8,14 +8,14 @@
 //! store trie nodes on-disk. Unlike most of state management approaches in the field,
 //! it is not built on top of a generic KV store such as LevelDB/RocksDB. Firewood, like a
 //! B+-tree based database, directly uses the trie structure as the index on-disk. Thus,
-//! there is no additional “emulation” of the logical trie to flatten out the data structure
+//! there is no additional "emulation" of the logical trie to flatten out the data structure
 //! to feed into the underlying database that is unaware of the data being stored. The convenient
 //! byproduct of this approach is that iteration is still fast (for serving state sync queries)
 //! but compaction is not required to maintain the index. Firewood was first conceived to provide
 //! a very fast storage layer for the EVM but could be used on any blockchain that
 //! requires authenticated state.
 //!
-//! Firewood only attempts to store recent revisions on-disk and will actively clean up
+//! Firewood only attempts to support queries from recent revisions and will actively clean up
 //! unused older revisions when state diffs are committed. The number of revisions is
 //! configured when the database is opened.
 //!
@@ -67,7 +67,7 @@
 //!   the state of the nodestore, and a storage type.
 //!
 //!   There are three states for a nodestore:
-//!    - [`firewood_storage::Committed`] for revisions that are on disk
+//!    - [`firewood_storage::Committed`] for revisions that are committed
 //!    - [`firewood_storage::ImmutableProposal`] for revisions that are proposals against committed versions
 //!    - [`firewood_storage::MutableProposal`] for revisions where nodes are still being added.
 //!
@@ -96,16 +96,24 @@
 //! - If you delete a node, mark it as deleted in the proposal and remove the child reference to it.
 //!
 //! - After making all mutations, convert the [`firewood_storage::MutableProposal`] to an [`firewood_storage::ImmutableProposal`]. This
-//!   involves walking the in-memory trie and looking for nodes without disk addresses, then assigning
-//!   them from the freelist of the parent. This gives the node an address, but it is stil in
-//!   memory.
+//!   involves walking the in-memory trie and converting them to a [`firewood_storage::SharedNode`].
 //!
 //! - Since the root is guaranteed to be new, the new root will reference all of the new revision.
 //!
-//! A commit involves simply writing the nodes and the freelist to disk. If the proposal is
-//! abandoned, nothing has actually been written to disk.
+//! A commit involves allocating space for the nmodes and writing them as well as the freelist to disk.
 //!
-#![warn(missing_debug_implementations, rust_2018_idioms, missing_docs)]
+// Instead of using a `compile_error!`, cause clippy to hard fail if the target is not 64-bit. This
+// is a workaround for the fact that the `clippy::cast_possible_truncation` lint does not delineate
+// between 64-bit and non-64-bit targets with respect to `usize -> u64` casts and vice versa which
+// leads to a lot of unecessary `TryInto` casts. This also allows 32-bit builds to compile as long
+// as `clippy` is not part of the build process albeit with the risk of truncation errors.
+#![cfg_attr(
+    not(target_pointer_width = "64"),
+    forbid(
+        clippy::cast_possible_truncation,
+        reason = "non-64 bit target likely to cause issues during u64 to usize conversions"
+    )
+)]
 
 #[cfg(all(feature = "ethhash", feature = "branch_factor_256"))]
 compile_error!(
@@ -114,6 +122,9 @@ compile_error!(
 
 /// Database module for Firewood.
 pub mod db;
+
+/// Iterator module, for both node and key-value streams
+pub mod iter;
 
 /// Database manager module
 pub mod manager;
@@ -124,17 +135,43 @@ pub mod merkle;
 /// Proof module
 pub mod proof;
 
+/// Change, Range, and Key proofs for the Merkle Trie
+// TODO: push `proof` and `range_proof` modules into this module
+pub mod proofs;
+
+// Re-export the proc macro from firewood-macros
+pub use firewood_macros::metrics;
+
 /// Range proof module
 pub mod range_proof;
 
-/// Change proof module
-pub mod diff;
+/// Root store module
+pub mod root_store;
 
-/// Stream module, for both node and key-value streams
-pub mod stream;
+/// Change proof module (experimental)
+pub mod diff;
 
 /// Version 2 API
 pub mod v2;
 
 /// Expose the storage logger
 pub use firewood_storage::logger;
+
+#[cfg(all(test, feature = "logger"))]
+#[ctor::ctor]
+/// `ctor` will ensure this function is invoked before any tests are run so we
+/// can initialize the logger consistently across all tests without having to
+/// manually call it in each test.
+///
+/// This is technically black magic as it runs before `main` is invoked, which
+/// violates some of the Rust guarantees. But, it is convenient to ensure the
+/// logger is initialized for all tests.
+///
+/// In the event of unexpected behavior in testing, disable this first before
+/// looking elsewhere.
+fn init_logger() {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace"))
+        .is_test(true)
+        .try_init()
+        .ok();
+}

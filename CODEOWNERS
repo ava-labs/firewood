@@ -1,3 +1,5 @@
 # CODEOWNERS
-*       @rkuris @aaronbuchwald @demosdemon
-/ffi    @alarso16
+# Note: more specific rules overrule wildcard
+*        @rkuris @demosdemon
+/ffi     @rkuris @demosdemon @alarso16
+/.github @rkuris @demosdemon @aaronbuchwald

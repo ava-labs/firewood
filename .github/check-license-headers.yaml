@@ -1,7 +1,9 @@
 [
   {
     "include": [
-      "**/**/*.rs"
+      "**/**/*.rs",
+      "**/**/*.go",
+      "**/**/*.h",
     ],
     "exclude": [
       "target/**",
@@ -12,15 +14,20 @@
       "README*",
       "**/README*",
       "Cargo.toml",
+      "Cargo.lock",
       "*/Cargo.toml",
       "docs/**",
       "CODEOWNERS",
       "CONTRIBUTING.md",
       "benchmark/**",
-      "ffi/**",
       "triehash/**",
       "CHANGELOG.md",
       "cliff.toml",
+      "clippy.toml",
+      "**/tests/compile_*/**",
+      "**/go.mod",
+      "**/go.mod",
+      "**/cbindgen.toml",
     ],
     "license": "./.github/license-header.txt"
   },
@@ -34,6 +41,7 @@
       "README*",
       "**/README*",
       "Cargo.toml",
+      "Cargo.lock",
       "*/Cargo.toml",
       "docs/**",
       "benchmark/**",
@@ -43,6 +51,10 @@
       "triehash/**",
       "CHANGELOG.md",
       "cliff.toml",
+      "clippy.toml",
+      "**/tests/compile_*/**",
+      "justfile",
+      "scripts/run-just.sh",
     ],
   }
 ]

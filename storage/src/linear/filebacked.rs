@@ -11,10 +11,6 @@
     reason = "Found 5 occurrences after enabling the lint."
 )]
 #![expect(
-    clippy::cast_possible_truncation,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::indexing_slicing,
     reason = "Found 3 occurrences after enabling the lint."
 )]
@@ -29,6 +25,8 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Read;
+#[cfg(feature = "io-uring")]
+use std::mem::ManuallyDrop;
 use std::num::NonZero;
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
@@ -40,9 +38,9 @@ use std::sync::Mutex;
 use lru::LruCache;
 use metrics::counter;
 
-use crate::{CacheReadStrategy, LinearAddress, SharedNode};
+use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
 
-use super::{FileIoError, ReadableStorage, WritableStorage};
+use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
 
 /// A [`ReadableStorage`] and [`WritableStorage`] backed by a file
 pub struct FileBacked {
@@ -52,7 +50,32 @@ pub struct FileBacked {
     free_list_cache: Mutex<LruCache<LinearAddress, Option<LinearAddress>>>,
     cache_read_strategy: CacheReadStrategy,
     #[cfg(feature = "io-uring")]
-    pub(crate) ring: Mutex<io_uring::IoUring>,
+    pub(crate) ring: Mutex<ManuallyDrop<io_uring::IoUring>>,
+}
+
+impl Drop for FileBacked {
+    fn drop(&mut self) {
+        #[cfg(feature = "io-uring")]
+        {
+            // non-blocking because we have mutable access to self
+            let ring = self
+                .ring
+                .get_mut()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+            // We are manually dropping the ring here to ensure that it is
+            // flushed and dropped before we unlock the file descriptor.
+            #[expect(unsafe_code)]
+            // SAFETY: this is the only time `ring` is dropped. Furthermore,
+            // `Drop` ensures that this is only ever called once in a context
+            // where we are guaranteed to never use `ring` again.
+            unsafe {
+                ManuallyDrop::drop(ring);
+            }
+        }
+
+        _ = self.fd.unlock().ok();
+    }
 }
 
 // Manual implementation since ring doesn't implement Debug :(
@@ -68,6 +91,19 @@ impl std::fmt::Debug for FileBacked {
 }
 
 impl FileBacked {
+    /// Acquire an advisory lock on the underlying file to prevent multiple processes
+    /// from accessing it simultaneously
+    pub fn lock(&self) -> Result<(), FileIoError> {
+        self.fd.try_lock().map_err(|e| {
+            let context =
+                "unable to obtain advisory lock: database may be opened by another instance"
+                    .to_string();
+            // Convert TryLockError to a generic IO error for our FileIoError
+            let io_error = std::io::Error::new(std::io::ErrorKind::WouldBlock, e);
+            self.file_io_error(io_error, 0, Some(context))
+        })
+    }
+
     /// Make a write operation from a raw data buffer for this file
     #[cfg(feature = "io-uring")]
     pub(crate) fn make_op(&self, data: &[u8]) -> io_uring::opcode::Write {
@@ -95,16 +131,17 @@ impl FileBacked {
         node_cache_size: NonZero<usize>,
         free_list_cache_size: NonZero<usize>,
         truncate: bool,
+        create: bool,
         cache_read_strategy: CacheReadStrategy,
     ) -> Result<Self, FileIoError> {
         let fd = OpenOptions::new()
             .read(true)
             .write(true)
-            .create(true)
             .truncate(truncate)
+            .create(create)
             .open(&path)
-            .map_err(|inner| FileIoError {
-                inner,
+            .map_err(|e| FileIoError {
+                inner: e,
                 filename: Some(path.clone()),
                 offset: 0,
                 context: Some("file open".to_string()),
@@ -139,15 +176,15 @@ impl FileBacked {
             cache_read_strategy,
             filename: path,
             #[cfg(feature = "io-uring")]
-            ring: ring.into(),
+            ring: Mutex::new(ManuallyDrop::new(ring)),
         })
     }
 }
 
 impl ReadableStorage for FileBacked {
-    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, FileIoError> {
+    fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
         counter!("firewood.read_node", "from" => "file").increment(1);
-        Ok(Box::new(PredictiveReader::new(self, addr)))
+        Ok(PredictiveReader::new(self, addr))
     }
 
     fn size(&self) -> Result<u64, FileIoError> {
@@ -216,21 +253,28 @@ impl WritableStorage for FileBacked {
         }
     }
 
-    fn write_cached_nodes<'a>(
+    fn write_cached_nodes(
         &self,
-        nodes: impl Iterator<Item = (&'a std::num::NonZero<u64>, &'a SharedNode)>,
+        nodes: impl IntoIterator<Item = MaybePersistedNode>,
     ) -> Result<(), FileIoError> {
         let mut guard = self.cache.lock().expect("poisoned lock");
-        for (addr, node) in nodes {
-            guard.put(*addr, node.clone());
+        for maybe_persisted_node in nodes {
+            // Since we know the node is in Allocated state, we can get both address and shared node
+            let (addr, shared_node) = maybe_persisted_node
+                .allocated_info()
+                .expect("node should be allocated");
+
+            guard.put(addr, shared_node);
+            // The node can now be read from the general cache, so we can delete the local copy
+            maybe_persisted_node.persist_at(addr);
         }
         Ok(())
     }
 
-    fn invalidate_cached_nodes<'a>(&self, addresses: impl Iterator<Item = &'a LinearAddress>) {
+    fn invalidate_cached_nodes<'a>(&self, nodes: impl Iterator<Item = &'a MaybePersistedNode>) {
         let mut guard = self.cache.lock().expect("poisoned lock");
-        for addr in addresses {
-            guard.pop(addr);
+        for addr in nodes.filter_map(MaybePersistedNode::as_linear_address) {
+            guard.pop(&addr);
         }
     }
 
@@ -299,11 +343,18 @@ impl Read for PredictiveReader<'_> {
     }
 }
 
+impl OffsetReader for PredictiveReader<'_> {
+    fn offset(&self) -> u64 {
+        self.offset - self.len as u64 + self.pos as u64
+    }
+}
+
 #[cfg(test)]
 mod test {
     #![expect(clippy::unwrap_used)]
 
     use super::*;
+    use nonzero_ext::nonzero;
     use std::io::Write;
     use tempfile::NamedTempFile;
 
@@ -318,12 +369,14 @@ mod test {
         // read the whole thing in
         let fb = FileBacked::new(
             path,
-            NonZero::new(10).unwrap(),
-            NonZero::new(10).unwrap(),
+            nonzero!(10usize),
+            nonzero!(10usize),
             false,
+            true,
             CacheReadStrategy::WritesOnly,
         )
         .unwrap();
+
         let mut reader = fb.stream_from(0).unwrap();
         let mut buf: String = String::new();
         assert_eq!(reader.read_to_string(&mut buf).unwrap(), 11);
@@ -358,12 +411,14 @@ mod test {
 
         let fb = FileBacked::new(
             path,
-            NonZero::new(10).unwrap(),
-            NonZero::new(10).unwrap(),
+            nonzero!(10usize),
+            nonzero!(10usize),
             false,
+            true,
             CacheReadStrategy::WritesOnly,
         )
         .unwrap();
+
         let mut reader = fb.stream_from(0).unwrap();
         let mut buf: String = String::new();
         assert_eq!(reader.read_to_string(&mut buf).unwrap(), 11000);

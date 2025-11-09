@@ -2,44 +2,38 @@
 // See the file LICENSE.md for licensing terms.
 
 use clap::Args;
-use std::str;
 
 use firewood::db::{Db, DbConfig};
 use firewood::v2::api::{self, Db as _, DbView as _};
 
+use crate::DatabasePath;
+
 #[derive(Debug, Args)]
 pub struct Options {
+    #[command(flatten)]
+    pub database: DatabasePath,
+
     /// The key to get the value for
     #[arg(required = true, value_name = "KEY", help = "Key to get")]
     pub key: String,
-
-    /// The database path (if no path is provided, return an error). Defaults to firewood.
-    #[arg(
-        long,
-        required = false,
-        value_name = "DB_NAME",
-        default_value_t = String::from("firewood"),
-        help = "Name of the database"
-    )]
-    pub db: String,
 }
 
-pub(super) async fn run(opts: &Options) -> Result<(), api::Error> {
+pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("get key value pair {opts:?}");
-    let cfg = DbConfig::builder().truncate(false);
+    let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
 
-    let db = Db::new(opts.db.clone(), cfg.build()).await?;
+    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
 
-    let hash = db.root_hash().await?;
+    let hash = db.root_hash()?;
 
     let Some(hash) = hash else {
         println!("Database is empty");
         return Ok(());
     };
 
-    let rev = db.revision(hash).await?;
+    let rev = db.revision(hash)?;
 
-    match rev.val(opts.key.as_bytes()).await {
+    match rev.val(opts.key.as_bytes()) {
         Ok(Some(val)) => {
             let s = String::from_utf8_lossy(val.as_ref());
             println!("{s:?}");

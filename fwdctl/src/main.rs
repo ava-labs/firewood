@@ -3,9 +3,12 @@
 
 #![doc = include_str!("../README.md")]
 
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 use firewood::v2::api;
 
+pub mod check;
 pub mod create;
 pub mod delete;
 pub mod dump;
@@ -14,9 +17,24 @@ pub mod graph;
 pub mod insert;
 pub mod root;
 
+#[derive(Clone, Debug, Parser)]
+pub struct DatabasePath {
+    /// The database path. Defaults to firewood.db
+    #[arg(
+        long = "db",
+        short = 'd',
+        required = false,
+        value_name = "DB_NAME",
+        default_value_os_t = default_db_path(),
+        help = "Name of the database"
+    )]
+    pub dbpath: PathBuf,
+}
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 #[command(propagate_version = true)]
+#[command(version = concat!(env!("CARGO_PKG_VERSION"), " (", env!("GIT_COMMIT_SHA"), ", ", env!("ETHHASH_FEATURE"), ")"))]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -49,24 +67,29 @@ enum Commands {
     Dump(dump::Options),
     /// Produce a dot file of the database
     Graph(graph::Options),
+    /// Runs the checker on the database
+    Check(check::Options),
 }
 
-#[tokio::main]
-async fn main() -> Result<(), api::Error> {
+fn main() -> Result<(), api::Error> {
     let cli = Cli::parse();
 
     env_logger::init_from_env(
-        env_logger::Env::default()
-            .filter_or(env_logger::DEFAULT_FILTER_ENV, cli.log_level.to_string()),
+        env_logger::Env::default().filter_or(env_logger::DEFAULT_FILTER_ENV, cli.log_level.clone()),
     );
 
     match &cli.command {
-        Commands::Create(opts) => create::run(opts).await,
-        Commands::Insert(opts) => insert::run(opts).await,
-        Commands::Get(opts) => get::run(opts).await,
-        Commands::Delete(opts) => delete::run(opts).await,
-        Commands::Root(opts) => root::run(opts).await,
-        Commands::Dump(opts) => dump::run(opts).await,
-        Commands::Graph(opts) => graph::run(opts).await,
+        Commands::Create(opts) => create::run(opts),
+        Commands::Insert(opts) => insert::run(opts),
+        Commands::Get(opts) => get::run(opts),
+        Commands::Delete(opts) => delete::run(opts),
+        Commands::Root(opts) => root::run(opts),
+        Commands::Dump(opts) => dump::run(opts),
+        Commands::Graph(opts) => graph::run(opts),
+        Commands::Check(opts) => check::run(opts),
     }
+}
+
+fn default_db_path() -> PathBuf {
+    PathBuf::from("firewood.db")
 }

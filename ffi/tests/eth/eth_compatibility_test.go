@@ -1,6 +1,10 @@
+// Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE.md for licensing terms.
+
 package eth
 
 import (
+	"context"
 	"encoding/binary"
 	"math/rand"
 	"path"
@@ -67,8 +71,6 @@ func newMerkleTriePair(t *testing.T) *merkleTriePair {
 
 	file := path.Join(t.TempDir(), "test.db")
 	cfg := firewood.DefaultConfig()
-	cfg.Create = true
-	cfg.MetricsPort = 0
 	db, err := firewood.New(file, cfg)
 	r.NoError(err)
 
@@ -77,7 +79,7 @@ func newMerkleTriePair(t *testing.T) *merkleTriePair {
 	tr, err := tdb.OpenTrie(ethRoot)
 	r.NoError(err)
 	t.Cleanup(func() {
-		r.NoError(db.Close())
+		r.NoError(db.Close(context.Background())) //nolint:usetesting // t.Context() will already be cancelled
 	})
 
 	return &merkleTriePair{
@@ -202,7 +204,7 @@ func (tr *merkleTriePair) deleteAccount(accountIndex int) {
 	})
 
 	tr.pendingFwdKeys = append(tr.pendingFwdKeys, accHash[:])
-	tr.pendingFwdVals = append(tr.pendingFwdVals, []byte{})
+	tr.pendingFwdVals = append(tr.pendingFwdVals, nil)
 }
 
 // openStorageTrie opens the storage trie for the provided account address.
@@ -291,10 +293,10 @@ func (tr *merkleTriePair) deleteStorage(accountIndex int, storageIndexInput uint
 	tr.require.NoError(str.DeleteStorage(addr, storageKey[:]))
 
 	tr.pendingFwdKeys = append(tr.pendingFwdKeys, append(accHash[:], storageKeyHash[:]...))
-	tr.pendingFwdVals = append(tr.pendingFwdVals, []byte{})
+	tr.pendingFwdVals = append(tr.pendingFwdVals, nil)
 }
 
-func FuzzTree(f *testing.F) {
+func FuzzFirewoodTree(f *testing.F) {
 	for randSeed := range int64(5) {
 		rand := rand.New(rand.NewSource(randSeed))
 		steps := make([]byte, 32)

@@ -20,12 +20,11 @@
 )]
 
 use std::fmt::Debug;
-use std::io::Read;
-use std::num::NonZero;
+use std::io::{Cursor, Read};
 use std::ops::Deref;
 use std::path::PathBuf;
 
-use crate::{CacheReadStrategy, LinearAddress, SharedNode};
+use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
 pub(super) mod filebacked;
 pub mod memory;
 
@@ -123,7 +122,7 @@ pub trait ReadableStorage: Debug + Sync + Send {
     /// # Returns
     ///
     /// A `Result` containing a boxed `Read` trait object, or an `Error` if the operation fails.
-    fn stream_from(&self, addr: u64) -> Result<Box<dyn Read + '_>, FileIoError>;
+    fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError>;
 
     /// Return the size of the underlying storage, in bytes
     fn size(&self) -> Result<u64, FileIoError>;
@@ -181,17 +180,34 @@ pub trait WritableStorage: ReadableStorage {
     /// The number of bytes written, or an error if the write operation fails.
     fn write(&self, offset: u64, object: &[u8]) -> Result<usize, FileIoError>;
 
-    /// Write all nodes to the cache (if any)
-    fn write_cached_nodes<'a>(
+    /// Write all nodes to the cache (if any) and persist them
+    fn write_cached_nodes(
         &self,
-        _nodes: impl Iterator<Item = (&'a NonZero<u64>, &'a SharedNode)>,
+        _nodes: impl IntoIterator<Item = MaybePersistedNode>,
     ) -> Result<(), FileIoError> {
         Ok(())
     }
 
     /// Invalidate all nodes that are part of a specific revision, as these will never be referenced again
-    fn invalidate_cached_nodes<'a>(&self, _addresses: impl Iterator<Item = &'a LinearAddress>) {}
+    fn invalidate_cached_nodes<'a>(
+        &self,
+        _addresses: impl Iterator<Item = &'a MaybePersistedNode>,
+    ) {
+    }
 
     /// Add a new entry to the freelist cache
     fn add_to_free_list_cache(&self, _addr: LinearAddress, _next: Option<LinearAddress>) {}
+}
+
+pub trait OffsetReader: Read {
+    fn offset(&self) -> u64;
+}
+
+impl<T> OffsetReader for Cursor<T>
+where
+    Cursor<T>: Read,
+{
+    fn offset(&self) -> u64 {
+        self.position()
+    }
 }
