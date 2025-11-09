@@ -15,7 +15,7 @@ use std::cmp::Ordering;
 use std::iter::FusedIterator;
 
 /// Represents an ongoing iteration over a node and its children.
-enum IterationNode {
+pub(crate) enum IterationNode {
     /// This node has not been returned yet.
     Unvisited {
         /// The key (as nibbles) of this node.
@@ -49,7 +49,7 @@ impl std::fmt::Debug for IterationNode {
 }
 
 #[derive(Debug)]
-enum NodeIterState {
+pub(crate) enum NodeIterState {
     /// The iterator state is lazily initialized when `poll_next` is called
     /// for the first time. The iteration start key is stored here.
     StartFromKey(Key),
@@ -181,7 +181,7 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
 impl<T: TrieReader> FusedIterator for MerkleNodeIter<'_, T> {}
 
 /// Returns the initial state for an iterator over the given `merkle` which starts at `key`.
-fn get_iterator_intial_state<T: TrieReader>(
+pub(crate) fn get_iterator_intial_state<T: TrieReader>(
     merkle: &T,
     key: &[u8],
 ) -> Result<NodeIterState, FileIoError> {
@@ -712,4 +712,3 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
 
     data.into_boxed_slice()
 }
-

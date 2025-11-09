@@ -14,6 +14,7 @@ use std::fmt;
 
 use crate::db::BatchOp;
 use crate::merkle::{Key, Value};
+use crate::iter::{IterationNode, NodeIterState, get_iterator_intial_state};
 // Local helpers adapted from the iterator module since we can't import private items.
 #[cfg(feature = "branch_factor_256")]
 fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(nibbles: Iter) -> Key {
@@ -1139,10 +1140,10 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
             }
             (Some(_root_left), None) => {
                 // Only tree_left has content - use single tree traversal for deletions
-                let initial_state = NodeStreamState::get_iterator_initial_state(tree_left, key)?;
+                let initial_state = get_iterator_intial_state(tree_left, key)?;
                 let iter_stack = match initial_state {
-                    NodeStreamState::StartFromKey(_) => vec![], // Should not happen
-                    NodeStreamState::Iterating { iter_stack } => {
+                    NodeIterState::StartFromKey(_) => vec![], // Should not happen
+                    NodeIterState::Iterating { iter_stack } => {
                         // Convert IterationNode to DiffIterationNode for left tree operations
                         iter_stack
                             .into_iter()
@@ -1156,10 +1157,10 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
             }
             (None, Some(_root_right)) => {
                 // Only tree_right has content - use single tree traversal for additions
-                let initial_state = NodeStreamState::get_iterator_initial_state(tree_right, key)?;
+                let initial_state = get_iterator_intial_state(tree_right, key)?;
                 let iter_stack = match initial_state {
-                    NodeStreamState::StartFromKey(_) => vec![], // Should not happen
-                    NodeStreamState::Iterating { iter_stack } => {
+                    NodeIterState::StartFromKey(_) => vec![], // Should not happen
+                    NodeIterState::Iterating { iter_stack } => {
                         // Convert IterationNode to DiffIterationNode for right tree operations
                         iter_stack
                             .into_iter()
