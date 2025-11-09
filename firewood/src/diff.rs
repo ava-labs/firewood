@@ -8,15 +8,58 @@
 #![allow(clippy::borrowed_box)] // Derivative generates &Box<T> patterns
 #![allow(clippy::needless_lifetimes)] // Derivative generates explicit lifetimes that clippy thinks are unnecessary
 
-use firewood_storage::{Child, FileIoError, Node, Path, SharedNode, TrieReader, logger::trace};
+use firewood_storage::{BranchNode, Child, FileIoError, Node, Path, PathComponent, SharedNode, TrieReader, logger::trace};
 use std::cmp::Ordering;
 use std::fmt;
 
 use crate::db::BatchOp;
-use crate::merkle::{Key, PrefixOverlap, Value};
-use crate::stream::{
-    IterationNode, NodeStreamState, as_enumerated_children_iter, key_from_nibble_iter,
-};
+use crate::merkle::{Key, Value};
+// Local helpers adapted from the iterator module since we can't import private items.
+#[cfg(feature = "branch_factor_256")]
+fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(nibbles: Iter) -> Key {
+    nibbles.collect()
+}
+
+#[cfg(not(feature = "branch_factor_256"))]
+fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
+    let mut data = Vec::with_capacity(nibbles.size_hint().0 / 2);
+    while let (Some(hi), Some(lo)) = (nibbles.next(), nibbles.next()) {
+        let byte = hi
+            .checked_shl(4)
+            .and_then(|v| v.checked_add(lo))
+            .expect("Nibble overflow while constructing byte");
+        data.push(byte);
+    }
+    data.into_boxed_slice()
+}
+
+fn as_enumerated_children_iter(
+    branch: &BranchNode,
+) -> impl Iterator<Item = (u8, Child)> + use<> {
+    branch
+        .children
+        .clone()
+        .into_iter()
+        .filter_map(|(pos, child)| child.map(|child| (pos.as_u8(), child)))
+}
+
+struct PrefixOverlap<'a> {
+    unique_a: &'a [u8],
+    unique_b: &'a [u8],
+}
+
+impl<'a> PrefixOverlap<'a> {
+    fn new(a: &'a [u8], b: &'a [u8]) -> Self {
+        let split_index = a
+            .iter()
+            .zip(b.iter())
+            .position(|(x, y)| x != y)
+            .unwrap_or_else(|| a.len().min(b.len()));
+        let unique_a = &a[split_index..];
+        let unique_b = &b[split_index..];
+        Self { unique_a, unique_b }
+    }
+}
 use derive_more::derive::Debug;
 
 // State structs for different types of diff iteration nodes
