@@ -1,10 +1,17 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::{fmt::Display, sync::Arc};
 use std::fmt::Formatter;
+use std::{fmt::Display, sync::Arc};
 
-#[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+#[cfg(feature = "mutex_swap")]
+use std::sync::Mutex;
+
+#[cfg(not(any(
+    feature = "arc_swap",
+    feature = "parking_lot_swap",
+    feature = "mutex_swap"
+)))]
 use std::sync::RwLock;
 
 #[cfg(feature = "arc_swap")]
@@ -49,10 +56,17 @@ use crate::{FileIoError, LinearAddress, NodeReader, SharedNode};
 #[cfg(feature = "parking_lot_swap")]
 pub struct MaybePersistedNode(Arc<RwLock<Arc<MaybePersisted>>>);
 #[derive(Clone)]
+#[cfg(feature = "mutex_swap")]
+pub struct MaybePersistedNode(Arc<Mutex<Arc<MaybePersisted>>>);
+#[derive(Clone)]
 #[cfg(feature = "arc_swap")]
 pub struct MaybePersistedNode(Arc<ArcSwap<MaybePersisted>>);
 #[derive(Clone)]
-#[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+#[cfg(not(any(
+    feature = "arc_swap",
+    feature = "parking_lot_swap",
+    feature = "mutex_swap"
+)))]
 pub struct MaybePersistedNode(Arc<RwLock<Arc<MaybePersisted>>>);
 
 impl std::fmt::Debug for MaybePersistedNode {
@@ -67,9 +81,26 @@ impl std::fmt::Debug for MaybePersistedNode {
             write!(f, "MaybePersistedNode({:?})", self.0.read().as_ref())
         }
 
-        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        #[cfg(feature = "mutex_swap")]
         {
-            write!(f, "MaybePersistedNode({:?})", self.0.read().expect("poisoned lock").as_ref())
+            write!(
+                f,
+                "MaybePersistedNode({:?})",
+                self.0.lock().expect("poisoned lock").as_ref()
+            )
+        }
+
+        #[cfg(not(any(
+            feature = "arc_swap",
+            feature = "parking_lot_swap",
+            feature = "mutex_swap"
+        )))]
+        {
+            write!(
+                f,
+                "MaybePersistedNode({:?})",
+                self.0.read().expect("poisoned lock").as_ref()
+            )
         }
     }
 }
@@ -86,9 +117,20 @@ impl PartialEq<MaybePersistedNode> for MaybePersistedNode {
             self.0.read().as_ref() == other.0.read().as_ref()
         }
 
-        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        #[cfg(feature = "mutex_swap")]
         {
-            self.0.read().expect("poisoned lock").as_ref() == other.0.read().expect("poisoned lock").as_ref()
+            self.0.lock().expect("poisoned lock").as_ref()
+                == other.0.lock().expect("poisoned lock").as_ref()
+        }
+
+        #[cfg(not(any(
+            feature = "arc_swap",
+            feature = "parking_lot_swap",
+            feature = "mutex_swap"
+        )))]
+        {
+            self.0.read().expect("poisoned lock").as_ref()
+                == other.0.read().expect("poisoned lock").as_ref()
         }
     }
 }
@@ -111,7 +153,18 @@ impl From<SharedNode> for MaybePersistedNode {
             ))))
         }
 
-        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        #[cfg(feature = "mutex_swap")]
+        {
+            MaybePersistedNode(Arc::new(Mutex::new(Arc::new(MaybePersisted::Unpersisted(
+                node,
+            )))))
+        }
+
+        #[cfg(not(any(
+            feature = "arc_swap",
+            feature = "parking_lot_swap",
+            feature = "mutex_swap"
+        )))]
         {
             MaybePersistedNode(Arc::new(RwLock::new(Arc::new(
                 MaybePersisted::Unpersisted(node),
@@ -124,23 +177,34 @@ impl From<LinearAddress> for MaybePersistedNode {
     fn from(address: LinearAddress) -> Self {
         #[cfg(feature = "arc_swap")]
         {
-            MaybePersistedNode(Arc::new(ArcSwap::new(Arc::new(
-                MaybePersisted::Persisted(address),
-            ))))
+            MaybePersistedNode(Arc::new(ArcSwap::new(Arc::new(MaybePersisted::Persisted(
+                address,
+            )))))
         }
 
         #[cfg(feature = "parking_lot_swap")]
         {
-            MaybePersistedNode(Arc::new(RwLock::new(Arc::new(
-                MaybePersisted::Persisted(address),
-            ))))
+            MaybePersistedNode(Arc::new(RwLock::new(Arc::new(MaybePersisted::Persisted(
+                address,
+            )))))
         }
 
-        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        #[cfg(feature = "mutex_swap")]
         {
-            MaybePersistedNode(Arc::new(RwLock::new(Arc::new(
-                MaybePersisted::Persisted(address),
-            ))))
+            MaybePersistedNode(Arc::new(Mutex::new(Arc::new(MaybePersisted::Persisted(
+                address,
+            )))))
+        }
+
+        #[cfg(not(any(
+            feature = "arc_swap",
+            feature = "parking_lot_swap",
+            feature = "mutex_swap"
+        )))]
+        {
+            MaybePersistedNode(Arc::new(RwLock::new(Arc::new(MaybePersisted::Persisted(
+                address,
+            )))))
         }
     }
 }
@@ -167,7 +231,21 @@ impl From<&MaybePersistedNode> for Option<LinearAddress> {
             }
         }
 
-        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        #[cfg(feature = "mutex_swap")]
+        {
+            match node.0.lock().expect("poisoned lock").as_ref() {
+                MaybePersisted::Unpersisted(_) => None,
+                MaybePersisted::Allocated(address, _) | MaybePersisted::Persisted(address) => {
+                    Some(*address)
+                }
+            }
+        }
+
+        #[cfg(not(any(
+            feature = "arc_swap",
+            feature = "parking_lot_swap",
+            feature = "mutex_swap"
+        )))]
         {
             match node.0.read().expect("poisoned lock").as_ref() {
                 MaybePersisted::Unpersisted(_) => None,
@@ -215,7 +293,21 @@ impl MaybePersistedNode {
             }
         }
 
-        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        #[cfg(feature = "mutex_swap")]
+        {
+            match self.0.lock().expect("poisoned lock").as_ref() {
+                MaybePersisted::Allocated(_, node) | MaybePersisted::Unpersisted(node) => {
+                    Ok(node.clone())
+                }
+                MaybePersisted::Persisted(address) => storage.read_node(*address),
+            }
+        }
+
+        #[cfg(not(any(
+            feature = "arc_swap",
+            feature = "parking_lot_swap",
+            feature = "mutex_swap"
+        )))]
         {
             match self.0.read().expect("poisoned lock").as_ref() {
                 MaybePersisted::Allocated(_, node) | MaybePersisted::Unpersisted(node) => {
@@ -253,7 +345,21 @@ impl MaybePersistedNode {
             }
         }
 
-        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        #[cfg(feature = "mutex_swap")]
+        {
+            match self.0.lock().expect("poisoned lock").as_ref() {
+                MaybePersisted::Unpersisted(_) => None,
+                MaybePersisted::Allocated(address, _) | MaybePersisted::Persisted(address) => {
+                    Some(*address)
+                }
+            }
+        }
+
+        #[cfg(not(any(
+            feature = "arc_swap",
+            feature = "parking_lot_swap",
+            feature = "mutex_swap"
+        )))]
         {
             match self.0.read().expect("poisoned lock").as_ref() {
                 MaybePersisted::Unpersisted(_) => None,
@@ -287,7 +393,19 @@ impl MaybePersistedNode {
             }
         }
 
-        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        #[cfg(feature = "mutex_swap")]
+        {
+            match self.0.lock().expect("poisoned lock").as_ref() {
+                MaybePersisted::Allocated(_, _) | MaybePersisted::Unpersisted(_) => Some(self),
+                MaybePersisted::Persisted(_) => None,
+            }
+        }
+
+        #[cfg(not(any(
+            feature = "arc_swap",
+            feature = "parking_lot_swap",
+            feature = "mutex_swap"
+        )))]
         {
             match self.0.read().expect("poisoned lock").as_ref() {
                 MaybePersisted::Allocated(_, _) | MaybePersisted::Unpersisted(_) => Some(self),
@@ -317,7 +435,16 @@ impl MaybePersistedNode {
             *self.0.write() = Arc::new(MaybePersisted::Persisted(addr));
         }
 
-        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        #[cfg(feature = "mutex_swap")]
+        {
+            *self.0.lock().expect("poisoned lock") = Arc::new(MaybePersisted::Persisted(addr));
+        }
+
+        #[cfg(not(any(
+            feature = "arc_swap",
+            feature = "parking_lot_swap",
+            feature = "mutex_swap"
+        )))]
         {
             *self.0.write().expect("poisoned lock") = Arc::new(MaybePersisted::Persisted(addr));
         }
@@ -363,7 +490,28 @@ impl MaybePersistedNode {
             *self.0.write() = Arc::new(MaybePersisted::Allocated(addr, node));
         }
 
-        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        #[cfg(feature = "mutex_swap")]
+        {
+            let node = {
+                let guard = self.0.lock().expect("poisoned lock");
+                match guard.as_ref() {
+                    MaybePersisted::Unpersisted(node) | MaybePersisted::Allocated(_, node) => {
+                        node.clone()
+                    }
+                    MaybePersisted::Persisted(_) => {
+                        unreachable!("Cannot allocate a node that is already persisted on disk");
+                    }
+                }
+            };
+            *self.0.lock().expect("poisoned lock") =
+                Arc::new(MaybePersisted::Allocated(addr, node));
+        }
+
+        #[cfg(not(any(
+            feature = "arc_swap",
+            feature = "parking_lot_swap",
+            feature = "mutex_swap"
+        )))]
         {
             let node = {
                 let guard = self.0.read().expect("poisoned lock");
@@ -376,7 +524,8 @@ impl MaybePersistedNode {
                     }
                 }
             };
-            *self.0.write().expect("poisoned lock") = Arc::new(MaybePersisted::Allocated(addr, node));
+            *self.0.write().expect("poisoned lock") =
+                Arc::new(MaybePersisted::Allocated(addr, node));
         }
     }
 
@@ -404,7 +553,19 @@ impl MaybePersistedNode {
             }
         }
 
-        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        #[cfg(feature = "mutex_swap")]
+        {
+            match self.0.lock().expect("poisoned lock").as_ref() {
+                MaybePersisted::Allocated(addr, node) => Some((*addr, node.clone())),
+                _ => None,
+            }
+        }
+
+        #[cfg(not(any(
+            feature = "arc_swap",
+            feature = "parking_lot_swap",
+            feature = "mutex_swap"
+        )))]
         {
             match self.0.read().expect("poisoned lock").as_ref() {
                 MaybePersisted::Allocated(addr, node) => Some((*addr, node.clone())),
@@ -429,7 +590,9 @@ impl Display for MaybePersistedNode {
         {
             match self.0.load().as_ref() {
                 MaybePersisted::Unpersisted(node) => write!(f, "M{:p}", (*node).as_ptr()),
-                MaybePersisted::Allocated(addr, node) => write!(f, "A{:p}@{addr}", (*node).as_ptr()),
+                MaybePersisted::Allocated(addr, node) => {
+                    write!(f, "A{:p}@{addr}", (*node).as_ptr())
+                }
                 MaybePersisted::Persisted(addr) => write!(f, "{addr}"),
             }
         }
@@ -438,16 +601,35 @@ impl Display for MaybePersistedNode {
         {
             match self.0.read().as_ref() {
                 MaybePersisted::Unpersisted(node) => write!(f, "M{:p}", (*node).as_ptr()),
-                MaybePersisted::Allocated(addr, node) => write!(f, "A{:p}@{addr}", (*node).as_ptr()),
+                MaybePersisted::Allocated(addr, node) => {
+                    write!(f, "A{:p}@{addr}", (*node).as_ptr())
+                }
                 MaybePersisted::Persisted(addr) => write!(f, "{addr}"),
             }
         }
 
-        #[cfg(not(any(feature = "arc_swap", feature = "parking_lot_swap")))]
+        #[cfg(feature = "mutex_swap")]
+        {
+            match self.0.lock().expect("poisoned lock").as_ref() {
+                MaybePersisted::Unpersisted(node) => write!(f, "M{:p}", (*node).as_ptr()),
+                MaybePersisted::Allocated(addr, node) => {
+                    write!(f, "A{:p}@{addr}", (*node).as_ptr())
+                }
+                MaybePersisted::Persisted(addr) => write!(f, "{addr}"),
+            }
+        }
+
+        #[cfg(not(any(
+            feature = "arc_swap",
+            feature = "parking_lot_swap",
+            feature = "mutex_swap"
+        )))]
         {
             match self.0.read().expect("poisoned lock").as_ref() {
                 MaybePersisted::Unpersisted(node) => write!(f, "M{:p}", (*node).as_ptr()),
-                MaybePersisted::Allocated(addr, node) => write!(f, "A{:p}@{addr}", (*node).as_ptr()),
+                MaybePersisted::Allocated(addr, node) => {
+                    write!(f, "A{:p}@{addr}", (*node).as_ptr())
+                }
                 MaybePersisted::Persisted(addr) => write!(f, "{addr}"),
             }
         }

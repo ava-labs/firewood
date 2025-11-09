@@ -65,6 +65,7 @@ ethhash = ["dep:rlp", "dep:sha3", "dep:bytes"]
 test_utils = ["dep:rand"]
 parking_lot_swap = ["dep:parking_lot"]
 arc_swap = []
+mutex_swap = []
 std_rwlock = []
 
 [[bench]]
