@@ -340,306 +340,153 @@ enum PathIteratorState<'a> {
     Exhausted,
 }
 
+/// Iterates over all nodes on the path to a given key starting from the root.
+///
+/// All nodes are branch nodes except possibly the last, which may be a leaf.
+/// All returned nodes have keys which are a prefix of the given key.
+/// If the given key is in the trie, the last node is at that key.
 #[derive(Debug)]
-/// An iterator of nodes on the path from the root to either a key, or the node immediately
-/// preceding it in the lexicographic traversal order (i.e. the node for which any descendant's
-/// key is an immediate predecessor to `key`).
-pub struct PathIterator<'a, T: TrieReader> {
+pub struct PathIterator<'a, 'b, T> {
+    state: PathIteratorState<'b>,
     merkle: &'a T,
-    state: PathIteratorState<'a>,
 }
 
-impl<T: TrieReader> PathIterator<'_, T> {
-    pub fn from_key(merkle: &T, key: &[u8]) -> Result<Self, FileIoError> {
-        if let Some(root) = merkle.root_node() {
-            Ok(Self {
-                merkle,
-                state: PathIteratorState::Iterating {
-                    matched_key: vec![],
-                    unmatched_key: NibblesIterator::new(key),
-                    node: root,
-                },
-            })
-        } else {
-            Ok(Self {
-                merkle,
+impl<'a, 'b, T: TrieReader> PathIterator<'a, 'b, T> {
+    pub(super) fn new(merkle: &'a T, key: &'b [u8]) -> Result<Self, FileIoError> {
+        let Some(root) = merkle.root_node() else {
+            return Ok(Self {
                 state: PathIteratorState::Exhausted,
-            })
-        }
+                merkle,
+            });
+        };
+
+        Ok(Self {
+            merkle,
+            state: PathIteratorState::Iterating {
+                matched_key: vec![],
+                unmatched_key: NibblesIterator::new(key),
+                node: root,
+            },
+        })
     }
 }
 
-impl<T: TrieReader> Iterator for PathIterator<'_, T> {
+impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
     type Item = Result<PathIterItem, FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        // Invariant: `node_key` is `node`'s key without its
-        // partial path (if any) at the end at the start of each call.
-        let (merkle, state) = (&self.merkle, &mut self.state);
+        // destructuring is necessary here because we need mutable access to `state`
+        // at the same time as immutable access to `merkle`.
+        let Self { state, merkle } = &mut *self;
+
         match state {
             PathIteratorState::Exhausted => None,
             PathIteratorState::Iterating {
                 matched_key,
                 unmatched_key,
                 node,
-            } => loop {
-                match node.as_ref() {
-                    Node::Leaf(node) => {
-                        let (partial, is_leaf_key_prefix_of_query_key) = {
-                            let partial = node.partial_path.iter().copied();
-                            let mut iter_copy = unmatched_key.clone();
-                            let (_, new_unmatched) =
-                                compare_partial_path(partial.clone(), iter_copy);
-                            (partial, new_unmatched.len() == 0)
-                        };
+            } => {
+                let partial_path = match &**node {
+                    Node::Branch(branch) => &branch.partial_path,
+                    Node::Leaf(leaf) => &leaf.partial_path,
+                };
 
-                        let key: PathBuf = matched_key.iter().copied().chain(partial).collect();
-                        let next_nibble = is_leaf_key_prefix_of_query_key
-                            .then_some(unmatched_key.next().and_then(|n| n.try_into().ok()))
-                            .flatten();
+                let (comparison, unmatched_key) =
+                    compare_partial_path(partial_path.iter(), unmatched_key);
 
-                        return Some(Ok(PathIterItem {
-                            key_nibbles: key,
-                            node: node.clone().into(),
-                            next_nibble,
-                        }));
+                match comparison {
+                    Ordering::Less | Ordering::Greater => {
+                        self.state = PathIteratorState::Exhausted;
+                        None
                     }
-                    Node::Branch(node) => {
-                        // If `node` matches `unmatched_key` up until `next_unmatched_key_nibble`,
-                        // then we construct 2 merges as follows:
-                        //   Path A: root to node (inode)
-                        //   Path B: root to predecessor of next_unmatched_key_nibble (jnode)
-                        // if exists.
-                        // Then this function is done.
-                        let (node_key, is_node_key_prefix_of_query_key) = {
-                            let partial = node.partial_path.iter().copied();
-                            let mut iter_copy = unmatched_key.clone();
-                            let (_, new_unmatched) =
-                                compare_partial_path(partial.clone(), iter_copy);
-                            (
-                                matched_key.iter().copied().chain(partial).collect(),
-                                new_unmatched.len() == 0,
-                            )
-                        };
+                    Ordering::Equal => {
+                        matched_key.extend(partial_path.iter());
+                        let node_key = PathBuf::path_from_unpacked_bytes(matched_key)
+                            .expect("valid components");
 
-                        if is_node_key_prefix_of_query_key {
-                            // `node` is a predecessor of `key` or equal to it
-                            // It needs to be returned first
-                            let next_unmatched_key_nibble =
-                                PathComponent::try_new(unmatched_key.next().expect("nibble")).expect("valid nibble");
-                            let saved_node = node.clone().into();
-                            let saved_node_key = node_key.clone();
-                            if let Some(Some(child)) =
-                                node.children.get(next_unmatched_key_nibble).copied()
-                            {
-                                *state = PathIteratorState::Iterating {
-                                    matched_key: matched_key
-                                        .iter()
-                                        .copied()
-                                        .chain(node.partial_path.iter().copied())
-                                        .chain(Some(next_unmatched_key_nibble.as_u8()))
-                                        .collect(),
-                                    unmatched_key: unmatched_key.clone(),
-                                    node: match child {
-                                        Child::Node(child) => child.clone().into(),
-                                        Child::AddressWithHash(addr, _) => merkle.read_node(addr).expect("read node"),
-                                        Child::MaybePersisted(maybe, _) => maybe.as_shared_node(merkle).expect("maybe persisted"),
-                                    },
-                                };
-
-                                return Some(Ok(PathIterItem {
-                                    key_nibbles: saved_node_key,
-                                    node: saved_node,
-                                    next_nibble: Some(next_unmatched_key_nibble),
-                                }));
+                        match &**node {
+                            Node::Leaf(_) => {
+                                // We're at a leaf so we're done.
+                                let node = node.clone();
+                                self.state = PathIteratorState::Exhausted;
+                                Some(Ok(PathIterItem {
+                                    key_nibbles: node_key,
+                                    node,
+                                    next_nibble: None,
+                                }))
                             }
-
-                            // Child doesn't exist -> find predecessor
-                            // loop over node.children in reverse order to find j
-                            let j = node
-                                .children
-                                .clone()
-                                .into_iter()
-                                .filter_map(|(pos, child)| child.map(|_| pos))
-                                .rev()
-                                .find(|pos| *pos < next_unmatched_key_nibble);
-                            match j {
-                                None => {
-                                    // No predecessor exists -> inode is the predecessor for the entire subtree.
-                                    *state = PathIteratorState::Exhausted;
+                            Node::Branch(branch) => {
+                                // We're at a branch whose key is a prefix of `key`.
+                                // Find its child (if any) that matches the next nibble in the key.
+                                let saved_node = node.clone();
+                                let Some(next_unmatched_key_nibble) = unmatched_key.next() else {
+                                    // We're at the node at `key` so we're done.
+                                    self.state = PathIteratorState::Exhausted;
                                     return Some(Ok(PathIterItem {
                                         key_nibbles: node_key,
-                                        node: node.clone().into(),
-                                        next_nibble: Some(next_unmatched_key_nibble),
+                                        node: saved_node,
+                                        next_nibble: None,
                                     }));
-                                }
-                                Some(j) => {
-                                    // Walk into the subtree on `j` until it reaches that subtree's successor.
-                                    let mut node = match &node.children[j] {
-                                        Some(Child::Node(child)) => child.clone().into(),
-                                        Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr).expect("read node"),
-                                        Some(Child::MaybePersisted(maybe, _)) => maybe.as_shared_node(merkle).expect("maybe persisted"),
-                                        None => unreachable!("j is always set to a child that exists"),
-                                    };
-
-                                    loop {
-                                        match node.as_ref() {
-                                            Node::Leaf(leaf) => {
-                                                *state = PathIteratorState::Exhausted;
-                                                return Some(Ok(PathIterItem {
-                                                    key_nibbles: matched_key
-                                                        .iter()
-                                                        .copied()
-                                                        .chain(node_key.iter().copied())
-                                                        .chain(std::iter::once(j.as_u8()))
-                                                        .chain(leaf.partial_path.iter().copied())
-                                                        .collect(),
-                                                    node,
-                                                    next_nibble: None,
-                                                }));
-                                            }
-                                            Node::Branch(branch) => {
-                                                // if this branch has a value, then we can return it immediately
-                                                if branch.value.is_some() {
-                                                    let saved_node = node.clone();
-                                                    let exact_key = matched_key
-                                                        .iter()
-                                                        .copied()
-                                                        .chain(node_key.iter().copied())
-                                                        .chain(std::iter::once(j.as_u8()))
-                                                        .chain(branch.partial_path.iter().copied())
-                                                        .collect();
-                                                    *state = PathIteratorState::Iterating {
-                                                        matched_key: exact_key.clone().into_vec(),
-                                                        unmatched_key: NibblesIterator::new(&[]),
-                                                        node,
-                                                    };
-                                                    return Some(Ok(PathIterItem {
-                                                        key_nibbles: exact_key,
-                                                        node: saved_node,
-                                                        next_nibble: None,
-                                                    }));
-                                                }
-
-                                                // If there is no value in this branch, we want the last child in the subtree.
-                                                // loop over branch.children in reverse order to find the last child.
-                                                if let Some((pos, child)) = branch
-                                                    .children
-                                                    .clone()
-                                                    .into_iter()
-                                                    .filter_map(|(pos, child)| child.map(|child| (pos, child)))
-                                                    .rev()
-                                                    .next()
-                                                {
-                                                    let saved_node = node.clone();
-                                                    let node_key = matched_key
-                                                        .iter()
-                                                        .copied()
-                                                        .chain(node_key.iter().copied())
-                                                        .chain(std::iter::once(j.as_u8()))
-                                                        .chain(branch.partial_path.iter().copied())
-                                                        .collect();
-
-                                                    let child = match child {
-                                                        Child::Node(child) => child.clone().into(),
-                                                        Child::AddressWithHash(addr, _) => merkle.read_node(addr).expect("read node"),
-                                                        Child::MaybePersisted(maybe, _) => maybe.as_shared_node(merkle).expect("maybe persisted"),
-                                                    };
-
-                                                    matched_key.extend(node_key.iter().copied());
-                                                    matched_key.push(pos.as_u8());
-                                                    *node = child;
-
-                                                    Some(Ok(PathIterItem {
-                                                        key_nibbles: node_key,
-                                                        node: saved_node,
-                                                        next_nibble: Some(pos),
-                                                    }))
-                                                } else {
-                                                    unreachable!("the branch at `node_key` must have at least one child");
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        } else {
-                            // `node` does not match `unmatched_key_nibbles`. This implies that `node` is either
-                            // lexicographically smaller or larger than the key.
-                            // Continuing reading path for predecessor of `key`.
-                            let saved_node = node.clone().into();
-                            let next_unmatched_key_nibble =
-                                PathComponent::try_new(unmatched_key.next().expect("nibble")).expect("valid nibble");
-                            let saved_key = matched_key
-                                .iter()
-                                .copied()
-                                .chain(node.partial_path.iter().copied())
-                                .collect();
-
-                            let (comparison, new_unmatched) = compare_partial_path(
-                                node.partial_path.iter(),
-                                unmatched_key.clone(),
-                            );
-                            let child_result = match comparison {
-                                Ordering::Less => {
-                                    // Found the predecessor. Keep walking down the predecessor.
-                                    // The predecessor will either be a matching child, if exists, or
-                                    // j = largest child that is < `next_unmatched_key_nibble`.
-                                    unmatched_key.clone().next();
-
-                                    let mut pos = next_unmatched_key_nibble;
-                                    'lp: loop {
-                                        pos = PathComponent::try_new(pos.as_u8().saturating_sub(1)).expect("valid nibble");
-                                        if pos.as_u8() == 0 {
-                                            break 'lp;
-                                        }
-                                        if let Some(Some(child)) = node.children.get(pos).copied() {
-                                            break Some((pos, child));
-                                        }
-                                    }
-                                }
-                                Ordering::Greater => {
-                                    // Next step to find the predecessor of `node`.
-                                    // j = largest child that is < `next_unmatched_key_nibble`.
-                                    let mut pos = PathComponent::try_new(0x10).expect("valid nibble");
-                                    'lp: loop {
-                                        pos = PathComponent::try_new(pos.as_u8().saturating_sub(1)).expect("valid nibble");
-                                        if pos.as_u8() == 0 {
-                                            break 'lp;
-                                        }
-                                        if let Some(Some(child)) = node.children.get(pos).copied() {
-                                            break Some((pos, child));
-                                        }
-                                    }
-                                }
-                                Ordering::Equal => unreachable!("covered in is_node_key_prefix_of_query_key"),
-                            };
-
-                            if let Some((j, child)) = child_result {
-                                // Walk into the subtree on `j` until it reaches that subtree's successor.
-                                let child = match child {
-                                    Child::Node(child) => child.clone().into(),
-                                    Child::AddressWithHash(addr, _) => merkle.read_node(addr).expect("read node"),
-                                    Child::MaybePersisted(maybe, _) => maybe.as_shared_node(merkle).expect("maybe persisted"),
                                 };
+                                let next_unmatched_key_nibble =
+                                    PathComponent::try_new(next_unmatched_key_nibble)
+                                        .expect("valid nibble");
 
-                                matched_key.push(j.as_u8());
-                                *unmatched_key = new_unmatched;
-                                *node = child;
+                                let child = &branch.children[next_unmatched_key_nibble];
+                                match child {
+                                    None => {
+                                        // There's no child at the index of the next nibble in the key.
+                                        // There's no node at `key` in this trie so we're done.
+                                        self.state = PathIteratorState::Exhausted;
+                                        Some(Ok(PathIterItem {
+                                            key_nibbles: node_key,
+                                            node: saved_node,
+                                            next_nibble: None,
+                                        }))
+                                    }
+                                    Some(Child::AddressWithHash(child_addr, _)) => {
+                                        let child = match merkle.read_node(*child_addr) {
+                                            Ok(child) => child,
+                                            Err(e) => return Some(Err(e)),
+                                        };
 
-                                Some(Ok(PathIterItem {
-                                    key_nibbles: saved_key,
-                                    node: saved_node,
-                                    next_nibble: Some(next_unmatched_key_nibble),
-                                }))
-                            } else {
-                                // Predecessor does not exist.
-                                *state = PathIteratorState::Exhausted;
-                                Some(Ok(PathIterItem {
-                                    key_nibbles: saved_key,
-                                    node: saved_node,
-                                    next_nibble: Some(next_unmatched_key_nibble),
-                                }))
+                                        matched_key.push(next_unmatched_key_nibble.as_u8());
+
+                                        *node = child;
+
+                                        Some(Ok(PathIterItem {
+                                            key_nibbles: node_key,
+                                            node: saved_node,
+                                            next_nibble: Some(next_unmatched_key_nibble),
+                                        }))
+                                    }
+                                    Some(Child::Node(child)) => {
+                                        matched_key.push(next_unmatched_key_nibble.as_u8());
+
+                                        *node = child.clone().into();
+
+                                        Some(Ok(PathIterItem {
+                                            key_nibbles: node_key,
+                                            node: saved_node,
+                                            next_nibble: Some(next_unmatched_key_nibble),
+                                        }))
+                                    }
+                                    Some(Child::MaybePersisted(maybe_persisted, _)) => {
+                                        let child = match maybe_persisted.as_shared_node(merkle) {
+                                            Ok(child) => child,
+                                            Err(e) => return Some(Err(e)),
+                                        };
+
+                                        matched_key.push(next_unmatched_key_nibble.as_u8());
+                                        *node = child;
+
+                                        Some(Ok(PathIterItem {
+                                            key_nibbles: node_key,
+                                            node: saved_node,
+                                            next_nibble: Some(next_unmatched_key_nibble),
+                                        }))
+                                    }
+                                }
                             }
                         }
                     }
@@ -711,4 +558,806 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
     }
 
     data.into_boxed_slice()
+}
+
+#[cfg(test)]
+#[expect(clippy::indexing_slicing, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::merkle::Merkle;
+    use firewood_storage::{ImmutableProposal, MemStore, MutableProposal, NodeStore};
+    use std::sync::Arc;
+    use test_case::test_case;
+
+    macro_rules! path {
+        ($($elem:expr),* $(,)?)=>{
+            [
+                $(
+                    PathComponent::ALL[$elem],
+                )*
+            ]
+        };
+    }
+
+    pub(super) fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
+        let memstore = MemStore::new(vec![]);
+        let memstore = Arc::new(memstore);
+        let nodestore = NodeStore::new_empty_proposal(memstore);
+        Merkle::from(nodestore)
+    }
+
+    #[test_case(&[]; "empty key")]
+    #[test_case(&[1]; "non-empty key")]
+    fn path_iterate_empty_merkle_empty_key(key: &[u8]) {
+        let merkle = create_test_merkle();
+        let mut iter = merkle.path_iter(key).unwrap();
+        assert!(iter.next().is_none());
+    }
+
+    #[test_case(&[],false; "empty key")]
+    #[test_case(&[0xBE,0xE0],false; "prefix of singleton key")]
+    #[test_case(&[0xBE, 0xEF],true; "match singleton key")]
+    #[test_case(&[0xBE, 0xEF,0x10],true; "suffix of singleton key")]
+    #[test_case(&[0xF0],false; "no key nibbles match singleton key")]
+    fn path_iterate_singleton_merkle(key: &[u8], should_yield_elt: bool) {
+        let mut merkle = create_test_merkle();
+
+        merkle.insert(&[0xBE, 0xEF], Box::new([0x42])).unwrap();
+
+        let mut iter = merkle.path_iter(key).unwrap();
+        let node = match iter.next() {
+            Some(Ok(item)) => item,
+            Some(Err(e)) => panic!("{e:?}"),
+            None => {
+                assert!(!should_yield_elt);
+                return;
+            }
+        };
+
+        assert!(should_yield_elt);
+        #[cfg(not(feature = "branch_factor_256"))]
+        assert_eq!(*node.key_nibbles, path![0x0B, 0x0E, 0x0E, 0x0F]);
+        #[cfg(feature = "branch_factor_256")]
+        assert_eq!(*node.key_nibbles, path![0xBE, 0xEF]);
+        assert_eq!(node.node.as_leaf().unwrap().value, Box::from([0x42]));
+        assert_eq!(node.next_nibble, None);
+
+        assert!(iter.next().is_none());
+    }
+
+    #[test_case(&[0x00, 0x00, 0x00, 0xFF]; "leaf key")]
+    #[test_case(&[0x00, 0x00, 0x00, 0xFF, 0x01]; "leaf key suffix")]
+    fn path_iterate_non_singleton_merkle_seek_leaf(key: &[u8]) {
+        let merkle = created_populated_merkle();
+
+        let mut iter = merkle.path_iter(key).unwrap();
+
+        let node = match iter.next() {
+            Some(Ok(node)) => node,
+            Some(Err(e)) => panic!("{e:?}"),
+            None => panic!("unexpected end of iterator"),
+        };
+        #[cfg(not(feature = "branch_factor_256"))]
+        assert_eq!(*node.key_nibbles, path![0x00, 0x00]);
+        #[cfg(feature = "branch_factor_256")]
+        assert_eq!(*node.key_nibbles, path![0]);
+        assert_eq!(node.next_nibble, Some(PathComponent::ALL[0]));
+        assert!(node.node.as_branch().unwrap().value.is_none());
+
+        let node = match iter.next() {
+            Some(Ok(node)) => node,
+            Some(Err(e)) => panic!("{e:?}"),
+            None => panic!("unexpected end of iterator"),
+        };
+        #[cfg(not(feature = "branch_factor_256"))]
+        assert_eq!(*node.key_nibbles, path![0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        #[cfg(feature = "branch_factor_256")]
+        assert_eq!(*node.key_nibbles, path![0, 0, 0]);
+
+        assert_eq!(node.next_nibble, PathComponent::ALL.last().copied());
+
+        assert_eq!(
+            node.node.as_branch().unwrap().value,
+            Some(vec![0x00, 0x00, 0x00].into_boxed_slice()),
+        );
+
+        let node = match iter.next() {
+            Some(Ok(node)) => node,
+            Some(Err(e)) => panic!("{e:?}"),
+            None => panic!("unexpected end of iterator"),
+        };
+        #[cfg(not(feature = "branch_factor_256"))]
+        assert_eq!(
+            *node.key_nibbles,
+            path![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x0F]
+        );
+        assert_eq!(node.next_nibble, None);
+        assert_eq!(
+            node.node.as_leaf().unwrap().value,
+            Box::from([0x00, 0x00, 0x00, 0x0FF])
+        );
+
+        assert!(iter.next().is_none());
+    }
+
+    #[test_case(&[0x00, 0x00, 0x00]; "branch key")]
+    #[test_case(&[0x00, 0x00, 0x00, 0x10]; "branch key suffix (but not a leaf key)")]
+    fn path_iterate_non_singleton_merkle_seek_branch(key: &[u8]) {
+        let merkle = created_populated_merkle();
+
+        let mut iter = merkle.path_iter(key).unwrap();
+
+        let node = match iter.next() {
+            Some(Ok(node)) => node,
+            Some(Err(e)) => panic!("{e:?}"),
+            None => panic!("unexpected end of iterator"),
+        };
+        // TODO: make this branch factor 16 compatible
+        #[cfg(not(feature = "branch_factor_256"))]
+        assert_eq!(*node.key_nibbles, path![0x00, 0x00]);
+
+        assert!(node.node.as_branch().unwrap().value.is_none());
+        assert_eq!(node.next_nibble, Some(PathComponent::ALL[0]));
+
+        let node = match iter.next() {
+            Some(Ok(node)) => node,
+            Some(Err(e)) => panic!("{e:?}"),
+            None => panic!("unexpected end of iterator"),
+        };
+        #[cfg(not(feature = "branch_factor_256"))]
+        assert_eq!(*node.key_nibbles, path![0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
+        assert_eq!(
+            node.node.as_branch().unwrap().value,
+            Some(vec![0x00, 0x00, 0x00].into_boxed_slice()),
+        );
+        assert_eq!(node.next_nibble, None);
+
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn key_value_iterate_empty() {
+        let merkle = create_test_merkle();
+        let iter = merkle.key_value_iter_from_key(b"x".to_vec().into_boxed_slice());
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn node_iterate_empty() {
+        let merkle = create_test_merkle();
+        let iter = MerkleNodeIter::new(merkle.nodestore(), Box::new([]));
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn node_iterate_root_only() {
+        let mut merkle = create_test_merkle();
+
+        merkle.insert(&[0x00], Box::new([0x00])).unwrap();
+
+        let mut iter = MerkleNodeIter::new(merkle.nodestore(), Box::new([]));
+
+        let (key, node) = iter.next().unwrap().unwrap();
+
+        assert_eq!(key, vec![0x00].into_boxed_slice());
+        assert_eq!(node.as_leaf().unwrap().value.to_vec(), vec![0x00]);
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    /// Returns a new [Merkle] with the following key-value pairs:
+    /// Note each hex symbol in the keys below is a nibble (not two nibbles).
+    /// Each hex symbol in the values below is a byte.
+    /// 000000 --> 000000
+    /// 00000001 -->00000001
+    /// 000000FF --> 000000FF
+    /// 00D0D0 --> 00D0D0
+    /// 00FF --> 00FF
+    /// structure:
+    ///        00 <-- branch with no value
+    ///     0/  D|   \F
+    ///   000   0D0   F <-- leaf with no partial path
+    ///  0/ \F
+    ///  1   F
+    ///
+    /// The number next to each branch is the position of the child in the branch's children array.
+    fn created_populated_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
+        let mut merkle = create_test_merkle();
+
+        merkle
+            .insert(&[0x00, 0x00, 0x00], Box::new([0x00, 0x00, 0x00]))
+            .unwrap();
+        merkle
+            .insert(
+                &[0x00, 0x00, 0x00, 0x01],
+                Box::new([0x00, 0x00, 0x00, 0x01]),
+            )
+            .unwrap();
+        merkle
+            .insert(
+                &[0x00, 0x00, 0x00, 0xFF],
+                Box::new([0x00, 0x00, 0x00, 0xFF]),
+            )
+            .unwrap();
+        merkle
+            .insert(&[0x00, 0xD0, 0xD0], Box::new([0x00, 0xD0, 0xD0]))
+            .unwrap();
+        merkle
+            .insert(&[0x00, 0xFF], Box::new([0x00, 0xFF]))
+            .unwrap();
+        merkle
+    }
+
+    #[test]
+    fn node_iterator_no_start_key() {
+        let merkle = created_populated_merkle();
+
+        let mut iter = MerkleNodeIter::new(merkle.nodestore(), Box::new([]));
+
+        // Covers case of branch with no value
+        let (key, node) = iter.next().unwrap().unwrap();
+        assert_eq!(key, vec![0x00].into_boxed_slice());
+        let node = node.as_branch().unwrap();
+        assert!(node.value.is_none());
+
+        // Covers case of branch with value
+        let (key, node) = iter.next().unwrap().unwrap();
+        assert_eq!(key, vec![0x00, 0x00, 0x00].into_boxed_slice());
+        let node = node.as_branch().unwrap();
+        assert_eq!(node.value.clone().unwrap().to_vec(), vec![0x00, 0x00, 0x00]);
+
+        // Covers case of leaf with partial path
+        let (key, node) = iter.next().unwrap().unwrap();
+        assert_eq!(key, vec![0x00, 0x00, 0x00, 0x01].into_boxed_slice());
+        let node = node.as_leaf().unwrap();
+        assert_eq!(node.clone().value.to_vec(), vec![0x00, 0x00, 0x00, 0x01]);
+
+        let (key, node) = iter.next().unwrap().unwrap();
+        assert_eq!(key, vec![0x00, 0x00, 0x00, 0xFF].into_boxed_slice());
+        let node = node.as_leaf().unwrap();
+        assert_eq!(node.clone().value.to_vec(), vec![0x00, 0x00, 0x00, 0xFF]);
+
+        let (key, node) = iter.next().unwrap().unwrap();
+        assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
+        let node = node.as_leaf().unwrap();
+        assert_eq!(node.clone().value.to_vec(), vec![0x00, 0xD0, 0xD0]);
+
+        // Covers case of leaf with no partial path
+        let (key, node) = iter.next().unwrap().unwrap();
+        assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
+        let node = node.as_leaf().unwrap();
+        assert_eq!(node.clone().value.to_vec(), vec![0x00, 0xFF]);
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn node_iterator_start_key_between_nodes() {
+        let merkle = created_populated_merkle();
+
+        let mut iter = MerkleNodeIter::new(
+            merkle.nodestore(),
+            vec![0x00, 0x00, 0x01].into_boxed_slice(),
+        );
+
+        let (key, node) = iter.next().unwrap().unwrap();
+        assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
+        assert_eq!(
+            node.as_leaf().unwrap().clone().value.to_vec(),
+            vec![0x00, 0xD0, 0xD0]
+        );
+
+        // Covers case of leaf with no partial path
+        let (key, node) = iter.next().unwrap().unwrap();
+        assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
+        assert_eq!(
+            node.as_leaf().unwrap().clone().value.to_vec(),
+            vec![0x00, 0xFF]
+        );
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn node_iterator_start_key_on_node() {
+        let merkle = created_populated_merkle();
+
+        let mut iter = MerkleNodeIter::new(
+            merkle.nodestore(),
+            vec![0x00, 0xD0, 0xD0].into_boxed_slice(),
+        );
+
+        let (key, node) = iter.next().unwrap().unwrap();
+        assert_eq!(key, vec![0x00, 0xD0, 0xD0].into_boxed_slice());
+        assert_eq!(
+            node.as_leaf().unwrap().clone().value.to_vec(),
+            vec![0x00, 0xD0, 0xD0]
+        );
+
+        // Covers case of leaf with no partial path
+        let (key, node) = iter.next().unwrap().unwrap();
+        assert_eq!(key, vec![0x00, 0xFF].into_boxed_slice());
+        assert_eq!(
+            node.as_leaf().unwrap().clone().value.to_vec(),
+            vec![0x00, 0xFF]
+        );
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn node_iterator_start_key_after_last_key() {
+        let merkle = created_populated_merkle();
+
+        let iter = MerkleNodeIter::new(merkle.nodestore(), vec![0xFF].into_boxed_slice());
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test_case(Some(&[u8::MIN]); "Starting at first key")]
+    #[test_case(None; "No start specified")]
+    #[test_case(Some(&[128u8]); "Starting in middle")]
+    #[test_case(Some(&[u8::MAX]); "Starting at last key")]
+    fn key_value_iterate_many(start: Option<&[u8]>) {
+        let mut merkle = create_test_merkle();
+
+        // insert all values from u8::MIN to u8::MAX, with the key and value the same
+        for k in u8::MIN..=u8::MAX {
+            merkle.insert(&[k], Box::new([k])).unwrap();
+        }
+
+        let mut iter = match start {
+            Some(start) => merkle.key_value_iter_from_key(start.to_vec().into_boxed_slice()),
+            None => merkle.key_value_iter(),
+        };
+
+        // we iterate twice because we should get a None then start over
+        #[expect(clippy::indexing_slicing)]
+        for k in start.map(|r| r[0]).unwrap_or_default()..=u8::MAX {
+            let next = iter.next().map(|kv| {
+                let (k, v) = kv.unwrap();
+                assert_eq!(&*k, &*v);
+                k
+            });
+
+            assert_eq!(next, Some(vec![k].into_boxed_slice()));
+        }
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn key_value_fused_empty() {
+        let merkle = create_test_merkle();
+        assert_iterator_is_exhausted(merkle.key_value_iter());
+    }
+
+    #[test]
+    fn key_value_table_test() {
+        let mut merkle = create_test_merkle();
+
+        let max: u8 = 100;
+        // Insert key-values in reverse order to ensure iterator
+        // doesn't just return the keys in insertion order.
+        for i in (0..=max).rev() {
+            for j in (0..=max).rev() {
+                let key = &[i, j];
+                let value = Box::new([i, j]);
+
+                merkle.insert(key, value).unwrap();
+            }
+        }
+
+        // Test with no start key
+        let mut iter = merkle.key_value_iter();
+        for i in 0..=max {
+            for j in 0..=max {
+                let expected_key = vec![i, j];
+                let expected_value = vec![i, j];
+
+                assert_eq!(
+                    iter.next().unwrap().unwrap(),
+                    (
+                        expected_key.into_boxed_slice(),
+                        expected_value.into_boxed_slice(),
+                    ),
+                    "i: {i}, j: {j}",
+                );
+            }
+        }
+        assert_iterator_is_exhausted(iter);
+
+        // Test with start key
+        for i in 0..=max {
+            let mut iter = merkle.key_value_iter_from_key(vec![i].into_boxed_slice());
+            for j in 0..=max {
+                let expected_key = vec![i, j];
+                let expected_value = vec![i, j];
+                assert_eq!(
+                    iter.next().unwrap().unwrap(),
+                    (
+                        expected_key.into_boxed_slice(),
+                        expected_value.into_boxed_slice(),
+                    ),
+                    "i: {i}, j: {j}",
+                );
+            }
+            if i == max {
+                assert_iterator_is_exhausted(iter);
+            } else {
+                assert_eq!(
+                    iter.next().unwrap().unwrap(),
+                    (
+                        vec![i + 1, 0].into_boxed_slice(),
+                        vec![i + 1, 0].into_boxed_slice(),
+                    ),
+                    "i: {i}",
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn key_value_fused_full() {
+        let mut merkle = create_test_merkle();
+
+        let last = vec![0x00, 0x00, 0x00];
+
+        let mut key_values = vec![vec![0x00], vec![0x00, 0x00], last.clone()];
+
+        // branchs with paths (or extensions) will be present as well as leaves with siblings
+        for kv in u8::MIN..=u8::MAX {
+            let mut last = last.clone();
+            last.push(kv);
+            key_values.push(last);
+        }
+
+        for kv in &key_values {
+            merkle.insert(kv, kv.clone().into_boxed_slice()).unwrap();
+        }
+
+        let mut iter = merkle.key_value_iter();
+
+        for kv in &key_values {
+            let next = iter.next().unwrap().unwrap();
+            assert_eq!(&*next.0, &*next.1);
+            assert_eq!(&*next.1, &**kv);
+        }
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn key_value_root_with_empty_value() {
+        let mut merkle = create_test_merkle();
+
+        let key = vec![].into_boxed_slice();
+        let value = [0x00];
+
+        merkle.insert(&key, value.into()).unwrap();
+
+        let mut iter = merkle.key_value_iter();
+
+        assert_eq!(iter.next().unwrap().unwrap(), (key, value.into()));
+    }
+
+    #[test]
+    fn key_value_get_branch_and_leaf() {
+        let mut merkle = create_test_merkle();
+
+        let first_leaf = [0x00, 0x00];
+        let second_leaf = [0x00, 0x0f];
+        let branch = [0x00];
+
+        merkle.insert(&first_leaf, first_leaf.into()).unwrap();
+        merkle.insert(&second_leaf, second_leaf.into()).unwrap();
+
+        merkle.insert(&branch, branch.into()).unwrap();
+
+        let immutable_merkle: Merkle<NodeStore<Arc<ImmutableProposal>, _>> =
+            merkle.try_into().unwrap();
+        println!("{}", immutable_merkle.dump_to_string().unwrap());
+        merkle = immutable_merkle.fork().unwrap();
+
+        let mut iter = merkle.key_value_iter();
+
+        assert_eq!(
+            iter.next().unwrap().unwrap(),
+            (branch.into(), branch.into())
+        );
+
+        assert_eq!(
+            iter.next().unwrap().unwrap(),
+            (first_leaf.into(), first_leaf.into())
+        );
+
+        assert_eq!(
+            iter.next().unwrap().unwrap(),
+            (second_leaf.into(), second_leaf.into())
+        );
+    }
+
+    #[test]
+    fn key_value_start_at_key_not_in_trie() {
+        let mut merkle = create_test_merkle();
+
+        let first_key = 0x00;
+        let intermediate = 0x80;
+
+        assert!(first_key < intermediate);
+
+        let key_values = [
+            vec![first_key],
+            vec![intermediate, intermediate],
+            vec![intermediate, intermediate, intermediate],
+        ];
+        assert!(key_values[0] < key_values[1]);
+        assert!(key_values[1] < key_values[2]);
+
+        for key in &key_values {
+            merkle.insert(key, key.clone().into_boxed_slice()).unwrap();
+        }
+
+        let mut iter = merkle.key_value_iter_from_key(vec![intermediate].into_boxed_slice());
+
+        let first_expected = key_values[1].as_slice();
+        let first = iter.next().unwrap().unwrap();
+
+        assert_eq!(&*first.0, &*first.1);
+        assert_eq!(&*first.1, first_expected);
+
+        let second_expected = key_values[2].as_slice();
+        let second = iter.next().unwrap().unwrap();
+
+        assert_eq!(&*second.0, &*second.1);
+        assert_eq!(&*second.1, second_expected);
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn key_value_start_at_key_on_branch_with_no_value() {
+        let sibling_path = 0x00;
+        let branch_path = 0x0f;
+        let children = 0..=0x0f;
+
+        let mut merkle = create_test_merkle();
+
+        children.clone().for_each(|child_path| {
+            let key = vec![sibling_path, child_path];
+
+            merkle.insert(&key, key.clone().into()).unwrap();
+        });
+
+        let mut keys: Vec<_> = children
+            .map(|child_path| {
+                let key = vec![branch_path, child_path];
+
+                merkle.insert(&key, key.clone().into()).unwrap();
+
+                key
+            })
+            .collect();
+
+        keys.sort();
+
+        let start = keys.iter().position(|key| key[0] == branch_path).unwrap();
+        let keys = &keys[start..];
+
+        let mut iter = merkle.key_value_iter_from_key(vec![branch_path].into_boxed_slice());
+
+        for key in keys {
+            let next = iter.next().unwrap().unwrap();
+
+            assert_eq!(&*next.0, &*next.1);
+            assert_eq!(&*next.0, key);
+        }
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn key_value_start_at_key_on_branch_with_value() {
+        let sibling_path = 0x00;
+        let branch_path = 0x0f;
+        let branch_key = vec![branch_path];
+
+        let children = (0..=0xf).map(|val| (val << 4) + val); // 0x00, 0x11, ... 0xff
+
+        let mut merkle = create_test_merkle();
+
+        merkle
+            .insert(&branch_key, branch_key.clone().into())
+            .unwrap();
+
+        children.clone().for_each(|child_path| {
+            let key = vec![sibling_path, child_path];
+
+            merkle.insert(&key, key.clone().into()).unwrap();
+        });
+
+        let mut keys: Vec<_> = children
+            .map(|child_path| {
+                let key = vec![branch_path, child_path];
+
+                merkle.insert(&key, key.clone().into()).unwrap();
+
+                key
+            })
+            .chain(Some(branch_key.clone()))
+            .collect();
+
+        keys.sort();
+
+        let start = keys.iter().position(|key| key == &branch_key).unwrap();
+        let keys = &keys[start..];
+
+        let mut iter = merkle.key_value_iter_from_key(branch_key.into_boxed_slice());
+
+        for key in keys {
+            let next = iter.next().unwrap().unwrap();
+
+            assert_eq!(&*next.0, &*next.1);
+            assert_eq!(&*next.0, key);
+        }
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn key_value_start_at_key_on_extension() {
+        let missing = 0x0a;
+        let children = (0..=0x0f).filter(|x| *x != missing);
+        let mut merkle = create_test_merkle();
+
+        let keys: Vec<_> = children
+            .map(|child_path| {
+                let key = vec![child_path];
+
+                merkle.insert(&key, key.clone().into()).unwrap();
+
+                key
+            })
+            .collect();
+
+        let keys = &keys[(missing as usize)..];
+
+        let mut iter = merkle.key_value_iter_from_key(vec![missing].into_boxed_slice());
+
+        for key in keys {
+            let next = iter.next().unwrap().unwrap();
+
+            assert_eq!(&*next.0, &*next.1);
+            assert_eq!(&*next.0, key);
+        }
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn key_value_start_at_key_overlapping_with_extension_but_greater() {
+        let start_key = 0x0a;
+        let shared_path = 0x09;
+        // 0x0900, 0x0901, ... 0x0a0f
+        // path extension is 0x090
+        let children = (0..=0x0f).map(|val| vec![shared_path, val]);
+
+        let mut merkle = create_test_merkle();
+
+        children.for_each(|key| {
+            merkle.insert(&key, key.clone().into()).unwrap();
+        });
+
+        let iter = merkle.key_value_iter_from_key(vec![start_key].into_boxed_slice());
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn key_value_start_at_key_overlapping_with_extension_but_smaller() {
+        let start_key = 0x00;
+        let shared_path = 0x09;
+        // 0x0900, 0x0901, ... 0x0a0f
+        // path extension is 0x090
+        let children = (0..=0x0f).map(|val| vec![shared_path, val]);
+
+        let mut merkle = create_test_merkle();
+
+        let keys: Vec<_> = children
+            .inspect(|key| {
+                merkle.insert(key, key.clone().into()).unwrap();
+            })
+            .collect();
+
+        let mut iter = merkle.key_value_iter_from_key(vec![start_key].into_boxed_slice());
+
+        for key in keys {
+            let next = iter.next().unwrap().unwrap();
+
+            assert_eq!(&*next.0, &*next.1);
+            assert_eq!(&*next.0, key);
+        }
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn key_value_start_at_key_between_siblings() {
+        let missing = 0xaa;
+        let children = (0..=0xf)
+            .map(|val| (val << 4) + val) // 0x00, 0x11, ... 0xff
+            .filter(|x| *x != missing);
+        let mut merkle = create_test_merkle();
+
+        let keys: Vec<_> = children
+            .map(|child_path| {
+                let key = vec![child_path];
+
+                merkle.insert(&key, key.clone().into()).unwrap();
+
+                key
+            })
+            .collect();
+
+        let keys = &keys[((missing >> 4) as usize)..];
+
+        let mut iter = merkle.key_value_iter_from_key(vec![missing].into_boxed_slice());
+
+        for key in keys {
+            let next = iter.next().unwrap().unwrap();
+
+            assert_eq!(&*next.0, &*next.1);
+            assert_eq!(&*next.0, key);
+        }
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn key_value_start_at_key_greater_than_all_others_leaf() {
+        let key = [0x00];
+        let greater_key = [0xff];
+        let mut merkle = create_test_merkle();
+        merkle.insert(&key, key.into()).unwrap();
+
+        let iter = merkle.key_value_iter_from_key(greater_key);
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    #[test]
+    fn key_value_start_at_key_greater_than_all_others_branch() {
+        let greatest = 0xff;
+        let children = (0..=0xf)
+            .map(|val| (val << 4) + val) // 0x00, 0x11, ... 0xff
+            .filter(|x| *x != greatest);
+        let mut merkle = create_test_merkle();
+
+        let keys: Vec<_> = children
+            .map(|child_path| {
+                let key = vec![child_path];
+
+                merkle.insert(&key, key.clone().into()).unwrap();
+
+                key
+            })
+            .collect();
+
+        let keys = &keys[((greatest >> 4) as usize)..];
+
+        let mut iter = merkle.key_value_iter_from_key(vec![greatest].into_boxed_slice());
+
+        for key in keys {
+            let next = iter.next().unwrap().unwrap();
+
+            assert_eq!(&*next.0, &*next.1);
+            assert_eq!(&*next.0, key);
+        }
+
+        assert_iterator_is_exhausted(iter);
+    }
+
+    fn assert_iterator_is_exhausted<I: FusedIterator>(mut iter: I) {
+        assert!(iter.next().is_none());
+    }
 }

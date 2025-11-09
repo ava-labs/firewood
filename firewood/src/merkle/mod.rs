@@ -7,7 +7,7 @@ pub(crate) mod tests;
 /// Parallel merkle
 pub mod parallel;
 
-use crate::iter::{MerkleKeyValueIter, PathIterator, TryExtend};
+use crate::iter::{MerkleKeyValueIter, TryExtend};
 use crate::proof::{Proof, ProofCollection, ProofError, ProofNode};
 use crate::range_proof::RangeProof;
 use crate::v2::api::{self, FrozenProof, FrozenRangeProof, KeyType, ValueType};
@@ -266,11 +266,8 @@ impl<T: TrieReader> Merkle<T> {
         todo!()
     }
 
-    pub(crate) fn path_iter<'a>(
-        &self,
-        key: &'a [u8],
-    ) -> Result<PathIterator<'_, 'a, T>, FileIoError> {
-        PathIterator::new(&self.nodestore, key)
+    pub(crate) fn path_iter<'a>(&self, key: &'a [u8]) -> Result<crate::iter::PathIterator<'_, 'a, T>, FileIoError> {
+        crate::iter::PathIterator::new(&self.nodestore, key)
     }
 
     pub(super) fn key_value_iter(&self) -> MerkleKeyValueIter<'_, T> {

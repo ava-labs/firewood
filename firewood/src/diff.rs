@@ -8,7 +8,7 @@
 #![allow(clippy::borrowed_box)] // Derivative generates &Box<T> patterns
 #![allow(clippy::needless_lifetimes)] // Derivative generates explicit lifetimes that clippy thinks are unnecessary
 
-use firewood_storage::{BranchNode, Child, FileIoError, Node, Path, PathComponent, SharedNode, TrieReader, logger::trace};
+use firewood_storage::{BranchNode, Child, FileIoError, Node, Path, SharedNode, TrieReader, logger::trace};
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -334,7 +334,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                     }),
                     (_, Some(v_right)) => Some(BatchOp::Put {
                         key: key_from_nibble_iter(key.iter().copied()),
-                        value: v_right.to_vec(),
+                        value: v_right.clone(),
                     }),
                     (None, None) => None,
                 };
@@ -382,7 +382,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                             // operation for the leaf
                             Ok(Some(BatchOp::Put {
                                 key: key_from_nibble_iter(key.iter().copied()),
-                                value: leaf.value.to_vec(),
+                                value: leaf.value.clone(),
                             }))
                         }
                     } else {
@@ -390,7 +390,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                         // remaining items on the branch as deletes
                         Ok(Some(BatchOp::Put {
                             key: key_from_nibble_iter(key.iter().copied()),
-                            value: leaf.value.to_vec(),
+                            value: leaf.value.clone(),
                         }))
                     };
                 }
@@ -442,7 +442,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                     Some(different_val) => Some(BatchOp::Put {
                         // Branch has different value, update it
                         key: key_from_nibble_iter(key.iter().copied()),
-                        value: different_val.to_vec(),
+                        value: different_val.clone(),
                     }),
                     None => {
                         // Branch has no value - this might be a structural optimization
@@ -514,7 +514,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                             // The key already includes the complete path including partial paths
                             Ok(Some(BatchOp::Put {
                                 key: key_from_nibble_iter(key.iter().copied()),
-                                value: leaf2.value.to_vec(),
+                                value: leaf2.value.clone(),
                             }))
                         }
                     }
@@ -581,7 +581,7 @@ impl UnvisitedStateVisitor for UnvisitedNodeRightState {
                     // The key already includes the complete path including partial paths
                     Ok(Some(BatchOp::Put {
                         key: key_from_nibble_iter(current_key.iter().copied()),
-                        value: value.to_vec(),
+                        value: value.clone(),
                     }))
                 } else {
                     Ok(None)
@@ -591,7 +591,7 @@ impl UnvisitedStateVisitor for UnvisitedNodeRightState {
                 // The key already includes the complete path including partial paths
                 Ok(Some(BatchOp::Put {
                     key: key_from_nibble_iter(current_key.iter().copied()),
-                    value: leaf.value.to_vec(),
+                    value: leaf.value.clone(),
                 }))
             }
         }
@@ -609,6 +609,7 @@ impl StateVisitor for VisitedNodeLeftState {
             let node = match child {
                 Child::AddressWithHash(addr, _) => readers.0.read_node(addr)?,
                 Child::Node(node) => node.clone().into(),
+                Child::MaybePersisted(maybe, _) => maybe.as_shared_node(readers.0)?,
             };
 
             let child_key = Path::from_nibbles_iterator(
@@ -719,11 +720,13 @@ impl StateVisitor for VisitedNodePairState {
                         let node_left = match child_left {
                             Child::AddressWithHash(addr, _) => readers.0.read_node(addr)?,
                             Child::Node(node) => node.clone().into(),
+                            Child::MaybePersisted(maybe, _) => maybe.as_shared_node(readers.0)?,
                         };
 
                         let node_right = match child_right {
                             Child::AddressWithHash(addr, _) => readers.1.read_node(addr)?,
                             Child::Node(node) => node.clone().into(),
+                            Child::MaybePersisted(maybe, _) => maybe.as_shared_node(readers.1)?,
                         };
 
                         let child_key: Path = {
@@ -757,6 +760,7 @@ impl StateVisitor for VisitedNodePairState {
                         let node_left = match child_left {
                             Child::AddressWithHash(addr, _) => readers.0.read_node(addr)?,
                             Child::Node(node) => node.clone().into(),
+                            Child::MaybePersisted(maybe, _) => maybe.as_shared_node(readers.0)?,
                         };
 
                         let child_key: Path = {
@@ -793,6 +797,7 @@ impl StateVisitor for VisitedNodePairState {
                         let node_right = match child_right {
                             Child::AddressWithHash(addr, _) => readers.1.read_node(addr)?,
                             Child::Node(node) => node.clone().into(),
+                            Child::MaybePersisted(maybe, _) => maybe.as_shared_node(readers.1)?,
                         };
 
                         let child_key: Path = {
@@ -833,6 +838,7 @@ impl StateVisitor for VisitedNodePairState {
                 let node_left = match child_left {
                     Child::AddressWithHash(addr, _) => readers.0.read_node(addr)?,
                     Child::Node(node) => node.clone().into(),
+                    Child::MaybePersisted(maybe, _) => maybe.as_shared_node(readers.0)?,
                 };
 
                 let child_key: Path = {
@@ -867,6 +873,7 @@ impl StateVisitor for VisitedNodePairState {
                 let node_right = match child_right {
                     Child::AddressWithHash(addr, _) => readers.1.read_node(addr)?,
                     Child::Node(node) => node.clone().into(),
+                    Child::MaybePersisted(maybe, _) => maybe.as_shared_node(readers.1)?,
                 };
 
                 let child_partial_path = node_right.partial_path().iter().copied();
@@ -916,6 +923,7 @@ impl StateVisitor for VisitedNodeRightState {
             let node = match child {
                 Child::AddressWithHash(addr, _) => readers.1.read_node(addr)?,
                 Child::Node(node) => node.clone().into(),
+                Child::MaybePersisted(maybe, _) => maybe.as_shared_node(readers.1)?,
             };
 
             let child_partial_path = node.partial_path().iter().copied();
@@ -1037,7 +1045,7 @@ impl DiffIterationNode {
                 DiffIterationNode {
                     key: path,
                     state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
-                        children_iter,
+                        children_iter: Box::new(children_iter.map(|(pc, child)| (pc.as_u8(), child))),
                         excluded: None,
                     }),
                 }
@@ -1063,7 +1071,7 @@ impl DiffIterationNode {
                 DiffIterationNode {
                     key: path,
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
-                        children_iter,
+                        children_iter: Box::new(children_iter.map(|(pc, child)| (pc.as_u8(), child))),
                         excluded: None,
                     }),
                 }
