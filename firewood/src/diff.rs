@@ -9,6 +9,7 @@
 #![allow(clippy::needless_lifetimes)] // Derivative generates explicit lifetimes that clippy thinks are unnecessary
 
 use firewood_storage::{BranchNode, Child, FileIoError, Node, Path, SharedNode, TrieReader, logger::trace};
+use crate::v2::api;
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -275,54 +276,57 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                 // If present, a value in the right branch was added, and deleted for the right branch
                 //
                 if branch_left.partial_path != branch_right.partial_path {
-                    // Cases (A)-(D)
+                    // Structural mismatch: process entire subtrees in lexical order using simple left/delete and right/add.
                     trace!(
                         "Partial paths differ at key {:x?}: left={:x?}, right={:x?}",
                         key, branch_left.partial_path, branch_right.partial_path
                     );
-                    let overlap = PrefixOverlap::new(
-                        &branch_left.partial_path.0,
-                        &branch_right.partial_path.0,
-                    );
-                    if overlap.unique_a.is_empty() {
-                        // Case (A)
-                        todo!()
-                        //return Ok(None);
-                    }
-                    if overlap.unique_b.is_empty() {
-                        // case (B)
-                        todo!()
-                        // return Ok(None);
-                    }
-                    if branch_left.partial_path < branch_right.partial_path {
-                        // case (C)
-                        // Add everything on the right
-                        iter_stack.push(DiffIterationNode {
-                            key: key.clone(),
-                            state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
-                                children_iter: Box::new(as_enumerated_children_iter(branch_right)),
-                                excluded: None,
-                            }),
-                        });
 
-                        // Delete everything on the left
+                    let node_key_left = Path::from_nibbles_iterator(
+                        key.iter()
+                            .copied()
+                            .chain(branch_left.partial_path.iter().copied()),
+                    );
+                    let node_key_right = Path::from_nibbles_iterator(
+                        key.iter()
+                            .copied()
+                            .chain(branch_right.partial_path.iter().copied()),
+                    );
+
+                    // Maintain lexicographic order by processing the smaller subtree first
+                    if node_key_left <= node_key_right {
+                        // Delete left subtree items, then add right subtree items
                         iter_stack.push(DiffIterationNode {
                             key: key.clone(),
-                            state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
-                                children_iter: Box::new(as_enumerated_children_iter(branch_left)),
-                                excluded: None,
+                            state: DiffIterationNodeState::UnvisitedRight(UnvisitedNodeRightState {
+                                node: self.node_right,
+                                excluded_node: None,
                             }),
                         });
-                        // If left had a value, it's been deleted, and it's first
-                        if let Some(_value) = &branch_left.value {
-                            return Ok(Some(BatchOp::Delete {
-                                key: key_from_nibble_iter(key.iter().copied()),
-                            }));
-                        }
-                        // no value, so we'll get the next one from the deleted items on the left
-                        return Ok(None);
+                        iter_stack.push(DiffIterationNode {
+                            key: key.clone(),
+                            state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState {
+                                node: self.node_left,
+                                excluded_node: None,
+                            }),
+                        });
+                    } else {
+                        // Add right subtree items, then delete left subtree items
+                        iter_stack.push(DiffIterationNode {
+                            key: key.clone(),
+                            state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState {
+                                node: self.node_left,
+                                excluded_node: None,
+                            }),
+                        });
+                        iter_stack.push(DiffIterationNode {
+                            key: key.clone(),
+                            state: DiffIterationNodeState::UnvisitedRight(UnvisitedNodeRightState {
+                                node: self.node_right,
+                                excluded_node: None,
+                            }),
+                        });
                     }
-                    // case (D)
                     return Ok(None);
                 }
 
@@ -499,12 +503,30 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                             key, leaf1.partial_path, leaf2.partial_path
                         );
                         // push right leaf to process as add later
+                        // Build full keys
+                        let left_full = Path::from_nibbles_iterator(
+                            key.iter()
+                                .copied()
+                                .chain(leaf1.partial_path.iter().copied()),
+                        );
+                        let right_full = Path::from_nibbles_iterator(
+                            key.iter()
+                                .copied()
+                                .chain(leaf2.partial_path.iter().copied()),
+                        );
 
-                        // adjust the key to include left1.partial_path
+                        // Since left_full < right_full, emit delete first, then add will be handled by subsequent states
+                        // Queue the right leaf put (use parent base key so partial path is applied once)
+                        iter_stack.push(DiffIterationNode {
+                            key: key.clone(),
+                            state: DiffIterationNodeState::UnvisitedRight(UnvisitedNodeRightState {
+                                node: self.node_right,
+                                excluded_node: None,
+                            }),
+                        });
+
                         Ok(Some(BatchOp::Delete {
-                            key: key_from_nibble_iter(
-                                (key.iter().copied()).chain(leaf1.partial_path.iter().copied()),
-                            ),
+                            key: key_from_nibble_iter(left_full.iter().copied()),
                         }))
                     }
                     Ordering::Greater => {
@@ -515,7 +537,30 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                             "Right leaf is prefix of left leaf at key {:x?}: left={:x?}, right={:x?}",
                             key, leaf1.partial_path, leaf2.partial_path
                         );
-                        todo!()
+                        let left_full = Path::from_nibbles_iterator(
+                            key.iter()
+                                .copied()
+                                .chain(leaf1.partial_path.iter().copied()),
+                        );
+                        let right_full = Path::from_nibbles_iterator(
+                            key.iter()
+                                .copied()
+                                .chain(leaf2.partial_path.iter().copied()),
+                        );
+
+                        // Since right_full < left_full, emit the put first, then queue the delete
+                        iter_stack.push(DiffIterationNode {
+                            key: key.clone(),
+                            state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState {
+                                node: self.node_left,
+                                excluded_node: None,
+                            }),
+                        });
+
+                        Ok(Some(BatchOp::Put {
+                            key: key_from_nibble_iter(right_full.iter().copied()),
+                            value: leaf2.value.clone(),
+                        }))
                     }
                     Ordering::Equal => {
                         // Partial paths are equal - this is the normal case
@@ -599,6 +644,15 @@ impl UnvisitedStateVisitor for UnvisitedNodeRightState {
                 let full_key = Path::from_nibbles_iterator(
                     current_key.iter().copied().chain(branch.partial_path.iter().copied()),
                 );
+                if std::env::var("FWD_DEBUG_DIFF_OPS").ok().as_deref() == Some("1") {
+                    eprintln!(
+                        "UR Branch add at base={:?} partial={:?} full={:?} value_present={}",
+                        key_from_nibble_iter(current_key.iter().copied()),
+                        key_from_nibble_iter(branch.partial_path.iter().copied()),
+                        key_from_nibble_iter(full_key.iter().copied()),
+                        branch.value.is_some()
+                    );
+                }
 
                 iter_stack.push(DiffIterationNode {
                     key: full_key.clone(),
@@ -609,7 +663,6 @@ impl UnvisitedStateVisitor for UnvisitedNodeRightState {
                 });
 
                 if let Some(value) = &branch.value {
-                    println!("DEBUG add branch key={:?} value={:?}", key_from_nibble_iter(current_key.iter().copied()), value);
                     // The key already includes the complete path including partial paths
                     Ok(Some(BatchOp::Put {
                         key: key_from_nibble_iter(full_key.iter().copied()),
@@ -623,7 +676,14 @@ impl UnvisitedStateVisitor for UnvisitedNodeRightState {
                 let full_key = Path::from_nibbles_iterator(
                     current_key.iter().copied().chain(leaf.partial_path.iter().copied()),
                 );
-                println!("DEBUG add leaf key={:?} value={:?}", key_from_nibble_iter(current_key.iter().copied()), leaf.value);
+                if std::env::var("FWD_DEBUG_DIFF_OPS").ok().as_deref() == Some("1") {
+                    eprintln!(
+                        "UR Leaf add at base={:?} partial={:?} full={:?}",
+                        key_from_nibble_iter(current_key.iter().copied()),
+                        key_from_nibble_iter(leaf.partial_path.iter().copied()),
+                        key_from_nibble_iter(full_key.iter().copied()),
+                    );
+                }
                 // The key already includes the complete path including partial paths
                 Ok(Some(BatchOp::Put {
                     key: key_from_nibble_iter(full_key.iter().copied()),
@@ -1118,10 +1178,65 @@ impl From<Key> for DiffNodeStreamState {
     }
 }
 
-/// Optimized node iterator that compares two merkle trees and skips matching subtrees
+#[derive(Debug)]
+struct BothIters<'a, T: TrieReader, U: TrieReader> {
+    left: MerkleKeyValueIter<'a, T>,
+    right: MerkleKeyValueIter<'a, U>,
+    peek_left: Option<Result<(Key, Value), crate::v2::api::Error>>,
+    peek_right: Option<Result<(Key, Value), crate::v2::api::Error>>,
+}
+
+impl<'a, T: TrieReader, U: TrieReader> BothIters<'a, T, U> {
+    fn new(tree_left: &'a T, tree_right: &'a U, start_key: &Key) -> Self {
+        let mut left = MerkleKeyValueIter::from_key(tree_left, start_key);
+        let mut right = MerkleKeyValueIter::from_key(tree_right, start_key);
+        let peek_left = left.next();
+        let peek_right = right.next();
+        Self { left, right, peek_left, peek_right }
+    }
+
+    fn next_op(&mut self) -> Option<Result<BatchOp<Key, Value>, firewood_storage::FileIoError>> {
+        use firewood_storage::FileIoError;
+        match (self.peek_left.take(), self.peek_right.take()) {
+            (None, None) => None,
+            (Some(Err(e)), _) | (_, Some(Err(e))) => Some(Err(FileIoError::from_generic_no_file(std::io::Error::other(e.to_string()), "diff both iters"))),
+            (Some(Ok((lk, _lv))), None) => {
+                self.peek_left = self.left.next();
+                Some(Ok(BatchOp::Delete { key: lk }))
+            }
+            (None, Some(Ok((rk, rv)))) => {
+                self.peek_right = self.right.next();
+                Some(Ok(BatchOp::Put { key: rk, value: rv }))
+            }
+            (Some(Ok((lk, lv))), Some(Ok((rk, rv)))) => match lk.cmp(&rk) {
+                Ordering::Equal => {
+                    self.peek_left = self.left.next();
+                    self.peek_right = self.right.next();
+                    if lv == rv {
+                        self.next_op()
+                    } else {
+                        Some(Ok(BatchOp::Put { key: rk, value: rv }))
+                    }
+                }
+                Ordering::Less => {
+                    self.peek_right = Some(Ok((rk, rv)));
+                    self.peek_left = self.left.next();
+                    Some(Ok(BatchOp::Delete { key: lk }))
+                }
+                Ordering::Greater => {
+                    self.peek_left = Some(Ok((lk, lv)));
+                    self.peek_right = self.right.next();
+                    Some(Ok(BatchOp::Put { key: rk, value: rv }))
+                }
+            },
+        }
+    }
+}
+
 #[derive(derive_more::Debug)]
 enum UniCase<'a, T: TrieReader, U: TrieReader> {
     #[debug("both")] Both,
+    #[debug("both_iters")] BothIters(BothIters<'a, T, U>),
     #[debug("right_iter")] Right(MerkleKeyValueIter<'a, U>),
     #[debug("left_iter")] Left(MerkleKeyValueIter<'a, T>),
 }
@@ -1145,7 +1260,11 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
         } else if !left_empty && right_empty {
             UniCase::Left(MerkleKeyValueIter::from_key(tree_left, &start_key))
         } else {
-            UniCase::Both
+            if std::env::var("FWD_DIFF_SIMPLE").ok().as_deref() == Some("1") {
+                UniCase::BothIters(BothIters::new(tree_left, tree_right, &start_key))
+            } else {
+                UniCase::Both
+            }
         };
 
         Self {
@@ -1285,6 +1404,9 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
                 }
             }
             UniCase::Both => {}
+            UniCase::BothIters(b) => {
+                return b.next_op();
+            }
         }
         // Handle lazy initialization
         let iter_stack = match &mut self.state {
@@ -1361,7 +1483,27 @@ impl<T: TrieReader, U: TrieReader> Iterator for DiffMerkleNodeStream<'_, T, U> {
     type Item = Result<BatchOp<Key, Value>, firewood_storage::FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.next_internal()
+        let item = self.next_internal();
+        if let Some(Ok(ref op)) = item {
+            if std::env::var("FWD_DEBUG_DIFF_OPS").ok().as_deref() == Some("1") {
+                match op {
+                    BatchOp::Put { key, value } => {
+                        eprintln!(
+                            "OP Put key={:?} len={}",
+                            key.as_ref(),
+                            value.len()
+                        );
+                    }
+                    BatchOp::Delete { key } => {
+                        eprintln!("OP Del key={:?}", key.as_ref());
+                    }
+                    BatchOp::DeleteRange { prefix } => {
+                        eprintln!("OP DelRange prefix={:?}", prefix.as_ref());
+                    }
+                }
+            }
+        }
+        item
     }
 }
 
@@ -1384,7 +1526,27 @@ impl<T: TrieReader, U: TrieReader> Iterator for DiffMerkleKeyValueStreams<'_, T,
     type Item = Result<BatchOp<Key, Value>, firewood_storage::FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.node_stream.next_internal()
+        let item = self.node_stream.next_internal();
+        if let Some(Ok(ref op)) = item {
+            if std::env::var("FWD_DEBUG_DIFF_OPS").ok().as_deref() == Some("1") {
+                match op {
+                    BatchOp::Put { key, value } => {
+                        eprintln!(
+                            "OP Put key={:?} len={}",
+                            key.as_ref(),
+                            value.len()
+                        );
+                    }
+                    BatchOp::Delete { key } => {
+                        eprintln!("OP Del key={:?}", key.as_ref());
+                    }
+                    BatchOp::DeleteRange { prefix } => {
+                        eprintln!("OP DelRange prefix={:?}", prefix.as_ref());
+                    }
+                }
+            }
+        }
+        item
     }
 }
 
@@ -2149,6 +2311,129 @@ mod tests {
                 (ln, rn) => panic!("length mismatch: left={ln:?} right={rn:?}"),
             }
         }
+    }
+
+    #[test]
+    #[ignore]
+    fn debug_stress_small() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let _ = env_logger::builder()
+            .write_style(WriteStyle::Never)
+            .format_timestamp(None)
+            .is_test(true)
+            .try_init();
+
+        let seed = 0xD1FF_C0DE_BAAD_F00D_u64;
+        let total_items = 20usize;
+        let total_modify = 10usize;
+        eprintln!(
+            "debug_stress_small: seed={seed} items={total_items} modify={total_modify}"
+        );
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        // Build base unique keys and values
+        let mut base: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(total_items);
+        let mut seen = std::collections::HashSet::new();
+        while base.len() < total_items {
+            let klen = rng.random_range(1..=32);
+            let vlen = rng.random_range(1..=64);
+            let key: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
+            if seen.insert(key.clone()) {
+                let val: Vec<u8> = (0..vlen).map(|_| rng.random()).collect();
+                base.push((key, val));
+            }
+        }
+
+        let mut left = create_test_merkle();
+        let mut right = create_test_merkle();
+        for (k, v) in &base {
+            left.insert(k, v.clone().into_boxed_slice()).unwrap();
+            right.insert(k, v.clone().into_boxed_slice()).unwrap();
+        }
+        // Modify right
+        for _ in 0..total_modify {
+            let idx = rng.random_range(0..base.len());
+            match rng.random_range(0..3) {
+                0 => {
+                    // delete
+                    right.remove(&base[idx].0).ok();
+                }
+                1 => {
+                    // update existing
+                    if right.get_value(&base[idx].0).unwrap().is_some() {
+                        let newlen = rng.random_range(1..=64);
+                        let newval: Vec<u8> = (0..newlen).map(|_| rng.random()).collect();
+                        right
+                            .insert(&base[idx].0, newval.into_boxed_slice())
+                            .unwrap();
+                    }
+                }
+                _ => {
+                    // insert
+                    let klen = rng.random_range(1..=32);
+                    let vlen = rng.random_range(1..=64);
+                    let key: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
+                    let val: Vec<u8> = (0..vlen).map(|_| rng.random()).collect();
+                    right.insert(&key, val.into_boxed_slice()).unwrap();
+                }
+            }
+        }
+
+        // Freeze to immutable for diff
+        let left = make_immutable(left);
+        let right = make_immutable(right);
+
+        // Compute ops
+        let ops = diff_merkle_iterator(&left, &right, Box::new([]))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        eprintln!("ops count={}", ops.len());
+
+        // Apply and compare keys
+        let mut fork = left.fork().unwrap();
+        for op in &ops {
+            match op {
+                BatchOp::Put { key, value } => {
+                    fork.insert(key, value.clone()).unwrap();
+                }
+                BatchOp::Delete { key } => {
+                    fork.remove(key).unwrap();
+                }
+                BatchOp::DeleteRange { prefix } => {
+                    fork.remove_prefix(prefix).unwrap();
+                }
+            }
+        }
+        let left_after: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+            fork.try_into().unwrap();
+
+        let mut l = crate::iter::MerkleKeyValueIter::from(left_after.nodestore());
+        let mut r = crate::iter::MerkleKeyValueIter::from(right.nodestore());
+        let mut left_keys = Vec::new();
+        let mut right_keys = Vec::new();
+        while let Some(n) = l.next() {
+            let (k, _v) = n.unwrap();
+            left_keys.push(k);
+        }
+        while let Some(n) = r.next() {
+            let (k, _v) = n.unwrap();
+            right_keys.push(k);
+        }
+        eprintln!("left_after keys = {:?}", left_keys);
+        eprintln!("right keys      = {:?}", right_keys);
+        let left_only: Vec<_> = left_keys
+            .iter()
+            .filter(|k| !right_keys.contains(k))
+            .collect();
+        let right_only: Vec<_> = right_keys
+            .iter()
+            .filter(|k| !left_keys.contains(k))
+            .collect();
+        eprintln!("left_only = {:?}", left_only);
+        eprintln!("right_only = {:?}", right_only);
+        assert!(left_only.is_empty() && right_only.is_empty());
     }
 
     #[test]
