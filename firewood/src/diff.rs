@@ -295,6 +295,13 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
 
                     // Maintain lexicographic order by processing the smaller subtree first
                     if node_key_left <= node_key_right {
+                        if std::env::var("FWD_DEBUG_DIFF_OPS").ok().as_deref() == Some("1") {
+                            eprintln!(
+                                "BRBR mismatch: delete-left subtree at {:?} then add-right at {:?}",
+                                key_from_nibble_iter(node_key_left.iter().copied()),
+                                key_from_nibble_iter(node_key_right.iter().copied())
+                            );
+                        }
                         // Delete left subtree items, then add right subtree items
                         iter_stack.push(DiffIterationNode {
                             key: key.clone(),
@@ -311,6 +318,13 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                             }),
                         });
                     } else {
+                        if std::env::var("FWD_DEBUG_DIFF_OPS").ok().as_deref() == Some("1") {
+                            eprintln!(
+                                "BRBR mismatch: add-right subtree at {:?} then delete-left at {:?}",
+                                key_from_nibble_iter(node_key_right.iter().copied()),
+                                key_from_nibble_iter(node_key_left.iter().copied())
+                            );
+                        }
                         // Add right subtree items, then delete left subtree items
                         iter_stack.push(DiffIterationNode {
                             key: key.clone(),
@@ -415,25 +429,21 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                 // TODO: maybe the leaf is down in the branch somewhere. If we never find it,
                 // then it's brand new data
 
-                // Set up to traverse branch children, but exclude any that are equivalent to the leaf
-                // Construct full leaf key and branch key from parent + respective partial paths
-                let leaf_key = Path::from_nibbles_iterator(
-                    key.iter()
-                        .copied()
-                        .chain(leaf.partial_path.iter().copied()),
-                );
-                // let leaf_key = key.clone();
+                // Set up to traverse branch children and delete them; at the end, add the right leaf.
+                // We set the excluded path to the current parent key so that if no child matches,
+                // we'll add the leaf relative to this base key.
+                let leaf_base = key.clone();
                 trace!("key is {key:x?}");
                 trace!("branch is {branch:?}");
                 trace!("leaf is {leaf:?}");
-                trace!("excluding leaf {leaf_key:x?} (for inserts)");
+                trace!("excluding leaf base {leaf_base:x?} (for inserts)");
                 trace!("switching to VisitedNodeLeftState");
 
                 let din = DiffIterationNode {
                     key: key.clone(),
                     state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
                         children_iter: Box::new(as_enumerated_children_iter(branch)),
-                        excluded: Some((self.node_right.clone(), leaf_key)),
+                        excluded: Some((self.node_right.clone(), leaf_base)),
                     }),
                 };
                 trace!("pushing {din:?}");
@@ -774,6 +784,18 @@ impl StateVisitor for VisitedNodeLeftState {
                     }),
                 });
             }
+        } else {
+            // No more children on the left. If an excluded right node was never matched,
+            // it means that node does not exist on the left and must be added now.
+            if let Some((excluded_node, excluded_path)) = self.excluded.take() {
+                iter_stack.push(DiffIterationNode {
+                    key: excluded_path,
+                    state: DiffIterationNodeState::UnvisitedRight(UnvisitedNodeRightState {
+                        node: excluded_node,
+                        excluded_node: None,
+                    }),
+                });
+            }
         }
         Ok(())
     }
@@ -1079,6 +1101,18 @@ impl StateVisitor for VisitedNodeRightState {
                     }),
                 });
             }
+        } else {
+            // No more children on the right. If an excluded left node was never matched,
+            // it means that node does not exist on the right and must be deleted now.
+            if let Some((excluded_node, excluded_path)) = self.excluded.take() {
+                iter_stack.push(DiffIterationNode {
+                    key: excluded_path,
+                    state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState {
+                        node: excluded_node,
+                        excluded_node: None,
+                    }),
+                });
+            }
         }
         Ok(())
     }
@@ -1260,11 +1294,7 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
         } else if !left_empty && right_empty {
             UniCase::Left(MerkleKeyValueIter::from_key(tree_left, &start_key))
         } else {
-            if std::env::var("FWD_DIFF_SIMPLE").ok().as_deref() == Some("1") {
-                UniCase::BothIters(BothIters::new(tree_left, tree_right, &start_key))
-            } else {
-                UniCase::Both
-            }
+            UniCase::BothIters(BothIters::new(tree_left, tree_right, &start_key))
         };
 
         Self {
