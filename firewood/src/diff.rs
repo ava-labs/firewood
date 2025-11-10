@@ -43,6 +43,35 @@ fn as_enumerated_children_iter(
         .filter_map(|(pos, child)| child.map(|child| (pos.as_u8(), child)))
 }
 
+/// Returns true if two branch nodes are structurally identical by comparing their value
+/// and each present child's position and hash. This avoids descending into entire subtrees
+/// when both sides are immutable and carry child hashes.
+fn branches_equal_by_hashes(branch_left: &BranchNode, branch_right: &BranchNode) -> bool {
+    if branch_left.value != branch_right.value {
+        return false;
+    }
+    let mut it_l = as_enumerated_children_iter(branch_left).peekable();
+    let mut it_r = as_enumerated_children_iter(branch_right).peekable();
+    loop {
+        match (it_l.peek(), it_r.peek()) {
+            (None, None) => break true,
+            (None, Some(_)) | (Some(_), None) => break false,
+            (Some((pos_l, child_l)), Some((pos_r, child_r))) => match pos_l.cmp(pos_r) {
+                Ordering::Equal => {
+                    let hl = child_l.hash();
+                    let hr = child_r.hash();
+                    if hl.is_none() || hr.is_none() || hl != hr {
+                        break false;
+                    }
+                    let _ = it_l.next();
+                    let _ = it_r.next();
+                }
+                _ => break false,
+            },
+        }
+    }
+}
+
 struct PrefixOverlap<'a> {
     unique_a: &'a [u8],
     unique_b: &'a [u8],
@@ -231,15 +260,11 @@ trait OutOfSyncStateVisitor {
 #[derive(Debug)]
 struct IterStack {
     stack: Vec<DiffIterationNode>,
-    visited_nodes: std::collections::HashSet<(Vec<u8>, usize)>, // (key, node_ptr as usize)
 }
 
 impl Default for IterStack {
     fn default() -> Self {
-        Self {
-            stack: Vec::new(),
-            visited_nodes: std::collections::HashSet::new(),
-        }
+        Self { stack: Vec::new() }
     }
 }
 
@@ -249,41 +274,6 @@ impl IterStack {
             "pushing new state {{ key: {:x?}, state: {:?} }}",
             node.key, node.state
         );
-        if node.key.starts_with(&[0, 7, 7]) {
-            trace!("found key {:x?}", node.key);
-        }
-
-        // Check for duplicate UnvisitedRight/UnvisitedLeft nodes
-        let should_skip = match &node.state {
-            DiffIterationNodeState::UnvisitedRight(state) => {
-                let key_vec: Vec<u8> = node.key.iter().copied().collect();
-                let node_ptr = &*state.node as *const _ as usize;
-                let entry = (key_vec.clone(), node_ptr);
-                if !self.visited_nodes.insert(entry) {
-                    trace!("Skipping duplicate UnvisitedRight at key {:?}", key_vec);
-                    true
-                } else {
-                    false
-                }
-            }
-            DiffIterationNodeState::UnvisitedLeft(state) => {
-                let key_vec: Vec<u8> = node.key.iter().copied().collect();
-                let node_ptr = &*state.node as *const _ as usize;
-                let entry = (key_vec.clone(), node_ptr);
-                if !self.visited_nodes.insert(entry) {
-                    trace!("Skipping duplicate UnvisitedLeft at key {:?}", key_vec);
-                    true
-                } else {
-                    false
-                }
-            }
-            _ => false,
-        };
-
-        if should_skip {
-            return;
-        }
-
         self.stack.push(node);
     }
 }
@@ -522,7 +512,15 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                     (None, None) => None,
                 };
 
-                // Set up to compare children
+                // Fast path: if all children are identical by hash and values matched above
+                // then we can prune the entire subtree and avoid visiting descendants.
+                if branches_equal_by_hashes(branch_left, branch_right) {
+                    // Count this as a skip-by-hash event.
+                    stats_inc(|s| s.nodes_skipped_by_hash += 1);
+                    return Ok(value_diff);
+                }
+
+                // Otherwise, compare children in order
                 iter_stack.push(DiffIterationNode {
                     key: node_key,
                     state: DiffIterationNodeState::VisitedPair(VisitedNodePairState {
@@ -1453,6 +1451,8 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
             _ => false,
         }
     }
+
+    // branches_equal_by_hashes moved to a free function below to allow use from state visitors
 
     /// Returns the initial state for a diff iterator over the given trees which starts at `key`.
     fn get_diff_iterator_initial_state(
