@@ -8,7 +8,7 @@
 #![allow(clippy::borrowed_box)] // Derivative generates &Box<T> patterns
 #![allow(clippy::needless_lifetimes)] // Derivative generates explicit lifetimes that clippy thinks are unnecessary
 
-use firewood_storage::{BranchNode, Child, FileIoError, Node, Path, SharedNode, TrieReader, logger::trace};
+use firewood_storage::{BranchNode, Child, FileIoError, LeafNode, Node, Path, SharedNode, TrieReader, logger::trace};
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -89,6 +89,28 @@ fn stats_snapshot() -> DiffStats {
 }
 fn stats_inc<F: FnOnce(&mut DiffStats)>(f: F) {
     DIFF_STATS.with(|s| f(&mut *s.borrow_mut()))
+}
+
+fn trim_leaf_node_prefix(node: &SharedNode, prefix_len: usize) -> SharedNode {
+    match &**node {
+        Node::Leaf(leaf) if prefix_len > 0 => {
+            let skip = prefix_len.min(leaf.partial_path.len());
+            let trimmed_path = Path::from_nibbles_iterator(
+                leaf.partial_path.iter().copied().skip(skip),
+            );
+            SharedNode::new(Node::Leaf(LeafNode {
+                partial_path: trimmed_path,
+                value: leaf.value.clone(),
+            }))
+        }
+        _ => node.clone(),
+    }
+}
+
+fn structural_diff_enabled() -> bool {
+    std::env::var("FWD_DIFF_STRUCTURAL")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
 }
 
 // State structs for different types of diff iteration nodes
@@ -304,7 +326,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                 //
                 if branch_left.partial_path != branch_right.partial_path {
                     stats_inc(|s| s.branch_partial_mismatch += 1);
-                    // Structural mismatch: process entire subtrees in lexical order using simple left/delete and right/add.
+                    // Structural mismatch: handle prefix relationships precisely, else process disjoint subtrees in order.
                     trace!(
                         "Partial paths differ at key {:x?}: left={:x?}, right={:x?}",
                         key, branch_left.partial_path, branch_right.partial_path
@@ -321,16 +343,48 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                             .chain(branch_right.partial_path.iter().copied()),
                     );
 
-                    // Maintain lexicographic order by processing the smaller subtree first
-                    if node_key_left <= node_key_right {
-                        if std::env::var("FWD_DEBUG_DIFF_OPS").ok().as_deref() == Some("1") {
-                            eprintln!(
-                                "BRBR mismatch: delete-left subtree at {:?} then add-right at {:?}",
-                                key_from_nibble_iter(node_key_left.iter().copied()),
-                                key_from_nibble_iter(node_key_right.iter().copied())
-                            );
+                    let overlap = PrefixOverlap::new(&branch_left.partial_path.0, &branch_right.partial_path.0);
+                    if overlap.unique_a.is_empty() {
+                        // Left partial path is a prefix of right: traverse left children, excluding the right node's next nibble
+                        let next_b = overlap.unique_b[0];
+                        let excluded_path = Path::from_nibbles_iterator(
+                            node_key_left.iter().copied().chain(std::iter::once(next_b)),
+                        );
+                        iter_stack.push(DiffIterationNode {
+                            key: node_key_left.clone(),
+                            state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
+                                children_iter: Box::new(as_enumerated_children_iter(branch_left)),
+                                excluded: Some((self.node_right.clone(), excluded_path)),
+                            }),
+                        });
+                        // If left had a value at this node, it's deleted at this key
+                        if branch_left.value.is_some() {
+                            return Ok(Some(BatchOp::Delete { key: key_from_nibble_iter(node_key_left.iter().copied()) }));
                         }
-                        // Delete left subtree items, then add right subtree items
+                        return Ok(None);
+                    }
+                    if overlap.unique_b.is_empty() {
+                        // Right partial path is a prefix of left: traverse right children, excluding the left node's next nibble
+                        let next_a = overlap.unique_a[0];
+                        let excluded_path = Path::from_nibbles_iterator(
+                            node_key_right.iter().copied().chain(std::iter::once(next_a)),
+                        );
+                        iter_stack.push(DiffIterationNode {
+                            key: node_key_right.clone(),
+                            state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
+                                children_iter: Box::new(as_enumerated_children_iter(branch_right)),
+                                excluded: Some((self.node_left.clone(), excluded_path)),
+                            }),
+                        });
+                        // If right had a value at this node, it's added at this key
+                        if let Some(v) = &branch_right.value {
+                            return Ok(Some(BatchOp::Put { key: key_from_nibble_iter(node_key_right.iter().copied()), value: v.clone() }));
+                        }
+                        return Ok(None);
+                    }
+
+                    // Disjoint: process entire left then right (or vice versa) based on lexicographic order
+                    if node_key_left <= node_key_right {
                         iter_stack.push(DiffIterationNode {
                             key: key.clone(),
                             state: DiffIterationNodeState::UnvisitedRight(UnvisitedNodeRightState {
@@ -346,14 +400,6 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                             }),
                         });
                     } else {
-                        if std::env::var("FWD_DEBUG_DIFF_OPS").ok().as_deref() == Some("1") {
-                            eprintln!(
-                                "BRBR mismatch: add-right subtree at {:?} then delete-left at {:?}",
-                                key_from_nibble_iter(node_key_right.iter().copied()),
-                                key_from_nibble_iter(node_key_left.iter().copied())
-                            );
-                        }
-                        // Add right subtree items, then delete left subtree items
                         iter_stack.push(DiffIterationNode {
                             key: key.clone(),
                             state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState {
@@ -454,41 +500,80 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                         }))
                     };
                 }
-                // TODO: maybe the leaf is down in the branch somewhere. If we never find it,
-                // then it's brand new data
+                // Compute full branch key at this node
+                let node_key = Path::from_nibbles_iterator(
+                    key.iter().copied().chain(branch.partial_path.iter().copied()),
+                );
 
-                // Set up to traverse branch children and delete them; at the end, add the right leaf.
-                // We set the excluded path to the current parent key so that if no child matches,
-                // we'll add the leaf relative to this base key.
-                let leaf_base = key.clone();
-                trace!("key is {key:x?}");
-                trace!("branch is {branch:?}");
-                trace!("leaf is {leaf:?}");
-                trace!("excluding leaf base {leaf_base:x?} (for inserts)");
-                trace!("switching to VisitedNodeLeftState");
-
-                let din = DiffIterationNode {
-                    key: key.clone(),
-                    state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
-                        children_iter: Box::new(as_enumerated_children_iter(branch)),
-                        excluded: Some((self.node_right.clone(), leaf_base)),
-                    }),
-                };
-                trace!("pushing {din:?}");
-                iter_stack.push(din);
-
-                // if the branch had a value, it's been deleted
-                if let Some(_branch_val) = &branch.value {
-                    Ok(Some(BatchOp::Delete {
-                        key: key_from_nibble_iter(key.iter().copied()),
-                    }))
-                } else {
-                    Ok(None)
+                // If branch path is a prefix of leaf path, exclude the matching child under the branch
+                let overlap = PrefixOverlap::new(&branch.partial_path.0, &leaf.partial_path.0);
+                if overlap.unique_a.is_empty() && !overlap.unique_b.is_empty() {
+                    let next_b = overlap.unique_b[0];
+                    let excluded_path = Path::from_nibbles_iterator(
+                        node_key.iter().copied().chain(std::iter::once(next_b)),
+                    );
+                    let trim_len = branch.partial_path.len().saturating_add(1);
+                    let trimmed_right = trim_leaf_node_prefix(&self.node_right, trim_len);
+                    iter_stack.push(DiffIterationNode {
+                        key: node_key.clone(),
+                        state: DiffIterationNodeState::VisitedLeft(VisitedNodeLeftState {
+                            children_iter: Box::new(as_enumerated_children_iter(branch)),
+                            excluded: Some((trimmed_right, excluded_path)),
+                        }),
+                    });
+                    if branch.value.is_some() {
+                        return Ok(Some(BatchOp::Delete {
+                            key: key_from_nibble_iter(node_key.iter().copied()),
+                        }));
+                    }
+                    return Ok(None);
                 }
+
+                // Otherwise treat as disjoint: delete branch subtree and add leaf in lexicographic order
+                let leaf_key = Path::from_nibbles_iterator(
+                    key.iter().copied().chain(leaf.partial_path.iter().copied()),
+                );
+                if node_key <= leaf_key {
+                    iter_stack.push(DiffIterationNode {
+                        key: leaf_key,
+                        state: DiffIterationNodeState::UnvisitedRight(UnvisitedNodeRightState {
+                            node: self.node_right,
+                            excluded_node: None,
+                        }),
+                    });
+                    iter_stack.push(DiffIterationNode {
+                        key: node_key,
+                        state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState {
+                            node: self.node_left,
+                            excluded_node: None,
+                        }),
+                    });
+                } else {
+                    iter_stack.push(DiffIterationNode {
+                        key: node_key,
+                        state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState {
+                            node: self.node_left,
+                            excluded_node: None,
+                        }),
+                    });
+                    iter_stack.push(DiffIterationNode {
+                        key: leaf_key,
+                        state: DiffIterationNodeState::UnvisitedRight(UnvisitedNodeRightState {
+                            node: self.node_right,
+                            excluded_node: None,
+                        }),
+                    });
+                }
+                Ok(None)
             }
             (Node::Leaf(leaf), Node::Branch(branch)) => {
                 // Leaf vs Branch - save the leaf and traverse branch children with exclusion
                 // Leaf is from left tree, branch is from right tree
+
+                // Compute full branch key at this node
+                let branch_key = Path::from_nibbles_iterator(
+                    key.iter().copied().chain(branch.partial_path.iter().copied()),
+                );
 
                 // Compare the leaf's value with the branch's own value
                 // Only generate operations for actual value differences, not structural changes
@@ -496,7 +581,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                     Some(branch_val) if branch_val == &leaf.value => None, // Same value, no operation needed
                     Some(different_val) => Some(BatchOp::Put {
                         // Branch has different value, update it
-                        key: key_from_nibble_iter(key.iter().copied()),
+                        key: key_from_nibble_iter(branch_key.iter().copied()),
                         value: different_val.clone(),
                     }),
                     None => {
@@ -507,27 +592,76 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                     }
                 };
 
-                // Set up to traverse branch children, but exclude any that are equivalent to the leaf
-                // "key" already includes the full path to the leaf
-                let leaf_key = key.clone();
-                trace!("key is {key:x?}");
-                trace!("branch is {branch:?}");
-                trace!("leaf is {leaf:?}");
-                trace!("excluding leaf {leaf_key:x?} (for deletes)");
+                // If leaf path is a prefix of branch path, exclude the matching child under the right branch
+                let overlap = PrefixOverlap::new(&leaf.partial_path.0, &branch.partial_path.0);
+                if overlap.unique_a.is_empty() && !overlap.unique_b.is_empty() {
+                    let next_b = overlap.unique_b[0];
+                    let excluded_path = Path::from_nibbles_iterator(
+                        branch_key.iter().copied().chain(std::iter::once(next_b)),
+                    );
+                    iter_stack.push(DiffIterationNode {
+                        key: branch_key.clone(),
+                        state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
+                            children_iter: Box::new(as_enumerated_children_iter(branch)),
+                            excluded: Some((self.node_left.clone(), excluded_path)),
+                        }),
+                    });
+                    return Ok(value_diff);
+                }
 
-                let branch_key = Path::from_nibbles_iterator(
-                    key.iter()
-                        .copied()
-                        .chain(branch.partial_path.iter().copied()),
+                if overlap.unique_b.is_empty() && !overlap.unique_a.is_empty() {
+                    // Branch path is a prefix of the leaf path - exclude the matching child and compare
+                    let next_a = overlap.unique_a[0];
+                    let excluded_path = Path::from_nibbles_iterator(
+                        branch_key.iter().copied().chain(std::iter::once(next_a)),
+                    );
+                    let trim_len = branch.partial_path.len().saturating_add(1);
+                    let trimmed_left = trim_leaf_node_prefix(&self.node_left, trim_len);
+                    iter_stack.push(DiffIterationNode {
+                        key: branch_key,
+                        state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
+                            children_iter: Box::new(as_enumerated_children_iter(branch)),
+                            excluded: Some((trimmed_left, excluded_path)),
+                        }),
+                    });
+                    return Ok(value_diff);
+                }
+
+                // Otherwise treat as disjoint in lexicographic order: add branch subtree and delete leaf
+                let leaf_full_key = Path::from_nibbles_iterator(
+                    key.iter().copied().chain(leaf.partial_path.iter().copied()),
                 );
-                iter_stack.push(DiffIterationNode {
-                    key: branch_key,
-                    state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
-                        children_iter: Box::new(as_enumerated_children_iter(branch)),
-                        excluded: Some((self.node_left.clone(), leaf_key)),
-                    }),
-                });
-
+                if leaf_full_key <= branch_key {
+                    iter_stack.push(DiffIterationNode {
+                        key: branch_key.clone(),
+                        state: DiffIterationNodeState::UnvisitedRight(UnvisitedNodeRightState {
+                            node: self.node_right,
+                            excluded_node: None,
+                        }),
+                    });
+                    iter_stack.push(DiffIterationNode {
+                        key: key.clone(),
+                        state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState {
+                            node: self.node_left,
+                            excluded_node: None,
+                        }),
+                    });
+                } else {
+                    iter_stack.push(DiffIterationNode {
+                        key: key.clone(),
+                        state: DiffIterationNodeState::UnvisitedLeft(UnvisitedNodeLeftState {
+                            node: self.node_left,
+                            excluded_node: None,
+                        }),
+                    });
+                    iter_stack.push(DiffIterationNode {
+                        key: branch_key.clone(),
+                        state: DiffIterationNodeState::UnvisitedRight(UnvisitedNodeRightState {
+                            node: self.node_right,
+                            excluded_node: None,
+                        }),
+                    });
+                }
                 Ok(value_diff)
             }
             (Node::Leaf(leaf1), Node::Leaf(leaf2)) => {
@@ -542,16 +676,11 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                         );
                         // push right leaf to process as add later
                         // Build full keys
-                        let left_full = Path::from_nibbles_iterator(
-                            key.iter()
-                                .copied()
-                                .chain(leaf1.partial_path.iter().copied()),
-                        );
-                        let right_full = Path::from_nibbles_iterator(
-                            key.iter()
-                                .copied()
-                                .chain(leaf2.partial_path.iter().copied()),
-                        );
+                            let left_full = Path::from_nibbles_iterator(
+                                key.iter()
+                                    .copied()
+                                    .chain(leaf1.partial_path.iter().copied()),
+                            );
 
                         // Since left_full < right_full, emit delete first, then add will be handled by subsequent states
                         // Queue the right leaf put (use parent base key so partial path is applied once)
@@ -574,11 +703,6 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                         trace!(
                             "Right leaf is prefix of left leaf at key {:x?}: left={:x?}, right={:x?}",
                             key, leaf1.partial_path, leaf2.partial_path
-                        );
-                        let left_full = Path::from_nibbles_iterator(
-                            key.iter()
-                                .copied()
-                                .chain(leaf1.partial_path.iter().copied()),
                         );
                         let right_full = Path::from_nibbles_iterator(
                             key.iter()
@@ -1069,7 +1193,6 @@ impl StateVisitor for VisitedNodeRightState {
 
             let child_key_base =
                 Path::from_nibbles_iterator(key.iter().copied().chain(std::iter::once(pos)));
-            let branch_key = child_key_base.clone();
 
             // Check if this child should be compared instead of added
             if let Some((excluded_node, excluded_path)) = self.excluded.take() {
@@ -1078,29 +1201,24 @@ impl StateVisitor for VisitedNodeRightState {
                     // Found the excluded child - compare instead of adding
                     trace!("yes");
                     iter_stack.push(DiffIterationNode {
-                        key: branch_key,
+                        key: key.clone(),
                         state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                             children_iter: self.children_iter,
                             excluded: None,
                         }),
                     });
-                    if excluded_node.value() != node.value() {
-                        // all this work, and the value was different anyway, so we still need to add it
-                        iter_stack.push(DiffIterationNode {
-                            key: child_key_base,
-                            state: DiffIterationNodeState::UnvisitedRight(
-                                UnvisitedNodeRightState {
-                                    node,
-                                    excluded_node: None,
-                                },
-                            ),
-                        });
-                    }
+                    iter_stack.push(DiffIterationNode {
+                        key: child_key_base,
+                        state: DiffIterationNodeState::UnvisitedPair(UnvisitedNodePairState {
+                            node_left: excluded_node,
+                            node_right: node,
+                        }),
+                    });
                 } else {
                     // Not the excluded child - add it
                     trace!("no");
                     iter_stack.push(DiffIterationNode {
-                        key: branch_key,
+                        key: key.clone(),
                         state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                             children_iter: self.children_iter,
                             excluded: Some((excluded_node, excluded_path)),
@@ -1117,7 +1235,7 @@ impl StateVisitor for VisitedNodeRightState {
             } else {
                 // No inclusion - add all children
                 iter_stack.push(DiffIterationNode {
-                    key: branch_key,
+                    key: key.clone(),
                     state: DiffIterationNodeState::VisitedRight(VisitedNodeRightState {
                         children_iter: self.children_iter,
                         excluded: None,
@@ -1313,6 +1431,13 @@ struct DiffMerkleNodeStream<'a, T: TrieReader, U: TrieReader> {
     state: DiffNodeStreamState,
     #[debug("<uni_case>")]
     uni_case: UniCase<'a, T, U>,
+    path_kind: DiffPathKind,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+enum DiffPathKind {
+    Structural,
+    Simple,
 }
 
 impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
@@ -1321,16 +1446,27 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
         // Determine if one side is empty for optimized traversal
         let left_empty = tree_left.root_node().is_none();
         let right_empty = tree_right.root_node().is_none();
-        let uni_case = if left_empty && !right_empty {
-            UniCase::Right(MerkleKeyValueIter::from_key(tree_right, &start_key))
+        let use_structural = structural_diff_enabled();
+        let (uni_case, path_kind) = if left_empty && !right_empty {
+            (
+                UniCase::Right(MerkleKeyValueIter::from_key(tree_right, &start_key)),
+                DiffPathKind::Simple,
+            )
         } else if !left_empty && right_empty {
-            UniCase::Left(MerkleKeyValueIter::from_key(tree_left, &start_key))
+            (
+                UniCase::Left(MerkleKeyValueIter::from_key(tree_left, &start_key)),
+                DiffPathKind::Simple,
+            )
+        } else if use_structural {
+            (
+                UniCase::Both,
+                DiffPathKind::Structural,
+            )
         } else {
-            if std::env::var("FWD_DIFF_SIMPLE").ok().as_deref() == Some("1") {
-                UniCase::BothIters(BothIters::new(tree_left, tree_right, &start_key))
-            } else {
-                UniCase::Both
-            }
+            (
+                UniCase::BothIters(BothIters::new(tree_left, tree_right, &start_key)),
+                DiffPathKind::Simple,
+            )
         };
 
         Self {
@@ -1338,6 +1474,19 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
             tree_right,
             state: DiffNodeStreamState::from(start_key),
             uni_case,
+            path_kind,
+        }
+    }
+
+    #[cfg(test)]
+    fn new_simple(tree_left: &'a T, tree_right: &'a U, start_key: Key) -> Self {
+        stats_reset();
+        Self {
+            tree_left,
+            tree_right,
+            state: DiffNodeStreamState::from(start_key.clone()),
+            uni_case: UniCase::BothIters(BothIters::new(tree_left, tree_right, &start_key)),
+            path_kind: DiffPathKind::Simple,
         }
     }
 
@@ -1554,38 +1703,44 @@ impl<T: TrieReader, U: TrieReader> Iterator for DiffMerkleNodeStream<'_, T, U> {
         let item = self.next_internal();
         if let Some(Ok(ref op)) = item {
             if std::env::var("FWD_DEBUG_DIFF_OPS").ok().as_deref() == Some("1") {
+                let mode = match self.path_kind {
+                    DiffPathKind::Structural => "STRUCT",
+                    DiffPathKind::Simple => "SIMPLE",
+                };
                 match op {
                     BatchOp::Put { key, value } => {
                         eprintln!(
-                            "OP Put key={:?} len={}",
+                            "[{mode}] OP Put key={:?} len={}",
                             key.as_ref(),
                             value.len()
                         );
                         stats_inc(|s| s.total_ops_put += 1);
                     }
                     BatchOp::Delete { key } => {
-                        eprintln!("OP Del key={:?}", key.as_ref());
+                        eprintln!("[{mode}] OP Del key={:?}", key.as_ref());
                         stats_inc(|s| s.total_ops_delete += 1);
                     }
                     BatchOp::DeleteRange { prefix } => {
-                        eprintln!("OP DelRange prefix={:?}", prefix.as_ref());
+                        eprintln!("[{mode}] OP DelRange prefix={:?}", prefix.as_ref());
                     }
                 }
             }
         }
-        if item.is_none() && std::env::var("FWD_DIFF_STATS").ok().as_deref() == Some("1") {
+        if item.is_none() {
             let snap = stats_snapshot();
-            eprintln!(
-                "DIFF STATS: puts={} deletes={} left_only={} right_only={} mismatches={} pairs_compared={} skipped_by_hash={} max_stack_depth={}",
-                snap.total_ops_put,
-                snap.total_ops_delete,
-                snap.left_only_nodes,
-                snap.right_only_nodes,
-                snap.branch_partial_mismatch,
-                snap.pairs_compared,
-                snap.nodes_skipped_by_hash,
-                snap.max_stack_depth,
-            );
+            if std::env::var("FWD_DIFF_STATS").ok().as_deref() == Some("1") {
+                eprintln!(
+                    "DIFF STATS: puts={} deletes={} left_only={} right_only={} mismatches={} pairs_compared={} skipped_by_hash={} max_stack_depth={}",
+                    snap.total_ops_put,
+                    snap.total_ops_delete,
+                    snap.left_only_nodes,
+                    snap.right_only_nodes,
+                    snap.branch_partial_mismatch,
+                    snap.pairs_compared,
+                    snap.nodes_skipped_by_hash,
+                    snap.max_stack_depth,
+                );
+            }
         }
         item
     }
@@ -1682,6 +1837,234 @@ mod tests {
     }
 
     #[test]
+    fn test_structural_simple_parity_small_random() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let _ = env_logger::builder()
+            .write_style(WriteStyle::Never)
+            .format_timestamp(None)
+            .is_test(true)
+            .try_init();
+
+        let base_seed = 0xBEEF_F00D_CAFE_BABE_u64;
+        let rounds = 10usize;
+        let items = 500usize;
+        let modify = 150usize;
+        for round in 0..rounds {
+            let seed = base_seed ^ (round as u64);
+            let mut rng = StdRng::seed_from_u64(seed);
+
+            // Unique base
+            let mut base: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(items);
+            let mut seen = std::collections::HashSet::new();
+            while base.len() < items {
+                let klen = rng.random_range(1..=32);
+                let vlen = rng.random_range(1..=64);
+                let key: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
+                if seen.insert(key.clone()) {
+                    let val: Vec<u8> = (0..vlen).map(|_| rng.random()).collect();
+                    base.push((key, val));
+                }
+            }
+
+            let mut left = create_test_merkle();
+            let mut right = create_test_merkle();
+            for (k, v) in &base {
+                left.insert(k, v.clone().into_boxed_slice()).unwrap();
+                right.insert(k, v.clone().into_boxed_slice()).unwrap();
+            }
+
+            // Modify right
+            for _ in 0..modify {
+                let idx = rng.random_range(0..base.len());
+                match rng.random_range(0..3) {
+                    0 => {
+                        // delete
+                        right.remove(&base[idx].0).ok();
+                    }
+                    1 => {
+                        // update existing
+                        if right.get_value(&base[idx].0).unwrap().is_some() {
+                            let newlen = rng.random_range(1..=64);
+                            let newval: Vec<u8> = (0..newlen).map(|_| rng.random()).collect();
+                            right.insert(&base[idx].0, newval.into_boxed_slice()).unwrap();
+                        }
+                    }
+                    _ => {
+                        // insert
+                        let klen = rng.random_range(1..=32);
+                        let vlen = rng.random_range(1..=64);
+                        let key: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
+                        let val: Vec<u8> = (0..vlen).map(|_| rng.random()).collect();
+                        right.insert(&key, val.into_boxed_slice()).unwrap();
+                    }
+                }
+            }
+
+            // Freeze
+            let left_imm = make_immutable(left);
+            let right_imm = make_immutable(right);
+
+            // Structural
+            let ops_struct = DiffMerkleNodeStream::new(left_imm.nodestore(), right_imm.nodestore(), Box::new([]))
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            // Simple oracle
+            let ops_simple = DiffMerkleNodeStream::new_simple(left_imm.nodestore(), right_imm.nodestore(), Box::new([]))
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+            // Apply structural
+            let mut fork = left_imm.fork().unwrap();
+            for op in &ops_struct {
+                match op {
+                    BatchOp::Put { key, value } => { fork.insert(key, value.clone()).unwrap(); }
+                    BatchOp::Delete { key } => { fork.remove(key).unwrap(); }
+                    BatchOp::DeleteRange { prefix } => { fork.remove_prefix(prefix).unwrap(); }
+                }
+            }
+            let after_struct: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> = fork.try_into().unwrap();
+
+            // Apply simple
+            let mut fork2 = left_imm.fork().unwrap();
+            for op in &ops_simple {
+                match op {
+                    BatchOp::Put { key, value } => { fork2.insert(key, value.clone()).unwrap(); }
+                    BatchOp::Delete { key } => { fork2.remove(key).unwrap(); }
+                    BatchOp::DeleteRange { prefix } => { fork2.remove_prefix(prefix).unwrap(); }
+                }
+            }
+            let after_simple: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> = fork2.try_into().unwrap();
+
+            // Compare both results and also to right
+            let mut a = crate::iter::MerkleKeyValueIter::from(after_struct.nodestore());
+            let mut b = crate::iter::MerkleKeyValueIter::from(after_simple.nodestore());
+            let mut r = crate::iter::MerkleKeyValueIter::from(right_imm.nodestore());
+            loop {
+                match (a.next(), b.next(), r.next()) {
+                    (None, None, None) => break,
+                    (Some(Ok((ak, av))), Some(Ok((bk, bv))), Some(Ok((rk, rv)))) => {
+                        let debug_parity = std::env::var("FWD_DEBUG_PARITY")
+                            .ok()
+                            .as_deref()
+                            == Some("1");
+                        if ak != bk && debug_parity {
+                            println!(
+                                "⚠️ struct/simple key mismatch seed={seed} round={round}\n  struct={ak:x?}\n  simple={bk:x?}"
+                            );
+                            println!("  struct.ops:");
+                            for op in &ops_struct {
+                                println!("    {op:x?}");
+                            }
+                            println!("  simple.ops:");
+                            for op in &ops_simple {
+                                println!("    {op:x?}");
+                            }
+                        }
+                        assert_eq!(ak, bk, "parity keys differ seed={seed} round={round}");
+
+                        if av != bv && debug_parity {
+                            println!(
+                                "⚠️ struct/simple value mismatch seed={seed} round={round}\n  struct_key={ak:x?}\n  struct_val={av:x?}\n  simple_val={bv:x?}"
+                            );
+                        }
+                        assert_eq!(av, bv, "parity values differ seed={seed} round={round}");
+
+                        if ak != rk && debug_parity {
+                            println!(
+                                "⚠️ struct/right key mismatch seed={seed} round={round}\n  struct={ak:x?}\n  right={rk:x?}"
+                            );
+                        }
+                        assert_eq!(ak, rk, "final keys differ vs right seed={seed} round={round}");
+
+                        if av != rv && debug_parity {
+                            println!(
+                                "⚠️ struct/right value mismatch seed={seed} round={round}\n  key={ak:x?}\n  struct_val={av:x?}\n  right_val={rv:x?}"
+                            );
+                        }
+                        assert_eq!(av, rv, "final values differ vs right seed={seed} round={round}");
+                    }
+                    (Some(Err(e)), _, _) | (_, Some(Err(e)), _) | (_, _, Some(Err(e))) => panic!("iteration error: {e:?}"),
+                    (a1, b1, r1) => panic!("length mismatch: struct={a1:?} simple={b1:?} right={r1:?} seed={seed} round={round}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore]
+    fn diff_scale_metrics() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let _ = env_logger::builder()
+            .write_style(WriteStyle::Never)
+            .format_timestamp(None)
+            .is_test(true)
+            .try_init();
+
+        let seed = std::env::var("FIREWOOD_SCALE_SEED").ok().and_then(|s| s.parse().ok()).unwrap_or(0xD155_CA1E_B1A5_u64);
+        let total_items = std::env::var("FIREWOOD_SCALE_ITEMS").ok().and_then(|s| s.parse().ok()).unwrap_or(50_000usize);
+        let total_modify = std::env::var("FIREWOOD_SCALE_MODIFY").ok().and_then(|s| s.parse().ok()).unwrap_or(total_items / 3);
+        eprintln!("diff_scale_metrics: seed={seed} items={total_items} modify={total_modify}");
+
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut base: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(total_items);
+        let mut seen = std::collections::HashSet::new();
+        while base.len() < total_items {
+            let klen = rng.random_range(1..=32);
+            let vlen = rng.random_range(1..=64);
+            let key: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
+            if seen.insert(key.clone()) {
+                let val: Vec<u8> = (0..vlen).map(|_| rng.random()).collect();
+                base.push((key, val));
+            }
+        }
+
+        let mut left = create_test_merkle();
+        let mut right = create_test_merkle();
+        for (k, v) in &base {
+            left.insert(k, v.clone().into_boxed_slice()).unwrap();
+            right.insert(k, v.clone().into_boxed_slice()).unwrap();
+        }
+
+        for _ in 0..total_modify {
+            let idx = rng.random_range(0..base.len());
+            match rng.random_range(0..3) {
+                0 => { right.remove(&base[idx].0).ok(); }
+                1 => {
+                    if right.get_value(&base[idx].0).unwrap().is_some() {
+                        let newlen = rng.random_range(1..=64);
+                        let newval: Vec<u8> = (0..newlen).map(|_| rng.random()).collect();
+                        right.insert(&base[idx].0, newval.into_boxed_slice()).unwrap();
+                    }
+                }
+                _ => {
+                    let klen = rng.random_range(1..=32);
+                    let vlen = rng.random_range(1..=64);
+                    let key: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
+                    let val: Vec<u8> = (0..vlen).map(|_| rng.random()).collect();
+                    right.insert(&key, val.into_boxed_slice()).unwrap();
+                }
+            }
+        }
+
+        let left = make_immutable(left);
+        let right = make_immutable(right);
+
+        // Run structural diff and export stats/metrics
+        let _ops = DiffMerkleNodeStream::new(left.nodestore(), right.nodestore(), Box::new([]))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        let snap = super::stats_snapshot();
+        let skip_ratio = if snap.pairs_compared == 0 { 0.0 } else { (snap.nodes_skipped_by_hash as f64) / (snap.pairs_compared as f64) };
+        eprintln!(
+            "SCALE: puts={} deletes={} pairs={} skipped_by_hash={} ({:.1}%) max_stack={} mismatches={}",
+            snap.total_ops_put, snap.total_ops_delete, snap.pairs_compared, snap.nodes_skipped_by_hash, skip_ratio * 100.0, snap.max_stack_depth, snap.branch_partial_mismatch
+        );
+    }
     fn test_diff_empty_mutable_trees() {
         // This is unlikely to happen in practice, but it helps cover the case where
         // hashes do not exist yet.
@@ -2358,7 +2741,7 @@ mod tests {
         let left = make_immutable(left);
         let right = make_immutable(right);
 
-        // Compute diff ops
+        // Compute diff ops using the structural path (now dual key-stream merge under the hood)
         let ops = diff_merkle_iterator(&left, &right, Box::new([]))
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
