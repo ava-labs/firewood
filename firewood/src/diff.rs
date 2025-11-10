@@ -2026,6 +2026,132 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
+    fn diff_large_random_stress() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let _ = env_logger::builder()
+            .write_style(WriteStyle::Never)
+            .format_timestamp(None)
+            .is_test(true)
+            .try_init();
+
+        // Default parameters (can be overridden by env vars)
+        let default_items = 5000usize;
+        let default_modify = 1000usize; // modifies or inserts
+        let seed = std::env::var("FIREWOOD_STRESS_SEED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0xD1FF_C0DE_BAAD_F00D);
+        let total_items = std::env::var("FIREWOOD_STRESS_ITEMS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(default_items);
+        let total_modify = std::env::var("FIREWOOD_STRESS_MODIFY")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(default_modify);
+
+        eprintln!(
+            "diff_large_random_stress: seed={seed} items={total_items} modify={total_modify}"
+        );
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        // Build base unique keys and values
+        let mut base: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(total_items);
+        let mut seen = std::collections::HashSet::new();
+        while base.len() < total_items {
+            let klen: usize = rng.random_range(1..=32);
+            let vlen: usize = rng.random_range(1..=64);
+            let key: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            let val: Vec<u8> = (0..vlen).map(|_| rng.random()).collect();
+            base.push((key, val));
+        }
+
+        // Left and right start identical
+        let mut left = create_test_merkle();
+        let mut right = create_test_merkle();
+        for (k, v) in &base {
+            left.insert(k, v.clone().into_boxed_slice()).unwrap();
+            right.insert(k, v.clone().into_boxed_slice()).unwrap();
+        }
+
+        // Make modifications on the right: mix of deletes, updates, and inserts
+        for _ in 0..total_modify {
+            match rng.random_range(0..100) {
+                0..=24 => {
+                    // delete 25%
+                    let idx = rng.random_range(0..base.len());
+                    right.remove(&base[idx].0).ok();
+                }
+                25..=74 => {
+                    // update 50%
+                    let idx = rng.random_range(0..base.len());
+                    let newlen = rng.random_range(1..=64);
+                    let newval: Vec<u8> = (0..newlen).map(|_| rng.random()).collect();
+                    right
+                        .insert(&base[idx].0, newval.into_boxed_slice())
+                        .unwrap();
+                }
+                _ => {
+                    // insert 25%
+                    let klen = rng.random_range(1..=32);
+                    let vlen = rng.random_range(1..=64);
+                    let key: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
+                    let val: Vec<u8> = (0..vlen).map(|_| rng.random()).collect();
+                    right.insert(&key, val.into_boxed_slice()).unwrap();
+                }
+            }
+        }
+
+        // Freeze to immutable for diff
+        let left = make_immutable(left);
+        let right = make_immutable(right);
+
+        // Compute diff ops
+        let ops = diff_merkle_iterator(&left, &right, Box::new([]))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+        // Apply ops to left.fork()
+        let mut fork = left.fork().unwrap();
+        for op in &ops {
+            match op {
+                BatchOp::Put { key, value } => {
+                    fork.insert(key, value.clone()).unwrap();
+                }
+                BatchOp::Delete { key } => {
+                    fork.remove(key).unwrap();
+                }
+                BatchOp::DeleteRange { prefix } => {
+                    fork.remove_prefix(prefix).unwrap();
+                }
+            }
+        }
+        let left_after: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+            fork.try_into().unwrap();
+
+        // Verify left_after == right by comparing full key/value iteration
+        let mut l = crate::iter::MerkleKeyValueIter::from(left_after.nodestore());
+        let mut r = crate::iter::MerkleKeyValueIter::from(right.nodestore());
+        loop {
+            match (l.next(), r.next()) {
+                (None, None) => break,
+                (Some(Ok((lk, lv))), Some(Ok((rk, rv)))) => {
+                    assert_eq!(lk, rk, "keys differ");
+                    assert_eq!(lv, rv, "values differ for key {:?}", lk);
+                }
+                (Some(Err(e)), _) | (_, Some(Err(e))) => panic!("iteration error: {e:?}"),
+                (ln, rn) => panic!("length mismatch: left={ln:?} right={rn:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn test_diff_processes_all_branch_children() {
         // This test verifies the bug fix: ensure that after finding different children
         // at the same position in a branch, the algorithm continues to process remaining children
