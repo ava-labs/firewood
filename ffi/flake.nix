@@ -91,6 +91,11 @@
         # MAKEFLAGS only affects make invocations (jemalloc), not cargo parallelism
         # See: https://github.com/NixOS/nixpkgs/issues/380852
         MAKEFLAGS = "-j1";
+
+        # Enable jemalloc statistics for performance monitoring
+        # This allows collection of allocation, active, resident, mapped, and metadata stats
+        # Stats are automatically logged every 10 seconds via the metrics system
+        JEMALLOC_SYS_WITH_MALLOC_CONF = "stats:true";
       } // lib.optionalAttrs (!pkgs.stdenv.hostPlatform.isAarch64) {
         # Set jemalloc page size to 4KB (2^12) for x86_64 reproducibility
         # Problem: On x86_64, jemalloc's autodetection can produce different page sizes

@@ -8,7 +8,7 @@ use std::fmt::Write;
 use std::net::Ipv6Addr;
 use std::ops::Deref;
 use std::sync::OnceLock;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
 
@@ -22,7 +22,82 @@ use chrono::{DateTime, Utc};
 use metrics::Key;
 use metrics_util::registry::{AtomicStorage, Registry};
 
+#[cfg(unix)]
+use tikv_jemalloc_ctl::{epoch as jemalloc_epoch, stats};
+
 static RECORDER: OnceLock<TextRecorder> = OnceLock::new();
+static JEMALLOC_STATS_LOGGER_STARTED: AtomicBool = AtomicBool::new(false);
+
+/// Logs jemalloc statistics to stderr.
+#[cfg(unix)]
+fn log_jemalloc_stats() {
+    // Advance epoch to update stats
+    if let Ok(epoch_mib) = jemalloc_epoch::mib() {
+        let _ = epoch_mib.advance();
+    }
+
+    let mut output = String::new();
+    output.push_str("\n=== jemalloc Statistics ===\n");
+
+    if let Ok(allocated) = stats::allocated::read() {
+        writeln!(
+            output,
+            "allocated: {} bytes ({:.2} MB)",
+            allocated,
+            allocated as f64 / 1_000_000.0
+        )
+        .ok();
+    }
+    if let Ok(active) = stats::active::read() {
+        writeln!(
+            output,
+            "active: {} bytes ({:.2} MB)",
+            active,
+            active as f64 / 1_000_000.0
+        )
+        .ok();
+    }
+    if let Ok(resident) = stats::resident::read() {
+        writeln!(
+            output,
+            "resident: {} bytes ({:.2} MB)",
+            resident,
+            resident as f64 / 1_000_000.0
+        )
+        .ok();
+    }
+    if let Ok(mapped) = stats::mapped::read() {
+        writeln!(
+            output,
+            "mapped: {} bytes ({:.2} MB)",
+            mapped,
+            mapped as f64 / 1_000_000.0
+        )
+        .ok();
+    }
+    if let Ok(metadata) = stats::metadata::read() {
+        writeln!(
+            output,
+            "metadata: {} bytes ({:.2} MB)",
+            metadata,
+            metadata as f64 / 1_000_000.0
+        )
+        .ok();
+    }
+
+    // Calculate fragmentation ratio
+    if let (Ok(allocated), Ok(active)) = (stats::allocated::read(), stats::active::read()) {
+        if allocated > 0 {
+            let frag_ratio = active as f64 / allocated as f64;
+            writeln!(output, "fragmentation_ratio: {:.4}", frag_ratio).ok();
+        }
+    }
+
+    output.push_str("===========================\n");
+
+    // Log to stderr (will appear in logs)
+    eprintln!("{}", output);
+}
 
 /// Starts metrics recorder.
 /// This happens on a per-process basis, meaning that the metrics system cannot
@@ -40,6 +115,19 @@ pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
     RECORDER
         .set(recorder)
         .map_err(|_| "recorder already initialized")?;
+
+    // Start periodic jemalloc stats logging (every 10 seconds)
+    #[cfg(unix)]
+    {
+        if !JEMALLOC_STATS_LOGGER_STARTED.swap(true, Ordering::Relaxed) {
+            std::thread::spawn(|| {
+                loop {
+                    std::thread::sleep(Duration::from_secs(10));
+                    log_jemalloc_stats();
+                }
+            });
+        }
+    }
 
     Ok(())
 }
