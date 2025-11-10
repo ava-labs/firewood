@@ -9,7 +9,6 @@
 #![allow(clippy::needless_lifetimes)] // Derivative generates explicit lifetimes that clippy thinks are unnecessary
 
 use firewood_storage::{BranchNode, Child, FileIoError, Node, Path, SharedNode, TrieReader, logger::trace};
-use crate::v2::api;
 use std::cmp::Ordering;
 use std::fmt;
 
@@ -64,6 +63,33 @@ impl<'a> PrefixOverlap<'a> {
     }
 }
 use derive_more::derive::Debug;
+use std::cell::RefCell;
+
+#[derive(Debug, Default, Clone)]
+struct DiffStats {
+    total_ops_put: u64,
+    total_ops_delete: u64,
+    left_only_nodes: u64,
+    right_only_nodes: u64,
+    branch_partial_mismatch: u64,
+    pairs_compared: u64,
+    nodes_skipped_by_hash: u64,
+    max_stack_depth: u32,
+}
+
+thread_local! {
+    static DIFF_STATS: RefCell<DiffStats> = RefCell::new(DiffStats::default());
+}
+
+fn stats_reset() {
+    DIFF_STATS.with(|s| *s.borrow_mut() = DiffStats::default());
+}
+fn stats_snapshot() -> DiffStats {
+    DIFF_STATS.with(|s| s.borrow().clone())
+}
+fn stats_inc<F: FnOnce(&mut DiffStats)>(f: F) {
+    DIFF_STATS.with(|s| f(&mut *s.borrow_mut()))
+}
 
 // State structs for different types of diff iteration nodes
 
@@ -231,6 +257,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
             "visiting Unvisited node pair at {key:x?} (depth: {})",
             iter_stack.len()
         );
+        stats_inc(|s| s.pairs_compared += 1);
 
         match (&*self.node_left, &*self.node_right) {
             (Node::Branch(branch_left), Node::Branch(branch_right)) => {
@@ -276,6 +303,7 @@ impl UnvisitedStateVisitor for UnvisitedNodePairState {
                 // If present, a value in the right branch was added, and deleted for the right branch
                 //
                 if branch_left.partial_path != branch_right.partial_path {
+                    stats_inc(|s| s.branch_partial_mismatch += 1);
                     // Structural mismatch: process entire subtrees in lexical order using simple left/delete and right/add.
                     trace!(
                         "Partial paths differ at key {:x?}: left={:x?}, right={:x?}",
@@ -818,8 +846,7 @@ impl StateVisitor for VisitedNodePairState {
                 match pos_left.cmp(&pos_right) {
                     Ordering::Equal => {
                         // Same position - check if subtrees are identical
-                        if DiffMerkleNodeStream::<L, R>::child_identical(&child_left, &child_right)
-                        {
+                        if DiffMerkleNodeStream::<L, R>::child_identical(&child_left, &child_right) {
                             // Identical subtrees, skip them and continue with remaining children
                             iter_stack.push(DiffIterationNode {
                                 key: key.clone(),
@@ -872,6 +899,7 @@ impl StateVisitor for VisitedNodePairState {
                     }
                     Ordering::Less => {
                         // pos_left < pos_right: child exists in tree_left but not tree_right
+                        stats_inc(|s| s.left_only_nodes += 1);
                         let node_left = match child_left {
                             Child::AddressWithHash(addr, _) => readers.0.read_node(addr)?,
                             Child::Node(node) => node.clone().into(),
@@ -908,6 +936,7 @@ impl StateVisitor for VisitedNodePairState {
                     }
                     Ordering::Greater => {
                         // pos_left > pos_right: child exists in tree_right but not tree_left
+                        stats_inc(|s| s.right_only_nodes += 1);
                         let node_right = match child_right {
                             Child::AddressWithHash(addr, _) => readers.1.read_node(addr)?,
                             Child::Node(node) => node.clone().into(),
@@ -948,6 +977,7 @@ impl StateVisitor for VisitedNodePairState {
             }
             (Some((pos_left, child_left)), None) => {
                 // Only tree_left has remaining children
+                stats_inc(|s| s.left_only_nodes += 1);
                 let node_left = match child_left {
                     Child::AddressWithHash(addr, _) => readers.0.read_node(addr)?,
                     Child::Node(node) => node.clone().into(),
@@ -982,6 +1012,7 @@ impl StateVisitor for VisitedNodePairState {
             }
             (None, Some((pos_right, child_right))) => {
                 // Only tree_right has remaining children
+                stats_inc(|s| s.right_only_nodes += 1);
                 let node_right = match child_right {
                     Child::AddressWithHash(addr, _) => readers.1.read_node(addr)?,
                     Child::Node(node) => node.clone().into(),
@@ -1286,6 +1317,7 @@ struct DiffMerkleNodeStream<'a, T: TrieReader, U: TrieReader> {
 
 impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
     fn new(tree_left: &'a T, tree_right: &'a U, start_key: Key) -> Self {
+        stats_reset();
         // Determine if one side is empty for optimized traversal
         let left_empty = tree_left.root_node().is_none();
         let right_empty = tree_right.root_node().is_none();
@@ -1294,7 +1326,11 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
         } else if !left_empty && right_empty {
             UniCase::Left(MerkleKeyValueIter::from_key(tree_left, &start_key))
         } else {
-            UniCase::BothIters(BothIters::new(tree_left, tree_right, &start_key))
+            if std::env::var("FWD_DIFF_SIMPLE").ok().as_deref() == Some("1") {
+                UniCase::BothIters(BothIters::new(tree_left, tree_right, &start_key))
+            } else {
+                UniCase::Both
+            }
         };
 
         Self {
@@ -1453,6 +1489,8 @@ impl<'a, T: TrieReader, U: TrieReader> DiffMerkleNodeStream<'a, T, U> {
         };
 
         // We remove the most recent DiffIterationNode, but in some cases we will push it back onto the stack.
+        // Track max stack depth for stats using current stack's length.
+        stats_inc(|s| s.max_stack_depth = s.max_stack_depth.max(iter_stack.len() as u32));
         while let Some(iter_node) = iter_stack.pop() {
             match iter_node.state {
                 DiffIterationNodeState::UnvisitedPair(state) => {
@@ -1523,15 +1561,31 @@ impl<T: TrieReader, U: TrieReader> Iterator for DiffMerkleNodeStream<'_, T, U> {
                             key.as_ref(),
                             value.len()
                         );
+                        stats_inc(|s| s.total_ops_put += 1);
                     }
                     BatchOp::Delete { key } => {
                         eprintln!("OP Del key={:?}", key.as_ref());
+                        stats_inc(|s| s.total_ops_delete += 1);
                     }
                     BatchOp::DeleteRange { prefix } => {
                         eprintln!("OP DelRange prefix={:?}", prefix.as_ref());
                     }
                 }
             }
+        }
+        if item.is_none() && std::env::var("FWD_DIFF_STATS").ok().as_deref() == Some("1") {
+            let snap = stats_snapshot();
+            eprintln!(
+                "DIFF STATS: puts={} deletes={} left_only={} right_only={} mismatches={} pairs_compared={} skipped_by_hash={} max_stack_depth={}",
+                snap.total_ops_put,
+                snap.total_ops_delete,
+                snap.left_only_nodes,
+                snap.right_only_nodes,
+                snap.branch_partial_mismatch,
+                snap.pairs_compared,
+                snap.nodes_skipped_by_hash,
+                snap.max_stack_depth,
+            );
         }
         item
     }
