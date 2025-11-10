@@ -31,7 +31,7 @@ and EVM-compatible blockchains that store state in Merkle tries.
 
 This is a Cargo workspace with the following members:
 
-```
+```text
 firewood/             # Core library and main database implementation
 ├── src/              # Core source code
 │   ├── db.rs         # Main database API
