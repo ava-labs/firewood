@@ -23,7 +23,7 @@ use metrics::Key;
 use metrics_util::registry::{AtomicStorage, Registry};
 
 #[cfg(unix)]
-use tikv_jemalloc_ctl::{epoch as jemalloc_epoch, stats};
+use tikv_jemalloc_ctl::{stats, epoch as jemalloc_epoch};
 
 static RECORDER: OnceLock<TextRecorder> = OnceLock::new();
 static JEMALLOC_STATS_LOGGER_STARTED: AtomicBool = AtomicBool::new(false);
