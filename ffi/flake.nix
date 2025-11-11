@@ -60,7 +60,7 @@
 
       } // lib.optionalAttrs pkgs.stdenv.isDarwin {
         # Set macOS deployment target for Darwin builds
-        MACOSX_DEPLOYMENT_TARGET = "13.0";
+        MACOSX_DEPLOYMENT_TARGET = "15.0";
       };
 
       cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
