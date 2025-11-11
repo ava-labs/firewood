@@ -104,6 +104,7 @@ mod tests {
     use super::*;
     use firewood_storage::{ImmutableProposal, MemStore, MutableProposal, NodeStore};
     use std::sync::Arc;
+    use test_case::test_case;
 
     fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
         let memstore = MemStore::new(vec![]);
@@ -338,5 +339,304 @@ mod tests {
             matches!(ops[4], BatchOp::Put { ref key, ref value } if **key == *b"f" && **value == *b"value_f")
         );
         // Note: "c" should be skipped as it's identical in both trees
+    }
+
+    fn apply_ops_and_freeze(
+        base: &Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
+        ops: &[BatchOp<Key, Value>],
+    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> {
+        let mut fork = base.fork().unwrap();
+        for op in ops {
+            match op {
+                BatchOp::Put { key, value } => {
+                    fork.insert(key, value.clone()).unwrap();
+                }
+                BatchOp::Delete { key } => {
+                    fork.remove(key).unwrap();
+                }
+                BatchOp::DeleteRange { prefix } => {
+                    fork.remove_prefix(prefix).unwrap();
+                }
+            }
+        }
+        fork.try_into().unwrap()
+    }
+
+    fn assert_merkle_eq<L, R>(
+        left: &Merkle<L>,
+        right: &Merkle<R>,
+    ) where
+        L: TrieReader,
+        R: TrieReader,
+    {
+        let mut l = crate::iter::MerkleKeyValueIter::from(left.nodestore());
+        let mut r = crate::iter::MerkleKeyValueIter::from(right.nodestore());
+        loop {
+            match (l.next(), r.next()) {
+                (None, None) => break,
+                (Some(Ok((lk, lv))), Some(Ok((rk, rv)))) => {
+                    assert_eq!(lk, rk, "keys differ");
+                    assert_eq!(lv, rv, "values differ");
+                }
+                (None, Some(Ok((rk, _)))) => panic!("Missing key in result: {rk:x?}"),
+                (Some(Ok((lk, _))), None) => panic!("Extra key in result: {lk:x?}"),
+                (Some(Err(e)), _) | (_, Some(Err(e))) => panic!("iteration error: {e:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_structural_diff_random() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let base_seed = 0xBEEF_F00D_CAFE_BABE_u64;
+        let rounds = 5usize;
+        let items = 500usize;
+        let modify = 150usize;
+        for round in 0..rounds {
+            let seed = base_seed ^ (round as u64);
+            let mut rng = StdRng::seed_from_u64(seed);
+
+            // Unique base
+            let mut base: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(items);
+            let mut seen = std::collections::HashSet::new();
+            while base.len() < items {
+                let klen = rng.random_range(1..=32);
+                let vlen = rng.random_range(1..=64);
+                let key: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
+                if seen.insert(key.clone()) {
+                    let val: Vec<u8> = (0..vlen).map(|_| rng.random()).collect();
+                    base.push((key, val));
+                }
+            }
+
+            let mut left = create_test_merkle();
+            let mut right = create_test_merkle();
+            for (k, v) in &base {
+                left.insert(k, v.clone().into_boxed_slice()).unwrap();
+                right.insert(k, v.clone().into_boxed_slice()).unwrap();
+            }
+
+            // Modify right
+            for _ in 0..modify {
+                let idx = rng.random_range(0..base.len());
+                match rng.random_range(0..3) {
+                    0 => {
+                        // delete
+                        right.remove(&base[idx].0).ok();
+                    }
+                    1 => {
+                        // update existing
+                        if right.get_value(&base[idx].0).unwrap().is_some() {
+                            let newlen = rng.random_range(1..=64);
+                            let newval: Vec<u8> = (0..newlen).map(|_| rng.random()).collect();
+                            right.insert(&base[idx].0, newval.into_boxed_slice()).unwrap();
+                        }
+                    }
+                    _ => {
+                        // insert
+                        let klen = rng.random_range(1..=32);
+                        let vlen = rng.random_range(1..=64);
+                        let key: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
+                        let val: Vec<u8> = (0..vlen).map(|_| rng.random()).collect();
+                        right.insert(&key, val.into_boxed_slice()).unwrap();
+                    }
+                }
+            }
+
+            // Freeze
+            let left_imm = make_immutable(left);
+            let right_imm = make_immutable(right);
+
+            // Compute diff ops using simple diff
+            let ops: Vec<_> = diff_merkle_simple(&left_imm, &right_imm, Box::new([])).collect();
+
+            // Apply operations to left and verify equals right
+            let after = apply_ops_and_freeze(&left_imm, &ops);
+            assert_merkle_eq(&after, &right_imm);
+        }
+    }
+
+    // example of running this test with a specific seed and parameters:
+    // FIREWOOD_TEST_SEED=14805530293320947613 cargo test --features logger diff::tests::diff_random_with_deletions
+    #[test_case(false, false, 500)]
+    #[test_case(false, true, 500)]
+    #[test_case(true, false, 500)]
+    #[test_case(true, true, 500)]
+    #[allow(clippy::indexing_slicing, clippy::cast_precision_loss)]
+    fn diff_random_with_deletions(trie1_mutable: bool, trie2_mutable: bool, num_items: usize) {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        // Read FIREWOOD_TEST_SEED from environment or use default seed
+        let seed = std::env::var("FIREWOOD_TEST_SEED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(14805530293320947613);
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        // Generate random key-value pairs, ensuring uniqueness
+        let mut items: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        let mut seen_keys = std::collections::HashSet::new();
+
+        while items.len() < num_items {
+            let key_len = rng.random_range(1..=32);
+            let value_len = rng.random_range(1..=64);
+
+            let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
+
+            // Only add if key is unique
+            if seen_keys.insert(key.clone()) {
+                let value: Vec<u8> = (0..value_len).map(|_| rng.random()).collect();
+                items.push((key, value));
+            }
+        }
+
+        // Create two identical merkles
+        let mut m1 = create_test_merkle();
+        let mut m2 = create_test_merkle();
+
+        for (key, value) in &items {
+            m1.insert(key, value.clone().into_boxed_slice()).unwrap();
+            m2.insert(key, value.clone().into_boxed_slice()).unwrap();
+        }
+
+        // Pick two different random indices to delete (if possible)
+        if !items.is_empty() {
+            let delete_idx1 = rng.random_range(0..items.len());
+            m1.remove(&items[delete_idx1].0).unwrap();
+        }
+        if items.len() > 1 {
+            let mut delete_idx2 = rng.random_range(0..items.len());
+            // ensure different index
+            while items.len() > 1 && delete_idx2 == 0 { // it's okay if equal when len==1
+                delete_idx2 = rng.random_range(0..items.len());
+            }
+            m2.remove(&items[delete_idx2].0).unwrap();
+        }
+
+        // Compute ops and immutable views according to mutability flags
+        let (ops, m1_immut, m2_immut): (
+            Vec<BatchOp<Box<[u8]>, Box<[u8]>>>,
+            Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
+            Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
+        ) = if trie1_mutable && trie2_mutable {
+            let ops = diff_merkle_simple(&m1, &m2, Box::new([])).collect();
+            let m1_immut = m1.try_into().unwrap();
+            let m2_immut = m2.try_into().unwrap();
+            (ops, m1_immut, m2_immut)
+        } else if trie1_mutable && !trie2_mutable {
+            let m2_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+                m2.try_into().unwrap();
+            let ops = diff_merkle_simple(&m1, &m2_immut, Box::new([])).collect();
+            let m1_immut = m1.try_into().unwrap();
+            (ops, m1_immut, m2_immut)
+        } else if !trie1_mutable && trie2_mutable {
+            let m1_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+                m1.try_into().unwrap();
+            let ops = diff_merkle_simple(&m1_immut, &m2, Box::new([])).collect();
+            let m2_immut = m2.try_into().unwrap();
+            (ops, m1_immut, m2_immut)
+        } else {
+            let m1_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+                m1.try_into().unwrap();
+            let m2_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+                m2.try_into().unwrap();
+            let ops = diff_merkle_simple(&m1_immut, &m2_immut, Box::new([])).collect();
+            (ops, m1_immut, m2_immut)
+        };
+
+        // Apply ops to left immutable and compare with right immutable
+        let left_after = apply_ops_and_freeze(&m1_immut, &ops);
+        assert_merkle_eq(&left_after, &m2_immut);
+    }
+
+    #[test]
+    #[ignore]
+    fn diff_large_random_stress() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        // Default parameters (can be overridden by env vars)
+        let default_items = 5000usize;
+        let default_modify = 1000usize; // modifies or inserts
+        let seed = std::env::var("FIREWOOD_STRESS_SEED")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0xD1FF_C0DE_BAAD_F00D);
+        let total_items = std::env::var("FIREWOOD_STRESS_ITEMS")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(default_items);
+        let total_modify = std::env::var("FIREWOOD_STRESS_MODIFY")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(default_modify);
+
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        // Build base unique keys and values
+        let mut base: Vec<(Vec<u8>, Vec<u8>)> = Vec::with_capacity(total_items);
+        let mut seen = std::collections::HashSet::new();
+        while base.len() < total_items {
+            let klen: usize = rng.random_range(1..=32);
+            let vlen: usize = rng.random_range(1..=64);
+            let key: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
+            if !seen.insert(key.clone()) {
+                continue;
+            }
+            let val: Vec<u8> = (0..vlen).map(|_| rng.random()).collect();
+            base.push((key, val));
+        }
+
+        // Left and right start identical
+        let mut left = create_test_merkle();
+        let mut right = create_test_merkle();
+        for (k, v) in &base {
+            left.insert(k, v.clone().into_boxed_slice()).unwrap();
+            right.insert(k, v.clone().into_boxed_slice()).unwrap();
+        }
+
+        // Make modifications on the right: mix of deletes, updates, and inserts
+        for _ in 0..total_modify {
+            match rng.random_range(0..100) {
+                0..=24 => {
+                    // delete 25%
+                    let idx = rng.random_range(0..base.len());
+                    right.remove(&base[idx].0).ok();
+                }
+                25..=74 => {
+                    // update 50%
+                    let idx = rng.random_range(0..base.len());
+                    let newlen = rng.random_range(1..=64);
+                    let newval: Vec<u8> = (0..newlen).map(|_| rng.random()).collect();
+                    right
+                        .insert(&base[idx].0, newval.into_boxed_slice())
+                        .unwrap();
+                }
+                _ => {
+                    // insert 25%
+                    let klen = rng.random_range(1..=32);
+                    let vlen = rng.random_range(1..=64);
+                    let key: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
+                    let val: Vec<u8> = (0..vlen).map(|_| rng.random()).collect();
+                    right.insert(&key, val.into_boxed_slice()).unwrap();
+                }
+            }
+        }
+
+        // Freeze to immutable for diff
+        let left = make_immutable(left);
+        let right = make_immutable(right);
+
+        // Compute diff ops using simple diff
+        let ops = diff_merkle_simple(&left, &right, Box::new([])).collect::<Vec<_>>();
+
+        // Apply ops to left
+        let left_after = apply_ops_and_freeze(&left, &ops);
+
+        // Verify left_after == right by comparing full key/value iteration
+        assert_merkle_eq(&left_after, &right);
     }
 }
