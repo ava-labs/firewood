@@ -48,7 +48,7 @@ CARGO_SYMBOLS=$(wc -l < "$TMPDIR/cargo-symbols.txt")
 echo "Nix build:   $NIX_SYMBOLS symbols"
 echo "Cargo build: $CARGO_SYMBOLS symbols"
 if [ "$NIX_SYMBOLS" -eq "$CARGO_SYMBOLS" ]; then
-    echo "✅ Symbol counts match"
+    echo "✅ Symbol counts are both $NIX_SYMBOLS"
 else
     echo "❌ Symbol counts differ"
     echo ""
@@ -84,9 +84,9 @@ CARGO_RELOCS=$(wc -l < "$TMPDIR/cargo-relocs.txt")
 echo "Nix build:   $NIX_RELOCS relocation entries"
 echo "Cargo build: $CARGO_RELOCS relocation entries"
 if [ "$NIX_RELOCS" -eq "$CARGO_RELOCS" ]; then
-    echo "✅ Relocation counts match"
+    echo "✅ Relocation counts are both $NIX_RELOCS"
 else
-    echo "❌ Relocation counts differ"
+    echo "❌ Relocation counts differ (nix: $NIX_RELOCS vs cargo: $CARGO_RELOCS)"
 fi
 
 echo ""
@@ -98,6 +98,7 @@ grep -Eo "$RELOC_PATTERN" "$TMPDIR/cargo-relocs.txt" | sort | uniq -c > "$TMPDIR
 
 if diff "$TMPDIR/nix-reloc-types.txt" "$TMPDIR/cargo-reloc-types.txt" > /dev/null; then
     echo "✅ Relocation types match"
+    cat "$TMPDIR/nix-reloc-types.txt"
 else
     echo "❌ Relocation types differ"
     diff "$TMPDIR/nix-reloc-types.txt" "$TMPDIR/cargo-reloc-types.txt"
