@@ -62,7 +62,7 @@ if [ "${#NVME_DEVS[@]}" -gt 0 ]; then
   fi
 
   # Format and mount the device
-  mkfs.ext4 -E nodiscard -i 6291456 "$DEVICE_TO_USE"
+  mkfs.ext4 -E nodiscard -i 16384 "$DEVICE_TO_USE"
   NVME_MOUNT=/mnt/nvme
   mkdir -p "$NVME_MOUNT"
   mount -o noatime "$DEVICE_TO_USE" "$NVME_MOUNT"
