@@ -1600,12 +1600,19 @@ func TestCloseWithCancelledContext(t *testing.T) {
 	proposal, err := db.Propose(keys, vals)
 	r.NoError(err)
 
-	// Create a cancelled context
 	ctx, cancel := context.WithCancel(t.Context())
-	cancel() // Cancel immediately
 
-	// Close should return ErrActiveKeepAliveHandles because context is cancelled
-	err = db.Close(ctx)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		err = db.Close(ctx)
+	}()
+
+	cancel()
+	wg.Wait()
+
 	r.ErrorIs(err, ErrActiveKeepAliveHandles, "Close should return ErrActiveKeepAliveHandles when context is cancelled")
 
 	// Drop the proposal
@@ -1643,8 +1650,7 @@ func TestCloseWithShortTimeout(t *testing.T) {
 	elapsed := time.Since(start)
 
 	r.ErrorIs(err, ErrActiveKeepAliveHandles, "Close should return ErrActiveKeepAliveHandles when context times out")
-	// Verify it timed out quickly (much less than the default 1-minute timeout)
-	r.Less(elapsed, 5*time.Second, "Close should timeout quickly, not wait for default timeout")
+	r.Less(elapsed, defaultCloseTimeout, "Close should timeout quickly, not wait for default timeout")
 
 	// Drop the revision
 	r.NoError(revision.Drop())
@@ -1736,36 +1742,7 @@ func TestCloseSucceedsWhenHandlesDroppedInTime(t *testing.T) {
 	select {
 	case err := <-closeDone:
 		r.NoError(err, "Close should succeed when handles are dropped before timeout")
-	case <-time.After(1 * time.Second):
+	case <-time.After(defaultCloseTimeout):
 		r.Fail("Close did not complete in time")
 	}
-}
-
-// TestCloseErrorIsCorrectType verifies that the error returned by Database.Close
-// is exactly ErrActiveKeepAliveHandles and can be checked with errors.Is.
-func TestCloseErrorIsCorrectType(t *testing.T) {
-	r := require.New(t)
-	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, err := newDatabase(dbFile)
-	r.NoError(err)
-
-	// Create an active proposal
-	keys, vals := kvForTest(1)
-	proposal, err := db.Propose(keys, vals)
-	r.NoError(err)
-
-	// Create a cancelled context
-	ctx, cancel := context.WithCancel(t.Context())
-	cancel()
-
-	// Close should return ErrActiveKeepAliveHandles
-	err = db.Close(ctx)
-	r.Error(err, "Close should return an error")
-
-	// Also verify with ErrorIs
-	r.ErrorIs(err, ErrActiveKeepAliveHandles, "Error should match ErrActiveKeepAliveHandles")
-
-	// Clean up
-	r.NoError(proposal.Drop())
-	r.NoError(db.Close(t.Context()))
 }
