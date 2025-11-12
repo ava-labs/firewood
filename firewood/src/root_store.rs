@@ -35,7 +35,10 @@ pub trait RootStore: Debug {
     /// # Errors
     ///
     ///  Will return an error if unable to query the underlying datastore.
-    fn get(&self, hash: &TrieHash) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>>;
+    fn get(
+        &self,
+        hash: &TrieHash,
+    ) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>>;
 }
 
 #[derive(Debug)]
@@ -50,7 +53,10 @@ impl RootStore for NoOpStore {
         Ok(())
     }
 
-    fn get(&self, _hash: &TrieHash) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>> {
+    fn get(
+        &self,
+        _hash: &TrieHash,
+    ) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>> {
         Ok(None)
     }
 }
@@ -92,7 +98,10 @@ impl RootStore for MockStore {
         Ok(())
     }
 
-    fn get(&self, hash: &TrieHash) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>> {
+    fn get(
+        &self,
+        hash: &TrieHash,
+    ) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>> {
         if self.should_fail {
             return Err("Getting roots should fail".into());
         }
