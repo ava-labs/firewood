@@ -256,6 +256,30 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
             // Build the full path
             let mut full_path = current_path.clone();
             let node_partial = current_node.partial_path();
+
+            // Debug specific case
+            let prefix_nibbles: Vec<u8> = current_path.iter().map(|p| p.as_u8()).collect();
+            let prefix_key = Self::nibbles_to_key(&prefix_nibbles);
+
+            // Special debug for problematic prefix
+            if is_left && node_partial.as_ref().is_empty() {
+                if prefix_nibbles == vec![2, 6] {
+                    eprintln!("DEBUG: Processing left node at nibbles [2, 6] (byte [26]) with empty partial");
+                    eprintln!("  Has value: {}", current_node.value().is_some());
+                    if let Node::Branch(branch) = current_node.as_ref() {
+                        let child_count = branch.children.iter().filter(|(_, c)| c.is_some()).count();
+                        eprintln!("  Has {} children", child_count);
+                        // Check for specific children we expect
+                        if branch.children[PathComponent::try_new(3).unwrap()].is_some() {
+                            eprintln!("    ✓ Has child at nibble 3 (for key [26, 31...])");
+                        }
+                        if branch.children[PathComponent::try_new(4).unwrap()].is_some() {
+                            eprintln!("    ✓ Has child at nibble 4 (for key [26, 4d...])");
+                        }
+                    }
+                }
+            }
+
             for &nibble in node_partial.as_ref() {
                 if let Some(component) = PathComponent::try_new(nibble) {
                     full_path.push(component);
@@ -275,6 +299,7 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
 
             // Queue children
             if let Node::Branch(branch) = current_node.as_ref() {
+
                 for i in (0..16u8).rev() {
                     let idx = PathComponent::try_new(i).expect("index in bounds");
                     if let Some(child) = branch.children[idx].as_ref() {
@@ -403,7 +428,7 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
 
                     match relation {
                         PathRelation::ExactMatch => {
-                            // Paths match - compare values and children
+                            // Paths match exactly - compare values and children
                             let nibbles: Vec<u8> = current_path.iter().map(|p| p.as_u8()).collect();
                             let current_key = Self::nibbles_to_key(&nibbles);
 
@@ -462,38 +487,137 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
                                 _ => {} // One or both are leaves, no children to process
                             }
                         }
-                        _ => {
-                            // Paths diverge or one is prefix of other
-                            // We need to compare actual keys to avoid duplicates
+                        PathRelation::LeftIsPrefix => {
+                            // Left path is a prefix of right path
+                            // This means left stops here while right continues
+                            // We need to handle this specially
 
-                            // Collect keys from both subtrees
-                            let left_keys = self.collect_subtree_keys(left, frame.path_nibbles.clone(), true);
-                            let right_keys = self.collect_subtree_keys(right, frame.path_nibbles, false);
+                            // Process left from its current position (including any value and all children)
+                            // Process right from its current position
+                            let base_path = frame.path_nibbles;
+                            let left_keys = self.collect_subtree_keys(left, base_path.clone(), true);
+                            let right_keys = self.collect_subtree_keys(right, base_path, false);
 
-                            // Compare and emit only actual differences
-                            for (key, value) in &left_keys {
-                                if !right_keys.contains_key(key) {
-                                    // Key only in left - delete it
-                                    self.pending_ops.push_back(BatchOp::Delete { key: key.clone() });
-                                } else if let (Some(lv), Some(Some(rv))) = (value, right_keys.get(key)) {
-                                    // Key in both - check if values differ
-                                    if lv != rv {
+                            // Process all keys in sorted order
+                            let mut all_keys = std::collections::BTreeSet::new();
+                            for key in left_keys.keys() {
+                                all_keys.insert(key.clone());
+                            }
+                            for key in right_keys.keys() {
+                                all_keys.insert(key.clone());
+                            }
+
+                            for key in all_keys {
+                                match (left_keys.get(&key), right_keys.get(&key)) {
+                                    (Some(Some(_)), None) => {
+                                        self.pending_ops.push_back(BatchOp::Delete { key });
+                                    }
+                                    (None, Some(Some(value))) => {
                                         self.pending_ops.push_back(BatchOp::Put {
-                                            key: key.clone(),
+                                            key,
+                                            value: value.clone(),
+                                        });
+                                    }
+                                    (Some(Some(lv)), Some(Some(rv))) if lv != rv => {
+                                        self.pending_ops.push_back(BatchOp::Put {
+                                            key,
                                             value: rv.clone(),
                                         });
                                     }
+                                    _ => {}
                                 }
                             }
+                        }
+                        PathRelation::RightIsPrefix => {
+                            // Right path is a prefix of left path
+                            // This means right stops here while left continues
+                            // Handle symmetrically to LeftIsPrefix
 
-                            // Add keys only in right
-                            for (key, value) in &right_keys {
-                                if !left_keys.contains_key(key) {
-                                    if let Some(v) = value {
+                            let base_path = frame.path_nibbles;
+                            let left_keys = self.collect_subtree_keys(left, base_path.clone(), true);
+                            let right_keys = self.collect_subtree_keys(right, base_path, false);
+
+                            let mut all_keys = std::collections::BTreeSet::new();
+                            for key in left_keys.keys() {
+                                all_keys.insert(key.clone());
+                            }
+                            for key in right_keys.keys() {
+                                all_keys.insert(key.clone());
+                            }
+
+                            for key in all_keys {
+                                match (left_keys.get(&key), right_keys.get(&key)) {
+                                    (Some(Some(_)), None) => {
+                                        self.pending_ops.push_back(BatchOp::Delete { key });
+                                    }
+                                    (None, Some(Some(value))) => {
                                         self.pending_ops.push_back(BatchOp::Put {
-                                            key: key.clone(),
-                                            value: v.clone(),
+                                            key,
+                                            value: value.clone(),
                                         });
+                                    }
+                                    (Some(Some(lv)), Some(Some(rv))) if lv != rv => {
+                                        self.pending_ops.push_back(BatchOp::Put {
+                                            key,
+                                            value: rv.clone(),
+                                        });
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        PathRelation::Divergent => {
+                            // Paths truly diverge - neither is a prefix of the other
+                            // We need to compare all keys from both subtrees
+
+                            let base_path = frame.path_nibbles;
+                            let left_keys = self.collect_subtree_keys(left, base_path.clone(), true);
+                            let right_keys = self.collect_subtree_keys(right, base_path, false);
+
+                            // Merge and process keys in sorted order to maintain correct operation ordering
+                            // This is critical for correctness - operations must be emitted in sorted key order
+                            let mut all_keys = std::collections::BTreeSet::new();
+                            for key in left_keys.keys() {
+                                all_keys.insert(key.clone());
+                            }
+                            for key in right_keys.keys() {
+                                all_keys.insert(key.clone());
+                            }
+
+                            // Process keys in sorted order
+                            for key in all_keys {
+                                match (left_keys.get(&key), right_keys.get(&key)) {
+                                    (Some(Some(_)), None) => {
+                                        // Key with value only in left - delete it
+                                        self.pending_ops.push_back(BatchOp::Delete { key });
+                                    }
+                                    (None, Some(Some(value))) => {
+                                        // Key with value only in right - insert it
+                                        self.pending_ops.push_back(BatchOp::Put {
+                                            key,
+                                            value: value.clone(),
+                                        });
+                                    }
+                                    (Some(Some(lv)), Some(Some(rv))) if lv != rv => {
+                                        // Key in both with different values - update it
+                                        self.pending_ops.push_back(BatchOp::Put {
+                                            key,
+                                            value: rv.clone(),
+                                        });
+                                    }
+                                    (Some(None), Some(Some(value))) => {
+                                        // Left has no value but right does - insert it
+                                        self.pending_ops.push_back(BatchOp::Put {
+                                            key,
+                                            value: value.clone(),
+                                        });
+                                    }
+                                    (Some(Some(_)), Some(None)) => {
+                                        // Left has value but right doesn't - delete it
+                                        self.pending_ops.push_back(BatchOp::Delete { key });
+                                    }
+                                    _ => {
+                                        // Keys match with same values, or both None - no operation needed
                                     }
                                 }
                             }
@@ -959,6 +1083,37 @@ mod tests {
 
             // Compute diff operations
             let ops: Vec<_> = diff_merkle_optimized(&left_imm, &right_imm, Box::new([])).collect();
+
+            // Debug: Also compute simple diff to compare
+            let simple_ops: Vec<_> = diff_merkle_simple(&left_imm, &right_imm, Box::new([])).collect();
+
+            // If lengths differ, print debug info
+            if ops.len() != simple_ops.len() {
+                eprintln!("Round {}: Operation count mismatch! Optimized: {}, Simple: {}",
+                         round, ops.len(), simple_ops.len());
+
+                // Find which operations are missing
+                let mut simple_set = std::collections::HashSet::new();
+                for op in &simple_ops {
+                    simple_set.insert(format!("{:?}", op));
+                }
+                let mut opt_set = std::collections::HashSet::new();
+                for op in &ops {
+                    opt_set.insert(format!("{:?}", op));
+                }
+
+                eprintln!("  Missing from optimized:");
+                let missing: Vec<_> = simple_set.difference(&opt_set).take(5).collect();
+                for m in missing {
+                    eprintln!("    {}", m);
+                }
+
+                eprintln!("  Extra in optimized:");
+                let extra: Vec<_> = opt_set.difference(&simple_set).take(5).collect();
+                for e in extra {
+                    eprintln!("    {}", e);
+                }
+            }
 
             // Apply operations and verify result
             let after = apply_ops_and_freeze(&left_imm, &ops);
