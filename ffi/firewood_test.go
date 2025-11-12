@@ -1601,7 +1601,7 @@ func TestCloseWithCancelledContext(t *testing.T) {
 	r.NoError(err)
 
 	// Create a cancelled context
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // Cancel immediately
 
 	// Close should return ErrActiveKeepAliveHandles because context is cancelled
@@ -1612,7 +1612,7 @@ func TestCloseWithCancelledContext(t *testing.T) {
 	r.NoError(proposal.Drop())
 
 	// Now Close should succeed
-	r.NoError(db.Close(context.Background()))
+	r.NoError(db.Close(t.Context()))
 }
 
 // TestCloseWithShortTimeout verifies that Database.Close returns
@@ -1632,7 +1632,7 @@ func TestCloseWithShortTimeout(t *testing.T) {
 	r.NoError(err)
 
 	// Create a context with a very short timeout (100ms)
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 
 	// Record start time to verify timeout occurred quickly
@@ -1650,7 +1650,7 @@ func TestCloseWithShortTimeout(t *testing.T) {
 	r.NoError(revision.Drop())
 
 	// Now Close should succeed
-	r.NoError(db.Close(context.Background()))
+	r.NoError(db.Close(t.Context()))
 }
 
 // TestCloseWithMultipleActiveHandles verifies that Database.Close returns
@@ -1682,7 +1682,7 @@ func TestCloseWithMultipleActiveHandles(t *testing.T) {
 	r.NoError(err)
 
 	// Create a cancelled context
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	// Close should return ErrActiveKeepAliveHandles
@@ -1697,7 +1697,7 @@ func TestCloseWithMultipleActiveHandles(t *testing.T) {
 	r.NoError(revision2.Drop())
 
 	// Now Close should succeed
-	r.NoError(db.Close(context.Background()))
+	r.NoError(db.Close(t.Context()))
 }
 
 // TestCloseSucceedsWhenHandlesDroppedInTime verifies that Database.Close succeeds
@@ -1716,7 +1716,7 @@ func TestCloseSucceedsWhenHandlesDroppedInTime(t *testing.T) {
 	r.NoError(err)
 
 	// Create a context with a reasonable timeout
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
 
 	// Channel to receive Close result
@@ -1755,20 +1755,17 @@ func TestCloseErrorIsCorrectType(t *testing.T) {
 	r.NoError(err)
 
 	// Create a cancelled context
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	// Close should return ErrActiveKeepAliveHandles
 	err = db.Close(ctx)
 	r.Error(err, "Close should return an error")
 
-	// Verify the error is exactly ErrActiveKeepAliveHandles using errors.Is
-	r.True(errors.Is(err, ErrActiveKeepAliveHandles), "Error should be ErrActiveKeepAliveHandles")
-
 	// Also verify with ErrorIs
 	r.ErrorIs(err, ErrActiveKeepAliveHandles, "Error should match ErrActiveKeepAliveHandles")
 
 	// Clean up
 	r.NoError(proposal.Drop())
-	r.NoError(db.Close(context.Background()))
+	r.NoError(db.Close(t.Context()))
 }
