@@ -12,17 +12,16 @@ use crate::{FileIoError, LinearAddress, NodeReader, SharedNode};
 /// atomically.
 ///
 /// `MaybePersistedNode` owns a reference-counted pointer to a mutex-protected
-/// pointer. The mutex guards an `Arc` to the enum of either an un-persisted but
-/// committed (or committing) node or the linear address of a persisted node.
+/// enum representing either an un-persisted (or allocating) node or the
+/// linear address of a persisted node.
 ///
 /// This type is complicated, so here is a breakdown of the types involved:
 ///
 /// | Item                   | Description                                            |
 /// |------------------------|--------------------------------------------------------|
 /// | [`MaybePersistedNode`] | Newtype wrapper around the remaining items.            |
-/// | [Arc]                  | reference counted pointer to an updatable pointer.     |
-/// | `Mutex`                | Protects the inner `Arc` during updates                 |
-/// | [Arc]                  | reference-counted pointer to the enum                   |
+/// | [Arc]                  | Reference counted pointer to a mutexed enum            |
+/// | `Mutex`                | Protects the inner enum during updates                  |
 /// | `MaybePersisted`       | Enum of either `Unpersisted` or `Persisted`            |
 /// | variant `Unpersisted`  | The shared node, in memory, for unpersisted nodes      |
 /// | -> [`SharedNode`]      | A `triomphe::Arc` of a [Node](`crate::Node`)           |
@@ -32,11 +31,10 @@ use crate::{FileIoError, LinearAddress, NodeReader, SharedNode};
 /// Traversing these pointers does incur a runtime penalty.
 ///
 /// When an `Unpersisted` node is `Persisted` using [`MaybePersistedNode::persist_at`],
-/// a new `Arc` is created to the new `MaybePersisted::Persisted` variant and the
-/// mutex-protected pointer is replaced under the lock. Subsequent accesses to any
-/// instance of it, including any clones, will see the `Persisted` node address.
+/// the enum value inside the mutex is replaced under the lock. Subsequent accesses
+/// to any instance of it, including any clones, will see the `Persisted` node address.
 #[derive(Debug, Clone)]
-pub struct MaybePersistedNode(Arc<Mutex<Arc<MaybePersisted>>>);
+pub struct MaybePersistedNode(Arc<Mutex<MaybePersisted>>);
 
 impl PartialEq<MaybePersistedNode> for MaybePersistedNode {
     fn eq(&self, other: &MaybePersistedNode) -> bool {
@@ -44,8 +42,7 @@ impl PartialEq<MaybePersistedNode> for MaybePersistedNode {
         if Arc::ptr_eq(&self.0, &other.0) {
             return true;
         }
-        self.0.lock().expect("poisoned lock").as_ref()
-            == other.0.lock().expect("poisoned lock").as_ref()
+        *self.0.lock().expect("poisoned lock") == *other.0.lock().expect("poisoned lock")
     }
 }
 
@@ -53,23 +50,19 @@ impl Eq for MaybePersistedNode {}
 
 impl From<SharedNode> for MaybePersistedNode {
     fn from(node: SharedNode) -> Self {
-        MaybePersistedNode(Arc::new(Mutex::new(Arc::new(MaybePersisted::Unpersisted(
-            node,
-        )))))
+        MaybePersistedNode(Arc::new(Mutex::new(MaybePersisted::Unpersisted(node))))
     }
 }
 
 impl From<LinearAddress> for MaybePersistedNode {
     fn from(address: LinearAddress) -> Self {
-        MaybePersistedNode(Arc::new(Mutex::new(Arc::new(MaybePersisted::Persisted(
-            address,
-        )))))
+        MaybePersistedNode(Arc::new(Mutex::new(MaybePersisted::Persisted(address))))
     }
 }
 
 impl From<&MaybePersistedNode> for Option<LinearAddress> {
     fn from(node: &MaybePersistedNode) -> Option<LinearAddress> {
-        match node.0.lock().expect("poisoned lock").as_ref() {
+        match &*node.0.lock().expect("poisoned lock") {
             MaybePersisted::Unpersisted(_) => None,
             MaybePersisted::Allocated(address, _) | MaybePersisted::Persisted(address) => {
                 Some(*address)
@@ -94,7 +87,7 @@ impl MaybePersistedNode {
     /// - `Ok(SharedNode)` contains the node if successfully retrieved
     /// - `Err(FileIoError)` if there was an error reading from storage
     pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
-        match self.0.lock().expect("poisoned lock").as_ref() {
+        match &*self.0.lock().expect("poisoned lock") {
             MaybePersisted::Allocated(_, node) | MaybePersisted::Unpersisted(node) => {
                 Ok(node.clone())
             }
@@ -109,7 +102,7 @@ impl MaybePersistedNode {
     /// Returns `Some(LinearAddress)` if the node is persisted on disk, otherwise `None`.
     #[must_use]
     pub fn as_linear_address(&self) -> Option<LinearAddress> {
-        match self.0.lock().expect("poisoned lock").as_ref() {
+        match &*self.0.lock().expect("poisoned lock") {
             MaybePersisted::Unpersisted(_) => None,
             MaybePersisted::Allocated(address, _) | MaybePersisted::Persisted(address) => {
                 Some(*address)
@@ -124,7 +117,7 @@ impl MaybePersistedNode {
     /// Returns `Some(&Self)` if the node is unpersisted, otherwise `None`.
     #[must_use]
     pub fn unpersisted(&self) -> Option<&Self> {
-        match self.0.lock().expect("poisoned lock").as_ref() {
+        match &*self.0.lock().expect("poisoned lock") {
             MaybePersisted::Allocated(_, _) | MaybePersisted::Unpersisted(_) => Some(self),
             MaybePersisted::Persisted(_) => None,
         }
@@ -141,7 +134,7 @@ impl MaybePersistedNode {
     ///
     /// * `addr` - The `LinearAddress` where the node has been persisted on disk
     pub fn persist_at(&self, addr: LinearAddress) {
-        *self.0.lock().expect("poisoned lock") = Arc::new(MaybePersisted::Persisted(addr));
+        *self.0.lock().expect("poisoned lock") = MaybePersisted::Persisted(addr);
     }
 
     /// Updates the internal state to indicate this node is allocated at the specified disk address.
@@ -157,7 +150,7 @@ impl MaybePersistedNode {
     pub fn allocate_at(&self, addr: LinearAddress) {
         let node = {
             let guard = self.0.lock().expect("poisoned lock");
-            match guard.as_ref() {
+            match &*guard {
                 MaybePersisted::Unpersisted(node) | MaybePersisted::Allocated(_, node) => {
                     node.clone()
                 }
@@ -166,7 +159,7 @@ impl MaybePersistedNode {
                 }
             }
         };
-        *self.0.lock().expect("poisoned lock") = Arc::new(MaybePersisted::Allocated(addr, node));
+        *self.0.lock().expect("poisoned lock") = MaybePersisted::Allocated(addr, node);
     }
 
     /// Returns the address and shared node if this node is in the Allocated state.
@@ -177,7 +170,7 @@ impl MaybePersistedNode {
     /// otherwise `None`.
     #[must_use]
     pub fn allocated_info(&self) -> Option<(LinearAddress, SharedNode)> {
-        match self.0.lock().expect("poisoned lock").as_ref() {
+        match &*self.0.lock().expect("poisoned lock") {
             MaybePersisted::Allocated(addr, node) => Some((*addr, node.clone())),
             _ => None,
         }
@@ -195,7 +188,7 @@ impl MaybePersistedNode {
 /// If instead you want the node itself, use [`MaybePersistedNode::as_shared_node`] first.
 impl Display for MaybePersistedNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0.lock().expect("poisoned lock").as_ref() {
+        match &*self.0.lock().expect("poisoned lock") {
             MaybePersisted::Unpersisted(node) => write!(f, "M{:p}", (*node).as_ptr()),
             MaybePersisted::Allocated(addr, node) => {
                 write!(f, "A{:p}@{addr}", (*node).as_ptr())
