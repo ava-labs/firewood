@@ -110,7 +110,11 @@ pub extern "C" fn fwd_db_range_proof(
     args: CreateRangeProofArgs,
 ) -> RangeProofResult {
     crate::invoke_with_handle(db, |db| {
-        let root_hash = args.root.as_ref().try_into()?;
+        let root_hash: firewood_storage::TrieHash = args.root.as_ref().try_into()?;
+        if firewood_storage::TrieHash::empty() == root_hash {
+            return Err(api::Error::RangeProofOnEmptyTrie);
+        }
+
         let view = db.get_root(root_hash)?;
         view.range_proof(
             args.start_key
