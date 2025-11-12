@@ -25,15 +25,21 @@ func (h *databaseKeepAliveHandle) init(wg *sync.WaitGroup) {
 	// lock not necessary today, but will be necessary in the future for types
 	// that initialize the handle at some point after construction (#1429).
 	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.outstandingHandles == wg {
+		// already initialized with this wait group; nothing to do. Allows multiple
+		// calls to `Database.VerifyRangeProof` as long as the same database is
+		// used.
+		return
+	}
 
 	if h.outstandingHandles != nil {
-		h.mu.Unlock()
 		panic("keep-alive handle already initialized")
 	}
 
 	h.outstandingHandles = wg
 	h.outstandingHandles.Add(1)
-	h.mu.Unlock()
 }
 
 // disown indicates that the object owning this handle is no longer keeping the
