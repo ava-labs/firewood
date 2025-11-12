@@ -16,7 +16,7 @@ use crate::{
 pub struct CreateRangeProofArgs<'a> {
     /// The root hash of the revision to prove. If `None`, the latest revision
     /// is used.
-    pub root: Maybe<BorrowedBytes<'a>>,
+    pub root: BorrowedBytes<'a>,
     /// The start key of the range to prove. If `None`, the range starts from the
     /// beginning of the keyspace.
     ///
@@ -110,13 +110,7 @@ pub extern "C" fn fwd_db_range_proof(
     args: CreateRangeProofArgs,
 ) -> RangeProofResult {
     crate::invoke_with_handle(db, |db| {
-        let root_hash = match args.root {
-            Maybe::Some(root) => root.as_ref().try_into()?,
-            Maybe::None => db
-                .current_root_hash()?
-                .ok_or(api::Error::RangeProofOnEmptyTrie)?,
-        };
-
+        let root_hash = args.root.as_ref().try_into()?;
         let view = db.get_root(root_hash)?;
         view.range_proof(
             args.start_key
