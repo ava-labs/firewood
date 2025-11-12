@@ -60,6 +60,14 @@ var (
 	expectedRoots map[string]string
 )
 
+func stringToHash(t *testing.T, s string) Hash {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	require.NoError(t, err)
+	require.Len(t, b, RootLength)
+	return Hash(b)
+}
+
 func inferHashingMode(ctx context.Context) (string, error) {
 	dbFile := filepath.Join(os.TempDir(), "test.db")
 	db, err := newDatabase(dbFile)
@@ -206,9 +214,7 @@ func TestTruncateDatabase(t *testing.T) {
 	// Check that the database is empty after truncation.
 	hash, err := db.Root()
 	r.NoError(err)
-	emptyRootStr := expectedRoots[emptyKey]
-	expectedHash, err := hex.DecodeString(emptyRootStr)
-	r.NoError(err)
+	expectedHash := stringToHash(t, expectedRoots[emptyKey])
 	r.Equal(expectedHash, hash, "Root hash mismatch after truncation")
 
 	r.NoError(db.Close(t.Context()))
@@ -358,18 +364,12 @@ func TestInsert100(t *testing.T) {
 			hash, err := newDB.Root()
 			r.NoError(err)
 
-			rootFromInsert, err := newDB.Root()
-			r.NoError(err)
-
 			// Assert the hash is exactly as expected. Test failure indicates a
 			// non-hash compatible change has been made since the string was set.
 			// If that's expected, update the string at the top of the file to
 			// fix this test.
-			expectedHashHex := expectedRoots[insert100Key]
-			expectedHash, err := hex.DecodeString(expectedHashHex)
-			r.NoError(err)
+			expectedHash := stringToHash(t, expectedRoots[insert100Key])
 			r.Equal(expectedHash, hash, "Root hash mismatch.\nExpected (hex): %x\nActual (hex): %x", expectedHash, hash)
-			r.Equal(rootFromInsert, hash)
 		})
 	}
 }
@@ -405,9 +405,7 @@ func TestInvariants(t *testing.T) {
 	hash, err := db.Root()
 	r.NoError(err)
 
-	emptyRootStr := expectedRoots[emptyKey]
-	expectedHash, err := hex.DecodeString(emptyRootStr)
-	r.NoError(err)
+	expectedHash := stringToHash(t, expectedRoots[emptyKey])
 	r.Equalf(expectedHash, hash, "expected %x, got %x", expectedHash, hash)
 
 	got, err := db.Get([]byte("non-existent"))
@@ -514,10 +512,7 @@ func TestDeleteAll(t *testing.T) {
 		r.Empty(got, "Get(%d)", i)
 	}
 
-	emptyRootStr := expectedRoots[emptyKey]
-	expectedHash, err := hex.DecodeString(emptyRootStr)
-	r.NoError(err, "Decode expected empty root hash")
-
+	expectedHash := stringToHash(t, expectedRoots[emptyKey])
 	hash, err := proposal.Root()
 	r.NoError(err, "%T.Root() after commit", proposal)
 	r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
