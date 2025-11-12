@@ -42,8 +42,9 @@ const (
 )
 
 var (
-	errDBClosed = errors.New("firewood database already closed")
-	EmptyRoot   = make([]byte, RootLength)
+	ErrActiveKeepAliveHandles = errors.New("cannot close database with active keep-alive handles")
+	errDBClosed               = errors.New("firewood database already closed")
+	EmptyRoot                 = make([]byte, RootLength)
 )
 
 // A Database is a handle to a Firewood database.
@@ -296,7 +297,7 @@ func (db *Database) Close(ctx context.Context) error {
 	select {
 	case <-done:
 	case <-ctx.Done():
-		return fmt.Errorf("at least one reachable %T not disowned", &databaseKeepAliveHandle{})
+		return ErrActiveKeepAliveHandles
 	}
 
 	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {

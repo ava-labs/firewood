@@ -1586,3 +1586,189 @@ func TestNilVsEmptyValue(t *testing.T) {
 	r.NotNil(got, "key4 should exist")
 	r.Empty(got, "key4 should have empty value")
 }
+
+// TestCloseWithCancelledContext verifies that Database.Close returns
+// ErrActiveKeepAliveHandles when the context is cancelled before handles are dropped.
+func TestCloseWithCancelledContext(t *testing.T) {
+	r := require.New(t)
+	dbFile := filepath.Join(t.TempDir(), "test.db")
+	db, err := newDatabase(dbFile)
+	r.NoError(err)
+
+	// Create a proposal to keep a handle active
+	keys, vals := kvForTest(1)
+	proposal, err := db.Propose(keys, vals)
+	r.NoError(err)
+
+	// Create a cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	// Close should return ErrActiveKeepAliveHandles because context is cancelled
+	err = db.Close(ctx)
+	r.ErrorIs(err, ErrActiveKeepAliveHandles, "Close should return ErrActiveKeepAliveHandles when context is cancelled")
+
+	// Drop the proposal
+	r.NoError(proposal.Drop())
+
+	// Now Close should succeed
+	r.NoError(db.Close(context.Background()))
+}
+
+// TestCloseWithShortTimeout verifies that Database.Close returns
+// ErrActiveKeepAliveHandles when the context times out before handles are dropped.
+func TestCloseWithShortTimeout(t *testing.T) {
+	r := require.New(t)
+	dbFile := filepath.Join(t.TempDir(), "test.db")
+	db, err := newDatabase(dbFile)
+	r.NoError(err)
+
+	// Create a revision to keep a handle active
+	keys, vals := kvForTest(1)
+	root, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	revision, err := db.Revision(root)
+	r.NoError(err)
+
+	// Create a context with a very short timeout (100ms)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	// Record start time to verify timeout occurred quickly
+	start := time.Now()
+
+	// Close should return ErrActiveKeepAliveHandles after timeout
+	err = db.Close(ctx)
+	elapsed := time.Since(start)
+
+	r.ErrorIs(err, ErrActiveKeepAliveHandles, "Close should return ErrActiveKeepAliveHandles when context times out")
+	// Verify it timed out quickly (much less than the default 1-minute timeout)
+	r.Less(elapsed, 5*time.Second, "Close should timeout quickly, not wait for default timeout")
+
+	// Drop the revision
+	r.NoError(revision.Drop())
+
+	// Now Close should succeed
+	r.NoError(db.Close(context.Background()))
+}
+
+// TestCloseWithMultipleActiveHandles verifies that Database.Close returns
+// ErrActiveKeepAliveHandles when multiple handles are active and context is cancelled.
+func TestCloseWithMultipleActiveHandles(t *testing.T) {
+	r := require.New(t)
+	dbFile := filepath.Join(t.TempDir(), "test.db")
+	db, err := newDatabase(dbFile)
+	r.NoError(err)
+
+	// Create multiple proposals
+	keys1, vals1 := kvForTest(3)
+	proposal1, err := db.Propose(keys1[:1], vals1[:1])
+	r.NoError(err)
+	proposal2, err := db.Propose(keys1[1:2], vals1[1:2])
+	r.NoError(err)
+	proposal3, err := db.Propose(keys1[2:3], vals1[2:3])
+	r.NoError(err)
+
+	// Create multiple revisions
+	root1, err := db.Update([][]byte{keyForTest(10)}, [][]byte{valForTest(10)})
+	r.NoError(err)
+	root2, err := db.Update([][]byte{keyForTest(20)}, [][]byte{valForTest(20)})
+	r.NoError(err)
+
+	revision1, err := db.Revision(root1)
+	r.NoError(err)
+	revision2, err := db.Revision(root2)
+	r.NoError(err)
+
+	// Create a cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Close should return ErrActiveKeepAliveHandles
+	err = db.Close(ctx)
+	r.ErrorIs(err, ErrActiveKeepAliveHandles, "Close should return ErrActiveKeepAliveHandles with multiple active handles")
+
+	// Drop all handles
+	r.NoError(proposal1.Drop())
+	r.NoError(proposal2.Drop())
+	r.NoError(proposal3.Drop())
+	r.NoError(revision1.Drop())
+	r.NoError(revision2.Drop())
+
+	// Now Close should succeed
+	r.NoError(db.Close(context.Background()))
+}
+
+// TestCloseSucceedsWhenHandlesDroppedInTime verifies that Database.Close succeeds
+// when all handles are dropped before the context timeout.
+func TestCloseSucceedsWhenHandlesDroppedInTime(t *testing.T) {
+	r := require.New(t)
+	dbFile := filepath.Join(t.TempDir(), "test.db")
+	db, err := newDatabase(dbFile)
+	r.NoError(err)
+
+	// Create two active proposals
+	keys, vals := kvForTest(2)
+	proposal1, err := db.Propose(keys[:1], vals[:1])
+	r.NoError(err)
+	proposal2, err := db.Propose(keys[1:2], vals[1:2])
+	r.NoError(err)
+
+	// Create a context with a reasonable timeout
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	// Channel to receive Close result
+	closeDone := make(chan error, 1)
+
+	// Start Close in a goroutine
+	go func() {
+		closeDone <- db.Close(ctx)
+	}()
+
+	// Drop handles after a short delay (before timeout)
+	time.Sleep(100 * time.Millisecond)
+	r.NoError(proposal1.Drop())
+	r.NoError(proposal2.Drop())
+
+	// Close should succeed (not timeout)
+	select {
+	case err := <-closeDone:
+		r.NoError(err, "Close should succeed when handles are dropped before timeout")
+	case <-time.After(1 * time.Second):
+		r.Fail("Close did not complete in time")
+	}
+}
+
+// TestCloseErrorIsCorrectType verifies that the error returned by Database.Close
+// is exactly ErrActiveKeepAliveHandles and can be checked with errors.Is.
+func TestCloseErrorIsCorrectType(t *testing.T) {
+	r := require.New(t)
+	dbFile := filepath.Join(t.TempDir(), "test.db")
+	db, err := newDatabase(dbFile)
+	r.NoError(err)
+
+	// Create an active proposal
+	keys, vals := kvForTest(1)
+	proposal, err := db.Propose(keys, vals)
+	r.NoError(err)
+
+	// Create a cancelled context
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Close should return ErrActiveKeepAliveHandles
+	err = db.Close(ctx)
+	r.Error(err, "Close should return an error")
+
+	// Verify the error is exactly ErrActiveKeepAliveHandles using errors.Is
+	r.True(errors.Is(err, ErrActiveKeepAliveHandles), "Error should be ErrActiveKeepAliveHandles")
+
+	// Also verify with ErrorIs
+	r.ErrorIs(err, ErrActiveKeepAliveHandles, "Error should match ErrActiveKeepAliveHandles")
+
+	// Clean up
+	r.NoError(proposal.Drop())
+	r.NoError(db.Close(context.Background()))
+}
