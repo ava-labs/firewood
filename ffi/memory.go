@@ -250,18 +250,18 @@ func newOwnedBytes(owned C.OwnedBytes) *ownedBytes {
 func getHashKeyFromHashResult(result C.HashResult) (Hash, error) {
 	switch result.tag {
 	case C.HashResult_NullHandlePointer:
-		return Hash{}, errDBClosed
+		return EmptyRoot, errDBClosed
 	case C.HashResult_None:
-		return Hash{}, nil
+		return EmptyRoot, nil
 	case C.HashResult_Some:
 		cHashKey := (*C.HashKey)(unsafe.Pointer(&result.anon0))
 		hashKey := *(*Hash)(unsafe.Pointer(&cHashKey._0))
 		return hashKey, nil
 	case C.HashResult_Err:
 		ownedBytes := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0)))
-		return Hash{}, ownedBytes.intoError()
+		return EmptyRoot, ownedBytes.intoError()
 	default:
-		return Hash{}, fmt.Errorf("unknown C.HashResult tag: %d", result.tag)
+		return EmptyRoot, fmt.Errorf("unknown C.HashResult tag: %d", result.tag)
 	}
 }
 

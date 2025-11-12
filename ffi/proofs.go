@@ -125,7 +125,7 @@ func (db *Database) VerifyAndCommitRangeProof(
 	maxLength uint32,
 ) (Hash, error) {
 	if db.handle == nil {
-		return Hash{}, errDBClosed
+		return EmptyRoot, errDBClosed
 	}
 
 	var pinner runtime.Pinner
@@ -263,7 +263,7 @@ func (db *Database) VerifyAndCommitChangeProof(
 	maxLength uint32,
 ) (Hash, error) {
 	if db.handle == nil {
-		return Hash{}, errDBClosed
+		return EmptyRoot, errDBClosed
 	}
 
 	var pinner runtime.Pinner

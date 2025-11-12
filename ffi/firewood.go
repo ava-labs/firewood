@@ -34,13 +34,14 @@ import (
 	"time"
 )
 
-// These constants are used to identify errors returned by the Firewood Rust FFI.
-// These must be changed if the Rust FFI changes - should be reported by tests.
 const RootLength = C.sizeof_HashKey
 
 type Hash [RootLength]byte
 
-var errDBClosed = errors.New("firewood database already closed")
+var (
+	EmptyRoot   Hash
+	errDBClosed = errors.New("firewood database already closed")
+)
 
 // A Database is a handle to a Firewood database.
 // It is not safe to call these methods with a nil handle.
@@ -130,7 +131,7 @@ func New(filePath string, conf *Config) (*Database, error) {
 // due to prefix deletion semantics.
 func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 	if db.handle == nil {
-		return Hash{}, errDBClosed
+		return EmptyRoot, errDBClosed
 	}
 
 	var pinner runtime.Pinner
@@ -138,7 +139,7 @@ func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 
 	kvp, err := newKeyValuePairs(keys, vals, &pinner)
 	if err != nil {
-		return Hash{}, err
+		return EmptyRoot, err
 	}
 
 	return getHashKeyFromHashResult(C.fwd_batch(db.handle, kvp))
@@ -196,7 +197,7 @@ func (db *Database) GetFromRoot(root Hash, key []byte) ([]byte, error) {
 	}
 
 	// If the root is empty, the database is empty.
-	if root == (Hash{}) {
+	if root == (EmptyRoot) {
 		return nil, nil
 	}
 
@@ -211,10 +212,10 @@ func (db *Database) GetFromRoot(root Hash, key []byte) ([]byte, error) {
 }
 
 // Root returns the current root hash of the trie.
-// Empty trie must return common.Hash{}.
+// Empty trie must return common.EmptyRoot.
 func (db *Database) Root() (Hash, error) {
 	if db.handle == nil {
-		return Hash{}, errDBClosed
+		return EmptyRoot, errDBClosed
 	}
 
 	return getHashKeyFromHashResult(C.fwd_root_hash(db.handle))
@@ -225,7 +226,7 @@ func (db *Database) LatestRevision() (*Revision, error) {
 	if err != nil {
 		return nil, err
 	}
-	if root == (Hash{}) {
+	if root == (EmptyRoot) {
 		return nil, errRevisionNotFound
 	}
 	return db.Revision(root)

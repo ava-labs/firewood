@@ -41,7 +41,7 @@ func TestRangeProofEmptyDB(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	proof, err := db.RangeProof(Hash{}, nothing(), nothing(), 0)
+	proof, err := db.RangeProof(EmptyRoot, nothing(), nothing(), 0)
 	r.ErrorIs(err, errEmptyTrie)
 	r.Nil(proof)
 }
