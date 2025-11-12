@@ -27,14 +27,9 @@ func (h *databaseKeepAliveHandle) init(wg *sync.WaitGroup) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if h.outstandingHandles == wg {
-		// already initialized with this wait group; nothing to do. Allows multiple
-		// calls to `Database.VerifyRangeProof` as long as the same database is
-		// used.
-		return
-	}
-
 	if h.outstandingHandles != nil {
+		// setting the finalizer twice will also panic, so we're panicking
+		// early to provide better context
 		panic("keep-alive handle already initialized")
 	}
 
