@@ -21,7 +21,7 @@ use crate::{FileIoError, LinearAddress, NodeReader, SharedNode};
 /// |------------------------|--------------------------------------------------------|
 /// | [`MaybePersistedNode`] | Newtype wrapper around the remaining items.            |
 /// | [Arc]                  | Reference counted pointer to a mutexed enum            |
-/// | `Mutex`                | Protects the inner enum during updates                  |
+/// | `Mutex`                | Protects the inner enum during updates                 |
 /// | `MaybePersisted`       | Enum of either `Unpersisted` or `Persisted`            |
 /// | variant `Unpersisted`  | The shared node, in memory, for unpersisted nodes      |
 /// | -> [`SharedNode`]      | A `triomphe::Arc` of a [Node](`crate::Node`)           |
