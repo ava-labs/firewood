@@ -461,3 +461,7 @@ func getDatabaseFromHandleResult(result C.HandleResult) (*Database, error) {
 		return nil, fmt.Errorf("unknown C.HandleResult tag: %d", result.tag)
 	}
 }
+
+func newCHashKey(hash Hash) C.HashKey {
+	return *(*C.HashKey)(unsafe.Pointer(&hash))
+}

@@ -56,7 +56,7 @@ func (db *Database) RangeProof(
 	defer pinner.Unpin()
 
 	args := C.CreateRangeProofArgs{
-		root:       newBorrowedBytes(rootHash[:], &pinner),
+		root:       newCHashKey(rootHash),
 		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
 		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
 		max_length: C.uint32_t(maxLength),
@@ -79,7 +79,7 @@ func (p *RangeProof) Verify(
 
 	args := C.VerifyRangeProofArgs{
 		proof:      p.handle,
-		root:       newBorrowedBytes(rootHash[:], &pinner),
+		root:       newCHashKey(rootHash),
 		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
 		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
 		max_length: C.uint32_t(maxLength),
@@ -96,7 +96,7 @@ func (p *RangeProof) Verify(
 func (db *Database) VerifyRangeProof(
 	proof *RangeProof,
 	startKey, endKey Maybe[[]byte],
-	rootHash []byte,
+	rootHash Hash,
 	maxLength uint32,
 ) error {
 	var pinner runtime.Pinner
@@ -104,7 +104,7 @@ func (db *Database) VerifyRangeProof(
 
 	args := C.VerifyRangeProofArgs{
 		proof:      proof.handle,
-		root:       newBorrowedBytes(rootHash, &pinner),
+		root:       newCHashKey(rootHash),
 		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
 		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
 		max_length: C.uint32_t(maxLength),
@@ -133,7 +133,7 @@ func (db *Database) VerifyAndCommitRangeProof(
 
 	args := C.VerifyRangeProofArgs{
 		proof:      proof.handle,
-		root:       newBorrowedBytes(rootHash[:], &pinner),
+		root:       newCHashKey(rootHash),
 		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
 		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
 		max_length: C.uint32_t(maxLength),
@@ -215,8 +215,8 @@ func (db *Database) ChangeProof(
 	defer pinner.Unpin()
 
 	args := C.CreateChangeProofArgs{
-		start_root: newBorrowedBytes(startRoot[:], &pinner),
-		end_root:   newBorrowedBytes(endRoot[:], &pinner),
+		start_root: newCHashKey(startRoot),
+		end_root:   newCHashKey(endRoot),
 		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
 		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
 		max_length: C.uint32_t(maxLength),
@@ -241,8 +241,8 @@ func (db *Database) VerifyChangeProof(
 
 	args := C.VerifyChangeProofArgs{
 		proof:      proof.handle,
-		start_root: newBorrowedBytes(startRoot[:], &pinner),
-		end_root:   newBorrowedBytes(endRoot[:], &pinner),
+		start_root: newCHashKey(startRoot),
+		end_root:   newCHashKey(endRoot),
 		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
 		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
 		max_length: C.uint32_t(maxLength),
@@ -271,8 +271,8 @@ func (db *Database) VerifyAndCommitChangeProof(
 
 	args := C.VerifyChangeProofArgs{
 		proof:      proof.handle,
-		start_root: newBorrowedBytes(startRoot[:], &pinner),
-		end_root:   newBorrowedBytes(endRoot[:], &pinner),
+		start_root: newCHashKey(startRoot),
+		end_root:   newCHashKey(endRoot),
 		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
 		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
 		max_length: C.uint32_t(maxLength),

@@ -6,7 +6,7 @@ use std::num::NonZeroUsize;
 use firewood::v2::api::{self, FrozenRangeProof};
 
 use crate::{
-    BorrowedBytes, CResult, DatabaseHandle, HashResult, Maybe, NextKeyRangeResult,
+    BorrowedBytes, CResult, DatabaseHandle, HashKey, HashResult, Maybe, NextKeyRangeResult,
     RangeProofResult, ValueResult, VoidResult,
 };
 
@@ -16,7 +16,7 @@ use crate::{
 pub struct CreateRangeProofArgs<'a> {
     /// The root hash of the revision to prove. If `None`, the latest revision
     /// is used.
-    pub root: BorrowedBytes<'a>,
+    pub root: HashKey,
     /// The start key of the range to prove. If `None`, the range starts from the
     /// beginning of the keyspace.
     ///
@@ -45,7 +45,7 @@ pub struct VerifyRangeProofArgs<'a> {
     pub proof: Option<&'a mut RangeProofContext>,
     /// The root hash to verify the proof against. This must match the calculated
     /// hash of the root of the proof.
-    pub root: BorrowedBytes<'a>,
+    pub root: HashKey,
     /// The lower bound of the key range that the proof is expected to cover. If
     /// `None`, the proof is expected to cover from the start of the keyspace.
     ///
@@ -110,12 +110,7 @@ pub extern "C" fn fwd_db_range_proof(
     args: CreateRangeProofArgs,
 ) -> RangeProofResult {
     crate::invoke_with_handle(db, |db| {
-        let root_hash: firewood_storage::TrieHash = args.root.as_ref().try_into()?;
-        if firewood_storage::TrieHash::empty() == root_hash {
-            return Err(api::Error::RangeProofOnEmptyTrie);
-        }
-
-        let view = db.get_root(root_hash)?;
+        let view = db.get_root(args.root.into())?;
         view.range_proof(
             args.start_key
                 .as_ref()

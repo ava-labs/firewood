@@ -206,7 +206,7 @@ func (db *Database) GetFromRoot(root Hash, key []byte) ([]byte, error) {
 
 	return getValueFromValueResult(C.fwd_get_from_root(
 		db.handle,
-		newBorrowedBytes(root[:], &pinner),
+		newCHashKey(root),
 		newBorrowedBytes(key, &pinner),
 	))
 }
@@ -234,12 +234,9 @@ func (db *Database) LatestRevision() (*Revision, error) {
 
 // Revision returns a historical revision of the database.
 func (db *Database) Revision(root Hash) (*Revision, error) {
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
 	rev, err := getRevisionFromResult(C.fwd_get_revision(
 		db.handle,
-		newBorrowedBytes(root[:], &pinner),
+		newCHashKey(root),
 	), &db.outstandingHandles)
 	if err != nil {
 		return nil, err
