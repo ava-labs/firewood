@@ -40,7 +40,7 @@ type Proposal struct {
 	handle *C.ProposalHandle
 
 	// root is the root hash of the proposal and the expected root hash after commit.
-	root [RootLength]byte
+	root Hash
 
 	// keepAliveHandle is used to keep the database alive while this proposal is
 	// in use. It is initialized when the proposal is created and disowned after
@@ -51,8 +51,8 @@ type Proposal struct {
 // Root retrieves the root hash of the proposal.
 // If the proposal is empty (i.e. no keys in database),
 // it returns nil, nil.
-func (p *Proposal) Root() ([]byte, error) {
-	return p.root[:], nil
+func (p *Proposal) Root() (Hash, error) {
+	return p.root, nil
 }
 
 // Get retrieves the value for the given key.
@@ -151,7 +151,7 @@ func getProposalFromProposalResult(result C.ProposalResult, wg *sync.WaitGroup) 
 		return nil, errDBClosed
 	case C.ProposalResult_Ok:
 		body := (*C.ProposalResult_Ok_Body)(unsafe.Pointer(&result.anon0))
-		hashKey := *(*[32]byte)(unsafe.Pointer(&body.root_hash._0))
+		hashKey := *(*Hash)(unsafe.Pointer(&body.root_hash._0))
 		proposal := &Proposal{
 			handle: body.handle,
 			root:   hashKey,

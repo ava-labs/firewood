@@ -19,9 +19,8 @@ import (
 )
 
 var (
-	errRevisionNotFound  = errors.New("revision not found")
-	errInvalidRootLength = fmt.Errorf("root hash must be %d bytes", RootLength)
-	errDroppedRevision   = errors.New("revision already dropped")
+	errRevisionNotFound = errors.New("revision not found")
+	errDroppedRevision  = errors.New("revision already dropped")
 )
 
 // Revision is an immutable view over the database at a specific root hash.
@@ -43,7 +42,7 @@ type Revision struct {
 	handle *C.RevisionHandle
 
 	// root is the root hash of the revision.
-	root [RootLength]byte
+	root Hash
 
 	// keepAliveHandle is used to keep the database alive while this revision is
 	// in use. It is initialized when the revision is created and disowned after
@@ -102,8 +101,8 @@ func (r *Revision) Drop() error {
 	})
 }
 
-func (r *Revision) Root() []byte {
-	return r.root[:]
+func (r *Revision) Root() Hash {
+	return r.root
 }
 
 // getRevisionFromResult converts a C.RevisionResult to a Revision or error.
@@ -115,7 +114,7 @@ func getRevisionFromResult(result C.RevisionResult, wg *sync.WaitGroup) (*Revisi
 		return nil, errRevisionNotFound
 	case C.RevisionResult_Ok:
 		body := (*C.RevisionResult_Ok_Body)(unsafe.Pointer(&result.anon0))
-		hashKey := *(*[32]byte)(unsafe.Pointer(&body.root_hash._0))
+		hashKey := *(*Hash)(unsafe.Pointer(&body.root_hash._0))
 		rev := &Revision{
 			handle: body.handle,
 			root:   hashKey,
