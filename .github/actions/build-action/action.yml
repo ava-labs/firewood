@@ -24,7 +24,7 @@ inputs:
   rust-version:
     description: 'Rust version for source builds'
     required: false
-    default: '1.89'
+    default: '1.91'
 
 outputs:
   ffi-path:
