@@ -82,6 +82,7 @@ runs:
         # Debug: Print current and parent directory
         echo "Current directory: $(pwd)"
         echo "Parent directory: $(dirname $(pwd))"
+        ls -l
         
         # Run build script and capture FFI path
         FFI_PATH=$(./scripts/build-firewood.sh $ARGS)
