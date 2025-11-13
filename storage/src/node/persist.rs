@@ -1,7 +1,7 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::sync::Mutex;
+use std::sync::{Mutex, TryLockError};
 use std::{fmt::Display, sync::Arc};
 
 use crate::{FileIoError, LinearAddress, NodeReader, SharedNode};
@@ -148,8 +148,8 @@ impl MaybePersistedNode {
     ///
     /// * `addr` - The `LinearAddress` where the node has been allocated on disk
     pub fn allocate_at(&self, addr: LinearAddress) {
+        let mut guard = self.0.lock().expect("poisoned lock");
         let node = {
-            let guard = self.0.lock().expect("poisoned lock");
             match &*guard {
                 MaybePersisted::Unpersisted(node) | MaybePersisted::Allocated(_, node) => {
                     node.clone()
@@ -159,7 +159,7 @@ impl MaybePersistedNode {
                 }
             }
         };
-        *self.0.lock().expect("poisoned lock") = MaybePersisted::Allocated(addr, node);
+        *guard = MaybePersisted::Allocated(addr, node);
     }
 
     /// Returns the address and shared node if this node is in the Allocated state.
@@ -188,12 +188,20 @@ impl MaybePersistedNode {
 /// If instead you want the node itself, use [`MaybePersistedNode::as_shared_node`] first.
 impl Display for MaybePersistedNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &*self.0.lock().expect("poisoned lock") {
-            MaybePersisted::Unpersisted(node) => write!(f, "M{:p}", (*node).as_ptr()),
-            MaybePersisted::Allocated(addr, node) => {
-                write!(f, "A{:p}@{addr}", (*node).as_ptr())
+        match self.0.try_lock() {
+            Ok(guard) => match &*guard {
+                MaybePersisted::Unpersisted(node) => write!(f, "M{:p}", (*node).as_ptr()),
+                MaybePersisted::Allocated(addr, node) => {
+                    write!(f, "A{:p}@{addr}", (*node).as_ptr())
+                }
+                MaybePersisted::Persisted(addr) => write!(f, "{addr}"),
+            },
+            Err(TryLockError::WouldBlock) => {
+                write!(f, "<locked>")
             }
-            MaybePersisted::Persisted(addr) => write!(f, "{addr}"),
+            Err(TryLockError::Poisoned(_)) => {
+                panic!("poisoned lock")
+            }
         }
     }
 }
