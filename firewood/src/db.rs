@@ -18,7 +18,7 @@ use crate::v2::api::{
     KeyValuePair, OptionalHashKeyExt,
 };
 
-use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
+use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig, RevisionManagerError};
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
     ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieReader,
@@ -168,7 +168,9 @@ impl Db {
     /// Create a new database instance.
     pub fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
         let root_store: Box<dyn RootStore + Send + Sync> = match &cfg.root_store_dir {
-            Some(path) => Box::new(FjallStore::new(path)?),
+            Some(path) => {
+                Box::new(FjallStore::new(path).map_err(RevisionManagerError::RootStoreError)?)
+            }
             None => Box::new(NoOpStore {}),
         };
 

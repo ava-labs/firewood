@@ -13,21 +13,6 @@ use firewood_storage::{LinearAddress, TrieHash};
 
 const FJALL_PARTITION_NAME: &str = "firewood";
 
-#[derive(Debug)]
-pub enum RootStoreMethod {
-    Add,
-    Get,
-    New,
-}
-
-#[derive(Debug, thiserror::Error)]
-#[error("A RootStore error occurred.")]
-pub struct RootStoreError {
-    pub method: RootStoreMethod,
-    #[source]
-    pub source: Box<dyn std::error::Error + Send + Sync>,
-}
-
 pub trait RootStore: Debug {
     /// `add_root` persists a revision's address to `RootStore`.
     ///
@@ -39,7 +24,11 @@ pub trait RootStore: Debug {
     ///
     /// Will return an error if unable to persist the revision address to the
     /// underlying datastore
-    fn add_root(&self, hash: &TrieHash, address: &LinearAddress) -> Result<(), RootStoreError>;
+    fn add_root(
+        &self,
+        hash: &TrieHash,
+        address: &LinearAddress,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
     /// `get` returns the address of a revision.
     ///
@@ -49,18 +38,28 @@ pub trait RootStore: Debug {
     /// # Errors
     ///
     ///  Will return an error if unable to query the underlying datastore.
-    fn get(&self, hash: &TrieHash) -> Result<Option<LinearAddress>, RootStoreError>;
+    fn get(
+        &self,
+        hash: &TrieHash,
+    ) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>>;
 }
 
 #[derive(Debug)]
 pub struct NoOpStore {}
 
 impl RootStore for NoOpStore {
-    fn add_root(&self, _hash: &TrieHash, _address: &LinearAddress) -> Result<(), RootStoreError> {
+    fn add_root(
+        &self,
+        _hash: &TrieHash,
+        _address: &LinearAddress,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         Ok(())
     }
 
-    fn get(&self, _hash: &TrieHash) -> Result<Option<LinearAddress>, RootStoreError> {
+    fn get(
+        &self,
+        _hash: &TrieHash,
+    ) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>> {
         Ok(None)
     }
 }
@@ -86,12 +85,13 @@ impl MockStore {
 
 #[cfg(test)]
 impl RootStore for MockStore {
-    fn add_root(&self, hash: &TrieHash, address: &LinearAddress) -> Result<(), RootStoreError> {
+    fn add_root(
+        &self,
+        hash: &TrieHash,
+        address: &LinearAddress,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         if self.should_fail {
-            return Err(RootStoreError {
-                method: RootStoreMethod::Add,
-                source: "Adding roots should fail".into(),
-            });
+            return Err("Adding roots should fail".into());
         }
 
         self.roots
@@ -101,12 +101,12 @@ impl RootStore for MockStore {
         Ok(())
     }
 
-    fn get(&self, hash: &TrieHash) -> Result<Option<LinearAddress>, RootStoreError> {
+    fn get(
+        &self,
+        hash: &TrieHash,
+    ) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>> {
         if self.should_fail {
-            return Err(RootStoreError {
-                method: RootStoreMethod::Get,
-                source: "Getting roots should fail".into(),
-            });
+            return Err("Getting roots should fail".into());
         }
 
         Ok(self.roots.lock().expect("poisoned lock").get(hash).copied())
@@ -131,56 +131,39 @@ impl FjallStore {
     /// # Errors
     ///
     /// Will return an error if unable to create or open an instance of `FjallStore`.
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<FjallStore, RootStoreError> {
-        let keyspace = Config::new(path).open().map_err(|e| RootStoreError {
-            method: RootStoreMethod::New,
-            source: Box::new(e),
-        })?;
-        let items = keyspace
-            .open_partition(FJALL_PARTITION_NAME, PartitionCreateOptions::default())
-            .map_err(|e| RootStoreError {
-                method: RootStoreMethod::New,
-                source: Box::new(e),
-            })?;
+    pub fn new<P: AsRef<Path>>(
+        path: P,
+    ) -> Result<FjallStore, Box<dyn std::error::Error + Send + Sync>> {
+        let keyspace = Config::new(path).open()?;
+        let items =
+            keyspace.open_partition(FJALL_PARTITION_NAME, PartitionCreateOptions::default())?;
 
         Ok(Self { keyspace, items })
     }
 }
 
 impl RootStore for FjallStore {
-    fn add_root(&self, hash: &TrieHash, address: &LinearAddress) -> Result<(), RootStoreError> {
-        self.items
-            .insert(**hash, address.get().to_be_bytes())
-            .map_err(|e| RootStoreError {
-                method: RootStoreMethod::Add,
-                source: Box::new(e),
-            })?;
+    fn add_root(
+        &self,
+        hash: &TrieHash,
+        address: &LinearAddress,
+    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        self.items.insert(**hash, address.get().to_be_bytes())?;
 
-        self.keyspace
-            .persist(PersistMode::Buffer)
-            .map_err(|e| RootStoreError {
-                method: RootStoreMethod::Add,
-                source: Box::new(e),
-            })
+        self.keyspace.persist(PersistMode::Buffer)?;
+
+        Ok(())
     }
 
-    fn get(&self, hash: &TrieHash) -> Result<Option<LinearAddress>, RootStoreError> {
-        let v = self
-            .items
-            .get(**hash)
-            .map_err(|e| RootStoreError {
-                method: RootStoreMethod::Get,
-                source: Box::new(e),
-            })?
-            .ok_or(RootStoreError {
-                method: RootStoreMethod::Add,
-                source: "empty value".into(),
-            })?;
+    fn get(
+        &self,
+        hash: &TrieHash,
+    ) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>> {
+        let Some(v) = self.items.get(**hash)? else {
+            return Ok(None);
+        };
 
-        let array: [u8; 8] = v.as_ref().try_into().map_err(|e| RootStoreError {
-            method: RootStoreMethod::Get,
-            source: Box::new(e),
-        })?;
+        let array: [u8; 8] = v.as_ref().try_into()?;
 
         Ok(LinearAddress::new(u64::from_be_bytes(array)))
     }
