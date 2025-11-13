@@ -6,13 +6,13 @@
 //! This module contains all node hashing functionality for the nodestore, including
 //! specialized support for Ethereum-compatible hash processing.
 
-#[cfg(feature = "ethhash")]
-use crate::Children;
 use crate::hashednode::hash_node;
 use crate::linear::FileIoError;
 use crate::logger::trace;
 use crate::node::Node;
 use crate::{Child, HashType, MaybePersistedNode, NodeStore, Path, ReadableStorage, SharedNode};
+#[cfg(feature = "ethhash")]
+use crate::{Children, PathComponent};
 
 use super::NodeReader;
 
@@ -64,8 +64,8 @@ impl DerefMut for PathGuard<'_> {
 /// Classified children for ethereum hash processing
 #[cfg(feature = "ethhash")]
 pub(super) struct ClassifiedChildren<'a> {
-    pub(super) unhashed: Vec<(usize, Node)>,
-    pub(super) hashed: Vec<(usize, (MaybePersistedNode, &'a mut HashType))>,
+    pub(super) unhashed: Vec<(PathComponent, Node)>,
+    pub(super) hashed: Vec<(PathComponent, (MaybePersistedNode, &'a mut HashType))>,
 }
 
 impl<T, S: ReadableStorage> NodeStore<T, S>
@@ -78,9 +78,9 @@ where
     #[cfg(feature = "ethhash")]
     pub(super) fn ethhash_classify_children<'a>(
         &self,
-        children: &'a mut Children<Child>,
+        children: &'a mut Children<Option<Child>>,
     ) -> ClassifiedChildren<'a> {
-        children.iter_mut().enumerate().fold(
+        children.into_iter().fold(
             ClassifiedChildren {
                 unhashed: Vec::new(),
                 hashed: Vec::new(),
@@ -113,13 +113,18 @@ where
         )
     }
 
-    /// Hashes the given `node` and the subtree rooted at it.
-    /// Returns the hashed node and its hash.
-    pub(super) fn hash_helper(
+    /// Hashes the given `node` and the subtree rooted at it. The `root_path` should be empty
+    /// if this is called from the root, or it should include the partial path if this is called
+    /// on a subtrie. Returns the hashed node and its hash.
+    ///
+    /// # Errors
+    ///
+    /// Can return a `FileIoError` if it is unable to read a node that it is hashing.
+    pub fn hash_helper(
         #[cfg(feature = "ethhash")] &self,
         node: Node,
-    ) -> Result<(MaybePersistedNode, HashType, usize), FileIoError> {
-        let mut root_path = Path::new();
+        mut root_path: Path,
+    ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
         #[cfg(not(feature = "ethhash"))]
         let res = Self::hash_helper_inner(node, PathGuard::from_path(&mut root_path))?;
         #[cfg(feature = "ethhash")]
@@ -136,10 +141,9 @@ where
         mut node: Node,
         mut path_prefix: PathGuard<'_>,
         #[cfg(feature = "ethhash")] fake_root_extra_nibble: Option<u8>,
-    ) -> Result<(MaybePersistedNode, HashType, usize), FileIoError> {
+    ) -> Result<(MaybePersistedNode, HashType), FileIoError> {
         // If this is a branch, find all unhashed children and recursively hash them.
         trace!("hashing {node:?} at {path_prefix:?}");
-        let mut nodes_processed = 1usize; // Count this node
         if let Node::Branch(ref mut b) = node {
             // special case code for ethereum hashes at the account level
             #[cfg(feature = "ethhash")]
@@ -164,11 +168,11 @@ where
                         path_guard.0.extend(b.partial_path.0.iter().copied());
                         if unhashed.is_empty() {
                             hashable_node.update_partial_path(Path::from_nibbles_iterator(
-                                std::iter::once(*child_idx as u8)
+                                std::iter::once(child_idx.as_u8())
                                     .chain(hashable_node.partial_path().0.iter().copied()),
                             ));
                         } else {
-                            path_guard.0.push(*child_idx as u8);
+                            path_guard.0.push(child_idx.as_u8());
                         }
                         hash_node(&hashable_node, &path_guard)
                     };
@@ -176,7 +180,7 @@ where
                 }
                 // handle the single-child case for an account special below
                 if hashed.is_empty() && unhashed.len() == 1 {
-                    Some(unhashed.last().expect("only one").0 as u8)
+                    Some(unhashed.last().expect("only one").0.as_u8())
                 } else {
                     None
                 }
@@ -193,7 +197,7 @@ where
             // 5. 1 hashed, >0 unhashed <-- rehash case
             // 6. everything already hashed
 
-            for (nibble, child) in b.children.iter_mut().enumerate() {
+            for (nibble, child) in &mut b.children {
                 // If this is empty or already hashed, we're done
                 // Empty matches None, and non-Node types match Some(None) here, so we want
                 // Some(Some(node))
@@ -205,7 +209,7 @@ where
                 let child_node = std::mem::take(child_node);
 
                 // Hash this child and update
-                let (child_node, child_hash, child_count) = {
+                let (child_node, child_hash) = {
                     // we extend and truncate path_prefix to reduce memory allocations]
                     let mut child_path_prefix = PathGuard::new(&mut path_prefix);
                     child_path_prefix.0.extend(b.partial_path.0.iter().copied());
@@ -213,21 +217,20 @@ where
                     if make_fake_root.is_none() {
                         // we don't push the nibble there is only one unhashed child and
                         // we're on an account
-                        child_path_prefix.0.push(nibble as u8);
+                        child_path_prefix.0.push(nibble.as_u8());
                     }
                     #[cfg(not(feature = "ethhash"))]
-                    child_path_prefix.0.push(nibble as u8);
+                    child_path_prefix.0.push(nibble.as_u8());
                     #[cfg(feature = "ethhash")]
-                    let (child_node, child_hash, child_count) =
+                    let (child_node, child_hash) =
                         self.hash_helper_inner(child_node, child_path_prefix, make_fake_root)?;
                     #[cfg(not(feature = "ethhash"))]
-                    let (child_node, child_hash, child_count) =
+                    let (child_node, child_hash) =
                         Self::hash_helper_inner(child_node, child_path_prefix)?;
 
-                    (child_node, child_hash, child_count)
+                    (child_node, child_hash)
                 };
 
-                nodes_processed = nodes_processed.saturating_add(child_count);
                 *child = Some(Child::MaybePersisted(child_node, child_hash));
                 trace!("child now {child:?}");
             }
@@ -253,7 +256,7 @@ where
         #[cfg(not(feature = "ethhash"))]
         let hash = hash_node(&node, &path_prefix);
 
-        Ok((SharedNode::new(node).into(), hash, nodes_processed))
+        Ok((SharedNode::new(node).into(), hash))
     }
 
     #[cfg(feature = "ethhash")]

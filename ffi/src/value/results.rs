@@ -1,11 +1,16 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use firewood::merkle;
+use firewood::v2::api;
 use std::fmt;
 
-use firewood::v2::api;
-
-use crate::{ChangeProofContext, HashKey, NextKeyRange, OwnedBytes, RangeProofContext};
+use crate::revision::{GetRevisionResult, RevisionHandle};
+use crate::{
+    ChangeProofContext, CreateIteratorResult, CreateProposalResult, HashKey, IteratorHandle,
+    NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair, ProposalHandle,
+    RangeProofContext,
+};
 
 /// The result type returned from an FFI function that returns no value but may
 /// return an error.
@@ -54,7 +59,7 @@ pub enum HandleResult {
     /// associated with this handle when it is no longer needed.
     ///
     /// [`fwd_close_db`]: crate::fwd_close_db
-    Ok(Box<crate::DatabaseHandle<'static>>),
+    Ok(Box<crate::DatabaseHandle>),
 
     /// An error occurred and the message is returned as an [`OwnedBytes`]. If
     /// value is guaranteed to contain only valid UTF-8.
@@ -66,8 +71,8 @@ pub enum HandleResult {
     Err(OwnedBytes),
 }
 
-impl<E: fmt::Display> From<Result<crate::DatabaseHandle<'static>, E>> for HandleResult {
-    fn from(value: Result<crate::DatabaseHandle<'static>, E>) -> Self {
+impl<E: fmt::Display> From<Result<crate::DatabaseHandle, E>> for HandleResult {
+    fn from(value: Result<crate::DatabaseHandle, E>) -> Self {
         match value {
             Ok(handle) => HandleResult::Ok(Box::new(handle)),
             Err(err) => HandleResult::Err(err.to_string().into_bytes().into()),
@@ -272,6 +277,206 @@ pub enum NextKeyRangeResult {
     Err(OwnedBytes),
 }
 
+/// A result type returned from FFI functions that create a proposal but do not
+/// commit it to the database.
+#[derive(Debug)]
+#[repr(C)]
+pub enum ProposalResult<'db> {
+    /// The caller provided a null pointer to a database handle.
+    NullHandlePointer,
+    /// Buulding the proposal was successful and the proposal ID and root hash
+    /// are returned.
+    Ok {
+        /// An opaque pointer to the [`ProposalHandle`] that can be use to create
+        /// an additional proposal or later commit. The caller must ensure that this
+        /// pointer is freed with [`fwd_free_proposal`] if it is not committed.
+        ///
+        /// [`fwd_free_proposal`]: crate::fwd_free_proposal
+        // note: opaque pointers mut be boxed because the FFI does not the structure definition.
+        handle: Box<ProposalHandle<'db>>,
+        /// The root hash of the proposal. Zeroed if the proposal resulted in an
+        /// empty database.
+        root_hash: HashKey,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+/// A result type returned from FFI functions that create an iterator
+#[derive(Debug)]
+#[repr(C)]
+pub enum IteratorResult<'db> {
+    /// The caller provided a null pointer to a revision/proposal handle.
+    NullHandlePointer,
+    /// Building the iterator was successful and the iterator handle is returned
+    Ok {
+        /// An opaque pointer to the [`IteratorHandle`].
+        /// The value should be freed with [`fwd_free_iterator`]
+        ///
+        /// [`fwd_free_iterator`]: crate::fwd_free_iterator
+        handle: Box<IteratorHandle<'db>>,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`].
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+/// A result type returned from iterator FFI functions
+#[derive(Debug)]
+#[repr(C)]
+pub enum KeyValueResult {
+    /// The caller provided a null pointer to an iterator handle.
+    NullHandlePointer,
+    /// The iterator is exhausted
+    None,
+    /// The next item is returned.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with the key and the value of this pair.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Some(OwnedKeyValuePair),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. The
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl From<Option<Result<(merkle::Key, merkle::Value), api::Error>>> for KeyValueResult {
+    fn from(value: Option<Result<(merkle::Key, merkle::Value), api::Error>>) -> Self {
+        match value {
+            Some(value) => match value {
+                Ok(value) => KeyValueResult::Some(value.into()),
+                Err(err) => KeyValueResult::Err(err.to_string().into_bytes().into()),
+            },
+            None => KeyValueResult::None,
+        }
+    }
+}
+
+/// A result type returned from iterator FFI functions
+#[derive(Debug)]
+#[repr(C)]
+pub enum KeyValueBatchResult {
+    /// The caller provided a null pointer to an iterator handle.
+    NullHandlePointer,
+    /// The next batch of items on iterator are returned.
+    Some(OwnedKeyValueBatch),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl From<Result<Vec<(merkle::Key, merkle::Value)>, api::Error>> for KeyValueBatchResult {
+    fn from(value: Result<Vec<(merkle::Key, merkle::Value)>, api::Error>) -> Self {
+        match value {
+            Ok(pairs) => {
+                let values: Vec<_> = pairs.into_iter().map(Into::into).collect();
+                KeyValueBatchResult::Some(values.into())
+            }
+            Err(err) => KeyValueBatchResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+impl<'db> From<CreateIteratorResult<'db>> for IteratorResult<'db> {
+    fn from(value: CreateIteratorResult<'db>) -> Self {
+        IteratorResult::Ok {
+            handle: Box::new(value.0),
+        }
+    }
+}
+
+impl<'db, E: fmt::Display> From<Result<CreateIteratorResult<'db>, E>> for IteratorResult<'db> {
+    fn from(value: Result<CreateIteratorResult<'db>, E>) -> Self {
+        match value {
+            Ok(res) => res.into(),
+            Err(err) => IteratorResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+/// A result type returned from FFI functions that get a revision
+#[derive(Debug)]
+#[repr(C)]
+pub enum RevisionResult {
+    /// The caller provided a null pointer to a database handle.
+    NullHandlePointer,
+    /// The provided root was not found in the database.
+    RevisionNotFound(HashKey),
+    /// Getting the revision was successful and the revision handle and root
+    /// hash are returned.
+    Ok {
+        /// An opaque pointer to the [`RevisionHandle`].
+        /// The value should be freed with [`fwd_free_revision`]
+        ///
+        /// [`fwd_free_revision`]: crate::fwd_free_revision
+        handle: Box<RevisionHandle>,
+        /// The root hash of the revision.
+        root_hash: HashKey,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. The
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl From<GetRevisionResult> for RevisionResult {
+    fn from(value: GetRevisionResult) -> Self {
+        RevisionResult::Ok {
+            handle: Box::new(value.handle),
+            root_hash: HashKey::from(value.root_hash),
+        }
+    }
+}
+
+impl From<Result<GetRevisionResult, api::Error>> for RevisionResult {
+    fn from(value: Result<GetRevisionResult, api::Error>) -> Self {
+        match value {
+            Ok(res) => res.into(),
+            Err(api::Error::RevisionNotFound { provided }) => RevisionResult::RevisionNotFound(
+                HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
+            ),
+            Err(err) => RevisionResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+impl<'db, E: fmt::Display> From<Result<CreateProposalResult<'db>, E>> for ProposalResult<'db> {
+    fn from(value: Result<CreateProposalResult<'db>, E>) -> Self {
+        match value {
+            Ok(CreateProposalResult { handle, .. }) => ProposalResult::Ok {
+                root_hash: handle.hash_key().unwrap_or_default(),
+                handle: Box::new(handle),
+            },
+            Err(err) => ProposalResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 /// Helper trait to handle the different result types returned from FFI functions.
 ///
 /// Once Try trait is stable, we can use that instead of this trait:
@@ -336,6 +541,11 @@ impl_null_handle_result!(
     RangeProofResult,
     ChangeProofResult,
     NextKeyRangeResult,
+    ProposalResult<'_>,
+    IteratorResult<'_>,
+    RevisionResult,
+    KeyValueBatchResult,
+    KeyValueResult,
 );
 
 impl_cresult!(
@@ -346,6 +556,11 @@ impl_cresult!(
     RangeProofResult,
     ChangeProofResult,
     NextKeyRangeResult,
+    ProposalResult<'_>,
+    IteratorResult<'_>,
+    RevisionResult,
+    KeyValueBatchResult,
+    KeyValueResult,
 );
 
 enum Panic {

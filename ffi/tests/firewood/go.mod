@@ -1,8 +1,8 @@
-module github.com/ava-labs/firewood/ffi/tests
+module github.com/ava-labs/firewood/ffi/tests/firewood
 
 go 1.24
 
-toolchain go1.24.7
+toolchain go1.24.9
 
 require (
 	github.com/ava-labs/firewood-go/ffi v0.0.0 // this is replaced to use the parent folder

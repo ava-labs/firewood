@@ -42,9 +42,10 @@ pub(crate) mod alloc;
 pub(crate) mod hash;
 pub(crate) mod header;
 pub(crate) mod persist;
+#[cfg(feature = "io-uring")]
+pub(crate) mod persist_io_uring;
 pub(crate) mod primitives;
 
-use crate::firewood_gauge;
 use crate::linear::OffsetReader;
 use crate::logger::trace;
 use crate::node::branch::ReadSerializable as _;
@@ -53,7 +54,6 @@ use arc_swap::access::DynAccess;
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind, Read};
-use std::sync::atomic::AtomicUsize;
 
 // Re-export types from alloc module
 pub use alloc::NodeAllocator;
@@ -91,9 +91,15 @@ use std::sync::Arc;
 use crate::hashednode::hash_node;
 use crate::node::Node;
 use crate::node::persist::MaybePersistedNode;
-use crate::{CacheReadStrategy, FileIoError, Path, ReadableStorage, SharedNode, TrieHash};
+use crate::{
+    CacheReadStrategy, Child, FileIoError, HashType, Path, ReadableStorage, SharedNode, TrieHash,
+};
 
 use super::linear::WritableStorage;
+
+/// Initial size for the bump allocator used in node serialization batches.
+/// Set to the maximum area size to minimize allocations for large nodes.
+const INITIAL_BUMP_SIZE: usize = AreaIndex::MAX_AREA_SIZE as usize;
 
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Open an existing [`NodeStore`]
@@ -107,7 +113,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         let mut header_bytes = vec![0u8; std::mem::size_of::<NodeStoreHeader>()];
         if let Err(e) = stream.read_exact(&mut header_bytes) {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                return Self::new_empty_committed(storage.clone());
+                return Ok(Self::new_empty_committed(storage.clone()));
             }
             return Err(storage.file_io_error(e, 0, Some("header read".to_string())));
         }
@@ -123,17 +129,15 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             header,
             kind: Committed {
                 deleted: Box::default(),
-                root_hash: None,
-                root: header.root_address().map(Into::into),
-                unwritten_nodes: AtomicUsize::new(0),
+                root: None,
             },
             storage,
         };
 
-        if let Some(root_address) = nodestore.header.root_address() {
+        if let Some(root_address) = header.root_address() {
             let node = nodestore.read_node_from_disk(root_address, "open");
             let root_hash = node.map(|n| hash_node(&n, &Path(SmallVec::default())))?;
-            nodestore.kind.root_hash = Some(root_hash.into_triehash());
+            nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
         }
 
         Ok(nodestore)
@@ -141,23 +145,61 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
     /// Create a new, empty, Committed [`NodeStore`] and clobber
     /// the underlying store with an empty freelist and no root node
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the storage cannot be accessed.
-    pub fn new_empty_committed(storage: Arc<S>) -> Result<Self, FileIoError> {
+    pub fn new_empty_committed(storage: Arc<S>) -> Self {
         let header = NodeStoreHeader::new();
 
-        Ok(Self {
+        Self {
             header,
             storage,
             kind: Committed {
                 deleted: Box::default(),
-                root_hash: None,
                 root: None,
-                unwritten_nodes: AtomicUsize::new(0),
             },
-        })
+        }
+    }
+
+    /// Create a new Committed [`NodeStore`] with a specified root node.
+    ///
+    /// This constructor is used when you have an existing root node at a known
+    /// address and hash, typically when reconstructing a [`NodeStore`] from
+    /// a committed state. The `latest_nodestore` provides access to the underlying
+    /// storage backend containing the persisted trie data.
+    ///
+    /// ## Panics
+    ///
+    /// Panics in debug builds if the hash of the node at `root_address` does
+    /// not equal `root_hash`.
+    #[must_use]
+    pub fn with_root(
+        root_hash: HashType,
+        root_address: LinearAddress,
+        latest_nodestore: Arc<NodeStore<Committed, S>>,
+    ) -> Self {
+        let header = NodeStoreHeader::with_root(Some(root_address));
+        let storage = latest_nodestore.storage.clone();
+
+        let nodestore = NodeStore {
+            header,
+            kind: Committed {
+                deleted: Box::default(),
+                root: Some(Child::AddressWithHash(root_address, root_hash)),
+            },
+            storage,
+        };
+
+        debug_assert_eq!(
+            nodestore
+                .root_hash()
+                .expect("Nodestore should have root hash"),
+            hash_node(
+                &nodestore
+                    .read_node(root_address)
+                    .expect("Root node read should succeed"),
+                &Path(SmallVec::default())
+            )
+        );
+
+        nodestore
     }
 }
 
@@ -181,10 +223,12 @@ impl Parentable for Arc<ImmutableProposal> {
         NodeStoreParent::Proposed(Arc::clone(self))
     }
     fn root_hash(&self) -> Option<TrieHash> {
-        self.root_hash.clone()
+        self.root
+            .as_ref()
+            .and_then(|root| root.hash().cloned().map(HashType::into_triehash))
     }
     fn root(&self) -> Option<MaybePersistedNode> {
-        self.root.clone()
+        self.root.as_ref().map(Child::as_maybe_persisted_node)
     }
 }
 
@@ -208,13 +252,19 @@ impl<S> NodeStore<Arc<ImmutableProposal>, S> {
 
 impl Parentable for Committed {
     fn as_nodestore_parent(&self) -> NodeStoreParent {
-        NodeStoreParent::Committed(self.root_hash.clone())
+        NodeStoreParent::Committed(
+            self.root
+                .as_ref()
+                .and_then(|root| root.hash().cloned().map(HashType::into_triehash)),
+        )
     }
     fn root_hash(&self) -> Option<TrieHash> {
-        self.root_hash.clone()
+        self.root
+            .as_ref()
+            .and_then(|root| root.hash().cloned().map(HashType::into_triehash))
     }
     fn root(&self) -> Option<MaybePersistedNode> {
-        self.root.clone()
+        self.root.as_ref().map(Child::as_maybe_persisted_node)
     }
 }
 
@@ -251,6 +301,16 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
         self.kind.deleted.push(node);
     }
 
+    /// Take the nodes that have been marked as deleted in this proposal.
+    pub fn take_deleted_nodes(&mut self) -> Vec<MaybePersistedNode> {
+        take(&mut self.kind.deleted)
+    }
+
+    /// Adds to the nodes deleted in this proposal.
+    pub fn delete_nodes(&mut self, nodes: &[MaybePersistedNode]) {
+        self.kind.deleted.extend_from_slice(nodes);
+    }
+
     /// Reads a node for update, marking it as deleted in this proposal.
     /// We get an arc from cache (reading it from disk if necessary) then
     /// copy/clone the node and return it.
@@ -267,6 +327,28 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     /// Returns the root of this proposal.
     pub const fn root_mut(&mut self) -> &mut Option<Node> {
         &mut self.kind.root
+    }
+}
+
+impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
+    /// Creates a new [`NodeStore`] from a root node.
+    #[must_use]
+    pub fn from_root(parent: &NodeStore<MutableProposal, S>, root: Option<Node>) -> Self {
+        NodeStore {
+            header: parent.header,
+            kind: MutableProposal {
+                root,
+                deleted: Vec::default(),
+                parent: parent.kind.parent.clone(),
+            },
+            storage: parent.storage.clone(),
+        }
+    }
+
+    /// Consumes the `NodeStore` and returns the root of the trie
+    #[must_use]
+    pub fn into_root(self) -> Option<Node> {
+        self.kind.root
     }
 }
 
@@ -357,27 +439,10 @@ pub trait RootReader {
 }
 
 /// A committed revision of a merkle trie.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Committed {
     deleted: Box<[MaybePersistedNode]>,
-    root_hash: Option<TrieHash>,
-    root: Option<MaybePersistedNode>,
-    /// TODO: No readers of this variable yet - will be used for tracking unwritten nodes in committed revisions
-    unwritten_nodes: AtomicUsize,
-}
-
-impl Clone for Committed {
-    fn clone(&self) -> Self {
-        Self {
-            deleted: self.deleted.clone(),
-            root_hash: self.root_hash.clone(),
-            root: self.root.clone(),
-            unwritten_nodes: AtomicUsize::new(
-                self.unwritten_nodes
-                    .load(std::sync::atomic::Ordering::Relaxed),
-            ),
-        }
-    }
+    root: Option<Child>,
 }
 
 #[derive(Clone, Debug)]
@@ -405,12 +470,8 @@ pub struct ImmutableProposal {
     deleted: Box<[MaybePersistedNode]>,
     /// The parent of this proposal.
     parent: Arc<ArcSwap<NodeStoreParent>>,
-    /// The hash of the root node for this proposal
-    root_hash: Option<TrieHash>,
-    /// The root node, either in memory or on disk
-    root: Option<MaybePersistedNode>,
-    /// The number of unwritten nodes in this proposal
-    unwritten_nodes: usize,
+    /// The root of the trie in this proposal.
+    root: Option<Child>,
 }
 
 impl ImmutableProposal {
@@ -424,21 +485,6 @@ impl ImmutableProposal {
         {
             NodeStoreParent::Committed(root_hash) => *root_hash == hash,
             NodeStoreParent::Proposed(_) => false,
-        }
-    }
-}
-
-impl Drop for ImmutableProposal {
-    fn drop(&mut self) {
-        // When an immutable proposal is dropped without being committed,
-        // decrement the gauge to reflect that these nodes will never be written
-        if self.unwritten_nodes > 0 {
-            #[allow(clippy::cast_precision_loss)]
-            firewood_gauge!(
-                "firewood.nodes.unwritten",
-                "current number of unwritten nodes"
-            )
-            .decrement(self.unwritten_nodes as f64);
         }
     }
 }
@@ -505,23 +551,13 @@ impl<T: Into<NodeStoreParent>, S: ReadableStorage> From<NodeStore<T, S>>
 /// Commit a proposal to a new revision of the trie
 impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Committed, S> {
     fn from(val: NodeStore<ImmutableProposal, S>) -> Self {
-        let NodeStore {
-            header,
-            kind,
-            storage,
-        } = val;
-        // Use ManuallyDrop to prevent the Drop impl from running since we're committing
-        let kind = std::mem::ManuallyDrop::new(kind);
-
         NodeStore {
-            header,
+            header: val.header,
             kind: Committed {
-                deleted: kind.deleted.clone(),
-                root_hash: kind.root_hash.clone(),
-                root: kind.root.clone(),
-                unwritten_nodes: AtomicUsize::new(kind.unwritten_nodes),
+                deleted: val.kind.deleted.clone(),
+                root: val.kind.root.clone(),
             },
-            storage,
+            storage: val.storage,
         }
     }
 }
@@ -546,9 +582,7 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
             header: current_revision.header,
             kind: Committed {
                 deleted: self.kind.deleted.clone(),
-                root_hash: self.kind.root_hash.clone(),
                 root: self.kind.root.clone(),
-                unwritten_nodes: AtomicUsize::new(self.kind.unwritten_nodes),
             },
             storage: self.storage.clone(),
         }
@@ -572,9 +606,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
             kind: Arc::new(ImmutableProposal {
                 deleted: kind.deleted.into(),
                 parent: Arc::new(ArcSwap::new(Arc::new(kind.parent))),
-                root_hash: None,
                 root: None,
-                unwritten_nodes: 0,
             }),
             storage,
         };
@@ -585,32 +617,19 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
             return Ok(nodestore);
         };
 
-        // Hashes the trie and returns the address of the new root.
+        // Hashes the trie with an empty path and returns the address of the new root.
         #[cfg(feature = "ethhash")]
-        let (root, root_hash, unwritten_count) = nodestore.hash_helper(root)?;
+        let (root, root_hash) = nodestore.hash_helper(root, Path::new())?;
         #[cfg(not(feature = "ethhash"))]
-        let (root, root_hash, unwritten_count) =
-            NodeStore::<MutableProposal, S>::hash_helper(root)?;
+        let (root, root_hash) = NodeStore::<MutableProposal, S>::hash_helper(root, Path::new())?;
 
         let immutable_proposal =
             Arc::into_inner(nodestore.kind).expect("no other references to the proposal");
-        // Use ManuallyDrop to prevent Drop from running since we're replacing the proposal
-        let immutable_proposal = std::mem::ManuallyDrop::new(immutable_proposal);
         nodestore.kind = Arc::new(ImmutableProposal {
             deleted: immutable_proposal.deleted.clone(),
             parent: immutable_proposal.parent.clone(),
-            root_hash: Some(root_hash.into_triehash()),
-            root: Some(root),
-            unwritten_nodes: unwritten_count,
+            root: Some(Child::MaybePersisted(root, root_hash)),
         });
-
-        // Track unwritten nodes in metrics
-        #[allow(clippy::cast_precision_loss)]
-        firewood_gauge!(
-            "firewood.nodes.unwritten",
-            "current number of unwritten nodes"
-        )
-        .increment(unwritten_count as f64);
 
         Ok(nodestore)
     }
@@ -643,20 +662,28 @@ impl<S: ReadableStorage> RootReader for NodeStore<MutableProposal, S> {
 impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
     fn root_node(&self) -> Option<SharedNode> {
         // TODO: If the read_node fails, we just say there is no root; this is incorrect
-        self.kind.root.as_ref()?.as_shared_node(self).ok()
+        self.kind
+            .root
+            .as_ref()
+            .map(Child::as_maybe_persisted_node)
+            .and_then(|node| node.as_shared_node(self).ok())
     }
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
-        self.kind.root.clone()
+        self.kind.root.as_ref().map(Child::as_maybe_persisted_node)
     }
 }
 
 impl<S: ReadableStorage> RootReader for NodeStore<Arc<ImmutableProposal>, S> {
     fn root_node(&self) -> Option<SharedNode> {
         // Use the MaybePersistedNode's as_shared_node method to get the root
-        self.kind.root.as_ref()?.as_shared_node(self).ok()
+        self.kind
+            .root
+            .as_ref()
+            .map(Child::as_maybe_persisted_node)
+            .and_then(|node| node.as_shared_node(self).ok())
     }
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
-        self.kind.root.clone()
+        self.kind.root.as_ref().map(Child::as_maybe_persisted_node)
     }
 }
 
@@ -891,7 +918,7 @@ mod tests {
     fn test_reparent() {
         // create an empty base revision
         let memstore = MemStore::new(vec![]);
-        let base = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let base = NodeStore::new_empty_committed(memstore.into());
 
         // create an empty r1, check that it's parent is the empty committed version
         let r1 = NodeStore::new(&base).unwrap();

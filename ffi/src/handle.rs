@@ -4,12 +4,13 @@
 use firewood::{
     db::{Db, DbConfig},
     manager::RevisionManagerConfig,
-    merkle::Value,
-    v2::api::{self, ArcDynDbView, Db as _, DbView, HashKey, HashKeyExt, KeyType, Proposal as _},
+    v2::api::{self, ArcDynDbView, Db as _, DbView, HashKey, HashKeyExt, KeyType},
 };
-use metrics::counter;
 
-use crate::{BorrowedBytes, DatabaseHandle, KeyValuePair};
+use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
+
+use crate::revision::{GetRevisionResult, RevisionHandle};
+use metrics::counter;
 
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
 ///
@@ -78,7 +79,21 @@ impl DatabaseHandleArgs<'_> {
     }
 }
 
-impl DatabaseHandle<'_> {
+/// A handle to the database, returned by `fwd_open_db`.
+///
+/// These handles are passed to the other FFI functions.
+///
+#[derive(Debug)]
+#[repr(C)]
+pub struct DatabaseHandle {
+    /// A single cached view to improve performance of reads while committing
+    cached_view: ArcCache<HashKey, dyn api::DynDbView>,
+
+    /// The database
+    db: Db,
+}
+
+impl DatabaseHandle {
     /// Creates a new database handle from the given arguments.
     ///
     /// # Errors
@@ -116,7 +131,7 @@ impl DatabaseHandle<'_> {
     /// # Errors
     ///
     /// An error is returned if there was an i/o error while reading the value.
-    pub fn get_latest(&self, key: impl KeyType) -> Result<Option<Value>, api::Error> {
+    pub fn get_latest(&self, key: impl KeyType) -> Result<Option<Box<[u8]>>, api::Error> {
         let Some(root) = self.current_root_hash()? else {
             return Err(api::Error::RevisionNotFound {
                 provided: HashKey::default_root_hash(),
@@ -149,71 +164,32 @@ impl DatabaseHandle<'_> {
         &self,
         values: impl AsRef<[KeyValuePair<'kvp>]> + 'kvp,
     ) -> Result<Option<HashKey>, api::Error> {
-        let start = coarsetime::Instant::now();
+        let CreateProposalResult { handle, start_time } =
+            self.create_proposal_handle(values.as_ref())?;
 
-        let proposal = self.db.propose(values.as_ref())?;
+        let root_hash = handle.commit_proposal(|commit_time| {
+            counter!("firewood.ffi.commit_ms").increment(commit_time.as_millis());
+        })?;
 
-        let propose_time = start.elapsed().as_millis();
-        counter!("firewood.ffi.propose_ms").increment(propose_time);
-
-        let hash_val = proposal.root_hash()?;
-
-        proposal.commit()?;
-
-        let propose_plus_commit_time = start.elapsed().as_millis();
-        counter!("firewood.ffi.batch_ms").increment(propose_plus_commit_time);
-        counter!("firewood.ffi.commit_ms")
-            .increment(propose_plus_commit_time.saturating_sub(propose_time));
+        counter!("firewood.ffi.batch_ms").increment(start_time.elapsed().as_millis());
         counter!("firewood.ffi.batch").increment(1);
 
-        Ok(hash_val)
+        Ok(root_hash)
     }
 
-    /// Returns a value from the proposal with the given ID for the specified key.
+    /// Returns an owned handle to the revision corresponding to the provided root hash.
     ///
     /// # Errors
     ///
-    /// An error is returned if the proposal could not be found, or if the key is invalid.
-    pub fn get_from_proposal(
-        &self,
-        id: u32,
-        key: impl KeyType,
-    ) -> Result<Option<Value>, api::Error> {
-        self.proposals
-            .read()
-            .map_err(|_| invalid_data("proposal lock is poisoned"))?
-            .get(&id)
-            .ok_or_else(|| invalid_data("proposal not found"))?
-            .val(key.as_ref())
-    }
-
-    /// Commits a proposal with the given ID.
-    ///
-    /// # Errors
-    ///
-    /// An error is returned if the proposal could not be committed, or if the proposal ID is invalid.
-    pub fn commit_proposal(&self, proposal_id: u32) -> Result<Option<HashKey>, String> {
-        let proposal = self
-            .proposals
-            .write()
-            .map_err(|_| "proposal lock is poisoned")?
-            .remove(&proposal_id)
-            .ok_or("proposal not found")?;
-
-        // Get the proposal hash and cache the view. We never cache an empty proposal.
-        let proposal_hash = proposal.root_hash().map_err(|e| e.to_string())?;
-
-        if let Some(ref hash_key) = proposal_hash {
-            _ = self.get_root(hash_key.clone());
-        }
-
-        // Commit the proposal
-        let result = proposal.commit().map_err(|e| e.to_string());
-
-        // Clear the cache, which will force readers after this point to find the committed root hash
-        self.clear_cached_view();
-
-        result.map(|()| proposal_hash)
+    /// Returns an error if could not get the view from underlying database for the specified
+    /// root hash, for example when the revision does not exist or an I/O error occurs while
+    /// accessing the database.
+    pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult, api::Error> {
+        let view = self.db.view(root.clone())?;
+        Ok(GetRevisionResult {
+            handle: RevisionHandle::new(view),
+            root_hash: root,
+        })
     }
 
     pub(crate) fn get_root(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {
@@ -234,6 +210,28 @@ impl DatabaseHandle<'_> {
 
     pub(crate) fn clear_cached_view(&self) {
         self.cached_view.clear();
+    }
+}
+
+impl From<Db> for DatabaseHandle {
+    fn from(db: Db) -> Self {
+        Self {
+            db,
+            cached_view: ArcCache::new(),
+        }
+    }
+}
+
+impl<'db> CView<'db> for &'db crate::DatabaseHandle {
+    fn handle(&self) -> &'db crate::DatabaseHandle {
+        self
+    }
+
+    fn create_proposal<'kvp>(
+        self,
+        values: impl AsRef<[KeyValuePair<'kvp>]> + 'kvp,
+    ) -> Result<firewood::db::Proposal<'db>, api::Error> {
+        self.db.propose(values.as_ref().iter())
     }
 }
 

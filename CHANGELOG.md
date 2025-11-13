@@ -2,7 +2,80 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.0.12] - 2025-08-26
+## [0.0.14] - 2025-11-07
+
+### 🚀 Features
+
+- *(monitoring)* Grafana automatic dashboard and auth provisioning ([#1307](https://github.com/ava-labs/firewood/pull/1307))
+- *(ffi)* Implement revision handles and expose to FFI layer ([#1326](https://github.com/ava-labs/firewood/pull/1326))
+- *(ffi-iterator)* Implementation of Iterator in Rust (1/4) ([#1255](https://github.com/ava-labs/firewood/pull/1255))
+- *(ffi-iterator)* Implementation of Iterator in Go (2/4) ([#1256](https://github.com/ava-labs/firewood/pull/1256))
+- *(1/7)* Add U4 type to be used as a path component ([#1336](https://github.com/ava-labs/firewood/pull/1336))
+- *(2/7)* Add newtype for PathComponent ([#1337](https://github.com/ava-labs/firewood/pull/1337))
+- *(3/7)* Add TriePath trait and path abstraction ([#1338](https://github.com/ava-labs/firewood/pull/1338))
+- *(4/7)* Add SplitPath trait ([#1339](https://github.com/ava-labs/firewood/pull/1339))
+- *(ffi-iterator)* Batching support for Iterator (3/4) ([#1257](https://github.com/ava-labs/firewood/pull/1257))
+- *(5/7)* Add PackedPathRef type ([#1341](https://github.com/ava-labs/firewood/pull/1341))
+- *(6/7)* Children newtype ([#1344](https://github.com/ava-labs/firewood/pull/1344))
+- Use PathComponent in proofs ([#1359](https://github.com/ava-labs/firewood/pull/1359))
+- Replace NodeAndPrefix with HashableShunt ([#1362](https://github.com/ava-labs/firewood/pull/1362))
+- Parallel updates to Merkle trie (v2) ([#1258](https://github.com/ava-labs/firewood/pull/1258))
+- Parallel hashing of Merkle trie ([#1303](https://github.com/ava-labs/firewood/pull/1303))
+- Add nix flake for ffi ([#1319](https://github.com/ava-labs/firewood/pull/1319))
+- Add more info for IO error message ([#1378](https://github.com/ava-labs/firewood/pull/1378))
+- Add TrieNode trait and related functionality ([#1363](https://github.com/ava-labs/firewood/pull/1363))
+- Add hashed key-value trie implementation ([#1365](https://github.com/ava-labs/firewood/pull/1365))
+- Define explicit associated types on Hashable ([#1366](https://github.com/ava-labs/firewood/pull/1366))
+- *(ffi)* `Database.Close()` guarantees proposals committed or freed ([#1349](https://github.com/ava-labs/firewood/pull/1349))
+- *(ffi)* [**breaking**] Support empty values in Update operations ([#1420](https://github.com/ava-labs/firewood/pull/1420))
+- Add just task runner to ensure reproducibility of CI ([#1345](https://github.com/ava-labs/firewood/pull/1345))
+- *(ffi)* [**breaking**] Add finalization logic for Revisions ([#1435](https://github.com/ava-labs/firewood/pull/1435))
+- *(benchmark/bootstrap)* Add config param ([#1438](https://github.com/ava-labs/firewood/pull/1438))
+
+### 🐛 Bug Fixes
+
+- Explicitly release advisory lock on drop ([#1352](https://github.com/ava-labs/firewood/pull/1352))
+- EINTR during iouring calls ([#1354](https://github.com/ava-labs/firewood/pull/1354))
+- Revert "feat: Parallel updates to Merkle trie (v2)" ([#1372](https://github.com/ava-labs/firewood/pull/1372))
+- Revert "fix: Revert "feat: Parallel updates to Merkle trie (v2)"" ([#1374](https://github.com/ava-labs/firewood/pull/1374))
+- *(storage)* Flush freelist early to prevent corruption ([#1389](https://github.com/ava-labs/firewood/pull/1389))
+- *(benchmark/bootstrap)* Consistent go deps ([#1436](https://github.com/ava-labs/firewood/pull/1436))
+
+### 🚜 Refactor
+
+- Unify root storage using Child enum ([#1330](https://github.com/ava-labs/firewood/pull/1330))
+- *(db)* `TestDb` constructor ([#1351](https://github.com/ava-labs/firewood/pull/1351))
+
+### 📚 Documentation
+
+- *(benchmark/bootstrap)* Expand README.md ([#1421](https://github.com/ava-labs/firewood/pull/1421))
+
+### 🧪 Testing
+
+- Show symbol diff when ffi-nix build equivalency test fails ([#1423](https://github.com/ava-labs/firewood/pull/1423))
+
+### ⚙️ Miscellaneous Tasks
+
+- Include dependency lockfile ([#1321](https://github.com/ava-labs/firewood/pull/1321))
+- Add race detection in Go ([#1323](https://github.com/ava-labs/firewood/pull/1323))
+- *(nodestore)* Remove empty committed err ([#1353](https://github.com/ava-labs/firewood/pull/1353))
+- Upgrade dependencies ([#1360](https://github.com/ava-labs/firewood/pull/1360))
+- *(nodestore)* Access persisted nodestores ([#1355](https://github.com/ava-labs/firewood/pull/1355))
+- Update Go to 1.24.8 ([#1361](https://github.com/ava-labs/firewood/pull/1361))
+- Print ulimits and set memlock to unlimited before fuzz tests ([#1375](https://github.com/ava-labs/firewood/pull/1375))
+- *(db/manager)* Add `MockStore` ([#1346](https://github.com/ava-labs/firewood/pull/1346))
+- Update Go to 1.24.9 ([#1380](https://github.com/ava-labs/firewood/pull/1380))
+- *(ffi/firewood)* Remove `RootStore` generics ([#1388](https://github.com/ava-labs/firewood/pull/1388))
+- Update .golangci.yaml ([#1394](https://github.com/ava-labs/firewood/pull/1394))
+- Update ffi build check to configure cargo with same MAKEFLAGS as nix ([#1392](https://github.com/ava-labs/firewood/pull/1392))
+- Fix new lint warning from 1.91 update ([#1417](https://github.com/ava-labs/firewood/pull/1417))
+- Update .golangci.yaml ([#1419](https://github.com/ava-labs/firewood/pull/1419))
+- [**breaking**] Drop binary support for macos 13/14 ([#1425](https://github.com/ava-labs/firewood/pull/1425))
+- *(ci)* Disable ffi-nix job pending reliable build equivalency ([#1426](https://github.com/ava-labs/firewood/pull/1426))
+- Added helper to reduce code duplication between Db.propose and Proposal.create_proposal ([#1343](https://github.com/ava-labs/firewood/pull/1343))
+- Add guidance on Go workspaces ([#1434](https://github.com/ava-labs/firewood/pull/1434))
+
+## [0.0.13] - 2025-09-26
 
 ### 🚀 Features
 
@@ -16,6 +89,43 @@ All notable changes to this project will be documented in this file.
 - *(ffi-refactor)* Refactor how hash values are returned (5/8) ([#1226](https://github.com/ava-labs/firewood/pull/1226))
 - *(ffi-refactor)* Refactor revision to use database handle (6/8) ([#1227](https://github.com/ava-labs/firewood/pull/1227))
 - *(ffi-refactor)* Add `ValueResult` type (7/8) ([#1228](https://github.com/ava-labs/firewood/pull/1228))
+- *(checker)* Print report using template for better readability ([#1237](https://github.com/ava-labs/firewood/pull/1237))
+- *(checker)* Fix free lists when the erroneous area is the head ([#1240](https://github.com/ava-labs/firewood/pull/1240))
+- *(ffi-proofs)* Stub interfaces for FFI to interact with proofs. ([#1253](https://github.com/ava-labs/firewood/pull/1253))
+- Explicit impl of PartialEq/Eq on HashOrRlp ([#1260](https://github.com/ava-labs/firewood/pull/1260))
+- *(proofs)* [**breaking**] Disable `ValueDigest::Hash` for ethhash ([#1269](https://github.com/ava-labs/firewood/pull/1269))
+- [**breaking**] Rename `Hashable::key` ([#1270](https://github.com/ava-labs/firewood/pull/1270))
+- *(range-proofs)* KeyValuePairIter (1/2) ([#1282](https://github.com/ava-labs/firewood/pull/1282))
+- *(proofs)* [**breaking**] Add v0 serialization for RangeProofs ([#1271](https://github.com/ava-labs/firewood/pull/1271))
+- *(ffi-refactor)* Replace sequence id with pointer to proposals (8/8) ([#1221](https://github.com/ava-labs/firewood/pull/1221))
+
+### 🐛 Bug Fixes
+
+- Add an advisory lock ([#1244](https://github.com/ava-labs/firewood/pull/1244))
+- Path iterator returned wrong node ([#1259](https://github.com/ava-labs/firewood/pull/1259))
+- Use `count` instead of `size_hint` ([#1268](https://github.com/ava-labs/firewood/pull/1268))
+- Correct typo in README.md ([#1276](https://github.com/ava-labs/firewood/pull/1276))
+- Resolve build failures by pinning opentelemetry to 0.30 ([#1281](https://github.com/ava-labs/firewood/pull/1281))
+- *(range-proofs)* Serialize range proof key consistently ([#1278](https://github.com/ava-labs/firewood/pull/1278))
+- *(range-proofs)* Fix verify of exclusion proofs ([#1279](https://github.com/ava-labs/firewood/pull/1279))
+- *(ffi)* GetFromRoot typo ([#1298](https://github.com/ava-labs/firewood/pull/1298))
+- Incorrect gauge metrics ([#1300](https://github.com/ava-labs/firewood/pull/1300))
+- M6id is a amd64 machine ([#1305](https://github.com/ava-labs/firewood/pull/1305))
+- Revert #1116 ([#1313](https://github.com/ava-labs/firewood/pull/1313))
+
+### 💼 Other
+
+- *(deps)* Update typed-builder requirement from 0.21.0 to 0.22.0 ([#1275](https://github.com/ava-labs/firewood/pull/1275))
+
+### 📚 Documentation
+
+- README implies commit == persist ([#1283](https://github.com/ava-labs/firewood/pull/1283))
+
+### 🧪 Testing
+
+- Mark new_empty_proposal as test only ([#1249](https://github.com/ava-labs/firewood/pull/1249))
+- *(firewood)* Use ctor section to init logger for all tests ([#1277](https://github.com/ava-labs/firewood/pull/1277))
+- *(bootstrap)* Bootstrap testing scripts ([#1287](https://github.com/ava-labs/firewood/pull/1287))
 
 ### ⚙️ Miscellaneous Tasks
 
@@ -23,6 +133,24 @@ All notable changes to this project will be documented in this file.
 - Synchronize .golangci.yaml ([#1234](https://github.com/ava-labs/firewood/pull/1234))
 - *(metrics-check)* Re-use previous comment instead of spamming new ones ([#1232](https://github.com/ava-labs/firewood/pull/1232))
 - Nuke grpc-testtool ([#1220](https://github.com/ava-labs/firewood/pull/1220))
+- Rename FuzzTree ([#1239](https://github.com/ava-labs/firewood/pull/1239))
+- Upgrade to rust 1.89 ([#1242](https://github.com/ava-labs/firewood/pull/1242))
+- Rename mut_root to root_mut ([#1248](https://github.com/ava-labs/firewood/pull/1248))
+- Add missing debug traits ([#1254](https://github.com/ava-labs/firewood/pull/1254))
+- These tests actually work now ([#1262](https://github.com/ava-labs/firewood/pull/1262))
+- Cargo +nightly clippy --fix ([#1265](https://github.com/ava-labs/firewood/pull/1265))
+- Update .golangci.yaml ([#1274](https://github.com/ava-labs/firewood/pull/1274))
+- Various script improvements ([#1288](https://github.com/ava-labs/firewood/pull/1288))
+- *(bootstrap)* Add keys for brandon ([#1289](https://github.com/ava-labs/firewood/pull/1289))
+- *(bootstrap)* Add keys for Bernard and Amin ([#1291](https://github.com/ava-labs/firewood/pull/1291))
+- [**breaking**] Decorate enums and structs with `#[non_exhaustive]` ([#1292](https://github.com/ava-labs/firewood/pull/1292))
+- Add spot instance support ([#1294](https://github.com/ava-labs/firewood/pull/1294))
+- Upgrade go ([#1296](https://github.com/ava-labs/firewood/pull/1296))
+- Ask for clippy and rustfmt ([#1306](https://github.com/ava-labs/firewood/pull/1306))
+- Add support for enormous disk ([#1308](https://github.com/ava-labs/firewood/pull/1308))
+- Disable non-security dependabot version bumps ([#1315](https://github.com/ava-labs/firewood/pull/1315))
+- Upgrade dependencies ([#1314](https://github.com/ava-labs/firewood/pull/1314))
+- *(benchmark)* Add ssh key ([#1316](https://github.com/ava-labs/firewood/pull/1316))
 
 ## [0.0.11] - 2025-08-20
 

@@ -358,6 +358,13 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
 
         Ok(())
     }
+
+    pub fn flush_freelist(&mut self) -> Result<(), FileIoError> {
+        let free_list_bytes = bytemuck::bytes_of(self.header.free_lists());
+        let free_list_offset = NodeStoreHeader::free_lists_offset();
+        self.storage.write(free_list_offset, free_list_bytes)?;
+        Ok(())
+    }
 }
 
 /// Iterator over free lists in the nodestore
@@ -688,7 +695,7 @@ mod tests {
     fn free_list_iterator() {
         let mut rng = crate::SeededRng::from_env_or_random();
         let memstore = MemStore::new(vec![]);
-        let nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let area_index = rng.random_range(0..AreaIndex::NUM_AREA_SIZES as u8);
         let area_index_type = AreaIndex::try_from(area_index).unwrap();
@@ -743,7 +750,7 @@ mod tests {
     fn free_list_iter_with_metadata() {
         let rng = crate::SeededRng::from_env_or_random();
         let memstore = MemStore::new(vec![]);
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let mut nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let mut free_lists = FreeLists::default();
         let mut offset = NodeStoreHeader::SIZE;
@@ -869,7 +876,7 @@ mod tests {
         const AREA_INDEX2_PLUS_1: AreaIndex = area_index!(6);
 
         let memstore = MemStore::new(vec![]);
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into()).unwrap();
+        let mut nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let mut free_lists = FreeLists::default();
         let mut offset = NodeStoreHeader::SIZE;

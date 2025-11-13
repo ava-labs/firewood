@@ -2,10 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 #![expect(
-    clippy::indexing_slicing,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::items_after_statements,
     reason = "Found 2 occurrences after enabling the lint."
 )]
@@ -20,10 +16,11 @@
 
 use crate::node::branch::ReadSerializable;
 use crate::nodestore::AreaIndex;
-use crate::{HashType, LinearAddress, Path, SharedNode};
+use crate::{HashType, LinearAddress, Path, PathBuf, PathComponent, SharedNode};
 use bitfield::bitfield;
 use branch::Serializable as _;
-pub use branch::{BranchNode, Child, Children};
+pub use branch::{BranchNode, Child};
+pub use children::{Children, ChildrenSlots};
 use enum_as_inner::EnumAsInner;
 use integer_encoding::{VarInt, VarIntReader as _};
 pub use leaf::LeafNode;
@@ -31,6 +28,7 @@ use std::fmt::Debug;
 use std::io::{Error, Read, Write};
 
 pub mod branch;
+pub mod children;
 mod leaf;
 pub mod path;
 pub mod persist;
@@ -151,6 +149,21 @@ impl ExtendableBytes for Vec<u8> {
     }
 }
 
+impl ExtendableBytes for bumpalo::collections::Vec<'_, u8> {
+    fn extend<T: IntoIterator<Item = u8>>(&mut self, other: T) {
+        std::iter::Extend::extend(self, other);
+    }
+    fn reserve(&mut self, reserve: usize) {
+        bumpalo::collections::Vec::reserve(self, reserve);
+    }
+    fn push(&mut self, value: u8) {
+        bumpalo::collections::Vec::push(self, value);
+    }
+    fn extend_from_slice(&mut self, other: &[u8]) {
+        bumpalo::collections::Vec::extend_from_slice(self, other);
+    }
+}
+
 impl Node {
     /// Returns the partial path of the node.
     #[must_use]
@@ -224,11 +237,7 @@ impl Node {
     pub fn as_bytes<T: ExtendableBytes>(&self, prefix: AreaIndex, encoded: &mut T) {
         match self {
             Node::Branch(b) => {
-                let child_iter = b
-                    .children
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(offset, child)| child.as_ref().map(|c| (offset, c)));
+                let child_iter = b.children.iter_present();
                 let childcount = child_iter.clone().count();
 
                 // encode the first byte
@@ -279,7 +288,7 @@ impl Node {
                     }
                 } else {
                     for (position, child) in child_iter {
-                        encoded.extend_var_int(position);
+                        encoded.extend_var_int(position.as_u8());
                         let (address, hash) = child
                             .persist_info()
                             .expect("child must be hashed when serializing");
@@ -357,10 +366,10 @@ impl Node {
                     None
                 };
 
-                let mut children = BranchNode::empty_children();
+                let mut children = Children::new();
                 if childcount == 0 {
                     // branch is full of all children
-                    for child in &mut children {
+                    for (_, child) in &mut children {
                         // TODO: we can read them all at once
                         let mut address_buf = [0u8; 8];
                         serialized.read_exact(&mut address_buf)?;
@@ -378,7 +387,13 @@ impl Node {
                     for _ in 0..childcount {
                         let mut position_buf = [0u8; 1];
                         serialized.read_exact(&mut position_buf)?;
-                        let position = position_buf[0] as usize;
+                        let position =
+                            PathComponent::try_new(position_buf[0]).ok_or_else(|| {
+                                Error::other(format!(
+                                    "invalid child position {:02x}",
+                                    position_buf[0]
+                                ))
+                            })?;
 
                         let mut address_buf = [0u8; 8];
                         serialized.read_exact(&mut address_buf)?;
@@ -402,6 +417,53 @@ impl Node {
             }
         }
     }
+
+    /// Force the node (which should be a root of a trie) into a branch with no partial path
+    /// in preparation for a parallel insert. There are two cases to handle depending on whether
+    /// the node has a partial path.
+    ///
+    /// 1.  If the node has a partial path, then create a new node with an empty partial path
+    ///     and a None for a value. Push down the previous node as a child and return the
+    ///     branch.
+    /// 2.  If the existing node does not have a partial path, then there is nothing we need
+    ///     to do if it is a branch. If it is a leaf, then convert it into a branch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an `Error` if it cannot create a `PathComponent` from a u8 index.
+    pub fn force_branch_for_insert(mut self) -> Result<Box<BranchNode>, Error> {
+        // If the `partial_path` is non-empty, then create a branch that will be the new
+        // root with the previous root as the child at the index returned from split_first.
+        if let Some((child_index, child_path)) = self
+            .partial_path()
+            .split_first()
+            .map(|(index, path)| (*index, path.into()))
+        {
+            let mut branch = BranchNode {
+                partial_path: Path::new(),
+                value: None,
+                children: Children::default(),
+            };
+            self.update_partial_path(child_path);
+            let child_path_component = PathComponent::try_new(child_index)
+                .ok_or_else(|| Error::other("invalid child index"))?;
+            *branch.children.get_mut(child_path_component) = Some(Child::Node(self));
+            Ok(branch.into())
+        } else {
+            Ok(match self {
+                Node::Leaf(leaf) => {
+                    // Root is a leaf with an empty partial path. Replace it with a branch.
+                    BranchNode {
+                        partial_path: Path::new(),
+                        value: Some(leaf.value),
+                        children: Children::default(),
+                    }
+                    .into()
+                }
+                Node::Branch(branch) => branch,
+            })
+        }
+    }
 }
 
 /// A path iterator item, which has the key nibbles up to this point,
@@ -410,14 +472,14 @@ impl Node {
 #[derive(Debug)]
 pub struct PathIterItem {
     /// The key of the node at `address` as nibbles.
-    pub key_nibbles: Box<[u8]>,
+    pub key_nibbles: PathBuf,
     /// A reference to the node
     pub node: SharedNode,
     /// The next item returned by the iterator is a child of `node`.
     /// Specifically, it's the child at index `next_nibble` in `node`'s
     /// children array.
     /// None if `node` is the last node in the path.
-    pub next_nibble: Option<u8>,
+    pub next_nibble: Option<PathComponent>,
 }
 
 fn read_path_with_overflow_length(
@@ -451,7 +513,7 @@ mod test {
 
     use crate::node::{BranchNode, LeafNode, Node};
     use crate::nodestore::AreaIndex;
-    use crate::{Child, LinearAddress, NibblesIterator, Path};
+    use crate::{Child, Children, LinearAddress, NibblesIterator, Path};
     use test_case::test_case;
 
     #[test_case(
@@ -467,8 +529,8 @@ mod test {
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from(vec![0, 1]),
         value: None,
-        children: std::array::from_fn(|i| {
-            if i == 15 {
+        children: Children::from_fn(|i| {
+            if i.as_u8() == 15 {
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
             } else {
                 None
@@ -478,14 +540,14 @@ mod test {
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from(vec![0, 1, 2, 3]),
         value: Some(vec![4, 5, 6, 7].into()),
-        children: std::array::from_fn(|_|
+        children: Children::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
         )})), 652; "full branch node with long partial path and value"
     )]
     #[test_case(Node::Branch(Box::new(BranchNode {
         partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"this is a really long partial path, like so long it's more than 63 nibbles long which triggers #1056.")),
         value: Some(vec![4, 5, 6, 7].into()),
-        children: std::array::from_fn(|_|
+        children: Children::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
         )})), 851; "full branch node with obnoxiously long partial path"
     )]
@@ -497,7 +559,7 @@ verify that we decode the entire value every time. previously, we would only rea
 the first byte for the value length, which is incorrect if the length is greater
 than 126 bytes as the length would be encoded in multiple bytes.
         ").into()),
-        children: std::array::from_fn(|_|
+        children: Children::from_fn(|_|
                 Some(Child::AddressWithHash(LinearAddress::new(1).unwrap(), std::array::from_fn::<u8, 32, _>(|i| i as u8).into()))
         )})), 1165; "full branch node with obnoxiously long partial path and long value"
     )]

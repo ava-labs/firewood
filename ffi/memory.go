@@ -14,13 +14,10 @@ import "C"
 import (
 	"errors"
 	"fmt"
-	"runtime"
 	"unsafe"
 )
 
 var (
-	errNilStruct     = errors.New("nil struct pointer cannot be freed")
-	errBadValue      = errors.New("value from cgo formatted incorrectly")
 	errKeysAndValues = errors.New("keys and values must have the same length")
 	errFreeingValue  = errors.New("unexpected error while freeing value")
 )
@@ -66,17 +63,20 @@ var _ Borrower = (*ownedBytes)(nil)
 //
 // Provide a Pinner to ensure the memory is pinned while the BorrowedBytes is in use.
 func newBorrowedBytes(slice []byte, pinner Pinner) C.BorrowedBytes {
-	sliceLen := len(slice)
-	if sliceLen == 0 {
-		return C.BorrowedBytes{ptr: nil, len: 0}
-	}
-
+	// Get the pointer first to distinguish between nil slice and empty slice
 	ptr := unsafe.SliceData(slice)
+	sliceLen := len(slice)
+
+	// If ptr is nil (which means the slice itself is nil), return nil pointer
 	if ptr == nil {
 		return C.BorrowedBytes{ptr: nil, len: 0}
 	}
 
-	pinner.Pin(ptr)
+	// For non-nil slices (including empty slices like []byte{}),
+	// pin the pointer if the slice has data
+	if sliceLen > 0 {
+		pinner.Pin(ptr)
+	}
 
 	return C.BorrowedBytes{
 		ptr: (*C.uint8_t)(ptr),
@@ -134,25 +134,6 @@ func newKeyValuePairs(keys, vals [][]byte, pinner Pinner) (C.BorrowedKeyValuePai
 	}
 
 	return newBorrowedKeyValuePairs(pairs, pinner), nil
-}
-
-// Close releases the memory associated with the Database.
-//
-// This is safe to call if the pointer is nil, in which case it does nothing. The
-// pointer will be set to nil after freeing to prevent double free. However, it is
-// not safe to call this method concurrently from multiple goroutines.
-func (db *Database) Close() error {
-	if db.handle == nil {
-		return nil
-	}
-
-	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
-		return fmt.Errorf("unexpected error when closing database: %w", err)
-	}
-
-	db.handle = nil // Prevent double free
-
-	return nil
 }
 
 // ownedBytes is a wrapper around C.OwnedBytes that provides a Go interface
@@ -331,6 +312,139 @@ func getValueFromValueResult(result C.ValueResult) ([]byte, error) {
 	}
 }
 
+type ownedKeyValueBatch struct {
+	owned C.OwnedKeyValueBatch
+}
+
+func (b *ownedKeyValueBatch) copy() []*ownedKeyValue {
+	if b.owned.ptr == nil {
+		return nil
+	}
+	borrowed := b.borrow()
+	copied := make([]*ownedKeyValue, len(borrowed))
+	for i, borrow := range borrowed {
+		copied[i] = newOwnedKeyValue(borrow)
+	}
+	return copied
+}
+
+func (b *ownedKeyValueBatch) borrow() []C.OwnedKeyValuePair {
+	if b.owned.ptr == nil {
+		return nil
+	}
+
+	return unsafe.Slice((*C.OwnedKeyValuePair)(unsafe.Pointer(b.owned.ptr)), b.owned.len)
+}
+
+func (b *ownedKeyValueBatch) free() error {
+	if b == nil || b.owned.ptr == nil {
+		// we want ownedKeyValueBatch to be typed-nil safe
+		return nil
+	}
+
+	if err := getErrorFromVoidResult(C.fwd_free_owned_key_value_batch(b.owned)); err != nil {
+		return fmt.Errorf("%w: %w", errFreeingValue, err)
+	}
+
+	b.owned = C.OwnedKeyValueBatch{}
+
+	return nil
+}
+
+// newOwnedKeyValueBatch creates a ownedKeyValueBatch from a C.OwnedKeyValueBatch.
+//
+// The caller is responsible for calling Free() on the returned ownedKeyValue
+// when it is no longer needed otherwise memory will leak.
+func newOwnedKeyValueBatch(owned C.OwnedKeyValueBatch) *ownedKeyValueBatch {
+	return &ownedKeyValueBatch{
+		owned: owned,
+	}
+}
+
+type ownedKeyValue struct {
+	// owned holds the original C-provided pair so we can free it
+	// with fwd_free_owned_kv_pair instead of freeing key/value separately.
+	owned C.OwnedKeyValuePair
+	// key and value wrappers provide Borrowed/Copied accessors
+	key   *ownedBytes
+	value *ownedBytes
+}
+
+func (kv *ownedKeyValue) copy() ([]byte, []byte) {
+	key := kv.key.CopiedBytes()
+	value := kv.value.CopiedBytes()
+	return key, value
+}
+
+func (kv *ownedKeyValue) free() error {
+	if kv == nil {
+		// we want ownedKeyValue to be typed-nil safe
+		return nil
+	}
+	if err := getErrorFromVoidResult(C.fwd_free_owned_kv_pair(kv.owned)); err != nil {
+		return fmt.Errorf("%w: %w", errFreeingValue, err)
+	}
+	// zero out fields to avoid accidental reuse/double free
+	kv.owned = C.OwnedKeyValuePair{}
+	kv.key = nil
+	kv.value = nil
+	return nil
+}
+
+// newOwnedKeyValue creates a ownedKeyValue from a C.OwnedKeyValuePair.
+//
+// The caller is responsible for calling Free() on the returned ownedKeyValue
+// when it is no longer needed otherwise memory will leak.
+func newOwnedKeyValue(owned C.OwnedKeyValuePair) *ownedKeyValue {
+	return &ownedKeyValue{
+		owned: owned,
+		key:   newOwnedBytes(owned.key),
+		value: newOwnedBytes(owned.value),
+	}
+}
+
+// getKeyValueFromResult converts a C.KeyValueResult to a key value pair or error.
+//
+// It returns nil, nil if the result is None.
+// It returns a *ownedKeyValue, nil if the result is Some.
+// It returns an error if the result is an error.
+func getKeyValueFromResult(result C.KeyValueResult) (*ownedKeyValue, error) {
+	switch result.tag {
+	case C.KeyValueResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.KeyValueResult_None:
+		return nil, nil
+	case C.KeyValueResult_Some:
+		ownedKvp := newOwnedKeyValue(*(*C.OwnedKeyValuePair)(unsafe.Pointer(&result.anon0)))
+		return ownedKvp, nil
+	case C.KeyValueResult_Err:
+		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return nil, err
+	default:
+		return nil, fmt.Errorf("unknown C.KeyValueResult tag: %d", result.tag)
+	}
+}
+
+// getKeyValueBatchFromResult converts a C.KeyValueBatchResult to a key value batch or error.
+//
+// It returns nil, nil if the result is None.
+// It returns a *ownedKeyValueBatch, nil if the result is Some.
+// It returns an error if the result is an error.
+func getKeyValueBatchFromResult(result C.KeyValueBatchResult) (*ownedKeyValueBatch, error) {
+	switch result.tag {
+	case C.KeyValueBatchResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.KeyValueBatchResult_Some:
+		ownedBatch := newOwnedKeyValueBatch(*(*C.OwnedKeyValueBatch)(unsafe.Pointer(&result.anon0)))
+		return ownedBatch, nil
+	case C.KeyValueBatchResult_Err:
+		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return nil, err
+	default:
+		return nil, fmt.Errorf("unknown C.KeyValueBatchResult tag: %d", result.tag)
+	}
+}
+
 // getDatabaseFromHandleResult converts a C.HandleResult to a Database or error.
 //
 // If the C.HandleResult is an error, it returns an error instead of a Database.
@@ -346,90 +460,4 @@ func getDatabaseFromHandleResult(result C.HandleResult) (*Database, error) {
 	default:
 		return nil, fmt.Errorf("unknown C.HandleResult tag: %d", result.tag)
 	}
-}
-
-// hashAndIDFromValue converts the cgo `Value` payload into:
-//
-//	case | data    | len   | meaning
-//
-// 1.    | nil     | 0     | invalid
-// 2.    | nil     | non-0 | proposal deleted everything
-// 3.    | non-nil | 0     | error string
-// 4.    | non-nil | non-0 | hash and id
-//
-// The value should never be nil.
-func hashAndIDFromValue(v *C.struct_Value) ([]byte, uint32, error) {
-	// Pin the returned value to prevent it from being garbage collected.
-	defer runtime.KeepAlive(v)
-
-	if v == nil {
-		return nil, 0, errNilStruct
-	}
-
-	if v.data == nil {
-		// Case 2
-		if v.len != 0 {
-			return nil, uint32(v.len), nil
-		}
-
-		// Case 1
-		return nil, 0, errBadValue
-	}
-
-	// Case 3
-	if v.len == 0 {
-		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
-			return nil, 0, fmt.Errorf("%w: %w", errFreeingValue, err)
-		}
-		return nil, 0, errors.New(errStr)
-	}
-
-	// Case 4
-	id := uint32(v.len)
-	buf := C.GoBytes(unsafe.Pointer(v.data), RootLength)
-	v.len = C.size_t(RootLength) // set the length to free
-	if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
-		return nil, 0, fmt.Errorf("%w: %w", errFreeingValue, err)
-	}
-	return buf, id, nil
-}
-
-// errorFromValue converts the cgo `Value` payload into:
-//
-//	case | data    | len   | meaning
-//
-// 1.    | nil     | 0     | empty
-// 2.    | nil     | non-0 | invalid
-// 3.    | non-nil | 0     | error string
-// 4.    | non-nil | non-0 | invalid
-//
-// The value should never be nil.
-func errorFromValue(v *C.struct_Value) error {
-	// Pin the returned value to prevent it from being garbage collected.
-	defer runtime.KeepAlive(v)
-
-	if v == nil {
-		return errNilStruct
-	}
-
-	// Case 1
-	if v.data == nil && v.len == 0 {
-		return nil
-	}
-
-	// Case 3
-	if v.len == 0 {
-		errStr := C.GoString((*C.char)(unsafe.Pointer(v.data)))
-		if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
-			return fmt.Errorf("%w: %w", errFreeingValue, err)
-		}
-		return errors.New(errStr)
-	}
-
-	// Case 2 and 4
-	if err := getErrorFromVoidResult(C.fwd_free_value(v)); err != nil {
-		return fmt.Errorf("%w: %w", errFreeingValue, err)
-	}
-	return errBadValue
 }
