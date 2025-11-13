@@ -82,10 +82,11 @@ runs:
         # Debug: Print current and parent directory
         echo "Current directory: $(pwd)"
         echo "Parent directory: $(dirname $(pwd))"
+        echo "Action path: $GITHUB_ACTION_PATH"
         ls -l
-        
-        # Run build script and capture FFI path
-        FFI_PATH=$(./scripts/build-firewood.sh $ARGS)
+
+        FIREWOOD_REPO_ROOT="$GITHUB_ACTION_PATH/../../.."
+        FFI_PATH=$("$FIREWOOD_REPO_ROOT/scripts/build-firewood.sh" $ARGS)
         
         # Set outputs
         echo "ffi-path=$FFI_PATH" >> $GITHUB_OUTPUT
