@@ -197,7 +197,7 @@ func (db *Database) GetFromRoot(root Hash, key []byte) ([]byte, error) {
 	}
 
 	// If the root is empty, the database is empty.
-	if root == (EmptyRoot) {
+	if root == EmptyRoot {
 		return nil, nil
 	}
 
@@ -226,7 +226,7 @@ func (db *Database) LatestRevision() (*Revision, error) {
 	if err != nil {
 		return nil, err
 	}
-	if root == (EmptyRoot) {
+	if root == EmptyRoot {
 		return nil, errRevisionNotFound
 	}
 	return db.Revision(root)

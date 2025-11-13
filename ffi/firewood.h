@@ -547,8 +547,7 @@ typedef struct RangeProofResult {
  */
 typedef struct CreateRangeProofArgs {
   /**
-   * The root hash of the revision to prove. If `None`, the latest revision
-   * is used.
+   * The root hash of the revision to prove.
    */
   struct HashKey root;
   /**
