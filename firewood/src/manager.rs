@@ -200,22 +200,20 @@ impl RevisionManager {
                 .expect("poisoned lock")
                 .pop_front()
                 .expect("must be present");
-            let oldest_hash = oldest
-                .root_hash()
-                .or_default_root_hash()
-                .expect("root hash should not be none");
-
-            self.by_hash
-                .write()
-                .expect("poisoned lock")
-                .remove(&oldest_hash);
+            let oldest_hash = oldest.root_hash().or_default_root_hash();
+            if let Some(ref hash) = oldest_hash {
+                self.by_hash.write().expect("poisoned lock").remove(hash);
+            }
 
             // Check if this revision is referenced by RootStore
-            let is_in_root_store = self
-                .root_store
-                .get(&oldest_hash)
-                .map_err(RevisionManagerError::RootStoreError)?
-                .is_some();
+            let is_in_root_store = match oldest_hash {
+                Some(hash) => self
+                    .root_store
+                    .get(&hash)
+                    .map_err(RevisionManagerError::RootStoreError)?
+                    .is_some(),
+                None => false,
+            };
 
             // We reap the revision's nodes only if the revision is not referenced by RootStore.
             if !is_in_root_store {
