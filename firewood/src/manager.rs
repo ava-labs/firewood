@@ -76,7 +76,7 @@ pub(crate) struct RevisionManager {
     /// stored in the filebacked storage.
     historical: RwLock<VecDeque<CommittedRevision>>,
     proposals: Mutex<Vec<ProposedRevision>>,
-    // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
+    /// The list of revisions that are on disk by hash.
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
     threadpool: OnceLock<ThreadPool>,
     root_store: Box<dyn RootStore + Send + Sync>,
@@ -167,7 +167,7 @@ impl RevisionManager {
     ///    The proposal's parent must be the last committed revision, otherwise the commit fails.
     ///    It only contains the address of the nodes that are deleted, which should be very small.
     /// 2. Revision reaping. If more than the maximum number of revisions are kept in memory, the
-    ///    oldest revision is reaped.
+    ///    oldest revision is reaped if not referenced by `RootStore`.
     /// 3. Persist to disk. This includes flushing everything to disk.
     /// 4. Persist the revision to `RootStore`.
     /// 5. Set last committed revision.
@@ -189,7 +189,8 @@ impl RevisionManager {
         let mut committed = proposal.as_committed(&current_revision);
 
         // 2. Revision reaping
-        // Take the deleted entries from the oldest revision and mark them as free for this revision
+        // Take the deleted entries from the oldest revision and mark them as
+        // free for this revision only if the revision is not referenced by RootStore.
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
         while self.historical.read().expect("poisoned lock").len() >= self.max_revisions {
@@ -199,27 +200,40 @@ impl RevisionManager {
                 .expect("poisoned lock")
                 .pop_front()
                 .expect("must be present");
-            if let Some(oldest_hash) = oldest.root_hash().or_default_root_hash() {
-                self.by_hash
-                    .write()
-                    .expect("poisoned lock")
-                    .remove(&oldest_hash);
-            }
+            let oldest_hash = oldest
+                .root_hash()
+                .or_default_root_hash()
+                .expect("root hash should not be none");
 
-            // This `try_unwrap` is safe because nobody else will call `try_unwrap` on this Arc
-            // in a different thread, so we don't have to worry about the race condition where
-            // the Arc we get back is not usable as indicated in the docs for `try_unwrap`.
-            // This guarantee is there because we have a `&mut self` reference to the manager, so
-            // the compiler guarantees we are the only one using this manager.
-            match Arc::try_unwrap(oldest) {
-                Ok(oldest) => oldest.reap_deleted(&mut committed)?,
-                Err(original) => {
-                    warn!("Oldest revision could not be reaped; still referenced");
-                    self.historical
-                        .write()
-                        .expect("poisoned lock")
-                        .push_front(original);
-                    break;
+            self.by_hash
+                .write()
+                .expect("poisoned lock")
+                .remove(&oldest_hash);
+
+            // Check if this revision is referenced by RootStore
+            let is_in_root_store = self
+                .root_store
+                .get(&oldest_hash)
+                .map_err(RevisionManagerError::RootStoreError)?
+                .is_some();
+
+            // We reap the revision's nodes only if the revision is not referenced by RootStore.
+            if !is_in_root_store {
+                // This `try_unwrap` is safe because nobody else will call `try_unwrap` on this Arc
+                // in a different thread, so we don't have to worry about the race condition where
+                // the Arc we get back is not usable as indicated in the docs for `try_unwrap`.
+                // This guarantee is there because we have a `&mut self` reference to the manager, so
+                // the compiler guarantees we are the only one using this manager.
+                match Arc::try_unwrap(oldest) {
+                    Ok(oldest) => oldest.reap_deleted(&mut committed)?,
+                    Err(original) => {
+                        warn!("Oldest revision could not be reaped; still referenced");
+                        self.historical
+                            .write()
+                            .expect("poisoned lock")
+                            .push_front(original);
+                        break;
+                    }
                 }
             }
             gauge!("firewood.active_revisions")
@@ -339,14 +353,29 @@ impl RevisionManager {
     }
 
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
-        self.by_hash
+        if let Some(revision) = self
+            .by_hash
             .read()
             .expect("poisoned lock")
             .get(&root_hash)
             .cloned()
+        {
+            return Ok(revision);
+        }
+
+        let root_address = self
+            .root_store
+            .get(&root_hash)
+            .map_err(RevisionManagerError::RootStoreError)?
             .ok_or(RevisionManagerError::RevisionNotFound {
-                provided: root_hash,
-            })
+                provided: root_hash.clone(),
+            })?;
+
+        Ok(Arc::new(NodeStore::with_root(
+            root_hash.into_hash_type(),
+            root_address,
+            self.current_revision(),
+        )))
     }
 
     pub fn root_hash(&self) -> Result<Option<HashKey>, RevisionManagerError> {

@@ -1276,6 +1276,9 @@ func TestFjallStore(t *testing.T) {
 	// Create a new database with RootStore enabled
 	config := DefaultConfig()
 	config.RootStoreDir = rootStoreDir
+	// Setting the number of in-memory revisions to 5 tests that revision nodes
+	// are not reaped prior to closing the database.
+	config.Revisions = 5
 
 	db, err := New(dbFile, config)
 	r.NoError(err)

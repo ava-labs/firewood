@@ -394,6 +394,7 @@ mod test {
     #![expect(clippy::unwrap_used)]
 
     use core::iter::Take;
+    use std::collections::HashMap;
     use std::iter::Peekable;
     use std::num::NonZeroUsize;
     use std::ops::{Deref, DerefMut};
@@ -404,6 +405,7 @@ mod test {
     };
 
     use crate::db::{Db, Proposal, UseParallel};
+    use crate::manager::RevisionManagerConfig;
     use crate::root_store::{MockStore, RootStore};
     use crate::v2::api::{Db as _, DbView, Proposal as _};
 
@@ -1107,6 +1109,7 @@ mod test {
         test_root_store_helper(db);
     }
 
+    /// Verifies that persisted revisions are still accessible when reopening the database.
     fn test_root_store_helper(db: TestDb) {
         // First, create a revision to retrieve
         let key = b"key";
@@ -1158,6 +1161,55 @@ mod test {
         let db = TestDb::with_mockstore(mock_store);
 
         db.reopen();
+    }
+
+    /// Verifies that revisions exceeding the in-memory limit can still be retrieved.
+    #[test]
+    fn test_fjall_store_with_capped_max_revisions() {
+        const NUM_REVISIONS: usize = 10;
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
+            .iter()
+            .collect();
+        let root_store_path = tmpdir.as_ref().join("fjall_store");
+        let dbconfig = DbConfig::builder()
+            .root_store_dir(Some(root_store_path))
+            .manager(RevisionManagerConfig::builder().max_revisions(5).build())
+            .build();
+        let db = Db::new(dbpath, dbconfig).unwrap();
+        let db = TestDb { db, tmpdir };
+
+        // Create and commit 10 proposals
+        let key = b"root_store";
+        let revisions: HashMap<TrieHash, _> = (0..NUM_REVISIONS)
+            .map(|i| {
+                let value = i.to_be_bytes();
+                let batch = vec![BatchOp::Put { key, value }];
+                let proposal = db.propose(batch).unwrap();
+                let root_hash = proposal.root_hash().unwrap().unwrap();
+                proposal.commit().unwrap();
+
+                (root_hash, value)
+            })
+            .collect();
+
+        // Verify that we can access all revisions with their correct values
+        for (root_hash, value) in &revisions {
+            let revision = db.revision(root_hash.clone()).unwrap();
+            let retrieved_value = revision.val(key).unwrap().unwrap();
+            assert_eq!(value.as_slice(), retrieved_value.as_ref());
+        }
+
+        let db = db.reopen();
+
+        // Verify that we can access all revisions with their correct values
+        // after reopening
+        for (root_hash, value) in &revisions {
+            let revision = db.revision(root_hash.clone()).unwrap();
+            let retrieved_value = revision.val(key).unwrap().unwrap();
+            assert_eq!(value.as_slice(), retrieved_value.as_ref());
+        }
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
