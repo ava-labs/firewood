@@ -26,21 +26,22 @@ package ffi
 import "C"
 
 import (
-	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"runtime"
+	"sync"
+	"time"
 )
 
-// These constants are used to identify errors returned by the Firewood Rust FFI.
-// These must be changed if the Rust FFI changes - should be reported by tests.
-const (
-	RootLength = C.sizeof_HashKey
-)
+const RootLength = C.sizeof_HashKey
+
+type Hash [RootLength]byte
 
 var (
-	errDBClosed = errors.New("firewood database already closed")
-	EmptyRoot   = make([]byte, RootLength)
+	EmptyRoot                 Hash
+	errDBClosed               = errors.New("firewood database already closed")
+	ErrActiveKeepAliveHandles = errors.New("cannot close database with active keep-alive handles")
 )
 
 // A Database is a handle to a Firewood database.
@@ -49,7 +50,8 @@ type Database struct {
 	// handle is returned and accepted by cgo functions. It MUST be treated as
 	// an opaque value without special meaning.
 	// https://en.wikipedia.org/wiki/Blinkenlights
-	handle *C.DatabaseHandle
+	handle             *C.DatabaseHandle
+	outstandingHandles sync.WaitGroup
 }
 
 // Config configures the opening of a [Database].
@@ -121,11 +123,16 @@ func New(filePath string, conf *Config) (*Database, error) {
 // Update applies a batch of updates to the database, returning the hash of the
 // root node after the batch is applied.
 //
-// WARNING: a consequence of prefix deletion is that calling Update with an empty
-// key and value will delete the entire database.
-func (db *Database) Update(keys, vals [][]byte) ([]byte, error) {
+// Value Semantics:
+//   - nil value (vals[i] == nil): Performs a DeleteRange operation using the key as a prefix
+//   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
+//   - non-empty value: Inserts/updates the key with the provided value
+//
+// WARNING: Calling Update with an empty key and nil value will delete the entire database
+// due to prefix deletion semantics.
+func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 	if db.handle == nil {
-		return nil, errDBClosed
+		return EmptyRoot, errDBClosed
 	}
 
 	var pinner runtime.Pinner
@@ -133,12 +140,20 @@ func (db *Database) Update(keys, vals [][]byte) ([]byte, error) {
 
 	kvp, err := newKeyValuePairs(keys, vals, &pinner)
 	if err != nil {
-		return nil, err
+		return EmptyRoot, err
 	}
 
 	return getHashKeyFromHashResult(C.fwd_batch(db.handle, kvp))
 }
 
+// Propose creates a new proposal with the given keys and values. The proposal
+// is not committed until [Proposal.Commit] is called. See [Database.Close] re
+// freeing proposals.
+//
+// Value Semantics:
+//   - nil value (vals[i] == nil): Performs a DeleteRange operation using the key as a prefix
+//   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
+//   - non-empty value: Inserts/updates the key with the provided value
 func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 	if db.handle == nil {
 		return nil, errDBClosed
@@ -151,8 +166,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), db)
+	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.outstandingHandles)
 }
 
 // Get retrieves the value for the given key. It always returns a nil error.
@@ -178,13 +192,13 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 // GetFromRoot retrieves the value for the given key from a specific root hash.
 // If the root is not found, it returns an error.
 // If key is not found, it returns (nil, nil).
-func (db *Database) GetFromRoot(root, key []byte) ([]byte, error) {
+func (db *Database) GetFromRoot(root Hash, key []byte) ([]byte, error) {
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
 
 	// If the root is empty, the database is empty.
-	if len(root) == 0 || bytes.Equal(root, EmptyRoot) {
+	if root == EmptyRoot {
 		return nil, nil
 	}
 
@@ -193,25 +207,19 @@ func (db *Database) GetFromRoot(root, key []byte) ([]byte, error) {
 
 	return getValueFromValueResult(C.fwd_get_from_root(
 		db.handle,
-		newBorrowedBytes(root, &pinner),
+		newCHashKey(root),
 		newBorrowedBytes(key, &pinner),
 	))
 }
 
 // Root returns the current root hash of the trie.
-// Empty trie must return common.Hash{}.
-func (db *Database) Root() ([]byte, error) {
+// Empty trie must return common.EmptyRoot.
+func (db *Database) Root() (Hash, error) {
 	if db.handle == nil {
-		return nil, errDBClosed
+		return EmptyRoot, errDBClosed
 	}
 
-	bytes, err := getHashKeyFromHashResult(C.fwd_root_hash(db.handle))
-
-	// If the root hash is not found, return a zeroed slice.
-	if err == nil && bytes == nil {
-		bytes = EmptyRoot
-	}
-	return bytes, err
+	return getHashKeyFromHashResult(C.fwd_root_hash(db.handle))
 }
 
 func (db *Database) LatestRevision() (*Revision, error) {
@@ -219,25 +227,18 @@ func (db *Database) LatestRevision() (*Revision, error) {
 	if err != nil {
 		return nil, err
 	}
-	if bytes.Equal(root, EmptyRoot) {
+	if root == EmptyRoot {
 		return nil, errRevisionNotFound
 	}
 	return db.Revision(root)
 }
 
 // Revision returns a historical revision of the database.
-func (db *Database) Revision(root []byte) (*Revision, error) {
-	if root == nil || len(root) != RootLength {
-		return nil, errInvalidRootLength
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
+func (db *Database) Revision(root Hash) (*Revision, error) {
 	rev, err := getRevisionFromResult(C.fwd_get_revision(
 		db.handle,
-		newBorrowedBytes(root, &pinner),
-	), db)
+		newCHashKey(root),
+	), &db.outstandingHandles)
 	if err != nil {
 		return nil, err
 	}
@@ -245,17 +246,42 @@ func (db *Database) Revision(root []byte) (*Revision, error) {
 	return rev, nil
 }
 
+// defaultCloseTimeout is the duration by which the [context.Context] passed to
+// [Database.Close] is limited. A minute is arbitrary but well above what is
+// reasonably required, and is chosen simply to avoid permanently blocking.
+var defaultCloseTimeout = time.Minute
+
 // Close releases the memory associated with the Database.
 //
-// This is not safe to call while there are any outstanding Proposals. All proposals
-// must be freed or committed before calling this.
+// This blocks until all outstanding keep-alive handles are disowned. That is,
+// until all Revisions and Proposals created from this Database are either
+// unreachable or one of [Proposal.Commit], [Proposal.Drop], or [Revision.Drop]
+// has been called on them. Unreachable objects will be automatically dropped
+// before Close returns, unless an alternate GC finalizer is set on them.
 //
-// This is safe to call if the pointer is nil, in which case it does nothing. The
-// pointer will be set to nil after freeing to prevent double free. However, it is
-// not safe to call this method concurrently from multiple goroutines.
-func (db *Database) Close() error {
+// This is safe to call if the handle pointer is nil, in which case it does
+// nothing. The pointer will be set to nil after freeing to prevent double free.
+// However, it is not safe to call this method concurrently from multiple
+// goroutines.
+func (db *Database) Close(ctx context.Context) error {
 	if db.handle == nil {
 		return nil
+	}
+
+	go runtime.GC()
+
+	done := make(chan struct{})
+	go func() {
+		db.outstandingHandles.Wait()
+		close(done)
+	}()
+
+	ctx, cancel := context.WithTimeout(ctx, defaultCloseTimeout)
+	defer cancel()
+	select {
+	case <-done:
+	case <-ctx.Done():
+		return ErrActiveKeepAliveHandles
 	}
 
 	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {

@@ -14,25 +14,40 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sync"
 	"unsafe"
 )
 
 var (
-	errRevisionNotFound  = errors.New("revision not found")
-	errInvalidRootLength = fmt.Errorf("root hash must be %d bytes", RootLength)
-	errDroppedRevision   = errors.New("revision already dropped")
+	errRevisionNotFound = errors.New("revision not found")
+	errDroppedRevision  = errors.New("revision already dropped")
 )
 
 // Revision is an immutable view over the database at a specific root hash.
-// Instances are created via Database.Revision, provide read-only access to the revision,
-// and must be released with Drop when no longer needed.
+// Instances are created via [Database.Revision], provide read-only access to
+// the revision, and must be released with [Revision.Drop] when no longer needed.
+//
+// Revisions must be dropped before the associated database is closed. A finalizer
+// is set on each Revision to ensure that Drop is called when the Revision is
+// garbage collected, but relying on finalizers is not recommended. Failing to
+// drop a revision before the database is closed will cause it to block or fail.
 type Revision struct {
-	// The database this revision is associated with. Holding this ensures
-	// the DB outlives the revision for cleanup ordering.
-	db     *Database
+	// handle is an opaque pointer to the revision within Firewood. It should be
+	// passed to the C FFI functions that operate on revisions
+	//
+	// It is not safe to call these methods with a nil handle.
+	//
+	// Calls to `C.fwd_free_revision` will invalidate this handle, so it should
+	// not be used after that call.
 	handle *C.RevisionHandle
-	// The revision root
-	root []byte
+
+	// root is the root hash of the revision.
+	root Hash
+
+	// keepAliveHandle is used to keep the database alive while this revision is
+	// in use. It is initialized when the revision is created and disowned after
+	// [Revision.Drop] is called.
+	keepAliveHandle databaseKeepAliveHandle
 }
 
 // Get reads the value stored at the provided key within the revision.
@@ -72,25 +87,26 @@ func (r *Revision) Iter(key []byte) (*Iterator, error) {
 //
 // It is safe to call Drop multiple times; subsequent calls after the first are no-ops.
 func (r *Revision) Drop() error {
-	if r.handle == nil {
+	return r.keepAliveHandle.disown(false /* evenOnError */, func() error {
+		if r.handle == nil {
+			return nil
+		}
+
+		if err := getErrorFromVoidResult(C.fwd_free_revision(r.handle)); err != nil {
+			return fmt.Errorf("%w: %w", errFreeingValue, err)
+		}
+
+		r.handle = nil
 		return nil
-	}
-
-	if err := getErrorFromVoidResult(C.fwd_free_revision(r.handle)); err != nil {
-		return fmt.Errorf("%w: %w", errFreeingValue, err)
-	}
-
-	r.handle = nil // Prevent double free
-
-	return nil
+	})
 }
 
-func (r *Revision) Root() []byte {
+func (r *Revision) Root() Hash {
 	return r.root
 }
 
 // getRevisionFromResult converts a C.RevisionResult to a Revision or error.
-func getRevisionFromResult(result C.RevisionResult, db *Database) (*Revision, error) {
+func getRevisionFromResult(result C.RevisionResult, wg *sync.WaitGroup) (*Revision, error) {
 	switch result.tag {
 	case C.RevisionResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -98,12 +114,13 @@ func getRevisionFromResult(result C.RevisionResult, db *Database) (*Revision, er
 		return nil, errRevisionNotFound
 	case C.RevisionResult_Ok:
 		body := (*C.RevisionResult_Ok_Body)(unsafe.Pointer(&result.anon0))
-		hashKey := *(*[32]byte)(unsafe.Pointer(&body.root_hash._0))
+		hashKey := *(*Hash)(unsafe.Pointer(&body.root_hash._0))
 		rev := &Revision{
-			db:     db,
 			handle: body.handle,
-			root:   hashKey[:],
+			root:   hashKey,
 		}
+		rev.keepAliveHandle.init(wg)
+		runtime.SetFinalizer(rev, (*Revision).Drop)
 		return rev, nil
 	case C.RevisionResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()

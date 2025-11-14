@@ -15,6 +15,7 @@ import (
 
 	"github.com/ava-labs/avalanchego/database"
 	"github.com/ava-labs/avalanchego/database/memdb"
+	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/x/merkledb"
 	"github.com/stretchr/testify/require"
 )
@@ -53,21 +54,21 @@ func newTestFirewoodDatabase(t *testing.T) *firewood.Database {
 	t.Helper()
 
 	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, closeDB, err := newFirewoodDatabase(dbFile)
+	db, err := newFirewoodDatabase(dbFile)
 	require.NoError(t, err)
 	t.Cleanup(func() {
-		require.NoError(t, closeDB())
+		require.NoError(t, db.Close(context.Background())) //nolint:usetesting // t.Context() will already be cancelled
 	})
 	return db
 }
 
-func newFirewoodDatabase(dbFile string) (*firewood.Database, func() error, error) {
+func newFirewoodDatabase(dbFile string) (*firewood.Database, error) {
 	conf := firewood.DefaultConfig()
 	f, err := firewood.New(dbFile, conf)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
+		return nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
 	}
-	return f, f.Close, nil
+	return f, nil
 }
 
 type tree struct {
@@ -235,7 +236,7 @@ func (tr *tree) checkDBHash() {
 	tr.require.NoError(err)
 
 	// Compare the root hashes.
-	tr.require.Equal(merkleRoot[:], fwdRoot)
+	tr.require.Equal(merkleRoot, ids.ID(fwdRoot))
 }
 
 func (tr *tree) createProposalOnProposal() {
@@ -268,7 +269,7 @@ func (tr *tree) createProposalOnProposal() {
 	tr.require.NoError(err)
 	merkleRoot, err := merkleChildView.GetMerkleRoot(context.Background())
 	tr.require.NoError(err)
-	tr.require.Equal(fwdRoot, merkleRoot[:])
+	tr.require.Equal(merkleRoot, ids.ID(fwdRoot))
 
 	tr.nextID++
 	newProposal := &proposal{
@@ -301,7 +302,7 @@ func (tr *tree) createProposalOnDB() {
 	tr.require.NoError(err)
 	merkleRoot, err := merkleChildView.GetMerkleRoot(context.Background())
 	tr.require.NoError(err)
-	tr.require.Equal(fwdRoot, merkleRoot[:])
+	tr.require.Equal(merkleRoot, ids.ID(fwdRoot))
 
 	tr.nextID++
 	newProposal := &proposal{

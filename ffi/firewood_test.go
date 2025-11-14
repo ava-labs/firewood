@@ -5,6 +5,7 @@ package ffi
 
 import (
 	"bytes"
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -59,14 +60,22 @@ var (
 	expectedRoots map[string]string
 )
 
-func inferHashingMode() (string, error) {
+func stringToHash(t *testing.T, s string) Hash {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	require.NoError(t, err)
+	require.Len(t, b, RootLength)
+	return Hash(b)
+}
+
+func inferHashingMode(ctx context.Context) (string, error) {
 	dbFile := filepath.Join(os.TempDir(), "test.db")
-	db, closeDB, err := newDatabase(dbFile)
+	db, err := newDatabase(dbFile)
 	if err != nil {
 		return "", err
 	}
 	defer func() {
-		_ = closeDB()
+		_ = db.Close(ctx)
 		_ = os.Remove(dbFile)
 	}()
 
@@ -74,7 +83,7 @@ func inferHashingMode() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to get root of empty database: %w", err)
 	}
-	actualEmptyRootHex := hex.EncodeToString(actualEmptyRoot)
+	actualEmptyRootHex := hex.EncodeToString(actualEmptyRoot[:])
 
 	actualFwMode, ok := expectedEmptyRootToMode[actualEmptyRootHex]
 	if !ok {
@@ -111,7 +120,7 @@ func TestMain(m *testing.M) {
 	// Otherwise, infer the hash mode from an empty database.
 	hashMode := os.Getenv("TEST_FIREWOOD_HASH_MODE")
 	if hashMode == "" {
-		inferredHashMode, err := inferHashingMode()
+		inferredHashMode, err := inferHashingMode(context.Background())
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "failed to infer hash mode %v\n", err)
 			os.Exit(1)
@@ -133,15 +142,15 @@ func newTestDatabase(t *testing.T, configureFns ...func(*Config)) *Database {
 	r := require.New(t)
 
 	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, closeDB, err := newDatabase(dbFile, configureFns...)
+	db, err := newDatabase(dbFile, configureFns...)
 	r.NoError(err)
 	t.Cleanup(func() {
-		r.NoError(closeDB())
+		r.NoError(db.Close(context.Background())) //nolint:usetesting // t.Context() will already be cancelled
 	})
 	return db
 }
 
-func newDatabase(dbFile string, configureFns ...func(*Config)) (*Database, func() error, error) {
+func newDatabase(dbFile string, configureFns ...func(*Config)) (*Database, error) {
 	conf := DefaultConfig()
 	conf.Truncate = true // in tests, we use filepath.Join, which creates an empty file
 	for _, fn := range configureFns {
@@ -150,9 +159,9 @@ func newDatabase(dbFile string, configureFns ...func(*Config)) (*Database, func(
 
 	f, err := New(dbFile, conf)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
+		return nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
 	}
-	return f, f.Close, nil
+	return f, nil
 }
 
 func TestUpdateSingleKV(t *testing.T) {
@@ -196,7 +205,7 @@ func TestTruncateDatabase(t *testing.T) {
 	r.NoError(err)
 
 	// Close the database.
-	r.NoError(db.Close())
+	r.NoError(db.Close(t.Context()))
 
 	// Reopen the database with truncate enabled.
 	db, err = New(dbFile, config)
@@ -205,21 +214,19 @@ func TestTruncateDatabase(t *testing.T) {
 	// Check that the database is empty after truncation.
 	hash, err := db.Root()
 	r.NoError(err)
-	emptyRootStr := expectedRoots[emptyKey]
-	expectedHash, err := hex.DecodeString(emptyRootStr)
-	r.NoError(err)
+	expectedHash := stringToHash(t, expectedRoots[emptyKey])
 	r.Equal(expectedHash, hash, "Root hash mismatch after truncation")
 
-	r.NoError(db.Close())
+	r.NoError(db.Close(t.Context()))
 }
 
 func TestClosedDatabase(t *testing.T) {
 	r := require.New(t)
 	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, _, err := newDatabase(dbFile)
+	db, err := newDatabase(dbFile)
 	r.NoError(err)
 
-	r.NoError(db.Close())
+	r.NoError(db.Close(t.Context()))
 
 	_, err = db.Root()
 	r.ErrorIs(err, errDBClosed)
@@ -231,7 +238,7 @@ func TestClosedDatabase(t *testing.T) {
 	r.Empty(root)
 	r.ErrorIs(err, errDBClosed)
 
-	r.NoError(db.Close())
+	r.NoError(db.Close(t.Context()))
 }
 
 func keyForTest(i int) []byte {
@@ -293,7 +300,7 @@ func TestInsert100(t *testing.T) {
 	type dbView interface {
 		Get(key []byte) ([]byte, error)
 		Propose(keys, vals [][]byte) (*Proposal, error)
-		Root() ([]byte, error)
+		Root() (Hash, error)
 	}
 
 	tests := []struct {
@@ -357,18 +364,12 @@ func TestInsert100(t *testing.T) {
 			hash, err := newDB.Root()
 			r.NoError(err)
 
-			rootFromInsert, err := newDB.Root()
-			r.NoError(err)
-
 			// Assert the hash is exactly as expected. Test failure indicates a
 			// non-hash compatible change has been made since the string was set.
 			// If that's expected, update the string at the top of the file to
 			// fix this test.
-			expectedHashHex := expectedRoots[insert100Key]
-			expectedHash, err := hex.DecodeString(expectedHashHex)
-			r.NoError(err)
+			expectedHash := stringToHash(t, expectedRoots[insert100Key])
 			r.Equal(expectedHash, hash, "Root hash mismatch.\nExpected (hex): %x\nActual (hex): %x", expectedHash, hash)
-			r.Equal(rootFromInsert, hash)
 		})
 	}
 }
@@ -404,9 +405,7 @@ func TestInvariants(t *testing.T) {
 	hash, err := db.Root()
 	r.NoError(err)
 
-	emptyRootStr := expectedRoots[emptyKey]
-	expectedHash, err := hex.DecodeString(emptyRootStr)
-	r.NoError(err)
+	expectedHash := stringToHash(t, expectedRoots[emptyKey])
 	r.Equalf(expectedHash, hash, "expected %x, got %x", expectedHash, hash)
 
 	got, err := db.Get([]byte("non-existent"))
@@ -513,10 +512,7 @@ func TestDeleteAll(t *testing.T) {
 		r.Empty(got, "Get(%d)", i)
 	}
 
-	emptyRootStr := expectedRoots[emptyKey]
-	expectedHash, err := hex.DecodeString(emptyRootStr)
-	r.NoError(err, "Decode expected empty root hash")
-
+	expectedHash := stringToHash(t, expectedRoots[emptyKey])
 	hash, err := proposal.Root()
 	r.NoError(err, "%T.Root() after commit", proposal)
 	r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
@@ -936,19 +932,9 @@ func TestInvalidRevision(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	// Create a nil revision.
-	_, err := db.Revision(nil)
-	r.ErrorIs(err, errInvalidRootLength)
-
-	// Create a fake revision with an invalid root.
-	invalidRoot := []byte("not a valid root")
-	_, err = db.Revision(invalidRoot)
-	r.ErrorIs(err, errInvalidRootLength)
-
 	// Create a fake revision with an valid root.
-	validRoot := []byte("counting 32 bytes to make a hash")
-	r.Len(validRoot, 32, "valid root")
-	_, err = db.Revision(validRoot)
+	validRoot := Hash([]byte("counting 32 bytes to make a hash"))
+	_, err := db.Revision(validRoot)
 	r.ErrorIs(err, errRevisionNotFound, "Revision(valid root)")
 }
 
@@ -1087,13 +1073,8 @@ func TestGetFromRoot(t *testing.T) {
 		r.Equal(vals[i+5], got, "GetFromRoot root1 newer key %d", i)
 	}
 
-	// Test with invalid root hash
-	invalidRoot := []byte("this is not a valid 32-byte hash")
-	_, err = db.GetFromRoot(invalidRoot, []byte("key"))
-	r.Error(err, "GetFromRoot with invalid root should return error")
-
 	// Test with valid-length but non-existent root
-	nonExistentRoot := make([]byte, RootLength)
+	var nonExistentRoot Hash
 	for i := range nonExistentRoot {
 		nonExistentRoot[i] = 0xFF // All 1's, very unlikely to exist
 	}
@@ -1168,6 +1149,98 @@ func TestGetFromRootParallel(t *testing.T) {
 	for i := 0; i < numReaders; i++ {
 		err := <-results
 		r.NoError(err, "Parallel operation failed")
+	}
+}
+
+func TestHandlesFreeImplicitly(t *testing.T) {
+	t.Parallel()
+
+	db, err := newDatabase(filepath.Join(t.TempDir(), "test_GC_drops_implicitly.db"))
+	require.NoError(t, err)
+
+	// make the db non-empty
+	_, err = db.Update([][]byte{keyForTest(1)}, [][]byte{valForTest(1)})
+	require.NoError(t, err)
+
+	var (
+		explicitlyDropped []any
+		implicitlyDropped []any
+	)
+
+	// Grab one revision initially. All proposals can also be revisions, so
+	// this is the only case in which we don't add both a proposal and a revision.
+	historicExplicit, err := db.LatestRevision()
+	require.NoErrorf(t, err, "%T.LatestRevision()", db)
+	require.NoError(t, historicExplicit.Drop())
+	explicitlyDropped = append(explicitlyDropped, historicExplicit)
+	historicImplicit, err := db.LatestRevision()
+	require.NoErrorf(t, err, "%T.LatestRevision()", db)
+	implicitlyDropped = append(implicitlyDropped, historicImplicit)
+
+	// These MUST NOT be committed nor dropped as they demonstrate that the GC
+	// finalizer does it for us.
+	p0, err := db.Propose(kvForTest(1))
+	require.NoErrorf(t, err, "%T.Propose(...)", db)
+	root0, err := p0.Root()
+	require.NoErrorf(t, err, "%T.Root()", p0)
+	rev0, err := db.Revision(root0)
+	require.NoErrorf(t, err, "%T.Revision(...)", db)
+	implicitlyDropped = append(implicitlyDropped, p0, rev0)
+	p1, err := p0.Propose(kvForTest(1))
+	require.NoErrorf(t, err, "%T.Propose(...)", p0)
+	root1, err := p1.Root()
+	require.NoErrorf(t, err, "%T.Root()", p1)
+	rev1, err := db.Revision(root1)
+	require.NoErrorf(t, err, "%T.Revision(...)", db)
+	implicitlyDropped = append(implicitlyDropped, p1, rev1)
+
+	// Demonstrates that explicit [Proposal.Commit] and [Proposal.Drop] calls
+	// are sufficient to unblock [Database.Close].
+	// Each proposal has a corresponding revision to drop as well.
+	for name, free := range map[string](func(*Proposal) error){
+		"Commit": (*Proposal).Commit,
+		"Drop":   (*Proposal).Drop,
+	} {
+		p, err := db.Propose(kvForTest(1))
+		require.NoErrorf(t, err, "%T.Propose(...)", db)
+		root, err := p.Root()
+		require.NoErrorf(t, err, "%T.Root()", p)
+		rev, err := db.Revision(root)
+		require.NoErrorf(t, err, "%T.Revision(...)", db)
+		require.NoErrorf(t, free(p), "%T.%s()", p, name)
+		require.NoErrorf(t, rev.Drop(), "%T.Drop()", rev)
+		explicitlyDropped = append(explicitlyDropped, p, rev)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		require.NoErrorf(t, db.Close(t.Context()), "%T.Close()", db)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		require.Failf(t, "Unexpected return", "%T.Close() returned with undropped %T", db, p0)
+	case <-time.After(300 * time.Millisecond):
+		// TODO(arr4n) use `synctest` package when at Go 1.25
+	}
+
+	// This is the last time we must guarantee that these handles are reachable.
+	// After this, they must be unreachable so that the GC can collect them.
+	for _, h := range implicitlyDropped {
+		runtime.KeepAlive(h)
+	}
+
+	// In practice there's no need to call [runtime.GC] if [Database.Close] is
+	// called after all proposals are unreachable, as it does it itself.
+	runtime.GC()
+	// Note that [Database.Close] waits for outstanding handles, so this would
+	// block permanently if the unreachability of implicitly dropped handles didn't
+	// result in their Drop methods being called.
+	<-done
+
+	for _, p := range explicitlyDropped {
+		runtime.KeepAlive(p)
 	}
 }
 
@@ -1424,4 +1497,232 @@ func TestIterDone(t *testing.T) {
 	// calling next again should be safe and return false
 	r.False(it.Next())
 	r.NoError(it.Err())
+}
+
+// TestNilVsEmptyValue tests that nil values cause delete operations while
+// empty []byte{} values result in inserts with empty values.
+func TestNilVsEmptyValue(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert a key with a non-empty value
+	key1 := []byte("key1")
+	value1 := []byte("value1")
+	_, err := db.Update([][]byte{key1}, [][]byte{value1})
+	r.NoError(err, "Insert key1 with value1")
+
+	// Verify the key exists
+	got, err := db.Get(key1)
+	r.NoError(err, "Get key1")
+	r.Equal(value1, got, "key1 should have value1")
+
+	// Insert another key with an empty value (not nil)
+	key2 := []byte("key2")
+	emptyValue := []byte{} // empty slice, not nil
+	_, err = db.Update([][]byte{key2}, [][]byte{emptyValue})
+	r.NoError(err, "Insert key2 with empty value")
+
+	// Verify key2 exists with empty value
+	got, err = db.Get(key2)
+	r.NoError(err, "Get key2")
+	r.NotNil(got, "key2 should exist (not be nil)")
+	r.Empty(got, "key2 should have empty value")
+
+	// Now use nil value to delete key1 (DeleteRange operation)
+	var nilValue []byte = nil
+	_, err = db.Update([][]byte{key1}, [][]byte{nilValue})
+	r.NoError(err, "Delete key1 with nil value")
+
+	// Verify key1 is deleted
+	got, err = db.Get(key1)
+	r.NoError(err, "Get key1 after delete")
+	r.Nil(got, "key1 should be deleted")
+
+	// Verify key2 still exists with empty value
+	got, err = db.Get(key2)
+	r.NoError(err, "Get key2 after key1 delete")
+	r.NotNil(got, "key2 should still exist")
+	r.Empty(got, "key2 should still have empty value")
+
+	// Test with batch operations
+	key3 := []byte("key3")
+	value3 := []byte("value3")
+	key4 := []byte("key4")
+	emptyValue4 := []byte{}
+
+	_, err = db.Update(
+		[][]byte{key3, key4},
+		[][]byte{value3, emptyValue4},
+	)
+	r.NoError(err, "Batch insert key3 and key4")
+
+	// Verify both keys exist
+	got, err = db.Get(key3)
+	r.NoError(err, "Get key3")
+	r.Equal(value3, got, "key3 should have value3")
+
+	got, err = db.Get(key4)
+	r.NoError(err, "Get key4")
+	r.NotNil(got, "key4 should exist")
+	r.Empty(got, "key4 should have empty value")
+}
+
+// TestCloseWithCancelledContext verifies that Database.Close returns
+// ErrActiveKeepAliveHandles when the context is cancelled before handles are dropped.
+func TestCloseWithCancelledContext(t *testing.T) {
+	r := require.New(t)
+	dbFile := filepath.Join(t.TempDir(), "test.db")
+	db, err := newDatabase(dbFile)
+	r.NoError(err)
+
+	// Create a proposal to keep a handle active
+	keys, vals := kvForTest(1)
+	proposal, err := db.Propose(keys, vals)
+	r.NoError(err)
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+
+		err = db.Close(ctx)
+	}()
+
+	cancel()
+	wg.Wait()
+
+	r.ErrorIs(err, ErrActiveKeepAliveHandles, "Close should return ErrActiveKeepAliveHandles when context is cancelled")
+
+	// Drop the proposal
+	r.NoError(proposal.Drop())
+
+	// Now Close should succeed
+	r.NoError(db.Close(t.Context()))
+}
+
+// TestCloseWithShortTimeout verifies that Database.Close returns
+// ErrActiveKeepAliveHandles when the context times out before handles are dropped.
+func TestCloseWithShortTimeout(t *testing.T) {
+	r := require.New(t)
+	dbFile := filepath.Join(t.TempDir(), "test.db")
+	db, err := newDatabase(dbFile)
+	r.NoError(err)
+
+	// Create a revision to keep a handle active
+	keys, vals := kvForTest(1)
+	root, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	revision, err := db.Revision(root)
+	r.NoError(err)
+
+	// Create a context with a very short timeout (100ms)
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+
+	// Record start time to verify timeout occurred quickly
+	start := time.Now()
+
+	// Close should return ErrActiveKeepAliveHandles after timeout
+	err = db.Close(ctx)
+	elapsed := time.Since(start)
+
+	r.ErrorIs(err, ErrActiveKeepAliveHandles, "Close should return ErrActiveKeepAliveHandles when context times out")
+	r.Less(elapsed, defaultCloseTimeout, "Close should timeout quickly, not wait for default timeout")
+
+	// Drop the revision
+	r.NoError(revision.Drop())
+
+	// Now Close should succeed
+	r.NoError(db.Close(t.Context()))
+}
+
+// TestCloseWithMultipleActiveHandles verifies that Database.Close returns
+// ErrActiveKeepAliveHandles when multiple handles are active and context is cancelled.
+func TestCloseWithMultipleActiveHandles(t *testing.T) {
+	r := require.New(t)
+	dbFile := filepath.Join(t.TempDir(), "test.db")
+	db, err := newDatabase(dbFile)
+	r.NoError(err)
+
+	// Create multiple proposals
+	keys1, vals1 := kvForTest(3)
+	proposal1, err := db.Propose(keys1[:1], vals1[:1])
+	r.NoError(err)
+	proposal2, err := db.Propose(keys1[1:2], vals1[1:2])
+	r.NoError(err)
+	proposal3, err := db.Propose(keys1[2:3], vals1[2:3])
+	r.NoError(err)
+
+	// Create multiple revisions
+	root1, err := db.Update([][]byte{keyForTest(10)}, [][]byte{valForTest(10)})
+	r.NoError(err)
+	root2, err := db.Update([][]byte{keyForTest(20)}, [][]byte{valForTest(20)})
+	r.NoError(err)
+
+	revision1, err := db.Revision(root1)
+	r.NoError(err)
+	revision2, err := db.Revision(root2)
+	r.NoError(err)
+
+	// Create a cancelled context
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	// Close should return ErrActiveKeepAliveHandles
+	err = db.Close(ctx)
+	r.ErrorIs(err, ErrActiveKeepAliveHandles, "Close should return ErrActiveKeepAliveHandles with multiple active handles")
+
+	// Drop all handles
+	r.NoError(proposal1.Drop())
+	r.NoError(proposal2.Drop())
+	r.NoError(proposal3.Drop())
+	r.NoError(revision1.Drop())
+	r.NoError(revision2.Drop())
+
+	// Now Close should succeed
+	r.NoError(db.Close(t.Context()))
+}
+
+// TestCloseSucceedsWhenHandlesDroppedInTime verifies that Database.Close succeeds
+// when all handles are dropped before the context timeout.
+func TestCloseSucceedsWhenHandlesDroppedInTime(t *testing.T) {
+	r := require.New(t)
+	dbFile := filepath.Join(t.TempDir(), "test.db")
+	db, err := newDatabase(dbFile)
+	r.NoError(err)
+
+	// Create two active proposals
+	keys, vals := kvForTest(2)
+	proposal1, err := db.Propose(keys[:1], vals[:1])
+	r.NoError(err)
+	proposal2, err := db.Propose(keys[1:2], vals[1:2])
+	r.NoError(err)
+
+	// Create a context with a reasonable timeout
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+
+	// Channel to receive Close result
+	closeDone := make(chan error, 1)
+
+	// Start Close in a goroutine
+	go func() {
+		closeDone <- db.Close(ctx)
+	}()
+
+	// Drop handles after a short delay (before timeout)
+	time.Sleep(100 * time.Millisecond)
+	r.NoError(proposal1.Drop())
+	r.NoError(proposal2.Drop())
+
+	// Close should succeed (not timeout)
+	select {
+	case err := <-closeDone:
+		r.NoError(err, "Close should succeed when handles are dropped before timeout")
+	case <-time.After(defaultCloseTimeout):
+		r.Fail("Close did not complete in time")
+	}
 }

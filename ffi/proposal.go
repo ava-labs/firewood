@@ -14,17 +14,22 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sync"
 	"unsafe"
 )
 
 var errDroppedProposal = errors.New("proposal already dropped")
 
+// Proposal represents a set of proposed changes to be committed to the database.
+// Proposals are created via [Database.Propose] or [Proposal.Propose], and must be
+// either committed with [Proposal.Commit] or released with [Proposal.Drop].
+//
+// Proposals must be committed or dropped before the associated database is
+// closed. A finalizer is set on each Proposal to ensure that Drop is called
+// when the Proposal is garbage collected, but relying on finalizers is not
+// recommended. Failing to commit or drop a proposal before the database is
+// closed will cause it to block or fail.
 type Proposal struct {
-	// The database this proposal is associated with. We hold onto this to ensure
-	// the database handle outlives the proposal handle, which is required for
-	// the proposal to be valid.
-	db *Database
-
 	// handle is an opaque pointer to the proposal within Firewood. It should be
 	// passed to the C FFI functions that operate on proposals
 	//
@@ -34,14 +39,19 @@ type Proposal struct {
 	// this handle, so it should not be used after those calls.
 	handle *C.ProposalHandle
 
-	// The proposal root hash.
-	root []byte
+	// root is the root hash of the proposal and the expected root hash after commit.
+	root Hash
+
+	// keepAliveHandle is used to keep the database alive while this proposal is
+	// in use. It is initialized when the proposal is created and disowned after
+	// [Proposal.Commit] or [Proposal.Drop] is called.
+	keepAliveHandle databaseKeepAliveHandle
 }
 
 // Root retrieves the root hash of the proposal.
 // If the proposal is empty (i.e. no keys in database),
 // it returns nil, nil.
-func (p *Proposal) Root() ([]byte, error) {
+func (p *Proposal) Root() (Hash, error) {
 	return p.root, nil
 }
 
@@ -73,8 +83,13 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 	return getIteratorFromIteratorResult(itResult)
 }
 
-// Propose creates a new proposal with the given keys and values.
-// The proposal is not committed until Commit is called.
+// Propose is equivalent to [Database.Propose] except that the new proposal is
+// based on `p`.
+//
+// Value Semantics:
+//   - nil value (vals[i] == nil): Performs a DeleteRange operation using the key as a prefix
+//   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
+//   - non-empty value: Inserts/updates the key with the provided value
 func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 	if p.handle == nil {
 		return nil, errDroppedProposal
@@ -87,23 +102,25 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.handle, kvp), p.db)
+	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.handle, kvp), p.keepAliveHandle.outstandingHandles)
 }
 
 // Commit commits the proposal and returns any errors.
 //
 // The proposal handle is no longer valid after this call, but the root
-// hash can still be retrieved using Root().
+// hash can still be retrieved using [Proposal.Root].
 func (p *Proposal) Commit() error {
-	if p.handle == nil {
-		return errDroppedProposal
-	}
+	return p.keepAliveHandle.disown(true /* evenOnError */, func() error {
+		if p.handle == nil {
+			return errDroppedProposal
+		}
 
-	_, err := getHashKeyFromHashResult(C.fwd_commit_proposal(p.handle))
-	p.handle = nil // we no longer own the proposal handle
+		_, err := getHashKeyFromHashResult(C.fwd_commit_proposal(p.handle))
 
-	return err
+		p.handle = nil
+
+		return err
+	})
 }
 
 // Drop releases the memory associated with the Proposal.
@@ -112,32 +129,35 @@ func (p *Proposal) Commit() error {
 //
 // The pointer will be set to nil after freeing to prevent double free.
 func (p *Proposal) Drop() error {
-	if p.handle == nil {
+	return p.keepAliveHandle.disown(false /* evenOnError */, func() error {
+		if p.handle == nil {
+			return nil
+		}
+
+		if err := getErrorFromVoidResult(C.fwd_free_proposal(p.handle)); err != nil {
+			return fmt.Errorf("%w: %w", errFreeingValue, err)
+		}
+
+		p.handle = nil
+
 		return nil
-	}
-
-	if err := getErrorFromVoidResult(C.fwd_free_proposal(p.handle)); err != nil {
-		return fmt.Errorf("%w: %w", errFreeingValue, err)
-	}
-
-	p.handle = nil // Prevent double free
-
-	return nil
+	})
 }
 
 // getProposalFromProposalResult converts a C.ProposalResult to a Proposal or error.
-func getProposalFromProposalResult(result C.ProposalResult, db *Database) (*Proposal, error) {
+func getProposalFromProposalResult(result C.ProposalResult, wg *sync.WaitGroup) (*Proposal, error) {
 	switch result.tag {
 	case C.ProposalResult_NullHandlePointer:
 		return nil, errDBClosed
 	case C.ProposalResult_Ok:
 		body := (*C.ProposalResult_Ok_Body)(unsafe.Pointer(&result.anon0))
-		hashKey := *(*[32]byte)(unsafe.Pointer(&body.root_hash._0))
+		hashKey := *(*Hash)(unsafe.Pointer(&body.root_hash._0))
 		proposal := &Proposal{
-			db:     db,
 			handle: body.handle,
-			root:   hashKey[:],
+			root:   hashKey,
 		}
+		proposal.keepAliveHandle.init(wg)
+		runtime.SetFinalizer(proposal, (*Proposal).Drop)
 		return proposal, nil
 	case C.ProposalResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()

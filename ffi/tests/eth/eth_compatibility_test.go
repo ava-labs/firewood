@@ -4,6 +4,7 @@
 package eth
 
 import (
+	"context"
 	"encoding/binary"
 	"math/rand"
 	"path"
@@ -78,7 +79,7 @@ func newMerkleTriePair(t *testing.T) *merkleTriePair {
 	tr, err := tdb.OpenTrie(ethRoot)
 	r.NoError(err)
 	t.Cleanup(func() {
-		r.NoError(db.Close())
+		r.NoError(db.Close(context.Background())) //nolint:usetesting // t.Context() will already be cancelled
 	})
 
 	return &merkleTriePair{
@@ -133,7 +134,7 @@ func (tr *merkleTriePair) commit() {
 
 	fwdRoot, err := tr.fwdDB.Update(tr.pendingFwdKeys, tr.pendingFwdVals)
 	tr.require.NoError(err)
-	tr.require.Equal(fwdRoot, updatedRoot[:])
+	tr.require.Equal(updatedRoot, common.Hash(fwdRoot))
 
 	tr.pendingFwdKeys = nil
 	tr.pendingFwdVals = nil
@@ -203,7 +204,7 @@ func (tr *merkleTriePair) deleteAccount(accountIndex int) {
 	})
 
 	tr.pendingFwdKeys = append(tr.pendingFwdKeys, accHash[:])
-	tr.pendingFwdVals = append(tr.pendingFwdVals, []byte{})
+	tr.pendingFwdVals = append(tr.pendingFwdVals, nil)
 }
 
 // openStorageTrie opens the storage trie for the provided account address.
@@ -292,7 +293,7 @@ func (tr *merkleTriePair) deleteStorage(accountIndex int, storageIndexInput uint
 	tr.require.NoError(str.DeleteStorage(addr, storageKey[:]))
 
 	tr.pendingFwdKeys = append(tr.pendingFwdKeys, append(accHash[:], storageKeyHash[:]...))
-	tr.pendingFwdVals = append(tr.pendingFwdVals, []byte{})
+	tr.pendingFwdVals = append(tr.pendingFwdVals, nil)
 }
 
 func FuzzFirewoodTree(f *testing.F) {
