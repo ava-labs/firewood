@@ -7,6 +7,10 @@ if [ "$EUID" -ne 0 ]; then
     exit 1
 fi
 
+# Default bytes-per-inode for ext4 filesystem (2MB)
+# Can be overridden by setting BYTES_PER_INODE environment variable
+BYTES_PER_INODE=${BYTES_PER_INODE:-2097152}
+
 apt upgrade -y
 
 # install the build dependency packages
@@ -62,7 +66,7 @@ if [ "${#NVME_DEVS[@]}" -gt 0 ]; then
   fi
 
   # Format and mount the device
-  mkfs.ext4 -E nodiscard -i 6291456 "$DEVICE_TO_USE"
+  mkfs.ext4 -E nodiscard -i "$BYTES_PER_INODE" "$DEVICE_TO_USE"
   NVME_MOUNT=/mnt/nvme
   mkdir -p "$NVME_MOUNT"
   mount -o noatime "$DEVICE_TO_USE" "$NVME_MOUNT"
