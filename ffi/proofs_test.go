@@ -190,7 +190,7 @@ func TestRoundTripSerialization(t *testing.T) {
 	r.NoError(err)
 
 	// get a proof
-	proofBytes := newSerializedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
+	proofBytes := newSerializedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenUnbounded)
 
 	// Deserialize the proof.
 	proof := new(RangeProof)
@@ -367,7 +367,7 @@ func TestRangeProofFinalizerCleanup(t *testing.T) {
 	assertDatabaseNotCloseable(t, db)
 
 	runtime.KeepAlive(proof)
-	proof = nil
+	proof = nil //nolint:ineffassign // necessary to drop the reference for GC
 	runtime.GC()
 
 	r.NoError(db.Close(t.Context()), "Database should be closeable after proof is garbage collected")
