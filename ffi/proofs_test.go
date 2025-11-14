@@ -42,7 +42,7 @@ func TestRangeProofEmptyDB(t *testing.T) {
 	db := newTestDatabase(t)
 
 	proof, err := db.RangeProof(EmptyRoot, nothing(), nothing(), 0)
-	r.ErrorIs(err, errEmptyTrie)
+	r.ErrorIs(err, errRevisionNotFound)
 	r.Nil(proof)
 }
 
@@ -54,13 +54,11 @@ func TestRangeProofNonExistentRoot(t *testing.T) {
 	keys, vals := kvForTest(100)
 	root, err := db.Update(keys, vals)
 	r.NoError(err)
-	r.NotNil(root)
 
 	// create a bogus root
-	bogusRoot := root
-	bogusRoot[0] ^= 0xFF
+	root[0] ^= 0xFF
 
-	proof, err := db.RangeProof(bogusRoot, nothing(), nothing(), 0)
+	proof, err := db.RangeProof(root, nothing(), nothing(), 0)
 	r.ErrorIs(err, errRevisionNotFound)
 	r.Nil(proof)
 }

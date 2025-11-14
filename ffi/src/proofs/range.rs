@@ -14,8 +14,7 @@ use crate::{
 #[derive(Debug)]
 #[repr(C)]
 pub struct CreateRangeProofArgs<'a> {
-    /// The root hash of the revision to prove. If `None`, the latest revision
-    /// is used.
+    /// The root hash of the revision to prove.
     pub root: HashKey,
     /// The start key of the range to prove. If `None`, the range starts from the
     /// beginning of the keyspace.
