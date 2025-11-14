@@ -247,9 +247,9 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 }
 
 // defaultCloseTimeout is the duration by which the [context.Context] passed to
-// [Database.Close] is limited. A minute is arbitrary but well above what is
-// reasonably required, and is chosen simply to avoid permanently blocking.
-var defaultCloseTimeout = time.Minute
+// [Database.Close] is limited. One second is sufficient to detect when proposals
+// or revisions are not being properly freed, and is chosen to avoid test timeouts.
+var defaultCloseTimeout = time.Second
 
 // Close releases the memory associated with the Database.
 //
