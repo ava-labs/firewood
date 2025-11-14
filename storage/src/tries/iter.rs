@@ -20,35 +20,35 @@ pub struct IterDescending;
 /// respectively.
 #[derive(Debug)]
 #[must_use = "iterators are lazy and do nothing unless consumed"]
-pub struct TrieEdgeIter<'a, N: ?Sized, V: ?Sized, D> {
+pub struct TrieEdgeIter<'root, N, V: ?Sized, D> {
     leading_path: PathBuf,
-    stack: Vec<Frame<'a, N, V>>,
+    stack: Vec<Frame<'root, N, V>>,
     marker: std::marker::PhantomData<D>,
 }
 
 /// An iterator over the key-value pairs in a key-value trie.
 #[derive(Debug)]
 #[must_use = "iterators are lazy and do nothing unless consumed"]
-pub struct TrieValueIter<'a, N: ?Sized, V: ?Sized, D> {
-    edges: TrieEdgeIter<'a, N, V, D>,
+pub struct TrieValueIter<'root, N, V: ?Sized, D> {
+    edges: TrieEdgeIter<'root, N, V, D>,
 }
 
 #[derive(Debug)]
-struct Frame<'a, N: ?Sized, V: ?Sized> {
-    node: &'a N,
-    hash: Option<&'a HashType>,
+struct Frame<'root, N, V: ?Sized> {
+    node: N,
+    hash: Option<&'root HashType>,
     leading_path_len: usize,
     children: Option<std::array::IntoIter<PathComponent, { PathComponent::LEN }>>,
     marker: std::marker::PhantomData<V>,
 }
 
-impl<'a, N, V, D> TrieEdgeIter<'a, N, V, D>
+impl<'root, N, V, D> TrieEdgeIter<'root, N, V, D>
 where
-    N: TrieNode<V> + ?Sized,
-    V: AsRef<[u8]> + ?Sized,
+    N: TrieNode<'root, V>,
+    V: AsRef<[u8]> + ?Sized + 'root,
 {
     /// Creates a new iterator over the given key-value trie.
-    pub fn new(root: &'a N, root_hash: Option<&'a HashType>) -> Self {
+    pub fn new(root: N, root_hash: Option<&'root HashType>) -> Self {
         let mut this = Self {
             leading_path: PathBuf::new_const(),
             stack: Vec::new(),
@@ -60,15 +60,15 @@ where
 
     /// Transforms this iterator into an iterator over the key-value pairs in
     /// the trie.
-    pub const fn node_values(self) -> TrieValueIter<'a, N, V, D> {
+    pub const fn node_values(self) -> TrieValueIter<'root, N, V, D> {
         TrieValueIter { edges: self }
     }
 
     fn push_frame(
         &mut self,
         leading_component: Option<PathComponent>,
-        node: &'a N,
-        hash: Option<&'a HashType>,
+        node: N,
+        hash: Option<&'root HashType>,
     ) {
         let frame = Frame {
             node,
@@ -115,12 +115,12 @@ macro_rules! descend {
     };
 }
 
-impl<'a, N, V> Iterator for TrieEdgeIter<'a, N, V, IterAscending>
+impl<'root, N, V> Iterator for TrieEdgeIter<'root, N, V, IterAscending>
 where
-    N: TrieNode<V> + ?Sized,
-    V: AsRef<[u8]> + ?Sized,
+    N: TrieNode<'root, V>,
+    V: AsRef<[u8]> + ?Sized + 'root,
 {
-    type Item = (PathBuf, TrieEdgeState<'a, N>);
+    type Item = (PathBuf, TrieEdgeState<'root, N>);
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(&mut Frame {
@@ -157,12 +157,12 @@ where
     }
 }
 
-impl<'a, N, V> Iterator for TrieEdgeIter<'a, N, V, IterDescending>
+impl<'root, N, V> Iterator for TrieEdgeIter<'root, N, V, IterDescending>
 where
-    N: TrieNode<V> + ?Sized,
-    V: AsRef<[u8]> + ?Sized,
+    N: TrieNode<'root, V>,
+    V: AsRef<[u8]> + ?Sized + 'root,
 {
-    type Item = (PathBuf, TrieEdgeState<'a, N>);
+    type Item = (PathBuf, TrieEdgeState<'root, N>);
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(&mut Frame {
@@ -192,12 +192,12 @@ where
     }
 }
 
-impl<'a, N, V> Iterator for TrieValueIter<'a, N, V, IterAscending>
+impl<'root, N, V> Iterator for TrieValueIter<'root, N, V, IterAscending>
 where
-    N: TrieNode<V> + ?Sized,
-    V: AsRef<[u8]> + ?Sized + 'a,
+    N: TrieNode<'root, V>,
+    V: AsRef<[u8]> + ?Sized + 'root,
 {
-    type Item = (PathBuf, &'a V);
+    type Item = (PathBuf, &'root V);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.edges
@@ -205,12 +205,12 @@ where
     }
 }
 
-impl<'a, N, V> Iterator for TrieValueIter<'a, N, V, IterDescending>
+impl<'root, N, V> Iterator for TrieValueIter<'root, N, V, IterDescending>
 where
-    N: TrieNode<V> + ?Sized,
-    V: AsRef<[u8]> + ?Sized + 'a,
+    N: TrieNode<'root, V>,
+    V: AsRef<[u8]> + ?Sized + 'root,
 {
-    type Item = (PathBuf, &'a V);
+    type Item = (PathBuf, &'root V);
 
     fn next(&mut self) -> Option<Self::Item> {
         self.edges
@@ -220,7 +220,7 @@ where
 
 // auto-derived implementations would require N: Clone, V: Clone which is too much
 
-impl<N: ?Sized, V: ?Sized, D> Clone for TrieEdgeIter<'_, N, V, D> {
+impl<N: Copy, V: ?Sized, D> Clone for TrieEdgeIter<'_, N, V, D> {
     fn clone(&self) -> Self {
         Self {
             leading_path: self.leading_path.clone(),
@@ -235,7 +235,7 @@ impl<N: ?Sized, V: ?Sized, D> Clone for TrieEdgeIter<'_, N, V, D> {
     }
 }
 
-impl<N: ?Sized, V: ?Sized, D> Clone for TrieValueIter<'_, N, V, D> {
+impl<N: Copy, V: ?Sized, D> Clone for TrieValueIter<'_, N, V, D> {
     fn clone(&self) -> Self {
         Self {
             edges: self.edges.clone(),
@@ -247,7 +247,7 @@ impl<N: ?Sized, V: ?Sized, D> Clone for TrieValueIter<'_, N, V, D> {
     }
 }
 
-impl<N: ?Sized, V: ?Sized> Clone for Frame<'_, N, V> {
+impl<N: Copy, V: ?Sized> Clone for Frame<'_, N, V> {
     fn clone(&self) -> Self {
         Self {
             node: self.node,
