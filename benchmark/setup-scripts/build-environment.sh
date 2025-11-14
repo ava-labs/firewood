@@ -8,8 +8,34 @@ if [ "$EUID" -ne 0 ]; then
 fi
 
 # Default bytes-per-inode for ext4 filesystem (2MB)
-# Can be overridden by setting BYTES_PER_INODE environment variable
-BYTES_PER_INODE=${BYTES_PER_INODE:-2097152}
+BYTES_PER_INODE=2097152
+
+# Parse command line arguments
+show_usage() {
+    echo "Usage: $0 [OPTIONS]"
+    echo ""
+    echo "Options:"
+    echo "  --bytes-per-inode BYTES  Set bytes-per-inode for ext4 filesystem (default: 2097152)"
+    echo "  --help                   Show this help message"
+}
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --bytes-per-inode)
+            BYTES_PER_INODE="$2"
+            shift 2
+            ;;
+        --help)
+            show_usage
+            exit 0
+            ;;
+        *)
+            echo "Error: Unknown option $1" >&2
+            show_usage
+            exit 1
+            ;;
+    esac
+done
 
 apt upgrade -y
 

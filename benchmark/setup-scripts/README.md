@@ -8,10 +8,10 @@ sudo bash build-environment.sh
 
 This script sets up the build environment, including installing the firewood build dependencies.
 
-By default, it sets the bytes-per-inode to 2097152 (2MB) when creating the ext4 filesystem. This can be customized by setting the `BYTES_PER_INODE` environment variable:
+By default, it sets the bytes-per-inode to 2097152 (2MB) when creating the ext4 filesystem. This can be customized using the `--bytes-per-inode` option:
 
 ```bash
-sudo BYTES_PER_INODE=1048576 bash build-environment.sh
+sudo bash build-environment.sh --bytes-per-inode 1048576
 ```
 
 ```bash
