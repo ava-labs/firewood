@@ -1074,7 +1074,7 @@ func TestGetFromRoot(t *testing.T) {
 	}
 
 	// Test with valid-length but non-existent root
-	nonExistentRoot := EmptyRoot
+	var nonExistentRoot Hash
 	for i := range nonExistentRoot {
 		nonExistentRoot[i] = 0xFF // All 1's, very unlikely to exist
 	}
