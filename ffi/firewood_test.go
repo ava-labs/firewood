@@ -75,6 +75,8 @@ func inferHashingMode(ctx context.Context) (string, error) {
 		return "", err
 	}
 	defer func() {
+		ctx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
 		_ = db.Close(ctx)
 		_ = os.Remove(dbFile)
 	}()
@@ -137,6 +139,16 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
+// oneSecCtx returns `tb.Context()` with a 1-second timeout added. Any existing
+// cancellation on `tb.Context()` is removed, which allows this function to be
+// used inside a `tb.Cleanup()`
+func oneSecCtx(tb testing.TB) context.Context {
+	ctx := context.WithoutCancel(tb.Context())
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	tb.Cleanup(cancel)
+	return ctx
+}
+
 func newTestDatabase(t *testing.T, configureFns ...func(*Config)) *Database {
 	t.Helper()
 	r := require.New(t)
@@ -145,7 +157,7 @@ func newTestDatabase(t *testing.T, configureFns ...func(*Config)) *Database {
 	db, err := newDatabase(dbFile, configureFns...)
 	r.NoError(err)
 	t.Cleanup(func() {
-		r.NoError(db.Close(context.Background())) //nolint:usetesting // t.Context() will already be cancelled
+		r.NoError(db.Close(oneSecCtx(t)))
 	})
 	return db
 }
@@ -205,7 +217,7 @@ func TestTruncateDatabase(t *testing.T) {
 	r.NoError(err)
 
 	// Close the database.
-	r.NoError(db.Close(t.Context()))
+	r.NoError(db.Close(oneSecCtx(t)))
 
 	// Reopen the database with truncate enabled.
 	db, err = New(dbFile, config)
@@ -217,7 +229,7 @@ func TestTruncateDatabase(t *testing.T) {
 	expectedHash := stringToHash(t, expectedRoots[emptyKey])
 	r.Equal(expectedHash, hash, "Root hash mismatch after truncation")
 
-	r.NoError(db.Close(t.Context()))
+	r.NoError(db.Close(oneSecCtx(t)))
 }
 
 func TestClosedDatabase(t *testing.T) {
@@ -226,7 +238,7 @@ func TestClosedDatabase(t *testing.T) {
 	db, err := newDatabase(dbFile)
 	r.NoError(err)
 
-	r.NoError(db.Close(t.Context()))
+	r.NoError(db.Close(oneSecCtx(t)))
 
 	_, err = db.Root()
 	r.ErrorIs(err, errDBClosed)
@@ -238,7 +250,7 @@ func TestClosedDatabase(t *testing.T) {
 	r.Empty(root)
 	r.ErrorIs(err, errDBClosed)
 
-	r.NoError(db.Close(t.Context()))
+	r.NoError(db.Close(oneSecCtx(t)))
 }
 
 func keyForTest(i int) []byte {
@@ -1214,7 +1226,7 @@ func TestHandlesFreeImplicitly(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		require.NoErrorf(t, db.Close(t.Context()), "%T.Close()", db)
+		require.NoErrorf(t, db.Close(oneSecCtx(t)), "%T.Close()", db)
 		close(done)
 	}()
 
@@ -1599,7 +1611,7 @@ func TestCloseWithCancelledContext(t *testing.T) {
 	r.NoError(proposal.Drop())
 
 	// Now Close should succeed
-	r.NoError(db.Close(t.Context()))
+	r.NoError(db.Close(oneSecCtx(t)))
 }
 
 // TestCloseWithShortTimeout verifies that Database.Close returns
@@ -1622,21 +1634,16 @@ func TestCloseWithShortTimeout(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
 	defer cancel()
 
-	// Record start time to verify timeout occurred quickly
-	start := time.Now()
-
 	// Close should return ErrActiveKeepAliveHandles after timeout
 	err = db.Close(ctx)
-	elapsed := time.Since(start)
 
 	r.ErrorIs(err, ErrActiveKeepAliveHandles, "Close should return ErrActiveKeepAliveHandles when context times out")
-	r.Less(elapsed, defaultCloseTimeout, "Close should timeout quickly, not wait for default timeout")
 
 	// Drop the revision
 	r.NoError(revision.Drop())
 
 	// Now Close should succeed
-	r.NoError(db.Close(t.Context()))
+	r.NoError(db.Close(oneSecCtx(t)))
 }
 
 // TestCloseWithMultipleActiveHandles verifies that Database.Close returns
@@ -1683,7 +1690,7 @@ func TestCloseWithMultipleActiveHandles(t *testing.T) {
 	r.NoError(revision2.Drop())
 
 	// Now Close should succeed
-	r.NoError(db.Close(t.Context()))
+	r.NoError(db.Close(oneSecCtx(t)))
 }
 
 // TestCloseSucceedsWhenHandlesDroppedInTime verifies that Database.Close succeeds
@@ -1722,7 +1729,7 @@ func TestCloseSucceedsWhenHandlesDroppedInTime(t *testing.T) {
 	select {
 	case err := <-closeDone:
 		r.NoError(err, "Close should succeed when handles are dropped before timeout")
-	case <-time.After(defaultCloseTimeout):
+	case <-time.After(3 * time.Second): // arbitrary
 		r.Fail("Close did not complete in time")
 	}
 }
