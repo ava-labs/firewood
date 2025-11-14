@@ -117,7 +117,7 @@ By default, we prohibit bare `unwrap` calls and index dereferencing, as there ar
 
 ## [Where can I ask for help]?
 
-Please reach out on X (formerly twitter) @rkuris for help or questions!
+If you have questions or need help, please post them as issues in the [issue tracker](https://github.com/ava-labs/firewood/issues). This allows the community to benefit from the discussion and helps us maintain a searchable knowledge base.
 
 ## Thank you
 
