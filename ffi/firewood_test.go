@@ -1267,7 +1267,7 @@ func TestFjallStore(t *testing.T) {
 	numRevisions := 10
 	key := []byte("root_store")
 	_, vals := kvForTest(numRevisions)
-	revisionRoots := make([][]byte, numRevisions)
+	revisionRoots := make([]Hash, numRevisions)
 	for i := range numRevisions {
 		proposal, err := db.Propose([][]byte{key}, [][]byte{vals[i]})
 		r.NoError(err)
