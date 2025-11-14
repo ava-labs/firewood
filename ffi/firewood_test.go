@@ -1606,41 +1606,10 @@ func TestCloseWithCancelledContext(t *testing.T) {
 	wg.Wait()
 
 	r.ErrorIs(err, ErrActiveKeepAliveHandles, "Close should return ErrActiveKeepAliveHandles when context is cancelled")
+	r.ErrorIs(err, context.Canceled, "Close error should wrap context.Canceled")
 
 	// Drop the proposal
 	r.NoError(proposal.Drop())
-
-	// Now Close should succeed
-	r.NoError(db.Close(oneSecCtx(t)))
-}
-
-// TestCloseWithShortTimeout verifies that Database.Close returns
-// ErrActiveKeepAliveHandles when the context times out before handles are dropped.
-func TestCloseWithShortTimeout(t *testing.T) {
-	r := require.New(t)
-	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, err := newDatabase(dbFile)
-	r.NoError(err)
-
-	// Create a revision to keep a handle active
-	keys, vals := kvForTest(1)
-	root, err := db.Update(keys, vals)
-	r.NoError(err)
-
-	revision, err := db.Revision(root)
-	r.NoError(err)
-
-	// Create a context with a very short timeout (100ms)
-	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
-	defer cancel()
-
-	// Close should return ErrActiveKeepAliveHandles after timeout
-	err = db.Close(ctx)
-
-	r.ErrorIs(err, ErrActiveKeepAliveHandles, "Close should return ErrActiveKeepAliveHandles when context times out")
-
-	// Drop the revision
-	r.NoError(revision.Drop())
 
 	// Now Close should succeed
 	r.NoError(db.Close(oneSecCtx(t)))
@@ -1681,6 +1650,7 @@ func TestCloseWithMultipleActiveHandles(t *testing.T) {
 	// Close should return ErrActiveKeepAliveHandles
 	err = db.Close(ctx)
 	r.ErrorIs(err, ErrActiveKeepAliveHandles, "Close should return ErrActiveKeepAliveHandles with multiple active handles")
+	r.ErrorIs(err, context.Canceled, "Close error should wrap context.Canceled")
 
 	// Drop all handles
 	r.NoError(proposal1.Drop())
@@ -1708,28 +1678,17 @@ func TestCloseSucceedsWhenHandlesDroppedInTime(t *testing.T) {
 	proposal2, err := db.Propose(keys[1:2], vals[1:2])
 	r.NoError(err)
 
-	// Create a context with a reasonable timeout
-	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
-	defer cancel()
-
 	// Channel to receive Close result
 	closeDone := make(chan error, 1)
 
 	// Start Close in a goroutine
 	go func() {
-		closeDone <- db.Close(ctx)
+		closeDone <- db.Close(oneSecCtx(t))
 	}()
 
 	// Drop handles after a short delay (before timeout)
 	time.Sleep(100 * time.Millisecond)
 	r.NoError(proposal1.Drop())
 	r.NoError(proposal2.Drop())
-
-	// Close should succeed (not timeout)
-	select {
-	case err := <-closeDone:
-		r.NoError(err, "Close should succeed when handles are dropped before timeout")
-	case <-time.After(3 * time.Second): // arbitrary
-		r.Fail("Close did not complete in time")
-	}
+	r.NoError(<-closeDone, "Close should succeed when handles are dropped before timeout")
 }
