@@ -248,8 +248,22 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: DeterminateSystems/nix-installer-action@786fff0690178f1234e4e1fe9b536e94f5433196 #v20
-      - uses: DeterminateSystems/magic-nix-cache-action@565684385bcd71bad329742eefe8d12f2e765b39 #v13
+      - uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f #v31
+        with:
+          github_access_token: ${{ inputs.github_token }}
+      - run: nix develop ./ffi --command echo "dependencies installed"
+        shell: bash
+      # Cache Go modules (architecture-independent)
+      - uses: actions/cache@v4
+        id: go-mod-cache
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ hashFiles('ffi/go.sum') }}
+          restore-keys: go-mod-
+      # Download modules only on cache miss
+      - run: nix run ./ffi#go -- mod download ./ffi/go.mod
+        if: steps.go-mod-cache.outputs.cache-hit != 'true'
+        shell: bash
       - name: Check that FFI flake is up-to-date
         run: ./scripts/run-just.sh check-ffi-flake
       - name: Test nix build of Golang FFI bindings
