@@ -277,12 +277,15 @@ pub(crate) fn get_iterator_intial_state<T: TrieReader>(
 /// An iterator of key-value pairs in order starting from a specific point in the trie.
 pub struct MerkleKeyValueIter<'a, T> {
     iter: MerkleNodeIter<'a, T>,
+    /// Track how many nodes we visit during iteration (for performance metrics)
+    pub nodes_visited: usize,
 }
 
 impl<'a, T: TrieReader> From<&'a T> for MerkleKeyValueIter<'a, T> {
     fn from(merkle: &'a T) -> Self {
         Self {
             iter: MerkleNodeIter::new(merkle, Box::new([])),
+            nodes_visited: 0,
         }
     }
 }
@@ -293,6 +296,7 @@ impl<'a, T: TrieReader> MerkleKeyValueIter<'a, T> {
     pub fn from_key<K: AsRef<[u8]>>(merkle: &'a T, key: K) -> Self {
         Self {
             iter: MerkleNodeIter::new(merkle, key.as_ref().into()),
+            nodes_visited: 0,
         }
     }
 }
@@ -301,7 +305,10 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
     type Item = Result<(Key, Value), api::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.find_map(|result| {
+        let result = self.iter.find_map(|result| {
+            // Count every node we visit
+            self.nodes_visited += 1;
+
             result
                 .map(|(key, node)| {
                     match &*node {
@@ -318,7 +325,8 @@ impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
                 })
                 .map_err(Into::into)
                 .transpose()
-        })
+        });
+        result
     }
 }
 

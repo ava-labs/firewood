@@ -15,25 +15,31 @@ use std::collections::BTreeMap;
 /// - Emits Put for keys present only in `right`
 /// - Emits Put for keys present in both with different values
 /// - Skips identical pairs
+///
+/// Returns (operations, nodes_visited_left, nodes_visited_right)
 pub fn diff_merkle_simple<'a, T, U>(
     left: &'a Merkle<T>,
     right: &'a Merkle<U>,
     start_key: Key,
-) -> impl Iterator<Item = BatchOp<Key, Value>>
+) -> (Vec<BatchOp<Key, Value>>, usize, usize)
 where
     T: TrieReader,
     U: TrieReader,
 {
     // Collect all key/value pairs from each trie at or after start_key
-    let left_map: BTreeMap<Key, Value> = left
-        .key_value_iter_from_key(&start_key)
+    let mut left_iter = left.key_value_iter_from_key(&start_key);
+    let left_map: BTreeMap<Key, Value> = left_iter
+        .by_ref()
         .map(|res| res.expect("iterator over merkle should not error in simple diff"))
         .collect();
+    let left_nodes_visited = left_iter.nodes_visited;
 
-    let right_map: BTreeMap<Key, Value> = right
-        .key_value_iter_from_key(start_key)
+    let mut right_iter = right.key_value_iter_from_key(start_key);
+    let right_map: BTreeMap<Key, Value> = right_iter
+        .by_ref()
         .map(|res| res.expect("iterator over merkle should not error in simple diff"))
         .collect();
+    let right_nodes_visited = right_iter.nodes_visited;
 
     let mut ops: Vec<BatchOp<Key, Value>> = Vec::new();
     let mut li = left_map.into_iter().peekable();
@@ -70,7 +76,7 @@ where
         }
     }
 
-    ops.into_iter()
+    (ops, left_nodes_visited, right_nodes_visited)
 }
 
 use crate::merkle::PrefixOverlap;
@@ -1184,21 +1190,28 @@ mod tests {
             let m2 = make_immutable(m2);
 
             // Compare algorithms
-            let ops_simple: Vec<_> = diff_merkle_simple(&m1, &m2, Box::new([])).collect();
+            let (ops_simple, simple_left_nodes, simple_right_nodes) = diff_merkle_simple(&m1, &m2, Box::new([]));
 
             // Create optimized iterator to access metrics
             let mut optimized_iter = diff_merkle_optimized(&m1, &m2, Box::new([]));
             let ops_optimized: Vec<_> = optimized_iter.by_ref().collect();
 
             eprintln!("  Simple: {} operations", ops_simple.len());
+            eprintln!("    - Left nodes visited: {}", simple_left_nodes);
+            eprintln!("    - Right nodes visited: {}", simple_right_nodes);
+            eprintln!("    - Total nodes visited: {}", simple_left_nodes + simple_right_nodes);
             eprintln!("  Optimized: {} operations", ops_optimized.len());
-            eprintln!("  Pruning metrics:");
             eprintln!("    - Nodes visited: {}", optimized_iter.nodes_visited);
             eprintln!("    - Nodes pruned: {}", optimized_iter.nodes_pruned);
             eprintln!("    - Subtrees skipped: {}", optimized_iter.subtrees_skipped);
             if optimized_iter.nodes_visited > 0 {
                 let prune_rate = optimized_iter.nodes_pruned as f64 / optimized_iter.nodes_visited as f64 * 100.0;
                 eprintln!("    - Pruning rate: {:.1}%", prune_rate);
+            }
+            let simple_total = simple_left_nodes + simple_right_nodes;
+            if simple_total > 0 {
+                let traversal_reduction = 100.0 - (optimized_iter.nodes_visited as f64 / simple_total as f64 * 100.0);
+                eprintln!("  Traversal reduction: {:.1}%", traversal_reduction);
             }
 
             // Look for duplicate keys in optimized operations
@@ -1277,7 +1290,7 @@ mod tests {
 
         // Get operations from both algorithms
         let ops_opt: Vec<_> = diff_merkle_optimized(&m1, &m2, Box::new([])).collect();
-        let ops_simple: Vec<_> = diff_merkle_simple(&m1, &m2, Box::new([])).collect();
+        let (ops_simple, _, _) = diff_merkle_simple(&m1, &m2, Box::new([]));
 
         eprintln!("Optimized generated {} ops:", ops_opt.len());
         for op in &ops_opt {
@@ -1336,7 +1349,7 @@ mod tests {
         let m2 = make_immutable(m2);
 
         // Compare algorithms
-        let ops_simple: Vec<_> = diff_merkle_simple(&m1, &m2, Box::new([])).collect();
+        let (ops_simple, simple_left_nodes, simple_right_nodes) = diff_merkle_simple(&m1, &m2, Box::new([]));
 
         // Create optimized iterator to access metrics
         let mut optimized_iter = diff_merkle_optimized(&m1, &m2, Box::new([]));
@@ -1345,8 +1358,10 @@ mod tests {
         eprintln!("  Total keys: 1000");
         eprintln!("  Modified keys: 100 (10% - all with prefix 0x05)");
         eprintln!("  Simple: {} operations", ops_simple.len());
+        eprintln!("    - Left nodes visited: {}", simple_left_nodes);
+        eprintln!("    - Right nodes visited: {}", simple_right_nodes);
+        eprintln!("    - Total nodes visited: {}", simple_left_nodes + simple_right_nodes);
         eprintln!("  Optimized: {} operations", ops_optimized.len());
-        eprintln!("  Pruning metrics:");
         eprintln!("    - Nodes visited: {}", optimized_iter.nodes_visited);
         eprintln!("    - Nodes pruned: {}", optimized_iter.nodes_pruned);
         eprintln!("    - Subtrees skipped: {}", optimized_iter.subtrees_skipped);
@@ -1355,6 +1370,11 @@ mod tests {
             eprintln!("    - Pruning rate: {:.1}%", prune_rate);
             eprintln!("    - Nodes visited per operation: {:.2}",
                      optimized_iter.nodes_visited as f64 / ops_optimized.len() as f64);
+        }
+        let simple_total = simple_left_nodes + simple_right_nodes;
+        if simple_total > 0 {
+            let traversal_reduction = 100.0 - (optimized_iter.nodes_visited as f64 / simple_total as f64 * 100.0);
+            eprintln!("  Traversal reduction vs simple: {:.1}%", traversal_reduction);
         }
 
         // Verify correctness
