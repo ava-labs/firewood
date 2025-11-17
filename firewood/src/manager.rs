@@ -350,7 +350,12 @@ impl RevisionManager {
             .collect()
     }
 
+    /// Retrieve a committed revision by its root hash.
+    /// To retrieve a revision involves a few steps:
+    /// 1. Check the in-memory revision manager.
+    /// 2. Check `RootStore`.
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
+        // 1. Check the in-memory revision manager.
         if let Some(revision) = self
             .by_hash
             .read()
@@ -361,6 +366,9 @@ impl RevisionManager {
             return Ok(revision);
         }
 
+        // 2. Check `RootStore`
+        // If the revision exists, get its root address and construct a
+        // NodeStore for it.
         let root_address = self
             .root_store
             .get(&root_hash)
