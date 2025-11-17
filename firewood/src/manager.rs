@@ -76,7 +76,7 @@ pub(crate) struct RevisionManager {
     /// stored in the filebacked storage.
     historical: RwLock<VecDeque<CommittedRevision>>,
     proposals: Mutex<Vec<ProposedRevision>>,
-    /// The list of revisions that are on disk by hash.
+    // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
     threadpool: OnceLock<ThreadPool>,
     root_store: Box<dyn RootStore + Send + Sync>,
