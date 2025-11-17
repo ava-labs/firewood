@@ -7,6 +7,11 @@ compose-dev.yaml
 # ignore test databases
 *_db
 
+# polyrepo (tool for working with multiple repos)
+polyrepo.log
+avalanchego
+coreth
+
 #### Below sections are auto-generated ####
 
 # Created by https://www.toptal.com/developers/gitignore/api/rust,visualstudiocode,vim,macos

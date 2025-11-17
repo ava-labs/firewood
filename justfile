@@ -78,9 +78,21 @@ check-nix:
         echo "" >&2
         echo "To install nix:" >&2
         echo "  - Visit: https://github.com/DeterminateSystems/nix-installer" >&2
-        echo "  - Or run: curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install" >&2
+        echo "  - Or run: ./scripts/run-just.sh install-nix" >&2
         exit 1
     fi
+
+# Install nix using determinate systems installer
+install-nix:
+    curl --proto '=https' --tlsv1.2 -sSf -L https://install.determinate.systems/nix | sh -s -- install
+
+# Run the polyrepo command provided by avalanchego
+run-polyrepo *args: check-nix
+    #!/usr/bin/env bash
+    set -euo pipefail
+    AVALANCHEGO_COMMIT=0c4c6fcc92
+    echo "Running polyrepo@${AVALANCHEGO_COMMIT} via go run..."
+    nix run ./ffi#go -- run github.com/ava-labs/avalanchego/tests/fixture/polyrepo@"${AVALANCHEGO_COMMIT}" {{args}}
 
 # Adds go workspace for user experience consistency
 setup-go-workspace:
