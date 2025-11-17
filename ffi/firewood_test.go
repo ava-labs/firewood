@@ -1288,6 +1288,10 @@ func TestFjallStore(t *testing.T) {
 		revision, err := db.Revision(revisionRoots[i])
 		r.NoError(err)
 
+		defer func() {
+			r.NoError(revision.Drop())
+		}()
+
 		v, err := revision.Get(key)
 		r.NoError(err)
 
