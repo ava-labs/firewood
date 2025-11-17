@@ -166,8 +166,11 @@ impl RevisionManager {
     /// 1. Commit check.
     ///    The proposal's parent must be the last committed revision, otherwise the commit fails.
     ///    It only contains the address of the nodes that are deleted, which should be very small.
-    /// 2. Revision reaping. If more than the maximum number of revisions are kept in memory, the
-    ///    oldest revision is reaped if not referenced by `RootStore`.
+    /// 2. Revision reaping.
+    ///    If more than the maximum number of revisions are kept in memory, the
+    ///    oldest revision is removed from memory. Its nodes are then added to the free list only
+    ///    if the revision's root address is not in `RootStore`. Revisions in `RootStore` are
+    ///    preserved on disk to allow historical queries.
     /// 3. Persist to disk. This includes flushing everything to disk.
     /// 4. Persist the revision to `RootStore`.
     /// 5. Set last committed revision.
@@ -189,8 +192,8 @@ impl RevisionManager {
         let mut committed = proposal.as_committed(&current_revision);
 
         // 2. Revision reaping
-        // Take the deleted entries from the oldest revision and mark them as
-        // free for this revision only if the revision is not referenced by RootStore.
+        // When we exceed max_revisions, remove the oldest revision from memory.
+        // Then, add its nodes to the free list only if the revision root address is not in RootStore.
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
         while self.historical.read().expect("poisoned lock").len() >= self.max_revisions {
@@ -205,7 +208,7 @@ impl RevisionManager {
                 self.by_hash.write().expect("poisoned lock").remove(hash);
             }
 
-            // Check if this revision is referenced by RootStore
+            // Check if this revision's root address is in RootStore.
             let is_in_root_store = match oldest_hash {
                 Some(hash) => self
                     .root_store
@@ -215,7 +218,8 @@ impl RevisionManager {
                 None => false,
             };
 
-            // We reap the revision's nodes only if the revision is not referenced by RootStore.
+            // We reap the revision's nodes only if the revision's root address
+            // is not in RootStore.
             if !is_in_root_store {
                 // This `try_unwrap` is safe because nobody else will call `try_unwrap` on this Arc
                 // in a different thread, so we don't have to worry about the race condition where
