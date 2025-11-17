@@ -16,7 +16,7 @@ use std::num::NonZeroUsize;
 use std::time::Instant;
 
 use firewood::db::{BatchOp, Db, DbConfig};
-use firewood::diff::{diff_merkle_optimized, diff_merkle_simple};
+use firewood::diff::{diff_merkle_optimized, diff_merkle_simple, ParallelDiff};
 use firewood::manager::RevisionManagerConfig;
 use firewood::merkle::{Key, Merkle};
 use firewood::v2::api::{Db as _, DbView as _, Proposal as _};
@@ -202,6 +202,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let ops_optimized: Vec<_> = opt_iter.by_ref().collect();
     let t_opt = t_opt_start.elapsed();
 
+    println!("Running parallel optimized diff...");
+    let t_par_start = Instant::now();
+    let (ops_parallel, par_metrics) = ParallelDiff::diff(&left_merkle, &right_merkle, Box::new([]));
+    let t_par = t_par_start.elapsed();
+
     // ------------------------------------------------------------------------
     // Step 4: Print metrics and relative efficiency
     // ------------------------------------------------------------------------
@@ -209,6 +214,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     let opt_nodes_visited = opt_iter.nodes_visited;
     let opt_nodes_pruned = opt_iter.nodes_pruned;
     let opt_subtrees_skipped = opt_iter.subtrees_skipped;
+    let par_nodes_visited = par_metrics.nodes_visited;
+    let par_nodes_pruned = par_metrics.nodes_pruned;
+    let par_subtrees_skipped = par_metrics.subtrees_skipped;
 
     println!("\n=== Diff Metrics ===");
     println!("Base keys:              {}", args.items);
@@ -253,6 +261,41 @@ fn main() -> Result<(), Box<dyn Error>> {
             let speedup = t_simple_s / t_opt_s;
             println!("Time speedup (simple / optimized): {:.2}x", speedup);
         }
+    }
+
+    println!("\nParallel optimized diff:");
+    println!("  Operations:           {}", ops_parallel.len());
+    println!("  Nodes visited:        {}", par_nodes_visited);
+    println!("  Nodes pruned:         {}", par_nodes_pruned);
+    println!("  Subtrees skipped:     {}", par_subtrees_skipped);
+    println!("  Elapsed:              {:?}", t_par);
+
+    if par_nodes_visited > 0 {
+        let prune_rate =
+            par_nodes_pruned as f64 / par_nodes_visited as f64 * 100.0;
+        println!("  Pruning rate:         {:.1}%", prune_rate);
+    }
+
+    if simple_total_nodes > 0 && par_nodes_visited > 0 {
+        let traversal_reduction =
+            100.0 - (par_nodes_visited as f64 / simple_total_nodes as f64 * 100.0);
+        println!(
+            "Traversal reduction vs simple: {:.1}%",
+            traversal_reduction
+        );
+    }
+
+    if !ops_optimized.is_empty() && !ops_parallel.is_empty() {
+        let t_opt_s = t_opt.as_secs_f64();
+        let t_par_s = t_par.as_secs_f64();
+        if t_opt_s > 0.0 && t_par_s > 0.0 {
+            let speedup = t_opt_s / t_par_s;
+            println!("Time speedup (optimized / parallel): {:.2}x", speedup);
+        }
+    }
+
+    if ops_optimized != ops_parallel {
+        println!("WARNING: parallel optimized diff produced different ops than single-threaded optimized diff");
     }
 
     Ok(())

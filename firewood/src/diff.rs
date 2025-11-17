@@ -6,6 +6,7 @@
 use crate::db::BatchOp;
 use crate::merkle::{Key, Merkle, Value};
 use firewood_storage::TrieReader;
+use rayon::prelude::*;
 use std::collections::BTreeMap;
 
 /// Simple diff: iterate all key/value pairs from `left` and `right` starting at `start_key`
@@ -624,6 +625,180 @@ impl<'a, T: TrieReader, U: TrieReader> Iterator for OptimizedDiffIter<'a, T, U> 
         }
 
         None
+    }
+}
+
+/// Aggregated metrics for a parallel diff run
+#[derive(Debug, Default)]
+pub struct ParallelDiffMetrics {
+    /// Total nodes visited across all subtrees
+    pub nodes_visited: usize,
+    /// Total nodes pruned across all subtrees
+    pub nodes_pruned: usize,
+    /// Total subtrees skipped due to pruning
+    pub subtrees_skipped: usize,
+}
+
+/// Parallel diff driver that splits work across top-level branches (first nibble)
+#[derive(Debug, Default)]
+pub struct ParallelDiff;
+
+impl ParallelDiff {
+    /// Compute an optimized diff in parallel by splitting work across child branches of the root.
+    ///
+    /// This is conceptually similar to [`ParallelMerkle`]: we partition the trie by the first
+    /// path component and run the existing optimized structural diff independently on each
+    /// subtree, then concatenate the results in key order.
+    ///
+    /// If the root is not a branch with an empty partial path on both tries, this falls back
+    /// to a single-threaded optimized diff.
+    ///
+    /// Returns the diff operations and aggregated pruning metrics.
+    pub fn diff<'a, T, U>(
+        left: &'a Merkle<T>,
+        right: &'a Merkle<U>,
+        start_key: Key,
+    ) -> (Vec<BatchOp<Key, Value>>, ParallelDiffMetrics)
+    where
+        T: TrieReader + Sync,
+        U: TrieReader + Sync,
+    {
+        use firewood_storage::{Node, PathBuf, PathComponent, SharedNode};
+
+        // Fast-path: empty tries or trivial cases – use existing optimized iterator
+        let left_root = left.nodestore().root_node();
+        let right_root = right.nodestore().root_node();
+
+        match (left_root, right_root) {
+            (None, None) => (Vec::new(), ParallelDiffMetrics::default()),
+            // If only one side exists, fall back to the single-threaded optimized iterator.
+            (Some(_), None) | (None, Some(_)) => {
+                let mut iter = diff_merkle_optimized(left, right, start_key);
+                let ops: Vec<_> = iter.by_ref().collect();
+                let metrics = ParallelDiffMetrics {
+                    nodes_visited: iter.nodes_visited,
+                    nodes_pruned: iter.nodes_pruned,
+                    subtrees_skipped: iter.subtrees_skipped,
+                };
+                (ops, metrics)
+            }
+            (Some(left_root), Some(right_root)) => {
+                // If either root is not a branch with an empty partial path, fall back.
+                match (left_root.as_ref(), right_root.as_ref()) {
+                    (Node::Branch(left_branch), Node::Branch(right_branch))
+                        if left_branch.partial_path.is_empty()
+                            && right_branch.partial_path.is_empty() =>
+                    {
+                        // Build a list of child indices where at least one side has a child.
+                        let child_indices: Vec<u8> = (0u8..16u8)
+                            .filter(|i| {
+                                let idx = PathComponent::try_new(*i).expect("index in bounds");
+                                left_branch.children[idx].is_some()
+                                    || right_branch.children[idx].is_some()
+                            })
+                            .collect();
+
+                        if child_indices.is_empty() {
+                            // Only potential difference at the root itself – defer to optimized iterator.
+                            let mut iter = diff_merkle_optimized(left, right, start_key);
+                            let ops: Vec<_> = iter.by_ref().collect();
+                            let metrics = ParallelDiffMetrics {
+                                nodes_visited: iter.nodes_visited,
+                                nodes_pruned: iter.nodes_pruned,
+                                subtrees_skipped: iter.subtrees_skipped,
+                            };
+                            return (ops, metrics);
+                        }
+
+                        // Run a per-child diff in parallel. Each worker:
+                        // - Starts from the shared nodestores
+                        // - Seeds OptimizedDiffIter with a single DiffFrame for that child
+                        // - Collects operations and its own metrics
+                        #[derive(Debug)]
+                        struct SubtreeResult {
+                            index: u8,
+                            ops: Vec<BatchOp<Key, Value>>,
+                            nodes_visited: usize,
+                            nodes_pruned: usize,
+                            subtrees_skipped: usize,
+                        }
+
+                        let results: Vec<SubtreeResult> = child_indices
+                            .into_par_iter()
+                            .filter_map(|i| {
+                                let idx = PathComponent::try_new(i).expect("index in bounds");
+                                let left_child = left_branch.children[idx].as_ref();
+                                let right_child = right_branch.children[idx].as_ref();
+
+                                if left_child.is_none() && right_child.is_none() {
+                                    return None;
+                                }
+
+                                // Build an iterator whose stack starts at this child path.
+                                let mut iter =
+                                    OptimizedDiffIter::new(left, right, start_key.clone());
+                                iter.stack.clear();
+
+                                let mut path_nibbles = PathBuf::new();
+                                path_nibbles.push(idx);
+
+                                let left_node: Option<SharedNode> =
+                                    left_child.and_then(|c| iter.get_left_child_node(c).ok());
+                                let right_node: Option<SharedNode> =
+                                    right_child.and_then(|c| iter.get_right_child_node(c).ok());
+
+                                if left_node.is_none() && right_node.is_none() {
+                                    return None;
+                                }
+
+                                iter.stack.push(DiffFrame {
+                                    left_node,
+                                    right_node,
+                                    path_nibbles,
+                                });
+
+                                let ops: Vec<_> = iter.by_ref().collect();
+
+                                Some(SubtreeResult {
+                                    index: i,
+                                    ops,
+                                    nodes_visited: iter.nodes_visited,
+                                    nodes_pruned: iter.nodes_pruned,
+                                    subtrees_skipped: iter.subtrees_skipped,
+                                })
+                            })
+                            .collect();
+
+                        // Concatenate results in deterministic child order so keys remain globally sorted.
+                        let mut results = results;
+                        results.sort_by_key(|r| r.index);
+
+                        let mut all_ops = Vec::new();
+                        let mut metrics = ParallelDiffMetrics::default();
+
+                        for r in results {
+                            metrics.nodes_visited += r.nodes_visited;
+                            metrics.nodes_pruned += r.nodes_pruned;
+                            metrics.subtrees_skipped += r.subtrees_skipped;
+                            all_ops.extend(r.ops);
+                        }
+
+                        (all_ops, metrics)
+                    }
+                    _ => {
+                        // Fallback to single-threaded optimized diff for non-branch roots.
+                        let mut iter = diff_merkle_optimized(left, right, start_key);
+                        let ops: Vec<_> = iter.by_ref().collect();
+                        let metrics = ParallelDiffMetrics {
+                            nodes_visited: iter.nodes_visited,
+                            nodes_pruned: iter.nodes_pruned,
+                            subtrees_skipped: iter.subtrees_skipped,
+                        };
+                        (ops, metrics)
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1262,6 +1437,63 @@ mod tests {
 
             assert_merkle_eq(&after_simple, &m2);
             assert_merkle_eq(&after_optimized, &m2);
+        }
+    }
+
+    #[test]
+    fn test_parallel_diff_matches_optimized() {
+        use rand::rngs::StdRng;
+        use rand::{Rng, SeedableRng};
+
+        let seed = 12345u64;
+        let mut rng = StdRng::seed_from_u64(seed);
+
+        for size in [0usize, 1, 10, 100] {
+            // Generate unique random keys
+            let mut keys: Vec<Vec<u8>> = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            while keys.len() < size {
+                let klen = rng.random_range(1..=16);
+                let key: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
+                if seen.insert(key.clone()) {
+                    keys.push(key);
+                }
+            }
+
+            // Build two tries starting from the same base
+            let mut m1 = create_test_merkle();
+            let mut m2 = create_test_merkle();
+
+            for (i, key) in keys.iter().enumerate() {
+                let value = format!("value_{i}").into_bytes();
+                m1.insert(key, value.clone().into_boxed_slice()).unwrap();
+                m2.insert(key, value.into_boxed_slice()).unwrap();
+            }
+
+            // Apply some modifications to the second trie
+            for key in keys.iter().take(size / 2) {
+                let new_val = format!("modified_{:x?}", key).into_bytes();
+                m2.insert(key, new_val.into_boxed_slice()).unwrap();
+            }
+            for key in keys.iter().skip(size / 2).take(size / 4) {
+                m2.remove(key).ok();
+            }
+
+            let m1 = make_immutable(m1);
+            let m2 = make_immutable(m2);
+
+            let start_key: Key = Box::new([]);
+
+            let ops_opt: Vec<_> = diff_merkle_optimized(&m1, &m2, start_key.clone()).collect();
+            let (ops_par, metrics_par) = ParallelDiff::diff(&m1, &m2, start_key);
+
+            // Parallel diff should produce exactly the same operations as the single-threaded optimized diff
+            assert_eq!(ops_opt, ops_par, "parallel diff ops must match optimized ops");
+
+            // Metrics should be non-zero when there are differences
+            if !ops_opt.is_empty() {
+                assert!(metrics_par.nodes_visited > 0);
+            }
         }
     }
 
