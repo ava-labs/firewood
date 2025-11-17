@@ -291,7 +291,6 @@ impl RevisionManager {
     /// To view the database at a specific hash involves a few steps:
     /// 1. Try to find it in committed revisions.
     /// 2. Try to find it in proposals.
-    /// 3. Try to find it in `RootStore`.
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, RevisionManagerError> {
         // 1. Try to find it in committed revisions.
         if let Ok(committed) = self.revision(root_hash.clone()) {
@@ -305,28 +304,12 @@ impl RevisionManager {
             .expect("poisoned lock")
             .iter()
             .find(|p| p.root_hash().as_ref() == Some(&root_hash))
-            .cloned();
-
-        if let Some(proposal) = proposal {
-            return Ok(proposal);
-        }
-
-        // 3. Try to find it in `RootStore`.
-        let revision_addr = self
-            .root_store
-            .get(&root_hash)
-            .map_err(RevisionManagerError::RootStoreError)?
+            .cloned()
             .ok_or(RevisionManagerError::RevisionNotFound {
-                provided: root_hash.clone(),
+                provided: root_hash,
             })?;
 
-        let node_store = NodeStore::with_root(
-            root_hash.into_hash_type(),
-            revision_addr,
-            self.current_revision(),
-        );
-
-        Ok(Arc::new(node_store))
+        Ok(proposal)
     }
 
     pub fn add_proposal(&self, proposal: ProposedRevision) {
