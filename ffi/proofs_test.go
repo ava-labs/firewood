@@ -4,10 +4,8 @@
 package ffi
 
 import (
-	"context"
 	"runtime"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -52,7 +50,8 @@ func assertProofNotNil(t *testing.T, proof *RangeProof) {
 }
 
 // newVerifiedRangeProof generates a range proof for the given parameters and
-// verifies using [RangeProof.Verify] which does not prepare a proposal.
+// verifies using [RangeProof.Verify] which does not prepare a proposal. A
+// cleanup is registered to free the proof when the test ends.
 func newVerifiedRangeProof(
 	t *testing.T,
 	db *Database,
@@ -89,26 +88,6 @@ func newSerializedRangeProof(
 	r.NoError(err)
 
 	return proofBytes
-}
-
-func tryCloseDatabase(ctx context.Context, db *Database) error {
-	ctx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
-	defer cancel()
-	return db.Close(ctx)
-}
-
-// assertDatabaseCloseable verifies that the database can be closed within a short timeout.
-func assertDatabaseCloseable(t *testing.T, db *Database) {
-	t.Helper()
-	r := require.New(t)
-	r.NoError(tryCloseDatabase(t.Context(), db), "Database should be closeable with no active keep-alive handles")
-}
-
-// assertDatabaseNotCloseable verifies that the database cannot be closed due to active keep-alive handles.
-func assertDatabaseNotCloseable(t *testing.T, db *Database) {
-	t.Helper()
-	r := require.New(t)
-	r.ErrorIs(tryCloseDatabase(t.Context(), db), ErrActiveKeepAliveHandles, "Database should not be closeable with active keep-alive handles")
 }
 
 func TestRangeProofEmptyDB(t *testing.T) {
@@ -215,7 +194,7 @@ func TestRangeProofVerify(t *testing.T) {
 	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
 
 	// Database should be immediately closeable (no keep-alive)
-	assertDatabaseCloseable(t, db)
+	r.NoError(db.Close(oneSecCtx(t)))
 
 	// Verify with wrong root should fail
 	root[0] ^= 0xFF
@@ -304,13 +283,13 @@ func TestRangeProofFreeReleasesKeepAlive(t *testing.T) {
 	r.NoError(db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
 
 	// Database should not be closeable while proof has keep-alive
-	assertDatabaseNotCloseable(t, db)
+	r.ErrorIs(db.Close(oneSecCtx(t)), ErrActiveKeepAliveHandles)
 
 	// Free the proof (releases keep-alive)
 	r.NoError(proof.Free())
 
 	// Database should now be closeable
-	assertDatabaseCloseable(t, db)
+	r.NoError(db.Close(oneSecCtx(t)))
 }
 
 func TestRangeProofCommitReleasesKeepAlive(t *testing.T) {
@@ -328,14 +307,14 @@ func TestRangeProofCommitReleasesKeepAlive(t *testing.T) {
 	r.NoError(db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
 
 	// Database should not be closeable while proof has keep-alive
-	assertDatabaseNotCloseable(t, db)
+	r.ErrorIs(db.Close(oneSecCtx(t)), ErrActiveKeepAliveHandles)
 
 	// Commit the proof (releases keep-alive)
 	_, err = db.VerifyAndCommitRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated)
 	r.NoError(err)
 
 	// Database should now be closeable
-	assertDatabaseCloseable(t, db)
+	r.NoError(db.Close(oneSecCtx(t)))
 
 	marshalledAfterCommit, err := proof.MarshalBinary()
 	r.NoError(err)
@@ -364,7 +343,7 @@ func TestRangeProofFinalizerCleanup(t *testing.T) {
 	r.NoError(db.VerifyRangeProof(proof, nothing(), nothing(), root, rangeProofLenTruncated))
 
 	// Database should not be closeable while proof has keep-alive
-	assertDatabaseNotCloseable(t, db)
+	r.ErrorIs(db.Close(oneSecCtx(t)), ErrActiveKeepAliveHandles)
 
 	runtime.KeepAlive(proof)
 	proof = nil //nolint:ineffassign // necessary to drop the reference for GC
