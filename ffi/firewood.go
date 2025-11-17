@@ -57,6 +57,10 @@ var (
 // access the database's memory. These must be released before closing the
 // database. See [Database.Close] for more details.
 //
+// Database supports two hashing modes: Firewood hashing and Ethereum-compatible
+// hashing. Ethereum-compatible hashing is distributed, but you can use the more efficient
+// Firewood hashing by compiling from source. See the Firewood repository for more details.
+//
 // For concurrent use cases, see each type and method's documentation for thread-safety.
 type Database struct {
 	// handle is returned and accepted by cgo functions. It MUST be treated as
@@ -101,8 +105,11 @@ func DefaultConfig() *Config {
 type CacheStrategy uint8
 
 const (
+	// OnlyCacheWrites caches only writes.
 	OnlyCacheWrites CacheStrategy = iota
+	// CacheBranchReads caches intermediate reads and writes.
 	CacheBranchReads
+	// CacheAllReads caches all reads and writes.
 	CacheAllReads
 
 	// invalidCacheStrategy MUST be the final value in the iota block to make it
