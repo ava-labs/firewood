@@ -13,12 +13,13 @@
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZero;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock, Weak};
 
 use firewood_storage::logger::{trace, warn};
 use metrics::gauge;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
+use weak_table::WeakValueHashMap;
 
 use crate::merkle::Merkle;
 use crate::root_store::RootStore;
@@ -78,6 +79,7 @@ pub(crate) struct RevisionManager {
     proposals: Mutex<Vec<ProposedRevision>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
+    by_rootstore: Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked>>>>,
     threadpool: OnceLock<ThreadPool>,
     root_store: Box<dyn RootStore + Send + Sync>,
 }
@@ -128,6 +130,7 @@ impl RevisionManager {
             by_hash: RwLock::new(Default::default()),
             proposals: Mutex::new(Default::default()),
             // committing_proposals: Default::default(),
+            by_rootstore: Mutex::new(WeakValueHashMap::new()),
             threadpool: OnceLock::new(),
             root_store,
         };
@@ -340,7 +343,8 @@ impl RevisionManager {
     /// Retrieve a committed revision by its root hash.
     /// To retrieve a revision involves a few steps:
     /// 1. Check the in-memory revision manager.
-    /// 2. Check `RootStore`.
+    /// 2. Check the in-memory `RootStore` cache.
+    /// 3. Check the persistent `RootStore`.
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
         // 1. Check the in-memory revision manager.
         if let Some(revision) = self
@@ -353,9 +357,18 @@ impl RevisionManager {
             return Ok(revision);
         }
 
-        // 2. Check `RootStore`
-        // If the revision exists, get its root address and construct a
-        // NodeStore for it.
+        // 2. Check the in-memory `RootStore` cache.
+        if let Some(nodestore) = self
+            .by_rootstore
+            .lock()
+            .expect("poisoned lock")
+            .get(&root_hash)
+        {
+            return Ok(nodestore);
+        }
+
+        // 3. Check the persistent `RootStore`.
+        // If the revision exists, get its root address and construct a NodeStore for it.
         let root_address = self
             .root_store
             .get(&root_hash)
@@ -364,11 +377,19 @@ impl RevisionManager {
                 provided: root_hash.clone(),
             })?;
 
-        Ok(Arc::new(NodeStore::with_root(
-            root_hash.into_hash_type(),
+        let nodestore = Arc::new(NodeStore::with_root(
+            root_hash.clone().into_hash_type(),
             root_address,
             self.current_revision(),
-        )))
+        ));
+
+        // Cache the nodestore (stored as a weak reference).
+        self.by_rootstore
+            .lock()
+            .expect("poisoned lock")
+            .insert(root_hash, nodestore.clone());
+
+        Ok(nodestore)
     }
 
     pub fn root_hash(&self) -> Result<Option<HashKey>, RevisionManagerError> {

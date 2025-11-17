@@ -1113,6 +1113,7 @@ dependencies = [
  "test-case",
  "thiserror",
  "typed-builder",
+ "weak-table",
 ]
 
 [[package]]
@@ -4133,6 +4134,12 @@ checksum = "76f218a38c84bcb33c25ec7059b07847d465ce0e0a76b995e134a45adcb6af76"
 dependencies = [
  "unicode-ident",
 ]
+
+[[package]]
+name = "weak-table"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "323f4da9523e9a669e1eaf9c6e763892769b1d38c623913647bfdc1532fe4549"
 
 [[package]]
 name = "web-sys"
