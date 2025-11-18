@@ -357,13 +357,10 @@ impl RevisionManager {
             return Ok(revision);
         }
 
+        let mut cache_guard = self.by_rootstore.lock().expect("poisoned lock");
+
         // 2. Check the in-memory `RootStore` cache.
-        if let Some(nodestore) = self
-            .by_rootstore
-            .lock()
-            .expect("poisoned lock")
-            .get(&root_hash)
-        {
+        if let Some(nodestore) = cache_guard.get(&root_hash) {
             return Ok(nodestore);
         }
 
@@ -384,10 +381,7 @@ impl RevisionManager {
         ));
 
         // Cache the nodestore (stored as a weak reference).
-        self.by_rootstore
-            .lock()
-            .expect("poisoned lock")
-            .insert(root_hash, nodestore.clone());
+        cache_guard.insert(root_hash, nodestore.clone());
 
         Ok(nodestore)
     }
