@@ -67,7 +67,12 @@ type Database struct {
 	// an opaque value without special meaning.
 	// https://en.wikipedia.org/wiki/Blinkenlights
 	handle             *C.DatabaseHandle
+	handleLock         sync.Mutex
 	outstandingHandles sync.WaitGroup
+
+	// stateLock is used to ensure that methods accessing or modifying the latest
+	// revision do not conflict.
+	stateLock sync.Mutex
 }
 
 // Config defines the configuration parameters used when opening a [Database].
@@ -174,12 +179,15 @@ func New(filePath string, conf *Config) (*Database, error) {
 // WARNING: Calling Update with an empty key and nil value will delete the entire database
 // due to prefix deletion semantics.
 //
-// This function is not thread-safe with respect to other calls that reference the latest
-// state of the database, nor any calls that mutate the state of the database.
+// This function conflicts with all other calls that access the latest state of the database,
+// and will lock for the duration of this function.
 func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 	if db.handle == nil {
 		return EmptyRoot, errDBClosed
 	}
+
+	db.stateLock.Lock()
+	defer db.stateLock.Unlock()
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
@@ -201,12 +209,15 @@ func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 //   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
 //   - non-empty value: Inserts/updates the key with the provided value
 //
-// This function is not thread-safe with respect to other calls that reference the latest
-// state of the database, nor any calls that mutate the latest state of the database.
+// This function conflicts with all other calls that access the latest state of the database,
+// and will lock for the duration of this function.
 func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
-	if db.handle == nil {
+	if db.isClosed() {
 		return nil, errDBClosed
 	}
+
+	db.stateLock.Lock()
+	defer db.stateLock.Unlock()
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
@@ -215,18 +226,23 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 	if err != nil {
 		return nil, err
 	}
-	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.outstandingHandles)
+	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.outstandingHandles, &db.stateLock)
 }
 
 // Get retrieves the value for the given key from the most recent revision.
 // If the key is not found, the return value will be nil.
 //
-// This function is thread-safe with all other read operations, but is not thread-safe
-// with respect to other calls that mutate the latest state of the database.
+// This function conflicts with all other calls that access the latest state of the database,
+// and will lock for the duration of this function. If you need to perform concurrent reads,
+// consider using [Database.Revision] or [Database.LatestRevision] to get a [Revision] and
+// calling [Revision.Get] on it.
 func (db *Database) Get(key []byte) ([]byte, error) {
-	if db.handle == nil {
+	if db.isClosed() {
 		return nil, errDBClosed
 	}
+
+	db.stateLock.Lock()
+	defer db.stateLock.Unlock()
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
@@ -250,7 +266,7 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 //
 // This function is thread-safe with all other operations.
 func (db *Database) GetFromRoot(root Hash, key []byte) ([]byte, error) {
-	if db.handle == nil {
+	if db.isClosed() {
 		return nil, errDBClosed
 	}
 
@@ -272,13 +288,20 @@ func (db *Database) GetFromRoot(root Hash, key []byte) ([]byte, error) {
 // Root returns the current root hash of the trie.
 // With Firewood hashing, the empty trie must return [EmptyRoot].
 //
-// This function is thread-safe with all other operations, except those that mutate
-// the latest state of the database.
+// This function conflicts with all other calls that access the latest state of the database,
+// and will lock for the duration of this function.
 func (db *Database) Root() (Hash, error) {
-	if db.handle == nil {
+	if db.isClosed() {
 		return EmptyRoot, errDBClosed
 	}
 
+	db.stateLock.Lock()
+	defer db.stateLock.Unlock()
+	return db.root()
+}
+
+// root assumes db.stateLock is held and the database is open.
+func (db *Database) root() (Hash, error) {
 	return getHashKeyFromHashResult(C.fwd_root_hash(db.handle))
 }
 
@@ -286,10 +309,16 @@ func (db *Database) Root() (Hash, error) {
 // If the latest revision has root [EmptyRoot], it returns an error. The [Revision] must
 // be dropped prior to closing the database.
 //
-// This function is thread-safe with all other operations, except those that mutate
-// the latest state of the database.
+// This function conflicts with all other calls that access the latest state of the database,
+// and will lock for the duration of this function.
 func (db *Database) LatestRevision() (*Revision, error) {
-	root, err := db.Root()
+	if db.isClosed() {
+		return nil, errDBClosed
+	}
+
+	db.stateLock.Lock()
+	defer db.stateLock.Unlock()
+	root, err := db.root()
 	if err != nil {
 		return nil, err
 	}
@@ -305,6 +334,10 @@ func (db *Database) LatestRevision() (*Revision, error) {
 //
 // This function is thread-safe with all other operations.
 func (db *Database) Revision(root Hash) (*Revision, error) {
+	if db.isClosed() {
+		return nil, errDBClosed
+	}
+
 	rev, err := getRevisionFromResult(C.fwd_get_revision(
 		db.handle,
 		newCHashKey(root),
@@ -326,10 +359,9 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 // unless an alternate GC finalizer is set on them.
 //
 // This is safe to call multiple times; subsequent calls after the first will do
-// nothing. However, it is not safe to call this method concurrently from multiple
-// goroutines.
+// nothing.
 func (db *Database) Close(ctx context.Context) error {
-	if db.handle == nil {
+	if db.isClosed() {
 		return nil
 	}
 
@@ -347,11 +379,21 @@ func (db *Database) Close(ctx context.Context) error {
 		return fmt.Errorf("%w: %w", ctx.Err(), ErrActiveKeepAliveHandles)
 	}
 
+	db.stateLock.Lock()
+	defer db.stateLock.Unlock()
 	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
 		return fmt.Errorf("unexpected error when closing database: %w", err)
 	}
 
+	db.handleLock.Lock()
 	db.handle = nil // Prevent double free
+	db.handleLock.Unlock()
 
 	return nil
+}
+
+func (db *Database) isClosed() bool {
+	db.handleLock.Lock()
+	defer db.handleLock.Unlock()
+	return db.handle == nil
 }
