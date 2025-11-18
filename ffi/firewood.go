@@ -36,7 +36,7 @@ import (
 // RootLength is the hash length for all Firewood hashes.
 const RootLength = C.sizeof_HashKey
 
-// Hash is the type used for all Firewood hashes.
+// Hash is the type used for all firewood hashes.
 type Hash [RootLength]byte
 
 var (
@@ -70,7 +70,7 @@ type Database struct {
 	outstandingHandles sync.WaitGroup
 }
 
-// Config sets the configuration parameters used when opening a [Database].
+// Config defines the configuration parameters used when opening a [Database].
 type Config struct {
 	// Truncate indicates whether to clear the database file if it already exists.
 	Truncate bool
@@ -81,10 +81,14 @@ type Config struct {
 	// Must be non-zero.
 	FreeListCacheEntries uint
 	// Revisions is the maximum number of historical revisions to keep on disk.
-	// Must be at least 2.
+	// This value is ignored if RootStoreDir is set.
+	// Otherwise, must be >= 2.
 	Revisions uint
 	// ReadCacheStrategy is the caching strategy used for the node cache.
 	ReadCacheStrategy CacheStrategy
+	// RootStoreDir defines a path to store all historical roots.
+	// If set, Revisions is ignored and all historical roots are stored.
+	RootStoreDir string
 }
 
 // DefaultConfig returns a [*Config] with sensible defaults:
@@ -132,7 +136,7 @@ func New(filePath string, conf *Config) (*Database, error) {
 	if conf.ReadCacheStrategy >= invalidCacheStrategy {
 		return nil, fmt.Errorf("invalid %T (%[1]d)", conf.ReadCacheStrategy)
 	}
-	if conf.Revisions < 2 {
+	if conf.Revisions < 2 && len(conf.RootStoreDir) == 0 {
 		return nil, fmt.Errorf("%T.Revisions must be >= 2", conf)
 	}
 	if conf.NodeCacheEntries < 1 {
@@ -152,6 +156,7 @@ func New(filePath string, conf *Config) (*Database, error) {
 		revisions:            C.size_t(conf.Revisions),
 		strategy:             C.uint8_t(conf.ReadCacheStrategy),
 		truncate:             C.bool(conf.Truncate),
+		root_store_path:      newBorrowedBytes([]byte(conf.RootStoreDir), &pinner),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))
@@ -189,7 +194,7 @@ func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 
 // Propose creates a new proposal with the given keys and values. The proposal
 // is not committed until [Proposal.Commit] is called. See [Database.Close] regarding
-// freeing proposals. All proposals must be freed before closing the database.
+// freeing proposals. All proposals should be freed before closing the database.
 //
 // Value Semantics:
 //   - nil value (vals[i] == nil): Performs a DeleteRange operation using the key as a prefix
