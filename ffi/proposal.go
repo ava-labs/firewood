@@ -91,6 +91,7 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 //   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
 //   - non-empty value: Inserts/updates the key with the provided value
 func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
+	fmt.Println("propose from proposal")
 	if p.handle == nil {
 		return nil, errDroppedProposal
 	}

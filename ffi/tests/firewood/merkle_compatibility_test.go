@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"path/filepath"
 	"slices"
+	"sync"
 	"testing"
 
 	firewood "github.com/ava-labs/firewood-go/ffi"
@@ -154,7 +155,7 @@ func (tr *tree) dbUpdate() {
 
 func (tr *tree) createRandomBatch(numKeys int) ([][]byte, [][]byte) {
 	keys := tr.selectRandomKeys(numKeys)
-	vals := createRandomByteSlices(len(keys), valSize, tr.rand)
+	vals := createRandomByteSlices(numKeys, valSize, tr.rand)
 	return keys, vals
 }
 
@@ -419,7 +420,7 @@ func FuzzTree(f *testing.F) {
 }
 
 func createRandomSlice(maxSize int, rand *rand.Rand) []byte {
-	sliceSize := rand.Intn(maxSize) + 1 // always create non-empty slices
+	sliceSize := rand.Intn(maxSize) + 1
 	slice := make([]byte, sliceSize)
 	_, err := rand.Read(slice)
 	if err != nil {
@@ -434,4 +435,94 @@ func createRandomByteSlices(numSlices int, maxSliceSize int, rand *rand.Rand) []
 		slices[i] = createRandomSlice(maxSliceSize, rand)
 	}
 	return slices
+}
+
+func TestAsyncProposeOnProposal(t *testing.T) {
+	r := require.New(t)
+
+	rand := rand.New(rand.NewSource(0))
+
+	type batch struct {
+		keys [][]byte
+		vals [][]byte
+	}
+
+	batches := make([]batch, 100)
+	for i := range batches {
+		batchSize := rand.Intn(10) + 1 // ensure at least one key-value pair
+		batchKeys := createRandomByteSlices(batchSize, keySize, rand)
+		batchVals := createRandomByteSlices(batchSize, keySize, rand)
+		batches[i] = batch{
+			keys: batchKeys,
+			vals: batchVals,
+		}
+	}
+
+	syncDB := newTestFirewoodDatabase(t)
+
+	roots := make([][]byte, len(batches))
+	for i, batch := range batches {
+		pr, err := syncDB.Propose(batch.keys, batch.vals)
+		r.NoError(err)
+		r.NoError(pr.Commit())
+		root, err := syncDB.Root()
+		r.NoError(err)
+		roots[i] = root[:]
+	}
+
+	type proposable interface {
+		// Propose creates a new proposal from the current state with the given keys and values.
+		Propose(keys, values [][]byte) (*firewood.Proposal, error)
+	}
+
+	asyncDB := newTestFirewoodDatabase(t)
+	var (
+		proposalLock sync.Mutex
+		base         proposable = asyncDB
+	)
+	// Start async committer
+	type commitRequest struct {
+		pr *firewood.Proposal
+	}
+	commits := make(chan commitRequest, 2)
+	commitsDone := make(chan struct{})
+	go func() {
+		defer close(commitsDone)
+
+		for commitRequest := range commits {
+			func() {
+				proposalLock.Lock()
+				defer proposalLock.Unlock()
+				r.NoError(commitRequest.pr.Commit())
+				base = asyncDB
+			}()
+		}
+	}()
+
+	// Create proposals and add them to async committer
+	for i, batch := range batches {
+		var (
+			pr  *firewood.Proposal
+			err error
+		)
+		func() {
+			proposalLock.Lock()
+			defer proposalLock.Unlock()
+
+			pr, err = base.Propose(batch.keys, batch.vals)
+			r.NoError(err)
+			base = pr
+		}()
+		commits <- commitRequest{pr: pr}
+
+		// Verify root matches
+		asyncRoot, err := pr.Root()
+		r.NoError(err)
+		r.Equal(roots[i], asyncRoot[:], "root mismatch at batch %d", i)
+	}
+
+	close(commits)
+	<-commitsDone
+
+	t.FailNow()
 }

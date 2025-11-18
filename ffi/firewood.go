@@ -154,6 +154,7 @@ func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 //   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
 //   - non-empty value: Inserts/updates the key with the provided value
 func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
+	fmt.Println("propose from db")
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
