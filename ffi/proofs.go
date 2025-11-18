@@ -83,6 +83,8 @@ func (db *Database) RangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) (*RangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -137,6 +139,12 @@ func (db *Database) VerifyRangeProof(
 	rootHash Hash,
 	maxLength uint32,
 ) error {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return errDBClosed
+	}
+
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
@@ -169,6 +177,8 @@ func (db *Database) VerifyAndCommitRangeProof(
 	rootHash Hash,
 	maxLength uint32,
 ) (Hash, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return EmptyRoot, errDBClosed
 	}
@@ -259,6 +269,8 @@ func (db *Database) ChangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) (*ChangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -288,6 +300,12 @@ func (db *Database) VerifyChangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) error {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return errDBClosed
+	}
+
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
@@ -314,6 +332,8 @@ func (db *Database) VerifyAndCommitChangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) (Hash, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return EmptyRoot, errDBClosed
 	}

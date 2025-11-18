@@ -67,7 +67,7 @@ type Database struct {
 	// an opaque value without special meaning.
 	// https://en.wikipedia.org/wiki/Blinkenlights
 	handle             *C.DatabaseHandle
-	handleLock         sync.Mutex
+	handleLock         sync.RWMutex
 	outstandingHandles sync.WaitGroup
 
 	// stateLock is used to ensure that methods accessing or modifying the latest
@@ -182,6 +182,8 @@ func New(filePath string, conf *Config) (*Database, error) {
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
 func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return EmptyRoot, errDBClosed
 	}
@@ -212,7 +214,9 @@ func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
 func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
-	if db.isClosed() {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
 		return nil, errDBClosed
 	}
 
@@ -237,7 +241,9 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 // consider using [Database.Revision] or [Database.LatestRevision] to get a [Revision] and
 // calling [Revision.Get] on it.
 func (db *Database) Get(key []byte) ([]byte, error) {
-	if db.isClosed() {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
 		return nil, errDBClosed
 	}
 
@@ -266,7 +272,9 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 //
 // This function is thread-safe with all other operations.
 func (db *Database) GetFromRoot(root Hash, key []byte) ([]byte, error) {
-	if db.isClosed() {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
 		return nil, errDBClosed
 	}
 
@@ -291,7 +299,9 @@ func (db *Database) GetFromRoot(root Hash, key []byte) ([]byte, error) {
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
 func (db *Database) Root() (Hash, error) {
-	if db.isClosed() {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
 		return EmptyRoot, errDBClosed
 	}
 
@@ -312,7 +322,9 @@ func (db *Database) root() (Hash, error) {
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
 func (db *Database) LatestRevision() (*Revision, error) {
-	if db.isClosed() {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
 		return nil, errDBClosed
 	}
 
@@ -334,7 +346,9 @@ func (db *Database) LatestRevision() (*Revision, error) {
 //
 // This function is thread-safe with all other operations.
 func (db *Database) Revision(root Hash) (*Revision, error) {
-	if db.isClosed() {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
 		return nil, errDBClosed
 	}
 
@@ -361,7 +375,9 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 // This is safe to call multiple times; subsequent calls after the first will do
 // nothing.
 func (db *Database) Close(ctx context.Context) error {
-	if db.isClosed() {
+	db.handleLock.Lock()
+	defer db.handleLock.Unlock()
+	if db.handle == nil {
 		return nil
 	}
 
@@ -385,15 +401,7 @@ func (db *Database) Close(ctx context.Context) error {
 		return fmt.Errorf("unexpected error when closing database: %w", err)
 	}
 
-	db.handleLock.Lock()
 	db.handle = nil // Prevent double free
-	db.handleLock.Unlock()
 
 	return nil
-}
-
-func (db *Database) isClosed() bool {
-	db.handleLock.Lock()
-	defer db.handleLock.Unlock()
-	return db.handle == nil
 }
