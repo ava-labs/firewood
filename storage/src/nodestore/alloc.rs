@@ -239,6 +239,13 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
                 *free_stored_area_addr = free_head.next_free_block;
             }
 
+            firewood_counter!(
+                "firewood.space.reused",
+                "Bytes reused from free list by index",
+                "index" => index_name(index)
+            )
+            .increment(index.size());
+
             // Return the address of the newly allocated block.
             trace!("Allocating from free list: addr: {address:?}, size: {index}");
             return Ok(Some(address));

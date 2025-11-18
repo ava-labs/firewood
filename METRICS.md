@@ -148,6 +148,11 @@ See the [FFI README](ffi/README.md) for more details on FFI metrics configuratio
 
 #### Space Allocation
 
+- **`firewood.space.reused`** (counter with `index` label)
+  - Description: Bytes reused from free list
+  - Labels: `index`: Size index of allocated area
+  - Use: Track memory reuse efficiency
+
 - **`firewood.space.from_end`** (counter with `index` label)
   - Description: Bytes allocated from end of nodestore when free list was insufficient
   - Labels: `index`: Size index of allocated area
