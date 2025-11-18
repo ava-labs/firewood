@@ -500,6 +500,7 @@ func TestAsyncProposeOnProposal(t *testing.T) {
 	}()
 
 	// Create proposals and add them to async committer
+	defer close(commits)
 	for i, batch := range batches {
 		var (
 			pr  *firewood.Proposal
@@ -520,8 +521,6 @@ func TestAsyncProposeOnProposal(t *testing.T) {
 		r.NoError(err)
 		r.Equal(roots[i], asyncRoot[:], "root mismatch at batch %d", i)
 	}
-
-	close(commits)
 	<-commitsDone
 
 	t.FailNow()
