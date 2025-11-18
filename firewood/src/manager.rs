@@ -171,9 +171,10 @@ impl RevisionManager {
     ///    It only contains the address of the nodes that are deleted, which should be very small.
     /// 2. Revision reaping.
     ///    If more than the maximum number of revisions are kept in memory, the
-    ///    oldest revision is removed from memory. Its nodes are then added to the free list only
-    ///    if the revision's root address is not in `RootStore`. Revisions in `RootStore` are
-    ///    preserved on disk to allow historical queries.
+    ///    oldest revision is removed from memory. If `RootStore` allows space
+    ///    reuse, the oldest revision's nodes are added to the free list for space reuse.
+    ///    Otherwise, the oldest revision's nodes are preserved on disk, which
+    ///    is useful for historical queries.
     /// 3. Persist to disk. This includes flushing everything to disk.
     /// 4. Persist the revision to `RootStore`.
     /// 5. Set last committed revision.
@@ -196,7 +197,7 @@ impl RevisionManager {
 
         // 2. Revision reaping
         // When we exceed max_revisions, remove the oldest revision from memory.
-        // Then, add its nodes to the free list only if the revision root address is not in RootStore.
+        // If `RootStore` allows space reuse, add the oldest revision's nodes to the free list.
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
         while self.historical.read().expect("poisoned lock").len() >= self.max_revisions {
@@ -211,19 +212,8 @@ impl RevisionManager {
                 self.by_hash.write().expect("poisoned lock").remove(hash);
             }
 
-            // Check if this revision's root address is in RootStore.
-            let is_in_root_store = match oldest_hash {
-                Some(hash) => self
-                    .root_store
-                    .get(&hash)
-                    .map_err(RevisionManagerError::RootStoreError)?
-                    .is_some(),
-                None => false,
-            };
-
-            // We reap the revision's nodes only if the revision's root address
-            // is not in RootStore.
-            if !is_in_root_store {
+            // We reap the revision's nodes only if `RootStore` allows space reuse.
+            if self.root_store.allow_space_reuse() {
                 // This `try_unwrap` is safe because nobody else will call `try_unwrap` on this Arc
                 // in a different thread, so we don't have to worry about the race condition where
                 // the Arc we get back is not usable as indicated in the docs for `try_unwrap`.

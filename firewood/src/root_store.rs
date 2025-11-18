@@ -42,6 +42,9 @@ pub trait RootStore: Debug {
         &self,
         hash: &TrieHash,
     ) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>>;
+
+    /// Returns whether revision nodes should be added to the free list.
+    fn allow_space_reuse(&self) -> bool;
 }
 
 #[derive(Debug)]
@@ -61,6 +64,10 @@ impl RootStore for NoOpStore {
         _hash: &TrieHash,
     ) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>> {
         Ok(None)
+    }
+
+    fn allow_space_reuse(&self) -> bool {
+        true
     }
 }
 
@@ -110,6 +117,10 @@ impl RootStore for MockStore {
         }
 
         Ok(self.roots.lock().expect("poisoned lock").get(hash).copied())
+    }
+
+    fn allow_space_reuse(&self) -> bool {
+        false
     }
 }
 
@@ -166,5 +177,9 @@ impl RootStore for FjallStore {
         let array: [u8; 8] = v.as_ref().try_into()?;
 
         Ok(LinearAddress::new(u64::from_be_bytes(array)))
+    }
+
+    fn allow_space_reuse(&self) -> bool {
+        false
     }
 }
