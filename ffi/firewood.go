@@ -80,14 +80,14 @@ type Config struct {
 	// FreeListCacheEntries is the number of entries in the freelist cache.
 	// Must be non-zero.
 	FreeListCacheEntries uint
-	// Revisions is the maximum number of historical revisions to keep on disk.
-	// This value is ignored if RootStoreDir is set.
-	// Otherwise, must be >= 2.
+	// Revisions is the maximum number of historical revisions to keep in memory.
+	// If RootStoreDir is set, then any revisions removed from memory will still be kept on disk.
+	// Otherwise, any revisions removed from memory will no longer be kept on disk.
+	// Must be >= 2.
 	Revisions uint
 	// ReadCacheStrategy is the caching strategy used for the node cache.
 	ReadCacheStrategy CacheStrategy
-	// RootStoreDir defines a path to store all historical roots.
-	// If set, Revisions is ignored and all historical roots are stored.
+	// RootStoreDir defines a path to store all historical roots on disk.
 	RootStoreDir string
 }
 
@@ -136,7 +136,7 @@ func New(filePath string, conf *Config) (*Database, error) {
 	if conf.ReadCacheStrategy >= invalidCacheStrategy {
 		return nil, fmt.Errorf("invalid %T (%[1]d)", conf.ReadCacheStrategy)
 	}
-	if conf.Revisions < 2 && len(conf.RootStoreDir) == 0 {
+	if conf.Revisions < 2 {
 		return nil, fmt.Errorf("%T.Revisions must be >= 2", conf)
 	}
 	if conf.NodeCacheEntries < 1 {
