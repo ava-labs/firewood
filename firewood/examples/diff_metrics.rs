@@ -4,9 +4,18 @@
 // Example that builds a large Firewood database, applies a set of
 // random edits, and compares the simple vs optimized diff algorithms.
 //
+// In addition to aggregate metrics, this example can optionally emit a
+// Graphviz DOT snapshot of the optimized diff traversal on a small,
+// self-contained in-memory example to help explain how the algorithm
+// prunes identical subtrees and walks only the differing branches.
+//
 // Usage (from workspace root):
 //   cargo run --release -p firewood --example diff_metrics -- \
 //     --items 100000 --modify 20000 --db-path diff_db
+//
+// To also generate a DOT file for documentation:
+//   cargo run -p firewood --example diff_metrics -- \
+//     --items 1000 --modify 200 --graphviz-output diff_trace.dot
 
 use clap::Parser;
 use rand::{rngs::StdRng, Rng, SeedableRng};
@@ -16,7 +25,9 @@ use std::num::NonZeroUsize;
 use std::time::Instant;
 
 use firewood::db::{BatchOp, Db, DbConfig};
-use firewood::diff::{diff_merkle_optimized, diff_merkle_simple, ParallelDiff};
+use firewood::diff::{
+    diff_merkle_optimized, diff_merkle_optimized_with_graphviz, diff_merkle_simple, ParallelDiff,
+};
 use firewood::manager::RevisionManagerConfig;
 use firewood::merkle::{Key, Merkle};
 use firewood::v2::api::{Db as _, DbView as _, Proposal as _};
@@ -51,6 +62,13 @@ struct Args {
     /// Maximum number of revisions kept in the DB
     #[arg(long, default_value_t = 128)]
     revisions: usize,
+
+    /// Optional path to write a small Graphviz DOT snapshot of an optimized diff traversal.
+    ///
+    /// This uses a tiny in-memory example (not the large on-disk database) so the
+    /// resulting graph remains readable and can be embedded into documentation.
+    #[arg(long)]
+    graphviz_output: Option<String>,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -298,5 +316,59 @@ fn main() -> Result<(), Box<dyn Error>> {
         println!("WARNING: parallel optimized diff produced different ops than single-threaded optimized diff");
     }
 
+    // Optionally generate a small Graphviz DOT snapshot that visualizes which
+    // structural nodes the optimized diff visited and which were pruned by hash.
+    if let Some(path) = &args.graphviz_output {
+        println!("\nWriting Graphviz traversal snapshot to {path} ...");
+        write_graphviz_example(path)?;
+    }
+
+    Ok(())
+}
+
+/// Build a small in-memory Merkle example and dump the optimized diff traversal as Graphviz DOT.
+fn write_graphviz_example(path: &str) -> Result<(), Box<dyn Error>> {
+    use firewood_storage::{ImmutableProposal, MemStore, MutableProposal, NodeStore};
+    use std::sync::Arc;
+
+    fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
+        let memstore = MemStore::new(vec![]);
+        let nodestore = NodeStore::new_empty_proposal(Arc::new(memstore));
+        Merkle::from(nodestore)
+    }
+
+    fn populate_merkle(
+        mut merkle: Merkle<NodeStore<MutableProposal, MemStore>>,
+        items: &[(&[u8], &[u8])],
+    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> {
+        for (key, value) in items {
+            merkle.insert(key, value.to_vec().into_boxed_slice()).unwrap();
+        }
+        merkle.try_into().unwrap()
+    }
+
+    // Keys chosen to force some path divergence and shared prefixes so the graph
+    // shows a mix of ExactMatch, Divergent, and prefix relationships.
+    let left_items = &[
+        (b"\x00\x00".as_slice(), b"value1".as_slice()),
+        (b"\x00\x01".as_slice(), b"value2".as_slice()),
+        (b"\x10\x00".as_slice(), b"value3".as_slice()),
+        (b"\x10\x01".as_slice(), b"value4".as_slice()),
+    ];
+
+    let right_items = &[
+        (b"\x00\x00".as_slice(), b"value1_mod".as_slice()),
+        (b"\x00\x02".as_slice(), b"value5".as_slice()),
+        (b"\x10\x00".as_slice(), b"value3".as_slice()),
+        (b"\x10\x02".as_slice(), b"value6".as_slice()),
+    ];
+
+    let m1 = populate_merkle(create_test_merkle(), left_items);
+    let m2 = populate_merkle(create_test_merkle(), right_items);
+
+    let start_key: Key = Box::new([]);
+    let (_ops, dot) = diff_merkle_optimized_with_graphviz(&m1, &m2, start_key);
+
+    std::fs::write(path, dot)?;
     Ok(())
 }
