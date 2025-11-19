@@ -1088,16 +1088,7 @@ mod test {
     /// Verifies that persisted revisions are still accessible when reopening the database.
     #[test]
     fn test_fjall_store() {
-        let tmpdir = tempfile::tempdir().unwrap();
-        let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-            .iter()
-            .collect();
-        let root_store_path = tmpdir.as_ref().join("fjall_store");
-        let dbconfig = DbConfig::builder()
-            .root_store_dir(Some(root_store_path))
-            .build();
-        let db = Db::new(dbpath, dbconfig).unwrap();
-        let db = TestDb { db, tmpdir };
+        let db = TestDb::new_with_fjall_store(DbConfig::builder().build());
 
         // First, create a revision to retrieve
         let key = b"key";
@@ -1128,16 +1119,7 @@ mod test {
 
     #[test]
     fn test_rootstore_empty_db_reopen() {
-        let tmpdir = tempfile::tempdir().unwrap();
-        let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-            .iter()
-            .collect();
-        let root_store_path = tmpdir.as_ref().join("fjall_store");
-        let dbconfig = DbConfig::builder()
-            .root_store_dir(Some(root_store_path))
-            .build();
-        let db = Db::new(dbpath, dbconfig).unwrap();
-        let db = TestDb { db, tmpdir };
+        let db = TestDb::new_with_fjall_store(DbConfig::builder().build());
 
         db.reopen();
     }
@@ -1147,17 +1129,10 @@ mod test {
     fn test_fjall_store_with_capped_max_revisions() {
         const NUM_REVISIONS: usize = 10;
 
-        let tmpdir = tempfile::tempdir().unwrap();
-        let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-            .iter()
-            .collect();
-        let root_store_path = tmpdir.as_ref().join("fjall_store");
         let dbconfig = DbConfig::builder()
-            .root_store_dir(Some(root_store_path))
             .manager(RevisionManagerConfig::builder().max_revisions(5).build())
             .build();
-        let db = Db::new(dbpath, dbconfig).unwrap();
-        let db = TestDb { db, tmpdir };
+        let db = TestDb::new_with_fjall_store(dbconfig);
 
         // Create and commit 10 proposals
         let key = b"root_store";
@@ -1218,6 +1193,25 @@ mod test {
             let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()
                 .collect();
+            let db = Db::new(dbpath, dbconfig).unwrap();
+            TestDb { db, tmpdir }
+        }
+
+        /// Creates a new test database with `FjallStore` enabled.
+        ///
+        /// Overrides `root_store_dir` in dbconfig to provide a directory for `FjallStore`.
+        pub fn new_with_fjall_store(dbconfig: DbConfig) -> Self {
+            let tmpdir = tempfile::tempdir().unwrap();
+            let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
+                .iter()
+                .collect();
+            let root_store_path = tmpdir.as_ref().join("fjall_store");
+
+            let dbconfig = DbConfig {
+                root_store_dir: Some(root_store_path),
+                ..dbconfig
+            };
+
             let db = Db::new(dbpath, dbconfig).unwrap();
             TestDb { db, tmpdir }
         }
