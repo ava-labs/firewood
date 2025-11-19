@@ -5,7 +5,6 @@
     clippy::match_same_arms,
     reason = "Found 1 occurrences after enabling the lint."
 )]
- 
 
 use crate::node::ExtendableBytes;
 use crate::node::children::Children;

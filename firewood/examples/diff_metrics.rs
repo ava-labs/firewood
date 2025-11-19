@@ -85,16 +85,14 @@
 // See the file LICENSE.md for licensing terms.
 
 use clap::Parser;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use std::collections::HashSet;
 use std::error::Error;
 use std::num::NonZeroUsize;
 use std::time::Instant;
 
 use firewood::db::{BatchOp, Db, DbConfig};
-use firewood::diff::{
-    diff_merkle_optimized, diff_merkle_simple, ParallelDiff,
-};
+use firewood::diff::{ParallelDiff, diff_merkle_optimized, diff_merkle_simple};
 use firewood::manager::RevisionManagerConfig;
 use firewood::merkle::{Key, Merkle};
 use firewood::v2::api::{Db as _, DbView as _, Proposal as _};
@@ -131,6 +129,99 @@ struct Args {
     revisions: usize,
 }
 
+/// Generates a set of unique random key-value pairs.
+fn generate_unique_pairs(
+    rng: &mut StdRng,
+    count: usize,
+) -> (Vec<Vec<u8>>, Vec<Vec<u8>>, HashSet<Vec<u8>>) {
+    let mut keys: Vec<Vec<u8>> = Vec::with_capacity(count);
+    let mut values: Vec<Vec<u8>> = Vec::with_capacity(count);
+    let mut seen = HashSet::with_capacity(count * 2);
+
+    println!("Generating {} unique random keys...", count);
+    while keys.len() < count {
+        let key_length: usize = rng.random_range(8..=32);
+        let value_length: usize = rng.random_range(16..=64);
+
+        let key: Vec<u8> = (0..key_length).map(|_| rng.random()).collect();
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+
+        let value: Vec<u8> = (0..value_length).map(|_| rng.random()).collect();
+        keys.push(key);
+        values.push(value);
+    }
+
+    (keys, values, seen)
+}
+
+/// Creates a batch operation for the initial base state.
+fn create_base_batch(keys: &[Vec<u8>], values: &[Vec<u8>]) -> Vec<BatchOp<Vec<u8>, Vec<u8>>> {
+    keys.iter()
+        .cloned()
+        .zip(values.iter().cloned())
+        .map(|(key, value)| BatchOp::Put { key, value })
+        .collect()
+}
+
+/// Generates random modifications (inserts, updates, deletes) to apply to the base state.
+fn generate_modifications(
+    rng: &mut StdRng,
+    keys: &mut Vec<Vec<u8>>,
+    values: &mut Vec<Vec<u8>>,
+    seen: &mut HashSet<Vec<u8>>,
+    modification_count: usize,
+) -> Vec<BatchOp<Vec<u8>, Vec<u8>>> {
+    let mut modifications: Vec<BatchOp<Vec<u8>, Vec<u8>>> = Vec::with_capacity(modification_count);
+
+    println!(
+        "Generating {} random modifications (deletes / updates / inserts)...",
+        modification_count
+    );
+
+    for _ in 0..modification_count {
+        let operation_choice = rng.random_range(0..100);
+
+        if !keys.is_empty() && operation_choice < 25 {
+            // Delete an existing key (25% probability)
+            let index = rng.random_range(0..keys.len());
+            let key = keys[index].clone();
+            modifications.push(BatchOp::Delete { key });
+        } else if !keys.is_empty() && operation_choice < 75 {
+            // Update an existing key (50% probability)
+            let index = rng.random_range(0..keys.len());
+            let key = keys[index].clone();
+            let value_length: usize = rng.random_range(16..=64);
+            let new_value: Vec<u8> = (0..value_length).map(|_| rng.random()).collect();
+            modifications.push(BatchOp::Put {
+                key,
+                value: new_value,
+            });
+        } else {
+            // Insert a new key (25% probability)
+            let key = loop {
+                let key_length: usize = rng.random_range(8..=32);
+                let candidate: Vec<u8> = (0..key_length).map(|_| rng.random()).collect();
+                if seen.insert(candidate.clone()) {
+                    break candidate;
+                }
+            };
+            let value_length: usize = rng.random_range(16..=64);
+            let value: Vec<u8> = (0..value_length).map(|_| rng.random()).collect();
+            keys.push(key.clone());
+            values.push(value.clone());
+            modifications.push(BatchOp::Put { key, value });
+        }
+    }
+
+    modifications
+}
+
+/// Main entry point for the diff metrics example.
+///
+/// Demonstrates the performance characteristics of different diff algorithms
+/// on realistic blockchain-like workloads.
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
@@ -140,50 +231,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     );
 
     // Configure and open the database
-    let mgrcfg = RevisionManagerConfig::builder()
+    let manager_config = RevisionManagerConfig::builder()
         .node_cache_size(args.cache_size)
         .max_revisions(args.revisions)
         .build();
-    let cfg = DbConfig::builder()
+    let database_config = DbConfig::builder()
         .truncate(args.truncate)
-        .manager(mgrcfg)
+        .manager(manager_config)
         .build();
-    let db = Db::new(&args.db_path, cfg)?;
+    let db = Db::new(&args.db_path, database_config)?;
 
-    // Build deterministic RNG
-    let seed = args
-        .seed
-        .unwrap_or(0xD1FF_C0DE_BAAD_F00D_u64);
+    // Build deterministic RNG for reproducible results
+    let seed = args.seed.unwrap_or(0xD1FF_C0DE_BAAD_F00D_u64);
     let mut rng = StdRng::seed_from_u64(seed);
 
     // ------------------------------------------------------------------------
     // Step 1: Build a large base state and commit it
     // ------------------------------------------------------------------------
-    let mut keys: Vec<Vec<u8>> = Vec::with_capacity(args.items);
-    let mut values: Vec<Vec<u8>> = Vec::with_capacity(args.items);
-    let mut seen = HashSet::with_capacity(args.items * 2);
-
-    println!("Generating {} unique random keys...", args.items);
-    while keys.len() < args.items {
-        let klen: usize = rng.random_range(8..=32);
-        let vlen: usize = rng.random_range(16..=64);
-
-        let key: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
-        if !seen.insert(key.clone()) {
-            continue;
-        }
-
-        let value: Vec<u8> = (0..vlen).map(|_| rng.random()).collect();
-        keys.push(key);
-        values.push(value);
-    }
-
-    let base_batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = keys
-        .iter()
-        .cloned()
-        .zip(values.iter().cloned())
-        .map(|(key, value)| BatchOp::Put { key, value })
-        .collect();
+    let (mut keys, mut values, mut seen) = generate_unique_pairs(&mut rng, args.items);
+    let base_batch = create_base_batch(&keys, &values);
 
     println!("Committing base revision...");
     let t_insert_start = Instant::now();
@@ -202,49 +268,12 @@ fn main() -> Result<(), Box<dyn Error>> {
     // ------------------------------------------------------------------------
     // Step 2: Apply random modifications on top of the base state
     // ------------------------------------------------------------------------
-    let mut mods: Vec<BatchOp<Vec<u8>, Vec<u8>>> = Vec::with_capacity(args.modify);
-
-    println!(
-        "Generating {} random modifications (deletes / updates / inserts)...",
-        args.modify
-    );
-    for _ in 0..args.modify {
-        let op_choice = rng.random_range(0..100);
-        if !keys.is_empty() && op_choice < 25 {
-            // Delete an existing key (25%)
-            let idx = rng.random_range(0..keys.len());
-            let key = keys[idx].clone();
-            mods.push(BatchOp::Delete { key });
-        } else if !keys.is_empty() && op_choice < 75 {
-            // Update an existing key (50%)
-            let idx = rng.random_range(0..keys.len());
-            let key = keys[idx].clone();
-            let vlen: usize = rng.random_range(16..=64);
-            let new_value: Vec<u8> = (0..vlen).map(|_| rng.random()).collect();
-            mods.push(BatchOp::Put {
-                key,
-                value: new_value,
-            });
-        } else {
-            // Insert a new key (25%)
-            let key = loop {
-                let klen: usize = rng.random_range(8..=32);
-                let candidate: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
-                if seen.insert(candidate.clone()) {
-                    break candidate;
-                }
-            };
-            let vlen: usize = rng.random_range(16..=64);
-            let value: Vec<u8> = (0..vlen).map(|_| rng.random()).collect();
-            keys.push(key.clone());
-            values.push(value.clone());
-            mods.push(BatchOp::Put { key, value });
-        }
-    }
+    let modifications =
+        generate_modifications(&mut rng, &mut keys, &mut values, &mut seen, args.modify);
 
     println!("Committing modified revision...");
     let t_modify_start = Instant::now();
-    let proposal2 = db.propose(mods)?;
+    let proposal2 = db.propose(modifications)?;
     let modified_hash = proposal2
         .root_hash()?
         .expect("modified proposal should have a root hash");
@@ -318,18 +347,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("  Elapsed:              {:?}", t_opt);
 
     if opt_nodes_visited > 0 {
-        let prune_rate =
-            opt_nodes_pruned as f64 / opt_nodes_visited as f64 * 100.0;
+        let prune_rate = opt_nodes_pruned as f64 / opt_nodes_visited as f64 * 100.0;
         println!("  Pruning rate:         {:.1}%", prune_rate);
     }
 
     if simple_total_nodes > 0 && opt_nodes_visited > 0 {
         let traversal_reduction =
             100.0 - (opt_nodes_visited as f64 / simple_total_nodes as f64 * 100.0);
-        println!(
-            "Traversal reduction vs simple: {:.1}%",
-            traversal_reduction
-        );
+        println!("Traversal reduction vs simple: {:.1}%", traversal_reduction);
     }
 
     if !ops_simple.is_empty() && !ops_optimized.is_empty() {
@@ -349,18 +374,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("  Elapsed:              {:?}", t_par);
 
     if par_nodes_visited > 0 {
-        let prune_rate =
-            par_nodes_pruned as f64 / par_nodes_visited as f64 * 100.0;
+        let prune_rate = par_nodes_pruned as f64 / par_nodes_visited as f64 * 100.0;
         println!("  Pruning rate:         {:.1}%", prune_rate);
     }
 
     if simple_total_nodes > 0 && par_nodes_visited > 0 {
         let traversal_reduction =
             100.0 - (par_nodes_visited as f64 / simple_total_nodes as f64 * 100.0);
-        println!(
-            "Traversal reduction vs simple: {:.1}%",
-            traversal_reduction
-        );
+        println!("Traversal reduction vs simple: {:.1}%", traversal_reduction);
     }
 
     if !ops_optimized.is_empty() && !ops_parallel.is_empty() {
@@ -373,7 +394,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     }
 
     if ops_optimized != ops_parallel {
-        println!("WARNING: parallel optimized diff produced different ops than single-threaded optimized diff");
+        println!(
+            "WARNING: parallel optimized diff produced different ops than single-threaded optimized diff"
+        );
     }
 
     Ok(())

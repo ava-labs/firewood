@@ -4,6 +4,8 @@
 //! It offers multiple implementations optimized for different use cases, from simple brute-force
 //! comparison to sophisticated structural diffing with hash-based pruning and parallel execution.
 //!
+//! **📖 For a comprehensive guide with visualizations and examples, see [DIFF_ALGORITHMS.md](https://github.com/ava-labs/firewood/blob/main/firewood/DIFF_ALGORITHMS.md)**
+//!
 //! ## Overview
 //!
 //! When working with Merkle tries (authenticated data structures used in blockchain systems),
@@ -143,6 +145,9 @@ use firewood_storage::TrieReader;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 
+/// Number of child slots in a branch node (one per nibble: 0x0-0xF)
+const BRANCH_CHILDREN_COUNT: usize = 16;
+
 /// Computes differences between two Merkle tries using a simple, exhaustive approach.
 ///
 /// This function performs a complete linear scan of all key-value pairs in both tries,
@@ -245,42 +250,50 @@ where
         .collect();
     let right_nodes_visited = right_iter.nodes_visited;
 
-    let mut ops: Vec<BatchOp<Key, Value>> = Vec::new();
-    let mut li = left_map.into_iter().peekable();
-    let mut ri = right_map.into_iter().peekable();
+    let mut operations: Vec<BatchOp<Key, Value>> = Vec::new();
+    let mut left_iterator = left_map.into_iter().peekable();
+    let mut right_iterator = right_map.into_iter().peekable();
 
     loop {
-        match (li.peek(), ri.peek()) {
+        match (left_iterator.peek(), right_iterator.peek()) {
             (None, None) => break,
-            (Some((_lk, _lv)), None) => {
-                let (k, _v) = li.next().expect("peek said Some");
-                ops.push(BatchOp::Delete { key: k });
+            (Some((_, _)), None) => {
+                // Key exists only in left trie - it was deleted
+                let (key, _) = left_iterator.next().expect("peek returned Some");
+                operations.push(BatchOp::Delete { key });
             }
-            (None, Some((_rk, _rv))) => {
-                let (k, v) = ri.next().expect("peek said Some");
-                ops.push(BatchOp::Put { key: k, value: v });
+            (None, Some((_, _))) => {
+                // Key exists only in right trie - it was added
+                let (key, value) = right_iterator.next().expect("peek returned Some");
+                operations.push(BatchOp::Put { key, value });
             }
-            (Some((lk, _lv)), Some((rk, _rv))) => match lk.cmp(rk) {
+            (Some((left_key, _)), Some((right_key, _))) => match left_key.cmp(right_key) {
                 std::cmp::Ordering::Less => {
-                    let (k, _v) = li.next().expect("peek said Some");
-                    ops.push(BatchOp::Delete { key: k });
+                    // Left key comes before right key - it was deleted
+                    let (key, _) = left_iterator.next().expect("peek returned Some");
+                    operations.push(BatchOp::Delete { key });
                 }
                 std::cmp::Ordering::Greater => {
-                    let (k, v) = ri.next().expect("peek said Some");
-                    ops.push(BatchOp::Put { key: k, value: v });
+                    // Right key comes before left key - it was added
+                    let (key, value) = right_iterator.next().expect("peek returned Some");
+                    operations.push(BatchOp::Put { key, value });
                 }
                 std::cmp::Ordering::Equal => {
-                    let (_k_l, v_l) = li.next().expect("peek said Some");
-                    let (k_r, v_r) = ri.next().expect("peek said Some");
-                    if v_l != v_r {
-                        ops.push(BatchOp::Put { key: k_r, value: v_r });
+                    // Keys match - check if values differ
+                    let (_, left_value) = left_iterator.next().expect("peek returned Some");
+                    let (key, right_value) = right_iterator.next().expect("peek returned Some");
+                    if left_value != right_value {
+                        operations.push(BatchOp::Put {
+                            key,
+                            value: right_value,
+                        });
                     }
                 }
             },
         }
     }
 
-    (ops, left_nodes_visited, right_nodes_visited)
+    (operations, left_nodes_visited, right_nodes_visited)
 }
 
 use crate::merkle::PrefixOverlap;
@@ -469,8 +482,8 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
                     return false;
                 }
 
-                // Step 3: Check if all 16 children have matching hashes
-                // Branch nodes have exactly 16 child slots (one per nibble 0x0-0xF)
+                // Step 3: Check if all children have matching hashes
+                // Branch nodes have exactly BRANCH_CHILDREN_COUNT child slots (one per nibble 0x0-0xF)
                 for (pc, left_child) in &left_branch.children {
                     let right_child = &right_branch.children[pc];
 
@@ -511,7 +524,8 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
                 // Leaf nodes are terminal - they have no children
                 // They're equal if they have the same path and value
                 // Note: This is a direct comparison, not hash-based, since leaves are small
-                left_leaf.partial_path == right_leaf.partial_path && left_leaf.value == right_leaf.value
+                left_leaf.partial_path == right_leaf.partial_path
+                    && left_leaf.value == right_leaf.value
             }
             _ => {
                 // Different node types (one branch, one leaf) - definitely not equal
@@ -552,18 +566,28 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
 
     /// Emit all delete operations for a subtree rooted at the given node
     fn emit_subtree_deletes(&mut self, node: SharedNode, path_prefix: PathBuf) {
-        // We need to traverse from this node down, emitting deletes for all values
-        self.emit_subtree_ops(node, path_prefix, true);
+        self.traverse_subtree_with_action(node, path_prefix, true, |key, _value, pending_ops| {
+            pending_ops.push_back(BatchOp::Delete { key });
+        });
     }
 
     /// Emit all insert operations for a subtree rooted at the given node
     fn emit_subtree_inserts(&mut self, node: SharedNode, path_prefix: PathBuf) {
-        // We need to traverse from this node down, emitting inserts for all values
-        self.emit_subtree_ops(node, path_prefix, false);
+        self.traverse_subtree_with_action(node, path_prefix, false, |key, value, pending_ops| {
+            pending_ops.push_back(BatchOp::Put {
+                key,
+                value: value.to_vec().into_boxed_slice(),
+            });
+        });
     }
 
     /// Collect all keys from a subtree (for comparison when paths diverge)
-    fn collect_subtree_keys(&self, node: SharedNode, path_prefix: PathBuf, is_left: bool) -> std::collections::BTreeMap<Key, Option<Value>> {
+    fn collect_subtree_keys(
+        &self,
+        node: SharedNode,
+        path_prefix: PathBuf,
+        is_left: bool,
+    ) -> std::collections::BTreeMap<Key, Option<Value>> {
         let mut keys = std::collections::BTreeMap::new();
         let mut stack = vec![(node, path_prefix)];
 
@@ -571,7 +595,6 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
             // Build the full path
             let mut full_path = current_path.clone();
             let node_partial = current_node.partial_path();
-
 
             for &nibble in node_partial.as_ref() {
                 if let Some(component) = PathComponent::try_new(nibble) {
@@ -592,8 +615,7 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
 
             // Queue children
             if let Node::Branch(branch) = current_node.as_ref() {
-
-                for i in (0..16u8).rev() {
+                for i in (0..BRANCH_CHILDREN_COUNT as u8).rev() {
                     let idx = PathComponent::try_new(i).expect("index in bounds");
                     if let Some(child) = branch.children[idx].as_ref() {
                         let mut child_path = full_path.clone();
@@ -604,7 +626,6 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
                         } else {
                             self.get_right_child_node(child).ok()
                         };
-
 
                         if let Some(cn) = child_node {
                             stack.push((cn, child_path));
@@ -617,9 +638,16 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
         keys
     }
 
-    /// Helper to emit operations for a subtree
-    fn emit_subtree_ops(&mut self, node: SharedNode, path_prefix: PathBuf, is_delete: bool) {
-        // Stack for traversing the subtree
+    /// Generic subtree traversal with custom action
+    fn traverse_subtree_with_action<F>(
+        &mut self,
+        node: SharedNode,
+        path_prefix: PathBuf,
+        use_left_store: bool,
+        mut action: F,
+    ) where
+        F: FnMut(Key, &[u8], &mut VecDeque<BatchOp<Key, Value>>),
+    {
         let mut stack = vec![(node, path_prefix)];
 
         while let Some((current_node, current_path)) = stack.pop() {
@@ -640,28 +668,21 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
             // Check if this node has a value
             if let Some(value) = current_node.value() {
                 if current_key >= self.start_key {
-                    if is_delete {
-                        self.pending_ops.push_back(BatchOp::Delete { key: current_key });
-                    } else {
-                        self.pending_ops.push_back(BatchOp::Put {
-                            key: current_key,
-                            value: value.to_vec().into_boxed_slice(),
-                        });
-                    }
+                    action(current_key, value, &mut self.pending_ops);
                 }
             }
 
             // If it's a branch, queue its children
             if let Node::Branch(branch) = current_node.as_ref() {
-                for i in (0..16u8).rev() {
+                for i in (0..BRANCH_CHILDREN_COUNT as u8).rev() {
                     let idx = PathComponent::try_new(i).expect("index in bounds");
                     if let Some(child) = branch.children[idx].as_ref() {
                         // Child path should be full_path + index (including node's partial)
                         let mut child_path = full_path.clone();
                         child_path.push(idx);
 
-                        // Extract child node
-                        let child_node = if is_delete {
+                        // Extract child node from the appropriate store
+                        let child_node = if use_left_store {
                             self.get_left_child_node(child).ok()
                         } else {
                             self.get_right_child_node(child).ok()
@@ -745,7 +766,8 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
                     // This tells us:
                     // - How much of the path is shared (common prefix)
                     // - What parts are unique to each node
-                    let overlap = PrefixOverlap::from(left_partial.as_ref(), right_partial.as_ref());
+                    let overlap =
+                        PrefixOverlap::from(left_partial.as_ref(), right_partial.as_ref());
 
                     // Classify the relationship based on the unique portions
                     let relation = Self::classify_path_relation(overlap.unique_a, overlap.unique_b);
@@ -783,7 +805,8 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
                                         });
                                     }
                                     (Some(_), None) => {
-                                        self.pending_ops.push_back(BatchOp::Delete { key: current_key });
+                                        self.pending_ops
+                                            .push_back(BatchOp::Delete { key: current_key });
                                     }
                                     (None, Some(rv)) => {
                                         self.pending_ops.push_back(BatchOp::Put {
@@ -799,8 +822,9 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
                             match (left.as_ref(), right.as_ref()) {
                                 (Node::Branch(left_branch), Node::Branch(right_branch)) => {
                                     // Process children in reverse order for stack (so they process in order)
-                                    for i in (0..16u8).rev() {
-                                        let idx = PathComponent::try_new(i).expect("index in bounds");
+                                    for i in (0..BRANCH_CHILDREN_COUNT as u8).rev() {
+                                        let idx =
+                                            PathComponent::try_new(i).expect("index in bounds");
                                         let left_child = left_branch.children[idx].as_ref();
                                         let right_child = right_branch.children[idx].as_ref();
 
@@ -809,9 +833,10 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
                                             child_path.push(idx);
 
                                             // Extract nodes from children
-                                            let left_node = left_child.and_then(|c| self.get_left_child_node(c).ok());
-                                            let right_node =
-                                                right_child.and_then(|c| self.get_right_child_node(c).ok());
+                                            let left_node = left_child
+                                                .and_then(|c| self.get_left_child_node(c).ok());
+                                            let right_node = right_child
+                                                .and_then(|c| self.get_right_child_node(c).ok());
 
                                             if left_node.is_some() || right_node.is_some() {
                                                 self.stack.push(DiffFrame {
@@ -827,13 +852,17 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
                                     // Left is a branch, right is a leaf
                                     // We already compared values at this position
                                     // Now we need to delete all children from left since right terminates here
-                                    for i in (0..16u8).rev() {
-                                        let idx = PathComponent::try_new(i).expect("index in bounds");
-                                        if let Some(left_child) = left_branch.children[idx].as_ref() {
+                                    for i in (0..BRANCH_CHILDREN_COUNT as u8).rev() {
+                                        let idx =
+                                            PathComponent::try_new(i).expect("index in bounds");
+                                        if let Some(left_child) = left_branch.children[idx].as_ref()
+                                        {
                                             let mut child_path = current_path.clone();
                                             child_path.push(idx);
 
-                                            if let Ok(left_node) = self.get_left_child_node(left_child) {
+                                            if let Ok(left_node) =
+                                                self.get_left_child_node(left_child)
+                                            {
                                                 // Emit deletes for entire left subtree
                                                 self.emit_subtree_deletes(left_node, child_path);
                                             }
@@ -844,13 +873,18 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
                                     // Right is a branch, left is a leaf
                                     // We already compared values at this position
                                     // Now we need to insert all children from right since left terminates here
-                                    for i in (0..16u8).rev() {
-                                        let idx = PathComponent::try_new(i).expect("index in bounds");
-                                        if let Some(right_child) = right_branch.children[idx].as_ref() {
+                                    for i in (0..BRANCH_CHILDREN_COUNT as u8).rev() {
+                                        let idx =
+                                            PathComponent::try_new(i).expect("index in bounds");
+                                        if let Some(right_child) =
+                                            right_branch.children[idx].as_ref()
+                                        {
                                             let mut child_path = current_path.clone();
                                             child_path.push(idx);
 
-                                            if let Ok(right_node) = self.get_right_child_node(right_child) {
+                                            if let Ok(right_node) =
+                                                self.get_right_child_node(right_child)
+                                            {
                                                 // Emit inserts for entire right subtree
                                                 self.emit_subtree_inserts(right_node, child_path);
                                             }
@@ -875,8 +909,7 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
                             let base_path = frame.path_nibbles;
                             let left_keys =
                                 self.collect_subtree_keys(left, base_path.clone(), true);
-                            let right_keys =
-                                self.collect_subtree_keys(right, base_path, false);
+                            let right_keys = self.collect_subtree_keys(right, base_path, false);
 
                             // Merge and process keys in sorted order to maintain correct operation ordering
                             // This is critical for correctness - operations must be emitted in sorted key order
@@ -933,30 +966,26 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
         Ok(())
     }
 
-    /// Extract a SharedNode from a Child on the left side
-    fn get_left_child_node(&self, child: &Child) -> Result<SharedNode, FileIoError> {
+    /// Extract a SharedNode from a Child using the provided nodestore
+    fn extract_child_node<R: TrieReader>(
+        child: &Child,
+        nodestore: &R,
+    ) -> Result<SharedNode, FileIoError> {
         match child {
             Child::Node(node) => Ok(SharedNode::from(node.clone())),
-            Child::AddressWithHash(addr, _) => {
-                self.left_nodestore.read_node(*addr).map(SharedNode::from)
-            }
-            Child::MaybePersisted(mp, _) => {
-                mp.as_shared_node(self.left_nodestore)
-            }
+            Child::AddressWithHash(addr, _) => nodestore.read_node(*addr).map(SharedNode::from),
+            Child::MaybePersisted(mp, _) => mp.as_shared_node(nodestore),
         }
+    }
+
+    /// Extract a SharedNode from a Child on the left side
+    fn get_left_child_node(&self, child: &Child) -> Result<SharedNode, FileIoError> {
+        Self::extract_child_node(child, self.left_nodestore)
     }
 
     /// Extract a SharedNode from a Child on the right side
     fn get_right_child_node(&self, child: &Child) -> Result<SharedNode, FileIoError> {
-        match child {
-            Child::Node(node) => Ok(SharedNode::from(node.clone())),
-            Child::AddressWithHash(addr, _) => {
-                self.right_nodestore.read_node(*addr).map(SharedNode::from)
-            }
-            Child::MaybePersisted(mp, _) => {
-                mp.as_shared_node(self.right_nodestore)
-            }
-        }
+        Self::extract_child_node(child, self.right_nodestore)
     }
 }
 
@@ -1268,7 +1297,7 @@ impl ParallelDiff {
                             && right_branch.partial_path.is_empty() =>
                     {
                         // Build a list of child indices where at least one side has a child.
-                        let child_indices: Vec<u8> = (0u8..16u8)
+                        let child_indices: Vec<u8> = (0u8..BRANCH_CHILDREN_COUNT as u8)
                             .filter(|i| {
                                 let idx = PathComponent::try_new(*i).expect("index in bounds");
                                 left_branch.children[idx].is_some()
@@ -1479,7 +1508,6 @@ where
 {
     OptimizedDiffIter::new(left, right, start_key)
 }
-
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
@@ -1745,10 +1773,8 @@ mod tests {
         fork.try_into().unwrap()
     }
 
-    fn assert_merkle_eq<L, R>(
-        left: &Merkle<L>,
-        right: &Merkle<R>,
-    ) where
+    fn assert_merkle_eq<L, R>(left: &Merkle<L>, right: &Merkle<R>)
+    where
         L: TrieReader,
         R: TrieReader,
     {
@@ -1761,18 +1787,36 @@ mod tests {
                 (Some(Ok((lk, lv))), Some(Ok((rk, rv)))) => {
                     key_count += 1;
                     if lk != rk {
-                        eprintln!("Key mismatch at position {}: left={:02x?}, right={:02x?}", key_count, lk.as_ref(), rk.as_ref());
+                        eprintln!(
+                            "Key mismatch at position {}: left={:02x?}, right={:02x?}",
+                            key_count,
+                            lk.as_ref(),
+                            rk.as_ref()
+                        );
                         // Show a few more keys for context
                         for i in 0..3 {
                             match (l.next(), r.next()) {
                                 (Some(Ok((lk2, _))), Some(Ok((rk2, _)))) => {
-                                    eprintln!("  Next {}: left={:02x?}, right={:02x?}", i+1, lk2.as_ref(), rk2.as_ref());
+                                    eprintln!(
+                                        "  Next {}: left={:02x?}, right={:02x?}",
+                                        i + 1,
+                                        lk2.as_ref(),
+                                        rk2.as_ref()
+                                    );
                                 }
                                 (Some(Ok((lk2, _))), None) => {
-                                    eprintln!("  Next {}: left={:02x?}, right=None", i+1, lk2.as_ref());
+                                    eprintln!(
+                                        "  Next {}: left={:02x?}, right=None",
+                                        i + 1,
+                                        lk2.as_ref()
+                                    );
                                 }
                                 (None, Some(Ok((rk2, _)))) => {
-                                    eprintln!("  Next {}: left=None, right={:02x?}", i+1, rk2.as_ref());
+                                    eprintln!(
+                                        "  Next {}: left=None, right={:02x?}",
+                                        i + 1,
+                                        rk2.as_ref()
+                                    );
                                 }
                                 _ => break,
                             }
@@ -1781,8 +1825,14 @@ mod tests {
                     }
                     assert_eq!(lv, rv, "values differ at key {:02x?}", lk.as_ref());
                 }
-                (None, Some(Ok((rk, _)))) => panic!("Missing key in result at position {}: {rk:02x?}", key_count + 1),
-                (Some(Ok((lk, _))), None) => panic!("Extra key in result at position {}: {lk:02x?}", key_count + 1),
+                (None, Some(Ok((rk, _)))) => panic!(
+                    "Missing key in result at position {}: {rk:02x?}",
+                    key_count + 1
+                ),
+                (Some(Ok((lk, _))), None) => panic!(
+                    "Extra key in result at position {}: {lk:02x?}",
+                    key_count + 1
+                ),
                 (Some(Err(e)), _) | (_, Some(Err(e))) => panic!("iteration error: {e:?}"),
             }
         }
@@ -1841,7 +1891,9 @@ mod tests {
                         if !deleted.contains(&idx) {
                             let newlen = rng.random_range(1..=64);
                             let newval: Vec<u8> = (0..newlen).map(|_| rng.random()).collect();
-                            right.insert(&base[idx].0, newval.into_boxed_slice()).unwrap();
+                            right
+                                .insert(&base[idx].0, newval.into_boxed_slice())
+                                .unwrap();
                         }
                     }
                     _ => {
@@ -1923,7 +1975,8 @@ mod tests {
         if items.len() > 1 {
             let mut delete_idx2 = rng.random_range(0..items.len());
             // ensure different index
-            while items.len() > 1 && delete_idx2 == 0 { // it's okay if equal when len==1
+            while items.len() > 1 && delete_idx2 == 0 {
+                // it's okay if equal when len==1
                 delete_idx2 = rng.random_range(0..items.len());
             }
             m2.remove(&items[delete_idx2].0).unwrap();
@@ -2002,18 +2055,20 @@ mod tests {
                 let choice = i % 5;
                 match choice {
                     0 => {} // Skip (delete)
-                    1 => {  // Modify
+                    1 => {
+                        // Modify
                         let new_value = format!("modified_{}", i).into_bytes();
                         m2.insert(key, new_value.into_boxed_slice()).unwrap();
                     }
-                    _ => {  // Keep same
+                    _ => {
+                        // Keep same
                         m2.insert(key, value.into_boxed_slice()).unwrap();
                     }
                 }
             }
 
             // Add some new keys to m2
-            for i in 0..size/5 {
+            for i in 0..size / 5 {
                 let klen = rng.random_range(1..=16);
                 let key: Vec<u8> = (0..klen).map(|_| rng.random()).collect();
                 if !seen.contains(&key) {
@@ -2026,7 +2081,8 @@ mod tests {
             let m2 = make_immutable(m2);
 
             // Compare algorithms
-            let (ops_simple, simple_left_nodes, simple_right_nodes) = diff_merkle_simple(&m1, &m2, Box::new([]));
+            let (ops_simple, simple_left_nodes, simple_right_nodes) =
+                diff_merkle_simple(&m1, &m2, Box::new([]));
 
             // Create optimized iterator to access metrics
             let mut optimized_iter = diff_merkle_optimized(&m1, &m2, Box::new([]));
@@ -2035,18 +2091,27 @@ mod tests {
             eprintln!("  Simple: {} operations", ops_simple.len());
             eprintln!("    - Left nodes visited: {}", simple_left_nodes);
             eprintln!("    - Right nodes visited: {}", simple_right_nodes);
-            eprintln!("    - Total nodes visited: {}", simple_left_nodes + simple_right_nodes);
+            eprintln!(
+                "    - Total nodes visited: {}",
+                simple_left_nodes + simple_right_nodes
+            );
             eprintln!("  Optimized: {} operations", ops_optimized.len());
             eprintln!("    - Nodes visited: {}", optimized_iter.nodes_visited);
             eprintln!("    - Nodes pruned: {}", optimized_iter.nodes_pruned);
-            eprintln!("    - Subtrees skipped: {}", optimized_iter.subtrees_skipped);
+            eprintln!(
+                "    - Subtrees skipped: {}",
+                optimized_iter.subtrees_skipped
+            );
             if optimized_iter.nodes_visited > 0 {
-                let prune_rate = optimized_iter.nodes_pruned as f64 / optimized_iter.nodes_visited as f64 * 100.0;
+                let prune_rate = optimized_iter.nodes_pruned as f64
+                    / optimized_iter.nodes_visited as f64
+                    * 100.0;
                 eprintln!("    - Pruning rate: {:.1}%", prune_rate);
             }
             let simple_total = simple_left_nodes + simple_right_nodes;
             if simple_total > 0 {
-                let traversal_reduction = 100.0 - (optimized_iter.nodes_visited as f64 / simple_total as f64 * 100.0);
+                let traversal_reduction =
+                    100.0 - (optimized_iter.nodes_visited as f64 / simple_total as f64 * 100.0);
                 eprintln!("  Traversal reduction: {:.1}%", traversal_reduction);
             }
 
@@ -2074,9 +2139,12 @@ mod tests {
             }
 
             if !duplicates.is_empty() {
-                eprintln!("  ⚠ Found {} keys that are both deleted and put!", duplicates.len());
+                eprintln!(
+                    "  ⚠ Found {} keys that are both deleted and put!",
+                    duplicates.len()
+                );
                 for (i, key) in duplicates.iter().take(3).enumerate() {
-                    eprintln!("    Duplicate #{}: {:02x?}", i+1, key.as_ref());
+                    eprintln!("    Duplicate #{}: {:02x?}", i + 1, key.as_ref());
                 }
             }
 
@@ -2089,7 +2157,10 @@ mod tests {
             if ops_optimized.len() <= ops_simple.len() {
                 eprintln!("  ✓ Optimized is {:.1}% fewer operations", reduction.abs());
             } else {
-                eprintln!("  ✗ Optimized has {:.1}% MORE operations (needs fixing)", reduction.abs());
+                eprintln!(
+                    "  ✗ Optimized has {:.1}% MORE operations (needs fixing)",
+                    reduction.abs()
+                );
             }
 
             // Verify correctness
@@ -2149,7 +2220,10 @@ mod tests {
             let (ops_par, metrics_par) = ParallelDiff::diff(&m1, &m2, start_key);
 
             // Parallel diff should produce exactly the same operations as the single-threaded optimized diff
-            assert_eq!(ops_opt, ops_par, "parallel diff ops must match optimized ops");
+            assert_eq!(
+                ops_opt, ops_par,
+                "parallel diff ops must match optimized ops"
+            );
 
             // Metrics should be non-zero when there are differences
             if !ops_opt.is_empty() {
@@ -2189,7 +2263,11 @@ mod tests {
         for op in &ops_opt {
             match op {
                 BatchOp::Delete { key } => eprintln!("  Delete: {:02x?}", key.as_ref()),
-                BatchOp::Put { key, value } => eprintln!("  Put: {:02x?} = {:?}", key.as_ref(), std::str::from_utf8(value)),
+                BatchOp::Put { key, value } => eprintln!(
+                    "  Put: {:02x?} = {:?}",
+                    key.as_ref(),
+                    std::str::from_utf8(value)
+                ),
                 _ => {}
             }
         }
@@ -2198,7 +2276,11 @@ mod tests {
         for op in &ops_simple {
             match op {
                 BatchOp::Delete { key } => eprintln!("  Delete: {:02x?}", key.as_ref()),
-                BatchOp::Put { key, value } => eprintln!("  Put: {:02x?} = {:?}", key.as_ref(), std::str::from_utf8(value)),
+                BatchOp::Put { key, value } => eprintln!(
+                    "  Put: {:02x?} = {:?}",
+                    key.as_ref(),
+                    std::str::from_utf8(value)
+                ),
                 _ => {}
             }
         }
@@ -2209,7 +2291,6 @@ mod tests {
         assert_merkle_eq(&after_opt, &m2);
         assert_merkle_eq(&after_simple, &m2);
     }
-
 
     #[test]
     fn test_localized_changes_pruning() {
@@ -2243,7 +2324,8 @@ mod tests {
         let m2 = make_immutable(m2);
 
         // Compare algorithms
-        let (ops_simple, simple_left_nodes, simple_right_nodes) = diff_merkle_simple(&m1, &m2, Box::new([]));
+        let (ops_simple, simple_left_nodes, simple_right_nodes) =
+            diff_merkle_simple(&m1, &m2, Box::new([]));
 
         // Create optimized iterator to access metrics
         let mut optimized_iter = diff_merkle_optimized(&m1, &m2, Box::new([]));
@@ -2254,21 +2336,34 @@ mod tests {
         eprintln!("  Simple: {} operations", ops_simple.len());
         eprintln!("    - Left nodes visited: {}", simple_left_nodes);
         eprintln!("    - Right nodes visited: {}", simple_right_nodes);
-        eprintln!("    - Total nodes visited: {}", simple_left_nodes + simple_right_nodes);
+        eprintln!(
+            "    - Total nodes visited: {}",
+            simple_left_nodes + simple_right_nodes
+        );
         eprintln!("  Optimized: {} operations", ops_optimized.len());
         eprintln!("    - Nodes visited: {}", optimized_iter.nodes_visited);
         eprintln!("    - Nodes pruned: {}", optimized_iter.nodes_pruned);
-        eprintln!("    - Subtrees skipped: {}", optimized_iter.subtrees_skipped);
+        eprintln!(
+            "    - Subtrees skipped: {}",
+            optimized_iter.subtrees_skipped
+        );
         if optimized_iter.nodes_visited > 0 {
-            let prune_rate = optimized_iter.nodes_pruned as f64 / optimized_iter.nodes_visited as f64 * 100.0;
+            let prune_rate =
+                optimized_iter.nodes_pruned as f64 / optimized_iter.nodes_visited as f64 * 100.0;
             eprintln!("    - Pruning rate: {:.1}%", prune_rate);
-            eprintln!("    - Nodes visited per operation: {:.2}",
-                     optimized_iter.nodes_visited as f64 / ops_optimized.len() as f64);
+            eprintln!(
+                "    - Nodes visited per operation: {:.2}",
+                optimized_iter.nodes_visited as f64 / ops_optimized.len() as f64
+            );
         }
         let simple_total = simple_left_nodes + simple_right_nodes;
         if simple_total > 0 {
-            let traversal_reduction = 100.0 - (optimized_iter.nodes_visited as f64 / simple_total as f64 * 100.0);
-            eprintln!("  Traversal reduction vs simple: {:.1}%", traversal_reduction);
+            let traversal_reduction =
+                100.0 - (optimized_iter.nodes_visited as f64 / simple_total as f64 * 100.0);
+            eprintln!(
+                "  Traversal reduction vs simple: {:.1}%",
+                traversal_reduction
+            );
         }
 
         // Verify correctness

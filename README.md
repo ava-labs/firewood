@@ -74,6 +74,17 @@ as well as carefully managing the free list during the creation and expiration o
 - `Commit` - The operation of applying one or more `Proposal`s to the most recent
   `Revision`.
 
+## Documentation
+
+### Key Features Documentation
+
+- **[Diff Algorithms Guide](./firewood/DIFF_ALGORITHMS.md)** - Comprehensive guide explaining Firewood's trie diff algorithms with visualizations, examples, and performance analysis. Covers simple, optimized, and parallel diff implementations.
+
+### Examples
+
+- `cargo run --example diff_metrics` - Benchmark diff algorithms on large datasets
+- `cargo run --example diff_visualization` - Visual demonstration of diff algorithms
+
 ## Build
 
 In order to build firewood, the following dependencies must be installed:

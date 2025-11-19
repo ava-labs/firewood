@@ -266,7 +266,10 @@ impl<T: TrieReader> Merkle<T> {
         todo!()
     }
 
-    pub(crate) fn path_iter<'a>(&self, key: &'a [u8]) -> Result<crate::iter::PathIterator<'_, 'a, T>, FileIoError> {
+    pub(crate) fn path_iter<'a>(
+        &self,
+        key: &'a [u8],
+    ) -> Result<crate::iter::PathIterator<'_, 'a, T>, FileIoError> {
         crate::iter::PathIterator::new(&self.nodestore, key)
     }
 

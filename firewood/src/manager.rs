@@ -271,7 +271,6 @@ impl RevisionManager {
                 trace!("{s}");
             }
         }
-        
 
         Ok(())
     }
