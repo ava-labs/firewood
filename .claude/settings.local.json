@@ -10,7 +10,8 @@
       "Bash(cargo build:*)",
       "Bash(FWD_DEBUG_DIFF_OPS=1 RUST_LOG=firewood=trace cargo test:*)",
       "Bash(RUST_TEST_THREADS=1 cargo test:*)",
-      "Bash(cargo clean:*)"
+      "Bash(cargo clean:*)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": []

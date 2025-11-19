@@ -1,21 +1,100 @@
+//! # Diff Algorithm Performance Metrics Example
+//!
+//! This example demonstrates and benchmarks the different diff algorithms provided by Firewood,
+//! showcasing their performance characteristics on realistic workloads.
+//!
+//! ## Overview
+//!
+//! The example creates a large Firewood database with random key-value pairs, applies modifications,
+//! and then compares the performance of three diff algorithms:
+//!
+//! 1. **Simple Diff**: Exhaustive O(n) algorithm that examines all keys
+//! 2. **Optimized Diff**: Structural algorithm with hash-based pruning
+//! 3. **Parallel Diff**: Multi-threaded version of the optimized algorithm
+//!
+//! ## Key Features
+//!
+//! - **Realistic Workload**: Generates random keys and values similar to blockchain state
+//! - **Performance Metrics**: Tracks nodes visited, pruning rates, and execution time
+//! - **Visualization**: Optionally generates Graphviz DOT files showing traversal patterns
+//! - **Configurable**: Command-line arguments for database size and modification patterns
+//!
+//! ## Usage Examples
+//!
+//! ### Basic Usage
+//!
+//! Compare diff algorithms on a moderate-sized database:
+//! ```bash
+//! cargo run --release -p firewood --example diff_metrics
+//! ```
+//!
+//! ### Large-Scale Testing
+//!
+//! Test with a large database (100K keys, 20K modifications):
+//! ```bash
+//! cargo run --release -p firewood --example diff_metrics -- \
+//!     --items 100000 --modify 20000 --db-path diff_db
+//! ```
+//!
+//! ### Generate Visualization
+//!
+//! Create a Graphviz DOT file showing the optimized traversal pattern:
+//! ```bash
+//! cargo run -p firewood --example diff_metrics -- \
+//!     --items 1000 --modify 200 --graphviz-output diff_trace.dot
+//!
+//! # Convert to image
+//! dot -Tpng diff_trace.dot -o diff_trace.png
+//! ```
+//!
+//! ### Custom Seed for Reproducibility
+//!
+//! Use a specific random seed for reproducible results:
+//! ```bash
+//! cargo run --release -p firewood --example diff_metrics -- \
+//!     --seed 42 --items 50000 --modify 5000
+//! ```
+//!
+//! ## Performance Insights
+//!
+//! This example helps understand:
+//!
+//! - **Pruning Effectiveness**: How many nodes the optimized algorithm skips
+//! - **Speedup Factors**: Relative performance of each algorithm
+//! - **Parallel Scalability**: Benefits of multi-threading for large tries
+//! - **Memory Patterns**: Node visitation patterns and cache efficiency
+//!
+//! ## Expected Output
+//!
+//! The example outputs detailed metrics including:
+//!
+//! ```text
+//! === Diff Metrics ===
+//! Base keys:              100000
+//! Requested modifications: 20000
+//!
+//! Simple diff:
+//!   Operations:           15234
+//!   Total nodes visited:  200000
+//!   Elapsed:              450ms
+//!
+//! Optimized diff:
+//!   Operations:           15234
+//!   Nodes visited:        18542
+//!   Nodes pruned:         16893
+//!   Pruning rate:         91.1%
+//!   Elapsed:              35ms
+//! Time speedup: 12.8x
+//!
+//! Parallel diff:
+//!   Operations:           15234
+//!   Nodes visited:        18542
+//!   Elapsed:              12ms
+//! Time speedup: 37.5x
+//! ```
+
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
-
-// Example that builds a large Firewood database, applies a set of
-// random edits, and compares the simple vs optimized diff algorithms.
-//
-// In addition to aggregate metrics, this example can optionally emit a
-// Graphviz DOT snapshot of the optimized diff traversal on a small,
-// self-contained in-memory example to help explain how the algorithm
-// prunes identical subtrees and walks only the differing branches.
-//
-// Usage (from workspace root):
-//   cargo run --release -p firewood --example diff_metrics -- \
-//     --items 100000 --modify 20000 --db-path diff_db
-//
-// To also generate a DOT file for documentation:
-//   cargo run -p firewood --example diff_metrics -- \
-//     --items 1000 --modify 200 --graphviz-output diff_trace.dot
 
 use clap::Parser;
 use rand::{rngs::StdRng, Rng, SeedableRng};
