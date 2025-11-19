@@ -219,9 +219,7 @@ impl RevisionManager {
                     Ok(oldest) => oldest.reap_deleted(&mut committed)?,
                     Err(original) => {
                         warn!("Oldest revision could not be reaped; still referenced");
-                        self.historical
-                            .write()
-                            .push_front(original);
+                        self.historical.write().push_front(original);
                         break;
                     }
                 }
@@ -321,12 +319,7 @@ impl RevisionManager {
     /// 3. Check the persistent `RootStore`.
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
         // 1. Check the in-memory revision manager.
-        if let Some(revision) = self
-            .by_hash
-            .read()
-            .get(&root_hash)
-            .cloned()
-        {
+        if let Some(revision) = self.by_hash.read().get(&root_hash).cloned() {
             return Ok(revision);
         }
 

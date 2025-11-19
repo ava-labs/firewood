@@ -917,7 +917,7 @@ mod tests {
         let r1 = NodeStore::new(&base).unwrap();
         let r1: NodeStore<Arc<ImmutableProposal>, _> = r1.try_into().unwrap();
         {
-            let parent = r1.kind.parent.lock()
+            let parent = r1.kind.parent.lock();
             assert!(matches!(*parent, NodeStoreParent::Committed(None)));
         }
 

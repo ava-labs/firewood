@@ -4,10 +4,7 @@
 #[cfg(test)]
 use parking_lot::Mutex;
 #[cfg(test)]
-use std::{
-    collections::HashMap,
-    sync::{Arc},
-};
+use std::{collections::HashMap, sync::Arc};
 use std::{fmt::Debug, path::Path};
 
 use derive_where::derive_where;
