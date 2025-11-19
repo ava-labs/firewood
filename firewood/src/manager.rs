@@ -10,10 +10,11 @@
     reason = "Found 3 occurrences after enabling the lint."
 )]
 
+use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZero;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 
 use firewood_storage::logger::{trace, warn};
 use metrics::gauge;
@@ -133,11 +134,7 @@ impl RevisionManager {
         };
 
         if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
-            manager
-                .by_hash
-                .write()
-                .expect("poisoned lock")
-                .insert(hash, nodestore.clone());
+            manager.by_hash.write().insert(hash, nodestore.clone());
         }
 
         if config.truncate {
@@ -197,18 +194,14 @@ impl RevisionManager {
         // 3 Take the deleted entries from the oldest revision and mark them as free for this revision
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
-        while self.historical.read().expect("poisoned lock").len() >= self.max_revisions {
+        while self.historical.read().len() >= self.max_revisions {
             let oldest = self
                 .historical
                 .write()
-                .expect("poisoned lock")
                 .pop_front()
                 .expect("must be present");
             if let Some(oldest_hash) = oldest.root_hash().or_default_root_hash() {
-                self.by_hash
-                    .write()
-                    .expect("poisoned lock")
-                    .remove(&oldest_hash);
+                self.by_hash.write().remove(&oldest_hash);
             }
 
             // This `try_unwrap` is safe because nobody else will call `try_unwrap` on this Arc
@@ -220,15 +213,11 @@ impl RevisionManager {
                 Ok(oldest) => oldest.reap_deleted(&mut committed)?,
                 Err(original) => {
                     warn!("Oldest revision could not be reaped; still referenced");
-                    self.historical
-                        .write()
-                        .expect("poisoned lock")
-                        .push_front(original);
+                    self.historical.write().push_front(original);
                     break;
                 }
             }
-            gauge!("firewood.active_revisions")
-                .set(self.historical.read().expect("poisoned lock").len() as f64);
+            gauge!("firewood.active_revisions").set(self.historical.read().len() as f64);
             gauge!("firewood.max_revisions").set(self.max_revisions as f64);
         }
 
@@ -246,15 +235,9 @@ impl RevisionManager {
 
         // 6. Set last committed revision
         let committed: CommittedRevision = committed.into();
-        self.historical
-            .write()
-            .expect("poisoned lock")
-            .push_back(committed.clone());
+        self.historical.write().push_back(committed.clone());
         if let Some(hash) = committed.root_hash().or_default_root_hash() {
-            self.by_hash
-                .write()
-                .expect("poisoned lock")
-                .insert(hash, committed.clone());
+            self.by_hash.write().insert(hash, committed.clone());
         }
 
         // 7. Proposal Cleanup
@@ -262,11 +245,10 @@ impl RevisionManager {
         // referenced by anyone else.
         self.proposals
             .lock()
-            .expect("poisoned lock")
             .retain(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1);
 
         // then reparent any proposals that have this proposal as a parent
-        for p in &*self.proposals.lock().expect("poisoned lock") {
+        for p in &*self.proposals.lock() {
             proposal.commit_reparent(p);
         }
 
@@ -295,7 +277,6 @@ impl RevisionManager {
         let proposal = self
             .proposals
             .lock()
-            .expect("poisoned lock")
             .iter()
             .find(|p| p.root_hash().as_ref() == Some(&root_hash))
             .cloned();
@@ -323,20 +304,18 @@ impl RevisionManager {
     }
 
     pub fn add_proposal(&self, proposal: ProposedRevision) {
-        self.proposals.lock().expect("poisoned lock").push(proposal);
+        self.proposals.lock().push(proposal);
     }
 
     /// TODO: should we support fetching all hashes from `RootStore`?
     pub fn all_hashes(&self) -> Vec<TrieHash> {
         self.historical
             .read()
-            .expect("poisoned lock")
             .iter()
             .filter_map(|r| r.root_hash().or_default_root_hash())
             .chain(
                 self.proposals
                     .lock()
-                    .expect("poisoned lock")
                     .iter()
                     .filter_map(|p| p.root_hash().or_default_root_hash()),
             )
@@ -346,7 +325,6 @@ impl RevisionManager {
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
         self.by_hash
             .read()
-            .expect("poisoned lock")
             .get(&root_hash)
             .cloned()
             .ok_or(RevisionManagerError::RevisionNotFound {
@@ -361,7 +339,6 @@ impl RevisionManager {
     pub fn current_revision(&self) -> CommittedRevision {
         self.historical
             .read()
-            .expect("poisoned lock")
             .back()
             .expect("there is always one revision")
             .clone()

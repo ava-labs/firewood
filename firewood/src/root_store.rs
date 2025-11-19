@@ -1,12 +1,11 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#[cfg(test)]
+use parking_lot::Mutex;
 use std::fmt::Debug;
 #[cfg(test)]
-use std::{
-    collections::HashMap,
-    sync::{Arc, Mutex},
-};
+use std::{collections::HashMap, sync::Arc};
 
 use firewood_storage::{LinearAddress, TrieHash};
 
@@ -91,10 +90,7 @@ impl RootStore for MockStore {
             return Err("Adding roots should fail".into());
         }
 
-        self.roots
-            .lock()
-            .expect("poisoned lock")
-            .insert(hash.clone(), *address);
+        self.roots.lock().insert(hash.clone(), *address);
         Ok(())
     }
 
@@ -106,6 +102,6 @@ impl RootStore for MockStore {
             return Err("Getting roots should fail".into());
         }
 
-        Ok(self.roots.lock().expect("poisoned lock").get(hash).copied())
+        Ok(self.roots.lock().get(hash).copied())
     }
 }
