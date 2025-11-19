@@ -49,8 +49,6 @@ pub(crate) mod primitives;
 use crate::linear::OffsetReader;
 use crate::logger::trace;
 use crate::node::branch::ReadSerializable as _;
-use arc_swap::ArcSwap;
-use arc_swap::access::DynAccess;
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind, Read};
@@ -236,17 +234,7 @@ impl<S> NodeStore<Arc<ImmutableProposal>, S> {
     /// When an immutable proposal commits, we need to reparent any proposal that
     /// has the committed proposal as it's parent
     pub fn commit_reparent(&self, other: &NodeStore<Arc<ImmutableProposal>, S>) {
-        match *other.kind.parent.load() {
-            NodeStoreParent::Proposed(ref parent) => {
-                if Arc::ptr_eq(&self.kind, parent) {
-                    other
-                        .kind
-                        .parent
-                        .store(NodeStoreParent::Committed(self.kind.root_hash()).into());
-                }
-            }
-            NodeStoreParent::Committed(_) => {}
-        }
+        other.kind.commit_reparent(&self.kind);
     }
 }
 
@@ -469,7 +457,7 @@ pub struct ImmutableProposal {
     /// Nodes that have been deleted in this proposal.
     deleted: Box<[MaybePersistedNode]>,
     /// The parent of this proposal.
-    parent: Arc<ArcSwap<NodeStoreParent>>,
+    parent: Arc<parking_lot::Mutex<NodeStoreParent>>,
     /// The root of the trie in this proposal.
     root: Option<Child>,
 }
@@ -478,13 +466,18 @@ impl ImmutableProposal {
     /// Returns true if the parent of this proposal is committed and has the given hash.
     #[must_use]
     fn parent_hash_is(&self, hash: Option<TrieHash>) -> bool {
-        match <Arc<ArcSwap<NodeStoreParent>> as arc_swap::access::DynAccess<Arc<_>>>::load(
-            &self.parent,
-        )
-        .as_ref()
-        {
+        match &*self.parent.lock() {
             NodeStoreParent::Committed(root_hash) => *root_hash == hash,
             NodeStoreParent::Proposed(_) => false,
+        }
+    }
+
+    fn commit_reparent(self: &Arc<Self>, committing: &Arc<Self>) {
+        let mut guard = self.parent.lock();
+        if let NodeStoreParent::Proposed(ref parent) = *guard
+            && Arc::ptr_eq(parent, committing)
+        {
+            *guard = NodeStoreParent::Committed(committing.root_hash());
         }
     }
 }
@@ -605,7 +598,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
             header,
             kind: Arc::new(ImmutableProposal {
                 deleted: kind.deleted.into(),
-                parent: Arc::new(ArcSwap::new(Arc::new(kind.parent))),
+                parent: Arc::new(parking_lot::Mutex::new(kind.parent)),
                 root: None,
             }),
             storage,
@@ -874,10 +867,10 @@ mod tests {
 
     use crate::LeafNode;
     use crate::linear::memory::MemStore;
-    use arc_swap::access::DynGuard;
 
     use super::*;
     use primitives::area_size_iter;
+    use std::error::Error;
 
     #[test]
     fn area_sizes_aligned() {
@@ -923,21 +916,25 @@ mod tests {
         // create an empty r1, check that it's parent is the empty committed version
         let r1 = NodeStore::new(&base).unwrap();
         let r1: NodeStore<Arc<ImmutableProposal>, _> = r1.try_into().unwrap();
-        let parent: DynGuard<Arc<NodeStoreParent>> = r1.kind.parent.load();
-        assert!(matches!(**parent, NodeStoreParent::Committed(None)));
+        {
+            let parent = r1.kind.parent.lock()
+            assert!(matches!(*parent, NodeStoreParent::Committed(None)));
+        }
 
         // create an empty r2, check that it's parent is the proposed version r1
         let r2: NodeStore<MutableProposal, _> = NodeStore::new(&r1).unwrap();
         let r2: NodeStore<Arc<ImmutableProposal>, _> = r2.try_into().unwrap();
-        let parent: DynGuard<Arc<NodeStoreParent>> = r2.kind.parent.load();
-        assert!(matches!(**parent, NodeStoreParent::Proposed(_)));
+        {
+            let parent = r2.kind.parent.lock();
+            assert!(matches!(*parent, NodeStoreParent::Proposed(_)));
+        }
 
         // reparent r2
         r1.commit_reparent(&r2);
 
         // now check r2's parent, should match the hash of r1 (which is still None)
-        let parent: DynGuard<Arc<NodeStoreParent>> = r2.kind.parent.load();
-        if let NodeStoreParent::Committed(hash) = &**parent {
+        let parent = r2.kind.parent.lock();
+        if let NodeStoreParent::Committed(hash) = &*parent {
             assert_eq!(*hash, r1.root_hash());
             assert_eq!(*hash, None);
         } else {
@@ -946,11 +943,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "https://github.com/ava-labs/firewood/issues/1054"]
-    #[should_panic(expected = "Node size 16777225 is too large")]
     fn giant_node() {
-        let memstore = MemStore::new(vec![]);
-        let mut node_store = NodeStore::new_empty_proposal(memstore.into());
+        let memstore = Arc::new(MemStore::new(vec![]));
+        let empty_root = NodeStore::new_empty_committed(Arc::clone(&memstore));
+
+        let mut node_store = NodeStore::new(&empty_root).unwrap();
 
         let huge_value = vec![0u8; AreaIndex::MAX_AREA_SIZE as usize];
 
@@ -961,7 +958,26 @@ mod tests {
 
         node_store.root_mut().replace(giant_leaf);
 
-        let immutable = NodeStore::<Arc<ImmutableProposal>, _>::try_from(node_store).unwrap();
-        println!("{immutable:?}"); // should not be reached, but need to consume immutable to avoid optimization removal
+        let node_store = NodeStore::<Arc<ImmutableProposal>, _>::try_from(node_store).unwrap();
+
+        let mut node_store = node_store.as_committed(&empty_root);
+
+        let err = node_store.persist().unwrap_err();
+        let err_ctx = err.context();
+        assert!(err_ctx == Some("allocate_node"));
+
+        let io_err = err
+            .source()
+            .unwrap()
+            .downcast_ref::<std::io::Error>()
+            .unwrap();
+        assert_eq!(io_err.kind(), std::io::ErrorKind::OutOfMemory);
+
+        let io_err_source = io_err
+            .get_ref()
+            .unwrap()
+            .downcast_ref::<primitives::AreaSizeError>()
+            .unwrap();
+        assert_eq!(io_err_source.0, 16_777_225);
     }
 }

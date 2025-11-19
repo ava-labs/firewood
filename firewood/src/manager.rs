@@ -14,12 +14,13 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZero;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, OnceLock, Weak};
 
 use firewood_storage::logger::{trace, warn};
 use metrics::gauge;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
+use weak_table::WeakValueHashMap;
 
 use crate::merkle::Merkle;
 use crate::root_store::RootStore;
@@ -79,6 +80,7 @@ pub(crate) struct RevisionManager {
     proposals: Mutex<Vec<ProposedRevision>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
+    by_rootstore: Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked>>>>,
     threadpool: OnceLock<ThreadPool>,
     root_store: Box<dyn RootStore + Send + Sync>,
 }
@@ -129,6 +131,7 @@ impl RevisionManager {
             by_hash: RwLock::new(Default::default()),
             proposals: Mutex::new(Default::default()),
             // committing_proposals: Default::default(),
+            by_rootstore: Mutex::new(WeakValueHashMap::new()),
             threadpool: OnceLock::new(),
             root_store,
         };
@@ -162,18 +165,18 @@ impl RevisionManager {
     /// To commit a proposal involves a few steps:
     /// 1. Commit check.
     ///    The proposal's parent must be the last committed revision, otherwise the commit fails.
-    /// 2. Persist delete list.
-    ///    The list of all nodes that were to be deleted for this proposal must be fully flushed to disk.
-    ///    The address of the root node and the root hash is also persisted.
-    ///    Note that this is *not* a write ahead log.
     ///    It only contains the address of the nodes that are deleted, which should be very small.
-    /// 3. Revision reaping. If more than the maximum number of revisions are kept in memory, the
-    ///    oldest revision is reaped.
-    /// 4. Persist to disk. This includes flushing everything to disk.
-    /// 5. Persist the revision to `RootStore`.
-    /// 6. Set last committed revision.
+    /// 2. Revision reaping.
+    ///    If more than the maximum number of revisions are kept in memory, the
+    ///    oldest revision is removed from memory. If `RootStore` allows space
+    ///    reuse, the oldest revision's nodes are added to the free list for space reuse.
+    ///    Otherwise, the oldest revision's nodes are preserved on disk, which
+    ///    is useful for historical queries.
+    /// 3. Persist to disk. This includes flushing everything to disk.
+    /// 4. Persist the revision to `RootStore`.
+    /// 5. Set last committed revision.
     ///    Set last committed revision in memory.
-    /// 7. Proposal Cleanup.
+    /// 6. Proposal Cleanup.
     ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
     #[fastrace::trace(short_name = true)]
     #[crate::metrics("firewood.proposal.commit", "proposal commit to storage")]
@@ -189,9 +192,9 @@ impl RevisionManager {
 
         let mut committed = proposal.as_committed(&current_revision);
 
-        // 2. Persist delete list for this committed revision to disk for recovery
-
-        // 3 Take the deleted entries from the oldest revision and mark them as free for this revision
+        // 2. Revision reaping
+        // When we exceed max_revisions, remove the oldest revision from memory.
+        // If `RootStore` allows space reuse, add the oldest revision's nodes to the free list.
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
         while self.historical.read().len() >= self.max_revisions {
@@ -200,47 +203,53 @@ impl RevisionManager {
                 .write()
                 .pop_front()
                 .expect("must be present");
-            if let Some(oldest_hash) = oldest.root_hash().or_default_root_hash() {
-                self.by_hash.write().remove(&oldest_hash);
+            let oldest_hash = oldest.root_hash().or_default_root_hash();
+            if let Some(ref hash) = oldest_hash {
+                self.by_hash.write().remove(hash);
             }
 
-            // This `try_unwrap` is safe because nobody else will call `try_unwrap` on this Arc
-            // in a different thread, so we don't have to worry about the race condition where
-            // the Arc we get back is not usable as indicated in the docs for `try_unwrap`.
-            // This guarantee is there because we have a `&mut self` reference to the manager, so
-            // the compiler guarantees we are the only one using this manager.
-            match Arc::try_unwrap(oldest) {
-                Ok(oldest) => oldest.reap_deleted(&mut committed)?,
-                Err(original) => {
-                    warn!("Oldest revision could not be reaped; still referenced");
-                    self.historical.write().push_front(original);
-                    break;
+            // We reap the revision's nodes only if `RootStore` allows space reuse.
+            if self.root_store.allow_space_reuse() {
+                // This `try_unwrap` is safe because nobody else will call `try_unwrap` on this Arc
+                // in a different thread, so we don't have to worry about the race condition where
+                // the Arc we get back is not usable as indicated in the docs for `try_unwrap`.
+                // This guarantee is there because we have a `&mut self` reference to the manager, so
+                // the compiler guarantees we are the only one using this manager.
+                match Arc::try_unwrap(oldest) {
+                    Ok(oldest) => oldest.reap_deleted(&mut committed)?,
+                    Err(original) => {
+                        warn!("Oldest revision could not be reaped; still referenced");
+                        self.historical
+                            .write()
+                            .push_front(original);
+                        break;
+                    }
                 }
             }
             gauge!("firewood.active_revisions").set(self.historical.read().len() as f64);
             gauge!("firewood.max_revisions").set(self.max_revisions as f64);
         }
 
-        // 4. Persist to disk.
+        // 3. Persist to disk.
         // TODO: We can probably do this in another thread, but it requires that
         // we move the header out of NodeStore, which is in a future PR.
         committed.persist()?;
 
-        // 5. Persist revision to root store
+        // 4. Persist revision to root store
         if let (Some(hash), Some(address)) = (committed.root_hash(), committed.root_address()) {
             self.root_store
                 .add_root(&hash, &address)
                 .map_err(RevisionManagerError::RootStoreError)?;
         }
 
-        // 6. Set last committed revision
+        // 5. Set last committed revision
         let committed: CommittedRevision = committed.into();
         self.historical.write().push_back(committed.clone());
         if let Some(hash) = committed.root_hash().or_default_root_hash() {
             self.by_hash.write().insert(hash, committed.clone());
         }
 
-        // 7. Proposal Cleanup
+        // 6. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
         // referenced by anyone else.
         self.proposals
@@ -266,7 +275,6 @@ impl RevisionManager {
     /// To view the database at a specific hash involves a few steps:
     /// 1. Try to find it in committed revisions.
     /// 2. Try to find it in proposals.
-    /// 3. Try to find it in `RootStore`.
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, RevisionManagerError> {
         // 1. Try to find it in committed revisions.
         if let Ok(committed) = self.revision(root_hash.clone()) {
@@ -279,28 +287,12 @@ impl RevisionManager {
             .lock()
             .iter()
             .find(|p| p.root_hash().as_ref() == Some(&root_hash))
-            .cloned();
-
-        if let Some(proposal) = proposal {
-            return Ok(proposal);
-        }
-
-        // 3. Try to find it in `RootStore`.
-        let revision_addr = self
-            .root_store
-            .get(&root_hash)
-            .map_err(RevisionManagerError::RootStoreError)?
+            .cloned()
             .ok_or(RevisionManagerError::RevisionNotFound {
-                provided: root_hash.clone(),
+                provided: root_hash,
             })?;
 
-        let node_store = NodeStore::with_root(
-            root_hash.into_hash_type(),
-            revision_addr,
-            self.current_revision(),
-        );
-
-        Ok(Arc::new(node_store))
+        Ok(proposal)
     }
 
     pub fn add_proposal(&self, proposal: ProposedRevision) {
@@ -322,14 +314,49 @@ impl RevisionManager {
             .collect()
     }
 
+    /// Retrieve a committed revision by its root hash.
+    /// To retrieve a revision involves a few steps:
+    /// 1. Check the in-memory revision manager.
+    /// 2. Check the in-memory `RootStore` cache.
+    /// 3. Check the persistent `RootStore`.
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
-        self.by_hash
+        // 1. Check the in-memory revision manager.
+        if let Some(revision) = self
+            .by_hash
             .read()
             .get(&root_hash)
             .cloned()
+        {
+            return Ok(revision);
+        }
+
+        let mut cache_guard = self.by_rootstore.lock();
+
+        // 2. Check the in-memory `RootStore` cache.
+        if let Some(nodestore) = cache_guard.get(&root_hash) {
+            return Ok(nodestore);
+        }
+
+        // 3. Check the persistent `RootStore`.
+        // If the revision exists, get its root address and construct a NodeStore for it.
+        let root_address = self
+            .root_store
+            .get(&root_hash)
+            .map_err(RevisionManagerError::RootStoreError)?
             .ok_or(RevisionManagerError::RevisionNotFound {
-                provided: root_hash,
-            })
+                provided: root_hash.clone(),
+            })?;
+
+        let nodestore = Arc::new(NodeStore::with_root(
+            root_hash.clone().into_hash_type(),
+            root_address,
+            self.current_revision(),
+        ));
+
+        // Cache the nodestore (stored as a weak reference).
+        cache_guard.insert(root_hash, nodestore.clone());
+
+        Ok(nodestore)
     }
 
     pub fn root_hash(&self) -> Result<Option<HashKey>, RevisionManagerError> {
