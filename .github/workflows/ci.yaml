@@ -296,7 +296,7 @@ jobs:
 
   firewood-merkle-differential-fuzz:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -311,6 +311,9 @@ jobs:
         with:
           go-version-file: "ffi/tests/firewood/go.mod"
           cache-dependency-path: "ffi/tests/firewood/go.sum"
+      - name: Test Firewood <> MerkleDB regular tests
+        working-directory: ffi/tests/firewood
+        run: go test 
       - name: Test Firewood <> MerkleDB Differential fuzz
         working-directory: ffi/tests/firewood
         run: |
