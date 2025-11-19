@@ -115,29 +115,6 @@
 //! # }
 //! ```
 //!
-//! ### Generating Visualizations
-//!
-//! ```rust,no_run
-//! use firewood::diff::diff_merkle_optimized_with_graphviz;
-//! # use firewood::merkle::{Merkle, Key};
-//! # use firewood_storage::{ImmutableProposal, MemStore, NodeStore};
-//! # use std::sync::Arc;
-//!
-//! # fn example(left: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
-//! #           right: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>) {
-//! // Generate a Graphviz DOT visualization of the traversal
-//! let (ops, dot_graph) = diff_merkle_optimized_with_graphviz(
-//!     &left,
-//!     &right,
-//!     Box::new([])
-//! );
-//!
-//! // Write to file for visualization
-//! std::fs::write("diff_trace.dot", dot_graph).unwrap();
-//! // Convert to image: dot -Tpng diff_trace.dot -o diff_trace.png
-//! # }
-//! ```
-//!
 //! ## Implementation Details
 //!
 //! The optimized algorithm uses several techniques for efficiency:
@@ -316,7 +293,6 @@ struct DiffFrame {
     left_node: Option<SharedNode>,
     right_node: Option<SharedNode>,
     path_nibbles: PathBuf, // Path as nibbles accumulated so far
-    trace_id: Option<usize>,
 }
 
 /// Path relationship classification for structural comparison
@@ -326,135 +302,6 @@ enum PathRelation {
     LeftIsPrefix,  // Left path is prefix of right path
     RightIsPrefix, // Right path is prefix of left path
     Divergent,     // Paths diverge after some shared prefix
-}
-
-/// Internal trace node used to build Graphviz visualizations of the optimized diff traversal.
-#[derive(Debug, Clone)]
-struct DiffTraceNode {
-    id: usize,
-    parent: Option<usize>,
-    path: PathBuf,
-    has_left: bool,
-    has_right: bool,
-    relation: Option<PathRelation>,
-    pruned: bool,
-}
-
-/// In-memory trace of a single optimized diff traversal.
-///
-/// This is only used for documentation, tests, and examples (via
-/// [`diff_merkle_optimized_with_graphviz`]) and is not consulted on hot paths
-/// unless explicitly requested.
-#[derive(Debug, Default, Clone)]
-struct DiffTrace {
-    nodes: Vec<DiffTraceNode>,
-}
-
-impl DiffTrace {
-    fn add_node(
-        &mut self,
-        parent: Option<usize>,
-        path: &PathBuf,
-        has_left: bool,
-        has_right: bool,
-    ) -> usize {
-        let id = self.nodes.len();
-        self.nodes.push(DiffTraceNode {
-            id,
-            parent,
-            path: path.clone(),
-            has_left,
-            has_right,
-            relation: None,
-            pruned: false,
-        });
-        id
-    }
-
-    fn mark_pruned(&mut self, id: usize) {
-        if let Some(node) = self.nodes.get_mut(id) {
-            node.pruned = true;
-        }
-    }
-
-    fn set_relation(&mut self, id: usize, relation: PathRelation) {
-        if let Some(node) = self.nodes.get_mut(id) {
-            node.relation = Some(relation);
-        }
-    }
-
-    fn path_to_hex(path: &PathBuf) -> String {
-        use std::fmt::Write as _;
-
-        if path.is_empty() {
-            return String::from("root");
-        }
-
-        let mut s = String::new();
-        for component in path.iter() {
-            // PathComponent represents a single nibble (0-15).
-            let _ = write!(&mut s, "{:x}", component.as_u8());
-        }
-        s
-    }
-
-    /// Render the recorded traversal as a Graphviz DOT string.
-    ///
-    /// Nodes are annotated with:
-    /// - `path`: nibble path from the root
-    /// - `side`: which trie(s) had a node at this path
-    /// - `relation`: path relationship (if applicable)
-    /// - `status`: `visited` or `pruned` (hash-based pruning)
-    fn to_dot(&self) -> String {
-        use std::fmt::Write as _;
-
-        let mut out = String::new();
-        let _ = writeln!(&mut out, "digraph OptimizedDiffTraversal {{");
-        let _ = writeln!(
-            &mut out,
-            "  node [shape=box, fontname=\"monospace\", fontsize=10];"
-        );
-
-        for node in &self.nodes {
-            let path_hex = Self::path_to_hex(&node.path);
-            let side = match (node.has_left, node.has_right) {
-                (true, true) => "both",
-                (true, false) => "left-only",
-                (false, true) => "right-only",
-                (false, false) => "none",
-            };
-            let relation = match node.relation {
-                Some(PathRelation::ExactMatch) => "ExactMatch",
-                Some(PathRelation::LeftIsPrefix) => "LeftIsPrefix",
-                Some(PathRelation::RightIsPrefix) => "RightIsPrefix",
-                Some(PathRelation::Divergent) => "Divergent",
-                None => "-",
-            };
-            let status = if node.pruned { "pruned" } else { "visited" };
-
-            let style = if node.pruned {
-                "dashed"
-            } else {
-                "solid"
-            };
-            let color = if node.pruned { "gray40" } else { "black" };
-
-            let _ = writeln!(
-                &mut out,
-                "  n{0} [label=\"#{0} path={1}\\nside={2}\\nrelation={3}\\nstatus={4}\", style=\"{5}\", color=\"{6}\"];",
-                node.id, path_hex, side, relation, status, style, color,
-            );
-        }
-
-        for node in &self.nodes {
-            if let Some(parent) = node.parent {
-                let _ = writeln!(&mut out, "  n{} -> n{};", parent, node.id);
-            }
-        }
-
-        let _ = writeln!(&mut out, "}}");
-        out
-    }
 }
 
 /// Iterator for computing optimized structural differences between two Merkle tries.
@@ -505,7 +352,6 @@ impl DiffTrace {
 /// Each frame contains:
 /// - Optional nodes from left and right tries
 /// - Current path in the trie (as nibbles)
-/// - Optional trace ID for visualization
 ///
 /// Processing continues until the stack is empty, with results buffered in a queue
 /// to ensure correct ordering of operations.
@@ -546,25 +392,10 @@ pub struct OptimizedDiffIter<'a, T: TrieReader, U: TrieReader> {
     pub nodes_visited: usize,
     pub nodes_pruned: usize,
     pub subtrees_skipped: usize,
-    // Optional traversal trace used only for documentation/examples.
-    trace: Option<DiffTrace>,
 }
 
 impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
     fn new(left: &'a Merkle<T>, right: &'a Merkle<U>, start_key: Key) -> Self {
-        Self::new_with_trace_flag(left, right, start_key, false)
-    }
-
-    fn new_with_trace(left: &'a Merkle<T>, right: &'a Merkle<U>, start_key: Key) -> Self {
-        Self::new_with_trace_flag(left, right, start_key, true)
-    }
-
-    fn new_with_trace_flag(
-        left: &'a Merkle<T>,
-        right: &'a Merkle<U>,
-        start_key: Key,
-        enable_trace: bool,
-    ) -> Self {
         let mut iter = Self {
             left_nodestore: left.nodestore(),
             right_nodestore: right.nodestore(),
@@ -574,42 +405,11 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
             nodes_visited: 0,
             nodes_pruned: 0,
             subtrees_skipped: 0,
-            trace: if enable_trace {
-                Some(DiffTrace::default())
-            } else {
-                None
-            },
         };
 
         // Initialize with root nodes
         iter.push_root_frame();
         iter
-    }
-
-    fn register_trace_node(
-        &mut self,
-        parent: Option<usize>,
-        path_nibbles: &PathBuf,
-        has_left: bool,
-        has_right: bool,
-    ) -> Option<usize> {
-        if let Some(trace) = self.trace.as_mut() {
-            Some(trace.add_node(parent, path_nibbles, has_left, has_right))
-        } else {
-            None
-        }
-    }
-
-    fn mark_trace_pruned(&mut self, trace_id: Option<usize>) {
-        if let (Some(trace), Some(id)) = (self.trace.as_mut(), trace_id) {
-            trace.mark_pruned(id);
-        }
-    }
-
-    fn set_trace_relation(&mut self, trace_id: Option<usize>, relation: PathRelation) {
-        if let (Some(trace), Some(id)) = (self.trace.as_mut(), trace_id) {
-            trace.set_relation(id, relation);
-        }
     }
 
     fn push_root_frame(&mut self) {
@@ -618,17 +418,10 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
 
         if left_root.is_some() || right_root.is_some() {
             let path_nibbles = PathBuf::new();
-            let trace_id = self.register_trace_node(
-                None,
-                &path_nibbles,
-                left_root.is_some(),
-                right_root.is_some(),
-            );
             self.stack.push(DiffFrame {
                 left_node: left_root,
                 right_node: right_root,
                 path_nibbles,
-                trace_id,
             });
         }
     }
@@ -906,8 +699,6 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
     /// 4. Emits operations in sorted order for correctness
     fn process_frame(&mut self) -> Result<(), FileIoError> {
         if let Some(frame) = self.stack.pop() {
-            let parent_trace_id = frame.trace_id;
-
             match (frame.left_node, frame.right_node) {
                 (None, None) => {
                     // Both nodes are None - this can happen when exploring
@@ -937,7 +728,6 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
                     if self.nodes_have_same_hash(&left, &right) {
                         self.nodes_pruned += 2; // Both nodes were effectively pruned
                         self.subtrees_skipped += 1; // One entire subtree comparison avoided
-                        self.mark_trace_pruned(parent_trace_id);
                         return Ok(()); // Exit early - subtrees are identical!
                     }
 
@@ -959,7 +749,6 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
 
                     // Classify the relationship based on the unique portions
                     let relation = Self::classify_path_relation(overlap.unique_a, overlap.unique_b);
-                    self.set_trace_relation(parent_trace_id, relation);
 
                     // Build the current path by extending with the shared portion.
                     // This represents the full path to this point in the trie.
@@ -1025,17 +814,10 @@ impl<'a, T: TrieReader, U: TrieReader> OptimizedDiffIter<'a, T, U> {
                                                 right_child.and_then(|c| self.get_right_child_node(c).ok());
 
                                             if left_node.is_some() || right_node.is_some() {
-                                                let trace_id = self.register_trace_node(
-                                                    parent_trace_id,
-                                                    &child_path,
-                                                    left_node.is_some(),
-                                                    right_node.is_some(),
-                                                );
                                                 self.stack.push(DiffFrame {
                                                     left_node,
                                                     right_node,
                                                     path_nibbles: child_path,
-                                                    trace_id,
                                                 });
                                             }
                                         }
@@ -1551,7 +1333,6 @@ impl ParallelDiff {
                                     left_node,
                                     right_node,
                                     path_nibbles,
-                                    trace_id: None,
                                 });
 
                                 let ops: Vec<_> = iter.by_ref().collect();
@@ -1699,99 +1480,6 @@ where
     OptimizedDiffIter::new(left, right, start_key)
 }
 
-/// Computes an optimized diff while capturing a Graphviz visualization of the traversal.
-///
-/// This function combines the optimized diff algorithm with traversal tracing to generate
-/// a Graphviz DOT file that visualizes exactly how the algorithm traversed the tries.
-/// This is invaluable for understanding the pruning behavior and debugging performance issues.
-///
-/// # Use Cases
-///
-/// - **Documentation**: Generate diagrams showing how the algorithm works
-/// - **Debugging**: Understand why certain nodes were or weren't pruned
-/// - **Performance Analysis**: Visualize traversal patterns and pruning effectiveness
-/// - **Education**: Teach the algorithm's behavior with visual aids
-///
-/// # Visualization Details
-///
-/// The generated DOT graph shows:
-/// - **Nodes visited**: Solid borders, black text
-/// - **Nodes pruned**: Dashed borders, gray text
-/// - **Path relationships**: Labeled on each node
-/// - **Tree structure**: Parent-child relationships with arrows
-///
-/// # Parameters
-///
-/// * `left` - The source Merkle trie
-/// * `right` - The target Merkle trie
-/// * `start_key` - Key to start comparison from
-///
-/// # Returns
-///
-/// A tuple containing:
-/// * `Vec<BatchOp<Key, Value>>` - The diff operations
-/// * `String` - Graphviz DOT format string
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use firewood::diff::diff_merkle_optimized_with_graphviz;
-/// use std::process::Command;
-/// # use firewood::merkle::Merkle;
-/// # use firewood_storage::{ImmutableProposal, MemStore, NodeStore};
-/// # use std::sync::Arc;
-///
-/// # fn example(left: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
-/// #           right: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>) {
-/// // Generate diff with visualization
-/// let (ops, dot_graph) = diff_merkle_optimized_with_graphviz(
-///     &left,
-///     &right,
-///     Box::new([])
-/// );
-///
-/// // Write DOT file
-/// std::fs::write("diff_trace.dot", &dot_graph).unwrap();
-///
-/// // Convert to PNG image using Graphviz
-/// Command::new("dot")
-///     .args(&["-Tpng", "diff_trace.dot", "-o", "diff_trace.png"])
-///     .status()
-///     .expect("Failed to run dot command");
-///
-/// println!("Visualization saved to diff_trace.png");
-/// println!("Found {} differences", ops.len());
-/// # }
-/// ```
-///
-/// # DOT Output Format
-///
-/// ```text
-/// digraph OptimizedDiffTraversal {
-///   node [shape=box, fontname="monospace", fontsize=10];
-///   n0 [label="#0 path=root\nside=both\nrelation=-\nstatus=visited"];
-///   n1 [label="#1 path=0\nside=both\nrelation=ExactMatch\nstatus=pruned", style="dashed"];
-///   n0 -> n1;
-/// }
-/// ```
-pub fn diff_merkle_optimized_with_graphviz<'a, T, U>(
-    left: &'a Merkle<T>,
-    right: &'a Merkle<U>,
-    start_key: Key,
-) -> (Vec<BatchOp<Key, Value>>, String)
-where
-    T: TrieReader,
-    U: TrieReader,
-{
-    let mut iter = OptimizedDiffIter::new_with_trace(left, right, start_key);
-    let ops: Vec<_> = iter.by_ref().collect();
-    let dot = iter
-        .trace
-        .as_ref()
-        .map(DiffTrace::to_dot)
-        .unwrap_or_else(|| String::from("digraph OptimizedDiffTraversal {}\n"));
-    (ops, dot)
-}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
@@ -2522,38 +2210,6 @@ mod tests {
         assert_merkle_eq(&after_simple, &m2);
     }
 
-    #[test]
-    fn test_graphviz_trace_builds() {
-        // Reuse the debug example keys to exercise multiple path relations.
-        let m1 = populate_merkle(
-            create_test_merkle(),
-            &[
-                (b"\x00\x00", b"value1"),
-                (b"\x00\x01", b"value2"),
-                (b"\x10\x00", b"value3"),
-                (b"\x10\x01", b"value4"),
-            ],
-        );
-
-        let m2 = populate_merkle(
-            create_test_merkle(),
-            &[
-                (b"\x00\x00", b"value1_mod"),
-                (b"\x00\x02", b"value5"),
-                (b"\x10\x00", b"value3"),
-                (b"\x10\x02", b"value6"),
-            ],
-        );
-
-        let start_key: Key = Box::new([]);
-        let (ops, dot) = diff_merkle_optimized_with_graphviz(&m1, &m2, start_key);
-
-        assert!(!ops.is_empty());
-        assert!(!dot.is_empty());
-        assert!(dot.contains("digraph OptimizedDiffTraversal"));
-        // At least one node should be marked as visited.
-        assert!(dot.contains("status=visited"));
-    }
 
     #[test]
     fn test_localized_changes_pruning() {
