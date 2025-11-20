@@ -2,10 +2,13 @@
 // See the file LICENSE.md for licensing terms.
 
 use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle, PersistMode};
-use std::{fmt::Debug, path::Path};
+use parking_lot::RwLock;
+use std::{fmt::Debug, path::Path, sync::Arc};
 
 use derive_where::derive_where;
-use firewood_storage::{LinearAddress, TrieHash};
+use firewood_storage::{Committed, FileBacked, IntoHashType, LinearAddress, NodeStore, TrieHash};
+
+use crate::manager::InMemoryRevisions;
 
 const FJALL_PARTITION_NAME: &str = "firewood";
 
@@ -26,7 +29,7 @@ pub trait RootStore: Debug {
         address: &LinearAddress,
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
 
-    /// `get` returns the address of a revision.
+    /// `get` returns a historical revision.
     ///
     /// Args:
     /// - hash: the hash of the revision
@@ -37,8 +40,9 @@ pub trait RootStore: Debug {
     fn get(
         &self,
         hash: &TrieHash,
-    ) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>>;
+    ) -> Result<Option<NodeStore<Committed, FileBacked>>, Box<dyn std::error::Error + Send + Sync>>;
 
+    /// XXX: I think we can probably nuke this function
     /// Returns whether revision nodes should be added to the free list.
     fn allow_space_reuse(&self) -> bool;
 }
@@ -58,7 +62,8 @@ impl RootStore for NoOpStore {
     fn get(
         &self,
         _hash: &TrieHash,
-    ) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<NodeStore<Committed, FileBacked>>, Box<dyn std::error::Error + Send + Sync>>
+    {
         Ok(None)
     }
 
@@ -72,8 +77,10 @@ impl RootStore for NoOpStore {
 pub struct FjallStore {
     keyspace: Keyspace,
     items: PartitionHandle,
+    in_memory_revisions: Arc<RwLock<InMemoryRevisions>>,
 }
 
+// XXX: FjallStore should manage it's own cache
 impl FjallStore {
     /// Creates or opens an instance of `FjallStore`.
     ///
@@ -85,12 +92,17 @@ impl FjallStore {
     /// Will return an error if unable to create or open an instance of `FjallStore`.
     pub fn new<P: AsRef<Path>>(
         path: P,
+        in_memory_revisions: Arc<RwLock<InMemoryRevisions>>,
     ) -> Result<FjallStore, Box<dyn std::error::Error + Send + Sync>> {
         let keyspace = Config::new(path).open()?;
         let items =
             keyspace.open_partition(FJALL_PARTITION_NAME, PartitionCreateOptions::default())?;
 
-        Ok(Self { keyspace, items })
+        Ok(Self {
+            keyspace,
+            items,
+            in_memory_revisions,
+        })
     }
 }
 
@@ -110,14 +122,24 @@ impl RootStore for FjallStore {
     fn get(
         &self,
         hash: &TrieHash,
-    ) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<NodeStore<Committed, FileBacked>>, Box<dyn std::error::Error + Send + Sync>>
+    {
         let Some(v) = self.items.get(**hash)? else {
             return Ok(None);
         };
 
         let array: [u8; 8] = v.as_ref().try_into()?;
+        let addr = LinearAddress::new(u64::from_be_bytes(array)).ok_or( 
+            Box::<dyn std::error::Error + Send + Sync>::from("invalid address: zero address")
+        )?;
 
-        Ok(LinearAddress::new(u64::from_be_bytes(array)))
+        let nodestore = NodeStore::with_root(
+            hash.clone().into_hash_type(),
+            addr,
+            self.in_memory_revisions.read().get_latest_revision(),
+        );
+
+        Ok(Some(nodestore))
     }
 
     fn allow_space_reuse(&self) -> bool {

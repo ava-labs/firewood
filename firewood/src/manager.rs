@@ -28,8 +28,8 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal,
-    IntoHashType, NodeStore, TrieHash,
+    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
+    TrieHash,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
@@ -77,15 +77,30 @@ pub(crate) struct RevisionManager {
     /// Maximum number of revisions to keep on disk
     max_revisions: usize,
 
-    /// The list of revisions that are on disk; these point to the different roots
-    /// stored in the filebacked storage.
-    historical: RwLock<VecDeque<CommittedRevision>>,
+    in_memory_revisions: Arc<RwLock<InMemoryRevisions>>,
+
     proposals: Mutex<Vec<ProposedRevision>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
-    by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
     by_rootstore: Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked>>>>,
     threadpool: OnceLock<ThreadPool>,
     root_store: Box<dyn RootStore + Send + Sync>,
+}
+
+#[derive(Debug, Default)]
+pub struct InMemoryRevisions {
+    latest: VecDeque<CommittedRevision>,
+    by_hash: HashMap<TrieHash, CommittedRevision>,
+}
+
+impl InMemoryRevisions {
+    #[must_use]
+    #[allow(clippy::missing_panics_doc)]
+    pub fn get_latest_revision(&self) -> CommittedRevision {
+        self.latest
+            .back()
+            .expect("there is always one revision")
+            .clone()
+    }
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -122,10 +137,13 @@ impl RevisionManager {
         // from opening the same database simultaneously
         fb.lock()?;
 
+        let in_memory_revisions = Arc::new(RwLock::new(InMemoryRevisions::default()));
+
         let root_store: Box<dyn RootStore + Send + Sync> = match config.root_store_dir {
-            Some(path) => {
-                Box::new(FjallStore::new(path).map_err(RevisionManagerError::RootStoreError)?)
-            }
+            Some(path) => Box::new(
+                FjallStore::new(path, in_memory_revisions.clone())
+                    .map_err(RevisionManagerError::RootStoreError)?,
+            ),
             None => Box::new(NoOpStore {}),
         };
 
@@ -133,17 +151,20 @@ impl RevisionManager {
         let nodestore = Arc::new(NodeStore::open(storage.clone())?);
         let manager = Self {
             max_revisions: config.manager.max_revisions,
-            historical: RwLock::new(VecDeque::from([nodestore.clone()])),
-            by_hash: RwLock::new(Default::default()),
+            in_memory_revisions: in_memory_revisions.clone(),
             proposals: Mutex::new(Default::default()),
-            // committing_proposals: Default::default(),
             by_rootstore: Mutex::new(WeakValueHashMap::new()),
             threadpool: OnceLock::new(),
             root_store,
         };
 
-        if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
-            manager.by_hash.write().insert(hash, nodestore.clone());
+        // Add the initial nodestore to the in-memory revisions
+        {
+            let mut revisions = in_memory_revisions.write();
+            revisions.latest.push_back(nodestore.clone());
+            if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
+                revisions.by_hash.insert(hash, nodestore.clone());
+            }
         }
 
         if config.truncate {
@@ -203,15 +224,16 @@ impl RevisionManager {
         // If `RootStore` allows space reuse, add the oldest revision's nodes to the free list.
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
-        while self.historical.read().len() >= self.max_revisions {
-            let oldest = self
-                .historical
-                .write()
+        let mut in_memory_revisions = self.in_memory_revisions.write();
+        while in_memory_revisions.latest.len() >= self.max_revisions {
+            let oldest = in_memory_revisions
+                .latest
                 .pop_front()
                 .expect("must be present");
+
             let oldest_hash = oldest.root_hash().or_default_root_hash();
             if let Some(ref hash) = oldest_hash {
-                self.by_hash.write().remove(hash);
+                in_memory_revisions.by_hash.remove(hash);
             }
 
             // We reap the revision's nodes only if `RootStore` allows space reuse.
@@ -225,12 +247,12 @@ impl RevisionManager {
                     Ok(oldest) => oldest.reap_deleted(&mut committed)?,
                     Err(original) => {
                         warn!("Oldest revision could not be reaped; still referenced");
-                        self.historical.write().push_front(original);
+                        in_memory_revisions.latest.push_front(original);
                         break;
                     }
                 }
             }
-            gauge!("firewood.active_revisions").set(self.historical.read().len() as f64);
+            gauge!("firewood.active_revisions").set(in_memory_revisions.latest.len() as f64);
             gauge!("firewood.max_revisions").set(self.max_revisions as f64);
         }
 
@@ -248,10 +270,13 @@ impl RevisionManager {
 
         // 5. Set last committed revision
         let committed: CommittedRevision = committed.into();
-        self.historical.write().push_back(committed.clone());
+
+        in_memory_revisions.latest.push_back(committed.clone());
         if let Some(hash) = committed.root_hash().or_default_root_hash() {
-            self.by_hash.write().insert(hash, committed.clone());
+            in_memory_revisions.by_hash.insert(hash, committed.clone());
         }
+
+        drop(in_memory_revisions);
 
         // 6. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
@@ -305,8 +330,9 @@ impl RevisionManager {
 
     /// TODO: should we support fetching all hashes from `RootStore`?
     pub fn all_hashes(&self) -> Vec<TrieHash> {
-        self.historical
+        self.in_memory_revisions
             .read()
+            .latest
             .iter()
             .filter_map(|r| r.root_hash().or_default_root_hash())
             .chain(
@@ -325,7 +351,13 @@ impl RevisionManager {
     /// 3. Check the persistent `RootStore`.
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
         // 1. Check the in-memory revision manager.
-        if let Some(revision) = self.by_hash.read().get(&root_hash).cloned() {
+        if let Some(revision) = self
+            .in_memory_revisions
+            .read()
+            .by_hash
+            .get(&root_hash)
+            .cloned()
+        {
             return Ok(revision);
         }
 
@@ -338,19 +370,14 @@ impl RevisionManager {
 
         // 3. Check the persistent `RootStore`.
         // If the revision exists, get its root address and construct a NodeStore for it.
-        let root_address = self
+        let nodestore = self
             .root_store
             .get(&root_hash)
             .map_err(RevisionManagerError::RootStoreError)?
             .ok_or(RevisionManagerError::RevisionNotFound {
                 provided: root_hash.clone(),
             })?;
-
-        let nodestore = Arc::new(NodeStore::with_root(
-            root_hash.clone().into_hash_type(),
-            root_address,
-            self.current_revision(),
-        ));
+        let nodestore = Arc::new(nodestore);
 
         // Cache the nodestore (stored as a weak reference).
         cache_guard.insert(root_hash, nodestore.clone());
@@ -363,11 +390,7 @@ impl RevisionManager {
     }
 
     pub fn current_revision(&self) -> CommittedRevision {
-        self.historical
-            .read()
-            .back()
-            .expect("there is always one revision")
-            .clone()
+        self.in_memory_revisions.read().get_latest_revision()
     }
 
     /// Gets or creates a threadpool associated with the revision manager.
