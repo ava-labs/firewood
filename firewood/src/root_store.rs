@@ -46,10 +46,6 @@ pub trait RootStore: Debug {
         &self,
         hash: &TrieHash,
     ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>>;
-
-    /// XXX: I think we can probably nuke this function
-    /// Returns whether revision nodes should be added to the free list.
-    fn allow_space_reuse(&self) -> bool;
 }
 
 #[derive(Debug)]
@@ -69,10 +65,6 @@ impl RootStore for NoOpStore {
         _hash: &TrieHash,
     ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>> {
         Ok(None)
-    }
-
-    fn allow_space_reuse(&self) -> bool {
-        true
     }
 }
 
@@ -150,9 +142,5 @@ impl RootStore for FjallStore {
         self.cache.lock().insert(hash.clone(), nodestore.clone());
 
         Ok(Some(nodestore))
-    }
-
-    fn allow_space_reuse(&self) -> bool {
-        false
     }
 }

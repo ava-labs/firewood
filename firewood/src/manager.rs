@@ -87,6 +87,7 @@ pub(crate) struct RevisionManager {
 pub struct InMemoryRevisions {
     latest: VecDeque<CommittedRevision>,
     by_hash: HashMap<TrieHash, CommittedRevision>,
+    allow_space_reuse: bool,
 }
 
 impl InMemoryRevisions {
@@ -134,7 +135,12 @@ impl RevisionManager {
         // from opening the same database simultaneously
         fb.lock()?;
 
-        let in_memory_revisions = Arc::new(RwLock::new(InMemoryRevisions::default()));
+        let allow_space_reuse = config.root_store_dir.is_none();
+        let in_memory_revisions = Arc::new(RwLock::new(InMemoryRevisions {
+            latest: VecDeque::new(),
+            by_hash: HashMap::new(),
+            allow_space_reuse,
+        }));
 
         let root_store: Box<dyn RootStore + Send + Sync> = match config.root_store_dir {
             Some(path) => Box::new(
@@ -233,7 +239,7 @@ impl RevisionManager {
             }
 
             // We reap the revision's nodes only if `RootStore` allows space reuse.
-            if self.root_store.allow_space_reuse() {
+            if in_memory_revisions.allow_space_reuse {
                 // This `try_unwrap` is safe because nobody else will call `try_unwrap` on this Arc
                 // in a different thread, so we don't have to worry about the race condition where
                 // the Arc we get back is not usable as indicated in the docs for `try_unwrap`.
