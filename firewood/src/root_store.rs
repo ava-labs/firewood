@@ -129,9 +129,11 @@ impl RootStore for FjallStore {
         };
 
         let array: [u8; 8] = v.as_ref().try_into()?;
-        let addr = LinearAddress::new(u64::from_be_bytes(array)).ok_or( 
-            Box::<dyn std::error::Error + Send + Sync>::from("invalid address: zero address")
-        )?;
+        let addr = LinearAddress::new(u64::from_be_bytes(array)).ok_or(Box::<
+            dyn std::error::Error + Send + Sync,
+        >::from(
+            "invalid address: zero address",
+        ))?;
 
         let nodestore = NodeStore::with_root(
             hash.clone().into_hash_type(),
