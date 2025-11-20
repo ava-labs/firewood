@@ -406,7 +406,6 @@ mod test {
 
     use crate::db::{Db, Proposal, UseParallel};
     use crate::manager::RevisionManagerConfig;
-    use crate::root_store::RootStore;
     use crate::v2::api::{Db as _, DbView, Proposal as _};
 
     use super::{BatchOp, DbConfig};
@@ -446,15 +445,6 @@ mod test {
     }
 
     impl<T: Iterator> IterExt for T {}
-
-    #[cfg(test)]
-    impl Db {
-        /// Extract the root store by consuming the database instance.
-        /// This is primarily used for reopening or replacing the database with the same root store.
-        pub fn into_root_store(self) -> Box<dyn RootStore + Send + Sync> {
-            self.manager.into_root_store()
-        }
-    }
 
     #[test]
     fn test_proposal_reads() {
