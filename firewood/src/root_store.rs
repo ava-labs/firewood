@@ -2,13 +2,18 @@
 // See the file LICENSE.md for licensing terms.
 
 use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle, PersistMode};
-use parking_lot::RwLock;
-use std::{fmt::Debug, path::Path, sync::Arc};
+use parking_lot::{Mutex, RwLock};
+use std::{
+    fmt::Debug,
+    path::Path,
+    sync::{Arc, Weak},
+};
+use weak_table::WeakValueHashMap;
 
 use derive_where::derive_where;
 use firewood_storage::{Committed, FileBacked, IntoHashType, LinearAddress, NodeStore, TrieHash};
 
-use crate::manager::InMemoryRevisions;
+use crate::manager::{CommittedRevision, InMemoryRevisions};
 
 const FJALL_PARTITION_NAME: &str = "firewood";
 
@@ -40,7 +45,7 @@ pub trait RootStore: Debug {
     fn get(
         &self,
         hash: &TrieHash,
-    ) -> Result<Option<NodeStore<Committed, FileBacked>>, Box<dyn std::error::Error + Send + Sync>>;
+    ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>>;
 
     /// XXX: I think we can probably nuke this function
     /// Returns whether revision nodes should be added to the free list.
@@ -62,8 +67,7 @@ impl RootStore for NoOpStore {
     fn get(
         &self,
         _hash: &TrieHash,
-    ) -> Result<Option<NodeStore<Committed, FileBacked>>, Box<dyn std::error::Error + Send + Sync>>
-    {
+    ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>> {
         Ok(None)
     }
 
@@ -78,9 +82,9 @@ pub struct FjallStore {
     keyspace: Keyspace,
     items: PartitionHandle,
     in_memory_revisions: Arc<RwLock<InMemoryRevisions>>,
+    cache: Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked>>>>,
 }
 
-// XXX: FjallStore should manage it's own cache
 impl FjallStore {
     /// Creates or opens an instance of `FjallStore`.
     ///
@@ -98,10 +102,13 @@ impl FjallStore {
         let items =
             keyspace.open_partition(FJALL_PARTITION_NAME, PartitionCreateOptions::default())?;
 
+        let cache = Mutex::new(WeakValueHashMap::new());
+
         Ok(Self {
             keyspace,
             items,
             in_memory_revisions,
+            cache,
         })
     }
 }
@@ -122,8 +129,7 @@ impl RootStore for FjallStore {
     fn get(
         &self,
         hash: &TrieHash,
-    ) -> Result<Option<NodeStore<Committed, FileBacked>>, Box<dyn std::error::Error + Send + Sync>>
-    {
+    ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>> {
         let Some(v) = self.items.get(**hash)? else {
             return Ok(None);
         };
@@ -135,11 +141,13 @@ impl RootStore for FjallStore {
             "invalid address: zero address",
         ))?;
 
-        let nodestore = NodeStore::with_root(
+        let nodestore = Arc::new(NodeStore::with_root(
             hash.clone().into_hash_type(),
             addr,
             self.in_memory_revisions.read().get_latest_revision(),
-        );
+        ));
+
+        self.cache.lock().insert(hash.clone(), nodestore.clone());
 
         Ok(Some(nodestore))
     }

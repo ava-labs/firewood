@@ -14,13 +14,12 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZero;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{Arc, OnceLock};
 
 use firewood_storage::logger::{trace, warn};
 use metrics::gauge;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
-use weak_table::WeakValueHashMap;
 
 use crate::merkle::Merkle;
 use crate::root_store::{FjallStore, NoOpStore, RootStore};
@@ -69,7 +68,7 @@ pub struct ConfigManager {
     pub manager: RevisionManagerConfig,
 }
 
-type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
+pub type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
 #[derive(Debug)]
@@ -80,8 +79,6 @@ pub(crate) struct RevisionManager {
     in_memory_revisions: Arc<RwLock<InMemoryRevisions>>,
 
     proposals: Mutex<Vec<ProposedRevision>>,
-    // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
-    by_rootstore: Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked>>>>,
     threadpool: OnceLock<ThreadPool>,
     root_store: Box<dyn RootStore + Send + Sync>,
 }
@@ -153,7 +150,6 @@ impl RevisionManager {
             max_revisions: config.manager.max_revisions,
             in_memory_revisions: in_memory_revisions.clone(),
             proposals: Mutex::new(Default::default()),
-            by_rootstore: Mutex::new(WeakValueHashMap::new()),
             threadpool: OnceLock::new(),
             root_store,
         };
@@ -347,8 +343,7 @@ impl RevisionManager {
     /// Retrieve a committed revision by its root hash.
     /// To retrieve a revision involves a few steps:
     /// 1. Check the in-memory revision manager.
-    /// 2. Check the in-memory `RootStore` cache.
-    /// 3. Check the persistent `RootStore`.
+    /// 2. Check the `RootStore`.
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
         // 1. Check the in-memory revision manager.
         if let Some(revision) = self
@@ -361,15 +356,7 @@ impl RevisionManager {
             return Ok(revision);
         }
 
-        let mut cache_guard = self.by_rootstore.lock();
-
-        // 2. Check the in-memory `RootStore` cache.
-        if let Some(nodestore) = cache_guard.get(&root_hash) {
-            return Ok(nodestore);
-        }
-
-        // 3. Check the persistent `RootStore`.
-        // If the revision exists, get its root address and construct a NodeStore for it.
+        // 2. Check the persistent `RootStore`.
         let nodestore = self
             .root_store
             .get(&root_hash)
@@ -377,10 +364,6 @@ impl RevisionManager {
             .ok_or(RevisionManagerError::RevisionNotFound {
                 provided: root_hash.clone(),
             })?;
-        let nodestore = Arc::new(nodestore);
-
-        // Cache the nodestore (stored as a weak reference).
-        cache_guard.insert(root_hash, nodestore.clone());
 
         Ok(nodestore)
     }
