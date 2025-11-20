@@ -1208,7 +1208,7 @@ mod test {
             let root_store_dir = tmpdir.as_ref().join("fjall_store");
 
             let dbconfig = DbConfig {
-                root_store_dir: Some(root_store_dir.clone()),
+                root_store_dir: Some(root_store_dir),
                 ..dbconfig
             };
 
