@@ -137,9 +137,8 @@ impl RevisionManager {
 
         let allow_space_reuse = config.root_store_dir.is_none();
         let in_memory_revisions = Arc::new(RwLock::new(InMemoryRevisions {
-            latest: VecDeque::new(),
-            by_hash: HashMap::new(),
             allow_space_reuse,
+            ..Default::default()
         }));
 
         let root_store: Box<dyn RootStore + Send + Sync> = match config.root_store_dir {
