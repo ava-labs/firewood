@@ -2,10 +2,17 @@
 // See the file LICENSE.md for licensing terms.
 
 use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle, PersistMode};
-use std::path::Path;
+use parking_lot::{Mutex, RwLock};
+use std::{
+    path::Path,
+    sync::{Arc, Weak},
+};
+use weak_table::WeakValueHashMap;
 
 use derive_where::derive_where;
-use firewood_storage::{LinearAddress, TrieHash};
+use firewood_storage::{Committed, FileBacked, IntoHashType, LinearAddress, NodeStore, TrieHash};
+
+use crate::manager::{CommittedRevision, InMemoryRevisions};
 
 const FJALL_PARTITION_NAME: &str = "firewood";
 
@@ -14,6 +21,8 @@ const FJALL_PARTITION_NAME: &str = "firewood";
 pub struct RootStore {
     keyspace: Keyspace,
     items: PartitionHandle,
+    in_memory_revisions: Arc<RwLock<InMemoryRevisions>>,
+    cache: Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked>>>>,
 }
 
 impl RootStore {
@@ -27,12 +36,20 @@ impl RootStore {
     /// Will return an error if unable to create or open an instance of `RootStore`.
     pub fn new<P: AsRef<Path>>(
         path: P,
+        in_memory_revisions: Arc<RwLock<InMemoryRevisions>>,
     ) -> Result<RootStore, Box<dyn std::error::Error + Send + Sync>> {
         let keyspace = Config::new(path).open()?;
         let items =
             keyspace.open_partition(FJALL_PARTITION_NAME, PartitionCreateOptions::default())?;
 
-        Ok(Self { keyspace, items })
+        let cache = Mutex::new(WeakValueHashMap::new());
+
+        Ok(Self {
+            keyspace,
+            items,
+            in_memory_revisions,
+            cache,
+        })
     }
 
     /// `add_root` persists a revision's address to `RootStore`.
@@ -68,13 +85,26 @@ impl RootStore {
     pub fn get(
         &self,
         hash: &TrieHash,
-    ) -> Result<Option<LinearAddress>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>> {
         let Some(v) = self.items.get(**hash)? else {
             return Ok(None);
         };
 
         let array: [u8; 8] = v.as_ref().try_into()?;
+        let addr = LinearAddress::new(u64::from_be_bytes(array)).ok_or(Box::<
+            dyn std::error::Error + Send + Sync,
+        >::from(
+            "invalid address: zero address",
+        ))?;
 
-        Ok(LinearAddress::new(u64::from_be_bytes(array)))
+        let nodestore = Arc::new(NodeStore::with_root(
+            hash.clone().into_hash_type(),
+            addr,
+            self.in_memory_revisions.read().get_latest_revision(),
+        ));
+
+        self.cache.lock().insert(hash.clone(), nodestore.clone());
+
+        Ok(Some(nodestore))
     }
 }
