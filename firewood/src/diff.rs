@@ -446,6 +446,105 @@ mod tests {
         merkle.try_into().unwrap()
     }
 
+
+    /* 
+    #[test]
+    fn test_diff_empty_mutable_trees() {
+        // This is unlikely to happen in practice, but it helps cover the case where
+        // hashes do not exist yet.
+        let m1 = create_test_merkle();
+        let m2 = create_test_merkle();
+
+        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+        assert!(diff_iter.next().is_none());
+    }
+    */
+
+    #[test]
+    fn test_diff_empty_trees() {
+        let m1 = make_immutable(create_test_merkle());
+        let m2 = make_immutable(create_test_merkle());
+
+        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+        assert!(diff_iter.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_diff_identical_trees() {
+        let items = [
+            (b"key1".as_slice(), b"value1".as_slice()),
+            (b"key2".as_slice(), b"value2".as_slice()),
+            (b"key3".as_slice(), b"value3".as_slice()),
+        ];
+
+        let m1 = populate_merkle(create_test_merkle(), &items);
+        let m2 = populate_merkle(create_test_merkle(), &items);
+
+        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+        assert!(diff_iter.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_diff_additions_only() {
+        let items = [
+            (b"key1".as_slice(), b"value1".as_slice()),
+            (b"key2".as_slice(), b"value2".as_slice()),
+        ];
+
+        let m1 = make_immutable(create_test_merkle());
+        let m2 = populate_merkle(create_test_merkle(), &items);
+
+        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+
+        let op1 = diff_iter.next().unwrap().unwrap();
+        assert!(
+            matches!(op1, BatchOp::Put { key, value } if key == Box::from(b"key1".as_slice()) && *value == *b"value1")
+        );
+
+        let op2 = diff_iter.next().unwrap().unwrap();
+        assert!(
+            matches!(op2, BatchOp::Put { key, value } if key == Box::from(b"key2".as_slice()) && *value == *b"value2")
+        );
+
+        assert!(diff_iter.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_diff_deletions_only() {
+        let items = [
+            (b"key1".as_slice(), b"value1".as_slice()),
+            (b"key2".as_slice(), b"value2".as_slice()),
+        ];
+
+        let m1 = populate_merkle(create_test_merkle(), &items);
+        let m2 = make_immutable(create_test_merkle());
+
+        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+
+        let op1 = diff_iter.next().unwrap().unwrap();
+        assert!(matches!(op1, BatchOp::Delete { key } if key == Box::from(b"key1".as_slice())));
+
+        let op2 = diff_iter.next().unwrap().unwrap();
+        assert!(matches!(op2, BatchOp::Delete { key } if key == Box::from(b"key2".as_slice())));
+
+        assert!(diff_iter.next().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_diff_modifications() {
+        let m1 = populate_merkle(create_test_merkle(), &[(b"key1", b"old_value")]);
+        let m2 = populate_merkle(create_test_merkle(), &[(b"key1", b"new_value")]);
+
+        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+
+        let op = diff_iter.next().unwrap().unwrap();
+        assert!(
+            matches!(op, BatchOp::Put { key, value } if key == Box::from(b"key1".as_slice()) && *value == *b"new_value")
+        );
+
+        assert!(diff_iter.next().unwrap().is_none());
+    }
+
     #[test]
     #[allow(clippy::manual_let_else)]
     fn test_diff_mixed_operations() {
