@@ -239,12 +239,12 @@ impl RevisionManager {
         committed.persist()?;
 
         // 4. Persist revision to root store
-        if let Some(store) = &self.root_store {
-            if let (Some(hash), Some(address)) = (committed.root_hash(), committed.root_address()) {
-                store
-                    .add_root(&hash, &address)
-                    .map_err(RevisionManagerError::RootStoreError)?;
-            }
+        if let Some(store) = &self.root_store
+            && let (Some(hash), Some(address)) = (committed.root_hash(), committed.root_address())
+        {
+            store
+                .add_root(&hash, &address)
+                .map_err(RevisionManagerError::RootStoreError)?;
         }
 
         // 5. Set last committed revision
