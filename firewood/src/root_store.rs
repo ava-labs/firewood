@@ -4,7 +4,6 @@
 use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle, PersistMode};
 use parking_lot::{Mutex, RwLock};
 use std::{
-    fmt::Debug,
     path::Path,
     sync::{Arc, Weak},
 };
@@ -17,79 +16,28 @@ use crate::manager::{CommittedRevision, InMemoryRevisions};
 
 const FJALL_PARTITION_NAME: &str = "firewood";
 
-pub trait RootStore: Debug {
-    /// `add_root` persists a revision's address to `RootStore`.
-    ///
-    /// Args:
-    /// - hash: the hash of the revision
-    /// - address: the address of the revision
-    ///
-    /// # Errors
-    ///
-    /// Will return an error if unable to persist the revision address to the
-    /// underlying datastore
-    fn add_root(
-        &self,
-        hash: &TrieHash,
-        address: &LinearAddress,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>;
-
-    /// `get` returns a historical revision.
-    ///
-    /// Args:
-    /// - hash: the hash of the revision
-    ///
-    /// # Errors
-    ///
-    ///  Will return an error if unable to query the underlying datastore.
-    fn get(
-        &self,
-        hash: &TrieHash,
-    ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>>;
-}
-
-#[derive(Debug)]
-pub struct NoOpStore {}
-
-impl RootStore for NoOpStore {
-    fn add_root(
-        &self,
-        _hash: &TrieHash,
-        _address: &LinearAddress,
-    ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-        Ok(())
-    }
-
-    fn get(
-        &self,
-        _hash: &TrieHash,
-    ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>> {
-        Ok(None)
-    }
-}
-
 #[derive_where(Debug)]
 #[derive_where(skip_inner)]
-pub struct FjallStore {
+pub struct RootStore {
     keyspace: Keyspace,
     items: PartitionHandle,
     in_memory_revisions: Arc<RwLock<InMemoryRevisions>>,
     cache: Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked>>>>,
 }
 
-impl FjallStore {
-    /// Creates or opens an instance of `FjallStore`.
+impl RootStore {
+    /// Creates or opens an instance of `RootStore`.
     ///
     /// Args:
-    /// - path: the directory where `FjallStore` will write to.
+    /// - path: the directory where `RootStore` will write to.
     ///
     /// # Errors
     ///
-    /// Will return an error if unable to create or open an instance of `FjallStore`.
+    /// Will return an error if unable to create or open an instance of `RootStore`.
     pub fn new<P: AsRef<Path>>(
         path: P,
         in_memory_revisions: Arc<RwLock<InMemoryRevisions>>,
-    ) -> Result<FjallStore, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<RootStore, Box<dyn std::error::Error + Send + Sync>> {
         let keyspace = Config::new(path).open()?;
         let items =
             keyspace.open_partition(FJALL_PARTITION_NAME, PartitionCreateOptions::default())?;
@@ -103,10 +51,18 @@ impl FjallStore {
             cache,
         })
     }
-}
 
-impl RootStore for FjallStore {
-    fn add_root(
+    /// `add_root` persists a revision's address to `RootStore`.
+    ///
+    /// Args:
+    /// - hash: the hash of the revision
+    /// - address: the address of the revision
+    ///
+    /// # Errors
+    ///
+    /// Will return an error if unable to persist the revision address to the
+    /// underlying datastore
+    pub fn add_root(
         &self,
         hash: &TrieHash,
         address: &LinearAddress,
@@ -118,7 +74,15 @@ impl RootStore for FjallStore {
         Ok(())
     }
 
-    fn get(
+    /// `get` returns the address of a revision.
+    ///
+    /// Args:
+    /// - hash: the hash of the revision
+    ///
+    /// # Errors
+    ///
+    ///  Will return an error if unable to query the underlying datastore.
+    pub fn get(
         &self,
         hash: &TrieHash,
     ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>> {
