@@ -1101,7 +1101,7 @@ mod test {
         let dbconfig = DbConfig::builder()
             .manager(RevisionManagerConfig::builder().max_revisions(5).build())
             .build();
-        let db = TestDb::new_with_fjall_store(dbconfig.clone());
+        let db = TestDb::new_with_fjall_store(dbconfig);
 
         // Create and commit 10 proposals
         let key = b"root_store";
