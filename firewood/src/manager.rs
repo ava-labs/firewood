@@ -91,6 +91,18 @@ pub struct InMemoryRevisions {
 
 impl InMemoryRevisions {
     #[must_use]
+    pub fn new(committed: CommittedRevision) -> Self {
+        let mut in_memory_revisions = Self::default();
+
+        if let Some(hash) = committed.root_hash().or_default_root_hash() {
+            in_memory_revisions.by_hash.insert(hash, committed.clone());
+        }
+        in_memory_revisions.latest.push_back(committed);
+
+        in_memory_revisions
+    }
+
+    #[must_use]
     #[allow(clippy::missing_panics_doc)]
     pub fn get_latest_revision(&self) -> CommittedRevision {
         self.latest
@@ -134,8 +146,10 @@ impl RevisionManager {
         // from opening the same database simultaneously
         fb.lock()?;
 
-        let in_memory_revisions = Arc::new(RwLock::new(InMemoryRevisions::default()));
+        let storage = Arc::new(fb);
+        let nodestore = Arc::new(NodeStore::open(storage.clone())?);
 
+        let in_memory_revisions = Arc::new(RwLock::new(InMemoryRevisions::new(nodestore.clone())));
         let root_store: Option<RootStore> = match config.root_store_dir {
             Some(path) => Some(
                 RootStore::new(path, in_memory_revisions.clone())
@@ -144,8 +158,6 @@ impl RevisionManager {
             None => None,
         };
 
-        let storage = Arc::new(fb);
-        let nodestore = Arc::new(NodeStore::open(storage.clone())?);
         let manager = Self {
             max_revisions: config.manager.max_revisions,
             in_memory_revisions: in_memory_revisions.clone(),
@@ -153,15 +165,6 @@ impl RevisionManager {
             threadpool: OnceLock::new(),
             root_store,
         };
-
-        // Add the initial nodestore to the in-memory revisions
-        {
-            let mut revisions = in_memory_revisions.write();
-            revisions.latest.push_back(nodestore.clone());
-            if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
-                revisions.by_hash.insert(hash, nodestore.clone());
-            }
-        }
 
         if config.truncate {
             nodestore.flush_header_with_padding()?;
