@@ -139,6 +139,9 @@ pub mod proof;
 // TODO: push `proof` and `range_proof` modules into this module
 pub mod proofs;
 
+/// Change proof module
+pub mod diff;
+
 // Re-export the proc macro from firewood-macros
 pub use firewood_macros::metrics;
 
