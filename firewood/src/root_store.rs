@@ -34,7 +34,7 @@ impl RootStore {
 
         Ok(Self { keyspace, items })
     }
-    
+
     /// `add_root` persists a revision's address to `RootStore`.
     ///
     /// Args:

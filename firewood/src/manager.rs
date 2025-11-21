@@ -242,8 +242,8 @@ impl RevisionManager {
         if let Some(store) = &self.root_store {
             if let (Some(hash), Some(address)) = (committed.root_hash(), committed.root_address()) {
                 store
-                .add_root(&hash, &address)
-                .map_err(RevisionManagerError::RootStoreError)?;
+                    .add_root(&hash, &address)
+                    .map_err(RevisionManagerError::RootStoreError)?;
             }
         }
 
@@ -349,7 +349,7 @@ impl RevisionManager {
             None => {
                 return Err(RevisionManagerError::RevisionNotFound {
                     provided: root_hash.clone(),
-                })
+                });
             }
         };
 
