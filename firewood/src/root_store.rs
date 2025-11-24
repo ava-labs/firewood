@@ -74,14 +74,21 @@ impl RootStore {
         Ok(())
     }
 
-    /// `get` returns the address of a revision.
+    /// `get` retrieves a committed revision by its hash.
+    ///
+    /// To retrieve a committed revision involves a few steps:
+    /// 1. Check if the committed revision is cached.
+    /// 2. If the committed revision is not cached, query the underlying
+    ///    datastore for the revision's root address.
+    /// 3. Construct the committed revision.
     ///
     /// Args:
     /// - hash: the hash of the revision
     ///
     /// # Errors
     ///
-    ///  Will return an error if unable to query the underlying datastore.
+    ///  Will return an error if unable to query the underlying datastore or if
+    ///  the stored address is invalid.
     ///
     /// # Panics
     ///
@@ -90,16 +97,20 @@ impl RootStore {
         &self,
         hash: &TrieHash,
     ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>> {
+        // 1. Check if the committed revision is cached.
+        if let Some(v) = self.cache.lock().get(hash) {
+            return Ok(Some(v));
+        }
+
+        // 2. If the committed revision is not cached, query the underlying
+        //    datastore for the revision's root address.
         let Some(v) = self.items.get(**hash)? else {
             return Ok(None);
         };
 
         let array: [u8; 8] = v.as_ref().try_into()?;
-        let addr = LinearAddress::new(u64::from_be_bytes(array)).ok_or(Box::<
-            dyn std::error::Error + Send + Sync,
-        >::from(
-            "invalid address: zero address",
-        ))?;
+        let addr = LinearAddress::new(u64::from_be_bytes(array))
+            .ok_or("invalid address: empty address")?;
 
         let latest_nodestore = self
             .in_memory_revisions
@@ -108,12 +119,14 @@ impl RootStore {
             .expect("there is always one revision")
             .clone();
 
+        // 3. Construct the committed revision.
         let nodestore = Arc::new(NodeStore::with_root(
             hash.clone().into_hash_type(),
             addr,
             latest_nodestore,
         ));
 
+        // Cache for future lookups.
         self.cache.lock().insert(hash.clone(), nodestore.clone());
 
         Ok(Some(nodestore))
