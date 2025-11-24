@@ -81,6 +81,12 @@ pub(crate) struct RevisionManager {
     root_store: Option<RootStore>,
 }
 
+/// Cache of recently committed revisions, maintaining both ordered and hash-indexed access.
+///
+/// This structure keeps track of a bounded number of recent committed revisions as a
+/// FIFO queue, providing both sequential access (via a deque of recent revisions) and
+/// direct hash-based lookup (via a hash map). When the cache exceeds its capacity,
+/// the oldest revisions are evicted from the front of the queue.
 #[derive(Debug, Default)]
 pub struct CommittedRevisionCache {
     latest: VecDeque<CommittedRevision>,
