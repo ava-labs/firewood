@@ -23,7 +23,8 @@ pub struct RootStore {
     items: PartitionHandle,
     committed_revision_cache: Arc<RwLock<CommittedRevisionCache>>,
     /// Cache of reconstructed revisions by hash.
-    cache: Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked>>>>,
+    reconstructed_revision_cache:
+        Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked>>>>,
 }
 
 impl RootStore {
@@ -43,13 +44,13 @@ impl RootStore {
         let keyspace = Config::new(path).open()?;
         let items =
             keyspace.open_partition(FJALL_PARTITION_NAME, PartitionCreateOptions::default())?;
-        let cache = Mutex::new(WeakValueHashMap::new());
+        let reconstructed_revision_cache = Mutex::new(WeakValueHashMap::new());
 
         Ok(Self {
             keyspace,
             items,
             committed_revision_cache,
-            cache,
+            reconstructed_revision_cache,
         })
     }
 
@@ -99,7 +100,7 @@ impl RootStore {
         hash: &TrieHash,
     ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>> {
         // 1. Check if the committed revision is cached.
-        if let Some(v) = self.cache.lock().get(hash) {
+        if let Some(v) = self.reconstructed_revision_cache.lock().get(hash) {
             return Ok(Some(v));
         }
 
@@ -128,7 +129,9 @@ impl RootStore {
         ));
 
         // Cache for future lookups.
-        self.cache.lock().insert(hash.clone(), nodestore.clone());
+        self.reconstructed_revision_cache
+            .lock()
+            .insert(hash.clone(), nodestore.clone());
 
         Ok(Some(nodestore))
     }
@@ -188,7 +191,7 @@ mod tests {
 
         let hash = TrieHash::from_bytes([1; 32]);
         root_store
-            .cache
+            .reconstructed_revision_cache
             .lock()
             .insert(hash.clone(), revision.clone());
 
