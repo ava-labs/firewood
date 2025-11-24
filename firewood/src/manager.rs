@@ -158,13 +158,11 @@ impl RevisionManager {
         let in_memory_revisions = Arc::new(RwLock::new(InMemoryRevisions::default()));
         in_memory_revisions.write().push(nodestore.clone());
 
-        let root_store: Option<RootStore> = match config.root_store_dir {
-            Some(path) => Some(
-                RootStore::new(path, in_memory_revisions.clone())
-                    .map_err(RevisionManagerError::RootStoreError)?,
-            ),
-            None => None,
-        };
+        let root_store = config
+            .root_store_dir
+            .map(|path| RootStore::new(path, in_memory_revisions.clone()))
+            .transpose()
+            .map_err(RevisionManagerError::RootStoreError)?;
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,
