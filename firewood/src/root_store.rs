@@ -41,7 +41,6 @@ impl RootStore {
         let keyspace = Config::new(path).open()?;
         let items =
             keyspace.open_partition(FJALL_PARTITION_NAME, PartitionCreateOptions::default())?;
-
         let cache = Mutex::new(WeakValueHashMap::new());
 
         Ok(Self {
