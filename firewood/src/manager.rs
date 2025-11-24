@@ -75,9 +75,7 @@ type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 pub(crate) struct RevisionManager {
     /// Maximum number of revisions to keep on disk
     max_revisions: usize,
-
     in_memory_revisions: Arc<RwLock<InMemoryRevisions>>,
-
     proposals: Mutex<Vec<ProposedRevision>>,
     threadpool: OnceLock<ThreadPool>,
     root_store: Option<RootStore>,
