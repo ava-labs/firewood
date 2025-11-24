@@ -133,3 +133,78 @@ impl RootStore {
         Ok(Some(nodestore))
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use firewood_storage::{CacheReadStrategy, FileBacked, NodeStore};
+    use std::num::NonZero;
+    use std::ops::Deref;
+    use std::sync::Arc;
+
+    struct TestRootStore {
+        root_store: RootStore,
+        tmpdir: tempfile::TempDir,
+    }
+
+    impl TestRootStore {
+        fn new() -> Self {
+            let tmpdir = tempfile::tempdir().unwrap();
+            let root_store_dir = tmpdir.as_ref().join("root_store");
+
+            let committed_revision_cache = Arc::new(RwLock::new(CommittedRevisionCache::default()));
+            let root_store = RootStore::new(root_store_dir, committed_revision_cache).unwrap();
+
+            Self { root_store, tmpdir }
+        }
+    }
+
+    impl Deref for TestRootStore {
+        type Target = RootStore;
+        fn deref(&self) -> &Self::Target {
+            &self.root_store
+        }
+    }
+
+    #[test]
+    fn test_cache_hit() {
+        let root_store = TestRootStore::new();
+
+        // Create a revision to cache.
+        let db_path = root_store.tmpdir.as_ref().join("testdb");
+        let file_backed = Arc::new(
+            FileBacked::new(
+                db_path,
+                NonZero::new(1024).unwrap(),
+                NonZero::new(1024).unwrap(),
+                false,
+                true,
+                CacheReadStrategy::WritesOnly,
+            )
+            .unwrap(),
+        );
+        let revision = Arc::new(NodeStore::new_empty_committed(file_backed));
+
+        let hash = TrieHash::from_bytes([1; 32]);
+        root_store
+            .cache
+            .lock()
+            .insert(hash.clone(), revision.clone());
+
+        // Since the underlying datastore is empty, this should get the revision
+        // from the cache.
+        let retrieved_revision = root_store.get(&hash).unwrap().unwrap();
+
+        assert!(Arc::ptr_eq(&revision, &retrieved_revision))
+    }
+
+    #[test]
+    fn test_nonexistent_revision() {
+        let root_store = TestRootStore::new();
+
+        // Try to get a hash that doesn't exist in the cache nor in the underlying datastore.
+        let nonexistent_hash = TrieHash::from_bytes([1; 32]);
+        assert!(root_store.get(&nonexistent_hash).unwrap().is_none());
+    }
+}
