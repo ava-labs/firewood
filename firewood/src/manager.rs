@@ -118,6 +118,11 @@ impl CommittedRevisionCache {
     }
 
     #[must_use]
+    pub fn get_by_hash(&self, root_hash: &HashKey) -> Option<&CommittedRevision> {
+        self.by_hash.get(root_hash)
+    }
+
+    #[must_use]
     #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.latest.len()
@@ -359,8 +364,7 @@ impl RevisionManager {
         if let Some(revision) = self
             .committed_revision_cache
             .read()
-            .by_hash
-            .get(&root_hash)
+            .get_by_hash(&root_hash)
             .cloned()
         {
             return Ok(revision);
