@@ -17,6 +17,7 @@ enum DiffIterationNodeState {
     TraverseRight,
     AddRestRight,
     DeleteRestLeft,
+    SkipChildren,
 }
 
 /// Optimized node iterator that compares two merkle trees and skips matching subtrees
@@ -64,8 +65,10 @@ impl<'a> DiffMerkleNodeStream<'a> {
         &self,
         left_pre_path: &Path,
         left_node: &triomphe::Arc<Node>,
+        left_hash: Option<&TrieHash>,
         right_pre_path: &Path,
         right_node: &triomphe::Arc<Node>,
+        right_hash: Option<&TrieHash>,
     ) -> (DiffIterationNodeState, Option<BatchOp<Key, Value>>) {
         // Combine pre_path with node path to get full path.
         let left_full_path = Path::from_nibbles_iterator(
@@ -113,7 +116,17 @@ impl<'a> DiffMerkleNodeStream<'a> {
             Ordering::Equal => {
                 // Check if there are values. If there are, then it might not actually be equal
                 match (left_node.value(), right_node.value()) {
-                    (None, None) => (DiffIterationNodeState::TraverseBoth, None),
+                    (None, None) => {
+                        if let (Some(left_hash), Some(right_hash)) = (left_hash, right_hash) {
+                            if left_hash.eq(right_hash) {
+                                (DiffIterationNodeState::SkipChildren, None)
+                            } else {
+                                (DiffIterationNodeState::TraverseBoth, None)
+                            }
+                        } else {
+                            (DiffIterationNodeState::TraverseBoth, None)
+                        }
+                    }
                     (Some(_val), None) => (
                         DiffIterationNodeState::TraverseLeft,
                         Some(BatchOp::Delete {
@@ -129,7 +142,17 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     ),
                     // TODO: Replace cmp with eq
                     (Some(left_val), Some(right_val)) => match left_val.cmp(right_val) {
-                        Ordering::Equal => (DiffIterationNodeState::TraverseBoth, None),
+                        Ordering::Equal => {
+                            if let (Some(left_hash), Some(right_hash)) = (left_hash, right_hash) {
+                                if left_hash.eq(right_hash) {
+                                    (DiffIterationNodeState::SkipChildren, None)
+                                } else {
+                                    (DiffIterationNodeState::TraverseBoth, None)
+                                }
+                            } else {
+                                (DiffIterationNodeState::TraverseBoth, None)
+                            }
+                        }
                         Ordering::Less | Ordering::Greater => (
                             DiffIterationNodeState::TraverseBoth,
                             Some(BatchOp::Put {
@@ -148,6 +171,51 @@ impl DiffMerkleNodeStream<'_> {
     fn next(&mut self) -> Result<Option<BatchOp<Key, Value>>, firewood_storage::FileIoError> {
         loop {
             match &mut self.state {
+                DiffIterationNodeState::SkipChildren => {
+                    println!("######## Just skip for now ############");
+                    self.left_tree.skip_branches();
+                    self.right_tree.skip_branches();
+
+                    // TODO: Copied and pasted from TraverseBoth. Need to refactor
+                    let Some((left_node, left_pre_path, left_hash)) = self.left_tree.next()? else {
+                        self.state = DiffIterationNodeState::AddRestRight;
+                        self.left_state = None;
+                        continue;
+                    };
+
+                    let Some((right_node, right_pre_path, right_hash)) = self.right_tree.next()?
+                    else {
+                        self.state = DiffIterationNodeState::DeleteRestLeft;
+                        self.right_state = None;
+                        // Combine pre_path with node path to get full path.
+                        let full_path = Path::from_nibbles_iterator(
+                            left_pre_path
+                                .iter()
+                                .copied()
+                                .chain(left_node.partial_path().iter().copied()),
+                        );
+
+                        let ret = left_node.value().map(|_val| BatchOp::Delete {
+                            key: key_from_nibble_iter(full_path.iter().copied()),
+                        });
+                        if ret.is_some() {
+                            return Ok(ret);
+                        }
+                        continue;
+                    };
+                    println!("Right state: {:?}", self.right_state);
+                    let (next_op, ret) =
+                        self.one_step(&left_pre_path, &left_node, left_hash.as_ref(), &right_pre_path, &right_node, right_hash.as_ref());
+
+                    // Update states
+                    self.left_state = Some((left_node, left_pre_path, left_hash));
+                    self.right_state = Some((right_node, right_pre_path, right_hash));
+                    self.state = next_op;
+                    println!("Ret: {ret:?}");
+                    if ret.is_some() {
+                        return Ok(ret); // There is a BatchOp to return, else keep looping until there is or is done
+                    }
+                }
                 // TODO: Do I actually need a traverse both? What if the right state is None, then call next. If next will continue
                 //       to return None after the first None is reached, then it would be safe.
                 DiffIterationNodeState::TraverseBoth => {
@@ -181,7 +249,7 @@ impl DiffMerkleNodeStream<'_> {
                     };
                     println!("Right state: {:?}", self.right_state);
                     let (next_op, ret) =
-                        self.one_step(&left_pre_path, &left_node, &right_pre_path, &right_node);
+                        self.one_step(&left_pre_path, &left_node, left_hash.as_ref(), &right_pre_path, &right_node, right_hash.as_ref());
 
                     // Update states
                     self.left_state = Some((left_node, left_pre_path, left_hash));
@@ -226,8 +294,14 @@ impl DiffMerkleNodeStream<'_> {
 
                     //let (right_node, right_pre_path, right_hash) =
                     //    self.right_state.take().expect("TODO");
-                    let (next_op, ret) =
-                        self.one_step(&left_pre_path, &left_node, &right_pre_path, &right_node);
+                    let (next_op, ret) = self.one_step(
+                        &left_pre_path,
+                        &left_node,
+                        left_hash.as_ref(),
+                        &right_pre_path,
+                        &right_node,
+                        right_hash.as_ref(),
+                    );
 
                     self.left_state = Some((left_node, left_pre_path, left_hash));
                     self.right_state = Some((right_node, right_pre_path, right_hash));
@@ -264,7 +338,7 @@ impl DiffMerkleNodeStream<'_> {
                         continue;
                     };
                     let (next_op, ret) =
-                        self.one_step(&left_pre_path, &left_node, &right_pre_path, &right_node);
+                        self.one_step(&left_pre_path, &left_node, left_hash.as_ref(), &right_pre_path, &right_node, right_hash.as_ref());
 
                     self.left_state = Some((left_node, left_pre_path, left_hash));
                     self.right_state = Some((right_node, right_pre_path, right_hash));
@@ -317,7 +391,7 @@ impl DiffMerkleNodeStream<'_> {
                             .chain(left_node.partial_path().iter().copied()),
                     );
 
-                    let ret = left_node.value().map(|val| BatchOp::Delete {
+                    let ret = left_node.value().map(|_val| BatchOp::Delete {
                         key: key_from_nibble_iter(full_path.iter().copied()),
                     });
                     self.left_state = Some((left_node, left_pre_path, left_hash));
@@ -446,8 +520,7 @@ mod tests {
         merkle.try_into().unwrap()
     }
 
-
-    /* 
+    /*
     #[test]
     fn test_diff_empty_mutable_trees() {
         // This is unlikely to happen in practice, but it helps cover the case where
