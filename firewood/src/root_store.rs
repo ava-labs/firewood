@@ -82,6 +82,10 @@ impl RootStore {
     /// # Errors
     ///
     ///  Will return an error if unable to query the underlying datastore.
+    ///
+    /// # Panics
+    ///
+    ///  Will panic if the latest revision does not exist.
     pub fn get(
         &self,
         hash: &TrieHash,
@@ -97,10 +101,17 @@ impl RootStore {
             "invalid address: zero address",
         ))?;
 
+        let latest_nodestore = self
+            .in_memory_revisions
+            .read()
+            .get_latest_revision()
+            .expect("there is always one revision")
+            .clone();
+
         let nodestore = Arc::new(NodeStore::with_root(
             hash.clone().into_hash_type(),
             addr,
-            self.in_memory_revisions.read().get_latest_revision(),
+            latest_nodestore,
         ));
 
         self.cache.lock().insert(hash.clone(), nodestore.clone());
