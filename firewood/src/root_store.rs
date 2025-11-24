@@ -12,7 +12,7 @@ use weak_table::WeakValueHashMap;
 use derive_where::derive_where;
 use firewood_storage::{Committed, FileBacked, IntoHashType, LinearAddress, NodeStore, TrieHash};
 
-use crate::manager::{CommittedRevision, InMemoryRevisions};
+use crate::manager::{CommittedRevision, CommittedRevisionCache};
 
 const FJALL_PARTITION_NAME: &str = "firewood";
 
@@ -21,7 +21,8 @@ const FJALL_PARTITION_NAME: &str = "firewood";
 pub struct RootStore {
     keyspace: Keyspace,
     items: PartitionHandle,
-    in_memory_revisions: Arc<RwLock<InMemoryRevisions>>,
+    revision_cache: Arc<RwLock<CommittedRevisionCache>>,
+    /// Cache of reconstructed revisions by hash.
     cache: Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked>>>>,
 }
 
@@ -29,14 +30,15 @@ impl RootStore {
     /// Creates or opens an instance of `RootStore`.
     ///
     /// Args:
-    /// - path: the directory where `RootStore` will write to.
+    /// - `path`: the directory where `RootStore` will write to.
+    /// - `committed_revision_cache`: the cache of recently committed revisions.
     ///
     /// # Errors
     ///
     /// Will return an error if unable to create or open an instance of `RootStore`.
     pub fn new<P: AsRef<Path>>(
         path: P,
-        in_memory_revisions: Arc<RwLock<InMemoryRevisions>>,
+        committed_revision_cache: Arc<RwLock<CommittedRevisionCache>>,
     ) -> Result<RootStore, Box<dyn std::error::Error + Send + Sync>> {
         let keyspace = Config::new(path).open()?;
         let items =
@@ -46,7 +48,7 @@ impl RootStore {
         Ok(Self {
             keyspace,
             items,
-            in_memory_revisions,
+            revision_cache: committed_revision_cache,
             cache,
         })
     }
@@ -112,7 +114,7 @@ impl RootStore {
             .ok_or("invalid address: empty address")?;
 
         let latest_nodestore = self
-            .in_memory_revisions
+            .revision_cache
             .read()
             .get_latest_revision()
             .expect("there is always one revision")
