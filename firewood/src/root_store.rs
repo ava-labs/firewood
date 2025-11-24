@@ -196,7 +196,7 @@ mod tests {
         // from the cache.
         let retrieved_revision = root_store.get(&hash).unwrap().unwrap();
 
-        assert!(Arc::ptr_eq(&revision, &retrieved_revision))
+        assert!(Arc::ptr_eq(&revision, &retrieved_revision));
     }
 
     #[test]
