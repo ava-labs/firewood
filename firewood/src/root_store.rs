@@ -21,7 +21,7 @@ const FJALL_PARTITION_NAME: &str = "firewood";
 pub struct RootStore {
     keyspace: Keyspace,
     items: PartitionHandle,
-    revision_cache: Arc<RwLock<CommittedRevisionCache>>,
+    committed_revision_cache: Arc<RwLock<CommittedRevisionCache>>,
     /// Cache of reconstructed revisions by hash.
     cache: Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked>>>>,
 }
@@ -48,7 +48,7 @@ impl RootStore {
         Ok(Self {
             keyspace,
             items,
-            revision_cache: committed_revision_cache,
+            committed_revision_cache,
             cache,
         })
     }
@@ -114,7 +114,7 @@ impl RootStore {
             .ok_or("invalid address: empty address")?;
 
         let latest_nodestore = self
-            .revision_cache
+            .committed_revision_cache
             .read()
             .get_latest_revision()
             .expect("there is always one revision")
