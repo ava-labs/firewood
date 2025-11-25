@@ -1,6 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(dead_code)]
+
 use crate::{
     db::BatchOp,
     iter::key_from_nibble_iter,
@@ -30,14 +32,14 @@ struct DiffMerkleNodeStream<'a> {
 }
 
 impl<'a> DiffMerkleNodeStream<'a> {
-    fn new<T: TrieReader + HashedNodeReader, U: TrieReader + HashedNodeReader>(
+    fn new_without_hash<T: TrieReader, U: TrieReader>(
         left_tree: &'a T,
         right_tree: &'a U,
         start_key: Key,
     ) -> Self {
         Self {
-            left_tree: Self::dfs_iter(left_tree),
-            right_tree: Self::dfs_iter(right_tree),
+            left_tree: Self::dfs_iter(left_tree, None),
+            right_tree: Self::dfs_iter(right_tree, None),
             left_state: None,
             right_state: None,
             state: DiffIterationNodeState::TraverseBoth,
@@ -45,10 +47,23 @@ impl<'a> DiffMerkleNodeStream<'a> {
         }
     }
 
-    pub fn dfs_iter<V: TrieReader + HashedNodeReader>(tree: &'a V) -> DFSIterator<'a> {
-        let root = tree.root_node();
-        let hash = tree.root_hash();
+    fn new<T: TrieReader + HashedNodeReader, U: TrieReader + HashedNodeReader>(
+        left_tree: &'a T,
+        right_tree: &'a U,
+        start_key: Key,
+    ) -> Self {
+        Self {
+            left_tree: Self::dfs_iter(left_tree, left_tree.root_hash()),
+            right_tree: Self::dfs_iter(right_tree, right_tree.root_hash()),
+            left_state: None,
+            right_state: None,
+            state: DiffIterationNodeState::TraverseBoth,
+            //state: DiffNodeStreamState::from(start_key),
+        }
+    }
 
+    pub fn dfs_iter<V: TrieReader>(tree: &'a V, root_hash: Option<TrieHash>) -> DFSIterator<'a> {
+        let root = tree.root_node();
         let mut ret = DFSIterator {
             stack: vec![],
             prev_num_children: 0,
@@ -56,7 +71,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
         };
 
         if let Some(root) = root {
-            ret.stack.push((root.clone(), Path::default(), hash));
+            ret.stack.push((root.clone(), Path::default(), root_hash));
         }
         ret
     }
@@ -513,7 +528,7 @@ mod tests {
         HashedNodeReader, ImmutableProposal, MemStore, MutableProposal, NodeStore,
     };
     use std::sync::Arc;
-    //use test_case::test_case;
+    use test_case::test_case;
 
     fn diff_merkle_iterator<'a, T, U>(
         tree_left: &'a Merkle<T>,
@@ -526,6 +541,18 @@ mod tests {
     {
         DiffMerkleNodeStream::new(tree_left.nodestore(), tree_right.nodestore(), start_key)
     }
+
+    fn diff_merkle_iterator_without_hash<'a, T, U>(
+        tree_left: &'a Merkle<T>,
+        tree_right: &'a Merkle<U>,
+        start_key: Key,
+    ) -> DiffMerkleNodeStream<'a>
+    where
+        T: firewood_storage::TrieReader,
+        U: firewood_storage::TrieReader,
+    {
+        DiffMerkleNodeStream::new_without_hash(tree_left.nodestore(), tree_right.nodestore(), start_key)
+    }    
 
     fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
         let memstore = MemStore::new(vec![]);
@@ -551,7 +578,6 @@ mod tests {
         merkle.try_into().unwrap()
     }
 
-    /*
     #[test]
     fn test_diff_empty_mutable_trees() {
         // This is unlikely to happen in practice, but it helps cover the case where
@@ -559,10 +585,9 @@ mod tests {
         let m1 = create_test_merkle();
         let m2 = create_test_merkle();
 
-        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+        let mut diff_iter = diff_merkle_iterator_without_hash(&m1, &m2, Box::new([]));
         assert!(diff_iter.next().is_none());
     }
-    */
 
     #[test]
     fn test_diff_empty_trees() {
@@ -730,5 +755,87 @@ mod tests {
             matches!(ops[4], BatchOp::Put { ref key, ref value } if **key == *b"f" && **value == *b"value_f")
         );
         // Note: "c" should be skipped as it's identical in both trees
+    }
+
+
+    #[test_case(true, false, 0, 1)] // same value, m1->m2: no put needed, delete prefix/b
+    #[test_case(false, false, 1, 1)] // diff value, m1->m2: put prefix/a, delete prefix/b
+    #[test_case(true, true, 1, 0)] // same value, m2->m1: no change to prefix/a, add prefix/b
+    #[test_case(false, true, 2, 0)] // diff value, m2->m1: update prefix/a, add prefix/b
+    #[allow(clippy::arithmetic_side_effects)]
+    fn test_branch_vs_leaf_empty_partial_path_bug(
+        same_value: bool,
+        backwards: bool,
+        expected_puts: usize,
+        expected_deletes: usize,
+    ) {
+        // This test covers the exclusion logic in Branch vs Leaf scenarios.
+        // It creates a case where one tree has a branch with children, and the other
+        // tree has a leaf that matches one of those children - testing that the
+        // matching child gets excluded from deletion and properly compared instead.
+        //
+        // Parameters:
+        // - same_value: whether prefix/a has the same value in both trees
+        // - backwards: whether to compare m2->m1 instead of m1->m2
+        // - expected_puts/expected_deletes: expected operation counts
+
+        // Tree1: Create children under "prefix" but no value at "prefix" itself
+        // This creates a branch node at "prefix" with value=None
+        let m1 = populate_merkle(
+            create_test_merkle(),
+            &[
+                (b"prefix/a".as_slice(), b"value_a".as_slice()),
+                (b"prefix/b".as_slice(), b"value_b".as_slice()),
+            ],
+        );
+
+        // Tree2: Create just a single value at "prefix/a"
+        // Value depends on same_value parameter
+        let m2_value: &[u8] = if same_value {
+            b"value_a"
+        } else {
+            b"prefix_a_value"
+        };
+        let m2 = populate_merkle(create_test_merkle(), &[(b"prefix/a".as_slice(), m2_value)]);
+
+        // Choose direction based on backwards parameter
+        let (tree_left, tree_right, direction_desc) = if backwards {
+            (m2.nodestore(), m1.nodestore(), "m2->m1")
+        } else {
+            (m1.nodestore(), m2.nodestore(), "m1->m2")
+        };
+
+        //let diff_stream = DiffMerkleKeyValueStreams::new(tree_left, tree_right, Key::default());
+        let diff_stream = DiffMerkleNodeStream::new(tree_left, tree_right, Key::default());
+        let results: Vec<_> = diff_stream.collect::<Result<Vec<_>, _>>().unwrap();
+
+        let delete_count = results
+            .iter()
+            .filter(|op| matches!(op, BatchOp::Delete { .. }))
+            .count();
+
+        let put_count = results
+            .iter()
+            .filter(|op| matches!(op, BatchOp::Put { .. }))
+            .count();
+
+        // Verify against expected counts
+        assert_eq!(
+            put_count, expected_puts,
+            "Put count mismatch for {direction_desc} (same_value={same_value}, backwards={backwards}), results={results:x?}"
+        );
+        assert_eq!(
+            delete_count, expected_deletes,
+            "Delete count mismatch for {direction_desc} (same_value={same_value}, backwards={backwards}), results={results:x?}"
+        );
+        assert_eq!(
+            results.len(),
+            expected_puts + expected_deletes,
+            "Total operation count mismatch for {direction_desc} (same_value={same_value}, backwards={backwards}), results={results:x?}"
+        );
+
+        println!(
+            "✅ Branch vs leaf test passed: {direction_desc} (same_value={same_value}, backwards={backwards}) - {put_count} puts, {delete_count} deletes"
+        );
     }
 }
