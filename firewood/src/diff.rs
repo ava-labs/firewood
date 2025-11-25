@@ -172,14 +172,16 @@ impl Iterator for DiffMerkleNodeStream<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         match self.next_internal().transpose()? {
-            Ok(batch)  => Some(Ok(batch)),
+            Ok(batch) => Some(Ok(batch)),
             Err(e) => Some(Err(e)),
-        } 
+        }
     }
 }
 
 impl DiffMerkleNodeStream<'_> {
-    fn next_internal(&mut self) -> Result<Option<BatchOp<Key, Value>>, firewood_storage::FileIoError> {
+    fn next_internal(
+        &mut self,
+    ) -> Result<Option<BatchOp<Key, Value>>, firewood_storage::FileIoError> {
         loop {
             match &mut self.state {
                 DiffIterationNodeState::SkipChildren => {
@@ -215,8 +217,14 @@ impl DiffMerkleNodeStream<'_> {
                         continue;
                     };
                     println!("Right state: {:?}", self.right_state);
-                    let (next_op, ret) =
-                        self.one_step(&left_pre_path, &left_node, left_hash.as_ref(), &right_pre_path, &right_node, right_hash.as_ref());
+                    let (next_op, ret) = self.one_step(
+                        &left_pre_path,
+                        &left_node,
+                        left_hash.as_ref(),
+                        &right_pre_path,
+                        &right_node,
+                        right_hash.as_ref(),
+                    );
 
                     // Update states
                     self.left_state = Some((left_node, left_pre_path, left_hash));
@@ -259,8 +267,14 @@ impl DiffMerkleNodeStream<'_> {
                         continue;
                     };
                     println!("Right state: {:?}", self.right_state);
-                    let (next_op, ret) =
-                        self.one_step(&left_pre_path, &left_node, left_hash.as_ref(), &right_pre_path, &right_node, right_hash.as_ref());
+                    let (next_op, ret) = self.one_step(
+                        &left_pre_path,
+                        &left_node,
+                        left_hash.as_ref(),
+                        &right_pre_path,
+                        &right_node,
+                        right_hash.as_ref(),
+                    );
 
                     // Update states
                     self.left_state = Some((left_node, left_pre_path, left_hash));
@@ -348,8 +362,14 @@ impl DiffMerkleNodeStream<'_> {
                         }
                         continue;
                     };
-                    let (next_op, ret) =
-                        self.one_step(&left_pre_path, &left_node, left_hash.as_ref(), &right_pre_path, &right_node, right_hash.as_ref());
+                    let (next_op, ret) = self.one_step(
+                        &left_pre_path,
+                        &left_node,
+                        left_hash.as_ref(),
+                        &right_pre_path,
+                        &right_node,
+                        right_hash.as_ref(),
+                    );
 
                     self.left_state = Some((left_node, left_pre_path, left_hash));
                     self.right_state = Some((right_node, right_pre_path, right_hash));
@@ -669,5 +689,46 @@ mod tests {
         );
 
         assert!(diff_iter.next().is_none());
+    }
+
+    #[test]
+    #[allow(clippy::indexing_slicing)]
+    fn test_diff_interleaved_keys() {
+        // m1: a, c, e
+        // m2: b, c, d, f
+        // Expected: Delete a, Put b, Put d, Delete e, Put f
+
+        let m1 = populate_merkle(
+            create_test_merkle(),
+            &[(b"a", b"value_a"), (b"c", b"value_c"), (b"e", b"value_e")],
+        );
+
+        let m2 = populate_merkle(
+            create_test_merkle(),
+            &[
+                (b"b", b"value_b"),
+                (b"c", b"value_c"),
+                (b"d", b"value_d"),
+                (b"f", b"value_f"),
+            ],
+        );
+
+        let diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+
+        let ops: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
+
+        assert_eq!(ops.len(), 5);
+        assert!(matches!(ops[0], BatchOp::Delete { ref key } if **key == *b"a"));
+        assert!(
+            matches!(ops[1], BatchOp::Put { ref key, ref value } if **key == *b"b" && **value == *b"value_b")
+        );
+        assert!(
+            matches!(ops[2], BatchOp::Put { ref key, ref value } if **key == *b"d" && **value == *b"value_d")
+        );
+        assert!(matches!(ops[3], BatchOp::Delete { ref key } if **key == *b"e"));
+        assert!(
+            matches!(ops[4], BatchOp::Put { ref key, ref value } if **key == *b"f" && **value == *b"value_f")
+        );
+        // Note: "c" should be skipped as it's identical in both trees
     }
 }
