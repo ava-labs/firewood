@@ -167,8 +167,19 @@ impl<'a> DiffMerkleNodeStream<'a> {
     }
 }
 
+impl Iterator for DiffMerkleNodeStream<'_> {
+    type Item = Result<BatchOp<Key, Value>, firewood_storage::FileIoError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.next_internal().transpose()? {
+            Ok(batch)  => Some(Ok(batch)),
+            Err(e) => Some(Err(e)),
+        } 
+    }
+}
+
 impl DiffMerkleNodeStream<'_> {
-    fn next(&mut self) -> Result<Option<BatchOp<Key, Value>>, firewood_storage::FileIoError> {
+    fn next_internal(&mut self) -> Result<Option<BatchOp<Key, Value>>, firewood_storage::FileIoError> {
         loop {
             match &mut self.state {
                 DiffIterationNodeState::SkipChildren => {
@@ -539,7 +550,7 @@ mod tests {
         let m2 = make_immutable(create_test_merkle());
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
-        assert!(diff_iter.next().unwrap().is_none());
+        assert!(diff_iter.next().is_none());
     }
 
     #[test]
@@ -554,7 +565,7 @@ mod tests {
         let m2 = populate_merkle(create_test_merkle(), &items);
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
-        assert!(diff_iter.next().unwrap().is_none());
+        assert!(diff_iter.next().is_none());
     }
 
     #[test]
@@ -569,17 +580,17 @@ mod tests {
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
 
-        let op1 = diff_iter.next().unwrap().unwrap();
+        let op1 = diff_iter.next_internal().unwrap().unwrap();
         assert!(
             matches!(op1, BatchOp::Put { key, value } if key == Box::from(b"key1".as_slice()) && *value == *b"value1")
         );
 
-        let op2 = diff_iter.next().unwrap().unwrap();
+        let op2 = diff_iter.next_internal().unwrap().unwrap();
         assert!(
             matches!(op2, BatchOp::Put { key, value } if key == Box::from(b"key2".as_slice()) && *value == *b"value2")
         );
 
-        assert!(diff_iter.next().unwrap().is_none());
+        assert!(diff_iter.next().is_none());
     }
 
     #[test]
@@ -594,13 +605,13 @@ mod tests {
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
 
-        let op1 = diff_iter.next().unwrap().unwrap();
+        let op1 = diff_iter.next_internal().unwrap().unwrap();
         assert!(matches!(op1, BatchOp::Delete { key } if key == Box::from(b"key1".as_slice())));
 
-        let op2 = diff_iter.next().unwrap().unwrap();
+        let op2 = diff_iter.next_internal().unwrap().unwrap();
         assert!(matches!(op2, BatchOp::Delete { key } if key == Box::from(b"key2".as_slice())));
 
-        assert!(diff_iter.next().unwrap().is_none());
+        assert!(diff_iter.next().is_none());
     }
 
     #[test]
@@ -610,12 +621,12 @@ mod tests {
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
 
-        let op = diff_iter.next().unwrap().unwrap();
+        let op = diff_iter.next_internal().unwrap().unwrap();
         assert!(
             matches!(op, BatchOp::Put { key, value } if key == Box::from(b"key1".as_slice()) && *value == *b"new_value")
         );
 
-        assert!(diff_iter.next().unwrap().is_none());
+        assert!(diff_iter.next().is_none());
     }
 
     #[test]
@@ -641,22 +652,22 @@ mod tests {
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
 
-        let op1 = diff_iter.next().unwrap().unwrap();
+        let op1 = diff_iter.next_internal().unwrap().unwrap();
         assert!(matches!(op1, BatchOp::Delete { key } if key == Box::from(b"key1".as_slice())));
 
-        let op2 = diff_iter.next().unwrap().unwrap();
+        let op2 = diff_iter.next_internal().unwrap().unwrap();
         assert!(
             matches!(op2, BatchOp::Put { key, value } if key == Box::from(b"key2".as_slice()) && *value == *b"new_value")
         );
 
-        let op3 = diff_iter.next().unwrap().unwrap();
+        let op3 = diff_iter.next_internal().unwrap().unwrap();
         assert!(matches!(op3, BatchOp::Delete { key } if key == Box::from(b"key3".as_slice())));
 
-        let op4 = diff_iter.next().unwrap().unwrap();
+        let op4 = diff_iter.next_internal().unwrap().unwrap();
         assert!(
             matches!(op4, BatchOp::Put { key, value } if key == Box::from(b"key4".as_slice()) && *value == *b"value4")
         );
 
-        assert!(diff_iter.next().unwrap().is_none());
+        assert!(diff_iter.next().is_none());
     }
 }
