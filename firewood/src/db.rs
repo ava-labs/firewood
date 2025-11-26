@@ -798,37 +798,27 @@ mod test {
         }
     }
 
-
     #[test]
     fn test_propose_parallel_vs_normal_propose() {
-        const I: usize = 10;
         const N: usize = 100;
         let db1 = TestDb::new_with_config(
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
         );
-        let db2 = TestDb::new_with_config(
-            DbConfig::builder()
-                .use_parallel(UseParallel::Never)
-                .build(),
-        );
+        let db2 =
+            TestDb::new_with_config(DbConfig::builder().use_parallel(UseParallel::Never).build());
 
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
-        for round in 0..I {
+        for _ in 0..10 {
             // Create N keys and values like (key0, value0)..(keyN, valueN)
             let (keys, vals): (Vec<_>, Vec<_>) = (0..N)
-                .map(|i| {
-                    (
-                        rng.random::<[u8; 32]>(),
-                        rng.random::<[u8; 32]>(),
-                    )
-                })
+                .map(|_i| (rng.random::<[u8; 32]>(), rng.random::<[u8; 32]>()))
                 .unzip();
 
             let p1 = db1.propose(keys.iter().zip(vals.iter())).unwrap();
-            let p2 = db2.propose( keys.iter().zip(vals.iter())).unwrap();
+            let p2 = db2.propose(keys.iter().zip(vals.iter())).unwrap();
             let x = p1.nodestore.deleted();
             let y = p2.nodestore.deleted();
             assert_eq!(x, y);

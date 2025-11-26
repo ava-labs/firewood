@@ -816,7 +816,6 @@ where
 }
 
 impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
-
     #[doc(hidden)]
     pub fn deleted(&self) -> &[MaybePersistedNode] {
         self.kind.deleted.as_ref()
