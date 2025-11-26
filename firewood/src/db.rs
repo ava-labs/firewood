@@ -812,7 +812,7 @@ mod test {
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
         for _ in 0..10 {
-            // Create N keys and values like (key0, value0)..(keyN, valueN)
+            // Create N random keys and values
             let (keys, vals): (Vec<_>, Vec<_>) = (0..N)
                 .map(|_i| (rng.random::<[u8; 32]>(), rng.random::<[u8; 32]>()))
                 .unzip();
