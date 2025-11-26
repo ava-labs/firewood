@@ -245,7 +245,7 @@ impl ParallelMerkle {
                     Child::Node(node) => Ok(node),
                     Child::AddressWithHash(address, _) => {
                         // Track deletion of the removed child from the root (if it was persisted).
-                        root_deleted.push((address.clone()).into());
+                        root_deleted.push(address.into());
                         Ok(proposal.read_node(address)?.deref().clone())
                     }
                     Child::MaybePersisted(maybe_persisted, _) => {
