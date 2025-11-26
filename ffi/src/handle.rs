@@ -192,13 +192,13 @@ impl DatabaseHandle {
 
         let root_hash = handle.commit_proposal(|commit_time| {
             counter!("firewood.ffi.commit_ms").increment(commit_time.as_millis());
-            histogram!("firewood.ffi.commit_ms_bucket").record(commit_time.as_millis() as f64);
+            histogram!("firewood.ffi.commit_ms_bucket").record(commit_time.as_f64() * 1000.0);
         })?;
 
-        let elapsed = start_time.elapsed().as_millis();
-        counter!("firewood.ffi.batch_ms").increment(elapsed);
+        let elapsed = start_time.elapsed();
+        counter!("firewood.ffi.batch_ms").increment(elapsed.as_millis());
         counter!("firewood.ffi.batch").increment(1);
-        histogram!("firewood.ffi.batch_ms_bucket").record(elapsed as f64);
+        histogram!("firewood.ffi.batch_ms_bucket").record(elapsed.as_f64() * 1000.0);
 
         Ok(root_hash)
     }

@@ -123,7 +123,7 @@ impl<'db> CreateProposalResult<'db> {
         let propose_time = start_time.elapsed();
         counter!("firewood.ffi.propose_ms").increment(propose_time.as_millis());
         counter!("firewood.ffi.propose").increment(1);
-        histogram!("firewood.ffi.propose_ms_bucket").record(propose_time.as_millis() as f64);
+        histogram!("firewood.ffi.propose_ms_bucket").record(propose_time.as_f64() * 1000.0);
 
         let hash_key = proposal.root_hash()?;
 
