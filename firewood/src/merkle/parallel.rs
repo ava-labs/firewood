@@ -236,32 +236,23 @@ impl ParallelMerkle {
         // Create a channel for the coordinator (main thread) to send messages to this worker.
         let (child_sender, child_receiver) = mpsc::channel();
 
-        // The root's child becomes the root node of the worker
-        let taken_child = root_branch.children.get_mut(first_path_component).take();
-
-        // Track deletion of the removed child from the root (if it was persisted).
-        if let Some(ref child) = taken_child {
-            match child {
-                Child::AddressWithHash(address, _) => {
-                    root_deleted.push((*address).into());
-                }
-                Child::MaybePersisted(maybe_persisted, _) => {
-                    if maybe_persisted.as_linear_address().is_some() {
-                        root_deleted.push(maybe_persisted.clone());
-                    }
-                }
-                Child::Node(_) => {}
-            }
-        }
-
-        let child_root = taken_child
+        let child_root = root_branch
+            .children
+            .get_mut(first_path_component)
+            .take()
             .map(|child| -> Result<_, FileIoError> {
                 match child {
                     Child::Node(node) => Ok(node),
                     Child::AddressWithHash(address, _) => {
+                        // Track deletion of the removed child from the root (if it was persisted).
+                        root_deleted.push((address.clone()).into());
                         Ok(proposal.read_node(address)?.deref().clone())
                     }
                     Child::MaybePersisted(maybe_persisted, _) => {
+                        if maybe_persisted.as_linear_address().is_some() {
+                            // similar to above
+                            root_deleted.push(maybe_persisted.clone());
+                        }
                         Ok(maybe_persisted.as_shared_node(proposal)?.deref().clone())
                     }
                 }
