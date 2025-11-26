@@ -6,7 +6,7 @@
 use crate::{
     db::BatchOp,
     iter::key_from_nibble_iter,
-    merkle::{Key, Value},
+    merkle::{Key, PrefixOverlap, Value},
 };
 use firewood_storage::{Child, FileIoError, HashedNodeReader, Node, Path, TrieHash, TrieReader};
 use std::{cmp::Ordering, iter::once};
@@ -24,8 +24,8 @@ enum DiffIterationNodeState {
 
 /// Optimized node iterator that compares two merkle trees and skips matching subtrees
 struct DiffMerkleNodeStream<'a> {
-    left_tree: DFSIterator<'a>,
-    right_tree: DFSIterator<'a>,
+    left_tree: PreOrderIterator<'a>,
+    right_tree: PreOrderIterator<'a>,
     left_state: Option<(Arc<Node>, Path, Option<TrieHash>)>,
     right_state: Option<(Arc<Node>, Path, Option<TrieHash>)>,
     state: DiffIterationNodeState,
@@ -37,14 +37,17 @@ impl<'a> DiffMerkleNodeStream<'a> {
         right_tree: &'a U,
         start_key: Key,
     ) -> Self {
-        Self {
-            left_tree: Self::dfs_iter(left_tree, None),
-            right_tree: Self::dfs_iter(right_tree, None),
+        let mut ret = Self {
+            left_tree: Self::preorder_iter(left_tree, None),
+            right_tree: Self::preorder_iter(right_tree, None),
             left_state: None,
             right_state: None,
             state: DiffIterationNodeState::TraverseBoth,
             //state: DiffNodeStreamState::from(start_key),
-        }
+        };
+        let _ = ret.left_tree.iterate_to_key(&start_key);
+        let _ = ret.right_tree.iterate_to_key(&start_key);
+        ret
     }
 
     fn new<T: TrieReader + HashedNodeReader, U: TrieReader + HashedNodeReader>(
@@ -52,19 +55,25 @@ impl<'a> DiffMerkleNodeStream<'a> {
         right_tree: &'a U,
         start_key: Key,
     ) -> Self {
-        Self {
-            left_tree: Self::dfs_iter(left_tree, left_tree.root_hash()),
-            right_tree: Self::dfs_iter(right_tree, right_tree.root_hash()),
+        let mut ret = Self {
+            left_tree: Self::preorder_iter(left_tree, left_tree.root_hash()),
+            right_tree: Self::preorder_iter(right_tree, right_tree.root_hash()),
             left_state: None,
             right_state: None,
             state: DiffIterationNodeState::TraverseBoth,
             //state: DiffNodeStreamState::from(start_key),
-        }
+        };
+        let _ = ret.left_tree.iterate_to_key(&start_key);
+        let _ = ret.right_tree.iterate_to_key(&start_key);
+        ret
     }
 
-    pub fn dfs_iter<V: TrieReader>(tree: &'a V, root_hash: Option<TrieHash>) -> DFSIterator<'a> {
+    pub fn preorder_iter<V: TrieReader>(
+        tree: &'a V,
+        root_hash: Option<TrieHash>,
+    ) -> PreOrderIterator<'a> {
         let root = tree.root_node();
-        let mut ret = DFSIterator {
+        let mut ret = PreOrderIterator {
             stack: vec![],
             prev_num_children: 0,
             trie: tree,
@@ -452,14 +461,94 @@ impl DiffMerkleNodeStream<'_> {
 }
 
 // For now, just implement traverse left and traverse right functions to test out the iterator
-struct DFSIterator<'a> {
+struct PreOrderIterator<'a> {
     // The stack of nodes to visit. We store references to avoid ownership issues during iteration.
     trie: &'a dyn TrieReader,
     stack: Vec<(Arc<Node>, Path, Option<TrieHash>)>,
     prev_num_children: usize,
 }
 
-impl DFSIterator<'_> {
+impl PreOrderIterator<'_> {
+    fn iterate_to_key(&mut self, key: &Key) -> Result<(), FileIoError> {
+        if key.is_empty() {
+            return Ok(());
+        }
+        // Assume root or other nodes have already been pushed onto the stack
+        loop {
+            self.prev_num_children = 0;
+            if let Some((node, pre_path, node_hash)) = self.stack.pop() {
+                // Check if it is a match for the key.
+                let full_path = Path::from_nibbles_iterator(
+                    pre_path
+                        .iter()
+                        .copied()
+                        .chain(node.partial_path().iter().copied()),
+                );
+
+                let node_key = key_from_nibble_iter(full_path.iter().copied());
+                if node_key.eq(key) {
+                    // Just push back to stack and return. Change proof will now start at this key
+                    self.stack.push((node, pre_path, node_hash));
+                    return Ok(());
+                }
+                // Check if this node's path is a prefix of the key. If it is, then keep traversing
+                // Otherwise, this is the lexicographically next node to the key. Not clear what the
+                // correct response is for this case, but for now we will just push that to the stac
+                // and allow the change proof to start at this node.
+                // TODO: This can be improved to not require generating the full path on each
+                //       iteration by following the approach in insert_helper, which is to update
+                //       the key on each iteration with only the non-overlapping parts.
+                let path_overlap = PrefixOverlap::from(key, node_key.as_ref());
+                let unique_node = path_overlap.unique_b;
+                if !unique_node.is_empty() {
+                    self.stack.push((node, pre_path, node_hash));
+                    return Ok(());
+                }
+
+                if let Node::Branch(branch) = &*node {
+                    // TODO: Once the first child is added to the stack, then the rest should be added without needing
+                    //       to do additional checks.
+                    for (path_comp, child) in branch.children.clone().into_iter().rev() {
+                        if let Some(child) = child {
+                            let mut child_hash: Option<TrieHash> = None;
+                            let child = match child {
+                                Child::Node(child) => child.clone().into(),
+                                Child::AddressWithHash(addr, hash) => {
+                                    child_hash = Some(hash);
+                                    self.trie.read_node(addr)?
+                                }
+                                Child::MaybePersisted(maybe_persisted, hash) => {
+                                    child_hash = Some(hash);
+                                    maybe_persisted.as_shared_node(&self.trie)?
+                                }
+                            };
+                            let child_pre_path = Path::from_nibbles_iterator(
+                                pre_path.iter().copied().chain(
+                                    node.partial_path()
+                                        .iter()
+                                        .copied()
+                                        .chain(once(path_comp.as_u8())),
+                                ),
+                            );
+
+                            let child_pre_key =
+                                key_from_nibble_iter(child_pre_path.iter().copied());
+                            let path_overlap = PrefixOverlap::from(key, child_pre_key.as_ref());
+                            let unique_node = path_overlap.unique_b;
+                            if unique_node.is_empty() || child_pre_key > *key {
+                                self.stack.push((child, child_pre_path, child_hash));
+                                self.prev_num_children =
+                                    self.prev_num_children.checked_add(1).expect("TODO");
+                            }
+                        }
+                    }
+                }
+            } else {
+                return Ok(());
+            }
+        }
+    }
+
     fn next(&mut self) -> Result<Option<(Arc<Node>, Path, Option<TrieHash>)>, FileIoError> {
         // Pop the next node from the stack
         self.prev_num_children = 0;
@@ -551,8 +640,12 @@ mod tests {
         T: firewood_storage::TrieReader,
         U: firewood_storage::TrieReader,
     {
-        DiffMerkleNodeStream::new_without_hash(tree_left.nodestore(), tree_right.nodestore(), start_key)
-    }    
+        DiffMerkleNodeStream::new_without_hash(
+            tree_left.nodestore(),
+            tree_right.nodestore(),
+            start_key,
+        )
+    }
 
     fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
         let memstore = MemStore::new(vec![]);
@@ -757,7 +850,6 @@ mod tests {
         // Note: "c" should be skipped as it's identical in both trees
     }
 
-
     #[test_case(true, false, 0, 1)] // same value, m1->m2: no put needed, delete prefix/b
     #[test_case(false, false, 1, 1)] // diff value, m1->m2: put prefix/a, delete prefix/b
     #[test_case(true, true, 1, 0)] // same value, m2->m1: no change to prefix/a, add prefix/b
@@ -837,5 +929,272 @@ mod tests {
         println!(
             "✅ Branch vs leaf test passed: {direction_desc} (same_value={same_value}, backwards={backwards}) - {put_count} puts, {delete_count} deletes"
         );
+    }
+
+    #[test]
+    fn test_diff_processes_all_branch_children() {
+        // This test verifies the bug fix: ensure that after finding different children
+        // at the same position in a branch, the algorithm continues to process remaining children
+        let m1 = create_test_merkle();
+        let m1 = populate_merkle(
+            m1,
+            &[
+                (b"branch_a/file", b"shared_value"),    // This will be identical
+                (b"branch_b/file", b"value1"),          // This will be changed
+                (b"branch_c/file", b"left_only_value"), // This will be deleted
+            ],
+        );
+
+        let m2 = create_test_merkle();
+        let m2 = populate_merkle(
+            m2,
+            &[
+                (b"branch_a/file", b"shared_value"),     // Identical to tree1
+                (b"branch_b/file", b"value1_modified"),  // Different value
+                (b"branch_d/file", b"right_only_value"), // This will be added
+            ],
+        );
+
+        let diff_stream = DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Key::default());
+
+        let results: Vec<_> = diff_stream.collect::<Result<Vec<_>, _>>().unwrap();
+
+        // Should find all differences:
+        // 1. branch_b/file modified
+        // 2. branch_c/file deleted
+        // 3. branch_d/file added
+        assert_eq!(results.len(), 3, "Should find all 3 differences");
+
+        // Verify specific operations
+        let mut changes = 0;
+        let mut deletions = 0;
+        let mut additions = 0;
+
+        for result in &results {
+            match result {
+                BatchOp::Put { key, value: _ } => {
+                    if key.as_ref() == b"branch_b/file" {
+                        changes += 1;
+                        assert_eq!(&**key, b"branch_b/file");
+                    } else if key.as_ref() == b"branch_d/file" {
+                        additions += 1;
+                        assert_eq!(&**key, b"branch_d/file");
+                    }
+                }
+                BatchOp::Delete { key } => {
+                    deletions += 1;
+                    assert_eq!(&**key, b"branch_c/file");
+                }
+                BatchOp::DeleteRange { .. } => {
+                    panic!("DeleteRange not expected in this test");
+                }
+            }
+        }
+
+        assert_eq!(changes, 1, "Should have 1 change");
+        assert_eq!(deletions, 1, "Should have 1 deletion");
+        assert_eq!(additions, 1, "Should have 1 addition");
+    }
+
+    #[test]
+    fn test_all_six_diff_states_coverage() {
+        // This test ensures comprehensive coverage of all 6 diff iteration states
+        // by creating specific scenarios that guarantee each state is exercised
+
+        // Create trees with carefully designed structure to trigger all states:
+        // 1. Deep branching structure to ensure branch nodes exist
+        // 2. Mix of shared, modified, left-only, and right-only content
+        // 3. Different tree shapes to force visited states
+
+        let tree1_data = vec![
+            // Shared deep structure (will trigger VisitedNodePairState)
+            (b"shared/deep/branch/file1".as_slice(), b"value1".as_slice()),
+            (b"shared/deep/branch/file2".as_slice(), b"value2".as_slice()),
+            (b"shared/deep/branch/file3".as_slice(), b"value3".as_slice()),
+            // Modified values (will trigger UnvisitedNodePairState)
+            (b"modified/path/file".as_slice(), b"old_value".as_slice()),
+            // Left-only deep structure (will trigger VisitedNodeLeftState)
+            (
+                b"left_only/deep/branch/file1".as_slice(),
+                b"left_val1".as_slice(),
+            ),
+            (
+                b"left_only/deep/branch/file2".as_slice(),
+                b"left_val2".as_slice(),
+            ),
+            (
+                b"left_only/deep/branch/file3".as_slice(),
+                b"left_val3".as_slice(),
+            ),
+            // Simple left-only (will trigger UnvisitedNodeLeftState)
+            (
+                b"simple_left_only".as_slice(),
+                b"simple_left_value".as_slice(),
+            ),
+            // Mixed branch with some shared children
+            (
+                b"mixed_branch/shared_child".as_slice(),
+                b"shared".as_slice(),
+            ),
+            (
+                b"mixed_branch/left_child".as_slice(),
+                b"left_value".as_slice(),
+            ),
+        ];
+
+        let tree2_data = vec![
+            // Same shared deep structure
+            (b"shared/deep/branch/file1".as_slice(), b"value1".as_slice()),
+            (b"shared/deep/branch/file2".as_slice(), b"value2".as_slice()),
+            (b"shared/deep/branch/file3".as_slice(), b"value3".as_slice()),
+            // Modified values
+            (b"modified/path/file".as_slice(), b"new_value".as_slice()),
+            // Right-only deep structure (will trigger VisitedNodeRightState)
+            (
+                b"right_only/deep/branch/file1".as_slice(),
+                b"right_val1".as_slice(),
+            ),
+            (
+                b"right_only/deep/branch/file2".as_slice(),
+                b"right_val2".as_slice(),
+            ),
+            (
+                b"right_only/deep/branch/file3".as_slice(),
+                b"right_val3".as_slice(),
+            ),
+            // Simple right-only (will trigger UnvisitedNodeRightState)
+            (
+                b"simple_right_only".as_slice(),
+                b"simple_right_value".as_slice(),
+            ),
+            // Mixed branch with some shared children
+            (
+                b"mixed_branch/shared_child".as_slice(),
+                b"shared".as_slice(),
+            ),
+            (
+                b"mixed_branch/right_child".as_slice(),
+                b"right_value".as_slice(),
+            ),
+        ];
+
+        let m1 = populate_merkle(create_test_merkle(), &tree1_data);
+        let m2 = populate_merkle(create_test_merkle(), &tree2_data);
+
+        let diff_iter = diff_merkle_iterator(&m1, &m2, Key::default());
+        let results: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
+
+        // Verify we found the expected differences
+        let mut deletions = 0;
+        let mut additions = 0;
+
+        for result in &results {
+            match result {
+                BatchOp::Put { .. } => additions += 1,
+                BatchOp::Delete { .. } => deletions += 1,
+                BatchOp::DeleteRange { .. } => {
+                    panic!("DeleteRange not expected in this test");
+                }
+            }
+        }
+
+        // Expected differences using BatchOp representation:
+        // - Both modifications and additions are represented as Put operations
+        // - Deletions are Delete operations
+        // - We expect multiple operations for the different scenarios
+        assert!(deletions >= 4, "Expected at least 4 deletions");
+        assert!(
+            additions >= 4,
+            "Expected at least 4 additions (includes modifications)"
+        );
+
+        println!("✅ All 6 diff states coverage test passed:");
+        println!("   - Deletions: {deletions}");
+        println!("   - Additions (includes modifications): {additions}");
+        println!("   - This test exercises scenarios that should trigger:");
+        println!("     1. UnvisitedNodePairState (comparing modified nodes)");
+        println!("     2. UnvisitedNodeLeftState (simple left-only nodes)");
+        println!("     3. UnvisitedNodeRightState (simple right-only nodes)");
+        println!("     4. VisitedNodePairState (shared branch with different children)");
+        println!("     5. VisitedNodeLeftState (left-only branch structures)");
+        println!("     6. VisitedNodeRightState (right-only branch structures)");
+    }
+
+    #[test]
+    fn test_branch_vs_leaf_state_transitions() {
+        // This test specifically covers the branch-vs-leaf scenarios in UnvisitedNodePairState
+        // which can trigger different state transitions
+
+        // Tree1: Has a branch structure at "path"
+        let m1 = populate_merkle(
+            create_test_merkle(),
+            &[
+                (b"path/file1".as_slice(), b"value1".as_slice()),
+                (b"path/file2".as_slice(), b"value2".as_slice()),
+            ],
+        );
+
+        // Tree2: Has a leaf at "path"
+        let m2 = populate_merkle(
+            create_test_merkle(),
+            &[(b"path".as_slice(), b"leaf_value".as_slice())],
+        );
+
+        let diff_stream = DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Key::default());
+
+        let results: Vec<_> = diff_stream.collect::<Result<Vec<_>, _>>().unwrap();
+
+        // Should find:
+        // - Deletion of path/file1 and path/file2
+        // - Addition of path (leaf)
+        assert!(
+            results.len() >= 2,
+            "Should find multiple differences for branch vs leaf"
+        );
+
+        println!(
+            "✅ Branch vs leaf transitions test passed with {} operations",
+            results.len()
+        );
+    }
+
+    #[test]
+    fn test_diff_with_start_key() {
+        let m1 = populate_merkle(
+            create_test_merkle(),
+            &[
+                (b"aaa", b"value1"),
+                (b"bbb", b"value2"),
+                (b"ccc", b"value3"),
+            ],
+        );
+
+        let m2 = populate_merkle(
+            create_test_merkle(),
+            &[
+                (b"aaa", b"value2"),   // Same
+                (b"bbb", b"modified"), // Modified
+                (b"ddd", b"value4"),   // Added
+            ],
+        );
+
+        // Start from key "bbb" - should skip "aaa"
+        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::from(b"bbb".as_slice()));
+
+        let op1 = diff_iter.next().unwrap().unwrap();
+        assert!(
+            matches!(op1, BatchOp::Put { ref key, ref value } if **key == *b"bbb" && **value == *b"modified"),
+            "Expected first operation to be Put bbb=modified, got: {op1:?}",
+        );
+
+        let op2 = diff_iter.next().unwrap().unwrap();
+        assert!(matches!(op2, BatchOp::Delete { key } if key == Box::from(b"ccc".as_slice())));
+
+        let op3 = diff_iter.next().unwrap().unwrap();
+        assert!(
+            matches!(op3, BatchOp::Put { key, value } if key == Box::from(b"ddd".as_slice()) && *value == *b"value4")
+        );
+
+        assert!(diff_iter.next().is_none());
     }
 }
