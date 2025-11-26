@@ -455,7 +455,7 @@ impl Eq for NodeStoreParent {}
 /// Contains state for a proposed revision of the trie.
 pub struct ImmutableProposal {
     /// Nodes that have been deleted in this proposal.
-    deleted: Box<[MaybePersistedNode]>,
+    pub(crate) deleted: Box<[MaybePersistedNode]>,
     /// The parent of this proposal.
     parent: Arc<parking_lot::Mutex<NodeStoreParent>>,
     /// The root of the trie in this proposal.
@@ -815,6 +815,13 @@ where
     }
 }
 
+impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
+
+    #[doc(hidden)]
+    pub fn deleted(&self) -> &[MaybePersistedNode] {
+        self.kind.deleted.as_ref()
+    }
+}
 impl<S: WritableStorage> NodeStore<Committed, S> {
     /// adjust the freelist of this proposal to reflect the freed nodes in the oldest proposal
     ///
