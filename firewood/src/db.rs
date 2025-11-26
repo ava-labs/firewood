@@ -801,12 +801,12 @@ mod test {
     #[test]
     fn test_propose_parallel_vs_normal_propose() {
         const N: usize = 100;
-        let db1 = TestDb::new_with_config(
+        let db_parallel = TestDb::new_with_config(
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
         );
-        let db2 =
+        let db_single =
             TestDb::new_with_config(DbConfig::builder().use_parallel(UseParallel::Never).build());
 
         let rng = firewood_storage::SeededRng::from_env_or_random();
@@ -817,13 +817,18 @@ mod test {
                 .map(|_i| (rng.random::<[u8; 32]>(), rng.random::<[u8; 32]>()))
                 .unzip();
 
-            let p1 = db1.propose(keys.iter().zip(vals.iter())).unwrap();
-            let p2 = db2.propose(keys.iter().zip(vals.iter())).unwrap();
-            let x = p1.nodestore.deleted();
-            let y = p2.nodestore.deleted();
-            assert_eq!(x, y);
-            p1.commit().unwrap();
-            p2.commit().unwrap();
+            let p_parallel = db_parallel.propose(keys.iter().zip(vals.iter())).unwrap();
+            let p_single = db_single.propose(keys.iter().zip(vals.iter())).unwrap();
+            let del_parallel = p_parallel.nodestore.deleted().to_vec();
+            let del_single = p_single.nodestore.deleted().to_vec();
+            // inefficient, but MaybePersistedNode doesn't impl neither Ord nor Hash
+            // can't use sort or hashset
+            assert!(
+                del_parallel.len() == del_single.len()
+                    && del_parallel.iter().all(|node| del_single.contains(node))
+            );
+            p_parallel.commit().unwrap();
+            p_single.commit().unwrap();
         }
     }
 
