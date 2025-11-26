@@ -85,16 +85,25 @@ impl<'a> DiffMerkleNodeStream<'a> {
         ret
     }
 
+    /// Called as part of a lock-step synchronized pre-order traversal of the left and right tries. This
+    /// function compares the current nodes from the two tries to determine if any operations needed to be
+    /// deleted (i.e., op appears on the left but not the right trie) or added (i.e., op appears on the
+    /// right but not the left trie). It also returns the next iteration action, which can include
+    /// traversing down the left or right trie, traversing down both if current nodes' path on both tries
+    /// are the same but their node hashes differ, or skipping the children of the current nodes from both
+    /// tries if their node hashes match.
+    /// TODO: Consider grouping pre-path, node, and hash into a single struct.
     pub fn one_step(
         &self,
         left_pre_path: &Path,
-        left_node: &triomphe::Arc<Node>,
+        left_node: &Arc<Node>,
         left_hash: Option<&TrieHash>,
         right_pre_path: &Path,
-        right_node: &triomphe::Arc<Node>,
+        right_node: &Arc<Node>,
         right_hash: Option<&TrieHash>,
     ) -> (DiffIterationNodeState, Option<BatchOp<Key, Value>>) {
-        // Combine pre_path with node path to get full path.
+        // Combine pre_path with node's partial path to get its full path.
+        // TODO: Determine if it is necessary to compute the full path.
         let left_full_path = Path::from_nibbles_iterator(
             left_pre_path
                 .iter()
@@ -108,10 +117,19 @@ impl<'a> DiffMerkleNodeStream<'a> {
                 .chain(right_node.partial_path().iter().copied()),
         );
 
-        // Compare the partial path of the current node from the left and right tries.
+        // Compare the full path of the current nodes from the left and right tries.
         match left_full_path.cmp(&right_full_path) {
+            // If the left full path is less than the right full path, that means that all of
+            // the remaining nodes (and any keys stored in those nodes) from the right trie
+            // are greater than the current node on the left trie. Therefore, we should traverse
+            // down the left trie until we reach a node that is larger than or equal to the
+            // current node on the right trie, and collect all of the keys associated with
+            // those nodes (excluding the last one) and add them to the set of keys that
+            // need to be deleted in the change proof.
             Ordering::Less => {
-                //println!("Less than: {left_full_path:?} ------ {right_full_path:?}");
+                // If there is a value in the current node in the left trie, than that value
+                // should be included in the set of deleted keys in the change proof. We do
+                // this by returning it in the second entry of the tuple in the return value.
                 if let Some(_val) = left_node.value() {
                     (
                         DiffIterationNodeState::TraverseLeft,
@@ -718,14 +736,14 @@ mod tests {
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
 
-        let op1 = diff_iter.next_internal().unwrap().unwrap();
+        let op1 = diff_iter.next().unwrap().unwrap();
         assert!(
-            matches!(op1, BatchOp::Put { key, value } if key == Box::from(b"key1".as_slice()) && *value == *b"value1")
+            matches!(op1, BatchOp::Put { key, value } if key == Box::from(b"key1".as_slice()) && value.as_ref() == b"value1")
         );
 
-        let op2 = diff_iter.next_internal().unwrap().unwrap();
+        let op2 = diff_iter.next().unwrap().unwrap();
         assert!(
-            matches!(op2, BatchOp::Put { key, value } if key == Box::from(b"key2".as_slice()) && *value == *b"value2")
+            matches!(op2, BatchOp::Put { key, value } if key == Box::from(b"key2".as_slice()) && value.as_ref() == b"value2")
         );
 
         assert!(diff_iter.next().is_none());
@@ -743,10 +761,10 @@ mod tests {
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
 
-        let op1 = diff_iter.next_internal().unwrap().unwrap();
+        let op1 = diff_iter.next().unwrap().unwrap();
         assert!(matches!(op1, BatchOp::Delete { key } if key == Box::from(b"key1".as_slice())));
 
-        let op2 = diff_iter.next_internal().unwrap().unwrap();
+        let op2 = diff_iter.next().unwrap().unwrap();
         assert!(matches!(op2, BatchOp::Delete { key } if key == Box::from(b"key2".as_slice())));
 
         assert!(diff_iter.next().is_none());
@@ -759,9 +777,9 @@ mod tests {
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
 
-        let op = diff_iter.next_internal().unwrap().unwrap();
+        let op = diff_iter.next().unwrap().unwrap();
         assert!(
-            matches!(op, BatchOp::Put { key, value } if key == Box::from(b"key1".as_slice()) && *value == *b"new_value")
+            matches!(op, BatchOp::Put { key, value } if key == Box::from(b"key1".as_slice()) && value.as_ref() == b"new_value")
         );
 
         assert!(diff_iter.next().is_none());
@@ -790,20 +808,20 @@ mod tests {
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
 
-        let op1 = diff_iter.next_internal().unwrap().unwrap();
+        let op1 = diff_iter.next().unwrap().unwrap();
         assert!(matches!(op1, BatchOp::Delete { key } if key == Box::from(b"key1".as_slice())));
 
-        let op2 = diff_iter.next_internal().unwrap().unwrap();
+        let op2 = diff_iter.next().unwrap().unwrap();
         assert!(
-            matches!(op2, BatchOp::Put { key, value } if key == Box::from(b"key2".as_slice()) && *value == *b"new_value")
+            matches!(op2, BatchOp::Put { key, value } if key == Box::from(b"key2".as_slice()) && value.as_ref() == b"new_value")
         );
 
-        let op3 = diff_iter.next_internal().unwrap().unwrap();
+        let op3 = diff_iter.next().unwrap().unwrap();
         assert!(matches!(op3, BatchOp::Delete { key } if key == Box::from(b"key3".as_slice())));
 
-        let op4 = diff_iter.next_internal().unwrap().unwrap();
+        let op4 = diff_iter.next().unwrap().unwrap();
         assert!(
-            matches!(op4, BatchOp::Put { key, value } if key == Box::from(b"key4".as_slice()) && *value == *b"value4")
+            matches!(op4, BatchOp::Put { key, value } if key == Box::from(b"key4".as_slice()) && value.as_ref() == b"value4")
         );
 
         assert!(diff_iter.next().is_none());
@@ -1192,7 +1210,7 @@ mod tests {
 
         let op3 = diff_iter.next().unwrap().unwrap();
         assert!(
-            matches!(op3, BatchOp::Put { key, value } if key == Box::from(b"ddd".as_slice()) && *value == *b"value4")
+            matches!(op3, BatchOp::Put { key, value } if key == Box::from(b"ddd".as_slice()) && value.as_ref() == b"value4")
         );
 
         assert!(diff_iter.next().is_none());
