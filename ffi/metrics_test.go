@@ -66,7 +66,6 @@ func TestMetrics(t *testing.T) {
 
 	// Check that batch op was recorded
 	r.Contains(string(body), "firewood_ffi_batch 1")
-
 	g := Gatherer{}
 	metricsFamily, err := g.Gather()
 	r.NoError(err)
@@ -81,6 +80,9 @@ func TestMetrics(t *testing.T) {
 		"firewood_flush_nodes":        dto.MetricType_COUNTER,
 		"firewood_insert":             dto.MetricType_COUNTER,
 		"firewood_space_from_end":     dto.MetricType_COUNTER,
+		"firewood_ffi_propose_ms_bucket":     dto.MetricType_HISTOGRAM,
+		"firewood_ffi_commit_ms_bucket":      dto.MetricType_HISTOGRAM,
+		"firewood_ffi_batch_ms_bucket":       dto.MetricType_HISTOGRAM,
 	}
 
 	for k, v := range expectedMetrics {

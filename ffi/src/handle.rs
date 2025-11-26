@@ -12,7 +12,7 @@ use firewood::{
 use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
-use metrics::counter;
+use metrics::{counter, histogram};
 
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
 ///
@@ -192,10 +192,13 @@ impl DatabaseHandle {
 
         let root_hash = handle.commit_proposal(|commit_time| {
             counter!("firewood.ffi.commit_ms").increment(commit_time.as_millis());
+            histogram!("firewood.ffi.commit_ms_bucket").record(commit_time.as_millis() as f64);
         })?;
 
-        counter!("firewood.ffi.batch_ms").increment(start_time.elapsed().as_millis());
+        let elapsed = start_time.elapsed().as_millis();
+        counter!("firewood.ffi.batch_ms").increment(elapsed);
         counter!("firewood.ffi.batch").increment(1);
+        histogram!("firewood.ffi.batch_ms_bucket").record(elapsed as f64);
 
         Ok(root_hash)
     }

@@ -530,6 +530,7 @@ pub unsafe extern "C" fn fwd_commit_proposal(
         proposal.commit_proposal(|commit_time| {
             metrics::counter!("firewood.ffi.commit_ms").increment(commit_time.as_millis());
             metrics::counter!("firewood.ffi.commit").increment(1);
+            metrics::histogram!("firewood.ffi.commit_ms_bucket").record(commit_time.as_millis() as f64);
         })
     })
 }
