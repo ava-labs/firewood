@@ -829,7 +829,9 @@ where
 }
 
 impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
-    #[doc(hidden)]
+    /// Returns the slice of deleted nodes in this proposal (test only).
+    #[cfg(any(test, feature = "test_utils"))]
+    #[must_use]
     pub fn deleted(&self) -> &[MaybePersistedNode] {
         self.kind.deleted.as_ref()
     }
