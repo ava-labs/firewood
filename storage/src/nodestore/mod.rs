@@ -455,7 +455,7 @@ impl Eq for NodeStoreParent {}
 /// Contains state for a proposed revision of the trie.
 pub struct ImmutableProposal {
     /// Nodes that have been deleted in this proposal.
-    pub(crate) deleted: Box<[MaybePersistedNode]>,
+    deleted: Box<[MaybePersistedNode]>,
     /// The parent of this proposal.
     parent: Arc<parking_lot::Mutex<NodeStoreParent>>,
     /// The root of the trie in this proposal.
