@@ -120,7 +120,7 @@ pub struct DbConfig {
     // Whether to perform parallel proposal creation. If set to BatchSize, then firewood
     // performs parallel proposal creation if the batch is >= to the BatchSize value.
     // TODO: Experimentally determine the right value for BatchSize.
-    #[builder(default = UseParallel::BatchSize(8))]
+    #[builder(default = UseParallel::Never)]
     pub use_parallel: UseParallel,
 }
 
