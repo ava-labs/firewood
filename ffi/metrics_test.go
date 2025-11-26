@@ -71,18 +71,18 @@ func TestMetrics(t *testing.T) {
 	r.NoError(err)
 
 	expectedMetrics := map[string]dto.MetricType{
-		"firewood_ffi_batch":          dto.MetricType_COUNTER,
-		"firewood_proposal_commit":    dto.MetricType_COUNTER,
-		"firewood_proposal_commit_ms": dto.MetricType_COUNTER,
-		"firewood_ffi_propose_ms":     dto.MetricType_COUNTER,
-		"firewood_ffi_commit_ms":      dto.MetricType_COUNTER,
-		"firewood_ffi_batch_ms":       dto.MetricType_COUNTER,
-		"firewood_flush_nodes":        dto.MetricType_COUNTER,
-		"firewood_insert":             dto.MetricType_COUNTER,
-		"firewood_space_from_end":     dto.MetricType_COUNTER,
-		"firewood_ffi_propose_ms_bucket":     dto.MetricType_HISTOGRAM,
-		"firewood_ffi_commit_ms_bucket":      dto.MetricType_HISTOGRAM,
-		"firewood_ffi_batch_ms_bucket":       dto.MetricType_HISTOGRAM,
+		"firewood_ffi_batch":             dto.MetricType_COUNTER,
+		"firewood_proposal_commit":       dto.MetricType_COUNTER,
+		"firewood_proposal_commit_ms":    dto.MetricType_COUNTER,
+		"firewood_ffi_propose_ms":        dto.MetricType_COUNTER,
+		"firewood_ffi_commit_ms":         dto.MetricType_COUNTER,
+		"firewood_ffi_batch_ms":          dto.MetricType_COUNTER,
+		"firewood_flush_nodes":           dto.MetricType_COUNTER,
+		"firewood_insert":                dto.MetricType_COUNTER,
+		"firewood_space_from_end":        dto.MetricType_COUNTER,
+		"firewood_ffi_propose_ms_bucket": dto.MetricType_HISTOGRAM,
+		"firewood_ffi_commit_ms_bucket":  dto.MetricType_HISTOGRAM,
+		"firewood_ffi_batch_ms_bucket":   dto.MetricType_HISTOGRAM,
 	}
 
 	for k, v := range expectedMetrics {
