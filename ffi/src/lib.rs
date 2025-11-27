@@ -31,6 +31,8 @@ mod proofs;
 mod proposal;
 mod revision;
 mod value;
+#[cfg(feature = "block-replay")]
+mod replay;
 
 use firewood::v2::api::DbView;
 
