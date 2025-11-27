@@ -102,7 +102,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
         right_node: &Arc<Node>,
         right_hash: Option<&TrieHash>,
     ) -> (DiffIterationNodeState, Option<BatchOp<Key, Value>>) {
-        // Combine pre_path with node's partial path to get its full path.
+        // Combine the pre-path with the node's partial path to get the node's full path for both tries.
         // TODO: Determine if it is necessary to compute the full path.
         let left_full_path = Path::from_nibbles_iterator(
             left_pre_path
@@ -127,33 +127,43 @@ impl<'a> DiffMerkleNodeStream<'a> {
             // those nodes (excluding the last one) and add them to the set of keys that
             // need to be deleted in the change proof.
             Ordering::Less => {
-                // If there is a value in the current node in the left trie, than that value
+                // If there is a value in the current node in the left trie, then that value
                 // should be included in the set of deleted keys in the change proof. We do
                 // this by returning it in the second entry of the tuple in the return value.
-                if let Some(_val) = left_node.value() {
-                    (
-                        DiffIterationNodeState::TraverseLeft,
-                        Some(BatchOp::Delete {
-                            key: key_from_nibble_iter(left_full_path.iter().copied()),
-                        }),
-                    )
-                } else {
-                    (DiffIterationNodeState::TraverseLeft, None)
-                }
+                left_node
+                    .value()
+                    .map_or((DiffIterationNodeState::TraverseLeft, None), |_val| {
+                        (
+                            DiffIterationNodeState::TraverseLeft,
+                            Some(BatchOp::Delete {
+                                key: key_from_nibble_iter(left_full_path.iter().copied()),
+                            }),
+                        )
+                    })
             }
+            // If the left full path is greater than the right full path, then all of the
+            // remaining nodes (and any keys stored in those nodes) from the left trie are greater
+            // than the current node on the left trie. Therefore, any remaining keys from the
+            // right trie that is smaller than the current node in the left trie are missing from
+            // the left trie and should be added as additional keys to the change proof. Therefore,
+            // we should traverse the right trie until we reach a node that is smaller than or
+            // equal to the current node on the left trie, and collect all of the keys associated
+            // with those nodes (excluding the last one) and add them to the set of keys to be
+            // added to the change proof.
             Ordering::Greater => {
-                println!("Greater than: {left_full_path:?} ------ {right_full_path:?}");
-                if let Some(val) = right_node.value() {
-                    (
-                        DiffIterationNodeState::TraverseRight,
-                        Some(BatchOp::Put {
-                            key: key_from_nibble_iter(right_full_path.iter().copied()),
-                            value: val.into(),
-                        }),
-                    )
-                } else {
-                    (DiffIterationNodeState::TraverseRight, None)
-                }
+                // If there is a value in the current node in the right trie, then that value
+                // should be included in the set of additional keys in the change proof.
+                right_node
+                    .value()
+                    .map_or((DiffIterationNodeState::TraverseRight, None), |val| {
+                        (
+                            DiffIterationNodeState::TraverseRight,
+                            Some(BatchOp::Put {
+                                key: key_from_nibble_iter(right_full_path.iter().copied()),
+                                value: val.into(),
+                            }),
+                        )
+                    })
             }
             Ordering::Equal => {
                 // Check if there are values. If there are, then it might not actually be equal
