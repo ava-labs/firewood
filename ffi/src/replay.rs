@@ -1,6 +1,7 @@
 use core::ffi::c_void;
 use std::collections::HashMap;
 use std::fs;
+use std::io::{self, Write};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -93,6 +94,7 @@ struct ReplayRecorder {
     next_proposal_id: u64,
     proposal_ids: HashMap<usize, u64>,
     output_path: Option<PathBuf>,
+    flush_threshold: usize,
 }
 
 impl ReplayRecorder {
@@ -107,6 +109,7 @@ impl ReplayRecorder {
             next_proposal_id: 1,
             proposal_ids: HashMap::new(),
             output_path,
+            flush_threshold: 10_000,
         }
     }
 
@@ -117,6 +120,7 @@ impl ReplayRecorder {
     fn record_get_latest(&mut self, key: &[u8]) {
         self.operations
             .push(DbOperation::GetLatest(GetLatest { key: key.into() }));
+        self.maybe_flush();
     }
 
     fn record_get_from_root(&mut self, root: &[u8], key: &[u8]) {
@@ -124,6 +128,7 @@ impl ReplayRecorder {
             root: root.into(),
             key: key.into(),
         }));
+        self.maybe_flush();
     }
 
     fn record_batch(&mut self, pairs: &[KeyValuePair<'_>]) {
@@ -139,6 +144,7 @@ impl ReplayRecorder {
             })
             .collect();
         self.operations.push(DbOperation::Batch(Batch { pairs }));
+        self.maybe_flush();
     }
 
     fn record_propose_on_db(&mut self, handle_ptr: *const c_void, pairs: &[KeyValuePair<'_>]) {
@@ -167,6 +173,7 @@ impl ReplayRecorder {
                 pairs,
                 returned_proposal_id: proposal_id,
             }));
+        self.maybe_flush();
     }
 
     fn record_propose_on_proposal(
@@ -205,6 +212,7 @@ impl ReplayRecorder {
                 pairs,
                 returned_proposal_id: new_id,
             }));
+        self.maybe_flush();
     }
 
     fn record_get_from_proposal(&mut self, handle_ptr: *const c_void, key: &[u8]) {
@@ -217,6 +225,7 @@ impl ReplayRecorder {
                 proposal_id,
                 key: key.into(),
             }));
+        self.maybe_flush();
     }
 
     fn record_commit(&mut self, handle_ptr: *const c_void, returned_hash: Option<&[u8]>) {
@@ -229,27 +238,36 @@ impl ReplayRecorder {
                 proposal_id,
                 returned_hash: returned_hash.map(Into::into),
             }));
+        self.maybe_flush();
     }
 
     fn to_log(&self) -> ReplayLog {
         ReplayLog::new(self.operations.clone())
     }
 
-    fn write_to_disk(&self) -> std::io::Result<()> {
+    fn flush_to_disk_inner(&mut self) -> io::Result<()> {
         let Some(path) = &self.output_path else {
             // Block replay is considered disabled if the path is not set.
             return Ok(());
         };
 
-        let log = self.to_log();
+        if self.operations.is_empty() {
+            return Ok(());
+        }
+
+        // Move the current operations out so we can clear the in-memory buffer even if
+        // the write fails. This is best-effort logging and should not affect the main
+        // database behavior.
+        let operations = std::mem::take(&mut self.operations);
+        let log = ReplayLog::new(operations);
 
         // Use rkyv to serialize the log. We ignore the specific error and just surface
         // a generic IO error if serialization fails.
         let bytes = match rkyv::to_bytes::<rkyv::rancor::Error>(&log) {
             Ok(bytes) => bytes,
             Err(_err) => {
-                return Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(io::Error::new(
+                    io::ErrorKind::Other,
                     "failed to serialize block replay log",
                 ));
             }
@@ -259,7 +277,29 @@ impl ReplayRecorder {
             fs::create_dir_all(parent)?;
         }
 
-        fs::write(path, bytes.as_ref())
+        // Append as a length-prefixed segment so the log file can contain multiple
+        // replay segments.
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)?;
+
+        let len: u64 = bytes
+            .len()
+            .try_into()
+            .map_err(|_| io::Error::new(io::ErrorKind::Other, "segment too large to log"))?;
+
+        file.write_all(&len.to_le_bytes())?;
+        file.write_all(bytes.as_ref())?;
+
+        Ok(())
+    }
+
+    fn maybe_flush(&mut self) {
+        if self.operations.len() >= self.flush_threshold {
+            // Ignore errors here; logging must not interfere with the main path.
+            let _ = self.flush_to_disk_inner();
+        }
     }
 }
 
@@ -412,12 +452,12 @@ pub(crate) fn flush_to_disk() -> std::io::Result<()> {
         return Ok(());
     };
 
-    let recorder = rec.lock();
+    let mut recorder = rec.lock();
     if !recorder.is_enabled() {
         return Ok(());
     }
 
-    recorder.write_to_disk()
+    recorder.flush_to_disk_inner()
 }
 
 #[cfg(test)]
