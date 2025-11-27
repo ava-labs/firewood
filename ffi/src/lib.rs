@@ -110,6 +110,11 @@ pub unsafe extern "C" fn fwd_get_latest(
     db: Option<&DatabaseHandle>,
     key: BorrowedBytes,
 ) -> ValueResult {
+    #[cfg(feature = "block-replay")]
+    if db.is_some() {
+        crate::replay::record_get_latest(key);
+    }
+
     invoke_with_handle(db, move |db| db.get_latest(key))
 }
 
@@ -368,6 +373,9 @@ pub unsafe extern "C" fn fwd_get_from_proposal(
     handle: Option<&ProposalHandle<'_>>,
     key: BorrowedBytes,
 ) -> ValueResult {
+    #[cfg(feature = "block-replay")]
+    crate::replay::record_get_from_proposal(handle, key);
+
     invoke_with_handle(handle, move |handle| handle.val(key))
 }
 
@@ -403,6 +411,11 @@ pub unsafe extern "C" fn fwd_get_from_root(
     root: HashKey,
     key: BorrowedBytes,
 ) -> ValueResult {
+    #[cfg(feature = "block-replay")]
+    if db.is_some() {
+        crate::replay::record_get_from_root(root, key);
+    }
+
     invoke_with_handle(db, move |db| db.get_from_root(root.into(), key))
 }
 
@@ -433,6 +446,11 @@ pub unsafe extern "C" fn fwd_batch(
     db: Option<&DatabaseHandle>,
     values: BorrowedKeyValuePairs<'_>,
 ) -> HashResult {
+    #[cfg(feature = "block-replay")]
+    if db.is_some() {
+        crate::replay::record_batch(values);
+    }
+
     invoke_with_handle(db, move |db| db.create_batch(values))
 }
 
@@ -463,7 +481,17 @@ pub unsafe extern "C" fn fwd_propose_on_db<'db>(
     db: Option<&'db DatabaseHandle>,
     values: BorrowedKeyValuePairs<'_>,
 ) -> ProposalResult<'db> {
-    invoke_with_handle(db, move |db| db.create_proposal_handle(values))
+    #[cfg(feature = "block-replay")]
+    let values_for_log = values;
+
+    let result = invoke_with_handle(db, move |db| db.create_proposal_handle(values));
+
+    #[cfg(feature = "block-replay")]
+    if db.is_some() {
+        crate::replay::record_propose_on_db(&result, values_for_log);
+    }
+
+    result
 }
 
 /// Proposes a batch of operations to the database on top of an existing proposal.
@@ -494,7 +522,17 @@ pub unsafe extern "C" fn fwd_propose_on_proposal<'db>(
     handle: Option<&ProposalHandle<'db>>,
     values: BorrowedKeyValuePairs<'_>,
 ) -> ProposalResult<'db> {
-    invoke_with_handle(handle, move |p| p.create_proposal_handle(values))
+    #[cfg(feature = "block-replay")]
+    let parent_for_log = handle;
+    #[cfg(feature = "block-replay")]
+    let values_for_log = values;
+
+    let result = invoke_with_handle(handle, move |p| p.create_proposal_handle(values));
+
+    #[cfg(feature = "block-replay")]
+    crate::replay::record_propose_on_proposal(parent_for_log, &result, values_for_log);
+
+    result
 }
 
 /// Commits a proposal to the database.
@@ -528,12 +566,20 @@ pub unsafe extern "C" fn fwd_propose_on_proposal<'db>(
 pub unsafe extern "C" fn fwd_commit_proposal(
     proposal: Option<Box<ProposalHandle<'_>>>,
 ) -> HashResult {
-    invoke_with_handle(proposal, move |proposal| {
+    #[cfg(feature = "block-replay")]
+    let proposal_for_log = proposal.as_ref().map(|handle| &**handle as *const ProposalHandle<'_>);
+
+    let result = invoke_with_handle(proposal, move |proposal| {
         proposal.commit_proposal(|commit_time| {
             metrics::counter!("firewood.ffi.commit_ms").increment(commit_time.as_millis());
             metrics::counter!("firewood.ffi.commit").increment(1);
         })
-    })
+    });
+
+    #[cfg(feature = "block-replay")]
+    crate::replay::record_commit(proposal_for_log, &result);
+
+    result
 }
 
 /// Consumes the [`ProposalHandle`], cancels the proposal, and frees the memory.
@@ -707,6 +753,16 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidResult {
     invoke_with_handle(db, drop)
+}
+
+/// Flushes the block replay log to disk if the `block-replay` feature is enabled.
+///
+/// The destination path is taken from the `FIREWOOD_BLOCK_REPLAY_PATH` environment
+/// variable. If the variable is not set, this is a no-op.
+#[cfg(feature = "block-replay")]
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_block_replay_flush() -> VoidResult {
+    invoke(crate::replay::flush_to_disk)
 }
 
 /// Consumes the [`OwnedBytes`] and frees the memory associated with it.
