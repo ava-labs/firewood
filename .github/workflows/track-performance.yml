@@ -3,6 +3,8 @@ name: Track Performance
 on:
   workflow_dispatch:
     inputs:
+  pull_request:
+    types: [labeled]
       firewood-commit:
         description: 'Firewood commit/branch/tag to test (leave empty for current HEAD)'
         default: ''
@@ -49,13 +51,35 @@ jobs:
         with:
           fetch-depth: 0  # Needed for github-action-benchmark
 
+      - name: Check if triggered by label
+        if: github.event_name == 'pull_request'
+        run: |
+          if [ "${{ github.event.label.name }}" != "run-benchmark" ]; then
+            echo "Skipping - only runs on 'run-benchmark' label"
+            exit 0
+          fi
+
       - name: Determine Firewood commit
         id: commit
         run: |
           COMMIT_SHA="${{ inputs.firewood-commit || github.sha }}"
           echo "sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
 
+      - name: Set defaults for PR trigger
+        id: defaults
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "task=c-chain-reexecution-firewood-101-250k" >> "$GITHUB_OUTPUT"
+            echo "runner=avalanche-avalanchego-runner-2ti" >> "$GITHUB_OUTPUT"
+            echo "avalanchego-ref=master" >> "$GITHUB_OUTPUT"
+          else
+            echo "task=${{ inputs.task }}" >> "$GITHUB_OUTPUT"
+            echo "runner=${{ inputs.runner }}" >> "$GITHUB_OUTPUT"
+            echo "avalanchego-ref=${{ inputs.avalanchego-ref }}" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Validate inputs
+        if: github.event_name == 'workflow_dispatch'
         run: |
           if [ -z "${{ inputs.task }}" ]; then
             missing=()
@@ -74,24 +98,28 @@ jobs:
       - name: Trigger AvalancheGo benchmark
         id: trigger
         run: |
-          if [ -n "${{ inputs.task }}" ]; then
+          TASK="${{ github.event_name == 'pull_request' && steps.defaults.outputs.task || inputs.task }}"
+          RUNNER="${{ github.event_name == 'pull_request' && steps.defaults.outputs.runner || inputs.runner }}"
+          AVAGO_REF="${{ github.event_name == 'pull_request' && steps.defaults.outputs.avalanchego-ref || inputs.avalanchego-ref }}"
+          
+          if [ -n "$TASK" ]; then
             gh workflow run "Firewood Reexecution Benchmark" \
               --repo ava-labs/avalanchego \
-              --ref "${{ inputs.avalanchego-ref }}" \
+              --ref "$AVAGO_REF" \
               -f firewood-commit="${{ steps.commit.outputs.sha }}" \
-              -f task="${{ inputs.task }}" \
-              -f runner="${{ inputs.runner }}"
+              -f task="$TASK" \
+              -f runner="$RUNNER"
           else
             gh workflow run "Firewood Reexecution Benchmark" \
               --repo ava-labs/avalanchego \
-              --ref "${{ inputs.avalanchego-ref }}" \
+              --ref "$AVAGO_REF" \
               -f firewood-commit="${{ steps.commit.outputs.sha }}" \
               -f config="${{ inputs.config }}" \
               -f start-block="${{ inputs.start-block }}" \
               -f end-block="${{ inputs.end-block }}" \
               -f block-dir-src="${{ inputs.block-dir-src }}" \
               -f current-state-dir-src="${{ inputs.current-state-dir-src }}" \
-              -f runner="${{ inputs.runner }}"
+              -f runner="$RUNNER"
           fi
           
           sleep 10
