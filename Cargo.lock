@@ -1220,6 +1220,7 @@ dependencies = [
 name = "firewood-replay"
 version = "0.0.15"
 dependencies = [
+ "clap",
  "firewood",
  "firewood-storage",
  "rkyv",

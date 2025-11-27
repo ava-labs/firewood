@@ -14,9 +14,14 @@ firewood.workspace = true
 firewood-storage.workspace = true
 rkyv = "0.8.1"
 thiserror.workspace = true
+clap = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
 tempfile.workspace = true
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "firewood-replay"
+path = "src/main.rs"
