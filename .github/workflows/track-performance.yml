@@ -5,11 +5,6 @@ name: C-Chain Reexecution Performance Tracking
 on:
   workflow_dispatch:
     inputs:
-      firewood:
-        description: 'Firewood commit/branch/tag to test (leave empty to use the commit that triggered the workflow)'
-        default: ''
-      libevm:
-        description: 'libevm commit/branch/tag to test (leave empty to skip)'
         default: ''
       avalanchego:
         description: 'AvalancheGo commit/branch/tag to test against'
