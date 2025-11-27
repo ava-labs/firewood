@@ -7,12 +7,11 @@ use crate::v2::api::IntoBatchIter;
 use firewood_storage::logger::error;
 use firewood_storage::{
     BranchNode, Child, Children, FileBacked, FileIoError, ImmutableProposal, LeafNode,
-    MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeReader, NodeStore, Parentable,
-    Path, PathComponent,
+    MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore, Parentable, Path,
+    PathComponent,
 };
 use rayon::ThreadPool;
 use std::iter::once;
-use std::ops::Deref;
 use std::sync::mpsc::{Receiver, SendError, Sender};
 use std::sync::{Arc, mpsc};
 
@@ -227,11 +226,10 @@ impl ParallelMerkle {
     /// by the value of the `first_path_component`.
     fn create_worker(
         pool: &ThreadPool,
-        proposal: &NodeStore<MutableProposal, FileBacked>,
+        proposal: &mut NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut BranchNode,
         first_path_component: PathComponent,
         response_sender: Sender<Result<Response, FileIoError>>,
-        root_deleted: &mut Vec<MaybePersistedNode>,
     ) -> Result<WorkerSender, FileIoError> {
         // Create a channel for the coordinator (main thread) to send messages to this worker.
         let (child_sender, child_receiver) = mpsc::channel();
@@ -245,15 +243,10 @@ impl ParallelMerkle {
                     Child::Node(node) => Ok(node),
                     Child::AddressWithHash(address, _) => {
                         // Track deletion of the removed child from the root (if it was persisted).
-                        root_deleted.push(address.into());
-                        Ok(proposal.read_node(address)?.deref().clone())
+                        Ok(proposal.read_for_update(address.into())?)
                     }
                     Child::MaybePersisted(maybe_persisted, _) => {
-                        if maybe_persisted.as_linear_address().is_some() {
-                            // similar to above
-                            root_deleted.push(maybe_persisted.clone());
-                        }
-                        Ok(maybe_persisted.as_shared_node(proposal)?.deref().clone())
+                        Ok(proposal.read_for_update(maybe_persisted)?)
                     }
                 }
             })
@@ -307,11 +300,10 @@ impl ParallelMerkle {
     fn worker(
         &mut self,
         pool: &ThreadPool,
-        proposal: &NodeStore<MutableProposal, FileBacked>,
+        proposal: &mut NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut BranchNode,
         first_path_component: PathComponent,
         response_sender: Sender<Result<Response, FileIoError>>,
-        root_deleted: &mut Vec<MaybePersistedNode>,
     ) -> Result<&mut WorkerSender, FileIoError> {
         // Find the worker's state corresponding to the first nibble which is stored in an array.
         let worker_option = self.workers.get_mut(first_path_component);
@@ -326,7 +318,6 @@ impl ParallelMerkle {
                 root_branch,
                 first_path_component,
                 response_sender,
-                root_deleted,
             )?)),
         }
     }
@@ -398,9 +389,6 @@ impl ParallelMerkle {
         // Create a response channel the workers use to send messages back to the coordinator (us)
         let (response_sender, response_receiver) = mpsc::channel();
 
-        // Track deleted root-level children that are taken and given to workers
-        let mut root_deleted: Vec<MaybePersistedNode> = Vec::new();
-
         // Split step: for each operation in the batch, send a request to the worker that is
         // responsible for the sub-trie corresponding to the operation's first nibble.
         for res in batch.into_batch_iter::<CreateProposalError>() {
@@ -450,11 +438,10 @@ impl ParallelMerkle {
             // doesn't already exist.
             let worker = self.worker(
                 pool,
-                &mutable_nodestore,
+                &mut mutable_nodestore,
                 &mut root_branch,
                 first_path_component,
                 response_sender.clone(),
-                &mut root_deleted,
             )?;
 
             // Send the current operation to the worker.
@@ -488,11 +475,6 @@ impl ParallelMerkle {
         // Setting the workers to default will close the senders to the workers. This will cause the
         // workers to send back their responses.
         self.workers = Children::default();
-
-        // Add deletions for the root-level children that were replaced by worker roots.
-        if !root_deleted.is_empty() {
-            mutable_nodestore.delete_nodes(&root_deleted);
-        }
 
         // Merge step: Collect the results from the workers and merge them as children to the root.
         self.merge_children(response_receiver, &mut mutable_nodestore, &mut root_branch)?;
