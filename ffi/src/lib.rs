@@ -758,11 +758,18 @@ pub unsafe extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidRe
 /// Flushes the block replay log to disk if the `block-replay` feature is enabled.
 ///
 /// The destination path is taken from the `FIREWOOD_BLOCK_REPLAY_PATH` environment
-/// variable. If the variable is not set, this is a no-op.
-#[cfg(feature = "block-replay")]
+/// variable. If the variable is not set or the feature is disabled, this is a no-op.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_block_replay_flush() -> VoidResult {
-    invoke(crate::replay::flush_to_disk)
+    #[cfg(feature = "block-replay")]
+    {
+        return invoke(crate::replay::flush_to_disk);
+    }
+
+    #[cfg(not(feature = "block-replay"))]
+    {
+        return VoidResult::Ok;
+    }
 }
 
 /// Consumes the [`OwnedBytes`] and frees the memory associated with it.

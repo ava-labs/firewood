@@ -1060,7 +1060,7 @@ struct HashResult fwd_batch(const struct DatabaseHandle *db, BorrowedKeyValuePai
  * Flushes the block replay log to disk if the `block-replay` feature is enabled.
  *
  * The destination path is taken from the `FIREWOOD_BLOCK_REPLAY_PATH` environment
- * variable. If the variable is not set, this is a no-op.
+ * variable. If the variable is not set or the feature is disabled, this is a no-op.
  */
 struct VoidResult fwd_block_replay_flush(void);
 
