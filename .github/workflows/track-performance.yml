@@ -3,8 +3,6 @@ name: Track Performance
 on:
   workflow_dispatch:
     inputs:
-  pull_request:
-    types: [labeled]
       firewood-commit:
         description: 'Firewood commit/branch/tag to test (leave empty for current HEAD)'
         default: ''
@@ -39,6 +37,8 @@ on:
           - avalanche-avalanchego-runner-2ti
           - avago-runner-i4i-4xlarge-local-ssd
           - avago-runner-m6i-4xlarge-ebs-fast
+  pull_request:
+    types: [labeled]
 
 jobs:
   trigger-and-collect:
