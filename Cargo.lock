@@ -1177,7 +1177,9 @@ dependencies = [
  "oxhttp",
  "parking_lot",
  "rkyv",
+ "tempfile",
  "test-case",
+ "thiserror",
  "tikv-jemallocator",
 ]
 
@@ -3079,6 +3081,10 @@ checksum = "cadadef317c2f20755a64d7fdc48f9e7178ee6b0e1f7fce33fa60f1d68a276e6"
 dependencies = [
  "bytecheck",
 ]
+
+[[package]]
+name = "replay"
+version = "0.0.15"
 
 [[package]]
 name = "reqwest"
