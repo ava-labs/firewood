@@ -62,6 +62,7 @@ firewood-macros = { path = "firewood-macros", version = "0.0.15" }
 firewood-storage = { path = "storage", version = "0.0.15" }
 firewood-ffi = { path = "ffi", version = "0.0.15" }
 firewood-triehash = { path = "triehash", version = "0.0.15" }
+firewood-replay = { path = "replay", version = "0.0.15" }
 
 # common dependencies
 aquamarine = "0.6.0"

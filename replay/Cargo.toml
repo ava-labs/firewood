@@ -1,5 +1,5 @@
 [package]
-name = "replay"
+name = "firewood-replay"
 version.workspace = true
 edition.workspace = true
 license-file.workspace = true
@@ -7,8 +7,16 @@ homepage.workspace = true
 repository.workspace = true
 readme.workspace = true
 rust-version.workspace = true
+description = "Replay engine for Firewood block replay logs."
 
 [dependencies]
+firewood.workspace = true
+firewood-storage.workspace = true
+rkyv = "0.8.1"
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
 
 [lints]
 workspace = true
