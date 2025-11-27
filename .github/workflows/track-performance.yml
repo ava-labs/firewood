@@ -1,4 +1,4 @@
-name: Track Performance in AvalancheGo
+name: Track Performance
 
 on:
   workflow_dispatch:
