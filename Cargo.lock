@@ -1223,6 +1223,7 @@ dependencies = [
  "clap",
  "firewood",
  "firewood-storage",
+ "hex",
  "rkyv",
  "tempfile",
  "thiserror",

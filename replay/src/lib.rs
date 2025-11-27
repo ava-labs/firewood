@@ -134,7 +134,9 @@ fn apply_operation<'db>(
     db: &'db Db,
     proposals: &mut HashMap<u64, firewood::db::Proposal<'db>>,
     operation: DbOperation,
-) -> Result<(), ReplayError> {
+) -> Result<Option<Box<[u8]>>, ReplayError> {
+    let mut new_hash = None;
+
     match operation {
         DbOperation::GetLatest(GetLatest { key }) => {
             // This is primarily a verification step; the result is discarded.
@@ -188,15 +190,16 @@ fn apply_operation<'db>(
             };
             proposals.insert(returned_proposal_id, new_proposal);
         }
-        DbOperation::Commit(Commit { proposal_id, .. }) => {
+        DbOperation::Commit(Commit { proposal_id, returned_hash }) => {
             let proposal = proposals
                 .remove(&proposal_id)
                 .ok_or(ReplayError::UnknownProposal(proposal_id))?;
             proposal.commit()?;
+            new_hash = returned_hash;
         }
     }
 
-    Ok(())
+    Ok(new_hash)
 }
 
 /// Replays all operations from a block replay log into the provided database.
@@ -208,9 +211,9 @@ fn apply_operation<'db>(
 ///
 /// This function assumes that `db` is opened on an empty database and will
 /// apply all operations in order.
-pub fn replay_log_from_reader<R: Read>(mut reader: R, db: &Db) -> Result<(), ReplayError> {
+pub fn replay_log_from_reader<R: Read>(mut reader: R, db: &Db) -> Result<Option<Box<[u8]>>, ReplayError> {
     let mut proposals: HashMap<u64, firewood::db::Proposal<'_>> = HashMap::new();
-
+    let mut last_commit_hash = None;
     loop {
         let mut len_buf = [0u8; 8];
         match reader.read_exact(&mut len_buf) {
@@ -229,11 +232,14 @@ pub fn replay_log_from_reader<R: Read>(mut reader: R, db: &Db) -> Result<(), Rep
 
         let log: ReplayLog = rkyv::from_bytes::<ReplayLog, rkyv::rancor::Error>(&buf)?;
         for op in log.operations {
-            apply_operation(db, &mut proposals, op)?;
+            let res = apply_operation(db, &mut proposals, op)?;
+            if let Some(last) = res {
+                last_commit_hash = Some(last);
+            }
         }
     }
 
-    Ok(())
+    Ok(last_commit_hash)
 }
 
 /// Convenience helper to replay a block replay log from the file at `path`
@@ -241,7 +247,7 @@ pub fn replay_log_from_reader<R: Read>(mut reader: R, db: &Db) -> Result<(), Rep
 pub fn replay_log_from_file(
     path: impl AsRef<std::path::Path>,
     db: &Db,
-) -> Result<(), ReplayError> {
+) -> Result<Option<Box<[u8]>>, ReplayError> {
     let file = fs::File::open(path)?;
     replay_log_from_reader(file, db)
 }

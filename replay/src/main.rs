@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use firewood::db::{Db, DbConfig};
+use firewood::v2::api::Db as _;
 use firewood::manager::RevisionManagerConfig;
 
 /// Command-line utility for applying Firewood block replay logs.
@@ -54,11 +55,20 @@ fn run() -> Result<(), Box<dyn Error>> {
     match cli.command {
         Command::ReExecute { log, db } => {
             let cfg = DbConfig::builder()
-                .truncate(true)
+                .truncate(false)
                 .manager(RevisionManagerConfig::builder().build())
                 .build();
             let db = Db::new(db, cfg)?;
-            firewood_replay::replay_log_from_file(log, &db)?;
+            let res = firewood_replay::replay_log_from_file(log, &db)?.unwrap();
+            let root = db.root_hash()?.unwrap();
+            if *root.as_ref() == *res {
+                println!("replay successful!");
+                println!("new root: {:?}", root);
+            } else {
+                println!("replay done but root hash mismatch detected!");
+                println!("new root: {:?}", root);
+                println!("expected root: {}", hex::encode(&res));
+            }
         }
         Command::BinarySearch { .. } => {
             eprintln!("binary-search subcommand is not implemented yet.");
