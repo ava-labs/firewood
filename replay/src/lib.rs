@@ -12,6 +12,7 @@ use firewood::db::{BatchOp, Db};
 use firewood::v2::api::{self, Db as DbApi, DbView as DbViewApi, Proposal as ProposalApi};
 use firewood_storage::{InvalidTrieHashLength, firewood_counter};
 use rkyv::{Archive, Deserialize, Serialize};
+use serde_bytes::ByteBuf;
 use thiserror::Error;
 
 /// Operation that reads the latest revision.
@@ -116,6 +117,171 @@ pub enum ReplayError {
     UnknownProposal(u64),
 }
 
+/// MessagePack-friendly view of the replay log used for Go FFI interop.
+///
+/// These types mirror the main replay log structures but ensure that all
+/// byte arrays are encoded using the MessagePack binary type rather than
+/// as arrays of integers, which matches Go's `[]byte` decoding behavior.
+mod mp {
+    use super::*;
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    pub struct GetLatest {
+        pub key: ByteBuf,
+    }
+
+    impl From<super::GetLatest> for GetLatest {
+        fn from(src: super::GetLatest) -> Self {
+            Self {
+                key: ByteBuf::from(src.key.into_vec()),
+            }
+        }
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    pub struct GetFromProposal {
+        pub proposal_id: u64,
+        pub key: ByteBuf,
+    }
+
+    impl From<super::GetFromProposal> for GetFromProposal {
+        fn from(src: super::GetFromProposal) -> Self {
+            Self {
+                proposal_id: src.proposal_id,
+                key: ByteBuf::from(src.key.into_vec()),
+            }
+        }
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    pub struct GetFromRoot {
+        pub root: ByteBuf,
+        pub key: ByteBuf,
+    }
+
+    impl From<super::GetFromRoot> for GetFromRoot {
+        fn from(src: super::GetFromRoot) -> Self {
+            Self {
+                root: ByteBuf::from(src.root.into_vec()),
+                key: ByteBuf::from(src.key.into_vec()),
+            }
+        }
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    pub struct KeyValueOp {
+        pub key: ByteBuf,
+        pub value: Option<ByteBuf>,
+    }
+
+    impl From<super::KeyValueOp> for KeyValueOp {
+        fn from(src: super::KeyValueOp) -> Self {
+            Self {
+                key: ByteBuf::from(src.key.into_vec()),
+                value: src.value.map(|v| ByteBuf::from(v.into_vec())),
+            }
+        }
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    pub struct Batch {
+        pub pairs: Vec<KeyValueOp>,
+    }
+
+    impl From<super::Batch> for Batch {
+        fn from(src: super::Batch) -> Self {
+            Self {
+                pairs: src.pairs.into_iter().map(Into::into).collect(),
+            }
+        }
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    pub struct ProposeOnDB {
+        pub pairs: Vec<KeyValueOp>,
+        pub returned_proposal_id: u64,
+    }
+
+    impl From<super::ProposeOnDB> for ProposeOnDB {
+        fn from(src: super::ProposeOnDB) -> Self {
+            Self {
+                pairs: src.pairs.into_iter().map(Into::into).collect(),
+                returned_proposal_id: src.returned_proposal_id,
+            }
+        }
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    pub struct ProposeOnProposal {
+        pub proposal_id: u64,
+        pub pairs: Vec<KeyValueOp>,
+        pub returned_proposal_id: u64,
+    }
+
+    impl From<super::ProposeOnProposal> for ProposeOnProposal {
+        fn from(src: super::ProposeOnProposal) -> Self {
+            Self {
+                proposal_id: src.proposal_id,
+                pairs: src.pairs.into_iter().map(Into::into).collect(),
+                returned_proposal_id: src.returned_proposal_id,
+            }
+        }
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    pub struct Commit {
+        pub proposal_id: u64,
+        pub returned_hash: Option<ByteBuf>,
+    }
+
+    impl From<super::Commit> for Commit {
+        fn from(src: super::Commit) -> Self {
+            Self {
+                proposal_id: src.proposal_id,
+                returned_hash: src.returned_hash.map(|h| ByteBuf::from(h.into_vec())),
+            }
+        }
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    pub enum DbOperation {
+        GetLatest(GetLatest),
+        GetFromProposal(GetFromProposal),
+        GetFromRoot(GetFromRoot),
+        Batch(Batch),
+        ProposeOnDB(ProposeOnDB),
+        ProposeOnProposal(ProposeOnProposal),
+        Commit(Commit),
+    }
+
+    impl From<super::DbOperation> for DbOperation {
+        fn from(src: super::DbOperation) -> Self {
+            match src {
+                super::DbOperation::GetLatest(op) => Self::GetLatest(op.into()),
+                super::DbOperation::GetFromProposal(op) => Self::GetFromProposal(op.into()),
+                super::DbOperation::GetFromRoot(op) => Self::GetFromRoot(op.into()),
+                super::DbOperation::Batch(op) => Self::Batch(op.into()),
+                super::DbOperation::ProposeOnDB(op) => Self::ProposeOnDB(op.into()),
+                super::DbOperation::ProposeOnProposal(op) => Self::ProposeOnProposal(op.into()),
+                super::DbOperation::Commit(op) => Self::Commit(op.into()),
+            }
+        }
+    }
+
+    #[derive(Debug, serde::Serialize, serde::Deserialize)]
+    pub struct ReplayLog {
+        pub operations: Vec<DbOperation>,
+    }
+
+    impl From<super::ReplayLog> for ReplayLog {
+        fn from(src: super::ReplayLog) -> Self {
+            Self {
+                operations: src.operations.into_iter().map(Into::into).collect(),
+            }
+        }
+    }
+}
+
 /// Convert a length-prefixed rkyv-encoded replay log file into a length-prefixed
 /// MessagePack (rmp-serde) file containing the same [`ReplayLog`] segments.
 pub fn convert_rkyv_log_to_rmp_file(
@@ -143,7 +309,8 @@ pub fn convert_rkyv_log_to_rmp_file(
 
         let log: ReplayLog = rkyv::from_bytes::<ReplayLog, rkyv::rancor::Error>(&buf)?;
 
-        let msgpack = rmp_serde::to_vec_named(&log)?;
+        let mp_log: mp::ReplayLog = log.into();
+        let msgpack = rmp_serde::to_vec_named(&mp_log)?;
         let out_len: u64 = msgpack
             .len()
             .try_into()

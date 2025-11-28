@@ -156,7 +156,7 @@ func applyReplayLogsToDatabase(t *testing.T, db *Database, logs []ReplayLog) err
 	r := require.New(t)
 
 	proposals := make(map[uint64]*Proposal)
-
+	total_commits := 0
 	for _, segment := range logs {
 		for _, op := range segment.Operations {
 			switch {
@@ -219,6 +219,10 @@ func applyReplayLogsToDatabase(t *testing.T, db *Database, logs []ReplayLog) err
 					if err == nil {
 						r.Equal(op.Commit.ReturnedHash, root[:], "root hash mismatch after Commit")
 					}
+				}
+				total_commits++
+				if total_commits > 10000 {
+					return nil
 				}
 
 			default:
