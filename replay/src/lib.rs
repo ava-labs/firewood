@@ -5,7 +5,7 @@ pub mod search;
 
 use std::collections::HashMap;
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::time::Instant;
 
 use firewood::db::{BatchOp, Db};
@@ -15,20 +15,20 @@ use rkyv::{Archive, Deserialize, Serialize};
 use thiserror::Error;
 
 /// Operation that reads the latest revision.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize, serde::Serialize, serde::Deserialize)]
 pub struct GetLatest {
     pub key: Box<[u8]>,
 }
 
 /// Operation that reads from a proposal by ID.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize, serde::Serialize, serde::Deserialize)]
 pub struct GetFromProposal {
     pub proposal_id: u64,
     pub key: Box<[u8]>,
 }
 
 /// Operation that reads from a specific root hash.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize, serde::Serialize, serde::Deserialize)]
 pub struct GetFromRoot {
     pub root: Box<[u8]>,
     pub key: Box<[u8]>,
@@ -37,27 +37,27 @@ pub struct GetFromRoot {
 /// A single key/value operation in a batch or proposal.
 ///
 /// If `value` is `None`, this represents a delete-range operation for `key`.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize, serde::Serialize, serde::Deserialize)]
 pub struct KeyValueOp {
     pub key: Box<[u8]>,
     pub value: Option<Box<[u8]>>,
 }
 
 /// Batch operation directly on the database.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize, serde::Serialize, serde::Deserialize)]
 pub struct Batch {
     pub pairs: Vec<KeyValueOp>,
 }
 
 /// Proposal created on the database.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize, serde::Serialize, serde::Deserialize)]
 pub struct ProposeOnDB {
     pub pairs: Vec<KeyValueOp>,
     pub returned_proposal_id: u64,
 }
 
 /// Proposal created on top of another proposal.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize, serde::Serialize, serde::Deserialize)]
 pub struct ProposeOnProposal {
     pub proposal_id: u64,
     pub pairs: Vec<KeyValueOp>,
@@ -65,14 +65,14 @@ pub struct ProposeOnProposal {
 }
 
 /// Commit operation for a proposal.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize, serde::Serialize, serde::Deserialize)]
 pub struct Commit {
     pub proposal_id: u64,
     pub returned_hash: Option<Box<[u8]>>,
 }
 
 /// All supported database operations recorded in the replay log.
-#[derive(Debug, Clone, Archive, Serialize, Deserialize)]
+#[derive(Debug, Clone, Archive, Serialize, Deserialize, serde::Serialize, serde::Deserialize)]
 pub enum DbOperation {
     GetLatest(GetLatest),
     GetFromProposal(GetFromProposal),
@@ -84,7 +84,7 @@ pub enum DbOperation {
 }
 
 /// The top-level structure that is serialized to the replay log.
-#[derive(Debug, Archive, Serialize, Deserialize)]
+#[derive(Debug, Archive, Serialize, Deserialize, serde::Serialize, serde::Deserialize)]
 pub struct ReplayLog {
     pub operations: Vec<DbOperation>,
 }
@@ -114,6 +114,46 @@ pub enum ReplayError {
     /// The replay log referenced a proposal ID that has not been created.
     #[error("unknown proposal id {0} in replay log")]
     UnknownProposal(u64),
+}
+
+/// Convert a length-prefixed rkyv-encoded replay log file into a length-prefixed
+/// MessagePack (rmp-serde) file containing the same [`ReplayLog`] segments.
+pub fn convert_rkyv_log_to_rmp_file(
+    rkyv_path: impl AsRef<std::path::Path>,
+    rmp_path: impl AsRef<std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut reader = fs::File::open(rkyv_path)?;
+    let mut writer = fs::File::create(rmp_path)?;
+
+    loop {
+        let mut len_buf = [0u8; 8];
+        match reader.read_exact(&mut len_buf) {
+            Ok(()) => {}
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => break,
+            Err(err) => return Err(Box::new(err)),
+        }
+
+        let len = u64::from_le_bytes(len_buf);
+        if len == 0 {
+            continue;
+        }
+
+        let mut buf = vec![0u8; len as usize];
+        reader.read_exact(&mut buf)?;
+
+        let log: ReplayLog = rkyv::from_bytes::<ReplayLog, rkyv::rancor::Error>(&buf)?;
+
+        let msgpack = rmp_serde::to_vec_named(&log)?;
+        let out_len: u64 = msgpack
+            .len()
+            .try_into()
+            .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "segment too large"))?;
+
+        writer.write_all(&out_len.to_le_bytes())?;
+        writer.write_all(&msgpack)?;
+    }
+
+    Ok(())
 }
 
 fn kv_ops_to_batch_ops(pairs: &[KeyValueOp]) -> Vec<BatchOp<Box<[u8]>, Box<[u8]>>> {

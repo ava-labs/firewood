@@ -2,6 +2,9 @@
 .vscode
 .idea
 
+run_metrics/
+x.html
+
 compose-dev.yaml
 
 # ignore test databases

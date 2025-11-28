@@ -1,0 +1,121 @@
+# TYPE firewood_io_read counter
+firewood_io_read 110206
+
+# TYPE firewood_cache_freelist counter
+firewood_cache_freelist{type="hit"} 109218
+
+# HELP firewood_delete_node Nodes deleted
+# TYPE firewood_delete_node counter
+firewood_delete_node{index="1024"} 350
+firewood_delete_node{index="96"} 43610
+firewood_delete_node{index="128"} 1280
+firewood_delete_node{index="64"} 5
+firewood_delete_node{index="512"} 24258
+firewood_delete_node{index="256"} 29965
+firewood_delete_node{index="768"} 10737
+
+# HELP firewood_space_freed Bytes freed in nodestore
+# TYPE firewood_space_freed counter
+firewood_space_freed{index="768"} 8246016
+firewood_space_freed{index="1024"} 358400
+firewood_space_freed{index="512"} 12420096
+firewood_space_freed{index="96"} 4186560
+firewood_space_freed{index="64"} 320
+firewood_space_freed{index="128"} 163840
+firewood_space_freed{index="256"} 7671040
+
+# HELP firewood_space_wasted Bytes wasted from free list by index
+# TYPE firewood_space_wasted counter
+firewood_space_wasted{index="128"} 18520
+firewood_space_wasted{index="1024"} 63647
+firewood_space_wasted{index="96"} 777271
+firewood_space_wasted{index="64"} 0
+firewood_space_wasted{index="256"} 3029938
+firewood_space_wasted{index="512"} 3700939
+firewood_space_wasted{index="768"} 1317233
+
+# HELP firewood_flush_nodes flushed node amount
+# TYPE firewood_flush_nodes counter
+firewood_flush_nodes 147
+
+# TYPE firewood_cache_node counter
+firewood_cache_node{mode="read",type="hit"} 19872
+firewood_cache_node{mode="write",type="hit"} 202329
+
+# HELP firewood_space_from_end Space allocated from end of nodestore
+# TYPE firewood_space_from_end counter
+firewood_space_from_end{index="64"} 9216
+firewood_space_from_end{index="1024"} 98304
+firewood_space_from_end{index="128"} 159616
+firewood_space_from_end{index="768"} 425472
+firewood_space_from_end{index="256"} 207872
+firewood_space_from_end{index="96"} 271776
+firewood_space_from_end{index="512"} 262144
+
+# HELP firewood_proposals Number of proposals created
+# TYPE firewood_proposals counter
+firewood_proposals 19874
+
+# HELP firewood_replay_commit_ns 
+# TYPE firewood_replay_commit_ns counter
+firewood_replay_commit_ns 7714910824
+
+# TYPE firewood_io_read_ms counter
+firewood_io_read_ms 7
+
+# HELP firewood_proposal_create_ms Timing of database proposal creation operations in milliseconds
+# TYPE firewood_proposal_create_ms counter
+firewood_proposal_create_ms{success="true"} 5
+
+# HELP firewood_replay_commit 
+# TYPE firewood_replay_commit counter
+firewood_replay_commit 10001
+
+# HELP firewood_space_reused Bytes reused from free list by index
+# TYPE firewood_space_reused counter
+firewood_space_reused{index="256"} 7638528
+firewood_space_reused{index="768"} 7957248
+firewood_space_reused{index="512"} 12381696
+firewood_space_reused{index="128"} 125696
+firewood_space_reused{index="1024"} 264192
+firewood_space_reused{index="96"} 4184736
+firewood_space_reused{index="64"} 320
+
+# HELP firewood_proposal_commit Number of proposal commit to storage operations
+# TYPE firewood_proposal_commit counter
+firewood_proposal_commit{success="true"} 10001
+
+# TYPE firewood_insert counter
+firewood_insert{merkle="above"} 92
+firewood_insert{merkle="split"} 1892
+firewood_insert{merkle="below"} 3716
+firewood_insert{merkle="update"} 95516
+
+# HELP firewood_proposal_create Number of database proposal creation operations
+# TYPE firewood_proposal_create counter
+firewood_proposal_create{success="true"} 128
+
+# HELP firewood_replay_propose_ns 
+# TYPE firewood_replay_propose_ns counter
+firewood_replay_propose_ns 4491332645
+
+# TYPE firewood_remove counter
+firewood_remove{prefix="true",result="success"} 32
+
+# HELP firewood_replay_propose 
+# TYPE firewood_replay_propose counter
+firewood_replay_propose 20002
+
+# HELP firewood_proposal_commit_ms Timing of proposal commit to storage operations in milliseconds
+# TYPE firewood_proposal_commit_ms counter
+firewood_proposal_commit_ms{success="true"} 3693
+
+# TYPE firewood_read_node counter
+firewood_read_node{from="file"} 110206
+
+# TYPE firewood_active_revisions gauge
+firewood_active_revisions 127
+
+# TYPE firewood_max_revisions gauge
+firewood_max_revisions 128
+

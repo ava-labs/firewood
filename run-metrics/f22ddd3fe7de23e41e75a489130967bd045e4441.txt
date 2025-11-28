@@ -1,0 +1,111 @@
+# HELP firewood_proposal_create Number of database proposal creation operations
+# TYPE firewood_proposal_create counter
+firewood_proposal_create{success="true"} 128
+
+# TYPE firewood_io_read_ms counter
+firewood_io_read_ms 1
+
+# HELP firewood_replay_propose 
+# TYPE firewood_replay_propose counter
+firewood_replay_propose 20002
+
+# HELP firewood_proposal_commit Number of proposal commit to storage operations
+# TYPE firewood_proposal_commit counter
+firewood_proposal_commit{success="true"} 10001
+
+# HELP firewood_replay_commit_ns 
+# TYPE firewood_replay_commit_ns counter
+firewood_replay_commit_ns 3227863989
+
+# HELP firewood_replay_propose_ns 
+# TYPE firewood_replay_propose_ns counter
+firewood_replay_propose_ns 4354579562
+
+# HELP firewood_space_freed Bytes freed in nodestore
+# TYPE firewood_space_freed counter
+firewood_space_freed{index="256"} 7600896
+firewood_space_freed{index="1024"} 358400
+firewood_space_freed{index="64"} 320
+firewood_space_freed{index="128"} 161792
+firewood_space_freed{index="512"} 12196352
+firewood_space_freed{index="768"} 8242176
+firewood_space_freed{index="96"} 4184544
+
+# TYPE firewood_cache_freelist counter
+firewood_cache_freelist{type="hit"} 108540
+
+# HELP firewood_proposal_commit_ms Timing of proposal commit to storage operations in milliseconds
+# TYPE firewood_proposal_commit_ms counter
+firewood_proposal_commit_ms{success="true"} 542
+
+# HELP firewood_flush_nodes amount flushed nodes
+# TYPE firewood_flush_nodes counter
+firewood_flush_nodes 92
+
+# HELP firewood_replay_commit 
+# TYPE firewood_replay_commit counter
+firewood_replay_commit 10001
+
+# HELP firewood_space_from_end Space allocated from end of nodestore
+# TYPE firewood_space_from_end counter
+firewood_space_from_end{index="256"} 276992
+firewood_space_from_end{index="768"} 429312
+firewood_space_from_end{index="128"} 161280
+firewood_space_from_end{index="512"} 451072
+firewood_space_from_end{index="1024"} 98304
+firewood_space_from_end{index="96"} 273792
+firewood_space_from_end{index="64"} 9216
+
+# TYPE firewood_io_read counter
+firewood_io_read 109453
+
+# TYPE firewood_cache_node counter
+firewood_cache_node{mode="read",type="hit"} 19872
+firewood_cache_node{mode="write",type="hit"} 202329
+
+# HELP firewood_proposal_create_ms Timing of database proposal creation operations in milliseconds
+# TYPE firewood_proposal_create_ms counter
+firewood_proposal_create_ms{success="true"} 5
+
+# HELP firewood_space_reused Bytes reused from free list by index
+# TYPE firewood_space_reused counter
+firewood_space_reused{index="256"} 7569408
+firewood_space_reused{index="64"} 320
+firewood_space_reused{index="96"} 4182720
+firewood_space_reused{index="1024"} 264192
+firewood_space_reused{index="768"} 7953408
+firewood_space_reused{index="128"} 124032
+firewood_space_reused{index="512"} 12192768
+
+# TYPE firewood_read_node counter
+firewood_read_node{from="file"} 109453
+
+# HELP firewood_delete_node Nodes deleted
+# TYPE firewood_delete_node counter
+firewood_delete_node{index="1024"} 350
+firewood_delete_node{index="64"} 5
+firewood_delete_node{index="96"} 43589
+firewood_delete_node{index="128"} 1264
+firewood_delete_node{index="512"} 23821
+firewood_delete_node{index="256"} 29691
+firewood_delete_node{index="768"} 10732
+
+# HELP firewood_proposals Number of proposals created
+# TYPE firewood_proposals counter
+firewood_proposals 20002
+
+# TYPE firewood_remove counter
+firewood_remove{prefix="true",result="success"} 32
+
+# TYPE firewood_insert counter
+firewood_insert{merkle="below"} 3710
+firewood_insert{merkle="update"} 95516
+firewood_insert{merkle="split"} 1892
+firewood_insert{merkle="above"} 92
+
+# TYPE firewood_active_revisions gauge
+firewood_active_revisions 127
+
+# TYPE firewood_max_revisions gauge
+firewood_max_revisions 128
+

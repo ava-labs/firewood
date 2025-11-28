@@ -42,6 +42,14 @@ enum Command {
 
     BinarySearch {},
     Plots {},
+    ExportLogsToMessagepack {
+        /// Path to the replay log file.
+        #[arg(long, value_name = "LOGS_PATH")]
+        logs: PathBuf,
+        /// Path to desired output file for messagepack encoded logs.
+        #[arg(long, value_name = "OUT_PATH")]
+        output: PathBuf,
+    },
 }
 
 fn main() {
@@ -94,6 +102,9 @@ fn run() -> Result<(), Box<dyn Error>> {
                 Path::new("x.html"),
             )
             .unwrap();
+        }
+        Command::ExportLogsToMessagepack { logs, output } => {
+            firewood_replay::convert_rkyv_log_to_rmp_file(logs, output).unwrap();
         }
     }
 
