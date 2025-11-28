@@ -62,7 +62,7 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
         }
         Command::BinarySearch { .. } => {
-            firewood_replay::search::binary_search_commits();
+            firewood_replay::search::binary_search_commits().unwrap();
         }
     }
 

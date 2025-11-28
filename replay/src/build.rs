@@ -26,6 +26,7 @@ pub fn run_cargo_build_with_progress(project_dir: &Path) -> Result<(), Box<dyn s
     let reader = BufReader::new(stderr);
 
     let mut last_progress: Option<(u64, u64)> = None;
+    let mut last_pct: f64 = 0.0;
 
     for line_result in reader.lines() {
         let line = line_result?;
@@ -34,7 +35,10 @@ pub fn run_cargo_build_with_progress(project_dir: &Path) -> Result<(), Box<dyn s
             if changed && total > 0 {
                 last_progress = Some((done, total));
                 let pct = (done as f64 / total as f64) * 100.0;
-                println!("cargo build progress: {done}/{total} ({pct:.1}%)");
+                if pct - last_pct > 10.0 {
+                    last_pct = pct;
+                    println!("cargo build progress: {done}/{total} ({pct:.1}%)");
+                }
             }
         }
     }
