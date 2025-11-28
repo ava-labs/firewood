@@ -8,7 +8,8 @@ use std::{env, fs};
 
 use git2::build::CheckoutBuilder;
 use git2::{Oid, Repository};
-use plotly::common::{Mode, Title};
+use plotly::common::{HoverInfo, Mode, Title};
+use plotly::layout::{Axis, Layout};
 use plotly::{Plot, Scatter};
 
 use crate::build::run_cargo_build_with_progress;
@@ -323,22 +324,47 @@ pub fn plot_replay_times_from_dir(
         get_temp_clone_path("firewood").as_path(),
     )?;
 
-    let mut labels = Vec::new();
+    let mut short_labels = Vec::new();
+    let mut hover_texts = Vec::new();
     let mut values_ms = Vec::new();
 
     let mut commits = all_commits(&repo)?;
     commits.reverse();
     for c in commits {
-        if let Some(value) = dmap.get(&c.to_string()) {
-            labels.push(c.to_string());
+        let hash_str = c.to_string();
+        if let Some(value) = dmap.get(&hash_str) {
+            let short_hash: String = hash_str.chars().take(7).collect();
+            let mut hover = short_hash.clone();
+
+            if let Ok(commit) = repo.find_commit(c) {
+                if let Some(summary) = commit.summary() {
+                    hover = format!("{short_hash}: {summary}");
+                }
+            }
+
+            short_labels.push(short_hash);
+            hover_texts.push(hover);
             values_ms.push(*value);
         }
     }
 
-    let trace = Scatter::new(labels, values_ms).mode(Mode::LinesMarkers);
+    let trace = Scatter::new(short_labels, values_ms)
+        .mode(Mode::LinesMarkers)
+        .text_array(hover_texts)
+        .hover_info(HoverInfo::Text);
+
+    let layout = Layout::new()
+        .title(Title::new("Replay Experiment"))
+        .x_axis(
+            Axis::new()
+                .title(Title::new("Commit (short hash)"))
+                .tick_angle(45.0),
+        )
+        .y_axis(Axis::new().title(Title::new("Avg propose+commit time (ms)")));
+
     let mut plot = Plot::new();
     plot.add_trace(trace);
-    // plot.(Title::new("Replay time per metrics log (ms)"));
+    plot.set_layout(layout);
     plot.write_html(output_html);
 
     Ok(())
