@@ -6,8 +6,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use firewood::db::{Db, DbConfig};
-use firewood::v2::api::Db as _;
 use firewood::manager::RevisionManagerConfig;
+use firewood::v2::api::Db as _;
 
 /// Command-line utility for applying Firewood block replay logs.
 #[derive(Debug, Parser)]
@@ -30,16 +30,7 @@ enum Command {
         db: PathBuf,
     },
 
-    /// Placeholder for a future binary search helper over replay logs.
-    BinarySearch {
-        /// Path to the replay log file.
-        #[arg(long, value_name = "LOG_PATH")]
-        log: PathBuf,
-
-        /// Path to the Firewood database to use.
-        #[arg(long, value_name = "DB_PATH")]
-        db: PathBuf,
-    },
+    BinarySearch {},
 }
 
 fn main() {
@@ -71,11 +62,9 @@ fn run() -> Result<(), Box<dyn Error>> {
             }
         }
         Command::BinarySearch { .. } => {
-            eprintln!("binary-search subcommand is not implemented yet.");
-            std::process::exit(1);
+            firewood_replay::search::binary_search_commits();
         }
     }
 
     Ok(())
 }
-

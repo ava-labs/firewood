@@ -1,5 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
+pub mod build;
+pub mod search;
 
 use std::collections::HashMap;
 use std::fs;
@@ -190,7 +192,10 @@ fn apply_operation<'db>(
             };
             proposals.insert(returned_proposal_id, new_proposal);
         }
-        DbOperation::Commit(Commit { proposal_id, returned_hash }) => {
+        DbOperation::Commit(Commit {
+            proposal_id,
+            returned_hash,
+        }) => {
             let proposal = proposals
                 .remove(&proposal_id)
                 .ok_or(ReplayError::UnknownProposal(proposal_id))?;
@@ -211,7 +216,10 @@ fn apply_operation<'db>(
 ///
 /// This function assumes that `db` is opened on an empty database and will
 /// apply all operations in order.
-pub fn replay_log_from_reader<R: Read>(mut reader: R, db: &Db) -> Result<Option<Box<[u8]>>, ReplayError> {
+pub fn replay_log_from_reader<R: Read>(
+    mut reader: R,
+    db: &Db,
+) -> Result<Option<Box<[u8]>>, ReplayError> {
     let mut proposals: HashMap<u64, firewood::db::Proposal<'_>> = HashMap::new();
     let mut last_commit_hash = None;
     loop {
@@ -283,9 +291,7 @@ mod tests {
                 value: Some(vec![i + 1].into_boxed_slice()),
             })
             .collect();
-        ops.push(DbOperation::Batch(Batch {
-            pairs: batch_pairs,
-        }));
+        ops.push(DbOperation::Batch(Batch { pairs: batch_pairs }));
 
         let proposal_pairs = (5u8..10)
             .map(|i| KeyValueOp {
@@ -328,4 +334,3 @@ mod tests {
         }
     }
 }
-
