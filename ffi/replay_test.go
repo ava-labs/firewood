@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/vmihailenco/msgpack/v5"
@@ -101,15 +102,31 @@ func TestReplayLogReexecution(t *testing.T) {
 	r.NoError(err, "decode replay logs")
 	r.NotEmpty(logs, "expected at least one replay segment")
 
+	r.NoError(StartMetrics())
+
 	db := newTestDatabase(t)
 
+	// let's see how long this takes
+	start := time.Now().UnixMilli()
 	err = applyReplayLogsToDatabase(t, db, logs)
 	r.NoError(err, "replay logs against database")
+	end := time.Now().UnixMilli()
+	fmt.Printf("Replay took %d milliseconds\n", end-start)
 
 	// Basic sanity: after replaying, root should be non-empty.
 	root, err := db.Root()
 	r.NoError(err, "get root after replay")
 	r.NotEqual(EmptyRoot, root, "root should not be EmptyRoot after replay")
+
+	mt, err := GatherMetrics()
+	r.NoError(err, "gather metrics")
+
+	metricPath := os.Getenv("FIREWOOD_METRICS_PATH")
+	if metricPath != "" {
+		mt += "# TYPE firewood_replay_spent counter\n"
+		mt += fmt.Sprintf("firewood_replay_spent %d\n", end-start)
+		r.NoError(os.WriteFile(metricPath, []byte(mt), 0644))
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
