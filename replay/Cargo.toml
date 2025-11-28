@@ -19,6 +19,7 @@ thiserror.workspace = true
 clap = { workspace = true, features = ["derive"] }
 hex = "0.4.3"
 git2 = "0.19"
+plotly.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

@@ -1,3 +1,6 @@
+use std::collections::HashMap;
+use std::ffi::OsStr;
+use std::hash::Hash;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Instant;
@@ -5,6 +8,8 @@ use std::{env, fs};
 
 use git2::build::CheckoutBuilder;
 use git2::{Oid, Repository};
+use plotly::common::{Mode, Title};
+use plotly::{Plot, Scatter};
 
 use crate::build::run_cargo_build_with_progress;
 
@@ -93,46 +98,56 @@ pub fn binary_search_performance() -> Result<(), Box<dyn std::error::Error>> {
     let mut left = 0; // 0 is the most recent commit
     let mut right = commits.len() - 1; // right is the oldest commit we consider
 
+    for (idx, commit) in commits.into_iter().enumerate() {
+        println!("commits: {}/{}", idx + 1, commits.len());
+        checkout_commit(&repo, *commit)?;
+        build_replay_cli(&repo, *commit)?;
+        run_replay_cli(&repo, *commit)?;
+    }
+
     // checkout left and right too
-    for idx in [left, right] {
-        let commit = commits[idx];
-        checkout_commit(&repo, commit)?;
-        build_replay_cli(&repo, commit)?;
-        run_replay_cli(&repo, commit)?;
-    }
+    // let mut threshold = 0.0;
+    // for idx in [left, right] {
+    //     let commit = commits[idx];
+    //     checkout_commit(&repo, commit)?;
+    //     build_replay_cli(&repo, commit)?;
+    //     threshold += run_replay_cli(&repo, commit)?;
+    // }
+    // threshold /= 2.0;
 
-    let mut first_failing: Option<usize> = None;
-    while left <= right {
-        let mid = left + (right - left) / 2;
-        let commit = commits[mid];
-        println!("Checking commit: {}", commit);
-        checkout_commit(&repo, commit)?;
-        let res = build_replay_cli(&repo, commit);
-        if res.is_err() {
-            // This commit fails to build; remember it and look for an earlier
-            // failing commit closer to HEAD.
-            first_failing = Some(mid);
-            if mid == 0 {
-                break;
-            }
-            right = mid - 1;
-        } else {
-            // This commit builds; any failing commit must be older.
-            left = mid + 1;
-        }
-    }
+    // let mut first_failing: Option<usize> = None;
+    // while left <= right {
+    //     let mid = left + (right - left) / 2;
+    //     let commit = commits[mid];
+    //     println!("Checking commit: {}", commit);
+    //     checkout_commit(&repo, commit)?;
+    //     build_replay_cli(&repo, commit)?;
+    //     let p = run_replay_cli(&repo, commit)?;
+    //     if p > threshold {
+    //         // This commit performs bad; remember it and look for an older
+    //         // failing commit closer to HEAD.
+    //         first_failing = Some(mid);
+    //         if mid == 0 {
+    //             break;
+    //         }
+    //         right = mid - 1;
+    //     } else {
+    //         // This commit builds; any failing commit must be older.
+    //         left = mid + 1;
+    //     }
+    // }
 
-    match first_failing {
-        Some(idx) => {
-            println!("first failing commit: {}", commits[idx]);
-        }
-        None => {
-            println!(
-                "all commits between HEAD and {start_commit} built successfully; \
-                 no failing commit found in this range"
-            );
-        }
-    }
+    // match first_failing {
+    //     Some(idx) => {
+    //         println!("first failing commit: {}", commits[idx]);
+    //     }
+    //     None => {
+    //         println!(
+    //             "all commits between HEAD and {start_commit} built successfully; \
+    //              no failing commit found in this range"
+    //         );
+    //     }
+    // }
 
     Ok(())
 }
@@ -212,9 +227,12 @@ fn build_replay_cli(repo: &Repository, _commit: Oid) -> Result<(), Box<dyn std::
     Ok(())
 }
 
-fn run_replay_cli(repo: &Repository, commit: Oid) -> Result<(), Box<dyn std::error::Error>> {
+fn run_replay_cli(repo: &Repository, commit: Oid) -> Result<f64, Box<dyn std::error::Error>> {
     let binary = repo.workdir().unwrap().join("target/debug/firewood-replay");
     let db_path = "/Volumes/Workspace/FirewoodForest/firewood-replay-simple/replay_new_db";
+    if fs::exists(db_path).unwrap_or(false) {
+        fs::remove_file(db_path)?;
+    }
     let log_path = "/Volumes/Workspace/FirewoodForest/firewood-replay-simple/replay_100k_log_db";
     let metrics_path = format!(
         "/Volumes/Workspace/FirewoodForest/firewood-replay-simple/run-metrics/{}.txt",
@@ -226,16 +244,18 @@ fn run_replay_cli(repo: &Repository, commit: Oid) -> Result<(), Box<dyn std::err
         .arg(db_path)
         .arg("--log")
         .arg(log_path)
+        .arg("--max-commits")
+        .arg("10000")
         .arg("--metrics")
         .arg(metrics_path.clone())
         .spawn()?;
     child.wait()?;
+    let replay_time = replay_time_ns_from_metrics(Path::new(&metrics_path))?;
     println!(
         "average propose+commit time for {}: {}ns",
-        commit,
-        replay_time_ns_from_metrics(Path::new(&metrics_path))?
+        commit, replay_time
     );
-    Ok(())
+    Ok(replay_time)
 }
 
 fn replay_time_ns_from_metrics(metrics_path: &Path) -> Result<f64, Box<dyn std::error::Error>> {
@@ -267,4 +287,59 @@ fn replay_time_ns_from_metrics(metrics_path: &Path) -> Result<f64, Box<dyn std::
     }
 
     Ok(propose_ns / propose + commit_ns / commit)
+}
+
+pub fn plot_replay_times_from_dir(
+    metrics_dir: &Path,
+    output_html: &Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut dmap: HashMap<String, f64> = HashMap::new();
+
+    for entry in fs::read_dir(metrics_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        if path.extension() != Some(OsStr::new("txt")) {
+            continue;
+        }
+
+        let label = path
+            .file_stem()
+            .and_then(OsStr::to_str)
+            .unwrap_or_default()
+            .to_owned();
+        let value_ns = replay_time_ns_from_metrics(&path)?;
+        dmap.insert(label.clone(), value_ns / 1_000_000.0);
+    }
+
+    if dmap.is_empty() {
+        return Err("no metrics files found to plot".into());
+    }
+
+    let repo = clone_or_get_repo(
+        "https://github.com/ava-labs/firewood.git",
+        get_temp_clone_path("firewood").as_path(),
+    )?;
+
+    let mut labels = Vec::new();
+    let mut values_ms = Vec::new();
+
+    let mut commits = all_commits(&repo)?;
+    commits.reverse();
+    for c in commits {
+        if let Some(value) = dmap.get(&c.to_string()) {
+            labels.push(c.to_string());
+            values_ms.push(*value);
+        }
+    }
+
+    let trace = Scatter::new(labels, values_ms).mode(Mode::LinesMarkers);
+    let mut plot = Plot::new();
+    plot.add_trace(trace);
+    // plot.(Title::new("Replay time per metrics log (ms)"));
+    plot.write_html(output_html);
+
+    Ok(())
 }

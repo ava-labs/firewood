@@ -3,7 +3,7 @@
 
 use std::error::Error;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Parser, Subcommand};
 use firewood::db::{Db, DbConfig};
@@ -41,6 +41,7 @@ enum Command {
     },
 
     BinarySearch {},
+    Plots {},
 }
 
 fn main() {
@@ -86,6 +87,13 @@ fn run() -> Result<(), Box<dyn Error>> {
         }
         Command::BinarySearch { .. } => {
             firewood_replay::search::binary_search_performance().unwrap();
+        }
+        Command::Plots { .. } => {
+            firewood_replay::search::plot_replay_times_from_dir(
+                Path::new("run-metrics"),
+                Path::new("x.html"),
+            )
+            .unwrap();
         }
     }
 

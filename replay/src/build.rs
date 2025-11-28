@@ -7,7 +7,7 @@ use std::process::{Command, Stdio};
 /// This parses Cargo's own progress lines (e.g. `304/359`) from stderr and
 /// reports `done/total` using the same counters that Cargo displays.
 pub fn run_cargo_build_with_progress(project_dir: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting `cargo build` in {:?}", project_dir);
+    // println!("Starting `cargo build` in {:?}", project_dir);
 
     let mut command = Command::new("cargo");
     command
