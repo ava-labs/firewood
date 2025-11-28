@@ -22,6 +22,17 @@ enum DiffIterationNodeState {
     SkipChildren,
 }
 
+struct CurrentNodeState {
+    pre_path: Path,
+    node: Arc<Node>,
+    hash: Option<TrieHash>,
+}
+
+struct DiffCurrentNodes {
+    left_node: Option<CurrentNodeState>,
+    right_node: Option<CurrentNodeState>,
+}
+
 /// Optimized node iterator that compares two merkle trees and skips matching subtrees
 struct DiffMerkleNodeStream<'a> {
     left_tree: PreOrderIterator<'a>,
@@ -32,22 +43,29 @@ struct DiffMerkleNodeStream<'a> {
 }
 
 impl<'a> DiffMerkleNodeStream<'a> {
+    // TODO: Return error
     fn new_without_hash<T: TrieReader, U: TrieReader>(
         left_tree: &'a T,
         right_tree: &'a U,
         start_key: Key,
     ) -> Self {
-        let mut ret = Self {
-            left_tree: Self::preorder_iter(left_tree, None),
-            right_tree: Self::preorder_iter(right_tree, None),
+        // TODO: Integrate start_key into pre_order_iter
+        let mut left_tree = Self::preorder_iter(left_tree, None);
+        let _ = left_tree.iterate_to_key(&start_key);
+        let mut right_tree = Self::preorder_iter(right_tree, None);
+        let _ = right_tree.iterate_to_key(&start_key);
+
+        Self {
+            left_tree,
+            right_tree,
             left_state: None,
             right_state: None,
             state: DiffIterationNodeState::TraverseBoth,
             //state: DiffNodeStreamState::from(start_key),
-        };
-        let _ = ret.left_tree.iterate_to_key(&start_key);
-        let _ = ret.right_tree.iterate_to_key(&start_key);
-        ret
+        }
+        //let _ = ret.left_tree.iterate_to_key(&start_key);
+        //let _ = ret.right_tree.iterate_to_key(&start_key);
+        //ret
     }
 
     fn new<T: TrieReader + HashedNodeReader, U: TrieReader + HashedNodeReader>(
@@ -55,17 +73,22 @@ impl<'a> DiffMerkleNodeStream<'a> {
         right_tree: &'a U,
         start_key: Key,
     ) -> Self {
-        let mut ret = Self {
-            left_tree: Self::preorder_iter(left_tree, left_tree.root_hash()),
-            right_tree: Self::preorder_iter(right_tree, right_tree.root_hash()),
+        let mut left_tree = Self::preorder_iter(left_tree, left_tree.root_hash());
+        let _ = left_tree.iterate_to_key(&start_key);
+        let mut right_tree = Self::preorder_iter(right_tree, right_tree.root_hash());
+        let _ = right_tree.iterate_to_key(&start_key);
+
+        Self {
+            left_tree,
+            right_tree,
             left_state: None,
             right_state: None,
             state: DiffIterationNodeState::TraverseBoth,
             //state: DiffNodeStreamState::from(start_key),
-        };
-        let _ = ret.left_tree.iterate_to_key(&start_key);
-        let _ = ret.right_tree.iterate_to_key(&start_key);
-        ret
+        }
+        //let _ = ret.left_tree.iterate_to_key(&start_key);
+        //let _ = ret.right_tree.iterate_to_key(&start_key);
+        //ret
     }
 
     pub fn preorder_iter<V: TrieReader>(
@@ -236,20 +259,86 @@ impl<'a> DiffMerkleNodeStream<'a> {
             }
         }
     }
-}
 
-impl Iterator for DiffMerkleNodeStream<'_> {
-    type Item = Result<BatchOp<Key, Value>, firewood_storage::FileIoError>;
+    fn add_delete_value(left_node: Arc<Node>, left_pre_path: Path) -> Option<BatchOp<Key, Value>> {
+        // Combine pre_path with node path to get full path.
+        let full_path = Path::from_nibbles_iterator(
+            left_pre_path
+                .iter()
+                .copied()
+                .chain(left_node.partial_path().iter().copied()),
+        );
 
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.next_internal().transpose()? {
-            Ok(batch) => Some(Ok(batch)),
-            Err(e) => Some(Err(e)),
-        }
+        left_node.value().map(|_val| BatchOp::Delete {
+            key: key_from_nibble_iter(full_path.iter().copied()),
+        })
     }
-}
 
-impl DiffMerkleNodeStream<'_> {
+    /* 
+    fn _next_node_from_both(&mut self) -> Result<Option<BatchOp<Key, Value>>, FileIoError> {
+        // Get the next node from the left trie.
+        let Some((left_node, left_pre_path, _left_hash)) = self.left_tree.next()? else {
+            // No more nodes in the left trie. For this state, the current node from the right trie has already
+            // been accounted for, which means we don't need to include it in the change proof. For this case,
+            // we want to mark the left state as empty (just for completeness), and transition to the
+            // AddRestRight state where we add the remaining values from the right trie to the change proof.
+            self.state = DiffIterationNodeState::AddRestRight;
+            self.left_state = None;
+            return Ok(None);
+            //return Ok(DiffCurrentNodes {
+            //    left_node: None,
+            //    right_node: None,
+            //});
+        };
+
+        // Get the next node from the right trie.
+        let Some((right_node, right_pre_path, right_hash)) = self.right_tree.next()? else {
+            // No more nodes on the right side. We want to transition to DeleteRestLeft, but we don't want to
+            // forget about the node that we just retrieved from the left tree.
+            self.state = DiffIterationNodeState::DeleteRestLeft;
+            self.right_state = None;
+
+            return Ok(Self::add_delete_value(left_node, left_pre_path));
+        };
+        Ok(None)
+    }
+    */
+
+    fn next_node_from_both(&mut self) -> Result<DiffCurrentNodes, FileIoError> {
+        // Get the next node from the left trie.
+        let Some((left_node, left_pre_path, left_hash)) = self.left_tree.next()? else {
+            return Ok(DiffCurrentNodes {
+                left_node: None,
+                right_node: None,
+            });
+        };
+        // Get the next node from the right trie.
+        let Some((right_node, right_pre_path, right_hash)) = self.right_tree.next()? else {
+            return Ok(DiffCurrentNodes {
+                left_node: Some(CurrentNodeState {
+                    pre_path: left_pre_path,
+                    node: left_node,
+                    hash: left_hash,
+                }),
+                right_node: None,
+            });
+        };
+        Ok(DiffCurrentNodes {
+            left_node: Some(CurrentNodeState {
+                pre_path: left_pre_path,
+                node: left_node,
+                hash: left_hash,
+            }),
+            right_node: Some(CurrentNodeState {
+                pre_path: right_pre_path,
+                node: right_node,
+                hash: right_hash,
+            }),
+        })
+    }
+
+    /// Only called by next to implement the Iterator trait. Separated out mainly to simplify
+    /// error handling.
     fn next_internal(
         &mut self,
     ) -> Result<Option<BatchOp<Key, Value>>, firewood_storage::FileIoError> {
@@ -260,9 +349,49 @@ impl DiffMerkleNodeStream<'_> {
                     //println!("Right node state: {:?}", self.right_state);
                     //println!("Left node state: {:?}", self.left_state);
 
+                    // In the SkipChildren state, the hash and path of the current nodes on
+                    // both the left and right tries match. This means we don't need to
+                    // traverse down the children of these tries. We can do this by calling
+                    // skip_branches on the two tries, which pops off the children from the
+                    // traversal stack.
                     self.left_tree.skip_branches();
                     self.right_tree.skip_branches();
 
+                    let diff = self.next_node_from_both()?;
+                    match (diff.left_node, diff.right_node) {
+                        (None, None) => {
+                            self.state = DiffIterationNodeState::AddRestRight;
+                            self.left_state = None;
+                        }
+                        (Some(left), None) => {
+                            self.state = DiffIterationNodeState::DeleteRestLeft;
+                            self.right_state = None;
+                            let delete_op = Self::add_delete_value(left.node, left.pre_path);
+                            if delete_op.is_some() {
+                                return Ok(delete_op);
+                            }
+                        }
+                        (Some(left), Some(right)) => {
+                            // TODO: This can be moved to a function.
+                            let (next_op, ret) = self.one_step(
+                                &left.pre_path,
+                                &left.node,
+                                left.hash.as_ref(),
+                                &right.pre_path,
+                                &right.node,
+                                right.hash.as_ref(),
+                            );
+                            // Update states
+                            self.left_state = Some((left.node, left.pre_path, left.hash));
+                            self.right_state = Some((right.node, right.pre_path, right.hash));
+                            self.state = next_op;
+                            if ret.is_some() {
+                                return Ok(ret); // There is a BatchOp to return, else keep looping until there is or is done
+                            }
+                        }
+                        (None, Some(_)) => {}, // TODO: Add warning. Should not be possible
+                    }
+                    /* 
                     // TODO: Copied and pasted from TraverseBoth. Need to refactor
                     let Some((left_node, left_pre_path, left_hash)) = self.left_tree.next()? else {
                         self.state = DiffIterationNodeState::AddRestRight;
@@ -308,6 +437,7 @@ impl DiffMerkleNodeStream<'_> {
                     if ret.is_some() {
                         return Ok(ret); // There is a BatchOp to return, else keep looping until there is or is done
                     }
+                    */
                 }
                 // TODO: Do I actually need a traverse both? What if the right state is None, then call next. If next will continue
                 //       to return None after the first None is reached, then it would be safe.
@@ -507,6 +637,18 @@ impl DiffMerkleNodeStream<'_> {
             }
         }
         Ok(None)
+    }
+}
+
+/// Adding support for the Iterator trait
+impl Iterator for DiffMerkleNodeStream<'_> {
+    type Item = Result<BatchOp<Key, Value>, firewood_storage::FileIoError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.next_internal().transpose()? {
+            Ok(batch) => Some(Ok(batch)),
+            Err(e) => Some(Err(e)),
+        }
     }
 }
 
