@@ -29,10 +29,10 @@ mod logging;
 mod metrics_setup;
 mod proofs;
 mod proposal;
-mod revision;
-mod value;
 #[cfg(feature = "block-replay")]
 mod replay;
+mod revision;
+mod value;
 
 use firewood::v2::api::DbView;
 
@@ -567,7 +567,9 @@ pub unsafe extern "C" fn fwd_commit_proposal(
     proposal: Option<Box<ProposalHandle<'_>>>,
 ) -> HashResult {
     #[cfg(feature = "block-replay")]
-    let proposal_for_log = proposal.as_ref().map(|handle| &**handle as *const ProposalHandle<'_>);
+    let proposal_for_log = proposal
+        .as_ref()
+        .map(|handle| &**handle as *const ProposalHandle<'_>);
 
     let result = invoke_with_handle(proposal, move |proposal| {
         proposal.commit_proposal(|commit_time| {
@@ -752,6 +754,8 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 /// - The database handle is not used after this function is called.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidResult {
+    #[cfg(feature = "block-replay")]
+    crate::replay::flush_to_disk();
     invoke_with_handle(db, drop)
 }
 
