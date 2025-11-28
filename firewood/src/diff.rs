@@ -63,9 +63,6 @@ impl<'a> DiffMerkleNodeStream<'a> {
             state: DiffIterationNodeState::TraverseBoth,
             //state: DiffNodeStreamState::from(start_key),
         })
-        //let _ = ret.left_tree.iterate_to_key(&start_key);
-        //let _ = ret.right_tree.iterate_to_key(&start_key);
-        //ret
     }
 
     fn new<T: TrieReader + HashedNodeReader, U: TrieReader + HashedNodeReader>(
@@ -86,9 +83,6 @@ impl<'a> DiffMerkleNodeStream<'a> {
             state: DiffIterationNodeState::TraverseBoth,
             //state: DiffNodeStreamState::from(start_key),
         }
-        //let _ = ret.left_tree.iterate_to_key(&start_key);
-        //let _ = ret.right_tree.iterate_to_key(&start_key);
-        //ret
     }
 
     pub fn preorder_iter<V: TrieReader>(
@@ -138,26 +132,23 @@ impl<'a> DiffMerkleNodeStream<'a> {
     /// TODO: Consider grouping pre-path, node, and hash into a single struct.
     pub fn one_step(
         &self,
-        left_pre_path: &Path,
-        left_node: &Arc<Node>,
-        left_hash: Option<&TrieHash>,
-        right_pre_path: &Path,
-        right_node: &Arc<Node>,
-        right_hash: Option<&TrieHash>,
+        left: &CurrentNodeState,
+        right: &CurrentNodeState,
     ) -> (DiffIterationNodeState, Option<BatchOp<Key, Value>>) {
         // Combine the pre-path with the node's partial path to get the node's full path for both tries.
         // TODO: Determine if it is necessary to compute the full path.
         let left_full_path = Path::from_nibbles_iterator(
-            left_pre_path
+            left.pre_path
                 .iter()
                 .copied()
-                .chain(left_node.partial_path().iter().copied()),
+                .chain(left.node.partial_path().iter().copied()),
         );
         let right_full_path = Path::from_nibbles_iterator(
-            right_pre_path
+            right
+                .pre_path
                 .iter()
                 .copied()
-                .chain(right_node.partial_path().iter().copied()),
+                .chain(right.node.partial_path().iter().copied()),
         );
 
         // Compare the full path of the current nodes from the left and right tries.
@@ -173,7 +164,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                 // If there is a value in the current node in the left trie, then that value
                 // should be included in the set of deleted keys in the change proof. We do
                 // this by returning it in the second entry of the tuple in the return value.
-                left_node
+                left.node
                     .value()
                     .map_or((DiffIterationNodeState::TraverseLeft, None), |_val| {
                         (
@@ -196,7 +187,8 @@ impl<'a> DiffMerkleNodeStream<'a> {
             Ordering::Greater => {
                 // If there is a value in the current node in the right trie, then that value
                 // should be included in the set of additional keys in the change proof.
-                right_node
+                right
+                    .node
                     .value()
                     .map_or((DiffIterationNodeState::TraverseRight, None), |val| {
                         (
@@ -230,8 +222,11 @@ impl<'a> DiffMerkleNodeStream<'a> {
             // we can transition to the SkipChildren state to not traverse any further down the two
             // tries from the current nodes.
             Ordering::Equal => {
-                match (left_node.value(), right_node.value()) {
-                    (None, None) => (Self::hash_match(left_hash, right_hash), None),
+                match (left.node.value(), right.node.value()) {
+                    (None, None) => (
+                        Self::hash_match(left.hash.as_ref(), right.hash.as_ref()),
+                        None,
+                    ),
                     (Some(_val), None) => (
                         //DiffIterationNodeState::TraverseLeft,
                         DiffIterationNodeState::TraverseBoth,
@@ -249,7 +244,10 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     ),
                     (Some(left_val), Some(right_val)) => {
                         if left_val == right_val {
-                            (Self::hash_match(left_hash, right_hash), None)
+                            (
+                                Self::hash_match(left.hash.as_ref(), right.hash.as_ref()),
+                                None,
+                            )
                         } else {
                             (
                                 DiffIterationNodeState::TraverseBoth,
@@ -270,19 +268,11 @@ impl<'a> DiffMerkleNodeStream<'a> {
         left: CurrentNodeState,
         right: CurrentNodeState,
     ) -> Option<BatchOp<Key, Value>> {
-        let (next_op, ret) = self.one_step(
-            &left.pre_path,
-            &left.node,
-            left.hash.as_ref(),
-            &right.pre_path,
-            &right.node,
-            right.hash.as_ref(),
-        );
-        // Update states
+        let (next_state, op) = self.one_step(&left, &right);
         self.left_state = Some(left);
         self.right_state = Some(right);
-        self.state = next_op;
-        ret
+        self.state = next_state;
+        op
     }
 
     fn deleted_values(left_node: Arc<Node>, left_pre_path: Path) -> Option<BatchOp<Key, Value>> {
@@ -340,7 +330,6 @@ impl<'a> DiffMerkleNodeStream<'a> {
             self.right_state = None;
             return Ok(Self::deleted_values(left.node, left.pre_path));
         };
-
         Ok(self.update_state(left, right))
     }
 
@@ -608,7 +597,8 @@ mod tests {
     };
 
     use firewood_storage::{
-        FileIoError, HashedNodeReader, ImmutableProposal, MemStore, MutableProposal, NodeStore, TrieReader
+        FileIoError, HashedNodeReader, ImmutableProposal, MemStore, MutableProposal, NodeStore,
+        TrieReader,
     };
     use std::sync::Arc;
     use test_case::test_case;
@@ -1351,7 +1341,8 @@ mod tests {
             Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
         ) = if trie1_mutable && trie2_mutable {
             //diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
-            let ops = diff_merkle_iterator_without_hash(&m1, &m2, Box::new([])).unwrap()
+            let ops = diff_merkle_iterator_without_hash(&m1, &m2, Box::new([]))
+                .unwrap()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
             let m1_immut = m1.try_into().unwrap();
@@ -1360,7 +1351,8 @@ mod tests {
         } else if trie1_mutable && !trie2_mutable {
             let m2_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
                 m2.try_into().unwrap();
-            let ops = diff_merkle_iterator_without_hash(&m1, &m2_immut, Box::new([])).unwrap()
+            let ops = diff_merkle_iterator_without_hash(&m1, &m2_immut, Box::new([]))
+                .unwrap()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
             let m1_immut = m1.try_into().unwrap();
@@ -1368,7 +1360,8 @@ mod tests {
         } else if !trie1_mutable && trie2_mutable {
             let m1_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
                 m1.try_into().unwrap();
-            let ops = diff_merkle_iterator_without_hash(&m1_immut, &m2, Box::new([])).unwrap()
+            let ops = diff_merkle_iterator_without_hash(&m1_immut, &m2, Box::new([]))
+                .unwrap()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
             let m2_immut = m2.try_into().unwrap();
@@ -1378,7 +1371,8 @@ mod tests {
                 m1.try_into().unwrap();
             let m2_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
                 m2.try_into().unwrap();
-            let ops = diff_merkle_iterator_without_hash(&m1_immut, &m2_immut, Box::new([])).unwrap()
+            let ops = diff_merkle_iterator_without_hash(&m1_immut, &m2_immut, Box::new([]))
+                .unwrap()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
             (ops, m1_immut, m2_immut)
