@@ -37,8 +37,10 @@ struct DiffCurrentNodes {
 struct DiffMerkleNodeStream<'a> {
     left_tree: PreOrderIterator<'a>,
     right_tree: PreOrderIterator<'a>,
-    left_state: Option<(Arc<Node>, Path, Option<TrieHash>)>,
-    right_state: Option<(Arc<Node>, Path, Option<TrieHash>)>,
+    //left_state: Option<(Arc<Node>, Path, Option<TrieHash>)>,
+    left_state: Option<CurrentNodeState>,
+    //right_state: Option<(Arc<Node>, Path, Option<TrieHash>)>,
+    right_state: Option<CurrentNodeState>,
     state: DiffIterationNodeState,
 }
 
@@ -279,8 +281,10 @@ impl<'a> DiffMerkleNodeStream<'a> {
             right.hash.as_ref(),
         );
         // Update states
-        self.left_state = Some((left.node, left.pre_path, left.hash));
-        self.right_state = Some((right.node, right.pre_path, right.hash));
+        //self.left_state = Some((left.node, left.pre_path, left.hash));
+        self.left_state = Some(left);
+        //self.right_state = Some((right.node, right.pre_path, right.hash));
+        self.right_state = Some(right);
         self.state = next_op;
         ret
     }
@@ -407,49 +411,22 @@ impl<'a> DiffMerkleNodeStream<'a> {
                 }
                 DiffIterationNodeState::TraverseLeft => {
                     //println!("TraverseLeft");
-                    let (right_node, right_pre_path, right_hash) =
-                        self.right_state.take().expect("TODO");
+                    //let (right_node, right_pre_path, right_hash) =
+                    //    self.right_state.take().expect("TODO");
+
+                    let right = self.right_state.take().expect("TODO");
 
                     let Some(left) = self.left_tree.next()? else {
                         self.state = DiffIterationNodeState::AddRestRight;
                         self.left_state = None;
 
-                        if let Some(op) = Self::additional_values(right_node, right_pre_path) {
+                        if let Some(op) = Self::additional_values(right.node, right.pre_path) {
                             return Ok(Some(op));
                         }
                         continue;
-                        /*
-                        // TODO: Refactor this into a helper function
-                        // Combine pre_path with node path to get full path.
-                        let full_path = Path::from_nibbles_iterator(
-                            right_pre_path
-                                .iter()
-                                .copied()
-                                .chain(right_node.partial_path().iter().copied()),
-                        );
-
-                        let ret = right_node.value().map(|val| {
-                            //println!("2");
-                            BatchOp::Put {
-                                key: key_from_nibble_iter(full_path.iter().copied()),
-                                value: val.into(),
-                            }
-                        });
-                        if ret.is_some() {
-                            return Ok(ret);
-                        }
-                        continue;
-                        */
                     };
 
-                    if let Some(op) = self.update_state(
-                        left,
-                        CurrentNodeState {
-                            pre_path: right_pre_path,
-                            node: right_node,
-                            hash: right_hash,
-                        },
-                    ) {
+                    if let Some(op) = self.update_state(left, right) {
                         return Ok(Some(op));
                     }
 
@@ -478,11 +455,18 @@ impl<'a> DiffMerkleNodeStream<'a> {
                 }
                 DiffIterationNodeState::TraverseRight => {
                     //println!("TraverseRight");
-                    let (left_node, left_pre_path, left_hash) =
-                        self.left_state.take().expect("TODO");
+                    //let (left_node, left_pre_path, left_hash) =
+                    //    self.left_state.take().expect("TODO");
+                    let left = self.left_state.take().expect("TODO");
                     let Some(right) = self.right_tree.next()? else {
                         self.state = DiffIterationNodeState::DeleteRestLeft;
                         self.right_state = None;
+
+                        if let Some(op) = Self::deleted_values(left.node, left.pre_path) {
+                            return Ok(Some(op));
+                        }
+                        continue;
+                        /*
 
                         // Combine pre_path with node path to get full path.
                         let full_path = Path::from_nibbles_iterator(
@@ -499,7 +483,14 @@ impl<'a> DiffMerkleNodeStream<'a> {
                             return Ok(ret);
                         }
                         continue;
+                        */
                     };
+
+                    if let Some(op) = self.update_state(left, right) {
+                        return Ok(Some(op));
+                    }
+
+                    /*
                     let (next_op, ret) = self.one_step(
                         &left_pre_path,
                         &left_node,
@@ -516,14 +507,18 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     if ret.is_some() {
                         return Ok(ret); // There is a BatchOp to return, else keep looping until there is or is done
                     }
+                    */
                 }
                 DiffIterationNodeState::AddRestRight => {
-                    //println!("AddRestRight");
                     let Some(right) = self.right_tree.next()? else {
-                        //println!("1");
                         self.right_state = None;
                         break;
                     };
+                    if let Some(op) = Self::additional_values(right.node, right.pre_path) {
+                        return Ok(Some(op));
+                    }
+
+                    /*
                     // Combine pre_path with node path to get full path.
                     let full_path = Path::from_nibbles_iterator(
                         right
@@ -545,6 +540,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                         //println!("3");
                         return Ok(ret); // There is a BatchOp to return, else keep looping until there is or is done
                     }
+                    */
                 }
                 DiffIterationNodeState::DeleteRestLeft => {
                     //println!("DeleteRestLeft");
@@ -552,6 +548,11 @@ impl<'a> DiffMerkleNodeStream<'a> {
                         self.left_state = None;
                         break;
                     };
+
+                    if let Some(op) = Self::deleted_values(left.node, left.pre_path) {
+                        return Ok(Some(op));
+                    }
+                    /*
                     // Combine pre_path with node path to get full path.
                     let full_path = Path::from_nibbles_iterator(
                         left.pre_path
@@ -567,6 +568,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     if ret.is_some() {
                         return Ok(ret); // There is a BatchOp to return, else keep looping until there is or is done
                     }
+                    */
                 }
             }
         }
