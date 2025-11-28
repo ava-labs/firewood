@@ -12,6 +12,8 @@ description = "Replay engine for Firewood block replay logs."
 [dependencies]
 firewood.workspace = true
 firewood-storage.workspace = true
+metrics.workspace = true
+metrics-exporter-prometheus = { version = "0.17.2", default-features = false }
 rkyv = "0.8.1"
 thiserror.workspace = true
 clap = { workspace = true, features = ["derive"] }

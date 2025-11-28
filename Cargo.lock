@@ -1225,6 +1225,8 @@ dependencies = [
  "firewood-storage",
  "git2",
  "hex",
+ "metrics",
+ "metrics-exporter-prometheus",
  "rkyv",
  "tempfile",
  "thiserror",
