@@ -21,14 +21,14 @@ enum DiffIterationNodeState<'a> {
         left_tree: PreOrderIterator<'a>,
         right_tree: PreOrderIterator<'a>,
     },
-    /// In the `TraverseLeft` state, we need to compare the next node from the left trie 
+    /// In the `TraverseLeft` state, we need to compare the next node from the left trie
     /// with the current node in the right trie (`right_state`).
     TraverseLeft {
         left_tree: PreOrderIterator<'a>,
         right_tree: PreOrderIterator<'a>,
         right_state: CurrentNodeState,
     },
-    /// In the `TraverseRight` state, we need to compare the next node from the right trie 
+    /// In the `TraverseRight` state, we need to compare the next node from the right trie
     /// with the current node in the left trie (`left_state`).
     TraverseRight {
         left_tree: PreOrderIterator<'a>,
@@ -36,17 +36,13 @@ enum DiffIterationNodeState<'a> {
         left_state: CurrentNodeState,
     },
     /// In the `AddRestRight` state, we have reached the end of the left trie and need to
-    /// add the remaining keys/values from the right trie to the addition list in the 
+    /// add the remaining keys/values from the right trie to the addition list in the
     /// change proof.
-    AddRestRight {
-        right_tree: PreOrderIterator<'a>,
-    },
-    /// In the `DeleteRestLeft` state, we have reached the end of the right trie and need 
+    AddRestRight { right_tree: PreOrderIterator<'a> },
+    /// In the `DeleteRestLeft` state, we have reached the end of the right trie and need
     /// add the remaining keys/values from the left trie to the deletion list in the change
     /// proof.
-    DeleteRestLeft {
-        left_tree: PreOrderIterator<'a>,
-    },
+    DeleteRestLeft { left_tree: PreOrderIterator<'a> },
     /// In the `SkipChildren` state, we previously identified that the current nodes from
     /// both tries have matching paths, values, and hashes. This means we no longer need
     /// traverse any of their children. In his state, we call `skip_children` on both tries
@@ -72,16 +68,18 @@ struct DiffMerkleNodeStream<'a> {
 }
 
 impl<'a> DiffMerkleNodeStream<'a> {
-    /// Constructor where the left and right tries are `TrieReaders`. This allows a 
-    /// `DiffMerkleNodeStream` to be constructed with `MutableProposal` parameters. The 
-    /// drawback to using `new_without_hash` is that we don't have the root hashes for 
-    /// these tries. The `new` constructor should be used `ImmutableProposal` parameters.
+    /// Constructor where the left and right tries implement the trait `TrieReader`. This
+    /// allows a `DiffMerkleNodeStream` to be constructed with `MutableProposal`s. The
+    /// drawback to using `new_without_hash` is that we don't have the root hashes for
+    /// these tries. The `new` constructor should be used for `ImmutableProposal`s.
     pub fn new_without_hash<T: TrieReader, U: TrieReader>(
         left_tree: &'a T,
         right_tree: &'a U,
         start_key: Key,
     ) -> Result<Self, FileIoError> {
-        // TODO: Integrate start_key into pre_order_iter
+        // Create pre-order iterators for the two tries and have them iterate to the start key.
+        // If the start key doesn't exist, it will iterate them to the smallest key that is
+        // larger than the start key.
         let mut left_tree = Self::preorder_iter(left_tree, None);
         left_tree.iterate_to_key(&start_key)?;
         let mut right_tree = Self::preorder_iter(right_tree, None);
@@ -95,26 +93,30 @@ impl<'a> DiffMerkleNodeStream<'a> {
         })
     }
 
-    // TODO: Return error
-    fn new<T: TrieReader + HashedNodeReader, U: TrieReader + HashedNodeReader>(
+    /// Constructor where the left and right tries implement the trait `HashedNodeReader`. This
+    /// constructor should be used instead of `new_without_hash` for `ImmutableProposal`s.
+    pub fn new<T: HashedNodeReader, U: HashedNodeReader>(
         left_tree: &'a T,
         right_tree: &'a U,
         start_key: Key,
-    ) -> Self {
+    ) -> Result<Self, FileIoError> {
+        // Create pre-order iterators for the two tries and have them iterate to the start key.
+        // If the start key doesn't exist, it will iterate them to the smallest key that is
+        // larger than the start key.
         let mut left_tree = Self::preorder_iter(left_tree, left_tree.root_hash());
-        let _ = left_tree.iterate_to_key(&start_key);
+        left_tree.iterate_to_key(&start_key)?;
         let mut right_tree = Self::preorder_iter(right_tree, right_tree.root_hash());
-        let _ = right_tree.iterate_to_key(&start_key);
+        right_tree.iterate_to_key(&start_key)?;
 
-        Self {
+        Ok(Self {
             state: Some(DiffIterationNodeState::TraverseBoth {
                 left_tree,
                 right_tree,
             }),
-        }
+        })
     }
 
-    pub fn preorder_iter<V: TrieReader>(
+    fn preorder_iter<V: TrieReader>(
         tree: &'a V,
         root_hash: Option<TrieHash>,
     ) -> PreOrderIterator<'a> {
@@ -131,7 +133,6 @@ impl<'a> DiffMerkleNodeStream<'a> {
                 node: root,
                 hash: root_hash,
             });
-            //(root.clone(), Path::default(), root_hash));
         }
         ret
     }
@@ -166,7 +167,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
     /// are the same but their node hashes differ, or skipping the children of the current nodes from both
     /// tries if their node hashes match.
     /// TODO: Consider grouping pre-path, node, and hash into a single struct.
-    pub fn one_step(
+    fn one_step_compare(
         left_state: CurrentNodeState,
         left_tree: PreOrderIterator<'a>,
         right_state: CurrentNodeState,
@@ -338,11 +339,9 @@ impl<'a> DiffMerkleNodeStream<'a> {
                 .copied()
                 .chain(right_node.partial_path().iter().copied()),
         );
-        right_node.value().map(|val| {
-            BatchOp::Put {
-                key: key_from_nibble_iter(full_path.iter().copied()),
-                value: val.into(),
-            }
+        right_node.value().map(|val| BatchOp::Put {
+            key: key_from_nibble_iter(full_path.iter().copied()),
+            value: val.into(),
         })
     }
 
@@ -369,7 +368,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
             ));
         };
 
-        Ok(Self::one_step(
+        Ok(Self::one_step_compare(
             left_state,
             left_tree,
             right_state,
@@ -406,7 +405,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     right_state,
                 } => {
                     if let Some(left_state) = left_tree.next()? {
-                        Self::one_step(left_state, left_tree, right_state, right_tree)
+                        Self::one_step_compare(left_state, left_tree, right_state, right_tree)
                     } else {
                         (
                             DiffIterationNodeState::AddRestRight { right_tree },
@@ -420,7 +419,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     left_state,
                 } => {
                     if let Some(right_state) = right_tree.next()? {
-                        Self::one_step(left_state, left_tree, right_state, right_tree)
+                        Self::one_step_compare(left_state, left_tree, right_state, right_tree)
                     } else {
                         (
                             DiffIterationNodeState::DeleteRestLeft { left_tree },
@@ -653,7 +652,7 @@ mod tests {
         tree_left: &'a Merkle<T>,
         tree_right: &'a Merkle<U>,
         start_key: Key,
-    ) -> DiffMerkleNodeStream<'a>
+    ) -> Result<DiffMerkleNodeStream<'a>, FileIoError>
     where
         T: firewood_storage::TrieReader + HashedNodeReader,
         U: firewood_storage::TrieReader + HashedNodeReader,
@@ -803,7 +802,7 @@ mod tests {
         let m1 = make_immutable(create_test_merkle());
         let m2 = make_immutable(create_test_merkle());
 
-        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
         assert!(diff_iter.next().is_none());
     }
 
@@ -818,7 +817,7 @@ mod tests {
         let m1 = populate_merkle(create_test_merkle(), &items);
         let m2 = populate_merkle(create_test_merkle(), &items);
 
-        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
         assert!(diff_iter.next().is_none());
     }
 
@@ -832,7 +831,7 @@ mod tests {
         let m1 = make_immutable(create_test_merkle());
         let m2 = populate_merkle(create_test_merkle(), &items);
 
-        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
 
         let op1 = diff_iter.next().unwrap().unwrap();
         assert!(
@@ -857,7 +856,7 @@ mod tests {
         let m1 = populate_merkle(create_test_merkle(), &items);
         let m2 = make_immutable(create_test_merkle());
 
-        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
 
         let op1 = diff_iter.next().unwrap().unwrap();
         assert!(matches!(op1, BatchOp::Delete { key } if key == Box::from(b"key1".as_slice())));
@@ -873,7 +872,7 @@ mod tests {
         let m1 = populate_merkle(create_test_merkle(), &[(b"key1", b"old_value")]);
         let m2 = populate_merkle(create_test_merkle(), &[(b"key1", b"new_value")]);
 
-        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
 
         let op = diff_iter.next().unwrap().unwrap();
         assert!(
@@ -904,7 +903,7 @@ mod tests {
             &[(b"key2", b"new_value"), (b"key4", b"value4")],
         );
 
-        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
 
         let op1 = diff_iter.next().unwrap().unwrap();
         assert!(matches!(op1, BatchOp::Delete { key } if key == Box::from(b"key1".as_slice())));
@@ -947,7 +946,7 @@ mod tests {
             ],
         );
 
-        let diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([]));
+        let diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
 
         let ops: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
 
@@ -1014,7 +1013,7 @@ mod tests {
         };
 
         //let diff_stream = DiffMerkleKeyValueStreams::new(tree_left, tree_right, Key::default());
-        let diff_stream = DiffMerkleNodeStream::new(tree_left, tree_right, Key::default());
+        let diff_stream = DiffMerkleNodeStream::new(tree_left, tree_right, Key::default()).unwrap();
         let results: Vec<_> = diff_stream.collect::<Result<Vec<_>, _>>().unwrap();
 
         let delete_count = results
@@ -1071,7 +1070,8 @@ mod tests {
             ],
         );
 
-        let diff_stream = DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Key::default());
+        let diff_stream =
+            DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Key::default()).unwrap();
 
         let results: Vec<_> = diff_stream.collect::<Result<Vec<_>, _>>().unwrap();
 
@@ -1197,7 +1197,7 @@ mod tests {
         let m1 = populate_merkle(create_test_merkle(), &tree1_data);
         let m2 = populate_merkle(create_test_merkle(), &tree2_data);
 
-        let diff_iter = diff_merkle_iterator(&m1, &m2, Key::default());
+        let diff_iter = diff_merkle_iterator(&m1, &m2, Key::default()).unwrap();
         let results: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
 
         // Verify we found the expected differences
@@ -1256,7 +1256,8 @@ mod tests {
             &[(b"path".as_slice(), b"leaf_value".as_slice())],
         );
 
-        let diff_stream = DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Key::default());
+        let diff_stream =
+            DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Key::default()).unwrap();
 
         let results: Vec<_> = diff_stream.collect::<Result<Vec<_>, _>>().unwrap();
 
@@ -1295,7 +1296,7 @@ mod tests {
         );
 
         // Start from key "bbb" - should skip "aaa"
-        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::from(b"bbb".as_slice()));
+        let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::from(b"bbb".as_slice())).unwrap();
 
         let op1 = diff_iter.next().unwrap().unwrap();
         assert!(
