@@ -12,48 +12,71 @@ use firewood_storage::{Child, FileIoError, HashedNodeReader, Node, Path, TrieHas
 use std::{cmp::Ordering, iter::once};
 use triomphe::Arc;
 
-/// Enum containing all possible states for a diff iteration node
+/// Enum containing all possible states that we can be in as we iterate through the diff
+/// between two Merkle tries.
 enum DiffIterationNodeState<'a> {
+    /// In the `TraverseBoth` state, we only need to consider the next nodes from the left
+    /// and right trie in pre-order traversal order.
     TraverseBoth {
         left_tree: PreOrderIterator<'a>,
         right_tree: PreOrderIterator<'a>,
     },
+    /// In the `TraverseLeft` state, we need to compare the next node from the left trie 
+    /// with the current node in the right trie (`right_state`).
     TraverseLeft {
         left_tree: PreOrderIterator<'a>,
         right_tree: PreOrderIterator<'a>,
         right_state: CurrentNodeState,
     },
+    /// In the `TraverseRight` state, we need to compare the next node from the right trie 
+    /// with the current node in the left trie (`left_state`).
     TraverseRight {
         left_tree: PreOrderIterator<'a>,
         right_tree: PreOrderIterator<'a>,
         left_state: CurrentNodeState,
     },
+    /// In the `AddRestRight` state, we have reached the end of the left trie and need to
+    /// add the remaining keys/values from the right trie to the addition list in the 
+    /// change proof.
     AddRestRight {
         right_tree: PreOrderIterator<'a>,
     },
+    /// In the `DeleteRestLeft` state, we have reached the end of the right trie and need 
+    /// add the remaining keys/values from the left trie to the deletion list in the change
+    /// proof.
     DeleteRestLeft {
         left_tree: PreOrderIterator<'a>,
     },
+    /// In the `SkipChildren` state, we previously identified that the current nodes from
+    /// both tries have matching paths, values, and hashes. This means we no longer need
+    /// traverse any of their children. In his state, we call `skip_children` on both tries
+    /// to remove their children from the traversal stack. Then we consider the next nodes
+    /// from both tries in the same way as `TraverseBoth`.
     SkipChildren {
         left_tree: PreOrderIterator<'a>,
         right_tree: PreOrderIterator<'a>,
     },
 }
 
-//#[derive(Clone)]
 struct CurrentNodeState {
     pre_path: Path,
     node: Arc<Node>,
     hash: Option<TrieHash>,
 }
 
-/// Node iterator that compares two merkle trees and skips matching subtrees
+/// Iterator that outputs the difference between two tries and skips matching sub-tries.
 struct DiffMerkleNodeStream<'a> {
+    // Contains the state of the traversal. It is only None after calling `next` or
+    // `next_internal` if it has reached the end of the traversal.
     state: Option<DiffIterationNodeState<'a>>,
 }
 
 impl<'a> DiffMerkleNodeStream<'a> {
-    fn new_without_hash<T: TrieReader, U: TrieReader>(
+    /// Constructor where the left and right tries are `TrieReaders`. This allows a 
+    /// `DiffMerkleNodeStream` to be constructed with `MutableProposal` parameters. The 
+    /// drawback to using `new_without_hash` is that we don't have the root hashes for 
+    /// these tries. The `new` constructor should be used `ImmutableProposal` parameters.
+    pub fn new_without_hash<T: TrieReader, U: TrieReader>(
         left_tree: &'a T,
         right_tree: &'a U,
         start_key: Key,
