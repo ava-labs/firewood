@@ -26,14 +26,14 @@ enum DiffIterationNodeState<'a> {
     TraverseLeft {
         left_tree: PreOrderIterator<'a>,
         right_tree: PreOrderIterator<'a>,
-        right_state: CurrentNodeState,
+        right_state: NodeState,
     },
     /// In the `TraverseRight` state, we need to compare the next node from the right trie
     /// with the current node in the left trie (`left_state`).
     TraverseRight {
         left_tree: PreOrderIterator<'a>,
         right_tree: PreOrderIterator<'a>,
-        left_state: CurrentNodeState,
+        left_state: NodeState,
     },
     /// In the `AddRestRight` state, we have reached the end of the left trie and need to
     /// add the remaining keys/values from the right trie to the addition list in the
@@ -54,7 +54,10 @@ enum DiffIterationNodeState<'a> {
     },
 }
 
-struct CurrentNodeState {
+// TODO: Would it be more efficient if we stored the node's path instead of its
+//       pre-path. It might reduce the number of times that the full path needs
+//       to be generated for a node.
+struct NodeState {
     pre_path: Path,
     node: Arc<Node>,
     hash: Option<TrieHash>,
@@ -116,27 +119,33 @@ impl<'a> DiffMerkleNodeStream<'a> {
         })
     }
 
+    /// Create a pre-order iterator for the trie. The iterator takes an optional
+    /// root hash which is available when the trie is from an `ImmutableProposal`.
     fn preorder_iter<V: TrieReader>(
         tree: &'a V,
         root_hash: Option<TrieHash>,
     ) -> PreOrderIterator<'a> {
-        let root = tree.root_node();
-        let mut ret = PreOrderIterator {
+        let mut preorder_it = PreOrderIterator {
             stack: vec![],
             prev_num_children: 0,
             trie: tree,
         };
-
-        if let Some(root) = root {
-            ret.stack.push(CurrentNodeState {
+        // If the root node is not None, then push the root's NodeState onto the traversal
+        // stack. It will be used on the first call to next or next_internal.
+        if let Some(root) = tree.root_node() {
+            preorder_it.stack.push(NodeState {
                 pre_path: Path::default(),
                 node: root,
                 hash: root_hash,
             });
         }
-        ret
+        preorder_it
     }
 
+    /// Helper function used in `one_step_compare` to check if two Option<TrieHash> matches. The
+    /// `left_tree` and `right_tree` parameters are used to create the next state. Note that this
+    /// function should only be used if the two nodes in the left and right tries have the same
+    /// path and the same value.
     fn hash_match(
         left_hash: Option<TrieHash>,
         left_tree: PreOrderIterator<'a>,
@@ -160,17 +169,16 @@ impl<'a> DiffMerkleNodeStream<'a> {
     }
 
     /// Called as part of a lock-step synchronized pre-order traversal of the left and right tries. This
-    /// function compares the current nodes from the two tries to determine if any operations needed to be
+    /// function compares the current nodes from the two tries to determine if any operations need to be
     /// deleted (i.e., op appears on the left but not the right trie) or added (i.e., op appears on the
-    /// right but not the left trie). It also returns the next iteration action, which can include
-    /// traversing down the left or right trie, traversing down both if current nodes' path on both tries
-    /// are the same but their node hashes differ, or skipping the children of the current nodes from both
-    /// tries if their node hashes match.
-    /// TODO: Consider grouping pre-path, node, and hash into a single struct.
+    /// right but not the left trie). It also returns the next iteration state, which can include
+    /// traversing down the left or right trie, traversing down both if the current nodes' path on both
+    /// tries are the same but their node hashes differ, or skipping the children of the current nodes
+    /// from both tries if their node hashes match.
     fn one_step_compare(
-        left_state: CurrentNodeState,
+        left_state: NodeState,
         left_tree: PreOrderIterator<'a>,
-        right_state: CurrentNodeState,
+        right_state: NodeState,
         right_tree: PreOrderIterator<'a>,
     ) -> (DiffIterationNodeState<'a>, Option<BatchOp<Key, Value>>) {
         // Combine the pre-path with the node's partial path to get the node's full path for both tries.
@@ -197,8 +205,8 @@ impl<'a> DiffMerkleNodeStream<'a> {
             // are greater than the current node on the left trie. Therefore, we should traverse
             // down the left trie until we reach a node that is larger than or equal to the
             // current node on the right trie, and collect all of the keys associated with
-            // those nodes (excluding the last one) and add them to the set of keys that
-            // need to be deleted in the change proof.
+            // the nodes that were traversed (excluding the last one) and add them to the set
+            // of keys that need to be deleted in the change proof.
             Ordering::Less => {
                 // If there is a value in the current node in the left trie, then that value
                 // should be included in the set of deleted keys in the change proof. We do
@@ -467,12 +475,9 @@ impl Iterator for DiffMerkleNodeStream<'_> {
     }
 }
 
-// For now, just implement traverse left and traverse right functions to test out the iterator
 struct PreOrderIterator<'a> {
-    // The stack of nodes to visit. We store references to avoid ownership issues during iteration.
     trie: &'a dyn TrieReader,
-    //stack: Vec<(Arc<Node>, Path, Option<TrieHash>)>,
-    stack: Vec<CurrentNodeState>,
+    stack: Vec<NodeState>,
     prev_num_children: usize,
 }
 
@@ -550,7 +555,7 @@ impl PreOrderIterator<'_> {
                             let unique_node = path_overlap.unique_b;
                             if unique_node.is_empty() || child_pre_key > *key {
                                 //self.stack.push((child, child_pre_path, child_hash));
-                                self.stack.push(CurrentNodeState {
+                                self.stack.push(NodeState {
                                     pre_path: child_pre_path,
                                     node: child,
                                     hash: child_hash,
@@ -568,7 +573,7 @@ impl PreOrderIterator<'_> {
     }
 
     //fn next(&mut self) -> Result<Option<(Arc<Node>, Path, Option<TrieHash>)>, FileIoError> {
-    fn next(&mut self) -> Result<Option<CurrentNodeState>, FileIoError> {
+    fn next(&mut self) -> Result<Option<NodeState>, FileIoError> {
         // Pop the next node from the stack
         self.prev_num_children = 0;
         //if let Some((node, pre_path, node_hash)) = self.stack.pop() {
@@ -604,7 +609,7 @@ impl PreOrderIterator<'_> {
                         );
 
                         //self.stack.push((child, child_pre_path, child_hash));
-                        self.stack.push(CurrentNodeState {
+                        self.stack.push(NodeState {
                             pre_path: child_pre_path,
                             node: child,
                             hash: child_hash,
@@ -615,7 +620,6 @@ impl PreOrderIterator<'_> {
                 }
             }
             // Return the value of the current node
-            //Ok(Some((state.clone(), pre_path, node_hash)))
             Ok(Some(state))
         } else {
             // Stack is empty, iteration is complete
