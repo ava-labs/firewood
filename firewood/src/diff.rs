@@ -58,7 +58,7 @@ enum DiffIterationNodeState<'a> {
 //       pre-path. It might reduce the number of times that the full path needs
 //       to be generated for a node.
 struct NodeState {
-    pre_path: Path,
+    path: Path,
     node: Arc<Node>,
     hash: Option<TrieHash>,
 }
@@ -134,7 +134,8 @@ impl<'a> DiffMerkleNodeStream<'a> {
         // stack. It will be used on the first call to next or next_internal.
         if let Some(root) = tree.root_node() {
             preorder_it.stack.push(NodeState {
-                pre_path: Path::default(),
+                //path: Path::default(),
+                path: root.partial_path().clone(),
                 node: root,
                 hash: root_hash,
             });
@@ -183,23 +184,26 @@ impl<'a> DiffMerkleNodeStream<'a> {
     ) -> (DiffIterationNodeState<'a>, Option<BatchOp<Key, Value>>) {
         // Combine the pre-path with the node's partial path to get the node's full path for both tries.
         // TODO: Determine if it is necessary to compute the full path.
-        let left_full_path = Path::from_nibbles_iterator(
-            left_state
-                .pre_path
-                .iter()
-                .copied()
-                .chain(left_state.node.partial_path().iter().copied()),
-        );
-        let right_full_path = Path::from_nibbles_iterator(
-            right_state
-                .pre_path
-                .iter()
-                .copied()
-                .chain(right_state.node.partial_path().iter().copied()),
-        );
+
+        /*
+            let left_full_path = Path::from_nibbles_iterator(
+                left_state
+                    .path
+                    .iter()
+                    .copied()
+                    .chain(left_state.node.partial_path().iter().copied()),
+            );
+            let right_full_path = Path::from_nibbles_iterator(
+                right_state
+                    .path
+                    .iter()
+                    .copied()
+                    .chain(right_state.node.partial_path().iter().copied()),
+            );
+        */
 
         // Compare the full path of the current nodes from the left and right tries.
-        match left_full_path.cmp(&right_full_path) {
+        match left_state.path.cmp(&right_state.path) {
             // If the left full path is less than the right full path, that means that all of
             // the remaining nodes (and any keys stored in those nodes) from the right trie
             // are greater than the current node on the left trie. Therefore, we should traverse
@@ -218,7 +222,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                         right_state,
                     },
                     left_state.node.value().map(|_val| BatchOp::Delete {
-                        key: key_from_nibble_iter(left_full_path.iter().copied()),
+                        key: key_from_nibble_iter(left_state.path.iter().copied()),
                     }),
                 )
             }
@@ -241,7 +245,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                         left_state,
                     },
                     right_state.node.value().map(|val| BatchOp::Put {
-                        key: key_from_nibble_iter(right_full_path.iter().copied()),
+                        key: key_from_nibble_iter(right_state.path.iter().copied()),
                         value: val.into(),
                     }),
                 )
@@ -280,7 +284,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                             right_tree,
                         },
                         Some(BatchOp::Delete {
-                            key: key_from_nibble_iter(left_full_path.iter().copied()),
+                            key: key_from_nibble_iter(left_state.path.iter().copied()),
                         }),
                     ),
                     (None, Some(val)) => (
@@ -290,7 +294,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                             right_tree,
                         },
                         Some(BatchOp::Put {
-                            key: key_from_nibble_iter(right_full_path.iter().copied()),
+                            key: key_from_nibble_iter(right_state.path.iter().copied()),
                             value: val.into(),
                         }),
                     ),
@@ -312,7 +316,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                                     right_tree,
                                 },
                                 Some(BatchOp::Put {
-                                    key: key_from_nibble_iter(right_full_path.iter().copied()),
+                                    key: key_from_nibble_iter(right_state.path.iter().copied()),
                                     value: right_val.into(),
                                 }),
                             )
@@ -323,7 +327,9 @@ impl<'a> DiffMerkleNodeStream<'a> {
         }
     }
 
-    fn deleted_values(left_node: Arc<Node>, left_pre_path: Path) -> Option<BatchOp<Key, Value>> {
+    //fn deleted_values(left_node: Arc<Node>, left_pre_path: Path) -> Option<BatchOp<Key, Value>> {
+    fn deleted_values(left_node: Arc<Node>, left_path: Path) -> Option<BatchOp<Key, Value>> {
+        /*
         // Combine pre_path with node path to get full path.
         let full_path = Path::from_nibbles_iterator(
             left_pre_path
@@ -334,12 +340,18 @@ impl<'a> DiffMerkleNodeStream<'a> {
         left_node.value().map(|_val| BatchOp::Delete {
             key: key_from_nibble_iter(full_path.iter().copied()),
         })
+        */
+        left_node.value().map(|_val| BatchOp::Delete {
+            key: key_from_nibble_iter(left_path.iter().copied()),
+        })
     }
 
     fn additional_values(
         right_node: Arc<Node>,
-        right_pre_path: Path,
+        //right_pre_path: Path,
+        right_path: Path,
     ) -> Option<BatchOp<Key, Value>> {
+        /*
         // Combine pre_path with node path to get full path.
         let full_path = Path::from_nibbles_iterator(
             right_pre_path
@@ -347,8 +359,9 @@ impl<'a> DiffMerkleNodeStream<'a> {
                 .copied()
                 .chain(right_node.partial_path().iter().copied()),
         );
+        */
         right_node.value().map(|val| BatchOp::Put {
-            key: key_from_nibble_iter(full_path.iter().copied()),
+            key: key_from_nibble_iter(right_path.iter().copied()),
             value: val.into(),
         })
     }
@@ -372,7 +385,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
             // forget about the node that we just retrieved from the left tree.
             return Ok((
                 DiffIterationNodeState::DeleteRestLeft { left_tree },
-                Self::deleted_values(left_state.node, left_state.pre_path),
+                Self::deleted_values(left_state.node, left_state.path),
             ));
         };
 
@@ -417,7 +430,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     } else {
                         (
                             DiffIterationNodeState::AddRestRight { right_tree },
-                            Self::additional_values(right_state.node, right_state.pre_path),
+                            Self::additional_values(right_state.node, right_state.path),
                         )
                     }
                 }
@@ -431,7 +444,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     } else {
                         (
                             DiffIterationNodeState::DeleteRestLeft { left_tree },
-                            Self::deleted_values(left_state.node, left_state.pre_path),
+                            Self::deleted_values(left_state.node, left_state.path),
                         )
                     }
                 }
@@ -441,7 +454,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     };
                     (
                         DiffIterationNodeState::AddRestRight { right_tree },
-                        Self::additional_values(right_state.node, right_state.pre_path),
+                        Self::additional_values(right_state.node, right_state.path),
                     )
                 }
                 DiffIterationNodeState::DeleteRestLeft { mut left_tree } => {
@@ -450,7 +463,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     };
                     (
                         DiffIterationNodeState::DeleteRestLeft { left_tree },
-                        Self::deleted_values(left_state.node, left_state.pre_path),
+                        Self::deleted_values(left_state.node, left_state.path),
                     )
                 }
             };
@@ -490,16 +503,18 @@ impl PreOrderIterator<'_> {
         loop {
             self.prev_num_children = 0;
             if let Some(state) = self.stack.pop() {
+                /*
                 // Check if it is a match for the key.
                 let full_path = Path::from_nibbles_iterator(
                     state
-                        .pre_path
+                        .path
                         .iter()
                         .copied()
                         .chain(state.node.partial_path().iter().copied()),
                 );
+                */
 
-                let node_key = key_from_nibble_iter(full_path.iter().copied());
+                let node_key = key_from_nibble_iter(state.path.iter().copied());
                 if node_key == *key {
                     // Just push back to stack and return. Change proof will now start at this key
                     //self.stack.push((node, pre_path, node_hash));
@@ -538,8 +553,19 @@ impl PreOrderIterator<'_> {
                                     maybe_persisted.as_shared_node(&self.trie)?
                                 }
                             };
+
+                            let child_path = Path::from_nibbles_iterator(
+                                state
+                                    .path
+                                    .iter()
+                                    .copied()
+                                    .chain(once(path_comp.as_u8()))
+                                    .chain(child.partial_path().iter().copied()),
+                            );
+
+                            /*
                             let child_pre_path = Path::from_nibbles_iterator(
-                                state.pre_path.iter().copied().chain(
+                                state.path.iter().copied().chain(
                                     state
                                         .node
                                         .partial_path()
@@ -548,15 +574,15 @@ impl PreOrderIterator<'_> {
                                         .chain(once(path_comp.as_u8())),
                                 ),
                             );
+                            */
 
-                            let child_pre_key =
-                                key_from_nibble_iter(child_pre_path.iter().copied());
-                            let path_overlap = PrefixOverlap::from(key, child_pre_key.as_ref());
+                            let child_key = key_from_nibble_iter(child_path.iter().copied());
+                            let path_overlap = PrefixOverlap::from(key, child_key.as_ref());
                             let unique_node = path_overlap.unique_b;
-                            if unique_node.is_empty() || child_pre_key > *key {
+                            if unique_node.is_empty() || child_key > *key {
                                 //self.stack.push((child, child_pre_path, child_hash));
                                 self.stack.push(NodeState {
-                                    pre_path: child_pre_path,
+                                    path: child_path,
                                     node: child,
                                     hash: child_hash,
                                 });
@@ -597,8 +623,9 @@ impl PreOrderIterator<'_> {
                                 maybe_persisted.as_shared_node(&self.trie)?
                             }
                         };
+                        /*
                         let child_pre_path = Path::from_nibbles_iterator(
-                            state.pre_path.iter().copied().chain(
+                            state.path.iter().copied().chain(
                                 state
                                     .node
                                     .partial_path()
@@ -607,10 +634,21 @@ impl PreOrderIterator<'_> {
                                     .chain(once(path_comp.as_u8())),
                             ),
                         );
+                        */
+
+                        let child_path = Path::from_nibbles_iterator(
+                            state
+                                .path
+                                .iter()
+                                .copied()
+                                .chain(once(path_comp.as_u8()))
+                                .chain(child.partial_path().iter().copied()),
+                        );
 
                         //self.stack.push((child, child_pre_path, child_hash));
                         self.stack.push(NodeState {
-                            pre_path: child_pre_path,
+                            //path: child_pre_path,
+                            path: child_path,
                             node: child,
                             hash: child_hash,
                         });
