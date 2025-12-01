@@ -520,9 +520,7 @@ impl PreOrderIterator<'_> {
         #[cfg(feature = "ethhash")]
         let child = match child {
             Child::Node(child) => child.clone().into(),
-            Child::AddressWithHash(addr, _hash) => {
-                self.trie.read_node(addr)?
-            }
+            Child::AddressWithHash(addr, _hash) => self.trie.read_node(addr)?,
             Child::MaybePersisted(maybe_persisted, _hash) => {
                 maybe_persisted.as_shared_node(&self.trie)?
             }
@@ -644,7 +642,8 @@ impl PreOrderIterator<'_> {
 mod tests {
     use crate::{
         db::BatchOp,
-        merkle::{Key, Merkle, Value}, proofs::diff::DiffMerkleNodeStream,
+        merkle::{Key, Merkle, Value},
+        proofs::diff::DiffMerkleNodeStream,
     };
 
     use firewood_storage::{
