@@ -1098,7 +1098,7 @@ pub struct PrefixOverlap<'a, T> {
 }
 
 impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
-    pub fn from(a: &'a [T], b: &'a [T]) -> Self {
+    pub(crate) fn from(a: &'a [T], b: &'a [T]) -> Self {
         let split_index = a
             .iter()
             .zip(b)

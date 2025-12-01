@@ -1,6 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+// TODO: Currently only tests use the code in this file. Remove allow(dead_code) once change
+//       proof has been implemented.
 #![allow(dead_code)]
 
 use crate::{
