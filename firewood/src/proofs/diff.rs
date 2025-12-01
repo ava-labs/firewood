@@ -143,7 +143,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
         preorder_it
     }
 
-    /// Helper function used in `one_step_compare` to check if two Option<TrieHash> matches. The
+    /// Helper function used in `one_step_compare` to check if two `Option<TrieHash>` matches. The
     /// `left_tree` and `right_tree` parameters are used to create the next state. Note that this
     /// function should only be used if the two nodes in the left and right tries have the same
     /// path and the same value.
