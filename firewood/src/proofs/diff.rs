@@ -501,7 +501,6 @@ impl PreOrderIterator<'_> {
         child: Child,
     ) -> Result<NodeState, FileIoError> {
         // Collect the hash for the child node as we possibly read the file from storage.
-        #[cfg(not(feature = "ethhash"))]
         let mut child_hash: Option<TrieHash> = None;
         #[cfg(not(feature = "ethhash"))]
         let child = match child {
@@ -516,12 +515,14 @@ impl PreOrderIterator<'_> {
             }
         };
         #[cfg(feature = "ethhash")]
-        let child_hash: Option<TrieHash> = None;
-        #[cfg(feature = "ethhash")]
         let child = match child {
             Child::Node(child) => child.clone().into(),
-            Child::AddressWithHash(addr, _hash) => self.trie.read_node(addr)?,
-            Child::MaybePersisted(maybe_persisted, _hash) => {
+            Child::AddressWithHash(addr, hash) => {
+                child_hash = Some(hash.into());
+                self.trie.read_node(addr)?
+            }
+            Child::MaybePersisted(maybe_persisted, hash) => {
+                child_hash = Some(hash.into());
                 maybe_persisted.as_shared_node(&self.trie)?
             }
         };
