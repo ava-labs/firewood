@@ -11,7 +11,6 @@ mod tests;
 
 use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
-use crate::root_store::{NoOpStore, RootStore};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
     self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter, KeyType,
@@ -26,7 +25,7 @@ use firewood_storage::{
 use metrics::{counter, describe_counter};
 use std::io::Write;
 use std::num::NonZeroUsize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
@@ -125,6 +124,9 @@ pub struct DbConfig {
     // TODO: Experimentally determine the right value for BatchSize.
     #[builder(default = UseParallel::BatchSize(8))]
     pub use_parallel: UseParallel,
+    /// `RootStore` directory path
+    #[builder(default = None)]
+    pub root_store_dir: Option<PathBuf>,
 }
 
 #[derive(Debug)]
@@ -164,14 +166,6 @@ impl api::Db for Db {
 impl Db {
     /// Create a new database instance.
     pub fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
-        Self::with_root_store(db_path, cfg, Box::new(NoOpStore {}))
-    }
-
-    fn with_root_store<P: AsRef<Path>>(
-        db_path: P,
-        cfg: DbConfig,
-        root_store: Box<dyn RootStore + Send + Sync>,
-    ) -> Result<Self, api::Error> {
         let metrics = Arc::new(DbMetrics {
             proposals: counter!("firewood.proposals"),
         });
@@ -179,11 +173,11 @@ impl Db {
         let config_manager = ConfigManager::builder()
             .create(cfg.create_if_missing)
             .truncate(cfg.truncate)
+            .root_store_dir(cfg.root_store_dir)
             .manager(cfg.manager)
             .build();
 
-        let manager =
-            RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager, root_store)?;
+        let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
         let db = Self {
             metrics,
             manager,
@@ -384,6 +378,7 @@ mod test {
     #![expect(clippy::unwrap_used)]
 
     use core::iter::Take;
+    use std::collections::HashMap;
     use std::iter::Peekable;
     use std::num::NonZeroUsize;
     use std::ops::{Deref, DerefMut};
@@ -394,7 +389,7 @@ mod test {
     };
 
     use crate::db::{Db, Proposal, UseParallel};
-    use crate::root_store::{MockStore, RootStore};
+    use crate::manager::RevisionManagerConfig;
     use crate::v2::api::{Db as _, DbView, Proposal as _};
 
     use super::{BatchOp, DbConfig};
@@ -434,15 +429,6 @@ mod test {
     }
 
     impl<T: Iterator> IterExt for T {}
-
-    #[cfg(test)]
-    impl Db {
-        /// Extract the root store by consuming the database instance.
-        /// This is primarily used for reopening or replacing the database with the same root store.
-        pub fn into_root_store(self) -> Box<dyn RootStore + Send + Sync> {
-            self.manager.into_root_store()
-        }
-    }
 
     #[test]
     fn test_proposal_reads() {
@@ -655,12 +641,7 @@ mod test {
                 .build(),
         );
         insert_commit(&db, 1);
-        let db = db.reopen_with_config(
-            DbConfig::builder()
-                .truncate(false)
-                .use_parallel(UseParallel::Always)
-                .build(),
-        );
+        let db = db.reopen();
         insert_commit(&db, 2);
         // Check that the keys are still there after the commits
         let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
@@ -1073,10 +1054,10 @@ mod test {
         assert_eq!(value, retrieved_value.as_ref());
     }
 
+    /// Verifies that persisted revisions are still accessible when reopening the database.
     #[test]
     fn test_root_store() {
-        let mock_store = MockStore::default();
-        let db = TestDb::with_mockstore(mock_store);
+        let db = TestDb::new_with_root_store(DbConfig::builder().build());
 
         // First, create a revision to retrieve
         let key = b"key";
@@ -1106,34 +1087,59 @@ mod test {
     }
 
     #[test]
-    fn test_root_store_errs() {
-        let mock_store = MockStore::with_failures();
-        let db = TestDb::with_mockstore(mock_store);
-
-        let view = db.view(TrieHash::empty());
-        assert!(view.is_err());
-
-        let batch = vec![BatchOp::Put {
-            key: b"k",
-            value: b"v",
-        }];
-
-        let proposal = db.propose(batch).unwrap();
-        assert!(proposal.commit().is_err());
-    }
-
-    #[test]
     fn test_rootstore_empty_db_reopen() {
-        let mock_store = MockStore::default();
-        let db = TestDb::with_mockstore(mock_store);
+        let db = TestDb::new_with_root_store(DbConfig::builder().build());
 
         db.reopen();
+    }
+
+    /// Verifies that revisions exceeding the in-memory limit can still be retrieved.
+    #[test]
+    fn test_root_store_with_capped_max_revisions() {
+        const NUM_REVISIONS: usize = 10;
+
+        let dbconfig = DbConfig::builder()
+            .manager(RevisionManagerConfig::builder().max_revisions(5).build())
+            .build();
+        let db = TestDb::new_with_root_store(dbconfig);
+
+        // Create and commit 10 proposals
+        let key = b"root_store";
+        let revisions: HashMap<TrieHash, _> = (0..NUM_REVISIONS)
+            .map(|i| {
+                let value = i.to_be_bytes();
+                let batch = vec![BatchOp::Put { key, value }];
+                let proposal = db.propose(batch).unwrap();
+                let root_hash = proposal.root_hash().unwrap().unwrap();
+                proposal.commit().unwrap();
+
+                (root_hash, value)
+            })
+            .collect();
+
+        // Verify that we can access all revisions with their correct values
+        for (root_hash, value) in &revisions {
+            let revision = db.revision(root_hash.clone()).unwrap();
+            let retrieved_value = revision.val(key).unwrap().unwrap();
+            assert_eq!(value.as_slice(), retrieved_value.as_ref());
+        }
+
+        let db = db.reopen();
+
+        // Verify that we can access all revisions with their correct values
+        // after reopening
+        for (root_hash, value) in &revisions {
+            let revision = db.revision(root_hash.clone()).unwrap();
+            let retrieved_value = revision.val(key).unwrap().unwrap();
+            assert_eq!(value.as_slice(), retrieved_value.as_ref());
+        }
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
     pub(super) struct TestDb {
         db: Db,
         tmpdir: tempfile::TempDir,
+        dbconfig: DbConfig,
     }
     impl Deref for TestDb {
         type Target = Db;
@@ -1157,43 +1163,85 @@ mod test {
             let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()
                 .collect();
-            let db = Db::new(dbpath, dbconfig).unwrap();
-            TestDb { db, tmpdir }
+            let db = Db::new(dbpath, dbconfig.clone()).unwrap();
+            TestDb {
+                db,
+                tmpdir,
+                dbconfig,
+            }
         }
 
-        pub fn with_mockstore(mock_store: MockStore) -> Self {
+        /// Creates a new test database with `RootStore` enabled.
+        ///
+        /// Overrides `root_store_dir` in dbconfig to provide a directory for `RootStore`.
+        pub fn new_with_root_store(dbconfig: DbConfig) -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
             let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
                 .iter()
                 .collect();
-            let dbconfig = DbConfig::builder().build();
-            let db = Db::with_root_store(dbpath, dbconfig, Box::new(mock_store)).unwrap();
-            TestDb { db, tmpdir }
+            let root_store_dir = tmpdir.as_ref().join("root_store");
+
+            let dbconfig = DbConfig {
+                root_store_dir: Some(root_store_dir),
+                ..dbconfig
+            };
+
+            let db = Db::new(dbpath, dbconfig.clone()).unwrap();
+            TestDb {
+                db,
+                tmpdir,
+                dbconfig,
+            }
         }
 
+        /// Reopens the database at the same path, preserving existing data.
+        ///
+        /// This method closes the current database instance (releasing the advisory lock),
+        /// then opens it again at the same path while keeping the same configuration.
         pub fn reopen(self) -> Self {
-            self.reopen_with_config(DbConfig::builder().truncate(false).build())
-        }
-
-        pub fn reopen_with_config(self, dbconfig: DbConfig) -> Self {
             let path = self.path();
-            let TestDb { db, tmpdir } = self;
+            let TestDb {
+                db,
+                tmpdir,
+                dbconfig,
+            } = self;
 
-            let root_store = db.into_root_store();
+            drop(db);
 
-            let db = Db::with_root_store(path, dbconfig, root_store).unwrap();
-            TestDb { db, tmpdir }
+            let db = Db::new(path, dbconfig.clone()).unwrap();
+            TestDb {
+                db,
+                tmpdir,
+                dbconfig,
+            }
         }
 
+        /// Replaces the database with a fresh instance at the same path.
+        ///
+        /// This method closes the current database instance (releasing the advisory lock),
+        /// and creates a new database. This completely resets the database, removing all
+        /// existing data and starting fresh. The new database instance will use the default
+        /// configuration with truncation enabled.
+        ///
+        /// This is useful for testing scenarios where you want to start with a clean slate
+        /// while maintaining the same temporary directory structure.
         pub fn replace(self) -> Self {
             let path = self.path();
-            let TestDb { db, tmpdir } = self;
+            let TestDb {
+                db,
+                tmpdir,
+                dbconfig: _,
+            } = self;
 
-            let root_store = db.into_root_store();
+            drop(db);
 
             let dbconfig = DbConfig::builder().truncate(true).build();
-            let db = Db::with_root_store(path, dbconfig, root_store).unwrap();
-            TestDb { db, tmpdir }
+            let db = Db::new(path, dbconfig.clone()).unwrap();
+            TestDb {
+                db,
+                tmpdir,
+                dbconfig,
+            }
         }
 
         pub fn path(&self) -> PathBuf {
