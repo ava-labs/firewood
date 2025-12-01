@@ -1411,7 +1411,7 @@ mod tests {
                 m1.try_into().unwrap();
             let m2_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
                 m2.try_into().unwrap();
-            let ops = diff_merkle_iterator_without_hash(&m1_immut, &m2_immut, Box::new([]))
+            let ops = diff_merkle_iterator(&m1_immut, &m2_immut, Box::new([]))
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
