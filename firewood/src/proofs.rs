@@ -7,6 +7,7 @@ mod header;
 mod proof_type;
 mod reader;
 mod ser;
+mod diff;
 #[cfg(test)]
 mod tests;
 

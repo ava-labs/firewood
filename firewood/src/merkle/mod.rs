@@ -1098,7 +1098,11 @@ pub struct PrefixOverlap<'a, T> {
 }
 
 impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
-    pub(crate) fn from(a: &'a [T], b: &'a [T]) -> Self {
+    /// # Panics
+    ///
+    /// Should only panic if there is a logic error causing `b.get` to fail
+    /// on `split_index` even though `split_index` was generated from `b`.
+    pub fn from(a: &'a [T], b: &'a [T]) -> Self {
         let split_index = a
             .iter()
             .zip(b)

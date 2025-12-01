@@ -630,8 +630,7 @@ impl PreOrderIterator<'_> {
 mod tests {
     use crate::{
         db::BatchOp,
-        diff::DiffMerkleNodeStream,
-        merkle::{Key, Merkle, Value},
+        merkle::{Key, Merkle, Value}, proofs::diff::DiffMerkleNodeStream,
     };
 
     use firewood_storage::{
