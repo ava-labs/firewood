@@ -54,9 +54,6 @@ enum DiffIterationNodeState<'a> {
     },
 }
 
-// TODO: Would it be more efficient if we stored the node's path instead of its
-//       pre-path. It might reduce the number of times that the full path needs
-//       to be generated for a node.
 struct NodeState {
     path: Path,
     node: Arc<Node>,
@@ -134,7 +131,6 @@ impl<'a> DiffMerkleNodeStream<'a> {
         // stack. It will be used on the first call to next or next_internal.
         if let Some(root) = tree.root_node() {
             preorder_it.stack.push(NodeState {
-                //path: Path::default(),
                 path: root.partial_path().clone(),
                 node: root,
                 hash: root_hash,
@@ -182,26 +178,6 @@ impl<'a> DiffMerkleNodeStream<'a> {
         right_state: NodeState,
         right_tree: PreOrderIterator<'a>,
     ) -> (DiffIterationNodeState<'a>, Option<BatchOp<Key, Value>>) {
-        // Combine the pre-path with the node's partial path to get the node's full path for both tries.
-        // TODO: Determine if it is necessary to compute the full path.
-
-        /*
-            let left_full_path = Path::from_nibbles_iterator(
-                left_state
-                    .path
-                    .iter()
-                    .copied()
-                    .chain(left_state.node.partial_path().iter().copied()),
-            );
-            let right_full_path = Path::from_nibbles_iterator(
-                right_state
-                    .path
-                    .iter()
-                    .copied()
-                    .chain(right_state.node.partial_path().iter().copied()),
-            );
-        */
-
         // Compare the full path of the current nodes from the left and right tries.
         match left_state.path.cmp(&right_state.path) {
             // If the left full path is less than the right full path, that means that all of
@@ -271,101 +247,78 @@ impl<'a> DiffMerkleNodeStream<'a> {
             // hashes match, then we know that everything below the current nodes are identical, and
             // we can transition to the SkipChildren state to not traverse any further down the two
             // tries from the current nodes.
-            Ordering::Equal => {
-                match (left_state.node.value(), right_state.node.value()) {
-                    (None, None) => (
-                        Self::hash_match(left_state.hash, left_tree, right_state.hash, right_tree),
-                        None,
-                    ),
-                    (Some(_val), None) => (
-                        //DiffIterationNodeState::TraverseLeft,
-                        DiffIterationNodeState::TraverseBoth {
-                            left_tree,
-                            right_tree,
-                        },
-                        Some(BatchOp::Delete {
-                            key: key_from_nibble_iter(left_state.path.iter().copied()),
-                        }),
-                    ),
-                    (None, Some(val)) => (
-                        //DiffIterationNodeState::TraverseRight,
-                        DiffIterationNodeState::TraverseBoth {
-                            left_tree,
-                            right_tree,
-                        },
-                        Some(BatchOp::Put {
-                            key: key_from_nibble_iter(right_state.path.iter().copied()),
-                            value: val.into(),
-                        }),
-                    ),
-                    (Some(left_val), Some(right_val)) => {
-                        if left_val == right_val {
-                            (
-                                Self::hash_match(
-                                    left_state.hash,
-                                    left_tree,
-                                    right_state.hash,
-                                    right_tree,
-                                ),
-                                None,
-                            )
-                        } else {
-                            (
-                                DiffIterationNodeState::TraverseBoth {
-                                    left_tree,
-                                    right_tree,
-                                },
-                                Some(BatchOp::Put {
-                                    key: key_from_nibble_iter(right_state.path.iter().copied()),
-                                    value: right_val.into(),
-                                }),
-                            )
-                        }
+            Ordering::Equal => match (left_state.node.value(), right_state.node.value()) {
+                (None, None) => (
+                    Self::hash_match(left_state.hash, left_tree, right_state.hash, right_tree),
+                    None,
+                ),
+                (Some(_val), None) => (
+                    DiffIterationNodeState::TraverseBoth {
+                        left_tree,
+                        right_tree,
+                    },
+                    Some(BatchOp::Delete {
+                        key: key_from_nibble_iter(left_state.path.iter().copied()),
+                    }),
+                ),
+                (None, Some(val)) => (
+                    DiffIterationNodeState::TraverseBoth {
+                        left_tree,
+                        right_tree,
+                    },
+                    Some(BatchOp::Put {
+                        key: key_from_nibble_iter(right_state.path.iter().copied()),
+                        value: val.into(),
+                    }),
+                ),
+                (Some(left_val), Some(right_val)) => {
+                    if left_val == right_val {
+                        (
+                            Self::hash_match(
+                                left_state.hash,
+                                left_tree,
+                                right_state.hash,
+                                right_tree,
+                            ),
+                            None,
+                        )
+                    } else {
+                        (
+                            DiffIterationNodeState::TraverseBoth {
+                                left_tree,
+                                right_tree,
+                            },
+                            Some(BatchOp::Put {
+                                key: key_from_nibble_iter(right_state.path.iter().copied()),
+                                value: right_val.into(),
+                            }),
+                        )
                     }
                 }
-            }
+            },
         }
     }
 
-    //fn deleted_values(left_node: Arc<Node>, left_pre_path: Path) -> Option<BatchOp<Key, Value>> {
+    /// Helper function that returns a key/value to be added to the delete list if the current 
+    /// node from the left trie has a value. 
     fn deleted_values(left_node: Arc<Node>, left_path: Path) -> Option<BatchOp<Key, Value>> {
-        /*
-        // Combine pre_path with node path to get full path.
-        let full_path = Path::from_nibbles_iterator(
-            left_pre_path
-                .iter()
-                .copied()
-                .chain(left_node.partial_path().iter().copied()),
-        );
-        left_node.value().map(|_val| BatchOp::Delete {
-            key: key_from_nibble_iter(full_path.iter().copied()),
-        })
-        */
         left_node.value().map(|_val| BatchOp::Delete {
             key: key_from_nibble_iter(left_path.iter().copied()),
         })
     }
 
-    fn additional_values(
-        right_node: Arc<Node>,
-        //right_pre_path: Path,
-        right_path: Path,
-    ) -> Option<BatchOp<Key, Value>> {
-        /*
-        // Combine pre_path with node path to get full path.
-        let full_path = Path::from_nibbles_iterator(
-            right_pre_path
-                .iter()
-                .copied()
-                .chain(right_node.partial_path().iter().copied()),
-        );
-        */
+    /// Helper function that returns a key/value to be added to the addition list if the current
+    /// node from the right trie has a value.
+    fn additional_values(right_node: Arc<Node>, right_path: Path) -> Option<BatchOp<Key, Value>> {
         right_node.value().map(|val| BatchOp::Put {
             key: key_from_nibble_iter(right_path.iter().copied()),
             value: val.into(),
         })
     }
 
+    /// Helper function called in the `TraverseBoth` or `SkipChildren` state. Mainly handles the complexities
+    /// introduced when one of the tries has no more nodes. If both tries have nodes remaining, then it calls
+    /// `one_step_compare` to complete the state handling.
     fn next_node_from_both(
         mut left_tree: PreOrderIterator<'a>,
         mut right_tree: PreOrderIterator<'a>,
@@ -397,23 +350,30 @@ impl<'a> DiffMerkleNodeStream<'a> {
         ))
     }
 
-    /// Only called by next to implement the Iterator trait. Separated out mainly to simplify
-    /// error handling.
+    /// Only called by `next` to implement the Iterator trait. Separated out into a separate 
+    /// function mainly to simplify error handling.
     fn next_internal(&mut self) -> Result<Option<BatchOp<Key, Value>>, FileIoError> {
+        // Loops until there is a value to return or if we have reached the end of the 
+        // traversal. State processing is based on the value of `state`, which we take at the
+        // beginning of the loop and reassign before the next iteration. `state` can only be
+        // None after calling `next_internal` if we have reached the end of the traversal.
         while let Some(state) = self.state.take() {
             let (next_state, op) = match state {
                 DiffIterationNodeState::SkipChildren {
                     mut left_tree,
                     mut right_tree,
                 } => {
-                    println!("######## Skipping sub-trie with the same hash ############");
+                    //println!("######## Skipping sub-trie with the same hash ############");
                     // In the SkipChildren state, the hash and path of the current nodes on
                     // both the left and right tries match. This means we don't need to
                     // traverse down the children of these tries. We can do this by calling
-                    // skip_branches on the two tries, which pops off the children from the
-                    // traversal stack.
+                    // skip_branches on the two tries, which pops off the children of the
+                    // current node from the traversal stack.
                     left_tree.skip_branches();
                     right_tree.skip_branches();
+
+                    // Calls helper function that uses the next node from both tries. This 
+                    // helper function is also called for `TraverseBoth`.`
                     Self::next_node_from_both(left_tree, right_tree)?
                 }
                 DiffIterationNodeState::TraverseBoth {
@@ -425,9 +385,15 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     right_tree,
                     right_state,
                 } => {
+                    // In the `TraverseLeft` state, we use the next node from the left trie to
+                    // perform state processing, which is done by calling `one_step_compare`.
                     if let Some(left_state) = left_tree.next()? {
                         Self::one_step_compare(left_state, left_tree, right_state, right_tree)
                     } else {
+                        // If we have no more nodes from the left trie, then we transition to
+                        // the `AddRestRight` state (where we add all of the remaining nodes
+                        // from the right trie to the addition list). We also need to add the
+                        // the value from the current right node if it has a value.
                         (
                             DiffIterationNodeState::AddRestRight { right_tree },
                             Self::additional_values(right_state.node, right_state.path),
