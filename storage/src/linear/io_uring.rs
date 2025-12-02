@@ -176,7 +176,7 @@ impl<'a> QueueEntry<'a> {
         if res == 0 {
             return Err(Error {
                 offset: self.original_offset,
-                err: std::io::Error::other("kernel wrote zero bytes without error"),
+                err: std::io::Error::new(std::io::ErrorKind::WriteZero, "kernel wrote zero bytes"),
             });
         }
 
