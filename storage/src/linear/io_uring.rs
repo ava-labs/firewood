@@ -177,8 +177,13 @@ impl IoUringProxy {
             // do not stop processing the submission queue on error, submit
             // all events and report errors in the completion queue
             .setup_submit_all()
+            // NOTE: .setup_defer_taskrun() is not used because it conflicts
+            // with the `setup_sqpoll` thread and causes the kernel to return
+            // EINVAL when initializing the ring. With `setup_single_issuer` and
+            // `setup_sqpoll`, we are allowed to sumit from multiple threads and
+            // "single issuer" here means "single process" instead of "single
+            // thread".
             .setup_single_issuer()
-            // .setup_defer_taskrun()
             // completion queue must be greater than the submission queue
             // and is rounded up to the next power of two if necessary
             .setup_cqsize(COMPLETION_QUEUE_SIZE)
