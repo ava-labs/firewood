@@ -306,11 +306,16 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
                     if write_entry.length > 0 {
                         // not fully written, re-queue
                         self.add_entry_to_backlog(write_entry);
-                        trace!("io-uring write at offset {offset} partially completed, re-queuing");
-                        firewood_counter!(
-                            "ring.partial_write_retry",
-                            "amount of io-uring write entries that have been re-submitted due to partial writes"
-                        ).increment(1);
+                        if written != 0 {
+                            // if zero, we would have already logged EAGIN above
+                            trace!(
+                                "io-uring write at offset {offset} partially completed, re-queuing"
+                            );
+                            firewood_counter!(
+                                "ring.partial_write_retry",
+                                "amount of io-uring write entries that have been re-submitted due to partial writes"
+                            ).increment(1);
+                        }
                     }
                     if let Some(total_written) = self.written.checked_add(written) {
                         self.written = total_written;
