@@ -1,49 +1,163 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::collections::HashMap;
 use std::ops::ControlFlow;
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 
+use hashbrown::{HashTable, hash_table::Entry as HashTableEntry};
 use io_uring::IoUring;
 use parking_lot::Mutex;
 
 use crate::{FileIoError, firewood_counter, logger::trace};
 
+/// The amount of time (in milliseconds) that the io-uring kernel thread
+/// processing the submission queue should spin before idling to sleep.
+///
+/// A higher value increases CPU utilization when idle but reduces latency from
+/// submissions to the queue. A lower value may increase the latency when
+/// processing many small batches with gaps of idleness in between, but reduces
+/// wasted CPU cycles from the busy wait loop.
 const SUBMISSION_QUEUE_IDLE_TIME_MS: u32 = 1000;
 
+/// The amount of entries in the shared submission queue.
+///
+/// The kernel copies entries from this queue to its own internal queue once it
+/// begins processing them freeing us to add more entries while it processes
+/// existing ones. This means the submission queue is effectively double this
+/// size.
 const SUBMISSION_QUEUE_SIZE: u32 = 32;
 
+/// The amount of entries in the shared completion queue.
+///
+/// The kernel copies entries to this queue as operations complete, failure
+/// or success. The kernel requires this queue to be strictly larger than the
+/// submission queue and will round up to the next power of two if necessary.
+///
+/// We must ensure the completion queue is continuously worked to prevent the
+/// kernel from stalling when it cannot push completed entries to it.
 const COMPLETION_QUEUE_SIZE: u32 = SUBMISSION_QUEUE_SIZE * 2;
 
+/// A thread-safe proxy around an io-uring instance.
 pub struct IoUringProxy(Mutex<IoUring>);
 
-pub struct Errors {
-    errors: Vec<Error>,
+/// A collection of errors encountered during an io-uring write batch.
+///
+/// A least one error occured for this to be returned. Incurable errors can be
+/// observed via [`BatchErrors::incurable_error`].
+#[must_use]
+pub struct BatchErrors {
+    errors: Vec<BatchError>,
 }
 
-struct Error {
-    offset: u64,
-    err: std::io::Error,
+/// An error encountered during an io-uring write operation.
+pub struct BatchError {
+    /// The offset of the original write operation that caused the error.
+    ///
+    /// This value is meaningful only if `incurable` is true.
+    pub batch_offset: u64,
+
+    /// The offset at which the error occurred, which may be different from
+    /// `batch_offset` if a prior write operation partially succeeded.
+    ///
+    /// This value is meaningful only if `incurable` is false.
+    pub error_offset: u64,
+
+    /// The underlying I/O error.
+    pub err: std::io::Error,
+
+    /// Incurable errors are those that prevent us from communicating with the
+    /// kernel via io-uring and force us to abort the entire batch immediately.
+    ///
+    /// The data is likely corrupted and should not be trusted. These errors
+    /// likely should abort the process instead of being handled gracefully;
+    /// however, we return them here so the abort can happen at a higher level.
+    ///
+    /// Curable errors are those that affect only a single write operation and
+    /// may be recoverable, depending on the operation and context.
+    incurable: bool,
 }
 
+/// The state of an ongoing io-uring write batch.
 struct WriteBatch<'batch, 'ring, I> {
+    /// The file descriptor all writes are applied to.
+    ///
+    /// There is no requirement that all entries write to the same file;
+    /// however, this implementation assumes that is the case for simplicity.
     fd: RawFd,
+
+    /// The io-uring submission interface.
+    ///
+    /// This is a higher-level interface for actually interacting with the
+    /// kernel, after we have prepared our submission queue entries and after
+    /// the kernel has processed some completion queue entries.
     submitter: io_uring::Submitter<'ring>,
+
+    /// The kernel submission queue.
+    ///
+    /// The kernel keeps its own internal submission queue and copies entries
+    /// from this queue to its own when it begins processing them. This allows
+    /// us to continue adding entries to the queue while the kernel is busy.
     sq: io_uring::squeue::SubmissionQueue<'ring>,
+
+    /// The kernel completion queue.
+    ///
+    /// We must continuously work this queue to prevent the kernel from stalling.
     cq: io_uring::cqueue::CompletionQueue<'ring>,
-    outstanding: HashMap<u64, QueueEntry<'batch>>,
+
+    /// A table of outstanding entries that have been submitted to the kernel
+    /// but have not yet completed.
+    ///
+    /// A raw table is used here instead of a `HashMap` to avoid unnecessary
+    /// indirection for the embedded key; and, to avoid unnecessary hashing
+    /// because our keys are u64 offsets and do not require protection from
+    /// denial-of-service attacks.
+    outstanding: HashTable<QueueEntry<'batch>>,
+
+    /// A backlog of entries that were taken from the `entries` iterator but
+    /// could not be submitted to the kernel yet.
+    ///
+    /// This also contains entries for items that were partially written and
+    /// need to be re-submitted.
+    ///
+    /// New entries are added to the back of the queue, while partially written
+    /// entries are re-added to the front of the queue for priority processing.
     backlog: std::collections::VecDeque<QueueEntry<'batch>>,
+
+    /// The undiscovered, unsubmitted entries in the batch.
     entries: I,
+
+    /// The total number of bytes successfully written so far.
+    ///
+    /// An error is returned if the batch causes an overflow; however, the batch
+    /// will continue processing all entries in the batch after such an error.
     written: usize,
 }
 
+/// An entry in the io-uring write batch.
+#[derive(Debug, PartialEq)]
 struct QueueEntry<'batch> {
+    /// The original offset of the entry.
     original_offset: u64,
+
+    /// The current offset of the entry.
+    ///
+    /// If different from `original_offset`, this entry has been partially written.
     offset: u64,
+
+    /// A pointer to the current position in the buffer to write from.
+    ///
+    /// This is taken from the input and is adjusted as data is written. The
+    /// pointer is guaranteed to be valid for the `'batch` lifetime and for
+    /// `length` bytes. We do not directly dereference this pointer; however,
+    /// it is passed to the kernel to copy data from.
     pointer: *const u8,
+
+    /// The number of bytes remaining to write from the buffer.
     length: u32,
+
+    /// ZST marker to bind the buffer's lifetime after replacing the slice with
+    /// a raw pointer.
     lifetime: std::marker::PhantomData<&'batch [u8]>,
 }
 
@@ -72,19 +186,33 @@ impl IoUringProxy {
             .map(Self::from_ring)
     }
 
+    /// Writes a batch of buffers to the given file descriptor at the specified
+    /// offsets.
+    ///
+    /// We do not guarantee the ordering of writes in the batch; however, we
+    /// do guarantee that all writes are attempted even if some writes fail;
+    /// except if an incurable error occurs that prevents further communication
+    /// with the kernel.
+    ///
+    /// If all writes succeed, the total number of bytes written is returned. If
+    /// any writes fail, a collection of errors is returned. If an incurable
+    /// error occurs, it will be indicated in the returned errors.
     pub fn write_batch<'a>(
         &self,
         fd: RawFd,
         writes: impl IntoIterator<Item = (u64, &'a [u8])>,
-    ) -> Result<usize, Errors> {
-        let mut errors = Vec::<Error>::new();
+    ) -> Result<usize, BatchErrors> {
+        let mut errors = Vec::<BatchError>::new();
         macro_rules! bail {
             ($reason:expr) => {{
-                errors.push(Error {
-                    offset: 0,
+                errors.push(BatchError {
+                    batch_offset: 0,
+                    error_offset: 0,
                     err: $reason,
+                    incurable: true,
                 });
-                return Err(Errors { errors });
+                // guaranteed non-empty since we just pushed the incurable error
+                return Err(BatchErrors { errors });
             }};
         }
 
@@ -120,7 +248,7 @@ impl IoUringProxy {
         if errors.is_empty() {
             Ok(batch.written)
         } else {
-            Err(Errors { errors })
+            Err(BatchErrors { errors })
         }
     }
 }
@@ -138,14 +266,18 @@ impl<'a> QueueEntry<'a> {
         }
     }
 
-    fn build_sqe(&self, fd: RawFd) -> io_uring::squeue::Entry {
+    fn build_submission_queue_entry(&self, fd: RawFd) -> io_uring::squeue::Entry {
         io_uring::opcode::Write::new(io_uring::types::Fd(fd), self.pointer, self.length)
             .offset(self.offset)
             .build()
             .user_data(self.original_offset)
     }
 
-    fn handle_result(&mut self, res: i32) -> Result<usize, Error> {
+    /// Handles the result of a completed write operation.
+    ///
+    /// If the operation was successful, returns the number of bytes written. If
+    /// the operation failed, returns a `BatchError` describing the failure.
+    fn handle_result(&mut self, res: i32) -> Result<usize, BatchError> {
         #![expect(clippy::arithmetic_side_effects, clippy::cast_sign_loss)]
 
         if res < 0 {
@@ -163,28 +295,33 @@ impl<'a> QueueEntry<'a> {
                 return Ok(0);
             }
 
-            return Err(Error {
-                offset: self.original_offset,
+            return Err(BatchError {
+                batch_offset: self.original_offset,
+                error_offset: self.offset,
                 err,
+                incurable: false,
             });
         }
 
-        debug_assert!(
-            res != 0,
-            "zero-length writes should return EAGIN or a manifested WriteZero error"
-        );
+        // This check is to prevent infinite loops. The kernel should never
+        // return Ok(0) for a write operation via this API unless the storage
+        // driver is broken (or we weren't writing to a file--how did we get here?)
         if res == 0 {
-            return Err(Error {
-                offset: self.original_offset,
+            return Err(BatchError {
+                batch_offset: self.original_offset,
+                error_offset: self.offset,
                 err: std::io::Error::new(std::io::ErrorKind::WriteZero, "kernel wrote zero bytes"),
+                incurable: false,
             });
         }
 
         let written = res as u32;
         if written > self.length {
-            return Err(Error {
-                offset: self.original_offset,
+            return Err(BatchError {
+                batch_offset: self.original_offset,
+                error_offset: self.offset,
                 err: std::io::Error::other("kernel wrote more data than requested"),
+                incurable: false,
             });
         }
 
@@ -194,6 +331,11 @@ impl<'a> QueueEntry<'a> {
         self.offset += u64::from(written);
 
         Ok(written as usize)
+    }
+
+    const fn hashtable_hash(&self) -> u64 {
+        // use the original offset as the hash to avoid unnecessary hashing
+        self.original_offset
     }
 }
 
@@ -205,7 +347,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
             submitter,
             sq,
             cq,
-            outstanding: HashMap::with_capacity(COMPLETION_QUEUE_SIZE as usize),
+            outstanding: HashTable::with_capacity(COMPLETION_QUEUE_SIZE as usize),
             backlog: std::collections::VecDeque::new(),
             entries,
             written: 0,
@@ -216,6 +358,25 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
         // we never take from the iterator without submitting it to the kernel
         // or adding it to the backlog, so we don't need to check the iterator
         self.backlog.is_empty() && self.outstanding.is_empty()
+    }
+
+    fn hashtable_insert(&mut self, entry: QueueEntry<'batch>) {
+        self.outstanding
+            .insert_unique(entry.hashtable_hash(), entry, QueueEntry::hashtable_hash);
+    }
+
+    fn hashtable_remove(&mut self, offset: u64) -> Option<QueueEntry<'batch>> {
+        match self.outstanding.entry(
+            offset,
+            |needle| needle.original_offset == offset,
+            QueueEntry::hashtable_hash,
+        ) {
+            HashTableEntry::Occupied(entry) => {
+                let (entry, _) = entry.remove();
+                Some(entry)
+            }
+            HashTableEntry::Vacant(_) => None,
+        }
     }
 
     fn pop_next_entry(&mut self) -> Option<QueueEntry<'batch>> {
@@ -254,7 +415,15 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
             return ControlFlow::Break(());
         };
 
-        let sqe = entry.build_sqe(self.fd);
+        // debug_assert_eq so it `Debug` prints the entry on failure
+        debug_assert_eq!(
+            self.hashtable_remove(entry.original_offset),
+            None,
+            "attempting to enqueue duplicate io-uring write entry at offset {}",
+            entry.original_offset,
+        );
+
+        let sqe = entry.build_submission_queue_entry(self.fd);
         #[expect(unsafe_code)]
         // SAFETY: rust borrowing rules ensure the buffer lives for `'batch`
         // lifetime which must outlive the `write_batch` method that created
@@ -270,7 +439,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
             .increment(1);
             ControlFlow::Break(())
         } else {
-            self.outstanding.insert(entry.original_offset, entry);
+            self.hashtable_insert(entry);
             ControlFlow::Continue(())
         }
     }
@@ -301,19 +470,23 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
         }
     }
 
-    fn flush_completion_queue(&mut self, errors: &mut Vec<Error>) {
+    fn flush_completion_queue(&mut self, errors: &mut Vec<BatchError>) {
         trace!("flushing io-uring completion queue");
         while let Some(entry) = self.cq.next() {
             let offset = entry.user_data();
-            let Some(mut write_entry) = self.outstanding.remove(&offset) else {
-                errors.push(Error {
-                    offset,
+            let Some(mut write_entry) = self.hashtable_remove(offset) else {
+                errors.push(BatchError {
+                    batch_offset: offset,
+                    error_offset: offset,
                     err: std::io::Error::other("completion event for unknown offset"),
+                    incurable: false,
                 });
                 continue;
             };
             match write_entry.handle_result(entry.result()) {
                 Ok(written) => {
+                    // copy offset off the entry before adding it back to the backlog
+                    let error_offset = write_entry.offset;
                     if write_entry.length > 0 {
                         // not fully written, re-queue
                         self.add_entry_to_backlog(write_entry);
@@ -331,9 +504,11 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
                     if let Some(total_written) = self.written.checked_add(written) {
                         self.written = total_written;
                     } else {
-                        errors.push(Error {
-                            offset,
+                        errors.push(BatchError {
+                            batch_offset: offset,
+                            error_offset,
                             err: std::io::Error::other("overflow when summing total bytes written"),
+                            incurable: false,
                         });
                     }
                 }
@@ -351,20 +526,34 @@ impl std::fmt::Debug for IoUringProxy {
     }
 }
 
-impl std::fmt::Display for Error {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} at offset {}", self.err, self.offset)
+impl BatchError {
+    pub const fn is_incurable(&self) -> bool {
+        self.incurable
     }
 }
 
-impl Errors {
+impl std::fmt::Display for BatchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.batch_offset == self.error_offset {
+            write!(f, "{} at offset {}", self.err, self.batch_offset)
+        } else {
+            write!(
+                f,
+                "{} at offset {} (after writing up to offset {})",
+                self.err, self.error_offset, self.batch_offset
+            )
+        }
+    }
+}
+
+impl BatchErrors {
     pub fn into_file_io_error(self, path: Option<PathBuf>) -> FileIoError {
         if self.errors.len() == 1 {
             let only = self.errors.into_iter().next().expect("just checked length");
             FileIoError::new(
                 only.err,
                 path,
-                only.offset,
+                only.error_offset,
                 Some("io_uring write error".to_string()),
             )
         } else {
@@ -376,23 +565,72 @@ impl Errors {
             )
         }
     }
+
+    pub fn errors(&self) -> &[BatchError] {
+        &self.errors
+    }
+
+    pub fn incurable_error(&self) -> Option<&std::io::Error> {
+        // if we have an incurable error, it will always be the last one added
+        self.errors()
+            .last()
+            .and_then(|e| if e.is_incurable() { Some(&e.err) } else { None })
+    }
 }
 
-impl std::fmt::Debug for Errors {
+impl std::fmt::Debug for BatchErrors {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         std::fmt::Display::fmt(self, f)
     }
 }
 
-impl std::fmt::Display for Errors {
+impl std::fmt::Display for BatchErrors {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.errors.as_slice() {
+        use std::error::Error;
+        match self.errors() {
             [] => write!(f, "no errors (this is unexpected)"),
-            [only] => std::fmt::Display::fmt(only, f),
-            many if f.alternate() => {
-                writeln!(f, "Encountered {} errors:", many.len())?;
-                for (i, error) in many.iter().enumerate() {
-                    writeln!(f, "  {}: {error}", i.wrapping_add(1))?;
+            [only] => std::fmt::Display::fmt(&only, f),
+            [
+                rest @ ..,
+                incurable @ BatchError {
+                    incurable: true, ..
+                },
+            ] if f.alternate() => {
+                writeln!(
+                    f,
+                    "Encountered an incurable error after other errors: {incurable}"
+                )?;
+                for err in ErrorChain(incurable.err.source()) {
+                    writeln!(f, "  Caused by: {err}")?;
+                }
+                writeln!(f, "Other errors:")?;
+                for (i, err) in rest.iter().enumerate() {
+                    writeln!(f, "  {}: {err}", i.wrapping_add(1))?;
+                    for err in ErrorChain(err.err.source()) {
+                        writeln!(f, "    Caused by: {err}")?;
+                    }
+                }
+                Ok(())
+            }
+            [
+                rest @ ..,
+                incurable @ BatchError {
+                    incurable: true, ..
+                },
+            ] => {
+                write!(
+                    f,
+                    "Encountered an incurable error after {} other errors: {incurable}",
+                    rest.len()
+                )
+            }
+            [first, rest @ ..] if f.alternate() => {
+                writeln!(f, "Multiple errors encountered:")?;
+                for (i, err) in std::iter::once(first).chain(rest.iter()).enumerate() {
+                    writeln!(f, "  {}: {err}", i.wrapping_add(1))?;
+                    for err in ErrorChain(err.err.source()) {
+                        writeln!(f, "    Caused by: {err}")?;
+                    }
                 }
                 Ok(())
             }
@@ -403,10 +641,23 @@ impl std::fmt::Display for Errors {
     }
 }
 
-impl std::error::Error for Errors {
+impl std::error::Error for BatchErrors {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        // Source only lets us return one error, so return the first.
-        self.errors.first().map(|e| &e.err as &_)
+        // if we have an incurable error, prefer that as the source
+        self.incurable_error().map(|e| e as &_).or_else(|| {
+            // Source only lets us return one error, so return the first.
+            self.errors.first().map(|e| &e.err as &_)
+        })
+    }
+}
+
+struct ErrorChain<'a>(Option<&'a (dyn std::error::Error + 'static)>);
+
+impl<'a> std::iter::Iterator for ErrorChain<'a> {
+    type Item = &'a (dyn std::error::Error + 'static);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.take().inspect(|err| self.0 = err.source())
     }
 }
 
