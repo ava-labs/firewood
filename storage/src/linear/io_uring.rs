@@ -98,11 +98,18 @@ struct WriteBatch<'batch, 'ring, I> {
     /// The kernel keeps its own internal submission queue and copies entries
     /// from this queue to its own when it begins processing them. This allows
     /// us to continue adding entries to the queue while the kernel is busy.
+    ///
+    /// We must call `sync` on this queue after adding entries and after calling
+    /// `submit` to ensure the kernel sees our changes and we see its changes.
+    /// The call can be batched after adding multiple entries for efficiency.
     sq: io_uring::squeue::SubmissionQueue<'ring>,
 
     /// The kernel completion queue.
     ///
-    /// We must continuously work this queue to prevent the kernel from stalling.
+    /// We must continuously work this queue to prevent the kernel from
+    /// stalling. We must also call `sync` on this queue after calling `wait`,
+    /// which we do via `submit_and_wait`, to ensure we see the kernel's
+    /// updates.
     cq: io_uring::cqueue::CompletionQueue<'ring>,
 
     /// A table of outstanding entries that have been submitted to the kernel
