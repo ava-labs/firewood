@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1764705804730,
+  "lastUpdate": 1764706317650,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution Performance": [
@@ -54,6 +54,34 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[101,250000]-Config-firewood-Runner-avalanche-avalanchego-runner-2ti-z284t-runner-p4cv6",
             "value": 83.64,
+            "unit": "mgas/s",
+            "extra": "1 times\n32 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Elvis S.",
+            "username": "Elvis339",
+            "email": "elvissabanovic3@gmail.com"
+          },
+          "committer": {
+            "name": "Elvis S.",
+            "username": "Elvis339",
+            "email": "elvissabanovic3@gmail.com"
+          },
+          "id": "7a750215580d41360f3aaededa07d727041b8b14",
+          "message": "fix",
+          "timestamp": "2025-12-02T19:43:19Z",
+          "url": "https://github.com/ava-labs/firewood/commit/7a750215580d41360f3aaededa07d727041b8b14"
+        },
+        "date": 1764706317012,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[101,250000]-Config-firewood-Runner-avalanche-avalanchego-runner-2ti-z284t-runner-fbp5x",
+            "value": 86.18,
             "unit": "mgas/s",
             "extra": "1 times\n32 procs"
           }
