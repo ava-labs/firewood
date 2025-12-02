@@ -225,6 +225,9 @@ impl IoUringProxy {
         let mut ring = self.0.lock();
         let mut batch = WriteBatch::new(&mut ring, fd, writes.into_iter().map(QueueEntry::new));
 
+        // Before entering the main loop, seed the submission queue with as many
+        // entries as possible ensuring `is_finished` returns false unless there
+        // is nothing to do.
         batch.seed_submission_queue();
 
         while !batch.is_finished() {
@@ -239,15 +242,21 @@ impl IoUringProxy {
                 batch.entries.size_hint(),
             );
 
+            // Top of the loop: synchronize the completion queue pointers and
+            // maybe block until at least one completion is available.
             if let Err(err) = batch.sync_completion_queue() {
                 bail!(err);
             }
 
+            // Drain the completion queue and backlog any entries we need to
+            // re-submit before flushing to the submission queue.
+            batch.flush_completion_queue(&mut errors);
+
+            // Finally, try to flush more entries to the submission queue
+            // prioritizing resubmits before new entries.
             if let Err(err) = batch.flush_submission_queue() {
                 bail!(err);
             }
-
-            batch.flush_completion_queue(&mut errors);
         }
 
         if errors.is_empty() {
@@ -407,6 +416,19 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
 
     fn sync_completion_queue(&mut self) -> std::io::Result<()> {
         trace!("syncing io-uring completion queue");
+        // `submit_and_wait` blocks until at least `want` (1) completion events
+        // are available in the completion queue. If there are already `want`
+        // events in the cq, this returns immediately.
+        //
+        // The return value is simply the number of SQEs copied to the kernel
+        // since the last time we called `submit` or `submit_and_wait` and is
+        // not particularly useful here.
+        //
+        // The kernel will spurrously interrupt this call if this thread needs
+        // to be woken up for an unrelated reason; we ignore those interrupts.
+        // The kernel will also return EBUSY if its internal submission queue is
+        // full, in which case we break out to process completions. If the CQ
+        // is empty, we may spin here until the syscall blocks.
         match self.submitter.submit_and_wait(1) {
             Ok(_) => {}
             Err(ref err) if ignore_poll_error(err) => {}
