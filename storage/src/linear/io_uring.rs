@@ -123,7 +123,7 @@ struct WriteBatch<'batch, 'ring, I> {
     /// if we somehow return from `write_batch` with outstanding entries, that
     /// will result in undefined behavior because the buffers may be dropped
     /// while the kernel is still using them.
-    outstanding: DropGuard<HashTable<QueueEntry<'batch>>>,
+    outstanding: self::drop_guard::DropGuard<HashTable<QueueEntry<'batch>>>,
 
     /// A backlog of entries that were taken from the `entries` iterator but
     /// could not be submitted to the kernel yet.
@@ -389,7 +389,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
             submitter,
             sq,
             cq,
-            outstanding: DropGuard::new(
+            outstanding: self::drop_guard::DropGuard::new(
                 HashTable::with_capacity(COMPLETION_QUEUE_SIZE as usize),
                 hashbrown::HashTable::is_empty,
                 "io-uring write batch terminated with outstanding entries",
@@ -730,70 +730,76 @@ impl<'a> std::iter::Iterator for ErrorChain<'a> {
     }
 }
 
-struct DropGuard<T, F: FnOnce(&T) -> bool = fn(&T) -> bool> {
-    value: std::mem::ManuallyDrop<T>,
-    /// The predicate that must be false when dropped. If `true`, this indicates
-    /// a logic error in the code using the guard and will cause a panic. If
-    /// this happens during a panic unwind, the process will abort (which is
-    /// desirable to avoid further corruption).
-    predicate: std::mem::ManuallyDrop<F>,
-    message: &'static str,
-}
+/// The drop guard ensures a predicate is false when dropped.
+///
+/// This is inside its own module to avoid accidentally exposing the inner
+/// `value`.
+mod drop_guard {
+    pub(super) struct DropGuard<T, F: FnOnce(&T) -> bool = fn(&T) -> bool> {
+        value: std::mem::ManuallyDrop<T>,
+        /// The predicate that must be false when dropped. If `true`, this indicates
+        /// a logic error in the code using the guard and will cause a panic. If
+        /// this happens during a panic unwind, the process will abort (which is
+        /// desirable to avoid further corruption).
+        predicate: std::mem::ManuallyDrop<F>,
+        message: &'static str,
+    }
 
-impl<T, F: FnOnce(&T) -> bool> DropGuard<T, F> {
-    const fn new(value: T, predicate: F, message: &'static str) -> Self {
-        Self {
-            value: std::mem::ManuallyDrop::new(value),
-            predicate: std::mem::ManuallyDrop::new(predicate),
-            message,
+    impl<T, F: FnOnce(&T) -> bool> DropGuard<T, F> {
+        pub(super) const fn new(value: T, predicate: F, message: &'static str) -> Self {
+            Self {
+                value: std::mem::ManuallyDrop::new(value),
+                predicate: std::mem::ManuallyDrop::new(predicate),
+                message,
+            }
+        }
+
+        pub(super) fn forget(self) -> T {
+            let mut this = std::mem::ManuallyDrop::new(self);
+            #[expect(unsafe_code)]
+            // SAFETY: we are forgetting the guard, so we must remove both the value
+            // and the predicate without running `drop`. `ManuallDrop(self)` ensures
+            // this is safe because we will not run `drop` on `this`.
+            let (value, _predicate) = unsafe { this.take() };
+            value
+        }
+
+        unsafe fn take(&mut self) -> (T, F) {
+            #![expect(unsafe_code)]
+            // SAFETY: the caller must ensure this is only called once and that
+            // `drop` is not called after this; e.g., by forgetting the guard or
+            // by calling from within `drop`.
+            unsafe {
+                (
+                    std::mem::ManuallyDrop::take(&mut self.value),
+                    std::mem::ManuallyDrop::take(&mut self.predicate),
+                )
+            }
         }
     }
 
-    fn forget(self) -> T {
-        let mut this = std::mem::ManuallyDrop::new(self);
-        #[expect(unsafe_code)]
-        // SAFETY: we are forgetting the guard, so we must remove both the value
-        // and the predicate without running `drop`. `ManuallDrop(self)` ensures
-        // this is safe because we will not run `drop` on `this`.
-        let (value, _predicate) = unsafe { this.take() };
-        value
-    }
-
-    unsafe fn take(&mut self) -> (T, F) {
-        #![expect(unsafe_code)]
-        // SAFETY: the caller must ensure this is only called once and that
-        // `drop` is not called after this; e.g., by forgetting the guard or
-        // by calling from within `drop`.
-        unsafe {
-            (
-                std::mem::ManuallyDrop::take(&mut self.value),
-                std::mem::ManuallyDrop::take(&mut self.predicate),
-            )
+    impl<T, F: FnOnce(&T) -> bool> Drop for DropGuard<T, F> {
+        fn drop(&mut self) {
+            #[expect(unsafe_code)]
+            // SAFETY: `Drop` ensures this is only called once and is called because
+            // the guard was not forgotten
+            let (value, predicate) = unsafe { self.take() };
+            assert!(!(predicate)(&value), "{}", self.message);
         }
     }
-}
 
-impl<T, F: FnOnce(&T) -> bool> Drop for DropGuard<T, F> {
-    fn drop(&mut self) {
-        #[expect(unsafe_code)]
-        // SAFETY: `Drop` ensures this is only called once and is called because
-        // the guard was not forgotten
-        let (value, predicate) = unsafe { self.take() };
-        assert!(!(predicate)(&value), "{}", self.message);
+    impl<T, F: FnOnce(&T) -> bool> std::ops::Deref for DropGuard<T, F> {
+        type Target = T;
+
+        fn deref(&self) -> &Self::Target {
+            &self.value
+        }
     }
-}
 
-impl<T, F: FnOnce(&T) -> bool> std::ops::Deref for DropGuard<T, F> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        &self.value
-    }
-}
-
-impl<T, F: FnOnce(&T) -> bool> std::ops::DerefMut for DropGuard<T, F> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.value
+    impl<T, F: FnOnce(&T) -> bool> std::ops::DerefMut for DropGuard<T, F> {
+        fn deref_mut(&mut self) -> &mut Self::Target {
+            &mut self.value
+        }
     }
 }
 
