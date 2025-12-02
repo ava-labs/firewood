@@ -81,13 +81,12 @@ Firewood provides comprehensive metrics for monitoring database performance, res
 ## Performance Tracking
 
 Firewood tracks its performance over time by running C-Chain reexecution benchmarks in AvalancheGo. This allows us to:
-- Monitor performance across commits and releases
+
+- Monitor performance across commits and releases (a/b comparison tests)
 - Catch performance regressions early
 - Validate optimizations against real-world blockchain workloads
 
 Performance data is automatically collected and published to [GitHub Pages](https://ava-labs.github.io/firewood/dev/bench/).
-
-For information on running benchmarks and interpreting results, see [docs/PERFORMANCE_TRACKING.md](docs/PERFORMANCE_TRACKING.md).
 
 ## Build
 
