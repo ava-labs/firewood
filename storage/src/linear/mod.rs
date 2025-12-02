@@ -198,9 +198,11 @@ pub trait WritableStorage: ReadableStorage {
     ///
     /// Implementations may provide a more efficient way to write multiple
     /// objects at once.
-    fn write_batch<'a>(
+    ///
+    /// The iterator is expected to be cheap to clone without copying the data.
+    fn write_batch<'a, I: IntoIterator<Item = (u64, &'a [u8])> + Clone>(
         &self,
-        writes: impl IntoIterator<Item = (u64, &'a [u8])>,
+        writes: I,
     ) -> Result<usize, FileIoError> {
         writes
             .into_iter()

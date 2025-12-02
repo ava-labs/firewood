@@ -178,9 +178,9 @@ impl WritableStorage for FileBacked {
     }
 
     #[cfg(feature = "io-uring")]
-    fn write_batch<'a>(
+    fn write_batch<'a, I: IntoIterator<Item = (u64, &'a [u8])> + Clone>(
         &self,
-        writes: impl IntoIterator<Item = (u64, &'a [u8])>,
+        writes: I,
     ) -> Result<usize, FileIoError> {
         use std::os::fd::AsRawFd;
         self.ring
@@ -284,18 +284,13 @@ impl OffsetReader for PredictiveReader<'_> {
     }
 }
 
+#[derive(Debug)]
 struct UnlockOnDrop(File);
 
 impl Drop for UnlockOnDrop {
     fn drop(&mut self) {
         // ignore the error, we might not have ever called `lock`
         _ = self.0.unlock();
-    }
-}
-
-impl std::fmt::Debug for UnlockOnDrop {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Debug::fmt(&self.0, f)
     }
 }
 

@@ -4,6 +4,7 @@
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 
+use derive_where::derive_where;
 use hashbrown::{HashTable, hash_table::Entry as HashTableEntry};
 use io_uring::IoUring;
 use parking_lot::Mutex;
@@ -38,6 +39,8 @@ const SUBMISSION_QUEUE_SIZE: u32 = 32;
 const COMPLETION_QUEUE_SIZE: u32 = SUBMISSION_QUEUE_SIZE * 2;
 
 /// A thread-safe proxy around an io-uring instance.
+#[derive_where(Debug)]
+#[derive_where(skip_inner)]
 pub struct IoUringProxy(Mutex<IoUring>);
 
 /// A collection of errors encountered during an io-uring write batch.
@@ -197,7 +200,7 @@ impl IoUringProxy {
             // NOTE: .setup_defer_taskrun() is not used because it conflicts
             // with the `setup_sqpoll` thread and causes the kernel to return
             // EINVAL when initializing the ring. With `setup_single_issuer` and
-            // `setup_sqpoll`, we are allowed to sumit from multiple threads and
+            // `setup_sqpoll`, we are allowed to submit from multiple threads and
             // "single issuer" here means "single process" instead of "single
             // thread".
             .setup_single_issuer()
@@ -211,6 +214,8 @@ impl IoUringProxy {
     /// Writes a batch of buffers to the given file descriptor at the specified
     /// offsets.
     ///
+    /// The batch must be disjoint and not contain overlapping write ranges.
+    ///
     /// We do not guarantee the ordering of writes in the batch; however, we
     /// do guarantee that all writes are attempted even if some writes fail;
     /// except if an incurable error occurs that prevents further communication
@@ -219,10 +224,10 @@ impl IoUringProxy {
     /// If all writes succeed, the total number of bytes written is returned. If
     /// any writes fail, a collection of errors is returned. If an incurable
     /// error occurs, it will be indicated in the returned errors.
-    pub fn write_batch<'a>(
+    pub fn write_batch<'a, I: IntoIterator<Item = (u64, &'a [u8])> + Clone>(
         &self,
         fd: RawFd,
-        writes: impl IntoIterator<Item = (u64, &'a [u8])>,
+        writes: I,
     ) -> Result<usize, BatchErrors> {
         let mut errors = Vec::<BatchError>::new();
         macro_rules! bail {
@@ -236,6 +241,18 @@ impl IoUringProxy {
                 // guaranteed non-empty since we just pushed the incurable error
                 return Err(BatchErrors { errors });
             }};
+        }
+
+        // verify all sections are disjoint (no overlaps); and guarantee we do
+        // not have to handle overlapping writes and also guarantee all inserts
+        // into the hash table are unique
+        if !is_set_disjoint(writes.clone().into_iter().map(|(offset, buffer)| {
+            let end = offset.wrapping_add(buffer.len() as u64);
+            offset..end
+        })) {
+            bail!(std::io::Error::other(
+                "io-uring write batch contains overlapping write ranges"
+            ));
         }
 
         trace!("starting io-uring write batch");
@@ -589,12 +606,6 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
     }
 }
 
-impl std::fmt::Debug for IoUringProxy {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("IoUringProxy").finish_non_exhaustive()
-    }
-}
-
 impl BatchError {
     pub const fn is_incurable(&self) -> bool {
         self.incurable
@@ -801,6 +812,38 @@ mod drop_guard {
             &mut self.value
         }
     }
+}
+
+const fn are_disjoin_ranges(a: &std::ops::Range<u64>, b: &std::ops::Range<u64>) -> bool {
+    a.end <= b.start || b.end <= a.start
+}
+
+fn is_set_disjoint(iter: impl Iterator<Item = std::ops::Range<u64>>) -> bool {
+    let mut regions = Vec::<std::ops::Range<u64>>::new();
+    for range in iter {
+        match regions.binary_search_by(|span| span.start.cmp(&range.start)) {
+            Ok(_) => {
+                // exact match, duplicate offset -- guaranteed overlap and thus not disjoint
+                return false;
+            }
+            Err(insertion) => {
+                if let Some(prior) = insertion.checked_sub(1)
+                    && let Some(prior) = regions.get(prior)
+                    && !are_disjoin_ranges(prior, &range)
+                {
+                    return false;
+                }
+                if let Some(next) = regions.get(insertion)
+                    && !are_disjoin_ranges(next, &range)
+                {
+                    return false;
+                }
+                regions.insert(insertion, range);
+            }
+        }
+    }
+
+    true
 }
 
 fn ignore_poll_error(err: &std::io::Error) -> bool {
