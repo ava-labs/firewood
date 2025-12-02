@@ -54,7 +54,7 @@ pub struct BatchErrors {
 pub struct BatchError {
     /// The offset of the original write operation that caused the error.
     ///
-    /// This value is meaningful only if `incurable` is true.
+    /// This value is meaningful only if `incurable` is false.
     pub batch_offset: u64,
 
     /// The offset at which the error occurred, which may be different from
@@ -277,6 +277,9 @@ impl<'a> QueueEntry<'a> {
     ///
     /// If the operation was successful, returns the number of bytes written. If
     /// the operation failed, returns a `BatchError` describing the failure.
+    ///
+    /// If `length` is non-zero after a successful write, the entry must be
+    /// re-submitted to write the remaining data.
     fn handle_result(&mut self, res: i32) -> Result<usize, BatchError> {
         #![expect(clippy::arithmetic_side_effects, clippy::cast_sign_loss)]
 
