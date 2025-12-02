@@ -3,11 +3,14 @@ name: Track Performance
 on:
   workflow_dispatch:
     inputs:
-      firewood-commit:
+      firewood:
         description: 'Firewood commit/branch/tag to test (leave empty for current HEAD)'
         default: ''
-      avalanchego-ref:
-        description: 'AvalancheGo ref to test against'
+      libevm:
+        description: 'libevm commit/branch/tag to test (leave empty to skip)'
+        default: ''
+      avalanchego:
+        description: 'AvalancheGo commit/branch/tag to test against'
         default: 'master'
       task:
         description: 'Predefined task (leave empty to use custom parameters below)'
@@ -39,7 +42,7 @@ on:
           - avago-runner-m6i-4xlarge-ebs-fast
 
 jobs:
-  trigger-and-collect:
+  c-chain-benchmark:
     runs-on: ubuntu-latest
     permissions:
       contents: write  # Required for github-action-benchmark to push to gh-pages
@@ -70,10 +73,18 @@ jobs:
         run: |
           TASK="${{ inputs.task }}"
           RUNNER="${{ inputs.runner }}"
-          AVAGO_REF="${{ inputs.avalanchego-ref }}"
-          FIREWOOD_COMMIT="${{ inputs.firewood-commit || github.sha }}"
+          AVAGO_REF="${{ inputs.avalanchego }}"
+          FIREWOOD_COMMIT="${{ inputs.firewood || github.sha }}"
           
-          echo "firewood_commit=$FIREWOOD_COMMIT" >> "$GITHUB_OUTPUT"
+          echo "firewood=$FIREWOOD_COMMIT" >> "$GITHUB_OUTPUT"
+          
+          LIBEVM_COMMIT="${{ inputs.libevm }}"
+          
+          # Build optional libevm flag
+          LIBEVM_FLAG=""
+          if [ -n "$LIBEVM_COMMIT" ]; then
+            LIBEVM_FLAG="-f libevm-commit=$LIBEVM_COMMIT"
+          fi
           
           if [ -n "$TASK" ]; then
             gh workflow run "Firewood Reexecution Benchmark" \
@@ -81,7 +92,8 @@ jobs:
               --ref "$AVAGO_REF" \
               -f firewood-commit="$FIREWOOD_COMMIT" \
               -f task="$TASK" \
-              -f runner="$RUNNER"
+              -f runner="$RUNNER" \
+              $LIBEVM_FLAG
           else
             gh workflow run "Firewood Reexecution Benchmark" \
               --repo ava-labs/avalanchego \
@@ -92,7 +104,8 @@ jobs:
               -f end-block="${{ inputs.end-block }}" \
               -f block-dir-src="${{ inputs.block-dir-src }}" \
               -f current-state-dir-src="${{ inputs.current-state-dir-src }}" \
-              -f runner="$RUNNER"
+              -f runner="$RUNNER" \
+              $LIBEVM_FLAG
           fi
           
           sleep 10
@@ -174,8 +187,11 @@ jobs:
             echo "- State source: \`${{ inputs.current-state-dir-src }}\`" >> $GITHUB_STEP_SUMMARY
           fi
           
-          echo "- Firewood commit: \`${{ steps.trigger.outputs.firewood_commit }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- AvalancheGo ref: \`${{ inputs.avalanchego-ref }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Firewood: \`${{ steps.trigger.outputs.firewood }}\`" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ inputs.libevm }}" ]; then
+            echo "- libevm: \`${{ inputs.libevm }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "- AvalancheGo: \`${{ inputs.avalanchego }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Runner: \`${{ inputs.runner }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
