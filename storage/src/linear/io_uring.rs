@@ -169,6 +169,17 @@ impl<'a> QueueEntry<'a> {
             });
         }
 
+        debug_assert!(
+            res != 0,
+            "zero-length writes should return EAGIN or a manifested WriteZero error"
+        );
+        if res == 0 {
+            return Err(Error {
+                offset: self.original_offset,
+                err: std::io::Error::other("kernel wrote zero bytes without error"),
+            });
+        }
+
         let written = res as u32;
         if written > self.length {
             return Err(Error {
