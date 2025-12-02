@@ -1,7 +1,6 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::ops::ControlFlow;
 use std::os::fd::RawFd;
 use std::path::PathBuf;
 
@@ -166,6 +165,12 @@ struct QueueEntry<'batch> {
     /// ZST marker to bind the buffer's lifetime after replacing the slice with
     /// a raw pointer.
     lifetime: std::marker::PhantomData<&'batch [u8]>,
+}
+
+enum EnqueueResult {
+    Empty,
+    Full,
+    Enqueued,
 }
 
 impl IoUringProxy {
@@ -447,9 +452,9 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
         Ok(())
     }
 
-    fn enqueue_single_op(&mut self) -> ControlFlow<()> {
+    fn enqueue_single_op(&mut self) -> EnqueueResult {
         let Some(entry) = self.pop_next_entry() else {
-            return ControlFlow::Break(());
+            return EnqueueResult::Empty;
         };
 
         // debug_assert_eq so it `Debug` prints the entry on failure
@@ -474,24 +479,25 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
                 "amount of io-uring full submission queue breakpoints"
             )
             .increment(1);
-            ControlFlow::Break(())
+            EnqueueResult::Full
         } else {
             self.hashtable_insert(entry);
-            ControlFlow::Continue(())
+            EnqueueResult::Enqueued
         }
     }
 
     fn seed_submission_queue(&mut self) {
-        while self.enqueue_single_op().is_continue() {}
+        while let EnqueueResult::Enqueued = self.enqueue_single_op() {}
         self.sq.sync();
     }
 
     fn flush_submission_queue(&mut self) -> std::io::Result<()> {
         trace!("flushing io-uring submission queue");
+        let mut submitted = false;
         loop {
             if self.sq.is_full() {
                 match self.submitter.submit() {
-                    Ok(_) => {}
+                    Ok(_) => submitted = true,
                     Err(ref err) if ignore_poll_error(err) => {
                         // kernel is busy, move onto completions
                         return Ok(());
@@ -501,8 +507,17 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
             }
             self.sq.sync();
 
-            if self.enqueue_single_op().is_break() {
-                return Ok(());
+            loop {
+                match self.enqueue_single_op() {
+                    // nothing more to do
+                    EnqueueResult::Empty => return Ok(()),
+                    // still full after submit and sync
+                    EnqueueResult::Full if submitted => return Ok(()),
+                    // submit and try again
+                    EnqueueResult::Full => break,
+                    // keep going
+                    EnqueueResult::Enqueued => submitted = false,
+                }
             }
         }
     }
