@@ -37,8 +37,6 @@ on:
           - avalanche-avalanchego-runner-2ti
           - avago-runner-i4i-4xlarge-local-ssd
           - avago-runner-m6i-4xlarge-ebs-fast
-  pull_request:
-    types: [labeled]
 
 jobs:
   trigger-and-collect:
@@ -51,35 +49,7 @@ jobs:
         with:
           fetch-depth: 0  # Needed for github-action-benchmark
 
-      - name: Check if triggered by label
-        if: github.event_name == 'pull_request'
-        run: |
-          if [ "${{ github.event.label.name }}" != "run-benchmark" ]; then
-            echo "Skipping - only runs on 'run-benchmark' label"
-            exit 0
-          fi
-
-      - name: Determine Firewood commit
-        id: commit
-        run: |
-          COMMIT_SHA="${{ inputs.firewood-commit || github.sha }}"
-          echo "sha=$COMMIT_SHA" >> "$GITHUB_OUTPUT"
-
-      - name: Set defaults for PR trigger
-        id: defaults
-        run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo "task=c-chain-reexecution-firewood-101-250k" >> "$GITHUB_OUTPUT"
-            echo "runner=avalanche-avalanchego-runner-2ti" >> "$GITHUB_OUTPUT"
-            echo "avalanchego-ref=master" >> "$GITHUB_OUTPUT"
-          else
-            echo "task=${{ inputs.task }}" >> "$GITHUB_OUTPUT"
-            echo "runner=${{ inputs.runner }}" >> "$GITHUB_OUTPUT"
-            echo "avalanchego-ref=${{ inputs.avalanchego-ref }}" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Validate inputs
-        if: github.event_name == 'workflow_dispatch'
         run: |
           if [ -z "${{ inputs.task }}" ]; then
             missing=()
@@ -98,22 +68,25 @@ jobs:
       - name: Trigger AvalancheGo benchmark
         id: trigger
         run: |
-          TASK="${{ github.event_name == 'pull_request' && steps.defaults.outputs.task || inputs.task }}"
-          RUNNER="${{ github.event_name == 'pull_request' && steps.defaults.outputs.runner || inputs.runner }}"
-          AVAGO_REF="${{ github.event_name == 'pull_request' && steps.defaults.outputs.avalanchego-ref || inputs.avalanchego-ref }}"
+          TASK="${{ inputs.task }}"
+          RUNNER="${{ inputs.runner }}"
+          AVAGO_REF="${{ inputs.avalanchego-ref }}"
+          FIREWOOD_COMMIT="${{ inputs.firewood-commit || github.sha }}"
+          
+          echo "firewood_commit=$FIREWOOD_COMMIT" >> "$GITHUB_OUTPUT"
           
           if [ -n "$TASK" ]; then
             gh workflow run "Firewood Reexecution Benchmark" \
               --repo ava-labs/avalanchego \
               --ref "$AVAGO_REF" \
-              -f firewood-commit="${{ steps.commit.outputs.sha }}" \
+              -f firewood-commit="$FIREWOOD_COMMIT" \
               -f task="$TASK" \
               -f runner="$RUNNER"
           else
             gh workflow run "Firewood Reexecution Benchmark" \
               --repo ava-labs/avalanchego \
               --ref "$AVAGO_REF" \
-              -f firewood-commit="${{ steps.commit.outputs.sha }}" \
+              -f firewood-commit="$FIREWOOD_COMMIT" \
               -f config="${{ inputs.config }}" \
               -f start-block="${{ inputs.start-block }}" \
               -f end-block="${{ inputs.end-block }}" \
@@ -139,45 +112,12 @@ jobs:
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
           echo "run_url=https://github.com/ava-labs/avalanchego/actions/runs/$RUN_ID" >> "$GITHUB_OUTPUT"
         env:
-          GH_TOKEN: ${{ secrets.FIREWOOD_GO_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
 
       - name: Wait for benchmark completion
-        id: wait
-        run: |
-          RUN_ID="${{ steps.trigger.outputs.run_id }}"
-          TIMEOUT=3600
-          ELAPSED=0
-          INTERVAL=30
-          
-          while [ $ELAPSED -lt $TIMEOUT ]; do
-            RUN_INFO=$(gh run view "$RUN_ID" \
-              --repo ava-labs/avalanchego \
-              --json status,conclusion)
-            
-            STATUS=$(echo "$RUN_INFO" | jq -r '.status')
-            CONCLUSION=$(echo "$RUN_INFO" | jq -r '.conclusion')
-            
-            if [ "$STATUS" = "completed" ]; then
-              if [ "$CONCLUSION" = "success" ]; then
-                echo "conclusion=success" >> "$GITHUB_OUTPUT"
-                break
-              else
-                echo "Benchmark failed with conclusion: $CONCLUSION"
-                echo "conclusion=$CONCLUSION" >> "$GITHUB_OUTPUT"
-                exit 1
-              fi
-            fi
-            
-            sleep $INTERVAL
-            ELAPSED=$((ELAPSED + INTERVAL))
-          done
-          
-          if [ $ELAPSED -ge $TIMEOUT ]; then
-            echo "Timeout waiting for benchmark completion"
-            exit 1
-          fi
+        run: gh run watch "${{ steps.trigger.outputs.run_id }}" --repo ava-labs/avalanchego --exit-status
         env:
-          GH_TOKEN: ${{ secrets.FIREWOOD_GO_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
         timeout-minutes: 60
 
       - name: Download benchmark results
@@ -192,10 +132,15 @@ jobs:
           
           cat ./results/benchmark-output.txt
           
-          MGAS_PER_SEC=$(grep -oP '\d+\.\d+ mgas/s' ./results/benchmark-output.txt || echo "N/A")
-          echo "performance=$MGAS_PER_SEC" >> "$GITHUB_OUTPUT"
+          # Determine target dashboard
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "data-dir=bench" >> "$GITHUB_OUTPUT"
+          else
+            SAFE_NAME=$(echo "${{ github.ref_name }}" | tr '/' '-')
+            echo "data-dir=dev/bench/$SAFE_NAME" >> "$GITHUB_OUTPUT"
+          fi
         env:
-          GH_TOKEN: ${{ secrets.FIREWOOD_GO_GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
 
       - name: Store benchmark results
         uses: benchmark-action/github-action-benchmark@v1
@@ -205,14 +150,11 @@ jobs:
           output-file-path: ./results/benchmark-output.txt
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
-          # Store benchmark data in gh-pages branch
           gh-pages-branch: gh-pages
-          benchmark-data-dir-path: dev/bench
+          benchmark-data-dir-path: ${{ steps.download.outputs.data-dir }}
           # Don't fail the workflow if there's an issue with benchmark storage
           fail-on-alert: false
           comment-on-alert: false
-          # Add metadata
-          alert-comment-cc-users: ''
 
       - name: Summary
         if: always()
@@ -232,17 +174,15 @@ jobs:
             echo "- State source: \`${{ inputs.current-state-dir-src }}\`" >> $GITHUB_STEP_SUMMARY
           fi
           
-          echo "- Firewood commit: \`${{ steps.commit.outputs.sha }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Firewood commit: \`${{ steps.trigger.outputs.firewood_commit }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- AvalancheGo ref: \`${{ inputs.avalanchego-ref }}\`" >> $GITHUB_STEP_SUMMARY
           echo "- Runner: \`${{ inputs.runner }}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [ "${{ steps.wait.outputs.conclusion }}" = "success" ]; then
-            echo "**Performance:** ${{ steps.download.outputs.performance }}" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.download.outcome }}" = "success" ]; then
             echo "**Links:**" >> $GITHUB_STEP_SUMMARY
             echo "- [AvalancheGo Workflow](${{ steps.trigger.outputs.run_url }})" >> $GITHUB_STEP_SUMMARY
-            echo "- [Performance Trends](https://ava-labs.github.io/firewood/dev/bench/)" >> $GITHUB_STEP_SUMMARY
+            echo "- [Performance Trends](https://ava-labs.github.io/firewood/${{ steps.download.outputs.data-dir }}/)" >> $GITHUB_STEP_SUMMARY
           else
             echo "**Status:** Failed" >> $GITHUB_STEP_SUMMARY
             echo "Check [workflow logs](${{ steps.trigger.outputs.run_url }}) for details." >> $GITHUB_STEP_SUMMARY
