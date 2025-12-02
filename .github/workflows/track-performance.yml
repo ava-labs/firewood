@@ -71,40 +71,34 @@ jobs:
       - name: Trigger AvalancheGo benchmark
         id: trigger
         run: |
-          TASK="${{ inputs.task }}"
-          RUNNER="${{ inputs.runner }}"
-          AVAGO_REF="${{ inputs.avalanchego }}"
-          FIREWOOD_COMMIT="${{ inputs.firewood || github.sha }}"
-          
-          echo "firewood=$FIREWOOD_COMMIT" >> "$GITHUB_OUTPUT"
-          
-          LIBEVM_COMMIT="${{ inputs.libevm }}"
+          FIREWOOD="${{ inputs.firewood || github.sha }}"
+          echo "firewood=$FIREWOOD" >> "$GITHUB_OUTPUT"
           
           # Build optional libevm flag
           LIBEVM_FLAG=""
-          if [ -n "$LIBEVM_COMMIT" ]; then
-            LIBEVM_FLAG="-f libevm-commit=$LIBEVM_COMMIT"
+          if [ -n "${{ inputs.libevm }}" ]; then
+            LIBEVM_FLAG="-f libevm=${{ inputs.libevm }}"
           fi
           
-          if [ -n "$TASK" ]; then
+          if [ -n "${{ inputs.task }}" ]; then
             gh workflow run "Firewood Reexecution Benchmark" \
               --repo ava-labs/avalanchego \
-              --ref "$AVAGO_REF" \
-              -f firewood-commit="$FIREWOOD_COMMIT" \
-              -f task="$TASK" \
-              -f runner="$RUNNER" \
+              --ref "${{ inputs.avalanchego }}" \
+              -f firewood="$FIREWOOD" \
+              -f task="${{ inputs.task }}" \
+              -f runner="${{ inputs.runner }}" \
               $LIBEVM_FLAG
           else
             gh workflow run "Firewood Reexecution Benchmark" \
               --repo ava-labs/avalanchego \
-              --ref "$AVAGO_REF" \
-              -f firewood-commit="$FIREWOOD_COMMIT" \
+              --ref "${{ inputs.avalanchego }}" \
+              -f firewood="$FIREWOOD" \
               -f config="${{ inputs.config }}" \
               -f start-block="${{ inputs.start-block }}" \
               -f end-block="${{ inputs.end-block }}" \
               -f block-dir-src="${{ inputs.block-dir-src }}" \
               -f current-state-dir-src="${{ inputs.current-state-dir-src }}" \
-              -f runner="$RUNNER" \
+              -f runner="${{ inputs.runner }}" \
               $LIBEVM_FLAG
           fi
           
