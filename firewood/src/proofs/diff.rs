@@ -642,16 +642,17 @@ impl PreOrderIterator<'_> {
 #[allow(clippy::unwrap_used, clippy::arithmetic_side_effects)]
 mod tests {
     use crate::{
-        db::BatchOp,
+        db::{BatchOp, Db, DbConfig},
         merkle::{Key, Merkle, Value},
         proofs::diff::DiffMerkleNodeStream,
+        v2::api::{Db as _, Proposal as _},
     };
 
     use firewood_storage::{
         FileIoError, HashedNodeReader, ImmutableProposal, MemStore, MutableProposal, NodeStore,
-        TrieReader,
+        SeededRng, TrieReader,
     };
-    use std::sync::Arc;
+    use std::{ops::Deref, path::PathBuf, sync::Arc};
     use test_case::test_case;
 
     fn diff_merkle_iterator<'a, T, U>(
@@ -1327,7 +1328,6 @@ mod tests {
     #[test_case(false, true, 500)]
     #[test_case(true, false, 500)]
     #[test_case(true, true, 500)]
-    //#[allow(clippy::indexing_slicing, clippy::cast_precision_loss)]
     #[allow(
         clippy::indexing_slicing,
         clippy::cast_precision_loss,
@@ -1335,7 +1335,7 @@ mod tests {
         clippy::disallowed_types,
         clippy::unreadable_literal
     )]
-    fn diff_random_with_deletions(trie1_mutable: bool, trie2_mutable: bool, num_items: usize) {
+    fn test_diff_random_with_deletions(trie1_mutable: bool, trie2_mutable: bool, num_items: usize) {
         use rand::rngs::StdRng;
         use rand::{Rng, SeedableRng};
 
@@ -1434,5 +1434,111 @@ mod tests {
         // Apply ops to left immutable and compare with right immutable
         let left_after = apply_ops_and_freeze(&m1_immut, &ops);
         assert_merkle_eq(&left_after, &m2_immut);
+    }
+
+    #[test_case(500)]
+    #[allow(clippy::type_complexity)]
+    fn test_db_fuzz(num_items: usize) {
+        pub(super) struct TestDb {
+            db: Db,
+            tmpdir: tempfile::TempDir,
+            dbconfig: DbConfig,
+        }
+
+        impl Deref for TestDb {
+            type Target = Db;
+            fn deref(&self) -> &Self::Target {
+                &self.db
+            }
+        }
+
+        impl TestDb {
+            pub fn new() -> Self {
+                let tmpdir = tempfile::tempdir().unwrap();
+                let dbconfig = DbConfig::builder().truncate(true).build();
+                let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
+                    .iter()
+                    .collect();
+                let db = Db::new(dbpath, dbconfig.clone()).unwrap();
+                TestDb {
+                    db,
+                    tmpdir,
+                    dbconfig,
+                }
+            }
+        }
+
+        fn gen_random_keys(
+            rng: &SeededRng,
+            num_keys: usize,
+            start_val: usize,
+        ) -> (Vec<Vec<u8>>, Vec<Box<[u8]>>) {
+            let mut keys: Vec<Vec<u8>> = Vec::new();
+            let mut vals: Vec<Box<[u8]>> = Vec::new();
+            let mut seen_keys = std::collections::HashSet::new();
+
+            let mut i = 0;
+            while keys.len() < num_keys {
+                let key_len = rng.random_range(1..=32);
+                let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
+                // Only add if key is unique
+                if seen_keys.insert(key.clone()) {
+                    keys.push(key);
+                    vals.push(Box::from(format!("value{}", i + start_val).as_bytes()));
+                }
+                i += 1;
+            }
+            (keys, vals)
+        }
+
+        let db = TestDb::new();
+        let rng = firewood_storage::SeededRng::from_env_or_random();
+
+        // Populate the database with an initial batch of keys, as we would use a range proof
+        // instead of a change proof if the database was initially empty.
+        let (keys, vals) = gen_random_keys(&rng, num_items, 0);
+        let kviter = keys.iter().zip(vals.iter());
+        let proposal = db.propose(kviter).unwrap();
+        proposal.commit().unwrap();
+
+        // Create a proposal that we will use to compare with the committed revision.
+        let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+        let proposal = NodeStore::new(&committed).unwrap();
+        let mut merkle = Merkle::from(proposal);
+        let (keys, vals) = gen_random_keys(&rng, num_items, num_items);
+        let kviter = keys.iter().zip(vals.iter());
+        for (key, val) in kviter.clone() {
+            // Only consider Puts for now.
+            let _ = merkle.insert(key, val.clone());
+        }
+        let nodestore = merkle.into_inner();
+
+        // Use the diff iterator to create a list of BatchOps.
+        let ops =
+            diff_merkle_iterator_without_hash(&committed.into(), &nodestore.into(), Box::new([]))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+
+        let mut proposal_items: Vec<(&Vec<u8>, &Box<[u8]>)> = kviter.collect();
+        proposal_items.sort();
+
+        let mut diff_items: Vec<(&Box<[u8]>, &Box<[u8]>)> = ops
+            .as_slice()
+            .iter()
+            .map(|x| (x.key(), x.value().unwrap()))
+            .collect();
+        diff_items.sort();
+
+        // Check that that proposal is the same size as the diff.
+        assert_eq!(proposal_items.len(), diff_items.len());
+
+        // Check all of the keys and values match.
+        let mut diff_it = diff_items.iter();
+        for current_entry in proposal_items {
+            let diff_entry = diff_it.next().unwrap();
+            assert_eq!(*current_entry.0, diff_entry.0.to_vec());
+            assert_eq!(current_entry.1, diff_entry.1);
+        }
     }
 }
