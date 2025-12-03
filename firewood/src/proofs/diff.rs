@@ -1561,14 +1561,23 @@ mod tests {
             }
             let nodestore = merkle.into_inner();
 
-            // Use the diff iterator to create a list of BatchOps.
-            let ops = diff_merkle_iterator_without_hash(
-                &committed.clone().into(),
-                &nodestore.into(),
-                Box::new([]),
-            )
-            .unwrap()
-            .collect::<Result<Vec<_>, _>>()
+            // Randomly choose between comparing the committed nodestore against a
+            // mutable proposal or an immutable proposal.
+            let ops = if rng.random() {
+                diff_merkle_iterator_without_hash(
+                    &committed.clone().into(),
+                    &nodestore.into(),
+                    Box::new([]),
+                )
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+            } else {
+                let immutable: NodeStore<Arc<ImmutableProposal>, FileBacked> =
+                    nodestore.try_into().unwrap();
+                diff_merkle_iterator(&committed.clone().into(), &immutable.into(), Box::new([]))
+                    .unwrap()
+                    .collect::<Result<Vec<_>, _>>()
+            }
             .unwrap();
 
             // Sort by the key of the BatchOp.
