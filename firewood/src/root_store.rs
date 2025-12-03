@@ -98,8 +98,11 @@ impl RootStore {
         &self,
         hash: &TrieHash,
     ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>> {
+        // Obtain the lock to prevent multiple threads from caching the same result.
+        let mut revision_cache = self.revision_cache.lock();
+
         // 1. Check if the committed revision is cached.
-        if let Some(v) = self.revision_cache.lock().get(hash) {
+        if let Some(v) = revision_cache.get(hash) {
             return Ok(Some(v));
         }
 
@@ -121,9 +124,7 @@ impl RootStore {
         ));
 
         // Cache for future lookups.
-        self.revision_cache
-            .lock()
-            .insert(hash.clone(), nodestore.clone());
+        revision_cache.insert(hash.clone(), nodestore.clone());
 
         Ok(Some(nodestore))
     }
