@@ -246,7 +246,7 @@ impl IoUringProxy {
         // verify all sections are disjoint (no overlaps); and guarantee we do
         // not have to handle overlapping writes and also guarantee all inserts
         // into the hash table are unique
-        if !is_set_disjoint(writes.clone().into_iter().map(|(offset, buffer)| {
+        if !are_set_of_ranges_disjoint(writes.clone().into_iter().map(|(offset, buffer)| {
             let end = offset.wrapping_add(buffer.len() as u64);
             offset..end
         })) {
@@ -814,11 +814,11 @@ mod drop_guard {
     }
 }
 
-const fn are_disjoin_ranges(a: &std::ops::Range<u64>, b: &std::ops::Range<u64>) -> bool {
+const fn are_ranges_disjoint(a: &std::ops::Range<u64>, b: &std::ops::Range<u64>) -> bool {
     a.end <= b.start || b.end <= a.start
 }
 
-fn is_set_disjoint(iter: impl Iterator<Item = std::ops::Range<u64>>) -> bool {
+fn are_set_of_ranges_disjoint(iter: impl Iterator<Item = std::ops::Range<u64>>) -> bool {
     let mut regions = Vec::<std::ops::Range<u64>>::new();
     for range in iter {
         match regions.binary_search_by(|span| span.start.cmp(&range.start)) {
@@ -829,12 +829,12 @@ fn is_set_disjoint(iter: impl Iterator<Item = std::ops::Range<u64>>) -> bool {
             Err(insertion) => {
                 if let Some(prior) = insertion.checked_sub(1)
                     && let Some(prior) = regions.get(prior)
-                    && !are_disjoin_ranges(prior, &range)
+                    && !are_ranges_disjoint(prior, &range)
                 {
                     return false;
                 }
                 if let Some(next) = regions.get(insertion)
-                    && !are_disjoin_ranges(next, &range)
+                    && !are_ranges_disjoint(next, &range)
                 {
                     return false;
                 }
