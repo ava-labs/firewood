@@ -42,7 +42,6 @@ pub use crate::proposal::*;
 pub use crate::revision::*;
 pub use crate::value::*;
 
-#[cfg(unix)]
 #[global_allocator]
 #[doc(hidden)]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
