@@ -1,15 +1,22 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::os::fd::RawFd;
-use std::path::PathBuf;
+use std::{
+    cmp::Ordering,
+    io::{self, ErrorKind},
+    os::fd::RawFd,
+};
 
 use derive_where::derive_where;
-use hashbrown::{HashTable, hash_table::Entry as HashTableEntry};
 use io_uring::IoUring;
 use parking_lot::Mutex;
 
-use crate::{FileIoError, firewood_counter, logger::trace};
+use crate::{
+    firewood_counter,
+    logger::{debug, trace},
+};
+
+pub use self::errors::{BatchError, BatchErrors};
 
 /// The amount of time (in milliseconds) that the io-uring kernel thread
 /// processing the submission queue should spin before idling to sleep.
@@ -42,43 +49,6 @@ const COMPLETION_QUEUE_SIZE: u32 = SUBMISSION_QUEUE_SIZE * 2;
 #[derive_where(Debug)]
 #[derive_where(skip_inner)]
 pub struct IoUringProxy(Mutex<IoUring>);
-
-/// A collection of errors encountered during an io-uring write batch.
-///
-/// A least one error occured for this to be returned. Incurable errors can be
-/// observed via [`BatchErrors::incurable_error`].
-#[must_use]
-pub struct BatchErrors {
-    errors: Vec<BatchError>,
-}
-
-/// An error encountered during an io-uring write operation.
-pub struct BatchError {
-    /// The offset of the original write operation that caused the error.
-    ///
-    /// This value is meaningful only if `incurable` is false.
-    pub batch_offset: u64,
-
-    /// The offset at which the error occurred, which may be different from
-    /// `batch_offset` if a prior write operation partially succeeded.
-    ///
-    /// This value is meaningful only if `incurable` is false.
-    pub error_offset: u64,
-
-    /// The underlying I/O error.
-    pub err: std::io::Error,
-
-    /// Incurable errors are those that prevent us from communicating with the
-    /// kernel via io-uring and force us to abort the entire batch immediately.
-    ///
-    /// The data is likely corrupted and should not be trusted. These errors
-    /// likely should abort the process instead of being handled gracefully;
-    /// however, we return them here so the abort can happen at a higher level.
-    ///
-    /// Curable errors are those that affect only a single write operation and
-    /// may be recoverable, depending on the operation and context.
-    incurable: bool,
-}
 
 /// The state of an ongoing io-uring write batch.
 struct WriteBatch<'batch, 'ring, I> {
@@ -126,7 +96,7 @@ struct WriteBatch<'batch, 'ring, I> {
     /// if we somehow return from `write_batch` with outstanding entries, that
     /// will result in undefined behavior because the buffers may be dropped
     /// while the kernel is still using them.
-    outstanding: self::drop_guard::DropGuard<HashTable<QueueEntry<'batch>>>,
+    outstanding: self::drop_guard::DropGuard<Outstanding<'batch>>,
 
     /// A backlog of entries that were taken from the `entries` iterator but
     /// could not be submitted to the kernel yet.
@@ -148,6 +118,11 @@ struct WriteBatch<'batch, 'ring, I> {
     written: usize,
 }
 
+#[derive(Debug)]
+struct Outstanding<'batch> {
+    btree: Vec<QueueEntry<'batch>>,
+}
+
 /// An entry in the io-uring write batch.
 #[derive(Debug, PartialEq)]
 struct QueueEntry<'batch> {
@@ -159,20 +134,11 @@ struct QueueEntry<'batch> {
     /// If different from `original_offset`, this entry has been partially written.
     offset: u64,
 
-    /// A pointer to the current position in the buffer to write from.
-    ///
-    /// This is taken from the input and is adjusted as data is written. The
-    /// pointer is guaranteed to be valid for the `'batch` lifetime and for
-    /// `length` bytes. We do not directly dereference this pointer; however,
-    /// it is passed to the kernel to copy data from.
-    pointer: *const u8,
+    /// The contents to write to the file descriptor.
+    buffer: &'batch [u8],
 
-    /// The number of bytes remaining to write from the buffer.
-    length: u32,
-
-    /// ZST marker to bind the buffer's lifetime after replacing the slice with
-    /// a raw pointer.
-    lifetime: std::marker::PhantomData<&'batch [u8]>,
+    /// The number of times this entry has been submitted to the kernel.
+    submission_count: u32,
 }
 
 enum EnqueueResult {
@@ -186,7 +152,7 @@ impl IoUringProxy {
         Self(Mutex::new(ring))
     }
 
-    pub fn new() -> std::io::Result<Self> {
+    pub fn new() -> io::Result<Self> {
         io_uring::IoUring::builder()
             // don't give the ring to child processes
             .dontfork()
@@ -200,9 +166,9 @@ impl IoUringProxy {
             // NOTE: .setup_defer_taskrun() is not used because it conflicts
             // with the `setup_sqpoll` thread and causes the kernel to return
             // EINVAL when initializing the ring. With `setup_single_issuer` and
-            // `setup_sqpoll`, we are allowed to submit from multiple threads and
-            // "single issuer" here means "single process" instead of "single
-            // thread".
+            // `setup_sqpoll`, we are allowed to submit from multiple threads
+            // and "single issuer" here means "single process" instead of
+            // "single thread".
             .setup_single_issuer()
             // completion queue must be greater than the submission queue
             // and is rounded up to the next power of two if necessary
@@ -213,8 +179,6 @@ impl IoUringProxy {
 
     /// Writes a batch of buffers to the given file descriptor at the specified
     /// offsets.
-    ///
-    /// The batch must be disjoint and not contain overlapping write ranges.
     ///
     /// We do not guarantee the ordering of writes in the batch; however, we
     /// do guarantee that all writes are attempted even if some writes fail;
@@ -243,18 +207,6 @@ impl IoUringProxy {
             }};
         }
 
-        // verify all sections are disjoint (no overlaps); and guarantee we do
-        // not have to handle overlapping writes and also guarantee all inserts
-        // into the hash table are unique
-        if !are_set_of_ranges_disjoint(writes.clone().into_iter().map(|(offset, buffer)| {
-            let end = offset.wrapping_add(buffer.len() as u64);
-            offset..end
-        })) {
-            bail!(std::io::Error::other(
-                "io-uring write batch contains overlapping write ranges"
-            ));
-        }
-
         trace!("starting io-uring write batch");
         let mut ring = self.0.lock();
         let mut batch = WriteBatch::new(&mut ring, fd, writes.into_iter().map(QueueEntry::new));
@@ -266,7 +218,7 @@ impl IoUringProxy {
 
         while !batch.is_finished() {
             trace!(
-                "io-uring write batch status: outstanding={}, backlog={}, sq_len={}, sq_full={}, cq_len={}, cq_full={}, iter_size_hint={:?}",
+                "io-uring write batch status: outstanding={}, backlog={}, sq_len={}, sq_full={}, cq_len={}, cq_full={}, iter_size_hint={:?}, errors={}",
                 batch.outstanding.len(),
                 batch.backlog.len(),
                 batch.sq.len(),
@@ -274,6 +226,7 @@ impl IoUringProxy {
                 batch.cq.len(),
                 batch.cq.is_full(),
                 batch.entries.size_hint(),
+                errors.len(),
             );
 
             // Top of the loop: synchronize the completion queue pointers and
@@ -310,23 +263,33 @@ impl IoUringProxy {
 }
 
 impl<'a> QueueEntry<'a> {
-    fn new((offset, buffer): (u64, &'a [u8])) -> Self {
-        // trivial check because we never allocate nodes larger than 16 MiB (AREA_SIZES)
-        debug_assert!(u32::try_from(buffer.len()).is_ok());
+    const fn new((offset, buffer): (u64, &'a [u8])) -> Self {
         Self {
             original_offset: offset,
             offset,
-            pointer: buffer.as_ptr(),
-            length: buffer.len() as u32,
-            lifetime: std::marker::PhantomData,
+            buffer,
+            submission_count: 0,
         }
     }
 
     fn build_submission_queue_entry(&self, fd: RawFd) -> io_uring::squeue::Entry {
-        io_uring::opcode::Write::new(io_uring::types::Fd(fd), self.pointer, self.length)
-            .offset(self.offset)
-            .build()
-            .user_data(self.original_offset)
+        io_uring::opcode::Write::new(
+            io_uring::types::Fd(fd),
+            self.buffer.as_ptr(),
+            // writes are limited to i32::MAX bytes. If the length is larger,
+            // we will automatically resubmit the remaining data.
+            //
+            // for larger writes in a single call, we need to switch to using
+            // `writev(2)` instead of `write(2)` or automatically split the
+            // entries beforehand.
+            //
+            // this is fine for now since we usually only write 16 MiB chunks
+            // at most, but this is here for future-proofing.
+            (self.buffer.len() & 0x7FFF_FFFF) as u32,
+        )
+        .offset(self.offset)
+        .build()
+        .user_data(self.original_offset)
     }
 
     /// Handles the result of a completed write operation.
@@ -337,64 +300,114 @@ impl<'a> QueueEntry<'a> {
     /// If `length` is non-zero after a successful write, the entry must be
     /// re-submitted to write the remaining data.
     fn handle_result(&mut self, res: i32) -> Result<usize, BatchError> {
-        #![expect(clippy::arithmetic_side_effects, clippy::cast_sign_loss)]
+        match res.cmp(&0) {
+            Ordering::Less => {
+                #[expect(clippy::arithmetic_side_effects)]
+                let err = io::Error::from_raw_os_error(-res);
+                // rust stdlib maps EAGAIN to WouldBlock; re-submit in that case
+                if matches!(err.kind(), ErrorKind::WouldBlock) {
+                    debug!(
+                        "io-uring write at offset {} returned EAGAIN, re-submitting",
+                        self.original_offset
+                    );
+                    firewood_counter!(
+                        "ring.eagain_write_retry",
+                        "amount of io-uring write entries that have been re-submitted due to EAGAIN io error"
+                    ).increment(1);
+                    return Ok(0);
+                }
 
-        if res < 0 {
-            let err = std::io::Error::from_raw_os_error(-res);
-            // rust stdlib maps EAGAIN to WouldBlock; re-submit in that case
-            if matches!(err.kind(), std::io::ErrorKind::WouldBlock) {
-                trace!(
-                    "io-uring write at offset {} returned EAGAIN, re-submitting",
-                    self.original_offset
-                );
-                firewood_counter!(
-                    "ring.eagain_write_retry",
-                    "amount of io-uring write entries that have been re-submitted due to EAGAIN io error"
-                ).increment(1);
-                return Ok(0);
+                Err(BatchError {
+                    batch_offset: self.original_offset,
+                    error_offset: self.offset,
+                    err,
+                    incurable: false,
+                })
             }
-
-            return Err(BatchError {
+            // This check is to prevent infinite loops. The kernel should never
+            // return Ok(0) for a write operation via this API unless the storage
+            // driver is broken (or we weren't writing to a file--how did we get here?)
+            Ordering::Equal => Err(BatchError {
                 batch_offset: self.original_offset,
                 error_offset: self.offset,
-                err,
+                err: io::Error::new(ErrorKind::WriteZero, "kernel wrote zero bytes"),
                 incurable: false,
-            });
+            }),
+            Ordering::Greater => {
+                #[expect(clippy::cast_sign_loss)]
+                let written = res as usize;
+                let Some(remaining) = self.buffer.get(written..) else {
+                    // concious choice: if the kernel writes more than we asked for,
+                    // panic instead of returning an error. This indicates a serious
+                    // bug in the kernel or storage driver and continuing execution
+                    // could lead to data corruption.
+                    unreachable!(
+                        "kernel wrote more data than requested: wrote {written}, requested {}",
+                        self.buffer.len(),
+                    )
+                };
+
+                // if this is non-empty, we need to re-submit the remaining data
+                self.buffer = remaining;
+                self.offset = self.offset.wrapping_add(written as u64);
+
+                Ok(written)
+            }
         }
+    }
+}
 
-        // This check is to prevent infinite loops. The kernel should never
-        // return Ok(0) for a write operation via this API unless the storage
-        // driver is broken (or we weren't writing to a file--how did we get here?)
-        if res == 0 {
-            return Err(BatchError {
-                batch_offset: self.original_offset,
-                error_offset: self.offset,
-                err: std::io::Error::new(std::io::ErrorKind::WriteZero, "kernel wrote zero bytes"),
-                incurable: false,
-            });
+impl<'batch> Outstanding<'batch> {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            btree: Vec::with_capacity(capacity),
         }
-
-        let written = res as u32;
-        if written > self.length {
-            return Err(BatchError {
-                batch_offset: self.original_offset,
-                error_offset: self.offset,
-                err: std::io::Error::other("kernel wrote more data than requested"),
-                incurable: false,
-            });
-        }
-
-        // if this is non-zero, we need to re-submit the remaining data
-        self.length -= written;
-        self.pointer = self.pointer.wrapping_add(written as usize);
-        self.offset += u64::from(written);
-
-        Ok(written as usize)
     }
 
-    const fn hashtable_hash(&self) -> u64 {
-        // use the original offset as the hash to avoid unnecessary hashing
-        self.original_offset
+    const fn is_empty(&self) -> bool {
+        self.btree.is_empty()
+    }
+
+    const fn len(&self) -> usize {
+        self.btree.len()
+    }
+
+    fn insert(&mut self, entry: QueueEntry<'batch>) {
+        let offset = entry.original_offset;
+        match self
+            .btree
+            // O(log n) search for existing entry or insertion point
+            .binary_search_by(move |probe| probe.original_offset.cmp(&offset))
+        {
+            Ok(index) => {
+                // binary_search guarantees `index` is valid and the compiler
+                // knows this too but clippy does not
+                #[expect(clippy::indexing_slicing)]
+                let existing = &self.btree[index];
+                // This is a critical logic error and should never happen. It
+                // indicates that either we allocated a node at the same offset
+                // in the same batch twice, which is a violation of the
+                // allocator contract; or, we have a bug in our loop where we
+                // did not remove an existing entry before re-inserting it.
+                //
+                // either way, this is unrecoverable and indicates a serious bug
+                unreachable!(
+                    "attempting to insert duplicate io-uring write entry for offset {offset}: existing={existing:?}, new={entry:?}"
+                );
+            }
+            Err(index) => {
+                // O(n) worse case to shift elements; but, we typically expect
+                // all insertions to be near the end of the list.
+                self.btree.insert(index, entry);
+            }
+        }
+    }
+
+    fn remove(&mut self, offset: u64) -> Option<QueueEntry<'batch>> {
+        self.btree
+            .binary_search_by(move |probe| probe.original_offset.cmp(&offset))
+            .ok()
+            .map(|index| self.btree.remove(index))
     }
 }
 
@@ -407,8 +420,8 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
             sq,
             cq,
             outstanding: self::drop_guard::DropGuard::new(
-                HashTable::with_capacity(COMPLETION_QUEUE_SIZE as usize),
-                hashbrown::HashTable::is_empty,
+                Outstanding::with_capacity(COMPLETION_QUEUE_SIZE as usize),
+                Outstanding::is_empty,
                 "io-uring write batch terminated with outstanding entries",
             ),
             backlog: std::collections::VecDeque::new(),
@@ -423,31 +436,8 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
         self.backlog.is_empty() && self.outstanding.is_empty()
     }
 
-    fn hashtable_insert(&mut self, entry: QueueEntry<'batch>) {
-        self.outstanding
-            .insert_unique(entry.hashtable_hash(), entry, QueueEntry::hashtable_hash);
-    }
-
-    fn hashtable_remove(&mut self, offset: u64) -> Option<QueueEntry<'batch>> {
-        match self.outstanding.entry(
-            offset,
-            |needle| needle.original_offset == offset,
-            QueueEntry::hashtable_hash,
-        ) {
-            HashTableEntry::Occupied(entry) => {
-                let (entry, _) = entry.remove();
-                Some(entry)
-            }
-            HashTableEntry::Vacant(_) => None,
-        }
-    }
-
     fn pop_next_entry(&mut self) -> Option<QueueEntry<'batch>> {
-        if let Some(entry) = self.backlog.pop_front() {
-            Some(entry)
-        } else {
-            self.entries.next()
-        }
+        self.backlog.pop_front().or_else(|| self.entries.next())
     }
 
     fn add_entry_to_backlog(&mut self, entry: QueueEntry<'batch>) {
@@ -460,7 +450,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
         }
     }
 
-    fn sync_completion_queue(&mut self) -> std::io::Result<()> {
+    fn sync_completion_queue(&mut self) -> io::Result<()> {
         trace!("syncing io-uring completion queue");
         // `submit_and_wait` blocks until at least `want` (1) completion events
         // are available in the completion queue. If there are already `want`
@@ -475,10 +465,10 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
         // The kernel will also return EBUSY if its internal submission queue is
         // full, in which case we break out to process completions. If the CQ
         // is empty, we may spin here until the syscall blocks.
-        match self.submitter.submit_and_wait(1) {
-            Ok(_) => {}
-            Err(ref err) if ignore_poll_error(err) => {}
-            Err(err) => return Err(err),
+        if let Err(err) = self.submitter.submit_and_wait(1)
+            && !ignore_poll_error(&err)
+        {
+            return Err(err);
         }
 
         self.cq.sync();
@@ -490,14 +480,6 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
         let Some(entry) = self.pop_next_entry() else {
             return EnqueueResult::Empty;
         };
-
-        // debug_assert_eq so it `Debug` prints the entry on failure
-        debug_assert_eq!(
-            self.hashtable_remove(entry.original_offset),
-            None,
-            "attempting to enqueue duplicate io-uring write entry at offset {}",
-            entry.original_offset,
-        );
 
         let sqe = entry.build_submission_queue_entry(self.fd);
         #[expect(unsafe_code)]
@@ -515,7 +497,17 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
             .increment(1);
             EnqueueResult::Full
         } else {
-            self.hashtable_insert(entry);
+            let submission_count = entry.submission_count.wrapping_add(1);
+            trace!(
+                "enqueued io-uring write at offset {} ({}) of length {} (attempt #{submission_count})",
+                entry.original_offset,
+                entry.offset,
+                entry.buffer.len(),
+            );
+            self.outstanding.insert(QueueEntry {
+                submission_count,
+                ..entry
+            });
             EnqueueResult::Enqueued
         }
     }
@@ -525,17 +517,15 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
         self.sq.sync();
     }
 
-    fn flush_submission_queue(&mut self) -> std::io::Result<()> {
+    fn flush_submission_queue(&mut self) -> io::Result<()> {
         trace!("flushing io-uring submission queue");
         let mut submitted = false;
         loop {
             if self.sq.is_full() {
                 match self.submitter.submit() {
                     Ok(_) => submitted = true,
-                    Err(ref err) if ignore_poll_error(err) => {
-                        // kernel is busy, move onto completions
-                        return Ok(());
-                    }
+                    // kernel is busy, move onto completions
+                    Err(err) if ignore_poll_error(&err) => return Ok(()),
                     Err(err) => return Err(err),
                 }
             }
@@ -560,11 +550,11 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
         trace!("flushing io-uring completion queue");
         while let Some(entry) = self.cq.next() {
             let offset = entry.user_data();
-            let Some(mut write_entry) = self.hashtable_remove(offset) else {
+            let Some(mut write_entry) = self.outstanding.remove(offset) else {
                 errors.push(BatchError {
                     batch_offset: offset,
                     error_offset: offset,
-                    err: std::io::Error::other("completion event for unknown offset"),
+                    err: io::Error::other("completion event for unknown offset"),
                     incurable: false,
                 });
                 continue;
@@ -573,7 +563,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
                 Ok(written) => {
                     // copy offset off the entry before adding it back to the backlog
                     let error_offset = write_entry.offset;
-                    if write_entry.length > 0 {
+                    if !write_entry.buffer.is_empty() {
                         // not fully written, re-queue
                         self.add_entry_to_backlog(write_entry);
                         if written != 0 {
@@ -593,7 +583,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
                         errors.push(BatchError {
                             batch_offset: offset,
                             error_offset,
-                            err: std::io::Error::other("overflow when summing total bytes written"),
+                            err: io::Error::other("overflow when summing total bytes written"),
                             incurable: false,
                         });
                     }
@@ -606,138 +596,218 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
     }
 }
 
-impl BatchError {
-    pub const fn is_incurable(&self) -> bool {
-        self.incurable
-    }
+fn ignore_poll_error(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        // EINTR happens on intentionally blocking syscalls when the thread
+        // needs to be woken up for another reason (usually signal handlers),
+        // we can safely ignore those and retry as the signal handler will have
+        // completed by the time control returns to us.
+        // EBUSY happens when the kernel submission queue is full and cannot
+        // accept new entries; in that case we should break out to process
+        // completions.
+        std::io::ErrorKind::Interrupted | std::io::ErrorKind::ResourceBusy
+    )
 }
 
-impl std::fmt::Display for BatchError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if self.batch_offset == self.error_offset {
-            write!(f, "{} at offset {}", self.err, self.batch_offset)
-        } else {
-            write!(
-                f,
-                "{} at offset {} (after writing up to offset {})",
-                self.err, self.error_offset, self.batch_offset
-            )
+mod errors {
+    use std::{fmt, io, path::PathBuf};
+
+    use crate::FileIoError;
+
+    /// A collection of errors encountered during an io-uring write batch.
+    ///
+    /// A least one error occured for this to be returned. Incurable errors can be
+    /// observed via [`BatchErrors::incurable_error`].
+    #[must_use]
+    pub struct BatchErrors {
+        pub(super) errors: Vec<BatchError>,
+    }
+
+    /// An error encountered during an io-uring write operation.
+    pub struct BatchError {
+        /// The offset of the original write operation that caused the error.
+        ///
+        /// This value is meaningful only if `incurable` is false.
+        pub batch_offset: u64,
+
+        /// The offset at which the error occurred, which may be different from
+        /// `batch_offset` if a prior write operation partially succeeded.
+        ///
+        /// This value is meaningful only if `incurable` is false.
+        pub error_offset: u64,
+
+        /// The underlying I/O error.
+        pub err: io::Error,
+
+        /// Incurable errors are those that prevent us from communicating with the
+        /// kernel via io-uring and force us to abort the entire batch immediately.
+        ///
+        /// The data is likely corrupted and should not be trusted. These errors
+        /// likely should abort the process instead of being handled gracefully;
+        /// however, we return them here so the abort can happen at a higher level.
+        ///
+        /// Curable errors are those that affect only a single write operation and
+        /// may be recoverable, depending on the operation and context.
+        pub(super) incurable: bool,
+    }
+
+    impl BatchError {
+        /// If true, the error is incurable and prevents further communication
+        /// with the kernel preventing further processing of the batch.
+        pub const fn is_incurable(&self) -> bool {
+            self.incurable
         }
     }
-}
 
-impl BatchErrors {
-    pub fn into_file_io_error(self, path: Option<PathBuf>) -> FileIoError {
-        if self.errors.len() == 1 {
-            let only = self.errors.into_iter().next().expect("just checked length");
-            FileIoError::new(
-                only.err,
-                path,
-                only.error_offset,
-                Some("io_uring write error".to_string()),
-            )
-        } else {
-            FileIoError::new(
-                std::io::Error::other(self),
-                path,
-                0,
-                Some("multiple io_uring write errors".to_string()),
-            )
-        }
-    }
-
-    pub fn errors(&self) -> &[BatchError] {
-        &self.errors
-    }
-
-    pub fn incurable_error(&self) -> Option<&std::io::Error> {
-        // if we have an incurable error, it will always be the last one added
-        self.errors()
-            .last()
-            .and_then(|e| if e.is_incurable() { Some(&e.err) } else { None })
-    }
-}
-
-impl std::fmt::Debug for BatchErrors {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
-    }
-}
-
-impl std::fmt::Display for BatchErrors {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        use std::error::Error;
-        match self.errors() {
-            [] => write!(f, "no errors (this is unexpected)"),
-            [only] => std::fmt::Display::fmt(&only, f),
-            [
-                rest @ ..,
-                incurable @ BatchError {
-                    incurable: true, ..
-                },
-            ] if f.alternate() => {
-                writeln!(
-                    f,
-                    "Encountered an incurable error after other errors: {incurable}"
-                )?;
-                for err in ErrorChain(incurable.err.source()) {
-                    writeln!(f, "  Caused by: {err}")?;
-                }
-                writeln!(f, "Other errors:")?;
-                for (i, err) in rest.iter().enumerate() {
-                    writeln!(f, "  {}: {err}", i.wrapping_add(1))?;
-                    for err in ErrorChain(err.err.source()) {
-                        writeln!(f, "    Caused by: {err}")?;
-                    }
-                }
-                Ok(())
-            }
-            [
-                rest @ ..,
-                incurable @ BatchError {
-                    incurable: true, ..
-                },
-            ] => {
+    impl fmt::Display for BatchError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            if self.batch_offset == self.error_offset {
+                write!(f, "{} at offset {}", self.err, self.batch_offset)
+            } else {
                 write!(
                     f,
-                    "Encountered an incurable error after {} other errors: {incurable}",
-                    rest.len()
+                    "{} at offset {} (after writing up to offset {})",
+                    self.err, self.error_offset, self.batch_offset
                 )
-            }
-            [first, rest @ ..] if f.alternate() => {
-                writeln!(f, "Multiple errors encountered:")?;
-                for (i, err) in std::iter::once(first).chain(rest.iter()).enumerate() {
-                    writeln!(f, "  {}: {err}", i.wrapping_add(1))?;
-                    for err in ErrorChain(err.err.source()) {
-                        writeln!(f, "    Caused by: {err}")?;
-                    }
-                }
-                Ok(())
-            }
-            [first, rest @ ..] => {
-                write!(f, "{first} (and {} more errors)", rest.len())
             }
         }
     }
-}
 
-impl std::error::Error for BatchErrors {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        // if we have an incurable error, prefer that as the source
-        self.incurable_error().map(|e| e as &_).or_else(|| {
-            // Source only lets us return one error, so return the first.
-            self.errors.first().map(|e| &e.err as &_)
-        })
+    impl BatchErrors {
+        pub fn into_file_io_error(self, path: Option<PathBuf>) -> FileIoError {
+            if self.errors.len() == 1 {
+                let only = self.errors.into_iter().next().expect("just checked length");
+                FileIoError::new(
+                    only.err,
+                    path,
+                    only.error_offset,
+                    Some(
+                        if only.incurable {
+                            "io_uring incurable write error"
+                        } else {
+                            "io_uring write error"
+                        }
+                        .to_owned(),
+                    ),
+                )
+            } else {
+                FileIoError::new(
+                    io::Error::other(self),
+                    path,
+                    0,
+                    Some("multiple io_uring write errors".to_string()),
+                )
+            }
+        }
+
+        pub fn errors(&self) -> &[BatchError] {
+            &self.errors
+        }
+
+        pub fn incurable_error(&self) -> Option<&io::Error> {
+            // if we have an incurable error, it will always be the last one added
+            self.errors()
+                .last()
+                .and_then(|e| if e.is_incurable() { Some(&e.err) } else { None })
+        }
     }
-}
 
-struct ErrorChain<'a>(Option<&'a (dyn std::error::Error + 'static)>);
+    impl fmt::Debug for BatchErrors {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            fmt::Display::fmt(self, f)
+        }
+    }
 
-impl<'a> std::iter::Iterator for ErrorChain<'a> {
-    type Item = &'a (dyn std::error::Error + 'static);
+    impl fmt::Display for BatchErrors {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            use std::error::Error;
+            match self.errors() {
+                // zero-errors; we should never try to display these
+                [] => write!(f, "no errors (this is unexpected)"),
 
-    fn next(&mut self) -> Option<Self::Item> {
-        self.0.take().inspect(|err| self.0 = err.source())
+                // a single error, forward to its Display impl
+                [only] => fmt::Display::fmt(&only, f),
+
+                // `#` formatting and we have an incurable error at the end,
+                // print it first with its causes, then the rest
+                [
+                    rest @ ..,
+                    incurable @ BatchError {
+                        incurable: true, ..
+                    },
+                ] if f.alternate() => {
+                    writeln!(
+                        f,
+                        "Encountered an incurable error after other errors: {incurable}"
+                    )?;
+                    for err in ErrorChain(incurable.err.source()) {
+                        writeln!(f, "  Caused by: {err}")?;
+                    }
+                    writeln!(f, "Other errors:")?;
+                    for (i, err) in rest.iter().enumerate() {
+                        writeln!(f, "  {}: {err}", i.wrapping_add(1))?;
+                        for err in ErrorChain(err.err.source()) {
+                            writeln!(f, "    Caused by: {err}")?;
+                        }
+                    }
+                    Ok(())
+                }
+
+                // regular formatting and we have an incurable error at the end,
+                // print it last with a count of other errors
+                [
+                    rest @ ..,
+                    incurable @ BatchError {
+                        incurable: true, ..
+                    },
+                ] => {
+                    write!(
+                        f,
+                        "Encountered an incurable error after {} other errors: {incurable}",
+                        rest.len()
+                    )
+                }
+
+                // `#` formatting and multiple errors, print them all with causes
+                many @ [_, ..] if f.alternate() => {
+                    writeln!(f, "Multiple errors encountered:")?;
+                    for (i, err) in many.iter().enumerate() {
+                        writeln!(f, "  {}: {err}", i.wrapping_add(1))?;
+                        for err in ErrorChain(err.err.source()) {
+                            writeln!(f, "    Caused by: {err}")?;
+                        }
+                    }
+                    Ok(())
+                }
+
+                // regular formatting and multiple errors, print the first with
+                // a count of the rest
+                [first, rest @ ..] => {
+                    write!(f, "{first} (and {} more errors)", rest.len())
+                }
+            }
+        }
+    }
+
+    impl std::error::Error for BatchErrors {
+        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+            // if we have an incurable error, prefer that as the source
+            self.incurable_error().map(|e| e as &_).or_else(|| {
+                // Source only lets us return one error, so return the first.
+                self.errors.first().map(|e| &e.err as &_)
+            })
+        }
+    }
+
+    struct ErrorChain<'a>(Option<&'a (dyn std::error::Error + 'static)>);
+
+    impl<'a> Iterator for ErrorChain<'a> {
+        type Item = &'a (dyn std::error::Error + 'static);
+
+        fn next(&mut self) -> Option<Self::Item> {
+            self.0.take().inspect(|err| self.0 = err.source())
+        }
     }
 }
 
@@ -746,60 +816,67 @@ impl<'a> std::iter::Iterator for ErrorChain<'a> {
 /// This is inside its own module to avoid accidentally exposing the inner
 /// `value`.
 mod drop_guard {
-    pub(super) struct DropGuard<T, F: FnOnce(&T) -> bool = fn(&T) -> bool> {
-        value: std::mem::ManuallyDrop<T>,
+    use std::{
+        fmt::Debug,
+        mem::ManuallyDrop,
+        ops::{Deref, DerefMut},
+    };
+
+    pub(super) struct DropGuard<T: Debug, F: FnOnce(&T) -> bool = fn(&T) -> bool> {
+        value: ManuallyDrop<T>,
         /// The predicate that must be false when dropped. If `true`, this indicates
         /// a logic error in the code using the guard and will cause a panic. If
         /// this happens during a panic unwind, the process will abort (which is
         /// desirable to avoid further corruption).
-        predicate: std::mem::ManuallyDrop<F>,
+        predicate: ManuallyDrop<F>,
         message: &'static str,
     }
 
-    impl<T, F: FnOnce(&T) -> bool> DropGuard<T, F> {
+    impl<T: Debug, F: FnOnce(&T) -> bool> DropGuard<T, F> {
         pub(super) const fn new(value: T, predicate: F, message: &'static str) -> Self {
             Self {
-                value: std::mem::ManuallyDrop::new(value),
-                predicate: std::mem::ManuallyDrop::new(predicate),
+                value: ManuallyDrop::new(value),
+                predicate: ManuallyDrop::new(predicate),
                 message,
             }
         }
 
+        /// Forget the guard without evaluating the predicate; and return the
+        /// inner value.
+        ///
+        /// This must take ownership of `self` to ensure the guard is forgotten
+        /// and cannot be used afterward.
         pub(super) fn forget(self) -> T {
-            let mut this = std::mem::ManuallyDrop::new(self);
+            let mut this = ManuallyDrop::new(self);
             #[expect(unsafe_code)]
-            // SAFETY: we are forgetting the guard, so we must remove both the value
-            // and the predicate without running `drop`. `ManuallDrop(self)` ensures
-            // this is safe because we will not run `drop` on `this`.
-            let (value, _predicate) = unsafe { this.take() };
-            value
-        }
-
-        unsafe fn take(&mut self) -> (T, F) {
-            #![expect(unsafe_code)]
-            // SAFETY: the caller must ensure this is only called once and that
-            // `drop` is not called after this; e.g., by forgetting the guard or
-            // by calling from within `drop`.
+            // SAFETY: we are forgetting the guard; therefore, we must drop the
+            // predicate and take the move the value without running the `Drop`
+            // handler on the guard. `ManuallyDrop(self)` ensures that.
             unsafe {
-                (
-                    std::mem::ManuallyDrop::take(&mut self.value),
-                    std::mem::ManuallyDrop::take(&mut self.predicate),
-                )
+                ManuallyDrop::drop(&mut this.predicate);
+                ManuallyDrop::take(&mut this.value)
             }
         }
     }
 
-    impl<T, F: FnOnce(&T) -> bool> Drop for DropGuard<T, F> {
+    impl<T: Debug, F: FnOnce(&T) -> bool> Drop for DropGuard<T, F> {
         fn drop(&mut self) {
             #[expect(unsafe_code)]
-            // SAFETY: `Drop` ensures this is only called once and is called because
-            // the guard was not forgotten
-            let (value, predicate) = unsafe { self.take() };
-            assert!(!(predicate)(&value), "{}", self.message);
+            // SAFETY: we are in the `Drop` handler; therefore, it is safe to
+            // take ownership of the predicate to call it. `Drop` ensures this
+            // is only called once and the values within the manually dropped
+            // are not used afterward.
+            let (value, predicate) = unsafe {
+                (
+                    ManuallyDrop::take(&mut self.value),
+                    ManuallyDrop::take(&mut self.predicate),
+                )
+            };
+            assert!(!(predicate)(&value), "{value:?}: {}", self.message);
         }
     }
 
-    impl<T, F: FnOnce(&T) -> bool> std::ops::Deref for DropGuard<T, F> {
+    impl<T: Debug, F: FnOnce(&T) -> bool> Deref for DropGuard<T, F> {
         type Target = T;
 
         fn deref(&self) -> &Self::Target {
@@ -807,48 +884,9 @@ mod drop_guard {
         }
     }
 
-    impl<T, F: FnOnce(&T) -> bool> std::ops::DerefMut for DropGuard<T, F> {
+    impl<T: Debug, F: FnOnce(&T) -> bool> DerefMut for DropGuard<T, F> {
         fn deref_mut(&mut self) -> &mut Self::Target {
             &mut self.value
         }
     }
-}
-
-const fn are_ranges_disjoint(a: &std::ops::Range<u64>, b: &std::ops::Range<u64>) -> bool {
-    a.end <= b.start || b.end <= a.start
-}
-
-fn are_set_of_ranges_disjoint(iter: impl Iterator<Item = std::ops::Range<u64>>) -> bool {
-    let mut regions = Vec::<std::ops::Range<u64>>::new();
-    for range in iter {
-        match regions.binary_search_by(|span| span.start.cmp(&range.start)) {
-            Ok(_) => {
-                // exact match, duplicate offset -- guaranteed overlap and thus not disjoint
-                return false;
-            }
-            Err(insertion) => {
-                if let Some(prior) = insertion.checked_sub(1)
-                    && let Some(prior) = regions.get(prior)
-                    && !are_ranges_disjoint(prior, &range)
-                {
-                    return false;
-                }
-                if let Some(next) = regions.get(insertion)
-                    && !are_ranges_disjoint(next, &range)
-                {
-                    return false;
-                }
-                regions.insert(insertion, range);
-            }
-        }
-    }
-
-    true
-}
-
-fn ignore_poll_error(err: &std::io::Error) -> bool {
-    matches!(
-        err.kind(),
-        std::io::ErrorKind::Interrupted | std::io::ErrorKind::ResourceBusy
-    )
 }

@@ -34,21 +34,20 @@ thiserror.workspace = true
 # Regular dependencies
 bitfield = "0.19.4"
 bitflags = "2.10.0"
-bumpalo = { version = "3.19.0", features = ["collections", "std"] }
 derive-where = "1.6.0"
 enum-as-inner = "0.6.1"
 indicatif = "0.18.3"
 lru = "0.16.2"
-parking_lot.workspace = true
 semver = "1.0.27"
 triomphe = "0.1.15"
+parking_lot.workspace = true
 # Optional dependencies
 bytes = { version = "1.11.0", optional = true }
-hashbrown = { version = "0.16.1", optional = true }
 io-uring = { version = "0.7.11", optional = true }
 log = { version = "0.4.28", optional = true }
 rlp = { version = "0.6.1", optional = true }
 sha3 = { version = "0.10.8", optional = true }
+bumpalo = { version = "3.19.0", features = ["collections", "std"] }
 
 [dev-dependencies]
 # Workspace dependencies
@@ -61,7 +60,7 @@ test-case.workspace = true
 [features]
 logger = ["log"]
 branch_factor_256 = []
-io-uring = ["dep:io-uring", "dep:hashbrown"]
+io-uring = ["dep:io-uring"]
 ethhash = ["dep:rlp", "dep:sha3", "dep:bytes"]
 test_utils = ["dep:rand"]
 
