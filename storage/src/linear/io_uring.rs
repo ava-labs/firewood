@@ -572,13 +572,16 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
                             ).increment(1);
                         }
                     }
-                    if let Some(total_written) = self.written.checked_add(written) {
-                        self.written = total_written;
-                    } else {
+                    let carry;
+                    (self.written, carry) = self.written.overflowing_add(written);
+                    if carry {
                         errors.push(BatchError {
                             batch_offset: offset,
                             error_offset,
-                            err: io::Error::other("overflow when summing total bytes written"),
+                            err: io::Error::other(format!(
+                                "overflow after adding {written} bytes wrapping to {}",
+                                self.written
+                            )),
                             incurable: false,
                         });
                     }
