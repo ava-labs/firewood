@@ -649,8 +649,8 @@ mod tests {
     };
 
     use firewood_storage::{
-        FileIoError, HashedNodeReader, ImmutableProposal, MemStore, MutableProposal, NodeStore,
-        SeededRng, TrieReader,
+        FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, MemStore, MutableProposal,
+        NodeStore, SeededRng, TrieReader,
     };
     use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
     use test_case::test_case;
@@ -1436,9 +1436,9 @@ mod tests {
         assert_merkle_eq(&left_after, &m2_immut);
     }
 
-    #[test_case(500)]
+    #[test_case(20, 500)]
     #[allow(clippy::type_complexity, clippy::too_many_lines)]
-    fn test_db_fuzz(num_items: usize) {
+    fn test_db_fuzz(num_iterations: usize, num_items: usize) {
         pub(super) struct TestDb {
             db: Db,
             tmpdir: tempfile::TempDir,
@@ -1544,6 +1544,92 @@ mod tests {
             (batch, i + start_val)
         }
 
+        fn one_iteration(
+            rng: &SeededRng,
+            db: &Db,
+            committed: Arc<NodeStore<firewood_storage::Committed, FileBacked>>,
+            committed_keys: &mut HashSet<Vec<u8>>,
+            num_items: usize,
+            start_val: usize,
+        ) -> (
+            Arc<NodeStore<firewood_storage::Committed, FileBacked>>,
+            usize,
+        ) {
+            const CHANCE_COMMIT: usize = 25;
+            let proposal = NodeStore::new(&committed).unwrap();
+            let mut merkle = Merkle::from(proposal);
+            let (batch, next_start_val) =
+                gen_random_keys(rng, committed_keys, num_items, start_val);
+            for op in batch.clone() {
+                match op {
+                    BatchOp::Put { key, value } => {
+                        let _ = merkle.insert(&key, value);
+                    }
+                    BatchOp::Delete { key } => {
+                        let _ = merkle.remove(&key);
+                    }
+                    BatchOp::DeleteRange { prefix: _ } => {
+                        panic!("should not have any DeleteRanges");
+                    }
+                }
+            }
+            let nodestore = merkle.into_inner();
+
+            // Use the diff iterator to create a list of BatchOps.
+            let ops = diff_merkle_iterator_without_hash(
+                &committed.clone().into(),
+                &nodestore.into(),
+                Box::new([]),
+            )
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+
+            // Sort by the key of the BatchOp.
+            let mut batch_sorted = batch.clone();
+            batch_sorted.sort_by_key(|op| op.key().clone());
+
+            // Check that that proposal is the same size as the diff.
+            assert_eq!(batch_sorted.len(), ops.len());
+
+            // Check all of the keys and values match.
+            let mut diff_it = ops.iter();
+            for current_entry in batch_sorted.clone() {
+                let diff_entry = diff_it.next().unwrap();
+                match (&current_entry, &diff_entry) {
+                    (BatchOp::Put { key: _, value: _ }, BatchOp::Put { key: _, value: _ }) => {
+                        assert_eq!(**current_entry.key(), **diff_entry.key());
+                        assert_eq!(current_entry.value(), diff_entry.value());
+                    }
+                    (BatchOp::Delete { key: _ }, BatchOp::Delete { key: _ }) => {
+                        assert_eq!(**current_entry.key(), **diff_entry.key());
+                    }
+                    _ => {
+                        panic!("diff does not match proposal");
+                    }
+                }
+            }
+
+            // There is chance that we want to commit the batch.
+            if rng.random_range(1..=100) <= CHANCE_COMMIT {
+                let proposal = db.propose(batch.into_iter()).unwrap();
+                proposal.commit().unwrap();
+                let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+                // Have to regenerate the committed keys hash set if we commit the proposal
+                committed_keys.clear();
+                committed_keys.extend(
+                    committed
+                        .iter()
+                        .unwrap()
+                        .map(|kv| kv.unwrap())
+                        .map(|kv| kv.0.to_vec()),
+                );
+                (committed, next_start_val)
+            } else {
+                (committed, next_start_val)
+            }
+        }
+
         let db = TestDb::new();
         let rng = firewood_storage::SeededRng::from_env_or_random();
         let mut committed_keys = HashSet::new();
@@ -1551,12 +1637,12 @@ mod tests {
 
         // Populate the database with an initial batch of keys, as we would use a range proof
         // instead of a change proof if the database was initially empty.
-        let (batch, start_val) = gen_random_keys(&rng, &committed_keys, num_items, start_val);
+        let (batch, mut start_val) = gen_random_keys(&rng, &committed_keys, num_items, start_val);
         let proposal = db.propose(batch.into_iter()).unwrap();
         proposal.commit().unwrap();
 
         // Create a proposal that we will use to compare with the committed revision.
-        let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+        let mut committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
         committed_keys.extend(
             committed
                 .iter()
@@ -1565,67 +1651,16 @@ mod tests {
                 .map(|kv| kv.0.to_vec()),
         );
 
-        let proposal = NodeStore::new(&committed).unwrap();
-        let mut merkle = Merkle::from(proposal);
-        let (mut batch, _start_val) = gen_random_keys(&rng, &committed_keys, num_items, start_val);
-        for op in batch.clone() {
-            match op {
-                BatchOp::Put { key, value } => {
-                    let _ = merkle.insert(&key, value);
-                }
-                BatchOp::Delete { key } => {
-                    let _ = merkle.remove(&key);
-                }
-                BatchOp::DeleteRange { prefix: _ } => {
-                    panic!("should not have any DeleteRanges");
-                }
-            }
+        // Run multiple iterations, with each iteration having a chance to commit the proposal.
+        for _ in 0..num_iterations {
+            (committed, start_val) = one_iteration(
+                &rng,
+                &db,
+                committed,
+                &mut committed_keys,
+                num_items,
+                start_val,
+            );
         }
-        let nodestore = merkle.into_inner();
-
-        // Use the diff iterator to create a list of BatchOps.
-        let ops =
-            diff_merkle_iterator_without_hash(&committed.into(), &nodestore.into(), Box::new([]))
-                .unwrap()
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
-
-        // Sort by the key of the BatchOp.
-        batch.sort_by_key(|op| op.key().clone());
-
-        let diff_items: Vec<&BatchOp<Box<[u8]>, Box<[u8]>>> = ops.as_slice().iter().collect();
-
-        // Check that that proposal is the same size as the diff.
-        assert_eq!(batch.len(), diff_items.len());
-
-        // Check all of the keys and values match.
-        let mut diff_it = diff_items.iter();
-        for current_entry in batch {
-            let diff_entry = diff_it.next().unwrap();
-            match (&current_entry, &diff_entry) {
-                (BatchOp::Put { key: _, value: _ }, BatchOp::Put { key: _, value: _ }) => {
-                    assert_eq!(**current_entry.key(), **diff_entry.key());
-                    assert_eq!(current_entry.value(), diff_entry.value());
-                }
-                (BatchOp::Delete { key: _ }, BatchOp::Delete { key: _ }) => {
-                    assert_eq!(**current_entry.key(), **diff_entry.key());
-                }
-                _ => {
-                    panic!("diff does not match proposal");
-                }
-            }
-        }
-
-        // TODO: If we want to commit this proposal, uncomment below.
-        //let proposal = db.propose(batch.clone().into_iter()).unwrap();
-        //proposal.commit().unwrap();
-        //let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
-        //committed_keys.extend(
-        //    committed
-        //        .iter()
-        //        .unwrap()
-        //        .map(|kv| kv.unwrap())
-        //        .map(|kv| kv.0.to_vec()),
-        //);
     }
 }
