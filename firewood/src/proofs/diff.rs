@@ -645,14 +645,14 @@ mod tests {
         db::{BatchOp, Db, DbConfig},
         merkle::{Key, Merkle, Value},
         proofs::diff::DiffMerkleNodeStream,
-        v2::api::{Db as _, Proposal as _},
+        v2::api::{Db as _, DbView, Proposal as _},
     };
 
     use firewood_storage::{
         FileIoError, HashedNodeReader, ImmutableProposal, MemStore, MutableProposal, NodeStore,
         SeededRng, TrieReader,
     };
-    use std::{ops::Deref, path::PathBuf, sync::Arc};
+    use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
     use test_case::test_case;
 
     fn diff_merkle_iterator<'a, T, U>(
@@ -1437,7 +1437,7 @@ mod tests {
     }
 
     #[test_case(500)]
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, clippy::too_many_lines)]
     fn test_db_fuzz(num_items: usize) {
         pub(super) struct TestDb {
             db: Db,
@@ -1468,48 +1468,118 @@ mod tests {
             }
         }
 
-        fn gen_random_keys(
-            rng: &SeededRng,
-            num_keys: usize,
-            start_val: usize,
-        ) -> (Vec<Vec<u8>>, Vec<Box<[u8]>>) {
-            let mut keys: Vec<Vec<u8>> = Vec::new();
-            let mut vals: Vec<Box<[u8]>> = Vec::new();
-            let mut seen_keys = std::collections::HashSet::new();
+        fn random_key_from_hashset<'a>(
+            rng: &'a SeededRng,
+            set: &'a HashSet<Vec<u8>>,
+        ) -> Option<Vec<u8>> {
+            let len = set.len();
+            if len == 0 {
+                return None;
+            }
+            // Generate a random index within the bounds of the set's size
+            let index = rng.random_range(0..len);
+            // Use the iterator's nth method to get the element at that index
+            set.iter().nth(index).cloned()
+        }
 
-            let mut i = 0;
-            while keys.len() < num_keys {
+        fn gen_delete_key(
+            rng: &SeededRng,
+            committed_keys: &HashSet<Vec<u8>>,
+            seen_keys: &mut HashSet<Vec<u8>>,
+        ) -> Option<Vec<u8>> {
+            let key_opt = random_key_from_hashset(rng, committed_keys);
+            // Just skip the key if it has been seen. Otherwise return it and add the key
+            // to seen keys.
+            key_opt
+                .filter(|del_key| !seen_keys.contains(del_key))
+                .inspect(|del_key| {
+                    seen_keys.insert(del_key.clone());
+                })
+        }
+
+        fn gen_insert_key(rng: &SeededRng, seen_keys: &mut HashSet<Vec<u8>>) -> Vec<u8> {
+            loop {
                 let key_len = rng.random_range(1..=32);
                 let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
                 // Only add if key is unique
                 if seen_keys.insert(key.clone()) {
-                    keys.push(key);
-                    vals.push(Box::from(format!("value{}", i + start_val).as_bytes()));
+                    return key;
+                }
+            }
+        }
+
+        fn gen_random_keys(
+            rng: &SeededRng,
+            committed_keys: &HashSet<Vec<u8>>,
+            num_keys: usize,
+            start_val: usize,
+        ) -> (Vec<BatchOp<Vec<u8>, Box<[u8]>>>, usize) {
+            const CHANCE_DELETE: usize = 2;
+            let mut seen_keys = std::collections::HashSet::new();
+            let mut i = 0;
+            let mut batch = Vec::new();
+
+            while batch.len() < num_keys {
+                if !committed_keys.is_empty() && rng.random_range(1..=100) <= CHANCE_DELETE {
+                    let del_key = gen_delete_key(rng, committed_keys, &mut seen_keys);
+                    if let Some(key) = del_key {
+                        //println!("Deleting key: {key:?}");
+                        batch.push(BatchOp::Delete { key });
+                        continue;
+                    }
+                    // If we couldn't generate a delete key, then just fall through and create
+                    // a BatchOp::Put.
+                }
+                let key_len = rng.random_range(1..=32);
+                let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
+                // Only add if key is unique
+                if seen_keys.insert(key.clone()) {
+                    batch.push(BatchOp::Put {
+                        key,
+                        value: Box::from(format!("value{}", i + start_val).as_bytes()),
+                    });
                 }
                 i += 1;
             }
-            (keys, vals)
+            (batch, i + start_val)
         }
 
         let db = TestDb::new();
         let rng = firewood_storage::SeededRng::from_env_or_random();
+        let mut committed_keys = HashSet::new();
+        let start_val = 0;
 
         // Populate the database with an initial batch of keys, as we would use a range proof
         // instead of a change proof if the database was initially empty.
-        let (keys, vals) = gen_random_keys(&rng, num_items, 0);
-        let kviter = keys.iter().zip(vals.iter());
-        let proposal = db.propose(kviter).unwrap();
+        let (batch, start_val) = gen_random_keys(&rng, &committed_keys, num_items, start_val);
+        let proposal = db.propose(batch.into_iter()).unwrap();
         proposal.commit().unwrap();
 
         // Create a proposal that we will use to compare with the committed revision.
         let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+        committed_keys.extend(
+            committed
+                .iter()
+                .unwrap()
+                .map(|kv| kv.unwrap())
+                .map(|kv| kv.0.to_vec()),
+        );
+
         let proposal = NodeStore::new(&committed).unwrap();
         let mut merkle = Merkle::from(proposal);
-        let (keys, vals) = gen_random_keys(&rng, num_items, num_items);
-        let kviter = keys.iter().zip(vals.iter());
-        for (key, val) in kviter.clone() {
-            // Only consider Puts for now.
-            let _ = merkle.insert(key, val.clone());
+        let (mut batch, _start_val) = gen_random_keys(&rng, &committed_keys, num_items, start_val);
+        for op in batch.clone() {
+            match op {
+                BatchOp::Put { key, value } => {
+                    let _ = merkle.insert(&key, value);
+                }
+                BatchOp::Delete { key } => {
+                    let _ = merkle.remove(&key);
+                }
+                BatchOp::DeleteRange { prefix: _ } => {
+                    panic!("should not have any DeleteRanges");
+                }
+            }
         }
         let nodestore = merkle.into_inner();
 
@@ -1520,25 +1590,42 @@ mod tests {
                 .collect::<Result<Vec<_>, _>>()
                 .unwrap();
 
-        let mut proposal_items: Vec<(&Vec<u8>, &Box<[u8]>)> = kviter.collect();
-        proposal_items.sort();
+        // Sort by the key of the BatchOp.
+        batch.sort_by_key(|op| op.key().clone());
 
-        let mut diff_items: Vec<(&Box<[u8]>, &Box<[u8]>)> = ops
-            .as_slice()
-            .iter()
-            .map(|x| (x.key(), x.value().unwrap()))
-            .collect();
-        diff_items.sort();
+        let diff_items: Vec<&BatchOp<Box<[u8]>, Box<[u8]>>> = ops.as_slice().iter().collect();
 
         // Check that that proposal is the same size as the diff.
-        assert_eq!(proposal_items.len(), diff_items.len());
+        assert_eq!(batch.len(), diff_items.len());
 
         // Check all of the keys and values match.
         let mut diff_it = diff_items.iter();
-        for current_entry in proposal_items {
+        for current_entry in batch {
             let diff_entry = diff_it.next().unwrap();
-            assert_eq!(*current_entry.0, diff_entry.0.to_vec());
-            assert_eq!(current_entry.1, diff_entry.1);
+            match (&current_entry, &diff_entry) {
+                (BatchOp::Put { key: _, value: _ }, BatchOp::Put { key: _, value: _ }) => {
+                    assert_eq!(**current_entry.key(), **diff_entry.key());
+                    assert_eq!(current_entry.value(), diff_entry.value());
+                }
+                (BatchOp::Delete { key: _ }, BatchOp::Delete { key: _ }) => {
+                    assert_eq!(**current_entry.key(), **diff_entry.key());
+                }
+                _ => {
+                    panic!("diff does not match proposal");
+                }
+            }
         }
+
+        // TODO: If we want to commit this proposal, uncomment below.
+        //let proposal = db.propose(batch.clone().into_iter()).unwrap();
+        //proposal.commit().unwrap();
+        //let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+        //committed_keys.extend(
+        //    committed
+        //        .iter()
+        //        .unwrap()
+        //        .map(|kv| kv.unwrap())
+        //        .map(|kv| kv.0.to_vec()),
+        //);
     }
 }
