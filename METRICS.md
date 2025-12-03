@@ -176,8 +176,8 @@ See the [FFI README](ffi/README.md) for more details on FFI metrics configuratio
   - Description: Count of times the ring buffer became full during node flushing
   - Use: Identify backpressure in node persistence pipeline
 
-- **`ring.eagin_write_retry`** (counter)
-  - Description: Amount of io-uring write entries that have been re-submitted due to `EAGIN` io error.
+- **`ring.eagain_write_retry`** (counter)
+  - Description: Amount of io-uring write entries that have been re-submitted due to `EAGAIN` io error.
   - Use: identify interrupted writes
 
 - **`ring.partial_write_retry`** (counter)

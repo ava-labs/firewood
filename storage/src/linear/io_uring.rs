@@ -341,15 +341,15 @@ impl<'a> QueueEntry<'a> {
 
         if res < 0 {
             let err = std::io::Error::from_raw_os_error(-res);
-            // rust stdlib maps EAGIN to WouldBlock; re-submit in that case
+            // rust stdlib maps EAGAIN to WouldBlock; re-submit in that case
             if matches!(err.kind(), std::io::ErrorKind::WouldBlock) {
                 trace!(
-                    "io-uring write at offset {} returned EAGIN, re-submitting",
+                    "io-uring write at offset {} returned EAGAIN, re-submitting",
                     self.original_offset
                 );
                 firewood_counter!(
-                    "ring.eagin_write_retry",
-                    "amount of io-uring write entries that have been re-submitted due to EAGIN io error"
+                    "ring.eagain_write_retry",
+                    "amount of io-uring write entries that have been re-submitted due to EAGAIN io error"
                 ).increment(1);
                 return Ok(0);
             }
@@ -577,7 +577,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
                         // not fully written, re-queue
                         self.add_entry_to_backlog(write_entry);
                         if written != 0 {
-                            // if zero, we would have already logged EAGIN above
+                            // if zero, we would have already logged EAGAIN above
                             trace!(
                                 "io-uring write at offset {offset} partially completed, re-queuing"
                             );
