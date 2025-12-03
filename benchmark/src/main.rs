@@ -180,7 +180,6 @@ trait TestRunner {
 }
 
 #[global_allocator]
-#[cfg(unix)]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 fn main() -> Result<(), Box<dyn Error>> {
