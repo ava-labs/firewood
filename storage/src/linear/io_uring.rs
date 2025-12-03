@@ -84,13 +84,8 @@ struct WriteBatch<'batch, 'ring, I> {
     /// updates.
     cq: io_uring::cqueue::CompletionQueue<'ring>,
 
-    /// A table of outstanding entries that have been submitted to the kernel
+    /// A btree of outstanding entries that have been submitted to the kernel
     /// but have not yet completed.
-    ///
-    /// A raw table is used here instead of a `HashMap` to avoid unnecessary
-    /// indirection for the embedded key; and, to avoid unnecessary hashing
-    /// because our keys are u64 offsets and do not require protection from
-    /// denial-of-service attacks.
     ///
     /// The drop guard ensures this table is empty when the batch is complete,
     /// if we somehow return from `write_batch` with outstanding entries, that
