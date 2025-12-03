@@ -159,9 +159,9 @@ impl<'a> BorrowedBytes<'a> {
     ///
     /// If the slice is not valid UTF-8, an error is returned.
     pub const fn as_str(&self) -> Result<&'a str, std::str::Utf8Error> {
-        // C callers are expected to pass a valid UTF-8 string for the path, even
-        // on Windows. Go does not handle UTF-16 paths on Windows, like Rust does,
-        // so we do not need to handle that here as well.
+        // C callers are expected to pass a valid UTF-8 string for the path. 
+        // Go does not handle UTF-16 paths, like Rust does, so we do not need
+        // to handle that here as well.
         std::str::from_utf8(self.as_slice())
     }
 }

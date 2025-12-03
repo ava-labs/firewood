@@ -31,8 +31,6 @@ use std::mem::ManuallyDrop;
 use std::num::NonZero;
 #[cfg(unix)]
 use std::os::unix::fs::FileExt;
-#[cfg(windows)]
-use std::os::windows::fs::FileExt;
 use std::path::PathBuf;
 
 use lru::LruCache;
@@ -242,12 +240,6 @@ impl WritableStorage for FileBacked {
                 .write_at(object, offset)
                 .map_err(|e| self.file_io_error(e, offset, Some("write".to_string())))
         }
-        #[cfg(windows)]
-        {
-            self.fd
-                .seek_write(object, offset)
-                .map_err(|e| self.file_io_error(e, offset, Some("write".to_string())))
-        }
     }
 
     fn write_cached_nodes(
@@ -325,10 +317,6 @@ impl Read for PredictiveReader<'_> {
             let read = self
                 .fd
                 .read_at(&mut self.buffer[..bytes_left_in_page], self.offset)?;
-            #[cfg(windows)]
-            let read = self
-                .fd
-                .seek_read(&mut self.buffer[..bytes_left_in_page], self.offset)?;
             self.offset += read as u64;
             self.len = read;
             self.pos = 0;
