@@ -1328,23 +1328,9 @@ mod tests {
     #[test_case(false, true, 500)]
     #[test_case(true, false, 500)]
     #[test_case(true, true, 500)]
-    #[allow(
-        clippy::indexing_slicing,
-        clippy::cast_precision_loss,
-        clippy::type_complexity,
-        clippy::disallowed_types,
-        clippy::unreadable_literal
-    )]
+    #[allow(clippy::indexing_slicing, clippy::type_complexity)]
     fn test_diff_random_with_deletions(trie1_mutable: bool, trie2_mutable: bool, num_items: usize) {
-        use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng};
-
-        // Read FIREWOOD_TEST_SEED from environment or use default seed
-        let seed = std::env::var("FIREWOOD_TEST_SEED")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(14805530293320947613);
-        let mut rng = StdRng::seed_from_u64(seed);
+        let rng = firewood_storage::SeededRng::from_env_or_random();
 
         // Generate random key-value pairs, ensuring uniqueness
         let mut items: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
@@ -1439,7 +1425,7 @@ mod tests {
     #[test_case(20, 500)]
     #[allow(clippy::type_complexity, clippy::too_many_lines)]
     fn test_db_fuzz(num_iterations: usize, num_items: usize) {
-        pub(super) struct TestDb {
+        struct TestDb {
             db: Db,
             tmpdir: tempfile::TempDir,
             dbconfig: DbConfig,
@@ -1641,7 +1627,8 @@ mod tests {
         let proposal = db.propose(batch.into_iter()).unwrap();
         proposal.commit().unwrap();
 
-        // Create a proposal that we will use to compare with the committed revision.
+        // Create the committed revision that we will use to compare against proposal. We also generate
+        // a hashset of all of the keys in the trie for use in selecting delete keys.
         let mut committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
         committed_keys.extend(
             committed
