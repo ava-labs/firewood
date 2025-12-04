@@ -10,9 +10,7 @@ use crate::{
     iter::key_from_nibble_iter,
     merkle::{Key, PrefixOverlap, Value},
 };
-use firewood_storage::{
-    Child, FileIoError, HashedNodeReader, Node, Path, PathComponent, TrieHash, TrieReader,
-};
+use firewood_storage::{Child, FileIoError, HashedNodeReader, Node, Path, TrieHash, TrieReader};
 use std::{cmp::Ordering, iter::once};
 use triomphe::Arc;
 
@@ -131,12 +129,13 @@ impl<'a> DiffMerkleNodeStream<'a> {
             prev_num_children: 0,
             trie: tree,
         };
-        // If the root node is not None, then push the root's NodeState onto the traversal
-        // stack. It will be used on the first call to next or next_internal.
+        // If the root node is not None, then push a `TraversalStackFrame` for the
+        // root onto the traversal stack. It will be used on the first call to
+        // next or next_internal.
         if let Some(root) = tree.root_node() {
-            preorder_it.stack.push(NodeState {
-                path: root.partial_path().clone(),
-                node: root,
+            preorder_it.stack.push(TraversalStackFrame {
+                pre_path: Path::default(),
+                node: Child::Node((*root).clone()),
                 hash: root_hash,
             });
         }
@@ -467,9 +466,16 @@ impl Iterator for DiffMerkleNodeStream<'_> {
     }
 }
 
+/// Contents of a frame on the traversal stack.
+struct TraversalStackFrame {
+    pre_path: Path,
+    node: Child,
+    hash: Option<TrieHash>,
+}
+
 /// State required for performing pre-order iteration of a Merkle trie. It contains
 /// a reference to a trie which implements the `TrieReader` trait, a stack that
-/// contains nodes (and their associated state including its path and its hash) to
+/// contains nodes (and their associated state including its pre-path and hash) to
 /// be traversed, and a previous number of children field.
 ///
 /// The last field is used to specifically to pop off children from the last traversed
@@ -485,7 +491,7 @@ impl Iterator for DiffMerkleNodeStream<'_> {
 /// since we are performing in-order traversal.
 struct PreOrderIterator<'a> {
     trie: &'a dyn TrieReader,
-    stack: Vec<NodeState>,
+    stack: Vec<TraversalStackFrame>,
     prev_num_children: u8,
 }
 
@@ -494,73 +500,74 @@ struct PreOrderIterator<'a> {
 /// node and `prev_num_children` is an u8.
 #[allow(clippy::arithmetic_side_effects)]
 impl PreOrderIterator<'_> {
-    fn load_child(
+    // Creates a NodeState from a pre-path and Child that were popped off the
+    // traversal stack. The NodeState is used to compare nodes between tries.
+    fn create_node_state(
         &self,
-        state: &NodeState,
-        path_comp: PathComponent,
-        child: Child,
+        pre_path: &Path,
+        node: Child,
+        mut node_hash: Option<TrieHash>,
     ) -> Result<NodeState, FileIoError> {
-        // Collect the hash for the child node as we possibly read the file from storage.
-        let mut child_hash: Option<TrieHash> = None;
         #[cfg(not(feature = "ethhash"))]
-        let child = match child {
-            Child::Node(child) => child.clone().into(),
+        let node = match node {
+            Child::Node(node) => node.clone().into(),
             Child::AddressWithHash(addr, hash) => {
-                child_hash = Some(hash);
+                node_hash = Some(hash);
                 self.trie.read_node(addr)?
             }
             Child::MaybePersisted(maybe_persisted, hash) => {
-                child_hash = Some(hash);
+                node_hash = Some(hash);
                 maybe_persisted.as_shared_node(&self.trie)?
             }
         };
         #[cfg(feature = "ethhash")]
-        let child = match child {
-            Child::Node(child) => child.clone().into(),
+        let node = match node {
+            Child::Node(node) => node.clone().into(),
             Child::AddressWithHash(addr, hash) => {
-                child_hash = Some(hash.into());
+                node_hash = Some(hash.into());
                 self.trie.read_node(addr)?
             }
             Child::MaybePersisted(maybe_persisted, hash) => {
-                child_hash = Some(hash.into());
+                node_hash = Some(hash.into());
                 maybe_persisted.as_shared_node(&self.trie)?
             }
         };
 
-        // Compute the full path for the child. This is used later to compare with the full path
+        // Compute the full path for the node. This is used to compare with the full path
         // of the current node from the other trie.
-        let child_path = Path::from_nibbles_iterator(
-            state
-                .path
+        let full_path = Path::from_nibbles_iterator(
+            pre_path
                 .iter()
                 .copied()
-                .chain(once(path_comp.as_u8()))
-                .chain(child.partial_path().iter().copied()),
+                .chain(node.partial_path().iter().copied()),
         );
         Ok(NodeState {
-            path: child_path,
-            node: child,
-            hash: child_hash,
+            path: full_path,
+            node,
+            hash: node_hash,
         })
     }
 
     fn next(&mut self) -> Result<Option<NodeState>, FileIoError> {
         // Pop the next node state from the stack and reset `prev_num_children`
         self.prev_num_children = 0;
-        if let Some(state) = self.stack.pop() {
+        if let Some(frame) = self.stack.pop() {
+            let state = self.create_node_state(&frame.pre_path, frame.node, frame.hash)?;
             // If this node is a branch, push its children onto the stack so they will be processed next.
             if let Node::Branch(branch) = &*state.node {
                 // Since a stack is LIFO and we want to perform pre-order traversal, we pushed the
                 // children in reverse order.
                 for (path_comp, child) in branch.children.clone().into_iter().rev() {
                     if let Some(child) = child {
-                        // Load the child possibly from storage, and collect its hash and generate its path.
-                        // Push this node state onto the traversal stack.
-                        // TODO: Instead of loading the child here, we can just push the child and its pre-path,
-                        //       onto the traversal stack and load the child when we actually need it. By doing so,
-                        //       we can avoid loading the children that are later skipped because of a
-                        //       hash match.
-                        self.stack.push(self.load_child(&state, path_comp, child)?);
+                        // Generate the pre-path for this child, and push it onto the traversal stack.
+                        let child_pre_path = Path::from_nibbles_iterator(
+                            state.path.iter().copied().chain(once(path_comp.as_u8())),
+                        );
+                        self.stack.push(TraversalStackFrame {
+                            pre_path: child_pre_path,
+                            node: child,
+                            hash: None,
+                        });
                         // Increment the number of children that has been added to the stack.
                         self.prev_num_children += 1;
                     }
@@ -585,7 +592,7 @@ impl PreOrderIterator<'_> {
     /// Used to skip all of the keys prior to the specified key. Its main use is to start the
     /// change proof at a particular key.
     fn iterate_to_key(&mut self, key: &Key) -> Result<(), FileIoError> {
-        // Function is a no-op if the key is empty. This is the common case.
+        // Function is a no-op if the key is empty.
         if key.is_empty() {
             return Ok(());
         }
@@ -593,41 +600,61 @@ impl PreOrderIterator<'_> {
         loop {
             // Pop the next node state from the stack and reset `prev_num_children`
             self.prev_num_children = 0;
-            if let Some(state) = self.stack.pop() {
+            if let Some(frame) = self.stack.pop() {
+                let state = self.create_node_state(&frame.pre_path, frame.node, frame.hash)?;
                 // If the key matches the node path, then we have reached the key. Just push the
-                // current node state back to the stack. Calling `next` will process this node again.
+                // current node with its pre-path and hash back to the stack. Calling `next` will
+                // process this node again.
                 let node_key = key_from_nibble_iter(state.path.iter().copied());
                 if node_key == *key {
-                    self.stack.push(state);
+                    self.stack.push(TraversalStackFrame {
+                        pre_path: frame.pre_path,
+                        node: Child::Node((*state.node).clone()),
+                        hash: state.hash,
+                    });
                     return Ok(());
                 }
                 // Check if this node's path is a prefix of the key. If it is, then keep traversing
-                // Otherwise, this is the lexicographically next node to the key, and calling `next`
-                // should return this node. We stop the traversal at this point and push the node
-                // state back onto the stack.
+                // Otherwise, if this is the lexicographically next node to the key, then calling
+                // `next` should return this node. We stop the traversal at this point and push the
+                // node back onto the stack.
                 let path_overlap = PrefixOverlap::from(key, node_key.as_ref());
                 let unique_node = path_overlap.unique_b;
                 if !unique_node.is_empty() {
-                    // If `unique_node` is not empty, then the path is not a prefix of the key.
-                    self.stack.push(state);
-                    return Ok(());
+                    // If `unique_node` is not empty, then the path is not a prefix of the key. We
+                    // stop traversal here if this is the lexicographically next node to the key.
+                    if node_key > *key {
+                        self.stack.push(TraversalStackFrame {
+                            pre_path: frame.pre_path,
+                            node: Child::Node((*state.node).clone()),
+                            hash: state.hash,
+                        });
+                        return Ok(());
+                    }
+                    // Not a prefix, and the node key is smaller than the key. We don't want to
+                    // traverse down its children.
+                    continue;
                 }
 
                 if let Node::Branch(branch) = &*state.node {
-                    // TODO: Once the first child is added to the stack, then the rest should be added without needing
-                    //       to do additional checks.
+                    // TODO: Once the first child is added to the stack, then the rest of the
+                    //       children should be added without needing additional checks.
                     for (path_comp, child) in branch.children.clone().into_iter().rev() {
                         if let Some(child) = child {
-                            // Load the child possibly from storage, and collect its hash and generate its path.
-                            let child_state = self.load_child(&state, path_comp, child)?;
-
-                            // We only need to traverse this child if its path is either a prefix of the key (including
-                            // being equal to the key), or if its path is lexicographically larger than the key.
-                            let child_key = key_from_nibble_iter(child_state.path.iter().copied());
+                            let child_pre_path = Path::from_nibbles_iterator(
+                                state.path.iter().copied().chain(once(path_comp.as_u8())),
+                            );
+                            // We only need to traverse this child if its pre-path is a prefix of the key (including
+                            // being equal to the key) or its path is lexicographically larger than the key.
+                            let child_key = key_from_nibble_iter(child_pre_path.iter().copied());
                             let path_overlap = PrefixOverlap::from(key, child_key.as_ref());
                             let unique_node = path_overlap.unique_b;
                             if unique_node.is_empty() || child_key > *key {
-                                self.stack.push(child_state);
+                                self.stack.push(TraversalStackFrame {
+                                    pre_path: child_pre_path,
+                                    node: child,
+                                    hash: None,
+                                });
                                 self.prev_num_children += 1;
                             }
                         }
@@ -1670,98 +1697,101 @@ mod tests {
 
     #[test]
     fn test_two_round_diff_with_start_keys() {
-        let db = TestDb::new();
         let rng = firewood_storage::SeededRng::from_env_or_random();
-        let mut committed_keys = HashSet::new();
-        let start_val = 0;
+        // Run this test several times.
+        for _ in 0..4 {
+            let db = TestDb::new();
+            let mut committed_keys = HashSet::new();
+            let start_val = 0;
 
-        // Populate the database with an initial batch of keys, as we would use a range proof
-        // instead of a change proof if the database was initially empty.
-        let (batch, _) = gen_random_keys(&rng, &committed_keys, 1000, start_val);
-        let proposal = db.propose(batch.into_iter()).unwrap();
-        proposal.commit().unwrap();
+            // Populate the database with an initial batch of keys, as we would use a range proof
+            // instead of a change proof if the database was initially empty.
+            let (batch, _) = gen_random_keys(&rng, &committed_keys, 1000, start_val);
+            let proposal = db.propose(batch.into_iter()).unwrap();
+            proposal.commit().unwrap();
 
-        // Create the committed revision that we will use to compare against proposal. We also generate
-        // a hashset of all of the keys in the trie for use in selecting delete keys.
-        let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
-        committed_keys.extend(
-            committed
-                .iter()
+            // Create the committed revision that we will use to compare against proposal. We also generate
+            // a hashset of all of the keys in the trie for use in selecting delete keys.
+            let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+            committed_keys.extend(
+                committed
+                    .iter()
+                    .unwrap()
+                    .map(|kv| kv.unwrap())
+                    .map(|kv| kv.0.to_vec()),
+            );
+
+            // Create an immutable proposal based on a second batch of keys
+            let proposal = NodeStore::new(&committed).unwrap();
+            let mut merkle = Merkle::from(proposal);
+            let (batch, _) = gen_random_keys(&rng, &committed_keys, 1000, start_val);
+            for op in batch.clone() {
+                match op {
+                    BatchOp::Put { key, value } => {
+                        let _ = merkle.insert(&key, value);
+                    }
+                    BatchOp::Delete { key } => {
+                        let _ = merkle.remove(&key);
+                    }
+                    BatchOp::DeleteRange { prefix: _ } => {
+                        panic!("should not have any DeleteRanges");
+                    }
+                }
+            }
+            let nodestore = merkle.into_inner();
+            let target_immutable: NodeStore<Arc<ImmutableProposal>, FileBacked> =
+                nodestore.try_into().unwrap();
+
+            // Now generate a diff iterator, but only create a vector from the first
+            // one hundred keys.
+            let committed = committed.into();
+            let target_immutable = target_immutable.into();
+            let mut diff_it =
+                diff_merkle_iterator(&committed, &target_immutable, Box::new([])).unwrap();
+
+            let mut partial_vec = Vec::new();
+            for _ in 0..100 {
+                match diff_it.next() {
+                    Some(op) => {
+                        partial_vec.push(op.unwrap());
+                    }
+                    None => break,
+                }
+            }
+
+            // Call next to get the next key. Only use it for the next key.
+            let next_key = diff_it.next().map(|op| op.unwrap().key().clone()).unwrap();
+
+            // Apply ops in partial_vec to the db
+            let proposal = db.propose(partial_vec.iter()).unwrap();
+            proposal.commit().unwrap();
+            let committed = db
+                .revision(db.root_hash().unwrap().unwrap())
                 .unwrap()
-                .map(|kv| kv.unwrap())
-                .map(|kv| kv.0.to_vec()),
-        );
+                .into();
+            let diff_it =
+                diff_merkle_iterator(&committed, &target_immutable, next_key.clone()).unwrap();
 
-        // Create an immutable proposal based on a second batch of keys
-        let proposal = NodeStore::new(&committed).unwrap();
-        let mut merkle = Merkle::from(proposal);
-        let (batch, _) = gen_random_keys(&rng, &committed_keys, 1000, start_val);
-        for op in batch.clone() {
-            match op {
-                BatchOp::Put { key, value } => {
-                    let _ = merkle.insert(&key, value);
-                }
-                BatchOp::Delete { key } => {
-                    let _ = merkle.remove(&key);
-                }
-                BatchOp::DeleteRange { prefix: _ } => {
-                    panic!("should not have any DeleteRanges");
-                }
+            let mut partial_vec = Vec::new();
+            for op in diff_it {
+                let op = op.unwrap();
+                assert!(op.key() >= &next_key);
+                partial_vec.push(op);
             }
+
+            // Apply ops in partial_vec to the db one last time
+            let proposal = db.propose(partial_vec.iter()).unwrap();
+            proposal.commit().unwrap();
+            let committed = db
+                .revision(db.root_hash().unwrap().unwrap())
+                .unwrap()
+                .into();
+            let first_diff_item = diff_merkle_iterator(&committed, &target_immutable, Box::new([]))
+                .unwrap()
+                .next();
+
+            // The two tries should now be identical.
+            assert!(first_diff_item.is_none());
         }
-        let nodestore = merkle.into_inner();
-        let target_immutable: NodeStore<Arc<ImmutableProposal>, FileBacked> =
-            nodestore.try_into().unwrap();
-
-        // Now generate a diff iterator, but only create a vector from the first
-        // one hundred keys.
-        let committed = committed.into();
-        let target_immutable = target_immutable.into();
-        let mut diff_it =
-            diff_merkle_iterator(&committed, &target_immutable, Box::new([])).unwrap();
-
-        let mut partial_vec = Vec::new();
-        for _ in 0..100 {
-            match diff_it.next() {
-                Some(op) => {
-                    partial_vec.push(op.unwrap());
-                }
-                None => break,
-            }
-        }
-
-        // Call next to get the next key. Only use it for the next key.
-        let next_key = diff_it.next().map(|op| op.unwrap().key().clone()).unwrap();
-
-        // Apply ops in partial_vec to the db
-        let proposal = db.propose(partial_vec.iter()).unwrap();
-        proposal.commit().unwrap();
-        let committed = db
-            .revision(db.root_hash().unwrap().unwrap())
-            .unwrap()
-            .into();
-        let diff_it =
-            diff_merkle_iterator(&committed, &target_immutable, next_key.clone()).unwrap();
-
-        let mut partial_vec = Vec::new();
-        for op in diff_it {
-            let op = op.unwrap();
-            assert!(op.key() >= &next_key);
-            partial_vec.push(op);
-        }
-
-        // Apply ops in partial_vec to the db one last time
-        let proposal = db.propose(partial_vec.iter()).unwrap();
-        proposal.commit().unwrap();
-        let committed = db
-            .revision(db.root_hash().unwrap().unwrap())
-            .unwrap()
-            .into();
-        let first_diff_item = diff_merkle_iterator(&committed, &target_immutable, Box::new([]))
-            .unwrap()
-            .next();
-
-        // The two tries should now be identical.
-        assert!(first_diff_item.is_none());
     }
 }
