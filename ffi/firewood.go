@@ -70,9 +70,9 @@ type Database struct {
 	handleLock         sync.RWMutex
 	outstandingHandles sync.WaitGroup
 
-	// stateLock is used to ensure that methods accessing or modifying the latest
+	// commitLock is used to ensure that methods accessing or modifying the latest
 	// revision do not conflict.
-	stateLock sync.Mutex
+	commitLock sync.Mutex
 }
 
 // Config defines the configuration parameters used when opening a [Database].
@@ -188,8 +188,8 @@ func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 		return EmptyRoot, errDBClosed
 	}
 
-	db.stateLock.Lock()
-	defer db.stateLock.Unlock()
+	db.commitLock.Lock()
+	defer db.commitLock.Unlock()
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
@@ -220,8 +220,8 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 		return nil, errDBClosed
 	}
 
-	db.stateLock.Lock()
-	defer db.stateLock.Unlock()
+	db.commitLock.Lock()
+	defer db.commitLock.Unlock()
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
@@ -230,7 +230,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 	if err != nil {
 		return nil, err
 	}
-	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.outstandingHandles, &db.stateLock)
+	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.outstandingHandles, &db.commitLock)
 }
 
 // Get retrieves the value for the given key from the most recent revision.
@@ -247,8 +247,8 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 		return nil, errDBClosed
 	}
 
-	db.stateLock.Lock()
-	defer db.stateLock.Unlock()
+	db.commitLock.Lock()
+	defer db.commitLock.Unlock()
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
@@ -305,8 +305,8 @@ func (db *Database) Root() (Hash, error) {
 		return EmptyRoot, errDBClosed
 	}
 
-	db.stateLock.Lock()
-	defer db.stateLock.Unlock()
+	db.commitLock.Lock()
+	defer db.commitLock.Unlock()
 	return db.root()
 }
 
@@ -328,8 +328,8 @@ func (db *Database) LatestRevision() (*Revision, error) {
 		return nil, errDBClosed
 	}
 
-	db.stateLock.Lock()
-	defer db.stateLock.Unlock()
+	db.commitLock.Lock()
+	defer db.commitLock.Unlock()
 	root, err := db.root()
 	if err != nil {
 		return nil, err
@@ -395,8 +395,8 @@ func (db *Database) Close(ctx context.Context) error {
 		return fmt.Errorf("%w: %w", ctx.Err(), ErrActiveKeepAliveHandles)
 	}
 
-	db.stateLock.Lock()
-	defer db.stateLock.Unlock()
+	db.commitLock.Lock()
+	defer db.commitLock.Unlock()
 	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
 		return fmt.Errorf("unexpected error when closing database: %w", err)
 	}
