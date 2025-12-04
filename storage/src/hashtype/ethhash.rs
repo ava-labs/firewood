@@ -124,27 +124,26 @@ impl Serializable for HashOrRlp {
 
     fn from_reader<R: Read>(mut reader: R) -> Result<Self, std::io::Error> {
         let mut bytes = [0; 32];
+
         reader.read_exact(&mut bytes[0..1])?;
-        match bytes[0] {
-            0 => {
-                reader.read_exact(&mut bytes)?;
-                Ok(HashOrRlp::Hash(TrieHash::from(bytes)))
-            }
-            len if len < 32 => {
-                #[expect(clippy::indexing_slicing)]
-                {
-                    reader.read_exact(&mut bytes[0..len as usize])?;
-                }
-                Ok(HashOrRlp::Rlp(SmallVec::from_buf_and_len(
-                    bytes,
-                    len as usize,
-                )))
-            }
-            _ => Err(std::io::Error::new(
+        let Some(len) = std::num::NonZeroU8::new(bytes[0]) else {
+            // length is zero, so it's a full trie hash
+            reader.read_exact(&mut bytes)?;
+            return Ok(HashOrRlp::Hash(TrieHash::from(bytes)));
+        };
+
+        let Some(bytes_mut) = bytes.get_mut(..len.get() as usize) else {
+            return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "invalid RLP length",
-            )),
-        }
+                format!("invalid RLP length; expected strictly less than 32, got {len}"),
+            ));
+        };
+
+        reader.read_exact(bytes_mut)?;
+        Ok(HashOrRlp::Rlp(SmallVec::from_buf_and_len(
+            bytes,
+            len.get() as usize,
+        )))
     }
 }
 
