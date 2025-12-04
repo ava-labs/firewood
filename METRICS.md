@@ -314,15 +314,34 @@ Performance data is collected via the `Track Performance` workflow and published
 Benchmarks can be triggered locally using just commands (requires nix):
 
 ```bash
-# Run full benchmark: trigger, wait, download results
+# Run with defaults (current HEAD, master, default task/runner)
 just benchmark
 
-# With specific versions
-just benchmark v0.0.15 master c-chain-reexecution-firewood-101-250k avalanche-avalanchego-runner-2ti
+# With named parameters
+just benchmark \
+  firewood=v0.0.15 \
+  avalanchego=master \
+  task=c-chain-reexecution-firewood-101-250k \
+  runner=avalanche-avalanchego-runner-2ti
 
 # With libevm
-just benchmark v0.0.15 master c-chain-reexecution-firewood-101-250k avalanche-avalanchego-runner-2ti v1.0.0
+just benchmark \
+  firewood=v0.0.15 \
+  avalanchego=master \
+  task=c-chain-reexecution-firewood-101-250k \
+  runner=avalanche-avalanchego-runner-2ti \
+  libevm=v1.0.0
 ```
+
+**Parameters:**
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `firewood` | Firewood commit/branch/tag | `HEAD` |
+| `avalanchego` | AvalancheGo commit/branch/tag | `master` |
+| `task` | Benchmark task name | `c-chain-reexecution-firewood-101-250k` |
+| `runner` | GitHub Actions runner | `avalanche-avalanchego-runner-2ti` |
+| `libevm` | libevm commit/branch/tag (optional) | `` |
 
 ### Composable Commands
 
@@ -330,13 +349,17 @@ Individual steps can be run separately:
 
 ```bash
 # Trigger benchmark, returns run_id
-just benchmark-trigger <firewood> <avalanchego> <task> <runner> [libevm]
+just benchmark-trigger \
+  firewood=v0.0.15 \
+  avalanchego=master \
+  task=c-chain-reexecution-firewood-101-250k \
+  runner=avalanche-avalanchego-runner-2ti
 
 # Wait for a specific run to complete
-just benchmark-wait <run_id>
+just benchmark-wait run_id=19938272417
 
 # Download results from a specific run
-just benchmark-download <run_id>
+just benchmark-download run_id=19938272417
 
 # List recent benchmark runs
 just benchmark-list
