@@ -40,7 +40,7 @@ fn into_committed(
     let ns = merkle.into_inner();
     ns.flush_freelist().unwrap();
     ns.flush_header().unwrap();
-    let mut ns = ns.as_committed(parent);
+    let ns = ns.as_committed(parent);
     ns.flush_nodes().unwrap();
     ns.into()
 }

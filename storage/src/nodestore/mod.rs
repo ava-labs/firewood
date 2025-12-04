@@ -42,8 +42,6 @@ pub(crate) mod alloc;
 pub(crate) mod hash;
 pub(crate) mod header;
 pub(crate) mod persist;
-#[cfg(feature = "io-uring")]
-pub(crate) mod persist_io_uring;
 pub(crate) mod primitives;
 
 use crate::linear::OffsetReader;
