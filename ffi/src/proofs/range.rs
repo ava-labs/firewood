@@ -5,13 +5,16 @@ use std::num::NonZeroUsize;
 
 use firewood::{
     logger::warn,
-    v2::api::{self, DbView, FrozenRangeProof, HashKey},
+    v2::api::{self, FrozenRangeProof, HashKey},
 };
 
 use crate::{
-    BorrowedBytes, DatabaseHandle, HashResult, Maybe, NextKeyRange, NextKeyRangeResult,
-    RangeProofResult, ValueResult, VoidResult,
+    BorrowedBytes, DatabaseHandle, HashResult, Maybe, NextKeyRangeResult, RangeProofResult,
+    ValueResult, VoidResult,
 };
+
+/// A key range represented by a start key and an optional end key.
+pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
 
 /// Arguments for creating a range proof.
 #[derive(Debug)]
@@ -70,13 +73,20 @@ pub struct VerifyRangeProofArgs<'a, 'db> {
 #[derive(Debug)]
 pub struct RangeProofContext<'db> {
     proof: FrozenRangeProof,
-    state: RangeProofState<'db>,
+    verification: Option<VerificationContext>,
+    proposal_state: Option<ProposalState<'db>>,
 }
 
 #[derive(Debug)]
-enum RangeProofState<'db> {
-    Unverified,
-    Verified,
+struct VerificationContext {
+    root: HashKey,
+    start_key: Option<Box<[u8]>>,
+    end_key: Option<Box<[u8]>>,
+    max_length: Option<NonZeroUsize>,
+}
+
+#[derive(Debug)]
+enum ProposalState<'db> {
     Proposed(crate::ProposalHandle<'db>),
     Committed(Option<HashKey>),
 }
@@ -85,40 +95,8 @@ impl From<FrozenRangeProof> for RangeProofContext<'_> {
     fn from(proof: FrozenRangeProof) -> Self {
         Self {
             proof,
-            state: RangeProofState::Unverified,
-        }
-    }
-}
-
-impl<'db> RangeProofState<'db> {
-    const fn is_verified(&self) -> bool {
-        !matches!(self, Self::Unverified)
-    }
-
-    const fn is_proposed_or_committed(&self) -> bool {
-        matches!(self, Self::Proposed(_) | Self::Committed(_))
-    }
-
-    const fn is_committed(&self) -> bool {
-        matches!(self, Self::Committed(_))
-    }
-
-    fn take_proposal(&mut self) -> Option<crate::ProposalHandle<'db>> {
-        match std::mem::replace(self, Self::Unverified) {
-            Self::Proposed(proposal) => Some(proposal),
-            other => {
-                // put it back (so we don't need to write unsafe/panicking code)
-                *self = other;
-                None
-            }
-        }
-    }
-
-    fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
-        match self {
-            Self::Committed(root) => Ok(root.clone()),
-            Self::Proposed(proposal) => proposal.root_hash(),
-            _ => Ok(None),
+            verification: None,
+            proposal_state: None,
         }
     }
 }
@@ -126,17 +104,35 @@ impl<'db> RangeProofState<'db> {
 impl<'db> RangeProofContext<'db> {
     fn verify(
         &mut self,
-        _root: HashKey,
-        _start_key: Option<&[u8]>,
-        _end_key: Option<&[u8]>,
-        _max_length: Option<NonZeroUsize>,
+        root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
     ) -> Result<(), api::Error> {
-        if !self.state.is_verified() {
-            return Ok(());
+        if let Some(ref ctx) = self.verification {
+            if ctx.root == root
+                && ctx.start_key.as_deref() == start_key
+                && ctx.end_key.as_deref() == end_key
+                && ctx.max_length == max_length
+            {
+                // already verified with the same context
+                return Ok(());
+            }
+
+            return Err(api::Error::ProofError(
+                firewood::proof::ProofError::ValueMismatch,
+            ));
         }
 
+        debug_assert!(self.verification.is_none());
+
         warn!("range proof verification not yet implemented");
-        self.state = RangeProofState::Verified;
+        self.verification = Some(VerificationContext {
+            root,
+            start_key: start_key.map(Box::from),
+            end_key: end_key.map(Box::from),
+            max_length,
+        });
         Ok(())
     }
 
@@ -148,14 +144,14 @@ impl<'db> RangeProofContext<'db> {
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
     ) -> Result<(), api::Error> {
-        if self.state.is_proposed_or_committed() {
+        self.verify(root, start_key, end_key, max_length)?;
+
+        if self.proposal_state.is_some() {
             return Ok(());
         }
 
-        self.verify(root, start_key, end_key, max_length)?;
-
         let proposal = db.merge_key_value_range(start_key, end_key, self.proof.key_values())?;
-        self.state = RangeProofState::Proposed(proposal.handle);
+        self.proposal_state = Some(ProposalState::Proposed(proposal.handle));
 
         Ok(())
     }
@@ -168,26 +164,76 @@ impl<'db> RangeProofContext<'db> {
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
     ) -> Result<Option<HashKey>, api::Error> {
-        if self.state.is_committed() {
-            return self.state.root_hash();
-        }
-
         self.verify(root, start_key, end_key, max_length)?;
 
-        let proposal_handle = if let Some(proposal) = self.state.take_proposal() {
-            proposal
-        } else {
-            db.merge_key_value_range(start_key, end_key, self.proof.key_values())?
-                .handle
+        let mut allow_rebase = true;
+        let proposal_handle = match self.proposal_state.take() {
+            Some(ProposalState::Committed(hash)) => {
+                self.proposal_state = Some(ProposalState::Committed(hash.clone()));
+                return Ok(hash);
+            }
+            Some(ProposalState::Proposed(proposal)) => proposal,
+            None => {
+                allow_rebase = false;
+                db.merge_key_value_range(start_key, end_key, self.proof.key_values())?
+                    .handle
+            }
         };
 
-        let hash = proposal_handle.commit_proposal(|commit_time| {
+        let metrics_cb = |commit_time: coarsetime::Duration| {
             metrics::counter!("firewood.ffi.commit_ms").increment(commit_time.as_millis());
             metrics::counter!("firewood.ffi.merge").increment(1);
-        })?;
+        };
 
-        self.state = RangeProofState::Committed(hash.clone());
+        let result = proposal_handle.commit_proposal(metrics_cb);
+        let result = if let Err(api::Error::ParentNotLatest { .. }) = result
+            && allow_rebase
+        {
+            // proposal is stale, try rebasing and committing again
+            let proposal_handle = db
+                .merge_key_value_range(start_key, end_key, self.proof.key_values())?
+                .handle;
+            proposal_handle.commit_proposal(metrics_cb)
+        } else {
+            result
+        };
+
+        let hash = result?;
+        self.proposal_state = Some(ProposalState::Committed(hash.clone()));
+
         Ok(hash)
+    }
+
+    fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
+        // TODO(#352): proper implementation, this naively retuns the last key in
+        // in the range, which is correct, but not ideal.
+        let verification = self.verification.as_ref().ok_or(api::Error::ProofError(
+            firewood::proof::ProofError::Unverified,
+        ))?;
+        if self.proposal_state.is_none() {
+            return Err(api::Error::ProofError(
+                firewood::proof::ProofError::Unverified,
+            ));
+        }
+
+        if self.proof.end_proof().is_empty() {
+            // unbounded, so we are done
+            return Ok(None);
+        }
+
+        let Some((last_key, _)) = self.proof.key_values().last() else {
+            // no key-values in the proof, so we are done
+            return Ok(None);
+        };
+
+        if let Some(ref end_key) = verification.end_key
+            && **last_key >= **end_key
+        {
+            // reached or exceeded the end key, so we are done
+            return Ok(None);
+        }
+
+        Ok(Some((last_key.clone(), verification.end_key.clone())))
     }
 }
 
@@ -412,28 +458,7 @@ pub extern "C" fn fwd_db_verify_and_commit_range_proof<'db>(
 pub extern "C" fn fwd_range_proof_find_next_key(
     proof: Option<&mut RangeProofContext>,
 ) -> NextKeyRangeResult {
-    // TODO(#352): proper implementation, this naively retuns the last key in
-    // in the range, which is correct, but not sufficient.
-    crate::invoke_with_handle(proof, |ctx| match ctx.state {
-        RangeProofState::Unverified | RangeProofState::Verified => NextKeyRangeResult::NotPrepared,
-        RangeProofState::Proposed(_) | RangeProofState::Committed(_) => {
-            if ctx.proof.end_proof().is_empty() {
-                // unbounded, so we are done
-                NextKeyRangeResult::None
-            } else {
-                match ctx.proof.key_values().last() {
-                    Some((key, _)) => NextKeyRangeResult::Some(NextKeyRange {
-                        start_key: key.clone().into(),
-                        end_key: None.into(),
-                    }),
-                    None => {
-                        // no key-values in the proof, so we are done
-                        NextKeyRangeResult::None
-                    }
-                }
-            }
-        }
-    })
+    crate::invoke_with_handle(proof, RangeProofContext::find_next_key)
 }
 
 /// Serialize a `RangeProof` to bytes.
