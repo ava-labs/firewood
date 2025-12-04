@@ -217,13 +217,16 @@ benchmark firewood="HEAD" avalanchego="master" task="c-chain-reexecution-firewoo
     echo "Triggering reexecution benchmark in AvalancheGo..."
     RUN_ID=$(just benchmark-trigger "$FIREWOOD" "{{ avalanchego }}" "{{ task }}" "{{ runner }}" "{{ libevm }}")
     echo "  Run ID: $RUN_ID"
-    echo "  URL: https://github.com/ava-labs/avalanchego/actions/runs/$RUN_ID \n"
+    echo "  URL: https://github.com/ava-labs/avalanchego/actions/runs/$RUN_ID"
+    echo ""
     
     echo "Waiting for benchmark completion..."
-    just benchmark-wait "$RUN_ID \n"
+    just benchmark-wait "$RUN_ID"
+    echo ""
     
     echo "Downloading results..."
-    just benchmark-download "$RUN_ID \n"
+    just benchmark-download "$RUN_ID"
+    echo ""
     echo "Results saved to: ./results/benchmark-output.txt"
 
 # List recent AvalancheGo benchmark runs
