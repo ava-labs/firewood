@@ -11,6 +11,7 @@ use crate::{
     merkle::{Key, PrefixOverlap, Value},
 };
 use firewood_storage::{Child, FileIoError, HashedNodeReader, Node, Path, TrieHash, TrieReader};
+use metrics::counter;
 use std::{cmp::Ordering, iter::once};
 use triomphe::Arc;
 
@@ -556,6 +557,7 @@ impl PreOrderIterator<'_> {
     }
 
     fn next(&mut self) -> Result<Option<NodeState>, FileIoError> {
+        counter!("firewood.diff_merkle", "traversal" => "next").increment(1);
         // Pop the next node state from the stack and reset `prev_num_children`
         self.prev_num_children = 0;
         if let Some(frame) = self.stack.pop() {
@@ -749,15 +751,23 @@ mod tests {
     }
 
     fn populate_merkle(
-        mut merkle: Merkle<NodeStore<MutableProposal, MemStore>>,
+        merkle: Merkle<NodeStore<MutableProposal, MemStore>>,
         items: &[(&[u8], &[u8])],
     ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> {
+        let merkle = populate_merkle_mutable(merkle, items);
+        merkle.try_into().unwrap()
+    }
+
+    fn populate_merkle_mutable(
+        mut merkle: Merkle<NodeStore<MutableProposal, MemStore>>,
+        items: &[(&[u8], &[u8])],
+    ) -> Merkle<NodeStore<MutableProposal, MemStore>> {
         for (key, value) in items {
             merkle
                 .insert(key, value.to_vec().into_boxed_slice())
                 .unwrap();
         }
-        merkle.try_into().unwrap()
+        merkle
     }
 
     fn make_immutable(
@@ -1788,5 +1798,231 @@ mod tests {
             // The two tries should now be identical.
             assert!(first_diff_item.is_none());
         }
+    }
+
+    #[test]
+    #[allow(clippy::pedantic)]
+    fn test_hash_optimization_reduces_next_calls() {
+        use metrics::{Key, Label, Recorder};
+        use metrics_util::registry::{AtomicStorage, Registry};
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+
+        /// Test metrics recorder that captures counter values for testing
+        #[derive(Clone)]
+        struct TestRecorder {
+            registry: Arc<Registry<Key, AtomicStorage>>,
+        }
+
+        impl TestRecorder {
+            fn new() -> Self {
+                Self {
+                    registry: Arc::new(Registry::atomic()),
+                }
+            }
+
+            fn get_counter_value(
+                &self,
+                key_name: &'static str,
+                labels: &[(&'static str, &'static str)],
+            ) -> u64 {
+                let key = if labels.is_empty() {
+                    Key::from_name(key_name)
+                } else {
+                    let label_vec: Vec<Label> =
+                        labels.iter().map(|(k, v)| Label::new(*k, *v)).collect();
+                    Key::from_name(key_name).with_extra_labels(label_vec)
+                };
+
+                self.registry
+                    .get_counter_handles()
+                    .into_iter()
+                    .find(|(k, _)| k == &key)
+                    .map_or(0, |(_, counter)| counter.load(Ordering::Relaxed))
+            }
+        }
+
+        impl Recorder for TestRecorder {
+            fn describe_counter(
+                &self,
+                _key: metrics::KeyName,
+                _unit: Option<metrics::Unit>,
+                _description: metrics::SharedString,
+            ) {
+            }
+            fn describe_gauge(
+                &self,
+                _key: metrics::KeyName,
+                _unit: Option<metrics::Unit>,
+                _description: metrics::SharedString,
+            ) {
+            }
+            fn describe_histogram(
+                &self,
+                _key: metrics::KeyName,
+                _unit: Option<metrics::Unit>,
+                _description: metrics::SharedString,
+            ) {
+            }
+
+            fn register_counter(
+                &self,
+                key: &Key,
+                _metadata: &metrics::Metadata<'_>,
+            ) -> metrics::Counter {
+                self.registry
+                    .get_or_create_counter(key, |c| c.clone().into())
+            }
+
+            fn register_gauge(
+                &self,
+                key: &Key,
+                _metadata: &metrics::Metadata<'_>,
+            ) -> metrics::Gauge {
+                self.registry.get_or_create_gauge(key, |c| c.clone().into())
+            }
+
+            fn register_histogram(
+                &self,
+                key: &Key,
+                _metadata: &metrics::Metadata<'_>,
+            ) -> metrics::Histogram {
+                self.registry
+                    .get_or_create_histogram(key, |c| c.clone().into())
+            }
+        }
+
+        // Set up test recorder - if it fails, skip the entire test
+        let recorder = TestRecorder::new();
+        if metrics::set_global_recorder(recorder.clone()).is_err() {
+            println!("⚠️  Could not set test recorder (already set) - skipping test");
+            return;
+        }
+
+        // Create test data with substantial shared content and unique content
+        let tree1_items = [
+            // Large shared content that will form identical subtrees
+            (
+                b"shared/branch_a/deep/file1".as_slice(),
+                b"shared_value1".as_slice(),
+            ),
+            (
+                b"shared/branch_a/deep/file2".as_slice(),
+                b"shared_value2".as_slice(),
+            ),
+            (
+                b"shared/branch_a/deep/file3".as_slice(),
+                b"shared_value3".as_slice(),
+            ),
+            (b"shared/branch_b/file1".as_slice(), b"shared_b1".as_slice()),
+            (b"shared/branch_b/file2".as_slice(), b"shared_b2".as_slice()),
+            (
+                b"shared/branch_c/deep/nested/file".as_slice(),
+                b"shared_nested".as_slice(),
+            ),
+            (b"shared/common".as_slice(), b"common_value".as_slice()),
+            // Unique to tree1
+            (b"tree1_unique/x".as_slice(), b"x_value".as_slice()),
+            (b"tree1_unique/y".as_slice(), b"y_value".as_slice()),
+            (b"tree1_unique/z".as_slice(), b"z_value".as_slice()),
+        ];
+
+        let tree2_items = [
+            // Identical shared content
+            (
+                b"shared/branch_a/deep/file1".as_slice(),
+                b"shared_value1".as_slice(),
+            ),
+            (
+                b"shared/branch_a/deep/file2".as_slice(),
+                b"shared_value2".as_slice(),
+            ),
+            (
+                b"shared/branch_a/deep/file3".as_slice(),
+                b"shared_value3".as_slice(),
+            ),
+            (b"shared/branch_b/file1".as_slice(), b"shared_b1".as_slice()),
+            (b"shared/branch_b/file2".as_slice(), b"shared_b2".as_slice()),
+            (
+                b"shared/branch_c/deep/nested/file".as_slice(),
+                b"shared_nested".as_slice(),
+            ),
+            (b"shared/common".as_slice(), b"common_value".as_slice()),
+            // Unique to tree2
+            (b"tree2_unique/p".as_slice(), b"p_value".as_slice()),
+            (b"tree2_unique/q".as_slice(), b"q_value".as_slice()),
+            (b"tree2_unique/r".as_slice(), b"r_value".as_slice()),
+        ];
+
+        // Create mutable trees
+        let m1 = populate_merkle_mutable(create_test_merkle(), &tree1_items);
+        let m2 = populate_merkle_mutable(create_test_merkle(), &tree2_items);
+
+        // Traverse tree1 completely
+        let tree1_iter = m1.key_value_iter();
+        let tree1_count = tree1_iter.count();
+
+        // Traverse tree2 completely
+        let tree2_iter = m2.key_value_iter();
+        let tree2_count = tree2_iter.count();
+
+        println!("Baseline - Tree1 items: {tree1_count}, Tree2 items: {tree2_count}");
+
+        // DIFF TEST: Measure next calls from diff operations on mutable proposals
+        let diff_nexts_before =
+            recorder.get_counter_value("firewood.diff_merkle", &[("traversal", "next")]);
+
+        let diff_stream =
+            DiffMerkleNodeStream::new_without_hash(m1.nodestore(), m2.nodestore(), Box::new([]))
+                .unwrap();
+        let diff_mutable_results_count = diff_stream.count();
+
+        let diff_nexts_after =
+            recorder.get_counter_value("firewood.diff_merkle", &[("traversal", "next")]);
+        let diff_mutable_nexts = diff_nexts_after - diff_nexts_before;
+
+        println!("Diff (mutable) next operations: {diff_mutable_nexts}");
+        println!("Diff (mutable) results count: {diff_mutable_results_count}");
+
+        let m1 = make_immutable(m1);
+        let m2 = make_immutable(m2);
+
+        // DIFF TEST: Measure next calls from hash-optimized diff operation
+        let diff_nexts_before =
+            recorder.get_counter_value("firewood.diff_merkle", &[("traversal", "next")]);
+
+        let diff_stream =
+            DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Box::new([])).unwrap();
+        let diff_immutable_results_count = diff_stream.count();
+
+        let diff_nexts_after =
+            recorder.get_counter_value("firewood.diff_merkle", &[("traversal", "next")]);
+        let diff_immutable_nexts = diff_nexts_after - diff_nexts_before;
+
+        println!("Diff (immutable) next operations: {diff_immutable_nexts}");
+        println!("Diff (immutable) results count: {diff_immutable_results_count}");
+
+        // Should have some next calls
+        assert!(
+            diff_immutable_nexts > 0,
+            "Expected next calls from diff operation"
+        );
+
+        // Verify hash optimization is working - should call next FEWER times
+        assert!(
+            diff_immutable_nexts < diff_mutable_nexts,
+            "Hash optimization failed: there should be fewer next calls on immutable ({diff_immutable_nexts}) than on mutable ({diff_mutable_nexts}) for trees with shared content"
+        );
+
+        // Verify that diff on mutable and immutable tries return the same number of results
+        assert!(
+            diff_immutable_results_count > 0
+                && diff_immutable_results_count == diff_mutable_results_count,
+            "Expected to retrieve the same diff results"
+        );
+
+        println!(
+            "Traversal optimization verified: {diff_immutable_nexts} vs {diff_mutable_nexts} next calls"
+        );
     }
 }
