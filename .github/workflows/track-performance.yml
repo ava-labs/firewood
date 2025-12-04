@@ -52,6 +52,11 @@ jobs:
         with:
           fetch-depth: 0  # Needed for github-action-benchmark
 
+      - name: Install Nix
+        uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Validate inputs
         run: |
           if [ -z "${{ inputs.task }}" ]; then
@@ -70,25 +75,21 @@ jobs:
 
       - name: Trigger AvalancheGo benchmark
         id: trigger
+        shell: nix develop ./ffi --command bash {0}
         run: |
           FIREWOOD="${{ inputs.firewood || github.sha }}"
           echo "firewood=$FIREWOOD" >> "$GITHUB_OUTPUT"
           
-          # Build optional libevm flag
-          LIBEVM_FLAG=""
-          if [ -n "${{ inputs.libevm }}" ]; then
-            LIBEVM_FLAG="-f libevm=${{ inputs.libevm }}"
-          fi
-          
           if [ -n "${{ inputs.task }}" ]; then
-            gh workflow run "Firewood Reexecution Benchmark" \
-              --repo ava-labs/avalanchego \
-              --ref "${{ inputs.avalanchego }}" \
-              -f firewood="$FIREWOOD" \
-              -f task="${{ inputs.task }}" \
-              -f runner="${{ inputs.runner }}" \
-              $LIBEVM_FLAG
+            # Task-based mode: use just command
+            RUN_ID=$(just benchmark-trigger "$FIREWOOD" "${{ inputs.avalanchego }}" "${{ inputs.task }}" "${{ inputs.runner }}" "${{ inputs.libevm }}")
           else
+            # Granular mode: use direct gh with custom params
+            LIBEVM_FLAG=""
+            if [ -n "${{ inputs.libevm }}" ]; then
+              LIBEVM_FLAG="-f libevm=${{ inputs.libevm }}"
+            fi
+            
             gh workflow run "Firewood Reexecution Benchmark" \
               --repo ava-labs/avalanchego \
               --ref "${{ inputs.avalanchego }}" \
@@ -100,20 +101,20 @@ jobs:
               -f current-state-dir-src="${{ inputs.current-state-dir-src }}" \
               -f runner="${{ inputs.runner }}" \
               $LIBEVM_FLAG
-          fi
-          
-          sleep 10
-          
-          RUN_ID=$(gh run list \
-            --repo ava-labs/avalanchego \
-            --workflow "Firewood Reexecution Benchmark" \
-            --limit 5 \
-            --json databaseId,createdAt \
-            --jq '[.[] | select(.createdAt | fromdateiso8601 > (now - 60))] | .[0].databaseId')
-          
-          if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-            echo "Could not find triggered workflow run"
-            exit 1
+            
+            sleep 10
+            
+            RUN_ID=$(gh run list \
+              --repo ava-labs/avalanchego \
+              --workflow "Firewood Reexecution Benchmark" \
+              --limit 5 \
+              --json databaseId,createdAt \
+              --jq '[.[] | select(.createdAt | fromdateiso8601 > (now - 60))] | .[0].databaseId')
+            
+            if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+              echo "Could not find triggered workflow run"
+              exit 1
+            fi
           fi
           
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
@@ -122,22 +123,17 @@ jobs:
           GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
 
       - name: Wait for benchmark completion
-        run: gh run watch "${{ steps.trigger.outputs.run_id }}" --repo ava-labs/avalanchego --exit-status
+        shell: nix develop ./ffi --command bash {0}
+        run: just benchmark-wait "${{ steps.trigger.outputs.run_id }}"
         env:
           GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
         timeout-minutes: 60
 
       - name: Download benchmark results
         id: download
+        shell: nix develop ./ffi --command bash {0}
         run: |
-          mkdir -p ./results
-          
-          gh run download "${{ steps.trigger.outputs.run_id }}" \
-            --repo ava-labs/avalanchego \
-            --name benchmark-output \
-            --dir ./results
-          
-          cat ./results/benchmark-output.txt
+          just benchmark-download "${{ steps.trigger.outputs.run_id }}"
           
           # Determine target dashboard
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
