@@ -55,12 +55,6 @@ impl HashOrRlp {
     pub fn into_triehash(self) -> TrieHash {
         self.into()
     }
-
-    // used in PartialEq and Hash impls and is to trick clippy into not caring
-    // about creating an owned instance for comparison
-    fn as_triehash(&self) -> TrieHash {
-        self.into()
-    }
 }
 
 impl PartialEq<TrieHash> for HashOrRlp {
@@ -87,9 +81,12 @@ impl PartialEq for HashOrRlp {
             // if both are hash or rlp, we can skip hashing
             (HashOrRlp::Hash(h1), HashOrRlp::Hash(h2)) => h1 == h2,
             (HashOrRlp::Rlp(r1), HashOrRlp::Rlp(r2)) => r1 == r2,
-            // otherwise, one is a hash and the other isn't, so convert both
-            // to hash and compare
-            _ => self.as_triehash() == other.as_triehash(),
+            // otherwise, one is a hash and the other isn't, so hash the rlp and compare
+            (HashOrRlp::Hash(h), HashOrRlp::Rlp(r)) | (HashOrRlp::Rlp(r), HashOrRlp::Hash(h)) => {
+                // avoid copying by comparing the hash directly; copying into a
+                // TrieHash adds a noticeable overhead
+                Keccak256::digest(r).as_slice() == h.as_ref()
+            }
         }
     }
 }
@@ -101,7 +98,11 @@ impl std::hash::Hash for HashOrRlp {
         // contract on `Hash` and `PartialEq` requires that if `a == b` then `hash(a) == hash(b)`
         // and since `PartialEq` may require hashing, we must always convert to `TrieHash` here
         // and use it's hash implementation
-        self.as_triehash().hash(state);
+        match self {
+            Self::Hash(h) => h.hash(state),
+            // NB: same `hash` impl as [u8; 32] which TrieHash also uses, prevents copying twice
+            Self::Rlp(r) => Keccak256::digest(r.as_ref()).hash(state),
+        }
     }
 }
 
