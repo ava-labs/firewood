@@ -56,6 +56,11 @@ enum DiffIterationNodeState<'a> {
     },
 }
 
+/// Contains all of a node's state that is needed for node comparison in `DiffMerkleNOdeStream`.
+/// It includes the nodes full path and its hash if available. `NodeState` is created from
+/// a `TraversalStackFrame` and differs from it by storing the node's full path instead of
+/// just its pre-path (doesn't include the node's partial path), and by storing the node as
+/// an `Arc<Node>` instead of a `Child`.
 struct NodeState {
     path: Path,
     node: Arc<Node>,
@@ -466,7 +471,9 @@ impl Iterator for DiffMerkleNodeStream<'_> {
     }
 }
 
-/// Contents of a frame on the traversal stack.
+/// Contents of a frame on the traversal stack. Unlike for a `NodeState`, a
+/// `TraversalStackFrame` for a child can be generated from a parent without
+/// needing to load the child from storage.
 struct TraversalStackFrame {
     pre_path: Path,
     node: Child,
