@@ -8,7 +8,7 @@ use std::fmt;
 use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CreateIteratorResult, CreateProposalResult, HashKey, IteratorHandle,
-    NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair, ProposalHandle,
+    KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair, ProposalHandle,
     RangeProofContext,
 };
 
@@ -275,6 +275,22 @@ pub enum NextKeyRangeResult {
     ///
     /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
     Err(OwnedBytes),
+}
+
+impl From<Result<Option<KeyRange>, api::Error>> for NextKeyRangeResult {
+    fn from(value: Result<Option<KeyRange>, api::Error>) -> Self {
+        match value {
+            Ok(None) => NextKeyRangeResult::None,
+            Ok(Some((start_key, end_key))) => NextKeyRangeResult::Some(NextKeyRange {
+                start_key: start_key.into(),
+                end_key: end_key.map(Into::into).into(),
+            }),
+            Err(api::Error::ProofError(firewood::proof::ProofError::Unverified)) => {
+                NextKeyRangeResult::NotPrepared
+            }
+            Err(err) => NextKeyRangeResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
 }
 
 /// A result type returned from FFI functions that create a proposal but do not

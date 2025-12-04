@@ -73,6 +73,10 @@ pub enum ProofError {
     /// Empty range
     #[error("empty range")]
     EmptyRange,
+
+    /// The proof has not yet been verified.
+    #[error("the proof has not yet been verified")]
+    Unverified,
 }
 
 #[derive(Clone, PartialEq, Eq)]
