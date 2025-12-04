@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"sync"
 	"unsafe"
 )
 
@@ -58,6 +59,10 @@ type RangeProof struct {
 	// unmarshalling or when [RangeProof.Verify] is used. It is disowned after
 	// [Database.VerifyAndCommitRangeProof] or [RangeProof.Free].
 	keepAliveHandle databaseKeepAliveHandle
+
+	// commitLock is used to ensure that methods accessing the latest state do not conflict.
+	// Inherited from the database to which this proof is tied.
+	commitLock *sync.Mutex
 }
 
 // ChangeProof represents a proof of changes between two roots for a range of keys.
@@ -83,6 +88,8 @@ func (db *Database) RangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) (*RangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -97,7 +104,7 @@ func (db *Database) RangeProof(
 		max_length: C.uint32_t(maxLength),
 	}
 
-	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof(db.handle, args))
+	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof(db.handle, args), &db.commitLock)
 }
 
 // Verify verifies the provided range [proof] proves the values in the range
@@ -137,6 +144,12 @@ func (db *Database) VerifyRangeProof(
 	rootHash Hash,
 	maxLength uint32,
 ) error {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return errDBClosed
+	}
+
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
@@ -169,6 +182,8 @@ func (db *Database) VerifyAndCommitRangeProof(
 	rootHash Hash,
 	maxLength uint32,
 ) (Hash, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return EmptyRoot, errDBClosed
 	}
@@ -221,7 +236,7 @@ func (p *RangeProof) UnmarshalBinary(data []byte) error {
 	defer pinner.Unpin()
 
 	handle, err := getRangeProofFromRangeProofResult(
-		C.fwd_range_proof_from_bytes(newBorrowedBytes(data, &pinner)))
+		C.fwd_range_proof_from_bytes(newBorrowedBytes(data, &pinner)), p.commitLock)
 
 	if err == nil {
 		p.handle = handle.handle
@@ -259,6 +274,8 @@ func (db *Database) ChangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) (*ChangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -288,6 +305,12 @@ func (db *Database) VerifyChangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) error {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return errDBClosed
+	}
+
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
@@ -314,6 +337,8 @@ func (db *Database) VerifyAndCommitChangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) (Hash, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return EmptyRoot, errDBClosed
 	}
@@ -452,7 +477,7 @@ func getNextKeyRangeFromNextKeyRangeResult(result C.NextKeyRangeResult) (*NextKe
 	}
 }
 
-func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, error) {
+func getRangeProofFromRangeProofResult(result C.RangeProofResult, commitLock *sync.Mutex) (*RangeProof, error) {
 	switch result.tag {
 	case C.RangeProofResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -464,7 +489,10 @@ func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, 
 		return nil, errEmptyTrie
 	case C.RangeProofResult_Ok:
 		ptr := *(**C.RangeProofContext)(unsafe.Pointer(&result.anon0))
-		return &RangeProof{handle: ptr}, nil
+		return &RangeProof{
+			handle:     ptr,
+			commitLock: commitLock,
+		}, nil
 	case C.RangeProofResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err
