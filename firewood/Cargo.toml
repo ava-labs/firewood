@@ -36,6 +36,7 @@ thiserror.workspace = true
 # Regular dependencies
 typed-builder = "0.23.1"
 rayon = "1.11.0"
+triomphe = "0.1.15"
 parking_lot.workspace = true
 fjall = "2.11.2"
 derive-where = "1.6.0"
@@ -68,6 +69,7 @@ hash-db = "0.16.0"
 plain_hasher = "0.2.3"
 rlp = "0.6.1"
 sha3 = "0.10.8"
+metrics-util = "0.20.0"
 
 [[bench]]
 name = "hashops"

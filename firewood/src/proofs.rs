@@ -3,6 +3,7 @@
 
 mod bitmap;
 mod de;
+mod diff;
 mod header;
 mod proof_type;
 mod reader;

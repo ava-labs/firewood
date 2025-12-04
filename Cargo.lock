@@ -1097,6 +1097,7 @@ dependencies = [
  "hex-literal",
  "integer-encoding",
  "metrics",
+ "metrics-util",
  "parking_lot",
  "plain_hasher",
  "pprof",
@@ -1107,6 +1108,7 @@ dependencies = [
  "tempfile",
  "test-case",
  "thiserror",
+ "triomphe",
  "typed-builder",
  "weak-table",
 ]
