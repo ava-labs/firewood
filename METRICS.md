@@ -298,3 +298,46 @@ rate(firewood_space_from_end[5m])
 rate(firewood_proposal_commit{success="false"}[5m]) /
 rate(firewood_proposal_commit[5m])
 ```
+
+## Performance Tracking
+
+Firewood tracks its performance over time by running C-Chain reexecution benchmarks in AvalancheGo. This allows us to:
+
+- Monitor performance across commits and releases
+- Catch performance regressions early
+- Validate optimizations against real-world blockchain workloads
+
+Performance data is collected via the `Track Performance` workflow and published to GitHub Pages.
+
+### Running Benchmarks Locally
+
+Benchmarks can be triggered locally using just commands (requires nix):
+
+```bash
+# Run full benchmark: trigger, wait, download results
+just benchmark
+
+# With specific versions
+just benchmark v0.0.15 master c-chain-reexecution-firewood-101-250k avalanche-avalanchego-runner-2ti
+
+# With libevm
+just benchmark v0.0.15 master c-chain-reexecution-firewood-101-250k avalanche-avalanchego-runner-2ti v1.0.0
+```
+
+### Composable Commands
+
+Individual steps can be run separately:
+
+```bash
+# Trigger benchmark, returns run_id
+just benchmark-trigger <firewood> <avalanchego> <task> <runner> [libevm]
+
+# Wait for a specific run to complete
+just benchmark-wait <run_id>
+
+# Download results from a specific run
+just benchmark-download <run_id>
+
+# List recent benchmark runs
+just benchmark-list
+```

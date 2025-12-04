@@ -78,16 +78,6 @@ as well as carefully managing the free list during the creation and expiration o
 
 Firewood provides comprehensive metrics for monitoring database performance, resource utilization, and operational characteristics. For detailed information about all available metrics, how to enable them, and how to interpret them, see [METRICS.md](METRICS.md).
 
-## Performance Tracking
-
-Firewood tracks its performance over time by running C-Chain reexecution benchmarks in AvalancheGo. This allows us to:
-
-- Monitor performance across commits and releases (a/b comparison tests)
-- Catch performance regressions early
-- Validate optimizations against real-world blockchain workloads
-
-Performance data is automatically collected and published to [GitHub Pages](https://ava-labs.github.io/firewood/dev/bench/).
-
 ## Build
 
 In order to build firewood, the following dependencies must be installed:
