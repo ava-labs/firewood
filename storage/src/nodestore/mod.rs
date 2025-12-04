@@ -158,21 +158,15 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     ///
     /// This constructor is used when you have an existing root node at a known
     /// address and hash, typically when reconstructing a [`NodeStore`] from
-    /// a committed state. The `latest_nodestore` provides access to the underlying
-    /// storage backend containing the persisted trie data.
+    /// a committed state.
     ///
     /// ## Panics
     ///
     /// Panics in debug builds if the hash of the node at `root_address` does
     /// not equal `root_hash`.
     #[must_use]
-    pub fn with_root(
-        root_hash: HashType,
-        root_address: LinearAddress,
-        latest_nodestore: Arc<NodeStore<Committed, S>>,
-    ) -> Self {
+    pub fn with_root(root_hash: HashType, root_address: LinearAddress, storage: Arc<S>) -> Self {
         let header = NodeStoreHeader::with_root(Some(root_address));
-        let storage = latest_nodestore.storage.clone();
 
         let nodestore = NodeStore {
             header,
@@ -196,6 +190,15 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         );
 
         nodestore
+    }
+}
+
+impl<S: ReadableStorage> NodeStore<Committed, S> {
+    /// Get the underlying storage for a `NodeStore`.
+    #[cfg(any(test, feature = "test_utils"))]
+    #[must_use]
+    pub fn get_storage(&self) -> Arc<S> {
+        self.storage.clone()
     }
 }
 
