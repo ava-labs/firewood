@@ -609,11 +609,12 @@ impl PreOrderIterator<'_> {
             self.prev_num_children = 0;
             if let Some(frame) = self.stack.pop() {
                 let state = self.create_node_state(&frame.pre_path, frame.node, frame.hash)?;
-                // If the key matches the node path, then we have reached the key. Just push the
-                // current node with its pre-path and hash back to the stack. Calling `next` will
-                // process this node again.
+                // Since pre-order traversal of a trie iterates through the nodes in lexicographical
+                // order, we can stop the traversal once we see a node key that is larger than or
+                // equal to the key. We stop the traversal by pushing  the current node with its
+                // pre-path and hash back to the stack. Calling `next` will process this node.
                 let node_key = key_from_nibble_iter(state.path.iter().copied());
-                if node_key == *key {
+                if node_key >= *key {
                     self.stack.push(TraversalStackFrame {
                         pre_path: frame.pre_path,
                         node: Child::Node((*state.node).clone()),
@@ -621,25 +622,12 @@ impl PreOrderIterator<'_> {
                     });
                     return Ok(());
                 }
-                // Check if this node's path is a prefix of the key. If it is, then keep traversing
-                // Otherwise, if this is the lexicographically next node to the key, then calling
-                // `next` should return this node. We stop the traversal at this point and push the
-                // node back onto the stack.
+                // Check if this node's path is a prefix of the key. If it is not (`unique_node`
+                // is not empty), then this node and its children cannot be larger than or equal to
+                // the key, and we don't need to include them on the traversal stack.
                 let path_overlap = PrefixOverlap::from(key, node_key.as_ref());
                 let unique_node = path_overlap.unique_b;
                 if !unique_node.is_empty() {
-                    // If `unique_node` is not empty, then the path is not a prefix of the key. We
-                    // stop traversal here if this is the lexicographically next node to the key.
-                    if node_key > *key {
-                        self.stack.push(TraversalStackFrame {
-                            pre_path: frame.pre_path,
-                            node: Child::Node((*state.node).clone()),
-                            hash: state.hash,
-                        });
-                        return Ok(());
-                    }
-                    // Not a prefix, and the node key is smaller than the key. We don't want to
-                    // traverse down its children.
                     continue;
                 }
 
