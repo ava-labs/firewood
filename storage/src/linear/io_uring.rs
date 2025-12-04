@@ -391,8 +391,7 @@ impl<'batch> Outstanding<'batch> {
                 );
             }
             Err(index) => {
-                // O(n) worse case to shift elements; but, we typically expect
-                // all insertions to be near the end of the list.
+                // O(n) worse case to shift elements
                 self.btree.insert(index, entry);
             }
         }
@@ -400,8 +399,10 @@ impl<'batch> Outstanding<'batch> {
 
     fn remove(&mut self, offset: u64) -> Option<QueueEntry<'batch>> {
         self.btree
+            // O(log n) search for existing entry
             .binary_search_by(move |probe| probe.original_offset.cmp(&offset))
             .ok()
+            // O(n) worse case to shift elements
             .map(|index| self.btree.remove(index))
     }
 }
@@ -848,8 +849,8 @@ mod drop_guard {
             let mut this = ManuallyDrop::new(self);
             #[expect(unsafe_code)]
             // SAFETY: we are forgetting the guard; therefore, we must drop the
-            // predicate and take the move the value without running the `Drop`
-            // handler on the guard. `ManuallyDrop(self)` ensures that.
+            // predicate and move the value without running the `Drop` handler
+            // on the guard. `ManuallyDrop(self)` ensures that.
             unsafe {
                 ManuallyDrop::drop(&mut this.predicate);
                 ManuallyDrop::take(&mut this.value)
