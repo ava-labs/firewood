@@ -556,6 +556,10 @@ impl PreOrderIterator<'_> {
                     if let Some(child) = child {
                         // Load the child possibly from storage, and collect its hash and generate its path.
                         // Push this node state onto the traversal stack.
+                        // TODO: Instead of loading the child here, we can just push the child and its pre-path,
+                        //       onto the traversal stack and load the child when we actually need it. By doing so,
+                        //       we can avoid loading the children that are later skipped because of a
+                        //       hash match.
                         self.stack.push(self.load_child(&state, path_comp, child)?);
                         // Increment the number of children that has been added to the stack.
                         self.prev_num_children += 1;
@@ -639,7 +643,11 @@ impl PreOrderIterator<'_> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::arithmetic_side_effects)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::arithmetic_side_effects,
+    clippy::type_complexity
+)]
 mod tests {
     use crate::{
         db::{BatchOp, Db, DbConfig},
@@ -654,6 +662,35 @@ mod tests {
     };
     use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
     use test_case::test_case;
+
+    struct TestDb {
+        db: Db,
+        tmpdir: tempfile::TempDir,
+        dbconfig: DbConfig,
+    }
+
+    impl Deref for TestDb {
+        type Target = Db;
+        fn deref(&self) -> &Self::Target {
+            &self.db
+        }
+    }
+
+    impl TestDb {
+        pub fn new() -> Self {
+            let tmpdir = tempfile::tempdir().unwrap();
+            let dbconfig = DbConfig::builder().truncate(true).build();
+            let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
+                .iter()
+                .collect();
+            let db = Db::new(dbpath, dbconfig.clone()).unwrap();
+            TestDb {
+                db,
+                tmpdir,
+                dbconfig,
+            }
+        }
+    }
 
     fn diff_merkle_iterator<'a, T, U>(
         tree_left: &'a Merkle<T>,
@@ -791,6 +828,82 @@ mod tests {
                 (Some(Err(e)), _) | (_, Some(Err(e))) => panic!("iteration error: {e:?}"),
             }
         }
+    }
+
+    fn random_key_from_hashset<'a>(
+        rng: &'a SeededRng,
+        set: &'a HashSet<Vec<u8>>,
+    ) -> Option<Vec<u8>> {
+        let len = set.len();
+        if len == 0 {
+            return None;
+        }
+        // Generate a random index within the bounds of the set's size
+        let index = rng.random_range(0..len);
+        // Use the iterator's nth method to get the element at that index
+        set.iter().nth(index).cloned()
+    }
+
+    fn gen_delete_key(
+        rng: &SeededRng,
+        committed_keys: &HashSet<Vec<u8>>,
+        seen_keys: &mut HashSet<Vec<u8>>,
+    ) -> Option<Vec<u8>> {
+        let key_opt = random_key_from_hashset(rng, committed_keys);
+        // Just skip the key if it has been seen. Otherwise return it and add the key
+        // to seen keys.
+        key_opt
+            .filter(|del_key| !seen_keys.contains(del_key))
+            .inspect(|del_key| {
+                seen_keys.insert(del_key.clone());
+            })
+    }
+
+    fn gen_insert_key(rng: &SeededRng, seen_keys: &mut HashSet<Vec<u8>>) -> Vec<u8> {
+        loop {
+            let key_len = rng.random_range(1..=32);
+            let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
+            // Only add if key is unique
+            if seen_keys.insert(key.clone()) {
+                return key;
+            }
+        }
+    }
+
+    fn gen_random_keys(
+        rng: &SeededRng,
+        committed_keys: &HashSet<Vec<u8>>,
+        num_keys: usize,
+        start_val: usize,
+    ) -> (Vec<BatchOp<Vec<u8>, Box<[u8]>>>, usize) {
+        const CHANCE_DELETE: usize = 2;
+        let mut seen_keys = std::collections::HashSet::new();
+        let mut i = 0;
+        let mut batch = Vec::new();
+
+        while batch.len() < num_keys {
+            if !committed_keys.is_empty() && rng.random_range(1..=100) <= CHANCE_DELETE {
+                let del_key = gen_delete_key(rng, committed_keys, &mut seen_keys);
+                if let Some(key) = del_key {
+                    //println!("Deleting key: {key:?}");
+                    batch.push(BatchOp::Delete { key });
+                    continue;
+                }
+                // If we couldn't generate a delete key, then just fall through and create
+                // a BatchOp::Put.
+            }
+            let key_len = rng.random_range(1..=32);
+            let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
+            // Only add if key is unique
+            if seen_keys.insert(key.clone()) {
+                batch.push(BatchOp::Put {
+                    key,
+                    value: Box::from(format!("value{}", i + start_val).as_bytes()),
+                });
+            }
+            i += 1;
+        }
+        (batch, i + start_val)
     }
 
     #[test]
@@ -1328,7 +1441,7 @@ mod tests {
     #[test_case(false, true, 500)]
     #[test_case(true, false, 500)]
     #[test_case(true, true, 500)]
-    #[allow(clippy::indexing_slicing, clippy::type_complexity)]
+    #[allow(clippy::indexing_slicing)]
     fn test_diff_random_with_deletions(trie1_mutable: bool, trie2_mutable: bool, num_items: usize) {
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -1425,111 +1538,6 @@ mod tests {
     #[test_case(20, 500)]
     #[allow(clippy::type_complexity, clippy::too_many_lines)]
     fn test_db_fuzz(num_iterations: usize, num_items: usize) {
-        struct TestDb {
-            db: Db,
-            tmpdir: tempfile::TempDir,
-            dbconfig: DbConfig,
-        }
-
-        impl Deref for TestDb {
-            type Target = Db;
-            fn deref(&self) -> &Self::Target {
-                &self.db
-            }
-        }
-
-        impl TestDb {
-            pub fn new() -> Self {
-                let tmpdir = tempfile::tempdir().unwrap();
-                let dbconfig = DbConfig::builder().truncate(true).build();
-                let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-                    .iter()
-                    .collect();
-                let db = Db::new(dbpath, dbconfig.clone()).unwrap();
-                TestDb {
-                    db,
-                    tmpdir,
-                    dbconfig,
-                }
-            }
-        }
-
-        fn random_key_from_hashset<'a>(
-            rng: &'a SeededRng,
-            set: &'a HashSet<Vec<u8>>,
-        ) -> Option<Vec<u8>> {
-            let len = set.len();
-            if len == 0 {
-                return None;
-            }
-            // Generate a random index within the bounds of the set's size
-            let index = rng.random_range(0..len);
-            // Use the iterator's nth method to get the element at that index
-            set.iter().nth(index).cloned()
-        }
-
-        fn gen_delete_key(
-            rng: &SeededRng,
-            committed_keys: &HashSet<Vec<u8>>,
-            seen_keys: &mut HashSet<Vec<u8>>,
-        ) -> Option<Vec<u8>> {
-            let key_opt = random_key_from_hashset(rng, committed_keys);
-            // Just skip the key if it has been seen. Otherwise return it and add the key
-            // to seen keys.
-            key_opt
-                .filter(|del_key| !seen_keys.contains(del_key))
-                .inspect(|del_key| {
-                    seen_keys.insert(del_key.clone());
-                })
-        }
-
-        fn gen_insert_key(rng: &SeededRng, seen_keys: &mut HashSet<Vec<u8>>) -> Vec<u8> {
-            loop {
-                let key_len = rng.random_range(1..=32);
-                let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
-                // Only add if key is unique
-                if seen_keys.insert(key.clone()) {
-                    return key;
-                }
-            }
-        }
-
-        fn gen_random_keys(
-            rng: &SeededRng,
-            committed_keys: &HashSet<Vec<u8>>,
-            num_keys: usize,
-            start_val: usize,
-        ) -> (Vec<BatchOp<Vec<u8>, Box<[u8]>>>, usize) {
-            const CHANCE_DELETE: usize = 2;
-            let mut seen_keys = std::collections::HashSet::new();
-            let mut i = 0;
-            let mut batch = Vec::new();
-
-            while batch.len() < num_keys {
-                if !committed_keys.is_empty() && rng.random_range(1..=100) <= CHANCE_DELETE {
-                    let del_key = gen_delete_key(rng, committed_keys, &mut seen_keys);
-                    if let Some(key) = del_key {
-                        //println!("Deleting key: {key:?}");
-                        batch.push(BatchOp::Delete { key });
-                        continue;
-                    }
-                    // If we couldn't generate a delete key, then just fall through and create
-                    // a BatchOp::Put.
-                }
-                let key_len = rng.random_range(1..=32);
-                let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
-                // Only add if key is unique
-                if seen_keys.insert(key.clone()) {
-                    batch.push(BatchOp::Put {
-                        key,
-                        value: Box::from(format!("value{}", i + start_val).as_bytes()),
-                    });
-                }
-                i += 1;
-            }
-            (batch, i + start_val)
-        }
-
         fn one_iteration(
             rng: &SeededRng,
             db: &Db,
@@ -1658,5 +1666,102 @@ mod tests {
                 start_val,
             );
         }
+    }
+
+    #[test]
+    fn test_two_round_diff_with_start_keys() {
+        let db = TestDb::new();
+        let rng = firewood_storage::SeededRng::from_env_or_random();
+        let mut committed_keys = HashSet::new();
+        let start_val = 0;
+
+        // Populate the database with an initial batch of keys, as we would use a range proof
+        // instead of a change proof if the database was initially empty.
+        let (batch, _) = gen_random_keys(&rng, &committed_keys, 1000, start_val);
+        let proposal = db.propose(batch.into_iter()).unwrap();
+        proposal.commit().unwrap();
+
+        // Create the committed revision that we will use to compare against proposal. We also generate
+        // a hashset of all of the keys in the trie for use in selecting delete keys.
+        let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+        committed_keys.extend(
+            committed
+                .iter()
+                .unwrap()
+                .map(|kv| kv.unwrap())
+                .map(|kv| kv.0.to_vec()),
+        );
+
+        // Create an immutable proposal based on a second batch of keys
+        let proposal = NodeStore::new(&committed).unwrap();
+        let mut merkle = Merkle::from(proposal);
+        let (batch, _) = gen_random_keys(&rng, &committed_keys, 1000, start_val);
+        for op in batch.clone() {
+            match op {
+                BatchOp::Put { key, value } => {
+                    let _ = merkle.insert(&key, value);
+                }
+                BatchOp::Delete { key } => {
+                    let _ = merkle.remove(&key);
+                }
+                BatchOp::DeleteRange { prefix: _ } => {
+                    panic!("should not have any DeleteRanges");
+                }
+            }
+        }
+        let nodestore = merkle.into_inner();
+        let target_immutable: NodeStore<Arc<ImmutableProposal>, FileBacked> =
+            nodestore.try_into().unwrap();
+
+        // Now generate a diff iterator, but only create a vector from the first
+        // one hundred keys.
+        let committed = committed.into();
+        let target_immutable = target_immutable.into();
+        let mut diff_it =
+            diff_merkle_iterator(&committed, &target_immutable, Box::new([])).unwrap();
+
+        let mut partial_vec = Vec::new();
+        for _ in 0..100 {
+            match diff_it.next() {
+                Some(op) => {
+                    partial_vec.push(op.unwrap());
+                }
+                None => break,
+            }
+        }
+
+        // Call next to get the next key. Only use it for the next key.
+        let next_key = diff_it.next().map(|op| op.unwrap().key().clone()).unwrap();
+
+        // Apply ops in partial_vec to the db
+        let proposal = db.propose(partial_vec.iter()).unwrap();
+        proposal.commit().unwrap();
+        let committed = db
+            .revision(db.root_hash().unwrap().unwrap())
+            .unwrap()
+            .into();
+        let diff_it =
+            diff_merkle_iterator(&committed, &target_immutable, next_key.clone()).unwrap();
+
+        let mut partial_vec = Vec::new();
+        for op in diff_it {
+            let op = op.unwrap();
+            assert!(op.key() >= &next_key);
+            partial_vec.push(op);
+        }
+
+        // Apply ops in partial_vec to the db one last time
+        let proposal = db.propose(partial_vec.iter()).unwrap();
+        proposal.commit().unwrap();
+        let committed = db
+            .revision(db.root_hash().unwrap().unwrap())
+            .unwrap()
+            .into();
+        let first_diff_item = diff_merkle_iterator(&committed, &target_immutable, Box::new([]))
+            .unwrap()
+            .next();
+
+        // The two tries should now be identical.
+        assert!(first_diff_item.is_none());
     }
 }
