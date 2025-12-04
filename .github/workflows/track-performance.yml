@@ -1,0 +1,196 @@
+name: Track Performance
+
+on:
+  workflow_dispatch:
+    inputs:
+      firewood:
+        description: 'Firewood commit/branch/tag to test (leave empty for current HEAD)'
+        default: ''
+      libevm:
+        description: 'libevm commit/branch/tag to test (leave empty to skip)'
+        default: ''
+      avalanchego:
+        description: 'AvalancheGo commit/branch/tag to test against'
+        default: 'master'
+      task:
+        description: 'Predefined task (leave empty to use custom parameters below)'
+        type: choice
+        options:
+          - c-chain-reexecution-firewood-101-250k
+          - c-chain-reexecution-firewood-33m-33m500k
+          - c-chain-reexecution-firewood-33m-40m
+      config:
+        description: 'VM config (e.g., firewood, hashdb)'
+        default: ''
+      start-block:
+        default: ''
+      end-block:
+        default: ''
+      block-dir-src:
+        description: 'Block directory source e.g., cchain-mainnet-blocks-1m-ldb (without S3 path)'
+        default: ''
+      current-state-dir-src:
+        description: 'Current state directory source e.g., cchain-mainnet-blocks-30m-40m-ldb (without S3 path)'
+        default: ''
+      runner:
+        description: 'Runner to use in AvalancheGo'
+        required: true
+        type: choice
+        options:
+          - avalanche-avalanchego-runner-2ti
+          - avago-runner-i4i-4xlarge-local-ssd
+          - avago-runner-m6i-4xlarge-ebs-fast
+
+jobs:
+  c-chain-benchmark:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required for github-action-benchmark to push to gh-pages
+    steps:
+      - name: Checkout Firewood
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Needed for github-action-benchmark
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # v31
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Validate inputs
+        run: |
+          if [ -z "${{ inputs.task }}" ]; then
+            missing=()
+            [ -z "${{ inputs.config }}" ] && missing+=("config")
+            [ -z "${{ inputs.start-block }}" ] && missing+=("start-block")
+            [ -z "${{ inputs.end-block }}" ] && missing+=("end-block")
+            [ -z "${{ inputs.block-dir-src }}" ] && missing+=("block-dir-src")
+            [ -z "${{ inputs.current-state-dir-src }}" ] && missing+=("current-state-dir-src")
+            
+            if [ ${#missing[@]} -gt 0 ]; then
+              echo "Error: When using custom mode, these fields are required: ${missing[*]}"
+              exit 1
+            fi
+          fi
+
+      - name: Trigger AvalancheGo benchmark
+        id: trigger
+        shell: nix develop ./ffi --command bash {0}
+        run: |
+          FIREWOOD="${{ inputs.firewood || github.sha }}"
+          echo "firewood=$FIREWOOD" >> "$GITHUB_OUTPUT"
+          
+          if [ -n "${{ inputs.task }}" ]; then
+            # Task-based mode: use just command
+            RUN_ID=$(just benchmark-trigger "$FIREWOOD" "${{ inputs.avalanchego }}" "${{ inputs.task }}" "${{ inputs.runner }}" "${{ inputs.libevm }}")
+          else
+            # Granular mode: use direct gh with custom params
+            LIBEVM_FLAG=""
+            if [ -n "${{ inputs.libevm }}" ]; then
+              LIBEVM_FLAG="-f libevm=${{ inputs.libevm }}"
+            fi
+            
+            gh workflow run "Firewood Reexecution Benchmark" \
+              --repo ava-labs/avalanchego \
+              --ref "${{ inputs.avalanchego }}" \
+              -f firewood="$FIREWOOD" \
+              -f config="${{ inputs.config }}" \
+              -f start-block="${{ inputs.start-block }}" \
+              -f end-block="${{ inputs.end-block }}" \
+              -f block-dir-src="${{ inputs.block-dir-src }}" \
+              -f current-state-dir-src="${{ inputs.current-state-dir-src }}" \
+              -f runner="${{ inputs.runner }}" \
+              $LIBEVM_FLAG
+            
+            sleep 10
+            
+            RUN_ID=$(gh run list \
+              --repo ava-labs/avalanchego \
+              --workflow "Firewood Reexecution Benchmark" \
+              --limit 5 \
+              --json databaseId,createdAt \
+              --jq '[.[] | select(.createdAt | fromdateiso8601 > (now - 60))] | .[0].databaseId')
+            
+            if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
+              echo "Could not find triggered workflow run"
+              exit 1
+            fi
+          fi
+          
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "run_url=https://github.com/ava-labs/avalanchego/actions/runs/$RUN_ID" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
+
+      - name: Wait for benchmark completion
+        shell: nix develop ./ffi --command bash {0}
+        run: just benchmark-wait "${{ steps.trigger.outputs.run_id }}"
+        env:
+          GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
+        timeout-minutes: 60
+
+      - name: Download benchmark results
+        id: download
+        shell: nix develop ./ffi --command bash {0}
+        run: |
+          just benchmark-download "${{ steps.trigger.outputs.run_id }}"
+          
+          # Determine target dashboard
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "data-dir=bench" >> "$GITHUB_OUTPUT"
+          else
+            SAFE_NAME=$(echo "${{ github.ref_name }}" | tr '/' '-')
+            echo "data-dir=dev/bench/$SAFE_NAME" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
+
+      - name: Store benchmark results
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: C-Chain Reexecution Performance
+          tool: 'go'
+          output-file-path: ./results/benchmark-output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          gh-pages-branch: benchmark-data
+          benchmark-data-dir-path: ${{ steps.download.outputs.data-dir }}
+          # Don't fail the workflow if there's an issue with benchmark storage
+          fail-on-alert: false
+          comment-on-alert: false
+
+      - name: Summary
+        if: always()
+        run: |
+          echo "## Firewood Performance Benchmark Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY
+          
+          if [ -n "${{ inputs.task }}" ]; then
+            echo "- Mode: Task-based" >> $GITHUB_STEP_SUMMARY
+            echo "- Task: \`${{ inputs.task }}\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "- Mode: Custom parameters" >> $GITHUB_STEP_SUMMARY
+            echo "- Config: \`${{ inputs.config }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- Blocks: \`${{ inputs.start-block }}\` → \`${{ inputs.end-block }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- Block source: \`${{ inputs.block-dir-src }}\`" >> $GITHUB_STEP_SUMMARY
+            echo "- State source: \`${{ inputs.current-state-dir-src }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          echo "- Firewood: \`${{ steps.trigger.outputs.firewood }}\`" >> $GITHUB_STEP_SUMMARY
+          if [ -n "${{ inputs.libevm }}" ]; then
+            echo "- libevm: \`${{ inputs.libevm }}\`" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "- AvalancheGo: \`${{ inputs.avalanchego }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Runner: \`${{ inputs.runner }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          if [ "${{ steps.download.outcome }}" = "success" ]; then
+            echo "**Links:**" >> $GITHUB_STEP_SUMMARY
+            echo "- [AvalancheGo Workflow](${{ steps.trigger.outputs.run_url }})" >> $GITHUB_STEP_SUMMARY
+            echo "- [Performance Trends](https://ava-labs.github.io/firewood/${{ steps.download.outputs.data-dir }}/)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "**Status:** Failed" >> $GITHUB_STEP_SUMMARY
+            echo "Check [workflow logs](${{ steps.trigger.outputs.run_url }}) for details." >> $GITHUB_STEP_SUMMARY
+          fi
+
