@@ -23,17 +23,14 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
+use parking_lot::Mutex;
 use std::fs::{File, OpenOptions};
 use std::io::Read;
 #[cfg(feature = "io-uring")]
 use std::mem::ManuallyDrop;
 use std::num::NonZero;
-#[cfg(unix)]
 use std::os::unix::fs::FileExt;
-#[cfg(windows)]
-use std::os::windows::fs::FileExt;
 use std::path::PathBuf;
-use std::sync::Mutex;
 
 use lru::LruCache;
 use metrics::counter;
@@ -58,10 +55,7 @@ impl Drop for FileBacked {
         #[cfg(feature = "io-uring")]
         {
             // non-blocking because we have mutable access to self
-            let ring = self
-                .ring
-                .get_mut()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let ring = self.ring.get_mut();
 
             // We are manually dropping the ring here to ensure that it is
             // flushed and dropped before we unlock the file descriptor.
@@ -196,7 +190,7 @@ impl ReadableStorage for FileBacked {
     }
 
     fn read_cached_node(&self, addr: LinearAddress, mode: &'static str) -> Option<SharedNode> {
-        let mut guard = self.cache.lock().expect("poisoned lock");
+        let mut guard = self.cache.lock();
         let cached = guard.get(&addr).cloned();
         counter!("firewood.cache.node", "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" })
             .increment(1);
@@ -204,7 +198,7 @@ impl ReadableStorage for FileBacked {
     }
 
     fn free_list_cache(&self, addr: LinearAddress) -> Option<Option<LinearAddress>> {
-        let mut guard = self.free_list_cache.lock().expect("poisoned lock");
+        let mut guard = self.free_list_cache.lock();
         let cached = guard.pop(&addr);
         counter!("firewood.cache.freelist", "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
         cached
@@ -220,12 +214,12 @@ impl ReadableStorage for FileBacked {
                 // we don't cache reads
             }
             CacheReadStrategy::All => {
-                let mut guard = self.cache.lock().expect("poisoned lock");
+                let mut guard = self.cache.lock();
                 guard.put(addr, node);
             }
             CacheReadStrategy::BranchReads => {
                 if !node.is_leaf() {
-                    let mut guard = self.cache.lock().expect("poisoned lock");
+                    let mut guard = self.cache.lock();
                     guard.put(addr, node);
                 }
             }
@@ -239,25 +233,16 @@ impl ReadableStorage for FileBacked {
 
 impl WritableStorage for FileBacked {
     fn write(&self, offset: u64, object: &[u8]) -> Result<usize, FileIoError> {
-        #[cfg(unix)]
-        {
-            self.fd
-                .write_at(object, offset)
-                .map_err(|e| self.file_io_error(e, offset, Some("write".to_string())))
-        }
-        #[cfg(windows)]
-        {
-            self.fd
-                .seek_write(object, offset)
-                .map_err(|e| self.file_io_error(e, offset, Some("write".to_string())))
-        }
+        self.fd
+            .write_at(object, offset)
+            .map_err(|e| self.file_io_error(e, offset, Some("write".to_string())))
     }
 
     fn write_cached_nodes(
         &self,
         nodes: impl IntoIterator<Item = MaybePersistedNode>,
     ) -> Result<(), FileIoError> {
-        let mut guard = self.cache.lock().expect("poisoned lock");
+        let mut guard = self.cache.lock();
         for maybe_persisted_node in nodes {
             // Since we know the node is in Allocated state, we can get both address and shared node
             let (addr, shared_node) = maybe_persisted_node
@@ -272,14 +257,14 @@ impl WritableStorage for FileBacked {
     }
 
     fn invalidate_cached_nodes<'a>(&self, nodes: impl Iterator<Item = &'a MaybePersistedNode>) {
-        let mut guard = self.cache.lock().expect("poisoned lock");
+        let mut guard = self.cache.lock();
         for addr in nodes.filter_map(MaybePersistedNode::as_linear_address) {
             guard.pop(&addr);
         }
     }
 
     fn add_to_free_list_cache(&self, addr: LinearAddress, next: Option<LinearAddress>) {
-        let mut guard = self.free_list_cache.lock().expect("poisoned lock");
+        let mut guard = self.free_list_cache.lock();
         guard.put(addr, next);
     }
 }
@@ -324,14 +309,9 @@ impl Read for PredictiveReader<'_> {
         if self.len == self.pos {
             let bytes_left_in_page = PREDICTIVE_READ_BUFFER_SIZE
                 - (self.offset % PREDICTIVE_READ_BUFFER_SIZE as u64) as usize;
-            #[cfg(unix)]
             let read = self
                 .fd
                 .read_at(&mut self.buffer[..bytes_left_in_page], self.offset)?;
-            #[cfg(windows)]
-            let read = self
-                .fd
-                .seek_read(&mut self.buffer[..bytes_left_in_page], self.offset)?;
             self.offset += read as u64;
             self.len = read;
             self.pos = 0;
