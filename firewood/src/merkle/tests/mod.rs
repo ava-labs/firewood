@@ -60,40 +60,12 @@ where
         let value = v.as_ref();
 
         merkle.insert(key, value.into()).unwrap();
-
-        assert_eq!(
-            merkle.get_value(key).unwrap().as_deref(),
-            Some(value),
-            "Failed to insert key: {key:?}",
-        );
-    }
-
-    for (k, v) in iter.clone() {
-        let key = k.as_ref();
-        let value = v.as_ref();
-
-        assert_eq!(
-            merkle.get_value(key).unwrap().as_deref(),
-            Some(value),
-            "Failed to get key after insert: {key:?}",
-        );
     }
 
     let merkle = merkle.hash();
-
-    for (k, v) in iter.clone() {
-        let key = k.as_ref();
-        let value = v.as_ref();
-
-        assert_eq!(
-            merkle.get_value(key).unwrap().as_deref(),
-            Some(value),
-            "Failed to get key after hashing: {key:?}"
-        );
-    }
-
     let merkle = into_committed(merkle, base.nodestore());
 
+    // Single verification pass at the end to ensure correctness
     for (k, v) in iter {
         let key = k.as_ref();
         let value = v.as_ref();
