@@ -14,13 +14,12 @@ use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZero;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock, Weak};
+use std::sync::{Arc, OnceLock};
 
 use firewood_storage::logger::{trace, warn};
 use metrics::gauge;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
-use weak_table::WeakValueHashMap;
 
 use crate::merkle::Merkle;
 use crate::root_store::RootStore;
@@ -28,8 +27,8 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal,
-    IntoHashType, NodeStore, TrieHash,
+    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
+    TrieHash,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
@@ -69,7 +68,7 @@ pub struct ConfigManager {
     pub manager: RevisionManagerConfig,
 }
 
-type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
+pub type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
 #[derive(Debug)]
@@ -83,7 +82,6 @@ pub(crate) struct RevisionManager {
     proposals: Mutex<Vec<ProposedRevision>>,
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
-    by_rootstore: Mutex<WeakValueHashMap<TrieHash, Weak<NodeStore<Committed, FileBacked>>>>,
     threadpool: OnceLock<ThreadPool>,
     root_store: Option<RootStore>,
 }
@@ -122,20 +120,20 @@ impl RevisionManager {
         // from opening the same database simultaneously
         fb.lock()?;
 
-        let root_store: Option<RootStore> = match config.root_store_dir {
-            Some(path) => Some(RootStore::new(path).map_err(RevisionManagerError::RootStoreError)?),
-            None => None,
-        };
-
         let storage = Arc::new(fb);
         let nodestore = Arc::new(NodeStore::open(storage.clone())?);
+        let root_store = config
+            .root_store_dir
+            .map(|path| RootStore::new(path, storage.clone()))
+            .transpose()
+            .map_err(RevisionManagerError::RootStoreError)?;
+
         let manager = Self {
             max_revisions: config.manager.max_revisions,
             historical: RwLock::new(VecDeque::from([nodestore.clone()])),
             by_hash: RwLock::new(Default::default()),
             proposals: Mutex::new(Default::default()),
             // committing_proposals: Default::default(),
-            by_rootstore: Mutex::new(WeakValueHashMap::new()),
             threadpool: OnceLock::new(),
             root_store,
         };
@@ -322,47 +320,28 @@ impl RevisionManager {
     /// Retrieve a committed revision by its root hash.
     /// To retrieve a revision involves a few steps:
     /// 1. Check the in-memory revision manager.
-    /// 2. Check the in-memory `RootStore` cache.
-    /// 3. Check the persistent `RootStore`.
+    /// 2. Check `RootStore` (if it exists).
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
         // 1. Check the in-memory revision manager.
         if let Some(revision) = self.by_hash.read().get(&root_hash).cloned() {
             return Ok(revision);
         }
 
-        let mut cache_guard = self.by_rootstore.lock();
-
-        // 2. Check the in-memory `RootStore` cache.
-        if let Some(nodestore) = cache_guard.get(&root_hash) {
-            return Ok(nodestore);
-        }
-
-        // 3. Check the persistent `RootStore`.
-        // If the revision exists, get its root address and construct a NodeStore for it.
-        let root_address = match &self.root_store {
-            Some(store) => store
-                .get(&root_hash)
-                .map_err(RevisionManagerError::RootStoreError)?
+        // 2. Check `RootStore` (if it exists).
+        let root_store =
+            self.root_store
+                .as_ref()
                 .ok_or(RevisionManagerError::RevisionNotFound {
                     provided: root_hash.clone(),
-                })?,
-            None => {
-                return Err(RevisionManagerError::RevisionNotFound {
-                    provided: root_hash.clone(),
-                });
-            }
-        };
+                })?;
+        let revision = root_store
+            .get(&root_hash)
+            .map_err(RevisionManagerError::RootStoreError)?
+            .ok_or(RevisionManagerError::RevisionNotFound {
+                provided: root_hash.clone(),
+            })?;
 
-        let nodestore = Arc::new(NodeStore::with_root(
-            root_hash.clone().into_hash_type(),
-            root_address,
-            self.current_revision(),
-        ));
-
-        // Cache the nodestore (stored as a weak reference).
-        cache_guard.insert(root_hash, nodestore.clone());
-
-        Ok(nodestore)
+        Ok(revision)
     }
 
     pub fn root_hash(&self) -> Result<Option<HashKey>, RevisionManagerError> {

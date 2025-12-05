@@ -160,21 +160,15 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     ///
     /// This constructor is used when you have an existing root node at a known
     /// address and hash, typically when reconstructing a [`NodeStore`] from
-    /// a committed state. The `latest_nodestore` provides access to the underlying
-    /// storage backend containing the persisted trie data.
+    /// a committed state.
     ///
     /// ## Panics
     ///
     /// Panics in debug builds if the hash of the node at `root_address` does
     /// not equal `root_hash`.
     #[must_use]
-    pub fn with_root(
-        root_hash: HashType,
-        root_address: LinearAddress,
-        latest_nodestore: Arc<NodeStore<Committed, S>>,
-    ) -> Self {
+    pub fn with_root(root_hash: HashType, root_address: LinearAddress, storage: Arc<S>) -> Self {
         let header = NodeStoreHeader::with_root(Some(root_address));
-        let storage = latest_nodestore.storage.clone();
 
         let nodestore = NodeStore {
             header,
@@ -198,6 +192,15 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         );
 
         nodestore
+    }
+}
+
+impl<S: ReadableStorage> NodeStore<Committed, S> {
+    /// Get the underlying storage for a `NodeStore`.
+    #[cfg(any(test, feature = "test_utils"))]
+    #[must_use]
+    pub fn get_storage(&self) -> Arc<S> {
+        self.storage.clone()
     }
 }
 
@@ -873,10 +876,16 @@ where
 #[expect(clippy::cast_possible_truncation)]
 mod tests {
 
+    use crate::BranchNode;
+    use crate::Children;
+    use crate::FileBacked;
     use crate::LeafNode;
+    use crate::NibblesIterator;
+    use crate::PathComponent;
     use crate::linear::memory::MemStore;
 
     use super::*;
+    use nonzero_ext::nonzero;
     use primitives::area_size_iter;
     use std::error::Error;
 
@@ -987,5 +996,95 @@ mod tests {
             .downcast_ref::<primitives::AreaSizeError>()
             .unwrap();
         assert_eq!(io_err_source.0, 16_777_225);
+    }
+
+    /// Test that persisting a branch node with children succeeds.
+    ///
+    /// This test verifies the fix for issue #1488 where the panic
+    /// "child must be hashed when serializing" occurred during persist.
+    ///
+    /// The bug was caused by batching nodes before writing but only calling
+    /// `allocate_at` after writing. This meant when serializing a parent node,
+    /// its children didn't have addresses yet (children are serialized first
+    /// in depth-first order, but without `allocate_at()` being called before
+    /// batching, the parent couldn't get the child's address during serialization).
+    ///
+    /// The fix calls `allocate_at` immediately after allocating storage for a node
+    /// but before adding it to the batch, ensuring children have addresses when
+    /// their parents are serialized.
+    #[test]
+    fn persist_branch_with_children() -> Result<(), Box<dyn Error>> {
+        let tmpdir = tempfile::tempdir()?;
+        let dbfile = tmpdir.path().join("nodestore_branch_persist_test.db");
+
+        let nodestore = NodeStore::open(Arc::new(FileBacked::new(
+            dbfile,
+            nonzero!(10usize),
+            nonzero!(10usize),
+            false,
+            true,
+            CacheReadStrategy::WritesOnly,
+        )?))?;
+
+        let mut proposal = NodeStore::new(&nodestore)?;
+
+        {
+            let root = proposal.root_mut();
+            assert!(root.is_none());
+
+            let mut children = Children::new();
+            children[PathComponent::ALL[0x0]] = Some(Child::Node(Node::Leaf(LeafNode {
+                partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"123")),
+                value: b"\x00123".to_vec().into_boxed_slice(),
+            })));
+            children[PathComponent::ALL[0xF]] = Some(Child::Node(Node::Leaf(LeafNode {
+                partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"abc")),
+                value: b"\x0Fabc".to_vec().into_boxed_slice(),
+            })));
+            let branch1 = Node::Branch(Box::new(BranchNode {
+                partial_path: Path::new(),
+                value: None,
+                children,
+            }));
+
+            let mut children = Children::new();
+            children[PathComponent::ALL[0x0]] = Some(Child::Node(Node::Leaf(LeafNode {
+                partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"123")),
+                value: b"\xF0123".to_vec().into_boxed_slice(),
+            })));
+            children[PathComponent::ALL[0xF]] = Some(Child::Node(Node::Leaf(LeafNode {
+                partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"abc")),
+                value: b"\xFFabc".to_vec().into_boxed_slice(),
+            })));
+            let branch2 = Node::Branch(Box::new(BranchNode {
+                partial_path: Path::new(),
+                value: None,
+                children,
+            }));
+
+            let mut children = Children::new();
+            children[PathComponent::ALL[0x0]] = Some(Child::Node(branch1));
+            children[PathComponent::ALL[0xF]] = Some(Child::Node(branch2));
+
+            *root = Some(Node::Branch(Box::new(BranchNode {
+                partial_path: Path::new(),
+                value: None,
+                children,
+            })));
+        }
+
+        let proposal = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
+
+        let mut nodestore = proposal.as_committed(&nodestore);
+        nodestore.persist()?;
+
+        let mut proposal = NodeStore::new(&nodestore)?;
+
+        {
+            let root = proposal.root_mut();
+            assert!(root.is_some());
+        }
+
+        Ok(())
     }
 }

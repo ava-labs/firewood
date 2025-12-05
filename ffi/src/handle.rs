@@ -22,14 +22,14 @@ use metrics::counter;
 pub struct DatabaseHandleArgs<'a> {
     /// The path to the database file.
     ///
-    /// This must be a valid UTF-8 string, even on Windows.
+    /// This must be a valid UTF-8 string.
     ///
     /// If this is empty, an error will be returned.
     pub path: BorrowedBytes<'a>,
 
     /// The path to the `RootStore` directory.
     ///
-    /// This must be a valid UTF-8 string, even on Windows.
+    /// This must be a valid UTF-8 string.
     ///
     /// If this is empty, then the archival feature is disabled.
     ///
