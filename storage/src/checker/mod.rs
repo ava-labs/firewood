@@ -8,9 +8,9 @@ use crate::logger::warn;
 use crate::nodestore::alloc::FreeAreaWithMetadata;
 use crate::nodestore::primitives::{AreaIndex, area_size_iter};
 use crate::{
-    CheckerError, Committed, FileIoError, HashType, HashedNodeReader, ImmutableProposal,
-    IntoHashType, LinearAddress, MutableProposal, Node, NodeReader, NodeStore, Path,
-    ReadableStorage, RootReader, StoredAreaParent, TrieNodeParent, WritableStorage,
+    CheckerError, Committed, FileIoError, HashType, HashedNodeReader, IntoHashType, LinearAddress,
+    MutableProposal, Node, NodeReader, NodeStore, Path, ReadableStorage, RootReader,
+    StoredAreaParent, TrieNodeParent, WritableStorage,
 };
 
 #[cfg(not(feature = "ethhash"))]
@@ -19,7 +19,6 @@ use crate::hashednode::hash_node;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::ops::Range;
-use std::sync::Arc;
 
 use indicatif::ProgressBar;
 
@@ -69,7 +68,7 @@ pub struct CheckerReport {
 }
 
 /// All statistics about the given database image
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct DBStats {
     /// The high watermark of the database
     pub high_watermark: u64,
@@ -80,7 +79,7 @@ pub struct DBStats {
 }
 
 /// Statistics about the trie
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TrieStats {
     /// The total number of bytes of compressed branch nodes
     pub branch_bytes: u64,
@@ -128,7 +127,7 @@ impl Default for TrieStats {
 }
 
 /// Statistics about the free list
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct FreeListsStats {
     /// The distribution of area sizes in the free lists
     pub area_counts: BTreeMap<u64, u64>,
@@ -578,31 +577,12 @@ pub struct FixReport {
 }
 
 impl<S: WritableStorage> NodeStore<Committed, S> {
-    /// Check the node store and fix any errors found.
+    /// Given a check report, fixes any errors found.
     /// Returns a report of the fix operation.
-    // TODO: return a committed revision instead of an immutable proposal
-    pub fn check_and_fix(
-        &self,
-        opt: CheckOpt,
-    ) -> (
-        Result<NodeStore<Arc<ImmutableProposal>, S>, FileIoError>,
-        FixReport,
-    ) {
-        let check_report = self.check(opt);
-        let mut proposal = match NodeStore::<MutableProposal, S>::new(self) {
-            Ok(proposal) => proposal,
-            Err(e) => {
-                let report = FixReport {
-                    fixed: Vec::new(),
-                    unfixable: check_report.errors.into_iter().map(|e| (e, None)).collect(),
-                    db_stats: check_report.db_stats,
-                };
-                return (Err(e), report);
-            }
-        };
-        let fix_report = proposal.fix(check_report);
-        let immutable_proposal = NodeStore::<Arc<ImmutableProposal>, S>::try_from(proposal);
-        (immutable_proposal, fix_report)
+    pub fn temp_fix(&self, check_report: CheckerReport) -> Result<FixReport, FileIoError> {
+        let mut proposal = NodeStore::<MutableProposal, S>::new(self)?;
+
+        Ok(proposal.fix(check_report))
     }
 }
 
@@ -764,9 +744,10 @@ mod test {
     };
     use crate::nodestore::primitives::area_size_iter;
     use crate::{
-        BranchNode, Child, Children, FreeListParent, LeafNode, NodeStore, Path, PathComponent,
-        area_index, hash_node,
+        BranchNode, Child, Children, FreeListParent, ImmutableProposal, LeafNode, NodeStore, Path,
+        PathComponent, area_index, hash_node,
     };
+    use std::sync::Arc;
 
     #[derive(Debug)]
     struct TestTrie {
