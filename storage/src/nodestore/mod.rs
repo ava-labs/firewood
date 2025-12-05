@@ -590,22 +590,9 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
     fn try_from(val: NodeStore<MutableProposal, S>) -> Result<Self, Self::Error> {
         let NodeStore {
             header,
-            mut kind,
+            kind,
             storage,
         } = val;
-
-        // Deduplicate deleted nodes by persisted address within a batch across parallel workers.
-        {
-            use std::collections::HashSet;
-            let mut seen: HashSet<LinearAddress> = HashSet::with_capacity(kind.deleted.len());
-            kind.deleted.retain(|mp| {
-                if let Some(addr) = mp.as_linear_address() {
-                    seen.insert(addr)
-                } else {
-                    true
-                }
-            });
-        }
 
         let mut nodestore = NodeStore {
             header,
