@@ -7,12 +7,11 @@ use crate::v2::api::IntoBatchIter;
 use firewood_storage::logger::error;
 use firewood_storage::{
     BranchNode, Child, Children, FileBacked, FileIoError, ImmutableProposal, LeafNode,
-    MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeReader, NodeStore, Parentable,
-    Path, PathComponent,
+    MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore, Parentable, Path,
+    PathComponent,
 };
 use rayon::ThreadPool;
 use std::iter::once;
-use std::ops::Deref;
 use std::sync::mpsc::{Receiver, SendError, Sender};
 use std::sync::{Arc, mpsc};
 
@@ -227,7 +226,7 @@ impl ParallelMerkle {
     /// by the value of the `first_path_component`.
     fn create_worker(
         pool: &ThreadPool,
-        proposal: &NodeStore<MutableProposal, FileBacked>,
+        proposal: &mut NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut BranchNode,
         first_path_component: PathComponent,
         response_sender: Sender<Result<Response, FileIoError>>,
@@ -235,7 +234,6 @@ impl ParallelMerkle {
         // Create a channel for the coordinator (main thread) to send messages to this worker.
         let (child_sender, child_receiver) = mpsc::channel();
 
-        // The root's child becomes the root node of the worker
         let child_root = root_branch
             .children
             .get_mut(first_path_component)
@@ -244,10 +242,11 @@ impl ParallelMerkle {
                 match child {
                     Child::Node(node) => Ok(node),
                     Child::AddressWithHash(address, _) => {
-                        Ok(proposal.read_node(address)?.deref().clone())
+                        // Track deletion of the removed child from the root (if it was persisted).
+                        Ok(proposal.read_for_update(address.into())?)
                     }
                     Child::MaybePersisted(maybe_persisted, _) => {
-                        Ok(maybe_persisted.as_shared_node(proposal)?.deref().clone())
+                        Ok(proposal.read_for_update(maybe_persisted)?)
                     }
                 }
             })
@@ -301,7 +300,7 @@ impl ParallelMerkle {
     fn worker(
         &mut self,
         pool: &ThreadPool,
-        proposal: &NodeStore<MutableProposal, FileBacked>,
+        proposal: &mut NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut BranchNode,
         first_path_component: PathComponent,
         response_sender: Sender<Result<Response, FileIoError>>,
@@ -439,7 +438,7 @@ impl ParallelMerkle {
             // doesn't already exist.
             let worker = self.worker(
                 pool,
-                &mutable_nodestore,
+                &mut mutable_nodestore,
                 &mut root_branch,
                 first_path_component,
                 response_sender.clone(),
