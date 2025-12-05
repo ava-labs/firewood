@@ -26,7 +26,6 @@ fn test_missing_key_proof() {
 #[test]
 // Tests normal range proof with both edge proofs as the existent proof.
 // The test cases are generated randomly.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -69,7 +68,6 @@ fn test_range_proof() {
 #[test]
 // Tests a few cases which the proof is wrong.
 // The prover is expected to detect the error.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_bad_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -78,7 +76,7 @@ fn test_bad_range_proof() {
     items.sort_unstable();
     let merkle = init_merkle(items.clone());
 
-    for _ in 0..10 {
+    'skip_test: for _ in 0..10 {
         let start = rng.random_range(0..items.len());
         let end = rng.random_range(0..items.len() - start) + start - 1;
 
@@ -104,10 +102,12 @@ fn test_bad_range_proof() {
             0 => {
                 // Modified key
                 keys[index] = rng.random::<[u8; 32]>(); // In theory it can't be same
+                continue 'skip_test;
             }
             1 => {
                 // Modified val
                 vals[index] = rng.random::<[u8; 20]>(); // In theory it can't be same
+                continue 'skip_test;
             }
             2 => {
                 // Gapped entry slice
@@ -116,6 +116,7 @@ fn test_bad_range_proof() {
                 }
                 keys.remove(index);
                 vals.remove(index);
+                continue 'skip_test;
             }
             3 => {
                 // Out of order
@@ -130,10 +131,12 @@ fn test_bad_range_proof() {
             4 => {
                 // Set random key to empty, do nothing
                 keys[index] = [0; 32];
+                continue 'skip_test;
             }
             5 => {
                 // Set random value to nil
                 vals[index] = [0; 20];
+                continue 'skip_test;
             }
             _ => unreachable!(),
         }
