@@ -78,7 +78,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
 
     let mut db_stats = check_report.db_stats.clone();
     if opts.fix {
-        match nodestore.temp_fix(check_report) {
+        match nodestore.fix(check_report) {
             Ok(report) => {
                 println!("Fixed Errors ({}):", report.fixed.len());
                 for error in report.fixed {

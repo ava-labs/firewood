@@ -579,7 +579,7 @@ pub struct FixReport {
 impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Given a check report, fixes any errors found.
     /// Returns a report of the fix operation.
-    pub fn temp_fix(&self, check_report: CheckerReport) -> Result<FixReport, FileIoError> {
+    pub fn fix(&self, check_report: CheckerReport) -> Result<FixReport, FileIoError> {
         let mut proposal = NodeStore::<MutableProposal, S>::new(self)?;
 
         Ok(proposal.fix(check_report))
