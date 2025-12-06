@@ -579,6 +579,10 @@ pub struct FixReport {
 impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Given a check report, fixes any errors found.
     /// Returns a report of the fix operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if a mutable proposal cannot be created from the current nodestore.
     pub fn fix(&self, check_report: CheckerReport) -> Result<FixReport, FileIoError> {
         let mut proposal = NodeStore::<MutableProposal, S>::new(self)?;
 
