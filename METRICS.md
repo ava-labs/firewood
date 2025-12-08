@@ -313,6 +313,15 @@ This allows us to:
 
 Performance data is collected via the `Track Performance` workflow and published to GitHub Pages.
 
+### Running Benchmarks from GitHub UI
+
+The easiest way to trigger a benchmark is via the GitHub Actions UI:
+
+1. Go to [Actions → Track Performance](https://github.com/ava-labs/firewood/actions/workflows/track-performance.yml)
+2. Click "Run workflow"
+3. Select parameters from the dropdowns (task, runner) or enter custom values
+4. Click "Run workflow"
+
 ### Running Benchmarks Locally
 
 Benchmarks can be triggered locally using `just benchmark` (requires nix).
@@ -390,7 +399,7 @@ just trigger-benchmark \
 # Wait for a specific run to complete
 just wait-benchmark run_id=19938272417
 
-# Download results from a specific run
+# Download results from a specific run (saves to ./results/)
 just download-benchmark-results run_id=19938272417
 
 # List recent benchmark runs
