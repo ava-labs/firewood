@@ -385,7 +385,8 @@ mod test {
     use std::path::PathBuf;
 
     use firewood_storage::{
-        CheckOpt, CheckerError, HashedNodeReader, IntoHashType, NodeStore, TrieHash,
+        CheckOpt, CheckerError, HashedNodeReader, IntoHashType, LinearAddress, MaybePersistedNode,
+        NodeStore, TrieHash,
     };
 
     use crate::db::{Db, Proposal, UseParallel};
@@ -800,7 +801,15 @@ mod test {
 
     #[test]
     fn test_propose_parallel_vs_normal_propose() {
-        const N: usize = 100;
+        fn persisted_deleted(nodes: &[MaybePersistedNode]) -> Vec<LinearAddress> {
+            let mut addrs: Vec<_> = nodes
+                .iter()
+                .filter_map(MaybePersistedNode::as_linear_address)
+                .collect();
+            addrs.sort_unstable();
+            addrs
+        }
+
         let db_parallel = TestDb::new_with_config(
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
@@ -809,27 +818,37 @@ mod test {
         let db_single =
             TestDb::new_with_config(DbConfig::builder().use_parallel(UseParallel::Never).build());
 
-        let rng = firewood_storage::SeededRng::from_env_or_random();
+        // First batch: insert two keys with different first nibbles so they go
+        // to different workers in the parallel merkle implementation.
+        let keys1: Vec<[u8; 1]> = vec![[0x00], [0x10]];
+        let vals1: Vec<Box<[u8]>> = vec![Box::new([1u8]), Box::new([2u8])];
 
-        for _ in 0..10 {
-            // Create N random keys and values
-            let (keys, vals): (Vec<_>, Vec<_>) = (0..N)
-                .map(|_i| (rng.random::<[u8; 32]>(), rng.random::<[u8; 32]>()))
-                .unzip();
+        let p_parallel1 = db_parallel.propose(keys1.iter().zip(vals1.iter())).unwrap();
+        let p_single1 = db_single.propose(keys1.iter().zip(vals1.iter())).unwrap();
 
-            let p_parallel = db_parallel.propose(keys.iter().zip(vals.iter())).unwrap();
-            let p_single = db_single.propose(keys.iter().zip(vals.iter())).unwrap();
-            let del_parallel = p_parallel.nodestore.deleted().to_vec();
-            let del_single = p_single.nodestore.deleted().to_vec();
-            // inefficient, but MaybePersistedNode doesn't impl neither Ord nor Hash
-            // can't use sort or hashset
-            assert!(
-                del_parallel.len() == del_single.len()
-                    && del_parallel.iter().all(|node| del_single.contains(node))
-            );
-            p_parallel.commit().unwrap();
-            p_single.commit().unwrap();
-        }
+        p_parallel1.commit().unwrap();
+        p_single1.commit().unwrap();
+
+        // Second batch: update only the first key. This is a minimal case that
+        // exposes mismatched persisted deleted nodes between parallel and
+        // single-threaded proposals when the bug is present.
+        let keys2: Vec<[u8; 1]> = vec![[0x00]];
+        let vals2: Vec<Box<[u8]>> = vec![Box::new([3u8])];
+
+        let p_parallel2 = db_parallel.propose(keys2.iter().zip(vals2.iter())).unwrap();
+        let p_single2 = db_single.propose(keys2.iter().zip(vals2.iter())).unwrap();
+
+        let del_parallel = p_parallel2.nodestore.deleted().to_vec();
+        let del_single = p_single2.nodestore.deleted().to_vec();
+
+        assert_eq!(
+            persisted_deleted(&del_parallel),
+            persisted_deleted(&del_single),
+            "persisted deleted nodes should match between parallel and single proposals",
+        );
+
+        p_parallel2.commit().unwrap();
+        p_single2.commit().unwrap();
     }
 
     /// Test that proposing on a proposal works as expected
