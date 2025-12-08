@@ -10,10 +10,11 @@
     reason = "Found 3 occurrences after enabling the lint."
 )]
 
+use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::num::NonZero;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, OnceLock, RwLock};
+use std::sync::{Arc, OnceLock};
 
 use firewood_storage::logger::{trace, warn};
 use metrics::gauge;
@@ -21,13 +22,13 @@ use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
-use crate::root_store::{RootStore, RootStoreError};
+use crate::root_store::RootStore;
 use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal,
-    IntoHashType, NodeStore, TrieHash,
+    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
+    TrieHash,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
@@ -59,12 +60,15 @@ pub struct ConfigManager {
     /// existing contents will be lost.
     #[builder(default = false)]
     pub truncate: bool,
+    /// `RootStore` directory path
+    #[builder(default = None)]
+    pub root_store_dir: Option<PathBuf>,
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
 }
 
-type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
+pub type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
 #[derive(Debug)]
@@ -79,7 +83,7 @@ pub(crate) struct RevisionManager {
     // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
     threadpool: OnceLock<ThreadPool>,
-    root_store: Box<dyn RootStore + Send + Sync>,
+    root_store: Option<RootStore>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -97,16 +101,12 @@ pub(crate) enum RevisionManagerError {
     },
     #[error("An IO error occurred during the commit: {0}")]
     FileIoError(#[from] FileIoError),
-    #[error("A RootStore error occurred")]
-    RootStoreError(#[from] RootStoreError),
+    #[error("A RootStore error occurred: {0}")]
+    RootStoreError(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl RevisionManager {
-    pub fn new(
-        filename: PathBuf,
-        config: ConfigManager,
-        root_store: Box<dyn RootStore + Send + Sync>,
-    ) -> Result<Self, RevisionManagerError> {
+    pub fn new(filename: PathBuf, config: ConfigManager) -> Result<Self, RevisionManagerError> {
         let fb = FileBacked::new(
             filename,
             config.manager.node_cache_size,
@@ -122,6 +122,12 @@ impl RevisionManager {
 
         let storage = Arc::new(fb);
         let nodestore = Arc::new(NodeStore::open(storage.clone())?);
+        let root_store = config
+            .root_store_dir
+            .map(|path| RootStore::new(path, storage.clone()))
+            .transpose()
+            .map_err(RevisionManagerError::RootStoreError)?;
+
         let manager = Self {
             max_revisions: config.manager.max_revisions,
             historical: RwLock::new(VecDeque::from([nodestore.clone()])),
@@ -133,11 +139,7 @@ impl RevisionManager {
         };
 
         if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
-            manager
-                .by_hash
-                .write()
-                .expect("poisoned lock")
-                .insert(hash, nodestore.clone());
+            manager.by_hash.write().insert(hash, nodestore.clone());
         }
 
         if config.truncate {
@@ -152,7 +154,11 @@ impl RevisionManager {
                 },
             )?;
 
-            manager.root_store.add_root(&root_hash, &root_address)?;
+            if let Some(store) = &manager.root_store {
+                store
+                    .add_root(&root_hash, &root_address)
+                    .map_err(RevisionManagerError::RootStoreError)?;
+            }
         }
 
         Ok(manager)
@@ -162,18 +168,18 @@ impl RevisionManager {
     /// To commit a proposal involves a few steps:
     /// 1. Commit check.
     ///    The proposal's parent must be the last committed revision, otherwise the commit fails.
-    /// 2. Persist delete list.
-    ///    The list of all nodes that were to be deleted for this proposal must be fully flushed to disk.
-    ///    The address of the root node and the root hash is also persisted.
-    ///    Note that this is *not* a write ahead log.
     ///    It only contains the address of the nodes that are deleted, which should be very small.
-    /// 3. Revision reaping. If more than the maximum number of revisions are kept in memory, the
-    ///    oldest revision is reaped.
-    /// 4. Persist to disk. This includes flushing everything to disk.
-    /// 5. Persist the revision to `RootStore`.
-    /// 6. Set last committed revision.
+    /// 2. Revision reaping.
+    ///    If more than the maximum number of revisions are kept in memory, the
+    ///    oldest revision is removed from memory. If `RootStore` does not exist,
+    ///    the oldest revision's nodes are added to the free list for space reuse.
+    ///    Otherwise, the oldest revision's nodes are preserved on disk, which
+    ///    is useful for historical queries.
+    /// 3. Persist to disk. This includes flushing everything to disk.
+    /// 4. Persist the revision to `RootStore`.
+    /// 5. Set last committed revision.
     ///    Set last committed revision in memory.
-    /// 7. Proposal Cleanup.
+    /// 6. Proposal Cleanup.
     ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
     #[fastrace::trace(short_name = true)]
     #[crate::metrics("firewood.proposal.commit", "proposal commit to storage")]
@@ -189,79 +195,72 @@ impl RevisionManager {
 
         let mut committed = proposal.as_committed(&current_revision);
 
-        // 2. Persist delete list for this committed revision to disk for recovery
-
-        // 3 Take the deleted entries from the oldest revision and mark them as free for this revision
+        // 2. Revision reaping
+        // When we exceed max_revisions, remove the oldest revision from memory.
+        // If `RootStore` does not exist, add the oldest revision's nodes to the free list.
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
-        while self.historical.read().expect("poisoned lock").len() >= self.max_revisions {
+        while self.historical.read().len() >= self.max_revisions {
             let oldest = self
                 .historical
                 .write()
-                .expect("poisoned lock")
                 .pop_front()
                 .expect("must be present");
-            if let Some(oldest_hash) = oldest.root_hash().or_default_root_hash() {
-                self.by_hash
-                    .write()
-                    .expect("poisoned lock")
-                    .remove(&oldest_hash);
+            let oldest_hash = oldest.root_hash().or_default_root_hash();
+            if let Some(ref hash) = oldest_hash {
+                self.by_hash.write().remove(hash);
             }
 
-            // This `try_unwrap` is safe because nobody else will call `try_unwrap` on this Arc
-            // in a different thread, so we don't have to worry about the race condition where
-            // the Arc we get back is not usable as indicated in the docs for `try_unwrap`.
-            // This guarantee is there because we have a `&mut self` reference to the manager, so
-            // the compiler guarantees we are the only one using this manager.
-            match Arc::try_unwrap(oldest) {
-                Ok(oldest) => oldest.reap_deleted(&mut committed)?,
-                Err(original) => {
-                    warn!("Oldest revision could not be reaped; still referenced");
-                    self.historical
-                        .write()
-                        .expect("poisoned lock")
-                        .push_front(original);
-                    break;
+            // We reap the revision's nodes only if `RootStore` does not exist.
+            if self.root_store.is_none() {
+                // This `try_unwrap` is safe because nobody else will call `try_unwrap` on this Arc
+                // in a different thread, so we don't have to worry about the race condition where
+                // the Arc we get back is not usable as indicated in the docs for `try_unwrap`.
+                // This guarantee is there because we have a `&mut self` reference to the manager, so
+                // the compiler guarantees we are the only one using this manager.
+                match Arc::try_unwrap(oldest) {
+                    Ok(oldest) => oldest.reap_deleted(&mut committed)?,
+                    Err(original) => {
+                        warn!("Oldest revision could not be reaped; still referenced");
+                        self.historical.write().push_front(original);
+                        break;
+                    }
                 }
             }
-            gauge!("firewood.active_revisions")
-                .set(self.historical.read().expect("poisoned lock").len() as f64);
+            gauge!("firewood.active_revisions").set(self.historical.read().len() as f64);
             gauge!("firewood.max_revisions").set(self.max_revisions as f64);
         }
 
-        // 4. Persist to disk.
+        // 3. Persist to disk.
         // TODO: We can probably do this in another thread, but it requires that
         // we move the header out of NodeStore, which is in a future PR.
         committed.persist()?;
 
-        // 5. Persist revision to root store
-        if let (Some(hash), Some(address)) = (committed.root_hash(), committed.root_address()) {
-            self.root_store.add_root(&hash, &address)?;
+        // 4. Persist revision to root store
+        if let Some(store) = &self.root_store
+            && let (Some(hash), Some(address)) = (committed.root_hash(), committed.root_address())
+        {
+            store
+                .add_root(&hash, &address)
+                .map_err(RevisionManagerError::RootStoreError)?;
         }
 
-        // 6. Set last committed revision
+        // 5. Set last committed revision
         let committed: CommittedRevision = committed.into();
-        self.historical
-            .write()
-            .expect("poisoned lock")
-            .push_back(committed.clone());
+        self.historical.write().push_back(committed.clone());
         if let Some(hash) = committed.root_hash().or_default_root_hash() {
-            self.by_hash
-                .write()
-                .expect("poisoned lock")
-                .insert(hash, committed.clone());
+            self.by_hash.write().insert(hash, committed.clone());
         }
 
-        // 7. Proposal Cleanup
+        // 6. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
         // referenced by anyone else.
         self.proposals
             .lock()
-            .expect("poisoned lock")
             .retain(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1);
 
         // then reparent any proposals that have this proposal as a parent
-        for p in &*self.proposals.lock().expect("poisoned lock") {
+        for p in &*self.proposals.lock() {
             proposal.commit_reparent(p);
         }
 
@@ -279,7 +278,6 @@ impl RevisionManager {
     /// To view the database at a specific hash involves a few steps:
     /// 1. Try to find it in committed revisions.
     /// 2. Try to find it in proposals.
-    /// 3. Try to find it in `RootStore`.
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, RevisionManagerError> {
         // 1. Try to find it in committed revisions.
         if let Ok(committed) = self.revision(root_hash.clone()) {
@@ -290,62 +288,60 @@ impl RevisionManager {
         let proposal = self
             .proposals
             .lock()
-            .expect("poisoned lock")
             .iter()
             .find(|p| p.root_hash().as_ref() == Some(&root_hash))
-            .cloned();
+            .cloned()
+            .ok_or(RevisionManagerError::RevisionNotFound {
+                provided: root_hash,
+            })?;
 
-        if let Some(proposal) = proposal {
-            return Ok(proposal);
-        }
-
-        // 3. Try to find it in `RootStore`.
-        let revision_addr =
-            self.root_store
-                .get(&root_hash)?
-                .ok_or(RevisionManagerError::RevisionNotFound {
-                    provided: root_hash.clone(),
-                })?;
-
-        let node_store = NodeStore::with_root(
-            root_hash.into_hash_type(),
-            revision_addr,
-            self.current_revision(),
-        );
-
-        Ok(Arc::new(node_store))
+        Ok(proposal)
     }
 
     pub fn add_proposal(&self, proposal: ProposedRevision) {
-        self.proposals.lock().expect("poisoned lock").push(proposal);
+        self.proposals.lock().push(proposal);
     }
 
     /// TODO: should we support fetching all hashes from `RootStore`?
     pub fn all_hashes(&self) -> Vec<TrieHash> {
         self.historical
             .read()
-            .expect("poisoned lock")
             .iter()
             .filter_map(|r| r.root_hash().or_default_root_hash())
             .chain(
                 self.proposals
                     .lock()
-                    .expect("poisoned lock")
                     .iter()
                     .filter_map(|p| p.root_hash().or_default_root_hash()),
             )
             .collect()
     }
 
+    /// Retrieve a committed revision by its root hash.
+    /// To retrieve a revision involves a few steps:
+    /// 1. Check the in-memory revision manager.
+    /// 2. Check `RootStore` (if it exists).
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
-        self.by_hash
-            .read()
-            .expect("poisoned lock")
+        // 1. Check the in-memory revision manager.
+        if let Some(revision) = self.by_hash.read().get(&root_hash).cloned() {
+            return Ok(revision);
+        }
+
+        // 2. Check `RootStore` (if it exists).
+        let root_store =
+            self.root_store
+                .as_ref()
+                .ok_or(RevisionManagerError::RevisionNotFound {
+                    provided: root_hash.clone(),
+                })?;
+        let revision = root_store
             .get(&root_hash)
-            .cloned()
+            .map_err(RevisionManagerError::RootStoreError)?
             .ok_or(RevisionManagerError::RevisionNotFound {
-                provided: root_hash,
-            })
+                provided: root_hash.clone(),
+            })?;
+
+        Ok(revision)
     }
 
     pub fn root_hash(&self) -> Result<Option<HashKey>, RevisionManagerError> {
@@ -355,7 +351,6 @@ impl RevisionManager {
     pub fn current_revision(&self) -> CommittedRevision {
         self.historical
             .read()
-            .expect("poisoned lock")
             .back()
             .expect("there is always one revision")
             .clone()
@@ -383,16 +378,7 @@ impl RevisionManager {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::root_store::NoOpStore;
     use tempfile::NamedTempFile;
-
-    #[cfg(test)]
-    impl RevisionManager {
-        /// Extract the root store by consuming the revision manager instance.
-        pub fn into_root_store(self) -> Box<dyn RootStore + Send + Sync> {
-            self.root_store
-        }
-    }
 
     #[test]
     fn test_file_advisory_lock() {
@@ -406,16 +392,14 @@ mod tests {
             .build();
 
         // First database instance should open successfully
-        let first_manager =
-            RevisionManager::new(db_path.clone(), config.clone(), Box::new(NoOpStore {}));
+        let first_manager = RevisionManager::new(db_path.clone(), config.clone());
         assert!(
             first_manager.is_ok(),
             "First database should open successfully"
         );
 
         // Second database instance should fail to open due to file locking
-        let second_manager =
-            RevisionManager::new(db_path.clone(), config.clone(), Box::new(NoOpStore {}));
+        let second_manager = RevisionManager::new(db_path.clone(), config.clone());
         assert!(
             second_manager.is_err(),
             "Second database should fail to open"
@@ -435,7 +419,7 @@ mod tests {
         drop(first_manager.unwrap());
 
         // Now the second database should open successfully
-        let third_manager = RevisionManager::new(db_path, config, Box::new(NoOpStore {}));
+        let third_manager = RevisionManager::new(db_path, config);
         assert!(
             third_manager.is_ok(),
             "Database should open after first instance is dropped"

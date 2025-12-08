@@ -1,10 +1,12 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::path::PathBuf;
+
 use firewood::{
     db::{Db, DbConfig},
     manager::RevisionManagerConfig,
-    v2::api::{self, ArcDynDbView, Db as _, DbView, HashKey, HashKeyExt, KeyType},
+    v2::api::{self, ArcDynDbView, Db as _, DbView, HashKey, HashKeyExt, IntoBatchIter, KeyType},
 };
 
 use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
@@ -20,10 +22,21 @@ use metrics::counter;
 pub struct DatabaseHandleArgs<'a> {
     /// The path to the database file.
     ///
-    /// This must be a valid UTF-8 string, even on Windows.
+    /// This must be a valid UTF-8 string.
     ///
     /// If this is empty, an error will be returned.
     pub path: BorrowedBytes<'a>,
+
+    /// The path to the `RootStore` directory.
+    ///
+    /// This must be a valid UTF-8 string.
+    ///
+    /// If this is empty, then the archival feature is disabled.
+    ///
+    /// Note: Setting this directory will only track new revisions going forward
+    /// and will not contain revisions from a prior database instance that didn't
+    /// set a `root_store_path`.
+    pub root_store_path: BorrowedBytes<'a>,
 
     /// The size of the node cache.
     ///
@@ -100,9 +113,19 @@ impl DatabaseHandle {
     ///
     /// If the path is empty, or if the configuration is invalid, this will return an error.
     pub fn new(args: DatabaseHandleArgs<'_>) -> Result<Self, api::Error> {
+        let root_store_path = args
+            .root_store_path
+            .as_str()
+            .map_err(|e| invalid_data(format!("root store path contains invalid utf-8: {e}")))?;
+
+        let root_store_dir = Some(root_store_path)
+            .filter(|s| !s.is_empty())
+            .map(PathBuf::from);
+
         let cfg = DbConfig::builder()
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
+            .root_store_dir(root_store_dir)
             .build();
 
         let path = args
@@ -211,6 +234,18 @@ impl DatabaseHandle {
     pub(crate) fn clear_cached_view(&self) {
         self.cached_view.clear();
     }
+
+    pub(crate) fn merge_key_value_range(
+        &self,
+        first_key: Option<impl KeyType>,
+        last_key: Option<impl KeyType>,
+        key_values: impl IntoIterator<Item: api::KeyValuePair>,
+    ) -> Result<CreateProposalResult<'_>, api::Error> {
+        CreateProposalResult::new(self, || {
+            self.db
+                .merge_key_value_range(first_key, last_key, key_values)
+        })
+    }
 }
 
 impl From<Db> for DatabaseHandle {
@@ -227,11 +262,11 @@ impl<'db> CView<'db> for &'db crate::DatabaseHandle {
         self
     }
 
-    fn create_proposal<'kvp>(
+    fn create_proposal(
         self,
-        values: impl AsRef<[KeyValuePair<'kvp>]> + 'kvp,
+        values: impl IntoBatchIter,
     ) -> Result<firewood::db::Proposal<'db>, api::Error> {
-        self.db.propose(values.as_ref().iter())
+        self.db.propose(values)
     }
 }
 

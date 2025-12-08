@@ -5,14 +5,13 @@ use crate::manager::RevisionManagerError;
 use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
 use crate::proof::{Proof, ProofError, ProofNode};
-use crate::root_store::RootStoreError;
 use firewood_storage::{FileIoError, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 pub use crate::range_proof::RangeProof;
-pub use crate::v2::batch_op::{BatchOp, KeyValuePair, KeyValuePairIter, MapIntoBatch};
+pub use crate::v2::batch_op::{BatchIter, BatchOp, IntoBatchIter, KeyValuePair, TryIntoBatch};
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with
@@ -133,7 +132,7 @@ pub enum Error {
 
     #[error("RootStore error: {0}")]
     /// A `RootStore` error occurred
-    RootStoreError(#[from] RootStoreError),
+    RootStoreError(#[source] Box<dyn std::error::Error + Send + Sync>),
 
     /// Cannot commit a committed proposal
     #[error("Cannot commit a committed proposal")]
@@ -174,6 +173,12 @@ pub enum Error {
     // Error converting a u8 index into a path component
     #[error("error converting a u8 index into a path component")]
     InvalidConversionToPathComponent,
+}
+
+impl From<std::convert::Infallible> for Error {
+    fn from(value: std::convert::Infallible) -> Self {
+        match value {}
+    }
 }
 
 impl From<RevisionManagerError> for Error {
@@ -257,10 +262,7 @@ pub trait Db {
     /// * `data` - A batch consisting of [`BatchOp::Put`] and [`BatchOp::Delete`]
     ///   operations to apply
     #[expect(clippy::missing_errors_doc)]
-    fn propose(
-        &self,
-        data: impl IntoIterator<IntoIter: KeyValuePairIter>,
-    ) -> Result<Self::Proposal<'_>, Error>;
+    fn propose(&self, data: impl IntoBatchIter) -> Result<Self::Proposal<'_>, Error>;
 }
 
 /// A view of the database at a specific time.
@@ -273,7 +275,7 @@ pub trait Db {
 /// 3. From [`Proposal::propose`] which is a view on top of another proposal.
 pub trait DbView {
     /// The type of a stream of key/value pairs
-    type Iter<'view>: Iterator<Item = Result<(Key, Value), Error>>
+    type Iter<'view>: Iterator<Item = Result<(Key, Value), FileIoError>>
     where
         Self: 'view;
 
@@ -337,7 +339,8 @@ pub trait DbView {
 }
 
 /// A boxed iterator over key/value pairs.
-pub type BoxKeyValueIter<'view> = Box<dyn Iterator<Item = Result<(Key, Value), Error>> + 'view>;
+pub type BoxKeyValueIter<'view> =
+    Box<dyn Iterator<Item = Result<(Key, Value), FileIoError>> + 'view>;
 
 /// A dynamic dyspatch version of [`DbView`] that can be shared.
 pub type ArcDynDbView = Arc<dyn DynDbView>;
@@ -467,10 +470,7 @@ pub trait Proposal: DbView {
     ///
     /// A new proposal
     #[expect(clippy::missing_errors_doc)]
-    fn propose(
-        &self,
-        data: impl IntoIterator<IntoIter: KeyValuePairIter>,
-    ) -> Result<Self::Proposal, Error>;
+    fn propose(&self, data: impl IntoBatchIter) -> Result<Self::Proposal, Error>;
 }
 
 #[cfg(test)]
@@ -479,7 +479,6 @@ mod tests {
 
     #[test]
     #[cfg(feature = "ethhash")]
-    #[expect(deprecated, reason = "transitive dependency on generic-array")]
     fn test_ethhash_compat_default_root_hash_equals_empty_rlp_hash() {
         use sha3::Digest as _;
 

@@ -42,7 +42,6 @@ pub use crate::proposal::*;
 pub use crate::revision::*;
 pub use crate::value::*;
 
-#[cfg(unix)]
 #[global_allocator]
 #[doc(hidden)]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
@@ -283,9 +282,9 @@ pub unsafe extern "C" fn fwd_free_iterator(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_get_revision(
     db: Option<&DatabaseHandle>,
-    root: BorrowedBytes,
+    root: HashKey,
 ) -> RevisionResult {
-    invoke_with_handle(db, move |db| db.get_revision(root.as_ref().try_into()?))
+    invoke_with_handle(db, move |db| db.get_revision(root.into()))
 }
 
 /// Gets the value associated with the given key from the provided revision handle.
@@ -398,12 +397,10 @@ pub unsafe extern "C" fn fwd_get_from_proposal(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_get_from_root(
     db: Option<&DatabaseHandle>,
-    root: BorrowedBytes,
+    root: HashKey,
     key: BorrowedBytes,
 ) -> ValueResult {
-    invoke_with_handle(db, move |db| {
-        db.get_from_root(root.as_ref().try_into()?, key)
-    })
+    invoke_with_handle(db, move |db| db.get_from_root(root.into(), key))
 }
 
 /// Puts the given key-value pairs into the database.

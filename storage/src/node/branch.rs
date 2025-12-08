@@ -246,7 +246,6 @@ mod ethhash {
         fn eq(&self, other: &TrieHash) -> bool {
             match self {
                 HashOrRlp::Hash(h) => h == other,
-                #[expect(deprecated, reason = "transitive dependency on generic-array")]
                 HashOrRlp::Rlp(r) => Keccak256::digest(r.as_ref()).as_slice() == other.as_ref(),
             }
         }
@@ -256,7 +255,6 @@ mod ethhash {
         fn eq(&self, other: &HashOrRlp) -> bool {
             match other {
                 HashOrRlp::Hash(h) => h == self,
-                #[expect(deprecated, reason = "transitive dependency on generic-array")]
                 HashOrRlp::Rlp(r) => Keccak256::digest(r.as_ref()).as_slice() == self.as_ref(),
             }
         }
@@ -436,14 +434,11 @@ impl Debug for BranchNode {
             }
         }
 
-        write!(
-            f,
-            " v={}]",
-            match &self.value {
-                Some(v) => hex::encode(&**v),
-                None => "nil".to_string(),
-            }
-        )
+        let value: &dyn std::fmt::Display = match self.value.as_deref() {
+            Some(v) => &super::DisplayTruncatedHex(v),
+            None => &"nil",
+        };
+        write!(f, "v={value}]")
     }
 }
 

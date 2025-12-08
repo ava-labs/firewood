@@ -74,16 +74,9 @@ as well as carefully managing the free list during the creation and expiration o
 - `Commit` - The operation of applying one or more `Proposal`s to the most recent
   `Revision`.
 
-## Documentation
+## Metrics
 
-### Key Features Documentation
-
-- **[Diff Algorithms Guide](./firewood/DIFF_ALGORITHMS.md)** - Comprehensive guide explaining Firewood's trie diff algorithms with visualizations, examples, and performance analysis. Covers simple, optimized, and parallel diff implementations.
-
-### Examples
-
-- `cargo run --example diff_metrics` - Benchmark diff algorithms on large datasets
-- `cargo run --example diff_visualization` - Visual demonstration of diff algorithms
+Firewood provides comprehensive metrics for monitoring database performance, resource utilization, and operational characteristics. For detailed information about all available metrics, how to enable them, and how to interpret them, see [METRICS.md](METRICS.md).
 
 ## Build
 
@@ -139,7 +132,12 @@ We currently have very few logging statements, but this is useful for print-styl
 
 ## Release
 
-See the [release documentation](./RELEASE.md) for detailed information on how to release Firewood.
+See the [release documentation](./RELEASE.md) for detailed information on how to
+release Firewood.
+
+## Supported Platforms
+
+Firewood follows the same compatibility matrix as [AvalancheGo](https://github.com/ava-labs/avalanchego?tab=readme-ov-file#supported-platforms).
 
 ## CLI
 
