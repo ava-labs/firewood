@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
-	"sync"
 	"unsafe"
 )
 
@@ -59,10 +58,6 @@ type RangeProof struct {
 	// unmarshalling or when [RangeProof.Verify] is used. It is disowned after
 	// [Database.VerifyAndCommitRangeProof] or [RangeProof.Free].
 	keepAliveHandle databaseKeepAliveHandle
-
-	// commitLock is used to ensure that methods accessing the latest state do not conflict.
-	// Inherited from the database to which this proof is tied.
-	commitLock *sync.Mutex
 }
 
 // ChangeProof represents a proof of changes between two roots for a range of keys.
@@ -104,7 +99,7 @@ func (db *Database) RangeProof(
 		max_length: C.uint32_t(maxLength),
 	}
 
-	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof(db.handle, args), &db.commitLock)
+	return getRangeProofFromRangeProofResult(C.fwd_db_range_proof(db.handle, args))
 }
 
 // Verify verifies the provided range [proof] proves the values in the range
@@ -202,6 +197,8 @@ func (db *Database) VerifyAndCommitRangeProof(
 	var hash Hash
 	err := proof.keepAliveHandle.disown(true /* evenOnError */, func() error {
 		var err error
+		db.commitLock.Lock()
+		defer db.commitLock.Unlock()
 		hash, err = getHashKeyFromHashResult(C.fwd_db_verify_and_commit_range_proof(db.handle, args))
 		return err
 	})
@@ -236,7 +233,7 @@ func (p *RangeProof) UnmarshalBinary(data []byte) error {
 	defer pinner.Unpin()
 
 	handle, err := getRangeProofFromRangeProofResult(
-		C.fwd_range_proof_from_bytes(newBorrowedBytes(data, &pinner)), p.commitLock)
+		C.fwd_range_proof_from_bytes(newBorrowedBytes(data, &pinner)))
 
 	if err == nil {
 		p.handle = handle.handle
@@ -477,7 +474,7 @@ func getNextKeyRangeFromNextKeyRangeResult(result C.NextKeyRangeResult) (*NextKe
 	}
 }
 
-func getRangeProofFromRangeProofResult(result C.RangeProofResult, commitLock *sync.Mutex) (*RangeProof, error) {
+func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, error) {
 	switch result.tag {
 	case C.RangeProofResult_NullHandlePointer:
 		return nil, errDBClosed
@@ -490,8 +487,7 @@ func getRangeProofFromRangeProofResult(result C.RangeProofResult, commitLock *sy
 	case C.RangeProofResult_Ok:
 		ptr := *(**C.RangeProofContext)(unsafe.Pointer(&result.anon0))
 		return &RangeProof{
-			handle:     ptr,
-			commitLock: commitLock,
+			handle: ptr,
 		}, nil
 	case C.RangeProofResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
