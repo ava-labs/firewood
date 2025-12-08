@@ -160,7 +160,6 @@ jobs:
           comment-on-alert: false
 
       - name: Summary
-        if: always()
         run: |
           echo "## Firewood Performance Benchmark Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
