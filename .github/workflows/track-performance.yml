@@ -30,7 +30,7 @@ on:
         description: 'Block directory source (e.g., cchain-mainnet-blocks-1m-ldb [without S3 path])'
         default: ''
       current-state-dir-src:
-        description: 'Current state directory source e.g., cchain-mainnet-blocks-30m-40m-ldb (without S3 path)'
+        description: 'Current state directory source (e.g., cchain-mainnet-blocks-30m-40m-ldb [without S3 path])'
         default: ''
       runner:
         description: 'Runner to use in AvalancheGo'
