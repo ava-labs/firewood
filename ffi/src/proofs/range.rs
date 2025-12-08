@@ -5,7 +5,8 @@ use std::num::NonZeroUsize;
 
 use firewood::{
     logger::warn,
-    v2::api::{self, FrozenRangeProof, HashKey},
+    proof::ProofError,
+    v2::api::{self, DbView, FrozenRangeProof, HashKey},
 };
 
 use crate::{
@@ -102,6 +103,26 @@ impl From<FrozenRangeProof> for RangeProofContext<'_> {
 }
 
 impl<'db> RangeProofContext<'db> {
+    /// Verify the range proof against the given constraints.
+    ///
+    /// If the proof has already been verified with the same constraints, this
+    /// is a no-op.
+    ///
+    /// If the proof has already been verified with different constraints, an
+    /// error is returned.
+    ///
+    /// Otherwise, the proof is verified and the verification context is stored.
+    ///
+    /// This does not require a database handle as it only verifies the proof
+    /// without considering the current database state. Use
+    /// [`RangeProofContext::verify_and_propose`] to prepare a proposal against
+    /// a specific database and [`RangeProofContext::verify_and_commit`] to
+    /// commit the proof to a database.
+    ///
+    /// ## ⚠️ Unimplemented ⚠️
+    ///
+    /// Currently, this is a stub implementation that does not perform any
+    /// verification steps.
     fn verify(
         &mut self,
         root: HashKey,
@@ -119,9 +140,7 @@ impl<'db> RangeProofContext<'db> {
                 return Ok(());
             }
 
-            return Err(api::Error::ProofError(
-                firewood::proof::ProofError::ValueMismatch,
-            ));
+            return Err(api::Error::ProofError(ProofError::ValueMismatch));
         }
 
         debug_assert!(self.verification.is_none());
@@ -136,6 +155,17 @@ impl<'db> RangeProofContext<'db> {
         Ok(())
     }
 
+    /// Verify the range proof and prepare a proposal against the given database
+    /// without committing it.
+    ///
+    /// If the proof has already been verified, the cached validation context
+    /// allows us to skip verifying again.
+    ///
+    /// If a proposal has already been prepared or the previously prepared
+    /// proposal has been committed, this is a no-op.
+    ///
+    /// Returns an error if verification fails or if a database error occurs
+    /// while preparing the proposal.
     fn verify_and_propose(
         &mut self,
         db: &'db crate::DatabaseHandle,
@@ -156,6 +186,19 @@ impl<'db> RangeProofContext<'db> {
         Ok(())
     }
 
+    /// Verify and commit the range proof to the given database.
+    ///
+    /// If the proof has already been verified, the cached validation context is
+    /// used to skip re-verifying it. Similarly, if a proposal has already been
+    /// prepared, it is committed instead of preparing a new one.
+    ///
+    /// However, if the prepared proposal is no longer valid (e.g., the
+    /// database has changed since it was prepared), the proposal is discared
+    /// and a just-in-time proposal is created and committed.
+    ///
+    /// After committing or if the proof has already been committed, the
+    /// resulting root hash is returned. This hash may not be equal to the
+    /// target hash if the proof was not of the full range.
     fn verify_and_commit(
         &mut self,
         db: &'db crate::DatabaseHandle,
@@ -204,27 +247,45 @@ impl<'db> RangeProofContext<'db> {
         Ok(hash)
     }
 
+    /// Returns the next key range that should be fetched after processing this
+    /// range proof, or [`None`] if there are no more keys to fetch.
+    ///
+    /// The returned key range represents `(finalKey, endKey]` where finalKey is
+    /// is the last key known to be fully synchronized within the requested
+    /// range. `finalKey` is exclusive, meaning it has already been processed.
+    /// `endKey` is inclusive if provided during proof creation.
+    ///
+    /// Because the proof includes hash information about the state of the
+    /// database outside of the range of key-value pairs included in the proof,
+    /// we are able to inspect the database and provide a more accurate value
+    /// for `finalKey` than simply the last key in the set of key-value pairs.
     fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
-        // TODO(#352): proper implementation, this naively retuns the last key in
+        // TODO(#352): proper implementation, this naively returns the last key in
         // in the range, which is correct, but not ideal.
-        let verification = self.verification.as_ref().ok_or(api::Error::ProofError(
-            firewood::proof::ProofError::Unverified,
-        ))?;
-        if self.proposal_state.is_none() {
-            return Err(api::Error::ProofError(
-                firewood::proof::ProofError::Unverified,
-            ));
+        let verification = self
+            .verification
+            .as_ref()
+            .ok_or(api::Error::ProofError(ProofError::Unverified))?;
+
+        let Some((last_key, _)) = self.proof.key_values().last() else {
+            // no key-values in the proof, so we are done
+            return Ok(None);
+        };
+
+        let root_hash = match self.proposal_state {
+            Some(ProposalState::Committed(ref hash)) => Ok(hash.clone()),
+            Some(ProposalState::Proposed(ref proposal)) => proposal.root_hash(),
+            None => Err(api::Error::ProofError(ProofError::Unverified)),
+        }?;
+        if root_hash.as_ref() == Some(&verification.root) {
+            // already at the target root, so we are done
+            return Ok(None);
         }
 
         if self.proof.end_proof().is_empty() {
             // unbounded, so we are done
             return Ok(None);
         }
-
-        let Some((last_key, _)) = self.proof.key_values().last() else {
-            // no key-values in the proof, so we are done
-            return Ok(None);
-        };
 
         if let Some(ref end_key) = verification.end_key
             && **last_key >= **end_key
@@ -501,9 +562,8 @@ pub extern "C" fn fwd_range_proof_from_bytes(
     bytes: BorrowedBytes<'_>,
 ) -> RangeProofResult<'static> {
     crate::invoke(move || {
-        FrozenRangeProof::from_slice(&bytes).map_err(|err| {
-            api::Error::ProofError(firewood::proof::ProofError::Deserialization(err))
-        })
+        FrozenRangeProof::from_slice(&bytes)
+            .map_err(|err| api::Error::ProofError(ProofError::Deserialization(err)))
     })
 }
 
