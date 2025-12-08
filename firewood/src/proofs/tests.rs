@@ -6,10 +6,13 @@
 use integer_encoding::VarInt;
 use test_case::test_case;
 
-use crate::{
-    proofs::{header::InvalidHeader, magic, proof_type::ProofType, reader::ReadError},
-    v2::api::FrozenRangeProof,
+use super::{
+    header::InvalidHeader,
+    magic,
+    reader::ReadError,
+    types::ProofType,
 };
+use crate::v2::api::FrozenRangeProof;
 
 fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
     let merkle = crate::merkle::tests::init_merkle((0u8..=10).map(|k| ([k], [k])));

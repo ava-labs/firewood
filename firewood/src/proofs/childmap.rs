@@ -1,6 +1,31 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+//! Compact bitmap representation for tracking present children in proof nodes.
+//!
+//! This module provides the [`ChildrenMap`] type, which is used internally during
+//! proof serialization to efficiently encode which children are present in a node.
+//! Instead of serializing each child slot individually (which would require many bytes
+//! for sparse nodes), the bitmap allows encoding the presence or absence of up to 256
+//! children in just 32 bytes (for branch factor 256) or 2 bytes (for branch factor 16).
+//!
+//! # Serialization Efficiency
+//!
+//! The [`ChildrenMap`] provides significant space savings during proof serialization:
+//!
+//! - **Branch factor 16**: Uses 2 bytes to represent which of 16 children are present
+//! - **Branch factor 256**: Uses 32 bytes to represent which of 256 children are present
+//!
+//! This is especially beneficial for sparse nodes where only a few children exist,
+//! as the serialization size is fixed regardless of how many children are actually
+//! present. The deserializer can quickly scan the bitmap to determine which child
+//! hashes to expect in the serialized data.
+//!
+//! # Internal Use Only
+//!
+//! This type is not part of the public API and is only used internally by the proof
+//! serialization and deserialization logic in the `ser` and `de` modules.
+
 use firewood_storage::{Children, PathComponent};
 
 #[derive(Clone, Copy, PartialEq, Eq, bytemuck_derive::Pod, bytemuck_derive::Zeroable)]

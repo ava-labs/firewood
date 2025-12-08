@@ -234,7 +234,7 @@ fn exclusion_with_proof_value_present() {
 
 #[test]
 fn proof_path_construction_and_corruption() {
-    use crate::proof::{Proof, ProofNode};
+    use crate::{Proof, ProofNode};
 
     // Build a trie with several entries
     let mut merkle = crate::merkle::tests::create_in_memory_merkle();
@@ -278,7 +278,7 @@ fn proof_path_construction_and_corruption() {
     // Node traversal should fail
     assert!(matches!(
         err,
-        crate::proof::ProofError::NodeNotInTrie | crate::proof::ProofError::UnexpectedHash
+        crate::ProofError::NodeNotInTrie | crate::ProofError::UnexpectedHash
     ));
 }
 

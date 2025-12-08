@@ -477,7 +477,7 @@ pub extern "C" fn fwd_range_proof_from_bytes(
 ) -> RangeProofResult<'static> {
     crate::invoke(move || {
         FrozenRangeProof::from_slice(&bytes).map_err(|err| {
-            api::Error::ProofError(firewood::proof::ProofError::Deserialization(err))
+            api::Error::ProofError(firewood::ProofError::Deserialization(err))
         })
     })
 }
