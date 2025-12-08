@@ -70,6 +70,8 @@ plain_hasher = "0.2.3"
 rlp = "0.6.1"
 sha3 = "0.10.8"
 metrics-util = "0.19.0"
+tikv-jemallocator = "0.6.1"
+tikv-jemalloc-ctl = { version = "0.6.1", features = ["stats"] }
 
 [[bench]]
 name = "hashops"

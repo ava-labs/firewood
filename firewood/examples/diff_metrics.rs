@@ -85,7 +85,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use clap::Parser;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use std::collections::HashSet;
 use std::error::Error;
 use std::num::NonZeroUsize;
@@ -96,6 +96,10 @@ use firewood::diff::{ParallelDiff, diff_merkle_optimized, diff_merkle_simple};
 use firewood::manager::RevisionManagerConfig;
 use firewood::merkle::{Key, Merkle};
 use firewood::v2::api::{Db as _, DbView as _, Proposal as _};
+use tikv_jemalloc_ctl::{epoch, stats};
+
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 /// Command-line arguments for the diff metrics example.
 #[derive(Parser, Debug)]
@@ -303,13 +307,24 @@ fn main() -> Result<(), Box<dyn Error>> {
         diff_merkle_simple(&left_merkle, &right_merkle, start_key.clone());
     let t_simple = t_simple_start.elapsed();
 
+    epoch::advance().unwrap();
+    let allocated_before = stats::allocated::read().unwrap();
+
     println!("Running optimized diff...");
     let t_opt_start = Instant::now();
     let mut opt_iter = diff_merkle_optimized(&left_merkle, &right_merkle, start_key);
     let ops_optimized: Vec<_> = opt_iter.by_ref().collect();
     let t_opt = t_opt_start.elapsed();
 
+    epoch::advance().unwrap();
+    let allocated_after = stats::allocated::read().unwrap();
+    println!(
+        "allocated diff: {}",
+        (allocated_after.saturating_sub(allocated_before) as f64) / (1024.0 * 1024.0)
+    );
+
     println!("Running parallel optimized diff...");
+
     let t_par_start = Instant::now();
     let (ops_parallel, par_metrics) = ParallelDiff::diff(&left_merkle, &right_merkle, Box::new([]));
     let t_par = t_par_start.elapsed();
