@@ -310,7 +310,7 @@ Benchmarks can be triggered locally using `just benchmark` (requires nix).
 | `firewood` | Firewood commit/branch/tag | `HEAD` (currently checked out commit) |
 | `avalanchego` | AvalancheGo commit/branch/tag | `master` |
 | `task` | Benchmark task name | `c-chain-reexecution-firewood-101-250k` |
-| `runner` | GitHub Actions runner (list can be found [here](https://github.com/ava-labs/devops-argocd/blob/main/base/system/actions-runners/action-runner.yaml) -> ctrl+f "runnerScaleSetName") | `avalanche-avalanchego-runner-2ti` |
+| `runner` | GitHub Actions runner (see [runner config](https://github.com/ava-labs/devops-argocd/blob/main/base/system/actions-runners/action-runner.yaml), search for "runnerScaleSetName") | `avalanche-avalanchego-runner-2ti` |
 | `libevm` | libevm commit/branch/tag (optional) | `` |
 
 **Task Names:**
