@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       firewood:
-        description: 'Firewood commit/branch/tag to test (leave empty for current HEAD)'
+        description: 'Firewood commit/branch/tag to test (leave empty to use the commit that triggered the workflow)'
         default: ''
       libevm:
         description: 'libevm commit/branch/tag to test (leave empty to skip)'
@@ -82,7 +82,7 @@ jobs:
           
           if [ -n "${{ inputs.task }}" ]; then
             # Task-based mode: use just command
-            RUN_ID=$(just benchmark-trigger "$FIREWOOD" "${{ inputs.avalanchego }}" "${{ inputs.task }}" "${{ inputs.runner }}" "${{ inputs.libevm }}")
+            RUN_ID=$(just trigger-benchmark "$FIREWOOD" "${{ inputs.avalanchego }}" "${{ inputs.task }}" "${{ inputs.runner }}" "${{ inputs.libevm }}")
           else
             # Granular mode: use direct gh with custom params
             LIBEVM_FLAG=""
@@ -124,7 +124,7 @@ jobs:
 
       - name: Wait for benchmark completion
         shell: nix develop ./ffi --command bash {0}
-        run: just benchmark-wait "${{ steps.trigger.outputs.run_id }}"
+        run: just wait-benchmark "${{ steps.trigger.outputs.run_id }}"
         env:
           GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
         timeout-minutes: 60
@@ -133,7 +133,7 @@ jobs:
         id: download
         shell: nix develop ./ffi --command bash {0}
         run: |
-          just benchmark-download "${{ steps.trigger.outputs.run_id }}"
+          just download-benchmark-results "${{ steps.trigger.outputs.run_id }}"
           
           # Determine target dashboard
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
@@ -146,6 +146,8 @@ jobs:
           GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
 
       - name: Store benchmark results
+        id: store
+        continue-on-error: true
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: C-Chain Reexecution Performance
@@ -155,12 +157,14 @@ jobs:
           auto-push: true
           gh-pages-branch: benchmark-data
           benchmark-data-dir-path: ${{ steps.download.outputs.data-dir }}
-          # Don't fail the workflow if there's an issue with benchmark storage
           fail-on-alert: false
           comment-on-alert: false
 
       - name: Summary
         run: |
+          if [ "${{ steps.store.outcome }}" == "failure" ]; then
+            echo "::warning::Benchmark storage failed - results were not saved to GitHub Pages"
+          fi
           echo "## Firewood Performance Benchmark Results" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY

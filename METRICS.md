@@ -287,7 +287,11 @@ rate(firewood_proposal_commit[5m])
 
 ## Performance Tracking
 
-Firewood tracks its performance over time by running C-Chain reexecution benchmarks in AvalancheGo. This allows us to:
+Firewood tracks its performance over time by running [C-Chain reexecution benchmarks](https://github.com/ava-labs/avalanchego/blob/master/tests/reexecute/c/README.md) in AvalancheGo. These benchmarks re-execute historical mainnet C-Chain blocks against a state snapshot, measuring throughput in mgas/s (million gas per second).
+
+By default, the benchmark processes ~250,000 blocks (101 → 250k) and takes approximately 7 minutes on self-hosted runners.
+
+This allows us to:
 
 - Monitor performance across commits and releases
 - Catch performance regressions early
@@ -297,7 +301,45 @@ Performance data is collected via the `Track Performance` workflow and published
 
 ### Running Benchmarks Locally
 
-Benchmarks can be triggered locally using just commands (requires nix):
+Benchmarks can be triggered locally using `just benchmark` (requires nix).
+
+**Parameters:**
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `firewood` | Firewood commit/branch/tag | `HEAD` (currently checked out commit) |
+| `avalanchego` | AvalancheGo commit/branch/tag | `master` |
+| `task` | Benchmark task name | `c-chain-reexecution-firewood-101-250k` |
+| `runner` | GitHub Actions runner (list can be found [here](https://github.com/ava-labs/devops-argocd/blob/main/base/system/actions-runners/action-runner.yaml) -> ctrl+f "runnerScaleSetName") | `avalanche-avalanchego-runner-2ti` |
+| `libevm` | libevm commit/branch/tag (optional) | `` |
+
+**Task Names:**
+
+Predefined tasks follow the pattern `c-chain-reexecution-{db}-{start}-{end}` where:
+
+- `{db}` - database backend (e.g., `firewood`, `hashdb`)
+- `{start}` - start block number
+- `{end}` - end block (e.g., `250k` for 250,000 or `1m` for 1,000,000)
+
+To find available tasks, run in the [AvalancheGo](https://github.com/ava-labs/avalanchego/) repo:
+
+```bash
+./scripts/run_task.sh --list | grep "c-chain-reexecution"
+```
+
+See the [AvalancheGo C-Chain benchmark docs](https://github.com/ava-labs/avalanchego/blob/master/tests/reexecute/c/README.md) for the full list and details.
+
+**Granular Inputs:**
+
+If no predefined task fits your needs, leave `task` empty and use granular inputs via the CI workflow:
+
+- `config` - VM config (e.g., `archive`, `firewood`)
+- `start-block` - first block to execute
+- `end-block` - last block to execute
+- `block-dir-src` - S3 source for block data
+- `current-state-dir-src` - S3 source for state snapshot
+
+**Examples:**
 
 ```bash
 # Run with defaults (current HEAD, master, default task/runner)
@@ -319,34 +361,24 @@ just benchmark \
   libevm=v1.0.0
 ```
 
-**Parameters:**
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `firewood` | Firewood commit/branch/tag | `HEAD` |
-| `avalanchego` | AvalancheGo commit/branch/tag | `master` |
-| `task` | Benchmark task name | `c-chain-reexecution-firewood-101-250k` |
-| `runner` | GitHub Actions runner | `avalanche-avalanchego-runner-2ti` |
-| `libevm` | libevm commit/branch/tag (optional) | `` |
-
 ### Composable Commands
 
 Individual steps can be run separately:
 
 ```bash
 # Trigger benchmark, returns run_id
-just benchmark-trigger \
+just trigger-benchmark \
   firewood=v0.0.15 \
   avalanchego=master \
   task=c-chain-reexecution-firewood-101-250k \
   runner=avalanche-avalanchego-runner-2ti
 
 # Wait for a specific run to complete
-just benchmark-wait run_id=19938272417
+just wait-benchmark run_id=19938272417
 
 # Download results from a specific run
-just benchmark-download run_id=19938272417
+just download-benchmark-results run_id=19938272417
 
 # List recent benchmark runs
-just benchmark-list
+just list-benchmarks
 ```
