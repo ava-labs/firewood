@@ -28,18 +28,17 @@ pub trait IntoHashType {
     fn into_hash_type(self) -> HashType;
 }
 
-#[cfg(feature = "ethhash")]
 impl IntoHashType for crate::TrieHash {
     #[inline]
     fn into_hash_type(self) -> HashType {
-        self.into()
-    }
-}
+        #[cfg(feature = "ethhash")]
+        {
+            self.into()
+        }
 
-#[cfg(not(feature = "ethhash"))]
-impl IntoHashType for crate::TrieHash {
-    #[inline]
-    fn into_hash_type(self) -> HashType {
-        self
+        #[cfg(not(feature = "ethhash"))]
+        {
+            self
+        }
     }
 }
