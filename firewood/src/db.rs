@@ -385,7 +385,8 @@ mod test {
     use std::path::PathBuf;
 
     use firewood_storage::{
-        CheckOpt, CheckerError, HashedNodeReader, IntoHashType, NodeStore, TrieHash,
+        CheckOpt, CheckerError, HashedNodeReader, IntoHashType, LinearAddress, MaybePersistedNode,
+        NodeStore, TrieHash,
     };
 
     use crate::db::{Db, Proposal, UseParallel};
@@ -798,6 +799,64 @@ mod test {
         }
     }
 
+    #[test]
+    fn test_propose_parallel_vs_normal_propose() {
+        fn persisted_deleted(nodes: &[MaybePersistedNode]) -> Vec<LinearAddress> {
+            let mut addresses: Vec<_> = nodes
+                .iter()
+                .filter_map(MaybePersistedNode::as_linear_address)
+                .collect();
+            addresses.sort();
+            addresses
+        }
+
+        let parallel_db = TestDb::new_with_config(
+            DbConfig::builder()
+                .use_parallel(UseParallel::Always)
+                .build(),
+        );
+        let single_threaded_db =
+            TestDb::new_with_config(DbConfig::builder().use_parallel(UseParallel::Never).build());
+
+        // First batch: insert two keys with different first nibbles so they are
+        // handled by different workers in the parallel merkle implementation.
+        let initial_keys: Vec<[u8; 1]> = vec![[0x00], [0x10]];
+        let initial_values: Vec<Box<[u8]>> = vec![Box::new([1u8]), Box::new([2u8])];
+
+        let initial_parallel_proposal = parallel_db
+            .propose(initial_keys.iter().zip(initial_values.iter()))
+            .unwrap();
+        let initial_single_proposal = single_threaded_db
+            .propose(initial_keys.iter().zip(initial_values.iter()))
+            .unwrap();
+
+        initial_parallel_proposal.commit().unwrap();
+        initial_single_proposal.commit().unwrap();
+
+        // Second batch: update only the first key.
+        let update_keys: Vec<[u8; 1]> = vec![[0x00]];
+        let update_values: Vec<Box<[u8]>> = vec![Box::new([3u8])];
+
+        let update_parallel_proposal = parallel_db
+            .propose(update_keys.iter().zip(update_values.iter()))
+            .unwrap();
+        let update_single_proposal = single_threaded_db
+            .propose(update_keys.iter().zip(update_values.iter()))
+            .unwrap();
+
+        let parallel_deleted = update_parallel_proposal.nodestore.deleted().to_vec();
+        let single_deleted = update_single_proposal.nodestore.deleted().to_vec();
+
+        assert_eq!(
+            persisted_deleted(&parallel_deleted),
+            persisted_deleted(&single_deleted),
+            "persisted deleted nodes should match between parallel and single proposals",
+        );
+
+        update_parallel_proposal.commit().unwrap();
+        update_single_proposal.commit().unwrap();
+    }
+
     /// Test that proposing on a proposal works as expected
     ///
     /// Test creates two batches and proposes them, and verifies that the values are in the correct proposal.
@@ -1047,8 +1106,11 @@ mod test {
         let latest_value = latest_revision.val(key).unwrap().unwrap();
         assert_eq!(new_value, latest_value.as_ref());
 
-        let node_store =
-            NodeStore::with_root(root_hash.into_hash_type(), root_address, latest_revision);
+        let node_store = NodeStore::with_root(
+            root_hash.into_hash_type(),
+            root_address,
+            latest_revision.get_storage(),
+        );
 
         let retrieved_value = node_store.val(key).unwrap().unwrap();
         assert_eq!(value, retrieved_value.as_ref());
