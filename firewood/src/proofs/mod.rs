@@ -65,20 +65,22 @@
 //! The serialization format is versioned to allow for future evolution while maintaining
 //! backward compatibility with proof verification.
 
-pub(crate) mod types;
-pub(crate) mod range;
 pub(super) mod childmap;
 pub(super) mod de;
-pub(super) mod ser;
 pub(crate) mod header;
+pub(crate) mod range;
 pub(crate) mod reader;
+pub(super) mod ser;
 #[cfg(test)]
 mod tests;
+pub(crate) mod types;
 
 pub use self::header::InvalidHeader;
-pub use self::reader::ReadError;
 pub use self::range::RangeProof;
-pub use self::types::{EmptyProofCollection, Proof, ProofCollection, ProofError, ProofNode, ProofType};
+pub use self::reader::ReadError;
+pub use self::types::{
+    EmptyProofCollection, Proof, ProofCollection, ProofError, ProofNode, ProofType,
+};
 
 pub(super) mod magic {
     //! Magic constants for proof format identification.
@@ -96,7 +98,7 @@ pub(super) mod magic {
     /// Hash mode identifier for SHA-256 hashing
     #[cfg(not(feature = "ethhash"))]
     pub const HASH_MODE: u8 = 0;
-    
+
     /// Hash mode identifier for Keccak-256 hashing (Ethereum-compatible)
     #[cfg(feature = "ethhash")]
     pub const HASH_MODE: u8 = 1;
@@ -113,7 +115,7 @@ pub(super) mod magic {
     /// Branching factor identifier for branch factor 16
     #[cfg(not(feature = "branch_factor_256"))]
     pub const BRANCH_FACTOR: u8 = 16;
-    
+
     /// Branching factor identifier for branch factor 256 (encoded as 0 to fit in u8)
     #[cfg(feature = "branch_factor_256")]
     pub const BRANCH_FACTOR: u8 = 0; // 256 wrapped to 0

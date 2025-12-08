@@ -6,12 +6,7 @@
 use integer_encoding::VarInt;
 use test_case::test_case;
 
-use super::{
-    header::InvalidHeader,
-    magic,
-    reader::ReadError,
-    types::ProofType,
-};
+use super::{header::InvalidHeader, magic, reader::ReadError, types::ProofType};
 use crate::v2::api::FrozenRangeProof;
 
 fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
