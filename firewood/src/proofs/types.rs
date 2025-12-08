@@ -1,6 +1,47 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+//! Core types for Merkle trie proofs.
+//!
+//! This module defines the fundamental types used to construct, verify, and represent
+//! cryptographic proofs in Firewood's Merkle trie implementation. Proofs allow efficient
+//! verification that specific key-value pairs exist (or don't exist) in a trie without
+//! requiring access to the entire trie structure.
+//!
+//! # Key Types
+//!
+//! - [`Proof`]: A generic wrapper around a collection of proof nodes that can verify
+//!   the presence or absence of a key-value pair in a trie with a given root hash.
+//! - [`ProofNode`]: Represents a single node in a proof path, containing the node's
+//!   key, value digest, and child hashes necessary for verification.
+//! - [`ProofError`]: Comprehensive error type describing all possible proof validation
+//!   failures.
+//! - [`ProofCollection`]: Trait for collections that can store proof nodes, enabling
+//!   flexible proof representations (e.g., `Vec<ProofNode>`, `Box<[ProofNode]>`).
+//! - [`ProofType`]: Internal enum identifying the type of serialized proof (single,
+//!   range, or change proof).
+//!
+//! # Proof Verification
+//!
+//! Proofs work by providing a path from the root to a target node, where each node
+//! includes cryptographic hashes of its children. This allows verification that:
+//! 1. The path is valid (each hash matches the computed hash of the next node)
+//! 2. The path leads to the claimed key-value pair (inclusion proof)
+//! 3. No such key exists (exclusion proof)
+//!
+//! # Examples
+//!
+//! ```rust,ignore
+//! use firewood::Proof;
+//!
+//! // Verify that a key-value pair exists in the trie
+//! let proof: Proof<Vec<ProofNode>> = /* ... */;
+//! proof.verify(b"key", Some(b"value"), &root_hash)?;
+//!
+//! // Verify that a key does not exist (exclusion proof)
+//! proof.verify(b"missing_key", None, &root_hash)?;
+//! ```
+
 #![expect(
     clippy::missing_errors_doc,
     reason = "Found 1 occurrences after enabling the lint."
@@ -68,7 +109,7 @@ pub enum ProofError {
 
     /// Error deserializing a proof
     #[error("error deserializing a proof: {0}")]
-    Deserialization(crate::proofs::ReadError),
+    Deserialization(super::ReadError),
 
     /// Empty range
     #[error("empty range")]
@@ -418,5 +459,56 @@ fn verify_opt_value_digest(
         (None, Some(_)) => Err(ProofError::UnexpectedValue),
         (Some(ref expected), Some(found)) if found.verify(expected) => Ok(()),
         (Some(_), Some(_)) => Err(ProofError::ValueMismatch),
+    }
+}
+
+/// The type of serialized proof.
+///
+/// This enum is used internally during proof serialization and deserialization to
+/// identify the format and contents of a proof.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ProofType {
+    /// A proof for a single key/value pair.
+    ///
+    /// A proof is a sequence of nodes from the root to a specific node.
+    /// Each node in the path includes the hash of its child nodes, allowing
+    /// for verification of the integrity of the path.
+    ///
+    /// A single proof includes the full key and value (if present) of the target
+    /// node.
+    Single = 0,
+    /// A range proof for all key/value pairs over a specific key range.
+    ///
+    /// A range proof includes a key proof for the beginning and end of the
+    /// range, as well as all key/value pairs in the range.
+    Range = 1,
+    /// A change proof for all key/value pairs that changed between two
+    /// versions of the tree.
+    ///
+    /// A change proof includes a key proof for the beginning and end of the
+    /// changed range, as well as all key/value pairs that changed.
+    Change = 2,
+}
+
+impl ProofType {
+    /// Parse a byte into a [`ProofType`].
+    #[must_use]
+    pub const fn new(v: u8) -> Option<Self> {
+        match v {
+            0 => Some(ProofType::Single),
+            1 => Some(ProofType::Range),
+            2 => Some(ProofType::Change),
+            _ => None,
+        }
+    }
+
+    /// Human readable name for the [`ProofType`]
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            ProofType::Single => "single",
+            ProofType::Range => "range",
+            ProofType::Change => "change",
+        }
     }
 }

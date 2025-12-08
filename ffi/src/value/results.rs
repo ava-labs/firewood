@@ -285,7 +285,7 @@ impl From<Result<Option<KeyRange>, api::Error>> for NextKeyRangeResult {
                 start_key: start_key.into(),
                 end_key: end_key.map(Into::into).into(),
             }),
-            Err(api::Error::ProofError(firewood::proof::ProofError::Unverified)) => {
+            Err(api::Error::ProofError(firewood::ProofError::Unverified)) => {
                 NextKeyRangeResult::NotPrepared
             }
             Err(err) => NextKeyRangeResult::Err(err.to_string().into_bytes().into()),

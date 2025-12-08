@@ -4,8 +4,8 @@
 use std::num::NonZeroUsize;
 
 use firewood::{
+    ProofError,
     logger::warn,
-    proof::ProofError,
     v2::api::{self, DbView, FrozenRangeProof, HashKey},
 };
 
