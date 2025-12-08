@@ -27,7 +27,7 @@ on:
       end-block:
         default: ''
       block-dir-src:
-        description: 'Block directory source e.g., cchain-mainnet-blocks-1m-ldb (without S3 path)'
+        description: 'Block directory source (e.g., cchain-mainnet-blocks-1m-ldb [without S3 path])'
         default: ''
       current-state-dir-src:
         description: 'Current state directory source e.g., cchain-mainnet-blocks-30m-40m-ldb (without S3 path)'
