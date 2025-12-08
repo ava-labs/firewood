@@ -302,21 +302,6 @@ impl RevisionManager {
         self.proposals.lock().push(proposal);
     }
 
-    /// TODO: should we support fetching all hashes from `RootStore`?
-    pub fn all_hashes(&self) -> Vec<TrieHash> {
-        self.historical
-            .read()
-            .iter()
-            .filter_map(|r| r.root_hash().or_default_root_hash())
-            .chain(
-                self.proposals
-                    .lock()
-                    .iter()
-                    .filter_map(|p| p.root_hash().or_default_root_hash()),
-            )
-            .collect()
-    }
-
     /// Retrieve a committed revision by its root hash.
     /// To retrieve a revision involves a few steps:
     /// 1. Check the in-memory revision manager.
@@ -379,6 +364,17 @@ impl RevisionManager {
 mod tests {
     use super::*;
     use tempfile::NamedTempFile;
+
+    impl RevisionManager {
+        /// Get all proposal hashes available.
+        pub fn proposal_hashes(&self) -> Vec<TrieHash> {
+            self.proposals
+                .lock()
+                .iter()
+                .filter_map(|p| p.root_hash().or_default_root_hash())
+                .collect()
+        }
+    }
 
     #[test]
     fn test_file_advisory_lock() {

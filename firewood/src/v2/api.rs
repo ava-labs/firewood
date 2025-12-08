@@ -247,10 +247,6 @@ pub trait Db {
     #[expect(clippy::missing_errors_doc)]
     fn root_hash(&self) -> Result<Option<TrieHash>, Error>;
 
-    /// Get all the hashes available
-    #[expect(clippy::missing_errors_doc)]
-    fn all_hashes(&self) -> Result<Vec<TrieHash>, Error>;
-
     /// Propose a change to the database via a batch
     ///
     /// This proposal assumes it is based off the most recently

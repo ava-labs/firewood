@@ -26,6 +26,7 @@ mod checker;
 mod hashednode;
 mod hashedshunt;
 mod hashers;
+mod hashtype;
 mod iter;
 mod linear;
 mod node;
@@ -33,7 +34,6 @@ mod nodestore;
 mod path;
 #[cfg(any(test, feature = "test_utils"))]
 mod test_utils;
-mod trie_hash;
 mod tries;
 mod u4;
 
@@ -47,12 +47,10 @@ pub mod macros;
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use hashedshunt::HashableShunt;
+pub use hashtype::{HashType, IntoHashType, InvalidTrieHashLength, TrieHash};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
-pub use node::{
-    BranchNode, Child, Children, ChildrenSlots, LeafNode, Node, PathIterItem,
-    branch::{HashType, IntoHashType},
-};
+pub use node::{BranchNode, Child, Children, ChildrenSlots, LeafNode, Node, PathIterItem};
 pub use nodestore::{
     AreaIndex, Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal,
     NodeReader, NodeStore, Parentable, RootReader, TrieReader,
@@ -75,7 +73,6 @@ pub use linear::memory::MemStore;
 pub use node::persist::MaybePersistedNode;
 #[cfg(any(test, feature = "test_utils"))]
 pub use test_utils::SeededRng;
-pub use trie_hash::{InvalidTrieHashLength, TrieHash};
 
 /// A shared node, which is just a triophe Arc of a node
 pub type SharedNode = triomphe::Arc<Node>;
