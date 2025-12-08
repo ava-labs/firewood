@@ -31,6 +31,10 @@ use firewood::v2::api::{Db as _, DbView as _, Proposal as _};
 
 use metrics::{Key as MetricsKey, Label, Recorder};
 use metrics_util::registry::{AtomicStorage, Registry};
+use tikv_jemalloc_ctl::{epoch, stats};
+
+#[global_allocator]
+static ALLOC: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 /// Command-line arguments for the diff metrics example.
 #[derive(Parser, Debug)]
@@ -319,11 +323,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let start_key: Key = Box::new([]);
 
     println!("\nRunning change-proof diff...");
+
+    epoch::advance().unwrap();
+    let allocated_before = stats::allocated::read().unwrap();
+
     let t_diff_start = Instant::now();
 
     let nodes_before = recorder.get_counter_value("firewood.diff_merkle", &[("traversal", "next")]);
-
-    let diff_iter = diff_merkle_iterator_without_hash(&left_merkle, &right_merkle, start_key)?;
+    let diff_iter = diff_merkle_iterator(&left_merkle, &right_merkle, start_key)?;
     let ops: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>()?;
 
     let nodes_after = recorder.get_counter_value("firewood.diff_merkle", &[("traversal", "next")]);
@@ -331,6 +338,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let nodes_touched = nodes_after.saturating_sub(nodes_before);
 
+    epoch::advance().unwrap();
+    let allocated_after = stats::allocated::read().unwrap();
+    println!(
+        "allocated diff: {}",
+        (allocated_after.saturating_sub(allocated_before) as f64) / (1024.0 * 1024.0)
+    );
     // ------------------------------------------------------------------------
     // Step 4: Print metrics and relative efficiency
     // ------------------------------------------------------------------------
