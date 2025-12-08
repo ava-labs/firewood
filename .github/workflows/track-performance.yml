@@ -102,17 +102,23 @@ jobs:
               -f runner="${{ inputs.runner }}" \
               $LIBEVM_FLAG
             
-            sleep 10
-            
-            RUN_ID=$(gh run list \
-              --repo ava-labs/avalanchego \
-              --workflow "Firewood Reexecution Benchmark" \
-              --limit 5 \
-              --json databaseId,createdAt \
-              --jq '[.[] | select(.createdAt | fromdateiso8601 > (now - 60))] | .[0].databaseId')
+            # Wait for GitHub API to register the workflow run (retry up to 3min)
+            for i in {1..18}; do
+              sleep 10
+              RUN_ID=$(gh run list \
+                --repo ava-labs/avalanchego \
+                --workflow "Firewood Reexecution Benchmark" \
+                --limit 5 \
+                --json databaseId,createdAt \
+                --jq '[.[] | select(.createdAt | fromdateiso8601 > (now - 180))] | .[0].databaseId')
+              
+              if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
+                break
+              fi
+            done
             
             if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-              echo "Could not find triggered workflow run"
+              echo "Could not find triggered workflow run after 3min"
               exit 1
             fi
           fi
