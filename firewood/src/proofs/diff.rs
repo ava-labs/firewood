@@ -8,7 +8,7 @@
 use crate::{
     db::BatchOp,
     iter::key_from_nibble_iter,
-    merkle::{Key, PrefixOverlap, Value},
+    merkle::{Key, Merkle, PrefixOverlap, Value},
 };
 use firewood_storage::{Child, FileIoError, HashedNodeReader, Node, Path, TrieHash, TrieReader};
 use metrics::counter;
@@ -666,6 +666,45 @@ impl PreOrderIterator<'_> {
     }
 }
 
+/// Public helper that exposes the diff iterator over two [`Merkle`] tries whose
+/// underlying node stores provide hashes. This is primarily intended for
+/// experiments and benchmarks; it may change without notice.
+pub fn diff_merkle_iterator<'a, T, U>(
+    tree_left: &'a Merkle<T>,
+    tree_right: &'a Merkle<U>,
+    start_key: Key,
+) -> Result<
+    impl Iterator<Item = Result<BatchOp<Key, Value>, FileIoError>> + 'a,
+    FileIoError,
+>
+where
+    T: TrieReader + HashedNodeReader,
+    U: TrieReader + HashedNodeReader,
+{
+    DiffMerkleNodeStream::new(tree_left.nodestore(), tree_right.nodestore(), start_key)
+}
+
+/// Public helper variant of [`diff_merkle_iterator`] for tries that don't
+/// expose node hashes (e.g., mutable proposals).
+pub fn diff_merkle_iterator_without_hash<'a, T, U>(
+    tree_left: &'a Merkle<T>,
+    tree_right: &'a Merkle<U>,
+    start_key: Key,
+) -> Result<
+    impl Iterator<Item = Result<BatchOp<Key, Value>, FileIoError>> + 'a,
+    FileIoError,
+>
+where
+    T: TrieReader,
+    U: TrieReader,
+{
+    DiffMerkleNodeStream::new_without_hash(
+        tree_left.nodestore(),
+        tree_right.nodestore(),
+        start_key,
+    )
+}
+
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -676,7 +715,10 @@ mod tests {
     use crate::{
         db::{BatchOp, Db, DbConfig},
         merkle::{Key, Merkle, Value},
-        proofs::diff::DiffMerkleNodeStream,
+        proofs::{
+            diff::DiffMerkleNodeStream, diff_merkle_iterator,
+            diff_merkle_iterator_without_hash,
+        },
         v2::api::{Db as _, DbView, Proposal as _},
     };
 
@@ -714,34 +756,6 @@ mod tests {
                 dbconfig,
             }
         }
-    }
-
-    fn diff_merkle_iterator<'a, T, U>(
-        tree_left: &'a Merkle<T>,
-        tree_right: &'a Merkle<U>,
-        start_key: Key,
-    ) -> Result<DiffMerkleNodeStream<'a>, FileIoError>
-    where
-        T: firewood_storage::TrieReader + HashedNodeReader,
-        U: firewood_storage::TrieReader + HashedNodeReader,
-    {
-        DiffMerkleNodeStream::new(tree_left.nodestore(), tree_right.nodestore(), start_key)
-    }
-
-    fn diff_merkle_iterator_without_hash<'a, T, U>(
-        tree_left: &'a Merkle<T>,
-        tree_right: &'a Merkle<U>,
-        start_key: Key,
-    ) -> Result<DiffMerkleNodeStream<'a>, FileIoError>
-    where
-        T: firewood_storage::TrieReader,
-        U: firewood_storage::TrieReader,
-    {
-        DiffMerkleNodeStream::new_without_hash(
-            tree_left.nodestore(),
-            tree_right.nodestore(),
-            start_key,
-        )
     }
 
     fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {

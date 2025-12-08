@@ -11,6 +11,9 @@ mod ser;
 #[cfg(test)]
 mod tests;
 
+// Re-export selected diff helpers for external use in experiments and benchmarks.
+pub use self::diff::{diff_merkle_iterator, diff_merkle_iterator_without_hash};
+
 pub use self::header::InvalidHeader;
 pub use self::reader::ReadError;
 
