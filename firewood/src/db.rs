@@ -802,53 +802,61 @@ mod test {
     #[test]
     fn test_propose_parallel_vs_normal_propose() {
         fn persisted_deleted(nodes: &[MaybePersistedNode]) -> Vec<LinearAddress> {
-            let mut addrs: Vec<_> = nodes
+            let mut addresses: Vec<_> = nodes
                 .iter()
                 .filter_map(MaybePersistedNode::as_linear_address)
                 .collect();
-            addrs.sort_unstable();
-            addrs
+            addresses.sort();
+            addresses
         }
 
-        let db_parallel = TestDb::new_with_config(
+        let parallel_db = TestDb::new_with_config(
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)
                 .build(),
         );
-        let db_single =
+        let single_threaded_db =
             TestDb::new_with_config(DbConfig::builder().use_parallel(UseParallel::Never).build());
 
-        // First batch: insert two keys with different first nibbles so they go
-        // to different workers in the parallel merkle implementation.
-        let keys1: Vec<[u8; 1]> = vec![[0x00], [0x10]];
-        let vals1: Vec<Box<[u8]>> = vec![Box::new([1u8]), Box::new([2u8])];
+        // First batch: insert two keys with different first nibbles so they are
+        // handled by different workers in the parallel merkle implementation.
+        let initial_keys: Vec<[u8; 1]> = vec![[0x00], [0x10]];
+        let initial_values: Vec<Box<[u8]>> = vec![Box::new([1u8]), Box::new([2u8])];
 
-        let p_parallel1 = db_parallel.propose(keys1.iter().zip(vals1.iter())).unwrap();
-        let p_single1 = db_single.propose(keys1.iter().zip(vals1.iter())).unwrap();
+        let initial_parallel_proposal = parallel_db
+            .propose(initial_keys.iter().zip(initial_values.iter()))
+            .unwrap();
+        let initial_single_proposal = single_threaded_db
+            .propose(initial_keys.iter().zip(initial_values.iter()))
+            .unwrap();
 
-        p_parallel1.commit().unwrap();
-        p_single1.commit().unwrap();
+        initial_parallel_proposal.commit().unwrap();
+        initial_single_proposal.commit().unwrap();
 
-        // Second batch: update only the first key. This is a minimal case that
-        // exposes mismatched persisted deleted nodes between parallel and
-        // single-threaded proposals when the bug is present.
-        let keys2: Vec<[u8; 1]> = vec![[0x00]];
-        let vals2: Vec<Box<[u8]>> = vec![Box::new([3u8])];
+        // Second batch: update only the first key. This exercises the deletion
+        // bookkeeping in a configuration where parallel workers were used in
+        // the initial batch and only a subset of keys are updated.
+        let update_keys: Vec<[u8; 1]> = vec![[0x00]];
+        let update_values: Vec<Box<[u8]>> = vec![Box::new([3u8])];
 
-        let p_parallel2 = db_parallel.propose(keys2.iter().zip(vals2.iter())).unwrap();
-        let p_single2 = db_single.propose(keys2.iter().zip(vals2.iter())).unwrap();
+        let update_parallel_proposal = parallel_db
+            .propose(update_keys.iter().zip(update_values.iter()))
+            .unwrap();
+        let update_single_proposal = single_threaded_db
+            .propose(update_keys.iter().zip(update_values.iter()))
+            .unwrap();
 
-        let del_parallel = p_parallel2.nodestore.deleted().to_vec();
-        let del_single = p_single2.nodestore.deleted().to_vec();
+        let parallel_deleted = update_parallel_proposal.nodestore.deleted().to_vec();
+        let single_deleted = update_single_proposal.nodestore.deleted().to_vec();
 
         assert_eq!(
-            persisted_deleted(&del_parallel),
-            persisted_deleted(&del_single),
+            persisted_deleted(&parallel_deleted),
+            persisted_deleted(&single_deleted),
             "persisted deleted nodes should match between parallel and single proposals",
         );
 
-        p_parallel2.commit().unwrap();
-        p_single2.commit().unwrap();
+        update_parallel_proposal.commit().unwrap();
+        update_single_proposal.commit().unwrap();
     }
 
     /// Test that proposing on a proposal works as expected
