@@ -42,8 +42,6 @@ pub(crate) mod alloc;
 pub(crate) mod hash;
 pub(crate) mod header;
 pub(crate) mod persist;
-#[cfg(feature = "io-uring")]
-pub(crate) mod persist_io_uring;
 pub(crate) mod primitives;
 
 use crate::linear::OffsetReader;
@@ -818,6 +816,14 @@ where
     }
 }
 
+impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
+    /// Returns the slice of deleted nodes in this proposal (test only).
+    #[cfg(any(test, feature = "test_utils"))]
+    #[must_use]
+    pub fn deleted(&self) -> &[MaybePersistedNode] {
+        self.kind.deleted.as_ref()
+    }
+}
 impl<S: WritableStorage> NodeStore<Committed, S> {
     /// adjust the freelist of this proposal to reflect the freed nodes in the oldest proposal
     ///

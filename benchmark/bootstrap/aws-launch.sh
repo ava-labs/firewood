@@ -253,7 +253,7 @@ users:
     shell: /usr/bin/bash
     sudo: "ALL=(ALL) NOPASSWD:ALL"
     ssh_authorized_keys:
-      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFuwpEMnsBLdfr7V9SFRTm9XWHEFX3yQQP7nmsFHetBo cardno:26_763_547 brandon
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHWuCq/y50S0yFPJQEAifeeN4n6EL3IlUuYbAdk2w2kL cardno:33_731_913 brandon
   - name: amin
     lock_passwd: true
     groups: users, adm, sudo
