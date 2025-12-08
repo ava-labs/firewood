@@ -154,10 +154,6 @@ impl api::Db for Db {
         Ok(self.manager.root_hash()?.or_default_root_hash())
     }
 
-    fn all_hashes(&self) -> Result<Vec<HashKey>, api::Error> {
-        Ok(self.manager.all_hashes())
-    }
-
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal<'_>, api::Error> {
         self.propose_with_parent(batch, &self.manager.current_revision())
     }
@@ -518,7 +514,7 @@ mod test {
         // nodestore is still accessible because it's referenced by the revision manager
         // The third proposal remains referenced
         let p2hash = proposal2.root_hash().unwrap().unwrap();
-        assert!(db.all_hashes().unwrap().contains(&p2hash));
+        assert!(db.manager.proposal_hashes().contains(&p2hash));
         drop(proposal2);
 
         // commit the first proposal
@@ -529,12 +525,12 @@ mod test {
         assert_eq!(&*historical.val(b"k1").unwrap().unwrap(), b"v1");
 
         // the second proposal shouldn't be available to commit anymore
-        assert!(!db.all_hashes().unwrap().contains(&p2hash));
+        assert!(!db.manager.proposal_hashes().contains(&p2hash));
 
         // the third proposal should still be contained within the all_hashes list
         // would be deleted if another proposal was committed and proposal3 was dropped here
         let hash3 = proposal3.root_hash().unwrap().unwrap();
-        assert!(db.manager.all_hashes().contains(&hash3));
+        assert!(db.manager.proposal_hashes().contains(&hash3));
     }
 
     #[test]
@@ -570,7 +566,7 @@ mod test {
         // nodestore is still accessible because it's referenced by the revision manager
         // The third proposal remains referenced
         let p2hash = proposal2.root_hash().unwrap().unwrap();
-        assert!(db.all_hashes().unwrap().contains(&p2hash));
+        assert!(db.manager.proposal_hashes().contains(&p2hash));
         drop(proposal2);
 
         // commit the first proposal
@@ -581,11 +577,11 @@ mod test {
         assert_eq!(&*historical.val(b"k1").unwrap().unwrap(), b"v1");
 
         // the second proposal shouldn't be available to commit anymore
-        assert!(!db.all_hashes().unwrap().contains(&p2hash));
+        assert!(!db.manager.proposal_hashes().contains(&p2hash));
 
         // the third proposal should still be contained within the all_hashes list
         let hash3 = proposal3.root_hash().unwrap().unwrap();
-        assert!(db.manager.all_hashes().contains(&hash3));
+        assert!(db.manager.proposal_hashes().contains(&hash3));
 
         // moreover, the data from the second and third proposals should still be available
         // through proposal3
