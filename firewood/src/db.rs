@@ -833,9 +833,7 @@ mod test {
         initial_parallel_proposal.commit().unwrap();
         initial_single_proposal.commit().unwrap();
 
-        // Second batch: update only the first key. This exercises the deletion
-        // bookkeeping in a configuration where parallel workers were used in
-        // the initial batch and only a subset of keys are updated.
+        // Second batch: update only the first key.
         let update_keys: Vec<[u8; 1]> = vec![[0x00]];
         let update_values: Vec<Box<[u8]>> = vec![Box::new([3u8])];
 
