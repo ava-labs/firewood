@@ -154,10 +154,6 @@ impl api::Db for Db {
         Ok(self.manager.root_hash()?.or_default_root_hash())
     }
 
-    fn all_hashes(&self) -> Result<Vec<HashKey>, api::Error> {
-        Ok(self.manager.all_hashes())
-    }
-
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal<'_>, api::Error> {
         self.propose_with_parent(batch, &self.manager.current_revision())
     }
@@ -391,9 +387,16 @@ mod test {
 
     use crate::db::{Db, Proposal, UseParallel};
     use crate::manager::RevisionManagerConfig;
-    use crate::v2::api::{Db as _, DbView, Proposal as _};
+    use crate::v2::api::{self, Db as _, DbView, HashKey, Proposal as _};
 
     use super::{BatchOp, DbConfig};
+
+    impl Db {
+        /// Get all the hashes available
+        fn all_hashes(&self) -> Result<Vec<HashKey>, api::Error> {
+            Ok(self.manager.all_hashes())
+        }
+    }
 
     /// A chunk of an iterator, provided by [`IterExt::chunk_fold`] to the folding
     /// function.
