@@ -85,7 +85,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
                     println!("\t{error}");
                 }
                 println!();
-                println!("Unfixable Errors ({}):", report.unfixable.len(),);
+                println!("Unfixable Errors ({}):", report.unfixable.len());
                 for (error, io_error) in report.unfixable {
                     println!("\t{error}");
                     if let Some(io_error) = io_error {
