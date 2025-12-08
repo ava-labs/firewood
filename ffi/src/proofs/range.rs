@@ -4,9 +4,9 @@
 use std::num::NonZeroUsize;
 
 use firewood::{
+    ProofError,
     logger::warn,
     v2::api::{self, DbView, FrozenRangeProof, HashKey},
-    ProofError,
 };
 
 use crate::{
