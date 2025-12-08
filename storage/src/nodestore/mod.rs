@@ -818,6 +818,14 @@ where
     }
 }
 
+impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
+    /// Returns the slice of deleted nodes in this proposal (test only).
+    #[cfg(any(test, feature = "test_utils"))]
+    #[must_use]
+    pub fn deleted(&self) -> &[MaybePersistedNode] {
+        self.kind.deleted.as_ref()
+    }
+}
 impl<S: WritableStorage> NodeStore<Committed, S> {
     /// adjust the freelist of this proposal to reflect the freed nodes in the oldest proposal
     ///
