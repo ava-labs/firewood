@@ -366,6 +366,7 @@ mod tests {
     use tempfile::NamedTempFile;
 
     impl RevisionManager {
+        /// Get all proposal hashes available.
         pub fn proposal_hashes(&self) -> Vec<TrieHash> {
             self.proposals
                 .lock()

@@ -387,16 +387,9 @@ mod test {
 
     use crate::db::{Db, Proposal, UseParallel};
     use crate::manager::RevisionManagerConfig;
-    use crate::v2::api::{Db as _, DbView, HashKey, Proposal as _};
+    use crate::v2::api::{Db as _, DbView, Proposal as _};
 
     use super::{BatchOp, DbConfig};
-
-    impl Db {
-        /// Get all proposal hashes available.
-        fn proposal_hashes(&self) -> Vec<HashKey> {
-            self.manager.proposal_hashes()
-        }
-    }
 
     /// A chunk of an iterator, provided by [`IterExt::chunk_fold`] to the folding
     /// function.
@@ -521,7 +514,7 @@ mod test {
         // nodestore is still accessible because it's referenced by the revision manager
         // The third proposal remains referenced
         let p2hash = proposal2.root_hash().unwrap().unwrap();
-        assert!(db.proposal_hashes().contains(&p2hash));
+        assert!(db.manager.proposal_hashes().contains(&p2hash));
         drop(proposal2);
 
         // commit the first proposal
@@ -532,7 +525,7 @@ mod test {
         assert_eq!(&*historical.val(b"k1").unwrap().unwrap(), b"v1");
 
         // the second proposal shouldn't be available to commit anymore
-        assert!(!db.proposal_hashes().contains(&p2hash));
+        assert!(!db.manager.proposal_hashes().contains(&p2hash));
 
         // the third proposal should still be contained within the all_hashes list
         // would be deleted if another proposal was committed and proposal3 was dropped here
@@ -573,7 +566,7 @@ mod test {
         // nodestore is still accessible because it's referenced by the revision manager
         // The third proposal remains referenced
         let p2hash = proposal2.root_hash().unwrap().unwrap();
-        assert!(db.proposal_hashes().contains(&p2hash));
+        assert!(db.manager.proposal_hashes().contains(&p2hash));
         drop(proposal2);
 
         // commit the first proposal
@@ -584,7 +577,7 @@ mod test {
         assert_eq!(&*historical.val(b"k1").unwrap().unwrap(), b"v1");
 
         // the second proposal shouldn't be available to commit anymore
-        assert!(!db.proposal_hashes().contains(&p2hash));
+        assert!(!db.manager.proposal_hashes().contains(&p2hash));
 
         // the third proposal should still be contained within the all_hashes list
         let hash3 = proposal3.root_hash().unwrap().unwrap();
