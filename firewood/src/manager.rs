@@ -366,18 +366,11 @@ mod tests {
     use tempfile::NamedTempFile;
 
     impl RevisionManager {
-        /// TODO: should we support fetching all hashes from `RootStore`?
-        pub fn all_hashes(&self) -> Vec<TrieHash> {
-            self.historical
-                .read()
+        pub fn proposal_hashes(&self) -> Vec<TrieHash> {
+            self.proposals
+                .lock()
                 .iter()
-                .filter_map(|r| r.root_hash().or_default_root_hash())
-                .chain(
-                    self.proposals
-                        .lock()
-                        .iter()
-                        .filter_map(|p| p.root_hash().or_default_root_hash()),
-                )
+                .filter_map(|p| p.root_hash().or_default_root_hash())
                 .collect()
         }
     }
