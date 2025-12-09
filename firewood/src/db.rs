@@ -154,10 +154,6 @@ impl api::Db for Db {
         Ok(self.manager.root_hash()?.or_default_root_hash())
     }
 
-    fn all_hashes(&self) -> Result<Vec<HashKey>, api::Error> {
-        Ok(self.manager.all_hashes())
-    }
-
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal<'_>, api::Error> {
         self.propose_with_parent(batch, &self.manager.current_revision())
     }
@@ -385,7 +381,8 @@ mod test {
     use std::path::PathBuf;
 
     use firewood_storage::{
-        CheckOpt, CheckerError, HashedNodeReader, IntoHashType, NodeStore, TrieHash,
+        CheckOpt, CheckerError, HashedNodeReader, IntoHashType, LinearAddress, MaybePersistedNode,
+        NodeStore, TrieHash,
     };
 
     use crate::db::{Db, Proposal, UseParallel};
@@ -517,7 +514,7 @@ mod test {
         // nodestore is still accessible because it's referenced by the revision manager
         // The third proposal remains referenced
         let p2hash = proposal2.root_hash().unwrap().unwrap();
-        assert!(db.all_hashes().unwrap().contains(&p2hash));
+        assert!(db.manager.proposal_hashes().contains(&p2hash));
         drop(proposal2);
 
         // commit the first proposal
@@ -528,12 +525,12 @@ mod test {
         assert_eq!(&*historical.val(b"k1").unwrap().unwrap(), b"v1");
 
         // the second proposal shouldn't be available to commit anymore
-        assert!(!db.all_hashes().unwrap().contains(&p2hash));
+        assert!(!db.manager.proposal_hashes().contains(&p2hash));
 
         // the third proposal should still be contained within the all_hashes list
         // would be deleted if another proposal was committed and proposal3 was dropped here
         let hash3 = proposal3.root_hash().unwrap().unwrap();
-        assert!(db.manager.all_hashes().contains(&hash3));
+        assert!(db.manager.proposal_hashes().contains(&hash3));
     }
 
     #[test]
@@ -569,7 +566,7 @@ mod test {
         // nodestore is still accessible because it's referenced by the revision manager
         // The third proposal remains referenced
         let p2hash = proposal2.root_hash().unwrap().unwrap();
-        assert!(db.all_hashes().unwrap().contains(&p2hash));
+        assert!(db.manager.proposal_hashes().contains(&p2hash));
         drop(proposal2);
 
         // commit the first proposal
@@ -580,11 +577,11 @@ mod test {
         assert_eq!(&*historical.val(b"k1").unwrap().unwrap(), b"v1");
 
         // the second proposal shouldn't be available to commit anymore
-        assert!(!db.all_hashes().unwrap().contains(&p2hash));
+        assert!(!db.manager.proposal_hashes().contains(&p2hash));
 
         // the third proposal should still be contained within the all_hashes list
         let hash3 = proposal3.root_hash().unwrap().unwrap();
-        assert!(db.manager.all_hashes().contains(&hash3));
+        assert!(db.manager.proposal_hashes().contains(&hash3));
 
         // moreover, the data from the second and third proposals should still be available
         // through proposal3
@@ -796,6 +793,64 @@ mod test {
             }
             proposal.commit().unwrap();
         }
+    }
+
+    #[test]
+    fn test_propose_parallel_vs_normal_propose() {
+        fn persisted_deleted(nodes: &[MaybePersistedNode]) -> Vec<LinearAddress> {
+            let mut addresses: Vec<_> = nodes
+                .iter()
+                .filter_map(MaybePersistedNode::as_linear_address)
+                .collect();
+            addresses.sort();
+            addresses
+        }
+
+        let parallel_db = TestDb::new_with_config(
+            DbConfig::builder()
+                .use_parallel(UseParallel::Always)
+                .build(),
+        );
+        let single_threaded_db =
+            TestDb::new_with_config(DbConfig::builder().use_parallel(UseParallel::Never).build());
+
+        // First batch: insert two keys with different first nibbles so they are
+        // handled by different workers in the parallel merkle implementation.
+        let initial_keys: Vec<[u8; 1]> = vec![[0x00], [0x10]];
+        let initial_values: Vec<Box<[u8]>> = vec![Box::new([1u8]), Box::new([2u8])];
+
+        let initial_parallel_proposal = parallel_db
+            .propose(initial_keys.iter().zip(initial_values.iter()))
+            .unwrap();
+        let initial_single_proposal = single_threaded_db
+            .propose(initial_keys.iter().zip(initial_values.iter()))
+            .unwrap();
+
+        initial_parallel_proposal.commit().unwrap();
+        initial_single_proposal.commit().unwrap();
+
+        // Second batch: update only the first key.
+        let update_keys: Vec<[u8; 1]> = vec![[0x00]];
+        let update_values: Vec<Box<[u8]>> = vec![Box::new([3u8])];
+
+        let update_parallel_proposal = parallel_db
+            .propose(update_keys.iter().zip(update_values.iter()))
+            .unwrap();
+        let update_single_proposal = single_threaded_db
+            .propose(update_keys.iter().zip(update_values.iter()))
+            .unwrap();
+
+        let parallel_deleted = update_parallel_proposal.nodestore.deleted().to_vec();
+        let single_deleted = update_single_proposal.nodestore.deleted().to_vec();
+
+        assert_eq!(
+            persisted_deleted(&parallel_deleted),
+            persisted_deleted(&single_deleted),
+            "persisted deleted nodes should match between parallel and single proposals",
+        );
+
+        update_parallel_proposal.commit().unwrap();
+        update_single_proposal.commit().unwrap();
     }
 
     /// Test that proposing on a proposal works as expected

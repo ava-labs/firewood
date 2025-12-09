@@ -1,7 +1,13 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::proofs::{magic, proof_type::ProofType};
+//! Proof format headers and validation.
+//!
+//! This module defines the fixed-size header that prefixes all serialized proofs.
+//! The header contains metadata about the proof format including version, hash mode,
+//! branching factor, and proof type, enabling quick validation before deserialization.
+
+use super::{magic, types::ProofType};
 
 /// A fixed-size header at the beginning of every serialized proof.
 ///

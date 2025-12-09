@@ -1,7 +1,62 @@
 // Copyright (C) 2024, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::proof::{Proof, ProofCollection};
+//! Range proofs for Merkle tries.
+//!
+//! This module provides the [`RangeProof`] type, which enables efficient verification
+//! that a contiguous set of key-value pairs exists within a Merkle trie without requiring
+//! access to the entire trie structure.
+//!
+//! # Overview
+//!
+//! A range proof consists of three components:
+//!
+//! 1. **Start proof**: A Merkle proof establishing the lower boundary of the range.
+//!    This proves either the first key in the range or the nearest key after the
+//!    range start, ensuring no keys exist between the range start and the first
+//!    included key.
+//!
+//! 2. **End proof**: A Merkle proof establishing the upper boundary of the range.
+//!    This proves either the last key in the range or the nearest key before the
+//!    range end, ensuring no keys exist between the last included key and the range end.
+//!
+//! 3. **Key-value pairs**: The actual consecutive entries from the trie that fall
+//!    within the proven range boundaries, in lexicographic order.
+//!
+//! # Use Cases
+//!
+//! Range proofs are particularly valuable in blockchain contexts for:
+//!
+//! - **State synchronization**: Nodes can efficiently sync portions of state by
+//!   requesting and verifying range proofs for specific key ranges.
+//! - **Light client verification**: Light clients can verify specific state ranges
+//!   without downloading the entire state trie.
+//! - **Efficient auditing**: Auditors can verify that all keys in a specific range
+//!   match expected values.
+//! - **Sparse state queries**: Applications can query and verify multiple related
+//!   keys in a single proof.
+//!
+//! # Example
+//!
+//! ```rust,ignore
+//! use firewood::RangeProof;
+//!
+//! // Create a range proof for keys from "key1" to "key5"
+//! let range_proof: RangeProof<Vec<u8>, Vec<u8>, Vec<ProofNode>> =
+//!     db.get_range_proof(b"key1", b"key5")?;
+//!
+//! // Iterate over the key-value pairs in the proof
+//! for (key, value) in &range_proof {
+//!     println!("{:?} -> {:?}", key, value);
+//! }
+//!
+//! // Check if the proof is empty
+//! if range_proof.is_empty() {
+//!     println!("No keys in range");
+//! }
+//! ```
+
+use super::types::{Proof, ProofCollection};
 
 /// A range proof is a cryptographic proof that demonstrates a contiguous set of key-value pairs
 /// exists within a Merkle trie with a given root hash.
@@ -109,6 +164,9 @@ where
 ///
 /// This iterator yields references to the key-value pairs contained within
 /// the range proof in the order they appear (lexicographic order).
+///
+/// This type is not re-exported at the top level; it is only accessible through
+/// the iterator trait implementations on [`RangeProof`].
 #[derive(Debug)]
 pub struct RangeProofIter<'a, K, V>(std::slice::Iter<'a, (K, V)>);
 

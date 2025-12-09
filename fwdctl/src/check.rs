@@ -69,32 +69,35 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     };
 
     let nodestore = NodeStore::open(storage)?;
-    let db_stats = if opts.fix {
-        let (nodestore, report) = nodestore.check_and_fix(check_ops);
-        if let Err(e) = nodestore {
-            println!("Error fixing database: {e}");
-        }
-        println!("Fixed Errors ({}):", report.fixed.len());
-        for error in report.fixed {
-            println!("\t{error}");
-        }
-        println!();
-        println!("Unfixable Errors ({}):", report.unfixable.len(),);
-        for (error, io_error) in report.unfixable {
-            println!("\t{error}");
-            if let Some(io_error) = io_error {
-                println!("\t\tError encountered while fixing: {io_error}");
+    let check_report = nodestore.check(check_ops);
+
+    println!("Errors ({}): ", check_report.errors.len());
+    for error in &check_report.errors {
+        println!("\t{error}");
+    }
+
+    let mut db_stats = check_report.db_stats.clone();
+    if opts.fix {
+        match nodestore.fix(check_report) {
+            Ok(report) => {
+                println!("Fixed Errors ({}):", report.fixed.len());
+                for error in report.fixed {
+                    println!("\t{error}");
+                }
+                println!();
+                println!("Unfixable Errors ({}):", report.unfixable.len());
+                for (error, io_error) in report.unfixable {
+                    println!("\t{error}");
+                    if let Some(io_error) = io_error {
+                        println!("\t\tError encountered while fixing: {io_error}");
+                    }
+                }
+
+                db_stats = report.db_stats;
             }
+            Err(e) => println!("Error fixing database: {e}"),
         }
-        report.db_stats
-    } else {
-        let report = nodestore.check(check_ops);
-        println!("Errors ({}):", report.errors.len());
-        for error in report.errors {
-            println!("\t{error}");
-        }
-        report.db_stats
-    };
+    }
     println!();
 
     print_stats_report(db_stats);

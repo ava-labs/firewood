@@ -9,11 +9,10 @@ mod merge;
 pub mod parallel;
 
 use crate::iter::{MerkleKeyValueIter, PathIterator, TryExtend};
-use crate::proof::{Proof, ProofCollection, ProofError, ProofNode};
-use crate::range_proof::RangeProof;
 use crate::v2::api::{
     self, BatchIter, FrozenProof, FrozenRangeProof, KeyType, KeyValuePair, ValueType,
 };
+use crate::{Proof, ProofCollection, ProofError, ProofNode, RangeProof};
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashedNodeReader, ImmutableProposal,
     IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore,
