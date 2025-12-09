@@ -83,6 +83,8 @@ func (db *Database) RangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) (*RangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -137,6 +139,12 @@ func (db *Database) VerifyRangeProof(
 	rootHash Hash,
 	maxLength uint32,
 ) error {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return errDBClosed
+	}
+
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
@@ -169,6 +177,8 @@ func (db *Database) VerifyAndCommitRangeProof(
 	rootHash Hash,
 	maxLength uint32,
 ) (Hash, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return EmptyRoot, errDBClosed
 	}
@@ -187,6 +197,8 @@ func (db *Database) VerifyAndCommitRangeProof(
 	var hash Hash
 	err := proof.keepAliveHandle.disown(true /* evenOnError */, func() error {
 		var err error
+		db.commitLock.Lock()
+		defer db.commitLock.Unlock()
 		hash, err = getHashKeyFromHashResult(C.fwd_db_verify_and_commit_range_proof(db.handle, args))
 		return err
 	})
@@ -265,6 +277,8 @@ func (db *Database) ChangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) (*ChangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -294,6 +308,12 @@ func (db *Database) VerifyChangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) error {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return errDBClosed
+	}
+
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
@@ -320,6 +340,8 @@ func (db *Database) VerifyAndCommitChangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) (Hash, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return EmptyRoot, errDBClosed
 	}
@@ -470,7 +492,9 @@ func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, 
 		return nil, errEmptyTrie
 	case C.RangeProofResult_Ok:
 		ptr := *(**C.RangeProofContext)(unsafe.Pointer(&result.anon0))
-		return &RangeProof{handle: ptr}, nil
+		return &RangeProof{
+			handle: ptr,
+		}, nil
 	case C.RangeProofResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err
