@@ -442,7 +442,6 @@ mod tests {
 
         let config = ConfigManager::builder()
             .create(true)
-            .truncate(true)
             .manager(
                 RevisionManagerConfig::builder()
                     .max_revisions(100_000) // Set very high to prevent reaping during test
