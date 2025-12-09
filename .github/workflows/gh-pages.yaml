@@ -30,6 +30,14 @@ jobs:
         run: |
           cp -rv target/doc/* ./_site
           cp -rv docs/assets ./_site
+      - name: Include benchmark data
+        run: |
+          git fetch origin benchmark-data || true
+          if git rev-parse origin/benchmark-data >/dev/null 2>&1; then
+            git checkout origin/benchmark-data -- dev bench 2>/dev/null || true
+            cp -rv dev _site/ 2>/dev/null || true
+            cp -rv bench _site/ 2>/dev/null || true
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: pages
