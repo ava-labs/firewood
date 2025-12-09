@@ -8,8 +8,8 @@ use crate::{
 };
 use firewood_storage::{
     Child, FileIoError, HashedNodeReader, Node, Path, SharedNode, TrieHash, TrieReader,
+    firewood_counter,
 };
-use metrics::counter;
 use std::{cmp::Ordering, iter::once};
 
 /// Enum containing all possible states that we can be in as we iterate through the diff
@@ -130,7 +130,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
         root_hash: Option<TrieHash>,
     ) -> PreOrderIterator<'a> {
         let mut preorder_it = PreOrderIterator {
-            stack: vec![],
+            traversal_stack: vec![],
             prev_num_children: 0,
             trie: tree,
         };
@@ -138,7 +138,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
         // root onto the traversal stack. It will be used on the first call to
         // next or next_internal.
         if let Some(root) = tree.root_node() {
-            preorder_it.stack.push(TraversalStackFrame {
+            preorder_it.traversal_stack.push(TraversalStackFrame {
                 pre_path: Path::default(),
                 node: Child::Node((*root).clone()),
                 hash: root_hash,
@@ -464,10 +464,7 @@ impl Iterator for DiffMerkleNodeStream<'_> {
     type Item = Result<BatchOp<Key, Value>, firewood_storage::FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        match self.next_internal().transpose()? {
-            Ok(batch) => Some(Ok(batch)),
-            Err(e) => Some(Err(e)),
-        }
+        self.next_internal().transpose()
     }
 }
 
@@ -498,7 +495,7 @@ struct TraversalStackFrame {
 /// since we are performing in-order traversal.
 struct PreOrderIterator<'a> {
     trie: &'a dyn TrieReader,
-    stack: Vec<TraversalStackFrame>,
+    traversal_stack: Vec<TraversalStackFrame>,
     prev_num_children: u8,
 }
 
@@ -515,27 +512,14 @@ impl PreOrderIterator<'_> {
         node: Child,
         mut node_hash: Option<TrieHash>,
     ) -> Result<NodeState, FileIoError> {
-        #[cfg(not(feature = "ethhash"))]
         let node = match node {
             Child::Node(node) => node.clone().into(),
             Child::AddressWithHash(addr, hash) => {
-                node_hash = Some(hash);
+                node_hash = Some(hash.into_triehash());
                 self.trie.read_node(addr)?
             }
             Child::MaybePersisted(maybe_persisted, hash) => {
-                node_hash = Some(hash);
-                maybe_persisted.as_shared_node(&self.trie)?
-            }
-        };
-        #[cfg(feature = "ethhash")]
-        let node = match node {
-            Child::Node(node) => node.clone().into(),
-            Child::AddressWithHash(addr, hash) => {
-                node_hash = Some(hash.into());
-                self.trie.read_node(addr)?
-            }
-            Child::MaybePersisted(maybe_persisted, hash) => {
-                node_hash = Some(hash.into());
+                node_hash = Some(hash.into_triehash());
                 maybe_persisted.as_shared_node(&self.trie)?
             }
         };
@@ -556,10 +540,10 @@ impl PreOrderIterator<'_> {
     }
 
     fn next(&mut self) -> Result<Option<NodeState>, FileIoError> {
-        counter!("firewood.diff_merkle", "traversal" => "next").increment(1);
+        firewood_counter!("firewood.change_proof.next", "number of next calls on PreOrderIterator", "traversal" => "next").increment(1);
         // Pop the next node state from the stack and reset `prev_num_children`
         self.prev_num_children = 0;
-        if let Some(frame) = self.stack.pop() {
+        if let Some(frame) = self.traversal_stack.pop() {
             let state = self.create_node_state(&frame.pre_path, frame.node, frame.hash)?;
             // If this node is a branch, push its children onto the stack so they will be processed next.
             if let Node::Branch(branch) = &*state.node {
@@ -571,7 +555,7 @@ impl PreOrderIterator<'_> {
                         let child_pre_path = Path::from_nibbles_iterator(
                             state.path.iter().copied().chain(once(path_comp.as_u8())),
                         );
-                        self.stack.push(TraversalStackFrame {
+                        self.traversal_stack.push(TraversalStackFrame {
                             pre_path: child_pre_path,
                             node: child,
                             hash: None,
@@ -592,7 +576,7 @@ impl PreOrderIterator<'_> {
     /// Used to not iterate through the children of a branch node if there is a hash match.
     fn skip_children(&mut self) {
         for _ in 0..self.prev_num_children {
-            self.stack.pop();
+            self.traversal_stack.pop();
         }
         self.prev_num_children = 0;
     }
@@ -608,7 +592,7 @@ impl PreOrderIterator<'_> {
         loop {
             // Pop the next node state from the stack and reset `prev_num_children`
             self.prev_num_children = 0;
-            if let Some(frame) = self.stack.pop() {
+            if let Some(frame) = self.traversal_stack.pop() {
                 let state = self.create_node_state(&frame.pre_path, frame.node, frame.hash)?;
                 // Since pre-order traversal of a trie iterates through the nodes in lexicographical
                 // order, we can stop the traversal once we see a node key that is larger than or
@@ -616,7 +600,7 @@ impl PreOrderIterator<'_> {
                 // pre-path and hash back to the stack. Calling `next` will process this node.
                 let node_key = key_from_nibble_iter(state.path.iter().copied());
                 if node_key >= *key {
-                    self.stack.push(TraversalStackFrame {
+                    self.traversal_stack.push(TraversalStackFrame {
                         pre_path: frame.pre_path,
                         node: Child::Node((*state.node).clone()),
                         hash: state.hash,
@@ -646,7 +630,7 @@ impl PreOrderIterator<'_> {
                             let path_overlap = PrefixOverlap::from(key, child_key.as_ref());
                             let unique_node = path_overlap.unique_b;
                             if unique_node.is_empty() || child_key > *key {
-                                self.stack.push(TraversalStackFrame {
+                                self.traversal_stack.push(TraversalStackFrame {
                                     pre_path: child_pre_path,
                                     node: child,
                                     hash: None,
@@ -674,8 +658,8 @@ impl PreOrderIterator<'_> {
 mod tests {
     use crate::{
         db::{BatchOp, Db, DbConfig},
+        merkle::changes::DiffMerkleNodeStream,
         merkle::{Key, Merkle, Value},
-        proofs::diff::DiffMerkleNodeStream,
         v2::api::{Db as _, DbView, Proposal as _},
     };
 
@@ -1952,7 +1936,7 @@ mod tests {
 
         // DIFF TEST: Measure next calls from diff operations on mutable proposals
         let diff_nexts_before =
-            recorder.get_counter_value("firewood.diff_merkle", &[("traversal", "next")]);
+            recorder.get_counter_value("firewood.change_proof.next", &[("traversal", "next")]);
 
         let diff_stream =
             DiffMerkleNodeStream::new_without_hash(m1.nodestore(), m2.nodestore(), Box::new([]))
@@ -1960,7 +1944,7 @@ mod tests {
         let diff_mutable_results_count = diff_stream.count();
 
         let diff_nexts_after =
-            recorder.get_counter_value("firewood.diff_merkle", &[("traversal", "next")]);
+            recorder.get_counter_value("firewood.change_proof.next", &[("traversal", "next")]);
         let diff_mutable_nexts = diff_nexts_after - diff_nexts_before;
 
         println!("Diff (mutable) next operations: {diff_mutable_nexts}");
@@ -1971,14 +1955,14 @@ mod tests {
 
         // DIFF TEST: Measure next calls from hash-optimized diff operation
         let diff_nexts_before =
-            recorder.get_counter_value("firewood.diff_merkle", &[("traversal", "next")]);
+            recorder.get_counter_value("firewood.change_proof.next", &[("traversal", "next")]);
 
         let diff_stream =
             DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Box::new([])).unwrap();
         let diff_immutable_results_count = diff_stream.count();
 
         let diff_nexts_after =
-            recorder.get_counter_value("firewood.diff_merkle", &[("traversal", "next")]);
+            recorder.get_counter_value("firewood.change_proof.next", &[("traversal", "next")]);
         let diff_immutable_nexts = diff_nexts_after - diff_nexts_before;
 
         println!("Diff (immutable) next operations: {diff_immutable_nexts}");
