@@ -83,7 +83,7 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 
 	itResult := C.fwd_iter_on_proposal(p.handle, newBorrowedBytes(key, &pinner))
 
-	return getIteratorFromIteratorResult(itResult)
+	return getIteratorFromIteratorResult(itResult, p.keepAliveHandle.outstandingHandles)
 }
 
 // Propose is equivalent to [Database.Propose] except that the new proposal is

@@ -85,7 +85,7 @@ func (r *Revision) Iter(key []byte) (*Iterator, error) {
 
 	itResult := C.fwd_iter_on_revision(r.handle, newBorrowedBytes(key, &pinner))
 
-	return getIteratorFromIteratorResult(itResult)
+	return getIteratorFromIteratorResult(itResult, r.keepAliveHandle.outstandingHandles)
 }
 
 // Drop releases the resources backed by the revision handle.

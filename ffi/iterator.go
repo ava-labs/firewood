@@ -10,9 +10,29 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"runtime"
+	"sync"
 	"unsafe"
 )
 
+// Iterator provides a way to sequentially access key-value pairs
+// stored in a Proposal or Revision.
+//
+// Iterators are created via [Proposal.Iterator] or [Revision.Iterator],
+// and must be released with [Iterator.Drop] when no longer needed.
+// There is a finalizer set on each Iterator to ensure that Drop is called
+// when the Iterator is garbage collected, but relying on finalizers is not
+// recommended.
+// The underlying revision will remain valid while the iterator is in use.
+//
+// Iterators must be dropped before the associated database is closed.
+// Failing to drop an iterator before the database is closed will cause
+// it to block or fail.
+//
+// WARNING: Iterator is not safe for concurrent use. Additionally, there are
+// certain usage patterns that can lead to undefined behavior, such as retaining
+// borrowed slices beyond their valid lifetime. Please refer to the documentation
+// of individual methods for details.
 type Iterator struct {
 	// handle is an opaque pointer to the iterator within Firewood. It should be
 	// passed to the C FFI functions that operate on iterators
@@ -38,6 +58,8 @@ type Iterator struct {
 
 	// err is the error from the iterator, if any
 	err error
+
+	keepAliveHandle databaseKeepAliveHandle
 }
 
 func (it *Iterator) freeCurrentAllocation() error {
@@ -139,35 +161,42 @@ func (it *Iterator) Value() []byte {
 	return it.currentValue
 }
 
-// Err returns the error if Next failed
+// Err returns the error if Next failed.
+// This must only be checked after iteration is complete.
 func (it *Iterator) Err() error {
 	return it.err
 }
 
 // Drop drops the iterator and releases the resources
+//
+// It is safe to call Drop multiple times; subsequent calls after the first are no-ops.
 func (it *Iterator) Drop() error {
-	err := it.freeCurrentAllocation()
-	if it.handle != nil {
-		// Always free the iterator even if releasing the current KV/batch failed.
-		// The iterator holds a NodeStore ref that must be dropped.
-		return errors.Join(
-			err,
-			getErrorFromVoidResult(C.fwd_free_iterator(it.handle)))
-	}
-	return err
+	return it.keepAliveHandle.disown(false, func() error {
+		err := it.freeCurrentAllocation()
+		if it.handle != nil {
+			// Always free the iterator even if releasing the current KV/batch failed.
+			// The iterator holds a NodeStore ref that must be dropped.
+			return errors.Join(
+				err,
+				getErrorFromVoidResult(C.fwd_free_iterator(it.handle)))
+		}
+		return err
+	})
 }
 
 // getIteratorFromIteratorResult converts a C.IteratorResult to an Iterator or error.
-func getIteratorFromIteratorResult(result C.IteratorResult) (*Iterator, error) {
+func getIteratorFromIteratorResult(result C.IteratorResult, wg *sync.WaitGroup) (*Iterator, error) {
 	switch result.tag {
 	case C.IteratorResult_NullHandlePointer:
 		return nil, errDBClosed
 	case C.IteratorResult_Ok:
 		body := (*C.IteratorResult_Ok_Body)(unsafe.Pointer(&result.anon0))
-		proposal := &Iterator{
+		iter := &Iterator{
 			handle: body.handle,
 		}
-		return proposal, nil
+		iter.keepAliveHandle.init(wg)
+		runtime.SetFinalizer(iter, (*Iterator).Drop)
+		return iter, nil
 	case C.IteratorResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err

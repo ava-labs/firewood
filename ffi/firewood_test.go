@@ -1567,6 +1567,57 @@ func TestIterDone(t *testing.T) {
 	r.NoError(it.Err())
 }
 
+func TestIterFreesImplicitly(t *testing.T) {
+	t.Parallel()
+	db := newTestDatabase(t)
+
+	// make the db non-empty with one outstanding proposal
+	_, err := db.Update([][]byte{keyForTest(1)}, [][]byte{valForTest(1)})
+	require.NoError(t, err)
+	p, err := db.Propose([][]byte{keyForTest(2)}, [][]byte{valForTest(2)})
+	require.NoError(t, err)
+
+	// Get a revision iterator and proposal iterator
+	rev, err := db.LatestRevision()
+	require.NoErrorf(t, err, "%T.LatestRevision()", db)
+	itRev, err := rev.Iter(nil)
+	require.NoErrorf(t, err, "%T.Iter()", rev)
+	itProp, err := p.Iter(nil)
+	require.NoErrorf(t, err, "%T.Iter()", p)
+
+	require.NoErrorf(t, rev.Drop(), "%T.Drop()", rev)
+	require.NoErrorf(t, p.Drop(), "%T.Drop()", p)
+
+	require.ErrorIs(t, db.Close(oneSecCtx(t)), ErrActiveKeepAliveHandles, "%T.Close() with active iterators", db)
+
+	done := make(chan struct{})
+	go func() {
+		require.NoErrorf(t, db.Close(oneSecCtx(t)), "%T.Close()", db)
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		require.Failf(t, "Unexpected return", "%T.Close() returned with undropped %T", db, itRev)
+	case <-time.After(300 * time.Millisecond):
+		// TODO(arr4n) use `synctest` package when at Go 1.25
+	}
+
+	// These MUST NOT be committed nor dropped as they demonstrate that the GC
+	runtime.KeepAlive(itRev)
+	runtime.KeepAlive(itProp)
+	itRev = nil
+	itProp = nil
+
+	// In practice there's no need to call [runtime.GC] if [Database.Close] is
+	// called after all proposals are unreachable, as it does it itself.
+	runtime.GC()
+	// Note that [Database.Close] waits for outstanding handles, so this would
+	// block permanently if the unreachability of implicitly dropped handles didn't
+	// result in their Drop methods being called.
+	<-done
+}
+
 // TestNilVsEmptyValue tests that nil values cause delete operations while
 // empty []byte{} values result in inserts with empty values.
 func TestNilVsEmptyValue(t *testing.T) {
