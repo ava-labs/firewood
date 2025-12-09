@@ -424,108 +424,112 @@ mod tests {
 
     #[test]
     fn test_concurrent_view_during_commit() {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use firewood_storage::{
+            ImmutableProposal, LeafNode, NibblesIterator, Node, NodeStore, Path,
+        };
         use std::sync::Barrier;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         use std::thread;
-        use firewood_storage::{ImmutableProposal, LeafNode, NibblesIterator, Node, NodeStore, Path};
-        
+
         // Create a temporary database
         let temp_file = NamedTempFile::new().unwrap();
         let db_path = temp_file.path().to_path_buf();
-        
+
         let config = ConfigManager::builder()
             .create(true)
             .truncate(true)
             .manager(
                 RevisionManagerConfig::builder()
                     .max_revisions(100000) // Set very high to prevent reaping during test
-                    .build()
+                    .build(),
             )
             .build();
-        
+
         let manager = Arc::new(RevisionManager::new(db_path, config).unwrap());
-        
+
         // Create an initial proposal and commit it to have a non-empty base
         let base_revision = manager.current_revision();
         let mut proposal = NodeStore::new(&*base_revision).unwrap();
         {
             let root = proposal.root_mut();
             *root = Some(Node::Leaf(LeafNode {
-                partial_path: Path::from_nibbles_iterator(
-                    NibblesIterator::new(b"initial")
-                ),
+                partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"initial")),
                 value: b"value".to_vec().into_boxed_slice(),
             }));
         }
-        let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _>> = Arc::new(proposal.try_into().unwrap());
+        let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _>> =
+            Arc::new(proposal.try_into().unwrap());
         manager.add_proposal(proposal.clone());
         manager.commit(proposal).unwrap();
-        
+
         const NUM_ITERATIONS: usize = 1000;
         const NUM_VIEWER_THREADS: usize = 10;
         const NUM_COMMITTER_THREADS: usize = 5;
-        
+
         let error_count = Arc::new(AtomicUsize::new(0));
         let stop_flag = Arc::new(AtomicBool::new(false));
         let barrier = Arc::new(Barrier::new(NUM_VIEWER_THREADS + NUM_COMMITTER_THREADS));
-        
+
         let mut handles = vec![];
-        
+
         // Spawn viewer threads
         for thread_id in 0..NUM_VIEWER_THREADS {
             let manager = Arc::clone(&manager);
             let error_count = Arc::clone(&error_count);
             let stop_flag = Arc::clone(&stop_flag);
             let barrier = Arc::clone(&barrier);
-            
+
             let handle = thread::spawn(move || {
                 barrier.wait(); // Synchronize thread start
-                
+
                 let mut local_errors = 0;
                 for _ in 0..NUM_ITERATIONS {
                     if stop_flag.load(Ordering::Relaxed) {
                         break;
                     }
-                    
+
                     // Try to view the current revision
                     let current_hash = manager.current_revision().root_hash();
                     if let Some(hash) = current_hash {
                         match manager.view(hash.clone()) {
-                            Ok(_) => {},
+                            Ok(_) => {}
                             Err(RevisionManagerError::RevisionNotFound { .. }) => {
                                 local_errors += 1;
-                                eprintln!("Thread {}: RevisionNotFound for hash {:?}", thread_id, hash);
-                            },
+                                eprintln!(
+                                    "Thread {}: RevisionNotFound for hash {:?}",
+                                    thread_id, hash
+                                );
+                            }
                             Err(e) => {
                                 eprintln!("Thread {}: Unexpected error: {:?}", thread_id, e);
                             }
                         }
                     }
-                    
+
                     // Small yield to increase contention
                     thread::yield_now();
                 }
-                
+
                 error_count.fetch_add(local_errors, Ordering::Relaxed);
             });
-            
+
             handles.push(handle);
         }
-        
+
         // Spawn committer threads
         for thread_id in 0..NUM_COMMITTER_THREADS {
             let manager = Arc::clone(&manager);
             let stop_flag = Arc::clone(&stop_flag);
             let barrier = Arc::clone(&barrier);
-            
+
             let handle = thread::spawn(move || {
                 barrier.wait(); // Synchronize thread start
-                
+
                 for i in 0..NUM_ITERATIONS {
                     if stop_flag.load(Ordering::Relaxed) {
                         break;
                     }
-                    
+
                     // Create and commit a proposal
                     let current = manager.current_revision();
                     let mut new_proposal = match NodeStore::new(&*current) {
@@ -535,66 +539,79 @@ mod tests {
                             continue;
                         }
                     };
-                    
+
                     // Modify the proposal
                     {
                         let root = new_proposal.root_mut();
                         let key = format!("key_{}_{}", thread_id, i);
                         *root = Some(Node::Leaf(LeafNode {
-                            partial_path: Path::from_nibbles_iterator(
-                                NibblesIterator::new(key.as_bytes())
-                            ),
-                            value: format!("value_{}", i).as_bytes().to_vec().into_boxed_slice(),
+                            partial_path: Path::from_nibbles_iterator(NibblesIterator::new(
+                                key.as_bytes(),
+                            )),
+                            value: format!("value_{}", i)
+                                .as_bytes()
+                                .to_vec()
+                                .into_boxed_slice(),
                         }));
                     }
-                    
-                    let immutable: Arc<NodeStore<Arc<ImmutableProposal>, _>> = 
+
+                    let immutable: Arc<NodeStore<Arc<ImmutableProposal>, _>> =
                         Arc::new(match new_proposal.try_into() {
                             Ok(p) => p,
                             Err(e) => {
-                                eprintln!("Thread {}: Failed to convert to immutable: {:?}", thread_id, e);
+                                eprintln!(
+                                    "Thread {}: Failed to convert to immutable: {:?}",
+                                    thread_id, e
+                                );
                                 continue;
                             }
                         });
-                    
+
                     manager.add_proposal(immutable.clone());
-                    
+
                     match manager.commit(immutable) {
-                        Ok(()) => {},
+                        Ok(()) => {}
                         Err(RevisionManagerError::NotLatest { .. }) => {
                             // Expected when multiple threads try to commit
-                        },
+                        }
                         Err(e) => {
                             eprintln!("Thread {}: Unexpected commit error: {:?}", thread_id, e);
                             stop_flag.store(true, Ordering::Relaxed);
                             break;
                         }
                     }
-                    
+
                     thread::yield_now();
                 }
             });
-            
+
             handles.push(handle);
         }
-        
+
         // Wait for all threads to complete
         for handle in handles {
             handle.join().unwrap();
         }
-        
+
         let total_errors = error_count.load(Ordering::Relaxed);
-        
+
         if total_errors > 0 {
-            eprintln!("\nRace condition detected! {} RevisionNotFound errors occurred.", total_errors);
+            eprintln!(
+                "\nRace condition detected! {} RevisionNotFound errors occurred.",
+                total_errors
+            );
             eprintln!("This confirms the race condition exists between commit and view.");
         } else {
-            eprintln!("\nNo race condition detected in this run. Try running the test multiple times or increasing iterations.");
+            eprintln!(
+                "\nNo race condition detected in this run. Try running the test multiple times or increasing iterations."
+            );
         }
-        
+
         // For now, we expect the race to occur, so we fail if we see errors
-        assert_eq!(total_errors, 0, 
-            "Race condition detected: {} threads failed to find revisions that should exist", 
-            total_errors);
+        assert_eq!(
+            total_errors, 0,
+            "Race condition detected: {} threads failed to find revisions that should exist",
+            total_errors
+        );
     }
 }
