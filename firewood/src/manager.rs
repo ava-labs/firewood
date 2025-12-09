@@ -423,6 +423,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_concurrent_view_during_commit() {
         use firewood_storage::{
             ImmutableProposal, LeafNode, NibblesIterator, Node, NodeStore, Path,
@@ -430,6 +431,10 @@ mod tests {
         use std::sync::Barrier;
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         use std::thread;
+
+        const NUM_ITERATIONS: usize = 1000;
+        const NUM_VIEWER_THREADS: usize = 10;
+        const NUM_COMMITTER_THREADS: usize = 5;
 
         // Create a temporary database
         let temp_file = NamedTempFile::new().unwrap();
@@ -440,7 +445,7 @@ mod tests {
             .truncate(true)
             .manager(
                 RevisionManagerConfig::builder()
-                    .max_revisions(100000) // Set very high to prevent reaping during test
+                    .max_revisions(100_000) // Set very high to prevent reaping during test
                     .build(),
             )
             .build();
@@ -461,10 +466,6 @@ mod tests {
             Arc::new(proposal.try_into().unwrap());
         manager.add_proposal(proposal.clone());
         manager.commit(proposal).unwrap();
-
-        const NUM_ITERATIONS: usize = 1000;
-        const NUM_VIEWER_THREADS: usize = 10;
-        const NUM_COMMITTER_THREADS: usize = 5;
 
         let error_count = Arc::new(AtomicUsize::new(0));
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -496,12 +497,11 @@ mod tests {
                             Err(RevisionManagerError::RevisionNotFound { .. }) => {
                                 local_errors += 1;
                                 eprintln!(
-                                    "Thread {}: RevisionNotFound for hash {:?}",
-                                    thread_id, hash
+                                    "Thread {thread_id}: RevisionNotFound for hash {hash:?}"
                                 );
                             }
                             Err(e) => {
-                                eprintln!("Thread {}: Unexpected error: {:?}", thread_id, e);
+                                eprintln!("Thread {thread_id}: Unexpected error: {e:?}");
                             }
                         }
                     }
@@ -535,7 +535,7 @@ mod tests {
                     let mut new_proposal = match NodeStore::new(&*current) {
                         Ok(p) => p,
                         Err(e) => {
-                            eprintln!("Thread {}: Failed to create proposal: {:?}", thread_id, e);
+                            eprintln!("Thread {thread_id}: Failed to create proposal: {e:?}");
                             continue;
                         }
                     };
@@ -543,12 +543,12 @@ mod tests {
                     // Modify the proposal
                     {
                         let root = new_proposal.root_mut();
-                        let key = format!("key_{}_{}", thread_id, i);
+                        let key = format!("key_{thread_id}_{i}");
                         *root = Some(Node::Leaf(LeafNode {
                             partial_path: Path::from_nibbles_iterator(NibblesIterator::new(
                                 key.as_bytes(),
                             )),
-                            value: format!("value_{}", i)
+                            value: format!("value_{i}")
                                 .as_bytes()
                                 .to_vec()
                                 .into_boxed_slice(),
@@ -560,8 +560,7 @@ mod tests {
                             Ok(p) => p,
                             Err(e) => {
                                 eprintln!(
-                                    "Thread {}: Failed to convert to immutable: {:?}",
-                                    thread_id, e
+                                    "Thread {thread_id}: Failed to convert to immutable: {e:?}"
                                 );
                                 continue;
                             }
@@ -570,12 +569,11 @@ mod tests {
                     manager.add_proposal(immutable.clone());
 
                     match manager.commit(immutable) {
-                        Ok(()) => {}
-                        Err(RevisionManagerError::NotLatest { .. }) => {
+                        Ok(()) | Err(RevisionManagerError::NotLatest { .. }) => {
                             // Expected when multiple threads try to commit
                         }
                         Err(e) => {
-                            eprintln!("Thread {}: Unexpected commit error: {:?}", thread_id, e);
+                            eprintln!("Thread {thread_id}: Unexpected commit error: {e:?}");
                             stop_flag.store(true, Ordering::Relaxed);
                             break;
                         }
@@ -597,8 +595,7 @@ mod tests {
 
         if total_errors > 0 {
             eprintln!(
-                "\nRace condition detected! {} RevisionNotFound errors occurred.",
-                total_errors
+                "\nRace condition detected! {total_errors} RevisionNotFound errors occurred."
             );
             eprintln!("This confirms the race condition exists between commit and view.");
         } else {
@@ -610,8 +607,7 @@ mod tests {
         // For now, we expect the race to occur, so we fail if we see errors
         assert_eq!(
             total_errors, 0,
-            "Race condition detected: {} threads failed to find revisions that should exist",
-            total_errors
+            "Race condition detected: {total_errors} threads failed to find revisions that should exist"
         );
     }
 }
