@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.16] - 2025-12-09
+
+### 🚀 Features
+
+- Use `parking_lot` to eliminate lock poisoning ([#1476](https://github.com/ava-labs/firewood/pull/1476))
+- *(ffi)* Protect unsafe concurrent ops ([#1474](https://github.com/ava-labs/firewood/pull/1474))
+
+### 🐛 Bug Fixes
+
+- Mark node as allocated before serializing parent ([#1489](https://github.com/ava-labs/firewood/pull/1489))
+- *(parallel)* Track deleted nodes from root branch in parallel propose ([#1491](https://github.com/ava-labs/firewood/pull/1491))
+- Refactor io-uring to drive the queue to completion ([#1498](https://github.com/ava-labs/firewood/pull/1498))
+- *(ffi)* Hold onto verification context in next key range ([#1486](https://github.com/ava-labs/firewood/pull/1486))
+- *(range-proof)* Skip leaf nodes that come before lower bound ([#1512](https://github.com/ava-labs/firewood/pull/1512))
+- Correct architecture for m5ad.2xlarge ([#1514](https://github.com/ava-labs/firewood/pull/1514))
+- Race condition between view and commit ([#1519](https://github.com/ava-labs/firewood/pull/1519))
+- *(range-proofs)* Generate proofs for lower and upper bounds correctly ([#1513](https://github.com/ava-labs/firewood/pull/1513))
+
+### 🚜 Refactor
+
+- *(rootstore)* Remove `MockStore` ([#1477](https://github.com/ava-labs/firewood/pull/1477))
+- *(firewood/db)* Unify reopen methods ([#1481](https://github.com/ava-labs/firewood/pull/1481))
+- *(db/revisionmanager)* Move `RootStore` creation to `RevisionManager` ([#1482](https://github.com/ava-labs/firewood/pull/1482))
+- *(rootstore)* Remove box pointer ([#1484](https://github.com/ava-labs/firewood/pull/1484))
+- *(rootstore)* Own nodestore logic ([#1495](https://github.com/ava-labs/firewood/pull/1495))
+- *(checker)* Separate check and fix ([#1506](https://github.com/ava-labs/firewood/pull/1506))
+
+### 📚 Documentation
+
+- *(ffi)* Update godoc ([#1466](https://github.com/ava-labs/firewood/pull/1466))
+
+### ⚡ Performance
+
+- Avoid extra copying when comparing `HashOrRlp` ([#1505](https://github.com/ava-labs/firewood/pull/1505))
+
+### 🧪 Testing
+
+- Optimize init_merkle by removing redundant verification passes ([#1504](https://github.com/ava-labs/firewood/pull/1504))
+- Enhance aws-launch with show and terminate options ([#1517](https://github.com/ava-labs/firewood/pull/1517))
+
+### ⚙️ Miscellaneous Tasks
+
+- Update golangci yaml files ([#1492](https://github.com/ava-labs/firewood/pull/1492))
+- Remove windows remnants ([#1503](https://github.com/ava-labs/firewood/pull/1503))
+- *(db)* Remove unused `all_hashes()` method ([#1509](https://github.com/ava-labs/firewood/pull/1509))
+- *(bootstrap)* Update SSH authorized key for user 'brandon' ([#1510](https://github.com/ava-labs/firewood/pull/1510))
+- [**breaking**] Reorganize proof code ([#1511](https://github.com/ava-labs/firewood/pull/1511))
+
 ## [0.0.15] - 2025-11-18
 
 ### 🚀 Features
