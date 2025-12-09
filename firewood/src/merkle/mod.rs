@@ -410,20 +410,16 @@ impl<T: TrieReader> Merkle<T> {
 
         let mut iter = self
             .key_value_iter_from_key(start_key.unwrap_or_default())
-            .take_while(|kv| {
-                // no last key asked for, so keep going
-                let Some(last_key) = end_key else {
-                    return true;
-                };
-
-                // return the error if there was one
-                let Ok(kv) = kv else {
-                    return true;
-                };
-
-                // keep going if the key returned is less than the last key requested
-                *kv.0 <= *last_key
+            .take_while(move |result| {
+                if let (Ok((next_key, _)), Some(end_key)) = (result, end_key) {
+                    // keep going if the key returned is less than the last key requested
+                    **next_key <= *end_key
+                } else {
+                    // keep going if we don't have an end key or found an error
+                    true
+                }
             });
+
         // don't consume the iterator so we can determine if we hit the
         // limit or exhausted the iterator later
         let key_values = iter
