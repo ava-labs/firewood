@@ -100,7 +100,7 @@ impl LogArgs<'_> {
 
         env_logger::Builder::new()
             .filter_level(level)
-            .target(Pipe(Box::new(file)))
+            .target(Pipe(Box::new(std::io::BufWriter::new(file))))
             .try_init()
             .map_err(|e| std::io::Error::other(format!("failed to initialize logger: {e}")))?;
 
