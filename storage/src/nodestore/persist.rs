@@ -216,93 +216,30 @@ fn serialize_node_to_bump<'a>(
     Ok((slice, persisted_address, area_size_index.size() as usize))
 }
 
-/// Helper function to process unpersisted nodes with batching and overflow detection
-///
-/// This function iterates through all unpersisted nodes, serializes them into a bump allocator,
-/// and flushes them in batches when the bump allocator is about to overflow.
-///
-/// # Errors
-///
-/// Returns a [`FileIoError`] if any node cannot be serialized, allocated, or written to storage.
-pub(super) fn process_unpersisted_nodes<N, S, F>(
-    bump: &mut bumpalo::Bump,
-    node_allocator: &mut NodeAllocator<'_, S>,
-    node_store: &N,
-    bump_size_limit: usize,
-    mut write_fn: F,
-) -> Result<(), FileIoError>
-where
-    N: NodeReader + RootReader,
-    S: WritableStorage,
-    F: FnMut(Vec<(&[u8], crate::LinearAddress, MaybePersistedNode)>) -> Result<(), FileIoError>,
-{
-    let mut allocated_objects = Vec::new();
-    let mut allocated_len = 0_usize;
-
-    // Process each unpersisted node directly from the iterator
-    for node in UnPersistedNodeIterator::new(node_store) {
-        let shared_node = node
-            .as_shared_node(node_store)
-            .expect("in memory, so no IO");
-
-        // Serialize the node into the bump allocator
-        let (slice, persisted_address, idx_size) =
-            serialize_node_to_bump(bump, &shared_node, node_allocator)?;
-
-        // NOTE(#1488): we need to set the address so that the parent node can
-        // reference it when they are serialized within the same batch.
-        node.allocate_at(persisted_address);
-        allocated_len = allocated_len.saturating_add(idx_size);
-        allocated_objects.push((slice, persisted_address, node));
-
-        // we pause if we can't allocate another node of the same size as the last one
-        // This isn't a guarantee that we won't exceed bump_size_limit
-        // but it's a good enough approximation
-        let might_overflow = allocated_len > bump_size_limit.saturating_sub(idx_size);
-        if might_overflow {
-            // must persist freelist before writing anything
-            node_allocator.flush_freelist()?;
-            write_fn(allocated_objects)?;
-            allocated_objects = Vec::new();
-            bump.reset();
-            allocated_len = 0;
-        }
-    }
-    if !allocated_objects.is_empty() {
-        // Flush the freelist using the node_allocator before the final write
-        node_allocator.flush_freelist()?;
-        write_fn(allocated_objects)?;
-    }
-
-    Ok(())
-}
-
-impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
+impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Persist all the nodes of a proposal to storage.
     ///
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
-    pub fn flush_nodes(&mut self) -> Result<NodeStoreHeader, FileIoError> {
+    pub fn flush_nodes(&self) -> Result<NodeStoreHeader, FileIoError> {
         let flush_start = Instant::now();
 
         let header = {
-            #[cfg(feature = "io-uring")]
-            {
-                use crate::FileBacked;
-                // Try to use io-uring if available and storage type supports it
-                let this = self as &mut dyn std::any::Any;
-                if let Some(file_backed) = this.downcast_mut::<NodeStore<Committed, FileBacked>>() {
-                    file_backed.flush_nodes_io_uring()?
-                } else {
-                    self.flush_nodes_generic()?
-                }
-            }
-            #[cfg(not(feature = "io-uring"))]
-            {
-                self.flush_nodes_generic()?
-            }
+            use bumpalo::Bump;
+
+            let mut header = self.header;
+            let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
+            let mut bump = Bump::with_capacity(super::INITIAL_BUMP_SIZE);
+
+            self.process_unpersisted_nodes(
+                &mut bump,
+                &mut node_allocator,
+                super::INITIAL_BUMP_SIZE,
+            )?;
+
+            header
         };
 
         let flush_time = flush_start.elapsed().as_millis();
@@ -311,27 +248,58 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
         Ok(header)
     }
 
-    /// Persist all the nodes of a proposal to storage.
+    /// Helper function to process unpersisted nodes with batching and overflow detection
+    ///
+    /// This function iterates through all unpersisted nodes, serializes them into a bump allocator,
+    /// and flushes them in batches when the bump allocator is about to overflow.
     ///
     /// # Errors
     ///
-    /// Returns a [`FileIoError`] if any node cannot be written to storage.
-    fn flush_nodes_generic(&self) -> Result<NodeStoreHeader, FileIoError> {
-        use bumpalo::Bump;
+    /// Returns a [`FileIoError`] if any node cannot be serialized, allocated, or written to storage.
+    fn process_unpersisted_nodes(
+        &self,
+        bump: &mut bumpalo::Bump,
+        node_allocator: &mut NodeAllocator<'_, S>,
+        bump_size_limit: usize,
+    ) -> Result<(), FileIoError> {
+        let mut allocated_objects = Vec::new();
+        let mut allocated_len = 0_usize;
 
-        let mut header = self.header;
-        let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
-        let mut bump = Bump::with_capacity(super::INITIAL_BUMP_SIZE);
+        // Process each unpersisted node directly from the iterator
+        for node in UnPersistedNodeIterator::new(self) {
+            let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
 
-        process_unpersisted_nodes(
-            &mut bump,
-            &mut node_allocator,
-            self,
-            super::INITIAL_BUMP_SIZE,
-            |allocated_objects| self.write_nodes_generic(allocated_objects),
-        )?;
+            // Serialize the node into the bump allocator
+            let (slice, persisted_address, idx_size) =
+                serialize_node_to_bump(bump, &shared_node, node_allocator)?;
 
-        Ok(header)
+            // NOTE(#1488): we need to set the address so that the parent node can
+            // reference it when they are serialized within the same batch.
+            node.allocate_at(persisted_address);
+            allocated_len = allocated_len.saturating_add(idx_size);
+            allocated_objects.push((slice, persisted_address, node));
+
+            // we pause if we can't allocate another node of the same size as the last one
+            // This isn't a guarantee that we won't exceed bump_size_limit
+            // but it's a good enough approximation
+            let might_overflow = allocated_len > bump_size_limit.saturating_sub(idx_size);
+            if might_overflow {
+                // must persist freelist before writing anything
+                node_allocator.flush_freelist()?;
+                self.write_batch(allocated_objects)?;
+                allocated_objects = Vec::new();
+                bump.reset();
+                allocated_len = 0;
+            }
+        }
+
+        if !allocated_objects.is_empty() {
+            // Flush the freelist using the node_allocator before the final write
+            node_allocator.flush_freelist()?;
+            self.write_batch(allocated_objects)?;
+        }
+
+        Ok(())
     }
 
     /// Write a batch of serialized nodes to storage
@@ -339,27 +307,22 @@ impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
-    fn write_nodes_generic(
+    fn write_batch(
         &self,
         allocated_objects: Vec<(&[u8], crate::LinearAddress, MaybePersistedNode)>,
     ) -> Result<(), FileIoError> {
-        // Collect addresses and nodes for caching
-        let mut cached_nodes = Vec::new();
+        self.storage.write_batch(
+            allocated_objects
+                .iter()
+                .map(|&(data, addr, _)| (addr.get(), data)),
+        )?;
 
-        for (serialized, persisted_address, node) in allocated_objects {
-            self.storage.write(persisted_address.get(), serialized)?;
-
-            // I/O completed successfully - enqueue node for caching at the end
-            cached_nodes.push(node);
-        }
-
-        self.storage.write_cached_nodes(cached_nodes)?;
+        self.storage
+            .write_cached_nodes(allocated_objects.into_iter().map(|(_, _, node)| node))?;
 
         Ok(())
     }
-}
 
-impl<S: WritableStorage + 'static> NodeStore<Committed, S> {
     /// Persist the entire nodestore to storage.
     ///
     /// This method performs a complete persistence operation by:
@@ -405,7 +368,7 @@ mod tests {
     ) -> NodeStore<Committed, MemStore> {
         ns.flush_freelist().unwrap();
         ns.flush_header().unwrap();
-        let mut ns = ns.as_committed(parent);
+        let ns = ns.as_committed(parent);
         ns.flush_nodes().unwrap();
         ns
     }

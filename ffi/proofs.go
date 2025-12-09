@@ -211,6 +211,12 @@ func (db *Database) VerifyAndCommitRangeProof(
 //
 // FindNextKey can only be called after a successful call to [*Database.VerifyRangeProof] or
 // [*Database.VerifyAndCommitRangeProof].
+//
+// The next key range indicates the next `(startKey, endKey]` range of keys that
+// should be synchronized to complete the requested range. `startKey` is non-
+// inclusive and `endKey`, if present, is inclusive.
+//
+// TODO(#352): the start key will be inclusive in the future; update documentation then.
 func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
 	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_range_proof_find_next_key(p.handle))
 }
@@ -413,19 +419,19 @@ func (p *ChangeProof) Free() error {
 
 // StartKey returns the inclusive start key of this key range.
 func (r *NextKeyRange) StartKey() []byte {
-	return r.startKey.BorrowedBytes()
+	return r.startKey.CopiedBytes()
 }
 
 // HasEndKey returns true if this key range has an exclusive end key.
 func (r *NextKeyRange) HasEndKey() bool {
-	return r.endKey.HasValue()
+	return r.endKey != nil && r.endKey.HasValue()
 }
 
 // EndKey returns the exclusive end key of this key range if it exists or nil if
 // it does not.
 func (r *NextKeyRange) EndKey() []byte {
-	if r.endKey.HasValue() {
-		return r.endKey.Value().BorrowedBytes()
+	if r.HasEndKey() {
+		return r.endKey.Value().CopiedBytes()
 	}
 	return nil
 }
@@ -438,7 +444,7 @@ func (r *NextKeyRange) Free() error {
 	var err1, err2 error
 
 	err1 = r.startKey.Free()
-	if r.endKey != nil && r.endKey.HasValue() {
+	if r.HasEndKey() {
 		err2 = r.endKey.Value().Free()
 	}
 
