@@ -8,10 +8,14 @@ AVALANCHEGO_BRANCH=""
 CORETH_BRANCH=""
 LIBEVM_COMMIT=""
 NBLOCKS="1m"
+END_BLOCK_OVERRIDE=""
 CONFIG="firewood"
 REGION="us-west-2"
 DRY_RUN=false
 SPOT_INSTANCE=false
+SHOW_INSTANCES=false
+TERMINATE_MINE=false
+TERMINATE_INSTANCES=()
 
 # Valid instance types and their architectures
 declare -A VALID_INSTANCES=(
@@ -61,10 +65,14 @@ show_usage() {
     echo "  --coreth-branch BRANCH      Coreth git branch to checkout"
     echo "  --libevm-commit COMMIT      LibEVM git commit to checkout"
     echo "  --nblocks BLOCKS            Number of blocks to download (default: 1m)"
+    echo "  --end-block BLOCK           Override the end block number (must be <= nblocks limit)"
     echo "  --config CONFIG             The VM reexecution config to use (default: firewood)"
     echo "  --region REGION             AWS region (default: us-west-2)"
     echo "  --spot                      Use spot instance pricing (default depends on instance type)"
     echo "  --dry-run                   Show the aws command that would be run without executing it"
+    echo "  --show                      Show currently running instances in the region"
+    echo "  --terminate-mine            Terminate all running instances created by current user"
+    echo "  --terminate ID [ID...]      Terminate specific instance(s) by instance ID"
     echo "  --help                      Show this help message"
     echo ""
     echo "Valid instance types:"
@@ -124,6 +132,15 @@ while [[ $# -gt 0 ]]; do
             fi
             shift 2
             ;;
+        --end-block)
+            END_BLOCK_OVERRIDE="$2"
+            # Validate it's a number
+            if ! [[ "$END_BLOCK_OVERRIDE" =~ ^[0-9]+$ ]]; then
+                echo "Error: --end-block must be a positive integer"
+                exit 1
+            fi
+            shift 2
+            ;;
         --config)
             CONFIG="$2"
             shift 2
@@ -140,6 +157,26 @@ while [[ $# -gt 0 ]]; do
             DRY_RUN=true
             shift
             ;;
+        --show)
+            SHOW_INSTANCES=true
+            shift
+            ;;
+        --terminate-mine)
+            TERMINATE_MINE=true
+            shift
+            ;;
+        --terminate)
+            shift
+            # Collect all following arguments as instance IDs until we hit another flag or end
+            while [[ $# -gt 0 ]] && [[ ! $1 =~ ^-- ]]; do
+                TERMINATE_INSTANCES+=("$1")
+                shift
+            done
+            if [[ ${#TERMINATE_INSTANCES[@]} -eq 0 ]]; then
+                echo "Error: --terminate requires at least one instance ID"
+                exit 1
+            fi
+            ;;
         --help)
             show_usage
             exit 0
@@ -152,8 +189,92 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Handle --terminate option
+if [ ${#TERMINATE_INSTANCES[@]} -gt 0 ]; then
+    # Check if any incompatible options are present
+    if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || [ -n "$CORETH_BRANCH" ] || \
+       [ -n "$LIBEVM_COMMIT" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
+       [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ] || \
+       [ "$SHOW_INSTANCES" = true ] || [ "$TERMINATE_MINE" = true ]; then
+        echo "Error: --terminate cannot be used with other options except --region"
+        exit 1
+    fi
+    
+    echo "Terminating instances: ${TERMINATE_INSTANCES[*]}"
+    aws ec2 terminate-instances \
+      --region "$REGION" \
+      --instance-ids "${TERMINATE_INSTANCES[@]}"
+    exit 0
+fi
+
+# Handle --terminate-mine option
+if [ "$TERMINATE_MINE" = true ]; then
+    # Check if any incompatible options are present
+    if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || [ -n "$CORETH_BRANCH" ] || \
+       [ -n "$LIBEVM_COMMIT" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
+       [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ] || \
+       [ "$SHOW_INSTANCES" = true ]; then
+        echo "Error: --terminate-mine cannot be used with other options except --region"
+        exit 1
+    fi
+    
+    # Get instances created by current user (Name tag starts with username)
+    INSTANCE_IDS=$(aws ec2 describe-instances \
+      --region "$REGION" \
+      --filters "Name=tag:Name,Values=$USER-*" "Name=instance-state-name,Values=running" \
+      --query "Reservations[*].Instances[*].InstanceId" \
+      --output text)
+    
+    if [ -z "$INSTANCE_IDS" ]; then
+        echo "No running instances found for user: $USER"
+        exit 0
+    fi
+    
+    echo "Terminating instances for user $USER: $INSTANCE_IDS"
+    aws ec2 terminate-instances \
+      --region "$REGION" \
+      --instance-ids $INSTANCE_IDS
+    exit 0
+fi
+
+# Handle --show option
+if [ "$SHOW_INSTANCES" = true ]; then
+    # Check if any incompatible options are present
+    if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || [ -n "$CORETH_BRANCH" ] || \
+       [ -n "$LIBEVM_COMMIT" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
+       [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ]; then
+        echo "Error: --show cannot be used with other options except --region"
+        exit 1
+    fi
+    
+    # Execute the AWS command to show instances
+    aws ec2 describe-instances \
+      --region "$REGION" \
+      --filters "Name=key-name,Values=rkuris" "Name=instance-state-name,Values=running" \
+      --query "Reservations[*].Instances[?PublicIpAddress!=null].[InstanceId, LaunchTime, PublicIpAddress, InstanceType, Tags[?Key=='Name']|[0].Value]" \
+      --output json | jq -r '.[][] | @sh'
+    exit 0
+fi
+
 # Set architecture type based on instance type
 TYPE=${VALID_INSTANCES[$INSTANCE_TYPE]}
+
+# Convert nblocks to actual end block number
+case $NBLOCKS in
+    "1m")   END_BLOCK="1000000" ;;
+    "10m")  END_BLOCK="10000000" ;;
+    "50m")  END_BLOCK="50000000" ;;
+    *)      END_BLOCK="1000000" ;;  # Default fallback
+esac
+
+# Apply end block override if specified and validate
+if [ -n "$END_BLOCK_OVERRIDE" ]; then
+    if [ "$END_BLOCK_OVERRIDE" -gt "$END_BLOCK" ]; then
+        echo "Error: --end-block ($END_BLOCK_OVERRIDE) exceeds the limit for --nblocks $NBLOCKS ($END_BLOCK)"
+        exit 1
+    fi
+    END_BLOCK="$END_BLOCK_OVERRIDE"
+fi
 
 echo "Configuration:"
 echo "  Instance Type: $INSTANCE_TYPE ($TYPE)"
@@ -162,6 +283,7 @@ echo "  AvalancheGo Branch: ${AVALANCHEGO_BRANCH:-default}"
 echo "  Coreth Branch: ${CORETH_BRANCH:-default}"
 echo "  LibEVM Commit: ${LIBEVM_COMMIT:-default}"
 echo "  Number of Blocks: $NBLOCKS"
+echo "  End Block: $END_BLOCK"
 echo "  Config: $CONFIG"
 echo "  Region: $REGION"
 if [ "$SPOT_INSTANCE" = true ]; then
@@ -383,14 +505,6 @@ runcmd:
     > /var/log/bootstrap.log 2>&1
 END_HEREDOC
 )
-
-# Convert nblocks to actual end block number
-case $NBLOCKS in
-    "1m")   END_BLOCK="1000000" ;;
-    "10m")  END_BLOCK="10000000" ;;
-    "50m")  END_BLOCK="50000000" ;;
-    *)      END_BLOCK="1000000" ;;  # Default fallback
-esac
 
 # Substitute branch arguments and block values in the userdata template
 USERDATA=$(echo "$USERDATA_TEMPLATE" | \
