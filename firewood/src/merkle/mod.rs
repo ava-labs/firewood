@@ -8,7 +8,7 @@ mod merge;
 /// Parallel merkle
 pub mod parallel;
 
-use crate::iter::{MerkleKeyValueIter, PathIterator, TryExtend};
+use crate::iter::{MerkleKeyValueIter, PathIterator};
 use crate::v2::api::{
     self, BatchIter, FrozenProof, FrozenRangeProof, KeyType, KeyValuePair, ValueType,
 };
@@ -304,10 +304,6 @@ impl<T: TrieReader> Merkle<T> {
         PathIterator::new(&self.nodestore, key)
     }
 
-    pub(super) fn key_value_iter(&self) -> MerkleKeyValueIter<'_, T> {
-        MerkleKeyValueIter::from(&self.nodestore)
-    }
-
     pub(super) fn key_value_iter_from_key<K: AsRef<[u8]>>(
         &self,
         key: K,
@@ -399,70 +395,48 @@ impl<T: TrieReader> Merkle<T> {
             });
         }
 
-        let mut iter = match start_key {
-            // TODO: fix the call-site to force the caller to do the allocation
-            Some(key) => self.key_value_iter_from_key(key.to_vec().into_boxed_slice()),
-            None => self.key_value_iter(),
-        };
-
-        // fetch the first key from the stream
-        let first_result = iter.next();
-
-        // transpose the Option<Result<T, E>> to Result<Option<T>, E>
-        // If this is an error, the ? operator will return it
-        let Some((first_key, first_value)) = first_result.transpose()? else {
-            // The trie is empty.
-            if start_key.is_none() && end_key.is_none() {
-                // The caller requested a range proof over an empty trie.
-                return Err(api::Error::RangeProofOnEmptyTrie);
-            }
-
-            let start_proof = start_key
-                .map(|start_key| self.prove(start_key))
-                .transpose()?
-                .unwrap_or_default();
-
-            let end_proof = end_key
-                .map(|end_key| self.prove(end_key))
-                .transpose()?
-                .unwrap_or_default();
-
-            return Ok(RangeProof::new(start_proof, end_proof, Box::new([])));
-        };
-
-        let start_proof = self.prove(&first_key)?;
-        let limit = limit.map(|old_limit| old_limit.get().saturating_sub(1));
-
-        let mut key_values = vec![(first_key, first_value)];
-
-        // we stop iterating if either we hit the limit or the key returned was larger
-        // than the largest key requested
-        key_values.try_extend(iter.take(limit.unwrap_or(usize::MAX)).take_while(|kv| {
-            // no last key asked for, so keep going
-            let Some(last_key) = end_key else {
-                return true;
-            };
-
-            // return the error if there was one
-            let Ok(kv) = kv else {
-                return true;
-            };
-
-            // keep going if the key returned is less than the last key requested
-            *kv.0 <= *last_key
-        }))?;
-
-        let end_proof = key_values
-            .last()
-            .map(|(largest_key, _)| self.prove(largest_key))
+        // if there is a requested lower bound, the start proof must always be
+        // for that key even if (especially if) the key is not present in the
+        // trie so that the requestor can assert no keys exist between the
+        // requested key and the first provided key.
+        let start_proof = start_key
+            .map(|key| self.prove(key))
             .transpose()?
             .unwrap_or_default();
 
-        Ok(RangeProof::new(
-            start_proof,
-            end_proof,
-            key_values.into_boxed_slice(),
-        ))
+        let mut iter = self
+            .key_value_iter_from_key(start_key.unwrap_or_default())
+            .stop_after_key(end_key);
+
+        // don't consume the iterator so we can determine if we hit the
+        // limit or exhausted the iterator later
+        let key_values = iter
+            .by_ref()
+            .take(limit.map_or(usize::MAX, NonZeroUsize::get))
+            .collect::<Result<Box<_>, FileIoError>>()?;
+
+        if key_values.is_empty() && start_key.is_none() && end_key.is_none() {
+            // unbounded range proof yielded no key-values, so the trie must be empty
+            return Err(api::Error::RangeProofOnEmptyTrie);
+        }
+
+        let end_proof = if let Some(limit) = limit
+            && limit.get() <= key_values.len()
+            && iter.next().is_some()
+        {
+            // limit was provided, we hit it, and there is at least one more key
+            // end proof is for the last key provided
+            key_values.last().map(|(largest_key, _)| &**largest_key)
+        } else {
+            // limit was not hit or not provided, end proof is for the requested
+            // end key so that we can prove we have all keys up to that key
+            end_key
+        }
+        .map(|end_key| self.prove(end_key))
+        .transpose()?
+        .unwrap_or_default();
+
+        Ok(RangeProof::new(start_proof, end_proof, key_values))
     }
 
     pub(crate) fn get_value(&self, key: &[u8]) -> Result<Option<Value>, FileIoError> {

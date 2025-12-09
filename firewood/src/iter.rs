@@ -1,10 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-mod try_extend;
-
-pub(crate) use self::try_extend::TryExtend;
 use crate::merkle::{Key, Value};
+use crate::v2::api::{KeyType, KeyValuePair};
 
 use firewood_storage::{
     BranchNode, Child, FileIoError, NibblesIterator, Node, PathBuf, PathComponent, PathIterItem,
@@ -300,6 +298,12 @@ impl<'a, T: TrieReader> MerkleKeyValueIter<'a, T> {
             iter: MerkleNodeIter::new(merkle, key.as_ref().into()),
         }
     }
+
+    /// Returns a new iterator that will emit key-value pairs up to and
+    /// including `last_key`.
+    pub fn stop_after_key<K: KeyType>(self, last_key: Option<K>) -> FilteredKeyRangeIter<Self, K> {
+        FilteredKeyRangeIter::new(self, last_key)
+    }
 }
 
 impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
@@ -562,6 +566,61 @@ fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
     }
 
     data.into_boxed_slice()
+}
+
+/// An iterator over key-value pairs that stops after a specified final key.
+#[derive(Debug)]
+#[must_use = "iterators are lazy and do nothing unless consumed"]
+pub enum FilteredKeyRangeIter<I, K> {
+    Unfiltered { iter: I },
+    Filtered { iter: I, last_key: K },
+    Exhausted,
+}
+
+impl<I: Iterator<Item = T>, T: KeyValuePair, K: KeyType> FilteredKeyRangeIter<I, K> {
+    /// Creates a new [`FilteredKeyRangeIter`] that will iterate over `iter`
+    /// stopping early if `last_key` is `Some` and a key greater than it is
+    /// encountered.
+    pub fn new(iter: I, last_key: Option<K>) -> Self {
+        match last_key {
+            Some(k) => FilteredKeyRangeIter::Filtered { iter, last_key: k },
+            None => FilteredKeyRangeIter::Unfiltered { iter },
+        }
+    }
+}
+
+impl<I: Iterator<Item = T>, T: KeyValuePair, K: KeyType> Iterator for FilteredKeyRangeIter<I, K> {
+    type Item = Result<(T::Key, T::Value), T::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            FilteredKeyRangeIter::Unfiltered { iter } => iter.next().map(T::try_into_tuple),
+            FilteredKeyRangeIter::Filtered { iter, last_key } => {
+                match iter.next().map(T::try_into_tuple) {
+                    Some(Ok((key, value))) if key.as_ref() <= last_key.as_ref() => {
+                        Some(Ok((key, value)))
+                    }
+                    Some(Err(e)) => Some(Err(e)),
+                    _ => {
+                        *self = FilteredKeyRangeIter::Exhausted;
+                        None
+                    }
+                }
+            }
+            FilteredKeyRangeIter::Exhausted => None,
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match self {
+            FilteredKeyRangeIter::Unfiltered { iter } => iter.size_hint(),
+            FilteredKeyRangeIter::Filtered { iter, .. } => {
+                let (_, upper) = iter.size_hint();
+                (0, upper)
+            }
+            FilteredKeyRangeIter::Exhausted => (0, Some(0)),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -910,10 +969,7 @@ mod tests {
             merkle.insert(&[k], Box::new([k])).unwrap();
         }
 
-        let mut iter = match start {
-            Some(start) => merkle.key_value_iter_from_key(start.to_vec().into_boxed_slice()),
-            None => merkle.key_value_iter(),
-        };
+        let mut iter = merkle.key_value_iter_from_key(start.unwrap_or_default());
 
         // we iterate twice because we should get a None then start over
         #[expect(clippy::indexing_slicing)]
@@ -933,7 +989,7 @@ mod tests {
     #[test]
     fn key_value_fused_empty() {
         let merkle = create_test_merkle();
-        assert_iterator_is_exhausted(merkle.key_value_iter());
+        assert_iterator_is_exhausted(merkle.key_value_iter_from_key(b""));
     }
 
     #[test]
@@ -953,7 +1009,7 @@ mod tests {
         }
 
         // Test with no start key
-        let mut iter = merkle.key_value_iter();
+        let mut iter = merkle.key_value_iter_from_key(b"");
         for i in 0..=max {
             for j in 0..=max {
                 let expected_key = vec![i, j];
@@ -1020,7 +1076,7 @@ mod tests {
             merkle.insert(kv, kv.clone().into_boxed_slice()).unwrap();
         }
 
-        let mut iter = merkle.key_value_iter();
+        let mut iter = merkle.key_value_iter_from_key(b"");
 
         for kv in &key_values {
             let next = iter.next().unwrap().unwrap();
@@ -1040,7 +1096,7 @@ mod tests {
 
         merkle.insert(&key, value.into()).unwrap();
 
-        let mut iter = merkle.key_value_iter();
+        let mut iter = merkle.key_value_iter_from_key(b"");
 
         assert_eq!(iter.next().unwrap().unwrap(), (key, value.into()));
     }
@@ -1063,7 +1119,7 @@ mod tests {
         println!("{}", immutable_merkle.dump_to_string().unwrap());
         merkle = immutable_merkle.fork().unwrap();
 
-        let mut iter = merkle.key_value_iter();
+        let mut iter = merkle.key_value_iter_from_key(b"");
 
         assert_eq!(
             iter.next().unwrap().unwrap(),
