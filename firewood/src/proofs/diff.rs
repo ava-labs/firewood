@@ -1,19 +1,16 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-// TODO: Currently only tests use the code in this file. Remove allow(dead_code) once change
-//       proof has been implemented.
-#![allow(dead_code)]
-
 use crate::{
     db::BatchOp,
     iter::key_from_nibble_iter,
     merkle::{Key, PrefixOverlap, Value},
 };
-use firewood_storage::{Child, FileIoError, HashedNodeReader, Node, Path, TrieHash, TrieReader};
+use firewood_storage::{
+    Child, FileIoError, HashedNodeReader, Node, Path, SharedNode, TrieHash, TrieReader,
+};
 use metrics::counter;
 use std::{cmp::Ordering, iter::once};
-use triomphe::Arc;
 
 /// Enum containing all possible states that we can be in as we iterate through the diff
 /// between two Merkle tries.
@@ -64,7 +61,7 @@ enum DiffIterationNodeState<'a> {
 /// an `Arc<Node>` instead of a `Child`.
 struct NodeState {
     path: Path,
-    node: Arc<Node>,
+    node: SharedNode,
     hash: Option<TrieHash>,
 }
 
@@ -80,6 +77,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
     /// allows a `DiffMerkleNodeStream` to be constructed with `MutableProposal`s. The
     /// drawback to using `new_without_hash` is that we don't have the root hashes for
     /// these tries. The `new` constructor should be used for `ImmutableProposal`s.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub fn new_without_hash<T: TrieReader, U: TrieReader>(
         left_tree: &'a T,
         right_tree: &'a U,
@@ -103,6 +101,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
 
     /// Constructor where the left and right tries implement the trait `HashedNodeReader`. This
     /// constructor should be used instead of `new_without_hash` for `ImmutableProposal`s.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub fn new<T: HashedNodeReader, U: HashedNodeReader>(
         left_tree: &'a T,
         right_tree: &'a U,
@@ -310,7 +309,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
 
     /// Helper function that returns a key/value to be added to the delete list if the current
     /// node from the left trie has a value.
-    fn deleted_values(left_node: Arc<Node>, left_path: Path) -> Option<BatchOp<Key, Value>> {
+    fn deleted_values(left_node: SharedNode, left_path: Path) -> Option<BatchOp<Key, Value>> {
         left_node.value().map(|_val| BatchOp::Delete {
             key: key_from_nibble_iter(left_path.iter().copied()),
         })
@@ -318,7 +317,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
 
     /// Helper function that returns a key/value to be added to the addition list if the current
     /// node from the right trie has a value.
-    fn additional_values(right_node: Arc<Node>, right_path: Path) -> Option<BatchOp<Key, Value>> {
+    fn additional_values(right_node: SharedNode, right_path: Path) -> Option<BatchOp<Key, Value>> {
         right_node.value().map(|val| BatchOp::Put {
             key: key_from_nibble_iter(right_path.iter().copied()),
             value: val.into(),
@@ -689,8 +688,6 @@ mod tests {
 
     struct TestDb {
         db: Db,
-        tmpdir: tempfile::TempDir,
-        dbconfig: DbConfig,
     }
 
     impl Deref for TestDb {
@@ -708,11 +705,7 @@ mod tests {
                 .iter()
                 .collect();
             let db = Db::new(dbpath, dbconfig.clone()).unwrap();
-            TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            }
+            TestDb { db }
         }
     }
 
@@ -889,17 +882,6 @@ mod tests {
             .inspect(|del_key| {
                 seen_keys.insert(del_key.clone());
             })
-    }
-
-    fn gen_insert_key(rng: &SeededRng, seen_keys: &mut HashSet<Vec<u8>>) -> Vec<u8> {
-        loop {
-            let key_len = rng.random_range(1..=32);
-            let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
-            // Only add if key is unique
-            if seen_keys.insert(key.clone()) {
-                return key;
-            }
-        }
     }
 
     fn gen_random_keys(

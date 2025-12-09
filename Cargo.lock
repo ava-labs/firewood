@@ -1108,7 +1108,6 @@ dependencies = [
  "tempfile",
  "test-case",
  "thiserror",
- "triomphe",
  "typed-builder",
  "weak-table",
 ]
