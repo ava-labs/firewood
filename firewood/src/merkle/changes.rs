@@ -1924,16 +1924,6 @@ mod tests {
         let m1 = populate_merkle_mutable(create_test_merkle(), &tree1_items);
         let m2 = populate_merkle_mutable(create_test_merkle(), &tree2_items);
 
-        // Traverse tree1 completely
-        let tree1_iter = m1.key_value_iter();
-        let tree1_count = tree1_iter.count();
-
-        // Traverse tree2 completely
-        let tree2_iter = m2.key_value_iter();
-        let tree2_count = tree2_iter.count();
-
-        println!("Baseline - Tree1 items: {tree1_count}, Tree2 items: {tree2_count}");
-
         // DIFF TEST: Measure next calls from diff operations on mutable proposals
         let diff_nexts_before =
             recorder.get_counter_value("firewood.change_proof.next", &[("traversal", "next")]);
