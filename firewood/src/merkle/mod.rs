@@ -304,10 +304,6 @@ impl<T: TrieReader> Merkle<T> {
         PathIterator::new(&self.nodestore, key)
     }
 
-    pub(super) fn key_value_iter(&self) -> MerkleKeyValueIter<'_, T> {
-        MerkleKeyValueIter::from(&self.nodestore)
-    }
-
     pub(super) fn key_value_iter_from_key<K: AsRef<[u8]>>(
         &self,
         key: K,
@@ -410,15 +406,7 @@ impl<T: TrieReader> Merkle<T> {
 
         let mut iter = self
             .key_value_iter_from_key(start_key.unwrap_or_default())
-            .take_while(move |result| {
-                if let (Ok((next_key, _)), Some(end_key)) = (result, end_key) {
-                    // keep going if the key returned is less than the last key requested
-                    **next_key <= *end_key
-                } else {
-                    // keep going if we don't have an end key or found an error
-                    true
-                }
-            });
+            .stop_after_key(end_key);
 
         // don't consume the iterator so we can determine if we hit the
         // limit or exhausted the iterator later
