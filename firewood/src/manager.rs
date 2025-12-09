@@ -496,9 +496,7 @@ mod tests {
                             Ok(_) => {}
                             Err(RevisionManagerError::RevisionNotFound { .. }) => {
                                 local_errors += 1;
-                                eprintln!(
-                                    "Thread {thread_id}: RevisionNotFound for hash {hash:?}"
-                                );
+                                eprintln!("Thread {thread_id}: RevisionNotFound for hash {hash:?}");
                             }
                             Err(e) => {
                                 eprintln!("Thread {thread_id}: Unexpected error: {e:?}");
@@ -548,10 +546,7 @@ mod tests {
                             partial_path: Path::from_nibbles_iterator(NibblesIterator::new(
                                 key.as_bytes(),
                             )),
-                            value: format!("value_{i}")
-                                .as_bytes()
-                                .to_vec()
-                                .into_boxed_slice(),
+                            value: format!("value_{i}").as_bytes().to_vec().into_boxed_slice(),
                         }));
                     }
 
