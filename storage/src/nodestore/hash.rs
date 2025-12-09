@@ -102,7 +102,7 @@ where
                         } else {
                             // If not persisted, we need to get the node to hash it
                             let node = maybe_persisted
-                                .as_shared_node(&self)
+                                .as_shared_node(&self, &HashType::empty(), &Path::new())
                                 .expect("will never fail for unpersisted nodes");
                             acc.unhashed.push((idx, node.deref().clone()));
                         }
@@ -158,14 +158,17 @@ where
                 trace!("hashed {hashed:?} unhashed {unhashed:?}");
                 // we were left with one hashed node that must be rehashed
                 if let [(child_idx, (child_node, child_hash))] = &mut hashed[..] {
+                    let mut path_guard = PathGuard::new(&mut path_prefix);
+                    path_guard.0.extend(b.partial_path.0.iter().copied());
                     // Extract the address from the MaybePersistedNode
                     let addr: crate::LinearAddress = child_node
                         .as_linear_address()
                         .expect("hashed node should be persisted");
-                    let mut hashable_node = self.read_node(addr)?.deref().clone();
+                    let mut hashable_node = self
+                        .read_node(addr, child_hash, &path_guard)?
+                        .deref()
+                        .clone();
                     let hash = {
-                        let mut path_guard = PathGuard::new(&mut path_prefix);
-                        path_guard.0.extend(b.partial_path.0.iter().copied());
                         if unhashed.is_empty() {
                             hashable_node.update_partial_path(Path::from_nibbles_iterator(
                                 std::iter::once(child_idx.as_u8())
