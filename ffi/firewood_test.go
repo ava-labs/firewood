@@ -1331,12 +1331,16 @@ func (b *borrowIter) Drop() error                { return b.it.Drop() }
 
 func assertIteratorYields(r *require.Assertions, it kvIter, keys [][]byte, vals [][]byte) {
 	i := 0
-	for ; it.Next(); i += 1 {
-		r.Equal(keys[i], it.Key())
-		r.Equal(vals[i], it.Value())
+	for ; it.Next(); i++ {
+		if i < len(keys) {
+			// Validate expected key/value
+			r.Equal(keys[i], it.Key(), "key at index %d mismatch", i)
+			r.Equal(vals[i], it.Value(), "value at index %d mismatch", i)
+		}
 	}
+
 	r.NoError(it.Err())
-	r.Equal(len(keys), i)
+	r.Equalf(len(keys), i, "iterator yielded %d items, expected %d", i, len(keys))
 }
 
 type iteratorConfigFn = func(it kvIter) kvIter
@@ -1476,6 +1480,54 @@ func TestIterOnProposal(t *testing.T) {
 
 		assertIteratorYields(r, cfn(it), keys, updatedValues)
 	})
+}
+
+func TestIterOutlivesRevision(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t, func(config *Config) {
+		config.Revisions = 2
+	})
+
+	keys, vals := kvForTest(30)
+	_, err := db.Update(keys[:10], vals[:10])
+	r.NoErrorf(err, "%T.Update(...)", db)
+	rev, err := db.LatestRevision()
+	r.NoErrorf(err, "%T.LatestRevision()", db)
+	it, err := rev.Iter(nil)
+	r.NoErrorf(err, "%T.Iter()", rev)
+	t.Cleanup(func() {
+		r.NoErrorf(it.Drop(), "%T.Drop()", it)
+	})
+
+	// Drop the revision right away to ensure reaping
+	r.NoErrorf(rev.Drop(), "%T.Drop()", rev)
+
+	// Commit two more times to force reaping of the first revision
+	_, err = db.Update(keys[10:20], vals[10:20])
+	r.NoErrorf(err, "%T.Update(...)", db)
+	_, err = db.Update(keys[20:], vals[20:])
+	r.NoErrorf(err, "%T.Update(...)", db)
+
+	// iterate after reaping
+	assertIteratorYields(r, it, keys[:10], vals[:10])
+}
+
+func TestIterOutlivesProposal(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(10)
+	p, err := db.Propose(keys, vals)
+	r.NoErrorf(err, "%T.Propose(...)", db)
+
+	it, err := p.Iter(nil)
+	r.NoErrorf(err, "%T.Iter()", p)
+	t.Cleanup(func() {
+		r.NoErrorf(it.Drop(), "%T.Drop()", it)
+	})
+
+	require.NoErrorf(t, p.Drop(), "%T.Drop()", p)
+	assertIteratorYields(r, it, keys, vals)
 }
 
 // Tests that the iterator still works after proposal is committed
