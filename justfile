@@ -214,8 +214,6 @@ benchmark firewood="HEAD" avalanchego="master" task="c-chain-reexecution-firewoo
         echo "  LibEVM: {{ libevm }}"
     else
         echo "  LibEVM: (not set)"
-    else
-        echo "LibEVM: default"
     fi
     echo ""
     
