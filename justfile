@@ -90,7 +90,7 @@ install-nix:
 run-polyrepo *args: check-nix
     #!/usr/bin/env bash
     set -euo pipefail
-    AVALANCHEGO_COMMIT=0c4c6fcc92
+    AVALANCHEGO_COMMIT=6239973c9b
     echo "Running polyrepo@${AVALANCHEGO_COMMIT} via go run..."
     nix run ./ffi#go -- run github.com/ava-labs/avalanchego/tests/fixture/polyrepo@"${AVALANCHEGO_COMMIT}" {{args}}
 
