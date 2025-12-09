@@ -1,9 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-mod try_extend;
-
-pub(crate) use self::try_extend::TryExtend;
 use crate::merkle::{Key, Value};
 
 use firewood_storage::{
