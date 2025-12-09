@@ -436,16 +436,19 @@ impl<T: TrieReader> Merkle<T> {
             return Err(api::Error::RangeProofOnEmptyTrie);
         }
 
-        let end_proof = match limit {
+        let end_proof = if let Some(limit) = limit
+            && limit.get() <= key_values.len()
+            && iter.next().is_some()
+        {
             // limit was provided, we hit it, and there is at least one more key
             // end proof is for the last key provided
-            Some(limit) if limit.get() <= key_values.len() && iter.next().is_some() => key_values
-                .last()
-                .map(|(largest_key, _)| self.prove(largest_key)),
+            key_values.last().map(|(largest_key, _)| &**largest_key)
+        } else {
             // limit was not hit or not provided, end proof is for the requested
             // end key so that we can prove we have all keys up to that key
-            Some(_) | None => end_key.map(|end_key| self.prove(end_key)),
+            end_key
         }
+        .map(|end_key| self.prove(end_key))
         .transpose()?
         .unwrap_or_default();
 
