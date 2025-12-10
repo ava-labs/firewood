@@ -405,3 +405,23 @@ func (db *Database) Close(ctx context.Context) error {
 
 	return nil
 }
+
+// Dump returns a DOT (Graphviz) format representation of the trie structure
+// of the latest revision for debugging purposes.
+//
+// Returns an error if the database is closed or if there was an error
+// dumping the trie.
+func (db *Database) Dump() (string, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return "", errDBClosed
+	}
+
+	bytes, err := getValueFromValueResult(C.fwd_db_dump(db.handle))
+	if err != nil {
+		return "", err
+	}
+
+	return string(bytes), nil
+}

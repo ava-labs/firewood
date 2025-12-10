@@ -696,6 +696,16 @@ where
     }
 }
 
+impl<T: HashedNodeReader> HashedNodeReader for &T {
+    fn root_address(&self) -> Option<LinearAddress> {
+        (**self).root_address()
+    }
+
+    fn root_hash(&self) -> Option<TrieHash> {
+        (**self).root_hash()
+    }
+}
+
 // TODO: return only the index since we can easily get the size from the index
 fn area_index_and_size<S: ReadableStorage>(
     storage: &S,
