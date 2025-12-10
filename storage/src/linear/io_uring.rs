@@ -432,6 +432,10 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
         self.backlog.is_empty() && self.outstanding.is_empty()
     }
 
+    fn is_full(&self) -> bool {
+        self.outstanding.len() >= const { SUBMISSION_QUEUE_SIZE as usize }
+    }
+
     fn pop_next_entry(&mut self) -> Option<QueueEntry<'batch>> {
         self.backlog.pop_front().or_else(|| self.entries.next())
     }
@@ -473,7 +477,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
     }
 
     fn enqueue_single_op(&mut self) -> EnqueueResult {
-        if self.outstanding.len() >= const { SUBMISSION_QUEUE_SIZE as usize } {
+        if self.is_full() {
             trace!(
                 "io-uring has {} outstanding entries, cannot enqueue more",
                 self.outstanding.len()
@@ -525,7 +529,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
         trace!("flushing io-uring submission queue");
         let mut submitted = false;
         loop {
-            if self.sq.is_full() {
+            if self.sq.is_full() || self.is_full() {
                 match self.submitter.submit() {
                     Ok(_) => submitted = true,
                     // kernel is busy, move onto completions
