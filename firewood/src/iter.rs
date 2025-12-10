@@ -224,10 +224,16 @@ fn get_iterator_intial_state<T: TrieReader>(
             }
             Ordering::Equal => match &*node {
                 Node::Leaf(_) => {
-                    iter_stack.push(IterationNode::Unvisited {
-                        key: matched_key_nibbles.clone().into_boxed_slice(),
-                        node,
-                    });
+                    // if `Some`, the target key does not exist because if it
+                    // did it would be a child of this leaf node; do not visit
+                    // the leaf if that's the case.
+                    if unmatched_key_nibbles.next().is_none() {
+                        // otherwise, exact match and visit the leaf
+                        iter_stack.push(IterationNode::Unvisited {
+                            key: matched_key_nibbles.clone().into_boxed_slice(),
+                            node,
+                        });
+                    }
                     return Ok(NodeIterState::Iterating { iter_stack });
                 }
                 Node::Branch(branch) => {
@@ -539,7 +545,7 @@ fn as_enumerated_children_iter(
 }
 
 #[cfg(feature = "branch_factor_256")]
-fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(nibbles: Iter) -> Key {
+pub(crate) fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(nibbles: Iter) -> Key {
     nibbles.collect()
 }
 
@@ -1357,5 +1363,17 @@ mod tests {
 
     fn assert_iterator_is_exhausted<I: FusedIterator>(mut iter: I) {
         assert!(iter.next().is_none());
+    }
+
+    #[test]
+    fn iterator_skips_leaf_when_start_key_prefixed_by_leaf() {
+        let merkle = created_populated_merkle();
+
+        let mut iter =
+            MerkleNodeIter::new(merkle.nodestore(), [0x00, 0x00, 0x00, 0xFF, 0x01].into());
+
+        // the first result must not be the leaf node
+        let (key, _) = iter.next().unwrap().unwrap();
+        assert_ne!(&*key, &[0x00, 0x00, 0x00, 0xFF][..]);
     }
 }

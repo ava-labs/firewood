@@ -12,6 +12,9 @@ CONFIG="firewood"
 REGION="us-west-2"
 DRY_RUN=false
 SPOT_INSTANCE=false
+SHOW_INSTANCES=false
+TERMINATE_MINE=false
+TERMINATE_INSTANCES=()
 
 # Valid instance types and their architectures
 declare -A VALID_INSTANCES=(
@@ -22,7 +25,7 @@ declare -A VALID_INSTANCES=(
     ["m6id.xlarge"]="amd64"
     ["c6gd.2xlarge"]="arm64"
     ["x2gd.xlarge"]="arm64"
-    ["m5ad.2xlarge"]="arm64"
+    ["m5ad.2xlarge"]="amd64"
     ["r6gd.2xlarge"]="arm64"
     ["r6id.2xlarge"]="amd64"
     ["x2gd.2xlarge"]="arm64"
@@ -65,18 +68,21 @@ show_usage() {
     echo "  --region REGION             AWS region (default: us-west-2)"
     echo "  --spot                      Use spot instance pricing (default depends on instance type)"
     echo "  --dry-run                   Show the aws command that would be run without executing it"
+    echo "  --show                      Show currently running instances in the region"
+    echo "  --terminate-mine            Terminate all running instances created by current user"
+    echo "  --terminate ID [ID...]      Terminate specific instance(s) by instance ID"
     echo "  --help                      Show this help message"
     echo ""
     echo "Valid instance types:"
     echo "  # name         Type  disk vcpu memory   $/hr    notes"
     echo "  i4g.large      arm64 468  2    16 GiB   \$0.1544 Graviton2-powered"
     echo "  i4i.large      amd64 468  2    16 GiB   \$0.1720 Intel Xeon Scalable"
-    echo "  m6id.xlarge    arm64 237  4    16 GiB   \$0.2373 Intel Xeon Scalable"
+    echo "  m6id.xlarge    amd64 237  4    16 GiB   \$0.2373 Intel Xeon Scalable"
     echo "  c6gd.2xlarge   arm64 474  8    16 GiB   \$0.3072 Graviton2 compute-optimized"
     echo "  i4g.xlarge     arm64 937  4    32 GiB   \$0.3088 Graviton2-powered"
     echo "  i4i.xlarge     amd64 937  4    32 GiB   \$0.3440 Intel Xeon Scalable"
     echo "  x2gd.xlarge    arm64 237  4    64 GiB   \$0.3340 Graviton2 memory-optimized"
-    echo "  m5ad.2xlarge   arm64 300  8    32 GiB   \$0.4120 AMD EPYC processors"
+    echo "  m5ad.2xlarge   amd64 300  8    32 GiB   \$0.4120 AMD EPYC processors"
     echo "  r6gd.2xlarge   arm64 474  8    64 GiB   \$0.4608 Graviton2 memory-optimized"
     echo "  r6id.2xlarge   amd64 474  8    64 GiB   \$0.6048 Intel Xeon Scalable"
     echo "  x2gd.2xlarge   arm64 475  8    128 GiB  \$0.6680 Graviton2 memory-optimized"
@@ -140,6 +146,26 @@ while [[ $# -gt 0 ]]; do
             DRY_RUN=true
             shift
             ;;
+        --show)
+            SHOW_INSTANCES=true
+            shift
+            ;;
+        --terminate-mine)
+            TERMINATE_MINE=true
+            shift
+            ;;
+        --terminate)
+            shift
+            # Collect all following arguments as instance IDs until we hit another flag or end
+            while [[ $# -gt 0 ]] && [[ ! $1 =~ ^-- ]]; do
+                TERMINATE_INSTANCES+=("$1")
+                shift
+            done
+            if [[ ${#TERMINATE_INSTANCES[@]} -eq 0 ]]; then
+                echo "Error: --terminate requires at least one instance ID"
+                exit 1
+            fi
+            ;;
         --help)
             show_usage
             exit 0
@@ -151,6 +177,73 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Handle --terminate option
+if [ ${#TERMINATE_INSTANCES[@]} -gt 0 ]; then
+    # Check if any incompatible options are present
+    if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || [ -n "$CORETH_BRANCH" ] || \
+       [ -n "$LIBEVM_COMMIT" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
+       [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ] || \
+       [ "$SHOW_INSTANCES" = true ] || [ "$TERMINATE_MINE" = true ]; then
+        echo "Error: --terminate cannot be used with other options except --region"
+        exit 1
+    fi
+    
+    echo "Terminating instances: ${TERMINATE_INSTANCES[*]}"
+    aws ec2 terminate-instances \
+      --region "$REGION" \
+      --instance-ids "${TERMINATE_INSTANCES[@]}"
+    exit 0
+fi
+
+# Handle --terminate-mine option
+if [ "$TERMINATE_MINE" = true ]; then
+    # Check if any incompatible options are present
+    if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || [ -n "$CORETH_BRANCH" ] || \
+       [ -n "$LIBEVM_COMMIT" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
+       [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ] || \
+       [ "$SHOW_INSTANCES" = true ]; then
+        echo "Error: --terminate-mine cannot be used with other options except --region"
+        exit 1
+    fi
+    
+    # Get instances created by current user (Name tag starts with username)
+    INSTANCE_IDS=$(aws ec2 describe-instances \
+      --region "$REGION" \
+      --filters "Name=tag:Name,Values=$USER-*" "Name=instance-state-name,Values=running" \
+      --query "Reservations[*].Instances[*].InstanceId" \
+      --output text)
+    
+    if [ -z "$INSTANCE_IDS" ]; then
+        echo "No running instances found for user: $USER"
+        exit 0
+    fi
+    
+    echo "Terminating instances for user $USER: $INSTANCE_IDS"
+    aws ec2 terminate-instances \
+      --region "$REGION" \
+      --instance-ids $INSTANCE_IDS
+    exit 0
+fi
+
+# Handle --show option
+if [ "$SHOW_INSTANCES" = true ]; then
+    # Check if any incompatible options are present
+    if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || [ -n "$CORETH_BRANCH" ] || \
+       [ -n "$LIBEVM_COMMIT" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
+       [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ]; then
+        echo "Error: --show cannot be used with other options except --region"
+        exit 1
+    fi
+    
+    # Execute the AWS command to show instances
+    aws ec2 describe-instances \
+      --region "$REGION" \
+      --filters "Name=key-name,Values=rkuris" "Name=instance-state-name,Values=running" \
+      --query "Reservations[*].Instances[?PublicIpAddress!=null].[InstanceId, LaunchTime, PublicIpAddress, InstanceType, Tags[?Key=='Name']|[0].Value]" \
+      --output json | jq -r '.[][] | @sh'
+    exit 0
+fi
 
 # Set architecture type based on instance type
 TYPE=${VALID_INSTANCES[$INSTANCE_TYPE]}
@@ -253,7 +346,7 @@ users:
     shell: /usr/bin/bash
     sudo: "ALL=(ALL) NOPASSWD:ALL"
     ssh_authorized_keys:
-      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFuwpEMnsBLdfr7V9SFRTm9XWHEFX3yQQP7nmsFHetBo cardno:26_763_547 brandon
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHWuCq/y50S0yFPJQEAifeeN4n6EL3IlUuYbAdk2w2kL cardno:33_731_913 brandon
   - name: amin
     lock_passwd: true
     groups: users, adm, sudo
