@@ -11,6 +11,7 @@ import (
 	"encoding"
 	"errors"
 	"fmt"
+	"iter"
 	"runtime"
 	"unsafe"
 )
@@ -221,17 +222,16 @@ func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
 	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_range_proof_find_next_key(p.handle))
 }
 
-// CodeHashes returns the code hashes contained in all account nodes in the Ethereum trie.
-// This list may contain duplicates and is not guaranteed to be in any particular order.
-// If the proof does not contain any account nodes, an empty list is returned.
+// CodeHashes returns an iterator for the code hashes contained in the account nodes
+// of this proof. This list may contain duplicates and is not guaranteed to be in any particular order.
 //
 // Note: this method is only relevant for Ethereum tries.
-// This method can only be called after a successful verification of the range proof,
-// otherwise an error is returned.
+// This method can only be called after a successful verification of the proof,
+// otherwise an error is returned on the first iteration.
 //
 // TODO(#1157): implement this method to extract code hashes from account nodes.
-func (*RangeProof) CodeHashes() ([]Hash, error) {
-	return []Hash{}, nil
+func (*RangeProof) CodeHashes() iter.Seq2[Hash, error] {
+	return func(yield func(Hash, error) bool) {}
 }
 
 // MarshalBinary returns a serialized representation of this RangeProof.
@@ -384,15 +384,16 @@ func (p *ChangeProof) FindNextKey() (*NextKeyRange, error) {
 	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_change_proof_find_next_key(p.handle))
 }
 
-// CodeHashes returns the code hashes contained in all account nodes in the Ethereum trie.
-// This list may contain duplicates and is not guaranteed to be in any particular order.
-// If the proof does not contain any account nodes, an empty list is returned.
+// CodeHashes returns an iterator for the code hashes contained in the account nodes
+// of this proof. This list may contain duplicates and is not guaranteed to be in any particular order.
 //
 // Note: this method is only relevant for Ethereum tries.
-// This method can only be called after a successful verification of the change proof,
-// otherwise an error is returned.
-func (*ChangeProof) CodeHashes() ([]Hash, error) {
-	return []Hash{}, nil
+// This method can only be called after a successful verification of the proof,
+// otherwise an error is returned on the first iteration.
+//
+// TODO(#1157): implement this method to extract code hashes from account nodes.
+func (*ChangeProof) CodeHashes() iter.Seq2[Hash, error] {
+	return func(yield func(Hash, error) bool) {}
 }
 
 // MarshalBinary returns a serialized representation of this ChangeProof.
