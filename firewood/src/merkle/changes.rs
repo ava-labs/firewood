@@ -45,7 +45,6 @@ enum DiffIterationNodeState {
 /// a `TraversalStackFrame` and differs from it by storing the node's full path instead of
 /// just its pre-path (doesn't include the node's partial path), and by storing the node as
 /// an `Arc<Node>` instead of a `Child`.
-#[derive(Clone)]
 struct NodeState {
     path: Path,
     node: SharedNode,
