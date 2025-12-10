@@ -231,7 +231,7 @@ func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
 //
 // TODO(#1157): implement this method to extract code hashes from account nodes.
 func (*RangeProof) CodeHashes() iter.Seq2[Hash, error] {
-	return func(yield func(Hash, error) bool) {}
+	return func(func(Hash, error) bool) {}
 }
 
 // MarshalBinary returns a serialized representation of this RangeProof.
@@ -393,7 +393,7 @@ func (p *ChangeProof) FindNextKey() (*NextKeyRange, error) {
 //
 // TODO(#1157): implement this method to extract code hashes from account nodes.
 func (*ChangeProof) CodeHashes() iter.Seq2[Hash, error] {
-	return func(yield func(Hash, error) bool) {}
+	return func(func(Hash, error) bool) {}
 }
 
 // MarshalBinary returns a serialized representation of this ChangeProof.
