@@ -471,7 +471,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
             return Err(err);
         }
 
-        // synchronize both queues after waiting so we can see the kerne's changes
+        // synchronize both queues after waiting so we can see the kernel's changes
         self.cq.sync();
         self.sq.sync();
 
