@@ -26,8 +26,8 @@ use std::time::Instant;
 use firewood::db::{BatchOp, Db, DbConfig};
 use firewood::manager::RevisionManagerConfig;
 use firewood::merkle::{Key, Merkle};
-use firewood::proofs::{diff_merkle_iterator, diff_merkle_iterator_without_hash};
 use firewood::v2::api::{Db as _, DbView as _, Proposal as _};
+use firewood::{diff_merkle_iterator, diff_merkle_iterator_without_hash};
 
 use metrics::{Key as MetricsKey, Label, Recorder};
 use metrics_util::registry::{AtomicStorage, Registry};

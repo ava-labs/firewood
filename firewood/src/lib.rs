@@ -155,6 +155,8 @@ pub use proofs::{
     RangeProof, ReadError,
 };
 
+pub use merkle::changes::{diff_merkle_iterator, diff_merkle_iterator_without_hash};
+
 // Re-export the proc macro from firewood-macros
 pub use firewood_macros::metrics;
 
