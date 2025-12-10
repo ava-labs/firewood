@@ -123,6 +123,7 @@ impl MaybePersistedNode {
         }
     }
 
+    #[cfg(any(test, feature = "swap-persist-nodes"))]
     /// Updates the internal state to indicate this node is persisted at the specified disk address.
     ///
     /// This method changes the internal state of the `MaybePersistedNode` from `Mem` to `Disk`,

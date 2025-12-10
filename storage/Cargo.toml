@@ -63,6 +63,7 @@ branch_factor_256 = []
 io-uring = ["dep:io-uring"]
 ethhash = ["dep:rlp", "dep:sha3", "dep:bytes"]
 test_utils = ["dep:rand"]
+swap-persist-nodes = []
 
 [[bench]]
 name = "serializer"

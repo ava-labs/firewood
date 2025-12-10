@@ -188,6 +188,7 @@ impl WritableStorage for FileBacked {
                 .expect("node should be allocated");
 
             guard.put(addr, shared_node);
+            #[cfg(feature = "swap-persist-nodes")]
             // The node can now be read from the general cache, so we can delete the local copy
             maybe_persisted_node.persist_at(addr);
         }
