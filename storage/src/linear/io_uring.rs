@@ -471,6 +471,12 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
             return Err(err);
         }
 
+        assert_eq!(
+            self.cq.overflow(),
+            0,
+            "io-uring completion queue overflowed"
+        );
+
         // synchronize both queues after waiting so we can see the kernel's changes
         self.cq.sync();
         self.sq.sync();
