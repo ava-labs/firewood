@@ -221,6 +221,19 @@ func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
 	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_range_proof_find_next_key(p.handle))
 }
 
+// CodeHashes returns the code hashes contained in all account nodes in the Ethereum trie.
+// This list may contain duplicates and is not guaranteed to be in any particular order.
+// If the proof does not contain any account nodes, an empty list is returned.
+//
+// Note: this method is only relevant for Ethereum tries.
+// This method can only be called after a succesful verification of the range proof,
+// otherwise an error is returned.
+//
+// TODO(#1157): implement this method to extract code hashes from account nodes.
+func (*RangeProof) CodeHashes() ([]Hash, error) {
+	return []Hash{}, nil
+}
+
 // MarshalBinary returns a serialized representation of this RangeProof.
 //
 // The format is unspecified and opaque to firewood.
@@ -369,6 +382,17 @@ func (db *Database) VerifyAndCommitChangeProof(
 // [*Database.VerifyAndCommitChangeProof].
 func (p *ChangeProof) FindNextKey() (*NextKeyRange, error) {
 	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_change_proof_find_next_key(p.handle))
+}
+
+// CodeHashes returns the code hashes contained in all account nodes in the Ethereum trie.
+// This list may contain duplicates and is not guaranteed to be in any particular order.
+// If the proof does not contain any account nodes, an empty list is returned.
+//
+// Note: this method is only relevant for Ethereum tries.
+// This method can only be called after a succesful verification of the change proof,
+// otherwise an error is returned.
+func (*ChangeProof) CodeHashes() ([]Hash, error) {
+	return []Hash{}, nil
 }
 
 // MarshalBinary returns a serialized representation of this ChangeProof.
