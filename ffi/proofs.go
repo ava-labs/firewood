@@ -226,7 +226,7 @@ func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
 // If the proof does not contain any account nodes, an empty list is returned.
 //
 // Note: this method is only relevant for Ethereum tries.
-// This method can only be called after a succesful verification of the range proof,
+// This method can only be called after a successful verification of the range proof,
 // otherwise an error is returned.
 //
 // TODO(#1157): implement this method to extract code hashes from account nodes.
@@ -389,7 +389,7 @@ func (p *ChangeProof) FindNextKey() (*NextKeyRange, error) {
 // If the proof does not contain any account nodes, an empty list is returned.
 //
 // Note: this method is only relevant for Ethereum tries.
-// This method can only be called after a succesful verification of the change proof,
+// This method can only be called after a successful verification of the change proof,
 // otherwise an error is returned.
 func (*ChangeProof) CodeHashes() ([]Hash, error) {
 	return []Hash{}, nil
