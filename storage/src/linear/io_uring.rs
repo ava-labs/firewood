@@ -416,7 +416,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
             sq,
             cq,
             outstanding: self::drop_guard::DropGuard::new(
-                Outstanding::with_capacity(COMPLETION_QUEUE_SIZE as usize),
+                Outstanding::with_capacity(SUBMISSION_QUEUE_SIZE as usize),
                 Outstanding::is_empty,
                 "io-uring write batch terminated with outstanding entries",
             ),
@@ -473,6 +473,14 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
     }
 
     fn enqueue_single_op(&mut self) -> EnqueueResult {
+        if self.outstanding.len() >= const { SUBMISSION_QUEUE_SIZE as usize } {
+            trace!(
+                "io-uring has {} outstanding entries, cannot enqueue more",
+                self.outstanding.len()
+            );
+            return EnqueueResult::Full;
+        }
+
         let Some(entry) = self.pop_next_entry() else {
             return EnqueueResult::Empty;
         };
