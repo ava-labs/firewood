@@ -10,7 +10,7 @@ use firewood_storage::{
     Child, FileIoError, HashedNodeReader, Node, Path, SharedNode, TrieHash, TrieReader,
     firewood_counter,
 };
-use std::{cmp::Ordering, iter::once, rc::Rc};
+use std::{cmp::Ordering, iter::once};
 
 /// Enum containing all possible states that we can be in as we iterate through the diff
 /// between two Merkle tries.
@@ -20,10 +20,10 @@ enum DiffIterationNodeState {
     TraverseBoth,
     /// In the `TraverseLeft` state, we need to compare the next node from the left trie
     /// with the current node in the right trie (`right_state`).
-    TraverseLeft { right_state: Rc<NodeState> },
+    TraverseLeft { right_state: NodeState },
     /// In the `TraverseRight` state, we need to compare the next node from the right trie
     /// with the current node in the left trie (`left_state`).
-    TraverseRight { left_state: Rc<NodeState> },
+    TraverseRight { left_state: NodeState },
     /// In the `AddRestRight` state, we have reached the end of the left trie and need to
     /// add the remaining keys/values from the right trie to the addition list in the
     /// change proof.
@@ -45,6 +45,7 @@ enum DiffIterationNodeState {
 /// a `TraversalStackFrame` and differs from it by storing the node's full path instead of
 /// just its pre-path (doesn't include the node's partial path), and by storing the node as
 /// an `Arc<Node>` instead of a `Child`.
+#[derive(Clone)]
 struct NodeState {
     path: Path,
     node: SharedNode,
@@ -55,7 +56,7 @@ impl NodeState {
     // Creates a NodeState from a pre-path and Child that were popped off the traversal stack, and
     // a trie for reading the node from storage. NodeState is used to compare nodes between tries.
     fn new(
-        pre_path: &Path,
+        mut path: Path,
         node: Child,
         mut node_hash: Option<TrieHash>,
         trie: &'_ dyn TrieReader,
@@ -73,14 +74,10 @@ impl NodeState {
         };
         // Compute the full path for the node. This is used to compare with the full path
         // of the current node from the other trie.
-        let full_path = Path::from_nibbles_iterator(
-            pre_path
-                .iter()
-                .copied()
-                .chain(node.partial_path().iter().copied()),
-        );
+        path.extend(node.partial_path().iter().copied());
+
         Ok(NodeState {
-            path: full_path,
+            path,
             node,
             hash: node_hash,
         })
@@ -194,8 +191,8 @@ impl<'a> DiffMerkleNodeStream<'a> {
     /// tries are the same but their node hashes differ, or skipping the children of the current nodes
     /// from both tries if their node hashes match.
     fn one_step_compare(
-        left_state: Rc<NodeState>,
-        right_state: Rc<NodeState>,
+        left_state: &NodeState,
+        right_state: &NodeState,
     ) -> (DiffIterationNodeState, Option<BatchOp<Key, Value>>) {
         // Compare the full path of the current nodes from the left and right tries.
         match left_state.path.cmp(&right_state.path) {
@@ -211,7 +208,9 @@ impl<'a> DiffMerkleNodeStream<'a> {
                 // should be included in the set of deleted keys in the change proof. We do
                 // this by returning it in the second entry of the tuple in the return value.
                 (
-                    DiffIterationNodeState::TraverseLeft { right_state },
+                    DiffIterationNodeState::TraverseLeft {
+                        right_state: right_state.clone(),
+                    },
                     left_state.node.value().map(|_val| BatchOp::Delete {
                         key: key_from_nibble_iter(left_state.path.iter().copied()),
                     }),
@@ -230,7 +229,9 @@ impl<'a> DiffMerkleNodeStream<'a> {
                 // If there is a value in the current node in the right trie, then that value
                 // should be included in the set of additional keys in the change proof.
                 (
-                    DiffIterationNodeState::TraverseRight { left_state },
+                    DiffIterationNodeState::TraverseRight {
+                        left_state: left_state.clone(),
+                    },
                     right_state.node.value().map(|val| BatchOp::Put {
                         key: key_from_nibble_iter(right_state.path.iter().copied()),
                         value: val.into(),
@@ -371,7 +372,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     // In the `TraverseLeft` state, we use the next node from the left trie to
                     // perform state processing, which is done by calling `one_step_compare`.
                     if let Some(left_state) = self.left_tree.next()? {
-                        Self::one_step_compare(left_state, right_state)
+                        Self::one_step_compare(left_state, &right_state)
                     } else {
                         // If we have no more nodes from the left trie, then we transition to
                         // the `AddRestRight` state where we add all of the remaining nodes
@@ -385,7 +386,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                 }
                 DiffIterationNodeState::TraverseRight { left_state } => {
                     if let Some(right_state) = self.right_tree.next()? {
-                        Self::one_step_compare(left_state, right_state)
+                        Self::one_step_compare(&left_state, right_state)
                     } else {
                         // For `TraverseRight`, if we have no more nodes on the right trie, then
                         // transition to the `DeleteRestLeft` state where we add all of the
@@ -466,7 +467,7 @@ struct TraversalStackFrame {
 /// our use case as a hash match on the parent would have been determined previously
 /// since we are performing in-order traversal.
 struct PreOrderIterator<'a> {
-    node_state: Option<Rc<NodeState>>,
+    node_state: Option<NodeState>,
     trie: &'a dyn TrieReader,
     traversal_stack: Vec<TraversalStackFrame>,
 }
@@ -475,7 +476,7 @@ struct PreOrderIterator<'a> {
 /// `prev_num_children` once per child and there can only be at most 16 children per
 /// node and `prev_num_children` is an u8.
 impl PreOrderIterator<'_> {
-    fn next(&mut self) -> Result<Option<Rc<NodeState>>, FileIoError> {
+    fn next(&mut self) -> Result<Option<&NodeState>, FileIoError> {
         firewood_counter!("firewood.change_proof.next", "number of next calls on PreOrderIterator", "traversal" => "next").increment(1);
         if let Some(prev_node_state) = self.node_state.take()
             && let Node::Branch(branch) = &*prev_node_state.node
@@ -502,13 +503,13 @@ impl PreOrderIterator<'_> {
         }
 
         if let Some(frame) = self.traversal_stack.pop() {
-            self.node_state = Some(Rc::new(NodeState::new(
-                &frame.pre_path,
+            self.node_state = Some(NodeState::new(
+                frame.pre_path,
                 frame.node,
                 frame.hash,
                 self.trie,
-            )?));
-            Ok(self.node_state.clone())
+            )?);
+            Ok(self.node_state.as_ref())
         } else {
             // Stack is empty, iteration is complete. Return None.
             Ok(None)
@@ -572,7 +573,8 @@ impl PreOrderIterator<'_> {
 
             // Pop the next node state from the stack
             if let Some(frame) = self.traversal_stack.pop() {
-                let state = NodeState::new(&frame.pre_path, frame.node, frame.hash, self.trie)?;
+                let state =
+                    NodeState::new(frame.pre_path.clone(), frame.node, frame.hash, self.trie)?;
                 // Since pre-order traversal of a trie iterates through the nodes in lexicographical
                 // order, we can stop the traversal once we see a node key that is larger than or
                 // equal to the key. We stop the traversal by pushing  the current node with its
@@ -598,7 +600,7 @@ impl PreOrderIterator<'_> {
                 // Only save this node state in prev_node_path if it is a branch.
                 if let Node::Branch(_branch) = &*state.node {
                     //self.prev_node_path = Some((state.node, state.path));
-                    self.node_state = Some(Rc::new(state));
+                    self.node_state = Some(state);
                 }
             } else {
                 // Traversal stack is empty. This means the key is lexicographically larger than
