@@ -92,8 +92,7 @@ type config struct {
 	revisions uint
 	// readCacheStrategy is the caching strategy used for the node cache.
 	readCacheStrategy CacheStrategy
-	// XXX: should we change this?
-	// rootStore defines whether to enable storing all historical roots on disk.
+	// rootStore defines whether to enable storing all historical revisions on disk.
 	rootStore bool
 }
 
@@ -156,10 +155,10 @@ func WithReadCacheStrategy(strategy CacheStrategy) Option {
 	}
 }
 
-// WithRootStore defines whether to enable storing all historical roots on disk.
+// WithRootStore defines whether to enable storing all historical revisions on disk.
 // When set, historical revisions will be persisted to disk even after being
 // removed from memory (based on the Revisions limit).
-// Default: false (no disk persistence)
+// Default: false
 func WithRootStore() Option {
 	return func(c *config) {
 		c.rootStore = true
@@ -183,7 +182,7 @@ const (
 )
 
 // New opens or creates a new Firewood database with the given options.
-// The database file will be created at the provided file path if it does not
+// The database directory will be created at the provided path if it does not
 // already exist.
 //
 // If no [Option] is provided, sensible defaults will be used.
