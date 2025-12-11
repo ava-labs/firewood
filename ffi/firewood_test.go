@@ -148,11 +148,11 @@ func oneSecCtx(tb testing.TB) context.Context {
 	return ctx
 }
 
-func newTestDatabase(t *testing.T, configureFns ...func(*Config)) *Database {
+func newTestDatabase(t *testing.T, opts ...Option) *Database {
 	t.Helper()
 	r := require.New(t)
 
-	db, err := newDatabase(t.TempDir(), configureFns...)
+	db, err := newDatabase(t.TempDir(), opts...)
 	r.NoError(err)
 	t.Cleanup(func() {
 		r.NoError(db.Close(oneSecCtx(t)))
@@ -160,14 +160,8 @@ func newTestDatabase(t *testing.T, configureFns ...func(*Config)) *Database {
 	return db
 }
 
-func newDatabase(dbDir string, configureFns ...func(*Config)) (*Database, error) {
-	conf := DefaultConfig()
-	conf.Truncate = true // in tests, we use filepath.Join, which creates an empty file
-	for _, fn := range configureFns {
-		fn(conf)
-	}
-
-	f, err := New(dbDir, conf)
+func newDatabase(dbDir string, opts ...Option) (*Database, error) {
+	f, err := New(dbDir, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new database in directory %q: %w", dbDir, err)
 	}
@@ -204,9 +198,7 @@ func TestTruncateDatabase(t *testing.T) {
 	r := require.New(t)
 	dbDir := t.TempDir()
 	// Create a new database with truncate enabled.
-	config := DefaultConfig()
-	config.Truncate = true
-	db, err := New(dbDir, config)
+	db, err := New(dbDir, WithTruncate(true))
 	r.NoError(err)
 
 	// Insert some data.
@@ -218,7 +210,7 @@ func TestTruncateDatabase(t *testing.T) {
 	r.NoError(db.Close(oneSecCtx(t)))
 
 	// Reopen the database with truncate enabled.
-	db, err = New(dbDir, config)
+	db, err = New(dbDir, WithTruncate(true))
 	r.NoError(err)
 
 	// Check that the database is empty after truncation.
@@ -900,9 +892,7 @@ func TestRevisionOutlivesProposal(t *testing.T) {
 // Tests that holding a reference to revision will prevent from it being reaped
 func TestRevisionOutlivesReaping(t *testing.T) {
 	r := require.New(t)
-	db := newTestDatabase(t, func(config *Config) {
-		config.Revisions = 2
-	})
+	db := newTestDatabase(t, WithRevisions(2))
 
 	keys, vals := kvForTest(40)
 	firstRoot, err := db.Update(keys[:10], vals[:10])
@@ -1257,14 +1247,13 @@ func TestFjallStore(t *testing.T) {
 	r := require.New(t)
 
 	// Create a new database with RootStore enabled
-	config := DefaultConfig()
-	config.RootStore = true
 	// Setting the number of in-memory revisions to 5 tests that revision nodes
 	// are not reaped prior to closing the database.
-	config.Revisions = 5
-
 	dbDir := t.TempDir()
-	db, err := New(dbDir, config)
+	db, err := New(dbDir,
+		WithRootStore(),
+		WithRevisions(5),
+	)
 	r.NoError(err)
 
 	// Create and commit 10 proposals
@@ -1284,7 +1273,10 @@ func TestFjallStore(t *testing.T) {
 	// Close and reopen the database
 	r.NoError(db.Close(t.Context()))
 
-	db, err = New(dbDir, config)
+	db, err = New(dbDir,
+		WithRootStore(),
+		WithRevisions(5),
+	)
 	r.NoError(err)
 
 	// Verify that we can access all revisions

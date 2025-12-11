@@ -75,39 +75,94 @@ type Database struct {
 	commitLock sync.Mutex
 }
 
-// Config defines the configuration parameters used when opening a [Database].
-type Config struct {
-	// Truncate indicates whether to clear the database file if it already exists.
-	Truncate bool
-	// NodeCacheEntries is the number of entries in the cache.
+// config defines the internal configuration parameters used when opening a [Database].
+type config struct {
+	// truncate indicates whether to clear the database file if it already exists.
+	truncate bool
+	// nodeCacheEntries is the number of entries in the cache.
 	// Must be non-zero.
-	NodeCacheEntries uint
-	// FreeListCacheEntries is the number of entries in the freelist cache.
+	nodeCacheEntries uint
+	// freeListCacheEntries is the number of entries in the freelist cache.
 	// Must be non-zero.
-	FreeListCacheEntries uint
-	// Revisions is the maximum number of historical revisions to keep in memory.
-	// If RootStoreDir is set, then any revisions removed from memory will still be kept on disk.
+	freeListCacheEntries uint
+	// revisions is the maximum number of historical revisions to keep in memory.
+	// If rootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 	// Otherwise, any revisions removed from memory will no longer be kept on disk.
 	// Must be >= 2.
-	Revisions uint
-	// ReadCacheStrategy is the caching strategy used for the node cache.
-	ReadCacheStrategy CacheStrategy
+	revisions uint
+	// readCacheStrategy is the caching strategy used for the node cache.
+	readCacheStrategy CacheStrategy
 	// XXX: should we change this?
-	// RootStore defines whether to enable storing all historical roots on disk.
-	RootStore bool
+	// rootStore defines whether to enable storing all historical roots on disk.
+	rootStore bool
 }
 
-// DefaultConfig returns a [*Config] with sensible defaults:
-//   - NodeCacheEntries:     1_000_000
-//   - FreeListCacheEntries: 40_000
-//   - Revisions:            100
-//   - ReadCacheStrategy:    OnlyCacheWrites
-func DefaultConfig() *Config {
-	return &Config{
-		NodeCacheEntries:     1_000_000,
-		FreeListCacheEntries: 40_000,
-		Revisions:            100,
-		ReadCacheStrategy:    OnlyCacheWrites,
+func defaultConfig() *config {
+	return &config{
+		nodeCacheEntries:     1_000_000,
+		freeListCacheEntries: 40_000,
+		revisions:            100,
+		readCacheStrategy:    OnlyCacheWrites,
+	}
+}
+
+// Option is a function that configures a [Database].
+type Option func(*config)
+
+// WithTruncate sets whether to clear the database file if it already exists.
+// Default: false
+func WithTruncate(truncate bool) Option {
+	return func(c *config) {
+		c.truncate = truncate
+	}
+}
+
+// WithNodeCacheEntries sets the number of entries in the node cache.
+// The node cache stores frequently accessed trie nodes to improve read performance.
+// Must be non-zero.
+// Default: 1,000,000
+func WithNodeCacheEntries(entries uint) Option {
+	return func(c *config) {
+		c.nodeCacheEntries = entries
+	}
+}
+
+// WithFreeListCacheEntries sets the number of entries in the freelist cache.
+// The freelist cache manages available disk space for reuse.
+// Must be non-zero.
+// Default: 40,000
+func WithFreeListCacheEntries(entries uint) Option {
+	return func(c *config) {
+		c.freeListCacheEntries = entries
+	}
+}
+
+// WithRevisions sets the maximum number of historical revisions to keep in memory.
+// If RootStoreDir is set, then any revisions removed from memory will still be kept on disk.
+// Otherwise, any revisions removed from memory will no longer be kept on disk.
+// Must be >= 2.
+// Default: 100
+func WithRevisions(revisions uint) Option {
+	return func(c *config) {
+		c.revisions = revisions
+	}
+}
+
+// WithReadCacheStrategy sets the caching strategy used for the node cache.
+// Default: OnlyCacheWrites
+func WithReadCacheStrategy(strategy CacheStrategy) Option {
+	return func(c *config) {
+		c.readCacheStrategy = strategy
+	}
+}
+
+// WithRootStore defines whether to enable storing all historical roots on disk.
+// When set, historical revisions will be persisted to disk even after being
+// removed from memory (based on the Revisions limit).
+// Default: false (no disk persistence)
+func WithRootStore() Option {
+	return func(c *config) {
+		c.rootStore = true
 	}
 }
 
@@ -127,29 +182,33 @@ const (
 	invalidCacheStrategy
 )
 
-// New opens or creates a new Firewood database with the given configuration. If
-// a nil config is provided, [DefaultConfig] will be used instead.
+// New opens or creates a new Firewood database with the given options.
 // The database file will be created at the provided file path if it does not
 // already exist.
+//
+// If no [Option] is provided, sensible defaults will be used.
+// See the With* functions for details about each configuration parameter and its default value.
 //
 // It is the caller's responsibility to call [Database.Close] when the database
 // is no longer needed. No other [Database] in this process should be opened with
 // the same file path until the database is closed.
-func New(dbDir string, conf *Config) (*Database, error) {
-	if conf == nil {
-		conf = DefaultConfig()
+func New(dbDir string, opts ...Option) (*Database, error) {
+	conf := defaultConfig()
+	for _, opt := range opts {
+		opt(conf)
 	}
-	if conf.ReadCacheStrategy >= invalidCacheStrategy {
-		return nil, fmt.Errorf("invalid %T (%[1]d)", conf.ReadCacheStrategy)
+
+	if conf.readCacheStrategy >= invalidCacheStrategy {
+		return nil, fmt.Errorf("invalid cache strategy (%d)", conf.readCacheStrategy)
 	}
-	if conf.Revisions < 2 {
-		return nil, fmt.Errorf("%T.Revisions must be >= 2", conf)
+	if conf.revisions < 2 {
+		return nil, fmt.Errorf("revisions must be >= 2, got %d", conf.revisions)
 	}
-	if conf.NodeCacheEntries < 1 {
-		return nil, fmt.Errorf("%T.NodeCacheEntries must be >= 1", conf)
+	if conf.nodeCacheEntries < 1 {
+		return nil, fmt.Errorf("node cache entries must be >= 1, got %d", conf.nodeCacheEntries)
 	}
-	if conf.FreeListCacheEntries < 1 {
-		return nil, fmt.Errorf("%T.FreeListCacheEntries must be >= 1", conf)
+	if conf.freeListCacheEntries < 1 {
+		return nil, fmt.Errorf("free list cache entries must be >= 1, got %d", conf.freeListCacheEntries)
 	}
 
 	var pinner runtime.Pinner
@@ -157,12 +216,12 @@ func New(dbDir string, conf *Config) (*Database, error) {
 
 	args := C.struct_DatabaseHandleArgs{
 		dir:                  newBorrowedBytes([]byte(dbDir), &pinner),
-		cache_size:           C.size_t(conf.NodeCacheEntries),
-		free_list_cache_size: C.size_t(conf.FreeListCacheEntries),
-		revisions:            C.size_t(conf.Revisions),
-		strategy:             C.uint8_t(conf.ReadCacheStrategy),
-		truncate:             C.bool(conf.Truncate),
-		root_store:           C.bool(conf.RootStore),
+		cache_size:           C.size_t(conf.nodeCacheEntries),
+		free_list_cache_size: C.size_t(conf.freeListCacheEntries),
+		revisions:            C.size_t(conf.revisions),
+		strategy:             C.uint8_t(conf.readCacheStrategy),
+		truncate:             C.bool(conf.truncate),
+		root_store:           C.bool(conf.rootStore),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))
