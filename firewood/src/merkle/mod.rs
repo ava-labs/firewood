@@ -8,7 +8,8 @@ mod merge;
 /// Parallel merkle
 pub mod parallel;
 
-use crate::iter::{MerkleKeyValueIter, PathIterator};
+use crate::iter::FilteredKeyRangeExt;
+use crate::iter::{MerkleKeyValueIter, PathIterator, returnable::ReturnableIteratorExt};
 use crate::v2::api::{
     self, BatchIter, FrozenProof, FrozenRangeProof, KeyType, KeyValuePair, ValueType,
 };
@@ -406,7 +407,8 @@ impl<T: TrieReader> Merkle<T> {
 
         let mut iter = self
             .key_value_iter_from_key(start_key.unwrap_or_default())
-            .stop_after_key(end_key);
+            .stop_after_key(end_key)
+            .returnable();
 
         // don't consume the iterator so we can determine if we hit the
         // limit or exhausted the iterator later
@@ -422,7 +424,7 @@ impl<T: TrieReader> Merkle<T> {
 
         let end_proof = if let Some(limit) = limit
             && limit.get() <= key_values.len()
-            && iter.next().is_some()
+            && iter.peek().is_some()
         {
             // limit was provided, we hit it, and there is at least one more key
             // end proof is for the last key provided
