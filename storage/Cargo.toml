@@ -50,6 +50,7 @@ sha3 = { version = "0.10.8", optional = true }
 bumpalo = { version = "3.19.0", features = ["collections", "std"] }
 
 [dev-dependencies]
+cfg-if = "1.0.4"
 # Workspace dependencies
 criterion = { workspace = true, features = ["html_reports"] }
 pprof = { workspace = true, features = ["flamegraph"] }
@@ -59,7 +60,6 @@ test-case.workspace = true
 
 [features]
 logger = ["log"]
-branch_factor_256 = []
 io-uring = ["dep:io-uring"]
 ethhash = ["dep:rlp", "dep:sha3", "dep:bytes"]
 test_utils = ["dep:rand"]

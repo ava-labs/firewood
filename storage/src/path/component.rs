@@ -5,15 +5,9 @@ use smallvec::SmallVec;
 
 use super::{PartialPath, TriePath, TriePathFromUnpackedBytes};
 
-#[cfg(not(feature = "branch_factor_256"))]
 /// A path component in a hexary trie; which is only 4 bits (aka a nibble).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PathComponent(pub crate::u4::U4);
-
-#[cfg(feature = "branch_factor_256")]
-/// A path component in a 256-ary trie; which is 8 bits (aka a byte).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct PathComponent(pub u8);
 
 /// An iterator over path components.
 pub type ComponentIter<'a> = std::iter::Copied<std::slice::Iter<'a, PathComponent>>;
@@ -38,7 +32,6 @@ impl PathComponent {
     ///
     /// instead of using a raw range like (`0..16`) or  [`Iterator::enumerate`],
     /// which does not give a type-safe path component.
-    #[cfg(not(feature = "branch_factor_256"))]
     pub const ALL: [Self; Self::LEN] = [
         Self(crate::u4::U4::new_masked(0x0)),
         Self(crate::u4::U4::new_masked(0x1)),
@@ -58,51 +51,15 @@ impl PathComponent {
         Self(crate::u4::U4::new_masked(0xF)),
     ];
 
-    /// All possible path components.
-    ///
-    /// This makes it easy to iterate over all possible children of a branch
-    /// in a type-safe way. It is preferrable to do:
-    ///
-    /// ```ignore
-    /// for (idx, slot) in PathComponent::ALL.into_iter().zip(branch.children.each_ref()) {
-    ///     /// use idx and slot
-    /// }
-    /// ```
-    ///
-    /// instead of using a raw range like (`0..256`) or  [`Iterator::enumerate`],
-    /// which does not give a type-safe path component.
-    #[cfg(feature = "branch_factor_256")]
-    pub const ALL: [Self; Self::LEN] = {
-        let mut all = [Self(0); 256];
-        let mut i = 0;
-        #[expect(clippy::indexing_slicing)]
-        while i < 256 {
-            all[i] = Self(i as u8);
-            i += 1;
-        }
-        all
-    };
-
     /// The number of possible path components.
-    pub const LEN: usize = if cfg!(feature = "branch_factor_256") {
-        256
-    } else {
-        16
-    };
+    pub const LEN: usize = 16;
 }
 
 impl PathComponent {
     /// Returns the path component as a [`u8`].
     #[must_use]
     pub const fn as_u8(self) -> u8 {
-        #[cfg(not(feature = "branch_factor_256"))]
-        {
-            self.0.as_u8()
-        }
-        #[cfg(feature = "branch_factor_256")]
-        {
-            self.0
-        }
+        self.0.as_u8()
     }
 
     /// Returns the path component as a [`usize`].
@@ -119,23 +76,15 @@ impl PathComponent {
     /// For 256-ary tries, any value is valid.
     #[must_use]
     pub const fn try_new(value: u8) -> Option<Self> {
-        #[cfg(not(feature = "branch_factor_256"))]
-        {
-            match crate::u4::U4::try_new(value) {
-                Some(u4) => Some(Self(u4)),
-                None => None,
-            }
-        }
-        #[cfg(feature = "branch_factor_256")]
-        {
-            Some(Self(value))
+        match crate::u4::U4::try_new(value) {
+            Some(u4) => Some(Self(u4)),
+            None => None,
         }
     }
 
     /// Creates a pair of path components from a single byte where the
     /// upper 4 bits are the first component and the lower 4 bits are the
     /// second component.
-    #[cfg(not(feature = "branch_factor_256"))]
     #[must_use]
     pub const fn new_pair(v: u8) -> (Self, Self) {
         let (upper, lower) = crate::u4::U4::new_pair(v);
@@ -145,37 +94,28 @@ impl PathComponent {
     /// Joins this [`PathComponent`] with another to create a single [`u8`] where
     /// this component is the upper 4 bits and the provided component is the
     /// lower 4 bits.
-    #[cfg(not(feature = "branch_factor_256"))]
     #[must_use]
     pub const fn join(self, other: Self) -> u8 {
         self.0.join(other.0)
     }
 
     pub(crate) const fn wrapping_next(self) -> Self {
-        #[cfg(not(feature = "branch_factor_256"))]
-        {
-            match crate::u4::U4::try_new(self.0.as_u8().wrapping_add(1)) {
-                Some(next) => Self(next),
-                None => Self(crate::u4::U4::MIN),
-            }
+        match crate::u4::U4::try_new(self.0.as_u8().wrapping_add(1)) {
+            Some(next) => Self(next),
+            None => Self(crate::u4::U4::MIN),
         }
-        #[cfg(feature = "branch_factor_256")]
-        {
-            Self(self.0.wrapping_add(1))
-        }
+    }
+}
+
+impl std::fmt::Debug for PathComponent {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.0, f)
     }
 }
 
 impl std::fmt::Display for PathComponent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        #[cfg(not(feature = "branch_factor_256"))]
-        {
-            write!(f, "{self:X}")
-        }
-        #[cfg(feature = "branch_factor_256")]
-        {
-            write!(f, "{self:02X}")
-        }
+        write!(f, "{self:X}")
     }
 }
 
@@ -311,7 +251,6 @@ impl<A: smallvec::Array<Item = PathComponent>> TriePath for SmallVec<A> {
     }
 }
 
-#[cfg(not(feature = "branch_factor_256"))]
 impl<'input> TriePathFromUnpackedBytes<'input> for &'input [PathComponent] {
     type Error = crate::u4::TryFromIntError;
 
@@ -328,7 +267,6 @@ impl<'input> TriePathFromUnpackedBytes<'input> for &'input [PathComponent] {
     }
 }
 
-#[cfg(not(feature = "branch_factor_256"))]
 impl TriePathFromUnpackedBytes<'_> for Vec<PathComponent> {
     type Error = crate::u4::TryFromIntError;
 
@@ -337,7 +275,6 @@ impl TriePathFromUnpackedBytes<'_> for Vec<PathComponent> {
     }
 }
 
-#[cfg(not(feature = "branch_factor_256"))]
 impl<A: smallvec::Array<Item = PathComponent>> TriePathFromUnpackedBytes<'_> for SmallVec<A> {
     type Error = crate::u4::TryFromIntError;
 
@@ -346,7 +283,6 @@ impl<A: smallvec::Array<Item = PathComponent>> TriePathFromUnpackedBytes<'_> for
     }
 }
 
-#[cfg(not(feature = "branch_factor_256"))]
 impl super::TriePathFromPackedBytes<'_> for Vec<PathComponent> {
     fn path_from_packed_bytes(bytes: &'_ [u8]) -> Self {
         let path = super::PackedPathRef::path_from_packed_bytes(bytes);
@@ -360,7 +296,6 @@ impl super::TriePathFromPackedBytes<'_> for Vec<PathComponent> {
     }
 }
 
-#[cfg(not(feature = "branch_factor_256"))]
 impl<A: smallvec::Array<Item = PathComponent>> super::TriePathFromPackedBytes<'_> for SmallVec<A> {
     fn path_from_packed_bytes(bytes: &'_ [u8]) -> Self {
         let path = super::PackedPathRef::path_from_packed_bytes(bytes);
@@ -371,35 +306,6 @@ impl<A: smallvec::Array<Item = PathComponent>> super::TriePathFromPackedBytes<'_
         this.reserve_exact(path.len());
         this.extend(path.components());
         this
-    }
-}
-
-#[cfg(feature = "branch_factor_256")]
-impl<'input> TriePathFromUnpackedBytes<'input> for &'input [PathComponent] {
-    type Error = std::convert::Infallible;
-
-    fn path_from_unpacked_bytes(bytes: &'input [u8]) -> Result<Self, Self::Error> {
-        #[expect(unsafe_code)]
-        // SAFETY: u8 is always valid for PathComponent in 256-ary tries.
-        Ok(unsafe { byte_slice_as_path_components_unchecked(bytes) })
-    }
-}
-
-#[cfg(feature = "branch_factor_256")]
-impl TriePathFromUnpackedBytes<'_> for Vec<PathComponent> {
-    type Error = std::convert::Infallible;
-
-    fn path_from_unpacked_bytes(bytes: &[u8]) -> Result<Self, Self::Error> {
-        Ok(bytes.iter().copied().map(PathComponent).collect())
-    }
-}
-
-#[cfg(feature = "branch_factor_256")]
-impl<A: smallvec::Array<Item = PathComponent>> TriePathFromUnpackedBytes<'_> for SmallVec<A> {
-    type Error = std::convert::Infallible;
-
-    fn path_from_unpacked_bytes(bytes: &[u8]) -> Result<Self, Self::Error> {
-        Ok(bytes.iter().copied().map(PathComponent).collect())
     }
 }
 
@@ -427,25 +333,18 @@ impl<'input> TriePathFromUnpackedBytes<'input> for std::sync::Arc<[PathComponent
     }
 }
 
-// these must also only be included when `branch_factor_256` is not enabled otherwise
-// they would conflict with the blanket impl of TriePathFromPackedBytes over
-// TriePathFromUnpackedBytes
-
-#[cfg(not(feature = "branch_factor_256"))]
 impl super::TriePathFromPackedBytes<'_> for Box<[PathComponent]> {
     fn path_from_packed_bytes(bytes: &[u8]) -> Self {
         Vec::<PathComponent>::path_from_packed_bytes(bytes).into()
     }
 }
 
-#[cfg(not(feature = "branch_factor_256"))]
 impl super::TriePathFromPackedBytes<'_> for std::rc::Rc<[PathComponent]> {
     fn path_from_packed_bytes(bytes: &[u8]) -> Self {
         Vec::<PathComponent>::path_from_packed_bytes(bytes).into()
     }
 }
 
-#[cfg(not(feature = "branch_factor_256"))]
 impl super::TriePathFromPackedBytes<'_> for std::sync::Arc<[PathComponent]> {
     fn path_from_packed_bytes(bytes: &[u8]) -> Self {
         Vec::<PathComponent>::path_from_packed_bytes(bytes).into()
@@ -499,7 +398,6 @@ const fn path_components_as_byte_slice(components: &[PathComponent]) -> &[u8] {
 }
 
 #[inline]
-#[cfg(not(feature = "branch_factor_256"))]
 fn try_from_maybe_u4<I: FromIterator<PathComponent>>(
     bytes: impl IntoIterator<Item = u8>,
 ) -> Result<I, crate::u4::TryFromIntError> {
@@ -518,14 +416,10 @@ mod tests {
 
     use super::*;
 
-    #[cfg_attr(not(feature = "branch_factor_256"), test_case(PhantomData::<&[PathComponent]>; "slice"))]
-    #[cfg_attr(not(feature = "branch_factor_256"), test_case(PhantomData::<Box<[PathComponent]>>; "boxed slice"))]
-    #[cfg_attr(not(feature = "branch_factor_256"), test_case(PhantomData::<Vec<PathComponent>>; "vec"))]
-    #[cfg_attr(not(feature = "branch_factor_256"), test_case(PhantomData::<SmallVec<[PathComponent; 32]>>; "smallvec"))]
-    #[cfg_attr(feature = "branch_factor_256", test_case(PhantomData::<&[PathComponent]>; "slice"))]
-    #[cfg_attr(feature = "branch_factor_256", test_case(PhantomData::<Box<[PathComponent]>>; "boxed slice"))]
-    #[cfg_attr(feature = "branch_factor_256", test_case(PhantomData::<Vec<PathComponent>>; "vec"))]
-    #[cfg_attr(feature = "branch_factor_256", test_case(PhantomData::<SmallVec<[PathComponent; 32]>>; "smallvec"))]
+    #[test_case(PhantomData::<&[PathComponent]>; "slice")]
+    #[test_case(PhantomData::<Box<[PathComponent]>>; "boxed slice")]
+    #[test_case(PhantomData::<Vec<PathComponent>>; "vec")]
+    #[test_case(PhantomData::<SmallVec<[PathComponent; 32]>>; "smallvec")]
     fn test_path_from_unpacked_bytes_hexary<T>(_: PhantomData<T>)
     where
         T: TriePathFromUnpackedBytes<'static, Error: std::fmt::Debug>,
@@ -545,7 +439,6 @@ mod tests {
         );
     }
 
-    #[cfg(not(feature = "branch_factor_256"))]
     #[test_case(PhantomData::<&[PathComponent]>; "slice")]
     #[test_case(PhantomData::<Box<[PathComponent]>>; "boxed slice")]
     #[test_case(PhantomData::<Vec<PathComponent>>; "vec")]
