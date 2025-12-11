@@ -246,6 +246,15 @@ impl DatabaseHandle {
                 .merge_key_value_range(first_key, last_key, key_values)
         })
     }
+
+    /// Dumps the Trie structure of the latest revision to a DOT (Graphviz) format string.
+    ///
+    /// # Errors
+    ///
+    /// An error is returned if there was an i/o error while dumping the trie.
+    pub fn dump_to_string(&self) -> Result<String, api::Error> {
+        self.db.dump_to_string().map_err(api::Error::from)
+    }
 }
 
 impl From<Db> for DatabaseHandle {

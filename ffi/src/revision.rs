@@ -65,6 +65,10 @@ impl DbView for RevisionHandle {
     ) -> Result<Self::Iter<'_>, api::Error> {
         self.view.iter_option(first_key.as_ref().map(AsRef::as_ref))
     }
+
+    fn dump_to_string(&self) -> Result<String, api::Error> {
+        self.view.dump_to_string()
+    }
 }
 
 #[derive(Debug)]

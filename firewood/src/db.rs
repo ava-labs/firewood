@@ -95,6 +95,11 @@ where
             None => Ok(MerkleKeyValueIter::from(self)),
         }
     }
+
+    fn dump_to_string(&self) -> Result<String, api::Error> {
+        let merkle = Merkle::from(self);
+        merkle.dump_to_string().map_err(api::Error::from)
+    }
 }
 
 #[allow(dead_code)]
@@ -192,6 +197,17 @@ impl Db {
         let latest_rev_nodestore = self.manager.current_revision();
         let merkle = Merkle::from(latest_rev_nodestore);
         merkle.dump(w).map_err(std::io::Error::other)
+    }
+
+    /// Dump the Trie of the latest revision to a String
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the dump operation fails
+    pub fn dump_to_string(&self) -> Result<String, std::io::Error> {
+        let latest_rev_nodestore = self.manager.current_revision();
+        let merkle = Merkle::from(latest_rev_nodestore);
+        merkle.dump_to_string().map_err(std::io::Error::other)
     }
 
     /// Get a copy of the database metrics
@@ -347,6 +363,10 @@ impl api::DbView for Proposal<'_> {
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
         api::DbView::iter_option(&*self.nodestore, first_key)
+    }
+
+    fn dump_to_string(&self) -> Result<String, api::Error> {
+        api::DbView::dump_to_string(&*self.nodestore)
     }
 }
 
