@@ -2,6 +2,44 @@
 
 The FFI package provides a golang FFI layer for Firewood.
 
+## Usage
+
+### Basic Usage
+
+```go
+import "github.com/ava-labs/firewood/ffi"
+
+// Open a database with default configuration
+db, err := ffi.New("/path/to/database.db")
+if err != nil {
+    log.Fatal(err)
+}
+defer db.Close(context.Background())
+```
+
+### Configuration Options
+
+Firewood uses the functional options pattern for configuration. You can customize the database by passing option functions:
+
+```go
+db, err := ffi.New("/path/to/database.db",
+    ffi.WithTruncate(true),                    // Clear the database if it exists
+    ffi.WithNodeCacheEntries(2_000_000),       // Set node cache size
+    ffi.WithFreeListCacheEntries(50_000),      // Set freelist cache size
+    ffi.WithRevisions(200),                    // Keep 200 historical revisions
+    ffi.WithReadCacheStrategy(ffi.CacheAllReads), // Cache all reads
+    ffi.WithRootStoreDir("/path/to/roots"),    // Store roots on disk
+)
+```
+
+Available options:
+- `WithTruncate(bool)` - Clear the database file if it already exists
+- `WithNodeCacheEntries(uint)` - Number of entries in the node cache (default: 1,000,000)
+- `WithFreeListCacheEntries(uint)` - Number of entries in the freelist cache (default: 40,000)
+- `WithRevisions(uint)` - Maximum number of historical revisions to keep (default: 100, must be >= 2)
+- `WithReadCacheStrategy(CacheStrategy)` - Caching strategy for reads (default: OnlyCacheWrites)
+- `WithRootStoreDir(string)` - Path to store all historical roots on disk
+
 ## Building Firewood Golang FFI
 
 The Golang FFI layer uses a CGO directive to locate a C-API compatible binary built from Firewood. Firewood supports both seamless local development and a single-step compilation process for Go projects that depend or transitively depend on Firewood.
