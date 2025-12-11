@@ -119,8 +119,8 @@ impl<'a> DiffMerkleNodeStream<'a> {
         start_key: Key,
     ) -> Result<Self, FileIoError> {
         // Create pre-order iterators for the two tries and have them iterate to the start key.
-        // If the start key doesn't exist, it will set the iterators to the smallest key that is
-        // larger than the start key.
+        // If the start key doesn't exist for an iterator, it will set the iterator to the
+        // smallest key that is larger than the start key.
         let mut left_tree = Self::preorder_iter(left_tree, left_hash);
         left_tree.iterate_to_key(&start_key)?;
         let mut right_tree = Self::preorder_iter(right_tree, right_hash);
@@ -301,15 +301,14 @@ impl<'a> DiffMerkleNodeStream<'a> {
         // Get the next node from the left trie.
         let Some(left_state) = self.left_tree.next()? else {
             // No more nodes in the left trie. For this state, the current node from the right trie has already
-            // been accounted for, which means we don't need to include it in the change proof. For this case,
-            // we want to mark the left state as empty (just for completeness), and transition to the
-            // AddRestRight state where we add the remaining values from the right trie to the change proof.
+            // been accounted for, which means we don't need to include it in the change proof. Transition to
+            // `AddRestRight` state where we add the remaining values from the right trie to the addition list.
             return Ok((DiffIterationNodeState::AddRestRight, None));
         };
 
         // Get the next node from the right trie.
         let Some(right_state) = self.right_tree.next()? else {
-            // No more nodes on the right side. We want to transition to DeleteRestLeft, but we don't want to
+            // No more nodes on the right side. We want to transition to `DeleteRestLeft`, but we don't want to
             // forget about the node that we just retrieved from the left tree.
             return Ok((
                 DiffIterationNodeState::DeleteRestLeft,
@@ -333,8 +332,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     // In the SkipChildren state, the hash and path of the current nodes on
                     // both the left and right tries match. This means we don't need to
                     // traverse down the children of these tries. We can do this by calling
-                    // skip_children on the two tries, which pops off the children of the
-                    // current node from the traversal stack.
+                    // skip_children on the two tries.
                     self.left_tree.skip_children();
                     self.right_tree.skip_children();
 
