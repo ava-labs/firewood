@@ -202,7 +202,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     DiffIterationNodeState::TraverseLeft {
                         right_state: right_state.clone(),
                     },
-                    Self::deleted_values(&left_state.node, &left_state.path),
+                    Self::deleted_values(left_state.node.value(), &left_state.path),
                 )
             }
             // If the left full path is greater than the right full path, then all of the
@@ -221,7 +221,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     DiffIterationNodeState::TraverseRight {
                         left_state: left_state.clone(),
                     },
-                    Self::additional_values(&right_state.node, &right_state.path),
+                    Self::added_values(right_state.node.value(), &right_state.path),
                 )
             }
             // If the left and right full paths are equal, then we need to also look at their values
@@ -250,18 +250,13 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     Self::hash_match(left_state.hash.as_ref(), right_state.hash.as_ref()),
                     None,
                 ),
-                (Some(_val), None) => (
+                (Some(val), None) => (
                     DiffIterationNodeState::TraverseBoth,
-                    Some(BatchOp::Delete {
-                        key: key_from_nibble_iter(left_state.path.iter().copied()),
-                    }),
+                    Self::deleted_values(Some(val), &left_state.path),
                 ),
                 (None, Some(val)) => (
                     DiffIterationNodeState::TraverseBoth,
-                    Some(BatchOp::Put {
-                        key: key_from_nibble_iter(right_state.path.iter().copied()),
-                        value: val.into(),
-                    }),
+                    Self::added_values(Some(val), &right_state.path),
                 ),
                 (Some(left_val), Some(right_val)) => {
                     if left_val == right_val {
@@ -272,10 +267,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     } else {
                         (
                             DiffIterationNodeState::TraverseBoth,
-                            Some(BatchOp::Put {
-                                key: key_from_nibble_iter(right_state.path.iter().copied()),
-                                value: right_val.into(),
-                            }),
+                            Self::added_values(Some(right_val), &right_state.path),
                         )
                     }
                 }
@@ -285,19 +277,16 @@ impl<'a> DiffMerkleNodeStream<'a> {
 
     /// Helper function that returns a key/value to be added to the delete list if the current
     /// node from the left trie has a value.
-    fn deleted_values(left_node: &SharedNode, left_path: &Path) -> Option<BatchOp<Key, Value>> {
-        left_node.value().map(|_val| BatchOp::Delete {
+    fn deleted_values(left_value: Option<&[u8]>, left_path: &Path) -> Option<BatchOp<Key, Value>> {
+        left_value.map(|_val| BatchOp::Delete {
             key: key_from_nibble_iter(left_path.iter().copied()),
         })
     }
 
     /// Helper function that returns a key/value to be added to the addition list if the current
     /// node from the right trie has a value.
-    fn additional_values(
-        right_node: &SharedNode,
-        right_path: &Path,
-    ) -> Option<BatchOp<Key, Value>> {
-        right_node.value().map(|val| BatchOp::Put {
+    fn added_values(right_value: Option<&[u8]>, right_path: &Path) -> Option<BatchOp<Key, Value>> {
+        right_value.map(|val| BatchOp::Put {
             key: key_from_nibble_iter(right_path.iter().copied()),
             value: val.into(),
         })
@@ -324,7 +313,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
             // forget about the node that we just retrieved from the left tree.
             return Ok((
                 DiffIterationNodeState::DeleteRestLeft,
-                Self::deleted_values(&left_state.node, &left_state.path),
+                Self::deleted_values(left_state.node.value(), &left_state.path),
             ));
         };
 
@@ -366,7 +355,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                         // the value from the current right node if it has a value.
                         (
                             DiffIterationNodeState::AddRestRight,
-                            Self::additional_values(&right_state.node, &right_state.path),
+                            Self::added_values(right_state.node.value(), &right_state.path),
                         )
                     }
                 }
@@ -380,7 +369,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                         // to add the value from the current left node if it has a value.
                         (
                             DiffIterationNodeState::DeleteRestLeft,
-                            Self::deleted_values(&left_state.node, &left_state.path),
+                            Self::deleted_values(left_state.node.value(), &left_state.path),
                         )
                     }
                 }
@@ -392,7 +381,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     // in this state.
                     (
                         DiffIterationNodeState::AddRestRight,
-                        Self::additional_values(&right_state.node, &right_state.path),
+                        Self::added_values(right_state.node.value(), &right_state.path),
                     )
                 }
                 DiffIterationNodeState::DeleteRestLeft => {
@@ -403,7 +392,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     // in this state.
                     (
                         DiffIterationNodeState::DeleteRestLeft,
-                        Self::deleted_values(&left_state.node, &left_state.path),
+                        Self::deleted_values(left_state.node.value(), &left_state.path),
                     )
                 }
             };
