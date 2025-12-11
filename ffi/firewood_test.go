@@ -1797,3 +1797,98 @@ func TestDump(t *testing.T) {
 		r.Contains(proposalDump, string(val), "proposal dump should contain value: %s", string(val))
 	}
 }
+
+// TestLogging tests the WithLogPath and WithLogFilter options.
+// This test expects that no other tests in the package initialize logging.
+// Tests are run in order: error cases first, then success case, then logger-already-initialized error.
+func TestLogging(t *testing.T) {
+	ctx := t.Context()
+
+	// Test 1: Empty log path should not initialize logging (no error)
+	t.Run("EmptyLogPath", func(t *testing.T) {
+		r := require.New(t)
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+		db, err := New(dbPath,
+			WithTruncate(true),
+			WithLogPath(""),
+		)
+		// Empty path means logging is disabled, should succeed
+		r.NoError(err)
+		r.NotNil(db)
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			r.NoError(db.Close(ctx))
+		}()
+	})
+
+	// Test 2: Invalid log path should fail
+	t.Run("InvalidLogPath", func(t *testing.T) {
+		r := require.New(t)
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+		// Use a path that cannot be created (e.g., parent is a file)
+		invalidLogDir := filepath.Join(t.TempDir(), "file_not_dir")
+		r.NoError(os.WriteFile(invalidLogDir, []byte("not a directory"), 0o644))
+		invalidLogPath := filepath.Join(invalidLogDir, "subdir", "test.log")
+		
+		db, err := New(dbPath,
+			WithTruncate(true),
+			WithLogPath(invalidLogPath),
+			WithLogFilter("trace"),
+		)
+		r.Error(err)
+		r.Nil(db)
+		r.Contains(err.Error(), "failed to initialize logging")
+	})
+
+	// Test 3: Success case - valid log path with trace filter
+	t.Run("ValidLogging", func(t *testing.T) {
+		r := require.New(t)
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+		logPath := filepath.Join(t.TempDir(), "firewood.log")
+
+		db, err := New(dbPath,
+			WithTruncate(true),
+			WithLogPath(logPath),
+			WithLogFilter("trace"),
+		)
+		r.NoError(err)
+		r.NotNil(db)
+		defer func() {
+			ctx, cancel := context.WithTimeout(ctx, time.Second)
+			defer cancel()
+			r.NoError(db.Close(ctx))
+		}()
+
+		// Perform some operations to generate logs
+		keys := [][]byte{[]byte("key1")}
+		vals := [][]byte{[]byte("value1")}
+		_, err = db.Update(keys, vals)
+		r.NoError(err)
+
+		// Verify log file was created and contains trace logs
+		logContents, err := os.ReadFile(logPath)
+		r.NoError(err)
+		r.NotEmpty(logContents, "log file should contain trace logs from database opening")
+		
+		// Verify the log contains our trace message from opening
+		r.Contains(string(logContents), "Opening Firewood database")
+	})
+
+	// Test 4: Logger already initialized error
+	t.Run("LoggerAlreadyInitialized", func(t *testing.T) {
+		r := require.New(t)
+		dbPath := filepath.Join(t.TempDir(), "test2.db")
+		logPath := filepath.Join(t.TempDir(), "firewood2.log")
+
+		db, err := New(dbPath,
+			WithTruncate(true),
+			WithLogPath(logPath),
+			WithLogFilter("info"),
+		)
+		r.Error(err)
+		r.Nil(db)
+		r.Contains(err.Error(), "failed to initialize logging")
+		r.Contains(err.Error(), "attempted to set a logger after the logging system was already initialized")
+	})
+}

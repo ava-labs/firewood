@@ -18,6 +18,7 @@ use crate::v2::api::{
 };
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
+use firewood_storage::logger::trace;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
     ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieReader,
@@ -167,6 +168,10 @@ impl api::Db for Db {
 impl Db {
     /// Create a new database instance.
     pub fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
+        trace!(
+            "Opening Firewood database at path: {}",
+            db_path.as_ref().display()
+        );
         let metrics = Arc::new(DbMetrics {
             proposals: counter!("firewood.proposals"),
         });

@@ -659,14 +659,18 @@ pub unsafe extern "C" fn fwd_open_db(args: DatabaseHandleArgs) -> HandleResult {
 
 /// Start logs for this process.
 ///
+/// Logging is global per-process and can only be initialized once. Subsequent calls
+/// will return an error.
+///
 /// # Arguments
 ///
 /// See [`LogArgs`].
 ///
 /// # Returns
 ///
-/// - [`VoidResult::Ok`] if the recorder was initialized.
-/// - [`VoidResult::Err`] if an error occurs during initialization.
+/// - [`VoidResult::Ok`] if the logger was initialized.
+/// - [`VoidResult::Err`] if an error occurs during initialization (e.g., invalid path,
+///   invalid filter, or logger already initialized).
 ///
 /// # Safety
 ///

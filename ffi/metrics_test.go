@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"testing"
 	"time"
 
@@ -25,23 +23,11 @@ func TestMetrics(t *testing.T) {
 
 	// test params
 	var (
-		logPath     = filepath.Join(t.TempDir(), "firewood.log")
 		metricsPort = uint16(3000)
 	)
 
 	db := newTestDatabase(t)
 	r.NoError(StartMetricsWithExporter(metricsPort))
-
-	logConfig := &LogConfig{
-		Path:        logPath,
-		FilterLevel: "trace",
-	}
-
-	var logsDisabled bool
-	if err := StartLogs(logConfig); err != nil {
-		r.Contains(err.Error(), "Logging is not available")
-		logsDisabled = true
-	}
 
 	// Populate DB
 	keys, vals := kvForTest(10)
@@ -92,12 +78,5 @@ func TestMetrics(t *testing.T) {
 		}
 		r.NotNil(d)
 		r.Equal(v, *d.Type)
-	}
-
-	if !logsDisabled {
-		// logs should be non-empty if logging with trace filter level
-		f, err := os.ReadFile(logPath)
-		r.NoError(err)
-		r.NotEmpty(f)
 	}
 }
