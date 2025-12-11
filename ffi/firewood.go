@@ -96,11 +96,6 @@ type config struct {
 	rootStoreDir string
 }
 
-// defaultConfig returns a config with sensible defaults:
-//   - nodeCacheEntries:     1_000_000
-//   - freeListCacheEntries: 40_000
-//   - revisions:            100
-//   - readCacheStrategy:    OnlyCacheWrites
 func defaultConfig() *config {
 	return &config{
 		nodeCacheEntries:     1_000_000,
@@ -190,7 +185,7 @@ const (
 // The database file will be created at the provided file path if it does not
 // already exist.
 //
-// If no configuration options are provided, sensible defaults will be used.
+// If no [Option] is provided, sensible defaults will be used.
 // See the With* functions for details about each configuration parameter and its default value.
 //
 // It is the caller's responsibility to call [Database.Close] when the database
