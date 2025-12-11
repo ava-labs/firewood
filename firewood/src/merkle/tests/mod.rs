@@ -8,7 +8,7 @@ mod ethhash;
 // TODO: get the hashes from merkledb and verify compatibility with branch factor 256
 mod proof;
 mod range;
-#[cfg(not(any(feature = "ethhash", feature = "branch_factor_256")))]
+#[cfg(not(feature = "ethhash"))]
 mod triehash;
 
 use std::collections::HashMap;
@@ -631,8 +631,7 @@ fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
         key
     };
 
-    // TODO: figure out why this fails if we use more than 27 iterations with branch_factor_256
-    for _ in 0..27 {
+    for _ in 0..32 {
         let mut items = Vec::new();
 
         for _ in 0..100 {
