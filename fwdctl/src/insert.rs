@@ -5,12 +5,12 @@ use clap::Args;
 use firewood::db::{BatchOp, Db, DbConfig};
 use firewood::v2::api::{self, Db as _, Proposal as _};
 
-use crate::DatabaseDir;
+use crate::DatabasePath;
 
 #[derive(Debug, Args)]
 pub struct Options {
     #[command(flatten)]
-    pub database: DatabaseDir,
+    pub database: DatabasePath,
 
     /// The key to insert
     #[arg(required = true, value_name = "KEY", help = "Key to insert")]

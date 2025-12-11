@@ -13,13 +13,13 @@ use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 use nonzero_ext::nonzero;
 use num_format::{Locale, ToFormattedString};
 
-use crate::DatabaseDir;
+use crate::DatabasePath;
 
 // TODO: (optionally) add a fix option
 #[derive(Args, Debug)]
 pub struct Options {
     #[command(flatten)]
-    pub database: DatabaseDir,
+    pub database: DatabasePath,
 
     /// Whether to perform hash check
     #[arg(

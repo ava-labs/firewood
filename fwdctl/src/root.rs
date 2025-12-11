@@ -6,12 +6,12 @@ use clap::Args;
 use firewood::db::{Db, DbConfig};
 use firewood::v2::api::{self, Db as _};
 
-use crate::DatabaseDir;
+use crate::DatabasePath;
 
 #[derive(Debug, Args)]
 pub struct Options {
     #[command(flatten)]
-    pub database_dir: DatabaseDir,
+    pub database_dir: DatabasePath,
 }
 
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {

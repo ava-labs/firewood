@@ -18,15 +18,15 @@ pub mod insert;
 pub mod root;
 
 #[derive(Clone, Debug, Parser)]
-pub struct DatabaseDir {
-    /// The database path. Defaults to firewood.db
+pub struct DatabasePath {
+    /// The database path. Defaults to firewood
     #[arg(
         long = "db",
         short = 'd',
         required = false,
-        value_name = "DB_NAME",
+        value_name = "DB_DIR_NAME",
         default_value_os_t = default_db_path(),
-        help = "Name of the database"
+        help = "Name of the database directory"
     )]
     pub dbdir: PathBuf,
 }

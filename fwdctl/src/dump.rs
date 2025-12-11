@@ -12,7 +12,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
-use crate::DatabaseDir;
+use crate::DatabasePath;
 
 type KeyFromStream = Option<Result<(Key, Value), FileIoError>>;
 
@@ -27,7 +27,7 @@ pub enum OutputFormat {
 #[derive(Debug, Args)]
 pub struct Options {
     #[command(flatten)]
-    pub database: DatabaseDir,
+    pub database: DatabasePath,
 
     /// The key to start dumping from (if no key is provided, start from the beginning).
     /// Defaults to None.

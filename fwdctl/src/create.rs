@@ -5,12 +5,12 @@ use clap::{Args, value_parser};
 use firewood::db::{Db, DbConfig};
 use firewood::v2::api;
 
-use crate::DatabaseDir;
+use crate::DatabasePath;
 
 #[derive(Args, Debug)]
 pub struct Options {
     #[command(flatten)]
-    pub database: DatabaseDir,
+    pub database: DatabasePath,
 
     #[arg(
         long,
