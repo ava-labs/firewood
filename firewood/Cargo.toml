@@ -47,7 +47,6 @@ default = []
 nightly = []
 io-uring = ["firewood-storage/io-uring"]
 logger = ["firewood-storage/logger"]
-branch_factor_256 = ["firewood-storage/branch_factor_256"]
 ethhash = ["firewood-storage/ethhash"]
 
 [dev-dependencies]

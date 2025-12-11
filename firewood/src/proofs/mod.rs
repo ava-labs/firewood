@@ -113,21 +113,5 @@ pub(super) mod magic {
     }
 
     /// Branching factor identifier for branch factor 16
-    #[cfg(not(feature = "branch_factor_256"))]
     pub const BRANCH_FACTOR: u8 = 16;
-
-    /// Branching factor identifier for branch factor 256 (encoded as 0 to fit in u8)
-    #[cfg(feature = "branch_factor_256")]
-    pub const BRANCH_FACTOR: u8 = 0; // 256 wrapped to 0
-
-    /// Widens a branch factor identifier to its actual numeric value.
-    ///
-    /// The branch factor 256 is encoded as 0 in the header (since 256 doesn't fit
-    /// in a u8), so this function expands it back to the actual value.
-    pub const fn widen_branch_factor(v: u8) -> u16 {
-        match v {
-            0 => 256,
-            _ => v as u16,
-        }
-    }
 }
