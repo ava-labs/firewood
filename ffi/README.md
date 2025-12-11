@@ -33,6 +33,7 @@ db, err := ffi.New("/path/to/database.db",
 ```
 
 Available options:
+
 - `WithTruncate(bool)` - Clear the database file if it already exists
 - `WithNodeCacheEntries(uint)` - Number of entries in the node cache (default: 1,000,000)
 - `WithFreeListCacheEntries(uint)` - Number of entries in the freelist cache (default: 40,000)
