@@ -43,6 +43,12 @@ const SUBMISSION_QUEUE_SIZE: u32 = 32;
 ///
 /// We must ensure the completion queue is continuously worked to prevent the
 /// kernel from stalling when it cannot push completed entries to it.
+///
+/// If the kernel doesn't support [IORING_FEAT_NODROP], it will drop completion
+/// events when the completion queue is full, which leads to us missing events
+/// or errors.
+///
+/// [IORING_FEAT_NODROP]: https://man7.org/linux/man-pages/man2/io_uring_setup.2.html#:~:text=since%20kernel%205.4.-,IORING_FEAT_NODROP,-If%20this%20flag
 const COMPLETION_QUEUE_SIZE: u32 = SUBMISSION_QUEUE_SIZE * 2;
 
 /// A thread-safe proxy around an io-uring instance.
@@ -213,11 +219,15 @@ impl IoUringProxy {
 
         while !batch.is_finished() {
             trace!(
-                "io-uring write batch status: outstanding={}, backlog={}, sq_len={}, sq_full={}, cq_len={}, cq_full={}, iter_size_hint={:?}, errors={}",
+                "io-uring write batch status: outstanding={}, backlog={}, sq_asleep={}, sq_dropped={}, sq_cq_overflow={}, sq_len={}, sq_full={}, cq_overflow={}, cq_len={}, cq_full={}, iter_size_hint={:?}, errors={}",
                 batch.outstanding.len(),
                 batch.backlog.len(),
+                batch.sq.need_wakeup(),
+                batch.sq.dropped(),
+                batch.sq.cq_overflow(),
                 batch.sq.len(),
                 batch.sq.is_full(),
+                batch.cq.overflow(),
                 batch.cq.len(),
                 batch.cq.is_full(),
                 batch.entries.size_hint(),
@@ -416,7 +426,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
             sq,
             cq,
             outstanding: self::drop_guard::DropGuard::new(
-                Outstanding::with_capacity(SUBMISSION_QUEUE_SIZE as usize),
+                Outstanding::with_capacity(COMPLETION_QUEUE_SIZE as usize),
                 Outstanding::is_empty,
                 "io-uring write batch terminated with outstanding entries",
             ),
@@ -430,10 +440,6 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
         // we never take from the iterator without submitting it to the kernel
         // or adding it to the backlog, so we don't need to check the iterator
         self.backlog.is_empty() && self.outstanding.is_empty()
-    }
-
-    fn is_full(&self) -> bool {
-        self.outstanding.len() >= const { SUBMISSION_QUEUE_SIZE as usize }
     }
 
     fn pop_next_entry(&mut self) -> Option<QueueEntry<'batch>> {
@@ -471,28 +477,18 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
             return Err(err);
         }
 
-        assert_eq!(
-            self.cq.overflow(),
-            0,
-            "io-uring completion queue overflowed"
-        );
-
-        // synchronize both queues after waiting so we can see the kernel's changes
         self.cq.sync();
-        self.sq.sync();
+
+        assert_eq!(
+            0,
+            self.cq.overflow(),
+            "io-uring completion queue overflowed; we are unable to keep up with completions and cannot safely continue"
+        );
 
         Ok(())
     }
 
     fn enqueue_single_op(&mut self) -> EnqueueResult {
-        if self.is_full() {
-            trace!(
-                "io-uring has {} outstanding entries, cannot enqueue more",
-                self.outstanding.len()
-            );
-            return EnqueueResult::Full;
-        }
-
         let Some(entry) = self.pop_next_entry() else {
             return EnqueueResult::Empty;
         };
@@ -535,81 +531,152 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
 
     fn flush_submission_queue(&mut self) -> io::Result<()> {
         trace!("flushing io-uring submission queue");
-        let mut submitted = false;
         loop {
-            if self.sq.is_full() || self.is_full() {
-                match self.submitter.submit() {
-                    Ok(_) => submitted = true,
-                    // kernel is busy, move onto completions
-                    Err(err) if ignore_poll_error(&err) => return Ok(()),
-                    Err(err) => return Err(err),
+            if self.sq.is_full() {
+                // Because we use SQPOLL, this is a no-op if the polling thread
+                // is awake. However, if asleep, this will make a syscall to
+                // wake it up. We avoid calling `needs_wakeup` for metrics here
+                // to prevent hitting the same expensive atomic barrier twice.
+                let result = self.submitter.submit();
+                // `submit` will have performed the necessary synchronization
+                // for us to read the needs_wakeup state without needing to
+                // pay the cost of another full memory barrier.
+                if self.sq.need_wakeup_after_intermittent_seqcst() {
+                    trace!("io-uring submission thread was asleep, woke it up");
+                    firewood_counter!(
+                        "ring.sq_wake",
+                        "amount of io-uring submission queue wakeups"
+                    )
+                    .increment(1);
+                }
+                if let Err(err) = result {
+                    return if ignore_poll_error(&err) {
+                        trace!("io-uring submit returned EBUSY or EINTR");
+                        // kernel is busy, move onto completions
+                        Ok(())
+                    } else {
+                        Err(err)
+                    };
+                }
+
+                trace!("io-uring submission queue is full, waiting for space");
+                firewood_counter!(
+                    "ring.sq_wait",
+                    "amount of io-uring submission queue wait breakpoints"
+                )
+                .increment(1);
+                // this is our only mechanism to wait for the kernel to
+                // update the SQ once it is full. `submit_and_wait` does not
+                // provide the correct synchronization semantics in order for
+                // us to see updates made by the SQPOLL thread.
+                if let Err(err) = self.submitter.squeue_wait() {
+                    return if ignore_poll_error(&err) {
+                        trace!("io-uring squeue_wait returned EBUSY or EINTR");
+                        // kernel is busy, move onto completions
+                        Ok(())
+                    } else {
+                        Err(err)
+                    };
                 }
             }
+
+            // synchronize the SQ after submitting/waiting to see kernel updates
             self.sq.sync();
 
             loop {
                 match self.enqueue_single_op() {
                     // nothing more to do
                     EnqueueResult::Empty => return Ok(()),
-                    // still full after submit and sync
-                    EnqueueResult::Full if submitted => return Ok(()),
                     // submit and try again
                     EnqueueResult::Full => break,
                     // keep going
-                    EnqueueResult::Enqueued => submitted = false,
+                    EnqueueResult::Enqueued => {}
                 }
+            }
+
+            // synchronize the SQ after adding entries
+            self.sq.sync();
+
+            // synchronize the CQ after filling the SQ to check if we have
+            // completions to process before adding more entries
+            self.cq.sync();
+
+            if !self.cq.is_empty() {
+                // we have completions to process, break out to handle them
+                return Ok(());
             }
         }
     }
 
     fn flush_completion_queue(&mut self, errors: &mut Vec<BatchError>) {
         trace!("flushing io-uring completion queue");
-        while let Some(entry) = self.cq.next() {
-            let offset = entry.user_data();
-            let Some(mut write_entry) = self.outstanding.remove(offset) else {
-                errors.push(BatchError {
-                    batch_offset: offset,
-                    error_offset: offset,
-                    err: io::Error::other("completion event for unknown offset"),
-                    incurable: false,
-                });
-                continue;
-            };
-            match write_entry.handle_result(entry.result()) {
-                Ok(written) => {
-                    // copy offset off the entry before adding it back to the backlog
-                    let error_offset = write_entry.offset;
-                    if !write_entry.buffer.is_empty() {
-                        // not fully written, re-queue
-                        self.add_entry_to_backlog(write_entry);
-                        if written != 0 {
-                            // if zero, we would have already logged EAGAIN above
-                            trace!(
-                                "io-uring write at offset {offset} partially completed, re-queuing"
-                            );
-                            firewood_counter!(
+        // copy the entries in batches for efficiency
+        let mut cqes =
+            [const { std::mem::MaybeUninit::uninit() }; SUBMISSION_QUEUE_SIZE as usize / 2];
+
+        loop {
+            let cqes = self.cq.fill(&mut cqes);
+            if cqes.is_empty() {
+                break;
+            }
+
+            // synchronize the CQ after taking entries to let the kernel know
+            // we have processed them
+            self.cq.sync();
+
+            for entry in cqes {
+                self.handle_completion_event(errors, entry);
+            }
+        }
+    }
+
+    fn handle_completion_event(
+        &mut self,
+        errors: &mut Vec<BatchError>,
+        entry: &io_uring::cqueue::Entry,
+    ) {
+        let offset = entry.user_data();
+        let Some(mut write_entry) = self.outstanding.remove(offset) else {
+            errors.push(BatchError {
+                batch_offset: offset,
+                error_offset: offset,
+                err: io::Error::other("completion event for unknown offset"),
+                incurable: false,
+            });
+            return;
+        };
+        match write_entry.handle_result(entry.result()) {
+            Ok(written) => {
+                // copy offset off the entry before adding it back to the backlog
+                let error_offset = write_entry.offset;
+                if !write_entry.buffer.is_empty() {
+                    // not fully written, re-queue
+                    self.add_entry_to_backlog(write_entry);
+                    if written != 0 {
+                        // if zero, we would have already logged EAGAIN above
+                        trace!("io-uring write at offset {offset} partially completed, re-queuing");
+                        firewood_counter!(
                                 "ring.partial_write_retry",
                                 "amount of io-uring write entries that have been re-submitted due to partial writes"
                             ).increment(1);
-                        }
-                    }
-                    let carry;
-                    (self.written, carry) = self.written.overflowing_add(written);
-                    if carry {
-                        errors.push(BatchError {
-                            batch_offset: offset,
-                            error_offset,
-                            err: io::Error::other(format!(
-                                "overflow after adding {written} bytes wrapping to {}",
-                                self.written
-                            )),
-                            incurable: false,
-                        });
                     }
                 }
-                Err(err) => {
-                    errors.push(err);
+                let carry;
+                (self.written, carry) = self.written.overflowing_add(written);
+                if carry {
+                    errors.push(BatchError {
+                        batch_offset: offset,
+                        error_offset,
+                        err: io::Error::other(format!(
+                            "overflow after adding {written} bytes wrapping to {}",
+                            self.written
+                        )),
+                        incurable: false,
+                    });
                 }
+            }
+            Err(err) => {
+                errors.push(err);
             }
         }
     }
