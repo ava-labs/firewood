@@ -25,18 +25,16 @@ enum DiffIterationNodeState {
     /// with the current node in the left trie (`left_state`).
     TraverseRight { left_state: NodeState },
     /// In the `AddRestRight` state, we have reached the end of the left trie and need to
-    /// add the remaining keys/values from the right trie to the addition list in the
-    /// change proof.
+    /// add the remaining keys/values from the right trie to the addition list.
     AddRestRight,
     /// In the `DeleteRestLeft` state, we have reached the end of the right trie and need
-    /// add the remaining keys/values from the left trie to the deletion list in the change
-    /// proof.
+    /// add the remaining keys/values from the left trie to the deletion list.
     DeleteRestLeft,
     /// In the `SkipChildren` state, we previously identified that the current nodes from
-    /// both tries have matching paths, values, and hashes. This means we no longer need
+    /// both tries have matching paths, values, and hashes. This means we don't need
     /// traverse any of their children. In his state, we call `skip_children` on both tries
-    /// to remove their children from the traversal stack. Then we consider the next nodes
-    /// from both tries in the same way as `TraverseBoth`.
+    /// to not push their children onto the traversal stack on the next call to `next`.
+    /// Then we consider the next nodes from both tries in the same way as `TraverseBoth`.
     SkipChildren,
 }
 
@@ -44,7 +42,7 @@ enum DiffIterationNodeState {
 /// It includes the nodes full path and its hash if available. `NodeState` is created from
 /// a `TraversalStackFrame` and differs from it by storing the node's full path instead of
 /// just its pre-path (doesn't include the node's partial path), and by storing the node as
-/// an `Arc<Node>` instead of a `Child`.
+/// a `SharedNode` instead of a `Child`.
 #[derive(Clone)]
 struct NodeState {
     path: Path,
@@ -53,41 +51,34 @@ struct NodeState {
 }
 
 impl NodeState {
-    // Creates a NodeState from a pre-path and Child that were popped off the traversal stack, and
-    // a trie for reading the node from storage. NodeState is used to compare nodes between tries.
-    fn new(
-        mut path: Path,
-        node: Child,
-        mut node_hash: Option<TrieHash>,
-        trie: &'_ dyn TrieReader,
-    ) -> Result<NodeState, FileIoError> {
-        let node = match node {
+    // Creates a NodeState from a `TraversalStackFrame` popped off the traversal stack, and a
+    // trie for reading the node from storage.
+    fn new(frame: TraversalStackFrame, trie: &'_ dyn TrieReader) -> Result<Self, FileIoError> {
+        let mut hash = frame.hash;
+        let node = match frame.node {
             Child::Node(node) => node.clone().into(),
-            Child::AddressWithHash(addr, hash) => {
-                node_hash = Some(hash.into_triehash());
+            Child::AddressWithHash(addr, child_hash) => {
+                hash = Some(child_hash.into_triehash());
                 trie.read_node(addr)?
             }
-            Child::MaybePersisted(maybe_persisted, hash) => {
-                node_hash = Some(hash.into_triehash());
+            Child::MaybePersisted(maybe_persisted, child_hash) => {
+                hash = Some(child_hash.into_triehash());
                 maybe_persisted.as_shared_node(&trie)?
             }
         };
         // Compute the full path for the node. This is used to compare with the full path
         // of the current node from the other trie.
+        let mut path = frame.pre_path;
         path.extend(node.partial_path().iter().copied());
 
-        Ok(NodeState {
-            path,
-            node,
-            hash: node_hash,
-        })
+        Ok(Self { path, node, hash })
     }
 }
 
 /// Iterator that outputs the difference between two tries and skips matching sub-tries.
 struct DiffMerkleNodeStream<'a> {
-    // Contains the state of the traversal. It is only None after calling `next` or
-    // `next_internal` if it has reached the end of the traversal.
+    // Contains the state of the diff traversal. It is only None after calling `next` or
+    // `next_internal` if we have reached the end of the traversal.
     state: Option<DiffIterationNodeState>,
     left_tree: PreOrderIterator<'a>,
     right_tree: PreOrderIterator<'a>,
@@ -104,19 +95,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
         right_tree: &'a U,
         start_key: Key,
     ) -> Result<Self, FileIoError> {
-        // Create pre-order iterators for the two tries and have them iterate to the start key.
-        // If the start key doesn't exist, it will iterate them to the smallest key that is
-        // larger than the start key.
-        let mut left_tree = Self::preorder_iter(left_tree, None);
-        left_tree.iterate_to_key(&start_key)?;
-        let mut right_tree = Self::preorder_iter(right_tree, None);
-        right_tree.iterate_to_key(&start_key)?;
-
-        Ok(Self {
-            state: Some(DiffIterationNodeState::TraverseBoth),
-            left_tree,
-            right_tree,
-        })
+        Self::new_helper(left_tree, None, right_tree, None, start_key)
     }
 
     /// Constructor where the left and right tries implement the trait `HashedNodeReader`. This
@@ -127,12 +106,24 @@ impl<'a> DiffMerkleNodeStream<'a> {
         right_tree: &'a U,
         start_key: Key,
     ) -> Result<Self, FileIoError> {
+        let left_hash = left_tree.root_hash();
+        let right_hash = right_tree.root_hash();
+        Self::new_helper(left_tree, left_hash, right_tree, right_hash, start_key)
+    }
+
+    fn new_helper<T: TrieReader, U: TrieReader>(
+        left_tree: &'a T,
+        left_hash: Option<TrieHash>,
+        right_tree: &'a U,
+        right_hash: Option<TrieHash>,
+        start_key: Key,
+    ) -> Result<Self, FileIoError> {
         // Create pre-order iterators for the two tries and have them iterate to the start key.
-        // If the start key doesn't exist, it will iterate them to the smallest key that is
+        // If the start key doesn't exist, it will set the iterators to the smallest key that is
         // larger than the start key.
-        let mut left_tree = Self::preorder_iter(left_tree, left_tree.root_hash());
+        let mut left_tree = Self::preorder_iter(left_tree, left_hash);
         left_tree.iterate_to_key(&start_key)?;
-        let mut right_tree = Self::preorder_iter(right_tree, right_tree.root_hash());
+        let mut right_tree = Self::preorder_iter(right_tree, right_hash);
         right_tree.iterate_to_key(&start_key)?;
 
         Ok(Self {
@@ -211,9 +202,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     DiffIterationNodeState::TraverseLeft {
                         right_state: right_state.clone(),
                     },
-                    left_state.node.value().map(|_val| BatchOp::Delete {
-                        key: key_from_nibble_iter(left_state.path.iter().copied()),
-                    }),
+                    Self::deleted_values(&left_state.node, &left_state.path),
                 )
             }
             // If the left full path is greater than the right full path, then all of the
@@ -232,10 +221,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
                     DiffIterationNodeState::TraverseRight {
                         left_state: left_state.clone(),
                     },
-                    right_state.node.value().map(|val| BatchOp::Put {
-                        key: key_from_nibble_iter(right_state.path.iter().copied()),
-                        value: val.into(),
-                    }),
+                    Self::additional_values(&right_state.node, &right_state.path),
                 )
             }
             // If the left and right full paths are equal, then we need to also look at their values
@@ -503,12 +489,7 @@ impl PreOrderIterator<'_> {
         }
 
         if let Some(frame) = self.traversal_stack.pop() {
-            self.node_state = Some(NodeState::new(
-                frame.pre_path,
-                frame.node,
-                frame.hash,
-                self.trie,
-            )?);
+            self.node_state = Some(NodeState::new(frame, self.trie)?);
             Ok(self.node_state.as_ref())
         } else {
             // Stack is empty, iteration is complete. Return None.
@@ -573,8 +554,9 @@ impl PreOrderIterator<'_> {
 
             // Pop the next node state from the stack
             if let Some(frame) = self.traversal_stack.pop() {
-                let state =
-                    NodeState::new(frame.pre_path.clone(), frame.node, frame.hash, self.trie)?;
+                // Save a copy of the pre-path in case we need to push it back on the traversal stack.
+                let pre_path = frame.pre_path.clone();
+                let state = NodeState::new(frame, self.trie)?;
                 // Since pre-order traversal of a trie iterates through the nodes in lexicographical
                 // order, we can stop the traversal once we see a node key that is larger than or
                 // equal to the key. We stop the traversal by pushing  the current node with its
@@ -582,7 +564,7 @@ impl PreOrderIterator<'_> {
                 let node_key = key_from_nibble_iter(state.path.iter().copied());
                 if node_key >= *key {
                     self.traversal_stack.push(TraversalStackFrame {
-                        pre_path: frame.pre_path,
+                        pre_path,
                         node: Child::Node((*state.node).clone()),
                         hash: state.hash,
                     });
