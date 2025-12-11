@@ -331,6 +331,13 @@ pub trait DbView {
     fn iter_from<K: KeyType>(&self, first_key: K) -> Result<Self::Iter<'_>, Error> {
         self.iter_option(Some(first_key))
     }
+
+    /// Dump the Trie structure in DOT (Graphviz) format
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the dump operation fails
+    fn dump_to_string(&self) -> Result<String, Error>;
 }
 
 /// A boxed iterator over key/value pairs.
@@ -399,6 +406,13 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     fn iter_from(&self, first_key: &[u8]) -> Result<BoxKeyValueIter<'_>, Error> {
         self.iter_option(Some(first_key))
     }
+
+    /// Dump the Trie structure in DOT (Graphviz) format
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the dump operation fails
+    fn dump_to_string(&self) -> Result<String, Error>;
 }
 
 impl<T: Debug + DbView + Send + Sync + 'static> DynDbView for T
@@ -433,6 +447,10 @@ where
             Ok(iter) => Ok(Box::new(iter)),
             Err(e) => Err(e),
         }
+    }
+
+    fn dump_to_string(&self) -> Result<String, Error> {
+        DbView::dump_to_string(self)
     }
 }
 
