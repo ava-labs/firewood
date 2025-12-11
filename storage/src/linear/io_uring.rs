@@ -537,19 +537,7 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
                 // is awake. However, if asleep, this will make a syscall to
                 // wake it up. We avoid calling `needs_wakeup` for metrics here
                 // to prevent hitting the same expensive atomic barrier twice.
-                let result = self.submitter.submit();
-                // `submit` will have performed the necessary synchronization
-                // for us to read the needs_wakeup state without needing to
-                // pay the cost of another full memory barrier.
-                if self.sq.need_wakeup_after_intermittent_seqcst() {
-                    trace!("io-uring submission thread was asleep, woke it up");
-                    firewood_counter!(
-                        "ring.sq_wake",
-                        "amount of io-uring submission queue wakeups"
-                    )
-                    .increment(1);
-                }
-                if let Err(err) = result {
+                if let Err(err) = self.submitter.submit() {
                     return if ignore_poll_error(&err) {
                         trace!("io-uring submit returned EBUSY or EINTR");
                         // kernel is busy, move onto completions
