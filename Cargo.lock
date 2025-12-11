@@ -1172,6 +1172,7 @@ dependencies = [
  "bytemuck",
  "bytemuck_derive",
  "bytes",
+ "cfg-if",
  "coarsetime",
  "criterion",
  "derive-where",
