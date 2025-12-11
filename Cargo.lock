@@ -1067,6 +1067,7 @@ dependencies = [
  "hex-literal",
  "integer-encoding",
  "metrics",
+ "metrics-util",
  "parking_lot",
  "plain_hasher",
  "pprof",
