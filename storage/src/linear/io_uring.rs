@@ -571,14 +571,20 @@ impl<'batch, 'ring, I: Iterator<Item = QueueEntry<'batch>>> WriteBatch<'batch, '
             // synchronize the SQ after submitting/waiting to see kernel updates
             self.sq.sync();
 
+            let mut needs_sync = false;
             loop {
                 match self.enqueue_single_op() {
                     // nothing more to do
-                    EnqueueResult::Empty => return Ok(()),
+                    EnqueueResult::Empty => {
+                        if needs_sync {
+                            self.sq.sync();
+                        }
+                        return Ok(());
+                    }
                     // submit and try again
                     EnqueueResult::Full => break,
                     // keep going
-                    EnqueueResult::Enqueued => {}
+                    EnqueueResult::Enqueued => needs_sync = true,
                 }
             }
 
