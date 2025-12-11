@@ -25,11 +25,7 @@ pub struct DatabaseHandleArgs<'a> {
     /// If this is empty, an error will be returned.
     pub dir: BorrowedBytes<'a>,
 
-    /// The path to the `RootStore` directory.
-    ///
-    /// This must be a valid UTF-8 string.
-    ///
-    /// If this is empty, then the archival feature is disabled.
+    /// Whether to enable `RootStore`.
     ///
     /// Note: Setting this feature will only track new revisions going forward
     /// and will not contain revisions from a prior database instance that didn't
