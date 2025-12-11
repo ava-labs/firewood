@@ -124,16 +124,12 @@ impl RevisionManager {
 
         let storage = Arc::new(fb);
         let nodestore = Arc::new(NodeStore::open(storage.clone())?);
-        let root_store = if config.root_store {
+        let root_store = config.root_store.then_some({
             let root_store_dir = db_dir.join("root_store");
 
-            Some(
-                RootStore::new(root_store_dir, storage.clone())
-                    .map_err(RevisionManagerError::RootStoreError)?,
-            )
-        } else {
-            None
-        };
+            RootStore::new(root_store_dir, storage.clone())
+                .map_err(RevisionManagerError::RootStoreError)?
+        });
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,
