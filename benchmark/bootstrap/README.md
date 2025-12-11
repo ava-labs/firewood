@@ -47,7 +47,7 @@ For a complete list of options, run:
 ### Test multiple component branches together
 
 ```bash
-./aws-launch.sh --firewood-branch my-firewood-branch --avalanchego-branch foo  --libevm-commit bar
+./aws-launch.sh --firewood-branch my-firewood-branch --avalanchego-branch foo --libevm-commit bar
 ```
 
 ### Preview a configuration without launching
