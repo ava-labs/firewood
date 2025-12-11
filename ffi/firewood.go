@@ -94,6 +94,12 @@ type config struct {
 	readCacheStrategy CacheStrategy
 	// rootStoreDir defines a path to store all historical roots on disk.
 	rootStoreDir string
+	// logPath is the file path where logs will be written.
+	// If empty, logging is disabled.
+	logPath string
+	// logFilter is the RUST_LOG format filter string for logging.
+	// If empty and logPath is set, env_logger defaults will be used.
+	logFilter string
 }
 
 func defaultConfig() *config {
@@ -165,6 +171,35 @@ func WithRootStoreDir(dir string) Option {
 	}
 }
 
+// WithLogPath sets the file path where logs will be written.
+// Logging is global per-process and can only be initialized once. If logging
+// is already initialized (e.g., by a previous call to New with WithLogPath),
+// subsequent calls will fail with an error.
+//
+// The logger is initialized before opening the database. If database opening fails,
+// the logger remains initialized and subsequent New calls with WithLogPath will fail.
+//
+// Use "/dev/stdout" to write logs to standard output.
+// Default: empty string (logging disabled)
+func WithLogPath(path string) Option {
+	return func(c *config) {
+		c.logPath = path
+	}
+}
+
+// WithLogFilter sets the filter string for logging using RUST_LOG format.
+// Common usage: "info" to show info-level and above logs.
+// See env_logger documentation for full RUST_LOG format: https://docs.rs/env_logger
+//
+// This option only takes effect when WithLogPath is also set.
+// If empty and WithLogPath is set, env_logger defaults will be used.
+// Default: empty string
+func WithLogFilter(filter string) Option {
+	return func(c *config) {
+		c.logFilter = filter
+	}
+}
+
 // A CacheStrategy represents the caching strategy used by a [Database].
 type CacheStrategy uint8
 
@@ -208,6 +243,24 @@ func New(filePath string, opts ...Option) (*Database, error) {
 	}
 	if conf.freeListCacheEntries < 1 {
 		return nil, fmt.Errorf("free list cache entries must be >= 1, got %d", conf.freeListCacheEntries)
+	}
+
+	// Initialize logging if logPath is set.
+	// Logging is global per-process and must be initialized before opening the database.
+	// If initialization fails, return error immediately without attempting to open database.
+	// If database opening subsequently fails, the logger remains initialized.
+	if conf.logPath != "" {
+		var pinner runtime.Pinner
+		defer pinner.Unpin()
+
+		logArgs := C.struct_LogArgs{
+			path:         newBorrowedBytes([]byte(conf.logPath), &pinner),
+			filter_level: newBorrowedBytes([]byte(conf.logFilter), &pinner),
+		}
+
+		if err := getErrorFromVoidResult(C.fwd_start_logs(logArgs)); err != nil {
+			return nil, fmt.Errorf("failed to initialize logging: %w", err)
+		}
 	}
 
 	var pinner runtime.Pinner
