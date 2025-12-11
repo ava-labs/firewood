@@ -77,7 +77,7 @@ type Database struct {
 
 // config defines the internal configuration parameters used when opening a [Database].
 type config struct {
-	// Truncate indicates whether to clear the database file if it already exists.
+	// truncate indicates whether to clear the database file if it already exists.
 	truncate bool
 	// nodeCacheEntries is the number of entries in the cache.
 	// Must be non-zero.
@@ -114,6 +114,7 @@ func defaultConfig() *config {
 type Option func(*config)
 
 // WithTruncate sets whether to clear the database file if it already exists.
+// Default: false
 func WithTruncate(truncate bool) Option {
 	return func(c *config) {
 		c.truncate = truncate
@@ -121,7 +122,9 @@ func WithTruncate(truncate bool) Option {
 }
 
 // WithNodeCacheEntries sets the number of entries in the node cache.
+// The node cache stores frequently accessed trie nodes to improve read performance.
 // Must be non-zero.
+// Default: 1,000,000
 func WithNodeCacheEntries(entries uint) Option {
 	return func(c *config) {
 		c.nodeCacheEntries = entries
@@ -129,7 +132,9 @@ func WithNodeCacheEntries(entries uint) Option {
 }
 
 // WithFreeListCacheEntries sets the number of entries in the freelist cache.
+// The freelist cache manages available disk space for reuse.
 // Must be non-zero.
+// Default: 40,000
 func WithFreeListCacheEntries(entries uint) Option {
 	return func(c *config) {
 		c.freeListCacheEntries = entries
@@ -140,6 +145,7 @@ func WithFreeListCacheEntries(entries uint) Option {
 // If RootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 // Otherwise, any revisions removed from memory will no longer be kept on disk.
 // Must be >= 2.
+// Default: 100
 func WithRevisions(revisions uint) Option {
 	return func(c *config) {
 		c.revisions = revisions
@@ -147,6 +153,7 @@ func WithRevisions(revisions uint) Option {
 }
 
 // WithReadCacheStrategy sets the caching strategy used for the node cache.
+// Default: OnlyCacheWrites
 func WithReadCacheStrategy(strategy CacheStrategy) Option {
 	return func(c *config) {
 		c.readCacheStrategy = strategy
@@ -154,6 +161,9 @@ func WithReadCacheStrategy(strategy CacheStrategy) Option {
 }
 
 // WithRootStoreDir sets a path to store all historical roots on disk.
+// When set, historical revisions will be persisted to disk even after being
+// removed from memory (based on the Revisions limit).
+// Default: empty string (no disk persistence)
 func WithRootStoreDir(dir string) Option {
 	return func(c *config) {
 		c.rootStoreDir = dir
@@ -180,12 +190,8 @@ const (
 // The database file will be created at the provided file path if it does not
 // already exist.
 //
-// Configuration options can be provided using With* functions. If no options
-// are provided, sensible defaults will be used:
-//   - NodeCacheEntries:     1_000_000
-//   - FreeListCacheEntries: 40_000
-//   - Revisions:            100
-//   - ReadCacheStrategy:    OnlyCacheWrites
+// If no configuration options are provided, sensible defaults will be used.
+// See the With* functions for details about each configuration parameter and its default value.
 //
 // It is the caller's responsibility to call [Database.Close] when the database
 // is no longer needed. No other [Database] in this process should be opened with

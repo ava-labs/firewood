@@ -163,10 +163,7 @@ func newTestDatabase(t *testing.T, opts ...Option) *Database {
 }
 
 func newDatabase(dbFile string, opts ...Option) (*Database, error) {
-	// In tests, we use truncate by default to ensure a clean state
-	allOpts := append([]Option{WithTruncate(true)}, opts...)
-
-	f, err := New(dbFile, allOpts...)
+	f, err := New(dbFile, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
 	}

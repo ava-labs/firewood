@@ -7,14 +7,21 @@ The FFI package provides a golang FFI layer for Firewood.
 ### Basic Usage
 
 ```go
-import "github.com/ava-labs/firewood/ffi"
+import (
+    "context"
+    "time"
+
+    "github.com/ava-labs/firewood/ffi"
+)
 
 // Open a database with default configuration
 db, err := ffi.New("/path/to/database.db")
 if err != nil {
     log.Fatal(err)
 }
-defer db.Close(context.Background())
+ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+defer cancel()
+defer db.Close(ctx)
 ```
 
 ### Configuration Options
@@ -32,14 +39,7 @@ db, err := ffi.New("/path/to/database.db",
 )
 ```
 
-Available options:
-
-- `WithTruncate(bool)` - Clear the database file if it already exists
-- `WithNodeCacheEntries(uint)` - Number of entries in the node cache (default: 1,000,000)
-- `WithFreeListCacheEntries(uint)` - Number of entries in the freelist cache (default: 40,000)
-- `WithRevisions(uint)` - Maximum number of historical revisions to keep (default: 100, must be >= 2)
-- `WithReadCacheStrategy(CacheStrategy)` - Caching strategy for reads (default: `OnlyCacheWrites`)
-- `WithRootStoreDir(string)` - Path to store all historical roots on disk
+For detailed information about each configuration option, see the godoc for the `With*` functions
 
 ## Building Firewood Golang FFI
 
