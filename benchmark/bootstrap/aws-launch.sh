@@ -436,7 +436,8 @@ runcmd:
     --profile maxperf
     --features ethhash,logger
     > /mnt/nvme/ubuntu/firewood/build.log 2>&1
-  # run go mod tidy for avalanchego
+  # run go mod tidy for coreth and avalanchego
+  - sudo -u ubuntu --login -D /mnt/nvme/ubuntu/avalanchego/graft/coreth go mod tidy
   - sudo -u ubuntu --login -D /mnt/nvme/ubuntu/avalanchego go mod tidy
   # build avalanchego
   - >
