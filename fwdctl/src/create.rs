@@ -5,12 +5,12 @@ use clap::{Args, value_parser};
 use firewood::db::{Db, DbConfig};
 use firewood::v2::api;
 
-use crate::DatabasePath;
+use crate::DatabaseDir;
 
 #[derive(Args, Debug)]
 pub struct Options {
     #[command(flatten)]
-    pub database: DatabasePath,
+    pub database: DatabaseDir,
 
     #[arg(
         long,
@@ -53,10 +53,10 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let db_config = new(opts);
     log::debug!("database configuration parameters: \n{db_config:?}\n");
 
-    Db::new(opts.database.dbpath.clone(), db_config)?;
+    Db::new(opts.database.dbdir.clone(), db_config)?;
     println!(
         "created firewood database in {}",
-        opts.database.dbpath.display()
+        opts.database.dbdir.display()
     );
     Ok(())
 }

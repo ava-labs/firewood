@@ -1316,9 +1316,7 @@ mod test {
         }
 
         pub fn path(&self) -> PathBuf {
-            [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-                .iter()
-                .collect()
+            self.tmpdir.path().to_path_buf()
         }
     }
 }

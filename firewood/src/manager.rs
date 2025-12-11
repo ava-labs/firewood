@@ -107,6 +107,17 @@ pub(crate) enum RevisionManagerError {
 
 impl RevisionManager {
     pub fn new(db_dir: PathBuf, config: ConfigManager) -> Result<Self, RevisionManagerError> {
+        if config.create {
+            std::fs::create_dir_all(&db_dir).map_err(|e| {
+                FileIoError::new(
+                    e,
+                    Some(db_dir.clone()),
+                    0,
+                    Some("create database directory".to_string()),
+                )
+            })?;
+        }
+
         let file = db_dir.join("firewood.db");
 
         let fb = FileBacked::new(
@@ -366,7 +377,6 @@ impl RevisionManager {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
 
     impl RevisionManager {
         /// Get all proposal hashes available.
@@ -382,8 +392,7 @@ mod tests {
     #[test]
     fn test_file_advisory_lock() {
         // Create a temporary file for testing
-        let temp_file = NamedTempFile::new().unwrap();
-        let db_path = temp_file.path().to_path_buf();
+        let db_dir = tempfile::tempdir().unwrap();
 
         let config = ConfigManager::builder()
             .create(true)
@@ -391,14 +400,14 @@ mod tests {
             .build();
 
         // First database instance should open successfully
-        let first_manager = RevisionManager::new(db_path.clone(), config.clone());
+        let first_manager = RevisionManager::new(db_dir.as_ref().to_path_buf(), config.clone());
         assert!(
             first_manager.is_ok(),
             "First database should open successfully"
         );
 
         // Second database instance should fail to open due to file locking
-        let second_manager = RevisionManager::new(db_path.clone(), config.clone());
+        let second_manager = RevisionManager::new(db_dir.as_ref().to_path_buf(), config.clone());
         assert!(
             second_manager.is_err(),
             "Second database should fail to open"
@@ -418,7 +427,7 @@ mod tests {
         drop(first_manager.unwrap());
 
         // Now the second database should open successfully
-        let third_manager = RevisionManager::new(db_path, config);
+        let third_manager = RevisionManager::new(db_dir.as_ref().to_path_buf(), config);
         assert!(
             third_manager.is_ok(),
             "Database should open after first instance is dropped"
@@ -440,8 +449,7 @@ mod tests {
         const NUM_COMMITTER_THREADS: usize = 5;
 
         // Create a temporary database
-        let temp_file = NamedTempFile::new().unwrap();
-        let db_path = temp_file.path().to_path_buf();
+        let db_dir = tempfile::tempdir().unwrap();
 
         let config = ConfigManager::builder()
             .create(true)
@@ -452,7 +460,8 @@ mod tests {
             )
             .build();
 
-        let manager = Arc::new(RevisionManager::new(db_path, config).unwrap());
+        let manager =
+            Arc::new(RevisionManager::new(db_dir.as_ref().to_path_buf(), config).unwrap());
 
         // Create an initial proposal and commit it to have a non-empty base
         let base_revision = manager.current_revision();

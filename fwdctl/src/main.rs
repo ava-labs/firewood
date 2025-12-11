@@ -18,7 +18,7 @@ pub mod insert;
 pub mod root;
 
 #[derive(Clone, Debug, Parser)]
-pub struct DatabasePath {
+pub struct DatabaseDir {
     /// The database path. Defaults to firewood.db
     #[arg(
         long = "db",
@@ -28,7 +28,7 @@ pub struct DatabasePath {
         default_value_os_t = default_db_path(),
         help = "Name of the database"
     )]
-    pub dbpath: PathBuf,
+    pub dbdir: PathBuf,
 }
 
 #[derive(Parser)]
@@ -91,5 +91,5 @@ fn main() -> Result<(), api::Error> {
 }
 
 fn default_db_path() -> PathBuf {
-    PathBuf::from("firewood.db")
+    PathBuf::from("firewood")
 }

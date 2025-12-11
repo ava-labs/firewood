@@ -13,13 +13,13 @@ use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 use nonzero_ext::nonzero;
 use num_format::{Locale, ToFormattedString};
 
-use crate::DatabasePath;
+use crate::DatabaseDir;
 
 // TODO: (optionally) add a fix option
 #[derive(Args, Debug)]
 pub struct Options {
     #[command(flatten)]
-    pub database: DatabasePath,
+    pub database: DatabaseDir,
 
     /// Whether to perform hash check
     #[arg(
@@ -41,7 +41,7 @@ pub struct Options {
 }
 
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
-    let db_path = PathBuf::from(&opts.database.dbpath);
+    let db_path = PathBuf::from(&opts.database.dbdir).join("firewood.db");
     let node_cache_size = nonzero!(1usize);
     let free_list_cache_size = nonzero!(1usize);
 

@@ -12,7 +12,7 @@ use std::fs::File;
 use std::io::{BufWriter, Write};
 use std::path::PathBuf;
 
-use crate::DatabasePath;
+use crate::DatabaseDir;
 
 type KeyFromStream = Option<Result<(Key, Value), FileIoError>>;
 
@@ -27,7 +27,7 @@ pub enum OutputFormat {
 #[derive(Debug, Args)]
 pub struct Options {
     #[command(flatten)]
-    pub database: DatabasePath,
+    pub database: DatabaseDir,
 
     /// The key to start dumping from (if no key is provided, start from the beginning).
     /// Defaults to None.
@@ -143,7 +143,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     }
 
     let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
-    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
+    let db = Db::new(opts.database.dbdir.clone(), cfg.build())?;
     let latest_hash = db.root_hash()?;
     let Some(latest_hash) = latest_hash else {
         println!("Database is empty");
