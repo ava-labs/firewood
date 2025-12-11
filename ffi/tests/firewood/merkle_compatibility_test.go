@@ -63,8 +63,7 @@ func newTestFirewoodDatabase(t *testing.T) *firewood.Database {
 }
 
 func newFirewoodDatabase(dbFile string) (*firewood.Database, error) {
-	conf := firewood.DefaultConfig()
-	f, err := firewood.New(dbFile, conf)
+	f, err := firewood.New(dbFile)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
 	}
