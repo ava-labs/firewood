@@ -20,7 +20,6 @@ The `aws-launch.sh` script automatically:
 4. Clones and builds:
    - Firewood (from specified branch or default)
    - AvalancheGo (from specified branch or default)
-   - Coreth (from specified branch or default)
    - LibEVM (from specified branch or default)
 5. Downloads pre-existing blockchain data from S3 (1M, 10M, or 50M blocks)
 6. Executes the bootstrapping benchmark to test Firewood's performance
@@ -48,7 +47,7 @@ For a complete list of options, run:
 ### Test multiple component branches together
 
 ```bash
-./aws-launch.sh --firewood-branch my-firewood-branch --avalanchego-branch develop --coreth-branch foo --libevm-branch bar
+./aws-launch.sh --firewood-branch my-firewood-branch --avalanchego-branch foo  --libevm-commit bar
 ```
 
 ### Preview a configuration without launching
