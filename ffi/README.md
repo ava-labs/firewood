@@ -37,7 +37,7 @@ Available options:
 - `WithNodeCacheEntries(uint)` - Number of entries in the node cache (default: 1,000,000)
 - `WithFreeListCacheEntries(uint)` - Number of entries in the freelist cache (default: 40,000)
 - `WithRevisions(uint)` - Maximum number of historical revisions to keep (default: 100, must be >= 2)
-- `WithReadCacheStrategy(CacheStrategy)` - Caching strategy for reads (default: OnlyCacheWrites)
+- `WithReadCacheStrategy(CacheStrategy)` - Caching strategy for reads (default: `OnlyCacheWrites`)
 - `WithRootStoreDir(string)` - Path to store all historical roots on disk
 
 ## Building Firewood Golang FFI
