@@ -1748,3 +1748,60 @@ func TestCloseSucceedsWhenHandlesDroppedInTime(t *testing.T) {
 	r.NoError(proposal2.Drop())
 	r.NoError(<-closeDone, "Close should succeed when handles are dropped before timeout")
 }
+
+func TestDump(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Test dump on empty database
+	dump, err := db.Dump()
+	r.NoError(err)
+	r.Contains(dump, "digraph", "dump should be in DOT format")
+
+	// Insert a few keys and values
+	keys := [][]byte{[]byte("key1"), []byte("key2"), []byte("key3")}
+	vals := [][]byte{[]byte("value1"), []byte("value2"), []byte("value3")}
+	root, err := db.Update(keys, vals)
+	r.NoError(err)
+	r.NotNil(root)
+
+	// Test dump on database with data
+	dump, err = db.Dump()
+	r.NoError(err)
+	r.Contains(dump, "digraph", "dump should be in DOT format")
+	// Verify that the values appear in the dump (keys are encoded/abbreviated in DOT format)
+	for _, val := range vals {
+		r.Contains(dump, string(val), "dump should contain value: %s", string(val))
+	}
+
+	// Test dump on revision
+	revision, err := db.Revision(root)
+	r.NoError(err)
+	defer func() {
+		r.NoError(revision.Drop())
+	}()
+
+	revisionDump, err := revision.Dump()
+	r.NoError(err)
+	r.Contains(revisionDump, "digraph", "revision dump should be in DOT format")
+	for _, val := range vals {
+		r.Contains(revisionDump, string(val), "revision dump should contain value: %s", string(val))
+	}
+
+	// Test dump on proposal
+	newKeys := [][]byte{[]byte("key4")}
+	newVals := [][]byte{[]byte("value4")}
+	proposal, err := db.Propose(newKeys, newVals)
+	r.NoError(err)
+	defer func() {
+		r.NoError(proposal.Drop())
+	}()
+
+	proposalDump, err := proposal.Dump()
+	r.NoError(err)
+	r.Contains(proposalDump, "digraph", "proposal dump should be in DOT format")
+	// Proposal should contain both old and new values
+	for _, val := range append(vals, newVals...) {
+		r.Contains(proposalDump, string(val), "proposal dump should contain value: %s", string(val))
+	}
+}
