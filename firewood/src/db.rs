@@ -25,7 +25,7 @@ use firewood_storage::{
 use metrics::{counter, describe_counter};
 use std::io::Write;
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
@@ -129,9 +129,9 @@ pub struct DbConfig {
     // TODO: Experimentally determine the right value for BatchSize.
     #[builder(default = UseParallel::BatchSize(8))]
     pub use_parallel: UseParallel,
-    /// `RootStore` directory path
-    #[builder(default = None)]
-    pub root_store_dir: Option<PathBuf>,
+    /// Whether to enable `RootStore`.
+    #[builder(default = false)]
+    pub root_store: bool,
 }
 
 #[derive(Debug)]
@@ -166,7 +166,7 @@ impl api::Db for Db {
 
 impl Db {
     /// Create a new database instance.
-    pub fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
+    pub fn new<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Self, api::Error> {
         let metrics = Arc::new(DbMetrics {
             proposals: counter!("firewood.proposals"),
         });
@@ -174,11 +174,11 @@ impl Db {
         let config_manager = ConfigManager::builder()
             .create(cfg.create_if_missing)
             .truncate(cfg.truncate)
-            .root_store_dir(cfg.root_store_dir)
+            .root_store(cfg.root_store)
             .manager(cfg.manager)
             .build();
 
-        let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
+        let manager = RevisionManager::new(db_dir.as_ref().to_path_buf(), config_manager)?;
         let db = Self {
             metrics,
             manager,
@@ -1238,10 +1238,7 @@ mod test {
 
         pub fn new_with_config(dbconfig: DbConfig) -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
-            let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-                .iter()
-                .collect();
-            let db = Db::new(dbpath, dbconfig.clone()).unwrap();
+            let db = Db::new(tmpdir.as_ref(), dbconfig.clone()).unwrap();
             TestDb {
                 db,
                 tmpdir,
@@ -1254,17 +1251,13 @@ mod test {
         /// Overrides `root_store_dir` in dbconfig to provide a directory for `RootStore`.
         pub fn new_with_root_store(dbconfig: DbConfig) -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
-            let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-                .iter()
-                .collect();
-            let root_store_dir = tmpdir.as_ref().join("root_store");
 
             let dbconfig = DbConfig {
-                root_store_dir: Some(root_store_dir),
+                root_store: true,
                 ..dbconfig
             };
 
-            let db = Db::new(dbpath, dbconfig.clone()).unwrap();
+            let db = Db::new(tmpdir.as_ref(), dbconfig.clone()).unwrap();
             TestDb {
                 db,
                 tmpdir,

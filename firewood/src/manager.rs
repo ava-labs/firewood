@@ -60,9 +60,9 @@ pub struct ConfigManager {
     /// existing contents will be lost.
     #[builder(default = false)]
     pub truncate: bool,
-    /// `RootStore` directory path
-    #[builder(default = None)]
-    pub root_store_dir: Option<PathBuf>,
+    /// Whether to enable `RootStore`.
+    #[builder(default = false)]
+    pub root_store: bool,
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
@@ -106,9 +106,11 @@ pub(crate) enum RevisionManagerError {
 }
 
 impl RevisionManager {
-    pub fn new(filename: PathBuf, config: ConfigManager) -> Result<Self, RevisionManagerError> {
+    pub fn new(db_dir: PathBuf, config: ConfigManager) -> Result<Self, RevisionManagerError> {
+        let file = db_dir.join("firewood.db");
+
         let fb = FileBacked::new(
-            filename,
+            file,
             config.manager.node_cache_size,
             config.manager.free_list_cache_size,
             config.truncate,
@@ -122,11 +124,13 @@ impl RevisionManager {
 
         let storage = Arc::new(fb);
         let nodestore = Arc::new(NodeStore::open(storage.clone())?);
-        let root_store = config
-            .root_store_dir
-            .map(|path| RootStore::new(path, storage.clone()))
-            .transpose()
-            .map_err(RevisionManagerError::RootStoreError)?;
+        let root_store = if config.root_store {
+            let root_store_dir = db_dir.join("root_store");
+            
+            Some(RootStore::new(root_store_dir, storage.clone()).map_err(RevisionManagerError::RootStoreError)?)
+        } else {
+            None
+        };
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,

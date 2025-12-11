@@ -92,8 +92,9 @@ type Config struct {
 	Revisions uint
 	// ReadCacheStrategy is the caching strategy used for the node cache.
 	ReadCacheStrategy CacheStrategy
-	// RootStoreDir defines a path to store all historical roots on disk.
-	RootStoreDir string
+	// XXX: should we change this?
+	// RootStore defines whether to enable storing all historical roots on disk.
+	RootStore bool
 }
 
 // DefaultConfig returns a [*Config] with sensible defaults:
@@ -134,7 +135,7 @@ const (
 // It is the caller's responsibility to call [Database.Close] when the database
 // is no longer needed. No other [Database] in this process should be opened with
 // the same file path until the database is closed.
-func New(filePath string, conf *Config) (*Database, error) {
+func New(dbDir string, conf *Config) (*Database, error) {
 	if conf == nil {
 		conf = DefaultConfig()
 	}
@@ -155,13 +156,13 @@ func New(filePath string, conf *Config) (*Database, error) {
 	defer pinner.Unpin()
 
 	args := C.struct_DatabaseHandleArgs{
-		path:                 newBorrowedBytes([]byte(filePath), &pinner),
+		dir:                  newBorrowedBytes([]byte(dbDir), &pinner),
 		cache_size:           C.size_t(conf.NodeCacheEntries),
 		free_list_cache_size: C.size_t(conf.FreeListCacheEntries),
 		revisions:            C.size_t(conf.Revisions),
 		strategy:             C.uint8_t(conf.ReadCacheStrategy),
 		truncate:             C.bool(conf.Truncate),
-		root_store_path:      newBorrowedBytes([]byte(conf.RootStoreDir), &pinner),
+		root_store:           C.bool(conf.RootStore),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))
