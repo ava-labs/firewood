@@ -1135,7 +1135,7 @@ mod test {
     /// Verifies that persisted revisions are still accessible when reopening the database.
     #[test]
     fn test_root_store() {
-        let db = TestDb::new_with_root_store(DbConfig::builder().build());
+        let db = TestDb::new_with_config(DbConfig::builder().root_store(true).build());
 
         // First, create a revision to retrieve
         let key = b"key";
@@ -1166,7 +1166,7 @@ mod test {
 
     #[test]
     fn test_rootstore_empty_db_reopen() {
-        let db = TestDb::new_with_root_store(DbConfig::builder().build());
+        let db = TestDb::new_with_config(DbConfig::builder().root_store(true).build());
 
         db.reopen();
     }
@@ -1178,8 +1178,9 @@ mod test {
 
         let dbconfig = DbConfig::builder()
             .manager(RevisionManagerConfig::builder().max_revisions(5).build())
+            .root_store(true)
             .build();
-        let db = TestDb::new_with_root_store(dbconfig);
+        let db = TestDb::new_with_config(dbconfig);
 
         // Create and commit 10 proposals
         let key = b"root_store";
@@ -1238,25 +1239,6 @@ mod test {
 
         pub fn new_with_config(dbconfig: DbConfig) -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
-            let db = Db::new(tmpdir.as_ref(), dbconfig.clone()).unwrap();
-            TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            }
-        }
-
-        /// Creates a new test database with `RootStore` enabled.
-        ///
-        /// Overrides `root_store_dir` in dbconfig to provide a directory for `RootStore`.
-        pub fn new_with_root_store(dbconfig: DbConfig) -> Self {
-            let tmpdir = tempfile::tempdir().unwrap();
-
-            let dbconfig = DbConfig {
-                root_store: true,
-                ..dbconfig
-            };
-
             let db = Db::new(tmpdir.as_ref(), dbconfig.clone()).unwrap();
             TestDb {
                 db,
