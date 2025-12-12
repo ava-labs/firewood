@@ -28,7 +28,7 @@ pub struct DatabasePath {
         default_value_os_t = default_db_path(),
         help = "Name of the database directory"
     )]
-    pub dbdir: PathBuf,
+    pub dbpath: PathBuf,
 }
 
 #[derive(Parser)]

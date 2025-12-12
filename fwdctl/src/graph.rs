@@ -18,7 +18,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     log::debug!("dump database {opts:?}");
     let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
 
-    let db = Db::new(opts.database.dbdir.clone(), cfg.build())?;
+    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
     db.dump(&mut stdout())?;
     Ok(())
 }
