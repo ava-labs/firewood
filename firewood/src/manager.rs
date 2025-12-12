@@ -135,7 +135,7 @@ impl RevisionManager {
         let root_store = config.root_store.then_some({
             let root_store_dir = db_dir.join("root_store");
 
-            RootStore::new(root_store_dir, storage.clone())
+            RootStore::new(root_store_dir, storage.clone(), config.truncate)
                 .map_err(RevisionManagerError::RootStoreError)?
         });
 

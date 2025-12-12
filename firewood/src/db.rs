@@ -1214,6 +1214,25 @@ mod test {
         }
     }
 
+    /// Verifies that `RootStore` is truncated as well if we truncate the database.
+    #[test]
+    fn test_root_store_truncation() {
+        let db =
+            TestDb::new_with_config(DbConfig::builder().root_store(true).truncate(true).build());
+
+        // Create a revision to store
+        let batch = vec![BatchOp::Put {
+            key: b"foo",
+            value: b"bar",
+        }];
+        let proposal = db.propose(batch).unwrap();
+        let root_hash = proposal.root_hash().unwrap().unwrap();
+        proposal.commit().unwrap();
+
+        let db = db.reopen();
+        assert!(db.view(root_hash).is_err());
+    }
+
     /// Verifies that opening a database fails if the directory doesn't exist.
     #[test]
     fn test_nonexistent_directory() {
