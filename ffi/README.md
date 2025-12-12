@@ -15,7 +15,7 @@ import (
 )
 
 // Open a database with default configuration
-db, err := ffi.New("/path/to/database.db")
+db, err := ffi.New("/path/to/database_dir")
 if err != nil {
     log.Fatal(err)
 }
@@ -29,7 +29,7 @@ defer db.Close(ctx)
 Firewood uses the functional options pattern for configuration. You can customize the database by passing option functions:
 
 ```go
-db, err := ffi.New("/path/to/database.db",
+db, err := ffi.New("/path/to/database_dir",
     ffi.WithTruncate(true),                    // Clear the database if it exists
     ffi.WithNodeCacheEntries(2_000_000),       // Set node cache size
     ffi.WithFreeListCacheEntries(50_000),      // Set freelist cache size

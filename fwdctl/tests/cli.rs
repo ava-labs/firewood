@@ -4,7 +4,7 @@
 use anyhow::{Result, anyhow};
 use predicates::prelude::*;
 use serial_test::serial;
-use std::fs::{self, remove_file};
+use std::fs::{self, remove_dir_all};
 use std::path::{Path, PathBuf};
 
 const PRG: &str = "fwdctl";
@@ -18,7 +18,7 @@ macro_rules! cargo_bin_cmd {
 
 // Removes the firewood database on disk
 fn fwdctl_delete_db() -> Result<()> {
-    if let Err(e) = remove_file(tmpdb::path()) {
+    if let Err(e) = remove_dir_all(tmpdb::path()) {
         eprintln!("failed to delete testing dir: {e}");
         return Err(anyhow!(e));
     }
@@ -620,7 +620,6 @@ mod tmpdb {
 
     use super::*;
 
-    const FIREWOOD_TEST_DB_NAME: &str = "test_firewood";
     const TARGET_TMP_DIR: Option<&str> = option_env!("CARGO_TARGET_TMPDIR");
 
     pub fn path() -> &'static Path {
@@ -630,7 +629,6 @@ mod tmpdb {
                 .map(PathBuf::from)
                 .or_else(|| std::env::var("TMPDIR").ok().map(PathBuf::from))
                 .unwrap_or(std::env::temp_dir())
-                .join(FIREWOOD_TEST_DB_NAME)
         })
         .as_path()
     }

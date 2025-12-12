@@ -92,8 +92,8 @@ type config struct {
 	revisions uint
 	// readCacheStrategy is the caching strategy used for the node cache.
 	readCacheStrategy CacheStrategy
-	// rootStoreDir defines a path to store all historical roots on disk.
-	rootStoreDir string
+	// rootStore defines whether to enable storing all historical revisions on disk.
+	rootStore bool
 }
 
 func defaultConfig() *config {
@@ -155,13 +155,13 @@ func WithReadCacheStrategy(strategy CacheStrategy) Option {
 	}
 }
 
-// WithRootStoreDir sets a path to store all historical roots on disk.
+// WithRootStore defines whether to enable storing all historical revisions on disk.
 // When set, historical revisions will be persisted to disk even after being
 // removed from memory (based on the Revisions limit).
-// Default: empty string (no disk persistence)
-func WithRootStoreDir(dir string) Option {
+// Default: false
+func WithRootStore() Option {
 	return func(c *config) {
-		c.rootStoreDir = dir
+		c.rootStore = true
 	}
 }
 
@@ -182,7 +182,7 @@ const (
 )
 
 // New opens or creates a new Firewood database with the given options.
-// The database file will be created at the provided file path if it does not
+// The database directory will be created at the provided path if it does not
 // already exist.
 //
 // If no [Option] is provided, sensible defaults will be used.
@@ -191,7 +191,7 @@ const (
 // It is the caller's responsibility to call [Database.Close] when the database
 // is no longer needed. No other [Database] in this process should be opened with
 // the same file path until the database is closed.
-func New(filePath string, opts ...Option) (*Database, error) {
+func New(dbDir string, opts ...Option) (*Database, error) {
 	conf := defaultConfig()
 	for _, opt := range opts {
 		opt(conf)
@@ -214,13 +214,13 @@ func New(filePath string, opts ...Option) (*Database, error) {
 	defer pinner.Unpin()
 
 	args := C.struct_DatabaseHandleArgs{
-		path:                 newBorrowedBytes([]byte(filePath), &pinner),
+		dir:                  newBorrowedBytes([]byte(dbDir), &pinner),
 		cache_size:           C.size_t(conf.nodeCacheEntries),
 		free_list_cache_size: C.size_t(conf.freeListCacheEntries),
 		revisions:            C.size_t(conf.revisions),
 		strategy:             C.uint8_t(conf.readCacheStrategy),
 		truncate:             C.bool(conf.truncate),
-		root_store_path:      newBorrowedBytes([]byte(conf.rootStoreDir), &pinner),
+		root_store:           C.bool(conf.rootStore),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))
