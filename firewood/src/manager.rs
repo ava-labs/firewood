@@ -100,7 +100,7 @@ pub(crate) enum RevisionManagerError {
         provided: Option<HashKey>,
         expected: Option<HashKey>,
     },
-    #[error("An FileIO error occurred during the commit: {0}")]
+    #[error("A FileIO error occurred during the commit: {0}")]
     FileIoError(#[from] FileIoError),
     #[error("An IO error occurred while creating the database directory: {0}")]
     IOError(#[from] io::Error),

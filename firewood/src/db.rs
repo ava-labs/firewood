@@ -1219,7 +1219,7 @@ mod test {
     fn test_nonexistent_directory() {
         let tmpdir = tempfile::tempdir().unwrap();
 
-        assert!(Db::new(tmpdir, DbConfig::builder().create_if_missing(false).build()).is_err(),);
+        assert!(Db::new(tmpdir, DbConfig::builder().create_if_missing(false).build()).is_err());
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
