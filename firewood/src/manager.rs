@@ -32,6 +32,8 @@ use firewood_storage::{
     TrieHash,
 };
 
+const DB_FILE_NAME: &str = "firewood.db";
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
 /// Revision manager configuratoin
 pub struct RevisionManagerConfig {
@@ -114,8 +116,7 @@ impl RevisionManager {
             std::fs::create_dir_all(&db_dir).map_err(RevisionManagerError::IOError)?;
         }
 
-        let file = db_dir.join("firewood.db");
-
+        let file = db_dir.join(DB_FILE_NAME);
         let fb = FileBacked::new(
             file,
             config.manager.node_cache_size,
