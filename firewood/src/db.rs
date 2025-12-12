@@ -1214,7 +1214,7 @@ mod test {
         }
     }
 
-    /// Verifies that RootStore is truncated as well if we truncate the database.
+    /// Verifies that `RootStore` is truncated as well if we truncate the database.
     #[test]
     fn test_root_store_truncation() {
         let db =
@@ -1230,7 +1230,7 @@ mod test {
         proposal.commit().unwrap();
 
         let db = db.reopen();
-        assert!(db.view(root_hash).is_err())
+        assert!(db.view(root_hash).is_err());
     }
 
     /// Verifies that opening a database fails if the directory doesn't exist.
