@@ -183,7 +183,7 @@ impl From<std::convert::Infallible> for Error {
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
         use RevisionManagerError::{
-            CreateDirError, FileIoError, NotLatest, RevisionNotFound, RevisionWithoutAddress,
+            FileIoError, IOError, NotLatest, RevisionNotFound, RevisionWithoutAddress,
             RootStoreError,
         };
         match err {
@@ -193,7 +193,7 @@ impl From<RevisionManagerError> for Error {
             },
             RevisionWithoutAddress { provided } => Self::RevisionWithoutAddress { provided },
             FileIoError(io_err) => Self::FileIO(io_err),
-            CreateDirError(err) => Self::IO(err),
+            IOError(err) => Self::IO(err),
             RootStoreError(err) => Self::RootStoreError(err),
         }
     }

@@ -100,10 +100,10 @@ pub(crate) enum RevisionManagerError {
         provided: Option<HashKey>,
         expected: Option<HashKey>,
     },
-    #[error("An IO error occurred during the commit: {0}")]
+    #[error("An FileIO error occurred during the commit: {0}")]
     FileIoError(#[from] FileIoError),
-    #[error("An error occurred while creating the database directory: {0}")]
-    CreateDirError(#[from] io::Error),
+    #[error("An IO error occurred while creating the database directory: {0}")]
+    IOError(#[from] io::Error),
     #[error("A RootStore error occurred: {0}")]
     RootStoreError(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
@@ -111,7 +111,7 @@ pub(crate) enum RevisionManagerError {
 impl RevisionManager {
     pub fn new(db_dir: PathBuf, config: ConfigManager) -> Result<Self, RevisionManagerError> {
         if config.create {
-            std::fs::create_dir_all(&db_dir).map_err(RevisionManagerError::CreateDirError)?;
+            std::fs::create_dir_all(&db_dir).map_err(RevisionManagerError::IOError)?;
         }
 
         let file = db_dir.join("firewood.db");
