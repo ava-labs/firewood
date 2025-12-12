@@ -106,9 +106,13 @@ impl<'a> DiffMerkleNodeStream<'a> {
         right_tree: &'a U,
         start_key: Key,
     ) -> Result<Self, FileIoError> {
-        let left_hash = left_tree.root_hash();
-        let right_hash = right_tree.root_hash();
-        Self::new_helper(left_tree, left_hash, right_tree, right_hash, start_key)
+        Self::new_helper(
+            left_tree,
+            left_tree.root_hash(),
+            right_tree,
+            right_tree.root_hash(),
+            start_key,
+        )
     }
 
     fn new_helper<T: TrieReader, U: TrieReader>(
@@ -414,43 +418,44 @@ impl Iterator for DiffMerkleNodeStream<'_> {
     }
 }
 
-/// Contents of a frame on the traversal stack. Unlike for a `NodeState`, a
-/// `TraversalStackFrame` for a child can be generated from a parent without
-/// needing to load the child from storage.
+/// Contents of a frame on the traversal stack. Unlike for a `NodeState`, a `TraversalStackFrame`
+/// for a child can be generated from a parent without needing to load the child from storage.
 struct TraversalStackFrame {
     pre_path: Path,
     node: Child,
     hash: Option<TrieHash>,
 }
 
-/// State required for performing pre-order iteration of a Merkle trie. It contains
-/// a reference to a trie which implements the `TrieReader` trait, a stack that
-/// contains nodes (and their associated state including its pre-path and hash) to
-/// be traversed, and a previous number of children field.
-///
-/// The last field is used to specifically to pop off children from the last traversed
-/// node off of the stack so that they will not be traversed. This is useful in the
-/// case that the left trie node has the same path and hash as the right trie node. We
-/// can then skip their children in the traversal. `prev_num_children` is an u8 which
-/// is big enough since there can at most be 16 children per node.
-///
-/// Note that this skipping the children functionality can only be called once after a
-/// call to `next`. We cannot call `skip_children` twice in order to skip all of the
-/// children from the current node's parent. This functionality is not necessary for
-/// our use case as a hash match on the parent would have been determined previously
-/// since we are performing in-order traversal.
+/// Contains the state required for performing pre-order iteration of a Merkle trie. This includes
+/// the state of the current node, a reference to a trie that implements the `TrieReader` trait,
+/// and a stack that contains nodes (and their associated state including its pre-path and hash) to
+/// be traversed with calls to `next`.
 struct PreOrderIterator<'a> {
     node_state: Option<NodeState>,
     trie: &'a dyn TrieReader,
     traversal_stack: Vec<TraversalStackFrame>,
 }
 
-/// Ignoring possible arithmetic side effects since we are only incrementing
-/// `prev_num_children` once per child and there can only be at most 16 children per
-/// node and `prev_num_children` is an u8.
 impl PreOrderIterator<'_> {
+    /// In a textbook implementation of pre-order traversal we would normally pop off the next node
+    /// from the traversal stack and push its children onto the stack before returning. However, that
+    /// would be inefficient if we want to skip traversing a node's children if its hash matches that
+    /// of a node in a different trie, as we would then need to pop its children off the traversal
+    /// stack.
+    ///
+    /// This implementation flips the order such that we don't push a node's children onto the
+    /// traversal stack until the subseqent call to `next`. This is done by saving the node state of
+    /// the current node in `node_state` and keeping that available for the next call. Skipping
+    /// traversal of the children then just involves setting `node_state` to None.
     fn next(&mut self) -> Result<Option<&NodeState>, FileIoError> {
-        firewood_counter!("firewood.change_proof.next", "number of next calls on PreOrderIterator", "traversal" => "next").increment(1);
+        firewood_counter!(
+            "firewood.change_proof.next",
+            "number of next calls on PreOrderIterator",
+            "traversal" => "next")
+        .increment(1);
+
+        // Take the state of the current node (which will soon be replaced), and check if it is a
+        // branch. If it is, add its children onto the traversal stack.
         if let Some(prev_node_state) = self.node_state.take()
             && let Node::Branch(branch) = &*prev_node_state.node
         {
@@ -475,6 +480,8 @@ impl PreOrderIterator<'_> {
             }
         }
 
+        // Get the next node from the traversal stack, create its node state and set it as
+        // the current node state.
         if let Some(frame) = self.traversal_stack.pop() {
             self.node_state = Some(NodeState::new(frame, self.trie)?);
             Ok(self.node_state.as_ref())
@@ -484,7 +491,9 @@ impl PreOrderIterator<'_> {
         }
     }
 
-    /// Used to not iterate through the children of a branch node if there is a hash match.
+    /// Calling `skip_children` will clear the current node state, which will cause the children
+    /// of the current node to not be added to the traversal stack on the subsequent `next` call.
+    /// This will effective cause the traversal to skip the children of the current node.
     fn skip_children(&mut self) {
         self.node_state = None;
     }
@@ -498,7 +507,6 @@ impl PreOrderIterator<'_> {
         }
         // Assume root or other nodes have already been pushed onto the stack
         loop {
-            //if let Some((node, path)) = self.prev_node_path.take()
             if let Some(prev_node_state) = self.node_state.take()
                 && let Node::Branch(branch) = &*prev_node_state.node
             {
@@ -544,6 +552,7 @@ impl PreOrderIterator<'_> {
                 // Save a copy of the pre-path in case we need to push it back on the traversal stack.
                 let pre_path = frame.pre_path.clone();
                 let state = NodeState::new(frame, self.trie)?;
+
                 // Since pre-order traversal of a trie iterates through the nodes in lexicographical
                 // order, we can stop the traversal once we see a node key that is larger than or
                 // equal to the key. We stop the traversal by pushing  the current node with its
@@ -557,6 +566,7 @@ impl PreOrderIterator<'_> {
                     });
                     return Ok(());
                 }
+
                 // Check if this node's path is a prefix of the key. If it is not (`unique_node`
                 // is not empty), then this node and its children cannot be larger than or equal to
                 // the key, and we don't need to include them on the traversal stack.
@@ -568,7 +578,6 @@ impl PreOrderIterator<'_> {
 
                 // Only save this node state in prev_node_path if it is a branch.
                 if let Node::Branch(_branch) = &*state.node {
-                    //self.prev_node_path = Some((state.node, state.path));
                     self.node_state = Some(state);
                 }
             } else {
