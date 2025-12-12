@@ -37,7 +37,7 @@ const DB_FILE_NAME: &str = "firewood.db";
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
 /// Revision manager configuratoin
 pub struct RevisionManagerConfig {
-    /// The number of historical revisions to keep in memory.
+    /// The number of committed revisions to keep in memory.
     #[builder(default = 128)]
     max_revisions: usize,
 
@@ -76,16 +76,36 @@ type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
 #[derive(Debug)]
 pub(crate) struct RevisionManager {
-    /// Maximum number of revisions to keep on disk
+    /// Maximum number of revisions to keep in memory.
+    ///
+    /// When this limit is exceeded, the oldest revision is removed from memory.
+    /// If `root_store` is `None`, the oldest revision's nodes are added to the
+    /// free list for space reuse. Otherwise, the oldest revision
+    /// is preserved on disk for historical queries.
     max_revisions: usize,
 
-    /// The list of revisions that are on disk; these point to the different roots
-    /// stored in the filebacked storage.
-    historical: RwLock<VecDeque<CommittedRevision>>,
-    proposals: Mutex<Vec<ProposedRevision>>,
-    // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
+    /// FIFO queue of committed revisions kept in memory. The queue always
+    /// contains at least one revision.
+    in_memory_revisions: RwLock<VecDeque<CommittedRevision>>,
+
+    /// Hash-based index of committed revisions kept in memory.
+    ///
+    /// Maps root hash to the corresponding committed revision for O(1) lookup
+    /// performance. This allows efficient retrieval of revisions without
+    /// scanning through the `in_memory_revisions` queue.
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
+
+    /// Active proposals that have not yet been committed.
+    proposals: Mutex<Vec<ProposedRevision>>,
+
+    /// Lazily initialized thread pool for parallel operations.
     threadpool: OnceLock<ThreadPool>,
+
+    /// Optional persistent store for historical root addresses.
+    ///
+    /// When present, enables retrieval of revisions beyond `max_revisions` by
+    /// persisting root hash to disk address mappings. This allows historical
+    /// queries of arbitrarily old revisions without keeping them in memory.
     root_store: Option<RootStore>,
 }
 
@@ -141,10 +161,9 @@ impl RevisionManager {
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,
-            historical: RwLock::new(VecDeque::from([nodestore.clone()])),
+            in_memory_revisions: RwLock::new(VecDeque::from([nodestore.clone()])),
             by_hash: RwLock::new(Default::default()),
             proposals: Mutex::new(Default::default()),
-            // committing_proposals: Default::default(),
             threadpool: OnceLock::new(),
             root_store,
         };
@@ -211,9 +230,9 @@ impl RevisionManager {
         // If `RootStore` does not exist, add the oldest revision's nodes to the free list.
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
-        while self.historical.read().len() >= self.max_revisions {
+        while self.in_memory_revisions.read().len() >= self.max_revisions {
             let oldest = self
-                .historical
+                .in_memory_revisions
                 .write()
                 .pop_front()
                 .expect("must be present");
@@ -233,12 +252,12 @@ impl RevisionManager {
                     Ok(oldest) => oldest.reap_deleted(&mut committed)?,
                     Err(original) => {
                         warn!("Oldest revision could not be reaped; still referenced");
-                        self.historical.write().push_front(original);
+                        self.in_memory_revisions.write().push_front(original);
                         break;
                     }
                 }
             }
-            gauge!("firewood.active_revisions").set(self.historical.read().len() as f64);
+            gauge!("firewood.active_revisions").set(self.in_memory_revisions.read().len() as f64);
             gauge!("firewood.max_revisions").set(self.max_revisions as f64);
         }
 
@@ -261,7 +280,9 @@ impl RevisionManager {
         // The `view()` method relies on this ordering - it checks `proposals` first,
         // then `by_hash`, ensuring the revision is always findable during the transition.
         let committed: CommittedRevision = committed.into();
-        self.historical.write().push_back(committed.clone());
+        self.in_memory_revisions
+            .write()
+            .push_back(committed.clone());
         if let Some(hash) = committed.root_hash().or_default_root_hash() {
             self.by_hash.write().insert(hash, committed.clone());
         }
@@ -345,7 +366,7 @@ impl RevisionManager {
     }
 
     pub fn current_revision(&self) -> CommittedRevision {
-        self.historical
+        self.in_memory_revisions
             .read()
             .back()
             .expect("there is always one revision")
