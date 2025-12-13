@@ -124,7 +124,7 @@ impl<'a, N: NodeReader + RootReader> UnPersistedNodeIterator<'a, N> {
         debug_assert!(root.as_ref().is_none_or(|r| r.unpersisted().is_some()));
         let (child_iter_stack, stack) = if let Some(root) = root {
             if let Some(branch) = root
-                .as_shared_node(store)
+                .as_shared_node(store, &crate::HashType::empty(), &crate::Path::new())
                 .expect("in memory, so no io")
                 .as_branch()
             {
@@ -164,7 +164,7 @@ impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
         while let Some(current_iter) = self.child_iter_stack.last_mut() {
             if let Some(next_child) = current_iter.next() {
                 let shared_node = next_child
-                    .as_shared_node(self.store)
+                    .as_shared_node(self.store, &crate::HashType::empty(), &crate::Path::new())
                     .expect("in memory, so IO is impossible");
 
                 // It's a branch, so we need to get its children
@@ -267,7 +267,9 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         // Process each unpersisted node directly from the iterator
         for node in UnPersistedNodeIterator::new(self) {
-            let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
+            let shared_node = node
+                .as_shared_node(self, &crate::HashType::empty(), &crate::Path::new())
+                .expect("in memory, so no IO");
 
             // Serialize the node into the bump allocator
             let (slice, persisted_address, idx_size) =
@@ -424,8 +426,10 @@ mod tests {
     fn test_single_leaf_node() {
         let leaf = create_leaf(&[1, 2, 3], &[4, 5, 6]);
         let store = create_test_store_with_root(leaf.clone());
-        let mut iter =
-            UnPersistedNodeIterator::new(&store).map(|node| node.as_shared_node(&store).unwrap());
+        let mut iter = UnPersistedNodeIterator::new(&store).map(|node| {
+            node.as_shared_node(&store, &crate::HashType::empty(), &crate::Path::new())
+                .unwrap()
+        });
 
         // Should return the leaf node
         let node = iter.next().unwrap();
@@ -444,8 +448,10 @@ mod tests {
             vec![(PathComponent::ALL[5], leaf.clone())],
         );
         let store = create_test_store_with_root(branch.clone());
-        let mut iter =
-            UnPersistedNodeIterator::new(&store).map(|node| node.as_shared_node(&store).unwrap());
+        let mut iter = UnPersistedNodeIterator::new(&store).map(|node| {
+            node.as_shared_node(&store, &crate::HashType::empty(), &crate::Path::new())
+                .unwrap()
+        });
 
         // Should return child first (depth-first)
         let node = iter.next().unwrap();
@@ -481,7 +487,10 @@ mod tests {
 
         // Collect all nodes
         let nodes: Vec<_> = UnPersistedNodeIterator::new(&store)
-            .map(|node| node.as_shared_node(&store).unwrap())
+            .map(|node| {
+                node.as_shared_node(&store, &crate::HashType::empty(), &crate::Path::new())
+                    .unwrap()
+            })
             .collect();
 
         // Should have 4 nodes total (3 leaves + 1 branch)
@@ -553,7 +562,10 @@ mod tests {
 
         // Collect all nodes
         let nodes: Vec<_> = UnPersistedNodeIterator::new(&store)
-            .map(|node| node.as_shared_node(&store).unwrap())
+            .map(|node| {
+                node.as_shared_node(&store, &crate::HashType::empty(), &crate::Path::new())
+                    .unwrap()
+            })
             .collect();
 
         // Should have 5 nodes total (3 leaves + 2 branches)
@@ -607,7 +619,11 @@ mod tests {
         let root = committed_store.kind.root.as_ref().unwrap();
         let root_maybe_persisted = root.as_maybe_persisted_node();
         let root_node = root_maybe_persisted
-            .as_shared_node(&committed_store)
+            .as_shared_node(
+                &committed_store,
+                &crate::HashType::empty(),
+                &crate::Path::new(),
+            )
             .unwrap();
         assert_eq!(*root_node.partial_path(), Path::from(&[0]));
         assert_eq!(root_node.value(), Some(&b"branch_value"[..]));
@@ -620,7 +636,11 @@ mod tests {
             .unwrap();
         let child1_maybe_persisted = child1.as_maybe_persisted_node();
         let child1_node = child1_maybe_persisted
-            .as_shared_node(&committed_store)
+            .as_shared_node(
+                &committed_store,
+                &crate::HashType::empty(),
+                &crate::Path::new(),
+            )
             .unwrap();
         assert_eq!(*child1_node.partial_path(), Path::from(&[1, 2, 3]));
         assert_eq!(child1_node.value(), Some(&b"value1"[..]));
@@ -630,7 +650,11 @@ mod tests {
             .unwrap();
         let child2_maybe_persisted = child2.as_maybe_persisted_node();
         let child2_node = child2_maybe_persisted
-            .as_shared_node(&committed_store)
+            .as_shared_node(
+                &committed_store,
+                &crate::HashType::empty(),
+                &crate::Path::new(),
+            )
             .unwrap();
         assert_eq!(*child2_node.partial_path(), Path::from(&[4, 5, 6]));
         assert_eq!(child2_node.value(), Some(&b"value2"[..]));

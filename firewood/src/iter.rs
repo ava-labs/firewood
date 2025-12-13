@@ -4,45 +4,32 @@
 use crate::merkle::{Key, Value};
 use crate::v2::api::{KeyType, KeyValuePair};
 
+use derive_where::derive_where;
 use firewood_storage::{
-    BranchNode, Child, FileIoError, NibblesIterator, Node, PathBuf, PathComponent, PathIterItem,
-    SharedNode, TriePathFromUnpackedBytes, TrieReader,
+    BranchNode, Child, FileIoError, NibblesIterator, Node, Path, PathBuf, PathComponent,
+    PathIterItem, SharedNode, TriePathFromUnpackedBytes, TrieReader,
 };
 use std::cmp::Ordering;
 use std::iter::FusedIterator;
 
 /// Represents an ongoing iteration over a node and its children.
+#[derive_where(Debug)]
 enum IterationNode {
     /// This node has not been returned yet.
     Unvisited {
         /// The key (as nibbles) of this node.
-        key: Key,
+        path: Path,
         node: SharedNode,
     },
     /// This node has been returned. Track which child to visit next.
     Visited {
         /// The key (as nibbles) of this node.
-        key: Key,
+        path: Path,
         /// Returns the non-empty children of this node and their positions
         /// in the node's children array.
+        #[derive_where(skip)]
         children_iter: Box<dyn Iterator<Item = (PathComponent, Child)> + Send>,
     },
-}
-
-impl std::fmt::Debug for IterationNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unvisited { key, node } => f
-                .debug_struct("Unvisited")
-                .field("key", key)
-                .field("node", node)
-                .finish(),
-            Self::Visited {
-                key,
-                children_iter: _,
-            } => f.debug_struct("Visited").field("key", key).finish(),
-        }
-    }
 }
 
 #[derive(Debug)]
@@ -99,13 +86,13 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
                 NodeIterState::Iterating { iter_stack } => {
                     while let Some(mut iter_node) = iter_stack.pop() {
                         match iter_node {
-                            IterationNode::Unvisited { key, node } => {
+                            IterationNode::Unvisited { path, node } => {
                                 match &*node {
                                     Node::Leaf(_) => {}
                                     Node::Branch(branch) => {
                                         // `node` is a branch node. Visit its children next.
                                         iter_stack.push(IterationNode::Visited {
-                                            key: key.clone(),
+                                            path: path.clone(),
                                             children_iter: Box::new(as_enumerated_children_iter(
                                                 branch,
                                             )),
@@ -113,11 +100,11 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
                                     }
                                 }
 
-                                let key = key_from_nibble_iter(key.iter().copied());
+                                let key = key_from_nibble_iter(path.iter().copied());
                                 return Some(Ok((key, node)));
                             }
                             IterationNode::Visited {
-                                ref key,
+                                ref path,
                                 ref mut children_iter,
                             } => {
                                 // We returned `node` already. Visit its next child.
@@ -126,42 +113,22 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
                                     continue;
                                 };
 
-                                let child = match child {
-                                    Child::AddressWithHash(addr, _) => {
-                                        match self.merkle.read_node(addr) {
-                                            Ok(node) => node,
-                                            Err(e) => return Some(Err(e)),
-                                        }
-                                    }
-                                    Child::Node(node) => node.clone().into(),
-                                    Child::MaybePersisted(maybe_persisted, _) => {
-                                        // For MaybePersisted, we need to get the node
-                                        match maybe_persisted.as_shared_node(self.merkle) {
-                                            Ok(node) => node,
-                                            Err(e) => return Some(Err(e)),
-                                        }
-                                    }
+                                let mut path = path.clone();
+                                path.extend(Some(pos.as_u8()));
+
+                                let child = match child.read_node_from_storage(&self.merkle, &path)
+                                {
+                                    Ok(node) => node,
+                                    Err(e) => return Some(Err(e)),
                                 };
 
-                                let child_partial_path = child.partial_path().iter().copied();
-
-                                // The child's key is its parent's key, followed by the child's index,
-                                // followed by the child's partial path (if any).
-                                let child_key: Key = key
-                                    .iter()
-                                    .copied()
-                                    .chain(Some(pos.as_u8()))
-                                    .chain(child_partial_path)
-                                    .collect();
+                                path.extend(child.partial_path().iter().copied());
 
                                 // There may be more children of this node to visit.
                                 // Visit it again after visiting its `child`.
                                 iter_stack.push(iter_node);
 
-                                iter_stack.push(IterationNode::Unvisited {
-                                    key: child_key,
-                                    node: child,
-                                });
+                                iter_stack.push(IterationNode::Unvisited { path, node: child });
 
                                 continue 'outer;
                             }
@@ -182,7 +149,7 @@ fn get_iterator_intial_state<T: TrieReader>(
     merkle: &T,
     key: &[u8],
 ) -> Result<NodeIterState, FileIoError> {
-    let Some(root) = merkle.root_node() else {
+    let Some(root) = merkle.read_root()? else {
         // This merkle is empty.
         return Ok(NodeIterState::Iterating { iter_stack: vec![] });
     };
@@ -190,7 +157,7 @@ fn get_iterator_intial_state<T: TrieReader>(
 
     // Invariant: `matched_key_nibbles` is the path before `node`'s
     // partial path at the start of each loop iteration.
-    let mut matched_key_nibbles = vec![];
+    let mut matched_key_nibbles = Path::new();
 
     let mut unmatched_key_nibbles = NibblesIterator::new(key);
 
@@ -204,7 +171,7 @@ fn get_iterator_intial_state<T: TrieReader>(
             compare_partial_path(partial_path.iter(), unmatched_key_nibbles);
         unmatched_key_nibbles = new_unmatched_key_nibbles;
 
-        matched_key_nibbles.extend(partial_path.iter());
+        matched_key_nibbles.extend(partial_path.iter().copied());
 
         match comparison {
             Ordering::Less => {
@@ -215,7 +182,7 @@ fn get_iterator_intial_state<T: TrieReader>(
             Ordering::Greater => {
                 // `node` is after `key`. Visit it first.
                 iter_stack.push(IterationNode::Unvisited {
-                    key: Box::from(matched_key_nibbles),
+                    path: matched_key_nibbles,
                     node,
                 });
                 return Ok(NodeIterState::Iterating { iter_stack });
@@ -228,7 +195,7 @@ fn get_iterator_intial_state<T: TrieReader>(
                     if unmatched_key_nibbles.next().is_none() {
                         // otherwise, exact match and visit the leaf
                         iter_stack.push(IterationNode::Unvisited {
-                            key: matched_key_nibbles.clone().into_boxed_slice(),
+                            path: matched_key_nibbles,
                             node,
                         });
                     }
@@ -238,7 +205,7 @@ fn get_iterator_intial_state<T: TrieReader>(
                     let Some(next_unmatched_key_nibble) = unmatched_key_nibbles.next() else {
                         // There is no more key to traverse.
                         iter_stack.push(IterationNode::Unvisited {
-                            key: matched_key_nibbles.clone().into_boxed_slice(),
+                            path: matched_key_nibbles,
                             node,
                         });
 
@@ -251,25 +218,21 @@ fn get_iterator_intial_state<T: TrieReader>(
                     // We'll visit `node`'s first child at index > `next_unmatched_key_nibble`
                     // first (if it exists).
                     iter_stack.push(IterationNode::Visited {
-                        key: matched_key_nibbles.clone().into_boxed_slice(),
+                        path: matched_key_nibbles.clone(),
                         children_iter: Box::new(
                             as_enumerated_children_iter(branch)
                                 .filter(move |(pos, _)| *pos > next_unmatched_key_nibble),
                         ),
                     });
 
+                    matched_key_nibbles.extend(Some(next_unmatched_key_nibble.as_u8()));
                     let child = &branch.children[next_unmatched_key_nibble];
                     node = match child {
                         None => return Ok(NodeIterState::Iterating { iter_stack }),
-                        Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr)?,
-                        Some(Child::Node(node)) => (*node).clone().into(), // TODO can we avoid cloning this?
-                        Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                            // For MaybePersisted, we need to get the node
-                            maybe_persisted.as_shared_node(merkle)?
+                        Some(child) => {
+                            child.read_node_from_storage(merkle, &matched_key_nibbles)?
                         }
                     };
-
-                    matched_key_nibbles.push(next_unmatched_key_nibble.as_u8());
                 }
             },
         }
@@ -341,7 +304,7 @@ enum PathIteratorState<'a> {
         /// prefix of the key we're traversing to.
         /// Note the node at `address` may not have a key which is a
         /// prefix of the key we're traversing to.
-        matched_key: Vec<u8>,
+        matched_key: Path,
         unmatched_key: NibblesIterator<'a>,
         node: SharedNode,
     },
@@ -361,7 +324,7 @@ pub struct PathIterator<'a, 'b, T> {
 
 impl<'a, 'b, T: TrieReader> PathIterator<'a, 'b, T> {
     pub(super) fn new(merkle: &'a T, key: &'b [u8]) -> Result<Self, FileIoError> {
-        let Some(root) = merkle.root_node() else {
+        let Some(root) = merkle.read_root()? else {
             return Ok(Self {
                 state: PathIteratorState::Exhausted,
                 merkle,
@@ -371,7 +334,7 @@ impl<'a, 'b, T: TrieReader> PathIterator<'a, 'b, T> {
         Ok(Self {
             merkle,
             state: PathIteratorState::Iterating {
-                matched_key: vec![],
+                matched_key: Path::new(),
                 unmatched_key: NibblesIterator::new(key),
                 node: root,
             },
@@ -394,10 +357,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                 unmatched_key,
                 node,
             } => {
-                let partial_path = match &**node {
-                    Node::Branch(branch) => &branch.partial_path,
-                    Node::Leaf(leaf) => &leaf.partial_path,
-                };
+                let partial_path = node.partial_path();
 
                 let (comparison, unmatched_key) =
                     compare_partial_path(partial_path.iter(), unmatched_key);
@@ -408,7 +368,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                         None
                     }
                     Ordering::Equal => {
-                        matched_key.extend(partial_path.iter());
+                        matched_key.extend(partial_path.iter().copied());
                         let node_key = PathBuf::path_from_unpacked_bytes(matched_key)
                             .expect("valid components");
 
@@ -436,6 +396,7 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                         next_nibble: None,
                                     }));
                                 };
+                                matched_key.extend(Some(next_unmatched_key_nibble));
                                 let next_unmatched_key_nibble =
                                     PathComponent::try_new(next_unmatched_key_nibble)
                                         .expect("valid nibble");
@@ -452,42 +413,13 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                             next_nibble: None,
                                         }))
                                     }
-                                    Some(Child::AddressWithHash(child_addr, _)) => {
-                                        let child = match merkle.read_node(*child_addr) {
-                                            Ok(child) => child,
+                                    Some(child) => {
+                                        *node = match child
+                                            .read_node_from_storage(merkle, matched_key)
+                                        {
+                                            Ok(node) => node,
                                             Err(e) => return Some(Err(e)),
                                         };
-
-                                        matched_key.push(next_unmatched_key_nibble.as_u8());
-
-                                        *node = child;
-
-                                        Some(Ok(PathIterItem {
-                                            key_nibbles: node_key,
-                                            node: saved_node,
-                                            next_nibble: Some(next_unmatched_key_nibble),
-                                        }))
-                                    }
-                                    Some(Child::Node(child)) => {
-                                        matched_key.push(next_unmatched_key_nibble.as_u8());
-
-                                        *node = child.clone().into();
-
-                                        Some(Ok(PathIterItem {
-                                            key_nibbles: node_key,
-                                            node: saved_node,
-                                            next_nibble: Some(next_unmatched_key_nibble),
-                                        }))
-                                    }
-                                    Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                                        let child = match maybe_persisted.as_shared_node(merkle) {
-                                            Ok(child) => child,
-                                            Err(e) => return Some(Err(e)),
-                                        };
-
-                                        matched_key.push(next_unmatched_key_nibble.as_u8());
-                                        *node = child;
-
                                         Some(Ok(PathIterItem {
                                             key_nibbles: node_key,
                                             node: saved_node,

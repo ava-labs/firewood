@@ -141,6 +141,58 @@ impl Child {
             Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.clone(),
         }
     }
+
+    /// Read the node from storage for update
+    pub fn read_for_update<S: crate::ReadableStorage>(
+        &self,
+        storage: &mut crate::NodeStore<crate::MutableProposal, S>,
+        leading_path: &Path,
+    ) -> Result<Node, crate::FileIoError> {
+        match self {
+            Child::Node(node) => Ok(node.clone()),
+            Child::AddressWithHash(addr, hash) => {
+                storage.read_for_update((*addr).into(), hash, leading_path)
+            }
+            Child::MaybePersisted(node, hash) => {
+                storage.read_for_update(node.clone(), hash, leading_path)
+            }
+        }
+    }
+
+    /// Read the node from storage
+    pub fn read_node_from_storage<S: crate::NodeReader>(
+        &self,
+        storage: &S,
+        leading_path: &Path,
+    ) -> Result<SharedNode, crate::FileIoError> {
+        match self {
+            Child::Node(node) => Ok(node.clone().into()),
+            Child::AddressWithHash(addr, hash) => storage.read_node(*addr, hash, leading_path),
+            Child::MaybePersisted(maybe_persisted, hash) => {
+                maybe_persisted.as_shared_node(storage, hash, leading_path)
+            }
+        }
+    }
+
+    pub(crate) fn read_root<S: crate::NodeReader>(
+        &self,
+        storage: &S,
+    ) -> Result<(MaybePersistedNode, Node), crate::FileIoError> {
+        match self {
+            Child::Node(node) => Ok((
+                MaybePersistedNode::from(SharedNode::from(node.clone())),
+                node.clone(),
+            )),
+            Child::AddressWithHash(addr, hash) => {
+                let node = storage.read_node(*addr, hash, &Path::new())?;
+                Ok((MaybePersistedNode::from(*addr), (*node).clone()))
+            }
+            Child::MaybePersisted(maybe_persisted, hash) => {
+                let node = maybe_persisted.as_shared_node(storage, hash, &Path::new())?;
+                Ok((maybe_persisted.clone(), (*node).clone()))
+            }
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Clone)]

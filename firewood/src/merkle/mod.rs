@@ -70,40 +70,37 @@ fn get_helper<T: TrieReader>(
     nodestore: &T,
     node: &Node,
     key: &[u8],
+    mut leading_path: Path,
 ) -> Result<Option<SharedNode>, FileIoError> {
     // 4 possibilities for the position of the `key` relative to `node`:
     // 1. The node is at `key`
     // 2. The key is above the node (i.e. its ancestor)
     // 3. The key is below the node (i.e. its descendant)
     // 4. Neither is an ancestor of the other
+
     let path_overlap = PrefixOverlap::from(key, node.partial_path());
+    leading_path.extend(path_overlap.shared.iter().copied());
+
     let unique_key = path_overlap.unique_a;
     let unique_node = path_overlap.unique_b;
-
     match (
         unique_key.split_first().map(|(index, path)| (*index, path)),
         unique_node.split_first(),
     ) {
-        (_, Some(_)) => {
-            // Case (2) or (4)
-            Ok(None)
-        }
+        // Case (2) or (4)
+        (_, Some(_)) => Ok(None),
         (None, None) => Ok(Some(node.clone().into())), // 1. The node is at `key`
         (Some((child_index, remaining_key)), None) => {
+            leading_path.extend(Some(child_index));
             let child_index = PathComponent::try_new(child_index).expect("index is in bounds");
             // 3. The key is below the node (i.e. its descendant)
             match node {
                 Node::Leaf(_) => Ok(None),
                 Node::Branch(node) => match node.children[child_index].as_ref() {
                     None => Ok(None),
-                    Some(Child::Node(child)) => get_helper(nodestore, child, remaining_key),
-                    Some(Child::AddressWithHash(addr, _)) => {
-                        let child = nodestore.read_node(*addr)?;
-                        get_helper(nodestore, &child, remaining_key)
-                    }
-                    Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                        let child = maybe_persisted.as_shared_node(nodestore)?;
-                        get_helper(nodestore, &child, remaining_key)
+                    Some(child) => {
+                        let child = child.read_node_from_storage(nodestore, &leading_path)?;
+                        get_helper(nodestore, &child, remaining_key, leading_path)
                     }
                 },
             }
@@ -130,8 +127,8 @@ impl<T> From<T> for Merkle<T> {
 }
 
 impl<T: TrieReader> Merkle<T> {
-    pub(crate) fn root(&self) -> Option<SharedNode> {
-        self.nodestore.root_node()
+    pub(crate) fn read_root(&self) -> Result<Option<SharedNode>, FileIoError> {
+        self.nodestore.read_root()
     }
 
     pub(crate) const fn nodestore(&self) -> &T {
@@ -145,7 +142,7 @@ impl<T: TrieReader> Merkle<T> {
     ///
     /// Returns an error if the trie is empty or an error occurs while reading from storage.
     pub fn prove(&self, key: &[u8]) -> Result<FrozenProof, ProofError> {
-        let Some(root) = self.root() else {
+        let Some(root) = self.read_root()? else {
             return Err(ProofError::Empty);
         };
 
@@ -447,12 +444,12 @@ impl<T: TrieReader> Merkle<T> {
     }
 
     pub(crate) fn get_node(&self, key: &[u8]) -> Result<Option<SharedNode>, FileIoError> {
-        let Some(root) = self.root() else {
+        let Some(root) = self.read_root()? else {
             return Ok(None);
         };
 
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
-        get_helper(&self.nodestore, &root, &key)
+        get_helper(&self.nodestore, &root, &key, Path::new())
     }
 }
 
@@ -464,6 +461,7 @@ impl<T: HashedNodeReader> Merkle<T> {
         hash: Option<&HashType>,
         seen: &mut HashSet<String>,
         writer: &mut W,
+        mut leading_path: Path,
     ) -> Result<(), FileIoError> {
         writeln!(writer, "  {node}[label=\"{node}")
             .map_err(Error::other)
@@ -474,12 +472,22 @@ impl<T: HashedNodeReader> Merkle<T> {
                 .map_err(|e| FileIoError::new(e, None, 0, None))?;
         }
 
-        match &*node.as_shared_node(&self.nodestore)? {
+        match &*node.as_shared_node(
+            &self.nodestore,
+            // If we don't have a hash, `as_shared_node` will already have a node
+            // in memory, and it won't actually verify the hash. So, we can pass
+            // in an empty hash in that case and it will be ignored.
+            &hash.cloned().unwrap_or_else(HashType::empty),
+            &leading_path,
+        )? {
             Node::Branch(b) => {
+                leading_path.extend(b.partial_path.iter().copied());
                 write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
                 writeln!(writer, "\"]")
                     .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
                 for (childidx, child) in &b.children {
+                    let mut leading_path = leading_path.clone();
+                    leading_path.extend(Some(childidx.as_u8()));
                     let (child, child_hash) = match child {
                         None => continue,
                         Some(node) => (node.as_maybe_persisted_node(), node.hash()),
@@ -489,7 +497,7 @@ impl<T: HashedNodeReader> Merkle<T> {
                     if inserted {
                         writeln!(writer, "  {node} -> {child}[label=\"{childidx:x}\"]")
                             .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
-                        self.dump_node(&child, child_hash, seen, writer)?;
+                        self.dump_node(&child, child_hash, seen, writer, leading_path)?;
                     } else {
                         // We have already seen this child, which shouldn't happen.
                         // Indicate this with a red edge.
@@ -530,8 +538,14 @@ impl<T: HashedNodeReader> Merkle<T> {
                 .map_err(|e| FileIoError::new(e, None, 0, None))
                 .map_err(Error::other)?;
             let mut seen = HashSet::new();
-            self.dump_node(&root, Some(&root_hash.into_hash_type()), &mut seen, writer)
-                .map_err(Error::other)?;
+            self.dump_node(
+                &root,
+                Some(&root_hash.into_hash_type()),
+                &mut seen,
+                writer,
+                Path::new(),
+            )
+            .map_err(Error::other)?;
         }
         writeln!(writer, "}}")
             .map_err(Error::other)
@@ -590,12 +604,8 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         self.try_into().expect("failed to convert")
     }
 
-    fn read_for_update(&mut self, child: Child) -> Result<Node, FileIoError> {
-        match child {
-            Child::Node(node) => Ok(node),
-            Child::AddressWithHash(addr, _) => self.nodestore.read_for_update(addr.into()),
-            Child::MaybePersisted(node, _) => self.nodestore.read_for_update(node),
-        }
+    fn read_for_update(&mut self, child: Child, leading_path: &Path) -> Result<Node, FileIoError> {
+        child.read_for_update(&mut self.nodestore, leading_path)
     }
 
     /// Map `key` to `value` in the trie.
@@ -623,7 +633,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             return Ok(());
         };
 
-        let root_node = self.insert_helper(root_node, key.as_ref(), value)?;
+        let root_node = self.insert_helper(root_node, key.as_ref(), value, Path::new())?;
         *self.nodestore.root_mut() = root_node.into();
         Ok(())
     }
@@ -631,12 +641,12 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Map `key` to `value` into the subtrie rooted at `node`.
     /// Each element of `key` is 1 nibble.
     /// Returns the new root of the subtrie.
-    #[expect(clippy::missing_panics_doc)]
-    pub fn insert_helper(
+    fn insert_helper(
         &mut self,
         mut node: Node,
         key: &[u8],
         value: Value,
+        mut leading_path: Path,
     ) -> Result<Node, FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
@@ -644,6 +654,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
         let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+        leading_path.extend(path_overlap.shared.iter().copied());
 
         let unique_key = path_overlap.unique_a;
         let unique_node = path_overlap.unique_b;
@@ -685,6 +696,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 Ok(Node::Branch(Box::new(branch)))
             }
             (Some((child_index, partial_path)), None) => {
+                leading_path.extend(Some(child_index));
                 let child_index = PathComponent::try_new(child_index).expect("valid component");
                 // 3. The key is below the node (i.e. its descendant)
                 //    ...                         ...
@@ -705,8 +717,9 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             counter!("firewood.insert", "merkle"=>"below").increment(1);
                             return Ok(node);
                         };
-                        let child = self.read_for_update(child)?;
-                        let child = self.insert_helper(child, partial_path.as_ref(), value)?;
+                        let child = self.read_for_update(child, &leading_path)?;
+                        let child =
+                            self.insert_helper(child, partial_path.as_ref(), value, leading_path)?;
                         branch.children[child_index] = Some(Child::Node(child));
                         Ok(node)
                     }
@@ -786,7 +799,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             return Ok(None);
         };
 
-        let (root_node, removed_value) = self.remove_helper(root_node, &key)?;
+        let (root_node, removed_value) = self.remove_helper(root_node, &key, Path::new())?;
         *self.nodestore.root_mut() = root_node;
         if removed_value.is_some() {
             counter!("firewood.remove", "prefix" => "false", "result" => "success").increment(1);
@@ -804,6 +817,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         &mut self,
         node: Node,
         key: &[u8],
+        mut leading_path: Path,
     ) -> Result<(Option<Node>, Option<Value>), FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
@@ -811,6 +825,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         // 3. The key is below the node (i.e. its descendant)
         // 4. Neither is an ancestor of the other
         let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+        leading_path.extend(path_overlap.shared.iter().copied());
 
         let unique_key = path_overlap.unique_a;
         let unique_node = path_overlap.unique_b;
@@ -834,12 +849,16 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             return Ok((Some(Node::Branch(branch)), None));
                         };
 
-                        Ok((self.flatten_branch(branch)?, Some(removed_value)))
+                        Ok((
+                            self.flatten_branch(branch, leading_path)?,
+                            Some(removed_value),
+                        ))
                     }
                     Node::Leaf(leaf) => Ok((None, Some(leaf.value))),
                 }
             }
             (Some((child_index, child_partial_path)), None) => {
+                leading_path.extend(Some(child_index));
                 let child_index = PathComponent::try_new(child_index).expect("valid component");
                 // 3. The key is below the node (i.e. its descendant)
                 match node {
@@ -850,14 +869,16 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             // child does not exist, so the value does not exist
                             return Ok((Some(Node::Branch(branch)), None));
                         };
-                        let child = self.read_for_update(child)?;
-
-                        let (child, removed_value) =
-                            self.remove_helper(child, child_partial_path.as_ref())?;
+                        let child = self.read_for_update(child, &leading_path)?;
+                        let (child, removed_value) = self.remove_helper(
+                            child,
+                            child_partial_path.as_ref(),
+                            leading_path.clone(),
+                        )?;
 
                         branch.children[child_index] = child.map(Child::Node);
 
-                        Ok((self.flatten_branch(branch)?, removed_value))
+                        Ok((self.flatten_branch(branch, leading_path)?, removed_value))
                     }
                 }
             }
@@ -885,7 +906,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         };
 
         let mut deleted = 0;
-        let root_node = self.remove_prefix_helper(root_node, &prefix, &mut deleted)?;
+        let root_node = self.remove_prefix_helper(root_node, &prefix, &mut deleted, Path::new())?;
         counter!("firewood.remove", "prefix" => "true", "result" => "success")
             .increment(deleted as u64);
         *self.nodestore.root_mut() = root_node;
@@ -897,6 +918,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         node: Node,
         key: &[u8],
         deleted: &mut usize,
+        mut leading_path: Path,
     ) -> Result<Option<Node>, FileIoError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`, in which case we need to delete this node and all its children.
@@ -904,6 +926,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         // 3. The key is below the node (i.e. its descendant), so continue traversing the trie.
         // 4. Neither is an ancestor of the other, in which case there's no work to do.
         let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+        leading_path.extend(path_overlap.shared.iter().copied());
 
         let unique_key = path_overlap.unique_a;
         let unique_node = path_overlap.unique_b;
@@ -923,7 +946,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                             // a KV pair was in the branch itself
                             *deleted = deleted.saturating_add(1);
                         }
-                        self.delete_children(branch, deleted)?;
+                        self.delete_children(branch, deleted, leading_path)?;
                     }
                     Node::Leaf(_) => {
                         // the prefix matched only a leaf, so we remove it and indicate only one item was removed
@@ -937,6 +960,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 Ok(Some(node))
             }
             (Some((child_index, child_partial_path)), None) => {
+                leading_path.extend(Some(child_index));
                 let child_index = PathComponent::try_new(child_index).expect("valid component");
                 // 3. The key is below the node (i.e. its descendant)
                 match node {
@@ -945,14 +969,17 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                         let Some(child) = branch.children.take(child_index) else {
                             return Ok(Some(Node::Branch(branch)));
                         };
-                        let child = self.read_for_update(child)?;
-
-                        let child =
-                            self.remove_prefix_helper(child, child_partial_path.as_ref(), deleted)?;
+                        let child = self.read_for_update(child, &leading_path)?;
+                        let child = self.remove_prefix_helper(
+                            child,
+                            child_partial_path.as_ref(),
+                            deleted,
+                            leading_path.clone(),
+                        )?;
 
                         branch.children[child_index] = child.map(Child::Node);
 
-                        self.flatten_branch(branch)
+                        self.flatten_branch(branch, leading_path)
                     }
                 }
             }
@@ -964,19 +991,23 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         &mut self,
         mut branch: Box<BranchNode>,
         deleted: &mut usize,
+        leading_path: Path,
     ) -> Result<(), FileIoError> {
         if branch.value.is_some() {
             // a KV pair was in the branch itself
             *deleted = deleted.saturating_add(1);
         }
-        for (_, child) in &mut branch.children {
+        for (pathcomp, child) in &mut branch.children {
+            let mut leading_path = leading_path.clone();
+            leading_path.extend(Some(pathcomp.as_u8()));
+
             let Some(child) = child.take() else {
                 continue;
             };
-            let child = self.read_for_update(child)?;
+            let child = self.read_for_update(child, &leading_path)?;
             match child {
                 Node::Branch(child_branch) => {
-                    self.delete_children(child_branch, deleted)?;
+                    self.delete_children(child_branch, deleted, leading_path)?;
                 }
                 Node::Leaf(_) => {
                     *deleted = deleted.saturating_add(1);
@@ -997,6 +1028,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     fn flatten_branch(
         &mut self,
         mut branch_node: Box<BranchNode>,
+        leading_path: Path,
     ) -> Result<Option<Node>, FileIoError> {
         let mut children_iter = branch_node.children.each_mut().into_iter();
 
@@ -1032,7 +1064,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         };
 
         // The branch has only 1 child. Remove the branch and return the child.
-        let mut child = self.read_for_update(child)?;
+        let mut child = self.read_for_update(child, &leading_path)?;
 
         // The child's partial path is the concatenation of its (now removed) parent,
         // its (former) child index, and its partial path.
