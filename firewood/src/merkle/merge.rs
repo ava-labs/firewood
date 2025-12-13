@@ -5,7 +5,10 @@ use firewood_storage::{FileIoError, TrieReader};
 
 use crate::{
     db::BatchOp,
-    iter::{FilteredKeyRangeIter, MerkleKeyValueIter},
+    iter::{
+        FilteredKeyRangeExt, FilteredKeyRangeIter, MerkleKeyValueIter,
+        returnable::{ReturnableIterator, ReturnableIteratorExt},
+    },
     merkle::Key,
     v2::api::{BatchIter, KeyType, KeyValuePair},
 };
@@ -39,12 +42,12 @@ where
         last_key: Option<K>,
         kvp_iter: impl IntoIterator<IntoIter = I>,
     ) -> Self {
-        let base_iter = merkle
-            .key_value_iter_from_key(first_key.as_ref().map(AsRef::as_ref).unwrap_or_default())
-            .stop_after_key(last_key);
         Self {
-            trie: ReturnableIterator::new(base_iter),
-            kvp: ReturnableIterator::new(FilteredKeyRangeIter::new(kvp_iter.into_iter(), None)),
+            trie: merkle
+                .key_value_iter_from_key(first_key.as_ref().map(AsRef::as_ref).unwrap_or_default())
+                .stop_after_key(last_key)
+                .returnable(),
+            kvp: kvp_iter.into_iter().stop_after_key(None).returnable(),
         }
     }
 }
@@ -68,14 +71,14 @@ where
 
                 (Some(Err(err)), kvp) => {
                     if let Some(kvp) = kvp {
-                        self.kvp.set_next(kvp);
+                        self.kvp.return_item(kvp);
                     }
 
                     Some(Err(err))
                 }
                 (trie, Some(Err(err))) => {
                     if let Some(trie) = trie {
-                        self.trie.set_next(trie);
+                        self.trie.return_item(trie);
                     }
 
                     Some(Err(err.into()))
@@ -96,7 +99,7 @@ where
                     match <[u8] as Ord>::cmp(&base_key, kvp_key.as_ref()) {
                         std::cmp::Ordering::Less => {
                             // retain the kvp iterator's current item.
-                            self.kvp.set_next(Ok((kvp_key, kvp_value)));
+                            self.kvp.return_item(Ok((kvp_key, kvp_value)));
 
                             // trie key is less than next kvp key, so it must be deleted.
                             Some(Ok(BatchOp::Delete {
@@ -119,7 +122,7 @@ where
                         }
                         std::cmp::Ordering::Greater => {
                             // retain the trie iterator's current item.
-                            self.trie.set_next(Ok((base_key, node_value)));
+                            self.trie.return_item(Ok((base_key, node_value)));
                             // trie key is greater than next kvp key, so we need to insert it.
                             Some(Ok(BatchOp::Put {
                                 key: EitherKey::Right(kvp_key),
@@ -130,40 +133,6 @@ where
                 }
             };
         }
-    }
-}
-
-/// Similar to a peekable iterator. Instead of peeking at the next item, it allows
-/// you to put it back to be returned on the next call to `next()`.
-struct ReturnableIterator<I: Iterator> {
-    iter: I,
-    next: Option<I::Item>,
-}
-
-impl<I: Iterator> ReturnableIterator<I> {
-    const fn new(iter: I) -> Self {
-        Self { iter, next: None }
-    }
-
-    const fn set_next(&mut self, head: I::Item) -> Option<I::Item> {
-        self.next.replace(head)
-    }
-}
-
-impl<I: Iterator> Iterator for ReturnableIterator<I> {
-    type Item = I::Item;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        self.next.take().or_else(|| self.iter.next())
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let (lower, upper) = self.iter.size_hint();
-        let head_count = usize::from(self.next.is_some());
-        (
-            lower.saturating_add(head_count),
-            upper.and_then(|u| u.checked_add(head_count)),
-        )
     }
 }
 
