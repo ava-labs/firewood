@@ -1,6 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#![allow(clippy::unwrap_used)]
+
 use predicates::prelude::*;
 use std::fs;
 
@@ -543,9 +545,10 @@ fn fwdctl_check_empty_db() {
 
 #[test]
 fn fwdctl_check_db_with_data() {
+    use rand::{Rng, distr::Alphanumeric};
+
     let tmpdir = tempfile::tempdir().unwrap();
 
-    use rand::{Rng, distr::Alphanumeric};
     let rng = firewood_storage::SeededRng::from_env_or_random();
     let mut sample_iter = rng.sample_iter(Alphanumeric).map(char::from);
 
