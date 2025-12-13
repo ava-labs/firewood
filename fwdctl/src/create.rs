@@ -5,6 +5,9 @@ use clap::{Args, value_parser};
 use firewood::db::{Db, DbConfig};
 use firewood::v2::api;
 
+use crate::DatabasePath;
+
+
 #[derive(Args, Debug)]
 pub struct Options {
     #[command(flatten)]
