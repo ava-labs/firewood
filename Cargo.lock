@@ -1147,6 +1147,7 @@ dependencies = [
  "predicates",
  "rand 0.9.2",
  "serial_test",
+ "tempfile",
 ]
 
 [[package]]

@@ -45,6 +45,7 @@ logger = ["firewood/logger"]
 # Workspace dependencies
 firewood-storage = { workspace = true, features = ["test_utils"] }
 rand.workspace = true
+tempfile.workspace = true
 # Regular dependencies
 anyhow = "1.0.100"
 assert_cmd = "2.1.1"
