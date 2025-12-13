@@ -7,7 +7,6 @@ use firewood::v2::api;
 
 use crate::DatabasePath;
 
-
 #[derive(Args, Debug)]
 pub struct Options {
     #[command(flatten)]
