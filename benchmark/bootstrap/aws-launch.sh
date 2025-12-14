@@ -5,7 +5,6 @@ set +e
 INSTANCE_TYPE=i4g.large
 FIREWOOD_BRANCH=""
 AVALANCHEGO_BRANCH=""
-CORETH_BRANCH=""
 LIBEVM_COMMIT=""
 NBLOCKS="1m"
 CONFIG="firewood"
@@ -61,7 +60,6 @@ show_usage() {
     echo "  --instance-type TYPE        EC2 instance type (default: i4g.large)"
     echo "  --firewood-branch BRANCH    Firewood git branch to checkout"
     echo "  --avalanchego-branch BRANCH AvalancheGo git branch to checkout"
-    echo "  --coreth-branch BRANCH      Coreth git branch to checkout"
     echo "  --libevm-commit COMMIT      LibEVM git commit to checkout"
     echo "  --nblocks BLOCKS            Number of blocks to download (default: 1m)"
     echo "  --config CONFIG             The VM reexecution config to use (default: firewood)"
@@ -110,10 +108,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --avalanchego-branch)
             AVALANCHEGO_BRANCH="$2"
-            shift 2
-            ;;
-        --coreth-branch)
-            CORETH_BRANCH="$2"
             shift 2
             ;;
         --libevm-commit)
@@ -181,7 +175,7 @@ done
 # Handle --terminate option
 if [ ${#TERMINATE_INSTANCES[@]} -gt 0 ]; then
     # Check if any incompatible options are present
-    if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || [ -n "$CORETH_BRANCH" ] || \
+    if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || \
        [ -n "$LIBEVM_COMMIT" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
        [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ] || \
        [ "$SHOW_INSTANCES" = true ] || [ "$TERMINATE_MINE" = true ]; then
@@ -199,7 +193,7 @@ fi
 # Handle --terminate-mine option
 if [ "$TERMINATE_MINE" = true ]; then
     # Check if any incompatible options are present
-    if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || [ -n "$CORETH_BRANCH" ] || \
+    if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || \
        [ -n "$LIBEVM_COMMIT" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
        [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ] || \
        [ "$SHOW_INSTANCES" = true ]; then
@@ -229,7 +223,7 @@ fi
 # Handle --show option
 if [ "$SHOW_INSTANCES" = true ]; then
     # Check if any incompatible options are present
-    if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || [ -n "$CORETH_BRANCH" ] || \
+    if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || \
        [ -n "$LIBEVM_COMMIT" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
        [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ]; then
         echo "Error: --show cannot be used with other options except --region"
@@ -252,7 +246,6 @@ echo "Configuration:"
 echo "  Instance Type: $INSTANCE_TYPE ($TYPE)"
 echo "  Firewood Branch: ${FIREWOOD_BRANCH:-default}"
 echo "  AvalancheGo Branch: ${AVALANCHEGO_BRANCH:-default}"
-echo "  Coreth Branch: ${CORETH_BRANCH:-default}"
 echo "  LibEVM Commit: ${LIBEVM_COMMIT:-default}"
 echo "  Number of Blocks: $NBLOCKS"
 echo "  Config: $CONFIG"
@@ -287,16 +280,12 @@ if [ "$DRY_RUN" = false ]; then
     # Prepare branch arguments for cloud-init
 FIREWOOD_BRANCH_ARG=""
 AVALANCHEGO_BRANCH_ARG=""
-CORETH_BRANCH_ARG=""
 
 if [ -n "$FIREWOOD_BRANCH" ]; then
     FIREWOOD_BRANCH_ARG="--branch $FIREWOOD_BRANCH"
 fi
 if [ -n "$AVALANCHEGO_BRANCH" ]; then
     AVALANCHEGO_BRANCH_ARG="--branch $AVALANCHEGO_BRANCH"
-fi
-if [ -n "$CORETH_BRANCH" ]; then
-    CORETH_BRANCH_ARG="--branch $CORETH_BRANCH"
 fi
 
 # For libevm, default to main branch if no commit specified
@@ -412,38 +401,31 @@ runcmd:
   # install go and grafana
   - bash /mnt/nvme/ubuntu/firewood/benchmark/setup-scripts/install-golang.sh
   - bash /mnt/nvme/ubuntu/firewood/benchmark/setup-scripts/install-grafana.sh
-  # install task, avalanchego, coreth
+  # install task, avalanchego, libevm
   - snap install task --classic
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu
     git clone --depth 100 __AVALANCHEGO_BRANCH_ARG__ https://github.com/ava-labs/avalanchego.git
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu
-    git clone --depth 100 __CORETH_BRANCH_ARG__ https://github.com/ava-labs/coreth.git
-  - >
-    sudo -u ubuntu -D /mnt/nvme/ubuntu
     git clone https://github.com/ava-labs/libevm.git
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu/libevm
     git checkout __LIBEVM_COMMIT__
-  # force coreth to use the checked-out versions of libevm and firewood
+  # force coreth to use the checked-out version of firewood and libevm
   - >
-    sudo -u ubuntu -D /mnt/nvme/ubuntu/coreth
+    sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego/graft/coreth
     /usr/local/go/bin/go mod edit -replace
-    github.com/ava-labs/firewood-go-ethhash/ffi=../firewood/ffi
+    github.com/ava-labs/firewood-go-ethhash/ffi=../../../firewood/ffi
   - >
-    sudo -u ubuntu -D /mnt/nvme/ubuntu/coreth
+    sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego/graft/coreth
     /usr/local/go/bin/go mod edit -replace
-    github.com/ava-labs/libevm=../libevm
-  # force avalanchego to use the checked-out versions of coreth, libevm, and firewood
-  - >
-    sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego
-    /usr/local/go/bin/go mod edit -replace
-    github.com/ava-labs/firewood-go-ethhash/ffi=../firewood/ffi
+    github.com/ava-labs/libevm=../../../libevm
+  # force avalanchego to use the checked-out versions of libevm and firewood
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego
     /usr/local/go/bin/go mod edit -replace
-    github.com/ava-labs/coreth=../coreth
+    github.com/ava-labs/firewood-go-ethhash/ffi=../firewood/ffi
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego
     /usr/local/go/bin/go mod edit -replace
@@ -455,7 +437,7 @@ runcmd:
     --features ethhash,logger
     > /mnt/nvme/ubuntu/firewood/build.log 2>&1
   # run go mod tidy for coreth and avalanchego
-  - sudo -u ubuntu --login -D /mnt/nvme/ubuntu/coreth go mod tidy
+  - sudo -u ubuntu --login -D /mnt/nvme/ubuntu/avalanchego/graft/coreth go mod tidy
   - sudo -u ubuntu --login -D /mnt/nvme/ubuntu/avalanchego go mod tidy
   # build avalanchego
   - >
@@ -489,7 +471,6 @@ esac
 USERDATA=$(echo "$USERDATA_TEMPLATE" | \
   sed "s|__FIREWOOD_BRANCH_ARG__|$FIREWOOD_BRANCH_ARG|g" | \
   sed "s|__AVALANCHEGO_BRANCH_ARG__|$AVALANCHEGO_BRANCH_ARG|g" | \
-  sed "s|__CORETH_BRANCH_ARG__|$CORETH_BRANCH_ARG|g" | \
   sed "s|__LIBEVM_COMMIT__|$LIBEVM_COMMIT_CHECKOUT|g" | \
   sed "s|__NBLOCKS__|$NBLOCKS|g" | \
   sed "s|__END_BLOCK__|$END_BLOCK|g" | \
@@ -509,9 +490,6 @@ if [ -n "$FIREWOOD_BRANCH" ]; then
 fi
 if [ -n "$AVALANCHEGO_BRANCH" ]; then
     INSTANCE_NAME="$INSTANCE_NAME-ag-$AVALANCHEGO_BRANCH"
-fi
-if [ -n "$CORETH_BRANCH" ]; then
-    INSTANCE_NAME="$INSTANCE_NAME-ce-$CORETH_BRANCH"
 fi
 if [ -n "$LIBEVM_COMMIT" ]; then
     INSTANCE_NAME="$INSTANCE_NAME-le-$LIBEVM_COMMIT"

@@ -905,25 +905,21 @@ typedef struct HandleResult {
  */
 typedef struct DatabaseHandleArgs {
   /**
-   * The path to the database file.
+   * The path to the database directory.
    *
    * This must be a valid UTF-8 string.
    *
    * If this is empty, an error will be returned.
    */
-  BorrowedBytes path;
+  BorrowedBytes dir;
   /**
-   * The path to the `RootStore` directory.
+   * Whether to enable `RootStore`.
    *
-   * This must be a valid UTF-8 string.
-   *
-   * If this is empty, then the archival feature is disabled.
-   *
-   * Note: Setting this directory will only track new revisions going forward
+   * Note: Setting this feature will only track new revisions going forward
    * and will not contain revisions from a prior database instance that didn't
-   * set a `root_store_path`.
+   * enable `root_store`.
    */
-  BorrowedBytes root_store_path;
+  bool root_store;
   /**
    * The size of the node cache.
    *
@@ -1205,6 +1201,30 @@ struct HashResult fwd_commit_proposal(struct ProposalHandle *proposal);
  */
 struct ChangeProofResult fwd_db_change_proof(const struct DatabaseHandle *_db,
                                              struct CreateChangeProofArgs _args);
+
+/**
+ * Dumps the Trie structure of the latest revision of the database to a DOT
+ * (Graphviz) format string for debugging.
+ *
+ * # Arguments
+ *
+ * * `db` - The database handle returned by [`fwd_open_db`]
+ *
+ * # Returns
+ *
+ * - [`ValueResult::NullHandlePointer`] if the provided database handle is null.
+ * - [`ValueResult::Some`] with the DOT format string if successful (the data is
+ *   guaranteed to be utf-8 data, not null terminated).
+ * - [`ValueResult::Err`] if an error occurred while dumping the database.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`DatabaseHandle`].
+ * * call [`fwd_free_owned_bytes`] to free the memory associated with the
+ *   returned value.
+ */
+struct ValueResult fwd_db_dump(const struct DatabaseHandle *db);
 
 /**
  * Generate a range proof for the given range of keys for the latest revision.
@@ -1792,6 +1812,30 @@ struct IteratorResult fwd_iter_on_revision(const struct RevisionHandle *revision
 struct HandleResult fwd_open_db(struct DatabaseHandleArgs args);
 
 /**
+ * Dumps the Trie structure of a proposal to a DOT (Graphviz) format string for debugging.
+ *
+ * # Arguments
+ *
+ * * `proposal` - The proposal handle returned by [`fwd_propose_on_db`] or
+ *   [`fwd_propose_on_proposal`].
+ *
+ * # Returns
+ *
+ * - [`ValueResult::NullHandlePointer`] if the provided proposal handle is null.
+ * - [`ValueResult::Some`] with the DOT format string if successful (the data is
+ *   guaranteed to be utf-8 data, not null terminated).
+ * - [`ValueResult::Err`] if an error occurred while dumping the proposal.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `proposal` is a valid pointer to a [`ProposalHandle`].
+ * * call [`fwd_free_owned_bytes`] to free the memory associated with the
+ *   returned value.
+ */
+struct ValueResult fwd_proposal_dump(const struct ProposalHandle *proposal);
+
+/**
  * Proposes a batch of operations to the database.
  *
  * # Arguments
@@ -1935,6 +1979,30 @@ struct ValueResult fwd_range_proof_to_bytes(const struct RangeProofContext *proo
  * for the duration of the call.
  */
 struct VoidResult fwd_range_proof_verify(struct VerifyRangeProofArgs args);
+
+/**
+ * Dumps the Trie structure of a revision to a DOT (Graphviz) format string for debugging.
+ *
+ * # Arguments
+ *
+ * * `revision` - A pointer to a [`RevisionHandle`] previously returned by
+ *   [`fwd_get_revision`].
+ *
+ * # Returns
+ *
+ * - [`ValueResult::NullHandlePointer`] if the provided revision handle is null.
+ * - [`ValueResult::Some`] with the DOT format string if successful (the data is
+ *   guaranteed to be utf-8 data, not null terminated).
+ * - [`ValueResult::Err`] if an error occurred while dumping the revision.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `revision` is a valid pointer to a [`RevisionHandle`].
+ * * call [`fwd_free_owned_bytes`] to free the memory associated with the
+ *   returned value.
+ */
+struct ValueResult fwd_revision_dump(const struct RevisionHandle *revision);
 
 /**
  * Get the root hash of the latest version of the database

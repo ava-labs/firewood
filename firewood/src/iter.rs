@@ -548,12 +548,6 @@ fn as_enumerated_children_iter(
         .filter_map(|(pos, child)| child.map(|child| (pos, child)))
 }
 
-#[cfg(feature = "branch_factor_256")]
-fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(nibbles: Iter) -> Key {
-    nibbles.collect()
-}
-
-#[cfg(not(feature = "branch_factor_256"))]
 fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
     let mut data = Vec::with_capacity(nibbles.size_hint().0 / 2);
 
@@ -678,10 +672,7 @@ mod tests {
         };
 
         assert!(should_yield_elt);
-        #[cfg(not(feature = "branch_factor_256"))]
         assert_eq!(*node.key_nibbles, path![0x0B, 0x0E, 0x0E, 0x0F]);
-        #[cfg(feature = "branch_factor_256")]
-        assert_eq!(*node.key_nibbles, path![0xBE, 0xEF]);
         assert_eq!(node.node.as_leaf().unwrap().value, Box::from([0x42]));
         assert_eq!(node.next_nibble, None);
 
@@ -700,10 +691,7 @@ mod tests {
             Some(Err(e)) => panic!("{e:?}"),
             None => panic!("unexpected end of iterator"),
         };
-        #[cfg(not(feature = "branch_factor_256"))]
         assert_eq!(*node.key_nibbles, path![0x00, 0x00]);
-        #[cfg(feature = "branch_factor_256")]
-        assert_eq!(*node.key_nibbles, path![0]);
         assert_eq!(node.next_nibble, Some(PathComponent::ALL[0]));
         assert!(node.node.as_branch().unwrap().value.is_none());
 
@@ -712,10 +700,7 @@ mod tests {
             Some(Err(e)) => panic!("{e:?}"),
             None => panic!("unexpected end of iterator"),
         };
-        #[cfg(not(feature = "branch_factor_256"))]
         assert_eq!(*node.key_nibbles, path![0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
-        #[cfg(feature = "branch_factor_256")]
-        assert_eq!(*node.key_nibbles, path![0, 0, 0]);
 
         assert_eq!(node.next_nibble, PathComponent::ALL.last().copied());
 
@@ -729,7 +714,6 @@ mod tests {
             Some(Err(e)) => panic!("{e:?}"),
             None => panic!("unexpected end of iterator"),
         };
-        #[cfg(not(feature = "branch_factor_256"))]
         assert_eq!(
             *node.key_nibbles,
             path![0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0F, 0x0F]
@@ -755,8 +739,6 @@ mod tests {
             Some(Err(e)) => panic!("{e:?}"),
             None => panic!("unexpected end of iterator"),
         };
-        // TODO: make this branch factor 16 compatible
-        #[cfg(not(feature = "branch_factor_256"))]
         assert_eq!(*node.key_nibbles, path![0x00, 0x00]);
 
         assert!(node.node.as_branch().unwrap().value.is_none());
@@ -767,7 +749,6 @@ mod tests {
             Some(Err(e)) => panic!("{e:?}"),
             None => panic!("unexpected end of iterator"),
         };
-        #[cfg(not(feature = "branch_factor_256"))]
         assert_eq!(*node.key_nibbles, path![0x00, 0x00, 0x00, 0x00, 0x00, 0x00]);
         assert_eq!(
             node.node.as_branch().unwrap().value,

@@ -183,7 +183,8 @@ impl From<std::convert::Infallible> for Error {
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
         use RevisionManagerError::{
-            FileIoError, NotLatest, RevisionNotFound, RevisionWithoutAddress, RootStoreError,
+            FileIoError, IOError, NotLatest, RevisionNotFound, RevisionWithoutAddress,
+            RootStoreError,
         };
         match err {
             NotLatest { provided, expected } => Self::ParentNotLatest { provided, expected },
@@ -192,6 +193,7 @@ impl From<RevisionManagerError> for Error {
             },
             RevisionWithoutAddress { provided } => Self::RevisionWithoutAddress { provided },
             FileIoError(io_err) => Self::FileIO(io_err),
+            IOError(err) => Self::IO(err),
             RootStoreError(err) => Self::RootStoreError(err),
         }
     }
@@ -331,6 +333,13 @@ pub trait DbView {
     fn iter_from<K: KeyType>(&self, first_key: K) -> Result<Self::Iter<'_>, Error> {
         self.iter_option(Some(first_key))
     }
+
+    /// Dump the Trie structure in DOT (Graphviz) format
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the dump operation fails
+    fn dump_to_string(&self) -> Result<String, Error>;
 }
 
 /// A boxed iterator over key/value pairs.
@@ -399,6 +408,13 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     fn iter_from(&self, first_key: &[u8]) -> Result<BoxKeyValueIter<'_>, Error> {
         self.iter_option(Some(first_key))
     }
+
+    /// Dump the Trie structure in DOT (Graphviz) format
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the dump operation fails
+    fn dump_to_string(&self) -> Result<String, Error>;
 }
 
 impl<T: Debug + DbView + Send + Sync + 'static> DynDbView for T
@@ -433,6 +449,10 @@ where
             Ok(iter) => Ok(Box::new(iter)),
             Err(e) => Err(e),
         }
+    }
+
+    fn dump_to_string(&self) -> Result<String, Error> {
+        DbView::dump_to_string(self)
     }
 }
 

@@ -248,9 +248,6 @@ impl<T: TriePath + ?Sized> TriePathAsPackedBytes for T {
 mod tests {
     #![expect(clippy::unwrap_used)]
 
-    // NB: tests do not need to worry about 256-ary tries because this module is
-    // only compiled when the "branch_factor_256" feature is not enabled.
-
     use test_case::test_case;
 
     use super::*;

@@ -256,7 +256,6 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
 
             // Assert that only nodes whose keys are an even number of nibbles
             // have a `value_digest`.
-            #[cfg(not(feature = "branch_factor_256"))]
             if !node.full_path().len().is_multiple_of(2) && node.value_digest().is_some() {
                 return Err(ProofError::ValueAtOddNibbleLength);
             }

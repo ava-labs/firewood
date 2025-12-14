@@ -84,7 +84,7 @@ fn test_invalid_header(
     0; // found len
     "no varint after header"
 )]
-#[cfg_attr(not(feature = "branch_factor_256"), test_case(
+#[test_case(
     |proof, data| {
         #[expect(clippy::arithmetic_side_effects)]
         data.truncate(
@@ -98,7 +98,7 @@ fn test_invalid_header(
     1, // expected len
     0; // found len
     "truncated node key"
-))]
+)]
 fn test_incomplete_item(
     mutator: impl FnOnce(&FrozenRangeProof, &mut Vec<u8>),
     item: &'static str,
