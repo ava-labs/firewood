@@ -1555,8 +1555,8 @@ func TestIterDone(t *testing.T) {
 // outlive the revision as it owns a reference to the revision in Rust.
 func TestIterOutlivesRevision(t *testing.T) {
 	r := require.New(t)
-	db := newTestDatabase(t, func(config *Config) {
-		config.Revisions = 2
+	db := newTestDatabase(t, func(config *config) {
+		config.revisions = 2
 	})
 
 	keys, vals := kvForTest(30)
