@@ -1567,6 +1567,66 @@ func TestIterDone(t *testing.T) {
 	r.NoError(it.Err())
 }
 
+// Tests the iterator's behavior after revision is dropped, should safely
+// outlive the revision as it owns a reference to the revision in Rust.
+func TestIterOutlivesRevision(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t, func(config *Config) {
+		config.Revisions = 2
+	})
+
+	keys, vals := kvForTest(30)
+	_, err := db.Update(keys[:10], vals[:10])
+	r.NoErrorf(err, "%T.Update(...)", db)
+	rev, err := db.LatestRevision()
+	r.NoErrorf(err, "%T.LatestRevision()", db)
+	it, err := rev.Iter(nil)
+	r.NoErrorf(err, "%T.Iter()", rev)
+	t.Cleanup(func() {
+		r.NoErrorf(it.Drop(), "%T.Drop()", it)
+	})
+
+	// Drop the revision right away to ensure reaping
+	r.NoErrorf(rev.Drop(), "%T.Drop()", rev)
+
+	// Commit two more times to force reaping of the first revision
+	_, err = db.Update(keys[10:20], vals[10:20])
+	r.NoErrorf(err, "%T.Update(...)", db)
+	_, err = db.Update(keys[20:], vals[20:])
+	r.NoErrorf(err, "%T.Update(...)", db)
+
+	// iterate after reaping
+	assertIteratorYields(r, it, keys[:10], vals[:10])
+}
+
+// Tests the iterator's behavior after proposal is dropped, should safely
+// outlive the proposal as it owns a reference to the view in Rust.
+func TestIterOutlivesProposal(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(4)
+	p, err := db.Propose(keys[:2], vals[:2])
+	r.NoErrorf(err, "%T.Propose(...)", db)
+
+	it, err := p.Iter(nil)
+	r.NoErrorf(err, "%T.Iter()", p)
+	t.Cleanup(func() {
+		r.NoErrorf(it.Drop(), "%T.Drop()", it)
+	})
+	r.NoErrorf(p.Drop(), "%T.Drop()", p)
+
+	// This is necessary because the dropped proposal is referenced in
+	// the revision manager and cleanup only runs when commit is called.
+	// So here we create a new proposal with different keys, and commit
+	// to trigger cleanup of the dropped proposal.
+	p2, err := db.Propose(keys[2:], vals[2:])
+	r.NoErrorf(err, "%T.Propose(...)", db)
+	r.NoErrorf(p2.Commit(), "%T.Commit(...)", db)
+
+	assertIteratorYields(r, it, keys[:2], vals[:2])
+}
+
 // TestNilVsEmptyValue tests that nil values cause delete operations while
 // empty []byte{} values result in inserts with empty values.
 func TestNilVsEmptyValue(t *testing.T) {

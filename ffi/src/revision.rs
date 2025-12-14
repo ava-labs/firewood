@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::CreateIteratorResult;
+use crate::{CreateIteratorResult, IteratorHandle};
 use firewood::v2::api;
 use firewood::v2::api::{ArcDynDbView, BoxKeyValueIter, DbView, HashKey};
 
@@ -24,7 +24,7 @@ impl RevisionHandle {
             .view
             .iter_option(first_key)
             .expect("infallible; see issue #1329");
-        CreateIteratorResult(it.into())
+        CreateIteratorResult(IteratorHandle::new(self.view.clone(), it))
     }
 }
 
