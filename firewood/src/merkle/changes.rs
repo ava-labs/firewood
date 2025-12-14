@@ -125,40 +125,13 @@ impl<'a> DiffMerkleNodeStream<'a> {
         // Create pre-order iterators for the two tries and have them iterate to the start key.
         // If the start key doesn't exist for an iterator, it will set the iterator to the
         // smallest key that is larger than the start key.
-        let mut left_tree = Self::preorder_iter(left_tree, left_hash);
-        left_tree.iterate_to_key(&start_key)?;
-        let mut right_tree = Self::preorder_iter(right_tree, right_hash);
-        right_tree.iterate_to_key(&start_key)?;
-
+        let left_tree = PreOrderIterator::new(left_tree, left_hash, &start_key)?;
+        let right_tree = PreOrderIterator::new(right_tree, right_hash, &start_key)?;
         Ok(Self {
             state: Some(DiffIterationNodeState::TraverseBoth),
             left_tree,
             right_tree,
         })
-    }
-
-    /// Create a pre-order iterator for the trie. The iterator takes an optional
-    /// root hash which is available when the trie is from an `ImmutableProposal`.
-    fn preorder_iter<V: TrieReader>(
-        tree: &'a V,
-        root_hash: Option<TrieHash>,
-    ) -> PreOrderIterator<'a> {
-        let mut preorder_it = PreOrderIterator {
-            node_state: None,
-            traversal_stack: vec![],
-            trie: tree,
-        };
-        // If the root node is not None, then push a `TraversalStackFrame` for the
-        // root onto the traversal stack. It will be used on the first call to
-        // next or next_internal.
-        if let Some(root) = tree.root_node() {
-            preorder_it.traversal_stack.push(TraversalStackFrame {
-                pre_path: Path::default(),
-                node: Child::Node((*root).clone()),
-                hash: root_hash,
-            });
-        }
-        preorder_it
     }
 
     /// Helper function used in `one_step_compare` to check if two `Option<TrieHash>` matches.
@@ -436,7 +409,33 @@ struct PreOrderIterator<'a> {
     traversal_stack: Vec<TraversalStackFrame>,
 }
 
-impl PreOrderIterator<'_> {
+impl<'a> PreOrderIterator<'a> {
+    /// Create a pre-order iterator for the trie that starts at `start_key`. The iterator takes an
+    /// optional root hash which is available when the trie is from an `ImmutableProposal`.
+    fn new<V: TrieReader>(
+        trie: &'a V,
+        root_hash: Option<TrieHash>,
+        start_key: &Key,
+    ) -> Result<PreOrderIterator<'a>, FileIoError> {
+        let mut preorder = Self {
+            node_state: None,
+            traversal_stack: vec![],
+            trie,
+        };
+        // If the root node is not None, then push a `TraversalStackFrame` for the
+        // root onto the traversal stack. It will be used on the first call to
+        // next or next_internal.
+        if let Some(root) = trie.root_node() {
+            preorder.traversal_stack.push(TraversalStackFrame {
+                pre_path: Path::default(),
+                node: Child::Node((*root).clone()),
+                hash: root_hash,
+            });
+        }
+        preorder.iterate_to_key(start_key)?;
+        Ok(preorder)
+    }
+
     /// In a textbook implementation of pre-order traversal we would normally pop off the next node
     /// from the traversal stack and push its children onto the stack before returning. However, that
     /// would be inefficient if we want to skip traversing a node's children if its hash matches that
@@ -498,19 +497,21 @@ impl PreOrderIterator<'_> {
         self.node_state = None;
     }
 
-    /// Used to skip all of the keys prior to the specified key. Its main use is to start the
-    /// change proof at a particular key.
+    /// Modify the iterator to skip all keys prior to the specified key.
     fn iterate_to_key(&mut self, key: &Key) -> Result<(), FileIoError> {
         // Function is a no-op if the key is empty.
         if key.is_empty() {
             return Ok(());
         }
-        // Assume root or other nodes have already been pushed onto the stack
+        // Keep iterating until we have reached the start key. Only traverse branches that can
+        // contain the start key.
         loop {
+            // Push the children that can contain the keys that are larger than or equal to the
+            // the start key onto the traversal stack.
             if let Some(prev_node_state) = self.node_state.take()
                 && let Node::Branch(branch) = &*prev_node_state.node
             {
-                let mut passed_valid_check = false;
+                let mut passed_check = false;
                 for (path_comp, child) in branch.children.iter().rev() {
                     if let Some(child) = child {
                         let child_pre_path = Path::from_nibbles_iterator(
@@ -520,7 +521,9 @@ impl PreOrderIterator<'_> {
                                 .copied()
                                 .chain(once(path_comp.as_u8())),
                         );
-                        if passed_valid_check {
+                        // A previous child has already been pushed onto the traversal stack. The
+                        // remaining children can be pushed without additional checks.
+                        if passed_check {
                             self.traversal_stack.push(TraversalStackFrame {
                                 pre_path: child_pre_path,
                                 node: child.clone(),
@@ -528,7 +531,7 @@ impl PreOrderIterator<'_> {
                             });
                         } else {
                             // We only need to traverse this child if its pre-path is a prefix of the key (including
-                            // being equal to the key) or its path is lexicographically larger than the key.
+                            // being equal to the key) or is lexicographically larger than the key.
                             let child_key = key_from_nibble_iter(child_pre_path.iter().copied());
                             let path_overlap = PrefixOverlap::from(key, child_key.as_ref());
                             let unique_node = path_overlap.unique_b;
@@ -540,7 +543,7 @@ impl PreOrderIterator<'_> {
                                 });
                                 // Once the first child is added to the stack, then the subsequent children can be
                                 // added without needing additional checks.
-                                passed_valid_check = true;
+                                passed_check = true;
                             }
                         }
                     }
@@ -567,18 +570,17 @@ impl PreOrderIterator<'_> {
                     return Ok(());
                 }
 
-                // Check if this node's path is a prefix of the key. If it is not (`unique_node`
-                // is not empty), then this node and its children cannot be larger than or equal to
-                // the key, and we don't need to include them on the traversal stack.
-                let path_overlap = PrefixOverlap::from(key, node_key.as_ref());
-                let unique_node = path_overlap.unique_b;
-                if !unique_node.is_empty() {
-                    continue;
-                }
-
-                // Only save this node state in prev_node_path if it is a branch.
+                // If this node is a leaf, then we don't need to save its state to `node_state` as
+                // it has no children to traverse.
                 if let Node::Branch(_branch) = &*state.node {
-                    self.node_state = Some(state);
+                    // Check if this node's path is a prefix of the key. If it is not (`unique_node`
+                    // is not empty), then this node's children cannot be larger than or equal to
+                    // the key, and we don't need to include them on the traversal stack.
+                    let path_overlap = PrefixOverlap::from(key, node_key.as_ref());
+                    let unique_node = path_overlap.unique_b;
+                    if unique_node.is_empty() {
+                        self.node_state = Some(state);
+                    }
                 }
             } else {
                 // Traversal stack is empty. This means the key is lexicographically larger than
