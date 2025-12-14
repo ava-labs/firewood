@@ -159,6 +159,23 @@ func (p *Proposal) Drop() error {
 	})
 }
 
+// Dump returns a DOT (Graphviz) format representation of the trie structure
+// of this proposal for debugging purposes.
+//
+// Returns errDroppedProposal if Commit or Drop has already been called.
+func (p *Proposal) Dump() (string, error) {
+	if p.handle == nil {
+		return "", errDroppedProposal
+	}
+
+	bytes, err := getValueFromValueResult(C.fwd_proposal_dump(p.handle))
+	if err != nil {
+		return "", err
+	}
+
+	return string(bytes), nil
+}
+
 // getProposalFromProposalResult converts a C.ProposalResult to a Proposal or error.
 func getProposalFromProposalResult(result C.ProposalResult, wg *sync.WaitGroup, commitLock *sync.Mutex) (*Proposal, error) {
 	switch result.tag {

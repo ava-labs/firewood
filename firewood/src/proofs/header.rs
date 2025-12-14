@@ -133,8 +133,8 @@ pub enum InvalidHeader {
     /// The proof was encoded for an unsupported branching factor.
     #[error(
         "unsupported branch factor: found {}; expected {}",
-        magic::widen_branch_factor(*found),
-        magic::widen_branch_factor(magic::BRANCH_FACTOR)
+        *found,
+        magic::BRANCH_FACTOR,
     )]
     UnsupportedBranchFactor {
         /// The actual branch factor encoded in the header.

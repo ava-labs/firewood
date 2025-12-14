@@ -29,19 +29,13 @@ fn full_range_proof() {
 
     let rangeproof = merkle.range_proof(None, None, None).unwrap();
     assert_eq!(rangeproof.key_values().len(), u8::MAX as usize + 1);
-    assert_ne!(rangeproof.start_proof(), rangeproof.end_proof());
-    let left_proof = merkle.prove(&[u8::MIN]).unwrap();
-    let right_proof = merkle.prove(&[u8::MAX]).unwrap();
-    assert_eq!(rangeproof.start_proof(), &left_proof);
-    assert_eq!(rangeproof.end_proof(), &right_proof);
+    assert_eq!(rangeproof.start_proof(), &FrozenProof::default());
+    assert_eq!(rangeproof.end_proof(), &FrozenProof::default());
 
     let rangeproof = roundtrip_range_proof(&rangeproof);
     assert_eq!(rangeproof.key_values().len(), u8::MAX as usize + 1);
-    assert_ne!(rangeproof.start_proof(), rangeproof.end_proof());
-    let left_proof = merkle.prove(&[u8::MIN]).unwrap();
-    let right_proof = merkle.prove(&[u8::MAX]).unwrap();
-    assert_eq!(rangeproof.start_proof(), &left_proof);
-    assert_eq!(rangeproof.end_proof(), &right_proof);
+    assert_eq!(rangeproof.start_proof(), &FrozenProof::default());
+    assert_eq!(rangeproof.end_proof(), &FrozenProof::default());
 }
 
 #[test]

@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -69,8 +68,8 @@ func stringToHash(t *testing.T, s string) Hash {
 }
 
 func inferHashingMode(ctx context.Context) (string, error) {
-	dbFile := filepath.Join(os.TempDir(), "test.db")
-	db, err := newDatabase(dbFile)
+	dbDir := os.TempDir()
+	db, err := newDatabase(dbDir)
 	if err != nil {
 		return "", err
 	}
@@ -78,7 +77,7 @@ func inferHashingMode(ctx context.Context) (string, error) {
 		ctx, cancel := context.WithTimeout(ctx, time.Second)
 		defer cancel()
 		_ = db.Close(ctx)
-		_ = os.Remove(dbFile)
+		_ = os.Remove(dbDir)
 	}()
 
 	actualEmptyRoot, err := db.Root()
@@ -149,12 +148,11 @@ func oneSecCtx(tb testing.TB) context.Context {
 	return ctx
 }
 
-func newTestDatabase(t *testing.T, configureFns ...func(*Config)) *Database {
+func newTestDatabase(t *testing.T, opts ...Option) *Database {
 	t.Helper()
 	r := require.New(t)
 
-	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, err := newDatabase(dbFile, configureFns...)
+	db, err := newDatabase(t.TempDir(), opts...)
 	r.NoError(err)
 	t.Cleanup(func() {
 		r.NoError(db.Close(oneSecCtx(t)))
@@ -162,16 +160,10 @@ func newTestDatabase(t *testing.T, configureFns ...func(*Config)) *Database {
 	return db
 }
 
-func newDatabase(dbFile string, configureFns ...func(*Config)) (*Database, error) {
-	conf := DefaultConfig()
-	conf.Truncate = true // in tests, we use filepath.Join, which creates an empty file
-	for _, fn := range configureFns {
-		fn(conf)
-	}
-
-	f, err := New(dbFile, conf)
+func newDatabase(dbDir string, opts ...Option) (*Database, error) {
+	f, err := New(dbDir, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
+		return nil, fmt.Errorf("failed to create new database in directory %q: %w", dbDir, err)
 	}
 	return f, nil
 }
@@ -204,11 +196,9 @@ func TestUpdateMultiKV(t *testing.T) {
 
 func TestTruncateDatabase(t *testing.T) {
 	r := require.New(t)
-	dbFile := filepath.Join(t.TempDir(), "test.db")
+	dbDir := t.TempDir()
 	// Create a new database with truncate enabled.
-	config := DefaultConfig()
-	config.Truncate = true
-	db, err := New(dbFile, config)
+	db, err := New(dbDir, WithTruncate(true))
 	r.NoError(err)
 
 	// Insert some data.
@@ -220,7 +210,7 @@ func TestTruncateDatabase(t *testing.T) {
 	r.NoError(db.Close(oneSecCtx(t)))
 
 	// Reopen the database with truncate enabled.
-	db, err = New(dbFile, config)
+	db, err = New(dbDir, WithTruncate(true))
 	r.NoError(err)
 
 	// Check that the database is empty after truncation.
@@ -234,8 +224,7 @@ func TestTruncateDatabase(t *testing.T) {
 
 func TestClosedDatabase(t *testing.T) {
 	r := require.New(t)
-	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, err := newDatabase(dbFile)
+	db, err := newDatabase(t.TempDir())
 	r.NoError(err)
 
 	r.NoError(db.Close(oneSecCtx(t)))
@@ -903,9 +892,7 @@ func TestRevisionOutlivesProposal(t *testing.T) {
 // Tests that holding a reference to revision will prevent from it being reaped
 func TestRevisionOutlivesReaping(t *testing.T) {
 	r := require.New(t)
-	db := newTestDatabase(t, func(config *Config) {
-		config.Revisions = 2
-	})
+	db := newTestDatabase(t, WithRevisions(2))
 
 	keys, vals := kvForTest(40)
 	firstRoot, err := db.Update(keys[:10], vals[:10])
@@ -1167,7 +1154,7 @@ func TestGetFromRootParallel(t *testing.T) {
 func TestHandlesFreeImplicitly(t *testing.T) {
 	t.Parallel()
 
-	db, err := newDatabase(filepath.Join(t.TempDir(), "test_GC_drops_implicitly.db"))
+	db, err := newDatabase(t.TempDir())
 	require.NoError(t, err)
 
 	// make the db non-empty
@@ -1259,20 +1246,14 @@ func TestHandlesFreeImplicitly(t *testing.T) {
 func TestFjallStore(t *testing.T) {
 	r := require.New(t)
 
-	var (
-		tmpdir       = t.TempDir()
-		dbFile       = filepath.Join(tmpdir, "test.db")
-		rootStoreDir = filepath.Join(tmpdir, "root_store_dir")
-	)
-
 	// Create a new database with RootStore enabled
-	config := DefaultConfig()
-	config.RootStoreDir = rootStoreDir
 	// Setting the number of in-memory revisions to 5 tests that revision nodes
 	// are not reaped prior to closing the database.
-	config.Revisions = 5
-
-	db, err := New(dbFile, config)
+	dbDir := t.TempDir()
+	db, err := New(dbDir,
+		WithRootStore(),
+		WithRevisions(5),
+	)
 	r.NoError(err)
 
 	// Create and commit 10 proposals
@@ -1292,7 +1273,10 @@ func TestFjallStore(t *testing.T) {
 	// Close and reopen the database
 	r.NoError(db.Close(t.Context()))
 
-	db, err = New(dbFile, config)
+	db, err = New(dbDir,
+		WithRootStore(),
+		WithRevisions(5),
+	)
 	r.NoError(err)
 
 	// Verify that we can access all revisions
@@ -1639,8 +1623,7 @@ func TestNilVsEmptyValue(t *testing.T) {
 // ErrActiveKeepAliveHandles when the context is cancelled before handles are dropped.
 func TestCloseWithCancelledContext(t *testing.T) {
 	r := require.New(t)
-	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, err := newDatabase(dbFile)
+	db, err := newDatabase(t.TempDir())
 	r.NoError(err)
 
 	// Create a proposal to keep a handle active
@@ -1675,8 +1658,7 @@ func TestCloseWithCancelledContext(t *testing.T) {
 // ErrActiveKeepAliveHandles when multiple handles are active and context is cancelled.
 func TestCloseWithMultipleActiveHandles(t *testing.T) {
 	r := require.New(t)
-	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, err := newDatabase(dbFile)
+	db, err := newDatabase(t.TempDir())
 	r.NoError(err)
 
 	// Create multiple proposals
@@ -1723,8 +1705,7 @@ func TestCloseWithMultipleActiveHandles(t *testing.T) {
 // when all handles are dropped before the context timeout.
 func TestCloseSucceedsWhenHandlesDroppedInTime(t *testing.T) {
 	r := require.New(t)
-	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, err := newDatabase(dbFile)
+	db, err := newDatabase(t.TempDir())
 	r.NoError(err)
 
 	// Create two active proposals
@@ -1747,4 +1728,61 @@ func TestCloseSucceedsWhenHandlesDroppedInTime(t *testing.T) {
 	r.NoError(proposal1.Drop())
 	r.NoError(proposal2.Drop())
 	r.NoError(<-closeDone, "Close should succeed when handles are dropped before timeout")
+}
+
+func TestDump(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Test dump on empty database
+	dump, err := db.Dump()
+	r.NoError(err)
+	r.Contains(dump, "digraph", "dump should be in DOT format")
+
+	// Insert a few keys and values
+	keys := [][]byte{[]byte("key1"), []byte("key2"), []byte("key3")}
+	vals := [][]byte{[]byte("value1"), []byte("value2"), []byte("value3")}
+	root, err := db.Update(keys, vals)
+	r.NoError(err)
+	r.NotNil(root)
+
+	// Test dump on database with data
+	dump, err = db.Dump()
+	r.NoError(err)
+	r.Contains(dump, "digraph", "dump should be in DOT format")
+	// Verify that the values appear in the dump (keys are encoded/abbreviated in DOT format)
+	for _, val := range vals {
+		r.Contains(dump, string(val), "dump should contain value: %s", string(val))
+	}
+
+	// Test dump on revision
+	revision, err := db.Revision(root)
+	r.NoError(err)
+	defer func() {
+		r.NoError(revision.Drop())
+	}()
+
+	revisionDump, err := revision.Dump()
+	r.NoError(err)
+	r.Contains(revisionDump, "digraph", "revision dump should be in DOT format")
+	for _, val := range vals {
+		r.Contains(revisionDump, string(val), "revision dump should contain value: %s", string(val))
+	}
+
+	// Test dump on proposal
+	newKeys := [][]byte{[]byte("key4")}
+	newVals := [][]byte{[]byte("value4")}
+	proposal, err := db.Propose(newKeys, newVals)
+	r.NoError(err)
+	defer func() {
+		r.NoError(proposal.Drop())
+	}()
+
+	proposalDump, err := proposal.Dump()
+	r.NoError(err)
+	r.Contains(proposalDump, "digraph", "proposal dump should be in DOT format")
+	// Proposal should contain both old and new values
+	for _, val := range append(vals, newVals...) {
+		r.Contains(proposalDump, string(val), "proposal dump should contain value: %s", string(val))
+	}
 }

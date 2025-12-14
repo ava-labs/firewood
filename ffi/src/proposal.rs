@@ -48,6 +48,10 @@ impl<'db> DbView for ProposalHandle<'db> {
     ) -> Result<Self::Iter<'_>, api::Error> {
         self.proposal.iter_option(first_key)
     }
+
+    fn dump_to_string(&self) -> Result<String, api::Error> {
+        self.proposal.dump_to_string()
+    }
 }
 
 impl ProposalHandle<'_> {

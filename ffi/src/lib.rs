@@ -769,3 +769,78 @@ pub unsafe extern "C" fn fwd_free_owned_key_value_batch(batch: OwnedKeyValueBatc
 pub unsafe extern "C" fn fwd_free_owned_kv_pair(kv: OwnedKeyValuePair) -> VoidResult {
     invoke(move || drop(kv))
 }
+
+/// Dumps the Trie structure of the latest revision of the database to a DOT
+/// (Graphviz) format string for debugging.
+///
+/// # Arguments
+///
+/// * `db` - The database handle returned by [`fwd_open_db`]
+///
+/// # Returns
+///
+/// - [`ValueResult::NullHandlePointer`] if the provided database handle is null.
+/// - [`ValueResult::Some`] with the DOT format string if successful (the data is
+///   guaranteed to be utf-8 data, not null terminated).
+/// - [`ValueResult::Err`] if an error occurred while dumping the database.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `db` is a valid pointer to a [`DatabaseHandle`].
+/// * call [`fwd_free_owned_bytes`] to free the memory associated with the
+///   returned value.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_db_dump(db: Option<&DatabaseHandle>) -> ValueResult {
+    invoke_with_handle(db, handle::DatabaseHandle::dump_to_string)
+}
+
+/// Dumps the Trie structure of a revision to a DOT (Graphviz) format string for debugging.
+///
+/// # Arguments
+///
+/// * `revision` - A pointer to a [`RevisionHandle`] previously returned by
+///   [`fwd_get_revision`].
+///
+/// # Returns
+///
+/// - [`ValueResult::NullHandlePointer`] if the provided revision handle is null.
+/// - [`ValueResult::Some`] with the DOT format string if successful (the data is
+///   guaranteed to be utf-8 data, not null terminated).
+/// - [`ValueResult::Err`] if an error occurred while dumping the revision.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `revision` is a valid pointer to a [`RevisionHandle`].
+/// * call [`fwd_free_owned_bytes`] to free the memory associated with the
+///   returned value.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_revision_dump(revision: Option<&RevisionHandle>) -> ValueResult {
+    invoke_with_handle(revision, firewood::v2::api::DbView::dump_to_string)
+}
+
+/// Dumps the Trie structure of a proposal to a DOT (Graphviz) format string for debugging.
+///
+/// # Arguments
+///
+/// * `proposal` - The proposal handle returned by [`fwd_propose_on_db`] or
+///   [`fwd_propose_on_proposal`].
+///
+/// # Returns
+///
+/// - [`ValueResult::NullHandlePointer`] if the provided proposal handle is null.
+/// - [`ValueResult::Some`] with the DOT format string if successful (the data is
+///   guaranteed to be utf-8 data, not null terminated).
+/// - [`ValueResult::Err`] if an error occurred while dumping the proposal.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `proposal` is a valid pointer to a [`ProposalHandle`].
+/// * call [`fwd_free_owned_bytes`] to free the memory associated with the
+///   returned value.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_proposal_dump(proposal: Option<&ProposalHandle>) -> ValueResult {
+    invoke_with_handle(proposal, firewood::v2::api::DbView::dump_to_string)
+}

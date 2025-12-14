@@ -111,6 +111,23 @@ func (r *Revision) Root() Hash {
 	return r.root
 }
 
+// Dump returns a DOT (Graphviz) format representation of the trie structure
+// of this revision for debugging purposes.
+//
+// Returns ErrDroppedRevision if Drop has already been called.
+func (r *Revision) Dump() (string, error) {
+	if r.handle == nil {
+		return "", ErrDroppedRevision
+	}
+
+	bytes, err := getValueFromValueResult(C.fwd_revision_dump(r.handle))
+	if err != nil {
+		return "", err
+	}
+
+	return string(bytes), nil
+}
+
 // getRevisionFromResult converts a C.RevisionResult to a Revision or error.
 func getRevisionFromResult(result C.RevisionResult, wg *sync.WaitGroup) (*Revision, error) {
 	switch result.tag {

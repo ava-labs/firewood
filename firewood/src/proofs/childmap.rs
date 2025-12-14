@@ -79,20 +79,9 @@ impl std::fmt::Display for ChildrenMap {
     }
 }
 
-#[cfg(not(feature = "branch_factor_256"))]
 impl std::fmt::Binary for ChildrenMap {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:016b}", u16::from_le_bytes(self.0))
-    }
-}
-
-#[cfg(feature = "branch_factor_256")]
-impl std::fmt::Binary for ChildrenMap {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let [a, b] = bytemuck::cast::<_, [[u8; 16]; 2]>(self.0);
-        let a = u128::from_le_bytes(a);
-        let b = u128::from_le_bytes(b);
-        write!(f, "{a:0128b}{b:0128b}")
     }
 }
 
