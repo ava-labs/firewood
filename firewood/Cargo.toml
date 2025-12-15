@@ -43,7 +43,7 @@ derive-where = "1.6.0"
 weak-table = "0.3.2"
 
 [features]
-default = []
+default = ["debug-commit-delay"]
 nightly = []
 io-uring = ["firewood-storage/io-uring"]
 logger = ["firewood-storage/logger"]
