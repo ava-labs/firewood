@@ -1065,18 +1065,14 @@ pub fn nibbles_to_bytes_iter(nibbles: &[u8]) -> impl Iterator<Item = u8> {
 /// The `unique_*` properties, [`unique_a`][`PrefixOverlap::unique_a`] and [`unique_b`][`PrefixOverlap::unique_b`]
 /// are set based on the argument order passed into the [`from`][`PrefixOverlap::from`] constructor.
 #[derive(Debug)]
-pub struct PrefixOverlap<'a, T> {
-    pub shared: &'a [T],
-    pub unique_a: &'a [T],
-    pub unique_b: &'a [T],
+struct PrefixOverlap<'a, T> {
+    shared: &'a [T],
+    unique_a: &'a [T],
+    unique_b: &'a [T],
 }
 
 impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
-    /// # Panics
-    ///
-    /// Should only panic if there is a logic error causing `b.get` to fail
-    /// on `split_index` even though `split_index` was generated from `b`.
-    pub fn from(a: &'a [T], b: &'a [T]) -> Self {
+    fn from(a: &'a [T], b: &'a [T]) -> Self {
         let split_index = a
             .iter()
             .zip(b)
