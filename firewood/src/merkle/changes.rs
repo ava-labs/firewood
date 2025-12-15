@@ -612,6 +612,7 @@ mod tests {
         FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, MemStore, MutableProposal,
         NodeStore, SeededRng, TestRecorder, TrieReader,
     };
+    use metrics::with_local_recorder;
     use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
     use test_case::test_case;
 
