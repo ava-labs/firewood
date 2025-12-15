@@ -162,7 +162,7 @@ jobs:
           save-if: "false"
           shared-key: ${{ matrix.profile-key }}
       - name: Run tests with cargo-nextest
-        run: cargo nextest run --locked --profile ci ${{ matrix.profile-args }}
+        run: cargo nextest run --locked --profile ci --verbose ${{ matrix.profile-args }}
 
   examples:
     needs: build
