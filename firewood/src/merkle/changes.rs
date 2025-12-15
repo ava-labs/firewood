@@ -1765,7 +1765,7 @@ mod tests {
     #[allow(clippy::pedantic)]
     fn test_hash_optimization_reduces_next_calls() {
         let recorder = TestRecorder::default();
-        recorder.with_recorder(|| {
+        recorder.with_local_recorder(|| {
             // Create test data with substantial shared content and unique content
             let tree1_items = [
                 // Large shared content that will form identical subtrees

@@ -185,7 +185,7 @@ impl Deref for TestRecorder {
 
 impl TestRecorder {
     /// Execute test function with this recorder set as the local recorder.
-    pub fn with_recorder<F: Fn()>(&self, f: F) {
+    pub fn with_local_recorder<F: Fn()>(&self, f: F) {
         with_local_recorder(&**self, f);
     }
 
