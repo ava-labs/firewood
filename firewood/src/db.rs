@@ -387,6 +387,12 @@ impl Proposal<'_> {
     fn create_proposal(&self, batch: impl IntoBatchIter) -> Result<Self, api::Error> {
         self.db.propose_with_parent(batch, &self.nodestore)
     }
+
+    /// Returns the view backing this proposal.
+    #[must_use]
+    pub fn view(&self) -> ArcDynDbView {
+        self.nodestore.clone()
+    }
 }
 
 #[cfg(test)]
