@@ -944,7 +944,7 @@ mod test {
     }
 
     #[test]
-    fn fuzz_checker() {
+    fn test_slow_fuzz_checker() {
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
         let db = TestDb::new();
