@@ -1,9 +1,9 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood::v2::api::{self, BoxKeyValueIter, DbView, HashKey, IntoBatchIter, Proposal as _};
+use firewood::v2::api::{self, DbView, HashKey, IntoBatchIter, Proposal as _};
 
-use crate::iterator::CreateIteratorResult;
+use crate::{IteratorHandle, iterator::CreateIteratorResult};
 use metrics::counter;
 
 /// An opaque wrapper around a Proposal that also retains a reference to the
@@ -108,7 +108,7 @@ impl ProposalHandle<'_> {
         let it = self
             .iter_option(first_key)
             .expect("infallible; see issue #1329");
-        CreateIteratorResult((Box::new(it) as BoxKeyValueIter<'_>).into())
+        CreateIteratorResult(IteratorHandle::new(self.proposal.view(), Box::new(it)))
     }
 }
 #[derive(Debug)]
