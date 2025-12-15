@@ -460,22 +460,25 @@ impl<'a> PreOrderIterator<'a> {
         {
             // Since a stack is LIFO and we want to perform pre-order traversal, we pushed the
             // children in reverse order.
-            for (path_comp, child) in branch.children.iter().rev() {
-                if let Some(child) = child {
-                    // Generate the pre-path for this child, and push it onto the traversal stack.
-                    let child_pre_path = Path::from_nibbles_iterator(
-                        prev_node_state
-                            .path
-                            .iter()
-                            .copied()
-                            .chain(once(path_comp.as_u8())),
-                    );
-                    self.traversal_stack.push(TraversalStackFrame {
-                        pre_path: child_pre_path,
-                        node: child.clone(),
-                        hash: None,
-                    });
-                }
+            for (path_comp, child) in branch
+                .children
+                .iter()
+                .rev()
+                .filter_map(|(pc, c)| c.as_ref().map(|child| (pc, child)))
+            {
+                // Generate the pre-path for this child, and push it onto the traversal stack.
+                let child_pre_path = Path::from_nibbles_iterator(
+                    prev_node_state
+                        .path
+                        .iter()
+                        .copied()
+                        .chain(once(path_comp.as_u8())),
+                );
+                self.traversal_stack.push(TraversalStackFrame {
+                    pre_path: child_pre_path,
+                    node: child.clone(),
+                    hash: None,
+                });
             }
         }
 
@@ -512,39 +515,42 @@ impl<'a> PreOrderIterator<'a> {
                 && let Node::Branch(branch) = &*prev_node_state.node
             {
                 let mut passed_check = false;
-                for (path_comp, child) in branch.children.iter().rev() {
-                    if let Some(child) = child {
-                        let child_pre_path = Path::from_nibbles_iterator(
-                            prev_node_state
-                                .path
-                                .iter()
-                                .copied()
-                                .chain(once(path_comp.as_u8())),
-                        );
-                        // A previous child has already been pushed onto the traversal stack. The
-                        // remaining children can be pushed without additional checks.
-                        if passed_check {
+                for (path_comp, child) in branch
+                    .children
+                    .iter()
+                    .rev()
+                    .filter_map(|(pc, c)| c.as_ref().map(|child| (pc, child)))
+                {
+                    let child_pre_path = Path::from_nibbles_iterator(
+                        prev_node_state
+                            .path
+                            .iter()
+                            .copied()
+                            .chain(once(path_comp.as_u8())),
+                    );
+                    // A previous child has already been pushed onto the traversal stack. The
+                    // remaining children can be pushed without additional checks.
+                    if passed_check {
+                        self.traversal_stack.push(TraversalStackFrame {
+                            pre_path: child_pre_path,
+                            node: child.clone(),
+                            hash: None,
+                        });
+                    } else {
+                        // We only need to traverse this child if its pre-path is a prefix of the key (including
+                        // being equal to the key) or is lexicographically larger than the key.
+                        let child_key = key_from_nibble_iter(child_pre_path.iter().copied());
+                        let path_overlap = PrefixOverlap::from(key, child_key.as_ref());
+                        let unique_node = path_overlap.unique_b;
+                        if unique_node.is_empty() || child_key > *key {
                             self.traversal_stack.push(TraversalStackFrame {
                                 pre_path: child_pre_path,
                                 node: child.clone(),
                                 hash: None,
                             });
-                        } else {
-                            // We only need to traverse this child if its pre-path is a prefix of the key (including
-                            // being equal to the key) or is lexicographically larger than the key.
-                            let child_key = key_from_nibble_iter(child_pre_path.iter().copied());
-                            let path_overlap = PrefixOverlap::from(key, child_key.as_ref());
-                            let unique_node = path_overlap.unique_b;
-                            if unique_node.is_empty() || child_key > *key {
-                                self.traversal_stack.push(TraversalStackFrame {
-                                    pre_path: child_pre_path,
-                                    node: child.clone(),
-                                    hash: None,
-                                });
-                                // Once the first child is added to the stack, then the subsequent children can be
-                                // added without needing additional checks.
-                                passed_check = true;
-                            }
+                            // Once the first child is added to the stack, then the subsequent children can be
+                            // added without needing additional checks.
+                            passed_check = true;
                         }
                     }
                 }
@@ -733,7 +739,7 @@ mod tests {
                 (Some(Ok((lk, lv))), Some(Ok((rk, rv)))) => {
                     key_count += 1;
                     if lk != rk {
-                        eprintln!(
+                        println!(
                             "Key mismatch at position {}: left={:02x?}, right={:02x?}",
                             key_count,
                             lk.as_ref(),
@@ -743,7 +749,7 @@ mod tests {
                         for i in 0..3 {
                             match (l.next(), r.next()) {
                                 (Some(Ok((lk2, _))), Some(Ok((rk2, _)))) => {
-                                    eprintln!(
+                                    println!(
                                         "  Next {}: left={:02x?}, right={:02x?}",
                                         i + 1,
                                         lk2.as_ref(),
@@ -751,14 +757,14 @@ mod tests {
                                     );
                                 }
                                 (Some(Ok((lk2, _))), None) => {
-                                    eprintln!(
+                                    println!(
                                         "  Next {}: left={:02x?}, right=None",
                                         i + 1,
                                         lk2.as_ref()
                                     );
                                 }
                                 (None, Some(Ok((rk2, _)))) => {
-                                    eprintln!(
+                                    println!(
                                         "  Next {}: left=None, right={:02x?}",
                                         i + 1,
                                         rk2.as_ref()
@@ -1100,9 +1106,8 @@ mod tests {
         expected_puts: usize,
         expected_deletes: usize,
     ) {
-        // This test covers the exclusion logic in Branch vs Leaf scenarios.
-        // It creates a case where one tree has a branch with children, and the other
-        // tree has a leaf that matches one of those children - testing that the
+        // This test creates a case where one tree has a branch with children, and the
+        // other tree has a leaf that matches one of those children - testing that the
         // matching child gets excluded from deletion and properly compared instead.
         //
         // Parameters:
@@ -1166,7 +1171,7 @@ mod tests {
         );
 
         println!(
-            "✅ Branch vs leaf test passed: {direction_desc} (same_value={same_value}, backwards={backwards}) - {put_count} puts, {delete_count} deletes"
+            "Branch vs leaf test passed: {direction_desc} (same_value={same_value}, backwards={backwards}) - {put_count} puts, {delete_count} deletes"
         );
     }
 
@@ -1237,15 +1242,11 @@ mod tests {
     }
 
     #[test]
-    fn test_all_six_diff_states_coverage() {
-        // This test ensures comprehensive coverage of all 6 diff iteration states
-        // by creating specific scenarios that guarantee each state is exercised
-
-        // Create trees with carefully designed structure to trigger all states:
+    fn test_diff_states_coverage() {
+        // Create trees with carefully designed structure to trigger the following:
         // 1. Deep branching structure to ensure branch nodes exist
         // 2. Mix of shared, modified, left-only, and right-only content
         // 3. Different tree shapes to force visited states
-
         let tree1_data = vec![
             // Shared deep structure (will trigger VisitedNodePairState)
             (b"shared/deep/branch/file1".as_slice(), b"value1".as_slice()),
@@ -1348,7 +1349,7 @@ mod tests {
             "Expected at least 4 additions (includes modifications)"
         );
 
-        println!("✅ All 6 diff coverage tests passed:");
+        println!("All 6 diff coverage tests passed:");
     }
 
     #[test]
