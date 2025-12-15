@@ -14,21 +14,16 @@ type KeyValueItem = (merkle::Key, merkle::Value);
 #[derive(Default)]
 #[derive_where(Debug)]
 #[derive_where(skip_inner)]
-pub struct IteratorHandle<'view> {
-    // order is important to ensure the view is dropped after the iterator
-    iter: Option<BoxKeyValueIter<'view>>,
-    view: Option<ArcDynDbView>,
-}
+pub struct IteratorHandle<'view>(Option<(BoxKeyValueIter<'view>, ArcDynDbView)>);
 
 impl Iterator for IteratorHandle<'_> {
     type Item = Result<KeyValueItem, api::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let out = self.iter.as_mut()?.next();
+        let out = self.0.as_mut()?.0.next();
         if out.is_none() {
             // iterator exhausted; drop it so the NodeStore can be released
-            self.iter = None;
-            self.view = None;
+            self.0 = None;
         }
         out.map(|res| res.map_err(api::Error::from))
     }
@@ -43,10 +38,7 @@ impl<'view> IteratorHandle<'view> {
     }
 
     pub fn new(view: ArcDynDbView, iter: BoxKeyValueIter<'view>) -> Self {
-        IteratorHandle {
-            iter: Some(iter),
-            view: Some(view),
-        }
+        IteratorHandle(Some((iter, view)))
     }
 }
 
