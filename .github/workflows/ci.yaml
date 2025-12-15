@@ -151,17 +151,18 @@ jobs:
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
           - profile-key: maxperf-ethhash-logger
-            profile-args: "--profile maxperf --features ethhash,logger"
+            profile-args: "--cargo-profile maxperf --features ethhash,logger"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@nextest
       - uses: Swatinem/rust-cache@v2
         with:
           save-if: "false"
           shared-key: ${{ matrix.profile-key }}
-      - name: Run tests with features enabled
-        run: cargo test --locked --verbose ${{ matrix.profile-args }}
+      - name: Run tests with cargo-nextest
+        run: cargo nextest run --locked --profile ci --verbose ${{ matrix.profile-args }}
 
   examples:
     needs: build
