@@ -10,7 +10,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -69,8 +68,8 @@ func stringToHash(t *testing.T, s string) Hash {
 }
 
 func inferHashingMode(ctx context.Context) (string, error) {
-	dbFile := filepath.Join(os.TempDir(), "test.db")
-	db, err := newDatabase(dbFile)
+	dbDir := os.TempDir()
+	db, err := newDatabase(dbDir)
 	if err != nil {
 		return "", err
 	}
@@ -78,7 +77,7 @@ func inferHashingMode(ctx context.Context) (string, error) {
 		ctx, cancel := context.WithTimeout(ctx, time.Second)
 		defer cancel()
 		_ = db.Close(ctx)
-		_ = os.Remove(dbFile)
+		_ = os.Remove(dbDir)
 	}()
 
 	actualEmptyRoot, err := db.Root()
@@ -153,8 +152,7 @@ func newTestDatabase(t *testing.T, opts ...Option) *Database {
 	t.Helper()
 	r := require.New(t)
 
-	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, err := newDatabase(dbFile, opts...)
+	db, err := newDatabase(t.TempDir(), opts...)
 	r.NoError(err)
 	t.Cleanup(func() {
 		r.NoError(db.Close(oneSecCtx(t)))
@@ -162,10 +160,10 @@ func newTestDatabase(t *testing.T, opts ...Option) *Database {
 	return db
 }
 
-func newDatabase(dbFile string, opts ...Option) (*Database, error) {
-	f, err := New(dbFile, opts...)
+func newDatabase(dbDir string, opts ...Option) (*Database, error) {
+	f, err := New(dbDir, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
+		return nil, fmt.Errorf("failed to create new database in directory %q: %w", dbDir, err)
 	}
 	return f, nil
 }
@@ -198,9 +196,9 @@ func TestUpdateMultiKV(t *testing.T) {
 
 func TestTruncateDatabase(t *testing.T) {
 	r := require.New(t)
-	dbFile := filepath.Join(t.TempDir(), "test.db")
+	dbDir := t.TempDir()
 	// Create a new database with truncate enabled.
-	db, err := New(dbFile, WithTruncate(true))
+	db, err := New(dbDir, WithTruncate(true))
 	r.NoError(err)
 
 	// Insert some data.
@@ -212,7 +210,7 @@ func TestTruncateDatabase(t *testing.T) {
 	r.NoError(db.Close(oneSecCtx(t)))
 
 	// Reopen the database with truncate enabled.
-	db, err = New(dbFile, WithTruncate(true))
+	db, err = New(dbDir, WithTruncate(true))
 	r.NoError(err)
 
 	// Check that the database is empty after truncation.
@@ -226,8 +224,7 @@ func TestTruncateDatabase(t *testing.T) {
 
 func TestClosedDatabase(t *testing.T) {
 	r := require.New(t)
-	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, err := newDatabase(dbFile)
+	db, err := newDatabase(t.TempDir())
 	r.NoError(err)
 
 	r.NoError(db.Close(oneSecCtx(t)))
@@ -1157,7 +1154,7 @@ func TestGetFromRootParallel(t *testing.T) {
 func TestHandlesFreeImplicitly(t *testing.T) {
 	t.Parallel()
 
-	db, err := newDatabase(filepath.Join(t.TempDir(), "test_GC_drops_implicitly.db"))
+	db, err := newDatabase(t.TempDir())
 	require.NoError(t, err)
 
 	// make the db non-empty
@@ -1249,17 +1246,12 @@ func TestHandlesFreeImplicitly(t *testing.T) {
 func TestFjallStore(t *testing.T) {
 	r := require.New(t)
 
-	var (
-		tmpdir       = t.TempDir()
-		dbFile       = filepath.Join(tmpdir, "test.db")
-		rootStoreDir = filepath.Join(tmpdir, "root_store_dir")
-	)
-
 	// Create a new database with RootStore enabled
 	// Setting the number of in-memory revisions to 5 tests that revision nodes
 	// are not reaped prior to closing the database.
-	db, err := New(dbFile,
-		WithRootStoreDir(rootStoreDir),
+	dbDir := t.TempDir()
+	db, err := New(dbDir,
+		WithRootStore(),
 		WithRevisions(5),
 	)
 	r.NoError(err)
@@ -1281,8 +1273,8 @@ func TestFjallStore(t *testing.T) {
 	// Close and reopen the database
 	r.NoError(db.Close(t.Context()))
 
-	db, err = New(dbFile,
-		WithRootStoreDir(rootStoreDir),
+	db, err = New(dbDir,
+		WithRootStore(),
 		WithRevisions(5),
 	)
 	r.NoError(err)
@@ -1302,261 +1294,6 @@ func TestFjallStore(t *testing.T) {
 		r.Equal(vals[i], v)
 		r.NoError(revision.Drop())
 	}
-}
-
-type kvIter interface {
-	SetBatchSize(int)
-	Next() bool
-	Key() []byte
-	Value() []byte
-	Err() error
-	Drop() error
-}
-type borrowIter struct{ it *Iterator }
-
-func (b *borrowIter) SetBatchSize(batchSize int) { b.it.SetBatchSize(batchSize) }
-func (b *borrowIter) Next() bool                 { return b.it.NextBorrowed() }
-func (b *borrowIter) Key() []byte                { return b.it.Key() }
-func (b *borrowIter) Value() []byte              { return b.it.Value() }
-func (b *borrowIter) Err() error                 { return b.it.Err() }
-func (b *borrowIter) Drop() error                { return b.it.Drop() }
-
-func assertIteratorYields(r *require.Assertions, it kvIter, keys [][]byte, vals [][]byte) {
-	i := 0
-	for ; it.Next(); i += 1 {
-		r.Equal(keys[i], it.Key())
-		r.Equal(vals[i], it.Value())
-	}
-	r.NoError(it.Err())
-	r.Equal(len(keys), i)
-}
-
-type iteratorConfigFn = func(it kvIter) kvIter
-
-var iterConfigs = map[string]iteratorConfigFn{
-	"Owned":    func(it kvIter) kvIter { return it },
-	"Borrowed": func(it kvIter) kvIter { return &borrowIter{it: it.(*Iterator)} },
-	"Single": func(it kvIter) kvIter {
-		it.SetBatchSize(1)
-		return it
-	},
-	"Batched": func(it kvIter) kvIter {
-		it.SetBatchSize(100)
-		return it
-	},
-}
-
-func runIteratorTestForModes(t *testing.T, fn func(*testing.T, iteratorConfigFn), modes ...string) {
-	testName := strings.Join(modes, "/")
-	t.Run(testName, func(t *testing.T) {
-		r := require.New(t)
-		fn(t, func(it kvIter) kvIter {
-			for _, m := range modes {
-				config, ok := iterConfigs[m]
-				r.Truef(ok, "specified config mode %s does not exist", m)
-				it = config(it)
-			}
-			return it
-		})
-	})
-}
-
-func runIteratorTestForAllModes(parentT *testing.T, fn func(*testing.T, iteratorConfigFn)) {
-	for _, dataMode := range []string{"Owned", "Borrowed"} {
-		for _, batchMode := range []string{"Single", "Batched"} {
-			runIteratorTestForModes(parentT, fn, batchMode, dataMode)
-		}
-	}
-}
-
-// Tests that basic iterator functionality works
-func TestIter(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-	keys, vals := kvForTest(100)
-	_, err := db.Update(keys, vals)
-	r.NoError(err)
-
-	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
-		r := require.New(t)
-		rev, err := db.LatestRevision()
-		r.NoError(err)
-		it, err := rev.Iter(nil)
-		r.NoError(err)
-		t.Cleanup(func() {
-			r.NoError(it.Drop())
-			r.NoError(rev.Drop())
-		})
-
-		assertIteratorYields(r, cfn(it), keys, vals)
-	})
-}
-
-func TestIterOnRoot(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-	keys, vals := kvForTest(240)
-	firstRoot, err := db.Update(keys[:80], vals[:80])
-	r.NoError(err)
-	secondRoot, err := db.Update(keys[80:160], vals[80:160])
-	r.NoError(err)
-	thirdRoot, err := db.Update(keys[160:], vals[160:])
-	r.NoError(err)
-
-	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
-		r := require.New(t)
-		r1, err := db.Revision(firstRoot)
-		r.NoError(err)
-		h1, err := r1.Iter(nil)
-		r.NoError(err)
-		t.Cleanup(func() {
-			r.NoError(h1.Drop())
-			r.NoError(r1.Drop())
-		})
-
-		r2, err := db.Revision(secondRoot)
-		r.NoError(err)
-		h2, err := r2.Iter(nil)
-		r.NoError(err)
-		t.Cleanup(func() {
-			r.NoError(h2.Drop())
-			r.NoError(r2.Drop())
-		})
-
-		r3, err := db.Revision(thirdRoot)
-		r.NoError(err)
-		h3, err := r3.Iter(nil)
-		r.NoError(err)
-		t.Cleanup(func() {
-			r.NoError(h3.Drop())
-			r.NoError(r3.Drop())
-		})
-
-		assertIteratorYields(r, cfn(h1), keys[:80], vals[:80])
-		assertIteratorYields(r, cfn(h2), keys[:160], vals[:160])
-		assertIteratorYields(r, cfn(h3), keys, vals)
-	})
-}
-
-func TestIterOnProposal(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-	keys, vals := kvForTest(240)
-	_, err := db.Update(keys, vals)
-	r.NoError(err)
-
-	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
-		r := require.New(t)
-		updatedValues := make([][]byte, len(vals))
-		copy(updatedValues, vals)
-
-		changedKeys := make([][]byte, 0)
-		changedVals := make([][]byte, 0)
-		for i := 0; i < len(vals); i += 4 {
-			changedKeys = append(changedKeys, keys[i])
-			newVal := []byte{byte(i)}
-			changedVals = append(changedVals, newVal)
-			updatedValues[i] = newVal
-		}
-		p, err := db.Propose(changedKeys, changedVals)
-		r.NoError(err)
-		it, err := p.Iter(nil)
-		r.NoError(err)
-		t.Cleanup(func() {
-			r.NoError(it.Drop())
-		})
-
-		assertIteratorYields(r, cfn(it), keys, updatedValues)
-	})
-}
-
-// Tests that the iterator still works after proposal is committed
-func TestIterAfterProposalCommit(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	keys, vals := kvForTest(10)
-	p, err := db.Propose(keys, vals)
-	r.NoError(err)
-
-	it, err := p.Iter(nil)
-	r.NoError(err)
-	t.Cleanup(func() {
-		r.NoError(it.Drop())
-	})
-
-	err = p.Commit()
-	r.NoError(err)
-
-	// iterate after commit
-	// because iterator hangs on the nodestore reference of proposal
-	// the nodestore won't be dropped until we drop the iterator
-	assertIteratorYields(r, it, keys, vals)
-}
-
-// Tests that the iterator on latest revision works properly after a proposal commit
-func TestIterUpdate(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	keys, vals := kvForTest(10)
-	_, err := db.Update(keys, vals)
-	r.NoError(err)
-
-	// get an iterator on latest revision
-	rev, err := db.LatestRevision()
-	r.NoError(err)
-	it, err := rev.Iter(nil)
-	r.NoError(err)
-	t.Cleanup(func() {
-		r.NoError(it.Drop())
-		r.NoError(rev.Drop())
-	})
-
-	// update the database
-	keys2, vals2 := kvForTest(10)
-	_, err = db.Update(keys2, vals2)
-	r.NoError(err)
-
-	// iterate after commit
-	// because iterator is fixed on the revision hash, it should return the initial values
-	assertIteratorYields(r, it, keys, vals)
-}
-
-// Tests the iterator's behavior after exhaustion, should safely return empty item/batch, indicating done
-func TestIterDone(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	keys, vals := kvForTest(18)
-	_, err := db.Update(keys, vals)
-	r.NoError(err)
-
-	// get an iterator on latest revision
-	rev, err := db.LatestRevision()
-	r.NoError(err)
-	it, err := rev.Iter(nil)
-	r.NoError(err)
-	t.Cleanup(func() {
-		r.NoError(it.Drop())
-		r.NoError(rev.Drop())
-	})
-	// consume the iterator
-	assertIteratorYields(r, it, keys, vals)
-	// calling next again should be safe and return false
-	r.False(it.Next())
-	r.NoError(it.Err())
-
-	// get a new iterator
-	it2, err := rev.Iter(nil)
-	r.NoError(err)
-	// set batch size to 5
-	it2.SetBatchSize(5)
-	// consume the iterator
-	assertIteratorYields(r, it2, keys, vals)
-	// calling next again should be safe and return false
-	r.False(it.Next())
-	r.NoError(it.Err())
 }
 
 // TestNilVsEmptyValue tests that nil values cause delete operations while
@@ -1631,8 +1368,7 @@ func TestNilVsEmptyValue(t *testing.T) {
 // ErrActiveKeepAliveHandles when the context is cancelled before handles are dropped.
 func TestCloseWithCancelledContext(t *testing.T) {
 	r := require.New(t)
-	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, err := newDatabase(dbFile)
+	db, err := newDatabase(t.TempDir())
 	r.NoError(err)
 
 	// Create a proposal to keep a handle active
@@ -1667,8 +1403,7 @@ func TestCloseWithCancelledContext(t *testing.T) {
 // ErrActiveKeepAliveHandles when multiple handles are active and context is cancelled.
 func TestCloseWithMultipleActiveHandles(t *testing.T) {
 	r := require.New(t)
-	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, err := newDatabase(dbFile)
+	db, err := newDatabase(t.TempDir())
 	r.NoError(err)
 
 	// Create multiple proposals
@@ -1715,8 +1450,7 @@ func TestCloseWithMultipleActiveHandles(t *testing.T) {
 // when all handles are dropped before the context timeout.
 func TestCloseSucceedsWhenHandlesDroppedInTime(t *testing.T) {
 	r := require.New(t)
-	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, err := newDatabase(dbFile)
+	db, err := newDatabase(t.TempDir())
 	r.NoError(err)
 
 	// Create two active proposals

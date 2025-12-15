@@ -26,7 +26,7 @@ use firewood_storage::{
 use metrics::{counter, describe_counter};
 use std::io::Write;
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
@@ -130,9 +130,9 @@ pub struct DbConfig {
     // TODO: Experimentally determine the right value for BatchSize.
     #[builder(default = UseParallel::BatchSize(8))]
     pub use_parallel: UseParallel,
-    /// `RootStore` directory path
-    #[builder(default = None)]
-    pub root_store_dir: Option<PathBuf>,
+    /// Whether to enable `RootStore`.
+    #[builder(default = false)]
+    pub root_store: bool,
 }
 
 #[derive(Debug)]
@@ -167,10 +167,10 @@ impl api::Db for Db {
 
 impl Db {
     /// Create a new database instance.
-    pub fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
+    pub fn new<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Self, api::Error> {
         trace!(
             "Opening Firewood database at path: {}",
-            db_path.as_ref().display()
+            db_dir.as_ref().display()
         );
         let metrics = Arc::new(DbMetrics {
             proposals: counter!("firewood.proposals"),
@@ -179,11 +179,11 @@ impl Db {
         let config_manager = ConfigManager::builder()
             .create(cfg.create_if_missing)
             .truncate(cfg.truncate)
-            .root_store_dir(cfg.root_store_dir)
+            .root_store(cfg.root_store)
             .manager(cfg.manager)
             .build();
 
-        let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
+        let manager = RevisionManager::new(db_dir.as_ref().to_path_buf(), config_manager)?;
         let db = Self {
             metrics,
             manager,
@@ -391,6 +391,12 @@ impl Proposal<'_> {
     #[crate::metrics("firewood.proposal.create", "database proposal creation")]
     fn create_proposal(&self, batch: impl IntoBatchIter) -> Result<Self, api::Error> {
         self.db.propose_with_parent(batch, &self.nodestore)
+    }
+
+    /// Returns the view backing this proposal.
+    #[must_use]
+    pub fn view(&self) -> ArcDynDbView {
+        self.nodestore.clone()
     }
 }
 
@@ -1140,7 +1146,7 @@ mod test {
     /// Verifies that persisted revisions are still accessible when reopening the database.
     #[test]
     fn test_root_store() {
-        let db = TestDb::new_with_root_store(DbConfig::builder().build());
+        let db = TestDb::new_with_config(DbConfig::builder().root_store(true).build());
 
         // First, create a revision to retrieve
         let key = b"key";
@@ -1171,7 +1177,7 @@ mod test {
 
     #[test]
     fn test_rootstore_empty_db_reopen() {
-        let db = TestDb::new_with_root_store(DbConfig::builder().build());
+        let db = TestDb::new_with_config(DbConfig::builder().root_store(true).build());
 
         db.reopen();
     }
@@ -1183,8 +1189,9 @@ mod test {
 
         let dbconfig = DbConfig::builder()
             .manager(RevisionManagerConfig::builder().max_revisions(5).build())
+            .root_store(true)
             .build();
-        let db = TestDb::new_with_root_store(dbconfig);
+        let db = TestDb::new_with_config(dbconfig);
 
         // Create and commit 10 proposals
         let key = b"root_store";
@@ -1218,6 +1225,33 @@ mod test {
         }
     }
 
+    /// Verifies that `RootStore` is truncated as well if we truncate the database.
+    #[test]
+    fn test_root_store_truncation() {
+        let db =
+            TestDb::new_with_config(DbConfig::builder().root_store(true).truncate(true).build());
+
+        // Create a revision to store
+        let batch = vec![BatchOp::Put {
+            key: b"foo",
+            value: b"bar",
+        }];
+        let proposal = db.propose(batch).unwrap();
+        let root_hash = proposal.root_hash().unwrap().unwrap();
+        proposal.commit().unwrap();
+
+        let db = db.reopen();
+        assert!(db.view(root_hash).is_err());
+    }
+
+    /// Verifies that opening a database fails if the directory doesn't exist.
+    #[test]
+    fn test_nonexistent_directory() {
+        let tmpdir = tempfile::tempdir().unwrap();
+
+        assert!(Db::new(tmpdir, DbConfig::builder().create_if_missing(false).build()).is_err());
+    }
+
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
     pub(super) struct TestDb {
         db: Db,
@@ -1243,33 +1277,7 @@ mod test {
 
         pub fn new_with_config(dbconfig: DbConfig) -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
-            let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-                .iter()
-                .collect();
-            let db = Db::new(dbpath, dbconfig.clone()).unwrap();
-            TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            }
-        }
-
-        /// Creates a new test database with `RootStore` enabled.
-        ///
-        /// Overrides `root_store_dir` in dbconfig to provide a directory for `RootStore`.
-        pub fn new_with_root_store(dbconfig: DbConfig) -> Self {
-            let tmpdir = tempfile::tempdir().unwrap();
-            let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-                .iter()
-                .collect();
-            let root_store_dir = tmpdir.as_ref().join("root_store");
-
-            let dbconfig = DbConfig {
-                root_store_dir: Some(root_store_dir),
-                ..dbconfig
-            };
-
-            let db = Db::new(dbpath, dbconfig.clone()).unwrap();
+            let db = Db::new(tmpdir.as_ref(), dbconfig.clone()).unwrap();
             TestDb {
                 db,
                 tmpdir,
@@ -1328,9 +1336,7 @@ mod test {
         }
 
         pub fn path(&self) -> PathBuf {
-            [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-                .iter()
-                .collect()
+            self.tmpdir.path().to_path_buf()
         }
     }
 }

@@ -25,7 +25,9 @@ typedef struct ChangeProofContext ChangeProofContext;
 typedef struct DatabaseHandle DatabaseHandle;
 
 /**
- * An opaque wrapper around a [`BoxKeyValueIter`].
+ * An opaque wrapper around a [`BoxKeyValueIter`] and a reference
+ * to the [`ArcDynDbView`] backing it, preventing the view from
+ * being dropped while iteration is in progress.
  */
 typedef struct IteratorHandle IteratorHandle;
 
@@ -903,25 +905,21 @@ typedef struct HandleResult {
  */
 typedef struct DatabaseHandleArgs {
   /**
-   * The path to the database file.
+   * The path to the database directory.
    *
    * This must be a valid UTF-8 string.
    *
    * If this is empty, an error will be returned.
    */
-  BorrowedBytes path;
+  BorrowedBytes dir;
   /**
-   * The path to the `RootStore` directory.
+   * Whether to enable `RootStore`.
    *
-   * This must be a valid UTF-8 string.
-   *
-   * If this is empty, then the archival feature is disabled.
-   *
-   * Note: Setting this directory will only track new revisions going forward
+   * Note: Setting this feature will only track new revisions going forward
    * and will not contain revisions from a prior database instance that didn't
-   * set a `root_store_path`.
+   * enable `root_store`.
    */
-  BorrowedBytes root_store_path;
+  bool root_store;
   /**
    * The size of the node cache.
    *
