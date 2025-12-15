@@ -5,7 +5,7 @@ set +e
 INSTANCE_TYPE=i4g.large
 FIREWOOD_BRANCH=""
 AVALANCHEGO_BRANCH=""
-LIBEVM_COMMIT=""
+LIBEVM_BRANCH=""
 NBLOCKS="1m"
 CONFIG="firewood"
 REGION="us-west-2"
@@ -60,7 +60,7 @@ show_usage() {
     echo "  --instance-type TYPE        EC2 instance type (default: i4g.large)"
     echo "  --firewood-branch BRANCH    Firewood git branch to checkout"
     echo "  --avalanchego-branch BRANCH AvalancheGo git branch to checkout"
-    echo "  --libevm-commit COMMIT      LibEVM git commit to checkout"
+    echo "  --libevm-branch BRANCH      LibEVM git branch to checkout"
     echo "  --nblocks BLOCKS            Number of blocks to download (default: 1m)"
     echo "  --config CONFIG             The VM reexecution config to use (default: firewood)"
     echo "  --region REGION             AWS region (default: us-west-2)"
@@ -110,8 +110,8 @@ while [[ $# -gt 0 ]]; do
             AVALANCHEGO_BRANCH="$2"
             shift 2
             ;;
-        --libevm-commit)
-            LIBEVM_COMMIT="$2"
+        --libevm-branch)
+            LIBEVM_BRANCH="$2"
             shift 2
             ;;
         --nblocks)
@@ -176,7 +176,7 @@ done
 if [ ${#TERMINATE_INSTANCES[@]} -gt 0 ]; then
     # Check if any incompatible options are present
     if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || \
-       [ -n "$LIBEVM_COMMIT" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
+       [ -n "$LIBEVM_BRANCH" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
        [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ] || \
        [ "$SHOW_INSTANCES" = true ] || [ "$TERMINATE_MINE" = true ]; then
         echo "Error: --terminate cannot be used with other options except --region"
@@ -194,7 +194,7 @@ fi
 if [ "$TERMINATE_MINE" = true ]; then
     # Check if any incompatible options are present
     if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || \
-       [ -n "$LIBEVM_COMMIT" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
+       [ -n "$LIBEVM_BRANCH" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
        [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ] || \
        [ "$SHOW_INSTANCES" = true ]; then
         echo "Error: --terminate-mine cannot be used with other options except --region"
@@ -224,7 +224,7 @@ fi
 if [ "$SHOW_INSTANCES" = true ]; then
     # Check if any incompatible options are present
     if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || \
-       [ -n "$LIBEVM_COMMIT" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
+       [ -n "$LIBEVM_BRANCH" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
        [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ]; then
         echo "Error: --show cannot be used with other options except --region"
         exit 1
@@ -246,7 +246,7 @@ echo "Configuration:"
 echo "  Instance Type: $INSTANCE_TYPE ($TYPE)"
 echo "  Firewood Branch: ${FIREWOOD_BRANCH:-default}"
 echo "  AvalancheGo Branch: ${AVALANCHEGO_BRANCH:-default}"
-echo "  LibEVM Commit: ${LIBEVM_COMMIT:-default}"
+echo "  LibEVM Branch: ${LIBEVM_BRANCH:-default}"
 echo "  Number of Blocks: $NBLOCKS"
 echo "  Config: $CONFIG"
 echo "  Region: $REGION"
@@ -288,8 +288,8 @@ if [ -n "$AVALANCHEGO_BRANCH" ]; then
     AVALANCHEGO_BRANCH_ARG="--branch $AVALANCHEGO_BRANCH"
 fi
 
-# For libevm, default to main branch if no commit specified
-LIBEVM_COMMIT_CHECKOUT="${LIBEVM_COMMIT:-main}"
+# For libevm, default to main branch if no branch specified
+LIBEVM_BRANCH_CHECKOUT="${LIBEVM_BRANCH:-main}"
 
 # set up this script to run at startup, installing a few packages, creating user accounts,
 # and downloading the blocks for the C-chain
@@ -411,7 +411,7 @@ runcmd:
     git clone https://github.com/ava-labs/libevm.git
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu/libevm
-    git checkout __LIBEVM_COMMIT__
+    git checkout __LIBEVM_BRANCH__
   # force coreth to use the checked-out version of firewood and libevm
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego/graft/coreth
@@ -471,7 +471,7 @@ esac
 USERDATA=$(echo "$USERDATA_TEMPLATE" | \
   sed "s|__FIREWOOD_BRANCH_ARG__|$FIREWOOD_BRANCH_ARG|g" | \
   sed "s|__AVALANCHEGO_BRANCH_ARG__|$AVALANCHEGO_BRANCH_ARG|g" | \
-  sed "s|__LIBEVM_COMMIT__|$LIBEVM_COMMIT_CHECKOUT|g" | \
+  sed "s|__LIBEVM_BRANCH__|$LIBEVM_BRANCH_CHECKOUT|g" | \
   sed "s|__NBLOCKS__|$NBLOCKS|g" | \
   sed "s|__END_BLOCK__|$END_BLOCK|g" | \
   sed "s|__CONFIG__|$CONFIG|g" | \
@@ -492,8 +492,8 @@ fi
 if [ -n "$AVALANCHEGO_BRANCH" ]; then
     INSTANCE_NAME="$INSTANCE_NAME-ag-$AVALANCHEGO_BRANCH"
 fi
-if [ -n "$LIBEVM_COMMIT" ]; then
-    INSTANCE_NAME="$INSTANCE_NAME-le-$LIBEVM_COMMIT"
+if [ -n "$LIBEVM_BRANCH" ]; then
+    INSTANCE_NAME="$INSTANCE_NAME-le-$LIBEVM_BRANCH"
 fi
 
 # Build spot instance market options if requested
