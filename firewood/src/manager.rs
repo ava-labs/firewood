@@ -10,12 +10,16 @@
     reason = "Found 3 occurrences after enabling the lint."
 )]
 
+#[cfg(feature = "debug-commit-delay")]
+use parking_lot::Condvar;
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
+#[cfg(feature = "debug-commit-delay")]
+use std::time::Duration;
 
 use firewood_storage::logger::{trace, warn};
 use metrics::gauge;
@@ -98,6 +102,11 @@ pub(crate) struct RevisionManager {
     /// Active proposals that have not yet been committed.
     proposals: Mutex<Vec<ProposedRevision>>,
 
+    /// Debug-only condition variable to delay commits until a proposal is generated.
+    /// WARNING: Only for testing race conditions. Do not use in production.
+    #[cfg(feature = "debug-commit-delay")]
+    proposal_condvar: Condvar,
+
     /// Lazily initialized thread pool for parallel operations.
     threadpool: OnceLock<ThreadPool>,
 
@@ -164,6 +173,8 @@ impl RevisionManager {
             in_memory_revisions: RwLock::new(VecDeque::from([nodestore.clone()])),
             by_hash: RwLock::new(Default::default()),
             proposals: Mutex::new(Default::default()),
+            #[cfg(feature = "debug-commit-delay")]
+            proposal_condvar: Condvar::new(),
             threadpool: OnceLock::new(),
             root_store,
         };
@@ -214,6 +225,15 @@ impl RevisionManager {
     #[fastrace::trace(short_name = true)]
     #[crate::metrics("firewood.proposal.commit", "proposal commit to storage")]
     pub fn commit(&self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
+        #[cfg(feature = "debug-commit-delay")]
+        {
+            let mut guard = self.proposals.lock();
+            let _ = self
+                .proposal_condvar
+                .wait_for(&mut guard, Duration::from_millis(100));
+            drop(guard);
+        }
+
         // 1. Commit check
         let current_revision = self.current_revision();
         if !proposal.parent_hash_is(current_revision.root_hash()) {
@@ -332,6 +352,8 @@ impl RevisionManager {
 
     pub fn add_proposal(&self, proposal: ProposedRevision) {
         self.proposals.lock().push(proposal);
+        #[cfg(feature = "debug-commit-delay")]
+        self.proposal_condvar.notify_one();
     }
 
     /// Retrieve a committed revision by its root hash.

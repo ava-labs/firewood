@@ -48,6 +48,7 @@ nightly = []
 io-uring = ["firewood-storage/io-uring"]
 logger = ["firewood-storage/logger"]
 ethhash = ["firewood-storage/ethhash"]
+debug-commit-delay = []
 
 [dev-dependencies]
 # Workspace dependencies
