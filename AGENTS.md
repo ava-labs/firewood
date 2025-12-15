@@ -112,7 +112,7 @@ Before submitting/updating a PR, run the following
 
 ```bash
 cargo fmt                                                               # Format code
-cargo test --workspace --features ethhash,logger --all-targets          # Run tests
+cargo nextest run --workspace --features ethhash,logger --all-targets   # Run tests
 cargo clippy --workspace --features ethhash,logger --all-targets        # Linter
 cargo doc --no-deps                                                     # Ensure docs build
 ```
@@ -170,7 +170,7 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
    blocks without documentation and strong justification. Unsafe code could be
    utilized in the `ffi` crate.
 
-2. **Testing**: Any changes should include appropriate tests. Run `cargo test --release` to verify.
+2. **Testing**: Any changes should include appropriate tests. Run `cargo nextest run --release` to verify.
 
 3. **Performance Context**: This is a database designed for blockchain state. Performance matters. Consider allocation patterns and hot paths.
 
