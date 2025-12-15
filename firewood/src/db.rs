@@ -1042,7 +1042,7 @@ mod test {
 
     /// Test that reading from a proposal during commit works as expected
     #[test]
-    fn test_read_during_commit() {
+    fn test_slow_read_during_commit() {
         use crate::db::Proposal;
 
         const CHANNEL_CAPACITY: usize = 8;
