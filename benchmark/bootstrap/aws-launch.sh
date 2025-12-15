@@ -481,7 +481,8 @@ export USERDATA
 fi  # End of DRY_RUN=false conditional
 
 
-SUFFIX=$(hexdump -vn4 -e'4/4 "%08X" 1 "\n"' /dev/urandom)
+# Generate a compact 8-hex-digit suffix without spaces/newlines
+SUFFIX=$(hexdump -vn4 -e '1/4 "%08X"' /dev/urandom)
 
 # Build instance name with branch info
 INSTANCE_NAME="$USER-fw-$SUFFIX"
