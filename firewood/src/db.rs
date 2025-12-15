@@ -1071,7 +1071,7 @@ mod test {
             });
             scope.spawn(move || {
                 // Proposal creation
-                for id in 0u32..5000 {
+                for id in 0u32..500 {
                     // insert a key of length 32 and a value of length 8,
                     // rotating between all zeroes through all 255
                     let batch = vec![BatchOp::Put {

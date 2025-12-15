@@ -92,19 +92,14 @@ type config struct {
 	revisions uint
 	// readCacheStrategy is the caching strategy used for the node cache.
 	readCacheStrategy CacheStrategy
-<<<<<<< HEAD
-	// rootStoreDir defines a path to store all historical roots on disk.
-	rootStoreDir string
-	// logPath is the file path where logs will be written.
-	// If empty, logging is disabled.
-	logPath string
-	// logFilter is the RUST_LOG format filter string for logging.
-	// If empty and logPath is set, env_logger defaults will be used.
-	logFilter string
-=======
-	// rootStore defines whether to enable storing all historical revisions on disk.
-	rootStore bool
->>>>>>> origin/main
+        // rootStore defines whether to enable storing all historical revisions on disk.
+        rootStore bool
+        // logPath is the file path where logs will be written.
+        // If empty, logging is disabled.
+        logPath string
+        // logFilter is the RUST_LOG format filter string for logging.
+        // If empty and logPath is set, env_logger defaults will be used.
+        logFilter string
 }
 
 func defaultConfig() *config {
@@ -171,13 +166,6 @@ func WithReadCacheStrategy(strategy CacheStrategy) Option {
 // removed from memory (based on the Revisions limit).
 // Default: false
 func WithRootStore() Option {
-	return func(c *config) {
-		c.rootStore = true
-	}
-}
-
-// WithLogPath sets the file path where logs will be written.
-// Logging is global per-process and can only be initialized once. If logging
 // is already initialized (e.g., by a previous call to New with WithLogPath),
 // subsequent calls will fail with an error.
 //
