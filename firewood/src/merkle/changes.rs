@@ -850,6 +850,67 @@ mod tests {
     }
 
     #[test]
+    fn test_preorder_iterator() {
+        let rng = firewood_storage::SeededRng::from_env_or_random();
+        let (batch, _) = gen_random_keys(&rng, &HashSet::new(), 1000, 0);
+
+        // Keep a sorted copy of the batch.
+        let mut batch_sorted = batch.clone();
+        batch_sorted.sort_by_key(|op| op.key().clone());
+
+        // Insert batch into a merkle trie.
+        let mut merkle = create_test_merkle();
+        for item in &batch {
+            // All of the ops should be Puts
+            merkle
+                .insert(
+                    item.key(),
+                    item.value().unwrap().to_vec().into_boxed_slice(),
+                )
+                .unwrap();
+        }
+
+        // Check if the sorted batch and the pre-order traversal have identical values.
+        let mut preorder_it =
+            PreOrderIterator::new(merkle.nodestore(), None, &Key::default()).unwrap();
+        let mut batch_sorted_it = batch_sorted.clone().into_iter();
+        while let Some(node_state) = preorder_it.next().unwrap() {
+            if let Some(val) = node_state.node.value() {
+                let key = key_from_nibble_iter(node_state.path.iter().copied());
+                let batch_sorted_item = batch_sorted_it.next().unwrap();
+                assert!(
+                    *key == *batch_sorted_item.key().as_slice()
+                        && *val == **batch_sorted_item.value().unwrap()
+                );
+            }
+        }
+        assert!(batch_sorted_it.next().is_none());
+
+        // Second test where we pick a random key from the sorted batch as the start key, and check
+        // the sorted batch and pre-order traversal have identical values when using that start key.
+        let mut index = rng.random_range(0..batch_sorted.len());
+        let start_key = batch_sorted
+            .get(index)
+            .unwrap()
+            .key()
+            .clone()
+            .into_boxed_slice();
+        let mut preorder_it = PreOrderIterator::new(merkle.nodestore(), None, &start_key).unwrap();
+        while let Some(node_state) = preorder_it.next().unwrap() {
+            if let Some(val) = node_state.node.value() {
+                let key = key_from_nibble_iter(node_state.path.iter().copied());
+                let batch_sorted_item = batch_sorted.get(index).unwrap();
+                assert!(
+                    *key == *batch_sorted_item.key().as_slice()
+                        && *val == **batch_sorted_item.value().unwrap()
+                );
+                index += 1;
+            }
+        }
+        assert!(index == batch_sorted.len());
+    }
+
+    #[test]
     fn test_diff_empty_mutable_trees() {
         // This is unlikely to happen in practice, but it helps cover the case where
         // hashes do not exist yet.
@@ -1925,66 +1986,5 @@ mod tests {
         println!(
             "Traversal optimization verified: {diff_immutable_nexts} vs {diff_mutable_nexts} next calls"
         );
-    }
-
-    #[test]
-    fn test_preorder_iterator() {
-        let rng = firewood_storage::SeededRng::from_env_or_random();
-        let (batch, _) = gen_random_keys(&rng, &HashSet::new(), 1000, 0);
-
-        // Keep a sorted copy of the batch.
-        let mut batch_sorted = batch.clone();
-        batch_sorted.sort_by_key(|op| op.key().clone());
-
-        // Insert batch into a merkle trie.
-        let mut merkle = create_test_merkle();
-        for item in &batch {
-            // All of the ops should be Puts
-            merkle
-                .insert(
-                    item.key(),
-                    item.value().unwrap().to_vec().into_boxed_slice(),
-                )
-                .unwrap();
-        }
-
-        // Check if the sorted batch and the pre-order traversal have identical values.
-        let mut preorder_it =
-            PreOrderIterator::new(merkle.nodestore(), None, &Key::default()).unwrap();
-        let mut batch_sorted_it = batch_sorted.clone().into_iter();
-        while let Some(node_state) = preorder_it.next().unwrap() {
-            if let Some(val) = node_state.node.value() {
-                let key = key_from_nibble_iter(node_state.path.iter().copied());
-                let batch_sorted_item = batch_sorted_it.next().unwrap();
-                assert!(
-                    *key == *batch_sorted_item.key().as_slice()
-                        && *val == **batch_sorted_item.value().unwrap()
-                );
-            }
-        }
-        assert!(batch_sorted_it.next().is_none());
-
-        // Second test where we pick a random key from the sorted batch as the start key, and check
-        // the sorted batch and pre-order traversal have identical values when using that start key.
-        let mut index = rng.random_range(0..batch_sorted.len());
-        let start_key = batch_sorted
-            .get(index)
-            .unwrap()
-            .key()
-            .clone()
-            .into_boxed_slice();
-        let mut preorder_it = PreOrderIterator::new(merkle.nodestore(), None, &start_key).unwrap();
-        while let Some(node_state) = preorder_it.next().unwrap() {
-            if let Some(val) = node_state.node.value() {
-                let key = key_from_nibble_iter(node_state.path.iter().copied());
-                let batch_sorted_item = batch_sorted.get(index).unwrap();
-                assert!(
-                    *key == *batch_sorted_item.key().as_slice()
-                        && *val == **batch_sorted_item.value().unwrap()
-                );
-                index += 1;
-            }
-        }
-        assert!(index == batch_sorted.len());
     }
 }
