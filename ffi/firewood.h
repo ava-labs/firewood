@@ -25,7 +25,9 @@ typedef struct ChangeProofContext ChangeProofContext;
 typedef struct DatabaseHandle DatabaseHandle;
 
 /**
- * An opaque wrapper around a [`BoxKeyValueIter`].
+ * An opaque wrapper around a [`BoxKeyValueIter`] and a reference
+ * to the [`ArcDynDbView`] backing it, preventing the view from
+ * being dropped while iteration is in progress.
  */
 typedef struct IteratorHandle IteratorHandle;
 
