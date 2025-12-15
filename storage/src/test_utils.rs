@@ -3,7 +3,11 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
 
+use metrics::{Key, Label, Recorder, SetRecorderError};
+use metrics_util::registry::{AtomicStorage, Registry};
 #[expect(
     clippy::disallowed_types,
     reason = "we are implementing the alternative"
@@ -164,5 +168,90 @@ impl rand::RngCore for &SeededRng {
     #[inline]
     fn fill_bytes(&mut self, dst: &mut [u8]) {
         SeededRng::fill_bytes(self, dst);
+    }
+}
+
+/// Test metrics recorder that captures counter values for testing
+#[derive(Clone, Debug)]
+pub struct TestRecorder {
+    registry: Arc<Registry<Key, AtomicStorage>>,
+}
+
+impl TestRecorder {
+    /// Default constructor for a `TestRecorder`
+    ///
+    /// # Errors
+    ///
+    /// Returns a `SetRecorderError` if the global recorder has already been created
+    /// for this process.
+    pub fn new() -> Result<Self, SetRecorderError<TestRecorder>> {
+        let recorder = Self {
+            registry: Arc::new(Registry::atomic()),
+        };
+        metrics::set_global_recorder(recorder.clone())?;
+        Ok(recorder)
+    }
+
+    /// Returns the counter value for the given key and label.
+    #[must_use]
+    pub fn counter_value(
+        &self,
+        key_name: &'static str,
+        labels: &[(&'static str, &'static str)],
+    ) -> u64 {
+        let key = if labels.is_empty() {
+            Key::from_name(key_name)
+        } else {
+            let label_vec: Vec<Label> = labels.iter().map(|(k, v)| Label::new(*k, *v)).collect();
+            Key::from_name(key_name).with_extra_labels(label_vec)
+        };
+
+        self.registry
+            .get_counter_handles()
+            .into_iter()
+            .find(|(k, _)| k == &key)
+            .map_or(0, |(_, counter)| counter.load(Ordering::Relaxed))
+    }
+}
+
+impl Recorder for TestRecorder {
+    fn describe_counter(
+        &self,
+        _key: metrics::KeyName,
+        _unit: Option<metrics::Unit>,
+        _description: metrics::SharedString,
+    ) {
+    }
+    fn describe_gauge(
+        &self,
+        _key: metrics::KeyName,
+        _unit: Option<metrics::Unit>,
+        _description: metrics::SharedString,
+    ) {
+    }
+    fn describe_histogram(
+        &self,
+        _key: metrics::KeyName,
+        _unit: Option<metrics::Unit>,
+        _description: metrics::SharedString,
+    ) {
+    }
+
+    fn register_counter(&self, key: &Key, _metadata: &metrics::Metadata<'_>) -> metrics::Counter {
+        self.registry
+            .get_or_create_counter(key, |c| c.clone().into())
+    }
+
+    fn register_gauge(&self, key: &Key, _metadata: &metrics::Metadata<'_>) -> metrics::Gauge {
+        self.registry.get_or_create_gauge(key, |c| c.clone().into())
+    }
+
+    fn register_histogram(
+        &self,
+        key: &Key,
+        _metadata: &metrics::Metadata<'_>,
+    ) -> metrics::Histogram {
+        self.registry
+            .get_or_create_histogram(key, |c| c.clone().into())
     }
 }

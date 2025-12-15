@@ -610,7 +610,7 @@ mod tests {
 
     use firewood_storage::{
         FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, MemStore, MutableProposal,
-        NodeStore, SeededRng, TrieReader,
+        NodeStore, SeededRng, TestRecorder, TrieReader,
     };
     use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
     use test_case::test_case;
@@ -1348,16 +1348,7 @@ mod tests {
             "Expected at least 4 additions (includes modifications)"
         );
 
-        println!("✅ All 6 diff states coverage test passed:");
-        println!("   - Deletions: {deletions}");
-        println!("   - Additions (includes modifications): {additions}");
-        println!("   - This test exercises scenarios that should trigger:");
-        println!("     1. UnvisitedNodePairState (comparing modified nodes)");
-        println!("     2. UnvisitedNodeLeftState (simple left-only nodes)");
-        println!("     3. UnvisitedNodeRightState (simple right-only nodes)");
-        println!("     4. VisitedNodePairState (shared branch with different children)");
-        println!("     5. VisitedNodeLeftState (left-only branch structures)");
-        println!("     6. VisitedNodeRightState (right-only branch structures)");
+        println!("✅ All 6 diff coverage tests passed:");
     }
 
     #[test]
@@ -1439,8 +1430,6 @@ mod tests {
         assert!(diff_iter.next().is_none());
     }
 
-    // example of running this test with a specific seed and parameters:
-    // FIREWOOD_TEST_SEED=14805530293320947613 cargo test --features logger diff::tests::diff_random_with_deletions
     #[test_case(false, false, 500)]
     #[test_case(false, true, 500)]
     #[test_case(true, false, 500)]
@@ -1775,101 +1764,10 @@ mod tests {
     #[test]
     #[allow(clippy::pedantic)]
     fn test_hash_optimization_reduces_next_calls() {
-        use metrics::{Key, Label, Recorder};
-        use metrics_util::registry::{AtomicStorage, Registry};
-        use std::sync::Arc;
-        use std::sync::atomic::Ordering;
-
-        /// Test metrics recorder that captures counter values for testing
-        #[derive(Clone)]
-        struct TestRecorder {
-            registry: Arc<Registry<Key, AtomicStorage>>,
-        }
-
-        impl TestRecorder {
-            fn new() -> Self {
-                Self {
-                    registry: Arc::new(Registry::atomic()),
-                }
-            }
-
-            fn get_counter_value(
-                &self,
-                key_name: &'static str,
-                labels: &[(&'static str, &'static str)],
-            ) -> u64 {
-                let key = if labels.is_empty() {
-                    Key::from_name(key_name)
-                } else {
-                    let label_vec: Vec<Label> =
-                        labels.iter().map(|(k, v)| Label::new(*k, *v)).collect();
-                    Key::from_name(key_name).with_extra_labels(label_vec)
-                };
-
-                self.registry
-                    .get_counter_handles()
-                    .into_iter()
-                    .find(|(k, _)| k == &key)
-                    .map_or(0, |(_, counter)| counter.load(Ordering::Relaxed))
-            }
-        }
-
-        impl Recorder for TestRecorder {
-            fn describe_counter(
-                &self,
-                _key: metrics::KeyName,
-                _unit: Option<metrics::Unit>,
-                _description: metrics::SharedString,
-            ) {
-            }
-            fn describe_gauge(
-                &self,
-                _key: metrics::KeyName,
-                _unit: Option<metrics::Unit>,
-                _description: metrics::SharedString,
-            ) {
-            }
-            fn describe_histogram(
-                &self,
-                _key: metrics::KeyName,
-                _unit: Option<metrics::Unit>,
-                _description: metrics::SharedString,
-            ) {
-            }
-
-            fn register_counter(
-                &self,
-                key: &Key,
-                _metadata: &metrics::Metadata<'_>,
-            ) -> metrics::Counter {
-                self.registry
-                    .get_or_create_counter(key, |c| c.clone().into())
-            }
-
-            fn register_gauge(
-                &self,
-                key: &Key,
-                _metadata: &metrics::Metadata<'_>,
-            ) -> metrics::Gauge {
-                self.registry.get_or_create_gauge(key, |c| c.clone().into())
-            }
-
-            fn register_histogram(
-                &self,
-                key: &Key,
-                _metadata: &metrics::Metadata<'_>,
-            ) -> metrics::Histogram {
-                self.registry
-                    .get_or_create_histogram(key, |c| c.clone().into())
-            }
-        }
-
         // Set up test recorder - if it fails, skip the entire test
-        let recorder = TestRecorder::new();
-        if metrics::set_global_recorder(recorder.clone()).is_err() {
-            println!("⚠️  Could not set test recorder (already set) - skipping test");
+        let Ok(recorder) = TestRecorder::new() else {
             return;
-        }
+        };
 
         // Create test data with substantial shared content and unique content
         let tree1_items = [
@@ -1932,7 +1830,7 @@ mod tests {
 
         // DIFF TEST: Measure next calls from diff operations on mutable proposals
         let diff_nexts_before =
-            recorder.get_counter_value("firewood.change_proof.next", &[("traversal", "next")]);
+            recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
 
         let diff_stream =
             DiffMerkleNodeStream::new_without_hash(m1.nodestore(), m2.nodestore(), Box::new([]))
@@ -1940,7 +1838,7 @@ mod tests {
         let diff_mutable_results_count = diff_stream.count();
 
         let diff_nexts_after =
-            recorder.get_counter_value("firewood.change_proof.next", &[("traversal", "next")]);
+            recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
         let diff_mutable_nexts = diff_nexts_after - diff_nexts_before;
 
         println!("Diff (mutable) next operations: {diff_mutable_nexts}");
@@ -1951,14 +1849,14 @@ mod tests {
 
         // DIFF TEST: Measure next calls from hash-optimized diff operation
         let diff_nexts_before =
-            recorder.get_counter_value("firewood.change_proof.next", &[("traversal", "next")]);
+            recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
 
         let diff_stream =
             DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Box::new([])).unwrap();
         let diff_immutable_results_count = diff_stream.count();
 
         let diff_nexts_after =
-            recorder.get_counter_value("firewood.change_proof.next", &[("traversal", "next")]);
+            recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
         let diff_immutable_nexts = diff_nexts_after - diff_nexts_before;
 
         println!("Diff (immutable) next operations: {diff_immutable_nexts}");
