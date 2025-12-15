@@ -2,10 +2,11 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::cell::RefCell;
+use std::ops::Deref;
 use std::rc::Rc;
 
-use metrics::{Key, Label, SetRecorderError};
-use metrics_util::debugging::{DebugValue, DebuggingRecorder, Snapshotter};
+use metrics::{Key, Label, with_local_recorder};
+use metrics_util::debugging::{DebugValue, DebuggingRecorder};
 
 #[expect(
     clippy::disallowed_types,
@@ -171,23 +172,21 @@ impl rand::RngCore for &SeededRng {
 }
 
 /// Test metrics recorder that captures counter values for testing
-#[derive(Debug)]
-pub struct TestRecorder {
-    snapshotter: Snapshotter,
+#[derive(Debug, Default)]
+pub struct TestRecorder(DebuggingRecorder);
+
+impl Deref for TestRecorder {
+    type Target = DebuggingRecorder;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 impl TestRecorder {
-    /// Default constructor for a `TestRecorder`
-    ///
-    /// # Errors
-    ///
-    /// Returns a `SetRecorderError` if the global recorder has already been created
-    /// for this process.
-    pub fn new() -> Result<Self, SetRecorderError<DebuggingRecorder>> {
-        let recorder = DebuggingRecorder::new();
-        let snapshotter = recorder.snapshotter();
-        recorder.install()?;
-        Ok(Self { snapshotter })
+    /// Execute test function with this recorder set as the local recorder.
+    pub fn with_recorder<F: Fn()>(&self, f: F) {
+        with_local_recorder(&**self, f);
     }
 
     /// Returns the counter value for the given key and label.
@@ -205,7 +204,7 @@ impl TestRecorder {
         };
 
         // Return the count value
-        let snapshot = self.snapshotter.snapshot();
+        let snapshot = self.snapshotter().snapshot();
         snapshot
             .into_vec()
             .into_iter()

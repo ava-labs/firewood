@@ -612,7 +612,6 @@ mod tests {
         FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, MemStore, MutableProposal,
         NodeStore, SeededRng, TestRecorder, TrieReader,
     };
-    use metrics::with_local_recorder;
     use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
     use test_case::test_case;
 
@@ -1765,125 +1764,123 @@ mod tests {
     #[test]
     #[allow(clippy::pedantic)]
     fn test_hash_optimization_reduces_next_calls() {
-        // Set up test recorder - if it fails, skip the entire test
-        let Ok(recorder) = TestRecorder::new() else {
-            return;
-        };
+        let recorder = TestRecorder::default();
+        recorder.with_recorder(|| {
+            // Create test data with substantial shared content and unique content
+            let tree1_items = [
+                // Large shared content that will form identical subtrees
+                (
+                    b"shared/branch_a/deep/file1".as_slice(),
+                    b"shared_value1".as_slice(),
+                ),
+                (
+                    b"shared/branch_a/deep/file2".as_slice(),
+                    b"shared_value2".as_slice(),
+                ),
+                (
+                    b"shared/branch_a/deep/file3".as_slice(),
+                    b"shared_value3".as_slice(),
+                ),
+                (b"shared/branch_b/file1".as_slice(), b"shared_b1".as_slice()),
+                (b"shared/branch_b/file2".as_slice(), b"shared_b2".as_slice()),
+                (
+                    b"shared/branch_c/deep/nested/file".as_slice(),
+                    b"shared_nested".as_slice(),
+                ),
+                (b"shared/common".as_slice(), b"common_value".as_slice()),
+                // Unique to tree1
+                (b"tree1_unique/x".as_slice(), b"x_value".as_slice()),
+                (b"tree1_unique/y".as_slice(), b"y_value".as_slice()),
+                (b"tree1_unique/z".as_slice(), b"z_value".as_slice()),
+            ];
 
-        // Create test data with substantial shared content and unique content
-        let tree1_items = [
-            // Large shared content that will form identical subtrees
-            (
-                b"shared/branch_a/deep/file1".as_slice(),
-                b"shared_value1".as_slice(),
-            ),
-            (
-                b"shared/branch_a/deep/file2".as_slice(),
-                b"shared_value2".as_slice(),
-            ),
-            (
-                b"shared/branch_a/deep/file3".as_slice(),
-                b"shared_value3".as_slice(),
-            ),
-            (b"shared/branch_b/file1".as_slice(), b"shared_b1".as_slice()),
-            (b"shared/branch_b/file2".as_slice(), b"shared_b2".as_slice()),
-            (
-                b"shared/branch_c/deep/nested/file".as_slice(),
-                b"shared_nested".as_slice(),
-            ),
-            (b"shared/common".as_slice(), b"common_value".as_slice()),
-            // Unique to tree1
-            (b"tree1_unique/x".as_slice(), b"x_value".as_slice()),
-            (b"tree1_unique/y".as_slice(), b"y_value".as_slice()),
-            (b"tree1_unique/z".as_slice(), b"z_value".as_slice()),
-        ];
+            let tree2_items = [
+                // Identical shared content
+                (
+                    b"shared/branch_a/deep/file1".as_slice(),
+                    b"shared_value1".as_slice(),
+                ),
+                (
+                    b"shared/branch_a/deep/file2".as_slice(),
+                    b"shared_value2".as_slice(),
+                ),
+                (
+                    b"shared/branch_a/deep/file3".as_slice(),
+                    b"shared_value3".as_slice(),
+                ),
+                (b"shared/branch_b/file1".as_slice(), b"shared_b1".as_slice()),
+                (b"shared/branch_b/file2".as_slice(), b"shared_b2".as_slice()),
+                (
+                    b"shared/branch_c/deep/nested/file".as_slice(),
+                    b"shared_nested".as_slice(),
+                ),
+                (b"shared/common".as_slice(), b"common_value".as_slice()),
+                // Unique to tree2
+                (b"tree2_unique/p".as_slice(), b"p_value".as_slice()),
+                (b"tree2_unique/q".as_slice(), b"q_value".as_slice()),
+                (b"tree2_unique/r".as_slice(), b"r_value".as_slice()),
+            ];
 
-        let tree2_items = [
-            // Identical shared content
-            (
-                b"shared/branch_a/deep/file1".as_slice(),
-                b"shared_value1".as_slice(),
-            ),
-            (
-                b"shared/branch_a/deep/file2".as_slice(),
-                b"shared_value2".as_slice(),
-            ),
-            (
-                b"shared/branch_a/deep/file3".as_slice(),
-                b"shared_value3".as_slice(),
-            ),
-            (b"shared/branch_b/file1".as_slice(), b"shared_b1".as_slice()),
-            (b"shared/branch_b/file2".as_slice(), b"shared_b2".as_slice()),
-            (
-                b"shared/branch_c/deep/nested/file".as_slice(),
-                b"shared_nested".as_slice(),
-            ),
-            (b"shared/common".as_slice(), b"common_value".as_slice()),
-            // Unique to tree2
-            (b"tree2_unique/p".as_slice(), b"p_value".as_slice()),
-            (b"tree2_unique/q".as_slice(), b"q_value".as_slice()),
-            (b"tree2_unique/r".as_slice(), b"r_value".as_slice()),
-        ];
+            // Create mutable trees
+            let m1 = populate_merkle_mutable(create_test_merkle(), &tree1_items);
+            let m2 = populate_merkle_mutable(create_test_merkle(), &tree2_items);
 
-        // Create mutable trees
-        let m1 = populate_merkle_mutable(create_test_merkle(), &tree1_items);
-        let m2 = populate_merkle_mutable(create_test_merkle(), &tree2_items);
+            // DIFF TEST: Measure next calls from diff operations on mutable proposals
+            let diff_nexts_before =
+                recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
 
-        // DIFF TEST: Measure next calls from diff operations on mutable proposals
-        let diff_nexts_before =
-            recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
+            let diff_stream =
+                DiffMerkleNodeStream::new_without_hash(m1.nodestore(), m2.nodestore(), Box::new([]))
+                    .unwrap();
+            let diff_mutable_results_count = diff_stream.count();
 
-        let diff_stream =
-            DiffMerkleNodeStream::new_without_hash(m1.nodestore(), m2.nodestore(), Box::new([]))
-                .unwrap();
-        let diff_mutable_results_count = diff_stream.count();
+            let diff_nexts_after =
+                recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
+            let diff_mutable_nexts = diff_nexts_after - diff_nexts_before;
 
-        let diff_nexts_after =
-            recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
-        let diff_mutable_nexts = diff_nexts_after - diff_nexts_before;
+            println!("Diff (mutable) next operations: {diff_mutable_nexts}");
+            println!("Diff (mutable) results count: {diff_mutable_results_count}");
 
-        println!("Diff (mutable) next operations: {diff_mutable_nexts}");
-        println!("Diff (mutable) results count: {diff_mutable_results_count}");
+            let m1 = make_immutable(m1);
+            let m2 = make_immutable(m2);
 
-        let m1 = make_immutable(m1);
-        let m2 = make_immutable(m2);
+            // DIFF TEST: Measure next calls from hash-optimized diff operation
+            let diff_nexts_before =
+                recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
 
-        // DIFF TEST: Measure next calls from hash-optimized diff operation
-        let diff_nexts_before =
-            recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
+            let diff_stream =
+                DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Box::new([])).unwrap();
+            let diff_immutable_results_count = diff_stream.count();
 
-        let diff_stream =
-            DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Box::new([])).unwrap();
-        let diff_immutable_results_count = diff_stream.count();
+            let diff_nexts_after =
+                recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
+            let diff_immutable_nexts = diff_nexts_after - diff_nexts_before;
 
-        let diff_nexts_after =
-            recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
-        let diff_immutable_nexts = diff_nexts_after - diff_nexts_before;
+            println!("Diff (immutable) next operations: {diff_immutable_nexts}");
+            println!("Diff (immutable) results count: {diff_immutable_results_count}");
 
-        println!("Diff (immutable) next operations: {diff_immutable_nexts}");
-        println!("Diff (immutable) results count: {diff_immutable_results_count}");
+            // Should have some next calls
+            assert!(
+                diff_immutable_nexts > 0,
+                "Expected next calls from diff operation"
+            );
 
-        // Should have some next calls
-        assert!(
-            diff_immutable_nexts > 0,
-            "Expected next calls from diff operation"
-        );
+            // Verify hash optimization is working - should call next FEWER times
+            assert!(
+                diff_immutable_nexts < diff_mutable_nexts,
+                "Hash optimization failed: there should be fewer next calls on immutable ({diff_immutable_nexts}) than on mutable ({diff_mutable_nexts}) for trees with shared content"
+            );
 
-        // Verify hash optimization is working - should call next FEWER times
-        assert!(
-            diff_immutable_nexts < diff_mutable_nexts,
-            "Hash optimization failed: there should be fewer next calls on immutable ({diff_immutable_nexts}) than on mutable ({diff_mutable_nexts}) for trees with shared content"
-        );
+            // Verify that diff on mutable and immutable tries return the same number of results
+            assert!(
+                diff_immutable_results_count > 0
+                    && diff_immutable_results_count == diff_mutable_results_count,
+                "Expected to retrieve the same diff results"
+            );
 
-        // Verify that diff on mutable and immutable tries return the same number of results
-        assert!(
-            diff_immutable_results_count > 0
-                && diff_immutable_results_count == diff_mutable_results_count,
-            "Expected to retrieve the same diff results"
-        );
-
-        println!(
-            "Traversal optimization verified: {diff_immutable_nexts} vs {diff_mutable_nexts} next calls"
-        );
+            println!(
+                "Traversal optimization verified: {diff_immutable_nexts} vs {diff_mutable_nexts} next calls"
+            );
+        });
     }
 }
