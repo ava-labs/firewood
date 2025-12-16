@@ -111,13 +111,23 @@ For more information on coding conventions and constraints, please refer to [CON
 Before submitting/updating a PR, run the following
 
 ```bash
-cargo fmt                                                                              # Format code
-cargo nextest run --workspace --features ethhash,logger --all-targets --profile ci     # Run tests
-cargo clippy --workspace --features ethhash,logger --all-targets                       # Linter
-cargo doc --no-deps                                                                    # Ensure docs build
+cargo fmt                                                               # Format code
+cargo nextest run --workspace --features ethhash,logger --all-targets   # Run tests
+cargo clippy --workspace --features ethhash,logger --all-targets        # Linter
+cargo doc --no-deps                                                     # Ensure docs build
 ```
 
 All tests must pass, and there should be no clippy warnings.
+
+### Slow Tests
+
+If your PR modifies code that is tested by any test prefixed with `test_slow_`, you should also run the full test suite with the `ci` profile to ensure those tests pass:
+
+```bash
+cargo nextest run --workspace --features ethhash,logger --all-targets --profile ci
+```
+
+The `ci` profile includes slow tests that are skipped in the default profile for faster local development.
 
 ### Markdown Linter
 
