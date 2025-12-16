@@ -26,6 +26,7 @@ fastrace.workspace = true
 hex.workspace = true
 integer-encoding.workspace = true
 metrics.workspace = true
+metrics-util.workspace = true
 nonzero_ext.workspace = true
 rand = { workspace = true, optional = true }
 sha2.workspace = true

@@ -1184,6 +1184,7 @@ dependencies = [
  "log",
  "lru",
  "metrics",
+ "metrics-util",
  "nonzero_ext",
  "parking_lot",
  "pprof",
