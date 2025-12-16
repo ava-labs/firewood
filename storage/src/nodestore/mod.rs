@@ -968,7 +968,7 @@ mod tests {
     }
 
     #[test]
-    fn giant_node() {
+    fn test_slow_giant_node() {
         let memstore = Arc::new(MemStore::new(vec![]));
         let empty_root = NodeStore::new_empty_committed(Arc::clone(&memstore));
 
