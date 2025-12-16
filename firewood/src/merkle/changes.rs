@@ -1879,7 +1879,7 @@ mod tests {
             // Verify hash optimization is working - should call next FEWER times
             assert!(
                 diff_immutable_nexts < diff_mutable_nexts,
-                "Hash optimization failed: there should be fewer next calls on immutable ({diff_immutable_nexts}) than on mutable ({diff_mutable_nexts}) for trees with shared content"
+                "Hash optimization failed: there should be fewer next calls on immutable ({diff_immutable_nexts}) than on mutable ({diff_mutable_nexts}) for tries with shared content"
             );
 
             // Verify that diff on mutable and immutable tries return the same number of results
