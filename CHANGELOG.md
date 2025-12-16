@@ -2,6 +2,43 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.17] - 2025-12-16
+
+### 🚀 Features
+
+- *(ffi)* Stub for code hashes in proof ([#1526](https://github.com/ava-labs/firewood/pull/1526))
+- Add ffi support for dump() ([#1527](https://github.com/ava-labs/firewood/pull/1527))
+- Disable automatic io-uring enablement ([#1528](https://github.com/ava-labs/firewood/pull/1528))
+- [**breaking**] Open database with directory instead of filepath ([#1532](https://github.com/ava-labs/firewood/pull/1532))
+
+### 🐛 Bug Fixes
+
+- *(io-uring)* Use sqwait to correctly synchronize kernel updates ([#1523](https://github.com/ava-labs/firewood/pull/1523))
+- *(rootstore)* Respect db truncation ([#1538](https://github.com/ava-labs/firewood/pull/1538))
+- *(ffi/iterator)* Keep view alive for iterator lifetime ([#1542](https://github.com/ava-labs/firewood/pull/1542))
+- Generated instance names have whitespace ([#1550](https://github.com/ava-labs/firewood/pull/1550))
+
+### 🚜 Refactor
+
+- [**breaking**] Remove branch_factor_256 ([#1533](https://github.com/ava-labs/firewood/pull/1533))
+- [**breaking**] Go DB config to functional options pattern ([#1534](https://github.com/ava-labs/firewood/pull/1534))
+- *(ffi/iterator)* Move tests into a separate file ([#1543](https://github.com/ava-labs/firewood/pull/1543))
+
+### 🧪 Testing
+
+- *(fwdctl)* Parallelize test suite ([#1540](https://github.com/ava-labs/firewood/pull/1540))
+- *(firewood)* Reduce thread spawn count ([#1547](https://github.com/ava-labs/firewood/pull/1547))
+
+### ⚙️ Miscellaneous Tasks
+
+- Update GitHub templates ([#1525](https://github.com/ava-labs/firewood/pull/1525))
+- *(benchmark/bootstrap)* Remove Coreth branch option ([#1530](https://github.com/ava-labs/firewood/pull/1530))
+- *(firewood)* Clean up RevisionManager fields ([#1536](https://github.com/ava-labs/firewood/pull/1536))
+- Remove reference to RELEASES.md ([#1544](https://github.com/ava-labs/firewood/pull/1544))
+- Switch to cargo-nextest ([#1541](https://github.com/ava-labs/firewood/pull/1541))
+- Aws-launch.sh: libevm-commit -> libevm-branch ([#1552](https://github.com/ava-labs/firewood/pull/1552))
+- *(nextest)* Skip slow tests in local development ([#1551](https://github.com/ava-labs/firewood/pull/1551))
+
 ## [0.0.16] - 2025-12-09
 
 ### 🚀 Features
