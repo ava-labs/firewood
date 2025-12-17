@@ -173,7 +173,7 @@ func newDatabase(dbDir string, opts ...Option) (*Database, error) {
 		// Try ethhash first, if it fails try native
 		tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("firewood-hash-detection-%d", time.Now().UnixNano()))
 		defer os.RemoveAll(tempDir)
-		
+
 		_, err := New(tempDir, HashTypeEthHash, WithTruncate(true))
 		if err == nil {
 			detectedHashType = HashTypeEthHash
@@ -181,7 +181,7 @@ func newDatabase(dbDir string, opts ...Option) (*Database, error) {
 			detectedHashType = HashTypeNative
 		}
 	})
-	
+
 	f, err := New(dbDir, detectedHashType, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new database in directory %q: %w", dbDir, err)
@@ -203,11 +203,11 @@ func TestUpdateSingleKV(t *testing.T) {
 
 func TestHashTypeValidation(t *testing.T) {
 	r := require.New(t)
-	
+
 	// Try to create a database with EthHash
 	dbDirEth := t.TempDir()
 	dbEth, errEth := New(dbDirEth, HashTypeEthHash, WithTruncate(true))
-	
+
 	// Try to create a database with Native
 	dbDirNative := t.TempDir()
 	dbNative, errNative := New(dbDirNative, HashTypeNative, WithTruncate(true))
