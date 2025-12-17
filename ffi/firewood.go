@@ -239,17 +239,7 @@ func New(dbDir string, hashType HashType, opts ...Option) (*Database, error) {
 		strategy:             C.uint8_t(conf.readCacheStrategy),
 		truncate:             C.bool(conf.truncate),
 		root_store:           C.bool(conf.rootStore),
-		hash_type:            C.HashType(conf.hashType),
-	}
-
-	return getDatabaseFromHandleResult(C.fwd_open_db(args))
-}
-		cache_size:           C.size_t(conf.nodeCacheEntries),
-		free_list_cache_size: C.size_t(conf.freeListCacheEntries),
-		revisions:            C.size_t(conf.revisions),
-		strategy:             C.uint8_t(conf.readCacheStrategy),
-		truncate:             C.bool(conf.truncate),
-		root_store:           C.bool(conf.rootStore),
+		hash_type:            C.enum_HashType(conf.hashType),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))
