@@ -895,25 +895,32 @@ func TestCommitWithRevisionHeld(t *testing.T) {
 	db := newTestDatabase(t)
 
 	keys, vals := kvForTest(20)
-	_, err := db.Update(keys[:10], vals[:10])
+	root, err := db.Update(keys[:10], vals[:10])
+	r.NoError(err)
+	base, err := db.Revision(root)
 	r.NoError(err)
 
 	// Create a proposal with 10 key-value pairs.
 	nKeys, nVals := keys[10:], vals[10:]
 	proposal, err := db.Propose(nKeys, nVals)
 	r.NoError(err)
-	root, err := proposal.Root()
+	root, err = proposal.Root()
 	r.NoError(err)
 
 	rev, err := db.Revision(root)
 	r.NoError(err)
 
-	// revision should be accessible after commit
+	// both revisions should be accessible after commit
 	r.NoError(proposal.Commit())
-	for i, key := range nKeys {
+	for i, key := range keys {
+		if i < 10 {
+			val, err := base.Get(key)
+			r.NoErrorf(err, "base.Get(): %d", i)
+			r.Equalf(val, vals[i], "base.Get(): %d", i)
+		}
 		val, err := rev.Get(key)
-		r.NoError(err)
-		r.Equal(val, nVals[i])
+		r.NoErrorf(err, "rev.Get(): %d", i)
+		r.Equalf(val, vals[i], "rev.Get(): %d", i)
 	}
 	r.NoError(rev.Drop())
 }
