@@ -922,6 +922,7 @@ func TestCommitWithRevisionHeld(t *testing.T) {
 		r.NoErrorf(err, "rev.Get(): %d", i)
 		r.Equalf(val, vals[i], "rev.Get(): %d", i)
 	}
+	r.NoError(base.Drop())
 	r.NoError(rev.Drop())
 }
 
