@@ -131,8 +131,9 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         };
 
         if let Some(root_address) = header.root_address() {
-            let node = nodestore.read_node_from_disk(root_address, "open");
-            let root_hash = node.map(|n| hash_node(&n, &Path(SmallVec::default())))?;
+            let node =
+                nodestore.read_node_from_disk_with_verifier(root_address, "open", |_| Ok(()))?;
+            let root_hash = hash_node(&node, &Path(SmallVec::default()));
             nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
         }
 
@@ -172,22 +173,13 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             header,
             kind: Committed {
                 deleted: Box::default(),
-                root: Some(Child::AddressWithHash(root_address, root_hash)),
+                root: Some(Child::AddressWithHash(root_address, root_hash.clone())),
             },
             storage,
         };
 
-        debug_assert_eq!(
-            nodestore
-                .root_hash()
-                .expect("Nodestore should have root hash"),
-            hash_node(
-                &nodestore
-                    .read_node(root_address)
-                    .expect("Root node read should succeed"),
-                &Path(SmallVec::default())
-            )
-        );
+        // read root to verify it exists and has correct hash
+        let _ = nodestore.read_node_from_disk(root_address, &root_hash, &Path::new(), "with_root");
 
         nodestore
     }
@@ -213,8 +205,15 @@ pub trait Parentable {
     fn as_nodestore_parent(&self) -> NodeStoreParent;
     /// Returns the root hash of this nodestore. This works because all parentable nodestores have a hash
     fn root_hash(&self) -> Option<TrieHash>;
-    /// Returns the root node
-    fn root(&self) -> Option<MaybePersistedNode>;
+    /// Returns the root of this nodestore as a [`MaybePersistedNode`] and [`Node`]
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the root cannot be read.
+    fn read_root<S: NodeReader>(
+        &self,
+        storage: &S,
+    ) -> Result<Option<(MaybePersistedNode, Node)>, FileIoError>;
 }
 
 impl Parentable for Arc<ImmutableProposal> {
@@ -226,8 +225,14 @@ impl Parentable for Arc<ImmutableProposal> {
             .as_ref()
             .and_then(|root| root.hash().cloned().map(HashType::into_triehash))
     }
-    fn root(&self) -> Option<MaybePersistedNode> {
-        self.root.as_ref().map(Child::as_maybe_persisted_node)
+    fn read_root<S: NodeReader>(
+        &self,
+        storage: &S,
+    ) -> Result<Option<(MaybePersistedNode, Node)>, FileIoError> {
+        self.root
+            .as_ref()
+            .map(|child| child.read_root(storage))
+            .transpose()
     }
 }
 
@@ -252,12 +257,19 @@ impl Parentable for Committed {
             .as_ref()
             .and_then(|root| root.hash().cloned().map(HashType::into_triehash))
     }
-    fn root(&self) -> Option<MaybePersistedNode> {
-        self.root.as_ref().map(Child::as_maybe_persisted_node)
+    fn read_root<S: NodeReader>(
+        &self,
+        storage: &S,
+    ) -> Result<Option<(MaybePersistedNode, Node)>, FileIoError> {
+        self.root
+            .as_ref()
+            .map(|child| child.read_root(storage))
+            .transpose()
     }
 }
 
 impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
+    ///
     /// Create a new `MutableProposal` [`NodeStore`] from a parent [`NodeStore`]
     ///
     /// # Errors
@@ -265,9 +277,8 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     /// Returns a [`FileIoError`] if the parent root cannot be read.
     pub fn new<F: Parentable>(parent: &NodeStore<F, S>) -> Result<Self, FileIoError> {
         let mut deleted = Vec::default();
-        let root = if let Some(ref root) = parent.kind.root() {
-            deleted.push(root.clone());
-            let root = root.as_shared_node(parent)?.deref().clone();
+        let root = if let Some((maybe, root)) = parent.kind.read_root(parent)? {
+            deleted.push(maybe);
             Some(root)
         } else {
             None
@@ -307,8 +318,13 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the node cannot be read.
-    pub fn read_for_update(&mut self, node: MaybePersistedNode) -> Result<Node, FileIoError> {
-        let arc_wrapped_node = node.as_shared_node(self)?;
+    pub fn read_for_update(
+        &mut self,
+        node: MaybePersistedNode,
+        expected_hash: &HashType,
+        leading_path: &Path,
+    ) -> Result<Node, FileIoError> {
+        let arc_wrapped_node = node.as_shared_node(self, expected_hash, leading_path)?;
         self.delete_node(node);
         Ok((*arc_wrapped_node).clone())
     }
@@ -387,7 +403,12 @@ pub trait NodeReader {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the node cannot be read.
-    fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError>;
+    fn read_node(
+        &self,
+        addr: LinearAddress,
+        expected_hash: &HashType,
+        leading_path: &Path,
+    ) -> Result<SharedNode, FileIoError>;
 }
 
 impl<T> NodeReader for T
@@ -395,8 +416,13 @@ where
     T: Deref,
     T::Target: NodeReader,
 {
-    fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
-        self.deref().read_node(addr)
+    fn read_node(
+        &self,
+        addr: LinearAddress,
+        expected_hash: &HashType,
+        leading_path: &Path,
+    ) -> Result<SharedNode, FileIoError> {
+        self.deref().read_node(addr, expected_hash, leading_path)
     }
 }
 
@@ -405,8 +431,8 @@ where
     T: Deref,
     T::Target: RootReader,
 {
-    fn root_node(&self) -> Option<SharedNode> {
-        self.deref().root_node()
+    fn read_root(&self) -> Result<Option<SharedNode>, FileIoError> {
+        self.deref().read_root()
     }
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
         self.deref().root_as_maybe_persisted_node()
@@ -419,7 +445,11 @@ where
 pub trait RootReader {
     /// Returns the root of the trie.
     /// Callers that just need the node at the root should use this function.
-    fn root_node(&self) -> Option<SharedNode>;
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the root cannot be read.
+    fn read_root(&self) -> Result<Option<SharedNode>, FileIoError>;
 
     /// Returns the root of the trie as a `MaybePersistedNode`.
     /// Callers that might want to modify the root or know how it is stored
@@ -630,20 +660,30 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
 }
 
 impl<S: ReadableStorage> NodeReader for NodeStore<MutableProposal, S> {
-    fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
-        self.read_node_from_disk(addr, "write")
+    fn read_node(
+        &self,
+        addr: LinearAddress,
+        expected_hash: &HashType,
+        leading_path: &Path,
+    ) -> Result<SharedNode, FileIoError> {
+        self.read_node_from_disk(addr, expected_hash, leading_path, "write")
     }
 }
 
 impl<T: Parentable, S: ReadableStorage> NodeReader for NodeStore<T, S> {
-    fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
-        self.read_node_from_disk(addr, "read")
+    fn read_node(
+        &self,
+        addr: LinearAddress,
+        expected_hash: &HashType,
+        leading_path: &Path,
+    ) -> Result<SharedNode, FileIoError> {
+        self.read_node_from_disk(addr, expected_hash, leading_path, "read")
     }
 }
 
 impl<S: ReadableStorage> RootReader for NodeStore<MutableProposal, S> {
-    fn root_node(&self) -> Option<SharedNode> {
-        self.kind.root.as_ref().map(|node| node.clone().into())
+    fn read_root(&self) -> Result<Option<SharedNode>, FileIoError> {
+        Ok(self.kind.root.as_ref().map(|node| node.clone().into()))
     }
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
         self.kind
@@ -654,13 +694,13 @@ impl<S: ReadableStorage> RootReader for NodeStore<MutableProposal, S> {
 }
 
 impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
-    fn root_node(&self) -> Option<SharedNode> {
+    fn read_root(&self) -> Result<Option<SharedNode>, FileIoError> {
         // TODO: If the read_node fails, we just say there is no root; this is incorrect
         self.kind
             .root
             .as_ref()
-            .map(Child::as_maybe_persisted_node)
-            .and_then(|node| node.as_shared_node(self).ok())
+            .map(|child| child.read_node_from_storage(self, &Path::new()))
+            .transpose()
     }
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
         self.kind.root.as_ref().map(Child::as_maybe_persisted_node)
@@ -668,13 +708,13 @@ impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
 }
 
 impl<S: ReadableStorage> RootReader for NodeStore<Arc<ImmutableProposal>, S> {
-    fn root_node(&self) -> Option<SharedNode> {
+    fn read_root(&self) -> Result<Option<SharedNode>, FileIoError> {
         // Use the MaybePersistedNode's as_shared_node method to get the root
         self.kind
             .root
             .as_ref()
-            .map(Child::as_maybe_persisted_node)
-            .and_then(|node| node.as_shared_node(self).ok())
+            .map(|child| child.read_node_from_storage(self, &Path::new()))
+            .transpose()
     }
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
         self.kind.root.as_ref().map(Child::as_maybe_persisted_node)
@@ -740,16 +780,53 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the node cannot be read.
+    #[allow(clippy::missing_panics_doc)]
     pub fn read_node_from_disk(
         &self,
         addr: LinearAddress,
+        expected_hash: &HashType,
+        leading_path: &Path,
         mode: &'static str,
+    ) -> Result<SharedNode, FileIoError> {
+        self.read_node_from_disk_with_verifier(addr, mode, |node| {
+            let jit_hash = hash_node(node, leading_path);
+            if jit_hash == *expected_hash {
+                Ok(())
+            } else {
+                let err = self.storage.file_io_error(
+                    Error::new(
+                        ErrorKind::InvalidData,
+                        format!(
+                            "hash mismatch reading node at {addr:?}: expected {expected_hash:?}, got {jit_hash:?}"
+                        ),
+                    ),
+                    addr.get(),
+                    Some("read_node_from_disk".to_string()),
+                );
+                assert!(!cfg!(debug_assertions), "{err}");
+                Err(err)
+            }
+        })
+    }
+
+    /// Read a [Node] from the provided [`LinearAddress`].
+    /// `addr` is the address of a `StoredArea` in the `ReadableStorage`.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the node cannot be read.
+    fn read_node_from_disk_with_verifier(
+        &self,
+        addr: LinearAddress,
+        mode: &'static str,
+        verifier: impl FnOnce(&SharedNode) -> Result<(), FileIoError>,
     ) -> Result<SharedNode, FileIoError> {
         if let Some(node) = self.storage.read_cached_node(addr, mode) {
             return Ok(node);
         }
 
         let (node, _) = self.read_node_with_num_bytes_from_disk(addr)?;
+        verifier(&node)?;
 
         match self.storage.cache_read_strategy() {
             CacheReadStrategy::All => {
@@ -871,7 +948,7 @@ where
         address: LinearAddress,
     ) -> Result<(AreaIndex, u64), FileIoError> {
         if alloc::FreeArea::from_storage(self.storage.as_ref(), address).is_err() {
-            self.read_node(address)?;
+            self.read_node_from_disk_with_verifier(address, "checker", |_| Ok(()))?;
         }
 
         let area_index_and_size = self.area_index_and_size(address)?;

@@ -4,7 +4,7 @@
 use parking_lot::Mutex;
 use std::{fmt::Display, sync::Arc};
 
-use crate::{FileIoError, LinearAddress, NodeReader, SharedNode};
+use crate::{FileIoError, HashType, LinearAddress, NodeReader, Path, SharedNode};
 
 /// A node that is either in memory or on disk.
 ///
@@ -86,12 +86,19 @@ impl MaybePersistedNode {
     /// Returns a `Result<SharedNode, FileIoError>` where:
     /// - `Ok(SharedNode)` contains the node if successfully retrieved
     /// - `Err(FileIoError)` if there was an error reading from storage
-    pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
+    pub fn as_shared_node<S: NodeReader>(
+        &self,
+        storage: &S,
+        expected_hash: &HashType,
+        leading_path: &Path,
+    ) -> Result<SharedNode, FileIoError> {
         match &*self.0.lock() {
             MaybePersisted::Allocated(_, node) | MaybePersisted::Unpersisted(node) => {
                 Ok(node.clone())
             }
-            MaybePersisted::Persisted(address) => storage.read_node(*address),
+            MaybePersisted::Persisted(address) => {
+                storage.read_node(*address, expected_hash, leading_path)
+            }
         }
     }
 
@@ -234,7 +241,12 @@ mod test {
         // create as unpersisted
         let maybe_persisted_node = MaybePersistedNode::from(node.clone());
         let addr = nonzero!(2048u64);
-        assert_eq!(maybe_persisted_node.as_shared_node(&store).unwrap(), node);
+        assert_eq!(
+            maybe_persisted_node
+                .as_shared_node(&store, &HashType::empty(), &Path::new())
+                .unwrap(),
+            node
+        );
         assert_eq!(
             Option::<LinearAddress>::None,
             Option::from(&maybe_persisted_node)
@@ -242,7 +254,11 @@ mod test {
 
         let addr = LinearAddress::new(addr.get()).unwrap();
         maybe_persisted_node.persist_at(addr);
-        assert!(maybe_persisted_node.as_shared_node(&store).is_err());
+        assert!(
+            maybe_persisted_node
+                .as_shared_node(&store, &HashType::empty(), &Path::new())
+                .is_err()
+        );
         assert_eq!(Some(addr), Option::from(&maybe_persisted_node));
         Ok(())
     }
@@ -267,8 +283,18 @@ mod test {
         let cloned = original.clone();
 
         // Both should be unpersisted initially
-        assert_eq!(original.as_shared_node(&store).unwrap(), node);
-        assert_eq!(cloned.as_shared_node(&store).unwrap(), node);
+        assert_eq!(
+            original
+                .as_shared_node(&store, &HashType::empty(), &Path::new())
+                .unwrap(),
+            node
+        );
+        assert_eq!(
+            cloned
+                .as_shared_node(&store, &HashType::empty(), &Path::new())
+                .unwrap(),
+            node
+        );
         assert_eq!(Option::<LinearAddress>::None, Option::from(&original));
         assert_eq!(Option::<LinearAddress>::None, Option::from(&cloned));
 
@@ -281,8 +307,16 @@ mod test {
 
         // Both original and clone should now be persisted since they share the same
         // mutex-protected pointer
-        assert!(original.as_shared_node(&store).is_err());
-        assert!(cloned.as_shared_node(&store).is_err());
+        assert!(
+            original
+                .as_shared_node(&store, &HashType::empty(), &Path::new())
+                .is_err()
+        );
+        assert!(
+            cloned
+                .as_shared_node(&store, &HashType::empty(), &Path::new())
+                .is_err()
+        );
         assert_eq!(Some(addr), Option::from(&original));
         assert_eq!(Some(addr), Option::from(&cloned));
 

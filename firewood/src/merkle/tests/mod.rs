@@ -281,7 +281,7 @@ fn remove_root() {
     assert!(merkle.get_value(&key3).unwrap().is_none());
     assert!(merkle.remove(&key3).unwrap().is_none());
 
-    assert!(merkle.nodestore.root_node().is_none());
+    assert!(merkle.nodestore.read_root().unwrap().is_none());
 }
 
 #[test]
@@ -357,7 +357,7 @@ fn remove_many() {
         let got = merkle.get_value(&key).unwrap();
         assert!(got.is_none());
     }
-    assert!(merkle.nodestore.root_node().is_none());
+    assert!(merkle.nodestore.read_root().unwrap().is_none());
 }
 
 #[test]
