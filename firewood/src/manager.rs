@@ -28,7 +28,7 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    TrieHash, firewood_gauge,
+    TrieHash, firewood_gauge, firewood_counter,
 };
 
 const DB_FILE_NAME: &str = "firewood.db";
@@ -296,10 +296,30 @@ impl RevisionManager {
 
         // 6. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
-        // referenced by anyone else.
-        self.proposals
-            .lock()
-            .retain(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1);
+        // referenced by anyone else. Track how many were discarded (dropped without commit).
+        {
+            let mut lock = self.proposals.lock();
+            let discarded = lock
+                .iter()
+                .filter(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) <= 1)
+                .count();
+            if discarded > 0 {
+                firewood_counter!(
+                    "firewood.proposals.discarded",
+                    "Number of proposals dropped without commit"
+                )
+                .increment(discarded as u64);
+            }
+
+            lock.retain(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1);
+
+            // Update outstanding proposals gauge after cleanup
+            firewood_gauge!(
+                "firewood.proposals.outstanding",
+                "Current number of outstanding proposals"
+            )
+            .set(lock.len() as f64);
+        }
 
         // then reparent any proposals that have this proposal as a parent
         for p in &*self.proposals.lock() {
@@ -338,7 +358,14 @@ impl RevisionManager {
     }
 
     pub fn add_proposal(&self, proposal: ProposedRevision) {
-        self.proposals.lock().push(proposal);
+        let mut lock = self.proposals.lock();
+        lock.push(proposal);
+        // Update outstanding proposals gauge when adding
+        firewood_gauge!(
+            "firewood.proposals.outstanding",
+            "Current number of outstanding proposals"
+        )
+        .set(lock.len() as f64);
     }
 
     /// Retrieve a committed revision by its root hash.

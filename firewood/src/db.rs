@@ -383,6 +383,13 @@ impl<'db> api::Proposal for Proposal<'db> {
 impl Proposal<'_> {
     #[crate::metrics("firewood.proposal.create", "database proposal creation")]
     fn create_proposal(&self, batch: impl IntoBatchIter) -> Result<Self, api::Error> {
+        // Proposal created based on another proposal
+        firewood_storage::firewood_counter!(
+            "firewood.proposals.based_on_proposal",
+            "Number of proposals created with a proposal parent"
+        )
+        .increment(1);
+
         self.db.propose_with_parent(batch, &self.nodestore)
     }
 
