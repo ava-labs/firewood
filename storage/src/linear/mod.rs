@@ -241,6 +241,22 @@ pub trait OffsetReader: Read {
     fn offset(&self) -> u64;
 }
 
+/// Trait for storage backends that support advisory locking.
+///
+/// This trait provides an abstraction over file-based locking mechanisms.
+/// File-backed storage implementations should acquire an advisory lock to
+/// prevent multiple processes from accessing the same database simultaneously.
+/// In-memory storage implementations can provide a no-op implementation.
+pub trait Lockable {
+    /// Acquire an advisory lock on the storage to prevent concurrent access.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the lock cannot be acquired (e.g., if another
+    /// process holds the lock).
+    fn lock(&self) -> Result<(), FileIoError>;
+}
+
 impl<T> OffsetReader for Cursor<T>
 where
     Cursor<T>: Read,

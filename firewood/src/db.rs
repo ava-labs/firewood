@@ -17,10 +17,13 @@ use crate::v2::api::{
     KeyValuePair, OptionalHashKeyExt,
 };
 
-use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
+use crate::manager::{CommittedRevision, ConfigManager, RevisionManager, RevisionManagerConfig};
+#[cfg(test)]
+use crate::manager::HistoricalRevisionStorage;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieReader,
+    ImmutableProposal, Lockable, NodeStore, Parentable, ReadableStorage, TrieReader,
+    WritableStorage,
 };
 use metrics::{counter, describe_counter};
 use std::io::Write;
@@ -134,19 +137,23 @@ pub struct DbConfig {
     pub root_store: bool,
 }
 
-#[derive(Debug)]
 /// A database instance.
-pub struct Db {
+///
+/// The `Db` type is generic over the storage backend `S`, which must implement
+/// both `WritableStorage` and `Lockable`. The default storage type is `FileBacked`
+/// for production use, but you can use `MemStore` for testing.
+#[derive(Debug)]
+pub struct Db<S: WritableStorage + Lockable = FileBacked> {
     metrics: Arc<DbMetrics>,
-    manager: RevisionManager,
+    manager: RevisionManager<S>,
     use_parallel: UseParallel,
 }
 
-impl api::Db for Db {
+impl api::Db for Db<FileBacked> {
     type Historical = NodeStore<Committed, FileBacked>;
 
     type Proposal<'db>
-        = Proposal<'db>
+        = Proposal<'db, FileBacked>
     where
         Self: 'db;
 
@@ -164,8 +171,12 @@ impl api::Db for Db {
     }
 }
 
-impl Db {
-    /// Create a new database instance.
+impl Db<FileBacked> {
+    /// Create a new file-backed database instance.
+    ///
+    /// This is the primary constructor for production use. It creates a database
+    /// backed by file storage with optional `RootStore` support for historical
+    /// revision queries.
     pub fn new<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Self, api::Error> {
         let metrics = Arc::new(DbMetrics {
             proposals: counter!("firewood.proposals"),
@@ -187,7 +198,10 @@ impl Db {
         Ok(db)
     }
 
-    /// Synchronously get a view, either committed or proposed
+    /// Synchronously get a view, either committed or proposed.
+    ///
+    /// This method checks proposals first, then in-memory committed revisions,
+    /// and finally the `RootStore` for historical revisions.
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, api::Error> {
         self.manager.view(root_hash).map_err(Into::into)
     }
@@ -208,11 +222,6 @@ impl Db {
         let latest_rev_nodestore = self.manager.current_revision();
         let merkle = Merkle::from(latest_rev_nodestore);
         merkle.dump_to_string().map_err(std::io::Error::other)
-    }
-
-    /// Get a copy of the database metrics
-    pub fn metrics(&self) -> Arc<DbMetrics> {
-        self.metrics.clone()
     }
 
     /// Check the database for consistency
@@ -327,16 +336,137 @@ impl Db {
     }
 }
 
-#[derive(Debug)]
-/// A user-visible database proposal
-pub struct Proposal<'db> {
-    nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
-    db: &'db Db,
+impl<S: WritableStorage + Lockable + 'static> Db<S> {
+    /// Create a new database instance with a pre-constructed storage backend.
+    ///
+    /// This constructor is primarily intended for testing with in-memory storage.
+    /// For production use with file-backed storage, use `Db::new()` instead.
+    ///
+    /// Note: `RootStore` is not supported with this constructor, so historical
+    /// revision queries beyond `max_revisions` will fail.
+    #[cfg(test)]
+    pub fn with_storage(
+        storage: Arc<S>,
+        cfg: DbConfig,
+    ) -> Result<Self, api::Error> {
+        let metrics = Arc::new(DbMetrics {
+            proposals: counter!("firewood.proposals"),
+        });
+        describe_counter!("firewood.proposals", "Number of proposals created");
+
+        let manager = RevisionManager::with_storage(storage, cfg.manager, cfg.truncate)?;
+        let db = Self {
+            metrics,
+            manager,
+            use_parallel: cfg.use_parallel,
+        };
+        Ok(db)
+    }
+
+    /// Get the root hash of the current revision.
+    pub fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
+        Ok(self.manager.root_hash()?.or_default_root_hash())
+    }
+
+    /// Get the current committed revision.
+    pub fn current_revision(&self) -> CommittedRevision<S> {
+        self.manager.current_revision()
+    }
+
+    /// Retrieve a committed revision by its root hash.
+    ///
+    /// This method checks in-memory revisions first, then falls back to
+    /// historical storage if available (e.g., `RootStore` for `FileBacked`).
+    ///
+    /// Note: For `FileBacked` storage, the public API is through the `api::Db` trait.
+    #[cfg(test)]
+    pub(crate) fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision<S>, api::Error>
+    where
+        S: HistoricalRevisionStorage,
+    {
+        self.manager.revision(root_hash).map_err(Into::into)
+    }
+
+    /// Get a copy of the database metrics
+    pub fn metrics(&self) -> Arc<DbMetrics> {
+        self.metrics.clone()
+    }
+
+    /// Get a reference to the thread pool.
+    pub fn threadpool(&self) -> &rayon::ThreadPool {
+        self.manager.threadpool()
+    }
+
+    /// Create a proposal on top of the current revision (sequential path only).
+    ///
+    /// This method uses the sequential Merkle path for proposal creation.
+    /// For parallel proposal creation with `FileBacked` storage, use the
+    /// `propose` method from the `api::Db` trait.
+    #[cfg(test)]
+    pub fn propose_sequential(
+        &self,
+        batch: impl IntoBatchIter,
+    ) -> Result<Proposal<'_, S>, api::Error> {
+        let parent = self.manager.current_revision();
+        let proposal = NodeStore::new(&*parent)?;
+        let mut merkle = Merkle::from(proposal);
+
+        for res in batch.into_iter().into_batch_iter::<api::Error>() {
+            match res? {
+                BatchOp::Put { key, value } => {
+                    merkle.insert(key.as_ref(), value.as_ref().into())?;
+                }
+                BatchOp::Delete { key } => {
+                    merkle.remove(key.as_ref())?;
+                }
+                BatchOp::DeleteRange { prefix } => {
+                    merkle.remove_prefix(prefix.as_ref())?;
+                }
+            }
+        }
+
+        let nodestore = merkle.into_inner();
+        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, S>> =
+            Arc::new(nodestore.try_into()?);
+        self.manager.add_proposal(immutable.clone());
+
+        self.metrics.proposals.increment(1);
+
+        Ok(Proposal {
+            nodestore: immutable,
+            db: self,
+        })
+    }
 }
 
-impl api::DbView for Proposal<'_> {
+/// Generic implementation for Proposal commit on any storage backend.
+impl<S: WritableStorage + Lockable + 'static> Proposal<'_, S> {
+    /// Commit this proposal to make its changes permanent.
+    #[cfg(test)]
+    pub fn commit(self) -> Result<(), api::Error> {
+        Ok(self.db.manager.commit(self.nodestore)?)
+    }
+
+    /// Returns the view backing this proposal.
+    #[must_use]
+    pub fn view(&self) -> ArcDynDbView {
+        self.nodestore.clone()
+    }
+}
+
+/// A user-visible database proposal.
+///
+/// The `Proposal` type is generic over the storage backend `S`. Proposals can be
+/// committed to make their changes permanent, or used as a base for further proposals.
+#[derive(Debug)]
+pub struct Proposal<'db, S: WritableStorage + Lockable = FileBacked> {
+    nodestore: Arc<NodeStore<Arc<ImmutableProposal>, S>>,
+    db: &'db Db<S>,
+}
+
+impl<S: WritableStorage + Lockable + 'static> api::DbView for Proposal<'_, S> {
     type Iter<'view>
-        = MerkleKeyValueIter<'view, NodeStore<Arc<ImmutableProposal>, FileBacked>>
+        = MerkleKeyValueIter<'view, NodeStore<Arc<ImmutableProposal>, S>>
     where
         Self: 'view;
 
@@ -370,8 +500,8 @@ impl api::DbView for Proposal<'_> {
     }
 }
 
-impl<'db> api::Proposal for Proposal<'db> {
-    type Proposal = Proposal<'db>;
+impl<'db> api::Proposal for Proposal<'db, FileBacked> {
+    type Proposal = Proposal<'db, FileBacked>;
 
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal, api::Error> {
         self.create_proposal(batch)
@@ -382,16 +512,10 @@ impl<'db> api::Proposal for Proposal<'db> {
     }
 }
 
-impl Proposal<'_> {
+impl Proposal<'_, FileBacked> {
     #[crate::metrics("firewood.proposal.create", "database proposal creation")]
     fn create_proposal(&self, batch: impl IntoBatchIter) -> Result<Self, api::Error> {
         self.db.propose_with_parent(batch, &self.nodestore)
-    }
-
-    /// Returns the view backing this proposal.
-    #[must_use]
-    pub fn view(&self) -> ArcDynDbView {
-        self.nodestore.clone()
     }
 }
 
@@ -1333,5 +1457,112 @@ mod test {
         pub fn path(&self) -> PathBuf {
             self.tmpdir.path().to_path_buf()
         }
+    }
+
+    /// Test that the database can work with in-memory storage.
+    ///
+    /// This test verifies that `MemStore` works as a storage backend for the
+    /// database. In-memory storage is useful for unit testing since it doesn't
+    /// require filesystem access and runs faster.
+    #[test]
+    fn test_db_with_memstore() {
+        use firewood_storage::MemStore;
+        use std::sync::Arc;
+
+        // Create a database with in-memory storage
+        let memstore = Arc::new(MemStore::new(vec![]));
+        let db: Db<MemStore> = Db::with_storage(
+            memstore,
+            DbConfig::builder().build(),
+        )
+        .unwrap();
+
+        // Test basic put and read
+        let batch = vec![BatchOp::Put {
+            key: b"key1",
+            value: b"value1",
+        }];
+        let proposal = db.propose_sequential(batch).unwrap();
+        assert_eq!(&*proposal.val(b"key1").unwrap().unwrap(), b"value1");
+        proposal.commit().unwrap();
+
+        // Verify committed value through current revision
+        let revision = db.current_revision();
+        assert_eq!(&*revision.val(b"key1").unwrap().unwrap(), b"value1");
+
+        // Test multiple commits
+        for i in 0..5 {
+            let key = format!("key{i}").into_bytes();
+            let value = format!("value{i}").into_bytes();
+            let batch = vec![BatchOp::Put {
+                key: &key,
+                value: &value,
+            }];
+            let proposal = db.propose_sequential(batch).unwrap();
+            proposal.commit().unwrap();
+        }
+
+        // Verify all values are accessible
+        let revision = db.current_revision();
+        for i in 0..5 {
+            let key = format!("key{i}").into_bytes();
+            let expected_value = format!("value{i}").into_bytes();
+            assert_eq!(&*revision.val(&key).unwrap().unwrap(), &expected_value);
+        }
+
+        // Test delete operation
+        let batch: Vec<BatchOp<&[u8], &[u8]>> = vec![BatchOp::Delete { key: b"key1" }];
+        let proposal = db.propose_sequential(batch).unwrap();
+        assert!(proposal.val(b"key1").unwrap().is_none());
+        proposal.commit().unwrap();
+
+        // Verify deletion
+        let revision = db.current_revision();
+        assert!(revision.val(b"key1").unwrap().is_none());
+    }
+
+    /// Test that historical revisions can be accessed with in-memory storage.
+    #[test]
+    fn test_memstore_historical_revisions() {
+        use firewood_storage::MemStore;
+        use std::sync::Arc;
+
+        let memstore = Arc::new(MemStore::new(vec![]));
+        let db: Db<MemStore> = Db::with_storage(
+            memstore,
+            DbConfig::builder()
+                .manager(RevisionManagerConfig::builder().max_revisions(10).build())
+                .build(),
+        )
+        .unwrap();
+
+        // Create first commit
+        let batch = vec![BatchOp::Put {
+            key: b"key",
+            value: b"version1",
+        }];
+        let proposal = db.propose_sequential(batch).unwrap();
+        proposal.commit().unwrap();
+        let first_hash = db.root_hash().unwrap().unwrap();
+
+        // Create second commit
+        let batch = vec![BatchOp::Put {
+            key: b"key",
+            value: b"version2",
+        }];
+        let proposal = db.propose_sequential(batch).unwrap();
+        proposal.commit().unwrap();
+        let second_hash = db.root_hash().unwrap().unwrap();
+
+        // Verify we can access historical revisions
+        let first_revision = db.revision(first_hash).unwrap();
+        assert_eq!(&*first_revision.val(b"key").unwrap().unwrap(), b"version1");
+
+        let second_revision = db.revision(second_hash).unwrap();
+        assert_eq!(&*second_revision.val(b"key").unwrap().unwrap(), b"version2");
+
+        // Current revision should have latest value
+        let current = db.current_revision();
+        assert_eq!(&*current.val(b"key").unwrap().unwrap(), b"version2");
     }
 }

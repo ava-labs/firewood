@@ -10,7 +10,7 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
+use super::{FileIoError, Lockable, OffsetReader, ReadableStorage, WritableStorage};
 use metrics::counter;
 use parking_lot::Mutex;
 use std::io::Cursor;
@@ -58,6 +58,13 @@ impl ReadableStorage for MemStore {
 
     fn size(&self) -> Result<u64, FileIoError> {
         Ok(self.bytes.lock().len() as u64)
+    }
+}
+
+impl Lockable for MemStore {
+    fn lock(&self) -> Result<(), FileIoError> {
+        // No locking needed for in-memory storage
+        Ok(())
     }
 }
 

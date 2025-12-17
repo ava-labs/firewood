@@ -31,7 +31,7 @@ use metrics::counter;
 
 use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
 
-use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
+use super::{FileIoError, Lockable, OffsetReader, ReadableStorage, WritableStorage};
 
 /// A [`ReadableStorage`] and [`WritableStorage`] backed by a file
 #[derive(Debug)]
@@ -47,19 +47,6 @@ pub struct FileBacked {
 }
 
 impl FileBacked {
-    /// Acquire an advisory lock on the underlying file to prevent multiple processes
-    /// from accessing it simultaneously
-    pub fn lock(&self) -> Result<(), FileIoError> {
-        self.fd.try_lock().map_err(|e| {
-            let context =
-                "unable to obtain advisory lock: database may be opened by another instance"
-                    .to_string();
-            // Convert TryLockError to a generic IO error for our FileIoError
-            let io_error = std::io::Error::new(std::io::ErrorKind::WouldBlock, e);
-            self.file_io_error(io_error, 0, Some(context))
-        })
-    }
-
     /// Create or open a file at a given path
     pub fn new(
         path: PathBuf,
@@ -204,6 +191,19 @@ impl WritableStorage for FileBacked {
     fn add_to_free_list_cache(&self, addr: LinearAddress, next: Option<LinearAddress>) {
         let mut guard = self.free_list_cache.lock();
         guard.put(addr, next);
+    }
+}
+
+impl Lockable for FileBacked {
+    fn lock(&self) -> Result<(), FileIoError> {
+        self.fd.try_lock().map_err(|e| {
+            let context =
+                "unable to obtain advisory lock: database may be opened by another instance"
+                    .to_string();
+            // Convert TryLockError to a generic IO error for our FileIoError
+            let io_error = std::io::Error::new(std::io::ErrorKind::WouldBlock, e);
+            self.file_io_error(io_error, 0, Some(context))
+        })
     }
 }
 

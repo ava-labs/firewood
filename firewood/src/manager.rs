@@ -28,9 +28,52 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    TrieHash,
+    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, Lockable,
+    MemStore, NodeStore, TrieHash, WritableStorage,
 };
+
+/// Trait for storage backends that may support historical revision queries.
+///
+/// This trait enables the `RevisionManager` to have a single `revision` method
+/// that behaves correctly for all storage types. For `FileBacked` storage with
+/// `RootStore` enabled, it can retrieve revisions from persistent storage.
+/// For other storage types (like `MemStore`), it returns `None`.
+pub(crate) trait HistoricalRevisionStorage: WritableStorage + Lockable + Sized {
+    /// Attempt to retrieve a historical revision from persistent storage.
+    ///
+    /// Returns `Ok(Some(revision))` if the revision was found in historical storage,
+    /// `Ok(None)` if historical storage is not available or doesn't contain the revision,
+    /// or an error if the lookup failed.
+    fn get_historical_revision(
+        manager: &RevisionManager<Self>,
+        hash: &TrieHash,
+    ) -> Result<Option<CommittedRevision<Self>>, RevisionManagerError>;
+}
+
+impl HistoricalRevisionStorage for FileBacked {
+    fn get_historical_revision(
+        manager: &RevisionManager<Self>,
+        hash: &TrieHash,
+    ) -> Result<Option<CommittedRevision<Self>>, RevisionManagerError> {
+        if let Some(root_store) = &manager.root_store {
+            root_store
+                .get(hash)
+                .map_err(RevisionManagerError::RootStoreError)
+        } else {
+            Ok(None)
+        }
+    }
+}
+
+impl HistoricalRevisionStorage for MemStore {
+    fn get_historical_revision(
+        _manager: &RevisionManager<Self>,
+        _hash: &TrieHash,
+    ) -> Result<Option<CommittedRevision<Self>>, RevisionManagerError> {
+        // MemStore has no historical storage
+        Ok(None)
+    }
+}
 
 const DB_FILE_NAME: &str = "firewood.db";
 
@@ -71,11 +114,17 @@ pub struct ConfigManager {
     pub manager: RevisionManagerConfig,
 }
 
-pub type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
-type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
+/// A committed revision backed by storage type `S`.
+pub type CommittedRevision<S> = Arc<NodeStore<Committed, S>>;
+type ProposedRevision<S> = Arc<NodeStore<Arc<ImmutableProposal>, S>>;
 
+/// Manages database revisions and proposals for a given storage backend.
+///
+/// The `RevisionManager` is generic over the storage type `S`, which must implement
+/// both `WritableStorage` and `Lockable`. This allows it to work with different
+/// storage backends, such as `FileBacked` for production use or `MemStore` for testing.
 #[derive(Debug)]
-pub(crate) struct RevisionManager {
+pub(crate) struct RevisionManager<S: WritableStorage + Lockable> {
     /// Maximum number of revisions to keep in memory.
     ///
     /// When this limit is exceeded, the oldest revision is removed from memory.
@@ -86,17 +135,17 @@ pub(crate) struct RevisionManager {
 
     /// FIFO queue of committed revisions kept in memory. The queue always
     /// contains at least one revision.
-    in_memory_revisions: RwLock<VecDeque<CommittedRevision>>,
+    in_memory_revisions: RwLock<VecDeque<CommittedRevision<S>>>,
 
     /// Hash-based index of committed revisions kept in memory.
     ///
     /// Maps root hash to the corresponding committed revision for O(1) lookup
     /// performance. This allows efficient retrieval of revisions without
     /// scanning through the `in_memory_revisions` queue.
-    by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
+    by_hash: RwLock<HashMap<TrieHash, CommittedRevision<S>>>,
 
     /// Active proposals that have not yet been committed.
-    proposals: Mutex<Vec<ProposedRevision>>,
+    proposals: Mutex<Vec<ProposedRevision<S>>>,
 
     /// Lazily initialized thread pool for parallel operations.
     threadpool: OnceLock<ThreadPool>,
@@ -106,6 +155,7 @@ pub(crate) struct RevisionManager {
     /// When present, enables retrieval of revisions beyond `max_revisions` by
     /// persisting root hash to disk address mappings. This allows historical
     /// queries of arbitrarily old revisions without keeping them in memory.
+    /// Note: `RootStore` only works with `FileBacked` storage.
     root_store: Option<RootStore>,
 }
 
@@ -130,7 +180,11 @@ pub(crate) enum RevisionManagerError {
     RootStoreError(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
-impl RevisionManager {
+impl RevisionManager<FileBacked> {
+    /// Create a new revision manager backed by file-based storage.
+    ///
+    /// This constructor creates a `FileBacked` storage instance and optionally
+    /// enables `RootStore` for historical revision queries.
     pub fn new(db_dir: PathBuf, config: ConfigManager) -> Result<Self, RevisionManagerError> {
         if config.create {
             std::fs::create_dir_all(&db_dir).map_err(RevisionManagerError::IOError)?;
@@ -193,7 +247,9 @@ impl RevisionManager {
 
         Ok(manager)
     }
+}
 
+impl<S: WritableStorage + Lockable + 'static> RevisionManager<S> {
     /// Commit a proposal
     /// To commit a proposal involves a few steps:
     /// 1. Commit check.
@@ -213,7 +269,7 @@ impl RevisionManager {
     ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
     #[fastrace::trace(short_name = true)]
     #[crate::metrics("firewood.proposal.commit", "proposal commit to storage")]
-    pub fn commit(&self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
+    pub fn commit(&self, proposal: ProposedRevision<S>) -> Result<(), RevisionManagerError> {
         // 1. Commit check
         let current_revision = self.current_revision();
         if !proposal.parent_hash_is(current_revision.root_hash()) {
@@ -279,7 +335,7 @@ impl RevisionManager {
         // The revision is added to `by_hash` here while it still exists in `proposals`.
         // The `view()` method relies on this ordering - it checks `proposals` first,
         // then `by_hash`, ensuring the revision is always findable during the transition.
-        let committed: CommittedRevision = committed.into();
+        let committed: CommittedRevision<S> = committed.into();
         self.in_memory_revisions
             .write()
             .push_back(committed.clone());
@@ -310,10 +366,13 @@ impl RevisionManager {
     }
 
     /// View the database at a specific hash.
-    /// To view the database at a specific hash involves a few steps:
-    /// 1. Try to find it in proposals.
-    /// 2. Try to find it in committed revisions.
-    pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, RevisionManagerError> {
+    ///
+    /// Checks proposals first, then committed revisions (both in-memory and
+    /// historical storage if available).
+    pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, RevisionManagerError>
+    where
+        S: HistoricalRevisionStorage,
+    {
         // 1. Try to find it in proposals.
         let proposal = self
             .proposals
@@ -330,42 +389,39 @@ impl RevisionManager {
         self.revision(root_hash).map(|r| r as ArcDynDbView)
     }
 
-    pub fn add_proposal(&self, proposal: ProposedRevision) {
+    pub fn add_proposal(&self, proposal: ProposedRevision<S>) {
         self.proposals.lock().push(proposal);
     }
 
     /// Retrieve a committed revision by its root hash.
-    /// To retrieve a revision involves a few steps:
-    /// 1. Check the in-memory revision manager.
-    /// 2. Check `RootStore` (if it exists).
-    pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
-        // 1. Check the in-memory revision manager.
+    ///
+    /// This method first checks the in-memory revision cache, then falls back
+    /// to historical storage if the storage backend supports it (e.g., `RootStore`
+    /// for `FileBacked` storage).
+    pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision<S>, RevisionManagerError>
+    where
+        S: HistoricalRevisionStorage,
+    {
+        // 1. Check the in-memory revision cache.
         if let Some(revision) = self.by_hash.read().get(&root_hash).cloned() {
             return Ok(revision);
         }
 
-        // 2. Check `RootStore` (if it exists).
-        let root_store =
-            self.root_store
-                .as_ref()
-                .ok_or(RevisionManagerError::RevisionNotFound {
-                    provided: root_hash.clone(),
-                })?;
-        let revision = root_store
-            .get(&root_hash)
-            .map_err(RevisionManagerError::RootStoreError)?
-            .ok_or(RevisionManagerError::RevisionNotFound {
-                provided: root_hash.clone(),
-            })?;
+        // 2. Check historical storage (implementation depends on S).
+        if let Some(revision) = S::get_historical_revision(self, &root_hash)? {
+            return Ok(revision);
+        }
 
-        Ok(revision)
+        Err(RevisionManagerError::RevisionNotFound {
+            provided: root_hash,
+        })
     }
 
     pub fn root_hash(&self) -> Result<Option<HashKey>, RevisionManagerError> {
         Ok(self.current_revision().root_hash())
     }
 
-    pub fn current_revision(&self) -> CommittedRevision {
+    pub fn current_revision(&self) -> CommittedRevision<S> {
         self.in_memory_revisions
             .read()
             .back()
@@ -391,12 +447,54 @@ impl RevisionManager {
     }
 }
 
+/*
+Durable, but all nodes are also kept in memory
+In memory, but not durable
+*/
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
-    impl RevisionManager {
+    impl<S: WritableStorage + Lockable + 'static> RevisionManager<S> {
+        /// Create a new revision manager with an existing storage backend.
+        ///
+        /// This constructor accepts a pre-constructed storage backend and does not
+        /// support `RootStore` (historical revision queries beyond `max_revisions`).
+        /// Use this for in-memory storage backends or when you need more control
+        /// over the storage initialization.
+        pub fn with_storage(
+            storage: Arc<S>,
+            config: RevisionManagerConfig,
+            truncate: bool,
+        ) -> Result<Self, RevisionManagerError> {
+            storage.lock()?;
+
+            let nodestore = Arc::new(NodeStore::open(storage)?);
+
+            let manager = Self {
+                max_revisions: config.max_revisions,
+                in_memory_revisions: RwLock::new(VecDeque::from([nodestore.clone()])),
+                by_hash: RwLock::new(Default::default()),
+                proposals: Mutex::new(Default::default()),
+                threadpool: OnceLock::new(),
+                root_store: None, // RootStore not supported with generic storage
+            };
+
+            if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
+                manager.by_hash.write().insert(hash, nodestore.clone());
+            }
+
+            if truncate {
+                nodestore.flush_header_with_padding()?;
+            }
+
+            Ok(manager)
+        }
+    }
+
+    impl RevisionManager<FileBacked> {
         /// Get all proposal hashes available.
         pub fn proposal_hashes(&self) -> Vec<TrieHash> {
             self.proposals

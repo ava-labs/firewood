@@ -105,7 +105,7 @@ impl RootStore {
     pub fn get(
         &self,
         hash: &TrieHash,
-    ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<Option<CommittedRevision<FileBacked>>, Box<dyn std::error::Error + Send + Sync>> {
         // Obtain the lock to prevent multiple threads from caching the same result.
         let mut revision_cache = self.revision_cache.lock();
 
