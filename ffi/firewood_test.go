@@ -913,12 +913,14 @@ func TestCommitWithRevisionHeld(t *testing.T) {
 	// both revisions should be accessible after commit
 	r.NoError(proposal.Commit())
 	for i, key := range keys {
+		val, err := base.Get(key)
+		r.NoErrorf(err, "base.Get(): %d", i)
 		if i < 10 {
-			val, err := base.Get(key)
-			r.NoErrorf(err, "base.Get(): %d", i)
 			r.Equalf(val, vals[i], "base.Get(): %d", i)
+		} else {
+			r.Emptyf(val, "base.Get(): %d", i)
 		}
-		val, err := rev.Get(key)
+		val, err = rev.Get(key)
 		r.NoErrorf(err, "rev.Get(): %d", i)
 		r.Equalf(val, vals[i], "rev.Get(): %d", i)
 	}
