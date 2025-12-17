@@ -5,7 +5,7 @@ use firewood_storage::{FileIoError, TrieReader};
 
 use crate::{
     db::BatchOp,
-    iter::MerkleKeyValueIter,
+    iter::{FilteredKeyRangeIter, MerkleKeyValueIter},
     merkle::Key,
     v2::api::{BatchIter, KeyType, KeyValuePair},
 };
@@ -23,8 +23,8 @@ where
     I: Iterator<Item: KeyValuePair>,
     K: KeyType,
 {
-    trie: ReturnableIterator<KeyRangeIter<MerkleKeyValueIter<'a, T>, K>>,
-    kvp: ReturnableIterator<KeyRangeIter<I, K>>,
+    trie: ReturnableIterator<FilteredKeyRangeIter<MerkleKeyValueIter<'a, T>, K>>,
+    kvp: ReturnableIterator<FilteredKeyRangeIter<I, K>>,
 }
 
 impl<'a, T, I, K> MergeKeyValueIter<'a, T, I, K>
@@ -39,14 +39,12 @@ where
         last_key: Option<K>,
         kvp_iter: impl IntoIterator<IntoIter = I>,
     ) -> Self {
-        let base_iter = match first_key {
-            Some(k) => merkle.key_value_iter_from_key(k),
-            None => merkle.key_value_iter(),
-        };
-
+        let base_iter = merkle
+            .key_value_iter_from_key(first_key.as_ref().map(AsRef::as_ref).unwrap_or_default())
+            .stop_after_key(last_key);
         Self {
-            trie: ReturnableIterator::new(KeyRangeIter::new(base_iter, last_key)),
-            kvp: ReturnableIterator::new(KeyRangeIter::new(kvp_iter.into_iter(), None)),
+            trie: ReturnableIterator::new(base_iter),
+            kvp: ReturnableIterator::new(FilteredKeyRangeIter::new(kvp_iter.into_iter(), None)),
         }
     }
 }
@@ -166,53 +164,6 @@ impl<I: Iterator> Iterator for ReturnableIterator<I> {
             lower.saturating_add(head_count),
             upper.and_then(|u| u.checked_add(head_count)),
         )
-    }
-}
-
-enum KeyRangeIter<I, K> {
-    Unfiltered { iter: I },
-    Filtered { iter: I, last_key: K },
-    Exhausted,
-}
-
-impl<I, K> KeyRangeIter<I, K> {
-    fn new(iter: I, last_key: Option<K>) -> Self {
-        match last_key {
-            Some(k) => KeyRangeIter::Filtered { iter, last_key: k },
-            None => KeyRangeIter::Unfiltered { iter },
-        }
-    }
-}
-
-impl<I: Iterator<Item = T>, T: KeyValuePair, K: KeyType> Iterator for KeyRangeIter<I, K> {
-    type Item = Result<(T::Key, T::Value), T::Error>;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            KeyRangeIter::Unfiltered { iter } => iter.next().map(T::try_into_tuple),
-            KeyRangeIter::Filtered { iter, last_key } => match iter.next().map(T::try_into_tuple) {
-                Some(Ok((key, value))) if key.as_ref() <= last_key.as_ref() => {
-                    Some(Ok((key, value)))
-                }
-                Some(Err(e)) => Some(Err(e)),
-                _ => {
-                    *self = KeyRangeIter::Exhausted;
-                    None
-                }
-            },
-            KeyRangeIter::Exhausted => None,
-        }
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            KeyRangeIter::Unfiltered { iter } => iter.size_hint(),
-            KeyRangeIter::Filtered { iter, .. } => {
-                let (_, upper) = iter.size_hint();
-                (0, upper)
-            }
-            KeyRangeIter::Exhausted => (0, Some(0)),
-        }
     }
 }
 

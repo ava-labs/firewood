@@ -219,7 +219,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_proc_macro_compilation() {
+    fn test_slow_proc_macro_compilation() {
         // Test that the proc macro generates compilable code
         let t = trybuild::TestCases::new();
         t.pass("tests/compile_pass/*.rs");

@@ -30,8 +30,8 @@ To use
 ```sh
 # Check available options when creating a database, including the defaults.
 $ fwdctl create -h
-# Create a new, blank instance of firewood using the default name "firewood.db".
-$ fwdctl create firewood.db
+# Create a new, blank instance of firewood using the default directory name "firewood".
+$ fwdctl create firewood
 ```
 
 * fwdctl get KEY

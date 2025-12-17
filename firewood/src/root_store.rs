@@ -39,8 +39,16 @@ impl RootStore {
     pub fn new<P: AsRef<Path>>(
         path: P,
         storage: Arc<FileBacked>,
+        truncate: bool,
     ) -> Result<RootStore, Box<dyn std::error::Error + Send + Sync>> {
         let keyspace = Config::new(path).open()?;
+
+        if truncate {
+            let items =
+                keyspace.open_partition(FJALL_PARTITION_NAME, PartitionCreateOptions::default())?;
+            keyspace.delete_partition(items)?;
+        }
+
         let items =
             keyspace.open_partition(FJALL_PARTITION_NAME, PartitionCreateOptions::default())?;
         let revision_cache = Mutex::new(WeakValueHashMap::new());
@@ -156,7 +164,7 @@ mod tests {
         );
 
         let root_store_dir = tmpdir.as_ref().join("root_store");
-        let root_store = RootStore::new(root_store_dir, file_backed.clone()).unwrap();
+        let root_store = RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
 
         // Create a revision to cache.
         let revision = Arc::new(NodeStore::new_empty_committed(file_backed.clone()));
@@ -192,7 +200,7 @@ mod tests {
         );
 
         let root_store_dir = tmpdir.as_ref().join("root_store");
-        let root_store = RootStore::new(root_store_dir, file_backed.clone()).unwrap();
+        let root_store = RootStore::new(root_store_dir, file_backed.clone(), false).unwrap();
 
         // Try to get a hash that doesn't exist in the cache nor in the underlying datastore.
         let nonexistent_hash = TrieHash::from_bytes([1; 32]);

@@ -1,21 +1,24 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+//! Proof deserialization implementation.
+//!
+//! This module handles the deserialization of proofs from the binary format.
+//! It supports parsing proof headers, proof nodes, and range proofs with full
+//! validation of the format.
+
 #[cfg(feature = "ethhash")]
 use firewood_storage::HashType;
 use firewood_storage::{Children, PathBuf, TrieHash, TriePathFromUnpackedBytes, ValueDigest};
 use integer_encoding::VarInt;
 
-use crate::{
-    proof::{Proof, ProofNode},
-    proofs::{
-        bitmap::ChildrenMap,
-        header::{Header, InvalidHeader},
-        proof_type::ProofType,
-        reader::{ProofReader, ReadError, ReadItem, V0Reader, Version0},
-    },
-    v2::api::FrozenRangeProof,
+use super::{
+    childmap::ChildrenMap,
+    header::{Header, InvalidHeader},
+    reader::{ProofReader, ReadError, ReadItem, V0Reader, Version0},
+    types::{Proof, ProofNode, ProofType},
 };
+use crate::v2::api::FrozenRangeProof;
 
 impl FrozenRangeProof {
     /// Parses a `FrozenRangeProof` from the given byte slice.

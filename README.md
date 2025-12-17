@@ -146,7 +146,7 @@ Firewood comes with a CLI tool called `fwdctl` that enables one to create and in
 ## Test
 
 ```sh
-cargo test --release
+cargo nextest --release
 ```
 
 ## License

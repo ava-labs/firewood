@@ -1,14 +1,21 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+//! Proof serialization implementation.
+//!
+//! This module handles the serialization of proofs into the compact binary format.
+//! It provides efficient encoding of proof nodes, child bitmaps, and range proofs
+//! for transmission or persistent storage.
+
 use firewood_storage::{PathBuf, PathComponentSliceExt, ValueDigest};
 use integer_encoding::VarInt;
 
-use crate::{
-    proof::ProofNode,
-    proofs::{bitmap::ChildrenMap, header::Header, proof_type::ProofType},
-    v2::api::FrozenRangeProof,
+use super::{
+    childmap::ChildrenMap,
+    header::Header,
+    types::{ProofNode, ProofType},
 };
+use crate::v2::api::FrozenRangeProof;
 
 impl FrozenRangeProof {
     /// Serializes this proof into the provided byte vector.

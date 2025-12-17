@@ -149,7 +149,7 @@ fn my_function() -> Result<String, Error> {
 The crate includes comprehensive tests:
 
 ```bash
-cargo test -p firewood-macros
+cargo nextest -p firewood-macros
 ```
 
 ## License

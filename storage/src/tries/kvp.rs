@@ -1,15 +1,11 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#[cfg(not(feature = "branch_factor_256"))]
 use crate::PackedPathRef;
 use crate::{
     Children, HashType, Hashable, HashableShunt, HashedTrieNode, JoinedPath, PathBuf,
     PathComponent, PathGuard, SplitPath, TrieNode, TriePath, TriePathFromPackedBytes, ValueDigest,
 };
-
-#[cfg(feature = "branch_factor_256")]
-type PackedPathRef<'a> = &'a [PathComponent];
 
 /// A duplicate key error when merging two key-value tries.
 #[non_exhaustive]
@@ -513,7 +509,6 @@ mod tests {
     /// ```ignore
     /// expected_hash!{
     ///     merkledb16: b"749390713e51d3e4e50ba492a669c1644a6d9cb7e48b2a14d556e7f953da92fc",
-    ///     merkledb256: b"30dbf15b59c97d2997f4fbed1ae86d1eab8e7aa2dd84337029fe898f47aeb8e6",
     ///     ethereum: b"2e636399fae96dc07abaf21167a34b8a5514d6594e777635987e319c76f28a75",
     /// }
     /// ```
@@ -523,45 +518,48 @@ mod tests {
     /// ```ignore
     /// expected_hash!{
     ///     merkledb16: b"1ffe11ce995a9c07021d6f8a8c5b1817e6375dd0ea27296b91a8d48db2858bc9",
-    ///     merkledb256: b"831a115e52af616bd2df8cd7a0993e21e544d7d201e151a7f61dcdd1a6bd557c",
     ///     ethereum: rlp(b"c482206131"),
     /// }
     /// ```
     macro_rules! expected_hash {
         (
             merkledb16: $hex16:expr,
-            merkledb256: $hex256:expr,
             ethereum: rlp($hexeth:expr),
-        ) => {
-            match () {
-                #[cfg(all(not(feature = "branch_factor_256"), not(feature = "ethhash")))]
-                () => $crate::HashType::from(from_ascii($hex16)),
-                #[cfg(all(feature = "branch_factor_256", not(feature = "ethhash")))]
-                () => $crate::HashType::from(from_ascii($hex256)),
-                #[cfg(all(not(feature = "branch_factor_256"), feature = "ethhash"))]
-                () => $crate::HashType::Rlp(smallvec::SmallVec::from(
-                    &from_ascii::<{ $hexeth.len() }, { $hexeth.len() / 2 }>($hexeth)[..],
-                )),
-                #[cfg(all(feature = "branch_factor_256", feature = "ethhash"))]
-                () => compile_error!("branch_factor_256 and ethhash cannot both be enabled"),
+        ) => {{
+            cfg_if::cfg_if! {
+                if #[cfg(feature = "ethhash")] {
+                    fn __expected_hash() -> $crate::HashType {
+                        $crate::HashType::Rlp(smallvec::SmallVec::from(
+                            &from_ascii::<{ $hexeth.len() }, { $hexeth.len() / 2 }>($hexeth)[..],
+                        ))
+                    }
+                } else {
+                    fn __expected_hash() -> $crate::HashType {
+                        $crate::HashType::from(from_ascii($hex16))
+                    }
+                }
             }
-        };
+
+            __expected_hash()
+        }};
         (
             merkledb16: $hex16:expr,
-            merkledb256: $hex256:expr,
             ethereum: $hexeth:expr,
-        ) => {
-            $crate::HashType::from(from_ascii(match () {
-                #[cfg(all(not(feature = "branch_factor_256"), not(feature = "ethhash")))]
-                () => $hex16,
-                #[cfg(all(feature = "branch_factor_256", not(feature = "ethhash")))]
-                () => $hex256,
-                #[cfg(all(not(feature = "branch_factor_256"), feature = "ethhash"))]
-                () => $hexeth,
-                #[cfg(all(feature = "branch_factor_256", feature = "ethhash"))]
-                () => compile_error!("branch_factor_256 and ethhash cannot both be enabled"),
-            }))
-        };
+        ) => {{
+            cfg_if::cfg_if! {
+                if #[cfg(feature = "ethhash")] {
+                    fn __expected_hash() -> $crate::HashType {
+                        $crate::HashType::from(from_ascii($hexeth))
+                    }
+                } else {
+                    fn __expected_hash() -> $crate::HashType {
+                        $crate::HashType::from(from_ascii($hex16))
+                    }
+                }
+            }
+
+            __expected_hash()
+        }};
     }
 
     #[test_case(&[])]
@@ -641,57 +639,46 @@ mod tests {
 
     #[test_case(&[("a", "1")], expected_hash!{
         merkledb16: b"1ffe11ce995a9c07021d6f8a8c5b1817e6375dd0ea27296b91a8d48db2858bc9",
-        merkledb256: b"831a115e52af616bd2df8cd7a0993e21e544d7d201e151a7f61dcdd1a6bd557c",
         ethereum: rlp(b"c482206131"),
     }; "single key")]
     #[test_case(&[("a", "1"), ("b", "2")], expected_hash!{
         merkledb16: b"ff783ce73f7a5fa641991d76d626eefd7840a839590db4269e1e92359ae60593",
-        merkledb256: b"301e9035ef0fe1b50788f9b5bca3a2c19bce9c798bdb1dda09fc71dd22564ce4",
         ethereum: rlp(b"d81696d580c22031c220328080808080808080808080808080"),
     }; "two disjoint keys")]
     #[test_case(&[("a", "1"), ("ab", "2")], expected_hash!{
         merkledb16: b"c5def8c64a2f3b8647283251732b68a2fb185f8bf92c0103f31d5ec69bb9a90c",
-        merkledb256: b"2453f6f0b38fd36bcb66b145aff0f7ae3a6b96121fa1187d13afcffa7641b156",
         ethereum: rlp(b"d882006194d3808080808080c2323280808080808080808031"),
     }; "two nested keys")]
     #[test_case(&[("a", "1"), ("b", "2"), ("c", "3")], expected_hash!{
         merkledb16: b"95618fd79a0ca2d7612bf9fd60663b81f632c9a65e76bb5bc3ed5f3045cf1404",
-        merkledb256: b"f5c185a96ed86da8da052a52f6c2e7368c90d342c272dd0e6c9e72c0071cdb0c",
         ethereum: rlp(b"da1698d780c22031c22032c2203380808080808080808080808080"),
     }; "three disjoint keys")]
     #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3")], expected_hash!{
         merkledb16: b"ee8a7a1409935f58ab6ce40a1e05ee2a587bdc06c201dbec7006ee1192e71f70",
-        merkledb256: b"40c9cee60ac59e7926109137fbaa5d68642d4770863b150f98bd8ac00aedbff3",
         ethereum: b"6ffab67bf7096a9608b312b9b2459c17ec9429286b283a3b3cdaa64860182699",
     }; "two children of same parent")]
     #[test_case(&[("a", "1"), ("b", "2"), ("ba", "3")], expected_hash!{
         merkledb16: b"d3efab83a1a4dd193c8ae51dfe638bba3494d8b1917e7a9185d20301ff1c528b",
-        merkledb256: b"e6f711e762064ffcc7276e9c6149fc8f1050e009a21e436e7b78a4a60079e3ba",
         ethereum: b"21a118e1765c556e505a8752a0fd5bbb4ea78fb21077f8488d42862ebabf0130",
     }; "nested sibling")]
     #[test_case(&[("a", "1"), ("ab", "2"), ("abc", "3")], expected_hash!{
         merkledb16: b"af11454e2f920fb49041c9890c318455952d651b7d835f5731218dbc4bde4805",
-        merkledb256: b"5dc43e88b3019050e741be52ed4afff621e1ac93cd2c68d37f82947d1d16cff5",
         ethereum: b"eabecb5e4efb9b5824cd926fac6350bdcb4a599508b16538afde303d72571169",
     }; "linear nested keys")]
     #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3"), ("b", "4")], expected_hash!{
         merkledb16: b"749390713e51d3e4e50ba492a669c1644a6d9cb7e48b2a14d556e7f953da92fc",
-        merkledb256: b"30dbf15b59c97d2997f4fbed1ae86d1eab8e7aa2dd84337029fe898f47aeb8e6",
         ethereum: b"2e636399fae96dc07abaf21167a34b8a5514d6594e777635987e319c76f28a75",
     }; "four keys")]
     #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3"), ("b", "4"), ("ba", "5")], expected_hash!{
         merkledb16: b"1c043978de0cd65fe2e75a74eaa98878b753f4ec20f6fbbb7232a39f02e88c6f",
-        merkledb256: b"02bb75b5d5b81ba4c64464a5e39547de4e0d858c04da4a4aae9e63fc8385279d",
         ethereum: b"df930bafb34edb6d758eb5f4dd9461fc259c8c13abf38da8a0f63f289e107ecd",
     }; "five keys")]
     #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3"), ("b", "4"), ("ba", "5"), ("bb", "6")], expected_hash!{
         merkledb16: b"c2c13c095f7f07ce9ef92401f73951b4846a19e2b092b8a527fe96fa82f55cfd",
-        merkledb256: b"56d69386ad494d6be42bbdd78b3ad00c07c12e631338767efa1539d6720ce7a6",
         ethereum: b"8ca7c3b09aa0a8877122d67fd795051bd1e6ff169932e3b7a1158ed3d66fbedf",
     }; "six keys")]
     #[test_case(&[("a", "1"), ("ab", "2"), ("ac", "3"), ("b", "4"), ("ba", "5"), ("bb", "6"), ("c", "7")], expected_hash!{
         merkledb16: b"697e767d6f4af8236090bc95131220c1c94cadba3e66e0a8011c9beef7b255a5",
-        merkledb256: b"2f083246b86da1e6e135f771ae712f271c1162c23ebfaa16178ea57f0317bf06",
         ethereum: b"3fa832b90f7f1a053a48a4528d1e446cc679fbcf376d0ef8703748d64030e19d",
     }; "seven keys")]
     fn test_hashed_trie(slice: &[(&str, &str)], root_hash: crate::HashType) {

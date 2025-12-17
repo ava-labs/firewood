@@ -11,7 +11,7 @@ its own crate and has an independent version.
 Ensure the following tools are installed before beginning:
 
 ```shell
-cargo install --locked git-cliff cargo-edit
+cargo install --locked just git-cliff cargo-edit
 ```
 
 ## Git Branch
@@ -20,14 +20,20 @@ Before making changes, create a new branch (if not already on one):
 
 ```console
 $ git fetch
-$ git switch -c release/v0.0.16 origin/main
-branch 'release/v0.0.16' set up to track 'origin/main'.
-Switched to a new branch 'release/v0.0.16'
+$ git switch -c release/v0.0.19 origin/main
+branch 'release/v0.0.19' set up to track 'origin/main'.
+Switched to a new branch 'release/v0.0.19'
 ```
 
 If already on a new branch, ensure `HEAD` is the same as the remote's `main`.
 As the upstream repo changes, rebase the branch onto `main` so that the changes
 from `git cliff` follow the repository history in the correct linear order.
+
+On rebase, quickly redo the generative steps with `just`:
+
+```shell
+just release-step-update-rust-dependencies && just release-step-refresh-changelog v0.0.19
+```
 
 ## Dependency upgrades
 
@@ -55,12 +61,12 @@ Updating the Rust MSRV requires edits in two places:
 ### Cargo Dependencies
 
 ```shell
-cargo upgrade                 # installed through cargo-edit above
-cargo upgrade --incompatible  # may require fixes; if too many fixes are needed, split into a separate PR
-cargo update --verbose        # ensure lockfile is up-to-date with all changes
-cargo test --workspace --all-targets
-cargo test --workspace --all-targets -F ethhash
+just release-step-update-rust-dependencies
 ```
+
+See the note in [justfile] about how the `cargo upgrade --incompatible` may fail
+if dependency upgrades require code changes. If significant changes are needed
+to resolve the dependency issues, do that in a separate step from release.
 
 ### Go Dependencies
 
@@ -75,7 +81,7 @@ table to define the version for all subpackages.
 
 ```toml
 [workspace.package]
-version = "0.0.16"
+version = "0.0.19"
 ```
 
 Each package inherits this version by setting `package.version.workspace = true`.
@@ -99,7 +105,7 @@ table. E.g.,:
 ```toml
 [workspace.dependencies]
 # workspace local packages
-firewood = { path = "firewood", version = "0.0.16" }
+firewood = { path = "firewood", version = "0.0.19" }
 ```
 
 This allows packages within the workspace to inherit the dependency,
@@ -130,8 +136,11 @@ is correct and reflects the new package versions.
 To build the changelog, see git-cliff.org. Short version:
 
 ```sh
-git cliff --tag v0.0.16 -o CHANGELOG.md
+just release-step-refresh-changelog v0.0.19
 ```
+
+where `v0.0.19` is the newest tag. This is a required paramter to ensure the
+changelog has the correct headers.
 
 ## Commit
 
@@ -160,11 +169,11 @@ To trigger a release, push a tag to the main branch matching the new version,
 # be sure to switch back to the main branch before tagging
 git checkout main
 git pull --prune
-git tag -s -a v0.0.16 -m 'Release v0.0.16'
-git push origin v0.0.16
+git tag -s -a v0.0.19 -m 'Release v0.0.19'
+git push origin v0.0.19
 ```
 
-for `v0.0.16` for the merged version change. The CI will automatically publish a
+for `v0.0.19` for the merged version change. The CI will automatically publish a
 draft release which consists of release notes and changes (see
 [.github/workflows/release.yaml](.github/workflows/release.yaml)).
 

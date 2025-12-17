@@ -1,7 +1,13 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::proofs::header::{Header, InvalidHeader};
+//! Proof reading utilities and traits.
+//!
+//! This module provides low-level utilities for reading binary proof data,
+//! including the `ProofReader` type for sequential reading and traits for
+//! deserializing individual proof components.
+
+use super::header::{Header, InvalidHeader};
 
 pub(super) trait ReadItem<'a>: Sized {
     /// Reads an item from the given reader, or terrminates with an error.

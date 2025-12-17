@@ -6,10 +6,8 @@
 use integer_encoding::VarInt;
 use test_case::test_case;
 
-use crate::{
-    proofs::{header::InvalidHeader, magic, proof_type::ProofType, reader::ReadError},
-    v2::api::FrozenRangeProof,
-};
+use super::{header::InvalidHeader, magic, reader::ReadError, types::ProofType};
+use crate::v2::api::FrozenRangeProof;
 
 fn create_valid_range_proof() -> (FrozenRangeProof, Vec<u8>) {
     let merkle = crate::merkle::tests::init_merkle((0u8..=10).map(|k| ([k], [k])));
@@ -86,7 +84,7 @@ fn test_invalid_header(
     0; // found len
     "no varint after header"
 )]
-#[cfg_attr(not(feature = "branch_factor_256"), test_case(
+#[test_case(
     |proof, data| {
         #[expect(clippy::arithmetic_side_effects)]
         data.truncate(
@@ -100,7 +98,7 @@ fn test_invalid_header(
     1, // expected len
     0; // found len
     "truncated node key"
-))]
+)]
 fn test_incomplete_item(
     mutator: impl FnOnce(&FrozenRangeProof, &mut Vec<u8>),
     item: &'static str,

@@ -23,7 +23,7 @@ guidelines for contributing to firewood.
 After submitting a PR, we'll run all the tests and verify your code meets our submission guidelines. To ensure it's more likely to pass these checks, you should run the following commands locally:
 
     cargo fmt
-    cargo test
+    cargo nextest run
     cargo clippy
     cargo doc --no-deps
 

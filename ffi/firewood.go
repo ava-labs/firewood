@@ -67,41 +67,101 @@ type Database struct {
 	// an opaque value without special meaning.
 	// https://en.wikipedia.org/wiki/Blinkenlights
 	handle             *C.DatabaseHandle
+	handleLock         sync.RWMutex
 	outstandingHandles sync.WaitGroup
+
+	// commitLock is used to ensure that methods accessing or modifying the latest
+	// revision do not conflict.
+	commitLock sync.Mutex
 }
 
-// Config defines the configuration parameters used when opening a [Database].
-type Config struct {
-	// Truncate indicates whether to clear the database file if it already exists.
-	Truncate bool
-	// NodeCacheEntries is the number of entries in the cache.
+// config defines the internal configuration parameters used when opening a [Database].
+type config struct {
+	// truncate indicates whether to clear the database file if it already exists.
+	truncate bool
+	// nodeCacheEntries is the number of entries in the cache.
 	// Must be non-zero.
-	NodeCacheEntries uint
-	// FreeListCacheEntries is the number of entries in the freelist cache.
+	nodeCacheEntries uint
+	// freeListCacheEntries is the number of entries in the freelist cache.
 	// Must be non-zero.
-	FreeListCacheEntries uint
-	// Revisions is the maximum number of historical revisions to keep in memory.
-	// If RootStoreDir is set, then any revisions removed from memory will still be kept on disk.
+	freeListCacheEntries uint
+	// revisions is the maximum number of historical revisions to keep in memory.
+	// If rootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 	// Otherwise, any revisions removed from memory will no longer be kept on disk.
 	// Must be >= 2.
-	Revisions uint
-	// ReadCacheStrategy is the caching strategy used for the node cache.
-	ReadCacheStrategy CacheStrategy
-	// RootStoreDir defines a path to store all historical roots on disk.
-	RootStoreDir string
+	revisions uint
+	// readCacheStrategy is the caching strategy used for the node cache.
+	readCacheStrategy CacheStrategy
+	// rootStore defines whether to enable storing all historical revisions on disk.
+	rootStore bool
 }
 
-// DefaultConfig returns a [*Config] with sensible defaults:
-//   - NodeCacheEntries:     1_000_000
-//   - FreeListCacheEntries: 40_000
-//   - Revisions:            100
-//   - ReadCacheStrategy:    OnlyCacheWrites
-func DefaultConfig() *Config {
-	return &Config{
-		NodeCacheEntries:     1_000_000,
-		FreeListCacheEntries: 40_000,
-		Revisions:            100,
-		ReadCacheStrategy:    OnlyCacheWrites,
+func defaultConfig() *config {
+	return &config{
+		nodeCacheEntries:     1_000_000,
+		freeListCacheEntries: 40_000,
+		revisions:            100,
+		readCacheStrategy:    OnlyCacheWrites,
+	}
+}
+
+// Option is a function that configures a [Database].
+type Option func(*config)
+
+// WithTruncate sets whether to clear the database file if it already exists.
+// Default: false
+func WithTruncate(truncate bool) Option {
+	return func(c *config) {
+		c.truncate = truncate
+	}
+}
+
+// WithNodeCacheEntries sets the number of entries in the node cache.
+// The node cache stores frequently accessed trie nodes to improve read performance.
+// Must be non-zero.
+// Default: 1,000,000
+func WithNodeCacheEntries(entries uint) Option {
+	return func(c *config) {
+		c.nodeCacheEntries = entries
+	}
+}
+
+// WithFreeListCacheEntries sets the number of entries in the freelist cache.
+// The freelist cache manages available disk space for reuse.
+// Must be non-zero.
+// Default: 40,000
+func WithFreeListCacheEntries(entries uint) Option {
+	return func(c *config) {
+		c.freeListCacheEntries = entries
+	}
+}
+
+// WithRevisions sets the maximum number of historical revisions to keep in memory.
+// If RootStoreDir is set, then any revisions removed from memory will still be kept on disk.
+// Otherwise, any revisions removed from memory will no longer be kept on disk.
+// Must be >= 2.
+// Default: 100
+func WithRevisions(revisions uint) Option {
+	return func(c *config) {
+		c.revisions = revisions
+	}
+}
+
+// WithReadCacheStrategy sets the caching strategy used for the node cache.
+// Default: OnlyCacheWrites
+func WithReadCacheStrategy(strategy CacheStrategy) Option {
+	return func(c *config) {
+		c.readCacheStrategy = strategy
+	}
+}
+
+// WithRootStore defines whether to enable storing all historical revisions on disk.
+// When set, historical revisions will be persisted to disk even after being
+// removed from memory (based on the Revisions limit).
+// Default: false
+func WithRootStore() Option {
+	return func(c *config) {
+		c.rootStore = true
 	}
 }
 
@@ -121,42 +181,46 @@ const (
 	invalidCacheStrategy
 )
 
-// New opens or creates a new Firewood database with the given configuration. If
-// a nil config is provided, [DefaultConfig] will be used instead.
-// The database file will be created at the provided file path if it does not
+// New opens or creates a new Firewood database with the given options.
+// The database directory will be created at the provided path if it does not
 // already exist.
+//
+// If no [Option] is provided, sensible defaults will be used.
+// See the With* functions for details about each configuration parameter and its default value.
 //
 // It is the caller's responsibility to call [Database.Close] when the database
 // is no longer needed. No other [Database] in this process should be opened with
 // the same file path until the database is closed.
-func New(filePath string, conf *Config) (*Database, error) {
-	if conf == nil {
-		conf = DefaultConfig()
+func New(dbDir string, opts ...Option) (*Database, error) {
+	conf := defaultConfig()
+	for _, opt := range opts {
+		opt(conf)
 	}
-	if conf.ReadCacheStrategy >= invalidCacheStrategy {
-		return nil, fmt.Errorf("invalid %T (%[1]d)", conf.ReadCacheStrategy)
+
+	if conf.readCacheStrategy >= invalidCacheStrategy {
+		return nil, fmt.Errorf("invalid cache strategy (%d)", conf.readCacheStrategy)
 	}
-	if conf.Revisions < 2 {
-		return nil, fmt.Errorf("%T.Revisions must be >= 2", conf)
+	if conf.revisions < 2 {
+		return nil, fmt.Errorf("revisions must be >= 2, got %d", conf.revisions)
 	}
-	if conf.NodeCacheEntries < 1 {
-		return nil, fmt.Errorf("%T.NodeCacheEntries must be >= 1", conf)
+	if conf.nodeCacheEntries < 1 {
+		return nil, fmt.Errorf("node cache entries must be >= 1, got %d", conf.nodeCacheEntries)
 	}
-	if conf.FreeListCacheEntries < 1 {
-		return nil, fmt.Errorf("%T.FreeListCacheEntries must be >= 1", conf)
+	if conf.freeListCacheEntries < 1 {
+		return nil, fmt.Errorf("free list cache entries must be >= 1, got %d", conf.freeListCacheEntries)
 	}
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
 	args := C.struct_DatabaseHandleArgs{
-		path:                 newBorrowedBytes([]byte(filePath), &pinner),
-		cache_size:           C.size_t(conf.NodeCacheEntries),
-		free_list_cache_size: C.size_t(conf.FreeListCacheEntries),
-		revisions:            C.size_t(conf.Revisions),
-		strategy:             C.uint8_t(conf.ReadCacheStrategy),
-		truncate:             C.bool(conf.Truncate),
-		root_store_path:      newBorrowedBytes([]byte(conf.RootStoreDir), &pinner),
+		dir:                  newBorrowedBytes([]byte(dbDir), &pinner),
+		cache_size:           C.size_t(conf.nodeCacheEntries),
+		free_list_cache_size: C.size_t(conf.freeListCacheEntries),
+		revisions:            C.size_t(conf.revisions),
+		strategy:             C.uint8_t(conf.readCacheStrategy),
+		truncate:             C.bool(conf.truncate),
+		root_store:           C.bool(conf.rootStore),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))
@@ -174,12 +238,17 @@ func New(filePath string, conf *Config) (*Database, error) {
 // WARNING: Calling Update with an empty key and nil value will delete the entire database
 // due to prefix deletion semantics.
 //
-// This function is not thread-safe with respect to other calls that reference the latest
-// state of the database, nor any calls that mutate the state of the database.
+// This function conflicts with all other calls that access the latest state of the database,
+// and will lock for the duration of this function.
 func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return EmptyRoot, errDBClosed
 	}
+
+	db.commitLock.Lock()
+	defer db.commitLock.Unlock()
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
@@ -201,12 +270,17 @@ func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 //   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
 //   - non-empty value: Inserts/updates the key with the provided value
 //
-// This function is not thread-safe with respect to other calls that reference the latest
-// state of the database, nor any calls that mutate the latest state of the database.
+// This function conflicts with all other calls that access the latest state of the database,
+// and will lock for the duration of this function.
 func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
+
+	db.commitLock.Lock()
+	defer db.commitLock.Unlock()
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
@@ -215,18 +289,25 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 	if err != nil {
 		return nil, err
 	}
-	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.outstandingHandles)
+	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.outstandingHandles, &db.commitLock)
 }
 
 // Get retrieves the value for the given key from the most recent revision.
 // If the key is not found, the return value will be nil.
 //
-// This function is thread-safe with all other read operations, but is not thread-safe
-// with respect to other calls that mutate the latest state of the database.
+// This function conflicts with all other calls that access the latest state of the database,
+// and will lock for the duration of this function. If you need to perform concurrent reads,
+// consider using [Database.Revision] or [Database.LatestRevision] to get a [Revision] and
+// calling [Revision.Get] on it.
 func (db *Database) Get(key []byte) ([]byte, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
+
+	db.commitLock.Lock()
+	defer db.commitLock.Unlock()
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
@@ -250,6 +331,8 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 //
 // This function is thread-safe with all other operations.
 func (db *Database) GetFromRoot(root Hash, key []byte) ([]byte, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -272,13 +355,22 @@ func (db *Database) GetFromRoot(root Hash, key []byte) ([]byte, error) {
 // Root returns the current root hash of the trie.
 // With Firewood hashing, the empty trie must return [EmptyRoot].
 //
-// This function is thread-safe with all other operations, except those that mutate
-// the latest state of the database.
+// This function conflicts with all other calls that access the latest state of the database,
+// and will lock for the duration of this function.
 func (db *Database) Root() (Hash, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return EmptyRoot, errDBClosed
 	}
 
+	db.commitLock.Lock()
+	defer db.commitLock.Unlock()
+	return db.root()
+}
+
+// root assumes db.stateLock is held and the database is open.
+func (db *Database) root() (Hash, error) {
 	return getHashKeyFromHashResult(C.fwd_root_hash(db.handle))
 }
 
@@ -286,10 +378,18 @@ func (db *Database) Root() (Hash, error) {
 // If the latest revision has root [EmptyRoot], it returns an error. The [Revision] must
 // be dropped prior to closing the database.
 //
-// This function is thread-safe with all other operations, except those that mutate
-// the latest state of the database.
+// This function conflicts with all other calls that access the latest state of the database,
+// and will lock for the duration of this function.
 func (db *Database) LatestRevision() (*Revision, error) {
-	root, err := db.Root()
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
+	db.commitLock.Lock()
+	defer db.commitLock.Unlock()
+	root, err := db.root()
 	if err != nil {
 		return nil, err
 	}
@@ -305,6 +405,12 @@ func (db *Database) LatestRevision() (*Revision, error) {
 //
 // This function is thread-safe with all other operations.
 func (db *Database) Revision(root Hash) (*Revision, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
 	rev, err := getRevisionFromResult(C.fwd_get_revision(
 		db.handle,
 		newCHashKey(root),
@@ -326,9 +432,10 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 // unless an alternate GC finalizer is set on them.
 //
 // This is safe to call multiple times; subsequent calls after the first will do
-// nothing. However, it is not safe to call this method concurrently from multiple
-// goroutines.
+// nothing.
 func (db *Database) Close(ctx context.Context) error {
+	db.handleLock.Lock()
+	defer db.handleLock.Unlock()
 	if db.handle == nil {
 		return nil
 	}
@@ -347,6 +454,8 @@ func (db *Database) Close(ctx context.Context) error {
 		return fmt.Errorf("%w: %w", ctx.Err(), ErrActiveKeepAliveHandles)
 	}
 
+	db.commitLock.Lock()
+	defer db.commitLock.Unlock()
 	if err := getErrorFromVoidResult(C.fwd_close_db(db.handle)); err != nil {
 		return fmt.Errorf("unexpected error when closing database: %w", err)
 	}
@@ -354,4 +463,24 @@ func (db *Database) Close(ctx context.Context) error {
 	db.handle = nil // Prevent double free
 
 	return nil
+}
+
+// Dump returns a DOT (Graphviz) format representation of the trie structure
+// of the latest revision for debugging purposes.
+//
+// Returns an error if the database is closed or if there was an error
+// dumping the trie.
+func (db *Database) Dump() (string, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return "", errDBClosed
+	}
+
+	bytes, err := getValueFromValueResult(C.fwd_db_dump(db.handle))
+	if err != nil {
+		return "", err
+	}
+
+	return string(bytes), nil
 }
