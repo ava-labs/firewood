@@ -12,6 +12,18 @@ use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache:
 use crate::revision::{GetRevisionResult, RevisionHandle};
 use metrics::counter;
 
+/// The hashing mode to use for the database.
+///
+/// This determines the cryptographic hash function and trie structure used.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HashType {
+    /// Native Firewood hashing (SHA-256 based)
+    Native = 0,
+    /// Ethereum-compatible hashing (Keccak-256 based)
+    EthHash = 1,
+}
+
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
 ///
 /// [`fwd_open_db`]: crate::fwd_open_db
@@ -58,6 +70,15 @@ pub struct DatabaseHandleArgs<'a> {
 
     /// Whether to truncate the database file if it exists.
     pub truncate: bool,
+
+    /// The hashing mode to use for the database.
+    ///
+    /// This must match the compile-time feature:
+    /// - [`HashType::EthHash`] if the `ethhash` feature is enabled
+    /// - [`HashType::Native`] if the `ethhash` feature is disabled
+    ///
+    /// Opening returns an error if this does not match the compile-time feature.
+    pub hash_type: HashType,
 }
 
 impl DatabaseHandleArgs<'_> {
@@ -107,6 +128,21 @@ impl DatabaseHandle {
     ///
     /// If the path is empty, or if the configuration is invalid, this will return an error.
     pub fn new(args: DatabaseHandleArgs<'_>) -> Result<Self, api::Error> {
+        // Validate that the hash_type matches the compile-time feature
+        #[cfg(feature = "ethhash")]
+        if args.hash_type != HashType::EthHash {
+            return Err(invalid_data(
+                "hash_type must be EthHash when ethhash feature is enabled",
+            ));
+        }
+
+        #[cfg(not(feature = "ethhash"))]
+        if args.hash_type != HashType::Native {
+            return Err(invalid_data(
+                "hash_type must be Native when ethhash feature is disabled",
+            ));
+        }
+
         let cfg = DbConfig::builder()
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)

@@ -161,9 +161,17 @@ func newTestDatabase(t *testing.T, opts ...Option) *Database {
 }
 
 func newDatabase(dbDir string, opts ...Option) (*Database, error) {
-	f, err := New(dbDir, opts...)
+	// Determine the correct hash type based on compile-time features
+	// Try ethhash first, if it fails try native
+	hashType := HashTypeEthHash
+	f, err := New(dbDir, hashType, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create new database in directory %q: %w", dbDir, err)
+		// If ethhash failed, try native
+		hashType = HashTypeNative
+		f, err = New(dbDir, hashType, opts...)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create new database in directory %q: %w", dbDir, err)
+		}
 	}
 	return f, nil
 }
@@ -198,7 +206,7 @@ func TestTruncateDatabase(t *testing.T) {
 	r := require.New(t)
 	dbDir := t.TempDir()
 	// Create a new database with truncate enabled.
-	db, err := New(dbDir, WithTruncate(true))
+	db, err := newDatabase(dbDir, WithTruncate(true))
 	r.NoError(err)
 
 	// Insert some data.
@@ -210,7 +218,7 @@ func TestTruncateDatabase(t *testing.T) {
 	r.NoError(db.Close(oneSecCtx(t)))
 
 	// Reopen the database with truncate enabled.
-	db, err = New(dbDir, WithTruncate(true))
+	db, err = newDatabase(dbDir, WithTruncate(true))
 	r.NoError(err)
 
 	// Check that the database is empty after truncation.
@@ -1289,7 +1297,7 @@ func TestFjallStore(t *testing.T) {
 	// Setting the number of in-memory revisions to 5 tests that revision nodes
 	// are not reaped prior to closing the database.
 	dbDir := t.TempDir()
-	db, err := New(dbDir,
+	db, err := newDatabase(dbDir,
 		WithRootStore(),
 		WithRevisions(5),
 	)
@@ -1312,7 +1320,7 @@ func TestFjallStore(t *testing.T) {
 	// Close and reopen the database
 	r.NoError(db.Close(t.Context()))
 
-	db, err = New(dbDir,
+	db, err = newDatabase(dbDir,
 		WithRootStore(),
 		WithRevisions(5),
 	)

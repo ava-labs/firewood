@@ -12,6 +12,22 @@
 
 
 /**
+ * The hashing mode to use for the database.
+ *
+ * This determines the cryptographic hash function and trie structure used.
+ */
+typedef enum HashType {
+  /**
+   * Native Firewood hashing (SHA-256 based)
+   */
+  HashType_Native = 0,
+  /**
+   * Ethereum-compatible hashing (Keccak-256 based)
+   */
+  HashType_EthHash = 1,
+} HashType;
+
+/**
  * FFI context for a parsed or generated change proof.
  */
 typedef struct ChangeProofContext ChangeProofContext;
@@ -952,6 +968,16 @@ typedef struct DatabaseHandleArgs {
    * Whether to truncate the database file if it exists.
    */
   bool truncate;
+  /**
+   * The hashing mode to use for the database.
+   *
+   * This must match the compile-time feature:
+   * - [`HashType::EthHash`] if the `ethhash` feature is enabled
+   * - [`HashType::Native`] if the `ethhash` feature is disabled
+   *
+   * Opening returns an error if this does not match the compile-time feature.
+   */
+  enum HashType hash_type;
 } DatabaseHandleArgs;
 
 /**
