@@ -1598,16 +1598,16 @@ func parseKVFromDumpFormat(dumpstr string) ([][]byte, [][]byte, error) {
 		}
 		parts := strings.Split(line, ":")
 		if len(parts) != 2 {
-			return nil, nil, fmt.Errorf("invalid line format")
+			return nil, nil, errors.New("invalid line format")
 		}
 		key, value := parts[0], parts[1]
 		keyBytes, err := hex.DecodeString(key)
 		if err != nil {
-			return nil, nil, fmt.Errorf("decode key: %w", err)
+			return nil, nil, err
 		}
 		valueBytes, err := hex.DecodeString(value)
 		if err != nil {
-			return nil, nil, fmt.Errorf("decode value: %w", err)
+			return nil, nil, err
 		}
 		keys = append(keys, keyBytes)
 		values = append(values, valueBytes)
