@@ -265,44 +265,48 @@ impl<T: TrieReader> Merkle<T> {
         proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
     ) -> Result<(), api::Error> {
         // check that the keys are in ascending order
-        proof
-            .key_values()
-            .windows(2)
-            .all(|pair| pair[0].0.as_ref() < pair[1].0.as_ref());
+        let key_values = proof.key_values();
+        if !key_values
+            .iter()
+            .zip(key_values.iter().skip(1))
+            .all(|(a, b)| a.0.as_ref() < b.0.as_ref())
+        {
+            return Err(api::Error::ProofError(
+                ProofError::NonMonotonicIncreaseRange,
+            ));
+        }
 
         // check that the start and end proofs are valid
-        let left = proof
-            .key_values()
+        let left = key_values
             .first()
             .ok_or(api::Error::ProofError(ProofError::Empty))?;
 
         // Verify that first_key (if provided) is <= the first key in the proof
-        if let Some(ref requested_first) = first_key {
-            if requested_first.as_ref() > left.0.as_ref() {
-                return Err(api::Error::InvalidRange {
-                    start_key: requested_first.as_ref().to_vec().into(),
-                    end_key: left.0.as_ref().to_vec().into(),
-                });
-            }
+        if let Some(ref requested_first) = first_key
+            && requested_first.as_ref() > left.0.as_ref()
+        {
+            return Err(api::Error::InvalidRange {
+                start_key: requested_first.as_ref().to_vec().into(),
+                end_key: left.0.as_ref().to_vec().into(),
+            });
         }
 
         proof
             .start_proof()
             .verify(&left.0, Some(&left.1), root_hash)?;
 
-        let right = proof
-            .key_values()
+        let right = key_values
             .last()
             .ok_or(api::Error::ProofError(ProofError::Empty))?;
 
         // Verify that last_key (if provided) is >= the last key in the proof
-        if let Some(ref requested_last) = last_key {
-            if requested_last.as_ref() < right.0.as_ref() {
-                return Err(api::Error::InvalidRange {
-                    start_key: right.0.as_ref().to_vec().into(),
-                    end_key: requested_last.as_ref().to_vec().into(),
-                });
-            }
+        if let Some(ref requested_last) = last_key
+            && requested_last.as_ref() < right.0.as_ref()
+        {
+            return Err(api::Error::InvalidRange {
+                start_key: right.0.as_ref().to_vec().into(),
+                end_key: requested_last.as_ref().to_vec().into(),
+            });
         }
 
         proof
