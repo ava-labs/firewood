@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -160,18 +161,30 @@ func newTestDatabase(t *testing.T, opts ...Option) *Database {
 	return db
 }
 
+var (
+	// detectedHashType is cached after first detection to avoid repeated attempts
+	detectedHashType     HashType
+	detectedHashTypeOnce sync.Once
+)
+
 func newDatabase(dbDir string, opts ...Option) (*Database, error) {
-	// Determine the correct hash type based on compile-time features
-	// Try ethhash first, if it fails try native
-	hashType := HashTypeEthHash
-	f, err := New(dbDir, hashType, opts...)
-	if err != nil {
-		// If ethhash failed, try native
-		hashType = HashTypeNative
-		f, err = New(dbDir, hashType, opts...)
-		if err != nil {
-			return nil, fmt.Errorf("failed to create new database in directory %q: %w", dbDir, err)
+	// Detect the correct hash type once and cache it
+	detectedHashTypeOnce.Do(func() {
+		// Try ethhash first, if it fails try native
+		tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("firewood-hash-detection-%d", time.Now().UnixNano()))
+		defer os.RemoveAll(tempDir)
+		
+		_, err := New(tempDir, HashTypeEthHash, WithTruncate(true))
+		if err == nil {
+			detectedHashType = HashTypeEthHash
+		} else {
+			detectedHashType = HashTypeNative
 		}
+	})
+	
+	f, err := New(dbDir, detectedHashType, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create new database in directory %q: %w", dbDir, err)
 	}
 	return f, nil
 }
@@ -190,13 +203,14 @@ func TestUpdateSingleKV(t *testing.T) {
 
 func TestHashTypeValidation(t *testing.T) {
 	r := require.New(t)
-	dbDir := t.TempDir()
-
+	
 	// Try to create a database with EthHash
-	dbEth, errEth := New(dbDir, HashTypeEthHash, WithTruncate(true))
+	dbDirEth := t.TempDir()
+	dbEth, errEth := New(dbDirEth, HashTypeEthHash, WithTruncate(true))
 	
 	// Try to create a database with Native
-	dbNative, errNative := New(dbDir, HashTypeNative, WithTruncate(true))
+	dbDirNative := t.TempDir()
+	dbNative, errNative := New(dbDirNative, HashTypeNative, WithTruncate(true))
 
 	// Exactly one should succeed based on compile-time feature
 	if errEth == nil && errNative != nil {
