@@ -29,7 +29,9 @@ impl NodeState {
     // trie for reading the node from storage.
     fn new<T: TrieReader>(frame: TraversalStackFrame, trie: &T) -> Result<Self, FileIoError> {
         // If a hash is provided, then use that. Otherwise use the hash from the node.
-        let hash = frame.hash.or_else(|| frame.node.hash().cloned());
+        let hash = frame
+            .hash
+            .or_else(|| frame.node.hash().map(|hash| hash.clone().into_triehash()));
         let node = frame.node.as_shared_node(trie)?;
         // Compute the full path for the node. This is used to compare with the full path
         // of the current node from the other trie.
