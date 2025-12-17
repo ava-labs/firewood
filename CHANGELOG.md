@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.0.18] - 2025-12-17
+
+### 🐛 Bug Fixes
+
+- Hash mismatch when proposing on uncommitted proposal ([#1557](https://github.com/ava-labs/firewood/pull/1557))
+
+### 🧪 Testing
+
+- Guarantee that revisions work after commit ([#1558](https://github.com/ava-labs/firewood/pull/1558))
+
 ## [0.0.17] - 2025-12-16
 
 ### 🚀 Features
