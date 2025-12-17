@@ -889,6 +889,35 @@ func TestRevisionOutlivesProposal(t *testing.T) {
 	r.NoError(rev.Drop())
 }
 
+// Tests that after committing a proposal, the corresponding revision is still accessible.
+func TestCommitWithRevisionHeld(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(20)
+	_, err := db.Update(keys[:10], vals[:10])
+	r.NoError(err)
+
+	// Create a proposal with 10 key-value pairs.
+	nKeys, nVals := keys[10:], vals[10:]
+	proposal, err := db.Propose(nKeys, nVals)
+	r.NoError(err)
+	root, err := proposal.Root()
+	r.NoError(err)
+
+	rev, err := db.Revision(root)
+	r.NoError(err)
+
+	// revision should be accessible after commit
+	r.NoError(proposal.Commit())
+	for i, key := range nKeys {
+		val, err := rev.Get(key)
+		r.NoError(err)
+		r.Equal(val, nVals[i])
+	}
+	r.NoError(rev.Drop())
+}
+
 // Tests that holding a reference to revision will prevent from it being reaped
 func TestRevisionOutlivesReaping(t *testing.T) {
 	r := require.New(t)
