@@ -27,7 +27,7 @@ struct NodeState {
 impl NodeState {
     // Creates a NodeState from a `TraversalStackFrame` popped off the traversal stack, and a
     // trie for reading the node from storage.
-    fn new<T: TrieReader>(frame: TraversalStackFrame, trie: &T) -> Result<Self, FileIoError> {
+    fn new(frame: TraversalStackFrame, trie: &dyn TrieReader) -> Result<Self, FileIoError> {
         // If a hash is provided, then use that. Otherwise use the hash from the node.
         let hash = frame
             .hash
@@ -54,21 +54,21 @@ struct TraversalStackFrame {
 /// the state of the current node, a reference to a trie that implements the `TrieReader` trait,
 /// and a stack that contains nodes (and their associated state including its pre-path and hash) to
 /// be traversed with calls to `next`.
-struct PreOrderIterator<'a, T: TrieReader> {
+struct PreOrderIterator<'a> {
     node_state: Option<NodeState>,
-    trie: &'a T,
+    trie: &'a dyn TrieReader,
     traversal_stack: Vec<TraversalStackFrame>,
 }
 
-impl<'a, T: TrieReader> PreOrderIterator<'a, T> {
+impl<'a> PreOrderIterator<'a> {
     /// Create a pre-order iterator for the trie that starts at `start_key`. The iterator takes an
     /// optional root hash which is available when the trie is from an `ImmutableProposal`.
     #[cfg_attr(not(test), expect(dead_code))]
     fn new(
-        trie: &'a T,
+        trie: &'a dyn TrieReader,
         root_hash: Option<TrieHash>,
         start_key: &Key,
-    ) -> Result<PreOrderIterator<'a, T>, FileIoError> {
+    ) -> Result<PreOrderIterator<'a>, FileIoError> {
         let mut preorder = Self {
             node_state: None,
             traversal_stack: vec![],
