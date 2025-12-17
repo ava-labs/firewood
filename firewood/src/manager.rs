@@ -18,7 +18,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use firewood_storage::logger::{trace, warn};
-use metrics::gauge;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
@@ -29,7 +28,7 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    TrieHash,
+    TrieHash, firewood_gauge,
 };
 
 const DB_FILE_NAME: &str = "firewood.db";
@@ -257,8 +256,16 @@ impl RevisionManager {
                     }
                 }
             }
-            gauge!("firewood.active_revisions").set(self.in_memory_revisions.read().len() as f64);
-            gauge!("firewood.max_revisions").set(self.max_revisions as f64);
+            firewood_gauge!(
+                "firewood.active_revisions",
+                "Current number of active revisions in memory"
+            )
+            .set(self.in_memory_revisions.read().len() as f64);
+            firewood_gauge!(
+                "firewood.max_revisions",
+                "Maximum number of revisions configured"
+            )
+            .set(self.max_revisions as f64);
         }
 
         // 3. Persist to disk.

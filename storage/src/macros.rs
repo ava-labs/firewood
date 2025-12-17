@@ -43,14 +43,14 @@ macro_rules! firewood_counter {
 ///   `firewood_gauge!("metric_name", "description")`
 ///   `firewood_gauge!("metric_name", "description", "label" => "value")`
 ///
-/// Call `.increment(val)` or `.decrement(val)` on the result as appropriate.
+/// Call `.set(val)`, `.increment(val)`, or `.decrement(val)` on the result as appropriate.
 macro_rules! firewood_gauge {
     // With labels
     ($name:expr, $desc:expr, $($labels:tt)+) => {
         {
             static ONCE: std::sync::Once = std::sync::Once::new();
             ONCE.call_once(|| {
-                metrics::describe_counter!($name, $desc);
+                metrics::describe_gauge!($name, $desc);
             });
             metrics::gauge!($name, $($labels)+)
         }
@@ -60,7 +60,7 @@ macro_rules! firewood_gauge {
         {
             static ONCE: std::sync::Once = std::sync::Once::new();
             ONCE.call_once(|| {
-                metrics::describe_counter!($name, $desc);
+                metrics::describe_gauge!($name, $desc);
             });
             metrics::gauge!($name)
         }
