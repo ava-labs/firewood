@@ -27,19 +27,10 @@ struct NodeState {
 impl NodeState {
     // Creates a NodeState from a `TraversalStackFrame` popped off the traversal stack, and a
     // trie for reading the node from storage.
-    fn new(frame: TraversalStackFrame, trie: &'_ dyn TrieReader) -> Result<Self, FileIoError> {
-        let mut hash = frame.hash;
-        let node = match frame.node {
-            Child::Node(node) => node.clone().into(),
-            Child::AddressWithHash(addr, child_hash) => {
-                hash = Some(child_hash.into_triehash());
-                trie.read_node(addr)?
-            }
-            Child::MaybePersisted(maybe_persisted, child_hash) => {
-                hash = Some(child_hash.into_triehash());
-                maybe_persisted.as_shared_node(&trie)?
-            }
-        };
+    fn new<T: TrieReader>(frame: TraversalStackFrame, trie: &T) -> Result<Self, FileIoError> {
+        // If a hash is provided, then use that. Otherwise use the hash from the node.
+        let hash = frame.hash.or_else(|| frame.node.hash().cloned());
+        let node = frame.node.as_shared_node(trie)?;
         // Compute the full path for the node. This is used to compare with the full path
         // of the current node from the other trie.
         let mut path = frame.pre_path;
@@ -61,21 +52,21 @@ struct TraversalStackFrame {
 /// the state of the current node, a reference to a trie that implements the `TrieReader` trait,
 /// and a stack that contains nodes (and their associated state including its pre-path and hash) to
 /// be traversed with calls to `next`.
-struct PreOrderIterator<'a> {
+struct PreOrderIterator<'a, T: TrieReader> {
     node_state: Option<NodeState>,
-    trie: &'a dyn TrieReader,
+    trie: &'a T,
     traversal_stack: Vec<TraversalStackFrame>,
 }
 
-impl<'a> PreOrderIterator<'a> {
+impl<'a, T: TrieReader> PreOrderIterator<'a, T> {
     /// Create a pre-order iterator for the trie that starts at `start_key`. The iterator takes an
     /// optional root hash which is available when the trie is from an `ImmutableProposal`.
     #[cfg_attr(not(test), expect(dead_code))]
-    fn new<V: TrieReader>(
-        trie: &'a V,
+    fn new(
+        trie: &'a T,
         root_hash: Option<TrieHash>,
         start_key: &Key,
-    ) -> Result<PreOrderIterator<'a>, FileIoError> {
+    ) -> Result<PreOrderIterator<'a, T>, FileIoError> {
         let mut preorder = Self {
             node_state: None,
             traversal_stack: vec![],
@@ -120,12 +111,7 @@ impl<'a> PreOrderIterator<'a> {
         {
             // Since a stack is LIFO and we want to perform pre-order traversal, we pushed the
             // children in reverse order.
-            for (path_comp, child) in branch
-                .children
-                .iter()
-                .rev()
-                .filter_map(|(pc, c)| c.as_ref().map(|child| (pc, child)))
-            {
+            for (path_comp, child) in branch.children.iter_present().rev() {
                 // Generate the pre-path for this child, and push it onto the traversal stack.
                 let child_pre_path = Path::from_nibbles_iterator(
                     prev_node_state
@@ -175,46 +161,54 @@ impl<'a> PreOrderIterator<'a> {
             if let Some(prev_node_state) = self.node_state.take()
                 && let Node::Branch(branch) = &*prev_node_state.node
             {
-                let mut passed_check = false;
-                for (path_comp, child) in branch
-                    .children
-                    .iter()
-                    .rev()
-                    .filter_map(|(pc, c)| c.as_ref().map(|child| (pc, child)))
-                {
-                    let child_pre_path = Path::from_nibbles_iterator(
-                        prev_node_state
-                            .path
-                            .iter()
-                            .copied()
-                            .chain(once(path_comp.as_u8())),
-                    );
-                    // A previous child has already been pushed onto the traversal stack. The
-                    // remaining children can be pushed without additional checks.
-                    if passed_check {
+                // Create a reverse iterator on the children that includes the child's pre-path.
+                let mut reversed_children_with_pre_path =
+                    branch
+                        .children
+                        .iter_present()
+                        .rev()
+                        .map(|(path_comp, child)| {
+                            (
+                                child,
+                                Path::from_nibbles_iterator(
+                                    prev_node_state
+                                        .path
+                                        .iter()
+                                        .copied()
+                                        .chain(once(path_comp.as_u8())),
+                                ),
+                            )
+                        });
+
+                for (child, child_pre_path) in reversed_children_with_pre_path.by_ref() {
+                    // We only need to traverse this child if its pre-path is a prefix of the key (including
+                    // being equal to the key) or is lexicographically larger than the key.
+                    let child_key = key_from_nibble_iter(child_pre_path.iter().copied());
+                    let path_overlap = PrefixOverlap::from(key, child_key.as_ref());
+                    let unique_node = path_overlap.unique_b;
+                    if unique_node.is_empty() || child_key > *key {
                         self.traversal_stack.push(TraversalStackFrame {
                             pre_path: child_pre_path,
                             node: child.clone(),
                             hash: None,
                         });
-                    } else {
-                        // We only need to traverse this child if its pre-path is a prefix of the key (including
-                        // being equal to the key) or is lexicographically larger than the key.
-                        let child_key = key_from_nibble_iter(child_pre_path.iter().copied());
-                        let path_overlap = PrefixOverlap::from(key, child_key.as_ref());
-                        let unique_node = path_overlap.unique_b;
-                        if unique_node.is_empty() || child_key > *key {
-                            self.traversal_stack.push(TraversalStackFrame {
+                        // Once we have found the first child that should be traversed, we can break out of
+                        // the loop where we we add the rest of the children without the above test.
+                        break;
+                    }
+                }
+
+                // Add the rest of the children (if any) to the traversal stack.
+                self.traversal_stack
+                    .extend(
+                        reversed_children_with_pre_path.map(|(child, child_pre_path)| {
+                            TraversalStackFrame {
                                 pre_path: child_pre_path,
                                 node: child.clone(),
                                 hash: None,
-                            });
-                            // Once the first child is added to the stack, then the subsequent children can be
-                            // added without needing additional checks.
-                            passed_check = true;
-                        }
-                    }
-                }
+                            }
+                        }),
+                    );
             }
 
             // Pop the next node state from the stack
