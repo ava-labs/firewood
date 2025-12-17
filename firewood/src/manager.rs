@@ -28,7 +28,7 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    TrieHash, firewood_gauge, firewood_counter,
+    TrieHash, firewood_counter, firewood_gauge,
 };
 
 const DB_FILE_NAME: &str = "firewood.db";
@@ -248,13 +248,34 @@ impl RevisionManager {
                 // This guarantee is there because we have a `&mut self` reference to the manager, so
                 // the compiler guarantees we are the only one using this manager.
                 match Arc::try_unwrap(oldest) {
-                    Ok(oldest) => oldest.reap_deleted(&mut committed)?,
+                    Ok(oldest) => {
+                        oldest.reap_deleted(&mut committed)?;
+                        firewood_counter!(
+                            "firewood.revisions.reaped",
+                            "Number of revisions removed from memory",
+                            "mode" => "without_rootstore"
+                        )
+                        .increment(1);
+                    }
                     Err(original) => {
                         warn!("Oldest revision could not be reaped; still referenced");
+                        firewood_counter!(
+                            "firewood.revisions.reaping_failed",
+                            "Reaping attempts that failed due to outstanding references"
+                        )
+                        .increment(1);
                         self.in_memory_revisions.write().push_front(original);
                         break;
                     }
                 }
+            } else {
+                // RootStore is enabled: drop only in-memory handle and keep history on disk
+                firewood_counter!(
+                    "firewood.revisions.reaped",
+                    "Number of revisions removed from memory",
+                    "mode" => "with_rootstore"
+                )
+                .increment(1);
             }
             firewood_gauge!(
                 "firewood.active_revisions",
@@ -375,6 +396,12 @@ impl RevisionManager {
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
         // 1. Check the in-memory revision manager.
         if let Some(revision) = self.by_hash.read().get(&root_hash).cloned() {
+            firewood_counter!(
+                "firewood.revisions.historical_queries",
+                "Historical revision queries by source",
+                "source" => "memory"
+            )
+            .increment(1);
             return Ok(revision);
         }
 
@@ -391,6 +418,13 @@ impl RevisionManager {
             .ok_or(RevisionManagerError::RevisionNotFound {
                 provided: root_hash.clone(),
             })?;
+
+        firewood_counter!(
+            "firewood.revisions.historical_queries",
+            "Historical revision queries by source",
+            "source" => "rootstore"
+        )
+        .increment(1);
 
         Ok(revision)
     }

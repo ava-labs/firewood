@@ -44,8 +44,8 @@ pub(crate) mod header;
 pub(crate) mod persist;
 pub(crate) mod primitives;
 
-use crate::linear::OffsetReader;
 use crate::firewood_counter;
+use crate::linear::OffsetReader;
 use crate::logger::trace;
 use crate::node::branch::ReadSerializable as _;
 use smallvec::SmallVec;
