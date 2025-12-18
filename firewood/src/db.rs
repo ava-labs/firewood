@@ -949,7 +949,7 @@ mod test {
     }
 
     #[test]
-    fn fuzz_checker() {
+    fn test_slow_fuzz_checker() {
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
         let db = TestDb::new();
@@ -1047,7 +1047,7 @@ mod test {
 
     /// Test that reading from a proposal during commit works as expected
     #[test]
-    fn test_read_during_commit() {
+    fn test_slow_read_during_commit() {
         use crate::db::Proposal;
 
         const CHANNEL_CAPACITY: usize = 8;

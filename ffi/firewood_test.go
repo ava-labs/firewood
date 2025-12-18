@@ -889,6 +889,45 @@ func TestRevisionOutlivesProposal(t *testing.T) {
 	r.NoError(rev.Drop())
 }
 
+// Tests that after committing a proposal, the corresponding revision is still accessible.
+func TestCommitWithRevisionHeld(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, vals := kvForTest(20)
+	root, err := db.Update(keys[:10], vals[:10])
+	r.NoError(err)
+	base, err := db.Revision(root)
+	r.NoError(err)
+
+	// Create a proposal with 10 key-value pairs.
+	nKeys, nVals := keys[10:], vals[10:]
+	proposal, err := db.Propose(nKeys, nVals)
+	r.NoError(err)
+	root, err = proposal.Root()
+	r.NoError(err)
+
+	rev, err := db.Revision(root)
+	r.NoError(err)
+
+	// both revisions should be accessible after commit
+	r.NoError(proposal.Commit())
+	for i, key := range keys {
+		val, err := base.Get(key)
+		r.NoErrorf(err, "base.Get(): %d", i)
+		if i < 10 {
+			r.Equalf(val, vals[i], "base.Get(): %d", i)
+		} else {
+			r.Emptyf(val, "base.Get(): %d", i)
+		}
+		val, err = rev.Get(key)
+		r.NoErrorf(err, "rev.Get(): %d", i)
+		r.Equalf(val, vals[i], "rev.Get(): %d", i)
+	}
+	r.NoError(base.Drop())
+	r.NoError(rev.Drop())
+}
+
 // Tests that holding a reference to revision will prevent from it being reaped
 func TestRevisionOutlivesReaping(t *testing.T) {
 	r := require.New(t)
@@ -1625,4 +1664,85 @@ func TestLogging(t *testing.T) {
 		r.Contains(err.Error(), "failed to initialize logging")
 		r.Contains(err.Error(), "attempted to set a logger after the logging system was already initialized")
 	})
+var block_307_items string = `
+d20628954718b36081ad06b1a04fb8896f3090eb5c7ab3cd9086e50e61d88b7eb10e2d527612073b26eecdfd717e6a320cf44b4afac2b0732d9fcbe2b7fa0cf6:944abef613822fb2031d897e792f89c896ddafc466
+d20628954718b36081ad06b1a04fb8896f3090eb5c7ab3cd9086e50e61d88b7e:f8450180a00000000000000000000000000000000000000000000000000000000000000000a0a33ec8100b06cfbacc612bc2baa4d36f01d5d52df97bcef04f54d5b8ceccbd9280
+f22bb46edf31af855938befaa870ed3d86a4ad93a9ecf7c63ceaa80daea9ac4d:f84e8089063443e4a44dc98c00a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0611445c10cb8404ad2103d510e139c3ace61b5acec80505bd1f5870528f587d780
+71645710251b71938795615f63f7bcf27fd5aa4ffbaeb7ace16cbd1c76a41e42:f84d1188662cdf1b7d1bc000a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a47080
+`
+
+var block_308_items string = `
+d20628954718b36081ad06b1a04fb8896f3090eb5c7ab3cd9086e50e61d88b7e290decd9548b62a8d60345a988386fc84ba6bc95484008f6362f93160ef3e563:944abef613822fb2031d897e792f89c896ddafc466
+d20628954718b36081ad06b1a04fb8896f3090eb5c7ab3cd9086e50e61d88b7e:f8450180a00000000000000000000000000000000000000000000000000000000000000000a0a33ec8100b06cfbacc612bc2baa4d36f01d5d52df97bcef04f54d5b8ceccbd9280
+f22bb46edf31af855938befaa870ed3d86a4ad93a9ecf7c63ceaa80daea9ac4d:f84e808906348c71086eb3ac00a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0611445c10cb8404ad2103d510e139c3ace61b5acec80505bd1f5870528f587d780
+71645710251b71938795615f63f7bcf27fd5aa4ffbaeb7ace16cbd1c76a41e42:f84d128865e452b75c31a000a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a47080
+`
+
+func TestProposeOnProposalRehash(t *testing.T) {
+	r := require.New(t)
+
+	b307k, b307v, err := parseKVFromDumpFormat(block_307_items)
+	r.NoError(err, "load 307")
+
+	b308k, b308v, err := parseKVFromDumpFormat(block_308_items)
+	r.NoError(err, "load 308")
+
+	var normalRoot, proposeOnProposalRoot Hash
+
+	{
+		db := newTestDatabase(t)
+
+		p1, err := db.Propose(b307k, b307v)
+		r.NoError(err, "propose 307")
+		r.NoError(p1.Commit(), "commit 307")
+
+		p2, err := db.Propose(b308k, b308v)
+		r.NoError(err, "propose 308")
+
+		normalRoot, err = p2.Root()
+		r.NoError(err, "root")
+	}
+
+	{
+		db := newTestDatabase(t)
+
+		p1, err := db.Propose(b307k, b307v)
+		r.NoError(err, "propose 307")
+
+		p2, err := p1.Propose(b308k, b308v)
+		r.NoError(err, "propose#2 308")
+
+		proposeOnProposalRoot, err = p2.Root()
+		r.NoError(err, "root")
+	}
+
+	r.Equal(normalRoot, proposeOnProposalRoot)
+}
+
+func parseKVFromDumpFormat(dumpstr string) ([][]byte, [][]byte, error) {
+	// TODO: make this same as dump format outputted by firewood (slightly different, this is a debug one from my replay stuff)
+	keys := make([][]byte, 0)
+	values := make([][]byte, 0)
+	lines := strings.SplitSeq(dumpstr, "\n")
+	for line := range lines {
+		if line == "" {
+			continue
+		}
+		parts := strings.Split(line, ":")
+		if len(parts) != 2 {
+			return nil, nil, errors.New("invalid line format")
+		}
+		key, value := parts[0], parts[1]
+		keyBytes, err := hex.DecodeString(key)
+		if err != nil {
+			return nil, nil, err
+		}
+		valueBytes, err := hex.DecodeString(value)
+		if err != nil {
+			return nil, nil, err
+		}
+		keys = append(keys, keyBytes)
+		values = append(values, valueBytes)
+	}
+	return keys, values, nil
 }
