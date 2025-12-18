@@ -191,7 +191,7 @@ fn fwdctl_dump() {
 }
 
 #[test]
-fn fwdctl_dump_with_start_stop_and_max() {
+fn test_slow_fwdctl_dump_with_start_stop_and_max() {
     let tmpdir = tempfile::tempdir().unwrap();
 
     cargo_bin_cmd!()
@@ -302,7 +302,7 @@ fn fwdctl_dump_with_start_stop_and_max() {
 }
 
 #[test]
-fn fwdctl_dump_with_csv_and_json() {
+fn test_slow_fwdctl_dump_with_csv_and_json() {
     let tmpdir = tempfile::tempdir().unwrap();
 
     cargo_bin_cmd!()
@@ -444,7 +444,7 @@ fn fwdctl_dump_with_file_name() {
 }
 
 #[test]
-fn fwdctl_dump_with_hex() {
+fn test_slow_fwdctl_dump_with_hex() {
     let tmpdir = tempfile::tempdir().unwrap();
 
     cargo_bin_cmd!()
@@ -544,7 +544,7 @@ fn fwdctl_check_empty_db() {
 }
 
 #[test]
-fn fwdctl_check_db_with_data() {
+fn test_slow_fwdctl_check_db_with_data() {
     use rand::{Rng, distr::Alphanumeric};
 
     let tmpdir = tempfile::tempdir().unwrap();
