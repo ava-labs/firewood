@@ -31,6 +31,6 @@ fn main() {
     println!("cargo:rustc-env=ETHHASH_FEATURE={ethhash_feature}");
 
     // Re-run this build script if the git HEAD changes
-    println!("cargo:rerun-if-changed=.git/HEAD");
-    println!("cargo:rerun-if-changed=.git/index");
+    println!("cargo:rerun-if-changed=../.git/HEAD");
+    println!("cargo:rerun-if-changed=../.git/index");
 }
