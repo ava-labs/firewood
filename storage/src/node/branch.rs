@@ -154,14 +154,12 @@ impl Child {
     /// Returns a `Result<SharedNode, FileIoError>` where:
     /// - `Ok(SharedNode)` contains the node if successfully read
     /// - `Err(FileIoError)` if there was an error reading from storage
-    pub fn as_shared_node<T: NodeReader>(&self, storage: &T) -> Result<SharedNode, FileIoError> {
-        Ok(match self {
-            Child::Node(node) => node.clone().into(),
-            Child::AddressWithHash(addr, _child_hash) => storage.read_node(*addr)?,
-            Child::MaybePersisted(maybe_persisted, _child_hash) => {
-                maybe_persisted.as_shared_node(storage)?
-            }
-        })
+    pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
+        match self {
+            Child::Node(node) => Ok(node.clone().into()),
+            Child::AddressWithHash(addr, _) => storage.read_node(*addr),
+            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.as_shared_node(storage),
+        }
     }
 }
 
