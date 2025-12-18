@@ -4,7 +4,8 @@
 use std::iter::once;
 
 use firewood_storage::{
-    Child, FileIoError, Node, Path, SharedNode, TrieHash, TrieReader, firewood_counter,
+    Child, FileIoError, HashedNodeReader, Node, NodeReader, Path, SharedNode, TrieHash,
+    firewood_counter,
 };
 
 use crate::{
@@ -13,10 +14,8 @@ use crate::{
 };
 
 /// Contains all of a node's state that is needed for node comparison in `DiffMerkleNodeStream`.
-/// It includes the nodes full path and its hash if available. `NodeState` is created from
-/// a `TraversalStackFrame` and differs from it by storing the node's full path instead of
-/// just its pre-path (doesn't include the node's partial path), and by storing the node as
-/// a `SharedNode` instead of a `Child`.
+/// It includes the nodes full path and its hash if available.
+#[cfg_attr(not(test), expect(dead_code))]
 #[derive(Clone)]
 struct NodeState {
     path: Path,
@@ -25,63 +24,47 @@ struct NodeState {
 }
 
 impl NodeState {
-    // Creates a NodeState from a `TraversalStackFrame` popped off the traversal stack, and a
-    // trie for reading the node from storage.
-    fn new(frame: TraversalStackFrame, trie: &dyn TrieReader) -> Result<Self, FileIoError> {
-        // If a hash is provided, then use that. Otherwise use the hash from the node.
-        let hash = frame
-            .hash
-            .or_else(|| frame.node.hash().map(|hash| hash.clone().into_triehash()));
-        let node = frame.node.as_shared_node(trie)?;
-        // Compute the full path for the node. This is used to compare with the full path
+    // Creates a NodeState from a `Child`, its pre-path, and trie for reading the node from storage.
+    fn new<T: NodeReader>(pre_path: Path, child: &Child, trie: &T) -> Result<Self, FileIoError> {
+        let node = child.as_shared_node(trie)?;
+        // Create the full path for the node. This is used to compare with the full path
         // of the current node from the other trie.
-        let mut path = frame.pre_path;
+        let mut path = pre_path;
         path.extend(node.partial_path().iter().copied());
 
-        Ok(Self { path, node, hash })
+        Ok(Self {
+            path,
+            node,
+            hash: child.hash().map(|hash| hash.clone().into_triehash()),
+        })
     }
 }
 
-/// Contents of a frame on the traversal stack. Unlike for a `NodeState`, a `TraversalStackFrame`
-/// for a child can be generated from a parent without needing to load the child from storage.
-struct TraversalStackFrame {
-    pre_path: Path,
-    node: Child,
-    hash: Option<TrieHash>,
-}
-
 /// Contains the state required for performing pre-order iteration of a Merkle trie. This includes
-/// the state of the current node, a reference to a trie that implements the `TrieReader` trait,
-/// and a stack that contains nodes (and their associated state including its pre-path and hash) to
-/// be traversed with calls to `next`.
-struct PreOrderIterator<'a> {
+/// the state of the current node, a reference to a trie that implements the `HashedNodeReader`
+/// trait, and a stack that contains the `NodeState` of nodes to be traversed with calls to `next`.
+struct PreOrderIterator<'a, T: HashedNodeReader> {
     node_state: Option<NodeState>,
-    trie: &'a dyn TrieReader,
-    traversal_stack: Vec<TraversalStackFrame>,
+    trie: &'a T,
+    traversal_stack: Vec<NodeState>,
 }
 
-impl<'a> PreOrderIterator<'a> {
-    /// Create a pre-order iterator for the trie that starts at `start_key`. The iterator takes an
-    /// optional root hash which is available when the trie is from an `ImmutableProposal`.
+impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
+    /// Create a pre-order iterator for the trie that starts at `start_key`.
     #[cfg_attr(not(test), expect(dead_code))]
-    fn new(
-        trie: &'a dyn TrieReader,
-        root_hash: Option<TrieHash>,
-        start_key: &Key,
-    ) -> Result<PreOrderIterator<'a>, FileIoError> {
+    fn new(trie: &'a T, start_key: &Key) -> Result<PreOrderIterator<'a, T>, FileIoError> {
         let mut preorder = Self {
             node_state: None,
             traversal_stack: vec![],
             trie,
         };
-        // If the root node is not None, then push a `TraversalStackFrame` for the
-        // root onto the traversal stack. It will be used on the first call to
-        // next or next_internal.
+        // If the root node is not None, then push a `NodeState` for the root onto the
+        // traversal stack. It will be used on the first call to `next` or `next_internal`.
         if let Some(root) = trie.root_node() {
-            preorder.traversal_stack.push(TraversalStackFrame {
-                pre_path: Path::default(),
-                node: Child::Node((*root).clone()),
-                hash: root_hash,
+            preorder.traversal_stack.push(NodeState {
+                path: Path::default(),
+                node: root,
+                hash: trie.root_hash().map(|hash| hash.clone().into_triehash()),
             });
         }
         preorder.iterate_to_key(start_key)?;
@@ -122,18 +105,14 @@ impl<'a> PreOrderIterator<'a> {
                         .copied()
                         .chain(once(path_comp.as_u8())),
                 );
-                self.traversal_stack.push(TraversalStackFrame {
-                    pre_path: child_pre_path,
-                    node: child.clone(),
-                    hash: None,
-                });
+                self.traversal_stack
+                    .push(NodeState::new(child_pre_path, child, self.trie)?);
             }
         }
 
-        // Get the next node from the traversal stack, create its node state and set it as
-        // the current node state.
-        if let Some(frame) = self.traversal_stack.pop() {
-            self.node_state = Some(NodeState::new(frame, self.trie)?);
+        // Get the next node from the traversal stack and set it as the current node state.
+        if let Some(node_state) = self.traversal_stack.pop() {
+            self.node_state = Some(node_state);
             Ok(self.node_state.as_ref())
         } else {
             // Stack is empty, iteration is complete. Return None.
@@ -143,7 +122,7 @@ impl<'a> PreOrderIterator<'a> {
 
     /// Calling `skip_children` will clear the current node state, which will cause the children
     /// of the current node to not be added to the traversal stack on the subsequent `next` call.
-    /// This will effective cause the traversal to skip the children of the current node.
+    /// This will effectively cause the traversal to skip the children of the current node.
     #[cfg_attr(not(test), expect(dead_code))]
     fn skip_children(&mut self) {
         self.node_state = None;
@@ -189,11 +168,11 @@ impl<'a> PreOrderIterator<'a> {
                     let path_overlap = PrefixOverlap::from(key, child_key.as_ref());
                     let unique_node = path_overlap.unique_b;
                     if unique_node.is_empty() || child_key > *key {
-                        self.traversal_stack.push(TraversalStackFrame {
-                            pre_path: child_pre_path,
-                            node: child.clone(),
-                            hash: None,
-                        });
+                        self.traversal_stack.push(NodeState::new(
+                            child_pre_path,
+                            child,
+                            self.trie,
+                        )?);
                         // Once we have found the first child that should be traversed, we can break out of
                         // the loop where we we add the rest of the children without the above test.
                         break;
@@ -201,35 +180,22 @@ impl<'a> PreOrderIterator<'a> {
                 }
 
                 // Add the rest of the children (if any) to the traversal stack.
-                self.traversal_stack
-                    .extend(
-                        reversed_children_with_pre_path.map(|(child, child_pre_path)| {
-                            TraversalStackFrame {
-                                pre_path: child_pre_path,
-                                node: child.clone(),
-                                hash: None,
-                            }
-                        }),
-                    );
+                for node_state in reversed_children_with_pre_path
+                    .map(|(child, child_pre_path)| NodeState::new(child_pre_path, child, self.trie))
+                {
+                    self.traversal_stack.push(node_state?);
+                }
             }
 
             // Pop the next node state from the stack
-            if let Some(frame) = self.traversal_stack.pop() {
-                // Save a copy of the pre-path in case we need to push it back on the traversal stack.
-                let pre_path = frame.pre_path.clone();
-                let state = NodeState::new(frame, self.trie)?;
-
+            if let Some(state) = self.traversal_stack.pop() {
                 // Since pre-order traversal of a trie iterates through the nodes in lexicographical
                 // order, we can stop the traversal once we see a node key that is larger than or
-                // equal to the key. We stop the traversal by pushing  the current node with its
-                // pre-path and hash back to the stack. Calling `next` will process this node.
+                // equal to the key. We stop the traversal by pushing the current `NodeState` 
+                // back to the stack. Calling `next` will process this node.
                 let node_key = key_from_nibble_iter(state.path.iter().copied());
                 if node_key >= *key {
-                    self.traversal_stack.push(TraversalStackFrame {
-                        pre_path,
-                        node: Child::Node((*state.node).clone()),
-                        hash: state.hash,
-                    });
+                    self.traversal_stack.push(state);
                     return Ok(());
                 }
 
@@ -267,13 +233,21 @@ mod tests {
         merkle::{Key, Merkle, changes::PreOrderIterator},
     };
 
-    use firewood_storage::{MemStore, MutableProposal, NodeStore, SeededRng};
+    use firewood_storage::{
+        HashedNodeReader, ImmutableProposal, MemStore, MutableProposal, NodeStore, SeededRng,
+    };
     use std::{collections::HashSet, sync::Arc};
 
     fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
         let memstore = MemStore::new(vec![]);
         let nodestore = NodeStore::new_empty_proposal(Arc::new(memstore));
         Merkle::from(nodestore)
+    }
+
+    fn make_immutable(
+        merkle: Merkle<NodeStore<MutableProposal, MemStore>>,
+    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> {
+        merkle.try_into().unwrap()
     }
 
     fn random_key_from_hashset<'a>(
@@ -320,7 +294,6 @@ mod tests {
             if !committed_keys.is_empty() && rng.random_range(1..=100) <= CHANCE_DELETE {
                 let del_key = gen_delete_key(rng, committed_keys, &mut seen_keys);
                 if let Some(key) = del_key {
-                    //println!("Deleting key: {key:?}");
                     batch.push(BatchOp::Delete { key });
                     continue;
                 }
@@ -361,12 +334,14 @@ mod tests {
                 )
                 .unwrap();
         }
+        let merkle = make_immutable(merkle);
+        assert!(merkle.nodestore().root_hash().is_some());
 
         // Check if the sorted batch and the pre-order traversal have identical values.
-        let mut preorder_it =
-            PreOrderIterator::new(merkle.nodestore(), None, &Key::default()).unwrap();
+        let mut preorder_it = PreOrderIterator::new(merkle.nodestore(), &Key::default()).unwrap();
         let mut batch_sorted_it = batch_sorted.clone().into_iter();
         while let Some(node_state) = preorder_it.next().unwrap() {
+            assert!(node_state.hash.is_some());
             if let Some(val) = node_state.node.value() {
                 let key = key_from_nibble_iter(node_state.path.iter().copied());
                 let batch_sorted_item = batch_sorted_it.next().unwrap();
@@ -387,7 +362,7 @@ mod tests {
             .key()
             .clone()
             .into_boxed_slice();
-        let mut preorder_it = PreOrderIterator::new(merkle.nodestore(), None, &start_key).unwrap();
+        let mut preorder_it = PreOrderIterator::new(merkle.nodestore(), &start_key).unwrap();
         while let Some(node_state) = preorder_it.next().unwrap() {
             if let Some(val) = node_state.node.value() {
                 let key = key_from_nibble_iter(node_state.path.iter().copied());
@@ -403,8 +378,7 @@ mod tests {
 
         // Third test that just skips the children after calling `next` once. This should skip all of
         // the children of the root node, causing the next call to `next` to return None.
-        let mut preorder_it =
-            PreOrderIterator::new(merkle.nodestore(), None, &Key::default()).unwrap();
+        let mut preorder_it = PreOrderIterator::new(merkle.nodestore(), &Key::default()).unwrap();
         preorder_it.next().unwrap();
         preorder_it.skip_children();
         assert!(preorder_it.next().unwrap().is_none());
