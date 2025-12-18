@@ -213,19 +213,35 @@ func TestHashTypeValidation(t *testing.T) {
 	dbNative, errNative := New(dbDirNative, HashTypeNative, WithTruncate(true))
 
 	// Exactly one should succeed based on compile-time feature
-	if errEth == nil && errNative != nil {
+	type resultType int
+	const (
+		ethHashOnly resultType = iota
+		nativeOnly
+		bothOrNeither
+	)
+
+	result := bothOrNeither
+	switch {
+	case errEth == nil && errNative != nil:
+		result = ethHashOnly
+	case errNative == nil && errEth != nil:
+		result = nativeOnly
+	}
+
+	switch result {
+	case ethHashOnly:
 		// EthHash succeeded, Native failed - ethhash feature is enabled
 		r.NoError(dbEth.Close(oneSecCtx(t)))
 		r.Error(errNative)
 		r.Contains(errNative.Error(), "hash_type must be EthHash")
-	} else if errNative == nil && errEth != nil {
+	case nativeOnly:
 		// Native succeeded, EthHash failed - ethhash feature is disabled
 		r.NoError(dbNative.Close(oneSecCtx(t)))
 		r.Error(errEth)
 		r.Contains(errEth.Error(), "hash_type must be Native")
-	} else {
+	case bothOrNeither:
 		// Both succeeded or both failed - this should not happen
-		t.Fatalf("Expected exactly one hash type to succeed, got errEth=%v, errNative=%v", errEth, errNative)
+		r.Failf("Expected exactly one hash type to succeed", "got errEth=%v, errNative=%v", errEth, errNative)
 	}
 }
 
