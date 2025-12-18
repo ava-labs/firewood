@@ -191,7 +191,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
             if let Some(state) = self.traversal_stack.pop() {
                 // Since pre-order traversal of a trie iterates through the nodes in lexicographical
                 // order, we can stop the traversal once we see a node key that is larger than or
-                // equal to the key. We stop the traversal by pushing the current `NodeState` 
+                // equal to the key. We stop the traversal by pushing the current `NodeState`
                 // back to the stack. Calling `next` will process this node.
                 let node_key = key_from_nibble_iter(state.path.iter().copied());
                 if node_key >= *key {
