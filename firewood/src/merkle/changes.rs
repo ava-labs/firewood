@@ -62,7 +62,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
         // traversal stack. It will be used on the first call to `next` or `next_internal`.
         if let Some(root) = trie.root_node() {
             preorder.traversal_stack.push(NodeState {
-                path: Path::default(),
+                path: root.partial_path().clone(),
                 node: root,
                 hash: trie.root_hash().map(|hash| hash.clone().into_triehash()),
             });
