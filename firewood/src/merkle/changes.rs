@@ -114,13 +114,9 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
         }
 
         // Get the next node from the traversal stack and set it as the current node state.
-        if let Some(node_state) = self.traversal_stack.pop() {
-            self.node_state = Some(node_state);
-            Ok(self.node_state.as_ref())
-        } else {
-            // Stack is empty, iteration is complete. Return None.
-            Ok(None)
-        }
+        // If the stack is empty, then it returns None and the iteration is complete.
+        self.node_state = self.traversal_stack.pop();
+        Ok(self.node_state.as_ref())
     }
 
     /// Calling `skip_children` will clear the current node state, which will cause the children
