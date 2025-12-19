@@ -992,10 +992,9 @@ mod tests {
             ],
         );
 
+        // First case: No start key
         let diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
-
         let ops: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
-
         assert_eq!(ops.len(), 5);
         assert!(matches!(ops[0], BatchOp::Delete { ref key } if **key == *b"a"));
         assert!(
@@ -1009,6 +1008,55 @@ mod tests {
             matches!(ops[4], BatchOp::Put { ref key, ref value } if **key == *b"f" && **value == *b"value_f")
         );
         // Note: "c" should be skipped as it's identical in both trees
+
+        // Second case: "b" start key
+        let diff_iter = diff_merkle_iterator(&m1, &m2, Box::from(b"b".as_slice())).unwrap();
+        let ops: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(ops.len(), 4);
+        assert!(
+            matches!(ops[0], BatchOp::Put { ref key, ref value } if **key == *b"b" && **value == *b"value_b")
+        );
+        assert!(
+            matches!(ops[1], BatchOp::Put { ref key, ref value } if **key == *b"d" && **value == *b"value_d")
+        );
+        assert!(matches!(ops[2], BatchOp::Delete { ref key } if **key == *b"e"));
+        assert!(
+            matches!(ops[3], BatchOp::Put { ref key, ref value } if **key == *b"f" && **value == *b"value_f")
+        );
+
+        // Third case: "c" start key
+        let diff_iter = diff_merkle_iterator(&m1, &m2, Box::from(b"c".as_slice())).unwrap();
+        let ops: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(ops.len(), 3);
+        assert!(
+            matches!(ops[0], BatchOp::Put { ref key, ref value } if **key == *b"d" && **value == *b"value_d")
+        );
+        assert!(matches!(ops[1], BatchOp::Delete { ref key } if **key == *b"e"));
+        assert!(
+            matches!(ops[2], BatchOp::Put { ref key, ref value } if **key == *b"f" && **value == *b"value_f")
+        );
+
+        // Fourth case: "da" start key.
+        let diff_iter = diff_merkle_iterator(&m1, &m2, Box::from(b"da".as_slice())).unwrap();
+        let ops: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(ops.len(), 2);
+        assert!(matches!(ops[0], BatchOp::Delete { ref key } if **key == *b"e"));
+        assert!(
+            matches!(ops[1], BatchOp::Put { ref key, ref value } if **key == *b"f" && **value == *b"value_f")
+        );
+
+        // Fifth case: "f" start key.
+        let diff_iter = diff_merkle_iterator(&m1, &m2, Box::from(b"f".as_slice())).unwrap();
+        let ops: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(ops.len(), 1);
+        assert!(
+            matches!(ops[0], BatchOp::Put { ref key, ref value } if **key == *b"f" && **value == *b"value_f")
+        );
+
+        // Sixth case: "g" start key.
+        let diff_iter = diff_merkle_iterator(&m1, &m2, Box::from(b"g".as_slice())).unwrap();
+        let ops: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(ops.len(), 0);
     }
 
     #[test_case(true, false, 0, 1)] // same value, m1->m2: no put needed, delete prefix/b
