@@ -58,8 +58,11 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
             traversal_stack: vec![],
             trie,
         };
-        // If the root node is not None, then push a `NodeState` for the root onto the
-        // traversal stack. It will be used on the first call to `next` or `next_internal`.
+        // If the root node is not None, then push a `NodeState` for the root onto the traversal
+        // stack. It will be used on the first call to `next` or `next_internal`. Because we
+        // already have the root node, we create its `NodeState` directly instead of using
+        // `NodeState::new` as we don't need to create a `SharedNode` from a `Child`. The full
+        // path of the root node is just its partial path since it has no pre-path.
         if let Some(root) = trie.root_node() {
             preorder.traversal_stack.push(NodeState {
                 path: root.partial_path().clone(),
