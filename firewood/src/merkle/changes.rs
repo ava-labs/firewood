@@ -598,23 +598,15 @@ mod tests {
     }
 
     fn populate_merkle(
-        merkle: Merkle<NodeStore<MutableProposal, MemStore>>,
-        items: &[(&[u8], &[u8])],
-    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> {
-        let merkle = populate_merkle_mutable(merkle, items);
-        merkle.try_into().unwrap()
-    }
-
-    fn populate_merkle_mutable(
         mut merkle: Merkle<NodeStore<MutableProposal, MemStore>>,
         items: &[(&[u8], &[u8])],
-    ) -> Merkle<NodeStore<MutableProposal, MemStore>> {
+    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> {
         for (key, value) in items {
             merkle
                 .insert(key, value.to_vec().into_boxed_slice())
                 .unwrap();
         }
-        merkle
+        merkle.try_into().unwrap()
     }
 
     fn make_immutable(
