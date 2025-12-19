@@ -1,6 +1,6 @@
 [package]
 name = "firewood-triehash"
-version.workspace = true
+version = "0.0.16"
 authors = ["Parity Technologies <admin@parity.io>", "Ron Kuris <swcafe@gmail.com>"]
 description = "In-memory patricia trie operations"
 repository.workspace = true

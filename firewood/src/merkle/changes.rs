@@ -4,7 +4,7 @@
 use std::{cmp::Ordering, iter::once};
 
 use firewood_storage::{
-    Child, FileIoError, HashedNodeReader, Node, Path, SharedNode, TrieHash, TrieReader,
+    Child, FileIoError, HashedNodeReader, Node, NodeReader, Path, SharedNode, TrieHash,
     firewood_counter,
 };
 
@@ -33,18 +33,15 @@ enum DiffIterationNodeState {
     /// add the remaining keys/values from the left trie to the deletion list.
     DeleteRestLeft,
     /// In the `SkipChildren` state, we previously identified that the current nodes from
-    /// both tries have matching paths, values, and hashes. This means we don't need
-    /// traverse any of their children. In his state, we call `skip_children` on both tries
+    /// both tries have matching paths, values, and hashes. This means we don't need to
+    /// traverse any of their children. In this state, we call `skip_children` on both tries
     /// to not push their children onto the traversal stack on the next call to `next`.
     /// Then we consider the next nodes from both tries in the same way as `TraverseBoth`.
     SkipChildren,
 }
 
 /// Contains all of a node's state that is needed for node comparison in `DiffMerkleNodeStream`.
-/// It includes the nodes full path and its hash if available. `NodeState` is created from
-/// a `TraversalStackFrame` and differs from it by storing the node's full path instead of
-/// just its pre-path (doesn't include the node's partial path), and by storing the node as
-/// a `SharedNode` instead of a `Child`.
+/// It includes the nodes full path and its hash if available.
 #[derive(Clone)]
 struct NodeState {
     path: Path,
@@ -53,82 +50,44 @@ struct NodeState {
 }
 
 impl NodeState {
-    // Creates a NodeState from a `TraversalStackFrame` popped off the traversal stack, and a
-    // trie for reading the node from storage.
-    fn new(frame: TraversalStackFrame, trie: &'_ dyn TrieReader) -> Result<Self, FileIoError> {
-        let mut hash = frame.hash;
-        let node = match frame.node {
-            Child::Node(node) => node.clone().into(),
-            Child::AddressWithHash(addr, child_hash) => {
-                hash = Some(child_hash.into_triehash());
-                trie.read_node(addr)?
-            }
-            Child::MaybePersisted(maybe_persisted, child_hash) => {
-                hash = Some(child_hash.into_triehash());
-                maybe_persisted.as_shared_node(&trie)?
-            }
-        };
-        // Compute the full path for the node. This is used to compare with the full path
+    // Creates a NodeState from a `Child`, its pre-path, and trie for reading the node from storage.
+    fn new<T: NodeReader>(pre_path: Path, child: &Child, trie: &T) -> Result<Self, FileIoError> {
+        let node = child.as_shared_node(trie)?;
+        // Create the full path for the node. This is used to compare with the full path
         // of the current node from the other trie.
-        let mut path = frame.pre_path;
+        let mut path = pre_path;
         path.extend(node.partial_path().iter().copied());
 
-        Ok(Self { path, node, hash })
+        Ok(Self {
+            path,
+            node,
+            hash: child.hash().map(|hash| hash.clone().into_triehash()),
+        })
     }
 }
 
 /// Iterator that outputs the difference between two tries and skips matching sub-tries.
-struct DiffMerkleNodeStream<'a> {
+struct DiffMerkleNodeStream<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader> {
     // Contains the state of the diff traversal. It is only None after calling `next` or
     // `next_internal` if we have reached the end of the traversal.
     state: Option<DiffIterationNodeState>,
-    left_tree: PreOrderIterator<'a>,
-    right_tree: PreOrderIterator<'a>,
+    left_tree: PreOrderIterator<'a, LEFT>,
+    right_tree: PreOrderIterator<'a, RIGHT>,
 }
 
-impl<'a> DiffMerkleNodeStream<'a> {
-    /// Constructor where the left and right tries implement the trait `TrieReader`. This
-    /// allows a `DiffMerkleNodeStream` to be constructed with `MutableProposal`s. The
-    /// drawback to using `new_without_hash` is that we don't have the root hashes for
-    /// these tries. The `new` constructor should be used for `ImmutableProposal`s.
+impl<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader> DiffMerkleNodeStream<'a, LEFT, RIGHT> {
+    /// Constructor where the left and right tries implement the trait `HashedNodeReader`.
     #[cfg_attr(not(test), expect(dead_code))]
-    pub fn new_without_hash<T: TrieReader, U: TrieReader>(
-        left_tree: &'a T,
-        right_tree: &'a U,
-        start_key: Key,
-    ) -> Result<Self, FileIoError> {
-        Self::new_helper(left_tree, None, right_tree, None, start_key)
-    }
-
-    /// Constructor where the left and right tries implement the trait `HashedNodeReader`. This
-    /// constructor should be used instead of `new_without_hash` for `ImmutableProposal`s.
-    #[cfg_attr(not(test), expect(dead_code))]
-    pub fn new<T: HashedNodeReader, U: HashedNodeReader>(
-        left_tree: &'a T,
-        right_tree: &'a U,
-        start_key: Key,
-    ) -> Result<Self, FileIoError> {
-        Self::new_helper(
-            left_tree,
-            left_tree.root_hash(),
-            right_tree,
-            right_tree.root_hash(),
-            start_key,
-        )
-    }
-
-    fn new_helper<T: TrieReader, U: TrieReader>(
-        left_tree: &'a T,
-        left_hash: Option<TrieHash>,
-        right_tree: &'a U,
-        right_hash: Option<TrieHash>,
+    pub fn new(
+        left_tree: &'a LEFT,
+        right_tree: &'a RIGHT,
         start_key: Key,
     ) -> Result<Self, FileIoError> {
         // Create pre-order iterators for the two tries and have them iterate to the start key.
         // If the start key doesn't exist for an iterator, it will set the iterator to the
         // smallest key that is larger than the start key.
-        let left_tree = PreOrderIterator::new(left_tree, left_hash, &start_key)?;
-        let right_tree = PreOrderIterator::new(right_tree, right_hash, &start_key)?;
+        let left_tree = PreOrderIterator::new(left_tree, &start_key)?;
+        let right_tree = PreOrderIterator::new(right_tree, &start_key)?;
         Ok(Self {
             state: Some(DiffIterationNodeState::TraverseBoth),
             left_tree,
@@ -385,7 +344,7 @@ impl<'a> DiffMerkleNodeStream<'a> {
 }
 
 /// Adding support for the Iterator trait
-impl Iterator for DiffMerkleNodeStream<'_> {
+impl<L: HashedNodeReader, R: HashedNodeReader> Iterator for DiffMerkleNodeStream<'_, L, R> {
     type Item = Result<BatchOp<Key, Value>, firewood_storage::FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -393,45 +352,33 @@ impl Iterator for DiffMerkleNodeStream<'_> {
     }
 }
 
-/// Contents of a frame on the traversal stack. Unlike for a `NodeState`, a `TraversalStackFrame`
-/// for a child can be generated from a parent without needing to load the child from storage.
-struct TraversalStackFrame {
-    pre_path: Path,
-    node: Child,
-    hash: Option<TrieHash>,
-}
-
 /// Contains the state required for performing pre-order iteration of a Merkle trie. This includes
-/// the state of the current node, a reference to a trie that implements the `TrieReader` trait,
-/// and a stack that contains nodes (and their associated state including its pre-path and hash) to
-/// be traversed with calls to `next`.
-struct PreOrderIterator<'a> {
+/// the state of the current node, a reference to a trie that implements the `HashedNodeReader`
+/// trait, and a stack that contains the `NodeState` of nodes to be traversed with calls to `next`.
+struct PreOrderIterator<'a, T: HashedNodeReader> {
     node_state: Option<NodeState>,
-    trie: &'a dyn TrieReader,
-    traversal_stack: Vec<TraversalStackFrame>,
+    trie: &'a T,
+    traversal_stack: Vec<NodeState>,
 }
 
-impl<'a> PreOrderIterator<'a> {
-    /// Create a pre-order iterator for the trie that starts at `start_key`. The iterator takes an
-    /// optional root hash which is available when the trie is from an `ImmutableProposal`.
-    fn new<V: TrieReader>(
-        trie: &'a V,
-        root_hash: Option<TrieHash>,
-        start_key: &Key,
-    ) -> Result<PreOrderIterator<'a>, FileIoError> {
+impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
+    /// Create a pre-order iterator for the trie that starts at `start_key`.
+    fn new(trie: &'a T, start_key: &Key) -> Result<PreOrderIterator<'a, T>, FileIoError> {
         let mut preorder = Self {
             node_state: None,
             traversal_stack: vec![],
             trie,
         };
-        // If the root node is not None, then push a `TraversalStackFrame` for the
-        // root onto the traversal stack. It will be used on the first call to
-        // next or next_internal.
+        // If the root node is not None, then push a `NodeState` for the root onto the traversal
+        // stack. It will be used on the first call to `next` or `next_internal`. Because we
+        // already have the root node, we create its `NodeState` directly instead of using
+        // `NodeState::new` as we don't need to create a `SharedNode` from a `Child`. The full
+        // path of the root node is just its partial path since it has no pre-path.
         if let Some(root) = trie.root_node() {
-            preorder.traversal_stack.push(TraversalStackFrame {
-                pre_path: Path::default(),
-                node: Child::Node((*root).clone()),
-                hash: root_hash,
+            preorder.traversal_stack.push(NodeState {
+                path: root.partial_path().clone(),
+                node: root,
+                hash: trie.root_hash().map(|hash| hash.clone().into_triehash()),
             });
         }
         preorder.iterate_to_key(start_key)?;
@@ -462,12 +409,7 @@ impl<'a> PreOrderIterator<'a> {
         {
             // Since a stack is LIFO and we want to perform pre-order traversal, we pushed the
             // children in reverse order.
-            for (path_comp, child) in branch
-                .children
-                .iter()
-                .rev()
-                .filter_map(|(pc, c)| c.as_ref().map(|child| (pc, child)))
-            {
+            for (path_comp, child) in branch.children.iter_present().rev() {
                 // Generate the pre-path for this child, and push it onto the traversal stack.
                 let child_pre_path = Path::from_nibbles_iterator(
                     prev_node_state
@@ -476,18 +418,14 @@ impl<'a> PreOrderIterator<'a> {
                         .copied()
                         .chain(once(path_comp.as_u8())),
                 );
-                self.traversal_stack.push(TraversalStackFrame {
-                    pre_path: child_pre_path,
-                    node: child.clone(),
-                    hash: None,
-                });
+                self.traversal_stack
+                    .push(NodeState::new(child_pre_path, child, self.trie)?);
             }
         }
 
-        // Get the next node from the traversal stack, create its node state and set it as
-        // the current node state.
-        if let Some(frame) = self.traversal_stack.pop() {
-            self.node_state = Some(NodeState::new(frame, self.trie)?);
+        // Get the next node from the traversal stack and set it as the current node state.
+        if let Some(node_state) = self.traversal_stack.pop() {
+            self.node_state = Some(node_state);
             Ok(self.node_state.as_ref())
         } else {
             // Stack is empty, iteration is complete. Return None.
@@ -497,7 +435,7 @@ impl<'a> PreOrderIterator<'a> {
 
     /// Calling `skip_children` will clear the current node state, which will cause the children
     /// of the current node to not be added to the traversal stack on the subsequent `next` call.
-    /// This will effective cause the traversal to skip the children of the current node.
+    /// This will effectively cause the traversal to skip the children of the current node.
     fn skip_children(&mut self) {
         self.node_state = None;
     }
@@ -516,65 +454,60 @@ impl<'a> PreOrderIterator<'a> {
             if let Some(prev_node_state) = self.node_state.take()
                 && let Node::Branch(branch) = &*prev_node_state.node
             {
-                let mut passed_check = false;
-                for (path_comp, child) in branch
-                    .children
-                    .iter()
-                    .rev()
-                    .filter_map(|(pc, c)| c.as_ref().map(|child| (pc, child)))
-                {
-                    let child_pre_path = Path::from_nibbles_iterator(
-                        prev_node_state
-                            .path
-                            .iter()
-                            .copied()
-                            .chain(once(path_comp.as_u8())),
-                    );
-                    // A previous child has already been pushed onto the traversal stack. The
-                    // remaining children can be pushed without additional checks.
-                    if passed_check {
-                        self.traversal_stack.push(TraversalStackFrame {
-                            pre_path: child_pre_path,
-                            node: child.clone(),
-                            hash: None,
+                // Create a reverse iterator on the children that includes the child's pre-path.
+                let mut reversed_children_with_pre_path =
+                    branch
+                        .children
+                        .iter_present()
+                        .rev()
+                        .map(|(path_comp, child)| {
+                            (
+                                child,
+                                Path::from_nibbles_iterator(
+                                    prev_node_state
+                                        .path
+                                        .iter()
+                                        .copied()
+                                        .chain(once(path_comp.as_u8())),
+                                ),
+                            )
                         });
-                    } else {
-                        // We only need to traverse this child if its pre-path is a prefix of the key (including
-                        // being equal to the key) or is lexicographically larger than the key.
-                        let child_key = key_from_nibble_iter(child_pre_path.iter().copied());
-                        let path_overlap = PrefixOverlap::from(key, child_key.as_ref());
-                        let unique_node = path_overlap.unique_b;
-                        if unique_node.is_empty() || child_key > *key {
-                            self.traversal_stack.push(TraversalStackFrame {
-                                pre_path: child_pre_path,
-                                node: child.clone(),
-                                hash: None,
-                            });
-                            // Once the first child is added to the stack, then the subsequent children can be
-                            // added without needing additional checks.
-                            passed_check = true;
-                        }
+
+                for (child, child_pre_path) in reversed_children_with_pre_path.by_ref() {
+                    // We only need to traverse this child if its pre-path is a prefix of the key (including
+                    // being equal to the key) or is lexicographically larger than the key.
+                    let child_key = key_from_nibble_iter(child_pre_path.iter().copied());
+                    let path_overlap = PrefixOverlap::from(key, child_key.as_ref());
+                    let unique_node = path_overlap.unique_b;
+                    if unique_node.is_empty() || child_key > *key {
+                        self.traversal_stack.push(NodeState::new(
+                            child_pre_path,
+                            child,
+                            self.trie,
+                        )?);
+                        // Once we have found the first child that should be traversed, we can break out of
+                        // the loop where we we add the rest of the children without the above test.
+                        break;
                     }
+                }
+
+                // Add the rest of the children (if any) to the traversal stack.
+                for node_state in reversed_children_with_pre_path
+                    .map(|(child, child_pre_path)| NodeState::new(child_pre_path, child, self.trie))
+                {
+                    self.traversal_stack.push(node_state?);
                 }
             }
 
             // Pop the next node state from the stack
-            if let Some(frame) = self.traversal_stack.pop() {
-                // Save a copy of the pre-path in case we need to push it back on the traversal stack.
-                let pre_path = frame.pre_path.clone();
-                let state = NodeState::new(frame, self.trie)?;
-
+            if let Some(state) = self.traversal_stack.pop() {
                 // Since pre-order traversal of a trie iterates through the nodes in lexicographical
                 // order, we can stop the traversal once we see a node key that is larger than or
-                // equal to the key. We stop the traversal by pushing  the current node with its
-                // pre-path and hash back to the stack. Calling `next` will process this node.
+                // equal to the key. We stop the traversal by pushing the current `NodeState`
+                // back to the stack. Calling `next` will process this node.
                 let node_key = key_from_nibble_iter(state.path.iter().copied());
                 if node_key >= *key {
-                    self.traversal_stack.push(TraversalStackFrame {
-                        pre_path,
-                        node: Child::Node((*state.node).clone()),
-                        hash: state.hash,
-                    });
+                    self.traversal_stack.push(state);
                     return Ok(());
                 }
 
@@ -650,28 +583,12 @@ mod tests {
         tree_left: &'a Merkle<T>,
         tree_right: &'a Merkle<U>,
         start_key: Key,
-    ) -> Result<DiffMerkleNodeStream<'a>, FileIoError>
+    ) -> Result<DiffMerkleNodeStream<'a, T, U>, FileIoError>
     where
         T: firewood_storage::TrieReader + HashedNodeReader,
         U: firewood_storage::TrieReader + HashedNodeReader,
     {
         DiffMerkleNodeStream::new(tree_left.nodestore(), tree_right.nodestore(), start_key)
-    }
-
-    fn diff_merkle_iterator_without_hash<'a, T, U>(
-        tree_left: &'a Merkle<T>,
-        tree_right: &'a Merkle<U>,
-        start_key: Key,
-    ) -> Result<DiffMerkleNodeStream<'a>, FileIoError>
-    where
-        T: firewood_storage::TrieReader,
-        U: firewood_storage::TrieReader,
-    {
-        DiffMerkleNodeStream::new_without_hash(
-            tree_left.nodestore(),
-            tree_right.nodestore(),
-            start_key,
-        )
     }
 
     fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
@@ -681,23 +598,15 @@ mod tests {
     }
 
     fn populate_merkle(
-        merkle: Merkle<NodeStore<MutableProposal, MemStore>>,
-        items: &[(&[u8], &[u8])],
-    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> {
-        let merkle = populate_merkle_mutable(merkle, items);
-        merkle.try_into().unwrap()
-    }
-
-    fn populate_merkle_mutable(
         mut merkle: Merkle<NodeStore<MutableProposal, MemStore>>,
         items: &[(&[u8], &[u8])],
-    ) -> Merkle<NodeStore<MutableProposal, MemStore>> {
+    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> {
         for (key, value) in items {
             merkle
                 .insert(key, value.to_vec().into_boxed_slice())
                 .unwrap();
         }
-        merkle
+        merkle.try_into().unwrap()
     }
 
     fn make_immutable(
@@ -836,7 +745,6 @@ mod tests {
             if !committed_keys.is_empty() && rng.random_range(1..=100) <= CHANCE_DELETE {
                 let del_key = gen_delete_key(rng, committed_keys, &mut seen_keys);
                 if let Some(key) = del_key {
-                    //println!("Deleting key: {key:?}");
                     batch.push(BatchOp::Delete { key });
                     continue;
                 }
@@ -877,12 +785,14 @@ mod tests {
                 )
                 .unwrap();
         }
+        let merkle = make_immutable(merkle);
+        assert!(HashedNodeReader::root_hash(&merkle.nodestore()).is_some());
 
         // Check if the sorted batch and the pre-order traversal have identical values.
-        let mut preorder_it =
-            PreOrderIterator::new(merkle.nodestore(), None, &Key::default()).unwrap();
+        let mut preorder_it = PreOrderIterator::new(merkle.nodestore(), &Key::default()).unwrap();
         let mut batch_sorted_it = batch_sorted.clone().into_iter();
         while let Some(node_state) = preorder_it.next().unwrap() {
+            assert!(node_state.hash.is_some());
             if let Some(val) = node_state.node.value() {
                 let key = key_from_nibble_iter(node_state.path.iter().copied());
                 let batch_sorted_item = batch_sorted_it.next().unwrap();
@@ -903,7 +813,7 @@ mod tests {
             .key()
             .clone()
             .into_boxed_slice();
-        let mut preorder_it = PreOrderIterator::new(merkle.nodestore(), None, &start_key).unwrap();
+        let mut preorder_it = PreOrderIterator::new(merkle.nodestore(), &start_key).unwrap();
         while let Some(node_state) = preorder_it.next().unwrap() {
             if let Some(val) = node_state.node.value() {
                 let key = key_from_nibble_iter(node_state.path.iter().copied());
@@ -919,22 +829,10 @@ mod tests {
 
         // Third test that just skips the children after calling `next` once. This should skip all of
         // the children of the root node, causing the next call to `next` to return None.
-        let mut preorder_it =
-            PreOrderIterator::new(merkle.nodestore(), None, &Key::default()).unwrap();
+        let mut preorder_it = PreOrderIterator::new(merkle.nodestore(), &Key::default()).unwrap();
         preorder_it.next().unwrap();
         preorder_it.skip_children();
         assert!(preorder_it.next().unwrap().is_none());
-    }
-
-    #[test]
-    fn test_diff_empty_mutable_trees() {
-        // This is unlikely to happen in practice, but it helps cover the case where
-        // hashes do not exist yet.
-        let m1 = create_test_merkle();
-        let m2 = create_test_merkle();
-
-        let mut diff_iter = diff_merkle_iterator_without_hash(&m1, &m2, Box::new([])).unwrap();
-        assert!(diff_iter.next().is_none());
     }
 
     #[test]
@@ -1086,10 +984,9 @@ mod tests {
             ],
         );
 
+        // First case: No start key
         let diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
-
         let ops: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
-
         assert_eq!(ops.len(), 5);
         assert!(matches!(ops[0], BatchOp::Delete { ref key } if **key == *b"a"));
         assert!(
@@ -1103,6 +1000,55 @@ mod tests {
             matches!(ops[4], BatchOp::Put { ref key, ref value } if **key == *b"f" && **value == *b"value_f")
         );
         // Note: "c" should be skipped as it's identical in both trees
+
+        // Second case: "b" start key
+        let diff_iter = diff_merkle_iterator(&m1, &m2, Box::from(b"b".as_slice())).unwrap();
+        let ops: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(ops.len(), 4);
+        assert!(
+            matches!(ops[0], BatchOp::Put { ref key, ref value } if **key == *b"b" && **value == *b"value_b")
+        );
+        assert!(
+            matches!(ops[1], BatchOp::Put { ref key, ref value } if **key == *b"d" && **value == *b"value_d")
+        );
+        assert!(matches!(ops[2], BatchOp::Delete { ref key } if **key == *b"e"));
+        assert!(
+            matches!(ops[3], BatchOp::Put { ref key, ref value } if **key == *b"f" && **value == *b"value_f")
+        );
+
+        // Third case: "c" start key
+        let diff_iter = diff_merkle_iterator(&m1, &m2, Box::from(b"c".as_slice())).unwrap();
+        let ops: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(ops.len(), 3);
+        assert!(
+            matches!(ops[0], BatchOp::Put { ref key, ref value } if **key == *b"d" && **value == *b"value_d")
+        );
+        assert!(matches!(ops[1], BatchOp::Delete { ref key } if **key == *b"e"));
+        assert!(
+            matches!(ops[2], BatchOp::Put { ref key, ref value } if **key == *b"f" && **value == *b"value_f")
+        );
+
+        // Fourth case: "da" start key.
+        let diff_iter = diff_merkle_iterator(&m1, &m2, Box::from(b"da".as_slice())).unwrap();
+        let ops: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(ops.len(), 2);
+        assert!(matches!(ops[0], BatchOp::Delete { ref key } if **key == *b"e"));
+        assert!(
+            matches!(ops[1], BatchOp::Put { ref key, ref value } if **key == *b"f" && **value == *b"value_f")
+        );
+
+        // Fifth case: "f" start key.
+        let diff_iter = diff_merkle_iterator(&m1, &m2, Box::from(b"f".as_slice())).unwrap();
+        let ops: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(ops.len(), 1);
+        assert!(
+            matches!(ops[0], BatchOp::Put { ref key, ref value } if **key == *b"f" && **value == *b"value_f")
+        );
+
+        // Sixth case: "g" start key.
+        let diff_iter = diff_merkle_iterator(&m1, &m2, Box::from(b"g".as_slice())).unwrap();
+        let ops: Vec<_> = diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(ops.len(), 0);
     }
 
     #[test_case(true, false, 0, 1)] // same value, m1->m2: no put needed, delete prefix/b
@@ -1441,12 +1387,11 @@ mod tests {
         assert!(diff_iter.next().is_none());
     }
 
-    #[test_case(false, false, 500)]
-    #[test_case(false, true, 500)]
-    #[test_case(true, false, 500)]
-    #[test_case(true, true, 500)]
+    #[test_case(500)]
+    #[test_case(10)]
+    #[test_case(3)]
     #[allow(clippy::indexing_slicing)]
-    fn test_diff_random_with_deletions(trie1_mutable: bool, trie2_mutable: bool, num_items: usize) {
+    fn test_diff_random_with_deletions(num_items: usize) {
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
         // Generate random key-value pairs, ensuring uniqueness
@@ -1495,34 +1440,7 @@ mod tests {
             Vec<BatchOp<Box<[u8]>, Box<[u8]>>>,
             Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
             Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
-        ) = if trie1_mutable && trie2_mutable {
-            //diff_iter.collect::<Result<Vec<_>, _>>().unwrap();
-            let ops = diff_merkle_iterator_without_hash(&m1, &m2, Box::new([]))
-                .unwrap()
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
-            let m1_immut = m1.try_into().unwrap();
-            let m2_immut = m2.try_into().unwrap();
-            (ops, m1_immut, m2_immut)
-        } else if trie1_mutable && !trie2_mutable {
-            let m2_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
-                m2.try_into().unwrap();
-            let ops = diff_merkle_iterator_without_hash(&m1, &m2_immut, Box::new([]))
-                .unwrap()
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
-            let m1_immut = m1.try_into().unwrap();
-            (ops, m1_immut, m2_immut)
-        } else if !trie1_mutable && trie2_mutable {
-            let m1_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
-                m1.try_into().unwrap();
-            let ops = diff_merkle_iterator_without_hash(&m1_immut, &m2, Box::new([]))
-                .unwrap()
-                .collect::<Result<Vec<_>, _>>()
-                .unwrap();
-            let m2_immut = m2.try_into().unwrap();
-            (ops, m1_immut, m2_immut)
-        } else {
+        ) = {
             let m1_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
                 m1.try_into().unwrap();
             let m2_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
@@ -1575,15 +1493,7 @@ mod tests {
 
             // Randomly choose between comparing the committed nodestore against a
             // mutable proposal or an immutable proposal.
-            let ops = if rng.random() {
-                diff_merkle_iterator_without_hash(
-                    &committed.clone().into(),
-                    &nodestore.into(),
-                    Box::new([]),
-                )
-                .unwrap()
-                .collect::<Result<Vec<_>, _>>()
-            } else {
+            let ops = {
                 let immutable: NodeStore<Arc<ImmutableProposal>, FileBacked> =
                     nodestore.try_into().unwrap();
                 diff_merkle_iterator(&committed.clone().into(), &immutable.into(), Box::new([]))
