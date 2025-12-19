@@ -95,17 +95,8 @@ where
                     }
                     Some(Child::Node(node)) => acc.unhashed.push((idx, node.clone())),
                     Some(Child::MaybePersisted(maybe_persisted, h)) => {
-                        // For MaybePersisted, we need to get the address if it's persisted
-                        if let Some(addr) = maybe_persisted.as_linear_address() {
-                            let maybe_persisted_node = MaybePersistedNode::from(addr);
-                            acc.hashed.push((idx, (maybe_persisted_node, h)));
-                        } else {
-                            // If not persisted, we need to get the node to hash it
-                            let node = maybe_persisted
-                                .as_shared_node(&self)
-                                .expect("will never fail for unpersisted nodes");
-                            acc.unhashed.push((idx, node.deref().clone()));
-                        }
+                        // For MaybePersisted, it's important to remember that we've already hashed it
+                        acc.hashed.push((idx, (maybe_persisted.clone(), h)));
                     }
                 }
                 acc
@@ -158,11 +149,8 @@ where
                 trace!("hashed {hashed:?} unhashed {unhashed:?}");
                 // we were left with one hashed node that must be rehashed
                 if let [(child_idx, (child_node, child_hash))] = &mut hashed[..] {
-                    // Extract the address from the MaybePersistedNode
-                    let addr: crate::LinearAddress = child_node
-                        .as_linear_address()
-                        .expect("hashed node should be persisted");
-                    let mut hashable_node = self.read_node(addr)?.deref().clone();
+                    // read MaybePersistedNode as a SharedNode so we can hash and update it
+                    let mut hashable_node = child_node.as_shared_node(&self)?.deref().clone();
                     let hash = {
                         let mut path_guard = PathGuard::new(&mut path_prefix);
                         path_guard.0.extend(b.partial_path.0.iter().copied());

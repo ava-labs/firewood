@@ -20,9 +20,9 @@ Before making changes, create a new branch (if not already on one):
 
 ```console
 $ git fetch
-$ git switch -c release/v0.0.17 origin/main
-branch 'release/v0.0.17' set up to track 'origin/main'.
-Switched to a new branch 'release/v0.0.17'
+$ git switch -c release/v0.0.19 origin/main
+branch 'release/v0.0.19' set up to track 'origin/main'.
+Switched to a new branch 'release/v0.0.19'
 ```
 
 If already on a new branch, ensure `HEAD` is the same as the remote's `main`.
@@ -32,7 +32,7 @@ from `git cliff` follow the repository history in the correct linear order.
 On rebase, quickly redo the generative steps with `just`:
 
 ```shell
-just release-step-update-rust-dependencies && just release-step-refresh-changelog v0.0.17
+just release-step-update-rust-dependencies && just release-step-refresh-changelog v0.0.19
 ```
 
 ## Dependency upgrades
@@ -81,7 +81,7 @@ table to define the version for all subpackages.
 
 ```toml
 [workspace.package]
-version = "0.0.17"
+version = "0.0.19"
 ```
 
 Each package inherits this version by setting `package.version.workspace = true`.
@@ -105,7 +105,7 @@ table. E.g.,:
 ```toml
 [workspace.dependencies]
 # workspace local packages
-firewood = { path = "firewood", version = "0.0.17" }
+firewood = { path = "firewood", version = "0.0.19" }
 ```
 
 This allows packages within the workspace to inherit the dependency,
@@ -136,10 +136,10 @@ is correct and reflects the new package versions.
 To build the changelog, see git-cliff.org. Short version:
 
 ```sh
-just release-step-refresh-changelog v0.0.17
+just release-step-refresh-changelog v0.0.19
 ```
 
-where `v0.0.17` is the newest tag. This is a required paramter to ensure the
+where `v0.0.19` is the newest tag. This is a required paramter to ensure the
 changelog has the correct headers.
 
 ## Commit
@@ -169,11 +169,11 @@ To trigger a release, push a tag to the main branch matching the new version,
 # be sure to switch back to the main branch before tagging
 git checkout main
 git pull --prune
-git tag -s -a v0.0.17 -m 'Release v0.0.17'
-git push origin v0.0.17
+git tag -s -a v0.0.19 -m 'Release v0.0.19'
+git push origin v0.0.19
 ```
 
-for `v0.0.17` for the merged version change. The CI will automatically publish a
+for `v0.0.19` for the merged version change. The CI will automatically publish a
 draft release which consists of release notes and changes (see
 [.github/workflows/release.yaml](.github/workflows/release.yaml)).
 
