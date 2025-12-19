@@ -32,6 +32,8 @@ mod proposal;
 mod revision;
 mod value;
 
+use firewood_storage::firewood_counter;
+
 use firewood::v2::api::DbView;
 
 pub use crate::handle::*;
@@ -527,8 +529,13 @@ pub unsafe extern "C" fn fwd_commit_proposal(
 ) -> HashResult {
     invoke_with_handle(proposal, move |proposal| {
         proposal.commit_proposal(|commit_time| {
-            metrics::counter!("firewood.ffi.commit_ms").increment(commit_time.as_millis());
-            metrics::counter!("firewood.ffi.commit").increment(1);
+            firewood_counter!(
+                "firewood.ffi.commit_ms",
+                "FFI commit timing in milliseconds"
+            )
+            .increment(commit_time.as_millis());
+            firewood_counter!("firewood.ffi.commit", "Number of FFI commit operations")
+                .increment(1);
         })
     })
 }

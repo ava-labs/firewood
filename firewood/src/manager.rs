@@ -18,7 +18,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use firewood_storage::logger::{trace, warn};
-use metrics::gauge;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
@@ -29,7 +28,7 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    TrieHash,
+    TrieHash, firewood_counter, firewood_gauge,
 };
 
 const DB_FILE_NAME: &str = "firewood.db";
@@ -249,16 +248,45 @@ impl RevisionManager {
                 // This guarantee is there because we have a `&mut self` reference to the manager, so
                 // the compiler guarantees we are the only one using this manager.
                 match Arc::try_unwrap(oldest) {
-                    Ok(oldest) => oldest.reap_deleted(&mut committed)?,
+                    Ok(oldest) => {
+                        oldest.reap_deleted(&mut committed)?;
+                        firewood_counter!(
+                            "firewood.revisions.reaped",
+                            "Number of revisions removed from memory",
+                            "mode" => "without_rootstore"
+                        )
+                        .increment(1);
+                    }
                     Err(original) => {
                         warn!("Oldest revision could not be reaped; still referenced");
+                        firewood_counter!(
+                            "firewood.revisions.reaping_failed",
+                            "Reaping attempts that failed due to outstanding references"
+                        )
+                        .increment(1);
                         self.in_memory_revisions.write().push_front(original);
                         break;
                     }
                 }
+            } else {
+                // RootStore is enabled: drop only in-memory handle and keep history on disk
+                firewood_counter!(
+                    "firewood.revisions.reaped",
+                    "Number of revisions removed from memory",
+                    "mode" => "with_rootstore"
+                )
+                .increment(1);
             }
-            gauge!("firewood.active_revisions").set(self.in_memory_revisions.read().len() as f64);
-            gauge!("firewood.max_revisions").set(self.max_revisions as f64);
+            firewood_gauge!(
+                "firewood.active_revisions",
+                "Current number of active revisions in memory"
+            )
+            .set(self.in_memory_revisions.read().len() as f64);
+            firewood_gauge!(
+                "firewood.max_revisions",
+                "Maximum number of revisions configured"
+            )
+            .set(self.max_revisions as f64);
         }
 
         // 3. Persist to disk.
@@ -289,10 +317,30 @@ impl RevisionManager {
 
         // 6. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
-        // referenced by anyone else.
-        self.proposals
-            .lock()
-            .retain(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1);
+        // referenced by anyone else. Track how many were discarded (dropped without commit).
+        {
+            let mut lock = self.proposals.lock();
+            let discarded = lock
+                .iter()
+                .filter(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) <= 1)
+                .count();
+            if discarded > 0 {
+                firewood_counter!(
+                    "firewood.proposals.discarded",
+                    "Number of proposals dropped without commit"
+                )
+                .increment(discarded as u64);
+            }
+
+            lock.retain(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1);
+
+            // Update outstanding proposals gauge after cleanup
+            firewood_gauge!(
+                "firewood.proposals.outstanding",
+                "Current number of outstanding proposals"
+            )
+            .set(lock.len() as f64);
+        }
 
         // then reparent any proposals that have this proposal as a parent
         for p in &*self.proposals.lock() {
@@ -331,7 +379,14 @@ impl RevisionManager {
     }
 
     pub fn add_proposal(&self, proposal: ProposedRevision) {
-        self.proposals.lock().push(proposal);
+        let mut lock = self.proposals.lock();
+        lock.push(proposal);
+        // Update outstanding proposals gauge when adding
+        firewood_gauge!(
+            "firewood.proposals.outstanding",
+            "Current number of outstanding proposals"
+        )
+        .set(lock.len() as f64);
     }
 
     /// Retrieve a committed revision by its root hash.
@@ -341,6 +396,12 @@ impl RevisionManager {
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
         // 1. Check the in-memory revision manager.
         if let Some(revision) = self.by_hash.read().get(&root_hash).cloned() {
+            firewood_counter!(
+                "firewood.revisions.historical_queries",
+                "Historical revision queries by source",
+                "source" => "memory"
+            )
+            .increment(1);
             return Ok(revision);
         }
 
@@ -357,6 +418,13 @@ impl RevisionManager {
             .ok_or(RevisionManagerError::RevisionNotFound {
                 provided: root_hash.clone(),
             })?;
+
+        firewood_counter!(
+            "firewood.revisions.historical_queries",
+            "Historical revision queries by source",
+            "source" => "rootstore"
+        )
+        .increment(1);
 
         Ok(revision)
     }
