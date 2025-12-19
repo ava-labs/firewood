@@ -1742,28 +1742,22 @@ mod tests {
                 (b"tree2_unique/r".as_slice(), b"r_value".as_slice()),
             ];
 
-            // Create mutable trees
-            let m1 = populate_merkle_mutable(create_test_merkle(), &tree1_items);
-            let m2 = populate_merkle_mutable(create_test_merkle(), &tree2_items);
+            let m1 = populate_merkle(create_test_merkle(), &tree1_items);
+            let m2 = populate_merkle(create_test_merkle(), &tree2_items);
 
-            // DIFF TEST: Measure next calls from diff operations on mutable proposals
+            // Check the number of next calls on two full tree traversals.
             let diff_nexts_before =
                 recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
 
-            let diff_stream =
-                DiffMerkleNodeStream::new_without_hash(m1.nodestore(), m2.nodestore(), Box::new([]))
-                    .unwrap();
-            let diff_mutable_results_count = diff_stream.count();
+            let mut preorder_it = PreOrderIterator::new(m1.nodestore(), &Key::default()).unwrap();
+            while preorder_it.next().unwrap().is_some() {}
+            let mut preorder_it = PreOrderIterator::new(m2.nodestore(), &Key::default()).unwrap();
+            while preorder_it.next().unwrap().is_some() {}
 
             let diff_nexts_after =
                 recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
-            let diff_mutable_nexts = diff_nexts_after - diff_nexts_before;
-
-            println!("Diff (mutable) next operations: {diff_mutable_nexts}");
-            println!("Diff (mutable) results count: {diff_mutable_results_count}");
-
-            let m1 = make_immutable(m1);
-            let m2 = make_immutable(m2);
+            let diff_iteration_count = diff_nexts_after - diff_nexts_before;
+            println!("Next calls from traversing tries: {diff_iteration_count}");
 
             // DIFF TEST: Measure next calls from hash-optimized diff operation
             let diff_nexts_before =
@@ -1777,31 +1771,19 @@ mod tests {
                 recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
             let diff_immutable_nexts = diff_nexts_after - diff_nexts_before;
 
-            println!("Diff (immutable) next operations: {diff_immutable_nexts}");
-            println!("Diff (immutable) results count: {diff_immutable_results_count}");
+            println!("Diff next calls: {diff_immutable_nexts}");
+            println!("Diff results count: {diff_immutable_results_count}");
 
             // Should have some next calls
-            assert!(
-                diff_immutable_nexts > 0,
-                "Expected next calls from diff operation"
-            );
+            assert!(diff_immutable_nexts > 0, "Expected next calls from diff operation");
 
-            // Verify hash optimization is working - should call next FEWER times
-            assert!(
-                diff_immutable_nexts < diff_mutable_nexts,
-                "Hash optimization failed: there should be fewer next calls on immutable ({diff_immutable_nexts}) than on mutable ({diff_mutable_nexts}) for tries with shared content"
-            );
+            // Verify hash optimization is working - should call next FEWER times than iterating both tries
+            assert!(diff_immutable_nexts < diff_iteration_count, "Hash optimization failed");
 
-            // Verify that diff on mutable and immutable tries return the same number of results
-            assert!(
-                diff_immutable_results_count > 0
-                    && diff_immutable_results_count == diff_mutable_results_count,
-                "Expected to retrieve the same diff results"
-            );
+            // Verify that diff return the correct number of results
+            assert!(diff_immutable_results_count == 6, "Retrieved an unexpected number of results");
 
-            println!(
-                "Traversal optimization verified: {diff_immutable_nexts} vs {diff_mutable_nexts} next calls"
-            );
+            println!("Traversal optimization verified: {diff_immutable_nexts} vs {diff_iteration_count} next calls");
         });
     }
 }

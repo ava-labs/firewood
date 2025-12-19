@@ -203,8 +203,8 @@ impl TestRecorder {
         };
 
         // Return the count value
-        let snapshot = self.snapshotter().snapshot();
-        snapshot
+        self.snapshotter()
+            .snapshot()
             .into_vec()
             .into_iter()
             .find(|(k, _, _, _)| *k.key() == key)
