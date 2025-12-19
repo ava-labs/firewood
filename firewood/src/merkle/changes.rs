@@ -114,7 +114,8 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
         }
 
         // Get the next node from the traversal stack and set it as the current node state.
-        // If the stack is empty, then it returns None and the iteration is complete.
+        // If the stack is empty, then return None and the iteration is complete. Otherwise
+        // return a reference to the current node state.
         self.node_state = self.traversal_stack.pop();
         Ok(self.node_state.as_ref())
     }
