@@ -151,12 +151,12 @@ impl RevisionManager {
 
         let storage = Arc::new(fb);
         let nodestore = Arc::new(NodeStore::open(storage.clone())?);
-        let root_store = config.root_store.then_some({
+        let root_store = config.root_store.then(|| {
             let root_store_dir = db_dir.join("root_store");
 
             RootStore::new(root_store_dir, storage.clone(), config.truncate)
-                .map_err(RevisionManagerError::RootStoreError)?
-        });
+                .map_err(RevisionManagerError::RootStoreError)
+        }).transpose()?;
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,
@@ -639,6 +639,50 @@ mod tests {
         assert_eq!(
             total_errors, 0,
             "Race condition detected: {total_errors} threads failed to find revisions that should exist"
+        );
+    }
+
+    #[test]
+    fn test_no_fjall_directory_when_root_store_disabled() {
+        // Create a temporary directory for the database
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.as_ref().to_path_buf();
+
+        // Create a database with root_store disabled (default)
+        let config = ConfigManager::builder()
+            .create(true)
+            .root_store(false)
+            .build();
+
+        let _manager = RevisionManager::new(db_path.clone(), config).unwrap();
+
+        // Verify that the root_store directory does NOT exist
+        let root_store_dir = db_path.join("root_store");
+        assert!(
+            !root_store_dir.exists(),
+            "root_store directory should not be created when root_store is disabled"
+        );
+    }
+
+    #[test]
+    fn test_fjall_directory_when_root_store_enabled() {
+        // Create a temporary directory for the database
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.as_ref().to_path_buf();
+
+        // Create a database with root_store enabled
+        let config = ConfigManager::builder()
+            .create(true)
+            .root_store(true)
+            .build();
+
+        let _manager = RevisionManager::new(db_path.clone(), config).unwrap();
+
+        // Verify that the root_store directory DOES exist
+        let root_store_dir = db_path.join("root_store");
+        assert!(
+            root_store_dir.exists(),
+            "root_store directory should be created when root_store is enabled"
         );
     }
 }
