@@ -57,7 +57,7 @@ sed -i -E "s|^;?\s*admin_password\s*=.*|admin_password = firewood_is_fast|" /etc
 cat > /etc/grafana/provisioning/datasources/prometheus.yml <<EOF
 apiVersion: 1
 datasources:
- - name: Prometheus
+  - name: Prometheus
     type: prometheus
     access: proxy
     orgId: 1
