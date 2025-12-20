@@ -28,7 +28,7 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    TrieHash, firewood_gauge,
+    TrieHash, firewood_counter, firewood_gauge,
 };
 
 const DB_FILE_NAME: &str = "firewood.db";
@@ -296,10 +296,33 @@ impl RevisionManager {
 
         // 6. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
-        // referenced by anyone else.
-        self.proposals
-            .lock()
-            .retain(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1);
+        // referenced by anyone else. Track how many were discarded (dropped without commit).
+        {
+            let mut lock = self.proposals.lock();
+            let mut discarded = 0u64;
+            lock.retain(|p| {
+                let should_retain = !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1;
+                if !should_retain {
+                    discarded = discarded.saturating_add(1);
+                }
+                should_retain
+            });
+
+            if discarded > 0 {
+                firewood_counter!(
+                    "proposals.discarded",
+                    "Number of proposals dropped without commit"
+                )
+                .increment(discarded);
+            }
+
+            // Update uncommitted proposals gauge after cleanup
+            firewood_gauge!(
+                "proposals.uncommitted",
+                "Current number of uncommitted proposals"
+            )
+            .set(lock.len() as f64);
+        }
 
         // then reparent any proposals that have this proposal as a parent
         for p in &*self.proposals.lock() {
@@ -338,7 +361,17 @@ impl RevisionManager {
     }
 
     pub fn add_proposal(&self, proposal: ProposedRevision) {
-        self.proposals.lock().push(proposal);
+        let len = {
+            let mut lock = self.proposals.lock();
+            lock.push(proposal);
+            lock.len()
+        };
+        // Update uncommitted proposals gauge after adding
+        firewood_gauge!(
+            "proposals.uncommitted",
+            "Current number of uncommitted proposals"
+        )
+        .set(len as f64);
     }
 
     /// Retrieve a committed revision by its root hash.
