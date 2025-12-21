@@ -41,6 +41,7 @@ parking_lot.workspace = true
 fjall = "2.11.2"
 derive-where = "1.6.0"
 weak-table = "0.3.2"
+lender = "0.3.0"
 
 [features]
 default = []

@@ -7,6 +7,7 @@ use firewood_storage::{
     Child, FileIoError, HashedNodeReader, Node, NodeReader, Path, SharedNode, TrieHash,
     firewood_counter,
 };
+use lender::{Lender, Lending};
 
 use crate::{
     iter::key_from_nibble_iter,
@@ -44,20 +45,23 @@ impl ComparableNodeInfo {
 /// Contains the state required for performing pre-order iteration of a Merkle trie. This includes
 /// the `ComparableNodeInfo` of the current node, a reference to a trie that implements the
 /// `HashedNodeReader` trait, and a stack that contains the `ComparableNodeInfo` of nodes to be
-/// traversed with calls to `next` or `next_ref`.
+/// traversed with calls to `next` or `next_internal`.
 struct PreOrderIterator<'a, T: HashedNodeReader> {
     node_info: Option<ComparableNodeInfo>,
     trie: &'a T,
     traversal_stack: Vec<ComparableNodeInfo>,
 }
 
-impl<T: HashedNodeReader> Iterator for PreOrderIterator<'_, T> {
-    type Item = Result<ComparableNodeInfo, FileIoError>;
+/// Implementation for the Lender trait, a lending iterator. A lending iterator rather than a
+/// normal iterator is necessary since we want to return a reference to the current
+/// `ComparableNodeInfo` that is inside `PreOrderIterator`.
+impl<'lend, T: HashedNodeReader> Lending<'lend> for PreOrderIterator<'_, T> {
+    type Lend = Result<&'lend ComparableNodeInfo, FileIoError>;
+}
 
-    fn next(&mut self) -> Option<Self::Item> {
-        self.next_ref()
-            .transpose()
-            .map(Result::<&ComparableNodeInfo, FileIoError>::cloned)
+impl<T: HashedNodeReader> Lender for PreOrderIterator<'_, T> {
+    fn next(&mut self) -> Option<Result<&'_ ComparableNodeInfo, FileIoError>> {
+        self.next_internal().transpose()
     }
 }
 
@@ -71,7 +75,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
             trie,
         };
         // If the root node is not None, then push a `ComparableNodeInfo` for the root onto
-        // the traversal stack. It will be used on the first call to `next` or `next_ref`.
+        // the traversal stack. It will be used on the first call to `next` or `next_internal`.
         // Because we already have the root node, we create its `ComparableNodeInfo` directly
         // instead of using `ComparableNodeInfo::new` as we don't need to create a `SharedNode`
         // from a `Child`. The full path of the root node is just its partial path since it has
@@ -94,10 +98,10 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
     /// stack.
     ///
     /// This implementation flips the order such that we don't push a node's children onto the
-    /// traversal stack until the subseqent call to `next` or `next_ref`. This is done by saving the
-    /// `ComparableNodeInfo` of the current node in `node_info` and keeping that available for the
+    /// traversal stack until the subseqent call to `next` or `next_internal`. This is done by saving
+    /// the `ComparableNodeInfo` of the current node in `node_info` and keeping that available for the
     /// next call. Skipping traversal of the children then just involves setting `node_info` to None.
-    fn next_ref(&mut self) -> Result<Option<&ComparableNodeInfo>, FileIoError> {
+    fn next_internal(&mut self) -> Result<Option<&ComparableNodeInfo>, FileIoError> {
         firewood_counter!(
             "firewood.change_proof.next",
             "number of next calls to calculate a change proof"
@@ -137,8 +141,8 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
 
     /// Calling `skip_children` will clear the current node's info, which will cause the children
     /// of the current node to not be added to the traversal stack on the subsequent `next` or
-    /// `next_ref` call. This will effectively cause the traversal to skip the children of the
-    /// current node.
+    /// `next_internal` call. This will effectively cause the traversal to skip the children of
+    /// the current node.
     #[cfg_attr(not(test), expect(dead_code))]
     fn skip_children(&mut self) {
         self.node_info = None;
@@ -208,7 +212,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
                 // Since pre-order traversal of a trie iterates through the nodes in lexicographical
                 // order, we can stop the traversal once we see a node key that is larger than or
                 // equal to the key. We stop the traversal by pushing the current `ComparableNodeInfo`
-                // back to the stack. Calling `next` or `next_ref` will process this node.
+                // back to the stack. Calling `next` or `next_internal` will process this node.
                 let node_key = key_from_nibble_iter(node_info.path.iter().copied());
                 if node_key >= *key {
                     self.traversal_stack.push(node_info);
@@ -229,7 +233,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
                 }
             } else {
                 // Traversal stack is empty. This means the key is lexicographically larger than
-                // all of the keys in the trie. Calling `next` or `next_ref` will return None.
+                // all of the keys in the trie. Calling `next` or `next_internal` will return None.
                 return Ok(());
             }
         }
@@ -252,6 +256,7 @@ mod tests {
     use firewood_storage::{
         HashedNodeReader, ImmutableProposal, MemStore, MutableProposal, NodeStore, SeededRng,
     };
+    use lender::Lender;
     use std::{collections::HashSet, sync::Arc};
 
     fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
@@ -356,7 +361,8 @@ mod tests {
         // Check if the sorted batch and the pre-order traversal have identical values.
         let mut preorder_it = PreOrderIterator::new(merkle.nodestore(), &Key::default()).unwrap();
         let mut batch_sorted_it = batch_sorted.clone().into_iter();
-        while let Some(node_info) = preorder_it.next_ref().unwrap() {
+        while let Some(node_info) = preorder_it.next() {
+            let node_info = node_info.unwrap();
             assert!(node_info.hash.is_some());
             if let Some(val) = node_info.node.value() {
                 let key = key_from_nibble_iter(node_info.path.iter().copied());
@@ -379,7 +385,8 @@ mod tests {
             .clone()
             .into_boxed_slice();
         let mut preorder_it = PreOrderIterator::new(merkle.nodestore(), &start_key).unwrap();
-        while let Some(node_info) = preorder_it.next_ref().unwrap() {
+        while let Some(node_info) = preorder_it.next() {
+            let node_info = node_info.unwrap();
             if let Some(val) = node_info.node.value() {
                 let key = key_from_nibble_iter(node_info.path.iter().copied());
                 let batch_sorted_item = batch_sorted.get(index).unwrap();
@@ -392,15 +399,15 @@ mod tests {
         }
         assert!(index == batch_sorted.len());
 
-        // Third test that just skips the children after calling `next_ref` once. This should skip all of
-        // the children of the root node, causing the next call to `next_ref` to return None.
+        // Third test that just skips the children after calling `next` once. This should skip all of
+        // the children of the root node, causing the next call to `next` to return None.
         let mut preorder_it = PreOrderIterator::new(merkle.nodestore(), &Key::default()).unwrap();
-        preorder_it.next_ref().unwrap();
+        let _ = preorder_it.next().unwrap();
         preorder_it.skip_children();
-        assert!(preorder_it.next_ref().unwrap().is_none());
+        assert!(preorder_it.next().is_none());
 
         // Fourth test that uses the Iterator trait to count the number of nodes in the trie
         let preorder_it = PreOrderIterator::new(merkle.nodestore(), &Key::default()).unwrap();
-        assert!(!preorder_it.collect::<Vec<_>>().is_empty());
+        assert!(preorder_it.count() > 0);
     }
 }
