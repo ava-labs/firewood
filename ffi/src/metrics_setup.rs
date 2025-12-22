@@ -201,11 +201,13 @@ impl TextRecorder {
         }
     }
 
-    // Add "firewood." prefix and convert dots to underscores for Prometheus compatibility
+    // Convert dots to underscores for Prometheus compatibility; no prefixing
     fn sanitize_key_name<'a>(&self, key_name: &'a str) -> Cow<'a, str> {
-        // Always add the "firewood_" prefix and replace any dots with underscores
-        let prefixed = format!("firewood_{}", key_name.replace('.', "_"));
-        Cow::Owned(prefixed)
+        if key_name.contains('.') {
+            Cow::Owned(key_name.replace('.', "_"))
+        } else {
+            Cow::Borrowed(key_name)
+        }
     }
 }
 

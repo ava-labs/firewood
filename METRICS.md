@@ -6,7 +6,7 @@ Firewood provides comprehensive metrics for monitoring database performance, res
 
 - **FFI/Go layer**: The custom HTTP renderer prefixes metrics with `firewood_` and converts dots to underscores for Prometheus compatibility
 - **Benchmark/Prometheus**: The scrape job applies a relabel rule to prefix metric names with `firewood_` (see benchmark/setup-scripts/install-grafana.sh)
-- **Prometheus queries**: Use underscore names (e.g., `firewood_proposal_commit`) due to Prometheus naming conventions
+- **Prometheus queries**: Use underscore names (e.g., `firewood_proposal_commit`) where scrape-time relabeling adds the `firewood_` prefix; FFI HTTP export does not add a prefix.
 
 ## Enabling Metrics
 
@@ -270,7 +270,7 @@ These metrics are specific to the Foreign Function Interface (Go) layer:
 
 2. **Ring Buffer Backpressure**:
 
-- `firewood.ring.full` counter increasing indicates persistence bottleneck
+- `firewood_ring_full` (exported) counter increasing indicates persistence bottleneck
 - May require tuning of flush parameters or disk subsystem
 
 3. **Insert/Remove Patterns**:
