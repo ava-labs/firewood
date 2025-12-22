@@ -454,7 +454,8 @@ runcmd:
   # execute bootstrapping
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego --login
-    time task reexecute-cchain-range CURRENT_STATE_DIR=/mnt/nvme/ubuntu/exec-data/current-state BLOCK_DIR=/mnt/nvme/ubuntu/exec-data/blocks START_BLOCK=1 END_BLOCK=__END_BLOCK__ CONFIG=__CONFIG__ METRICS_ENABLED=false
+    METRICS_SERVER_ENABLED=false METRICS_COLLECTOR_ENABLED=false
+    time task reexecute-cchain-range CURRENT_STATE_DIR=/mnt/nvme/ubuntu/exec-data/current-state BLOCK_DIR=/mnt/nvme/ubuntu/exec-data/blocks START_BLOCK=1 END_BLOCK=__END_BLOCK__ CONFIG=__CONFIG__
     > /var/log/bootstrap.log 2>&1
 END_HEREDOC
 )
