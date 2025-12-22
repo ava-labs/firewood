@@ -45,7 +45,11 @@ impl ComparableNodeInfo {
 /// Contains the state required for performing pre-order iteration of a Merkle trie. This includes
 /// the `ComparableNodeInfo` of the current node, a reference to a trie that implements the
 /// `HashedNodeReader` trait, and a stack that contains the `ComparableNodeInfo` of nodes to be
-/// traversed with calls to `next` or `next_internal`.
+/// traversed with calls to `next` or `next_internal`. The `node_info` is None at the beginning of
+/// the traversal before any node has been processed, or when a `skip_children` has been called.
+/// By setting `node_info` to None in the latter case, the children of the current node will be
+/// skipped from traversal as they will not be be pushed to the traversal stack in the subsequent
+/// `next` or `next_internal` call.
 struct PreOrderIterator<'a, T: HashedNodeReader> {
     node_info: Option<ComparableNodeInfo>,
     trie: &'a T,
@@ -69,26 +73,28 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
     /// Create a pre-order iterator for the trie that starts at `start_key`.
     #[cfg_attr(not(test), expect(dead_code))]
     fn new(trie: &'a T, start_key: &Key) -> Result<PreOrderIterator<'a, T>, FileIoError> {
-        let mut preorder = Self {
-            node_info: None,
-            traversal_stack: vec![],
-            trie,
-        };
         // If the root node is not None, then push a `ComparableNodeInfo` for the root onto
         // the traversal stack. It will be used on the first call to `next` or `next_internal`.
         // Because we already have the root node, we create its `ComparableNodeInfo` directly
         // instead of using `ComparableNodeInfo::new` as we don't need to create a `SharedNode`
         // from a `Child`. The full path of the root node is just its partial path since it has
         // no pre-path.
-        if let Some(root) = trie.root_node() {
-            preorder.traversal_stack.push(ComparableNodeInfo {
+        let traversal_stack = trie
+            .root_node()
+            .into_iter()
+            .map(|root| ComparableNodeInfo {
                 path: root.partial_path().clone(),
                 node: root,
                 hash: trie.root_hash().map(|hash| hash.clone().into_triehash()),
-            });
+            })
+            .collect();
+
+        Self {
+            node_info: None,
+            traversal_stack,
+            trie,
         }
-        preorder.iterate_to_key(start_key)?;
-        Ok(preorder)
+        .iterate_to_key(start_key)
     }
 
     /// In a textbook implementation of pre-order traversal we would normally pop off the next node
@@ -149,10 +155,10 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
     }
 
     /// Modify the iterator to skip all keys prior to the specified key.
-    fn iterate_to_key(&mut self, key: &Key) -> Result<(), FileIoError> {
+    fn iterate_to_key(mut self, key: &Key) -> Result<Self, FileIoError> {
         // Function is a no-op if the key is empty.
         if key.is_empty() {
-            return Ok(());
+            return Ok(self);
         }
         // Keep iterating until we have reached the start key. Only traverse branches that can
         // contain the start key.
@@ -216,7 +222,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
                 let node_key = key_from_nibble_iter(node_info.path.iter().copied());
                 if node_key >= *key {
                     self.traversal_stack.push(node_info);
-                    return Ok(());
+                    return Ok(self);
                 }
 
                 // If this node is a leaf, then we don't need to save its info to `node_info` as
@@ -234,7 +240,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
             } else {
                 // Traversal stack is empty. This means the key is lexicographically larger than
                 // all of the keys in the trie. Calling `next` or `next_internal` will return None.
-                return Ok(());
+                return Ok(self);
             }
         }
     }
