@@ -182,7 +182,7 @@ if [ ${#TERMINATE_INSTANCES[@]} -gt 0 ]; then
         echo "Error: --terminate cannot be used with other options except --region"
         exit 1
     fi
-    
+
     echo "Terminating instances: ${TERMINATE_INSTANCES[*]}"
     aws ec2 terminate-instances \
       --region "$REGION" \
@@ -200,19 +200,19 @@ if [ "$TERMINATE_MINE" = true ]; then
         echo "Error: --terminate-mine cannot be used with other options except --region"
         exit 1
     fi
-    
+
     # Get instances created by current user (Name tag starts with username)
     INSTANCE_IDS=$(aws ec2 describe-instances \
       --region "$REGION" \
       --filters "Name=tag:Name,Values=$USER-*" "Name=instance-state-name,Values=running" \
       --query "Reservations[*].Instances[*].InstanceId" \
       --output text)
-    
+
     if [ -z "$INSTANCE_IDS" ]; then
         echo "No running instances found for user: $USER"
         exit 0
     fi
-    
+
     echo "Terminating instances for user $USER: $INSTANCE_IDS"
     aws ec2 terminate-instances \
       --region "$REGION" \
@@ -229,7 +229,7 @@ if [ "$SHOW_INSTANCES" = true ]; then
         echo "Error: --show cannot be used with other options except --region"
         exit 1
     fi
-    
+
     # Execute the AWS command to show instances
     aws ec2 describe-instances \
       --region "$REGION" \
@@ -434,7 +434,7 @@ runcmd:
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu/firewood/ffi --login time cargo build
     --profile maxperf
-    --features ethhash,logger
+    --features ethhash,logger,io-uring
     > /mnt/nvme/ubuntu/firewood/build.log 2>&1
   # run go mod tidy for coreth and avalanchego
   - sudo -u ubuntu --login -D /mnt/nvme/ubuntu/avalanchego/graft/coreth go mod tidy
