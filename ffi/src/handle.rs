@@ -177,15 +177,15 @@ impl DatabaseHandle {
 
         let root_hash = handle.commit_proposal(|commit_time| {
             firewood_counter!(
-                "firewood.ffi.commit_ms",
+                "ffi.commit_ms",
                 "FFI commit timing in milliseconds"
             )
             .increment(commit_time.as_millis());
         })?;
 
-        firewood_counter!("firewood.ffi.batch_ms", "FFI batch timing in milliseconds")
+        firewood_counter!("ffi.batch_ms", "FFI batch timing in milliseconds")
             .increment(start_time.elapsed().as_millis());
-        firewood_counter!("firewood.ffi.batch", "Number of FFI batch operations").increment(1);
+        firewood_counter!("ffi.batch", "Number of FFI batch operations").increment(1);
 
         Ok(root_hash)
     }
@@ -214,13 +214,13 @@ impl DatabaseHandle {
 
         if cache_miss {
             firewood_counter!(
-                "firewood.ffi.cached_view.miss",
+                "ffi.cached_view.miss",
                 "Number of FFI cached view misses"
             )
             .increment(1);
         } else {
             firewood_counter!(
-                "firewood.ffi.cached_view.hit",
+                "ffi.cached_view.hit",
                 "Number of FFI cached view hits"
             )
             .increment(1);

@@ -1,8 +1,12 @@
 # Firewood Metrics
 
-Firewood provides comprehensive metrics for monitoring database performance, resource utilization, and operational characteristics. These metrics are built using the [Prometheus](https://prometheus.io/) format and can be exposed for collection by monitoring systems.
+Firewood provides comprehensive metrics for monitoring database performance, resource utilization, and operational characteristics. These metrics are exposed in Prometheus format with a consistent `firewood.` namespace prefix.
 
-**Note**: Metric names in this documentation use dots (e.g., `firewood.proposal.commit`), but when exported to Prometheus, dots are automatically converted to underscores (e.g., `firewood_proposal_commit`) following Prometheus naming conventions.
+**Architecture Note**: Internally, metrics are registered without the `firewood.` prefix for cleaner code organization. The prefix is automatically added when metrics are exported:
+
+- **FFI/Go layer**: The custom `TextRecorder` adds the `firewood.` prefix during Prometheus text exposition
+- **Rust applications**: The `PrefixRecorder` wrapper adds the prefix when using `metrics-exporter-prometheus`
+- **Prometheus export**: All metric names use underscores (e.g., `firewood_proposal_commit`) following Prometheus naming conventions
 
 ## Enabling Metrics
 
@@ -170,17 +174,17 @@ See the [FFI README](ffi/README.md) for more details on FFI metrics configuratio
   - Labels: `index`: Size index of deleted node
   - Use: Track node deletion patterns
 
-#### Ring Buffer
+-#### Ring Buffer
 
-- **`ring.full`** (counter)
+- **`firewood.ring.full`** (counter)
   - Description: Count of times the ring buffer became full during node flushing
   - Use: Identify backpressure in node persistence pipeline
 
-- **`ring.eagain_write_retry`** (counter)
+- **`firewood.ring.eagain_write_retry`** (counter)
   - Description: Amount of io-uring write entries that have been re-submitted due to `EAGAIN` io error.
   - Use: identify interrupted writes
 
-- **`ring.partial_write_retry`** (counter)
+- **`firewood.ring.partial_write_retry`** (counter)
   - Description: Amount of io-uring write entries that have been re-submitted due to partial writes.
   - Use: identify partial writes
 
@@ -265,7 +269,7 @@ These metrics are specific to the Foreign Function Interface (Go) layer:
    - Correlate with error logs for root cause analysis
 
 2. **Ring Buffer Backpressure**:
-   - `ring.full` counter increasing indicates persistence bottleneck
+  - `firewood.ring.full` counter increasing indicates persistence bottleneck
    - May require tuning of flush parameters or disk subsystem
 
 3. **Insert/Remove Patterns**:

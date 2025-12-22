@@ -302,7 +302,107 @@ fn spawn_prometheus_listener(
 
     let handle = recorder.handle();
 
-    metrics::set_global_recorder(recorder)?;
+    // Wrap the recorder to add "firewood." prefix to all metrics
+    let prefixed_recorder = PrefixRecorder::new(recorder, "firewood.");
+    metrics::set_global_recorder(prefixed_recorder)?;
 
     Ok(handle)
+}
+
+/// A wrapper around a metrics recorder that adds a prefix to all metric names.
+/// 
+/// This allows metrics to be defined without a namespace prefix in the code,
+/// but exported with a consistent prefix for observability systems.
+#[cfg(feature = "prometheus")]
+struct PrefixRecorder<R> {
+    inner: R,
+    prefix: &'static str,
+}
+
+#[cfg(feature = "prometheus")]
+impl<R> PrefixRecorder<R> {
+    fn new(inner: R, prefix: &'static str) -> Self {
+        Self { inner, prefix }
+    }
+
+    fn prefix_key(&self, key: &metrics::Key) -> metrics::Key {
+        let prefixed_name = format!("{}{}", self.prefix, key.name());
+        metrics::Key::from_parts(prefixed_name, key.labels())
+    }
+
+    fn prefix_key_name(&self, key_name: metrics::KeyName) -> String {
+        format!("{}{}", self.prefix, key_name.as_str())
+    }
+}
+
+#[cfg(feature = "prometheus")]
+impl<R: metrics::Recorder> metrics::Recorder for PrefixRecorder<R> {
+    fn describe_counter(
+        &self,
+        key: metrics::KeyName,
+        unit: Option<metrics::Unit>,
+        description: metrics::SharedString,
+    ) {
+        let prefixed_name = self.prefix_key_name(key);
+        self.inner.describe_counter(
+            metrics::KeyName::from(prefixed_name),
+            unit,
+            description,
+        );
+    }
+
+    fn describe_gauge(
+        &self,
+        key: metrics::KeyName,
+        unit: Option<metrics::Unit>,
+        description: metrics::SharedString,
+    ) {
+        let prefixed_name = self.prefix_key_name(key);
+        self.inner.describe_gauge(
+            metrics::KeyName::from(prefixed_name),
+            unit,
+            description,
+        );
+    }
+
+    fn describe_histogram(
+        &self,
+        key: metrics::KeyName,
+        unit: Option<metrics::Unit>,
+        description: metrics::SharedString,
+    ) {
+        let prefixed_name = self.prefix_key_name(key);
+        self.inner.describe_histogram(
+            metrics::KeyName::from(prefixed_name),
+            unit,
+            description,
+        );
+    }
+
+    fn register_counter(
+        &self,
+        key: &metrics::Key,
+        metadata: &metrics::Metadata<'_>,
+    ) -> metrics::Counter {
+        let prefixed_key = self.prefix_key(key);
+        self.inner.register_counter(&prefixed_key, metadata)
+    }
+
+    fn register_gauge(
+        &self,
+        key: &metrics::Key,
+        metadata: &metrics::Metadata<'_>,
+    ) -> metrics::Gauge {
+        let prefixed_key = self.prefix_key(key);
+        self.inner.register_gauge(&prefixed_key, metadata)
+    }
+
+    fn register_histogram(
+        &self,
+        key: &metrics::Key,
+        metadata: &metrics::Metadata<'_>,
+    ) -> metrics::Histogram {
+        let prefixed_key = self.prefix_key(key);
+        self.inner.register_histogram(&prefixed_key, metadata)
+    }
 }

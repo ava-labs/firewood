@@ -104,7 +104,7 @@ impl FileBacked {
 
 impl ReadableStorage for FileBacked {
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
-        firewood_counter!("firewood.read_node", "Number of node reads", "from" => "file")
+        firewood_counter!("read_node", "Number of node reads", "from" => "file")
             .increment(1);
         Ok(PredictiveReader::new(self, addr))
     }
@@ -120,7 +120,7 @@ impl ReadableStorage for FileBacked {
     fn read_cached_node(&self, addr: LinearAddress, mode: &'static str) -> Option<SharedNode> {
         let mut guard = self.cache.lock();
         let cached = guard.get(&addr).cloned();
-        firewood_counter!("firewood.cache.node", "Number of node cache operations", "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" })
+        firewood_counter!("cache.node", "Number of node cache operations", "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" })
             .increment(1);
         cached
     }
@@ -128,7 +128,7 @@ impl ReadableStorage for FileBacked {
     fn free_list_cache(&self, addr: LinearAddress) -> Option<Option<LinearAddress>> {
         let mut guard = self.free_list_cache.lock();
         let cached = guard.pop(&addr);
-        firewood_counter!("firewood.cache.freelist", "Number of freelist cache operations", "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
+        firewood_counter!("cache.freelist", "Number of freelist cache operations", "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
         cached
     }
 
@@ -238,9 +238,9 @@ impl<'a> PredictiveReader<'a> {
 impl Drop for PredictiveReader<'_> {
     fn drop(&mut self) {
         let elapsed = self.started.elapsed();
-        firewood_counter!("firewood.io.read_ms", "IO read timing in milliseconds")
+        firewood_counter!("io.read_ms", "IO read timing in milliseconds")
             .increment(elapsed.as_millis());
-        firewood_counter!("firewood.io.read", "Number of IO read operations").increment(1);
+        firewood_counter!("io.read", "Number of IO read operations").increment(1);
     }
 }
 

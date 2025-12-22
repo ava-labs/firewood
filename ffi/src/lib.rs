@@ -530,11 +530,11 @@ pub unsafe extern "C" fn fwd_commit_proposal(
     invoke_with_handle(proposal, move |proposal| {
         proposal.commit_proposal(|commit_time| {
             firewood_counter!(
-                "firewood.ffi.commit_ms",
+                "ffi.commit_ms",
                 "FFI commit timing in milliseconds"
             )
             .increment(commit_time.as_millis());
-            firewood_counter!("firewood.ffi.commit", "Number of FFI commit operations")
+            firewood_counter!("ffi.commit", "Number of FFI commit operations")
                 .increment(1);
         })
     })
