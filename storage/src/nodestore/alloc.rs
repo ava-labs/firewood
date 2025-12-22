@@ -240,7 +240,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
             }
 
             firewood_counter!(
-                "firewood.space.reused",
+                "space.reused",
                 "Bytes reused from free list by index",
                 "index" => index_name(index)
             )
@@ -253,7 +253,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
 
         trace!("No free blocks of sufficient size {index} found");
         firewood_counter!(
-            "firewood.space.from_end",
+            "space.from_end",
             "Space allocated from end of nodestore",
             "index" => index_name(index)
         )
@@ -317,13 +317,13 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         let (area_size_index, _) = self.area_index_and_size(addr)?;
         trace!("Deleting node at {addr:?} of size {area_size_index}");
         firewood_counter!(
-            "firewood.delete_node",
+            "delete_node",
             "Nodes deleted",
             "index" => index_name(area_size_index)
         )
         .increment(1);
         firewood_counter!(
-            "firewood.space.freed",
+            "space.freed",
             "Bytes freed in nodestore",
             "index" => index_name(area_size_index)
         )

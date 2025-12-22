@@ -201,7 +201,7 @@ impl TextRecorder {
         }
     }
 
-    // remove dots from key names, if they are present
+    // Convert dots to underscores for Prometheus compatibility; no prefixing
     fn sanitize_key_name<'a>(&self, key_name: &'a str) -> Cow<'a, str> {
         if key_name.contains('.') {
             Cow::Owned(key_name.replace('.', "_"))
