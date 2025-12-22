@@ -92,6 +92,11 @@ if ! grep -q '^  - job_name: firewood$' /etc/prometheus/prometheus.yml; then
   - job_name: firewood
     static_configs:
       - targets: ['localhost:3000']
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: '(.*)'
+        target_label: __name__
+        replacement: 'firewood_$1'
   - job_name: coreth
     metrics_path: /debug/metrics/prometheus
     static_configs:
