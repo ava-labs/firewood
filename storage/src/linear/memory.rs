@@ -45,8 +45,7 @@ impl WritableStorage for MemStore {
 
 impl ReadableStorage for MemStore {
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
-        firewood_counter!("read_node", "Number of node reads", "from" => "memory")
-            .increment(1);
+        firewood_counter!("read_node", "Number of node reads", "from" => "memory").increment(1);
         let bytes = self
             .bytes
             .lock()

@@ -125,11 +125,8 @@ impl<'db> CreateProposalResult<'db> {
         let start_time = coarsetime::Instant::now();
         let proposal = f()?;
         let propose_time = start_time.elapsed();
-        firewood_counter!(
-            "ffi.propose_ms",
-            "FFI propose timing in milliseconds"
-        )
-        .increment(propose_time.as_millis());
+        firewood_counter!("ffi.propose_ms", "FFI propose timing in milliseconds")
+            .increment(propose_time.as_millis());
         firewood_counter!("ffi.propose", "Number of FFI propose operations").increment(1);
 
         let hash_key = proposal.root_hash()?;

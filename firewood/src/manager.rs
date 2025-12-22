@@ -264,11 +264,8 @@ impl RevisionManager {
                 "Current number of active revisions in memory"
             )
             .set(self.in_memory_revisions.read().len() as f64);
-            firewood_gauge!(
-                "max_revisions",
-                "Maximum number of revisions configured"
-            )
-            .set(self.max_revisions as f64);
+            firewood_gauge!("max_revisions", "Maximum number of revisions configured")
+                .set(self.max_revisions as f64);
         }
 
         // 3. Persist to disk.

@@ -176,11 +176,8 @@ impl DatabaseHandle {
             self.create_proposal_handle(values.as_ref())?;
 
         let root_hash = handle.commit_proposal(|commit_time| {
-            firewood_counter!(
-                "ffi.commit_ms",
-                "FFI commit timing in milliseconds"
-            )
-            .increment(commit_time.as_millis());
+            firewood_counter!("ffi.commit_ms", "FFI commit timing in milliseconds")
+                .increment(commit_time.as_millis());
         })?;
 
         firewood_counter!("ffi.batch_ms", "FFI batch timing in milliseconds")
@@ -213,17 +210,10 @@ impl DatabaseHandle {
         })?;
 
         if cache_miss {
-            firewood_counter!(
-                "ffi.cached_view.miss",
-                "Number of FFI cached view misses"
-            )
-            .increment(1);
+            firewood_counter!("ffi.cached_view.miss", "Number of FFI cached view misses")
+                .increment(1);
         } else {
-            firewood_counter!(
-                "ffi.cached_view.hit",
-                "Number of FFI cached view hits"
-            )
-            .increment(1);
+            firewood_counter!("ffi.cached_view.hit", "Number of FFI cached view hits").increment(1);
         }
 
         Ok(view)

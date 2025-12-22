@@ -307,4 +307,3 @@ fn spawn_prometheus_listener(
 
     Ok(handle)
 }
-

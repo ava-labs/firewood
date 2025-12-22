@@ -104,8 +104,7 @@ impl FileBacked {
 
 impl ReadableStorage for FileBacked {
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
-        firewood_counter!("read_node", "Number of node reads", "from" => "file")
-            .increment(1);
+        firewood_counter!("read_node", "Number of node reads", "from" => "file").increment(1);
         Ok(PredictiveReader::new(self, addr))
     }
 

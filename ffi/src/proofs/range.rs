@@ -225,11 +225,8 @@ impl<'db> RangeProofContext<'db> {
         };
 
         let metrics_cb = |commit_time: coarsetime::Duration| {
-            firewood_counter!(
-                "ffi.commit_ms",
-                "FFI commit timing in milliseconds"
-            )
-            .increment(commit_time.as_millis());
+            firewood_counter!("ffi.commit_ms", "FFI commit timing in milliseconds")
+                .increment(commit_time.as_millis());
             firewood_counter!("ffi.merge", "Number of FFI merge operations").increment(1);
         };
 

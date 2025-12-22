@@ -273,7 +273,8 @@ These metrics are specific to the Foreign Function Interface (Go) layer:
 - `firewood_ring_full` (exported) counter increasing indicates persistence bottleneck
 - May require tuning of flush parameters or disk subsystem
 
-3. **Insert/Remove Patterns**:
+1. **Insert/Remove Patterns**:
+
    - `firewood.insert` labels show trie structure evolution
    - High `split` counts indicate complex key distributions
    - Remove `nonexistent` suggests application-level issues
