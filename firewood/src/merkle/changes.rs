@@ -247,7 +247,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
 }
 
 #[cfg(test)]
-#[allow(
+#[expect(
     clippy::unwrap_used,
     clippy::arithmetic_side_effects,
     clippy::type_complexity
@@ -269,12 +269,6 @@ mod tests {
         let memstore = MemStore::new(vec![]);
         let nodestore = NodeStore::new_empty_proposal(Arc::new(memstore));
         Merkle::from(nodestore)
-    }
-
-    fn make_immutable(
-        merkle: Merkle<NodeStore<MutableProposal, MemStore>>,
-    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> {
-        merkle.try_into().unwrap()
     }
 
     fn random_key_from_hashset<'a>(
@@ -306,19 +300,20 @@ mod tests {
             })
     }
 
-    fn gen_random_keys(
+    // Return a vector of `BatchOp`s and the next starting value for use as the `start_val` in the
+    // next call to `gen_random_test_batchops`.
+    fn gen_random_test_batchops(
         rng: &SeededRng,
         committed_keys: &HashSet<Vec<u8>>,
         num_keys: usize,
         start_val: usize,
     ) -> (Vec<BatchOp<Vec<u8>, Box<[u8]>>>, usize) {
-        const CHANCE_DELETE: usize = 2;
+        const CHANCE_DELETE_PERCENT: usize = 2;
         let mut seen_keys = std::collections::HashSet::new();
-        let mut i = 0;
         let mut batch = Vec::new();
 
         while batch.len() < num_keys {
-            if !committed_keys.is_empty() && rng.random_range(1..=100) <= CHANCE_DELETE {
+            if !committed_keys.is_empty() && rng.random_range(0..100) < CHANCE_DELETE_PERCENT {
                 let del_key = gen_delete_key(rng, committed_keys, &mut seen_keys);
                 if let Some(key) = del_key {
                     batch.push(BatchOp::Delete { key });
@@ -327,28 +322,28 @@ mod tests {
                 // If we couldn't generate a delete key, then just fall through and create
                 // a BatchOp::Put.
             }
-            let key_len = rng.random_range(1..=32);
+            let key_len = rng.random_range(2..=32);
             let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
             // Only add if key is unique
             if seen_keys.insert(key.clone()) {
                 batch.push(BatchOp::Put {
                     key,
-                    value: Box::from(format!("value{}", i + start_val).as_bytes()),
+                    value: Box::from(format!("value{}", batch.len() + start_val).as_bytes()),
                 });
             }
-            i += 1;
         }
-        (batch, i + start_val)
+        let next_val = batch.len() + start_val;
+        (batch, next_val)
     }
 
     #[test]
     fn test_preorder_iterator() {
         let rng = firewood_storage::SeededRng::from_env_or_random();
-        let (batch, _) = gen_random_keys(&rng, &HashSet::new(), 1000, 0);
+        let (batch, _) = gen_random_test_batchops(&rng, &HashSet::new(), 1000, 0);
 
         // Keep a sorted copy of the batch.
         let mut batch_sorted = batch.clone();
-        batch_sorted.sort_by_key(|op| op.key().clone());
+        batch_sorted.sort_by(|op1, op2| op1.key().cmp(op2.key()));
 
         // Insert batch into a merkle trie.
         let mut merkle = create_test_merkle();
@@ -361,7 +356,9 @@ mod tests {
                 )
                 .unwrap();
         }
-        let merkle = make_immutable(merkle);
+        // freeze and compute the hash
+        let merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+            merkle.try_into().unwrap();
         assert!(merkle.nodestore().root_hash().is_some());
 
         // Check if the sorted batch and the pre-order traversal have identical values.
