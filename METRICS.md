@@ -4,9 +4,9 @@ Firewood provides comprehensive metrics for monitoring database performance, res
 
 **Export Behavior**:
 
-- **FFI/Go layer**: The custom HTTP renderer prefixes metrics with `firewood_` and converts dots to underscores for Prometheus compatibility
+- **FFI/Go layer**: The custom HTTP renderer converts dots to underscores for Prometheus compatibility (no prefix added)
 - **Benchmark/Prometheus**: The scrape job applies a relabel rule to prefix metric names with `firewood_` (see benchmark/setup-scripts/install-grafana.sh)
-- **Prometheus queries**: Use underscore names (e.g., `firewood_proposal_commit`) where scrape-time relabeling adds the `firewood_` prefix; FFI HTTP export does not add a prefix.
+- **Prometheus queries**: Use underscore names (e.g., `firewood_proposal_commit`) when scraped via the benchmark Prometheus configuration
 
 ## Enabling Metrics
 
