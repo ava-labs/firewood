@@ -73,6 +73,8 @@ pub use linear::memory::MemStore;
 pub use node::persist::MaybePersistedNode;
 #[cfg(any(test, feature = "test_utils"))]
 pub use test_utils::SeededRng;
+#[cfg(any(test, feature = "test_utils"))]
+pub use test_utils::TestRecorder;
 
 /// A shared node, which is just a triophe Arc of a node
 pub type SharedNode = triomphe::Arc<Node>;
