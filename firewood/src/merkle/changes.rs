@@ -338,7 +338,7 @@ mod tests {
 
     #[test]
     fn test_preorder_iterator() {
-        let rng = firewood_storage::SeededRng::from_env_or_random();
+        let rng = SeededRng::from_env_or_random();
         let (batch, _) = gen_random_test_batchops(&rng, &HashSet::new(), 1000, 0);
 
         // Keep a sorted copy of the batch.
