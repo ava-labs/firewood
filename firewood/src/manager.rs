@@ -18,7 +18,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use firewood_storage::logger::{trace, warn};
-use metrics::gauge;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
@@ -29,7 +28,7 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    TrieHash,
+    TrieHash, firewood_gauge,
 };
 
 const DB_FILE_NAME: &str = "firewood.db";
@@ -152,12 +151,15 @@ impl RevisionManager {
 
         let storage = Arc::new(fb);
         let nodestore = Arc::new(NodeStore::open(storage.clone())?);
-        let root_store = config.root_store.then_some({
-            let root_store_dir = db_dir.join("root_store");
+        let root_store = config
+            .root_store
+            .then(|| {
+                let root_store_dir = db_dir.join("root_store");
 
-            RootStore::new(root_store_dir, storage.clone(), config.truncate)
-                .map_err(RevisionManagerError::RootStoreError)?
-        });
+                RootStore::new(root_store_dir, storage.clone(), config.truncate)
+                    .map_err(RevisionManagerError::RootStoreError)
+            })
+            .transpose()?;
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,
@@ -257,8 +259,16 @@ impl RevisionManager {
                     }
                 }
             }
-            gauge!("firewood.active_revisions").set(self.in_memory_revisions.read().len() as f64);
-            gauge!("firewood.max_revisions").set(self.max_revisions as f64);
+            firewood_gauge!(
+                "firewood.active_revisions",
+                "Current number of active revisions in memory"
+            )
+            .set(self.in_memory_revisions.read().len() as f64);
+            firewood_gauge!(
+                "firewood.max_revisions",
+                "Maximum number of revisions configured"
+            )
+            .set(self.max_revisions as f64);
         }
 
         // 3. Persist to disk.
@@ -632,6 +642,50 @@ mod tests {
         assert_eq!(
             total_errors, 0,
             "Race condition detected: {total_errors} threads failed to find revisions that should exist"
+        );
+    }
+
+    #[test]
+    fn test_no_fjall_directory_when_root_store_disabled() {
+        // Create a temporary directory for the database
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.as_ref().to_path_buf();
+
+        // Create a database with root_store disabled (default)
+        let config = ConfigManager::builder()
+            .create(true)
+            .root_store(false)
+            .build();
+
+        let _manager = RevisionManager::new(db_path.clone(), config).unwrap();
+
+        // Verify that the root_store directory does NOT exist
+        let root_store_dir = db_path.join("root_store");
+        assert!(
+            !root_store_dir.exists(),
+            "root_store directory should not be created when root_store is disabled"
+        );
+    }
+
+    #[test]
+    fn test_fjall_directory_when_root_store_enabled() {
+        // Create a temporary directory for the database
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.as_ref().to_path_buf();
+
+        // Create a database with root_store enabled
+        let config = ConfigManager::builder()
+            .create(true)
+            .root_store(true)
+            .build();
+
+        let _manager = RevisionManager::new(db_path.clone(), config).unwrap();
+
+        // Verify that the root_store directory DOES exist
+        let root_store_dir = db_path.join("root_store");
+        assert!(
+            root_store_dir.exists(),
+            "root_store directory should be created when root_store is enabled"
         );
     }
 }

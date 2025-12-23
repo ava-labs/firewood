@@ -20,9 +20,8 @@ use crate::v2::api::{
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieReader,
+    ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieReader, firewood_counter,
 };
-use metrics::{counter, describe_counter};
 use std::io::Write;
 use std::num::NonZeroUsize;
 use std::path::Path;
@@ -168,9 +167,8 @@ impl Db {
     /// Create a new database instance.
     pub fn new<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Self, api::Error> {
         let metrics = Arc::new(DbMetrics {
-            proposals: counter!("firewood.proposals"),
+            proposals: firewood_counter!("firewood.proposals", "Number of proposals created"),
         });
-        describe_counter!("firewood.proposals", "Number of proposals created");
         let config_manager = ConfigManager::builder()
             .create(cfg.create_if_missing)
             .truncate(cfg.truncate)
