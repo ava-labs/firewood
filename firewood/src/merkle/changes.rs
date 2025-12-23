@@ -1714,7 +1714,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::pedantic)]
     fn test_hash_optimization_reduces_next_calls() {
         let recorder = TestRecorder::default();
         recorder.with_local_recorder(|| {
@@ -1778,28 +1777,28 @@ mod tests {
 
             // Check the number of next calls on two full tree traversals.
             let diff_nexts_before =
-                recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
+                recorder.counter_value("firewood.change_proof.next", &[]);
 
             let mut preorder_it = PreOrderIterator::new(m1.nodestore(), &Key::default()).unwrap();
-            while preorder_it.next().unwrap().is_some() {}
+            while preorder_it.next().is_some() {}
             let mut preorder_it = PreOrderIterator::new(m2.nodestore(), &Key::default()).unwrap();
-            while preorder_it.next().unwrap().is_some() {}
+            while preorder_it.next().is_some() {}
 
             let diff_nexts_after =
-                recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
+                recorder.counter_value("firewood.change_proof.next", &[]);
             let diff_iteration_count = diff_nexts_after - diff_nexts_before;
             println!("Next calls from traversing tries: {diff_iteration_count}");
 
             // DIFF TEST: Measure next calls from hash-optimized diff operation
             let diff_nexts_before =
-                recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
+                recorder.counter_value("firewood.change_proof.next", &[]);
 
             let diff_stream =
                 DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Box::new([])).unwrap();
             let diff_immutable_results_count = diff_stream.count();
 
             let diff_nexts_after =
-                recorder.counter_value("firewood.change_proof.next", &[("traversal", "next")]);
+                recorder.counter_value("firewood.change_proof.next", &[]);
             let diff_immutable_nexts = diff_nexts_after - diff_nexts_before;
 
             println!("Diff next calls: {diff_immutable_nexts}");
