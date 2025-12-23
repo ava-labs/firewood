@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -160,8 +161,28 @@ func newTestDatabase(t *testing.T, opts ...Option) *Database {
 	return db
 }
 
+var (
+	// detectedHashType is cached after first detection to avoid repeated attempts
+	detectedHashType     HashType
+	detectedHashTypeOnce sync.Once
+)
+
 func newDatabase(dbDir string, opts ...Option) (*Database, error) {
-	f, err := New(dbDir, opts...)
+	// Detect the correct hash type once and cache it
+	detectedHashTypeOnce.Do(func() {
+		// Try ethhash first, if it fails try native
+		tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("firewood-hash-detection-%d", time.Now().UnixNano()))
+		defer os.RemoveAll(tempDir)
+
+		_, err := New(tempDir, HashTypeEthHash, WithTruncate(true))
+		if err == nil {
+			detectedHashType = HashTypeEthHash
+		} else {
+			detectedHashType = HashTypeNative
+		}
+	})
+
+	f, err := New(dbDir, detectedHashType, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new database in directory %q: %w", dbDir, err)
 	}
@@ -178,6 +199,50 @@ func TestUpdateSingleKV(t *testing.T) {
 	got, err := db.Get(keys[0])
 	r.NoError(err)
 	r.Equal(vals[0], got)
+}
+
+func TestHashTypeValidation(t *testing.T) {
+	r := require.New(t)
+
+	// Try to create a database with EthHash
+	dbDirEth := t.TempDir()
+	dbEth, errEth := New(dbDirEth, HashTypeEthHash, WithTruncate(true))
+
+	// Try to create a database with Native
+	dbDirNative := t.TempDir()
+	dbNative, errNative := New(dbDirNative, HashTypeNative, WithTruncate(true))
+
+	// Exactly one should succeed based on compile-time feature
+	type resultType int
+	const (
+		ethHashOnly resultType = iota
+		nativeOnly
+		bothOrNeither
+	)
+
+	result := bothOrNeither
+	switch {
+	case errEth == nil && errNative != nil:
+		result = ethHashOnly
+	case errNative == nil && errEth != nil:
+		result = nativeOnly
+	}
+
+	switch result {
+	case ethHashOnly:
+		// EthHash succeeded, Native failed - ethhash feature is enabled
+		r.NoError(dbEth.Close(oneSecCtx(t)))
+		r.Error(errNative)
+		r.Contains(errNative.Error(), "hash_type must be EthHash")
+	case nativeOnly:
+		// Native succeeded, EthHash failed - ethhash feature is disabled
+		r.NoError(dbNative.Close(oneSecCtx(t)))
+		r.Error(errEth)
+		r.Contains(errEth.Error(), "hash_type must be Native")
+	case bothOrNeither:
+		// Both succeeded or both failed - this should not happen
+		r.Failf("Expected exactly one hash type to succeed", "got errEth=%v, errNative=%v", errEth, errNative)
+	}
 }
 
 func TestUpdateMultiKV(t *testing.T) {
@@ -198,7 +263,7 @@ func TestTruncateDatabase(t *testing.T) {
 	r := require.New(t)
 	dbDir := t.TempDir()
 	// Create a new database with truncate enabled.
-	db, err := New(dbDir, WithTruncate(true))
+	db, err := newDatabase(dbDir, WithTruncate(true))
 	r.NoError(err)
 
 	// Insert some data.
@@ -210,7 +275,7 @@ func TestTruncateDatabase(t *testing.T) {
 	r.NoError(db.Close(oneSecCtx(t)))
 
 	// Reopen the database with truncate enabled.
-	db, err = New(dbDir, WithTruncate(true))
+	db, err = newDatabase(dbDir, WithTruncate(true))
 	r.NoError(err)
 
 	// Check that the database is empty after truncation.
@@ -1289,7 +1354,7 @@ func TestFjallStore(t *testing.T) {
 	// Setting the number of in-memory revisions to 5 tests that revision nodes
 	// are not reaped prior to closing the database.
 	dbDir := t.TempDir()
-	db, err := New(dbDir,
+	db, err := newDatabase(dbDir,
 		WithRootStore(),
 		WithRevisions(5),
 	)
@@ -1312,7 +1377,7 @@ func TestFjallStore(t *testing.T) {
 	// Close and reopen the database
 	r.NoError(db.Close(t.Context()))
 
-	db, err = New(dbDir,
+	db, err = newDatabase(dbDir,
 		WithRootStore(),
 		WithRevisions(5),
 	)
