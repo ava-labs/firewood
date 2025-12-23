@@ -409,7 +409,7 @@ mod tests {
         preorder_it.skip_children();
         assert!(preorder_it.next().is_none());
 
-        // Fourth test that uses the Iterator trait to count the number of nodes in the trie
+        // Fourth test that calls `count` on the lending iterator to count the number of nodes.
         let preorder_it = PreOrderIterator::new(merkle.nodestore(), &Key::default()).unwrap();
         assert!(preorder_it.count() > 0);
     }
