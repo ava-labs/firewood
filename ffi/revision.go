@@ -63,12 +63,12 @@ func (r *Revision) Get(key []byte) ([]byte, error) {
 		return nil, ErrDroppedRevision
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
+	pinner := getPinner()
+	defer releasePinner(pinner)
 
 	return getValueFromValueResult(C.fwd_get_from_revision(
 		r.handle,
-		newBorrowedBytes(key, &pinner),
+		newBorrowedBytes(key, pinner),
 	))
 }
 
@@ -80,10 +80,10 @@ func (r *Revision) Iter(key []byte) (*Iterator, error) {
 		return nil, ErrDroppedRevision
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
+	pinner := getPinner()
+	defer releasePinner(pinner)
 
-	itResult := C.fwd_iter_on_revision(r.handle, newBorrowedBytes(key, &pinner))
+	itResult := C.fwd_iter_on_revision(r.handle, newBorrowedBytes(key, pinner))
 
 	return getIteratorFromIteratorResult(itResult)
 }

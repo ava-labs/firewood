@@ -210,11 +210,11 @@ func New(dbDir string, opts ...Option) (*Database, error) {
 		return nil, fmt.Errorf("free list cache entries must be >= 1, got %d", conf.freeListCacheEntries)
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
+	pinner := getPinner()
+	defer releasePinner(pinner)
 
 	args := C.struct_DatabaseHandleArgs{
-		dir:                  newBorrowedBytes([]byte(dbDir), &pinner),
+		dir:                  newBorrowedBytes([]byte(dbDir), pinner),
 		cache_size:           C.size_t(conf.nodeCacheEntries),
 		free_list_cache_size: C.size_t(conf.freeListCacheEntries),
 		revisions:            C.size_t(conf.revisions),
@@ -250,10 +250,10 @@ func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 	db.commitLock.Lock()
 	defer db.commitLock.Unlock()
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
+	pinner := getPinner()
+	defer releasePinner(pinner)
 
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
+	kvp, err := newKeyValuePairs(keys, vals, pinner)
 	if err != nil {
 		return EmptyRoot, err
 	}
@@ -282,10 +282,10 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 	db.commitLock.Lock()
 	defer db.commitLock.Unlock()
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
+	pinner := getPinner()
+	defer releasePinner(pinner)
 
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
+	kvp, err := newKeyValuePairs(keys, vals, pinner)
 	if err != nil {
 		return nil, err
 	}
@@ -309,10 +309,10 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	db.commitLock.Lock()
 	defer db.commitLock.Unlock()
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
+	pinner := getPinner()
+	defer releasePinner(pinner)
 
-	val, err := getValueFromValueResult(C.fwd_get_latest(db.handle, newBorrowedBytes(key, &pinner)))
+	val, err := getValueFromValueResult(C.fwd_get_latest(db.handle, newBorrowedBytes(key, pinner)))
 	// The revision won't be found if the database is empty.
 	// This is valid, but should be treated as a non-existent key
 	if errors.Is(err, errRevisionNotFound) {
@@ -342,13 +342,13 @@ func (db *Database) GetFromRoot(root Hash, key []byte) ([]byte, error) {
 		return nil, nil
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
+	pinner := getPinner()
+	defer releasePinner(pinner)
 
 	return getValueFromValueResult(C.fwd_get_from_root(
 		db.handle,
 		newCHashKey(root),
-		newBorrowedBytes(key, &pinner),
+		newBorrowedBytes(key, pinner),
 	))
 }
 
