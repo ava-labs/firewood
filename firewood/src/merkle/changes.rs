@@ -359,11 +359,11 @@ impl<LEFT: HashedNodeReader, RIGHT: HashedNodeReader> Iterator
 /// Contains the state required for performing pre-order iteration of a Merkle trie. This includes
 /// the `ComparableNodeInfo` of the current node, a reference to a trie that implements the
 /// `HashedNodeReader` trait, and a stack that contains the `ComparableNodeInfo` of nodes to be
-/// traversed with calls to `next` or `next_internal`. The `node_info` is None at the beginning of
+/// traversed with calls to `next` or `next_node_info`. The `node_info` is None at the beginning of
 /// the traversal before any node has been processed, or when a `skip_children` has been called.
 /// By setting `node_info` to None in the latter case, the children of the current node will be
 /// skipped from traversal as they will not be be pushed to the traversal stack in the subsequent
-/// `next` or `next_internal` call.
+/// `next` or `next_node_info` call.
 struct PreOrderIterator<'a, T: HashedNodeReader> {
     node_info: Option<ComparableNodeInfo>,
     trie: &'a T,
@@ -379,7 +379,7 @@ impl<'lend, T: HashedNodeReader> Lending<'lend> for PreOrderIterator<'_, T> {
 
 impl<T: HashedNodeReader> Lender for PreOrderIterator<'_, T> {
     fn next(&mut self) -> Option<Result<&'_ ComparableNodeInfo, FileIoError>> {
-        self.next_internal().transpose()
+        self.next_node_info().transpose()
     }
 }
 
@@ -387,7 +387,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
     /// Create a pre-order iterator for the trie that starts at `start_key`.
     fn new(trie: &'a T, start_key: &Key) -> Result<PreOrderIterator<'a, T>, FileIoError> {
         // If the root node is not None, then push a `ComparableNodeInfo` for the root onto
-        // the traversal stack. It will be used on the first call to `next` or `next_internal`.
+        // the traversal stack. It will be used on the first call to `next` or `next_node_info`.
         // Because we already have the root node, we create its `ComparableNodeInfo` directly
         // instead of using `ComparableNodeInfo::new` as we don't need to create a `SharedNode`
         // from a `Child`. The full path of the root node is just its partial path since it has
@@ -417,10 +417,10 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
     /// stack.
     ///
     /// This implementation flips the order such that we don't push a node's children onto the
-    /// traversal stack until the subseqent call to `next` or `next_internal`. This is done by saving
+    /// traversal stack until the subseqent call to `next` or `next_node_info`. This is done by saving
     /// the `ComparableNodeInfo` of the current node in `node_info` and keeping that available for the
     /// next call. Skipping traversal of the children then just involves setting `node_info` to None.
-    fn next_internal(&mut self) -> Result<Option<&ComparableNodeInfo>, FileIoError> {
+    fn next_node_info(&mut self) -> Result<Option<&ComparableNodeInfo>, FileIoError> {
         firewood_counter!(
             "firewood.change_proof.next",
             "number of next calls to calculate a change proof"
@@ -460,7 +460,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
 
     /// Calling `skip_children` will clear the current node's info, which will cause the children
     /// of the current node to not be added to the traversal stack on the subsequent `next` or
-    /// `next_internal` call. This will effectively cause the traversal to skip the children of
+    /// `next_node_info` call. This will effectively cause the traversal to skip the children of
     /// the current node.
     fn skip_children(&mut self) {
         self.node_info = None;
@@ -530,7 +530,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
                 // Since pre-order traversal of a trie iterates through the nodes in lexicographical
                 // order, we can stop the traversal once we see a node key that is larger than or
                 // equal to the key. We stop the traversal by pushing the current `ComparableNodeInfo`
-                // back to the stack. Calling `next` or `next_internal` will process this node.
+                // back to the stack. Calling `next` or `next_node_info` will process this node.
                 let node_key = key_from_nibble_iter(node_info.path.iter().copied());
                 if node_key >= *key {
                     self.traversal_stack.push(node_info);
@@ -551,7 +551,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
                 }
             } else {
                 // Traversal stack is empty. This means the key is lexicographically larger than
-                // all of the keys in the trie. Calling `next` or `next_internal` will return None.
+                // all of the keys in the trie. Calling `next` or `next_node_info` will return None.
                 return Ok(self);
             }
         }
