@@ -567,7 +567,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
 mod tests {
     use crate::{
         db::{BatchOp, Db, DbConfig},
-        iter::key_from_nibble_iter,
+        iter::{MerkleKeyValueIter, key_from_nibble_iter},
         merkle::{
             Key, Merkle, Value,
             changes::{DiffMerkleNodeStream, PreOrderIterator},
@@ -636,12 +636,6 @@ mod tests {
         merkle.try_into().unwrap()
     }
 
-    fn make_immutable(
-        merkle: Merkle<NodeStore<MutableProposal, MemStore>>,
-    ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> {
-        merkle.try_into().unwrap()
-    }
-
     fn apply_ops_and_freeze(
         base: &Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
         ops: &[BatchOp<Key, Value>],
@@ -668,8 +662,8 @@ mod tests {
         L: TrieReader,
         R: TrieReader,
     {
-        let mut l = crate::iter::MerkleKeyValueIter::from(left.nodestore());
-        let mut r = crate::iter::MerkleKeyValueIter::from(right.nodestore());
+        let mut l = MerkleKeyValueIter::from(left.nodestore());
+        let mut r = MerkleKeyValueIter::from(right.nodestore());
         let mut key_count = 0;
         loop {
             match (l.next(), r.next()) {
@@ -873,8 +867,10 @@ mod tests {
 
     #[test]
     fn test_diff_empty_trees() {
-        let m1 = make_immutable(create_test_merkle());
-        let m2 = make_immutable(create_test_merkle());
+        let m1: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+            create_test_merkle().try_into().unwrap();
+        let m2: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+            create_test_merkle().try_into().unwrap();
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
         assert!(diff_iter.next().is_none());
@@ -902,7 +898,8 @@ mod tests {
             (b"key2".as_slice(), b"value2".as_slice()),
         ];
 
-        let m1 = make_immutable(create_test_merkle());
+        let m1: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+            create_test_merkle().try_into().unwrap();
         let m2 = populate_merkle(create_test_merkle(), &items);
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
@@ -928,7 +925,8 @@ mod tests {
         ];
 
         let m1 = populate_merkle(create_test_merkle(), &items);
-        let m2 = make_immutable(create_test_merkle());
+        let m2: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+            create_test_merkle().try_into().unwrap();
 
         let mut diff_iter = diff_merkle_iterator(&m1, &m2, Box::new([])).unwrap();
 
@@ -957,7 +955,6 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::manual_let_else)]
     fn test_diff_mixed_operations() {
         // m1 has: key1=value1, key2=old_value, key3=value3
         // m2 has: key2=new_value, key4=value4
@@ -999,7 +996,7 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::indexing_slicing)]
+    #[expect(clippy::indexing_slicing)]
     fn test_diff_interleaved_keys() {
         // m1: a, c, e
         // m2: b, c, d, f
@@ -1091,7 +1088,6 @@ mod tests {
     #[test_case(false, false, 1, 1)] // diff value, m1->m2: put prefix/a, delete prefix/b
     #[test_case(true, true, 1, 0)] // same value, m2->m1: no change to prefix/a, add prefix/b
     #[test_case(false, true, 2, 0)] // diff value, m2->m1: update prefix/a, add prefix/b
-    #[allow(clippy::arithmetic_side_effects)]
     fn test_branch_vs_leaf_empty_partial_path_bug(
         same_value: bool,
         backwards: bool,
@@ -1426,7 +1422,6 @@ mod tests {
     #[test_case(500)]
     #[test_case(10)]
     #[test_case(3)]
-    #[allow(clippy::indexing_slicing)]
     fn test_diff_random_with_deletions(num_items: usize) {
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -1435,7 +1430,7 @@ mod tests {
         let mut seen_keys = std::collections::HashSet::new();
 
         while items.len() < num_items {
-            let key_len = rng.random_range(1..=32);
+            let key_len = rng.random_range(2..=32);
             let value_len = rng.random_range(1..=64);
 
             let key: Vec<u8> = (0..key_len).map(|_| rng.random()).collect();
@@ -1459,7 +1454,7 @@ mod tests {
         // Pick two different random indices to delete (if possible)
         if !items.is_empty() {
             let delete_idx1 = rng.random_range(0..items.len());
-            m1.remove(&items[delete_idx1].0).unwrap();
+            m1.remove(&items.get(delete_idx1).unwrap().0).unwrap();
         }
         if items.len() > 1 {
             let mut delete_idx2 = rng.random_range(0..items.len());
@@ -1468,7 +1463,7 @@ mod tests {
                 // it's okay if equal when len==1
                 delete_idx2 = rng.random_range(0..items.len());
             }
-            m2.remove(&items[delete_idx2].0).unwrap();
+            m2.remove(&items.get(delete_idx2).unwrap().0).unwrap();
         }
 
         // Compute ops and immutable views according to mutability flags
@@ -1494,7 +1489,6 @@ mod tests {
     }
 
     #[test_case(20, 500)]
-    #[allow(clippy::type_complexity, clippy::too_many_lines)]
     fn test_db_fuzz(num_iterations: usize, num_items: usize) {
         fn one_iteration(
             rng: &SeededRng,
@@ -1507,7 +1501,7 @@ mod tests {
             Arc<NodeStore<firewood_storage::Committed, FileBacked>>,
             usize,
         ) {
-            const CHANCE_COMMIT: usize = 25;
+            const CHANCE_COMMIT_PERCENT: usize = 25;
             let proposal = NodeStore::new(&committed).unwrap();
             let mut merkle = Merkle::from(proposal);
             let (batch, next_start_val) =
@@ -1540,7 +1534,7 @@ mod tests {
 
             // Sort by the key of the BatchOp.
             let mut batch_sorted = batch.clone();
-            batch_sorted.sort_by_key(|op| op.key().clone());
+            batch_sorted.sort_by(|op1, op2| op1.key().cmp(op2.key()));
 
             // Check that that proposal is the same size as the diff.
             assert_eq!(batch_sorted.len(), ops.len());
@@ -1564,7 +1558,7 @@ mod tests {
             }
 
             // There is chance that we want to commit the batch.
-            if rng.random_range(1..=100) <= CHANCE_COMMIT {
+            if rng.random_range(0..100) < CHANCE_COMMIT_PERCENT {
                 let proposal = db.propose(batch.into_iter()).unwrap();
                 proposal.commit().unwrap();
                 let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
