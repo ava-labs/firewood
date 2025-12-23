@@ -810,7 +810,7 @@ mod tests {
         // freeze and compute the hash
         let merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
             merkle.try_into().unwrap();
-        assert!(DbView::root_hash(&merkle.nodestore).unwrap().is_some());
+        assert!(HashedNodeReader::root_hash(merkle.nodestore()).is_some());
 
         // Check if the sorted batch and the pre-order traversal have identical values.
         let mut preorder_it = PreOrderIterator::new(merkle.nodestore(), &Key::default()).unwrap();
