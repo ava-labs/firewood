@@ -9,7 +9,8 @@
 use crate::node::ExtendableBytes;
 use crate::node::children::Children;
 use crate::{
-    HashType, LeafNode, LinearAddress, MaybePersistedNode, Node, Path, PathComponent, SharedNode,
+    FileIoError, HashType, LeafNode, LinearAddress, MaybePersistedNode, Node, NodeReader, Path,
+    PathComponent, SharedNode,
 };
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
@@ -139,6 +140,25 @@ impl Child {
             Child::Node(node) => MaybePersistedNode::from(SharedNode::from(node.clone())),
             Child::AddressWithHash(addr, _) => MaybePersistedNode::from(*addr),
             Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.clone(),
+        }
+    }
+
+    /// Converts this `Child` to a `SharedNode` by reading from a `NodeReader`.
+    ///
+    /// # Arguments
+    ///
+    /// * `storage` - A reference to a `NodeReader` implementation that can read nodes from storage.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result<SharedNode, FileIoError>` where:
+    /// - `Ok(SharedNode)` contains the node if successfully read
+    /// - `Err(FileIoError)` if there was an error reading from storage
+    pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
+        match self {
+            Child::Node(node) => Ok(node.clone().into()),
+            Child::AddressWithHash(addr, _) => storage.read_node(*addr),
+            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.as_shared_node(storage),
         }
     }
 }
