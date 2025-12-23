@@ -13,6 +13,7 @@ use crate::{
     BorrowedBytes, DatabaseHandle, HashResult, Maybe, NextKeyRangeResult, RangeProofResult,
     ValueResult, VoidResult,
 };
+use firewood_storage::firewood_counter;
 
 /// A key range represented by a start key and an optional end key.
 pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
@@ -224,8 +225,12 @@ impl<'db> RangeProofContext<'db> {
         };
 
         let metrics_cb = |commit_time: coarsetime::Duration| {
-            metrics::counter!("firewood.ffi.commit_ms").increment(commit_time.as_millis());
-            metrics::counter!("firewood.ffi.merge").increment(1);
+            firewood_counter!(
+                "firewood.ffi.commit_ms",
+                "FFI commit timing in milliseconds"
+            )
+            .increment(commit_time.as_millis());
+            firewood_counter!("firewood.ffi.merge", "Number of FFI merge operations").increment(1);
         };
 
         let result = proposal_handle.commit_proposal(metrics_cb);

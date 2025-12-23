@@ -10,7 +10,7 @@ use firewood::{
 use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
-use metrics::counter;
+use firewood_storage::firewood_counter;
 
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
 ///
@@ -176,11 +176,16 @@ impl DatabaseHandle {
             self.create_proposal_handle(values.as_ref())?;
 
         let root_hash = handle.commit_proposal(|commit_time| {
-            counter!("firewood.ffi.commit_ms").increment(commit_time.as_millis());
+            firewood_counter!(
+                "firewood.ffi.commit_ms",
+                "FFI commit timing in milliseconds"
+            )
+            .increment(commit_time.as_millis());
         })?;
 
-        counter!("firewood.ffi.batch_ms").increment(start_time.elapsed().as_millis());
-        counter!("firewood.ffi.batch").increment(1);
+        firewood_counter!("firewood.ffi.batch_ms", "FFI batch timing in milliseconds")
+            .increment(start_time.elapsed().as_millis());
+        firewood_counter!("firewood.ffi.batch", "Number of FFI batch operations").increment(1);
 
         Ok(root_hash)
     }
@@ -208,9 +213,17 @@ impl DatabaseHandle {
         })?;
 
         if cache_miss {
-            counter!("firewood.ffi.cached_view.miss").increment(1);
+            firewood_counter!(
+                "firewood.ffi.cached_view.miss",
+                "Number of FFI cached view misses"
+            )
+            .increment(1);
         } else {
-            counter!("firewood.ffi.cached_view.hit").increment(1);
+            firewood_counter!(
+                "firewood.ffi.cached_view.hit",
+                "Number of FFI cached view hits"
+            )
+            .increment(1);
         }
 
         Ok(view)
