@@ -64,23 +64,23 @@ func TestMetrics(t *testing.T) {
 	r.NoError(err)
 	r.NoError(resp.Body.Close())
 
-	// Check that batch op was recorded
-	r.Contains(string(body), "firewood_ffi_batch 1")
+	// Check that batch op was recorded (no prefix)
+	r.Contains(string(body), "ffi_batch 1")
 
 	g := Gatherer{}
 	metricsFamily, err := g.Gather()
 	r.NoError(err)
 
 	expectedMetrics := map[string]dto.MetricType{
-		"firewood_ffi_batch":          dto.MetricType_COUNTER,
-		"firewood_proposal_commit":    dto.MetricType_COUNTER,
-		"firewood_proposal_commit_ms": dto.MetricType_COUNTER,
-		"firewood_ffi_propose_ms":     dto.MetricType_COUNTER,
-		"firewood_ffi_commit_ms":      dto.MetricType_COUNTER,
-		"firewood_ffi_batch_ms":       dto.MetricType_COUNTER,
-		"firewood_flush_nodes":        dto.MetricType_COUNTER,
-		"firewood_insert":             dto.MetricType_COUNTER,
-		"firewood_space_from_end":     dto.MetricType_COUNTER,
+		"ffi_batch":          dto.MetricType_COUNTER,
+		"proposal_commit":    dto.MetricType_COUNTER,
+		"proposal_commit_ms": dto.MetricType_COUNTER,
+		"ffi_propose_ms":     dto.MetricType_COUNTER,
+		"ffi_commit_ms":      dto.MetricType_COUNTER,
+		"ffi_batch_ms":       dto.MetricType_COUNTER,
+		"flush_nodes":        dto.MetricType_COUNTER,
+		"insert":             dto.MetricType_COUNTER,
+		"space_from_end":     dto.MetricType_COUNTER,
 	}
 
 	for k, v := range expectedMetrics {

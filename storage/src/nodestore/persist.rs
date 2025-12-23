@@ -243,7 +243,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         };
 
         let flush_time = flush_start.elapsed().as_millis();
-        firewood_counter!("firewood.flush_nodes", "amount flushed nodes").increment(flush_time);
+        firewood_counter!("flush_nodes", "amount flushed nodes").increment(flush_time);
 
         Ok(header)
     }
