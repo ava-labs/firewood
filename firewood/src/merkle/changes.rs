@@ -239,7 +239,7 @@ impl<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader> DiffMerkleNodeStream<'
         &mut self,
     ) -> Result<(DiffIterationNodeState, Option<BatchOp<Key, Value>>), FileIoError> {
         // Get the next node from the left trie.
-        let Some(left_state) = self.left_tree.next_internal()? else {
+        let Some(left_state) = self.left_tree.next_node_info()? else {
             // No more nodes in the left trie. For this state, the current node from the right trie has already
             // been accounted for, which means we don't need to include it in the change proof. Transition to
             // `AddRestRight` state where we add the remaining values from the right trie to the addition list.
@@ -247,7 +247,7 @@ impl<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader> DiffMerkleNodeStream<'
         };
 
         // Get the next node from the right trie.
-        let Some(right_state) = self.right_tree.next_internal()? else {
+        let Some(right_state) = self.right_tree.next_node_info()? else {
             // No more nodes on the right side. We want to transition to `DeleteRestLeft`, but we don't want to
             // forget about the node that we just retrieved from the left tree.
             return Ok((
@@ -284,7 +284,7 @@ impl<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader> DiffMerkleNodeStream<'
                 DiffIterationNodeState::TraverseLeft { right_state } => {
                     // In the `TraverseLeft` state, we use the next node from the left trie to
                     // perform state processing, which is done by calling `one_step_compare`.
-                    if let Some(left_state) = self.left_tree.next_internal()? {
+                    if let Some(left_state) = self.left_tree.next_node_info()? {
                         Self::one_step_compare(left_state, &right_state)
                     } else {
                         // If we have no more nodes from the left trie, then we transition to
@@ -298,7 +298,7 @@ impl<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader> DiffMerkleNodeStream<'
                     }
                 }
                 DiffIterationNodeState::TraverseRight { left_state } => {
-                    if let Some(right_state) = self.right_tree.next_internal()? {
+                    if let Some(right_state) = self.right_tree.next_node_info()? {
                         Self::one_step_compare(&left_state, right_state)
                     } else {
                         // For `TraverseRight`, if we have no more nodes on the right trie, then
@@ -312,7 +312,7 @@ impl<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader> DiffMerkleNodeStream<'
                     }
                 }
                 DiffIterationNodeState::AddRestRight => {
-                    let Some(right_state) = self.right_tree.next_internal()? else {
+                    let Some(right_state) = self.right_tree.next_node_info()? else {
                         break; // No more nodes from both tries, which ends the iteration.
                     };
                     // Add the value of the right node to the addition list if it has one, and stay
@@ -323,7 +323,7 @@ impl<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader> DiffMerkleNodeStream<'
                     )
                 }
                 DiffIterationNodeState::DeleteRestLeft => {
-                    let Some(left_state) = self.left_tree.next_internal()? else {
+                    let Some(left_state) = self.left_tree.next_node_info()? else {
                         break; // No more nodes from both tries, which ends the iteration.
                     };
                     // Add the value of the left node to the deletion list if it has one, and stay
