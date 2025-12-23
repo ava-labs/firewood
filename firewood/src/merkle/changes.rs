@@ -349,7 +349,7 @@ impl<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader> DiffMerkleNodeStream<'
 impl<LEFT: HashedNodeReader, RIGHT: HashedNodeReader> Iterator
     for DiffMerkleNodeStream<'_, LEFT, RIGHT>
 {
-    type Item = Result<BatchOp<Key, Value>, firewood_storage::FileIoError>;
+    type Item = Result<BatchOp<Key, Value>, FileIoError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.next_internal().transpose()
@@ -576,8 +576,8 @@ mod tests {
     };
 
     use firewood_storage::{
-        FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, MemStore, MutableProposal,
-        NodeStore, SeededRng, TestRecorder, TrieReader,
+        Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, MemStore,
+        MutableProposal, NodeStore, SeededRng, TestRecorder, TrieReader,
     };
     use lender::Lender;
     use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
@@ -612,8 +612,8 @@ mod tests {
         start_key: Key,
     ) -> Result<DiffMerkleNodeStream<'a, T, U>, FileIoError>
     where
-        T: firewood_storage::TrieReader + HashedNodeReader,
-        U: firewood_storage::TrieReader + HashedNodeReader,
+        T: TrieReader + HashedNodeReader,
+        U: TrieReader + HashedNodeReader,
     {
         DiffMerkleNodeStream::new(tree_left.nodestore(), tree_right.nodestore(), start_key)
     }
@@ -789,7 +789,7 @@ mod tests {
 
     #[test]
     fn test_preorder_iterator() {
-        let rng = firewood_storage::SeededRng::from_env_or_random();
+        let rng = SeededRng::from_env_or_random();
         let (batch, _) = gen_random_test_batchops(&rng, &HashSet::new(), 1000, 0);
 
         // Keep a sorted copy of the batch.
@@ -1423,7 +1423,7 @@ mod tests {
     #[test_case(10)]
     #[test_case(3)]
     fn test_diff_random_with_deletions(num_items: usize) {
-        let rng = firewood_storage::SeededRng::from_env_or_random();
+        let rng = SeededRng::from_env_or_random();
 
         // Generate random key-value pairs, ensuring uniqueness
         let mut items: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
@@ -1493,14 +1493,11 @@ mod tests {
         fn one_iteration(
             rng: &SeededRng,
             db: &Db,
-            committed: Arc<NodeStore<firewood_storage::Committed, FileBacked>>,
+            committed: Arc<NodeStore<Committed, FileBacked>>,
             committed_keys: &mut HashSet<Vec<u8>>,
             num_items: usize,
             start_val: usize,
-        ) -> (
-            Arc<NodeStore<firewood_storage::Committed, FileBacked>>,
-            usize,
-        ) {
+        ) -> (Arc<NodeStore<Committed, FileBacked>>, usize) {
             const CHANCE_COMMIT_PERCENT: usize = 25;
             let proposal = NodeStore::new(&committed).unwrap();
             let mut merkle = Merkle::from(proposal);
@@ -1578,7 +1575,7 @@ mod tests {
         }
 
         let db = TestDb::new();
-        let rng = firewood_storage::SeededRng::from_env_or_random();
+        let rng = SeededRng::from_env_or_random();
         let mut committed_keys = HashSet::new();
         let start_val = 0;
 
@@ -1615,7 +1612,7 @@ mod tests {
 
     #[test]
     fn test_two_round_diff_with_start_keys() {
-        let rng = firewood_storage::SeededRng::from_env_or_random();
+        let rng = SeededRng::from_env_or_random();
         // Run this test several times.
         for _ in 0..4 {
             let db = TestDb::new();
