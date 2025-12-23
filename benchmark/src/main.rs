@@ -302,6 +302,7 @@ fn spawn_prometheus_listener(
 
     let handle = recorder.handle();
 
+    // Register the Prometheus recorder directly; prefixing is handled by Grafana/Prometheus relabeling.
     metrics::set_global_recorder(recorder)?;
 
     Ok(handle)

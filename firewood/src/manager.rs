@@ -214,7 +214,7 @@ impl RevisionManager {
     /// 6. Proposal Cleanup.
     ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
     #[fastrace::trace(short_name = true)]
-    #[crate::metrics("firewood.proposal.commit", "proposal commit to storage")]
+    #[crate::metrics("proposal.commit", "proposal commit to storage")]
     pub fn commit(&self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
         // 1. Commit check
         let current_revision = self.current_revision();
@@ -260,15 +260,12 @@ impl RevisionManager {
                 }
             }
             firewood_gauge!(
-                "firewood.active_revisions",
+                "active_revisions",
                 "Current number of active revisions in memory"
             )
             .set(self.in_memory_revisions.read().len() as f64);
-            firewood_gauge!(
-                "firewood.max_revisions",
-                "Maximum number of revisions configured"
-            )
-            .set(self.max_revisions as f64);
+            firewood_gauge!("max_revisions", "Maximum number of revisions configured")
+                .set(self.max_revisions as f64);
         }
 
         // 3. Persist to disk.

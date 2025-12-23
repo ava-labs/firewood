@@ -167,7 +167,7 @@ impl Db {
     /// Create a new database instance.
     pub fn new<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Self, api::Error> {
         let metrics = Arc::new(DbMetrics {
-            proposals: firewood_counter!("firewood.proposals", "Number of proposals created"),
+            proposals: firewood_counter!("proposals", "Number of proposals created"),
         });
         let config_manager = ConfigManager::builder()
             .create(cfg.create_if_missing)
@@ -381,7 +381,7 @@ impl<'db> api::Proposal for Proposal<'db> {
 }
 
 impl Proposal<'_> {
-    #[crate::metrics("firewood.proposal.create", "database proposal creation")]
+    #[crate::metrics("proposal.create", "database proposal creation")]
     fn create_proposal(&self, batch: impl IntoBatchIter) -> Result<Self, api::Error> {
         self.db.propose_with_parent(batch, &self.nodestore)
     }
