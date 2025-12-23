@@ -8,6 +8,7 @@ AVALANCHEGO_BRANCH=""
 LIBEVM_BRANCH=""
 NBLOCKS="1m"
 CONFIG="firewood"
+METRICS_SERVER="true"
 REGION="us-west-2"
 DRY_RUN=false
 SPOT_INSTANCE=false
@@ -63,6 +64,7 @@ show_usage() {
     echo "  --libevm-branch BRANCH      LibEVM git branch to checkout"
     echo "  --nblocks BLOCKS            Number of blocks to download (default: 1m)"
     echo "  --config CONFIG             The VM reexecution config to use (default: firewood)"
+    echo "  --metrics-server BOOL       Enable metrics server (true/false, default: true)"
     echo "  --region REGION             AWS region (default: us-west-2)"
     echo "  --spot                      Use spot instance pricing (default depends on instance type)"
     echo "  --dry-run                   Show the aws command that would be run without executing it"
@@ -126,6 +128,17 @@ while [[ $# -gt 0 ]]; do
             ;;
         --config)
             CONFIG="$2"
+            shift 2
+            ;;
+        --metrics-server)
+            # Normalize to lowercase
+            METRICS_SERVER="${2,,}"
+            # Validate boolean value
+            if [[ "$METRICS_SERVER" != "true" && "$METRICS_SERVER" != "false" ]]; then
+                echo "Error: Invalid --metrics-server value '$2'"
+                echo "Valid values: true, false"
+                exit 1
+            fi
             shift 2
             ;;
         --region)
@@ -249,6 +262,7 @@ echo "  AvalancheGo Branch: ${AVALANCHEGO_BRANCH:-default}"
 echo "  LibEVM Branch: ${LIBEVM_BRANCH:-default}"
 echo "  Number of Blocks: $NBLOCKS"
 echo "  Config: $CONFIG"
+echo "  Metrics Server: $METRICS_SERVER"
 echo "  Region: $REGION"
 if [ "$SPOT_INSTANCE" = true ]; then
     echo "  Spot Instance: Yes (max price: \$${MAX_SPOT_PRICES[$INSTANCE_TYPE]})"
@@ -454,8 +468,7 @@ runcmd:
   # execute bootstrapping
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego --login
-    METRICS_SERVER_ENABLED=true
-    time task reexecute-cchain-range CURRENT_STATE_DIR=/mnt/nvme/ubuntu/exec-data/current-state BLOCK_DIR=/mnt/nvme/ubuntu/exec-data/blocks START_BLOCK=1 END_BLOCK=__END_BLOCK__ CONFIG=__CONFIG__
+    time METRICS_SERVER_ENABLED=__METRICS_SERVER__ task reexecute-cchain-range CURRENT_STATE_DIR=/mnt/nvme/ubuntu/exec-data/current-state BLOCK_DIR=/mnt/nvme/ubuntu/exec-data/blocks START_BLOCK=1 END_BLOCK=__END_BLOCK__ CONFIG=__CONFIG__
     > /var/log/bootstrap.log 2>&1
 END_HEREDOC
 )
@@ -476,6 +489,7 @@ USERDATA=$(echo "$USERDATA_TEMPLATE" | \
   sed "s|__NBLOCKS__|$NBLOCKS|g" | \
   sed "s|__END_BLOCK__|$END_BLOCK|g" | \
   sed "s|__CONFIG__|$CONFIG|g" | \
+  sed "s|__METRICS_SERVER__|$METRICS_SERVER|g" | \
   base64)
 export USERDATA
 
