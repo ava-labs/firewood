@@ -61,10 +61,10 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 		return nil, errDroppedProposal
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
+	pinner := getPinner()
+	defer releasePinner(pinner)
 
-	return getValueFromValueResult(C.fwd_get_from_proposal(p.handle, newBorrowedBytes(key, &pinner)))
+	return getValueFromValueResult(C.fwd_get_from_proposal(p.handle, newBorrowedBytes(key, pinner)))
 }
 
 // Iter creates and iterator starting from the provided key on proposal.
@@ -74,10 +74,10 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 		return nil, errDBClosed
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
+	pinner := getPinner()
+	defer releasePinner(pinner)
 
-	itResult := C.fwd_iter_on_proposal(p.handle, newBorrowedBytes(key, &pinner))
+	itResult := C.fwd_iter_on_proposal(p.handle, newBorrowedBytes(key, pinner))
 
 	return getIteratorFromIteratorResult(itResult)
 }
@@ -96,10 +96,10 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 		return nil, errDroppedProposal
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
+	pinner := getPinner()
+	defer releasePinner(pinner)
 
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
+	kvp, err := newKeyValuePairs(keys, vals, pinner)
 	if err != nil {
 		return nil, err
 	}

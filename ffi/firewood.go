@@ -146,17 +146,17 @@ func New(filePath string, conf *Config) (*Database, error) {
 		return nil, fmt.Errorf("%T.FreeListCacheEntries must be >= 1", conf)
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
+	pinner := getPinner()
+	defer releasePinner(pinner)
 
 	args := C.struct_DatabaseHandleArgs{
-		path:                 newBorrowedBytes([]byte(filePath), &pinner),
+		path:                 newBorrowedBytes([]byte(filePath), pinner),
 		cache_size:           C.size_t(conf.NodeCacheEntries),
 		free_list_cache_size: C.size_t(conf.FreeListCacheEntries),
 		revisions:            C.size_t(conf.Revisions),
 		strategy:             C.uint8_t(conf.ReadCacheStrategy),
 		truncate:             C.bool(conf.Truncate),
-		root_store_path:      newBorrowedBytes([]byte(conf.RootStoreDir), &pinner),
+		root_store_path:      newBorrowedBytes([]byte(conf.RootStoreDir), pinner),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))
@@ -181,10 +181,10 @@ func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 		return EmptyRoot, errDBClosed
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
+	pinner := getPinner()
+	defer releasePinner(pinner)
 
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
+	kvp, err := newKeyValuePairs(keys, vals, pinner)
 	if err != nil {
 		return EmptyRoot, err
 	}
@@ -208,10 +208,10 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 		return nil, errDBClosed
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
+	pinner := getPinner()
+	defer releasePinner(pinner)
 
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
+	kvp, err := newKeyValuePairs(keys, vals, pinner)
 	if err != nil {
 		return nil, err
 	}
@@ -228,10 +228,10 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 		return nil, errDBClosed
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
+	pinner := getPinner()
+	defer releasePinner(pinner)
 
-	val, err := getValueFromValueResult(C.fwd_get_latest(db.handle, newBorrowedBytes(key, &pinner)))
+	val, err := getValueFromValueResult(C.fwd_get_latest(db.handle, newBorrowedBytes(key, pinner)))
 	// The revision won't be found if the database is empty.
 	// This is valid, but should be treated as a non-existent key
 	if errors.Is(err, errRevisionNotFound) {
@@ -259,13 +259,13 @@ func (db *Database) GetFromRoot(root Hash, key []byte) ([]byte, error) {
 		return nil, nil
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
+	pinner := getPinner()
+	defer releasePinner(pinner)
 
 	return getValueFromValueResult(C.fwd_get_from_root(
 		db.handle,
 		newCHashKey(root),
-		newBorrowedBytes(key, &pinner),
+		newBorrowedBytes(key, pinner),
 	))
 }
 
