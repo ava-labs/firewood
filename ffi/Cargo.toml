@@ -30,7 +30,7 @@ parking_lot.workspace = true
 # Regular dependencies
 chrono = "0.4.42"
 oxhttp = "0.3.1"
-tikv-jemallocator = "0.6.1"
+tikv-jemallocator = { version = "0.6.1", features = ["profiling"] }
 # Optional dependencies
 env_logger = { workspace = true, optional = true }
 derive-where = "1.6.0"
