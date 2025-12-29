@@ -72,9 +72,17 @@ func (r *Revision) Get(key []byte) ([]byte, error) {
 	))
 }
 
-// Iter creates an iterator starting from the provided key on revision.
-// pass empty slice to start from beginning
-// It returns ErrDroppedRevision if Drop has already been called.
+// Iter creates an [Iterator] over the key-value pairs in this revision,
+// starting at the first key greater than or equal to the provided key.
+// Pass nil or an empty slice to iterate from the beginning of the trie.
+//
+// The returned Iterator traverses keys in lexicographic order. It holds a
+// reference to this Revision, so the Iterator can safely outlive the Revision
+// (i.e., you can call [Revision.Drop] before finishing iteration).
+//
+// The Iterator must be released with [Iterator.Drop] when no longer needed.
+//
+// It returns [ErrDroppedRevision] if [Revision.Drop] has already been called.
 func (r *Revision) Iter(key []byte) (*Iterator, error) {
 	if r.handle == nil {
 		return nil, ErrDroppedRevision

@@ -71,8 +71,19 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 	return getValueFromValueResult(C.fwd_get_from_proposal(p.handle, newBorrowedBytes(key, &pinner)))
 }
 
-// Iter creates and iterator starting from the provided key on proposal.
-// pass empty slice to start from beginning.
+// Iter creates an [Iterator] over the key-value pairs in this proposal,
+// starting at the first key greater than or equal to the provided key.
+// Pass nil or an empty slice to iterate from the beginning of the trie.
+//
+// The returned Iterator traverses keys in lexicographic order and reflects
+// all changes in this proposal (including uncommitted modifications).
+// It holds a reference to this Proposal, so the Iterator can safely outlive
+// the Proposal (i.e., you can call [Proposal.Drop] or [Proposal.Commit] before
+// finishing iteration).
+//
+// The Iterator must be released with [Iterator.Drop] when no longer needed.
+//
+// It returns an error if [Proposal.Drop] or [Proposal.Commit] has already been called.
 func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 	if p.handle == nil {
 		return nil, errDBClosed
