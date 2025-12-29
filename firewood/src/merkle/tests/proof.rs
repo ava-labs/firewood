@@ -29,19 +29,13 @@ fn full_range_proof() {
 
     let rangeproof = merkle.range_proof(None, None, None).unwrap();
     assert_eq!(rangeproof.key_values().len(), u8::MAX as usize + 1);
-    assert_ne!(rangeproof.start_proof(), rangeproof.end_proof());
-    let left_proof = merkle.prove(&[u8::MIN]).unwrap();
-    let right_proof = merkle.prove(&[u8::MAX]).unwrap();
-    assert_eq!(rangeproof.start_proof(), &left_proof);
-    assert_eq!(rangeproof.end_proof(), &right_proof);
+    assert_eq!(rangeproof.start_proof(), &FrozenProof::default());
+    assert_eq!(rangeproof.end_proof(), &FrozenProof::default());
 
     let rangeproof = roundtrip_range_proof(&rangeproof);
     assert_eq!(rangeproof.key_values().len(), u8::MAX as usize + 1);
-    assert_ne!(rangeproof.start_proof(), rangeproof.end_proof());
-    let left_proof = merkle.prove(&[u8::MIN]).unwrap();
-    let right_proof = merkle.prove(&[u8::MAX]).unwrap();
-    assert_eq!(rangeproof.start_proof(), &left_proof);
-    assert_eq!(rangeproof.end_proof(), &right_proof);
+    assert_eq!(rangeproof.start_proof(), &FrozenProof::default());
+    assert_eq!(rangeproof.end_proof(), &FrozenProof::default());
 }
 
 #[test]
@@ -234,7 +228,7 @@ fn exclusion_with_proof_value_present() {
 
 #[test]
 fn proof_path_construction_and_corruption() {
-    use crate::proof::{Proof, ProofNode};
+    use crate::{Proof, ProofNode};
 
     // Build a trie with several entries
     let mut merkle = crate::merkle::tests::create_in_memory_merkle();
@@ -278,7 +272,7 @@ fn proof_path_construction_and_corruption() {
     // Node traversal should fail
     assert!(matches!(
         err,
-        crate::proof::ProofError::NodeNotInTrie | crate::proof::ProofError::UnexpectedHash
+        crate::ProofError::NodeNotInTrie | crate::ProofError::UnexpectedHash
     ));
 }
 

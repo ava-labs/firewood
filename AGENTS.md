@@ -112,12 +112,22 @@ Before submitting/updating a PR, run the following
 
 ```bash
 cargo fmt                                                               # Format code
-cargo test --workspace --features ethhash,logger --all-targets          # Run tests
+cargo nextest run --workspace --features ethhash,logger --all-targets   # Run tests
 cargo clippy --workspace --features ethhash,logger --all-targets        # Linter
 cargo doc --no-deps                                                     # Ensure docs build
 ```
 
 All tests must pass, and there should be no clippy warnings.
+
+### Slow Tests
+
+If your PR modifies code that is tested by any test prefixed with `test_slow_`, you should also run the full test suite with the `ci` profile to ensure those tests pass:
+
+```bash
+cargo nextest run --workspace --features ethhash,logger --all-targets --profile ci
+```
+
+The `ci` profile includes slow tests that are skipped in the default profile for faster local development.
 
 ### Markdown Linter
 
@@ -170,7 +180,7 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
    blocks without documentation and strong justification. Unsafe code could be
    utilized in the `ffi` crate.
 
-2. **Testing**: Any changes should include appropriate tests. Run `cargo test --release` to verify.
+2. **Testing**: Any changes should include appropriate tests. Run `cargo nextest run --release` to verify.
 
 3. **Performance Context**: This is a database designed for blockchain state. Performance matters. Consider allocation patterns and hot paths.
 

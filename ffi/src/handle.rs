@@ -1,8 +1,6 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::path::PathBuf;
-
 use firewood::{
     db::{Db, DbConfig},
     manager::RevisionManagerConfig,
@@ -12,7 +10,7 @@ use firewood::{
 use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
-use metrics::{counter, histogram};
+use firewood_storage::firewood_counter;
 
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
 ///
@@ -20,23 +18,19 @@ use metrics::{counter, histogram};
 #[repr(C)]
 #[derive(Debug)]
 pub struct DatabaseHandleArgs<'a> {
-    /// The path to the database file.
+    /// The path to the database directory.
     ///
-    /// This must be a valid UTF-8 string, even on Windows.
+    /// This must be a valid UTF-8 string.
     ///
     /// If this is empty, an error will be returned.
-    pub path: BorrowedBytes<'a>,
+    pub dir: BorrowedBytes<'a>,
 
-    /// The path to the `RootStore` directory.
+    /// Whether to enable `RootStore`.
     ///
-    /// This must be a valid UTF-8 string, even on Windows.
-    ///
-    /// If this is empty, then the archival feature is disabled.
-    ///
-    /// Note: Setting this directory will only track new revisions going forward
+    /// Note: Setting this feature will only track new revisions going forward
     /// and will not contain revisions from a prior database instance that didn't
-    /// set a `root_store_path`.
-    pub root_store_path: BorrowedBytes<'a>,
+    /// enable `root_store`.
+    pub root_store: bool,
 
     /// The size of the node cache.
     ///
@@ -113,23 +107,14 @@ impl DatabaseHandle {
     ///
     /// If the path is empty, or if the configuration is invalid, this will return an error.
     pub fn new(args: DatabaseHandleArgs<'_>) -> Result<Self, api::Error> {
-        let root_store_path = args
-            .root_store_path
-            .as_str()
-            .map_err(|e| invalid_data(format!("root store path contains invalid utf-8: {e}")))?;
-
-        let root_store_dir = Some(root_store_path)
-            .filter(|s| !s.is_empty())
-            .map(PathBuf::from);
-
         let cfg = DbConfig::builder()
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
-            .root_store_dir(root_store_dir)
+            .root_store(args.root_store)
             .build();
 
         let path = args
-            .path
+            .dir
             .as_str()
             .map_err(|err| invalid_data(format!("database path contains invalid utf-8: {err}")))?;
 
@@ -191,14 +176,13 @@ impl DatabaseHandle {
             self.create_proposal_handle(values.as_ref())?;
 
         let root_hash = handle.commit_proposal(|commit_time| {
-            counter!("firewood.ffi.commit_ms").increment(commit_time.as_millis());
-            histogram!("firewood.ffi.commit_ms_bucket").record(commit_time.as_f64() * 1000.0);
+            firewood_counter!("ffi.commit_ms", "FFI commit timing in milliseconds")
+                .increment(commit_time.as_millis());
         })?;
 
-        let elapsed = start_time.elapsed();
-        counter!("firewood.ffi.batch_ms").increment(elapsed.as_millis());
-        counter!("firewood.ffi.batch").increment(1);
-        histogram!("firewood.ffi.batch_ms_bucket").record(elapsed.as_f64() * 1000.0);
+        firewood_counter!("ffi.batch_ms", "FFI batch timing in milliseconds")
+            .increment(start_time.elapsed().as_millis());
+        firewood_counter!("ffi.batch", "Number of FFI batch operations").increment(1);
 
         Ok(root_hash)
     }
@@ -226,9 +210,10 @@ impl DatabaseHandle {
         })?;
 
         if cache_miss {
-            counter!("firewood.ffi.cached_view.miss").increment(1);
+            firewood_counter!("ffi.cached_view.miss", "Number of FFI cached view misses")
+                .increment(1);
         } else {
-            counter!("firewood.ffi.cached_view.hit").increment(1);
+            firewood_counter!("ffi.cached_view.hit", "Number of FFI cached view hits").increment(1);
         }
 
         Ok(view)
@@ -248,6 +233,15 @@ impl DatabaseHandle {
             self.db
                 .merge_key_value_range(first_key, last_key, key_values)
         })
+    }
+
+    /// Dumps the Trie structure of the latest revision to a DOT (Graphviz) format string.
+    ///
+    /// # Errors
+    ///
+    /// An error is returned if there was an i/o error while dumping the trie.
+    pub fn dump_to_string(&self) -> Result<String, api::Error> {
+        self.db.dump_to_string().map_err(api::Error::from)
     }
 }
 

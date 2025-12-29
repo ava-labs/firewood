@@ -191,7 +191,9 @@ func TestRangeProofVerify(t *testing.T) {
 	root, err := db.Update(keys, vals)
 	r.NoError(err)
 
-	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
+	// not using `newVerifiedRangeProof` so we can test Verify separately
+	proof, err := db.RangeProof(root, nothing(), nothing(), rangeProofLenTruncated)
+	r.NoError(err)
 
 	// Database should be immediately closeable (no keep-alive)
 	r.NoError(db.Close(oneSecCtx(t)))

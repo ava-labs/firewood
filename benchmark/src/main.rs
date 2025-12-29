@@ -180,7 +180,6 @@ trait TestRunner {
 }
 
 #[global_allocator]
-#[cfg(unix)]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -303,6 +302,7 @@ fn spawn_prometheus_listener(
 
     let handle = recorder.handle();
 
+    // Register the Prometheus recorder directly; prefixing is handled by Grafana/Prometheus relabeling.
     metrics::set_global_recorder(recorder)?;
 
     Ok(handle)

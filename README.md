@@ -132,7 +132,12 @@ We currently have very few logging statements, but this is useful for print-styl
 
 ## Release
 
-See the [release documentation](./RELEASE.md) for detailed information on how to release Firewood.
+See the [release documentation](./RELEASE.md) for detailed information on how to
+release Firewood.
+
+## Supported Platforms
+
+Firewood follows the same compatibility matrix as [AvalancheGo](https://github.com/ava-labs/avalanchego?tab=readme-ov-file#supported-platforms).
 
 ## CLI
 
@@ -141,7 +146,7 @@ Firewood comes with a CLI tool called `fwdctl` that enables one to create and in
 ## Test
 
 ```sh
-cargo test --release
+cargo nextest --release
 ```
 
 ## License

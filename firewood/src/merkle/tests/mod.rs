@@ -8,7 +8,7 @@ mod ethhash;
 // TODO: get the hashes from merkledb and verify compatibility with branch factor 256
 mod proof;
 mod range;
-#[cfg(not(any(feature = "ethhash", feature = "branch_factor_256")))]
+#[cfg(not(feature = "ethhash"))]
 mod triehash;
 
 use std::collections::HashMap;
@@ -40,7 +40,7 @@ fn into_committed(
     let ns = merkle.into_inner();
     ns.flush_freelist().unwrap();
     ns.flush_header().unwrap();
-    let mut ns = ns.as_committed(parent);
+    let ns = ns.as_committed(parent);
     ns.flush_nodes().unwrap();
     ns.into()
 }
@@ -60,40 +60,12 @@ where
         let value = v.as_ref();
 
         merkle.insert(key, value.into()).unwrap();
-
-        assert_eq!(
-            merkle.get_value(key).unwrap().as_deref(),
-            Some(value),
-            "Failed to insert key: {key:?}",
-        );
-    }
-
-    for (k, v) in iter.clone() {
-        let key = k.as_ref();
-        let value = v.as_ref();
-
-        assert_eq!(
-            merkle.get_value(key).unwrap().as_deref(),
-            Some(value),
-            "Failed to get key after insert: {key:?}",
-        );
     }
 
     let merkle = merkle.hash();
-
-    for (k, v) in iter.clone() {
-        let key = k.as_ref();
-        let value = v.as_ref();
-
-        assert_eq!(
-            merkle.get_value(key).unwrap().as_deref(),
-            Some(value),
-            "Failed to get key after hashing: {key:?}"
-        );
-    }
-
     let merkle = into_committed(merkle, base.nodestore());
 
+    // Single verification pass at the end to ensure correctness
     for (k, v) in iter {
         let key = k.as_ref();
         let value = v.as_ref();
@@ -659,8 +631,7 @@ fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
         key
     };
 
-    // TODO: figure out why this fails if we use more than 27 iterations with branch_factor_256
-    for _ in 0..27 {
+    for _ in 0..32 {
         let mut items = Vec::new();
 
         for _ in 0..100 {

@@ -26,6 +26,8 @@ use std::path::PathBuf;
 
 use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
 pub(super) mod filebacked;
+#[cfg(feature = "io-uring")]
+mod io_uring;
 pub mod memory;
 
 /// An error that occurs when reading or writing to a [`ReadableStorage`] or [`WritableStorage`]
@@ -122,6 +124,7 @@ impl Deref for FileIoError {
         &self.inner
     }
 }
+
 /// Trait for readable storage.
 pub trait ReadableStorage: Debug + Sync + Send {
     /// Stream data from the specified address.
@@ -190,6 +193,30 @@ pub trait WritableStorage: ReadableStorage {
     ///
     /// The number of bytes written, or an error if the write operation fails.
     fn write(&self, offset: u64, object: &[u8]) -> Result<usize, FileIoError>;
+
+    /// Write a batch of objects to the storage.
+    ///
+    /// Implementations may provide a more efficient way to write multiple
+    /// objects at once.
+    ///
+    /// The iterator is expected to be cheap to clone without copying the data.
+    fn write_batch<'a, I: IntoIterator<Item = (u64, &'a [u8])> + Clone>(
+        &self,
+        writes: I,
+    ) -> Result<usize, FileIoError> {
+        writes
+            .into_iter()
+            .try_fold(0_usize, |acc, (offset, object)| {
+                let bytes_written = self.write(offset, object)?;
+                acc.checked_add(bytes_written).ok_or_else(|| {
+                    self.file_io_error(
+                        std::io::Error::other("Overflow when summing bytes written"),
+                        offset,
+                        Some("write_batch".into()),
+                    )
+                })
+            })
+    }
 
     /// Write all nodes to the cache (if any) and persist them
     fn write_cached_nodes(
