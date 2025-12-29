@@ -202,12 +202,6 @@ impl ParallelMerkle {
             .root_mut()
             .take()
             .map(|root| {
-                #[cfg(not(feature = "ethhash"))]
-                let (root_node, root_hash) = NodeStore::<MutableProposal, FileBacked>::hash_helper(
-                    root,
-                    Path::from(&[first_path_component.as_u8()]),
-                )?;
-                #[cfg(feature = "ethhash")]
                 let (root_node, root_hash) =
                     nodestore.hash_helper(root, Path::from(&[first_path_component.as_u8()]))?;
                 Ok(Child::MaybePersisted(root_node, root_hash))

@@ -132,6 +132,11 @@ impl Path {
         self.0.extend(iter);
     }
 
+    /// Push a single nibble to the end of the path.
+    pub fn push(&mut self, nibble: PathComponent) {
+        self.0.push(nibble.as_u8());
+    }
+
     /// Create an iterator that returns the bytes from the underlying nibbles
     /// If there is an odd nibble at the end, it is dropped
     #[must_use]

@@ -13,9 +13,6 @@ use crate::{
     StoredAreaParent, TrieNodeParent, WritableStorage,
 };
 
-#[cfg(not(feature = "ethhash"))]
-use crate::hashednode::hash_node;
-
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -150,8 +147,7 @@ struct SubTrieMetadata {
     parent: TrieNodeParent,
     depth: usize,
     path_prefix: Path,
-    #[cfg(feature = "ethhash")]
-    has_peers: bool,
+    num_siblings: usize, // include this node
 }
 
 /// [`NodeStore`] checker
@@ -250,8 +246,7 @@ where
             parent: TrieNodeParent::Root,
             depth: 0,
             path_prefix: Path::new(),
-            #[cfg(feature = "ethhash")]
-            has_peers: false,
+            num_siblings: 1,
         };
         let mut trie_stats = TrieStats::default();
         let errors = self
@@ -276,9 +271,8 @@ where
             root_hash: subtrie_root_hash,
             parent,
             depth,
-            path_prefix,
-            #[cfg(feature = "ethhash")]
-            has_peers,
+            mut path_prefix,
+            num_siblings,
         } = subtrie;
 
         // check that address is aligned
@@ -325,11 +319,10 @@ where
 
         // compute the hash of the node and check it against the stored hash
         if hash_check {
-            #[cfg(feature = "ethhash")]
-            let hash = Self::compute_node_ethhash(&node, &path_prefix, has_peers);
-            #[cfg(not(feature = "ethhash"))]
-            let hash = hash_node(&node, &path_prefix);
+            let hash = Self::compute_node_hash(&node, &mut path_prefix, num_siblings);
             if hash != subtrie_root_hash {
+                let mut path = path_prefix.clone();
+                path.0.extend_from_slice(node.partial_path());
                 return Err(vec![CheckerError::HashMismatch {
                     path: current_path_prefix,
                     address: subtrie_root_address,
@@ -425,8 +418,7 @@ where
                         parent,
                         depth: depth.saturating_add(1),
                         path_prefix: child_path_prefix,
-                        #[cfg(feature = "ethhash")]
-                        has_peers: num_children != 1,
+                        num_siblings: num_children,
                     };
                     if let Err(e) = self.visit_trie_helper(
                         child_subtrie,
@@ -1036,14 +1028,11 @@ mod test {
         test_write_new_node(&nodestore, branch_node, branch_addr.get());
 
         // Compute the current branch hash
-        #[cfg(feature = "ethhash")]
-        let computed_hash = NodeStore::<Committed, MemStore>::compute_node_ethhash(
+        let computed_hash = NodeStore::<Committed, MemStore>::compute_node_hash(
             branch_node,
-            &Path::from([2, 0]),
-            false,
+            &mut Path::from([2, 0]),
+            1, // 1 being the node itself
         );
-        #[cfg(not(feature = "ethhash"))]
-        let computed_hash = hash_node(branch_node, &Path::from([2, 0]));
 
         // Get parent stored hash
         let (root_node, _) = test_trie
