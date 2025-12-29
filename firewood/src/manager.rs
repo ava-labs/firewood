@@ -303,7 +303,7 @@ impl RevisionManager {
             lock.retain(|p| {
                 let should_retain = !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1;
                 if !should_retain {
-                    discarded = discarded.saturating_add(1);
+                    discarded = discarded.wrapping_add(1);
                 }
                 should_retain
             });
