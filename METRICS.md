@@ -322,86 +322,37 @@ The easiest way to trigger a benchmark is via the GitHub Actions UI:
 3. Select parameters from the dropdowns (task, runner) or enter custom values
 4. Click "Run workflow"
 
-### Running Benchmarks Locally
+### Running Reexecution Locally
 
-Benchmarks can be triggered locally using `just benchmark` (requires nix).
+Reexecution test can be triggered locally using `just` commands (requires nix).
 
-**Parameters:**
-
-| Parameter | Description | Default |
-|-----------|-------------|---------|
-| `firewood` | Firewood commit/branch/tag | `HEAD` (currently checked out commit) |
-| `avalanchego` | AvalancheGo commit/branch/tag | `master` |
-| `task` | Benchmark task name | `c-chain-reexecution-firewood-101-250k` |
-| `runner` | GitHub Actions runner (see [runner config](https://github.com/ava-labs/devops-argocd/blob/main/base/system/actions-runners/action-runner.yaml), search for "runnerScaleSetName") | `avalanche-avalanchego-runner-2ti` |
-| `libevm` | libevm commit/branch/tag (optional) | `` |
-
-**Task Names:**
-
-Predefined tasks follow the pattern `c-chain-reexecution-{db}-{start}-{end}` where:
-
-- `{db}` - database backend (e.g., `firewood`, `hashdb`)
-- `{start}` - start block number
-- `{end}` - end block (e.g., `250k` for 250,000 or `1m` for 1,000,000)
-
-To find available tasks, run in the [AvalancheGo](https://github.com/ava-labs/avalanchego/) repo:
+Example: Trigger a C-Chain reexecution in AvalancheGo, wait for completion, and download results:
 
 ```bash
-./scripts/run_task.sh --list | grep "c-chain-reexecution"
+RUN_ID=$(just trigger-reexecution firewood=v0.0.15 avalanchego=master task=c-chain-reexecution-firewood-101-250k runner=avalanche-avalanchego-runner-2ti) \
+  && just wait-reexecution run_id=$RUN_ID \
+  && just download-reexecution-results run_id=$RUN_ID
 ```
 
-See the [AvalancheGo C-Chain benchmark docs](https://github.com/ava-labs/avalanchego/blob/master/tests/reexecute/c/README.md) for the full list and details.
-
-**Granular Inputs:**
-
-If no predefined task fits your needs, leave `task` empty and use granular inputs via the CI workflow:
-
-- `config` - VM config (e.g., `archive`, `firewood`)
-- `start-block` - first block to execute
-- `end-block` - last block to execute
-- `block-dir-src` - S3 source for block data
-- `current-state-dir-src` - S3 source for state snapshot
-
-**Examples:**
+**Custom example:** Trigger with specific block range and config:
 
 ```bash
-# Run with defaults (current HEAD, master, default task/runner)
-just benchmark
-
-# With named parameters
-just benchmark \
-  firewood=v0.0.15 \
-  avalanchego=master \
-  task=c-chain-reexecution-firewood-101-250k \
-  runner=avalanche-avalanchego-runner-2ti
-
-# With libevm
-just benchmark \
-  firewood=v0.0.15 \
-  avalanchego=master \
-  task=c-chain-reexecution-firewood-101-250k \
-  runner=avalanche-avalanchego-runner-2ti \
-  libevm=v1.0.0
+RUN_ID=$(just trigger-custom-reexecution firewood=v0.0.15 avalanchego=master config=firewood start-block=101 end-block=250000 block-dir-src=cchain-mainnet-blocks-1m-ldb current-state-dir-src=cchain-mainnet-state-100-fw runner=avalanche-avalanchego-runner-2ti) \
+  && just wait-reexecution run_id=$RUN_ID \
+  && just download-reexecution-results run_id=$RUN_ID
 ```
 
-### Composable Commands
+**Available commands:**
 
-Individual steps can be run separately:
+| Command | Description |
+|---------|-------------|
+| `trigger-reexecution` | Trigger task-based reexecution, returns run_id |
+| `trigger-custom-reexecution` | Trigger with custom block range/config |
+| `wait-reexecution` | Wait for run to complete |
+| `download-reexecution-results` | Download results to `./results/` |
+| `list-reexecutions` | List recent reexecution runs |
 
-```bash
-# Trigger benchmark, returns run_id
-just trigger-benchmark \
-  firewood=v0.0.15 \
-  avalanchego=master \
-  task=c-chain-reexecution-firewood-101-250k \
-  runner=avalanche-avalanchego-runner-2ti
+**Tasks and runners** are defined in AvalancheGo:
 
-# Wait for a specific run to complete
-just wait-benchmark run_id=19938272417
-
-# Download results from a specific run (saves to ./results/)
-just download-benchmark-results run_id=19938272417
-
-# List recent benchmark runs
-just list-benchmarks
-```
+- [Available tasks](https://github.com/ava-labs/avalanchego/blob/master/.github/workflows/c-chain-reexecution-benchmark-container.json)
+- [C-Chain benchmark docs](https://github.com/ava-labs/avalanchego/blob/master/tests/reexecute/c/README.md)
