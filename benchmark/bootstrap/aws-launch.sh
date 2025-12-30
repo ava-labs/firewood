@@ -8,6 +8,7 @@ AVALANCHEGO_BRANCH=""
 LIBEVM_BRANCH=""
 NBLOCKS="1m"
 CONFIG="firewood"
+PROFILE=""
 METRICS_SERVER="true"
 REGION="us-west-2"
 DRY_RUN=false
@@ -15,6 +16,7 @@ SPOT_INSTANCE=false
 SHOW_INSTANCES=false
 TERMINATE_MINE=false
 TERMINATE_INSTANCES=()
+COMMON_ARGS=()
 
 # Valid instance types and their architectures
 declare -A VALID_INSTANCES=(
@@ -64,6 +66,7 @@ show_usage() {
     echo "  --libevm-branch BRANCH      LibEVM git branch to checkout"
     echo "  --nblocks BLOCKS            Number of blocks to download (default: 1m)"
     echo "  --config CONFIG             The VM reexecution config to use (default: firewood)"
+    echo "  --profile PROFILE           AWS CLI profile to use (default: AWS default)"
     echo "  --metrics-server BOOL       Enable metrics server (true/false, default: true)"
     echo "  --region REGION             AWS region (default: us-west-2)"
     echo "  --spot                      Use spot instance pricing (default depends on instance type)"
@@ -130,6 +133,10 @@ while [[ $# -gt 0 ]]; do
             CONFIG="$2"
             shift 2
             ;;
+        --profile)
+            PROFILE="$2"
+            shift 2
+            ;;
         --metrics-server)
             # Normalize to lowercase
             METRICS_SERVER="${2,,}"
@@ -185,6 +192,11 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [ -n "$PROFILE" ]; then
+    COMMON_ARGS+=("--profile" "$PROFILE")
+fi
+COMMON_ARGS+=("--region" "$REGION")
+
 # Handle --terminate option
 if [ ${#TERMINATE_INSTANCES[@]} -gt 0 ]; then
     # Check if any incompatible options are present
@@ -192,13 +204,13 @@ if [ ${#TERMINATE_INSTANCES[@]} -gt 0 ]; then
        [ -n "$LIBEVM_BRANCH" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
        [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ] || \
        [ "$SHOW_INSTANCES" = true ] || [ "$TERMINATE_MINE" = true ]; then
-        echo "Error: --terminate cannot be used with other options except --region"
+        echo "Error: --terminate cannot be used with other options except --profile and --region"
         exit 1
     fi
     
     echo "Terminating instances: ${TERMINATE_INSTANCES[*]}"
     aws ec2 terminate-instances \
-      --region "$REGION" \
+      "${COMMON_ARGS[*]}" \
       --instance-ids "${TERMINATE_INSTANCES[@]}"
     exit 0
 fi
@@ -210,13 +222,13 @@ if [ "$TERMINATE_MINE" = true ]; then
        [ -n "$LIBEVM_BRANCH" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
        [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ] || \
        [ "$SHOW_INSTANCES" = true ]; then
-        echo "Error: --terminate-mine cannot be used with other options except --region"
+        echo "Error: --terminate-mine cannot be used with other options except --profile and --region"
         exit 1
     fi
     
     # Get instances created by current user (Name tag starts with username)
     INSTANCE_IDS=$(aws ec2 describe-instances \
-      --region "$REGION" \
+      ${COMMON_ARGS[*]} \
       --filters "Name=tag:Name,Values=$USER-*" "Name=instance-state-name,Values=running" \
       --query "Reservations[*].Instances[*].InstanceId" \
       --output text)
@@ -228,7 +240,7 @@ if [ "$TERMINATE_MINE" = true ]; then
     
     echo "Terminating instances for user $USER: $INSTANCE_IDS"
     aws ec2 terminate-instances \
-      --region "$REGION" \
+      ${COMMON_ARGS[*]} \
       --instance-ids $INSTANCE_IDS
     exit 0
 fi
@@ -245,7 +257,7 @@ if [ "$SHOW_INSTANCES" = true ]; then
     
     # Execute the AWS command to show instances
     aws ec2 describe-instances \
-      --region "$REGION" \
+      ${COMMON_ARGS[*]} \
       --filters "Name=key-name,Values=rkuris" "Name=instance-state-name,Values=running" \
       --query "Reservations[*].Instances[?PublicIpAddress!=null].[InstanceId, LaunchTime, PublicIpAddress, InstanceType, Tags[?Key=='Name']|[0].Value]" \
       --output json | jq -r '.[][] | @sh'
@@ -262,6 +274,7 @@ echo "  AvalancheGo Branch: ${AVALANCHEGO_BRANCH:-default}"
 echo "  LibEVM Branch: ${LIBEVM_BRANCH:-default}"
 echo "  Number of Blocks: $NBLOCKS"
 echo "  Config: $CONFIG"
+echo "  AWS Profile: $PROFILE"
 echo "  Metrics Server: $METRICS_SERVER"
 echo "  Region: $REGION"
 if [ "$SPOT_INSTANCE" = true ]; then
@@ -281,7 +294,7 @@ if [ "$DRY_RUN" = true ]; then
 else
     # find the latest ubuntu-noble base image ID (only works for intel processors)
     AMI_ID=$(aws ec2 describe-images \
-        --region "$REGION" \
+        ${COMMON_ARGS[*]} \
         --owners 099720109477 \
         --filters "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-$TYPE-server-*" \
                   "Name=state,Values=available" \
@@ -521,8 +534,7 @@ fi
 if [ "$DRY_RUN" = true ]; then
     echo "DRY RUN - Would execute the following command:"
     echo ""
-    echo "aws ec2 run-instances \\"
-    echo "  --region \"$REGION\" \\"
+    echo "aws ec2 run-instances ${COMMON_ARGS[*]} \\"
     echo "  --image-id \"$AMI_ID\" \\"
     echo "  --count 1 \\"
     echo "  --instance-type $INSTANCE_TYPE \\"
@@ -543,6 +555,7 @@ else
     set -e
     # Build the AWS command with conditional spot options
     AWS_CMD="aws ec2 run-instances \
+        ${COMMON_ARGS[*]} \
       --region \"$REGION\" \
       --image-id \"$AMI_ID\" \
       --count 1 \
@@ -568,7 +581,7 @@ else
 fi
 
 if [ "$DRY_RUN" = false ]; then
-    # IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[].Instances[].PublicIpAddress' --output text)
+    # IP=$(aws ec2 describe-instances --profile "$PROFILE" --instance-ids "$INSTANCE_ID" --query 'Reservations[].Instances[].PublicIpAddress' --output text)
     set +e
 
     #IP=$(echo "$JSON" | jq -r '.PublicIpAddress')
