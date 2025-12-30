@@ -1,4 +1,6 @@
-name: Track Performance
+# Triggers AvalancheGo's C-Chain reexecution benchmark and publishes
+# results to GitHub Pages for trend analysis.
+name: C-Chain Performance Tracking
 
 on:
   workflow_dispatch:
@@ -40,9 +42,12 @@ on:
           - avalanche-avalanchego-runner-2ti
           - avago-runner-i4i-4xlarge-local-ssd
           - avago-runner-m6i-4xlarge-ebs-fast
+      timeout-minutes:
+        description: 'Timeout in minutes for the benchmark job'
+        default: '120'
 
 jobs:
-  c-chain-benchmark:
+  record-benchmark-to-gh-pages:
     runs-on: ubuntu-latest
     permissions:
       contents: write  # Required for github-action-benchmark to push to gh-pages
@@ -73,7 +78,7 @@ jobs:
             fi
           fi
 
-      - name: Trigger AvalancheGo benchmark
+      - name: Trigger C-Chain reexecution in AvalancheGo
         id: trigger
         shell: nix develop ./ffi --command bash {0}
         run: |
@@ -81,46 +86,9 @@ jobs:
           echo "firewood=$FIREWOOD" >> "$GITHUB_OUTPUT"
           
           if [ -n "${{ inputs.task }}" ]; then
-            # Task-based mode: use just command
-            RUN_ID=$(just trigger-benchmark "$FIREWOOD" "${{ inputs.avalanchego }}" "${{ inputs.task }}" "${{ inputs.runner }}" "${{ inputs.libevm }}")
+            RUN_ID=$(just trigger-reexecution "$FIREWOOD" "${{ inputs.avalanchego }}" "${{ inputs.task }}" "${{ inputs.runner }}" "${{ inputs.libevm }}" "${{ inputs.timeout-minutes }}")
           else
-            # Granular mode: use direct gh with custom params
-            LIBEVM_FLAG=""
-            if [ -n "${{ inputs.libevm }}" ]; then
-              LIBEVM_FLAG="-f libevm=${{ inputs.libevm }}"
-            fi
-            
-            gh workflow run "Firewood Reexecution Benchmark" \
-              --repo ava-labs/avalanchego \
-              --ref "${{ inputs.avalanchego }}" \
-              -f firewood="$FIREWOOD" \
-              -f config="${{ inputs.config }}" \
-              -f start-block="${{ inputs.start-block }}" \
-              -f end-block="${{ inputs.end-block }}" \
-              -f block-dir-src="${{ inputs.block-dir-src }}" \
-              -f current-state-dir-src="${{ inputs.current-state-dir-src }}" \
-              -f runner="${{ inputs.runner }}" \
-              $LIBEVM_FLAG
-            
-            # Wait for GitHub API to register the workflow run (retry up to 3min)
-            for i in {1..18}; do
-              sleep 10
-              RUN_ID=$(gh run list \
-                --repo ava-labs/avalanchego \
-                --workflow "Firewood Reexecution Benchmark" \
-                --limit 5 \
-                --json databaseId,createdAt \
-                --jq '[.[] | select(.createdAt | fromdateiso8601 > (now - 180))] | .[0].databaseId')
-              
-              if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
-                break
-              fi
-            done
-            
-            if [ -z "$RUN_ID" ] || [ "$RUN_ID" = "null" ]; then
-              echo "Could not find triggered workflow run after 3min"
-              exit 1
-            fi
+            RUN_ID=$(just trigger-custom-reexecution "$FIREWOOD" "${{ inputs.avalanchego }}" "${{ inputs.config }}" "${{ inputs.start-block }}" "${{ inputs.end-block }}" "${{ inputs.block-dir-src }}" "${{ inputs.current-state-dir-src }}" "${{ inputs.runner }}" "${{ inputs.libevm }}" "${{ inputs.timeout-minutes }}")
           fi
           
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
@@ -128,18 +96,17 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
 
-      - name: Wait for benchmark completion
+      - name: Wait for completion
         shell: nix develop ./ffi --command bash {0}
-        run: just wait-benchmark "${{ steps.trigger.outputs.run_id }}"
+        run: just wait-reexecution "${{ steps.trigger.outputs.run_id }}"
         env:
           GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
-        timeout-minutes: 60
 
-      - name: Download benchmark results
+      - name: Download artifacts
         id: download
         shell: nix develop ./ffi --command bash {0}
         run: |
-          just download-benchmark-results "${{ steps.trigger.outputs.run_id }}"
+          just download-reexecution-results "${{ steps.trigger.outputs.run_id }}"
           
           # Determine target dashboard
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
@@ -171,35 +138,39 @@ jobs:
           if [ "${{ steps.store.outcome }}" == "failure" ]; then
             echo "::warning::Benchmark storage failed - results were not saved to GitHub Pages"
           fi
-          echo "## Firewood Performance Benchmark Results" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Configuration:**" >> $GITHUB_STEP_SUMMARY
           
-          if [ -n "${{ inputs.task }}" ]; then
-            echo "- Mode: Task-based" >> $GITHUB_STEP_SUMMARY
-            echo "- Task: \`${{ inputs.task }}\`" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "- Mode: Custom parameters" >> $GITHUB_STEP_SUMMARY
-            echo "- Config: \`${{ inputs.config }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- Blocks: \`${{ inputs.start-block }}\` → \`${{ inputs.end-block }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- Block source: \`${{ inputs.block-dir-src }}\`" >> $GITHUB_STEP_SUMMARY
-            echo "- State source: \`${{ inputs.current-state-dir-src }}\`" >> $GITHUB_STEP_SUMMARY
-          fi
-          
-          echo "- Firewood: \`${{ steps.trigger.outputs.firewood }}\`" >> $GITHUB_STEP_SUMMARY
-          if [ -n "${{ inputs.libevm }}" ]; then
-            echo "- libevm: \`${{ inputs.libevm }}\`" >> $GITHUB_STEP_SUMMARY
-          fi
-          echo "- AvalancheGo: \`${{ inputs.avalanchego }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "- Runner: \`${{ inputs.runner }}\`" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          
-          if [ "${{ steps.download.outcome }}" = "success" ]; then
-            echo "**Links:**" >> $GITHUB_STEP_SUMMARY
-            echo "- [AvalancheGo Workflow](${{ steps.trigger.outputs.run_url }})" >> $GITHUB_STEP_SUMMARY
-            echo "- [Performance Trends](https://ava-labs.github.io/firewood/${{ steps.download.outputs.data-dir }}/)" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "**Status:** Failed" >> $GITHUB_STEP_SUMMARY
-            echo "Check [workflow logs](${{ steps.trigger.outputs.run_url }}) for details." >> $GITHUB_STEP_SUMMARY
-          fi
+          {
+            echo "## Firewood Performance Benchmark Results"
+            echo
+            echo "**Configuration:**"
+            
+            if [ -n "${{ inputs.task }}" ]; then
+              echo "- Mode: Task-based"
+              echo "- Task: \`${{ inputs.task }}\`"
+            else
+              echo "- Mode: Custom parameters"
+              echo "- Config: \`${{ inputs.config }}\`"
+              echo "- Blocks: \`${{ inputs.start-block }}\` → \`${{ inputs.end-block }}\`"
+              echo "- Block source: \`${{ inputs.block-dir-src }}\`"
+              echo "- State source: \`${{ inputs.current-state-dir-src }}\`"
+            fi
+            
+            echo "- Firewood: \`${{ steps.trigger.outputs.firewood }}\`"
+            if [ -n "${{ inputs.libevm }}" ]; then
+              echo "- libevm: \`${{ inputs.libevm }}\`"
+            fi
+            echo "- AvalancheGo: \`${{ inputs.avalanchego }}\`"
+            echo "- Runner: \`${{ inputs.runner }}\`"
+            echo "- Timeout: \`${{ inputs.timeout-minutes }}\` minutes"
+            echo
+            
+            if [ "${{ steps.download.outcome }}" = "success" ]; then
+              echo "**Links:**"
+              echo "- [AvalancheGo Workflow](${{ steps.trigger.outputs.run_url }})"
+              echo "- [Performance Trends](https://ava-labs.github.io/firewood/${{ steps.download.outputs.data-dir }}/)"
+            else
+              echo "**Status:** Failed"
+              echo "Check [workflow logs](${{ steps.trigger.outputs.run_url }}) for details."
+            fi
+          } >> $GITHUB_STEP_SUMMARY
 

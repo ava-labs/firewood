@@ -139,54 +139,26 @@ update-ffi-flake: check-nix
     echo "checking for a consistent golang verion"
     ../scripts/run-just.sh check-golang-version
 
-# Trigger Reexecution Benchmark
-# Usage: just trigger-benchmark <firewood> <avalanchego> <task> <runner> [libevm]
-trigger-benchmark firewood avalanchego task runner libevm="": check-nix
-    #!/usr/bin/env -S bash -euo pipefail
-    
-    GH="nix run ./ffi#gh --"
-    
-    LIBEVM_FLAG=""
-    if [ -n "{{ libevm }}" ]; then
-        LIBEVM_FLAG="-f libevm={{ libevm }}"
-    fi
-    
-    $GH workflow run "Firewood Reexecution Benchmark" \
-        --repo ava-labs/avalanchego \
-        --ref "{{ avalanchego }}" \
-        -f firewood="{{ firewood }}" \
-        -f task="{{ task }}" \
-        -f runner="{{ runner }}" \
-        $LIBEVM_FLAG
-    
-    # Wait for GitHub to register the run (retry up to 3min)
-    for i in {1..18}; do
-        sleep 10
-        RUN_ID=$($GH run list \
-            --repo ava-labs/avalanchego \
-            --workflow "Firewood Reexecution Benchmark" \
-            --limit 5 \
-            --json databaseId,createdAt \
-            --jq '[.[] | select(.createdAt | fromdateiso8601 > (now - 180))] | .[0].databaseId')
-        
-        if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
-            echo "$RUN_ID"
-            exit 0
-        fi
-    done
-    
-    echo "Error: Could not find triggered workflow run after 3min" >&2
-    exit 1
+# Trigger task based reexecution in AvalancheGo
+trigger-reexecution firewood avalanchego task runner libevm="" timeout-minutes="120":
+    just _trigger-workflow "{{ firewood }}" "{{ libevm }}" "{{ avalanchego }}" "{{ runner }}" "{{ timeout-minutes }}" \
+        -f "task={{ task }}"
 
-# Wait for reexecution benchmark run to complete (2h timeout)
-# Usage: just wait-benchmark <run_id>
-wait-benchmark run_id: check-nix
-    #!/usr/bin/env -S bash -euo pipefail
-    timeout -k 1m 2h nix run ./ffi#gh -- run watch "{{ run_id }}" --repo ava-labs/avalanchego --exit-status
+# Trigger custom param reexecution in AvalancheGo
+trigger-custom-reexecution firewood avalanchego config start-block end-block block-dir-src current-state-dir-src runner libevm="" timeout-minutes="120":
+    just _trigger-workflow "{{ firewood }}" "{{ libevm }}" "{{ avalanchego }}" "{{ runner }}" "{{ timeout-minutes }}" \
+        -f "config={{ config }}" \
+        -f "start-block={{ start-block }}" \
+        -f "end-block={{ end-block }}" \
+        -f "block-dir-src={{ block-dir-src }}" \
+        -f "current-state-dir-src={{ current-state-dir-src }}"
 
-# Download benchmark results
-# Usage: just download-benchmark-results <run_id>
-download-benchmark-results run_id: check-nix
+# Wait for reexecution run to complete
+wait-reexecution run_id: check-nix
+    nix run ./ffi#gh -- run watch "{{ run_id }}" --repo ava-labs/avalanchego --exit-status
+
+# Download reexecution results
+download-reexecution-results run_id: check-nix
     #!/usr/bin/env -S bash -euo pipefail
     mkdir -p ./results
     nix run ./ffi#gh -- run download "{{ run_id }}" \
@@ -195,43 +167,56 @@ download-benchmark-results run_id: check-nix
         --dir ./results
     cat ./results/benchmark-output.txt
 
-# Run full benchmark: trigger, wait, download (composes the above)
-# Usage: just benchmark [firewood] [avalanchego] [task] [runner] [libevm]
-benchmark firewood="HEAD" avalanchego="master" task="c-chain-reexecution-firewood-101-250k" runner="avalanche-avalanchego-runner-2ti" libevm="": check-nix
-    #!/usr/bin/env -S bash -euo pipefail
-    
-    FIREWOOD="{{ firewood }}"
-    if [[ "$FIREWOOD" == "HEAD" ]]; then
-        FIREWOOD=$(git rev-parse HEAD)
-    fi
-    
-    echo "Triggering reexecution benchmark in AvalancheGo with parameters:"
-    echo "  Firewood: $FIREWOOD"
-    echo "  AvalancheGo: {{ avalanchego }}"
-    echo "  Task: {{ task }}"
-    echo "  Runner: {{ runner }}"
-    if [ -n "{{ libevm }}" ]; then
-        echo "  LibEVM: {{ libevm }}"
-    else
-        echo "  LibEVM: (not set)"
-    fi
-    echo ""
-    
-    RUN_ID=$(just trigger-benchmark "$FIREWOOD" "{{ avalanchego }}" "{{ task }}" "{{ runner }}" "{{ libevm }}")
-    echo "  Run ID: $RUN_ID"
-    echo "  Monitor progress here: https://github.com/ava-labs/avalanchego/actions/runs/$RUN_ID"
-    echo ""
-    
-    echo "Waiting for benchmark completion..."
-    just wait-benchmark "$RUN_ID"
-    echo ""
-    
-    echo "Downloading results..."
-    just download-benchmark-results "$RUN_ID"
-    echo ""
-    echo "Results saved to: ./results/benchmark-output.txt"
+# List recent reexecution runs in AvalancheGo
+list-reexecutions: check-nix
+    nix run ./ffi#gh -- run list --repo ava-labs/avalanchego --workflow="C-Chain Re-Execution Benchmark w/ Container" --limit 10
 
-# List recent AvalancheGo benchmark runs
-list-benchmarks: check-nix
+# Internal helpers (not intended for direct use)
+
+_trigger-workflow firewood libevm avalanchego runner timeout-minutes +extra_flags: check-nix
     #!/usr/bin/env -S bash -euo pipefail
-    nix run ./ffi#gh -- run list --repo ava-labs/avalanchego --workflow="Firewood Reexecution Benchmark" --limit 10
+    GH="nix run ./ffi#gh --"
+    
+    # Validate refs contain only safe characters
+    if [[ ! "{{ firewood }}" =~ ^[a-zA-Z0-9/_.-]+$ ]]; then
+        echo "Error: firewood ref contains invalid characters: {{ firewood }}" >&2
+        exit 1
+    fi
+    if [[ -n "{{ libevm }}" && ! "{{ libevm }}" =~ ^[a-zA-Z0-9/_.-]+$ ]]; then
+        echo "Error: libevm ref contains invalid characters: {{ libevm }}" >&2
+        exit 1
+    fi
+    
+    WITH_VALUE="firewood={{ firewood }}"
+    if [ -n "{{ libevm }}" ]; then
+        WITH_VALUE="${WITH_VALUE},libevm={{ libevm }}"
+    fi
+    
+    $GH workflow run "C-Chain Re-Execution Benchmark w/ Container" \
+        --repo ava-labs/avalanchego \
+        --ref "{{ avalanchego }}" \
+        -f runner="{{ runner }}" \
+        -f timeout-minutes="{{ timeout-minutes }}" \
+        -f with="$WITH_VALUE" \
+        {{ extra_flags }}
+    
+    just _wait-for-workflow-run
+
+_wait-for-workflow-run: check-nix
+    #!/usr/bin/env -S bash -euo pipefail
+    GH="nix run ./ffi#gh --"
+    for i in {1..18}; do
+        sleep 10
+        RUN_ID=$($GH run list \
+            --repo ava-labs/avalanchego \
+            --workflow "C-Chain Re-Execution Benchmark w/ Container" \
+            --limit 5 \
+            --json databaseId,createdAt \
+            --jq '[.[] | select(.createdAt | fromdateiso8601 > (now - 180))] | .[0].databaseId')
+        if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
+            echo "$RUN_ID"
+            exit 0
+        fi
+    done
+    echo "Error: Could not find workflow run after 3min. Check AvalancheGo logs." >&2
+    exit 1
