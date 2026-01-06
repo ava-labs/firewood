@@ -129,7 +129,9 @@ func (it *Iterator) Next() bool {
 // NextBorrowed advances the iterator like [Iterator.Next], but the slices returned
 // by [Iterator.Key] and [Iterator.Value] borrow Rust-owned memory instead of copying.
 // This is faster than Next but the slices are only valid until the next call to
-// [Iterator.Next], [Iterator.NextBorrowed], or [Iterator.Drop]. Do not retain, store, or modify the slices.
+// [Iterator.Next], [Iterator.NextBorrowed], or [Iterator.Drop].
+//
+// WARNING: Do not retain, store, or modify the slices. Doing so results in undefined behavior.
 //
 // It returns false when the iterator is exhausted or an error occurs, same as Next.
 func (it *Iterator) NextBorrowed() bool {
@@ -173,7 +175,8 @@ func (it *Iterator) Err() error {
 	return it.err
 }
 
-// Drop releases the resources associated with the iterator.
+// Drop releases the resources associated with the iterator. This must be called
+// when the iterator is no longer needed to avoid memory leaks. 
 //
 // It is safe to call Drop multiple times; subsequent calls after the first are no-ops.
 func (it *Iterator) Drop() error {

@@ -75,9 +75,10 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 // starting at the first key greater than or equal to the provided key.
 // Pass nil or an empty slice to iterate from the beginning.
 //
-// The Iterator must be released with [Iterator.Drop] when no longer needed.
+// The Iterator must be released with [Iterator.Drop] when no longer needed,
+// otherwise the underlying proposal will never be properly freed.
 //
-// It returns an error if Drop or Commit has already been called.
+// It returns an error if Drop or Commit has already been called on the Proposal.
 func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 	if p.handle == nil {
 		return nil, errDBClosed
