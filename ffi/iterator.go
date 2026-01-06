@@ -176,7 +176,7 @@ func (it *Iterator) Err() error {
 }
 
 // Drop releases the resources associated with the iterator. This must be called
-// when the iterator is no longer needed to avoid memory leaks. 
+// when the iterator is no longer needed to avoid memory leaks.
 //
 // It is safe to call Drop multiple times; subsequent calls after the first are no-ops.
 func (it *Iterator) Drop() error {
