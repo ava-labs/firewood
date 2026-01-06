@@ -9,6 +9,7 @@ Before running the script, you'll need:
 - AWS CLI installed and configured on your machine
 - Authenticated AWS session: `aws sso login`
   - Your session should be configured to use the `Experimental` account.
+  - This must either be the AWS default or named and passed to this script as `--profile PROFILE`.
 
 ## What It Does
 
