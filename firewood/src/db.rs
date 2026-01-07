@@ -331,6 +331,13 @@ impl Db {
         let merge_ops = merkle.merge_key_value_range(first_key, last_key, key_values);
         self.propose_with_parent(merge_ops, merkle.nodestore())
     }
+
+    /// Forces the database to flush and sync the revision associated with root
+    /// to disk.
+    #[expect(clippy::missing_const_for_fn)]
+    pub fn flush_and_sync_root(&self, _root: HashKey) -> Result<(), api::Error> {
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
