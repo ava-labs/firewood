@@ -47,6 +47,13 @@ mod option_bytes {
     }
 }
 
+/// Strongly-typed proposal identifier.
+///
+/// Wraps a `u64` to prevent accidental misuse of raw integers as proposal IDs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ProposalId(pub u64);
+
 /// Operation that reads a key from the latest committed revision.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetLatest {
@@ -59,7 +66,7 @@ pub struct GetLatest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GetFromProposal {
     /// The proposal ID assigned during recording.
-    pub proposal_id: u64,
+    pub proposal_id: ProposalId,
     /// The key to read.
     #[serde(with = "serde_bytes")]
     pub key: Box<[u8]>,
@@ -100,25 +107,25 @@ pub struct ProposeOnDB {
     /// The key/value operations in this proposal.
     pub pairs: Vec<KeyValueOp>,
     /// The proposal ID assigned to the returned handle.
-    pub returned_proposal_id: u64,
+    pub returned_proposal_id: ProposalId,
 }
 
 /// Proposal created on top of an existing uncommitted proposal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProposeOnProposal {
     /// The parent proposal ID.
-    pub proposal_id: u64,
+    pub proposal_id: ProposalId,
     /// The key/value operations in this proposal.
     pub pairs: Vec<KeyValueOp>,
     /// The proposal ID assigned to the returned handle.
-    pub returned_proposal_id: u64,
+    pub returned_proposal_id: ProposalId,
 }
 
 /// Commit operation for a proposal.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Commit {
     /// The proposal ID being committed.
-    pub proposal_id: u64,
+    pub proposal_id: ProposalId,
     /// The root hash returned by the commit, if any.
     #[serde(with = "option_bytes")]
     pub returned_hash: Option<Box<[u8]>>,
@@ -192,27 +199,43 @@ pub enum ReplayError {
     InvalidHash(#[from] InvalidTrieHashLength),
 
     /// The log referenced a proposal ID that was not created or already consumed.
-    #[error("unknown proposal ID {0}")]
-    UnknownProposal(u64),
+    #[error("unknown proposal ID {}", .0.0)]
+    UnknownProposal(ProposalId),
 }
 
 /// Alias for the batch operation type used in replay.
 type BoxedBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
 
-/// Converts a slice of [`KeyValueOp`] to firewood batch operations.
-fn to_batch_ops(pairs: &[KeyValueOp]) -> Vec<BoxedBatchOp> {
+/// Consumes a `Vec` of [`KeyValueOp`] and converts them to firewood batch operations.
+///
+/// Takes ownership to avoid cloning keys and values in the hot path.
+fn into_batch_ops(pairs: Vec<KeyValueOp>) -> Vec<BoxedBatchOp> {
     pairs
-        .iter()
-        .map(|op| match &op.value {
+        .into_iter()
+        .map(|op| match op.value {
             Some(value) => BatchOp::Put {
-                key: op.key.clone(),
-                value: value.clone(),
+                key: op.key,
+                value,
             },
-            None => BatchOp::DeleteRange {
-                prefix: op.key.clone(),
-            },
+            None => BatchOp::DeleteRange { prefix: op.key },
         })
         .collect()
+}
+
+/// Retrieves a proposal reference from the map, returning an error if not found.
+fn get_proposal<'a, 'db>(
+    proposals: &'a HashMap<ProposalId, Proposal<'db>>,
+    id: ProposalId,
+) -> Result<&'a Proposal<'db>, ReplayError> {
+    proposals.get(&id).ok_or(ReplayError::UnknownProposal(id))
+}
+
+/// Removes and returns a proposal from the map, returning an error if not found.
+fn take_proposal<'db>(
+    proposals: &mut HashMap<ProposalId, Proposal<'db>>,
+    id: ProposalId,
+) -> Result<Proposal<'db>, ReplayError> {
+    proposals.remove(&id).ok_or(ReplayError::UnknownProposal(id))
 }
 
 /// Applies a single operation to the database.
@@ -220,7 +243,7 @@ fn to_batch_ops(pairs: &[KeyValueOp]) -> Vec<BoxedBatchOp> {
 /// Returns the root hash if the operation was a commit that produced one.
 fn apply_operation<'db>(
     db: &'db Db,
-    proposals: &mut HashMap<u64, Proposal<'db>>,
+    proposals: &mut HashMap<ProposalId, Proposal<'db>>,
     operation: DbOperation,
 ) -> Result<Option<Box<[u8]>>, ReplayError> {
     match operation {
@@ -238,15 +261,13 @@ fn apply_operation<'db>(
         }
 
         DbOperation::GetFromProposal(GetFromProposal { proposal_id, key }) => {
-            let proposal = proposals
-                .get(&proposal_id)
-                .ok_or(ReplayError::UnknownProposal(proposal_id))?;
+            let proposal = get_proposal(proposals, proposal_id)?;
             let _ = DbViewApi::val(proposal, key)?;
             Ok(None)
         }
 
         DbOperation::Batch(Batch { pairs }) => {
-            let ops = to_batch_ops(&pairs);
+            let ops = into_batch_ops(pairs);
             let proposal = DbApi::propose(db, ops)?;
             proposal.commit()?;
             Ok(None)
@@ -256,7 +277,7 @@ fn apply_operation<'db>(
             pairs,
             returned_proposal_id,
         }) => {
-            let ops = to_batch_ops(&pairs);
+            let ops = into_batch_ops(pairs);
             let start = Instant::now();
             let proposal = DbApi::propose(db, ops)?;
             firewood_counter!("replay.propose_ns", "Time spent in propose (ns)")
@@ -271,14 +292,10 @@ fn apply_operation<'db>(
             pairs,
             returned_proposal_id,
         }) => {
-            let ops = to_batch_ops(&pairs);
+            let ops = into_batch_ops(pairs);
             let start = Instant::now();
-            let new_proposal = {
-                let parent = proposals
-                    .get(&proposal_id)
-                    .ok_or(ReplayError::UnknownProposal(proposal_id))?;
-                ProposalApi::propose(parent, ops)?
-            };
+            let parent = get_proposal(proposals, proposal_id)?;
+            let new_proposal = ProposalApi::propose(parent, ops)?;
             firewood_counter!("replay.propose_ns", "Time spent in propose (ns)")
                 .increment(start.elapsed().as_nanos() as u64);
             firewood_counter!("replay.propose", "Number of propose calls").increment(1);
@@ -290,9 +307,7 @@ fn apply_operation<'db>(
             proposal_id,
             returned_hash,
         }) => {
-            let proposal = proposals
-                .remove(&proposal_id)
-                .ok_or(ReplayError::UnknownProposal(proposal_id))?;
+            let proposal = take_proposal(proposals, proposal_id)?;
             let start = Instant::now();
             proposal.commit()?;
             firewood_counter!("replay.commit_ns", "Time spent in commit (ns)")
@@ -306,7 +321,7 @@ fn apply_operation<'db>(
 /// Replays all operations from a length-prefixed replay log.
 ///
 /// The log is expected to be a sequence of segments, each formatted as:
-/// `[len: u64 LE][rkyv(ReplayLog) bytes]`
+/// `[len: u64 LE][message_pack(ReplayLog) bytes]`
 ///
 /// # Arguments
 ///
@@ -330,7 +345,7 @@ pub fn replay_from_reader<R: Read>(
     db: &Db,
     max_commits: Option<u64>,
 ) -> Result<Option<Box<[u8]>>, ReplayError> {
-    let mut proposals: HashMap<u64, Proposal<'_>> = HashMap::new();
+    let mut proposals: HashMap<ProposalId, Proposal<'_>> = HashMap::new();
     let mut last_commit_hash = None;
     let mut commit_count = 0u64;
     let max = max_commits.unwrap_or(u64::MAX);
@@ -460,10 +475,10 @@ mod tests {
         let ops = vec![
             DbOperation::ProposeOnDB(ProposeOnDB {
                 pairs,
-                returned_proposal_id: 1,
+                returned_proposal_id: ProposalId(1),
             }),
             DbOperation::Commit(Commit {
-                proposal_id: 1,
+                proposal_id: ProposalId(1),
                 returned_hash: None,
             }),
         ];
@@ -496,22 +511,22 @@ mod tests {
                     key: vec![1].into_boxed_slice(),
                     value: Some(vec![10].into_boxed_slice()),
                 }],
-                returned_proposal_id: 1,
+                returned_proposal_id: ProposalId(1),
             }),
             DbOperation::ProposeOnProposal(ProposeOnProposal {
-                proposal_id: 1,
+                proposal_id: ProposalId(1),
                 pairs: vec![KeyValueOp {
                     key: vec![2].into_boxed_slice(),
                     value: Some(vec![20].into_boxed_slice()),
                 }],
-                returned_proposal_id: 2,
+                returned_proposal_id: ProposalId(2),
             }),
             DbOperation::Commit(Commit {
-                proposal_id: 1,
+                proposal_id: ProposalId(1),
                 returned_hash: None,
             }),
             DbOperation::Commit(Commit {
-                proposal_id: 2,
+                proposal_id: ProposalId(2),
                 returned_hash: None,
             }),
         ];
