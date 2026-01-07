@@ -244,15 +244,16 @@ impl DatabaseHandle {
         self.db.dump_to_string().map_err(api::Error::from)
     }
 
-    /// Forces the database to persist the current state to disk.
+    /// Forces the database to flush and sync the revision associated with root
+    /// to disk.
     ///
     /// NOTE: this method is currently a no-op.
     ///
     /// # Errors
     ///
     /// An error is returned if unable to persist to disk.
-    pub fn persist_now(&self) -> Result<(), api::Error> {
-        self.db.persist_now()
+    pub fn flush_and_sync_root(&self, root: HashKey) -> Result<(), api::Error> {
+        self.db.flush_and_sync_root(root)
     }
 }
 

@@ -1335,11 +1335,11 @@ func TestFjallStore(t *testing.T) {
 	}
 }
 
-// TODO: complete this test when PersistNow() is no longer a no-op.
-func TestPersistNow(t *testing.T) {
+// TODO: complete this test when FlushAndSyncRoot() is no longer a no-op.
+func TestFlushAndSyncRoot(t *testing.T) {
 	db := newTestDatabase(t)
 
-	require.NoError(t, db.PersistNow())
+	require.NoError(t, db.FlushAndSyncRoot(EmptyRoot))
 }
 
 // TestNilVsEmptyValue tests that nil values cause delete operations while

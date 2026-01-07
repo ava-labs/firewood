@@ -848,7 +848,7 @@ pub unsafe extern "C" fn fwd_proposal_dump(proposal: Option<&ProposalHandle>) ->
     invoke_with_handle(proposal, firewood::v2::api::DbView::dump_to_string)
 }
 
-/// Forces the database to persist the current state to disk.
+/// Forces the database to flush and sync the revision associated with root to disk.
 ///
 /// NOTE: this function is currently a no-op.
 ///
@@ -859,13 +859,16 @@ pub unsafe extern "C" fn fwd_proposal_dump(proposal: Option<&ProposalHandle>) ->
 /// # Returns
 ///
 /// - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
-/// - [`VoidResult::Ok`] if the persist was successful.
+/// - [`VoidResult::Ok`] if the operation was successful.
 /// - [`VoidResult::Err`] if the process panics while persisting.
 ///
 /// # Safety
 ///
 /// The caller must ensure that `db` is a valid pointer to a [`DatabaseHandle`]
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_persist_now_on_db(db: Option<&DatabaseHandle>) -> VoidResult {
-    invoke_with_handle(db, DatabaseHandle::persist_now)
+pub unsafe extern "C" fn fwd_flush_and_sync_root_on_db(
+    db: Option<&DatabaseHandle>,
+    root: HashKey,
+) -> VoidResult {
+    invoke_with_handle(db, move |db| db.flush_and_sync_root(root.into()))
 }

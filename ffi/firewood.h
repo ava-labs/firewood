@@ -1368,6 +1368,28 @@ struct VoidResult fwd_db_verify_range_proof(const struct DatabaseHandle *db,
                                             struct VerifyRangeProofArgs args);
 
 /**
+ * Forces the database to flush and sync the revision associated with root to disk.
+ *
+ * NOTE: this function is currently a no-op.
+ *
+ * # Arguments
+ *
+ * * `db` - The database handle returned by [`fwd_open_db`]
+ *
+ * # Returns
+ *
+ * - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
+ * - [`VoidResult::Ok`] if the operation was successful.
+ * - [`VoidResult::Err`] if the process panics while persisting.
+ *
+ * # Safety
+ *
+ * The caller must ensure that `db` is a valid pointer to a [`DatabaseHandle`]
+ */
+struct VoidResult fwd_flush_and_sync_root_on_db(const struct DatabaseHandle *db,
+                                                struct HashKey root);
+
+/**
  * Frees the memory associated with a `ChangeProofContext`.
  *
  * # Arguments
@@ -1810,27 +1832,6 @@ struct IteratorResult fwd_iter_on_revision(const struct RevisionHandle *revision
  *   all proposals created on it.
  */
 struct HandleResult fwd_open_db(struct DatabaseHandleArgs args);
-
-/**
- * Forces the database to persist the current state to disk.
- *
- * NOTE: this function is currently a no-op.
- *
- * # Arguments
- *
- * * `db` - The database handle returned by [`fwd_open_db`]
- *
- * # Returns
- *
- * - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
- * - [`VoidResult::Ok`] if the persist was successful.
- * - [`VoidResult::Err`] if the process panics while persisting.
- *
- * # Safety
- *
- * The caller must ensure that `db` is a valid pointer to a [`DatabaseHandle`]
- */
-struct VoidResult fwd_persist_now_on_db(const struct DatabaseHandle *db);
 
 /**
  * Dumps the Trie structure of a proposal to a DOT (Graphviz) format string for debugging.

@@ -324,9 +324,10 @@ impl Db {
         self.propose_with_parent(merge_ops, merkle.nodestore())
     }
 
-    /// Forces the database to persist the current state to disk.
+    /// Forces the database to flush and sync the revision associated with root
+    /// to disk.
     #[allow(clippy::missing_const_for_fn)]
-    pub fn persist_now(&self) -> Result<(), api::Error> {
+    pub fn flush_and_sync_root(&self, _root: HashKey) -> Result<(), api::Error> {
         Ok(())
     }
 }

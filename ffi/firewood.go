@@ -399,15 +399,15 @@ func (db *Database) LatestRevision() (*Revision, error) {
 	return db.Revision(root)
 }
 
-// PersistNow forces the database to persist the current state to disk.
-// This method can be used to force syncs at specific intervals.
+// FlushAndSyncRoot forces the database to persist the revision associated with
+// root to disk.
 //
 // NOTE: this method is currently a no-op.
-func (db *Database) PersistNow() error {
+func (db *Database) FlushAndSyncRoot(root Hash) error {
 	db.handleLock.Lock()
 	defer db.handleLock.Unlock()
 
-	return getErrorFromVoidResult(C.fwd_persist_now_on_db(db.handle))
+	return getErrorFromVoidResult(C.fwd_flush_and_sync_root_on_db(db.handle, newCHashKey(root)))
 }
 
 // Revision returns a historical revision of the database.
