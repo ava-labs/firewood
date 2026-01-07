@@ -1,4 +1,4 @@
-// Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2026, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
 //! Replay log types and engine for applying them to a Database.
@@ -27,25 +27,8 @@ use firewood::db::{BatchOp, Db, Proposal};
 use firewood::v2::api::{self, Db as DbApi, DbView as DbViewApi, Proposal as ProposalApi};
 use firewood_storage::{InvalidTrieHashLength, firewood_counter};
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use thiserror::Error;
-
-/// Serde helper for `Option<Box<[u8]>>` using efficient byte representation.
-mod option_bytes {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    #[expect(clippy::ref_option, reason = "serde requires &T for serialize")]
-    pub fn serialize<S: Serializer>(value: &Option<Box<[u8]>>, ser: S) -> Result<S::Ok, S::Error> {
-        match value {
-            Some(bytes) => ser.serialize_some(&serde_bytes::Bytes::new(bytes)),
-            None => ser.serialize_none(),
-        }
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<Option<Box<[u8]>>, D::Error> {
-        let opt: Option<serde_bytes::ByteBuf> = Deserialize::deserialize(de)?;
-        Ok(opt.map(|b| b.into_vec().into_boxed_slice()))
-    }
-}
 
 /// Strongly-typed proposal identifier.
 ///
@@ -84,13 +67,14 @@ pub struct GetFromRoot {
 }
 
 /// A single key/value mutation within a batch or proposal.
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyValueOp {
     /// The key being mutated.
     #[serde(with = "serde_bytes")]
     pub key: Box<[u8]>,
     /// The value to set, or `None` for a delete-range operation.
-    #[serde(with = "option_bytes")]
+    #[serde_as(as = "Option<serde_with::Bytes>")]
     pub value: Option<Box<[u8]>>,
 }
 
@@ -122,12 +106,13 @@ pub struct ProposeOnProposal {
 }
 
 /// Commit operation for a proposal.
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Commit {
     /// The proposal ID being committed.
     pub proposal_id: ProposalId,
     /// The root hash returned by the commit, if any.
-    #[serde(with = "option_bytes")]
+    #[serde_as(as = "Option<serde_with::Bytes>")]
     pub returned_hash: Option<Box<[u8]>>,
 }
 
