@@ -73,7 +73,28 @@ jobs:
         working-directory: ffi
         run: |
           curl -L -o replay_10k_mp https://github.com/AminR443/firewood-benchmark-reports/raw/refs/heads/main/replay-files/replay_10k.mp.log
+      - name: Cleanup
+        run: |
+          echo "=============================================================================="
+          echo "Freeing up disk space on CI system"
+          echo "=============================================================================="
 
+          echo "Listing 100 largest packages"
+          dpkg-query -Wf '${Installed-Size}\t${Package}\n' | sort -n | tail -n 100
+          df -h
+          echo "Removing large packages"
+          sudo apt-get remove -y '^ghc-8.*'
+          sudo apt-get remove -y '^dotnet-.*'
+          sudo apt-get remove -y '^llvm-.*'
+          sudo apt-get remove -y 'php.*'
+          sudo apt-get remove -y azure-cli google-cloud-sdk hhvm google-chrome-stable firefox powershell mono-devel
+          sudo apt-get autoremove -y
+          sudo apt-get clean
+          df -h
+          echo "Removing large directories"
+          # deleting 15GB
+          rm -rf /usr/share/dotnet/
+          df -h
       - name: Run benchmark
         working-directory: ffi
         env:
