@@ -159,6 +159,14 @@ impl api::Db for Db {
     }
 
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal<'_>, api::Error> {
+        // Proposal created from db
+        firewood_storage::firewood_counter!(
+            "proposals.created",
+            "Number of proposals created by base type",
+            "base" => "db"
+        )
+        .increment(1);
+
         self.propose_with_parent(batch, &self.manager.current_revision())
     }
 }
@@ -383,6 +391,14 @@ impl<'db> api::Proposal for Proposal<'db> {
 impl Proposal<'_> {
     #[crate::metrics("proposal.create", "database proposal creation")]
     fn create_proposal(&self, batch: impl IntoBatchIter) -> Result<Self, api::Error> {
+        // Proposal created based on another proposal
+        firewood_storage::firewood_counter!(
+            "proposals.created",
+            "Number of proposals created by base type",
+            "base" => "proposal"
+        )
+        .increment(1);
+
         self.db.propose_with_parent(batch, &self.nodestore)
     }
 
