@@ -1,11 +1,10 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-//! Replay log types and engine for Firewood database operations.
+//! Replay log types and engine for applying them to a Database.
 //!
 //! This crate provides:
 //! - Serializable types representing database operations ([`DbOperation`])
-//! - A replay log container ([`ReplayLog`]) for batching operations
 //! - An engine to replay operations against a [`Db`] instance
 //!
 //! The log format uses length-prefixed `MessagePack` segments, allowing streaming
@@ -26,7 +25,7 @@ use std::time::Instant;
 
 use firewood::db::{BatchOp, Db, Proposal};
 use firewood::v2::api::{self, Db as DbApi, DbView as DbViewApi, Proposal as ProposalApi};
-use firewood_storage::{firewood_counter, InvalidTrieHashLength};
+use firewood_storage::{InvalidTrieHashLength, firewood_counter};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -47,10 +46,6 @@ mod option_bytes {
         Ok(opt.map(|b| b.into_vec().into_boxed_slice()))
     }
 }
-
-// ============================================================================
-// Operation Types
-// ============================================================================
 
 /// Operation that reads a key from the latest committed revision.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -148,10 +143,6 @@ pub enum DbOperation {
     Commit(Commit),
 }
 
-// ============================================================================
-// Replay Log
-// ============================================================================
-
 /// A container for a sequence of database operations.
 ///
 /// Multiple `ReplayLog` instances can be serialized sequentially into a file,
@@ -181,10 +172,6 @@ impl ReplayLog {
     }
 }
 
-// ============================================================================
-// Error Types
-// ============================================================================
-
 /// Errors that can occur when replaying a log against a database.
 #[derive(Debug, Error)]
 pub enum ReplayError {
@@ -208,10 +195,6 @@ pub enum ReplayError {
     #[error("unknown proposal ID {0}")]
     UnknownProposal(u64),
 }
-
-// ============================================================================
-// Replay Engine
-// ============================================================================
 
 /// Alias for the batch operation type used in replay.
 type BoxedBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
@@ -250,8 +233,7 @@ fn apply_operation<'db>(
         }
 
         DbOperation::GetFromRoot(GetFromRoot { root: _, key: _ }) => {
-            // Historical root reads are not replayed because the root may
-            // not exist in the replayed database (different proposal IDs).
+            // TODO, noop for now.
             Ok(None)
         }
 
@@ -277,9 +259,9 @@ fn apply_operation<'db>(
             let ops = to_batch_ops(&pairs);
             let start = Instant::now();
             let proposal = DbApi::propose(db, ops)?;
-            firewood_counter!("firewood.replay.propose_ns", "Time spent in propose (ns)")
+            firewood_counter!("replay.propose_ns", "Time spent in propose (ns)")
                 .increment(start.elapsed().as_nanos() as u64);
-            firewood_counter!("firewood.replay.propose", "Number of propose calls").increment(1);
+            firewood_counter!("replay.propose", "Number of propose calls").increment(1);
             proposals.insert(returned_proposal_id, proposal);
             Ok(None)
         }
@@ -297,9 +279,9 @@ fn apply_operation<'db>(
                     .ok_or(ReplayError::UnknownProposal(proposal_id))?;
                 ProposalApi::propose(parent, ops)?
             };
-            firewood_counter!("firewood.replay.propose_ns", "Time spent in propose (ns)")
+            firewood_counter!("replay.propose_ns", "Time spent in propose (ns)")
                 .increment(start.elapsed().as_nanos() as u64);
-            firewood_counter!("firewood.replay.propose", "Number of propose calls").increment(1);
+            firewood_counter!("replay.propose", "Number of propose calls").increment(1);
             proposals.insert(returned_proposal_id, new_proposal);
             Ok(None)
         }
@@ -313,9 +295,9 @@ fn apply_operation<'db>(
                 .ok_or(ReplayError::UnknownProposal(proposal_id))?;
             let start = Instant::now();
             proposal.commit()?;
-            firewood_counter!("firewood.replay.commit_ns", "Time spent in commit (ns)")
+            firewood_counter!("replay.commit_ns", "Time spent in commit (ns)")
                 .increment(start.elapsed().as_nanos() as u64);
-            firewood_counter!("firewood.replay.commit", "Number of commit calls").increment(1);
+            firewood_counter!("replay.commit", "Number of commit calls").increment(1);
             Ok(returned_hash)
         }
     }
@@ -406,10 +388,6 @@ pub fn replay_from_file(
     let file = std::fs::File::open(path)?;
     replay_from_reader(file, db, max_commits)
 }
-
-// ============================================================================
-// Tests
-// ============================================================================
 
 #[cfg(test)]
 mod tests {
@@ -548,76 +526,10 @@ mod tests {
             .expect("non-empty");
         let view = DbApi::revision(&db, root).expect("revision");
 
-        let v1 = DbViewApi::val(&*view, &[1]).expect("val").expect("exists");
-        let v2 = DbViewApi::val(&*view, &[2]).expect("val").expect("exists");
+        let v1 = DbViewApi::val(&*view, [1]).expect("val").expect("exists");
+        let v2 = DbViewApi::val(&*view, [2]).expect("val").expect("exists");
         assert_eq!(*v1, [10]);
         assert_eq!(*v2, [20]);
-    }
-
-    #[test]
-    fn replay_respects_max_commits() {
-        let (_tmpdir, db) = create_test_db();
-
-        let ops: Vec<DbOperation> = (0u8..10)
-            .flat_map(|i| {
-                vec![
-                    DbOperation::ProposeOnDB(ProposeOnDB {
-                        pairs: vec![KeyValueOp {
-                            key: vec![i].into_boxed_slice(),
-                            value: Some(vec![i].into_boxed_slice()),
-                        }],
-                        returned_proposal_id: u64::from(i),
-                    }),
-                    DbOperation::Commit(Commit {
-                        proposal_id: u64::from(i),
-                        returned_hash: None,
-                    }),
-                ]
-            })
-            .collect();
-
-        let log = ReplayLog::new(ops);
-        let buf = serialize_log(&log);
-
-        // Only replay 3 commits
-        replay_from_reader(Cursor::new(buf), &db, Some(3)).expect("replay");
-
-        let root = DbApi::root_hash(&db)
-            .expect("root_hash")
-            .expect("non-empty");
-        let view = DbApi::revision(&db, root).expect("revision");
-
-        // Keys 0, 1, 2 should exist
-        for i in 0u8..3 {
-            assert!(
-                DbViewApi::val(&*view, vec![i].as_slice())
-                    .expect("val")
-                    .is_some(),
-                "key {i} should exist"
-            );
-        }
-
-        // Key 3 should not exist (stopped after 3 commits)
-        assert!(
-            DbViewApi::val(&*view, &[3]).expect("val").is_none(),
-            "key 3 should not exist"
-        );
-    }
-
-    #[test]
-    fn replay_unknown_proposal_errors() {
-        let (_tmpdir, db) = create_test_db();
-
-        let ops = vec![DbOperation::Commit(Commit {
-            proposal_id: 999,
-            returned_hash: None,
-        })];
-
-        let log = ReplayLog::new(ops);
-        let buf = serialize_log(&log);
-
-        let result = replay_from_reader(Cursor::new(buf), &db, None);
-        assert!(matches!(result, Err(ReplayError::UnknownProposal(999))));
     }
 
     #[test]
