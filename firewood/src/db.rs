@@ -334,7 +334,7 @@ impl Db {
 
     /// Forces the database to flush and sync the revision associated with root
     /// to disk.
-    #[allow(clippy::missing_const_for_fn)]
+    #[expect(clippy::missing_const_for_fn)]
     pub fn flush_and_sync_root(&self, _root: HashKey) -> Result<(), api::Error> {
         Ok(())
     }
