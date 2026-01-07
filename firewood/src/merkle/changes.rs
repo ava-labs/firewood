@@ -227,7 +227,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
 
                 // If this node is a leaf, then we don't need to save its info to `node_info` as
                 // it has no children to traverse.
-                if let Node::Branch(_branch) = &*node_info.node {
+                if matches!(*node_info.node, Node::Branch(_)) {
                     // Check if this node's path is a prefix of the key. If it is not (`unique_node`
                     // is not empty), then this node's children cannot be larger than or equal to
                     // the key, and we don't need to include them on the traversal stack.
@@ -247,11 +247,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::arithmetic_side_effects,
-    clippy::type_complexity
-)]
+#[expect(clippy::unwrap_used, clippy::arithmetic_side_effects)]
 mod tests {
     use crate::{
         db::BatchOp,
@@ -264,6 +260,8 @@ mod tests {
     };
     use lender::Lender;
     use std::{collections::HashSet, sync::Arc};
+
+    type BatchOpVec = Vec<BatchOp<Vec<u8>, Box<[u8]>>>;
 
     fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
         let memstore = MemStore::new(vec![]);
@@ -307,7 +305,7 @@ mod tests {
         committed_keys: &HashSet<Vec<u8>>,
         num_keys: usize,
         start_val: usize,
-    ) -> (Vec<BatchOp<Vec<u8>, Box<[u8]>>>, usize) {
+    ) -> (BatchOpVec, usize) {
         const CHANCE_DELETE_PERCENT: usize = 2;
         let mut seen_keys = std::collections::HashSet::new();
         let mut batch = Vec::new();
