@@ -465,28 +465,6 @@ pub unsafe extern "C" fn fwd_propose_on_db<'db>(
     invoke_with_handle(db, move |db| db.create_proposal_handle(values))
 }
 
-/// Forces the database to persist the current state to disk.
-///
-/// NOTE: this function is currently a no-op.
-///
-/// # Arguments
-///
-/// * `db` - The database handle returned by [`fwd_open_db`]
-///
-/// # Returns
-///
-/// - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
-/// - [`VoidResult::Ok`] if the persist was successful.
-/// - [`VoidResult::Err`] if the process panics while persisting.
-///
-/// # Safety
-///
-/// The caller must ensure that `db` is a valid pointer to a [`DatabaseHandle`]
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_persist_now_on_db(db: Option<&DatabaseHandle>) -> VoidResult {
-    invoke_with_handle(db, DatabaseHandle::persist_now)
-}
-
 /// Proposes a batch of operations to the database on top of an existing proposal.
 ///
 /// # Arguments
@@ -868,4 +846,26 @@ pub unsafe extern "C" fn fwd_revision_dump(revision: Option<&RevisionHandle>) ->
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_proposal_dump(proposal: Option<&ProposalHandle>) -> ValueResult {
     invoke_with_handle(proposal, firewood::v2::api::DbView::dump_to_string)
+}
+
+/// Forces the database to persist the current state to disk.
+///
+/// NOTE: this function is currently a no-op.
+///
+/// # Arguments
+///
+/// * `db` - The database handle returned by [`fwd_open_db`]
+///
+/// # Returns
+///
+/// - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
+/// - [`VoidResult::Ok`] if the persist was successful.
+/// - [`VoidResult::Err`] if the process panics while persisting.
+///
+/// # Safety
+///
+/// The caller must ensure that `db` is a valid pointer to a [`DatabaseHandle`]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_persist_now_on_db(db: Option<&DatabaseHandle>) -> VoidResult {
+    invoke_with_handle(db, DatabaseHandle::persist_now)
 }
