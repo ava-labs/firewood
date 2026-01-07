@@ -1115,6 +1115,7 @@ dependencies = [
  "csv",
  "env_logger",
  "firewood",
+ "firewood-replay",
  "firewood-storage",
  "hex",
  "indicatif",
