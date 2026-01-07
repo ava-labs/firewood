@@ -27,7 +27,8 @@ const (
 	// replayLogEnv is the environment variable for the replay log path.
 	replayLogEnv = "REPLAY_LOG"
 
-	// replayMaxCommitsEnv is the environment variable for limiting commits.
+	// replayMaxCommitsEnv is the environment variable for limiting 
+	// number of executed commits.
 	// If empty, defaults to 10000. Set to 0 for unlimited.
 	replayMaxCommitsEnv = "REPLAY_MAX_COMMITS"
 )
