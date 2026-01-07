@@ -5,6 +5,7 @@ members = [
   "firewood-macros",
   "firewood",
   "fwdctl",
+  "replay",
   "storage",
   "triehash",
 ]
@@ -63,6 +64,7 @@ firewood-ffi = { path = "ffi", version = "0.0.18" }
 
 # no longer bumping with workspace
 firewood-triehash = { path = "triehash", version = "0.0.16" }
+firewood-replay = { path = "replay", version = "0.0.18" }
 
 # common dependencies
 aquamarine = "0.6.0"
