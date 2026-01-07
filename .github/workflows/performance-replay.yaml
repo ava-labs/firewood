@@ -98,9 +98,10 @@ jobs:
       - name: Run benchmark
         working-directory: ffi
         env:
-          TMPDIR: /mnt/tmp/firewood-db
+          TMPDIR: /mnt/tmp
         run: |
-          mkdir -p $TMPDIR
+          sudo mkdir -p $TMPDIR
+          sudo chmod 1777 $TMPDIR
           REPLAY_LOG=./replay_10k_mp go test -bench=BenchmarkReplayLog -benchtime=3x | tee output.txt
 
       - name: Store benchmark result - separate results repo
