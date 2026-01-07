@@ -148,6 +148,7 @@ func TestReplayLogExecution(t *testing.T) {
 //
 // Run with: REPLAY_LOG=/path/to/log go test -bench=BenchmarkReplayLog -benchtime=1x
 func BenchmarkReplayLog(b *testing.B) {
+	r := require.New(b)
 	logPath := os.Getenv(replayLogEnv)
 	if logPath == "" {
 		b.Skipf("%s not set; skipping replay benchmark", replayLogEnv)
@@ -164,23 +165,18 @@ func BenchmarkReplayLog(b *testing.B) {
 	if err != nil {
 		b.Skipf("unable to read replay log: %v", err)
 	}
-	if len(logs) == 0 {
-		b.Fatal("expected at least one replay segment")
-	}
+	r.NotEmpty(logs, "expected at least one replay segment")
 
 	commits := 0
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
 		db, err := New(b.TempDir(), WithTruncate(true))
-		if err != nil {
-			b.Fatalf("create database: %v", err)
-		}
+		r.NoError(err, "create database")
 		b.StartTimer()
 
-		if commits, err = applyReplayLogs(db, logs, ReplayConfig{MaxCommits: maxCommits}); err != nil {
-			b.Fatalf("replay failed: %v", err)
-		}
+		commits, err = applyReplayLogs(db, logs, ReplayConfig{MaxCommits: maxCommits})
+		r.NoError(err, "replay failed")
 
 		b.StopTimer()
 		_ = db.Close(oneSecCtx(b))
@@ -195,10 +191,7 @@ func TestBlockReplayRoundTrip(t *testing.T) {
 
 	replayLogPath := filepath.Join(t.TempDir(), "roundtrip.log")
 
-	r.NoError(os.Setenv(replayPathEnv, replayLogPath))
-	t.Cleanup(func() {
-		r.NoError(os.Unsetenv(replayPathEnv))
-	})
+	t.Setenv(replayPathEnv, replayLogPath)
 
 	// Phase 1: Record operations
 	db1, err := New(t.TempDir(), WithTruncate(true))
