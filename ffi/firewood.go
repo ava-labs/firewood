@@ -484,3 +484,12 @@ func (db *Database) Dump() (string, error) {
 
 	return string(bytes), nil
 }
+
+// FlushBlockReplay flushes buffered block replay operations to disk.
+//
+// This function is only meaningful when the FFI library was compiled with
+// the `block-replay` feature and the `FIREWOOD_BLOCK_REPLAY_PATH` environment
+// variable is set. Otherwise, it is a no-op.
+func FlushBlockReplay() error {
+	return getErrorFromVoidResult(C.fwd_block_replay_flush())
+}
