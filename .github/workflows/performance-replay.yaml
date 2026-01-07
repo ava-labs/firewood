@@ -76,7 +76,11 @@ jobs:
 
       - name: Run benchmark
         working-directory: ffi
-        run: REPLAY_LOG=./replay_10k_mp go test -bench=BenchmarkReplayLog -benchtime=5x | tee output.txt
+        env:
+          TMPDIR: ${{ github.workspace }}/tmp
+        run: |
+          mkdir -p $TMPDIR
+          REPLAY_LOG=./replay_10k_mp go test -bench=BenchmarkReplayLog -benchtime=3x | tee output.txt
 
       - name: Store benchmark result - separate results repo
         if: github.event_name == 'push'
