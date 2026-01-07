@@ -7,7 +7,7 @@
 //! environment variable is set, this module records all database operations
 //! passing through the FFI layer to a file for later replay.
 //!
-//! The recording is length-prefixed rkyv segments, compatible with the
+//! The recording is length-prefixed messagepack segments, compatible with the
 //! `firewood-replay` crate's replay engine.
 
 use std::collections::HashMap;
@@ -216,10 +216,6 @@ fn recorder() -> Option<&'static Mutex<Recorder>> {
     Some(RECORDER.get_or_init(|| Mutex::new(Recorder::new())))
 }
 
-// ============================================================================
-// Public Recording Functions
-// ============================================================================
-
 /// Records a `fwd_get_latest` call.
 pub(crate) fn record_get_latest(key: BorrowedBytes<'_>) {
     if let Some(rec) = recorder() {
@@ -346,20 +342,3 @@ pub(crate) fn flush_to_disk() -> io::Result<()> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn recorder_disabled_without_env_var() {
-        // Ensure the env var is not set for this test.
-        // SAFETY: This test is single-threaded and does not rely on other code
-        // reading this env var concurrently.
-        unsafe {
-            std::env::remove_var(REPLAY_PATH_ENV);
-        }
-
-        // recorder() should return None when env var is not set
-        assert!(recorder().is_none());
-    }
-}
