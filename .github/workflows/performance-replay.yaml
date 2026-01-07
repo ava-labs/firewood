@@ -19,13 +19,11 @@ jobs:
   benchmark:
     name: Run benchmark
     if: |
-      always() &&
-      (
-        (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-        (github.event_name == 'issue_comment' &&
-         github.event.issue.pull_request &&
-         contains(github.event.comment.body, '/perf_test'))
-      )
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'issue_comment' &&
+       github.event.issue.pull_request &&
+       contains(github.event.comment.body, '/perf_test'))
     runs-on: ubuntu-latest
     steps:
       # React to comment (only for /perf_test trigger)
@@ -40,34 +38,43 @@ jobs:
               comment_id: context.payload.comment.id,
               content: 'rocket'
             });
+
       # Checkout - different refs for push/PR vs comment
       - name: Checkout (push/PR)
         if: github.event_name != 'issue_comment'
         uses: actions/checkout@v4
+
       - name: Checkout (comment trigger)
         if: github.event_name == 'issue_comment'
         uses: actions/checkout@v4
         with:
           ref: refs/pull/${{ github.event.issue.number }}/head
+
       - uses: dtolnay/rust-toolchain@stable
+
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: "ffi/go.mod"
           cache-dependency-path: "ffi/go.sum"
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: "maxperf-ethhash-logger"
           cache-all-crates: true
           cache-workspace-crates: true
+
       - name: Cargo Fetch
         run: cargo fetch --locked --verbose
+
       - name: Build
         run: cargo build --frozen --profile maxperf --features ethhash,logger --workspace --all-targets
+
       - name: Fetch replay log
         working-directory: ffi
         run: |
           curl -L -o replay_10k_mp https://github.com/AminR443/firewood-benchmark-reports/raw/refs/heads/main/replay-files/replay_10k.mp.log
+
       - name: Run benchmark
         working-directory: ffi
         run: REPLAY_LOG=./replay_10k_mp go test -bench=BenchmarkReplayLog -benchtime=5x | tee output.txt
@@ -87,18 +94,28 @@ jobs:
           alert-comment-cc-users: '@AminR443'
           gh-repository: 'github.com/AminR443/firewood-benchmark-reports'
 
-      # Post results to PR (only for /perf_test trigger)
+      # Post results to PR (for both pull_request and /perf_test triggers)
       - name: Post results to PR
-        if: github.event_name == 'issue_comment'
+        if: github.event_name == 'pull_request' || github.event_name == 'issue_comment'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const results = fs.readFileSync('examples/go/output.txt', 'utf8');
+            const results = fs.readFileSync('ffi/output.txt', 'utf8');
+            
+            // Get PR number based on event type
+            const prNumber = context.eventName === 'pull_request' 
+              ? context.payload.pull_request.number 
+              : context.payload.issue.number;
+            
+            // Build the trigger info
+            const triggerInfo = context.eventName === 'issue_comment'
+              ? `Triggered by @${{ github.event.comment.user.login }} via \`/perf_test\``
+              : `Triggered automatically on PR`;
             
             const body = `## 🚀 Performance Test Results
             
-            Triggered by @${{ github.event.comment.user.login }}
+            ${triggerInfo}
             
             \`\`\`
             ${results}
@@ -111,6 +128,6 @@ jobs:
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.payload.issue.number,
+              issue_number: prNumber,
               body: body
             });
