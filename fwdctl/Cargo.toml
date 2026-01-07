@@ -27,6 +27,7 @@ path = "src/main.rs"
 clap = { workspace = true, features = ["cargo", "string"] }
 env_logger.workspace = true
 firewood.workspace = true
+firewood-replay.workspace = true
 firewood-storage.workspace = true
 hex.workspace = true
 log.workspace = true
