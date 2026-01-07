@@ -66,10 +66,9 @@ jobs:
 
       - name: Cargo Fetch
         run: cargo fetch --locked --verbose
-
-      - name: Build
-        run: cargo build --frozen --profile maxperf --features ethhash,logger --workspace --all-targets
-
+      - name: Build Firewood FFI
+        working-directory: ffi
+        run: cargo build --locked --features ethhash,logger --profile maxperf
       - name: Fetch replay log
         working-directory: ffi
         run: |
