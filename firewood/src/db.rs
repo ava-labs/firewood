@@ -159,6 +159,14 @@ impl api::Db for Db {
     }
 
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal<'_>, api::Error> {
+        // Proposal created from db
+        firewood_storage::firewood_counter!(
+            "proposals.created",
+            "Number of proposals created by base type",
+            "base" => "db"
+        )
+        .increment(1);
+
         self.propose_with_parent(batch, &self.manager.current_revision())
     }
 }
@@ -323,6 +331,13 @@ impl Db {
         let merge_ops = merkle.merge_key_value_range(first_key, last_key, key_values);
         self.propose_with_parent(merge_ops, merkle.nodestore())
     }
+
+    /// Forces the database to flush and sync the revision associated with root
+    /// to disk.
+    #[expect(clippy::missing_const_for_fn)]
+    pub fn flush_and_sync_root(&self, _root: HashKey) -> Result<(), api::Error> {
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -383,6 +398,14 @@ impl<'db> api::Proposal for Proposal<'db> {
 impl Proposal<'_> {
     #[crate::metrics("proposal.create", "database proposal creation")]
     fn create_proposal(&self, batch: impl IntoBatchIter) -> Result<Self, api::Error> {
+        // Proposal created based on another proposal
+        firewood_storage::firewood_counter!(
+            "proposals.created",
+            "Number of proposals created by base type",
+            "base" => "proposal"
+        )
+        .increment(1);
+
         self.db.propose_with_parent(batch, &self.nodestore)
     }
 

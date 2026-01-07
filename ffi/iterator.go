@@ -13,6 +13,20 @@ import (
 	"unsafe"
 )
 
+// Iterator provides sequential access to key-value pairs within a [Revision] or [Proposal].
+// An iterator traverses the trie in lexicographic key order, starting from a specified key.
+//
+// Instances are created via [Revision.Iter] or [Proposal.Iter], and must be released
+// with [Iterator.Drop] when no longer needed.
+//
+// An Iterator holds a reference to the underlying view, so it can safely outlive the
+// Revision or Proposal it was created from. The underlying state will not be released
+// until the Iterator is dropped.
+//
+// Iterator supports two modes of accessing key-value pairs. [Iterator.Next] copies
+// the key and value into Go-managed memory. [Iterator.NextBorrowed] returns slices
+// that borrow Rust-owned memory, which is faster but the slices are only valid until
+// the next call to Next, NextBorrowed, or Drop.
 type Iterator struct {
 	// handle is an opaque pointer to the iterator within Firewood. It should be
 	// passed to the C FFI functions that operate on iterators
@@ -84,14 +98,23 @@ func (it *Iterator) nextInternal() error {
 	return nil
 }
 
-// SetBatchSize sets the max number of pairs to be retrieved in one ffi call.
+// SetBatchSize sets the number of key-value pairs to retrieve per FFI call.
+// A batch size greater than 1 reduces FFI overhead when iterating over many items.
+// A batch size of 0 or 1 disables batching. The default is 0.
 func (it *Iterator) SetBatchSize(batchSize int) {
 	it.batchSize = batchSize
 }
 
-// Next proceeds to the next item on the iterator, and returns true
-// if succeeded and there is a pair available.
-// The new pair could be retrieved with Key and Value methods.
+// Next advances the iterator to the next key-value pair and returns true if
+// a pair is available. The key and value can be retrieved with [Iterator.Key]
+// and [Iterator.Value].
+//
+// Next copies the key and value into Go-managed memory, making them safe to
+// retain after subsequent calls. For better performance, use [Iterator.NextBorrowed].
+//
+// It returns false when the iterator is exhausted or an error occurs. Check
+// [Iterator.Err] after iteration completes to distinguish between the two.
+// It is safe to call Next after it returns false; it will continue to return false.
 func (it *Iterator) Next() bool {
 	it.err = it.nextInternal()
 	if it.currentPair == nil || it.err != nil {
@@ -103,15 +126,14 @@ func (it *Iterator) Next() bool {
 	return true
 }
 
-// NextBorrowed is like Next, but Key and Value **borrow** rust-owned buffers.
+// NextBorrowed advances the iterator like [Iterator.Next], but the slices returned
+// by [Iterator.Key] and [Iterator.Value] borrow Rust-owned memory instead of copying.
+// This is faster than Next but the slices are only valid until the next call to
+// [Iterator.Next], [Iterator.NextBorrowed], or [Iterator.Drop].
 //
-// Lifetime: the returned slices are valid **only until** the next call to
-// Next, NextBorrowed, Close, or any operation that advances/invalidates the iterator.
-// They alias FFI-owned memory that will be **freed or reused** on the next advance.
+// WARNING: Do not retain, store, or modify the slices. Doing so results in undefined behavior.
 //
-// Do **not** retain, store, or modify these slices.
-// **Copy** or use Next if you need to keep them.
-// Misuse can read freed memory and cause undefined behavior.
+// It returns false when the iterator is exhausted or an error occurs, same as Next.
 func (it *Iterator) NextBorrowed() bool {
 	it.err = it.nextInternal()
 	if it.currentPair == nil || it.err != nil {
@@ -123,7 +145,11 @@ func (it *Iterator) NextBorrowed() bool {
 	return true
 }
 
-// Key returns the key of the current pair
+// Key returns the key of the current key-value pair.
+// If the iterator has not been advanced or is exhausted, it returns nil.
+//
+// If the iterator was advanced with [Iterator.NextBorrowed], the returned slice
+// borrows Rust memory and is only valid until the next advance or drop.
 func (it *Iterator) Key() []byte {
 	if it.currentPair == nil || it.err != nil {
 		return nil
@@ -131,7 +157,11 @@ func (it *Iterator) Key() []byte {
 	return it.currentKey
 }
 
-// Value returns the value of the current pair
+// Value returns the value of the current key-value pair.
+// If the iterator has not been advanced or is exhausted, it returns nil.
+//
+// If the iterator was advanced with [Iterator.NextBorrowed], the returned slice
+// borrows Rust memory and is only valid until the next advance or drop.
 func (it *Iterator) Value() []byte {
 	if it.currentPair == nil || it.err != nil {
 		return nil
@@ -139,12 +169,16 @@ func (it *Iterator) Value() []byte {
 	return it.currentValue
 }
 
-// Err returns the error if Next failed
+// Err returns the error from the last call to [Iterator.Next] or [Iterator.NextBorrowed],
+// or nil if no error occurred.
 func (it *Iterator) Err() error {
 	return it.err
 }
 
-// Drop drops the iterator and releases the resources
+// Drop releases the resources associated with the iterator. This must be called
+// when the iterator is no longer needed to avoid memory leaks.
+//
+// It is safe to call Drop multiple times; subsequent calls after the first are no-ops.
 func (it *Iterator) Drop() error {
 	err := it.freeCurrentAllocation()
 	if it.handle != nil {
