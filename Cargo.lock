@@ -1095,6 +1095,7 @@ dependencies = [
  "derive-where",
  "env_logger",
  "firewood",
+ "firewood-replay",
  "firewood-storage",
  "metrics",
  "metrics-exporter-prometheus 0.17.2",

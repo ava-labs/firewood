@@ -203,6 +203,40 @@ typedef struct BorrowedSlice_KeyValuePair {
 typedef struct BorrowedSlice_KeyValuePair BorrowedKeyValuePairs;
 
 /**
+ * The result type returned from an FFI function that returns no value but may
+ * return an error.
+ */
+typedef enum VoidResult_Tag {
+  /**
+   * The caller provided a null pointer to the input handle.
+   */
+  VoidResult_NullHandlePointer,
+  /**
+   * The operation was successful and no error occurred.
+   */
+  VoidResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. Its
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  VoidResult_Err,
+} VoidResult_Tag;
+
+typedef struct VoidResult {
+  VoidResult_Tag tag;
+  union {
+    struct {
+      OwnedBytes err;
+    };
+  };
+} VoidResult;
+
+/**
  * Maybe is a C-compatible optional type using a tagged union pattern.
  *
  * FFI methods and types can use this to represent optional values where `Optional<T>`
@@ -391,40 +425,6 @@ typedef struct ValueResult {
     };
   };
 } ValueResult;
-
-/**
- * The result type returned from an FFI function that returns no value but may
- * return an error.
- */
-typedef enum VoidResult_Tag {
-  /**
-   * The caller provided a null pointer to the input handle.
-   */
-  VoidResult_NullHandlePointer,
-  /**
-   * The operation was successful and no error occurred.
-   */
-  VoidResult_Ok,
-  /**
-   * An error occurred and the message is returned as an [`OwnedBytes`]. Its
-   * value is guaranteed to contain only valid UTF-8.
-   *
-   * The caller must call [`fwd_free_owned_bytes`] to free the memory
-   * associated with this error.
-   *
-   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
-   */
-  VoidResult_Err,
-} VoidResult_Tag;
-
-typedef struct VoidResult {
-  VoidResult_Tag tag;
-  union {
-    struct {
-      OwnedBytes err;
-    };
-  };
-} VoidResult;
 
 /**
  * Maybe is a C-compatible optional type using a tagged union pattern.
@@ -1053,6 +1053,20 @@ typedef struct LogArgs {
  *   value).
  */
 struct HashResult fwd_batch(const struct DatabaseHandle *db, BorrowedKeyValuePairs values);
+
+/**
+ * Flushes buffered block replay operations to disk.
+ *
+ * This function is only meaningful when the `block-replay` feature is enabled
+ * and the `FIREWOOD_BLOCK_REPLAY_PATH` environment variable is set. Otherwise,
+ * it is a no-op.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the flush succeeded or was a no-op.
+ * - [`VoidResult::Err`] if an I/O error occurred during the flush.
+ */
+struct VoidResult fwd_block_replay_flush(void);
 
 /**
  * Returns the next key range that should be fetched after processing the

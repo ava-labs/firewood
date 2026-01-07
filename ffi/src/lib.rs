@@ -29,6 +29,8 @@ mod logging;
 mod metrics_setup;
 mod proofs;
 mod proposal;
+#[cfg(feature = "block-replay")]
+mod replay;
 mod revision;
 mod value;
 
@@ -109,6 +111,11 @@ pub unsafe extern "C" fn fwd_get_latest(
     db: Option<&DatabaseHandle>,
     key: BorrowedBytes,
 ) -> ValueResult {
+    #[cfg(feature = "block-replay")]
+    if db.is_some() {
+        replay::record_get_latest(key);
+    }
+
     invoke_with_handle(db, move |db| db.get_latest(key))
 }
 
@@ -367,6 +374,9 @@ pub unsafe extern "C" fn fwd_get_from_proposal(
     handle: Option<&ProposalHandle<'_>>,
     key: BorrowedBytes,
 ) -> ValueResult {
+    #[cfg(feature = "block-replay")]
+    replay::record_get_from_proposal(handle, key);
+
     invoke_with_handle(handle, move |handle| handle.val(key))
 }
 
@@ -402,6 +412,11 @@ pub unsafe extern "C" fn fwd_get_from_root(
     root: HashKey,
     key: BorrowedBytes,
 ) -> ValueResult {
+    #[cfg(feature = "block-replay")]
+    if db.is_some() {
+        replay::record_get_from_root(root, key);
+    }
+
     invoke_with_handle(db, move |db| db.get_from_root(root.into(), key))
 }
 
@@ -432,6 +447,11 @@ pub unsafe extern "C" fn fwd_batch(
     db: Option<&DatabaseHandle>,
     values: BorrowedKeyValuePairs<'_>,
 ) -> HashResult {
+    #[cfg(feature = "block-replay")]
+    if db.is_some() {
+        replay::record_batch(values);
+    }
+
     invoke_with_handle(db, move |db| db.create_batch(values))
 }
 
@@ -462,7 +482,17 @@ pub unsafe extern "C" fn fwd_propose_on_db<'db>(
     db: Option<&'db DatabaseHandle>,
     values: BorrowedKeyValuePairs<'_>,
 ) -> ProposalResult<'db> {
-    invoke_with_handle(db, move |db| db.create_proposal_handle(values))
+    #[cfg(feature = "block-replay")]
+    let values_for_log = values;
+
+    let result = invoke_with_handle(db, move |db| db.create_proposal_handle(values));
+
+    #[cfg(feature = "block-replay")]
+    if db.is_some() {
+        replay::record_propose_on_db(&result, values_for_log);
+    }
+
+    result
 }
 
 /// Proposes a batch of operations to the database on top of an existing proposal.
@@ -493,7 +523,17 @@ pub unsafe extern "C" fn fwd_propose_on_proposal<'db>(
     handle: Option<&ProposalHandle<'db>>,
     values: BorrowedKeyValuePairs<'_>,
 ) -> ProposalResult<'db> {
-    invoke_with_handle(handle, move |p| p.create_proposal_handle(values))
+    #[cfg(feature = "block-replay")]
+    let parent_for_log = handle;
+    #[cfg(feature = "block-replay")]
+    let values_for_log = values;
+
+    let result = invoke_with_handle(handle, move |p| p.create_proposal_handle(values));
+
+    #[cfg(feature = "block-replay")]
+    replay::record_propose_on_proposal(parent_for_log, &result, values_for_log);
+
+    result
 }
 
 /// Commits a proposal to the database.
@@ -527,13 +567,23 @@ pub unsafe extern "C" fn fwd_propose_on_proposal<'db>(
 pub unsafe extern "C" fn fwd_commit_proposal(
     proposal: Option<Box<ProposalHandle<'_>>>,
 ) -> HashResult {
-    invoke_with_handle(proposal, move |proposal| {
+    #[cfg(feature = "block-replay")]
+    let proposal_ptr = proposal
+        .as_ref()
+        .map(|h| std::ptr::from_ref(&**h));
+
+    let result = invoke_with_handle(proposal, move |proposal| {
         proposal.commit_proposal(|commit_time| {
             firewood_counter!("ffi.commit_ms", "FFI commit timing in milliseconds")
                 .increment(commit_time.as_millis());
             firewood_counter!("ffi.commit", "Number of FFI commit operations").increment(1);
         })
-    })
+    });
+
+    #[cfg(feature = "block-replay")]
+    replay::record_commit(proposal_ptr, &result);
+
+    result
 }
 
 /// Consumes the [`ProposalHandle`], cancels the proposal, and frees the memory.
@@ -706,7 +756,33 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 /// - The database handle is not used after this function is called.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidResult {
+    #[cfg(feature = "block-replay")]
+    let _ = replay::flush_to_disk();
+
     invoke_with_handle(db, drop)
+}
+
+/// Flushes buffered block replay operations to disk.
+///
+/// This function is only meaningful when the `block-replay` feature is enabled
+/// and the `FIREWOOD_BLOCK_REPLAY_PATH` environment variable is set. Otherwise,
+/// it is a no-op.
+///
+/// # Returns
+///
+/// - [`VoidResult::Ok`] if the flush succeeded or was a no-op.
+/// - [`VoidResult::Err`] if an I/O error occurred during the flush.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_block_replay_flush() -> VoidResult {
+    #[cfg(feature = "block-replay")]
+    {
+        invoke(replay::flush_to_disk)
+    }
+
+    #[cfg(not(feature = "block-replay"))]
+    {
+        VoidResult::Ok
+    }
 }
 
 /// Consumes the [`OwnedBytes`] and frees the memory associated with it.
