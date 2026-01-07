@@ -213,10 +213,7 @@ fn into_batch_ops(pairs: Vec<KeyValueOp>) -> Vec<BoxedBatchOp> {
     pairs
         .into_iter()
         .map(|op| match op.value {
-            Some(value) => BatchOp::Put {
-                key: op.key,
-                value,
-            },
+            Some(value) => BatchOp::Put { key: op.key, value },
             None => BatchOp::DeleteRange { prefix: op.key },
         })
         .collect()
@@ -235,7 +232,9 @@ fn take_proposal<'db>(
     proposals: &mut HashMap<ProposalId, Proposal<'db>>,
     id: ProposalId,
 ) -> Result<Proposal<'db>, ReplayError> {
-    proposals.remove(&id).ok_or(ReplayError::UnknownProposal(id))
+    proposals
+        .remove(&id)
+        .ok_or(ReplayError::UnknownProposal(id))
 }
 
 /// Applies a single operation to the database.
