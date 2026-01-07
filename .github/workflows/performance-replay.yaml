@@ -68,10 +68,10 @@ jobs:
       - name: Fetch replay log
         working-directory: ffi
         run: |
-          curl -L -o replay_100k_mp https://example.com/file.zip
+          curl -L -o replay_10k_mp https://github.com/AminR443/firewood-benchmark-reports/raw/refs/heads/main/replay-files/replay_10k.mp.log
       - name: Run benchmark
         working-directory: ffi
-        run: REPLAY_LOG=./replay_100k_mp go test -bench=BenchmarkReplayLog -benchtime=5x | tee output.txt
+        run: REPLAY_LOG=./replay_10k_mp go test -bench=BenchmarkReplayLog -benchtime=5x | tee output.txt
 
       - name: Store benchmark result - separate results repo
         if: github.event_name == 'push'
