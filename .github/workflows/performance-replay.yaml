@@ -14,8 +14,6 @@ env:
 jobs:
   benchmark:
     name: Run benchmark
-    # Run after build on push/PR, or independently on /perf_test comment
-    needs: [build]
     if: |
       always() &&
       (
