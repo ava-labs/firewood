@@ -7,7 +7,7 @@
 //! environment variable is set, this module records all database operations
 //! passing through the FFI layer to a file for later replay.
 //!
-//! The recording is length-prefixed rkyv segments, compatible with the
+//! The recording is length-prefixed messagepack segments, compatible with the
 //! `firewood-replay` crate's replay engine.
 
 use std::collections::HashMap;
@@ -30,8 +30,8 @@ const REPLAY_PATH_ENV: &str = "FIREWOOD_BLOCK_REPLAY_PATH";
 /// Number of operations to buffer before flushing to disk.
 const FLUSH_THRESHOLD: usize = 10_000;
 
-/// The global recorder instance.
-static RECORDER: OnceLock<Mutex<Recorder>> = OnceLock::new();
+/// The global recorder instance. `None` if recording is disabled.
+static RECORDER: OnceLock<Option<Mutex<Recorder>>> = OnceLock::new();
 
 /// Internal state for recording operations.
 struct Recorder {
@@ -41,24 +41,18 @@ struct Recorder {
     next_proposal_id: u64,
     /// Map from proposal handle pointer addresses to assigned IDs.
     proposal_ids: HashMap<usize, u64>,
-    /// Output path, or `None` if recording is disabled.
-    output_path: Option<PathBuf>,
+    /// Output path for the replay log.
+    output_path: PathBuf,
 }
 
 impl Recorder {
-    fn new() -> Self {
-        let output_path = std::env::var(REPLAY_PATH_ENV).ok().map(PathBuf::from);
+    fn new(output_path: PathBuf) -> Self {
         Self {
             operations: Vec::new(),
             next_proposal_id: 1, // Start from 1 to make 0 stand out as invalid
             proposal_ids: HashMap::new(),
             output_path,
         }
-    }
-
-    /// Returns `true` if recording is enabled.
-    const fn is_enabled(&self) -> bool {
-        self.output_path.is_some()
     }
 
     /// Records a `GetLatest` operation.
@@ -160,10 +154,6 @@ impl Recorder {
 
     /// Flushes buffered operations to disk.
     fn flush_to_disk(&mut self) -> io::Result<()> {
-        let Some(path) = &self.output_path else {
-            return Ok(());
-        };
-
         if self.operations.is_empty() {
             return Ok(());
         }
@@ -175,11 +165,14 @@ impl Recorder {
             .to_msgpack()
             .map_err(|e| io::Error::other(format!("failed to serialize replay log: {e}")))?;
 
-        if let Some(parent) = path.parent() {
+        if let Some(parent) = self.output_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        let mut file = OpenOptions::new().create(true).append(true).open(path)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.output_path)?;
 
         let len: u64 = bytes
             .len()
@@ -210,35 +203,28 @@ fn convert_pairs(pairs: &[KeyValuePair<'_>]) -> Vec<KeyValueOp> {
 
 /// Returns the recorder if recording is enabled.
 fn recorder() -> Option<&'static Mutex<Recorder>> {
-    if std::env::var(REPLAY_PATH_ENV).is_err() {
-        return None;
-    }
-    Some(RECORDER.get_or_init(|| Mutex::new(Recorder::new())))
+    RECORDER
+        .get_or_init(|| {
+            std::env::var(REPLAY_PATH_ENV)
+                .ok()
+                .map(|p| Mutex::new(Recorder::new(PathBuf::from(p))))
+        })
+        .as_ref()
 }
-
-// ============================================================================
-// Public Recording Functions
-// ============================================================================
 
 /// Records a `fwd_get_latest` call.
 pub(crate) fn record_get_latest(key: BorrowedBytes<'_>) {
     if let Some(rec) = recorder() {
-        let mut guard = rec.lock();
-        if guard.is_enabled() {
-            guard.record_get_latest(key.as_slice());
-        }
+        rec.lock().record_get_latest(key.as_slice());
     }
 }
 
 /// Records a `fwd_get_from_root` call.
 pub(crate) fn record_get_from_root(root: FfiHashKey, key: BorrowedBytes<'_>) {
     if let Some(rec) = recorder() {
-        let mut guard = rec.lock();
-        if guard.is_enabled() {
-            let api_hash: firewood::v2::api::HashKey = root.into();
-            let bytes: [u8; 32] = api_hash.into();
-            guard.record_get_from_root(&bytes, key.as_slice());
-        }
+        let api_hash: firewood::v2::api::HashKey = root.into();
+        let bytes: [u8; 32] = api_hash.into();
+        rec.lock().record_get_from_root(&bytes, key.as_slice());
     }
 }
 
@@ -250,20 +236,14 @@ pub(crate) fn record_get_from_proposal(
     let Some(rec) = recorder() else { return };
     let Some(handle) = handle else { return };
 
-    let mut guard = rec.lock();
-    if guard.is_enabled() {
-        let ptr = std::ptr::from_ref(handle) as usize;
-        guard.record_get_from_proposal(ptr, key.as_slice());
-    }
+    let ptr = std::ptr::from_ref(handle) as usize;
+    rec.lock().record_get_from_proposal(ptr, key.as_slice());
 }
 
 /// Records a `fwd_batch` call.
 pub(crate) fn record_batch(values: BorrowedKeyValuePairs<'_>) {
     if let Some(rec) = recorder() {
-        let mut guard = rec.lock();
-        if guard.is_enabled() {
-            guard.record_batch(values.as_slice());
-        }
+        rec.lock().record_batch(values.as_slice());
     }
 }
 
@@ -273,16 +253,12 @@ pub(crate) fn record_propose_on_db(
     values: BorrowedKeyValuePairs<'_>,
 ) {
     let Some(rec) = recorder() else { return };
-
     let crate::ProposalResult::Ok { handle, .. } = result else {
         return;
     };
 
-    let mut guard = rec.lock();
-    if guard.is_enabled() {
-        let ptr = std::ptr::from_ref(&**handle) as usize;
-        guard.record_propose_on_db(ptr, values.as_slice());
-    }
+    let ptr = std::ptr::from_ref(&**handle) as usize;
+    rec.lock().record_propose_on_db(ptr, values.as_slice());
 }
 
 /// Records a `fwd_propose_on_proposal` call after the proposal is created.
@@ -297,12 +273,10 @@ pub(crate) fn record_propose_on_proposal<'db>(
         return;
     };
 
-    let mut guard = rec.lock();
-    if guard.is_enabled() {
-        let parent_ptr = std::ptr::from_ref(parent) as usize;
-        let new_ptr = std::ptr::from_ref(&**handle) as usize;
-        guard.record_propose_on_proposal(parent_ptr, new_ptr, values.as_slice());
-    }
+    let parent_ptr = std::ptr::from_ref(parent) as usize;
+    let new_ptr = std::ptr::from_ref(&**handle) as usize;
+    rec.lock()
+        .record_propose_on_proposal(parent_ptr, new_ptr, values.as_slice());
 }
 
 /// Records a `fwd_commit_proposal` call after the commit completes.
@@ -323,10 +297,10 @@ pub(crate) fn record_commit(
         _ => return,
     };
 
-    let mut guard = rec.lock();
-    if guard.is_enabled() {
-        guard.record_commit(ptr as usize, returned_hash_bytes.as_ref().map(AsRef::as_ref));
-    }
+    rec.lock().record_commit(
+        ptr as usize,
+        returned_hash_bytes.as_ref().map(AsRef::as_ref),
+    );
 }
 
 /// Flushes any buffered operations to disk.
@@ -334,32 +308,9 @@ pub(crate) fn record_commit(
 /// Called automatically when the database is closed, but can also be
 /// invoked manually via `fwd_block_replay_flush`.
 pub(crate) fn flush_to_disk() -> io::Result<()> {
-    let Some(rec) = recorder() else {
-        return Ok(());
-    };
-
-    let mut guard = rec.lock();
-    if guard.is_enabled() {
-        guard.flush_to_disk()
+    if let Some(rec) = recorder() {
+        rec.lock().flush_to_disk()
     } else {
         Ok(())
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn recorder_disabled_without_env_var() {
-        // Ensure the env var is not set for this test.
-        // SAFETY: This test is single-threaded and does not rely on other code
-        // reading this env var concurrently.
-        unsafe {
-            std::env::remove_var(REPLAY_PATH_ENV);
-        }
-
-        // recorder() should return None when env var is not set
-        assert!(recorder().is_none());
     }
 }

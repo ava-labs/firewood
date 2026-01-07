@@ -27,7 +27,8 @@ const (
 	// replayLogEnv is the environment variable for the replay log path.
 	replayLogEnv = "REPLAY_LOG"
 
-	// replayMaxCommitsEnv is the environment variable for limiting commits.
+	// replayMaxCommitsEnv is the environment variable for limiting
+	// number of executed commits.
 	// If empty, defaults to 10000. Set to 0 for unlimited.
 	replayMaxCommitsEnv = "REPLAY_MAX_COMMITS"
 )
@@ -396,20 +397,6 @@ func loadReplayLogs(logPath string, maxCommits int) ([]ReplayLog, error) {
 		return nil, err
 	}
 	return decodeReplayLogs(data, maxCommits)
-}
-
-// replayLogStats returns the number of segments, operations, and commits in the logs.
-func replayLogStats(logs []ReplayLog) (segments, ops, commits int) {
-	segments = len(logs)
-	for _, seg := range logs {
-		ops += len(seg.Operations)
-		for _, op := range seg.Operations {
-			if op.Commit != nil {
-				commits++
-			}
-		}
-	}
-	return
 }
 
 func splitPairs(pairs []KeyValueOp) ([][]byte, [][]byte) {
