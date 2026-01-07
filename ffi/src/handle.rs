@@ -245,11 +245,11 @@ impl DatabaseHandle {
     }
 
     /// Forces the database to persist the current state to disk.
-    /// 
+    ///
     /// NOTE: this method is currently a no-op.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// An error is returned if unable to persist to disk.
     pub fn persist_now(&self) -> Result<(), api::Error> {
         self.db.persist_now()

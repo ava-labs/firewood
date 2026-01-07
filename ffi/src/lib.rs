@@ -466,19 +466,19 @@ pub unsafe extern "C" fn fwd_propose_on_db<'db>(
 }
 
 /// Forces the database to persist the current state to disk.
-/// 
+///
 /// NOTE: this function is currently a no-op.
-/// 
+///
 /// # Arguments
-/// 
+///
 /// * `db` - The database handle returned by [`fwd_open_db`]
-/// 
+///
 /// # Returns
 ///
 /// - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
 /// - [`VoidResult::Ok`] if the persist was successful.
 /// - [`VoidResult::Err`] if the process panics while persisting.
-/// 
+///
 /// # Safety
 ///
 /// The caller must ensure that `db` is a valid pointer to a [`DatabaseHandle`]
