@@ -568,9 +568,7 @@ pub unsafe extern "C" fn fwd_commit_proposal(
     proposal: Option<Box<ProposalHandle<'_>>>,
 ) -> HashResult {
     #[cfg(feature = "block-replay")]
-    let proposal_ptr = proposal
-        .as_ref()
-        .map(|h| std::ptr::from_ref(&**h));
+    let proposal_ptr = proposal.as_ref().map(|h| std::ptr::from_ref(&**h));
 
     let result = invoke_with_handle(proposal, move |proposal| {
         proposal.commit_proposal(|commit_time| {

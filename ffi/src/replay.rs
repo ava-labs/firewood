@@ -297,8 +297,10 @@ pub(crate) fn record_commit(
         _ => return,
     };
 
-    rec.lock()
-        .record_commit(ptr as usize, returned_hash_bytes.as_ref().map(AsRef::as_ref));
+    rec.lock().record_commit(
+        ptr as usize,
+        returned_hash_bytes.as_ref().map(AsRef::as_ref),
+    );
 }
 
 /// Flushes any buffered operations to disk.
@@ -312,4 +314,3 @@ pub(crate) fn flush_to_disk() -> io::Result<()> {
         Ok(())
     }
 }
-
