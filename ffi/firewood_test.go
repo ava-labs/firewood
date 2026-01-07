@@ -1335,6 +1335,13 @@ func TestFjallStore(t *testing.T) {
 	}
 }
 
+// TODO: complete this test when PersistNow() is no longer a no-op.
+func TestPersistNow(t *testing.T) {
+	db := newTestDatabase(t)
+
+	require.NoError(t, db.PersistNow())
+}
+
 // TestNilVsEmptyValue tests that nil values cause delete operations while
 // empty []byte{} values result in inserts with empty values.
 func TestNilVsEmptyValue(t *testing.T) {

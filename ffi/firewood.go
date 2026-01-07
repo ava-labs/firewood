@@ -399,6 +399,17 @@ func (db *Database) LatestRevision() (*Revision, error) {
 	return db.Revision(root)
 }
 
+// PersistNow forces the database to persist the current state to disk.
+// This method can be used to force syncs at specific intervals.
+//
+// NOTE: this method is currently a no-op.
+func (db *Database) PersistNow() error {
+	db.handleLock.Lock()
+	defer db.handleLock.Unlock()
+
+	return getErrorFromVoidResult(C.fwd_persist_now_on_db(db.handle))
+}
+
 // Revision returns a historical revision of the database.
 // If the provided root does not exist (or is the [EmptyRoot]), it returns an error.
 // The [Revision] must be dropped prior to closing the database.
