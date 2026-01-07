@@ -771,7 +771,7 @@ pub unsafe extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidRe
 /// - [`VoidResult::Ok`] if the flush succeeded or was a no-op.
 /// - [`VoidResult::Err`] if an I/O error occurred during the flush.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_block_replay_flush() -> VoidResult {
+pub const extern "C" fn fwd_block_replay_flush() -> VoidResult {
     #[cfg(feature = "block-replay")]
     {
         invoke(replay::flush_to_disk)
