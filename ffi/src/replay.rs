@@ -17,8 +17,8 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use firewood_replay::{
-    Batch, Commit, DbOperation, GetFromProposal, GetFromRoot, GetLatest, KeyValueOp, ProposeOnDB,
-    ProposeOnProposal, ReplayLog,
+    Batch, Commit, DbOperation, GetFromProposal, GetFromRoot, GetLatest, KeyValueOp, ProposalId,
+    ProposeOnDB, ProposeOnProposal, ReplayLog,
 };
 use parking_lot::Mutex;
 
@@ -40,7 +40,7 @@ struct Recorder {
     /// Counter for assigning proposal IDs.
     next_proposal_id: u64,
     /// Map from proposal handle pointer addresses to assigned IDs.
-    proposal_ids: HashMap<usize, u64>,
+    proposal_ids: HashMap<usize, ProposalId>,
     /// Output path for the replay log.
     output_path: PathBuf,
 }
@@ -93,7 +93,7 @@ impl Recorder {
 
     /// Records a `ProposeOnDB` operation.
     fn record_propose_on_db(&mut self, handle_ptr: usize, pairs: &[KeyValuePair<'_>]) {
-        let proposal_id = self.next_proposal_id;
+        let proposal_id = ProposalId(self.next_proposal_id);
         self.next_proposal_id = self.next_proposal_id.saturating_add(1);
         self.proposal_ids.insert(handle_ptr, proposal_id);
 
@@ -116,7 +116,7 @@ impl Recorder {
             return;
         };
 
-        let new_id = self.next_proposal_id;
+        let new_id = ProposalId(self.next_proposal_id);
         self.next_proposal_id = self.next_proposal_id.saturating_add(1);
         self.proposal_ids.insert(new_ptr, new_id);
 

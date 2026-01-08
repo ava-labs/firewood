@@ -482,14 +482,11 @@ pub unsafe extern "C" fn fwd_propose_on_db<'db>(
     db: Option<&'db DatabaseHandle>,
     values: BorrowedKeyValuePairs<'_>,
 ) -> ProposalResult<'db> {
-    #[cfg(feature = "block-replay")]
-    let values_for_log = values;
-
     let result = invoke_with_handle(db, move |db| db.create_proposal_handle(values));
 
     #[cfg(feature = "block-replay")]
     if db.is_some() {
-        replay::record_propose_on_db(&result, values_for_log);
+        replay::record_propose_on_db(&result, values);
     }
 
     result
@@ -523,15 +520,10 @@ pub unsafe extern "C" fn fwd_propose_on_proposal<'db>(
     handle: Option<&ProposalHandle<'db>>,
     values: BorrowedKeyValuePairs<'_>,
 ) -> ProposalResult<'db> {
-    #[cfg(feature = "block-replay")]
-    let parent_for_log = handle;
-    #[cfg(feature = "block-replay")]
-    let values_for_log = values;
-
     let result = invoke_with_handle(handle, move |p| p.create_proposal_handle(values));
 
     #[cfg(feature = "block-replay")]
-    replay::record_propose_on_proposal(parent_for_log, &result, values_for_log);
+    replay::record_propose_on_proposal(handle, &result, values);
 
     result
 }
@@ -771,7 +763,8 @@ pub unsafe extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidRe
 /// - [`VoidResult::Ok`] if the flush succeeded or was a no-op.
 /// - [`VoidResult::Err`] if an I/O error occurred during the flush.
 #[unsafe(no_mangle)]
-pub const extern "C" fn fwd_block_replay_flush() -> VoidResult {
+#[allow(clippy::missing_const_for_fn)] // Can't be const when block-replay is enabled
+pub extern "C" fn fwd_block_replay_flush() -> VoidResult {
     #[cfg(feature = "block-replay")]
     {
         invoke(replay::flush_to_disk)
