@@ -16,6 +16,8 @@
  */
 typedef struct ChangeProofContext ChangeProofContext;
 
+typedef struct CodeIteratorHandle CodeIteratorHandle;
+
 /**
  * A handle to the database, returned by `fwd_open_db`.
  *
@@ -201,6 +203,49 @@ typedef struct BorrowedSlice_KeyValuePair {
  * is valid for the duration of the C function call that was passed this slice.
  */
 typedef struct BorrowedSlice_KeyValuePair BorrowedKeyValuePairs;
+
+/**
+ * A result type returned from FFI functions that create an code hash iterator
+ */
+typedef enum CodeIteratorResult_Tag {
+  /**
+   * The caller provided a null pointer to a proof handle.
+   */
+  CodeIteratorResult_NullHandlePointer,
+  /**
+   * Building the iterator was successful and the iterator handle is returned
+   */
+  CodeIteratorResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`].
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  CodeIteratorResult_Err,
+} CodeIteratorResult_Tag;
+
+typedef struct CodeIteratorResult_Ok_Body {
+  /**
+   * An opaque pointer to the [`CodeIteratorHandle`].
+   * The value should be freed with [`fwd_free_code_iterator`]
+   *
+   * [`fwd_free_code_iterator`]: crate::fwd_free_code_iterator
+   */
+  struct CodeIteratorHandle *handle;
+} CodeIteratorResult_Ok_Body;
+
+typedef struct CodeIteratorResult {
+  CodeIteratorResult_Tag tag;
+  union {
+    CodeIteratorResult_Ok_Body ok;
+    struct {
+      OwnedBytes err;
+    };
+  };
+} CodeIteratorResult;
 
 /**
  * Maybe is a C-compatible optional type using a tagged union pattern.
@@ -1054,6 +1099,8 @@ typedef struct LogArgs {
  */
 struct HashResult fwd_batch(const struct DatabaseHandle *db, BorrowedKeyValuePairs values);
 
+struct CodeIteratorResult fwd_change_proof_code_iterator(const struct ChangeProofContext *_proof);
+
 /**
  * Returns the next key range that should be fetched after processing the
  * current set of operations in a change proof that was truncated.
@@ -1148,6 +1195,10 @@ struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *_p
  * - The database handle is not used after this function is called.
  */
 struct VoidResult fwd_close_db(struct DatabaseHandle *db);
+
+struct VoidResult fwd_code_hash_iter_free(struct CodeIteratorHandle *iter);
+
+struct HashResult fwd_code_hash_iter_next(struct CodeIteratorHandle *iter);
 
 /**
  * Commits a proposal to the database.
@@ -1911,6 +1962,8 @@ struct ProposalResult fwd_propose_on_db(const struct DatabaseHandle *db,
  */
 struct ProposalResult fwd_propose_on_proposal(const struct ProposalHandle *handle,
                                               BorrowedKeyValuePairs values);
+
+struct CodeIteratorResult fwd_range_proof_code_hash_iter(const struct RangeProofContext *proof);
 
 /**
  * Returns the next key range that should be fetched after processing the

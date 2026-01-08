@@ -1,9 +1,18 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+#[cfg(feature = "ethhash")]
+use firewood::ProofError;
+#[cfg(feature = "ethhash")]
+use firewood_storage::TrieHash;
+#[cfg(feature = "ethhash")]
+use rlp::Rlp;
+
+use firewood::v2::api;
+
 use crate::{
-    BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
-    NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
+    BorrowedBytes, CResult, ChangeProofResult, CodeIteratorResult, DatabaseHandle, HashKey,
+    HashResult, Maybe, NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
 };
 
 /// Arguments for creating a change proof.
@@ -78,6 +87,76 @@ pub struct NextKeyRange {
     /// If set, a non-inclusive upper bound for the next range to fetch. If not
     /// set, the range is unbounded (this is the final range).
     pub end_key: Maybe<OwnedBytes>,
+}
+
+#[derive(Debug)]
+#[cfg_attr(not(feature = "ethhash"), allow(dead_code))]
+
+pub struct CodeIteratorHandle<'a> {
+    key_values: &'a [(Box<[u8]>, Box<[u8]>)],
+    i: usize,
+}
+
+impl Iterator for CodeIteratorHandle<'_> {
+    type Item = Result<HashKey, api::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        #[cfg(not(feature = "ethhash"))]
+        {
+            return None;
+        }
+
+        #[cfg(feature = "ethhash")]
+        {
+            const EMPTY_CODE_HASH: [u8; 32] = [
+                // "c5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470"
+                0xc5, 0xd2, 0x46, 0x01, 0x86, 0xf7, 0x23, 0x3c, 0x92, 0x7e, 0x7d, 0xb2, 0xdc, 0xc7,
+                0x03, 0xc0, 0xe5, 0x00, 0xb6, 0x53, 0xca, 0x82, 0x27, 0x3b, 0x7b, 0xfa, 0xd8, 0x04,
+                0x5d, 0x85, 0xa4, 0x70,
+            ];
+            while self.i < self.key_values.len() {
+                let (key, value) = &self.key_values[self.i];
+                self.i += 1;
+                print!("key length: {}\n", key.len());
+                if key.len() != 32 {
+                    continue;
+                }
+                let code_hash_slice = match Rlp::new(value).at(3).and_then(|r| r.data()) {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        return Some(Err(api::Error::ProofError(ProofError::InvalidValueFormat)));
+                    }
+                };
+
+                let code_hash: HashKey = TrieHash::try_from(code_hash_slice).ok()?.into();
+                if code_hash == TrieHash::from(EMPTY_CODE_HASH).into() {
+                    print!("skipping empty code hash\n");
+                    continue;
+                }
+                print!("yielding code hash: {:x?}\n", code_hash);
+                return Some(Ok(code_hash));
+            }
+            return None;
+        }
+    }
+}
+
+impl<'a> CodeIteratorHandle<'a> {
+    #[cfg_attr(not(feature = "ethhash"), allow(unused_variables))]
+
+    pub fn new(key_values: &'a [(Box<[u8]>, Box<[u8]>)]) -> Result<Self, api::Error> {
+        #[cfg(not(feature = "ethhash"))]
+        {
+            return Err(api::Error::FeatureNotSupported(
+                "ethhash code hash iterator".to_string(),
+            ));
+        }
+
+        #[cfg(feature = "ethhash")]
+        {
+            Ok(CodeIteratorHandle { key_values, i: 0 })
+        }
+    }
 }
 
 /// Create a change proof for the given range of keys between two roots.
@@ -202,6 +281,13 @@ pub extern "C" fn fwd_db_verify_and_commit_change_proof(
 pub extern "C" fn fwd_change_proof_find_next_key(
     _proof: Option<&mut ChangeProofContext>,
 ) -> NextKeyRangeResult {
+    CResult::from_err("not yet implemented")
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_change_proof_code_iterator(
+    _proof: Option<&'_ ChangeProofContext>,
+) -> CodeIteratorResult<'_> {
     CResult::from_err("not yet implemented")
 }
 

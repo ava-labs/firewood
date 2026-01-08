@@ -7,9 +7,9 @@ use std::fmt;
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
-    ChangeProofContext, CreateIteratorResult, CreateProposalResult, HashKey, IteratorHandle,
-    KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair, ProposalHandle,
-    RangeProofContext,
+    ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult, HashKey,
+    IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair,
+    ProposalHandle, RangeProofContext,
 };
 
 /// The result type returned from an FFI function that returns no value but may
@@ -181,6 +181,18 @@ impl<E: fmt::Display> From<Result<Option<api::HashKey>, E>> for HashResult {
     }
 }
 
+impl From<Option<Result<HashKey, api::Error>>> for HashResult {
+    fn from(value: Option<Result<HashKey, api::Error>>) -> Self {
+        match value {
+            Some(value) => match value {
+                Ok(hash) => HashResult::Some(HashKey::from(hash)),
+                Err(err) => HashResult::Err(err.to_string().into_bytes().into()),
+            },
+            None => HashResult::None,
+        }
+    }
+}
+
 /// A result type returned from FFI functions that create or parse range proofs.
 ///
 /// The caller must ensure that [`fwd_free_range_proof`] is called to
@@ -289,6 +301,40 @@ impl From<Result<Option<KeyRange>, api::Error>> for NextKeyRangeResult {
                 NextKeyRangeResult::NotPrepared
             }
             Err(err) => NextKeyRangeResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+/// A result type returned from FFI functions that create an code hash iterator
+#[derive(Debug)]
+#[repr(C)]
+pub enum CodeIteratorResult<'p> {
+    /// The caller provided a null pointer to a proof handle.
+    NullHandlePointer,
+    /// Building the iterator was successful and the iterator handle is returned
+    Ok {
+        /// An opaque pointer to the [`CodeIteratorHandle`].
+        /// The value should be freed with [`fwd_free_code_iterator`]
+        ///
+        /// [`fwd_free_code_iterator`]: crate::fwd_free_code_iterator
+        handle: Box<CodeIteratorHandle<'p>>,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`].
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl<'a> From<Result<CodeIteratorHandle<'a>, api::Error>> for CodeIteratorResult<'a> {
+    fn from(value: Result<CodeIteratorHandle<'a>, api::Error>) -> Self {
+        match value {
+            Ok(res) => CodeIteratorResult::Ok {
+                handle: Box::new(res),
+            },
+            Err(err) => CodeIteratorResult::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -557,6 +603,7 @@ impl_null_handle_result!(
     RangeProofResult<'_>,
     ChangeProofResult,
     NextKeyRangeResult,
+    CodeIteratorResult<'_>,
     ProposalResult<'_>,
     IteratorResult<'_>,
     RevisionResult,
@@ -572,6 +619,7 @@ impl_cresult!(
     RangeProofResult<'_>,
     ChangeProofResult,
     NextKeyRangeResult,
+    CodeIteratorResult<'_>,
     ProposalResult<'_>,
     IteratorResult<'_>,
     RevisionResult,

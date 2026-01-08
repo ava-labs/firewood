@@ -1179,6 +1179,7 @@ dependencies = [
  "metrics-exporter-prometheus 0.17.2",
  "oxhttp",
  "parking_lot",
+ "rlp",
  "test-case",
  "tikv-jemallocator",
 ]

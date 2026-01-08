@@ -10,8 +10,8 @@ use firewood::{
 };
 
 use crate::{
-    BorrowedBytes, DatabaseHandle, HashResult, Maybe, NextKeyRangeResult, RangeProofResult,
-    ValueResult, VoidResult,
+    BorrowedBytes, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle, HashResult, Maybe,
+    NextKeyRangeResult, RangeProofResult, ValueResult, VoidResult,
 };
 use firewood_storage::firewood_counter;
 
@@ -298,6 +298,10 @@ impl<'db> RangeProofContext<'db> {
 
         Ok(Some((last_key.clone(), verification.end_key.clone())))
     }
+
+    fn code_hash_iter(&self) -> Result<CodeIteratorHandle<'_>, api::Error> {
+        CodeIteratorHandle::new(self.proof.key_values())
+    }
 }
 
 /// Generate a range proof for the given range of keys for the latest revision.
@@ -522,6 +526,27 @@ pub extern "C" fn fwd_range_proof_find_next_key(
     proof: Option<&mut RangeProofContext>,
 ) -> NextKeyRangeResult {
     crate::invoke_with_handle(proof, RangeProofContext::find_next_key)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_range_proof_code_hash_iter<'a>(
+    proof: Option<&'a RangeProofContext>,
+) -> CodeIteratorResult<'a> {
+    crate::invoke_with_handle(proof, RangeProofContext::code_hash_iter)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_code_hash_iter_next<'a>(
+    iter: Option<&'a mut CodeIteratorHandle<'a>>,
+) -> HashResult {
+    crate::invoke_with_handle(iter, CodeIteratorHandle::next)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_code_hash_iter_free<'a>(
+    iter: Option<Box<CodeIteratorHandle<'a>>>,
+) -> VoidResult {
+    crate::invoke_with_handle(iter, drop)
 }
 
 /// Serialize a `RangeProof` to bytes.

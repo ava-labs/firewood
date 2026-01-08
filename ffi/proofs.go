@@ -74,6 +74,10 @@ type NextKeyRange struct {
 	endKey   Maybe[*ownedBytes]
 }
 
+type codeIterator struct {
+	handle *C.CodeIteratorHandle
+}
+
 // RangeProof returns a proof that the values in the range [startKey, endKey] are
 // included in the tree with the current root. The proof may be truncated to at
 // most [maxLength] entries, if non-zero. If either [startKey] or [endKey] is
@@ -230,8 +234,39 @@ func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
 // otherwise an error is returned on the first iteration.
 //
 // TODO(#1157): implement this method to extract code hashes from account nodes.
-func (*RangeProof) CodeHashes() iter.Seq2[Hash, error] {
-	return func(func(Hash, error) bool) {}
+func (p *RangeProof) CodeHashes() iter.Seq2[Hash, error] {
+	return func(yield func(Hash, error) bool) {
+		iter, err := getCodeHashIteratorFromCodeHashIteratorResult(C.fwd_range_proof_code_hash_iter(p.handle))
+		if err != nil {
+			yield(EmptyRoot, err)
+			return
+		}
+		defer func() {
+			if err := iter.Free(); err != nil {
+				panic(err)
+			}
+		}()
+		for hash, err := iter.Next(); ; hash, err = iter.Next() {
+			if err != nil {
+				yield(EmptyRoot, err)
+				return
+			}
+			if hash == EmptyRoot {
+				return
+			}
+			if !yield(hash, err) {
+				return
+			}
+		}
+	}
+}
+
+func (it *codeIterator) Next() (Hash, error) {
+	return getHashKeyFromHashResult(C.fwd_code_hash_iter_next(it.handle))
+}
+
+func (it *codeIterator) Free() error {
+	return getErrorFromVoidResult(C.fwd_code_hash_iter_free(it.handle))
 }
 
 // MarshalBinary returns a serialized representation of this RangeProof.
@@ -502,6 +537,19 @@ func getNextKeyRangeFromNextKeyRangeResult(result C.NextKeyRangeResult) (*NextKe
 		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 	default:
 		return nil, fmt.Errorf("unknown C.NextKeyRangeResult tag: %d", result.tag)
+	}
+}
+
+func getCodeHashIteratorFromCodeHashIteratorResult(result C.CodeIteratorResult) (*codeIterator, error) {
+	switch result.tag {
+	case C.CodeIteratorResult_Ok:
+		ptr := *(**C.CodeIteratorHandle)(unsafe.Pointer(&result.anon0))
+		return &codeIterator{handle: ptr}, nil
+	case C.CodeIteratorResult_Err:
+		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return nil, err
+	default:
+		return nil, fmt.Errorf("unknown C.CodeIteratorResult tag: %d", result.tag)
 	}
 }
 

@@ -33,6 +33,7 @@ tikv-jemallocator = "0.6.1"
 env_logger = { workspace = true, optional = true }
 derive-where = "1.6.0"
 metrics-exporter-prometheus = { version = "0.17.2", default-features = false }
+rlp = "0.6.1"
 
 [dev-dependencies]
 # Workspace dependencies
