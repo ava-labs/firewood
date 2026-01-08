@@ -25,15 +25,14 @@ coarsetime.workspace = true
 firewood.workspace = true
 firewood-storage.workspace = true
 metrics.workspace = true
-metrics-util.workspace = true
 parking_lot.workspace = true
 # Regular dependencies
-chrono = "0.4.42"
 oxhttp = "0.3.1"
 tikv-jemallocator = "0.6.1"
 # Optional dependencies
 env_logger = { workspace = true, optional = true }
 derive-where = "1.6.0"
+metrics-exporter-prometheus = { version = "0.17.2", default-features = false }
 
 [dev-dependencies]
 # Workspace dependencies
@@ -51,4 +50,4 @@ cbindgen = "0.29.2"
 workspace = true
 
 [package.metadata.cargo-machete]
-ignored = ["cbindgen"]
+ignored = ["cbindgen", "metrics"]

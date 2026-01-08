@@ -529,13 +529,9 @@ pub unsafe extern "C" fn fwd_commit_proposal(
 ) -> HashResult {
     invoke_with_handle(proposal, move |proposal| {
         proposal.commit_proposal(|commit_time| {
-            firewood_counter!(
-                "firewood.ffi.commit_ms",
-                "FFI commit timing in milliseconds"
-            )
-            .increment(commit_time.as_millis());
-            firewood_counter!("firewood.ffi.commit", "Number of FFI commit operations")
-                .increment(1);
+            firewood_counter!("ffi.commit_ms", "FFI commit timing in milliseconds")
+                .increment(commit_time.as_millis());
+            firewood_counter!("ffi.commit", "Number of FFI commit operations").increment(1);
         })
     })
 }
@@ -850,4 +846,29 @@ pub unsafe extern "C" fn fwd_revision_dump(revision: Option<&RevisionHandle>) ->
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fwd_proposal_dump(proposal: Option<&ProposalHandle>) -> ValueResult {
     invoke_with_handle(proposal, firewood::v2::api::DbView::dump_to_string)
+}
+
+/// Forces the database to flush and sync the revision associated with root to disk.
+///
+/// NOTE: this function is currently a no-op.
+///
+/// # Arguments
+///
+/// * `db` - The database handle returned by [`fwd_open_db`]
+///
+/// # Returns
+///
+/// - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
+/// - [`VoidResult::Ok`] if the operation was successful.
+/// - [`VoidResult::Err`] if the process panics while persisting.
+///
+/// # Safety
+///
+/// The caller must ensure that `db` is a valid pointer to a [`DatabaseHandle`]
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn fwd_flush_and_sync_root_on_db(
+    db: Option<&DatabaseHandle>,
+    root: HashKey,
+) -> VoidResult {
+    invoke_with_handle(db, move |db| db.flush_and_sync_root(root.into()))
 }

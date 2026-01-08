@@ -44,6 +44,7 @@ pub(crate) mod header;
 pub(crate) mod persist;
 pub(crate) mod primitives;
 
+use crate::firewood_counter;
 use crate::linear::OffsetReader;
 use crate::logger::trace;
 use crate::node::branch::ReadSerializable as _;
@@ -479,6 +480,12 @@ impl ImmutableProposal {
             && Arc::ptr_eq(parent, committing)
         {
             *guard = NodeStoreParent::Committed(committing.root_hash());
+            // Track reparenting events
+            firewood_counter!(
+                "proposals.reparented",
+                "Number of proposals reparented to committed parent"
+            )
+            .increment(1);
         }
     }
 }
