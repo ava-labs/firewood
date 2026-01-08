@@ -69,20 +69,20 @@ impl ComparableNodeInfo {
 }
 
 /// Iterator that outputs the difference between two tries and skips matching sub-tries.
-struct DiffMerkleNodeStream<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader> {
+struct DiffMerkleNodeStream<'a, Left: HashedNodeReader, Right: HashedNodeReader> {
     // Contains the state of the diff traversal. It is only None after calling `next` or
     // `next_internal` if we have reached the end of the traversal.
     state: Option<DiffIterationNodeState>,
-    left_tree: PreOrderIterator<'a, LEFT>,
-    right_tree: PreOrderIterator<'a, RIGHT>,
+    left_tree: PreOrderIterator<'a, Left>,
+    right_tree: PreOrderIterator<'a, Right>,
 }
 
-impl<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader> DiffMerkleNodeStream<'a, LEFT, RIGHT> {
+impl<'a, Left: HashedNodeReader, Right: HashedNodeReader> DiffMerkleNodeStream<'a, Left, Right> {
     /// Constructor where the left and right tries implement the trait `HashedNodeReader`.
     #[cfg_attr(not(test), expect(dead_code))]
     pub fn new(
-        left_tree: &'a LEFT,
-        right_tree: &'a RIGHT,
+        left_tree: &'a Left,
+        right_tree: &'a Right,
         start_key: Key,
     ) -> Result<Self, FileIoError> {
         // Create pre-order iterators for the two tries and have them iterate to the start key.
@@ -346,8 +346,8 @@ impl<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader> DiffMerkleNodeStream<'
 }
 
 /// Adding support for the Iterator trait
-impl<LEFT: HashedNodeReader, RIGHT: HashedNodeReader> Iterator
-    for DiffMerkleNodeStream<'_, LEFT, RIGHT>
+impl<Left: HashedNodeReader, Right: HashedNodeReader> Iterator
+    for DiffMerkleNodeStream<'_, Left, Right>
 {
     type Item = Result<BatchOp<Key, Value>, FileIoError>;
 
@@ -1468,7 +1468,6 @@ mod tests {
                 m1.try_into().unwrap();
             let m2_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
                 m2.try_into().unwrap();
-
             let ops = diff_merkle_iterator(&m1_immut, &m2_immut, Box::new([]))
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
