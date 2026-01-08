@@ -32,6 +32,13 @@ lto = "fat"
 debug = false
 inherits = "release"
 
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+lto = "fat"
+panic = "unwind"
+
 [workspace.lints.rust]
 unsafe_code = "deny"
 missing_debug_implementations = "warn"

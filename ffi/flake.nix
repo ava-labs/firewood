@@ -45,6 +45,14 @@
           (craneLib.filterCargoSources path type);
       };
 
+      # Map Nix platform to Rust target triple (Go/Rust use aarch64, Nix uses arm64)
+      rustTarget = {
+        "aarch64-darwin" = "aarch64-apple-darwin";
+        "x86_64-darwin" = "x86_64-apple-darwin";
+        "aarch64-linux" = "aarch64-unknown-linux-gnu";
+        "x86_64-linux" = "x86_64-unknown-linux-gnu";
+      }.${pkgs.stdenv.hostPlatform.system} or pkgs.stdenv.hostPlatform.config;
+
       commonArgs = {
         inherit src;
         strictDeps = true;
@@ -63,47 +71,48 @@
         MACOSX_DEPLOYMENT_TARGET = "15.0";
       };
 
-      cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
-        # Use cargo alias defined in .cargo/config.toml
-        cargoBuildCommand = "cargo build-static-ffi";
-      });
-
-      firewood-ffi = craneLib.buildPackage (commonArgs // {
-        inherit cargoArtifacts;
-        # Use cargo alias defined in .cargo/config.toml
-        cargoBuildCommand = "cargo build-static-ffi";
-
-        # Disable tests - we only need to build the static library
-        doCheck = false;
-
-        # Install the static library and header
-        postInstall = ''
-          # Create a package structure compatible with FIREWOOD_LD_MODE=STATIC_LIBS
-          mkdir -p $out/ffi
-          cp -R ./ffi/* $out/ffi/
-          mkdir -p $out/ffi/libs/${pkgs.stdenv.hostPlatform.config}
-          cp target/maxperf/libfirewood_ffi.a $out/ffi/libs/${pkgs.stdenv.hostPlatform.config}/
-
-          # Run go generate to switch CGO directives to STATIC_LIBS mode
-          cd $out/ffi
-          HOME=$TMPDIR GOTOOLCHAIN=local FIREWOOD_LD_MODE=STATIC_LIBS ${go}/bin/go generate
-        '';
-
-        meta = with lib; {
-          description = "C FFI bindings for Firewood, an embedded key-value store";
-          homepage = "https://github.com/ava-labs/firewood";
-          license = {
-            fullName = "Ava Labs Ecosystem License 1.1";
-            url = "https://github.com/ava-labs/firewood/blob/main/LICENSE.md";
+      mkFfi = { cargoCmd, targetProfile, extraArgs ? {} }:
+        craneLib.buildPackage (commonArgs // {
+          cargoArtifacts = craneLib.buildDepsOnly (commonArgs // {
+            cargoBuildCommand = cargoCmd;
+          } // extraArgs);
+          cargoBuildCommand = cargoCmd;
+          doCheck = false;
+          postInstall = ''
+            mkdir -p $out/ffi
+            cp -R ./ffi/* $out/ffi/
+            mkdir -p $out/ffi/libs/${rustTarget}
+            cp target/${targetProfile}/libfirewood_ffi.a $out/ffi/libs/${rustTarget}/
+            cd $out/ffi
+            HOME=$TMPDIR GOTOOLCHAIN=local FIREWOOD_LD_MODE=STATIC_LIBS ${go}/bin/go generate
+          '';
+          meta = with lib; {
+            description = "C FFI bindings for Firewood, an embedded key-value store";
+            homepage = "https://github.com/ava-labs/firewood";
+            license = {
+              fullName = "Ava Labs Ecosystem License 1.1";
+              url = "https://github.com/ava-labs/firewood/blob/main/LICENSE.md";
+            };
+            platforms = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
           };
-          platforms = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
-        };
-      });
+        } // extraArgs);
+
+      firewood-ffi = mkFfi {
+        cargoCmd = "cargo build-static-ffi";
+        targetProfile = "maxperf";
+      };
+
+      firewood-ffi-profile = mkFfi {
+        cargoCmd = "cargo build-profile-ffi";
+        targetProfile = "profiling";
+        extraArgs.RUSTFLAGS = "-C force-frame-pointers=yes";
+      };
     in
     {
       packages = {
-        inherit firewood-ffi;
+        inherit firewood-ffi firewood-ffi-profile;
         default = firewood-ffi;
+        profile = firewood-ffi-profile;
       };
 
       apps.go = {
@@ -130,6 +139,12 @@
           jq
           just
           rustToolchain
+          # Profiling tools
+          rustfilt
+          inferno
+          jemalloc
+          graphviz
+          perl
         ];
 
         shellHook = ''
