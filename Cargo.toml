@@ -5,6 +5,7 @@ members = [
   "firewood-macros",
   "firewood",
   "fwdctl",
+  "replay",
   "storage",
   "triehash",
 ]
@@ -60,6 +61,7 @@ firewood = { path = "firewood", version = "0.0.18" }
 firewood-macros = { path = "firewood-macros", version = "0.0.18" }
 firewood-storage = { path = "storage", version = "0.0.18" }
 firewood-ffi = { path = "ffi", version = "0.0.18" }
+firewood-replay = { path = "replay", version = "0.0.18" }
 
 # no longer bumping with workspace
 firewood-triehash = { path = "triehash", version = "0.0.16" }

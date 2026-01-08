@@ -539,7 +539,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
 
                 // If this node is a leaf, then we don't need to save its info to `node_info` as
                 // it has no children to traverse.
-                if let Node::Branch(_branch) = &*node_info.node {
+                if matches!(*node_info.node, Node::Branch(_)) {
                     // Check if this node's path is a prefix of the key. If it is not (`unique_node`
                     // is not empty), then this node's children cannot be larger than or equal to
                     // the key, and we don't need to include them on the traversal stack.
@@ -559,11 +559,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
 }
 
 #[cfg(test)]
-#[expect(
-    clippy::unwrap_used,
-    clippy::arithmetic_side_effects,
-    clippy::type_complexity
-)]
+#[expect(clippy::unwrap_used, clippy::arithmetic_side_effects)]
 mod tests {
     use crate::{
         db::{BatchOp, Db, DbConfig},
@@ -582,6 +578,9 @@ mod tests {
     use lender::Lender;
     use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
     use test_case::test_case;
+
+    type BatchOpVec = Vec<BatchOp<Box<[u8]>, Box<[u8]>>>;
+    type ImmutableMemstore = Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>;
 
     struct TestDb {
         db: Db,
@@ -758,7 +757,7 @@ mod tests {
         committed_keys: &HashSet<Vec<u8>>,
         num_keys: usize,
         start_val: usize,
-    ) -> (Vec<BatchOp<Vec<u8>, Box<[u8]>>>, usize) {
+    ) -> (BatchOpVec, usize) {
         const CHANCE_DELETE_PERCENT: usize = 2;
         let mut seen_keys = std::collections::HashSet::new();
         let mut batch = Vec::new();
@@ -767,7 +766,9 @@ mod tests {
             if !committed_keys.is_empty() && rng.random_range(0..100) < CHANCE_DELETE_PERCENT {
                 let del_key = gen_delete_key(rng, committed_keys, &mut seen_keys);
                 if let Some(key) = del_key {
-                    batch.push(BatchOp::Delete { key });
+                    batch.push(BatchOp::Delete {
+                        key: key.into_boxed_slice(),
+                    });
                     continue;
                 }
                 // If we couldn't generate a delete key, then just fall through and create
@@ -778,7 +779,7 @@ mod tests {
             // Only add if key is unique
             if seen_keys.insert(key.clone()) {
                 batch.push(BatchOp::Put {
-                    key,
+                    key: key.into_boxed_slice(),
                     value: Box::from(format!("value{}", batch.len() + start_val).as_bytes()),
                 });
             }
@@ -822,7 +823,7 @@ mod tests {
                 let key = key_from_nibble_iter(node_info.path.iter().copied());
                 let batch_sorted_item = batch_sorted_it.next().unwrap();
                 assert!(
-                    *key == *batch_sorted_item.key().as_slice()
+                    *key == **batch_sorted_item.key()
                         && *val == **batch_sorted_item.value().unwrap()
                 );
             }
@@ -832,12 +833,7 @@ mod tests {
         // Second test where we pick a random key from the sorted batch as the start key, and check
         // the sorted batch and pre-order traversal have identical values when using that start key.
         let mut index = rng.random_range(0..batch_sorted.len());
-        let start_key = batch_sorted
-            .get(index)
-            .unwrap()
-            .key()
-            .clone()
-            .into_boxed_slice();
+        let start_key = batch_sorted.get(index).unwrap().key().clone();
         let mut preorder_it = PreOrderIterator::new(merkle.nodestore(), &start_key).unwrap();
         while let Some(node_info) = preorder_it.next() {
             let node_info = node_info.unwrap();
@@ -845,7 +841,7 @@ mod tests {
                 let key = key_from_nibble_iter(node_info.path.iter().copied());
                 let batch_sorted_item = batch_sorted.get(index).unwrap();
                 assert!(
-                    *key == *batch_sorted_item.key().as_slice()
+                    *key == **batch_sorted_item.key()
                         && *val == **batch_sorted_item.value().unwrap()
                 );
                 index += 1;
@@ -1467,15 +1463,12 @@ mod tests {
         }
 
         // Compute ops and immutable views according to mutability flags
-        let (ops, m1_immut, m2_immut): (
-            Vec<BatchOp<Box<[u8]>, Box<[u8]>>>,
-            Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
-            Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
-        ) = {
+        let (ops, m1_immut, m2_immut): (BatchOpVec, ImmutableMemstore, ImmutableMemstore) = {
             let m1_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
                 m1.try_into().unwrap();
             let m2_immut: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
                 m2.try_into().unwrap();
+
             let ops = diff_merkle_iterator(&m1_immut, &m2_immut, Box::new([]))
                 .unwrap()
                 .collect::<Result<Vec<_>, _>>()
