@@ -4,6 +4,7 @@
 #[cfg(test)]
 pub(crate) mod tests;
 
+mod changes;
 mod merge;
 /// Parallel merkle
 pub mod parallel;

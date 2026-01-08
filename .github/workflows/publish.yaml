@@ -36,6 +36,11 @@ jobs:
         run: |
           cargo login ${{ secrets.CARGO_TOKEN }}
           cargo publish -p firewood
+      - name: publish firewood-replay crate
+        continue-on-error: false
+        run: |
+          cargo login ${{ secrets.CARGO_TOKEN }}
+          cargo publish -p firewood-replay
       - name: publish firewood-ffi crate
         continue-on-error: false
         run: |
