@@ -7,7 +7,7 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/ava-labs/avalanchego/utils/maybe"
+	"github.com/ava-labs/firewood-go-ethhash/ffi"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/types"
 	"github.com/ava-labs/libevm/crypto"
@@ -15,6 +15,18 @@ import (
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/require"
 )
+
+var _ ffi.Maybe[[]byte] = nothing{}
+
+type nothing struct{}
+
+func (nothing) HasValue() bool {
+	return false
+}
+
+func (nothing) Value() []byte {
+	return nil
+}
 
 func FuzzRangeProofCreation(f *testing.F) {
 	f.Fuzz(func(t *testing.T, data []byte) {
@@ -53,11 +65,11 @@ func FuzzRangeProofCreation(f *testing.F) {
 		root, err := db.Update(keys, values)
 		require.NoErrorf(t, err, "%T.Update()", db)
 
-		proof, err := db.RangeProof(root, maybe.Nothing[[]byte](), maybe.Nothing[[]byte](), uint32(numAccounts))
+		proof, err := db.RangeProof(root, nothing{}, nothing{}, uint32(numAccounts))
 		require.NoErrorf(t, err, "%T.RangeProof()", db)
 		require.NotNil(t, proof)
 
-		err = proof.Verify(root, maybe.Nothing[[]byte](), maybe.Nothing[[]byte](), uint32(numAccounts))
+		err = proof.Verify(root, nothing{}, nothing{}, uint32(numAccounts))
 		require.NoErrorf(t, err, "%T.Verify()", proof)
 
 		seen := make(map[common.Hash]struct{})

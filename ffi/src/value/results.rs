@@ -185,7 +185,7 @@ impl From<Option<Result<HashKey, api::Error>>> for HashResult {
     fn from(value: Option<Result<HashKey, api::Error>>) -> Self {
         match value {
             Some(value) => match value {
-                Ok(hash) => HashResult::Some(HashKey::from(hash)),
+                Ok(hash) => HashResult::Some(hash),
                 Err(err) => HashResult::Err(err.to_string().into_bytes().into()),
             },
             None => HashResult::None,

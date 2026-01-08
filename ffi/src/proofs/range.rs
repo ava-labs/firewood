@@ -558,7 +558,7 @@ pub extern "C" fn fwd_range_proof_code_hash_iter<'a>(
 }
 
 /// Advances the code hash iterator and returns the next code hash.
-////
+///
 /// # Arguments
 ///
 /// - `iter` - A [`CodeIteratorHandle`] previously returned from the
@@ -595,9 +595,7 @@ pub extern "C" fn fwd_code_hash_iter_next<'a>(
 /// - [`VoidResult::Ok`] if the memory was successfully freed.
 /// - [`VoidResult::Err`] if the process panics while freeing the memory.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_code_hash_iter_free<'a>(
-    iter: Option<Box<CodeIteratorHandle<'a>>>,
-) -> VoidResult {
+pub extern "C" fn fwd_code_hash_iter_free(iter: Option<Box<CodeIteratorHandle>>) -> VoidResult {
     crate::invoke_with_handle(iter, drop)
 }
 

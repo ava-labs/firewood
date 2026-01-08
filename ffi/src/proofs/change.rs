@@ -91,11 +91,12 @@ pub struct NextKeyRange {
 
 #[derive(Debug)]
 #[cfg_attr(not(feature = "ethhash"), allow(dead_code))]
-
 pub struct CodeIteratorHandle<'a> {
-    key_values: &'a [(Box<[u8]>, Box<[u8]>)],
+    key_values: &'a KeyValueBox,
     i: usize,
 }
+
+type KeyValueBox = [(Box<[u8]>, Box<[u8]>)];
 
 impl Iterator for CodeIteratorHandle<'_> {
     type Item = Result<HashKey, api::Error>;
@@ -103,7 +104,7 @@ impl Iterator for CodeIteratorHandle<'_> {
     fn next(&mut self) -> Option<Self::Item> {
         #[cfg(not(feature = "ethhash"))]
         {
-            return None;
+            None
         }
 
         #[cfg(feature = "ethhash")]
@@ -115,41 +116,55 @@ impl Iterator for CodeIteratorHandle<'_> {
                 0x5d, 0x85, 0xa4, 0x70,
             ];
             while self.i < self.key_values.len() {
-                let (key, value) = &self.key_values[self.i];
-                self.i += 1;
-                print!("key length: {}\n", key.len());
+                let (key, value) = &self.key_values.get(self.i)?;
+                #[expect(clippy::arithmetic_side_effects)]
+                {
+                    self.i += 1;
+                }
                 if key.len() != 32 {
                     continue;
                 }
-                let code_hash_slice = match Rlp::new(value).at(3).and_then(|r| r.data()) {
-                    Ok(bytes) => bytes,
-                    Err(_) => {
-                        return Some(Err(api::Error::ProofError(ProofError::InvalidValueFormat)));
-                    }
-                };
 
+                let Ok(code_hash_slice) = Rlp::new(value).at(3).and_then(|r| r.data()) else {
+                    return Some(Err(api::Error::ProofError(ProofError::InvalidValueFormat)));
+                };
                 let code_hash: HashKey = TrieHash::try_from(code_hash_slice).ok()?.into();
                 if code_hash == TrieHash::from(EMPTY_CODE_HASH).into() {
-                    print!("skipping empty code hash\n");
                     continue;
                 }
-                print!("yielding code hash: {:x?}\n", code_hash);
                 return Some(Ok(code_hash));
             }
-            return None;
+            None
         }
     }
 }
 
 impl<'a> CodeIteratorHandle<'a> {
+    /// Create a new code hash iterator from the given key/value pairs.
+    /// The key/value pairs should be the raw entries from the
+    /// underlying proof.
+    ///
+    /// The iterator must be freed after use.
+    ///
+    /// Arguments:
+    /// - `key_values` - The key/value pairs from the proof.
+    ///
+    /// Returns:
+    /// - `Ok(CodeIteratorHandle)` if the iterator was successfully created.
+    /// - `Err(api::Error)` if the iterator could not be created.
+    ///
+    /// # Errors
+    ///
+    /// - Returns `api::Error::FeatureNotSupported` if the `ethhash` feature
+    ///   is not enabled.
+    #[cfg_attr(feature = "ethhash", allow(clippy::missing_const_for_fn))]
     #[cfg_attr(not(feature = "ethhash"), allow(unused_variables))]
-
-    pub fn new(key_values: &'a [(Box<[u8]>, Box<[u8]>)]) -> Result<Self, api::Error> {
+    pub fn new(key_values: &'a KeyValueBox) -> Result<Self, api::Error> {
         #[cfg(not(feature = "ethhash"))]
         {
-            return Err(api::Error::FeatureNotSupported(
+            Err(api::Error::FeatureNotSupported(
                 "ethhash code hash iterator".to_string(),
-            ));
+            ))
         }
 
         #[cfg(feature = "ethhash")]

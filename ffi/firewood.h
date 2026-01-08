@@ -1210,6 +1210,7 @@ struct VoidResult fwd_code_hash_iter_free(struct CodeIteratorHandle *iter);
 
 /**
  * Advances the code hash iterator and returns the next code hash.
+ *
  * # Arguments
  *
  * - `iter` - A [`CodeIteratorHandle`] previously returned from the
