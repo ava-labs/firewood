@@ -87,9 +87,8 @@ func FuzzRangeProofCreation(f *testing.F) {
 			seen[ethHash] = struct{}{}
 		}
 
-		// ensure we didn't miss any expected hash
+		// log more information about mismatches
 		if len(seen) != len(expected) {
-			// Optional: print the missing ones to make failures obvious
 			for h := range expected {
 				if _, ok := seen[h]; !ok {
 					t.Log("missing expected code hash", h.Hex())
@@ -100,8 +99,8 @@ func FuzzRangeProofCreation(f *testing.F) {
 					t.Log("extra unexpected code hash", h.Hex())
 				}
 			}
-			require.Len(t, expected, len(seen), "%T.CodeHashes() returned wrong number of unique code hashes", proof)
 		}
+		require.Len(t, expected, len(seen), "%T.CodeHashes() returned wrong number of unique code hashes", proof)
 
 	})
 }

@@ -276,7 +276,8 @@ func TestRangeProofCodeHashes(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	key := [32]byte{0x12, 0x34, 0x56}
+	// RLP encoded account with code hash
+	key := [32]byte{0x12, 0x34, 0x56} // key must be length 32
 	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
 	r.NoError(err)
 	codeHash := stringToHash(t, "044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
