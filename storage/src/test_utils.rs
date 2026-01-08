@@ -2,8 +2,11 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::cell::RefCell;
+use std::ops::Deref;
 use std::rc::Rc;
 
+use metrics::{Key, Label, with_local_recorder};
+use metrics_util::debugging::{DebugValue, DebuggingRecorder};
 #[expect(
     clippy::disallowed_types,
     reason = "we are implementing the alternative"
@@ -164,5 +167,51 @@ impl rand::RngCore for &SeededRng {
     #[inline]
     fn fill_bytes(&mut self, dst: &mut [u8]) {
         SeededRng::fill_bytes(self, dst);
+    }
+}
+
+/// Test metrics recorder that captures counter values for testing
+#[derive(Debug, Default)]
+pub struct TestRecorder(DebuggingRecorder);
+
+impl Deref for TestRecorder {
+    type Target = DebuggingRecorder;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl TestRecorder {
+    /// Execute test function with this recorder set as the local recorder.
+    pub fn with_local_recorder<F: Fn()>(&self, f: F) {
+        with_local_recorder(&**self, f);
+    }
+
+    /// Returns the counter value for the given key and label.
+    #[must_use]
+    pub fn counter_value(
+        &self,
+        key_name: &'static str,
+        labels: &[(&'static str, &'static str)],
+    ) -> u64 {
+        let key = if labels.is_empty() {
+            Key::from_name(key_name)
+        } else {
+            let label_vec: Vec<Label> = labels.iter().map(|(k, v)| Label::new(*k, *v)).collect();
+            Key::from_name(key_name).with_extra_labels(label_vec)
+        };
+
+        // Return the count value
+        self.snapshotter()
+            .snapshot()
+            .into_vec()
+            .into_iter()
+            .find(|(k, _, _, _)| *k.key() == key)
+            .map(|(_, _, _, v)| v)
+            .map_or(0, |val| match val {
+                DebugValue::Counter(c) => c,
+                _ => 0,
+            })
     }
 }

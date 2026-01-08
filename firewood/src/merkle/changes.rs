@@ -573,7 +573,7 @@ mod tests {
 
     use firewood_storage::{
         Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, MemStore,
-        MutableProposal, NodeStore, SeededRng, TrieReader,
+        MutableProposal, NodeStore, SeededRng, TestRecorder, TrieReader,
     };
     use lender::Lender;
     use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
@@ -1700,5 +1700,109 @@ mod tests {
             // The two tries should now be identical.
             assert!(first_diff_item.is_none());
         }
+    }
+
+    #[test]
+    fn test_hash_optimization_reduces_next_calls() {
+        let recorder = TestRecorder::default();
+        recorder.with_local_recorder(|| {
+            // Create test data with substantial shared content and unique content
+            let tree1_items = [
+                // Large shared content that will form identical subtrees
+                (
+                    b"shared/branch_a/deep/file1".as_slice(),
+                    b"shared_value1".as_slice(),
+                ),
+                (
+                    b"shared/branch_a/deep/file2".as_slice(),
+                    b"shared_value2".as_slice(),
+                ),
+                (
+                    b"shared/branch_a/deep/file3".as_slice(),
+                    b"shared_value3".as_slice(),
+                ),
+                (b"shared/branch_b/file1".as_slice(), b"shared_b1".as_slice()),
+                (b"shared/branch_b/file2".as_slice(), b"shared_b2".as_slice()),
+                (
+                    b"shared/branch_c/deep/nested/file".as_slice(),
+                    b"shared_nested".as_slice(),
+                ),
+                (b"shared/common".as_slice(), b"common_value".as_slice()),
+                // Unique to tree1
+                (b"tree1_unique/x".as_slice(), b"x_value".as_slice()),
+                (b"tree1_unique/y".as_slice(), b"y_value".as_slice()),
+                (b"tree1_unique/z".as_slice(), b"z_value".as_slice()),
+            ];
+
+            let tree2_items = [
+                // Identical shared content
+                (
+                    b"shared/branch_a/deep/file1".as_slice(),
+                    b"shared_value1".as_slice(),
+                ),
+                (
+                    b"shared/branch_a/deep/file2".as_slice(),
+                    b"shared_value2".as_slice(),
+                ),
+                (
+                    b"shared/branch_a/deep/file3".as_slice(),
+                    b"shared_value3".as_slice(),
+                ),
+                (b"shared/branch_b/file1".as_slice(), b"shared_b1".as_slice()),
+                (b"shared/branch_b/file2".as_slice(), b"shared_b2".as_slice()),
+                (
+                    b"shared/branch_c/deep/nested/file".as_slice(),
+                    b"shared_nested".as_slice(),
+                ),
+                (b"shared/common".as_slice(), b"common_value".as_slice()),
+                // Unique to tree2
+                (b"tree2_unique/p".as_slice(), b"p_value".as_slice()),
+                (b"tree2_unique/q".as_slice(), b"q_value".as_slice()),
+                (b"tree2_unique/r".as_slice(), b"r_value".as_slice()),
+            ];
+
+            let m1 = populate_merkle(create_test_merkle(), &tree1_items);
+            let m2 = populate_merkle(create_test_merkle(), &tree2_items);
+
+            // Check the number of next calls on two full tree traversals.
+            let diff_nexts_before =
+                recorder.counter_value("firewood.change_proof.next", &[]);
+
+            let mut preorder_it = PreOrderIterator::new(m1.nodestore(), &Key::default()).unwrap();
+            while preorder_it.next().is_some() {}
+            let mut preorder_it = PreOrderIterator::new(m2.nodestore(), &Key::default()).unwrap();
+            while preorder_it.next().is_some() {}
+
+            let diff_nexts_after =
+                recorder.counter_value("firewood.change_proof.next", &[]);
+            let diff_iteration_count = diff_nexts_after - diff_nexts_before;
+            println!("Next calls from traversing tries: {diff_iteration_count}");
+
+            // DIFF TEST: Measure next calls from hash-optimized diff operation
+            let diff_nexts_before =
+                recorder.counter_value("firewood.change_proof.next", &[]);
+
+            let diff_stream =
+                DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Box::new([])).unwrap();
+            let diff_immutable_results_count = diff_stream.count();
+
+            let diff_nexts_after =
+                recorder.counter_value("firewood.change_proof.next", &[]);
+            let diff_immutable_nexts = diff_nexts_after - diff_nexts_before;
+
+            println!("Diff next calls: {diff_immutable_nexts}");
+            println!("Diff results count: {diff_immutable_results_count}");
+
+            // Should have some next calls
+            assert!(diff_immutable_nexts > 0, "Expected next calls from diff operation");
+
+            // Verify hash optimization is working - should call next FEWER times than iterating both tries
+            assert!(diff_immutable_nexts < diff_iteration_count, "Hash optimization failed");
+
+            // Verify that diff return the correct number of results
+            assert!(diff_immutable_results_count == 6, "Retrieved an unexpected number of results");
+
+            println!("Traversal optimization verified: {diff_immutable_nexts} vs {diff_iteration_count} next calls");
+        });
     }
 }
