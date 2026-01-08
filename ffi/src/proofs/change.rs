@@ -11,8 +11,8 @@ use rlp::Rlp;
 use firewood::v2::api;
 
 use crate::{
-    BorrowedBytes, CResult, ChangeProofResult, CodeIteratorResult, DatabaseHandle, HashKey,
-    HashResult, Maybe, NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
+    BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
+    NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
 };
 
 /// Arguments for creating a change proof.
@@ -281,13 +281,6 @@ pub extern "C" fn fwd_db_verify_and_commit_change_proof(
 pub extern "C" fn fwd_change_proof_find_next_key(
     _proof: Option<&mut ChangeProofContext>,
 ) -> NextKeyRangeResult {
-    CResult::from_err("not yet implemented")
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_change_proof_code_iterator(
-    _proof: Option<&'_ ChangeProofContext>,
-) -> CodeIteratorResult<'_> {
     CResult::from_err("not yet implemented")
 }
 

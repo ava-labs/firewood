@@ -314,9 +314,9 @@ pub enum CodeIteratorResult<'p> {
     /// Building the iterator was successful and the iterator handle is returned
     Ok {
         /// An opaque pointer to the [`CodeIteratorHandle`].
-        /// The value should be freed with [`fwd_free_code_iterator`]
+        /// The value should be freed with [`fwd_code_hash_iter_free`]
         ///
-        /// [`fwd_free_code_iterator`]: crate::fwd_free_code_iterator
+        /// [`fwd_code_hash_iter_free`]: crate::fwd_code_hash_iter_free
         handle: Box<CodeIteratorHandle<'p>>,
     },
     /// An error occurred and the message is returned as an [`OwnedBytes`].

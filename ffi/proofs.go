@@ -232,8 +232,6 @@ func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
 // Note: this method is only relevant for Ethereum tries.
 // This method can only be called after a successful verification of the proof,
 // otherwise an error is returned on the first iteration.
-//
-// TODO(#1157): implement this method to extract code hashes from account nodes.
 func (p *RangeProof) CodeHashes() iter.Seq2[Hash, error] {
 	return func(yield func(Hash, error) bool) {
 		iter, err := getCodeHashIteratorFromCodeHashIteratorResult(C.fwd_range_proof_code_hash_iter(p.handle))
@@ -426,7 +424,7 @@ func (p *ChangeProof) FindNextKey() (*NextKeyRange, error) {
 // This method can only be called after a successful verification of the proof,
 // otherwise an error is returned on the first iteration.
 //
-// TODO(#1157): implement this method to extract code hashes from account nodes.
+// TODO(#1598): implement this method to extract code hashes from account nodes.
 func (*ChangeProof) CodeHashes() iter.Seq2[Hash, error] {
 	return func(func(Hash, error) bool) {}
 }
