@@ -501,6 +501,9 @@ func (db *Database) Dump() (string, error) {
 // This function is only meaningful when the FFI library was compiled with
 // the `block-replay` feature and the `FIREWOOD_BLOCK_REPLAY_PATH` environment
 // variable is set. Otherwise, it is a no-op.
+//
+// Note: the recording and flushing is not handled per db, and this will flush
+// all logs, if multiple databases are open.
 func FlushBlockReplay() error {
 	return getErrorFromVoidResult(C.fwd_block_replay_flush())
 }
