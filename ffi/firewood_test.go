@@ -148,14 +148,14 @@ func oneSecCtx(tb testing.TB) context.Context {
 	return ctx
 }
 
-func newTestDatabase(t *testing.T, opts ...Option) *Database {
-	t.Helper()
-	r := require.New(t)
+func newTestDatabase(tb testing.TB, opts ...Option) *Database {
+	tb.Helper()
+	r := require.New(tb)
 
-	db, err := newDatabase(t.TempDir(), opts...)
+	db, err := newDatabase(tb.TempDir(), opts...)
 	r.NoError(err)
-	t.Cleanup(func() {
-		r.NoError(db.Close(oneSecCtx(t)))
+	tb.Cleanup(func() {
+		r.NoError(db.Close(oneSecCtx(tb)))
 	})
 	return db
 }

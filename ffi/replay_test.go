@@ -33,66 +33,66 @@ const (
 	replayMaxCommitsEnv = "REPLAY_MAX_COMMITS"
 )
 
-// ReplayLog mirrors the Rust ReplayLog type.
-type ReplayLog struct {
-	Operations []DbOperation `msgpack:"operations"`
+// replayLog mirrors the Rust ReplayLog type.
+type replayLog struct {
+	Operations []dbOperation `msgpack:"operations"`
 }
 
-// DbOperation is the Go representation of the Rust DbOperation enum.
+// dbOperation is the Go representation of the Rust DbOperation enum.
 // msgpack will populate exactly one of the pointer fields below.
-type DbOperation struct {
-	GetLatest         *GetLatest         `msgpack:"GetLatest,omitempty"`
-	GetFromProposal   *GetFromProposal   `msgpack:"GetFromProposal,omitempty"`
-	GetFromRoot       *GetFromRoot       `msgpack:"GetFromRoot,omitempty"`
-	Batch             *Batch             `msgpack:"Batch,omitempty"`
-	ProposeOnDB       *ProposeOnDB       `msgpack:"ProposeOnDB,omitempty"`
-	ProposeOnProposal *ProposeOnProposal `msgpack:"ProposeOnProposal,omitempty"`
-	Commit            *Commit            `msgpack:"Commit,omitempty"`
+type dbOperation struct {
+	GetLatest         *getLatest         `msgpack:"GetLatest,omitempty"`
+	GetFromProposal   *getFromProposal   `msgpack:"GetFromProposal,omitempty"`
+	GetFromRoot       *getFromRoot       `msgpack:"GetFromRoot,omitempty"`
+	Batch             *batch             `msgpack:"Batch,omitempty"`
+	ProposeOnDB       *proposeOnDB       `msgpack:"ProposeOnDB,omitempty"`
+	ProposeOnProposal *proposeOnProposal `msgpack:"ProposeOnProposal,omitempty"`
+	Commit            *commit            `msgpack:"Commit,omitempty"`
 }
 
-// GetLatest represents a read from the latest revision.
-type GetLatest struct {
+// getLatest represents a read from the latest revision.
+type getLatest struct {
 	Key []byte `msgpack:"key"`
 }
 
-// GetFromProposal represents a read from an uncommitted proposal.
-type GetFromProposal struct {
+// getFromProposal represents a read from an uncommitted proposal.
+type getFromProposal struct {
 	ProposalID uint64 `msgpack:"proposal_id"`
 	Key        []byte `msgpack:"key"`
 }
 
-// GetFromRoot represents a read from a specific historical root.
-type GetFromRoot struct {
+// getFromRoot represents a read from a specific historical root.
+type getFromRoot struct {
 	Root []byte `msgpack:"root"`
 	Key  []byte `msgpack:"key"`
 }
 
-// KeyValueOp represents a single key/value mutation.
-type KeyValueOp struct {
+// keyValueOp represents a single key/value mutation.
+type keyValueOp struct {
 	Key   []byte `msgpack:"key"`
 	Value []byte `msgpack:"value"` // nil represents delete-range
 }
 
-// Batch represents a batch operation that commits immediately.
-type Batch struct {
-	Pairs []KeyValueOp `msgpack:"pairs"`
+// batch represents a batch operation that commits immediately.
+type batch struct {
+	Pairs []keyValueOp `msgpack:"pairs"`
 }
 
-// ProposeOnDB represents a proposal created on the database.
-type ProposeOnDB struct {
-	Pairs              []KeyValueOp `msgpack:"pairs"`
+// proposeOnDB represents a proposal created on the database.
+type proposeOnDB struct {
+	Pairs              []keyValueOp `msgpack:"pairs"`
 	ReturnedProposalID uint64       `msgpack:"returned_proposal_id"`
 }
 
-// ProposeOnProposal represents a proposal created on another proposal.
-type ProposeOnProposal struct {
+// proposeOnProposal represents a proposal created on another proposal.
+type proposeOnProposal struct {
 	ProposalID         uint64       `msgpack:"proposal_id"`
-	Pairs              []KeyValueOp `msgpack:"pairs"`
+	Pairs              []keyValueOp `msgpack:"pairs"`
 	ReturnedProposalID uint64       `msgpack:"returned_proposal_id"`
 }
 
-// Commit represents a commit operation for a proposal.
-type Commit struct {
+// commit represents a commit operation for a proposal.
+type commit struct {
 	ProposalID   uint64 `msgpack:"proposal_id"`
 	ReturnedHash []byte `msgpack:"returned_hash"` // nil when absent
 }
@@ -127,7 +127,7 @@ func TestReplayLogExecution(t *testing.T) {
 	db := newTestDatabase(t)
 
 	start := time.Now()
-	commits, err := applyReplayLogs(db, logs, ReplayConfig{MaxCommits: maxCommits})
+	commits, err := applyReplayLogs(db, logs, replayConfig{MaxCommits: maxCommits, VerifyHashes: true})
 	r.NoError(err, "replay logs against database")
 	elapsed := time.Since(start)
 
@@ -136,8 +136,6 @@ func TestReplayLogExecution(t *testing.T) {
 	r.NotEqual(EmptyRoot, root, "root should not be EmptyRoot after replay")
 
 	t.Logf("Replay completed in %v (%d commits), final root: %x", elapsed, commits, root)
-
-	r.NoError(db.Close(oneSecCtx(t)))
 }
 
 // BenchmarkReplayLog benchmarks the replay of recorded operations.
@@ -171,15 +169,11 @@ func BenchmarkReplayLog(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
-		db, err := New(b.TempDir(), WithTruncate(true))
-		r.NoError(err, "create database")
+		db := newTestDatabase(b)
 		b.StartTimer()
 
-		commits, err = applyReplayLogs(db, logs, ReplayConfig{MaxCommits: maxCommits})
+		commits, err = applyReplayLogs(db, logs, replayConfig{MaxCommits: maxCommits})
 		r.NoError(err, "replay failed")
-
-		b.StopTimer()
-		_ = db.Close(oneSecCtx(b))
 	}
 
 	b.ReportMetric(float64(commits), "commits")
@@ -194,8 +188,7 @@ func TestBlockReplayRoundTrip(t *testing.T) {
 	t.Setenv(replayPathEnv, replayLogPath)
 
 	// Phase 1: Record operations
-	db1, err := New(t.TempDir(), WithTruncate(true))
-	r.NoError(err)
+	db1 := newTestDatabase(t)
 
 	keys, vals := kvForTest(20)
 
@@ -227,24 +220,21 @@ func TestBlockReplayRoundTrip(t *testing.T) {
 	r.NoError(err)
 	r.NotEmpty(logs)
 
-	db2, err := New(t.TempDir(), WithTruncate(true))
-	r.NoError(err)
+	db2 := newTestDatabase(t)
 
-	_, err = applyReplayLogs(db2, logs, ReplayConfig{VerifyHashes: true})
+	_, err = applyReplayLogs(db2, logs, replayConfig{VerifyHashes: true})
 	r.NoError(err)
 
 	replayedRoot, err := db2.Root()
 	r.NoError(err)
 
 	r.Equal(originalRoot, replayedRoot, "replayed database should have same root hash")
-
-	r.NoError(db2.Close(oneSecCtx(t)))
 }
 
 // decodeReplayLogs decodes length-prefixed MessagePack segments from data.
 // If maxCommits > 0, stops loading once enough commits are found.
-func decodeReplayLogs(data []byte, maxCommits int) ([]ReplayLog, error) {
-	var logs []ReplayLog
+func decodeReplayLogs(data []byte, maxCommits int) ([]replayLog, error) {
+	var logs []replayLog
 	buf := bytes.NewReader(data)
 	totalCommits := 0
 
@@ -269,9 +259,9 @@ func decodeReplayLogs(data []byte, maxCommits int) ([]ReplayLog, error) {
 			return nil, fmt.Errorf("reading segment payload: %w", err)
 		}
 
-		var log ReplayLog
+		var log replayLog
 		if err := msgpack.Unmarshal(seg, &log); err != nil {
-			return nil, fmt.Errorf("decoding segment as ReplayLog: %w", err)
+			return nil, fmt.Errorf("decoding segment as replayLog: %w", err)
 		}
 		logs = append(logs, log)
 
@@ -291,8 +281,8 @@ func decodeReplayLogs(data []byte, maxCommits int) ([]ReplayLog, error) {
 	return logs, nil
 }
 
-// ReplayConfig controls replay behavior.
-type ReplayConfig struct {
+// replayConfig controls replay behavior.
+type replayConfig struct {
 	// MaxCommits limits the number of commits to replay. 0 means unlimited.
 	MaxCommits int
 	// VerifyHashes enables verification of returned hashes after commits.
@@ -301,7 +291,7 @@ type ReplayConfig struct {
 
 // applyReplayLogs applies replay logs to a database.
 // Returns the number of commits applied and any error encountered.
-func applyReplayLogs(db *Database, logs []ReplayLog, cfg ReplayConfig) (int, error) {
+func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, error) {
 	proposals := make(map[uint64]*Proposal)
 	totalCommits := 0
 
@@ -309,18 +299,26 @@ func applyReplayLogs(db *Database, logs []ReplayLog, cfg ReplayConfig) (int, err
 		for _, op := range segment.Operations {
 			switch {
 			case op.GetLatest != nil:
-				// Read operations - errors are non-fatal during replay
-				_, _ = db.Get(op.GetLatest.Key)
+				if _, err := db.Get(op.GetLatest.Key); err != nil {
+					return totalCommits, fmt.Errorf("GetLatest: %w", err)
+				}
 
 			case op.GetFromRoot != nil:
 				root, err := bytesToHash(op.GetFromRoot.Root)
-				if err == nil {
-					_, _ = db.GetFromRoot(root, op.GetFromRoot.Key)
+				if err != nil {
+					return totalCommits, fmt.Errorf("GetFromRoot: invalid root: %w", err)
+				}
+				if _, err := db.GetFromRoot(root, op.GetFromRoot.Key); err != nil {
+					return totalCommits, fmt.Errorf("GetFromRoot: %w", err)
 				}
 
 			case op.GetFromProposal != nil:
-				if prop, ok := proposals[op.GetFromProposal.ProposalID]; ok {
-					_, _ = prop.Get(op.GetFromProposal.Key)
+				prop, ok := proposals[op.GetFromProposal.ProposalID]
+				if !ok {
+					return totalCommits, fmt.Errorf("GetFromProposal: unknown proposal id %d", op.GetFromProposal.ProposalID)
+				}
+				if _, err := prop.Get(op.GetFromProposal.Key); err != nil {
+					return totalCommits, fmt.Errorf("GetFromProposal: %w", err)
 				}
 
 			case op.Batch != nil:
@@ -384,7 +382,7 @@ func applyReplayLogs(db *Database, logs []ReplayLog, cfg ReplayConfig) (int, err
 
 // loadReplayLogs reads and decodes replay logs from a file path.
 // If maxCommits > 0, stops loading once enough commits are found.
-func loadReplayLogs(logPath string, maxCommits int) ([]ReplayLog, error) {
+func loadReplayLogs(logPath string, maxCommits int) ([]replayLog, error) {
 	data, err := os.ReadFile(logPath)
 	if err != nil {
 		return nil, err
@@ -392,7 +390,7 @@ func loadReplayLogs(logPath string, maxCommits int) ([]ReplayLog, error) {
 	return decodeReplayLogs(data, maxCommits)
 }
 
-func splitPairs(pairs []KeyValueOp) ([][]byte, [][]byte) {
+func splitPairs(pairs []keyValueOp) ([][]byte, [][]byte) {
 	keys := make([][]byte, 0, len(pairs))
 	vals := make([][]byte, 0, len(pairs))
 	for _, p := range pairs {
