@@ -26,7 +26,7 @@ fastrace.workspace = true
 hex.workspace = true
 integer-encoding.workspace = true
 metrics.workspace = true
-metrics-util.workspace = true
+metrics-util = { workspace = true, optional = true }
 nonzero_ext.workspace = true
 rand = { workspace = true, optional = true }
 sha2.workspace = true
@@ -54,6 +54,7 @@ bumpalo = { version = "3.19.1", features = ["collections", "std"] }
 cfg-if = "1.0.4"
 # Workspace dependencies
 criterion = { workspace = true, features = ["html_reports"] }
+metrics-util.workspace = true
 pprof = { workspace = true, features = ["flamegraph"] }
 rand.workspace = true
 tempfile.workspace = true
@@ -63,7 +64,7 @@ test-case.workspace = true
 logger = ["log"]
 io-uring = ["dep:io-uring"]
 ethhash = ["dep:rlp", "dep:sha3", "dep:bytes"]
-test_utils = ["dep:rand"]
+test_utils = ["dep:metrics-util", "dep:rand"]
 
 [[bench]]
 name = "serializer"
