@@ -26,4 +26,4 @@ tempfile.workspace = true
 workspace = true
 
 [package.metadata.cargo-machete]
-ignored = ["metrics"]
+ignored = ["metrics", "serde_bytes"]
