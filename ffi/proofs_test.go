@@ -95,7 +95,7 @@ func TestRangeProofEmptyDB(t *testing.T) {
 	db := newTestDatabase(t)
 
 	proof, err := db.RangeProof(EmptyRoot, nothing(), nothing(), rangeProofLenUnbounded)
-	r.ErrorIs(err, errRevisionNotFound)
+	r.ErrorIs(err, ErrRevisionNotFound)
 	r.Nil(proof)
 }
 
@@ -112,7 +112,7 @@ func TestRangeProofNonExistentRoot(t *testing.T) {
 	root[0] ^= 0xFF
 
 	proof, err := db.RangeProof(root, nothing(), nothing(), rangeProofLenUnbounded)
-	r.ErrorIs(err, errRevisionNotFound)
+	r.ErrorIs(err, ErrRevisionNotFound)
 	r.Nil(proof)
 }
 
