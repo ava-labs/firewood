@@ -172,6 +172,10 @@ pub enum Error {
     // Error converting a u8 index into a path component
     #[error("error converting a u8 index into a path component")]
     InvalidConversionToPathComponent,
+
+    // Feature not supported in this build
+    #[error("feature not supported in this build: {0}")]
+    FeatureNotSupported(String),
 }
 
 impl From<std::convert::Infallible> for Error {
