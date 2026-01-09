@@ -10,7 +10,6 @@ package ffi
 import "C"
 
 import (
-	"runtime"
 	"strings"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -72,25 +71,4 @@ func GatherMetrics() (string, error) {
 	}
 
 	return string(bytes), nil
-}
-
-// LogConfig configures logs for this process.
-type LogConfig struct {
-	Path        string
-	FilterLevel string
-}
-
-// Starts global logs.
-// This function only needs to be called once.
-// An error is returned if this method is called a second time.
-func StartLogs(config *LogConfig) error {
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	args := C.struct_LogArgs{
-		path:         newBorrowedBytes([]byte(config.Path), &pinner),
-		filter_level: newBorrowedBytes([]byte(config.FilterLevel), &pinner),
-	}
-
-	return getErrorFromVoidResult(C.fwd_start_logs(args))
 }
