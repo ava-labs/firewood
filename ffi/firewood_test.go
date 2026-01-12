@@ -292,15 +292,27 @@ func sortKV(keys, vals [][]byte) error {
 	return nil
 }
 
+func makeBatch(keys, vals [][]byte) *Batch {
+	batch := NewBatch()
+	for i := range keys {
+		batch.Put(keys[i], vals[i])
+	}
+	return batch
+}
+
 // Tests that 100 key-value pairs can be inserted and retrieved.
-// This happens in three ways:
+// This happens in 6 ways:
 // 1. By calling [Database.Propose] and then [Proposal.Commit].
 // 2. By calling [Database.Update] directly - no proposal storage is needed.
 // 3. By calling [Database.Propose] and not committing, which returns a proposal.
+// 4. By calling [Database.ProposeBatch] and then [Proposal.Commit].
+// 5. By calling [Database.UpdateBatch] directly - no proposal storage is needed.
+// 6. By calling [Database.ProposeBatch] and not committing, which returns a proposal.
 func TestInsert100(t *testing.T) {
 	type dbView interface {
 		Get(key []byte) ([]byte, error)
 		Propose(keys, vals [][]byte) (*Proposal, error)
+		ProposeBatch(batch *Batch) (*Proposal, error)
 		Root() (Hash, error)
 	}
 
@@ -336,11 +348,40 @@ func TestInsert100(t *testing.T) {
 		{
 			name: "Propose",
 			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
-				proposal, err := db.Propose(keys, vals)
+				return db.Propose(keys, vals)
+			},
+		},
+		{
+			name: "ProposeBatch and Commit",
+			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
+				batch := makeBatch(keys, vals)
+				proposal, err := db.ProposeBatch(batch)
 				if err != nil {
 					return nil, err
 				}
-				return proposal, nil
+				err = proposal.Commit()
+				if err != nil {
+					return nil, err
+				}
+				return db, nil
+			},
+		},
+		{
+			name: "UpdateBatch",
+			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
+				actualDB, ok := db.(*Database)
+				if !ok {
+					return nil, fmt.Errorf("expected *Database, got %T", db)
+				}
+				_, err := actualDB.UpdateBatch(makeBatch(keys, vals))
+				return db, err
+			},
+		},
+		{
+			name: "ProposeBatch",
+			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
+				batch := makeBatch(keys, vals)
+				return db.ProposeBatch(batch)
 			},
 		},
 	}
@@ -377,25 +418,58 @@ func TestInsert100(t *testing.T) {
 
 // Tests that a range of keys can be deleted.
 func TestRangeDelete(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-	keys, vals := kvForTest(100)
-	_, err := db.Update(keys, vals)
-	r.NoError(err)
+	tests := []struct {
+		name   string
+		update func(db *Database, keys, vals [][]byte) error
+		delete func(db *Database, prefix []byte) error
+	}{
+		{
+			name: "Update",
+			update: func(db *Database, keys, vals [][]byte) error {
+				_, err := db.Update(keys, vals)
+				return err
+			},
+			delete: func(db *Database, prefix []byte) error {
+				_, err := db.Update([][]byte{prefix}, [][]byte{{}})
+				return err
+			},
+		},
+		{
+			name: "UpdateBatch",
+			update: func(db *Database, keys, vals [][]byte) error {
+				_, err := db.UpdateBatch(makeBatch(keys, vals))
+				return err
+			},
+			delete: func(db *Database, prefix []byte) error {
+				batch := NewBatch()
+				batch.PrefixDelete(prefix)
+				_, err := db.UpdateBatch(batch)
+				return err
+			},
+		},
+	}
 
-	const deletePrefix = 1
-	_, err = db.Update([][]byte{keyForTest(deletePrefix)}, [][]byte{{}})
-	r.NoError(err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			db := newTestDatabase(t)
+			keys, vals := kvForTest(100)
+			r.NoError(tt.update(db, keys, vals))
 
-	for i := range keys {
-		got, err := db.Get(keys[i])
-		r.NoError(err)
+			const deletePrefix = 1
+			r.NoError(tt.delete(db, keyForTest(deletePrefix)))
 
-		if deleted := bytes.HasPrefix(keys[i], keyForTest(deletePrefix)); deleted {
-			r.NoError(err)
-		} else {
-			r.Equal(vals[i], got)
-		}
+			for i := range keys {
+				got, err := db.Get(keys[i])
+				r.NoError(err)
+
+				if deleted := bytes.HasPrefix(keys[i], keyForTest(deletePrefix)); deleted {
+					r.NoError(err)
+				} else {
+					r.Equal(vals[i], got)
+				}
+			}
+		})
 	}
 }
 
@@ -494,38 +568,65 @@ func TestConflictingProposals(t *testing.T) {
 
 // Tests that a proposal that deletes all keys can be committed.
 func TestDeleteAll(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	keys, vals := kvForTest(10)
-	// Insert 10 key-value pairs.
-	_, err := db.Update(keys, vals)
-	r.NoError(err)
-
-	// Create a proposal that deletes all keys.
-	proposal, err := db.Propose([][]byte{[]byte("key")}, [][]byte{nil})
-	r.NoError(err)
-
-	// Check that the proposal doesn't have the keys we just inserted.
-	for i := range keys {
-		got, err := proposal.Get(keys[i])
-		r.NoError(err, "Get(%d)", i)
-		r.Empty(got, "Get(%d)", i)
+	tests := []struct {
+		name   string
+		delete func(db *Database, prefix []byte) (*Proposal, error)
+	}{
+		{
+			name: "Propose with nil value",
+			delete: func(db *Database, prefix []byte) (*Proposal, error) {
+				return db.Propose(
+					[][]byte{prefix},
+					[][]byte{nil},
+				)
+			},
+		},
+		{
+			name: "ProposeBatch with nil value",
+			delete: func(db *Database, prefix []byte) (*Proposal, error) {
+				batch := NewBatch()
+				batch.PrefixDelete(prefix)
+				return db.ProposeBatch(batch)
+			},
+		},
 	}
 
-	expectedHash := stringToHash(t, expectedRoots[emptyKey])
-	hash, err := proposal.Root()
-	r.NoError(err, "%T.Root() after commit", proposal)
-	r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			db := newTestDatabase(t)
 
-	// Commit the proposal.
-	err = proposal.Commit()
-	r.NoError(err, "Commit")
+			keys, vals := kvForTest(10)
+			// Insert 10 key-value pairs.
+			_, err := db.Update(keys, vals)
+			r.NoError(err)
 
-	// Check that the database is empty.
-	hash, err = db.Root()
-	r.NoError(err, "%T.Root()", db)
-	r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
+			// Create a proposal that deletes all keys.
+			proposal, err := tt.delete(db, []byte("key"))
+			r.NoError(err)
+
+			// Check that the proposal doesn't have the keys we just inserted.
+			for i := range keys {
+				got, err := proposal.Get(keys[i])
+				r.NoError(err, "Get(%d)", i)
+				r.Empty(got, "Get(%d)", i)
+			}
+
+			expectedHash := stringToHash(t, expectedRoots[emptyKey])
+			hash, err := proposal.Root()
+			r.NoError(err, "%T.Root() after commit", proposal)
+			r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
+
+			// Commit the proposal.
+			err = proposal.Commit()
+			r.NoError(err, "Commit")
+
+			// Check that the database is empty.
+			hash, err = db.Root()
+			r.NoError(err, "%T.Root()", db)
+			r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
+		})
+	}
 }
 
 func TestDropProposal(t *testing.T) {

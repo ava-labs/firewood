@@ -261,6 +261,10 @@ func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 	return getHashKeyFromHashResult(C.fwd_batch(db.handle, kvp))
 }
 
+func (db *Database) UpdateBatch(batch *Batch) (Hash, error) {
+	return db.Update(batch.keys, batch.values)
+}
+
 // Propose creates a new proposal with the given keys and values. The proposal
 // is not committed until [Proposal.Commit] is called. See [Database.Close] regarding
 // freeing proposals. All proposals should be freed before closing the database.
@@ -290,6 +294,10 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 		return nil, err
 	}
 	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.outstandingHandles, &db.commitLock)
+}
+
+func (db *Database) ProposeBatch(batch *Batch) (*Proposal, error) {
+	return db.Propose(batch.keys, batch.values)
 }
 
 // Get retrieves the value for the given key from the most recent revision.

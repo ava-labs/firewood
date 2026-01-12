@@ -116,6 +116,10 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.handle, kvp), p.keepAliveHandle.outstandingHandles, p.commitLock)
 }
 
+func (p *Proposal) ProposeBatch(batch *Batch) (*Proposal, error) {
+	return p.Propose(batch.keys, batch.values)
+}
+
 // Commit commits the proposal and returns any errors.
 //
 // The underlying data is no longer available during/after this call, but the root
