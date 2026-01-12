@@ -113,6 +113,7 @@ where
 
 /// Enum containing all possible states that we can be in as we iterate through the diff
 /// between two Merkle tries.
+#[derive(Debug)]
 enum DiffIterationNodeState {
     /// In the `TraverseBoth` state, we only need to consider the next nodes from the left
     /// and right trie in pre-order traversal order.
@@ -165,7 +166,8 @@ impl ComparableNodeInfo {
 }
 
 /// Iterator that outputs the difference between two tries and skips matching sub-tries.
-struct DiffMerkleNodeStream<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader> {
+#[derive(Debug)]
+pub struct DiffMerkleNodeStream<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader> {
     // Contains the state of the diff traversal. It is only None after calling `next` or
     // `next_internal` if we have reached the end of the traversal.
     state: Option<DiffIterationNodeState>,
@@ -175,7 +177,8 @@ struct DiffMerkleNodeStream<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader>
 
 impl<'a, LEFT: HashedNodeReader, RIGHT: HashedNodeReader> DiffMerkleNodeStream<'a, LEFT, RIGHT> {
     /// Constructor where the left and right tries implement the trait `HashedNodeReader`.
-    #[cfg_attr(not(test), expect(dead_code))]
+    //#[cfg_attr(not(test), expect(dead_code))]
+    #[allow(clippy::missing_errors_doc)]
     pub fn new(
         left_tree: &'a LEFT,
         right_tree: &'a RIGHT,
@@ -460,6 +463,7 @@ impl<LEFT: HashedNodeReader, RIGHT: HashedNodeReader> Iterator
 /// By setting `node_info` to None in the latter case, the children of the current node will be
 /// skipped from traversal as they will not be be pushed to the traversal stack in the subsequent
 /// `next` or `next_node_info` call.
+#[derive(Debug)]
 struct PreOrderIterator<'a, T: HashedNodeReader> {
     node_info: Option<ComparableNodeInfo>,
     trie: &'a T,

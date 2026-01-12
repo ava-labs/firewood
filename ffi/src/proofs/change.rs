@@ -1,6 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use firewood::v2::api::FrozenChangeProof;
+
 use crate::{
     BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
     NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
@@ -59,10 +61,14 @@ pub struct VerifyChangeProofArgs<'a> {
 
 /// FFI context for a parsed or generated change proof.
 #[derive(Debug)]
+#[expect(dead_code)]
 pub struct ChangeProofContext {
-    _proof: (),              // currently not implemented
-    _validation_context: (), // placeholder for future use
-    _commit_context: (),     // placeholder for future use
+    //_proof: (),              // currently not implemented
+    //_validation_context: (), // placeholder for future use
+    //_commit_context: (),     // placeholder for future use
+    proof: FrozenChangeProof,
+    //verification: Option<VerificationContext>,
+    //proposal_state: Option<ProposalState<'db>>,
 }
 
 /// A key range that should be fetched to continue iterating through a range

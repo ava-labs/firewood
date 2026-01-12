@@ -4,6 +4,7 @@
 use crate::manager::RevisionManagerError;
 use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
+use crate::merkle::changes::ChangeProof;
 use crate::{Proof, ProofError, ProofNode, RangeProof};
 use firewood_storage::{FileIoError, TrieHash};
 use std::fmt::Debug;
@@ -79,6 +80,8 @@ impl OptionalHashKeyExt for Option<HashKey> {
         self.or_else(HashKey::default_root_hash)
     }
 }
+
+pub type FrozenChangeProof = ChangeProof<Key, Value, Box<[ProofNode]>>;
 
 /// A frozen proof is a proof that is stored in immutable memory.
 pub type FrozenRangeProof = RangeProof<Key, Value, Box<[ProofNode]>>;
