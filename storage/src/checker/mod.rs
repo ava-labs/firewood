@@ -985,7 +985,7 @@ mod test {
     // This test creates a simple trie and checks that the checker traverses it correctly.
     // We use primitive calls here to do a low-level check.
     fn checker_traverse_correct_trie() {
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let test_trie = gen_test_trie(&mut nodestore);
@@ -1009,7 +1009,7 @@ mod test {
     #[test]
     // This test permutes the simple trie with a wrong hash and checks that the checker detects it.
     fn checker_traverse_trie_with_wrong_hash() {
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let mut test_trie = gen_test_trie(&mut nodestore);
@@ -1083,7 +1083,7 @@ mod test {
     fn traverse_correct_freelist() {
         let rng = crate::SeededRng::from_env_or_random();
 
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
 
         // write free areas
@@ -1129,7 +1129,7 @@ mod test {
 
     #[test]
     fn traverse_freelist_should_skip_offspring_of_incorrect_areas() {
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
         let TestFreelist {
             high_watermark,
@@ -1149,7 +1149,7 @@ mod test {
 
     #[test]
     fn fix_freelist_with_overlap() {
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
         let TestFreelist {
             high_watermark,
@@ -1187,7 +1187,7 @@ mod test {
 
         let mut rng = crate::SeededRng::from_env_or_random();
 
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let num_areas = 10;
@@ -1244,7 +1244,7 @@ mod test {
     // When traversing it should break consecutive areas.
     #[expect(clippy::arithmetic_side_effects)]
     fn split_range_of_zeros_into_leaked_areas() {
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let expected_leaked_area_indices = vec![
@@ -1295,7 +1295,7 @@ mod test {
     // With both valid and invalid areas in the range, return the valid areas until reaching one invalid area, then use heuristics to split the rest of the range.
     #[expect(clippy::arithmetic_side_effects)]
     fn split_range_into_leaked_areas_test() {
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let nodestore = NodeStore::new_empty_committed(memstore.into());
 
         // write two free areas

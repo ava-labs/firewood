@@ -32,6 +32,8 @@ impl RootStore {
     /// Args:
     /// - `path`: the directory where `RootStore` will write to.
     /// - `storage`: the underlying store to create nodestores from.
+    /// - `node_hash_algorithm`: the hash algorithm used for nodes.
+    /// - `truncate`: whether to truncate existing data.
     ///
     /// # Errors
     ///
@@ -142,7 +144,7 @@ impl RootStore {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use firewood_storage::{CacheReadStrategy, FileBacked, NodeStore};
+    use firewood_storage::{CacheReadStrategy, FileBacked, NodeHashAlgorithm, NodeStore};
     use std::num::NonZero;
     use std::sync::Arc;
 
@@ -159,6 +161,7 @@ mod tests {
                 false,
                 true,
                 CacheReadStrategy::WritesOnly,
+                NodeHashAlgorithm::compile_option(),
             )
             .unwrap(),
         );
@@ -195,6 +198,7 @@ mod tests {
                 false,
                 true,
                 CacheReadStrategy::WritesOnly,
+                NodeHashAlgorithm::compile_option(),
             )
             .unwrap(),
         );

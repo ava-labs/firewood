@@ -39,6 +39,16 @@ const RootLength = C.sizeof_HashKey
 // Hash is the type used for all firewood hashes.
 type Hash [RootLength]byte
 
+// NodeHashAlgorithm represents the hashing mode used by the database.
+type NodeHashAlgorithm uint8
+
+const (
+	// NodeHashAlgorithmMerkleDB uses MerkleDB-compatible SHA-256 based hashing
+	NodeHashAlgorithmMerkleDB NodeHashAlgorithm = C.NodeHashAlgorithm_MerkleDB
+	// NodeHashAlgorithmEthereum uses Ethereum-compatible Keccak-256 based hashing
+	NodeHashAlgorithmEthereum NodeHashAlgorithm = C.NodeHashAlgorithm_Ethereum
+)
+
 var (
 	// EmptyRoot is the zero value for [Hash]
 	EmptyRoot Hash
@@ -181,9 +191,17 @@ const (
 	invalidCacheStrategy
 )
 
-// New opens or creates a new Firewood database with the given options.
-// The database directory will be created at the provided path if it does not
-// already exist.
+// New opens or creates a new Firewood database with the given node hashing
+// algorithm and database options. The database directory will be created at the
+// provided path if it does not already exist.
+//
+// The [nodeHashAlgorithm] is required and must match the compile-time feature:
+//   - NodeHashAlgorithmEthereum if the ethhash feature is enabled
+//   - NodeHashAlgorithmMerkleDB if the ethhash feature is disabled
+//
+// In the future, the node hash algorithm will be configurable at runtime and
+// no longer need to match compile-time features but will instead select the
+// desired hashing mode.
 //
 // If no [Option] is provided, sensible defaults will be used.
 // See the With* functions for details about each configuration parameter and its default value.
@@ -191,7 +209,7 @@ const (
 // It is the caller's responsibility to call [Database.Close] when the database
 // is no longer needed. No other [Database] in this process should be opened with
 // the same file path until the database is closed.
-func New(dbDir string, opts ...Option) (*Database, error) {
+func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Database, error) {
 	conf := defaultConfig()
 	for _, opt := range opts {
 		opt(conf)
@@ -221,6 +239,7 @@ func New(dbDir string, opts ...Option) (*Database, error) {
 		strategy:             C.uint8_t(conf.readCacheStrategy),
 		truncate:             C.bool(conf.truncate),
 		root_store:           C.bool(conf.rootStore),
+		node_hash_algorithm:  C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))

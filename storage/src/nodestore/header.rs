@@ -25,10 +25,11 @@
 //!
 
 use bytemuck_derive::{Pod, Zeroable};
-use std::io::{Error, ErrorKind};
+use std::io::{Error, ErrorKind, Read};
 
 use super::alloc::FreeLists;
 use super::primitives::{LinearAddress, area_size_hash};
+use crate::NodeHashAlgorithm;
 use crate::logger::{debug, trace};
 
 /// Can be used by filesystem tooling such as "file" to identify
@@ -164,14 +165,12 @@ pub struct NodeStoreHeader {
     /// area sizes and trying to read old databases with the wrong area sizes.
     area_size_hash: [u8; 32],
     /// Whether ethhash was enabled when this database was created.
-    ethhash: u64,
+    node_hash_algorithm: u64,
 }
 
-impl Default for NodeStoreHeader {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// Compile-time assertion that SIZE is large enough for the header. Does not work
+// within the impl block.
+const _: () = assert!(size_of::<NodeStoreHeader>() <= NodeStoreHeader::SIZE as usize);
 
 impl NodeStoreHeader {
     /// The first SIZE bytes of the `ReadableStorage` are reserved for the
@@ -179,19 +178,33 @@ impl NodeStoreHeader {
     /// We also want it aligned to a disk block
     pub const SIZE: u64 = 2048;
 
-    // Compile-time assertion that SIZE is large enough for the header
-    const _ASSERT_SIZE: () = assert!(Self::SIZE as usize >= std::mem::size_of::<NodeStoreHeader>());
+    /// Reads the [`NodeStoreHeader`] from the start of the given storage.
+    pub fn read_from_storage<S: crate::linear::ReadableStorage>(
+        storage: &S,
+    ) -> Result<Self, crate::FileIoError> {
+        let mut this = bytemuck::zeroed::<Self>();
+        let header_bytes = bytemuck::bytes_of_mut(&mut this);
+        storage
+            .stream_from(0)?
+            .read_exact(header_bytes)
+            .map_err(|e| {
+                storage.file_io_error(e, 0, Some("NodeStoreHeader::read_from_storage".to_string()))
+            })?;
+        this.validate(storage.node_hash_algorithm()).map_err(|e| {
+            storage.file_io_error(e, 0, Some("NodeStoreHeader::validate".to_string()))
+        })?;
 
-    /// Deserialize a `NodeStoreHeader` from bytes using bytemuck
-    pub fn from_bytes(bytes: &[u8]) -> &Self {
-        bytemuck::from_bytes(bytes)
+        Ok(this)
     }
 
-    pub fn new() -> Self {
-        Self::with_root(None)
+    pub fn new(node_hash_algorithm: NodeHashAlgorithm) -> Self {
+        Self::with_root(None, node_hash_algorithm)
     }
 
-    pub fn with_root(root_address: Option<LinearAddress>) -> Self {
+    pub fn with_root(
+        root_address: Option<LinearAddress>,
+        node_hash_algorithm: NodeHashAlgorithm,
+    ) -> Self {
         Self {
             // The store just contains the header at this point
             size: Self::SIZE,
@@ -199,18 +212,12 @@ impl NodeStoreHeader {
             root_address,
             version: Version::new(),
             free_lists: Default::default(),
-            area_size_hash: area_size_hash()
-                .as_slice()
-                .try_into()
-                .expect("sizes should match"),
-            #[cfg(feature = "ethhash")]
-            ethhash: 1,
-            #[cfg(not(feature = "ethhash"))]
-            ethhash: 0,
+            area_size_hash: area_size_hash().into(),
+            node_hash_algorithm: node_hash_algorithm as u64,
         }
     }
 
-    pub fn validate(&self) -> Result<(), Error> {
+    pub fn validate(&self, expected_node_hash_algorithm: NodeHashAlgorithm) -> Result<(), Error> {
         trace!("Checking version...");
         self.version.validate()?;
 
@@ -220,8 +227,8 @@ impl NodeStoreHeader {
         trace!("Checking area size hash...");
         self.validate_area_size_hash()?;
 
-        trace!("Checking if db ethhash flag matches build feature...");
-        self.validate_ethhash()?;
+        trace!("Checking if node hash algorithm flag matches storage...");
+        self.validate_node_hash_algorithm(expected_node_hash_algorithm)?;
 
         Ok(())
     }
@@ -283,28 +290,16 @@ impl NodeStoreHeader {
         }
     }
 
-    #[cfg(not(feature = "ethhash"))]
-    fn validate_ethhash(&self) -> Result<(), Error> {
-        if self.ethhash == 0 {
-            Ok(())
-        } else {
-            Err(Error::new(
-                ErrorKind::InvalidData,
-                "Database cannot be opened as it was created with ethhash enabled",
-            ))
-        }
-    }
-
-    #[cfg(feature = "ethhash")]
-    fn validate_ethhash(&self) -> Result<(), Error> {
-        if self.ethhash == 1 {
-            Ok(())
-        } else {
-            Err(Error::new(
-                ErrorKind::InvalidData,
-                "Database cannot be opened as it was created without ethhash enabled",
-            ))
-        }
+    fn validate_node_hash_algorithm(&self, expected: NodeHashAlgorithm) -> Result<(), Error> {
+        expected.validate_init()?;
+        NodeHashAlgorithm::try_from(self.node_hash_algorithm)
+            .map_err(|err| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!("hash mode flag in database header is invalid: {err}"),
+                )
+            })?
+            .validate_open(expected)
     }
 }
 
@@ -312,10 +307,8 @@ impl NodeStoreHeader {
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::linear::ReadableStorage;
     use crate::linear::memory::MemStore;
     use crate::nodestore::NodeStore;
-    use std::io::Read;
     use test_case::test_case;
 
     #[test]
@@ -334,14 +327,11 @@ mod tests {
 
     #[test]
     fn test_node_store_new() {
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let node_store = NodeStore::new_empty_proposal(memstore.into());
 
         // Check the empty header is written at the start of the ReadableStorage.
-        let mut header_stream = node_store.storage.stream_from(0).unwrap();
-        let mut header_bytes = vec![0u8; std::mem::size_of::<NodeStoreHeader>()];
-        header_stream.read_exact(&mut header_bytes).unwrap();
-        let header = NodeStoreHeader::from_bytes(&header_bytes);
+        let header = NodeStoreHeader::read_from_storage(&*node_store.storage).unwrap();
         assert_eq!(header.version, Version::new());
         let empty_free_list: FreeLists = Default::default();
         assert_eq!(*header.free_lists(), empty_free_list);

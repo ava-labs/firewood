@@ -587,6 +587,7 @@ fn read_bincode_varint_u64_le(reader: &mut impl Read) -> std::io::Result<u64> {
 pub mod test_utils {
     use super::*;
 
+    use crate::NodeHashAlgorithm;
     use crate::node::Node;
     use crate::nodestore::{Committed, NodeStore, NodeStoreHeader};
 
@@ -629,7 +630,7 @@ pub mod test_utils {
         root_addr: Option<LinearAddress>,
         free_lists: FreeLists,
     ) {
-        let mut header = NodeStoreHeader::new();
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
         header.set_size(size);
         header.set_root_address(root_addr);
         *header.free_lists_mut() = free_lists;
@@ -680,7 +681,7 @@ mod tests {
     // Create a random free list and test that `FreeListIterator` is able to traverse all the free areas
     fn free_list_iterator() {
         let mut rng = crate::SeededRng::from_env_or_random();
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let area_index = rng.random_range(0..AreaIndex::NUM_AREA_SIZES as u8);
@@ -735,7 +736,7 @@ mod tests {
     #[test]
     fn free_list_iter_with_metadata() {
         let rng = crate::SeededRng::from_env_or_random();
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let mut free_lists = FreeLists::default();
@@ -861,7 +862,7 @@ mod tests {
         const AREA_INDEX2: AreaIndex = area_index!(5);
         const AREA_INDEX2_PLUS_1: AreaIndex = area_index!(6);
 
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let mut free_lists = FreeLists::default();

@@ -70,7 +70,7 @@ func newMerkleTriePair(t *testing.T) *merkleTriePair {
 	r := require.New(t)
 
 	file := path.Join(t.TempDir(), "test.db")
-	db, err := firewood.New(file)
+	db, err := firewood.New(file, firewood.NodeHashAlgorithmEthereum)
 	r.NoError(err)
 
 	tdb := state.NewDatabaseWithConfig(rawdb.NewMemoryDatabase(), triedb.HashDefaults)
