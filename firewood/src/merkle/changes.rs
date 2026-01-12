@@ -10,10 +10,106 @@ use firewood_storage::{
 use lender::{Lender, Lending};
 
 use crate::{
+    Proof, ProofCollection,
     db::BatchOp,
     iter::key_from_nibble_iter,
     merkle::{Key, PrefixOverlap, Value},
 };
+
+#[derive(Debug, PartialEq)]
+pub struct ChangeProof<K, V, H> {
+    start_proof: Proof<H>,
+    end_proof: Proof<H>,
+    key_values: Box<[(K, V)]>,
+}
+
+impl<K, V, H> ChangeProof<K, V, H>
+where
+    K: AsRef<[u8]>,
+    V: AsRef<[u8]>,
+    H: ProofCollection,
+{
+    #[must_use]
+    pub const fn new(
+        start_proof: Proof<H>,
+        end_proof: Proof<H>,
+        key_values: Box<[(K, V)]>,
+    ) -> Self {
+        Self {
+            start_proof,
+            end_proof,
+            key_values,
+        }
+    }
+
+    /// Returns a reference to the start proof, which may be empty.
+    #[must_use]
+    pub const fn start_proof(&self) -> &Proof<H> {
+        &self.start_proof
+    }
+
+    /// Returns a reference to the end proof, which may be empty.
+    #[must_use]
+    pub const fn end_proof(&self) -> &Proof<H> {
+        &self.end_proof
+    }
+
+    /// Returns the key-value pairs included in the change proof, which may be empty.
+    #[must_use]
+    pub const fn key_values(&self) -> &[(K, V)] {
+        &self.key_values
+    }
+
+    /// Returns true if the change proof is empty, meaning it has no start or end proof
+    /// and no key-value pairs.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.start_proof.is_empty() && self.end_proof.is_empty() && self.key_values.is_empty()
+    }
+
+    /// Returns an iterator over the key-value pairs in this change proof.
+    ///
+    /// The iterator yields references to the key-value pairs in the order they
+    /// appear in the proof (which should be lexicographic order as they appear
+    /// in the trie).
+    #[must_use]
+    pub fn iter(&self) -> ChangeProofIter<'_, K, V> {
+        ChangeProofIter(self.key_values.iter())
+    }
+}
+
+#[derive(Debug)]
+pub struct ChangeProofIter<'a, K, V>(std::slice::Iter<'a, (K, V)>);
+
+impl<'a, K, V> Iterator for ChangeProofIter<'a, K, V> {
+    type Item = &'a (K, V);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<K, V> ExactSizeIterator for ChangeProofIter<'_, K, V> {}
+
+impl<K, V> std::iter::FusedIterator for ChangeProofIter<'_, K, V> {}
+
+impl<'a, K, V, H> IntoIterator for &'a ChangeProof<K, V, H>
+where
+    K: AsRef<[u8]>,
+    V: AsRef<[u8]>,
+    H: ProofCollection,
+{
+    type Item = &'a (K, V);
+    type IntoIter = ChangeProofIter<'a, K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
 
 /// Enum containing all possible states that we can be in as we iterate through the diff
 /// between two Merkle tries.
@@ -566,13 +662,14 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
 )]
 mod tests {
     use crate::{
+        Proof,
         db::{BatchOp, Db, DbConfig},
         iter::{MerkleKeyValueIter, key_from_nibble_iter},
         merkle::{
             Key, Merkle, Value,
-            changes::{DiffMerkleNodeStream, PreOrderIterator},
+            changes::{ChangeProof, DiffMerkleNodeStream, PreOrderIterator},
         },
-        v2::api::{Db as _, DbView, Proposal as _},
+        v2::api::{Db as _, DbView, Proposal as _, TryIntoBatch},
     };
 
     use firewood_storage::{
@@ -1812,5 +1909,110 @@ mod tests {
 
             println!("Traversal optimization verified: {diff_immutable_nexts} vs {diff_iteration_count} next calls");
         });
+    }
+
+    #[test]
+    fn test_change_proof_iterator() {
+        // Create test data
+        let key_values: Box<[(Vec<u8>, Vec<u8>)]> = Box::new([
+            (b"key1".to_vec(), b"value1".to_vec()),
+            (b"key2".to_vec(), b"value2".to_vec()),
+            (b"key3".to_vec(), b"value3".to_vec()),
+        ]);
+
+        // Create empty proofs for testing
+        let start_proof = Proof::empty();
+        let end_proof = Proof::empty();
+
+        let change_proof = ChangeProof::new(start_proof, end_proof, key_values);
+
+        // Test basic iterator functionality
+        let mut iter = change_proof.iter();
+        assert_eq!(iter.len(), 3);
+
+        let first = iter.next().unwrap();
+        assert_eq!(first.0, b"key1");
+        assert_eq!(first.1, b"value1".to_vec());
+
+        let second = iter.next().unwrap();
+        assert_eq!(second.0, b"key2");
+        assert_eq!(second.1, b"value2".to_vec());
+
+        let third = iter.next().unwrap();
+        assert_eq!(third.0, b"key3");
+        assert_eq!(third.1, b"value3".to_vec());
+
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    #[expect(clippy::indexing_slicing)]
+    fn test_change_proof_into_iterator() {
+        let key_values: Box<[(Vec<u8>, Vec<u8>)]> = Box::new([
+            (b"a".to_vec(), b"alpha".to_vec()),
+            (b"b".to_vec(), b"beta".to_vec()),
+        ]);
+
+        let start_proof = Proof::empty();
+        let end_proof = Proof::empty();
+        let change_proof = ChangeProof::new(start_proof, end_proof, key_values);
+
+        // Test that we can use for-loop syntax
+        let mut items = Vec::new();
+        for item in &change_proof {
+            items.push(item);
+        }
+
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].0, b"a");
+        assert_eq!(items[0].1, b"alpha".to_vec());
+        assert_eq!(items[1].0, b"b");
+        assert_eq!(items[1].1, b"beta".to_vec());
+    }
+
+    // Not clear if the TryIntoBatch works correctly for change proof.
+    // TryIntoBatch converts (K, V) into BatchOp where if V is empty, it is a delete prefix operation.
+    // Is this correct behavior? Can we have valid keys without values? Couldn’t a delete prefix delete
+    // more than we want?
+    #[test]
+    #[expect(clippy::indexing_slicing)]
+    fn test_keyvaluepair_iter_trait() {
+        let key_values: Box<[(Vec<u8>, Vec<u8>)]> =
+            Box::new([(b"test".to_vec(), b"data".to_vec())]);
+
+        let start_proof = Proof::empty();
+        let end_proof = Proof::empty();
+        let range_proof = ChangeProof::new(start_proof, end_proof, key_values);
+
+        // Test that our iterator implements KeyValuePairIter
+        let iter = range_proof.iter();
+
+        // Verify we can call methods from KeyValuePairIter
+        let batch_iter = iter.map(TryIntoBatch::try_into_batch);
+        let batches: Vec<_> = batch_iter.collect::<Result<_, _>>().unwrap();
+
+        assert_eq!(batches.len(), 1);
+        // The batch should be a Put operation since value is non-empty
+        if let crate::v2::api::BatchOp::Put { key, value } = &batches[0] {
+            assert_eq!(key.as_ref() as &[u8], b"test");
+            assert_eq!(value.as_ref() as &[u8], b"data");
+        } else {
+            panic!("Expected Put operation");
+        }
+    }
+
+    #[test]
+    fn test_empty_range_proof_iterator() {
+        let key_values: Box<[(Vec<u8>, Vec<u8>)]> = Box::new([]);
+        let start_proof = Proof::empty();
+        let end_proof = Proof::empty();
+        let change_proof = ChangeProof::new(start_proof, end_proof, key_values);
+
+        let mut iter = change_proof.iter();
+        assert_eq!(iter.len(), 0);
+        assert!(iter.next().is_none());
+
+        let items: Vec<_> = change_proof.into_iter().collect();
+        assert!(items.is_empty());
     }
 }
