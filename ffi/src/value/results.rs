@@ -564,6 +564,7 @@ pub(crate) trait NullHandleResult: CResult {
 pub(crate) trait CResult: Sized {
     fn from_err(err: impl ToString) -> Self;
 
+    #[cfg(panic = "unwind")]
     fn from_panic(panic: Box<dyn std::any::Any + Send>) -> Self
     where
         Self: Sized,
@@ -627,6 +628,7 @@ impl_cresult!(
     KeyValueResult,
 );
 
+#[cfg(panic = "unwind")]
 enum Panic {
     Static(&'static str),
     Formatted(String),
@@ -637,6 +639,7 @@ enum Panic {
     // https://doc.rust-lang.org/stable/std/panic/fn.set_hook.html
 }
 
+#[cfg(panic = "unwind")]
 impl From<Box<dyn std::any::Any + Send>> for Panic {
     fn from(panic: Box<dyn std::any::Any + Send>) -> Self {
         macro_rules! downcast {
@@ -657,6 +660,7 @@ impl From<Box<dyn std::any::Any + Send>> for Panic {
     }
 }
 
+#[cfg(panic = "unwind")]
 impl fmt::Display for Panic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
