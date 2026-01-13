@@ -31,8 +31,8 @@ oxhttp = "0.3.1"
 tikv-jemallocator = "0.6.1"
 derive-where = "1.6.0"
 metrics-exporter-prometheus = { version = "0.17.2", default-features = false }
-rlp = "0.6.1"
 # Optional dependencies
+rlp = { version = "0.6.1", optional = true }
 env_logger = { workspace = true, optional = true }
 firewood-replay = { workspace = true, optional = true }
 
