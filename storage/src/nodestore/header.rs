@@ -156,9 +156,22 @@ pub struct NodeStoreHeader {
     version: Version,
     /// always "1"; verifies endianness
     endian_test: u64,
+    /// Total allocated storage size (high water mark). New nodes are allocated
+    /// at this offset when the free list is empty, then this value is incremented.
     size: u64,
-    /// Element i is the pointer to the first free block of size `BLOCK_SIZES[i]`.
+    /// Heads of the free lists for each area size class.
+    ///
+    /// Element `i` points to the first free area of size `AREA_SIZES[i]`. Each free area
+    /// contains a pointer to the next free area of the same size, forming a linked list.
+    ///
+    /// When allocating a new node, the allocator first checks the appropriate free list.
+    /// If empty, it falls back to bumping `size`. Free lists are populated at commit time
+    /// during revision reaping, when deleted nodes from evicted revisions are reclaimed.
     free_lists: FreeLists,
+    /// Disk address of the merkle trie root node, or `None` for an empty trie.
+    ///
+    /// This is updated at commit time to point to the new root after changes are persisted.
+    /// The address is a direct file offset, not a hash-based reference.
     root_address: Option<LinearAddress>,
     /// The hash of the area sizes used in this database to prevent someone from changing the
     /// area sizes and trying to read old databases with the wrong area sizes.
