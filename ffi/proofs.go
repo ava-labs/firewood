@@ -230,8 +230,7 @@ func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
 // of this proof. This list may contain duplicates and is not guaranteed to be in any particular order.
 //
 // Note: this method is only relevant for Ethereum tries.
-// This method can only be called after a successful verification of the proof,
-// otherwise an error is returned on the first iteration.
+// This method can only be called anytime after the proof is created.
 func (p *RangeProof) CodeHashes() iter.Seq2[Hash, error] {
 	return func(yield func(Hash, error) bool) {
 		iter, err := getCodeHashIteratorFromCodeHashIteratorResult(C.fwd_range_proof_code_hash_iter(p.handle))
@@ -540,6 +539,8 @@ func getNextKeyRangeFromNextKeyRangeResult(result C.NextKeyRangeResult) (*NextKe
 
 func getCodeHashIteratorFromCodeHashIteratorResult(result C.CodeIteratorResult) (*codeIterator, error) {
 	switch result.tag {
+	case C.CodeIteratorResult_NullHandlePointer:
+		return nil, errDBClosed
 	case C.CodeIteratorResult_Ok:
 		ptr := *(**C.CodeIteratorHandle)(unsafe.Pointer(&result.anon0))
 		return &codeIterator{handle: ptr}, nil

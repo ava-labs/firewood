@@ -42,7 +42,7 @@ test-case.workspace = true
 
 [features]
 logger = ["dep:env_logger", "firewood/logger"]
-ethhash = ["firewood/ethhash"]
+ethhash = ["firewood/ethhash", "rlp"]
 io-uring = ["firewood/io-uring", "firewood-storage/io-uring"]
 block-replay = ["dep:firewood-replay"]
 

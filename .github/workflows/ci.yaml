@@ -277,7 +277,7 @@ jobs:
           ulimit -Sa
           ulimit -Ha
           go test -fuzz=FuzzFirewoodTree -fuzztime=1m
-          go test -fuzz=FuzzRangeProofCodeHashes -fuzztime=1m
+          go test -fuzz=FuzzRangeProofCreation -fuzztime=1m
       - name: Upload Fuzz testdata
         if: failure()
         uses: actions/upload-artifact@v4
