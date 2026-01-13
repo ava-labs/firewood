@@ -118,6 +118,10 @@ pub enum ProofError {
     /// The proof has not yet been verified.
     #[error("the proof has not yet been verified")]
     Unverified,
+
+    /// Invalid value format
+    #[error("invalid value format")]
+    InvalidValueFormat,
 }
 
 #[derive(Clone, PartialEq, Eq)]
