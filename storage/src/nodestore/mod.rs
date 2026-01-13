@@ -1033,7 +1033,7 @@ mod tests {
         let tmpdir = tempfile::tempdir()?;
         let dbfile = tmpdir.path().join("nodestore_branch_persist_test.db");
 
-        let storage = Arc::new(FileBacked::new(
+        let nodestore = NodeStore::open(Arc::new(FileBacked::new(
             dbfile,
             nonzero!(10usize),
             nonzero!(10usize),
@@ -1041,8 +1041,7 @@ mod tests {
             true,
             CacheReadStrategy::WritesOnly,
             NodeHashAlgorithm::compile_option(),
-        )?);
-        let nodestore = NodeStore::open(storage)?;
+        )?))?;
 
         let mut proposal = NodeStore::new(&nodestore)?;
 
