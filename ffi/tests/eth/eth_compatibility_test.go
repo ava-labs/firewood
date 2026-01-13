@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/binary"
 	"math/rand"
-	"path"
 	"slices"
 	"testing"
 
@@ -66,20 +65,25 @@ type merkleTriePair struct {
 	pendingFwdVals   [][]byte
 }
 
+func newFirewoodDB(t *testing.T) *firewood.Database {
+	t.Helper()
+
+	db, err := firewood.New(t.TempDir(), firewood.NodeHashAlgorithmEthereum)
+	require.NoError(t, err, "firewood.New()")
+	t.Cleanup(func() {
+		require.NoErrorf(t, db.Close(context.Background()), "%T.Close()", db)
+	})
+	return db
+}
+
 func newMerkleTriePair(t *testing.T) *merkleTriePair {
 	r := require.New(t)
 
-	file := path.Join(t.TempDir(), "test.db")
-	db, err := firewood.New(file, firewood.NodeHashAlgorithmEthereum)
-	r.NoError(err)
-
+	db := newFirewoodDB(t)
 	tdb := state.NewDatabaseWithConfig(rawdb.NewMemoryDatabase(), triedb.HashDefaults)
 	ethRoot := types.EmptyRootHash
 	tr, err := tdb.OpenTrie(ethRoot)
 	r.NoError(err)
-	t.Cleanup(func() {
-		r.NoError(db.Close(context.Background())) //nolint:usetesting // t.Context() will already be cancelled
-	})
 
 	return &merkleTriePair{
 		fwdDB:                      db,

@@ -32,6 +32,7 @@ tikv-jemallocator = "0.6.1"
 derive-where = "1.6.0"
 metrics-exporter-prometheus = { version = "0.17.2", default-features = false }
 # Optional dependencies
+rlp = { version = "0.6.1", optional = true }
 env_logger = { workspace = true, optional = true }
 firewood-replay = { workspace = true, optional = true }
 
@@ -41,7 +42,7 @@ test-case.workspace = true
 
 [features]
 logger = ["dep:env_logger", "firewood/logger"]
-ethhash = ["firewood/ethhash"]
+ethhash = ["firewood/ethhash", "rlp"]
 io-uring = ["firewood/io-uring", "firewood-storage/io-uring"]
 block-replay = ["dep:firewood-replay"]
 
