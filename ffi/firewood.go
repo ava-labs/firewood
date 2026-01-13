@@ -39,14 +39,21 @@ const RootLength = C.sizeof_HashKey
 // Hash is the type used for all firewood hashes.
 type Hash [RootLength]byte
 
-// NodeHashAlgorithm represents the hashing mode used by the database.
-type NodeHashAlgorithm uint8
+// NodeHashAlgorithm represents the node hashing algorithm used by the database;
+// this must match the algorithm previously used to crate the database.
+//
+// Currently, there are only two variants but more may be added in the future.
+// At this time, the node hash algorithm used when opening the database must
+// match the compile-time feature used when building the FFI library. This
+// restriction will be lifted after #1088, which enables runtime selection of
+// the node hashing algorithm.
+type NodeHashAlgorithm C.enum_NodeHashAlgorithm
 
 const (
-	// NodeHashAlgorithmMerkleDB uses MerkleDB-compatible SHA-256 based hashing
-	NodeHashAlgorithmMerkleDB NodeHashAlgorithm = C.NodeHashAlgorithm_MerkleDB
-	// NodeHashAlgorithmEthereum uses Ethereum-compatible Keccak-256 based hashing
-	NodeHashAlgorithmEthereum NodeHashAlgorithm = C.NodeHashAlgorithm_Ethereum
+	// MerkleDBNodeHashing uses MerkleDB-compatible SHA-256 based hashing
+	MerkleDBNodeHashing NodeHashAlgorithm = C.NodeHashAlgorithm_MerkleDB
+	// EthereumNodeHashing uses Ethereum-compatible Keccak-256 based hashing
+	EthereumNodeHashing NodeHashAlgorithm = C.NodeHashAlgorithm_Ethereum
 )
 
 var (

@@ -174,11 +174,11 @@ func newDatabase(dbDir string, opts ...Option) (*Database, error) {
 		tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("firewood-hash-detection-%d", time.Now().UnixNano()))
 		defer os.RemoveAll(tempDir)
 
-		_, err := New(tempDir, NodeHashAlgorithmEthereum, WithTruncate(true))
+		_, err := New(tempDir, EthereumNodeHashing, WithTruncate(true))
 		if err == nil {
-			detectedNodeHashAlgorithm = NodeHashAlgorithmEthereum
+			detectedNodeHashAlgorithm = EthereumNodeHashing
 		} else {
-			detectedNodeHashAlgorithm = NodeHashAlgorithmMerkleDB
+			detectedNodeHashAlgorithm = MerkleDBNodeHashing
 		}
 	})
 
@@ -205,12 +205,12 @@ func TestNodeHashAlgorithmValidation(t *testing.T) {
 	r := require.New(t)
 
 	// Try to create a database with ethhash
-	dbDirEthereum := t.TempDir()
-	dbEthereum, errEthereum := New(dbDirEthereum, NodeHashAlgorithmEthereum, WithTruncate(true))
+	dbDirEth := t.TempDir()
+	dbEth, errEth := New(dbDirEth, EthereumNodeHashing, WithTruncate(true))
 
 	// Try to create a database with merkledb
 	dbDirMerkledb := t.TempDir()
-	dbMerkledb, errMerkledb := New(dbDirMerkledb, NodeHashAlgorithmMerkleDB, WithTruncate(true))
+	dbMerkledb, errMerkledb := New(dbDirMerkledb, MerkleDBNodeHashing, WithTruncate(true))
 
 	// Exactly one should succeed based on compile-time feature
 	type resultType int
@@ -222,24 +222,24 @@ func TestNodeHashAlgorithmValidation(t *testing.T) {
 
 	result := bothOrNeither
 	switch {
-	case errEthereum == nil && errMerkledb != nil:
+	case errEth == nil && errMerkledb != nil:
 		result = ethereumOnly
-	case errMerkledb == nil && errEthereum != nil:
+	case errMerkledb == nil && errEth != nil:
 		result = merkledbOnly
 	}
 
 	switch result {
 	case ethereumOnly:
-		r.NoError(dbEthereum.Close(oneSecCtx(t)))
+		r.NoError(dbEth.Close(oneSecCtx(t)))
 		r.Error(errMerkledb)
 		r.Contains(errMerkledb.Error(), "node store hash algorithm mismatch: want to initialize with MerkleDB, but build option is for Ethereum")
 	case merkledbOnly:
 		r.NoError(dbMerkledb.Close(oneSecCtx(t)))
-		r.Error(errEthereum)
-		r.Contains(errEthereum.Error(), "node store hash algorithm mismatch: want to initialize with Ethereum, but build option is for MerkleDB")
+		r.Error(errEth)
+		r.Contains(errEth.Error(), "node store hash algorithm mismatch: want to initialize with Ethereum, but build option is for MerkleDB")
 	case bothOrNeither:
 		// Both succeeded or both failed - this should not happen
-		r.Failf("Expected exactly one hash type to succeed", "got errEth=%v, errNative=%v", errEthereum, errMerkledb)
+		r.Failf("Expected exactly one hash type to succeed", "got errEth=%v, errNative=%v", errEth, errMerkledb)
 	}
 }
 
