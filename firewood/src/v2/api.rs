@@ -6,7 +6,7 @@ use crate::merkle::changes::ChangeProof;
 use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
 use crate::{Proof, ProofError, ProofNode, RangeProof};
-use firewood_storage::{FileIoError, HashedNodeReader, TrieHash};
+use firewood_storage::{FileIoError, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;

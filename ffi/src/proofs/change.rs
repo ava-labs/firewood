@@ -3,7 +3,7 @@
 
 use std::num::NonZeroUsize;
 
-use firewood::v2::api::{DbView, FrozenChangeProof};
+use firewood::v2::api::FrozenChangeProof;
 
 use crate::{
     BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
@@ -119,10 +119,10 @@ pub struct NextKeyRange {
 pub extern "C" fn fwd_db_change_proof(
     db: Option<&DatabaseHandle>,
     args: CreateChangeProofArgs,
-) -> ChangeProofResult {   
+) -> ChangeProofResult {
     crate::invoke_with_handle(db, |db| {
-        db.change_proof_test(
-            args.start_root.into(), 
+        db.change_proof(
+            args.start_root.into(),
             args.end_root.into(),
             args.start_key
                 .as_ref()

@@ -12,7 +12,8 @@ pub mod parallel;
 use crate::iter::{MerkleKeyValueIter, PathIterator};
 use crate::merkle::changes::{ChangeProof, DiffMerkleNodeStream};
 use crate::v2::api::{
-    self, BatchIter, FrozenChangeProof, FrozenProof, FrozenRangeProof, KeyType, KeyValuePair, ValueType
+    self, BatchIter, FrozenChangeProof, FrozenProof, FrozenRangeProof, KeyType, KeyValuePair,
+    ValueType,
 };
 use crate::{Proof, ProofCollection, ProofError, ProofNode, RangeProof};
 use firewood_storage::{
@@ -131,7 +132,17 @@ impl<T> From<T> for Merkle<T> {
 }
 
 impl<T: HashedNodeReader> Merkle<T> {
-    //#[expect(dead_code)]
+    /// Generate a change proof
+    ///
+    /// # Errors
+    ///
+    /// * `api::Error::InvalidRange` - If `start_key` > `end_key` when both are provided.
+    ///   This ensures the range bounds are logically consistent.
+    ///
+    /// * `api::Error` - Various other errors can occur during proof generation, such as:
+    ///   - I/O errors when reading nodes from storage
+    ///   - Corrupted trie structure
+    ///   - Invalid node references
     pub fn change_proof<S: HashedNodeReader>(
         &self,
         start_key: Option<&[u8]>,
@@ -166,38 +177,22 @@ impl<T: HashedNodeReader> Merkle<T> {
         let key_values = iter
             .by_ref()
             .take(limit.map_or(usize::MAX, NonZeroUsize::get))
-            //.map(|batch_op| {
-                //let batch_op = batch_op
-                /* 
-                match batch_op {
-                    Ok(batch_op) => {
-                        match batch_op {
-                            api::BatchOp::Put { key, value } => Ok((key, value)),
-                            api::BatchOp::Delete { key } => Ok((key, Value::default())),
-                            // TODO below should be an error
-                            api::BatchOp::DeleteRange { .. } => todo!(),
-                        }
-                    }
-                    Err(err) => Err(err),
-                }
-                */
-            //})
             .collect::<Result<Box<_>, FileIoError>>()?;
 
+        /*
         if key_values.is_empty() && start_key.is_none() && end_key.is_none() {
             // unbounded range proof yielded no key-values, so the trie must be empty
             // TODO: Change the Error type
             return Err(api::Error::RangeProofOnEmptyTrie);
         }
+        */
 
         let end_proof = if let Some(limit) = limit
             && limit.get() <= key_values.len()
             && iter.next().is_some()
         {
-            //key_values.last().map(|largest_key| largest_key.key())
             // limit was provided, we hit it, and there is at least one more key
             // end proof is for the last key provided
-            //key_values.last().map(|(largest_key, _)| &**largest_key)
             key_values.last().map(|largest_key| &**largest_key.key())
         } else {
             // limit was not hit or not provided, end proof is for the requested

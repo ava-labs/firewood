@@ -7,7 +7,10 @@ use firewood::{
     db::{Db, DbConfig},
     manager::RevisionManagerConfig,
     merkle::Merkle,
-    v2::api::{self, ArcDynDbView, Db as _, DbView, Error, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter, KeyType},
+    v2::api::{
+        self, ArcDynDbView, Db as _, DbView, Error, FrozenChangeProof, HashKey, HashKeyExt,
+        IntoBatchIter, KeyType,
+    },
 };
 
 use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
@@ -257,8 +260,12 @@ impl DatabaseHandle {
         self.db.dump_to_string().map_err(api::Error::from)
     }
 
-    // TODO: Move change proof here.
-    pub fn change_proof_test(
+    /// Create a Change Proof between two revisions specified by the start and end hash.
+    ///
+    /// # Errors
+    ///
+    /// An error is returned if the revision cannot be found or if there is an I/O error.
+    pub fn change_proof(
         &self,
         start_hash: HashKey,
         end_hash: HashKey,
@@ -266,13 +273,12 @@ impl DatabaseHandle {
         end_key: Option<&[u8]>,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenChangeProof, Error> {
-        let start_revision = self.db.revision(start_hash).expect("TODO");
-        let end_revision = self.db.revision(end_hash).expect("TODO");
-
-        let a = Merkle::from(end_revision);
-        let b = Merkle::from(start_revision);
-        let c = a.change_proof(start_key, end_key, b.nodestore(), limit);
-        c
+        Merkle::from(self.db.revision(end_hash)?).change_proof(
+            start_key,
+            end_key,
+            Merkle::from(self.db.revision(start_hash)?).nodestore(),
+            limit,
+        )
     }
 }
 
