@@ -1712,38 +1712,6 @@ struct ValueResult fwd_get_from_proposal(const struct ProposalHandle *handle, Bo
 struct ValueResult fwd_get_from_revision(const struct RevisionHandle *revision, BorrowedBytes key);
 
 /**
- * Gets a value assoicated with the given root hash and key.
- *
- * The hash may refer to a historical revision or an existing proposal.
- *
- * # Arguments
- *
- * * `db` - The database handle returned by [`fwd_open_db`]
- * * `root` - The root hash to look up as a [`BorrowedBytes`]
- * * `key` - The key to look up as a [`BorrowedBytes`]
- *
- * # Returns
- *
- * - [`ValueResult::NullHandlePointer`] if the provided database handle is null.
- * - [`ValueResult::RevisionNotFound`] if no revision was found for the specified root.
- * - [`ValueResult::None`] if the key was not found.
- * - [`ValueResult::Some`] if the key was found with the associated value.
- * - [`ValueResult::Err`] if an error occurred while retrieving the value.
- *
- * # Safety
- *
- * The caller must:
- * * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
- * * ensure that `root` is a valid for [`BorrowedBytes`]
- * * ensure that `key` is a valid for [`BorrowedBytes`]
- * * call [`fwd_free_owned_bytes`] to free the memory associated [`OwnedBytes`]
- *   returned in the result.
- */
-struct ValueResult fwd_get_from_root(const struct DatabaseHandle *db,
-                                     struct HashKey root,
-                                     BorrowedBytes key);
-
-/**
  * Gets the value associated with the given key from the database for the
  * latest revision.
  *

@@ -43,7 +43,6 @@ type replayLog struct {
 type dbOperation struct {
 	GetLatest         *getLatest         `msgpack:"GetLatest,omitempty"`
 	GetFromProposal   *getFromProposal   `msgpack:"GetFromProposal,omitempty"`
-	GetFromRoot       *getFromRoot       `msgpack:"GetFromRoot,omitempty"`
 	Batch             *batch             `msgpack:"Batch,omitempty"`
 	ProposeOnDB       *proposeOnDB       `msgpack:"ProposeOnDB,omitempty"`
 	ProposeOnProposal *proposeOnProposal `msgpack:"ProposeOnProposal,omitempty"`
@@ -301,15 +300,6 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 			case op.GetLatest != nil:
 				if _, err := db.Get(op.GetLatest.Key); err != nil {
 					return totalCommits, fmt.Errorf("GetLatest: %w", err)
-				}
-
-			case op.GetFromRoot != nil:
-				root, err := bytesToHash(op.GetFromRoot.Root)
-				if err != nil {
-					return totalCommits, fmt.Errorf("GetFromRoot: invalid root: %w", err)
-				}
-				if _, err := db.GetFromRoot(root, op.GetFromRoot.Key); err != nil {
-					return totalCommits, fmt.Errorf("GetFromRoot: %w", err)
 				}
 
 			case op.GetFromProposal != nil:
