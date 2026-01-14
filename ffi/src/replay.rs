@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use firewood_replay::{
-    Batch, Commit, DbOperation, GetFromProposal, GetFromRoot, GetLatest, KeyValueOp, ProposalId,
+    Batch, Commit, DbOperation, GetFromProposal, GetLatest, KeyValueOp, ProposalId,
     ProposeOnDB, ProposeOnProposal, ReplayLog,
 };
 use parking_lot::Mutex;
