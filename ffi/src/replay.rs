@@ -210,15 +210,6 @@ pub(crate) fn record_get_latest(key: BorrowedBytes<'_>) {
     }
 }
 
-/// Records a `fwd_get_from_root` call.
-pub(crate) fn record_get_from_root(root: FfiHashKey, key: BorrowedBytes<'_>) {
-    if let Some(rec) = recorder() {
-        let api_hash: firewood::v2::api::HashKey = root.into();
-        let bytes: [u8; 32] = api_hash.into();
-        rec.lock().record_get_from_root(&bytes, key.as_slice());
-    }
-}
-
 /// Records a `fwd_get_from_proposal` call.
 pub(crate) fn record_get_from_proposal(
     handle: Option<&crate::ProposalHandle<'_>>,
