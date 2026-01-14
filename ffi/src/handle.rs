@@ -229,18 +229,6 @@ impl DatabaseHandle {
     pub fn dump_to_string(&self) -> Result<String, api::Error> {
         self.db.dump_to_string().map_err(api::Error::from)
     }
-
-    /// Forces the database to flush and sync the revision associated with root
-    /// to disk.
-    ///
-    /// NOTE: this method is currently a no-op.
-    ///
-    /// # Errors
-    ///
-    /// An error is returned if unable to persist to disk.
-    pub fn flush_and_sync_root(&self, root: HashKey) -> Result<(), api::Error> {
-        self.db.flush_and_sync_root(root)
-    }
 }
 
 impl From<Db> for DatabaseHandle {

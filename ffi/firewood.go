@@ -369,17 +369,6 @@ func (db *Database) LatestRevision() (*Revision, error) {
 	return db.Revision(root)
 }
 
-// FlushAndSyncRoot forces the database to persist the revision associated with
-// root to disk.
-//
-// NOTE: this method is currently a no-op.
-func (db *Database) FlushAndSyncRoot(root Hash) error {
-	db.handleLock.Lock()
-	defer db.handleLock.Unlock()
-
-	return getErrorFromVoidResult(C.fwd_flush_and_sync_root_on_db(db.handle, newCHashKey(root)))
-}
-
 // Revision returns a historical revision of the database.
 // If the provided root does not exist (or is the [EmptyRoot]), it returns an error.
 // The [Revision] must be dropped prior to closing the database.
