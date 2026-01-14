@@ -60,12 +60,6 @@ type getFromProposal struct {
 	Key        []byte `msgpack:"key"`
 }
 
-// getFromRoot represents a read from a specific historical root.
-type getFromRoot struct {
-	Root []byte `msgpack:"root"`
-	Key  []byte `msgpack:"key"`
-}
-
 // keyValueOp represents a single key/value mutation.
 type keyValueOp struct {
 	Key   []byte `msgpack:"key"`
@@ -388,13 +382,4 @@ func splitPairs(pairs []keyValueOp) ([][]byte, [][]byte) {
 		vals = append(vals, p.Value)
 	}
 	return keys, vals
-}
-
-func bytesToHash(b []byte) (Hash, error) {
-	if len(b) != RootLength {
-		return Hash{}, fmt.Errorf("expected root length %d, got %d", RootLength, len(b))
-	}
-	var h Hash
-	copy(h[:], b)
-	return h, nil
 }

@@ -55,17 +55,6 @@ pub struct GetFromProposal {
     pub key: Box<[u8]>,
 }
 
-/// Operation that reads a key from a specific historical root.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetFromRoot {
-    /// The 32-byte root hash.
-    #[serde(with = "serde_bytes")]
-    pub root: Box<[u8]>,
-    /// The key to read.
-    #[serde(with = "serde_bytes")]
-    pub key: Box<[u8]>,
-}
-
 /// A single key/value mutation within a batch or proposal.
 #[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,8 +112,6 @@ pub enum DbOperation {
     GetLatest(GetLatest),
     /// Read from an uncommitted proposal.
     GetFromProposal(GetFromProposal),
-    /// Read from a historical root.
-    GetFromRoot(GetFromRoot),
     /// Batch write (immediate commit).
     Batch(Batch),
     /// Create a proposal on the database.
@@ -236,11 +223,6 @@ fn apply_operation<'db>(
                 let view = DbApi::revision(db, root)?;
                 let _ = DbViewApi::val(&*view, key)?;
             }
-            Ok(None)
-        }
-
-        DbOperation::GetFromRoot(GetFromRoot { root: _, key: _ }) => {
-            // TODO, noop for now.
             Ok(None)
         }
 

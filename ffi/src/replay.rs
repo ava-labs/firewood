@@ -62,15 +62,6 @@ impl Recorder {
         self.maybe_flush();
     }
 
-    /// Records a `GetFromRoot` operation.
-    fn record_get_from_root(&mut self, root: &[u8], key: &[u8]) {
-        self.operations.push(DbOperation::GetFromRoot(GetFromRoot {
-            root: root.into(),
-            key: key.into(),
-        }));
-        self.maybe_flush();
-    }
-
     /// Records a `GetFromProposal` operation.
     fn record_get_from_proposal(&mut self, handle_ptr: usize, key: &[u8]) {
         let Some(&proposal_id) = self.proposal_ids.get(&handle_ptr) else {
