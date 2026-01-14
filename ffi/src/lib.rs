@@ -908,28 +908,3 @@ pub extern "C" fn fwd_revision_dump(revision: Option<&RevisionHandle>) -> ValueR
 pub extern "C" fn fwd_proposal_dump(proposal: Option<&ProposalHandle>) -> ValueResult {
     invoke_with_handle(proposal, firewood::v2::api::DbView::dump_to_string)
 }
-
-/// Forces the database to flush and sync the revision associated with root to disk.
-///
-/// NOTE: this function is currently a no-op.
-///
-/// # Arguments
-///
-/// * `db` - The database handle returned by [`fwd_open_db`]
-///
-/// # Returns
-///
-/// - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
-/// - [`VoidResult::Ok`] if the operation was successful.
-/// - [`VoidResult::Err`] if the process panics while persisting.
-///
-/// # Safety
-///
-/// The caller must ensure that `db` is a valid pointer to a [`DatabaseHandle`]
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_flush_and_sync_root_on_db(
-    db: Option<&DatabaseHandle>,
-    root: HashKey,
-) -> VoidResult {
-    invoke_with_handle(db, move |db| db.flush_and_sync_root(root.into()))
-}
