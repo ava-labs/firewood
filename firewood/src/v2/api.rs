@@ -2,11 +2,11 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::manager::RevisionManagerError;
+use crate::merkle::changes::ChangeProof;
 use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
-use crate::merkle::changes::ChangeProof;
 use crate::{Proof, ProofError, ProofNode, RangeProof};
-use firewood_storage::{FileIoError, TrieHash};
+use firewood_storage::{FileIoError, HashedNodeReader, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -311,6 +311,15 @@ pub trait DbView {
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, Error>;
 
+    #[expect(clippy::missing_errors_doc)]
+    fn change_proof<K: KeyType, T: HashedNodeReader>(
+        &self,
+        first_key: Option<K>,
+        last_key: Option<K>,
+        source_trie: &T,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenChangeProof, Error>;
+
     /// Obtain a stream over the keys/values of this view, using an optional starting point
     ///
     /// # Arguments
@@ -386,6 +395,17 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, Error>;
 
+    /*
+    #[expect(clippy::missing_errors_doc)]
+    fn change_proof(
+        &self,
+        first_key: Option<&[u8]>,
+        last_key: Option<&[u8]>,
+        source_trie: &dyn HashedNodeReader,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenChangeProof, Error>;
+    */
+
     /// Obtain a stream over the keys/values of this view, using an optional starting point
     ///
     /// # Arguments
@@ -444,6 +464,19 @@ where
     ) -> Result<FrozenRangeProof, Error> {
         DbView::range_proof(self, first_key, last_key, limit)
     }
+
+    /*
+    // TODO: Not sure how to make this dyn safe for now
+    fn change_proof(
+            &self,
+            _first_key: Option<&[u8]>,
+            _last_key: Option<&[u8]>,
+            _source_trie: &dyn HashedNodeReader,
+            _limit: Option<NonZeroUsize>,
+        ) -> Result<FrozenChangeProof, Error> {
+        todo!();
+    }
+    */
 
     fn iter_option(&self, first_key: Option<&[u8]>) -> Result<BoxKeyValueIter<'_>, Error> {
         // NOTE: `Result::map` does not work here because the compiler cannot correctly

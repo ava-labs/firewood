@@ -59,6 +59,23 @@ impl DbView for RevisionHandle {
         )
     }
 
+    fn change_proof<K: api::KeyType, T: firewood_storage::HashedNodeReader>(
+        &self,
+        _first_key: Option<K>,
+        _last_key: Option<K>,
+        _source_trie: &T,
+        _limit: Option<std::num::NonZeroUsize>,
+    ) -> Result<api::FrozenChangeProof, api::Error> {
+        todo!();
+        /*
+        self.view.change_proof(
+            first_key.as_ref().map(AsRef::as_ref),
+            last_key.as_ref().map(AsRef::as_ref),
+            source_trie,
+            limit)
+        */
+    }
+
     fn iter_option<K: api::KeyType>(
         &self,
         first_key: Option<K>,

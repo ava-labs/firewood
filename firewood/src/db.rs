@@ -88,6 +88,21 @@ where
         )
     }
 
+    fn change_proof<K: KeyType, T: HashedNodeReader>(
+        &self,
+        first_key: Option<K>,
+        last_key: Option<K>,
+        source_trie: &T,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<api::FrozenChangeProof, api::Error> {
+        Merkle::from(self).change_proof(
+            first_key.as_ref().map(AsRef::as_ref),
+            last_key.as_ref().map(AsRef::as_ref),
+            source_trie,
+            limit,
+        )
+    }
+
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
         match first_key {
             Some(key) => Ok(MerkleKeyValueIter::from_key(self, key)),
@@ -357,6 +372,16 @@ impl api::DbView for Proposal<'_> {
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, api::Error> {
         api::DbView::range_proof(&*self.nodestore, first_key, last_key, limit)
+    }
+
+    fn change_proof<K: KeyType, T: HashedNodeReader>(
+        &self,
+        first_key: Option<K>,
+        last_key: Option<K>,
+        source_trie: &T,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<api::FrozenChangeProof, api::Error> {
+        api::DbView::change_proof(&*self.nodestore, first_key, last_key, source_trie, limit)
     }
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {

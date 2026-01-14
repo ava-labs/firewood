@@ -16,24 +16,25 @@ use crate::{
     merkle::{Key, PrefixOverlap, Value},
 };
 
-#[derive(Debug, PartialEq)]
-pub struct ChangeProof<K, V, H> {
+#[derive(Debug)]
+pub struct ChangeProof<K: AsRef<[u8]> + std::fmt::Debug, V: AsRef<[u8]> + std::fmt::Debug, H> {
     start_proof: Proof<H>,
     end_proof: Proof<H>,
-    key_values: Box<[(K, V)]>,
+    //key_values: Box<[(K, V)]>,
+    key_values: Box<[BatchOp<K, V>]>,
 }
 
 impl<K, V, H> ChangeProof<K, V, H>
 where
-    K: AsRef<[u8]>,
-    V: AsRef<[u8]>,
+    K: AsRef<[u8]> + std::fmt::Debug,
+    V: AsRef<[u8]> + std::fmt::Debug,
     H: ProofCollection,
 {
     #[must_use]
     pub const fn new(
         start_proof: Proof<H>,
         end_proof: Proof<H>,
-        key_values: Box<[(K, V)]>,
+        key_values: Box<[BatchOp<K, V>]>,
     ) -> Self {
         Self {
             start_proof,
@@ -56,7 +57,7 @@ where
 
     /// Returns the key-value pairs included in the change proof, which may be empty.
     #[must_use]
-    pub const fn key_values(&self) -> &[(K, V)] {
+    pub const fn key_values(&self) -> &[BatchOp<K, V>] {
         &self.key_values
     }
 
@@ -79,10 +80,16 @@ where
 }
 
 #[derive(Debug)]
-pub struct ChangeProofIter<'a, K, V>(std::slice::Iter<'a, (K, V)>);
+pub struct ChangeProofIter<'a, K: AsRef<[u8]> + std::fmt::Debug, V: AsRef<[u8]> + std::fmt::Debug>(
+    std::slice::Iter<'a, BatchOp<K, V>>,
+);
 
-impl<'a, K, V> Iterator for ChangeProofIter<'a, K, V> {
-    type Item = &'a (K, V);
+impl<'a, K, V> Iterator for ChangeProofIter<'a, K, V>
+where
+    K: AsRef<[u8]> + std::fmt::Debug,
+    V: AsRef<[u8]> + std::fmt::Debug,
+{
+    type Item = &'a BatchOp<K, V>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.0.next()
@@ -93,17 +100,27 @@ impl<'a, K, V> Iterator for ChangeProofIter<'a, K, V> {
     }
 }
 
-impl<K, V> ExactSizeIterator for ChangeProofIter<'_, K, V> {}
+impl<K, V> ExactSizeIterator for ChangeProofIter<'_, K, V>
+where
+    K: AsRef<[u8]> + std::fmt::Debug,
+    V: AsRef<[u8]> + std::fmt::Debug,
+{
+}
 
-impl<K, V> std::iter::FusedIterator for ChangeProofIter<'_, K, V> {}
+impl<K, V> std::iter::FusedIterator for ChangeProofIter<'_, K, V>
+where
+    K: AsRef<[u8]> + std::fmt::Debug,
+    V: AsRef<[u8]> + std::fmt::Debug,
+{
+}
 
 impl<'a, K, V, H> IntoIterator for &'a ChangeProof<K, V, H>
 where
-    K: AsRef<[u8]>,
-    V: AsRef<[u8]>,
+    K: AsRef<[u8]> + std::fmt::Debug,
+    V: AsRef<[u8]> + std::fmt::Debug,
     H: ProofCollection,
 {
-    type Item = &'a (K, V);
+    type Item = &'a BatchOp<K, V>;
     type IntoIter = ChangeProofIter<'a, K, V>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -673,7 +690,7 @@ mod tests {
             Key, Merkle, Value,
             changes::{ChangeProof, DiffMerkleNodeStream, PreOrderIterator},
         },
-        v2::api::{Db as _, DbView, Proposal as _, TryIntoBatch},
+        v2::api::{Db as _, DbView, Proposal as _},
     };
 
     use firewood_storage::{
@@ -1918,10 +1935,19 @@ mod tests {
     #[test]
     fn test_change_proof_iterator() {
         // Create test data
-        let key_values: Box<[(Vec<u8>, Vec<u8>)]> = Box::new([
-            (b"key1".to_vec(), b"value1".to_vec()),
-            (b"key2".to_vec(), b"value2".to_vec()),
-            (b"key3".to_vec(), b"value3".to_vec()),
+        let key_values: Box<[BatchOp<Key, Value>]> = Box::new([
+            BatchOp::Put {
+                key: b"key1".to_vec().into_boxed_slice(),
+                value: b"value1".to_vec().into_boxed_slice(),
+            },
+            BatchOp::Put {
+                key: b"key2".to_vec().into_boxed_slice(),
+                value: b"value2".to_vec().into_boxed_slice(),
+            },
+            BatchOp::Put {
+                key: b"key3".to_vec().into_boxed_slice(),
+                value: b"value3".to_vec().into_boxed_slice(),
+            },
         ]);
 
         // Create empty proofs for testing
@@ -1935,16 +1961,19 @@ mod tests {
         assert_eq!(iter.len(), 3);
 
         let first = iter.next().unwrap();
-        assert_eq!(first.0, b"key1");
-        assert_eq!(first.1, b"value1".to_vec());
+        assert!(
+            matches!(first, BatchOp::Put { key, value } if **key == *b"key1" && **value == *b"value1"),
+        );
 
         let second = iter.next().unwrap();
-        assert_eq!(second.0, b"key2");
-        assert_eq!(second.1, b"value2".to_vec());
+        assert!(
+            matches!(second, BatchOp::Put { key, value } if **key == *b"key2" && **value == *b"value2"),
+        );
 
         let third = iter.next().unwrap();
-        assert_eq!(third.0, b"key3");
-        assert_eq!(third.1, b"value3".to_vec());
+        assert!(
+            matches!(third, BatchOp::Put { key, value } if **key == *b"key3" && **value == *b"value3"),
+        );
 
         assert!(iter.next().is_none());
     }
@@ -1952,9 +1981,15 @@ mod tests {
     #[test]
     #[expect(clippy::indexing_slicing)]
     fn test_change_proof_into_iterator() {
-        let key_values: Box<[(Vec<u8>, Vec<u8>)]> = Box::new([
-            (b"a".to_vec(), b"alpha".to_vec()),
-            (b"b".to_vec(), b"beta".to_vec()),
+        let key_values: Box<[BatchOp<Key, Value>]> = Box::new([
+            BatchOp::Put {
+                key: b"a".to_vec().into_boxed_slice(),
+                value: b"alpha".to_vec().into_boxed_slice(),
+            },
+            BatchOp::Put {
+                key: b"b".to_vec().into_boxed_slice(),
+                value: b"beta".to_vec().into_boxed_slice(),
+            },
         ]);
 
         let start_proof = Proof::empty();
@@ -1968,46 +2003,17 @@ mod tests {
         }
 
         assert_eq!(items.len(), 2);
-        assert_eq!(items[0].0, b"a");
-        assert_eq!(items[0].1, b"alpha".to_vec());
-        assert_eq!(items[1].0, b"b");
-        assert_eq!(items[1].1, b"beta".to_vec());
-    }
-
-    // Not clear if the TryIntoBatch works correctly for change proof.
-    // TryIntoBatch converts (K, V) into BatchOp where if V is empty, it is a delete prefix operation.
-    // Is this correct behavior? Can we have valid keys without values? Couldn’t a delete prefix delete
-    // more than we want?
-    #[test]
-    #[expect(clippy::indexing_slicing)]
-    fn test_keyvaluepair_iter_trait() {
-        let key_values: Box<[(Vec<u8>, Vec<u8>)]> =
-            Box::new([(b"test".to_vec(), b"data".to_vec())]);
-
-        let start_proof = Proof::empty();
-        let end_proof = Proof::empty();
-        let range_proof = ChangeProof::new(start_proof, end_proof, key_values);
-
-        // Test that our iterator implements KeyValuePairIter
-        let iter = range_proof.iter();
-
-        // Verify we can call methods from KeyValuePairIter
-        let batch_iter = iter.map(TryIntoBatch::try_into_batch);
-        let batches: Vec<_> = batch_iter.collect::<Result<_, _>>().unwrap();
-
-        assert_eq!(batches.len(), 1);
-        // The batch should be a Put operation since value is non-empty
-        if let crate::v2::api::BatchOp::Put { key, value } = &batches[0] {
-            assert_eq!(key.as_ref() as &[u8], b"test");
-            assert_eq!(value.as_ref() as &[u8], b"data");
-        } else {
-            panic!("Expected Put operation");
-        }
+        assert!(
+            matches!(items[0], BatchOp::Put{ key, value } if **key == *b"a" && **value == *b"alpha"),
+        );
+        assert!(
+            matches!(items[1], BatchOp::Put{ key, value } if **key == *b"b" && **value == *b"beta"),
+        );
     }
 
     #[test]
     fn test_empty_range_proof_iterator() {
-        let key_values: Box<[(Vec<u8>, Vec<u8>)]> = Box::new([]);
+        let key_values: Box<[BatchOp<Key, Value>]> = Box::new([]);
         let start_proof = Proof::empty();
         let end_proof = Proof::empty();
         let change_proof = ChangeProof::new(start_proof, end_proof, key_values);

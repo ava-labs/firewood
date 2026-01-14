@@ -42,6 +42,16 @@ impl<'db> DbView for ProposalHandle<'db> {
         self.proposal.range_proof(first_key, last_key, limit)
     }
 
+    fn change_proof<K: api::KeyType, T: firewood_storage::HashedNodeReader> (
+            &self,
+            first_key: Option<K>,
+            last_key: Option<K>,
+            source_trie: &T,
+            limit: Option<std::num::NonZeroUsize>,
+        ) -> Result<api::FrozenChangeProof, api::Error> {
+        self.proposal.change_proof(first_key, last_key, source_trie, limit)
+    }
+
     fn iter_option<K: api::KeyType>(
         &self,
         first_key: Option<K>,

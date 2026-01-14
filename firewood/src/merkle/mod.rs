@@ -131,12 +131,12 @@ impl<T> From<T> for Merkle<T> {
 }
 
 impl<T: HashedNodeReader> Merkle<T> {
-    #[expect(dead_code)]
-    pub(super) fn change_proof(
+    //#[expect(dead_code)]
+    pub(super) fn change_proof<S: HashedNodeReader>(
         &self,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
-        source_trie: &T,
+        source_trie: &S,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenChangeProof, api::Error> {
         if let (Some(k1), Some(k2)) = (&start_key, &end_key)
@@ -166,8 +166,9 @@ impl<T: HashedNodeReader> Merkle<T> {
         let key_values = iter
             .by_ref()
             .take(limit.map_or(usize::MAX, NonZeroUsize::get))
-            .map(|batch_op| {
+            //.map(|batch_op| {
                 //let batch_op = batch_op
+                /* 
                 match batch_op {
                     Ok(batch_op) => {
                         match batch_op {
@@ -179,7 +180,8 @@ impl<T: HashedNodeReader> Merkle<T> {
                     }
                     Err(err) => Err(err),
                 }
-            })
+                */
+            //})
             .collect::<Result<Box<_>, FileIoError>>()?;
 
         if key_values.is_empty() && start_key.is_none() && end_key.is_none() {
@@ -192,9 +194,11 @@ impl<T: HashedNodeReader> Merkle<T> {
             && limit.get() <= key_values.len()
             && iter.next().is_some()
         {
+            //key_values.last().map(|largest_key| largest_key.key())
             // limit was provided, we hit it, and there is at least one more key
             // end proof is for the last key provided
-            key_values.last().map(|(largest_key, _)| &**largest_key)
+            //key_values.last().map(|(largest_key, _)| &**largest_key)
+            key_values.last().map(|largest_key| &**largest_key.key())
         } else {
             // limit was not hit or not provided, end proof is for the requested
             // end key so that we can prove we have all keys up to that key
