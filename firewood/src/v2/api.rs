@@ -311,6 +311,7 @@ pub trait DbView {
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenRangeProof, Error>;
 
+    /*
     #[expect(clippy::missing_errors_doc)]
     fn change_proof<K: KeyType, T: HashedNodeReader>(
         &self,
@@ -319,6 +320,7 @@ pub trait DbView {
         source_trie: &T,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenChangeProof, Error>;
+    */
 
     /// Obtain a stream over the keys/values of this view, using an optional starting point
     ///
@@ -401,7 +403,7 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
         &self,
         first_key: Option<&[u8]>,
         last_key: Option<&[u8]>,
-        source_trie: &dyn HashedNodeReader,
+        source_trie: Arc<dyn DynDbView>,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenChangeProof, Error>;
     */
@@ -465,15 +467,15 @@ where
         DbView::range_proof(self, first_key, last_key, limit)
     }
 
-    /*
+    /* 
     // TODO: Not sure how to make this dyn safe for now
     fn change_proof(
-            &self,
-            _first_key: Option<&[u8]>,
-            _last_key: Option<&[u8]>,
-            _source_trie: &dyn HashedNodeReader,
-            _limit: Option<NonZeroUsize>,
-        ) -> Result<FrozenChangeProof, Error> {
+        &self,
+        _first_key: Option<&[u8]>,
+        _last_key: Option<&[u8]>,
+        _source_trie: Arc<dyn DynDbView>,
+        _limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenChangeProof, Error> {
         todo!();
     }
     */

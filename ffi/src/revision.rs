@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::{CreateIteratorResult, IteratorHandle};
-use firewood::v2::api;
+use firewood::v2::api::{self};
 use firewood::v2::api::{ArcDynDbView, BoxKeyValueIter, DbView, HashKey};
 
 #[derive(Debug)]
@@ -58,23 +58,24 @@ impl DbView for RevisionHandle {
             limit,
         )
     }
+    /*
 
-    fn change_proof<K: api::KeyType, T: firewood_storage::HashedNodeReader>(
+    fn change_proof<K: api::KeyType>(
         &self,
         _first_key: Option<K>,
         _last_key: Option<K>,
-        _source_trie: &T,
+        _source_trie: Arc<dyn HashedNodeReader>,
         _limit: Option<std::num::NonZeroUsize>,
     ) -> Result<api::FrozenChangeProof, api::Error> {
         todo!();
-        /*
-        self.view.change_proof(
-            first_key.as_ref().map(AsRef::as_ref),
-            last_key.as_ref().map(AsRef::as_ref),
-            source_trie,
-            limit)
-        */
+
+        //self.view.change_proof(
+        //    first_key.as_ref().map(AsRef::as_ref),
+        //    last_key.as_ref().map(AsRef::as_ref),
+        //    source_trie,
+        //    limit)
     }
+    */
 
     fn iter_option<K: api::KeyType>(
         &self,

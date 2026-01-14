@@ -13,8 +13,7 @@ use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
-    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter, KeyType,
-    KeyValuePair, OptionalHashKeyExt,
+    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter, KeyType, KeyValuePair, OptionalHashKeyExt
 };
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
@@ -88,20 +87,23 @@ where
         )
     }
 
-    fn change_proof<K: KeyType, T: HashedNodeReader>(
+    /* 
+    fn change_proof<K: KeyType>(
         &self,
         first_key: Option<K>,
         last_key: Option<K>,
-        source_trie: &T,
+        source_trie: Arc<dyn DynDbView>,
         limit: Option<NonZeroUsize>,
     ) -> Result<api::FrozenChangeProof, api::Error> {
+        let source_trie  = Merkle::from(source_trie);
         Merkle::from(self).change_proof(
             first_key.as_ref().map(AsRef::as_ref),
             last_key.as_ref().map(AsRef::as_ref),
-            source_trie,
+            &*source_trie,
             limit,
         )
     }
+    */
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
         match first_key {
@@ -374,6 +376,7 @@ impl api::DbView for Proposal<'_> {
         api::DbView::range_proof(&*self.nodestore, first_key, last_key, limit)
     }
 
+    /* 
     fn change_proof<K: KeyType, T: HashedNodeReader>(
         &self,
         first_key: Option<K>,
@@ -383,6 +386,7 @@ impl api::DbView for Proposal<'_> {
     ) -> Result<api::FrozenChangeProof, api::Error> {
         api::DbView::change_proof(&*self.nodestore, first_key, last_key, source_trie, limit)
     }
+    */
 
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
         api::DbView::iter_option(&*self.nodestore, first_key)

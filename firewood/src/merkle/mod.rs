@@ -132,7 +132,7 @@ impl<T> From<T> for Merkle<T> {
 
 impl<T: HashedNodeReader> Merkle<T> {
     //#[expect(dead_code)]
-    pub(super) fn change_proof<S: HashedNodeReader>(
+    pub fn change_proof<S: HashedNodeReader>(
         &self,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
@@ -217,7 +217,7 @@ impl<T: TrieReader> Merkle<T> {
         self.nodestore.root_node()
     }
 
-    pub(crate) const fn nodestore(&self) -> &T {
+    pub const fn nodestore(&self) -> &T {
         &self.nodestore
     }
 

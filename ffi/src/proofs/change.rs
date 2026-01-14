@@ -1,7 +1,9 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood::v2::api::FrozenChangeProof;
+use std::num::NonZeroUsize;
+
+use firewood::v2::api::{DbView, FrozenChangeProof};
 
 use crate::{
     BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
@@ -71,6 +73,16 @@ pub struct ChangeProofContext {
     //proposal_state: Option<ProposalState<'db>>,
 }
 
+impl From<FrozenChangeProof> for ChangeProofContext {
+    fn from(proof: FrozenChangeProof) -> Self {
+        Self {
+            proof,
+            //.verification: None,
+            //proposal_state: None,
+        }
+    }
+}
+
 /// A key range that should be fetched to continue iterating through a range
 /// or change proof that was truncated. Represents a half-open range
 /// `[start_key, end_key)`. If `end_key` is `None`, the range is unbounded
@@ -105,10 +117,24 @@ pub struct NextKeyRange {
 /// - [`ChangeProofResult::Err`] containing an error message if the proof could not be created.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_change_proof(
-    _db: Option<&DatabaseHandle>,
-    _args: CreateChangeProofArgs,
-) -> ChangeProofResult {
-    CResult::from_err("not yet implemented")
+    db: Option<&DatabaseHandle>,
+    args: CreateChangeProofArgs,
+) -> ChangeProofResult {   
+    crate::invoke_with_handle(db, |db| {
+        db.change_proof_test(
+            args.start_root.into(), 
+            args.end_root.into(),
+            args.start_key
+                .as_ref()
+                .map(BorrowedBytes::as_slice)
+                .into_option(),
+            args.end_key
+                .as_ref()
+                .map(BorrowedBytes::as_slice)
+                .into_option(),
+            NonZeroUsize::new(args.max_length as usize),
+        )
+    })
 }
 
 /// Verify a change proof and prepare a proposal to later commit or drop.

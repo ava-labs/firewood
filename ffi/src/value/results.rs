@@ -256,6 +256,20 @@ pub enum ChangeProofResult {
     Err(OwnedBytes),
 }
 
+impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
+    fn from(value: Result<api::FrozenChangeProof, api::Error>) -> Self {
+        match value {
+            Ok(proof) => ChangeProofResult::Ok(Box::new(proof.into())),
+            Err(api::Error::RevisionNotFound { provided }) => ChangeProofResult::RevisionNotFound(
+                HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
+            ),
+            //Err(api::Error::RangeProofOnEmptyTrie) => ChangeProofResult::EmptyTrie,
+            Err(err) => ChangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+
 #[derive(Debug)]
 #[repr(C)]
 pub enum NextKeyRangeResult {

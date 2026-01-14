@@ -1199,8 +1199,8 @@ struct HashResult fwd_commit_proposal(struct ProposalHandle *proposal);
  *   was successfully created.
  * - [`ChangeProofResult::Err`] containing an error message if the proof could not be created.
  */
-struct ChangeProofResult fwd_db_change_proof(const struct DatabaseHandle *_db,
-                                             struct CreateChangeProofArgs _args);
+struct ChangeProofResult fwd_db_change_proof(const struct DatabaseHandle *db,
+                                             struct CreateChangeProofArgs args);
 
 /**
  * Dumps the Trie structure of the latest revision of the database to a DOT
