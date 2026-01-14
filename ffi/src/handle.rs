@@ -149,20 +149,6 @@ impl DatabaseHandle {
         self.db.revision(root)?.val(key)
     }
 
-    /// Returns a value from the database for the given key from the specified root hash.
-    ///
-    /// # Errors
-    ///
-    /// An error is returned if the root hash is invalid or if there was an i/o error
-    /// while reading the value.
-    pub fn get_from_root(
-        &self,
-        root: HashKey,
-        key: impl KeyType,
-    ) -> Result<Option<Box<[u8]>>, api::Error> {
-        self.get_root(root)?.val(key.as_ref())
-    }
-
     /// Creates a proposal with the given values and returns the proposal and the start time.
     ///
     /// # Errors

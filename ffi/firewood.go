@@ -322,36 +322,6 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	return val, err
 }
 
-// GetFromRoot retrieves the value for the given key from a specific root hash.
-// If the root is not found, it returns an error.
-// If key is not found, it returns nil.
-//
-// GetFromRoot caches a handle to the revision associated with the provided root hash, allowing
-// subsequent calls with the same root to be more efficient.
-//
-// This function is thread-safe with all other operations.
-func (db *Database) GetFromRoot(root Hash, key []byte) ([]byte, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return nil, errDBClosed
-	}
-
-	// If the root is empty, the database is empty.
-	if root == EmptyRoot {
-		return nil, nil
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	return getValueFromValueResult(C.fwd_get_from_root(
-		db.handle,
-		newCHashKey(root),
-		newBorrowedBytes(key, &pinner),
-	))
-}
-
 // Root returns the current root hash of the trie.
 // With Firewood hashing, the empty trie must return [EmptyRoot].
 //
