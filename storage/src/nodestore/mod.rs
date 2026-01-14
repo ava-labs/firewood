@@ -50,7 +50,7 @@ use crate::logger::trace;
 use crate::node::branch::ReadSerializable as _;
 use smallvec::SmallVec;
 use std::fmt::Debug;
-use std::io::{Error, ErrorKind, Read};
+use std::io::{Error, ErrorKind};
 
 // Re-export types from alloc module
 pub use alloc::NodeAllocator;
@@ -102,28 +102,16 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Open an existing [`NodeStore`]
     /// Assumes the header is written in the [`ReadableStorage`].
     ///
+    /// Open a NodeStore from storage using the provided header.
+    ///
+    /// The header should be read using [`NodeStoreHeader::read_from`] before calling this.
+    /// This separation allows callers to manage the header lifecycle independently.
+    ///
     /// # Errors
     ///
-    /// Returns a [`FileIoError`] if the header cannot be read or validated.
-    pub fn open(storage: Arc<S>) -> Result<Self, FileIoError> {
-        let mut stream = storage.stream_from(0)?;
-        let mut header_bytes = vec![0u8; std::mem::size_of::<NodeStoreHeader>()];
-        if let Err(e) = stream.read_exact(&mut header_bytes) {
-            if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                return Ok(Self::new_empty_committed(storage.clone()));
-            }
-            return Err(storage.file_io_error(e, 0, Some("header read".to_string())));
-        }
-
-        drop(stream);
-
-        let header = *NodeStoreHeader::from_bytes(&header_bytes);
-        header
-            .validate()
-            .map_err(|e| storage.file_io_error(e, 0, Some("header read".to_string())))?;
-
+    /// Returns a [`FileIoError`] if the root node cannot be read from storage.
+    pub fn open(header: &NodeStoreHeader, storage: Arc<S>) -> Result<Self, FileIoError> {
         let mut nodestore = Self {
-            header,
             kind: Committed {
                 deleted: Box::default(),
                 root: None,
@@ -140,13 +128,10 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         Ok(nodestore)
     }
 
-    /// Create a new, empty, Committed [`NodeStore`] and clobber
-    /// the underlying store with an empty freelist and no root node
+    /// Create a new, empty, Committed [`NodeStore`].
+    #[must_use]
     pub fn new_empty_committed(storage: Arc<S>) -> Self {
-        let header = NodeStoreHeader::new();
-
         Self {
-            header,
             storage,
             kind: Committed {
                 deleted: Box::default(),
@@ -159,7 +144,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     ///
     /// This constructor is used when you have an existing root node at a known
     /// address and hash, typically when reconstructing a [`NodeStore`] from
-    /// a committed state.
+    /// a committed state (e.g., loading a historical revision).
     ///
     /// ## Panics
     ///
@@ -167,10 +152,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// not equal `root_hash`.
     #[must_use]
     pub fn with_root(root_hash: HashType, root_address: LinearAddress, storage: Arc<S>) -> Self {
-        let header = NodeStoreHeader::with_root(Some(root_address));
-
         let nodestore = NodeStore {
-            header,
             kind: Committed {
                 deleted: Box::default(),
                 root: Some(Child::AddressWithHash(root_address, root_hash)),
@@ -216,6 +198,8 @@ pub trait Parentable {
     fn root_hash(&self) -> Option<TrieHash>;
     /// Returns the root node
     fn root(&self) -> Option<MaybePersistedNode>;
+    /// Returns the persisted address of the root node, if any.
+    fn root_address(&self) -> Option<LinearAddress>;
 }
 
 impl Parentable for Arc<ImmutableProposal> {
@@ -229,6 +213,9 @@ impl Parentable for Arc<ImmutableProposal> {
     }
     fn root(&self) -> Option<MaybePersistedNode> {
         self.root.as_ref().map(Child::as_maybe_persisted_node)
+    }
+    fn root_address(&self) -> Option<LinearAddress> {
+        self.root.as_ref().and_then(Child::persisted_address)
     }
 }
 
@@ -256,6 +243,9 @@ impl Parentable for Committed {
     fn root(&self) -> Option<MaybePersistedNode> {
         self.root.as_ref().map(Child::as_maybe_persisted_node)
     }
+    fn root_address(&self) -> Option<LinearAddress> {
+        self.root.as_ref().and_then(Child::persisted_address)
+    }
 }
 
 impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
@@ -279,7 +269,6 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
             parent: parent.kind.as_nodestore_parent(),
         };
         Ok(NodeStore {
-            header: parent.header,
             kind,
             storage: parent.storage.clone(),
         })
@@ -325,7 +314,6 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     #[must_use]
     pub fn from_root(parent: &NodeStore<MutableProposal, S>, root: Option<Node>) -> Self {
         NodeStore {
-            header: parent.header,
             kind: MutableProposal {
                 root,
                 deleted: Vec::default(),
@@ -343,21 +331,12 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
 }
 
 impl<S: WritableStorage> NodeStore<MutableProposal, S> {
-    /// Creates a new, empty, [`NodeStore`] and clobbers the underlying `storage` with an empty header.
-    /// This is used during testing and during the creation of an in-memory merkle for proofs
-    ///
-    /// # Panics
-    ///
-    /// Panics if the header cannot be written.
+    /// Creates a new, empty, [`NodeStore`].
+    /// This is used during testing and during the creation of an in-memory merkle for proofs.
     #[cfg(any(test, feature = "test_utils"))]
+    #[must_use]
     pub fn new_empty_proposal(storage: Arc<S>) -> Self {
-        let header = NodeStoreHeader::new();
-        let header_bytes = bytemuck::bytes_of(&header);
-        storage
-            .write(0, header_bytes)
-            .expect("failed to write header");
         NodeStore {
-            header,
             kind: MutableProposal {
                 root: None,
                 deleted: Vec::default(),
@@ -505,22 +484,10 @@ impl ImmutableProposal {
 
 #[derive(Debug)]
 pub struct NodeStore<T, S> {
-    // Metadata for this revision.
-    header: NodeStoreHeader,
     /// This is one of [Committed], [`ImmutableProposal`], or [`MutableProposal`].
     kind: T,
     /// Persisted storage to read nodes from.
     storage: Arc<S>,
-}
-
-impl<T, S> NodeStore<T, S> {
-    pub(crate) const fn freelists(&self) -> &alloc::FreeLists {
-        self.header.free_lists()
-    }
-
-    pub(crate) const fn freelists_mut(&mut self) -> &mut alloc::FreeLists {
-        self.header.free_lists_mut()
-    }
 }
 
 /// Contains the state of a proposal that is still being modified.
@@ -538,7 +505,6 @@ impl<T: Into<NodeStoreParent>, S: ReadableStorage> From<NodeStore<T, S>>
 {
     fn from(val: NodeStore<T, S>) -> Self {
         NodeStore {
-            header: val.header,
             kind: MutableProposal {
                 root: None,
                 deleted: Vec::default(),
@@ -553,7 +519,6 @@ impl<T: Into<NodeStoreParent>, S: ReadableStorage> From<NodeStore<T, S>>
 impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Committed, S> {
     fn from(val: NodeStore<ImmutableProposal, S>) -> Self {
         NodeStore {
-            header: val.header,
             kind: Committed {
                 deleted: val.kind.deleted.clone(),
                 root: val.kind.root.clone(),
@@ -575,12 +540,8 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     /// Return a Committed version of this proposal, which doesn't have any modified nodes.
     /// This function is used during commit.
     #[must_use]
-    pub fn as_committed(
-        &self,
-        current_revision: &NodeStore<Committed, S>,
-    ) -> NodeStore<Committed, S> {
+    pub fn as_committed(&self) -> NodeStore<Committed, S> {
         NodeStore {
-            header: current_revision.header,
             kind: Committed {
                 deleted: self.kind.deleted.clone(),
                 root: self.kind.root.clone(),
@@ -596,14 +557,9 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
     type Error = FileIoError;
 
     fn try_from(val: NodeStore<MutableProposal, S>) -> Result<Self, Self::Error> {
-        let NodeStore {
-            header,
-            kind,
-            storage,
-        } = val;
+        let NodeStore { kind, storage } = val;
 
         let mut nodestore = NodeStore {
-            header,
             kind: Arc::new(ImmutableProposal {
                 deleted: kind.deleted.into(),
                 parent: Arc::new(parking_lot::Mutex::new(kind.parent)),
@@ -613,8 +569,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
         };
 
         let Some(root) = kind.root else {
-            // This trie is now empty.
-            nodestore.header.set_root_address(None);
+            // This trie is now empty. Root address will be set to None during persist.
             return Ok(nodestore);
         };
 
@@ -695,7 +650,7 @@ where
     S: ReadableStorage,
 {
     fn root_address(&self) -> Option<LinearAddress> {
-        self.header.root_address()
+        self.kind.root_address()
     }
 
     fn root_hash(&self) -> Option<TrieHash> {
@@ -741,6 +696,12 @@ fn area_index_and_size<S: ReadableStorage>(
 }
 
 impl<T, S: ReadableStorage> NodeStore<T, S> {
+    /// Get a reference to the underlying storage.
+    #[must_use]
+    pub fn storage(&self) -> &Arc<S> {
+        &self.storage
+    }
+
     /// Read a [Node] from the provided [`LinearAddress`].
     /// `addr` is the address of a `StoredArea` in the `ReadableStorage`.
     ///
@@ -842,19 +803,19 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
     }
 }
 impl<S: WritableStorage> NodeStore<Committed, S> {
-    /// adjust the freelist of this proposal to reflect the freed nodes in the oldest proposal
+    /// Adjust the freelist to reflect the freed nodes in the oldest revision.
+    ///
+    /// This method takes ownership of `self` and adds its deleted nodes to the free list
+    /// managed by the given header.
     ///
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if a node cannot be deleted.
-    pub fn reap_deleted(
-        mut self,
-        proposal: &mut NodeStore<Committed, S>,
-    ) -> Result<(), FileIoError> {
+    pub fn reap_deleted(mut self, header: &mut NodeStoreHeader) -> Result<(), FileIoError> {
         self.storage
             .invalidate_cached_nodes(self.kind.deleted.iter());
         trace!("There are {} nodes to reap", self.kind.deleted.len());
-        let mut allocator = NodeAllocator::new(self.storage.as_ref(), &mut proposal.header);
+        let mut allocator = NodeAllocator::new(self.storage.as_ref(), header);
         for node in take(&mut self.kind.deleted) {
             allocator.delete_node(node)?;
         }
@@ -867,10 +828,6 @@ impl<T, S: ReadableStorage> NodeStore<T, S>
 where
     NodeStore<T, S>: NodeReader,
 {
-    pub(crate) const fn size(&self) -> u64 {
-        self.header.size()
-    }
-
     // Find the area index and size of the stored area at the given address if the area is valid.
     // TODO: there should be a way to read stored area directly instead of try reading as a free area then as a node
     pub(crate) fn read_leaked_area(
@@ -977,6 +934,7 @@ mod tests {
     #[test]
     fn test_slow_giant_node() {
         let memstore = Arc::new(MemStore::new(vec![]));
+        let mut header = NodeStoreHeader::new();
         let empty_root = NodeStore::new_empty_committed(Arc::clone(&memstore));
 
         let mut node_store = NodeStore::new(&empty_root).unwrap();
@@ -992,9 +950,9 @@ mod tests {
 
         let node_store = NodeStore::<Arc<ImmutableProposal>, _>::try_from(node_store).unwrap();
 
-        let mut node_store = node_store.as_committed(&empty_root);
+        let node_store = node_store.as_committed();
 
-        let err = node_store.persist().unwrap_err();
+        let err = node_store.persist(&mut header).unwrap_err();
         let err_ctx = err.context();
         assert!(err_ctx == Some("allocate_node"));
 
@@ -1032,14 +990,16 @@ mod tests {
         let tmpdir = tempfile::tempdir()?;
         let dbfile = tmpdir.path().join("nodestore_branch_persist_test.db");
 
-        let nodestore = NodeStore::open(Arc::new(FileBacked::new(
+        let storage = Arc::new(FileBacked::new(
             dbfile,
             nonzero!(10usize),
             nonzero!(10usize),
             false,
             true,
             CacheReadStrategy::WritesOnly,
-        )?))?;
+        )?);
+        let mut header = NodeStoreHeader::read_from(storage.as_ref())?;
+        let nodestore = NodeStore::open(&header, storage)?;
 
         let mut proposal = NodeStore::new(&nodestore)?;
 
@@ -1090,8 +1050,8 @@ mod tests {
 
         let proposal = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
 
-        let mut nodestore = proposal.as_committed(&nodestore);
-        nodestore.persist()?;
+        let nodestore = proposal.as_committed();
+        nodestore.persist(&mut header)?;
 
         let mut proposal = NodeStore::new(&nodestore)?;
 

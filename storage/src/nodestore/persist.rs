@@ -28,6 +28,7 @@
 //! - Ring buffer management for io-uring operations
 
 use std::iter::FusedIterator;
+use bumpalo::Bump;
 
 use crate::linear::FileIoError;
 use crate::nodestore::AreaIndex;
@@ -45,34 +46,6 @@ use super::{Committed, NodeStore};
 
 #[cfg(not(test))]
 use super::RootReader;
-
-impl<T, S: WritableStorage> NodeStore<T, S> {
-    /// Persist the header from this proposal to storage.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the header cannot be written.
-    pub fn flush_header(&self) -> Result<(), FileIoError> {
-        let header_bytes = bytemuck::bytes_of(&self.header);
-        self.storage.write(0, header_bytes)?;
-        Ok(())
-    }
-
-    /// Persist the header, including all the padding
-    /// This is only done the first time we write the header
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the header cannot be written.
-    pub fn flush_header_with_padding(&self) -> Result<(), FileIoError> {
-        let mut header_bytes = bytemuck::bytes_of(&self.header).to_vec();
-        header_bytes.resize(NodeStoreHeader::SIZE as usize, 0);
-        debug_assert_eq!(header_bytes.len(), NodeStoreHeader::SIZE as usize);
-
-        self.storage.write(0, &header_bytes)?;
-        Ok(())
-    }
-}
 
 /// Iterator that returns unpersisted nodes in depth first order.
 ///
@@ -191,35 +164,28 @@ fn serialize_node_to_bump<'a>(
 }
 
 impl<S: WritableStorage> NodeStore<Committed, S> {
-    /// Persist all the nodes of a proposal to storage.
+    /// Persist all the nodes of a proposal to storage, updating the header with new allocations.
     ///
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
-    pub fn flush_nodes(&self) -> Result<NodeStoreHeader, FileIoError> {
+    pub fn flush_nodes(&self, header: &mut NodeStoreHeader) -> Result<(), FileIoError> {
         let flush_start = Instant::now();
 
-        let header = {
-            use bumpalo::Bump;
+        let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), header);
+        let mut bump = Bump::with_capacity(super::INITIAL_BUMP_SIZE);
 
-            let mut header = self.header;
-            let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
-            let mut bump = Bump::with_capacity(super::INITIAL_BUMP_SIZE);
-
-            self.process_unpersisted_nodes(
-                &mut bump,
-                &mut node_allocator,
-                super::INITIAL_BUMP_SIZE,
-            )?;
-
-            header
-        };
+        self.process_unpersisted_nodes(
+            &mut bump,
+            &mut node_allocator,
+            super::INITIAL_BUMP_SIZE,
+        )?;
 
         let flush_time = flush_start.elapsed().as_millis();
         firewood_counter!("flush_nodes", "amount flushed nodes").increment(flush_time);
 
-        Ok(header)
+        Ok(())
     }
 
     /// Helper function to process unpersisted nodes with batching and overflow detection
@@ -300,7 +266,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Persist the entire nodestore to storage.
     ///
     /// This method performs a complete persistence operation by:
-    /// 1. Flushing all nodes to storage
+    /// 1. Flushing all nodes to storage (updates header with allocations)
     /// 2. Setting the root address in the header
     /// 3. Flushing the header to storage
     ///
@@ -308,16 +274,16 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     ///
     /// Returns a [`FileIoError`] if any of the persistence operations fail.
     #[fastrace::trace(short_name = true)]
-    pub fn persist(&mut self) -> Result<(), FileIoError> {
+    pub fn persist(&self, header: &mut NodeStoreHeader) -> Result<(), FileIoError> {
         // First persist all the nodes
-        self.header = self.flush_nodes()?;
+        self.flush_nodes(header)?;
 
         // Set the root address in the header based on the persisted root
         let root_address = self.kind.root.as_ref().and_then(Child::persisted_address);
-        self.header.set_root_address(root_address);
+        header.set_root_address(root_address);
 
         // Finally persist the header
-        self.flush_header()?;
+        header.flush_to(self.storage.as_ref())?;
 
         Ok(())
     }
@@ -328,8 +294,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 mod tests {
     use super::*;
     use crate::{
-        Child, Children, HashType, ImmutableProposal, LinearAddress, NodeStore, Path,
-        PathComponent, SharedNode,
+        Child, Children, HashType, ImmutableProposal, LinearAddress, NodeStore, NodeStoreHeader,
+        Path, PathComponent, SharedNode,
         linear::memory::MemStore,
         node::{BranchNode, LeafNode, Node},
         nodestore::MutableProposal,
@@ -338,10 +304,10 @@ mod tests {
 
     fn into_committed(
         ns: NodeStore<std::sync::Arc<ImmutableProposal>, MemStore>,
-        parent: &NodeStore<Committed, MemStore>,
+        header: &mut NodeStoreHeader,
     ) -> NodeStore<Committed, MemStore> {
-        let mut ns = ns.as_committed(parent);
-        ns.persist().unwrap();
+        let ns = ns.as_committed();
+        ns.persist(header).unwrap();
         ns
     }
 
@@ -549,6 +515,7 @@ mod tests {
     fn test_into_committed_with_generic_storage() {
         // Create a base committed store with MemStore
         let mem_store = MemStore::new(vec![]);
+        let mut header = NodeStoreHeader::new();
         let base_committed = NodeStore::new_empty_committed(mem_store.into());
 
         // Create a mutable proposal from the base
@@ -573,7 +540,7 @@ mod tests {
             mutable_store.try_into().unwrap();
 
         // Commit the immutable store
-        let committed_store = into_committed(immutable_store, &base_committed);
+        let committed_store = into_committed(immutable_store, &mut header);
 
         // Verify the committed store has the expected values
         let root = committed_store.kind.root.as_ref().unwrap();

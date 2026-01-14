@@ -28,7 +28,7 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    TrieHash, firewood_counter, firewood_gauge,
+    NodeStoreHeader, TrieHash, firewood_counter, firewood_gauge,
 };
 
 const DB_FILE_NAME: &str = "firewood.db";
@@ -82,6 +82,11 @@ pub(crate) struct RevisionManager {
     /// free list for space reuse. Otherwise, the oldest revision
     /// is preserved on disk for historical queries.
     max_revisions: usize,
+
+    /// The single source of truth header for persisted state.
+    /// This is loaded from disk on startup and updated during commits.
+    /// Uses Mutex for interior mutability (matches existing pattern with `proposals`).
+    header: Mutex<NodeStoreHeader>,
 
     /// FIFO queue of committed revisions kept in memory. The queue always
     /// contains at least one revision.
@@ -150,7 +155,8 @@ impl RevisionManager {
         fb.lock()?;
 
         let storage = Arc::new(fb);
-        let nodestore = Arc::new(NodeStore::open(storage.clone())?);
+        let header = NodeStoreHeader::read_from(storage.as_ref())?;
+        let nodestore = Arc::new(NodeStore::open(&header, storage.clone())?);
         let root_store = config
             .root_store
             .then(|| {
@@ -163,6 +169,7 @@ impl RevisionManager {
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,
+            header: Mutex::new(header),
             in_memory_revisions: RwLock::new(VecDeque::from([nodestore.clone()])),
             by_hash: RwLock::new(Default::default()),
             proposals: Mutex::new(Default::default()),
@@ -175,7 +182,10 @@ impl RevisionManager {
         }
 
         if config.truncate {
-            nodestore.flush_header_with_padding()?;
+            manager
+                .header
+                .lock()
+                .flush_with_padding_to(nodestore.storage().as_ref())?;
         }
 
         // On startup, we always write the latest revision to RootStore
@@ -225,7 +235,10 @@ impl RevisionManager {
             });
         }
 
-        let mut committed = proposal.as_committed(&current_revision);
+        let committed = proposal.as_committed();
+
+        // Lock header for the duration of reaping and persistence
+        let mut header = self.header.lock();
 
         // 2. Revision reaping
         // When we exceed max_revisions, remove the oldest revision from memory.
@@ -251,7 +264,7 @@ impl RevisionManager {
                 // This guarantee is there because we have a `&mut self` reference to the manager, so
                 // the compiler guarantees we are the only one using this manager.
                 match Arc::try_unwrap(oldest) {
-                    Ok(oldest) => oldest.reap_deleted(&mut committed)?,
+                    Ok(oldest) => oldest.reap_deleted(&mut header)?,
                     Err(original) => {
                         warn!("Oldest revision could not be reaped; still referenced");
                         self.in_memory_revisions.write().push_front(original);
@@ -269,9 +282,7 @@ impl RevisionManager {
         }
 
         // 3. Persist to disk.
-        // TODO: We can probably do this in another thread, but it requires that
-        // we move the header out of NodeStore, which is in a future PR.
-        committed.persist()?;
+        committed.persist(&mut header)?;
 
         // 4. Persist revision to root store
         if let Some(store) = &self.root_store
@@ -411,6 +422,12 @@ impl RevisionManager {
             .back()
             .expect("there is always one revision")
             .clone()
+    }
+
+    /// Returns a clone of the current header.
+    /// This is used for read-only operations like checking the database.
+    pub fn header(&self) -> NodeStoreHeader {
+        *self.header.lock()
     }
 
     /// Gets or creates a threadpool associated with the revision manager.

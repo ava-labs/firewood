@@ -25,11 +25,13 @@
 //!
 
 use bytemuck_derive::{Pod, Zeroable};
-use std::io::{Error, ErrorKind};
+use std::io::{Error, ErrorKind, Read};
 
 use super::alloc::FreeLists;
 use super::primitives::{LinearAddress, area_size_hash};
+use crate::linear::FileIoError;
 use crate::logger::{debug, trace};
+use crate::{ReadableStorage, WritableStorage};
 
 /// Can be used by filesystem tooling such as "file" to identify
 /// the version of firewood used to create this `NodeStore` file.
@@ -200,10 +202,12 @@ impl NodeStoreHeader {
         bytemuck::from_bytes(bytes)
     }
 
+    /// Creates a new header with default values and no root address.
     pub fn new() -> Self {
         Self::with_root(None)
     }
 
+    /// Creates a new header with the specified root address.
     pub fn with_root(root_address: Option<LinearAddress>) -> Self {
         Self {
             // The store just contains the header at this point
@@ -223,6 +227,7 @@ impl NodeStoreHeader {
         }
     }
 
+    /// Validates the header by checking version, endianness, area size hash, and ethhash flag.
     pub fn validate(&self) -> Result<(), Error> {
         trace!("Checking version...");
         self.version.validate()?;
@@ -319,16 +324,84 @@ impl NodeStoreHeader {
             ))
         }
     }
+
+    /// Read a header from storage, or return a new empty header if storage is empty.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the header cannot be read or validated.
+    pub fn read_from<S: ReadableStorage>(storage: &S) -> Result<Self, FileIoError> {
+        let mut stream = storage.stream_from(0)?;
+        let mut header_bytes = vec![0u8; std::mem::size_of::<Self>()];
+
+        if let Err(e) = stream.read_exact(&mut header_bytes) {
+            if e.kind() == ErrorKind::UnexpectedEof {
+                // Storage is empty, return a fresh header
+                return Ok(Self::new());
+            }
+            return Err(storage.file_io_error(e, 0, Some("header read".to_string())));
+        }
+
+        drop(stream);
+
+        let header = *Self::from_bytes(&header_bytes);
+        header
+            .validate()
+            .map_err(|e| storage.file_io_error(e, 0, Some("header validation".to_string())))?;
+
+        Ok(header)
+    }
+
+    /// Persist this header to storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the header cannot be written.
+    pub fn flush_to<S: WritableStorage>(&self, storage: &S) -> Result<(), FileIoError> {
+        let header_bytes = bytemuck::bytes_of(self);
+        storage.write(0, header_bytes)?;
+        Ok(())
+    }
+
+    /// Persist this header to storage including all the padding.
+    /// This is only done the first time we write the header.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the header cannot be written.
+    pub fn flush_with_padding_to<S: WritableStorage>(
+        &self,
+        storage: &S,
+    ) -> Result<(), FileIoError> {
+        let mut header_bytes = bytemuck::bytes_of(self).to_vec();
+        header_bytes.resize(Self::SIZE as usize, 0);
+        debug_assert_eq!(header_bytes.len(), Self::SIZE as usize);
+
+        storage.write(0, &header_bytes)?;
+        Ok(())
+    }
+
+    /// Persist the freelist to storage.
+    ///
+    /// This function is used to ensure that the freelist is advanced after allocating
+    /// nodes for writing. This allows the database to be recovered from an I/O error while
+    /// persisting a revision to disk.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the free list cannot be written to storage.
+    #[fastrace::trace(name = "firewood.flush_freelist")]
+    pub fn flush_freelist_to<S: WritableStorage>(&self, storage: &S) -> Result<(), FileIoError> {
+        let free_list_bytes = bytemuck::bytes_of(self.free_lists());
+        let free_list_offset = Self::free_lists_offset();
+        storage.write(free_list_offset, free_list_bytes)?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::linear::ReadableStorage;
-    use crate::linear::memory::MemStore;
-    use crate::nodestore::NodeStore;
-    use std::io::Read;
     use test_case::test_case;
 
     #[test]
@@ -346,15 +419,10 @@ mod tests {
     }
 
     #[test]
-    fn test_node_store_new() {
-        let memstore = MemStore::new(vec![]);
-        let node_store = NodeStore::new_empty_proposal(memstore.into());
+    fn test_header_new() {
+        let header = NodeStoreHeader::new();
 
-        // Check the empty header is written at the start of the ReadableStorage.
-        let mut header_stream = node_store.storage.stream_from(0).unwrap();
-        let mut header_bytes = vec![0u8; std::mem::size_of::<NodeStoreHeader>()];
-        header_stream.read_exact(&mut header_bytes).unwrap();
-        let header = NodeStoreHeader::from_bytes(&header_bytes);
+        // Check the header is correctly initialized.
         assert_eq!(header.version, Version::new());
         let empty_free_list: FreeLists = Default::default();
         assert_eq!(*header.free_lists(), empty_free_list);
