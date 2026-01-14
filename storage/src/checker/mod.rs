@@ -833,7 +833,7 @@ mod test {
         test_write_header(
             nodestore,
             high_watermark,
-            Some(root_addr),
+            Some((root_addr, root_hash.clone().into_triehash())),
             FreeLists::default(),
         );
 

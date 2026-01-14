@@ -29,9 +29,9 @@
 
 use std::iter::FusedIterator;
 
+use crate::firewood_counter;
 use crate::linear::FileIoError;
 use crate::nodestore::AreaIndex;
-use crate::{Child, firewood_counter};
 use coarsetime::Instant;
 
 use crate::{MaybePersistedNode, NodeReader, WritableStorage};
@@ -339,8 +339,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         self.header = self.flush_nodes()?;
 
         // Set the root address in the header based on the persisted root
-        let root_address = self.kind.root.as_ref().and_then(Child::persisted_address);
-        self.header.set_root_address(root_address);
+        let root_location = self.kind.root.as_ref().and_then(|child| {
+            let (addr, hash) = child.persist_info()?;
+            Some((addr, hash.clone().into_triehash()))
+        });
+        self.header.set_root_location(root_location);
 
         // Finally persist the header
         self.flush_header()?;
