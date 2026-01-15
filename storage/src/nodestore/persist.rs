@@ -72,32 +72,6 @@ impl<T, S: WritableStorage> NodeStore<T, S> {
         self.storage.write(0, &header_bytes)?;
         Ok(())
     }
-
-    /// Persist the freelist from this proposal to storage.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the free list cannot be written to storage.
-    pub fn flush_freelist(&self) -> Result<(), FileIoError> {
-        self.flush_freelist_from(&self.header)
-    }
-
-    /// Persist the freelist from the given header to storage
-    ///
-    /// This function is used to ensure that the freelist is advanced after allocating
-    /// nodes for writing. This allows the database to be recovered from an I/O error while
-    /// persisting a revision to disk.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the free list cannot be written to storage.
-    #[fastrace::trace(name = "firewood.flush_freelist")]
-    pub(crate) fn flush_freelist_from(&self, header: &NodeStoreHeader) -> Result<(), FileIoError> {
-        let free_list_bytes = bytemuck::bytes_of(header.free_lists());
-        let free_list_offset = NodeStoreHeader::free_lists_offset();
-        self.storage.write(free_list_offset, free_list_bytes)?;
-        Ok(())
-    }
 }
 
 /// Iterator that returns unpersisted nodes in depth first order.
@@ -366,10 +340,8 @@ mod tests {
         ns: NodeStore<std::sync::Arc<ImmutableProposal>, MemStore>,
         parent: &NodeStore<Committed, MemStore>,
     ) -> NodeStore<Committed, MemStore> {
-        ns.flush_freelist().unwrap();
-        ns.flush_header().unwrap();
-        let ns = ns.as_committed(parent);
-        ns.flush_nodes().unwrap();
+        let mut ns = ns.as_committed(parent);
+        ns.persist().unwrap();
         ns
     }
 
