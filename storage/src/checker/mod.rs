@@ -49,6 +49,7 @@ fn is_valid_key(key: &Path) -> bool {
     key.0.len().is_multiple_of(2)
 }
 
+#[expect(clippy::result_large_err)]
 const fn check_area_aligned(
     address: LinearAddress,
     parent: StoredAreaParent,
@@ -165,7 +166,6 @@ struct SubTrieMetadata {
 }
 
 /// [`NodeStore`] checker
-#[expect(clippy::result_large_err)]
 impl<T, S: ReadableStorage> NodeStore<T, S>
 where
     NodeStore<T, S>: HashedNodeReader,
