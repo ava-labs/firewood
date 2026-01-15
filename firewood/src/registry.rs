@@ -21,8 +21,8 @@ pub const INSERT: &str = "insert";
 /// Number of remove operations.
 pub const REMOVE: &str = "remove";
 
-/// Number of changes applied to merkle.
-pub const MERKLE_CHANGES: &str = "merkle.changes";
+/// Number of next calls to calculate a change proof.
+pub const CHANGE_PROOF_NEXT: &str = "change_proof.next";
 
 /// Commit latency in milliseconds.
 pub const COMMIT_LATENCY_MS: &str = "commit_latency_ms";
@@ -32,9 +32,6 @@ pub const ACTIVE_REVISIONS: &str = "active_revisions";
 
 /// Maximum number of revisions configured.
 pub const MAX_REVISIONS: &str = "max_revisions";
-
-/// Number of times the highest revision changed.
-pub const HIGHEST_REV_CHANGED: &str = "highest_rev_changed";
 
 /// Registers all firewood metric descriptions.
 pub fn register() {
@@ -55,12 +52,11 @@ pub fn register() {
     );
     describe_counter!(INSERT, "Number of insert operations");
     describe_counter!(REMOVE, "Number of remove operations");
-    describe_counter!(MERKLE_CHANGES, "Number of changes applied to merkle");
+    describe_counter!(
+        CHANGE_PROOF_NEXT,
+        "Number of next calls to calculate a change proof"
+    );
     describe_counter!(COMMIT_LATENCY_MS, "Commit latency in milliseconds");
     describe_gauge!(ACTIVE_REVISIONS, "Current number of active revisions");
     describe_gauge!(MAX_REVISIONS, "Maximum number of revisions configured");
-    describe_counter!(
-        HIGHEST_REV_CHANGED,
-        "Number of times the highest revision changed"
-    );
 }
