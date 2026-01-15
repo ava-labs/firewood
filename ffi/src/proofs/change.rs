@@ -1,9 +1,13 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::num::NonZeroUsize;
+use std::{cmp::Ordering, num::NonZeroUsize};
 
-use firewood::v2::api::FrozenChangeProof;
+use firewood::{
+    ProofError,
+    logger::warn,
+    v2::api::{self, FrozenChangeProof},
+};
 
 use crate::{
     BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
@@ -63,7 +67,6 @@ pub struct VerifyChangeProofArgs<'a> {
 
 /// FFI context for a parsed or generated change proof.
 #[derive(Debug)]
-#[expect(dead_code)]
 pub struct ChangeProofContext {
     //_proof: (),              // currently not implemented
     //_validation_context: (), // placeholder for future use
@@ -79,6 +82,30 @@ impl From<FrozenChangeProof> for ChangeProofContext {
             proof,
             //.verification: None,
             //proposal_state: None,
+        }
+    }
+}
+
+impl ChangeProofContext {
+    fn verify(
+        &mut self,
+        _start_root: HashKey,
+        _end_root: HashKey,
+        _start_key: Option<&[u8]>,
+        _end_key: Option<&[u8]>,
+        _max_length: Option<NonZeroUsize>,
+    ) -> Result<(), api::Error> {
+        warn!("change proof verification not yet implemented");
+        // For now, just verify the keys are in sorted order.
+        if self
+            .proof
+            .key_values()
+            .iter()
+            .is_sorted_by(|a, b| b.key().cmp(a.key()) != Ordering::Less)
+        {
+            Ok(())
+        } else {
+            Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted))
         }
     }
 }
@@ -160,9 +187,28 @@ pub extern "C" fn fwd_db_change_proof(
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_verify_change_proof(
     _db: Option<&DatabaseHandle>,
-    _args: VerifyChangeProofArgs,
+    args: VerifyChangeProofArgs,
 ) -> VoidResult {
-    CResult::from_err("not yet implemented")
+    let VerifyChangeProofArgs {
+        proof,
+        start_root,
+        end_root,
+        start_key,
+        end_key,
+        max_length,
+    } = args;
+
+    crate::invoke_with_handle(proof, |ctx| {
+        let start_key = start_key.into_option();
+        let end_key = end_key.into_option();
+        ctx.verify(
+            start_root,
+            end_root,
+            start_key.as_deref(),
+            end_key.as_deref(),
+            NonZeroUsize::new(max_length as usize),
+        )
+    })
 }
 
 /// Verify and commit a change proof to the database.

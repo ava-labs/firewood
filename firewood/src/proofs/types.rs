@@ -118,6 +118,10 @@ pub enum ProofError {
     /// The proof has not yet been verified.
     #[error("the proof has not yet been verified")]
     Unverified,
+
+    /// Change proof keys are not sorted
+    #[error("the change proof keys are not sorted")]
+    ChangeProofKeysNotSorted
 }
 
 #[derive(Clone, PartialEq, Eq)]

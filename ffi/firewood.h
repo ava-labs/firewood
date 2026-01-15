@@ -1338,7 +1338,7 @@ struct HashResult fwd_db_verify_and_commit_range_proof(const struct DatabaseHand
  * for the duration of the call.
  */
 struct VoidResult fwd_db_verify_change_proof(const struct DatabaseHandle *_db,
-                                             struct VerifyChangeProofArgs _args);
+                                             struct VerifyChangeProofArgs args);
 
 /**
  * Verify a range proof and prepare a proposal to later commit or drop. If the
