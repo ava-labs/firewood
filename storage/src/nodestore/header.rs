@@ -59,6 +59,57 @@ pub struct Version {
 }
 
 impl Version {
+    /// Construct a [`Version`] instance for the current build of firewood.
+    pub const fn new() -> Self {
+        // NB: const block prevents indexing into the array at runtime
+        const { Self::VALID_V1_VERSIONS[0] }
+    }
+
+    /// Validates that the version identifier is valid and compatible with the current
+    /// build of firewood.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the version is not recognized as one of the known
+    /// valid versions.
+    pub fn validate(self) -> Result<(), Error> {
+        if Self::VALID_V1_VERSIONS.contains(&self) {
+            debug!("Database version {:?} is valid.", self.as_str());
+            Ok(())
+        } else {
+            Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "Database cannot be opened due to incompatible version: {:?}",
+                    self.as_str()
+                ),
+            ))
+        }
+    }
+
+    /// Returns the version string as a `&str`, trimming any trailing null bytes.
+    pub fn as_str(&self) -> &str {
+        std::str::from_utf8(&self.bytes)
+            .unwrap_or("<invalid utf8>")
+            .trim_matches('\0')
+    }
+
+    /// Returns a u128 representation of the version bytes.
+    ///
+    /// This is useful for comparisons and hashing as we can use integer
+    /// operations which are more efficient than byte-wise operations.
+    pub const fn as_u128(self) -> u128 {
+        u128::from_ne_bytes(self.bytes)
+    }
+
+    const fn has_cargo_version(self) -> bool {
+        self.as_u128() == const { Self::VALID_V1_VERSIONS[0].as_u128() }
+    }
+
+    const fn has_git_describe(self) -> bool {
+        self.as_u128() == const { Self::VALID_V1_VERSIONS[0].as_u128() }
+    }
+
     const fn from_static(bytes: &'static [u8; 16]) -> Self {
         Self { bytes: *bytes }
     }
@@ -84,35 +135,6 @@ impl Version {
         Version::from_static(b"firewood 0.0.5\0\0"),
         Version::from_static(b"firewood 0.0.4\0\0"),
     ];
-
-    /// Validates that the version identifier is valid and compatible with the current
-    /// build of firewood.
-    ///
-    /// # Errors
-    ///
-    /// - If the token contains is not one of the known valid version strings.
-    pub fn validate(&self) -> Result<(), Error> {
-        if Self::VALID_V1_VERSIONS.contains(self) {
-            debug!(
-                "Database version {:?} is valid.",
-                std::str::from_utf8(&self.bytes).unwrap_or("<invalid utf8>")
-            );
-            Ok(())
-        } else {
-            Err(Error::new(
-                ErrorKind::InvalidData,
-                format!(
-                    "Database cannot be opened due to incompatible version: {:?}",
-                    std::str::from_utf8(&self.bytes).unwrap_or("<invalid utf8>")
-                ),
-            ))
-        }
-    }
-
-    /// Construct a [`Version`] instance for the current build of firewood.
-    pub const fn new() -> Self {
-        Self::VALID_V1_VERSIONS[0]
-    }
 }
 
 impl Default for Version {
@@ -401,8 +423,8 @@ impl NodeStoreHeader {
 
     /// Get the cargo version of `firewood-storage` used to create this database,
     /// if available.
-    pub fn cargo_version(&self) -> Option<&CargoVersion> {
-        if self.version == Version::VALID_V1_VERSIONS[0] {
+    pub const fn cargo_version(&self) -> Option<&CargoVersion> {
+        if self.version.has_cargo_version() {
             Some(&self.cargo_version)
         } else {
             None
@@ -410,8 +432,8 @@ impl NodeStoreHeader {
     }
 
     /// Get the git describe string of `firewood` used to create this database,
-    pub fn git_describe(&self) -> Option<&GitDescribe> {
-        if self.version == Version::VALID_V1_VERSIONS[0] {
+    pub const fn git_describe(&self) -> Option<&GitDescribe> {
+        if self.version.has_git_describe() {
             Some(&self.git_describe)
         } else {
             None
