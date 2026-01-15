@@ -3,9 +3,9 @@
 
 use std::{cmp::Ordering, iter::once};
 
+use firewood_metrics::firewood_increment;
 use firewood_storage::{
     Child, FileIoError, HashedNodeReader, Node, NodeReader, Path, SharedNode, TrieHash,
-    firewood_counter,
 };
 use lender::{Lender, Lending};
 
@@ -421,11 +421,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
     /// the `ComparableNodeInfo` of the current node in `node_info` and keeping that available for the
     /// next call. Skipping traversal of the children then just involves setting `node_info` to None.
     fn next_node_info(&mut self) -> Result<Option<&ComparableNodeInfo>, FileIoError> {
-        firewood_counter!(
-            "firewood.change_proof.next",
-            "number of next calls to calculate a change proof"
-        )
-        .increment(1);
+        firewood_increment!(crate::registry::MERKLE_CHANGES, 1);
 
         // Take the info of the current node (which will soon be replaced), and check if it is a
         // branch. If it is, add its children onto the traversal stack.

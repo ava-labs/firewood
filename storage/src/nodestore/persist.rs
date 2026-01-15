@@ -31,7 +31,8 @@ use std::iter::FusedIterator;
 
 use crate::linear::FileIoError;
 use crate::nodestore::AreaIndex;
-use crate::{Child, firewood_counter};
+use crate::Child;
+use firewood_metrics::firewood_increment;
 use coarsetime::Instant;
 
 use crate::{MaybePersistedNode, NodeReader, WritableStorage};
@@ -243,7 +244,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         };
 
         let flush_time = flush_start.elapsed().as_millis();
-        firewood_counter!("flush_nodes", "amount flushed nodes").increment(flush_time);
+        firewood_increment!(crate::registry::FLUSH_NODES, flush_time);
 
         Ok(header)
     }

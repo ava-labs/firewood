@@ -11,7 +11,7 @@
 )]
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
-use crate::firewood_counter;
+use firewood_metrics::firewood_increment;
 use parking_lot::Mutex;
 use std::io::Cursor;
 
@@ -45,7 +45,7 @@ impl WritableStorage for MemStore {
 
 impl ReadableStorage for MemStore {
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
-        firewood_counter!("read_node", "Number of node reads", "from" => "memory").increment(1);
+        firewood_increment!(crate::registry::READ_NODE, 1, "from" => "memory");
         let bytes = self
             .bytes
             .lock()
