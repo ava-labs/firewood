@@ -72,7 +72,7 @@ pub struct ChangeProofContext {
     //_validation_context: (), // placeholder for future use
     //_commit_context: (),     // placeholder for future use
     proof: FrozenChangeProof,
-    //verification: Option<VerificationContext>,
+    verification: Option<VerificationContext>,
     //proposal_state: Option<ProposalState<'db>>,
 }
 
@@ -80,20 +80,30 @@ impl From<FrozenChangeProof> for ChangeProofContext {
     fn from(proof: FrozenChangeProof) -> Self {
         Self {
             proof,
-            //.verification: None,
+            verification: None,
             //proposal_state: None,
         }
     }
 }
 
+#[derive(Debug)]
+#[expect(dead_code)]
+struct VerificationContext {
+    start_root: HashKey,
+    end_root: HashKey,
+    start_key: Option<Box<[u8]>>,
+    end_key: Option<Box<[u8]>>,
+    max_length: Option<NonZeroUsize>,
+}
+
 impl ChangeProofContext {
     fn verify(
         &mut self,
-        _start_root: HashKey,
-        _end_root: HashKey,
-        _start_key: Option<&[u8]>,
-        _end_key: Option<&[u8]>,
-        _max_length: Option<NonZeroUsize>,
+        start_root: HashKey,
+        end_root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
     ) -> Result<(), api::Error> {
         warn!("change proof verification not yet implemented");
         // For now, just verify the keys are in sorted order.
@@ -103,6 +113,13 @@ impl ChangeProofContext {
             .iter()
             .is_sorted_by(|a, b| b.key().cmp(a.key()) != Ordering::Less)
         {
+            self.verification = Some(VerificationContext {
+                start_root,
+                end_root,
+                start_key: start_key.map(Box::from),
+                end_key: end_key.map(Box::from),
+                max_length,
+            });
             Ok(())
         } else {
             Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted))
