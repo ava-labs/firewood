@@ -1159,15 +1159,14 @@ mod test {
             free_ranges: _,
             errors,
             stats,
-            header,
+            mut header,
         } = gen_test_freelist_with_errors(&nodestore);
         let expected_error_num = errors.len();
 
         // fix the freelist
         let mut proposal = NodeStore::<MutableProposal, _>::new(&nodestore).unwrap();
-        let mut header_copy = header;
         let fix_report = proposal.fix(
-            &mut header_copy,
+            &mut header,
             CheckerReport {
                 errors,
                 db_stats: DBStats {
@@ -1184,7 +1183,7 @@ mod test {
             NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal).unwrap();
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
         let (_, free_list_errors) =
-            immutable_proposal.visit_freelist(header_copy.free_lists(), &mut visited, None);
+            immutable_proposal.visit_freelist(header.free_lists(), &mut visited, None);
         assert_eq!(free_list_errors, vec![]);
     }
 
