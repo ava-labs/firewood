@@ -4,16 +4,21 @@
 use crate::{CreateIteratorResult, IteratorHandle};
 use firewood::v2::api;
 use firewood::v2::api::{ArcDynDbView, BoxKeyValueIter, DbView, HashKey};
+use firewood_metrics::MetricsContext;
 
 #[derive(Debug)]
 pub struct RevisionHandle {
     view: ArcDynDbView,
+    metrics_context: MetricsContext,
 }
 
 impl RevisionHandle {
     /// Creates a new revision handle for the provided database view.
-    pub(crate) fn new(view: ArcDynDbView) -> RevisionHandle {
-        RevisionHandle { view }
+    pub(crate) fn new(view: ArcDynDbView, metrics_context: MetricsContext) -> RevisionHandle {
+        RevisionHandle {
+            view,
+            metrics_context,
+        }
     }
 
     /// Creates an iterator on the revision starting from the given key.
@@ -24,7 +29,11 @@ impl RevisionHandle {
             .view
             .iter_option(first_key)
             .expect("infallible; see issue #1329");
-        CreateIteratorResult(IteratorHandle::new(self.view.clone(), it))
+        CreateIteratorResult(IteratorHandle::new(
+            self.view.clone(),
+            it,
+            self.metrics_context,
+        ))
     }
 }
 
@@ -75,4 +84,10 @@ impl DbView for RevisionHandle {
 pub struct GetRevisionResult {
     pub handle: RevisionHandle,
     pub root_hash: HashKey,
+}
+
+impl crate::HasMetricsContext for RevisionHandle {
+    fn metrics_context(&self) -> MetricsContext {
+        self.metrics_context
+    }
 }

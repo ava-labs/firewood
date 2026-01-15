@@ -6,9 +6,11 @@ package ffi
 import (
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -17,36 +19,89 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-// Test calling metrics exporter along with gathering metrics
-// This lives under one test as we can only instantiate the global recorder once
-func TestMetrics(t *testing.T) {
+var (
+	metricsPort     = uint16(3000)
+	expectedMetrics = map[string]dto.MetricType{
+		"ffi_batch":          dto.MetricType_COUNTER,
+		"proposal_commit":    dto.MetricType_COUNTER,
+		"proposal_commit_ms": dto.MetricType_COUNTER,
+		"ffi_propose_ms":     dto.MetricType_COUNTER,
+		"ffi_commit_ms":      dto.MetricType_COUNTER,
+		"ffi_batch_ms":       dto.MetricType_COUNTER,
+		"flush_nodes":        dto.MetricType_COUNTER,
+		"insert":             dto.MetricType_COUNTER,
+		"space_from_end":     dto.MetricType_COUNTER,
+	}
+	expectedExpensiveMetrics = map[string]dto.MetricType{
+		"ffi_commit_ms_bucket":  dto.MetricType_HISTOGRAM,
+		"ffi_propose_ms_bucket": dto.MetricType_HISTOGRAM,
+		"ffi_batch_ms_bucket":   dto.MetricType_HISTOGRAM,
+	}
+)
+
+var initMetrics sync.Once
+
+func ensureMetricsStarted(r *require.Assertions) {
+	initMetrics.Do(func() {
+		r.NoError(StartMetricsWithExporter(metricsPort))
+	})
+}
+
+func newDbWithMetricsAndLogs(t *testing.T, opts ...Option) (db *Database, logPath string) {
 	r := require.New(t)
-	ctx := t.Context()
-
-	// test params
-	var (
-		logPath     = filepath.Join(t.TempDir(), "firewood.log")
-		metricsPort = uint16(3000)
-	)
-
-	db := newTestDatabase(t)
-	r.NoError(StartMetricsWithExporter(metricsPort))
-
+	db = newTestDatabase(t, opts...)
+	ensureMetricsStarted(r)
+	logPath = filepath.Join(t.TempDir(), "firewood.log")
 	logConfig := &LogConfig{
 		Path:        logPath,
 		FilterLevel: "trace",
 	}
-
-	var logsDisabled bool
 	if err := StartLogs(logConfig); err != nil {
 		r.Contains(err.Error(), "Logging is not available")
-		logsDisabled = true
+		logPath = ""
 	}
+	return db, logPath
+}
 
-	// Populate DB
+// Test calling metrics exporter along with gathering metrics
+// This lives under one test as we can only instantiate the global recorder once
+func TestMetrics(t *testing.T) {
+	r := require.New(t)
+
+	db, logPath := newDbWithMetricsAndLogs(t)
+	// batch update
 	keys, vals := kvForTest(10)
 	_, err := db.Update(keys, vals)
 	r.NoError(err)
+
+	assertMetrics(t, metricsPort, expectedMetrics)
+	r.True((logPath == "") || assertNonEmptyFile(r, logPath))
+}
+
+func TestExpensiveMetrics(t *testing.T) {
+	r := require.New(t)
+	db, _ := newDbWithMetricsAndLogs(t, WithExpensiveMetrics())
+	// batch update
+	keys, vals := kvForTest(10)
+	_, err := db.Update(keys, vals)
+	r.NoError(err)
+
+	merged := make(map[string]dto.MetricType, len(expectedMetrics)+len(expectedExpensiveMetrics))
+	maps.Copy(merged, expectedMetrics)
+	maps.Copy(merged, expectedExpensiveMetrics)
+	assertMetrics(t, metricsPort, merged)
+}
+
+func assertNonEmptyFile(r *require.Assertions, path string) bool {
+	f, err := os.ReadFile(path)
+	r.NoError(err)
+	r.NotEmpty(f)
+	return true
+}
+
+func assertMetrics(t *testing.T, metricsPort uint16, expected map[string]dto.MetricType) {
+	r := require.New(t)
+	ctx := t.Context()
 
 	req, err := http.NewRequestWithContext(
 		ctx,
@@ -65,25 +120,13 @@ func TestMetrics(t *testing.T) {
 	r.NoError(resp.Body.Close())
 
 	// Check that batch op was recorded (no prefix)
-	r.Contains(string(body), "ffi_batch 1")
+	r.NotContains(string(body), "ffi_batch 0")
 
 	g := Gatherer{}
 	metricsFamily, err := g.Gather()
 	r.NoError(err)
 
-	expectedMetrics := map[string]dto.MetricType{
-		"ffi_batch":          dto.MetricType_COUNTER,
-		"proposal_commit":    dto.MetricType_COUNTER,
-		"proposal_commit_ms": dto.MetricType_COUNTER,
-		"ffi_propose_ms":     dto.MetricType_COUNTER,
-		"ffi_commit_ms":      dto.MetricType_COUNTER,
-		"ffi_batch_ms":       dto.MetricType_COUNTER,
-		"flush_nodes":        dto.MetricType_COUNTER,
-		"insert":             dto.MetricType_COUNTER,
-		"space_from_end":     dto.MetricType_COUNTER,
-	}
-
-	for k, v := range expectedMetrics {
+	for k, v := range expected {
 		var d *dto.MetricFamily
 		for _, m := range metricsFamily {
 			if *m.Name == k {
@@ -92,12 +135,5 @@ func TestMetrics(t *testing.T) {
 		}
 		r.NotNil(d)
 		r.Equal(v, *d.Type)
-	}
-
-	if !logsDisabled {
-		// logs should be non-empty if logging with trace filter level
-		f, err := os.ReadFile(logPath)
-		r.NoError(err)
-		r.NotEmpty(f)
 	}
 }

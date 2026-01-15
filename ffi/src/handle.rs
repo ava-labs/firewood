@@ -10,7 +10,7 @@ use firewood::{
 use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
-use firewood_metrics::firewood_increment;
+use firewood_metrics::{MetricsContext, firewood_increment, firewood_record};
 
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
 ///
@@ -58,6 +58,11 @@ pub struct DatabaseHandleArgs<'a> {
 
     /// Whether to truncate the database file if it exists.
     pub truncate: bool,
+
+    /// Whether to enable expensive metrics recording for this database handle.
+    ///
+    /// Expensive metrics are disabled by default.
+    pub expensive_metrics: bool,
 }
 
 impl DatabaseHandleArgs<'_> {
@@ -98,6 +103,8 @@ pub struct DatabaseHandle {
 
     /// The database
     db: Db,
+
+    metrics_context: MetricsContext,
 }
 
 impl DatabaseHandle {
@@ -107,6 +114,8 @@ impl DatabaseHandle {
     ///
     /// If the path is empty, or if the configuration is invalid, this will return an error.
     pub fn new(args: DatabaseHandleArgs<'_>) -> Result<Self, api::Error> {
+        let metrics_context = MetricsContext::new(args.expensive_metrics);
+
         let cfg = DbConfig::builder()
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
@@ -122,7 +131,12 @@ impl DatabaseHandle {
             return Err(invalid_data("database path cannot be empty"));
         }
 
-        Db::new(path, cfg).map(Self::from)
+        let db = Db::new(path, cfg)?;
+        Ok(Self {
+            cached_view: ArcCache::new(),
+            db,
+            metrics_context,
+        })
     }
 
     /// Returns the current root hash of the database.
@@ -163,10 +177,21 @@ impl DatabaseHandle {
 
         let root_hash = handle.commit_proposal(|commit_time| {
             firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
+            firewood_record!(
+                crate::registry::COMMIT_MS_BUCKET,
+                commit_time.as_f64() * 1000.0,
+                expensive
+            );
         })?;
 
-        firewood_increment!(crate::registry::BATCH_MS, start_time.elapsed().as_millis());
+        let elapsed = start_time.elapsed();
+        firewood_increment!(crate::registry::BATCH_MS, elapsed.as_millis());
         firewood_increment!(crate::registry::BATCH_COUNT, 1);
+        firewood_record!(
+            crate::registry::BATCH_MS_BUCKET,
+            elapsed.as_f64() * 1000.0,
+            expensive
+        );
 
         Ok(root_hash)
     }
@@ -181,9 +206,14 @@ impl DatabaseHandle {
     pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult, api::Error> {
         let view = self.db.view(root.clone())?;
         Ok(GetRevisionResult {
-            handle: RevisionHandle::new(view),
+            handle: RevisionHandle::new(view, self.metrics_context),
             root_hash: root,
         })
+    }
+
+    #[must_use]
+    pub(crate) const fn metrics_context(&self) -> MetricsContext {
+        self.metrics_context
     }
 
     pub(crate) fn get_root(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {
@@ -228,15 +258,6 @@ impl DatabaseHandle {
     }
 }
 
-impl From<Db> for DatabaseHandle {
-    fn from(db: Db) -> Self {
-        Self {
-            db,
-            cached_view: ArcCache::new(),
-        }
-    }
-}
-
 impl<'db> CView<'db> for &'db crate::DatabaseHandle {
     fn handle(&self) -> &'db crate::DatabaseHandle {
         self
@@ -247,6 +268,12 @@ impl<'db> CView<'db> for &'db crate::DatabaseHandle {
         values: impl IntoBatchIter,
     ) -> Result<firewood::db::Proposal<'db>, api::Error> {
         self.db.propose(values)
+    }
+}
+
+impl crate::HasMetricsContext for DatabaseHandle {
+    fn metrics_context(&self) -> MetricsContext {
+        self.metrics_context
     }
 }
 

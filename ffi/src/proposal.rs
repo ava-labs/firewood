@@ -1,10 +1,10 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood::v2::api::{self, DbView, HashKey, IntoBatchIter, Proposal as _};
+use firewood::v2::api::{self, BoxKeyValueIter, DbView, HashKey, IntoBatchIter, Proposal as _};
 
 use crate::{IteratorHandle, iterator::CreateIteratorResult};
-use firewood_metrics::firewood_increment;
+use firewood_metrics::{firewood_increment, firewood_record};
 
 /// An opaque wrapper around a Proposal that also retains a reference to the
 /// database handle it was created from.
@@ -108,9 +108,14 @@ impl ProposalHandle<'_> {
         let it = self
             .iter_option(first_key)
             .expect("infallible; see issue #1329");
-        CreateIteratorResult(IteratorHandle::new(self.proposal.view(), Box::new(it)))
+        CreateIteratorResult(IteratorHandle::new(
+            self.proposal.view(),
+            Box::new(it) as BoxKeyValueIter<'_>,
+            self.handle.metrics_context(),
+        ))
     }
 }
+
 #[derive(Debug)]
 pub struct CreateProposalResult<'db> {
     pub handle: ProposalHandle<'db>,
@@ -127,6 +132,11 @@ impl<'db> CreateProposalResult<'db> {
         let propose_time = start_time.elapsed();
         firewood_increment!(crate::registry::PROPOSE_MS, propose_time.as_millis());
         firewood_increment!(crate::registry::PROPOSE_COUNT, 1);
+        firewood_record!(
+            crate::registry::PROPOSE_MS_BUCKET,
+            propose_time.as_f64() * 1000.0,
+            expensive
+        );
 
         let hash_key = proposal.root_hash()?;
 
@@ -200,5 +210,11 @@ impl<'db> CView<'db> for &ProposalHandle<'db> {
         values: impl IntoBatchIter,
     ) -> Result<firewood::db::Proposal<'db>, api::Error> {
         self.proposal.propose(values)
+    }
+}
+
+impl crate::HasMetricsContext for ProposalHandle<'_> {
+    fn metrics_context(&self) -> firewood_metrics::MetricsContext {
+        crate::HasMetricsContext::metrics_context(self.handle)
     }
 }

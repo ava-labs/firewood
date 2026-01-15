@@ -348,5 +348,5 @@ pub extern "C" fn fwd_change_proof_from_bytes(_bytes: BorrowedBytes) -> ChangePr
 /// - [`VoidResult::Err`] if the process panics while freeing the memory.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_free_change_proof(proof: Option<Box<ChangeProofContext>>) -> VoidResult {
-    crate::invoke_with_handle(proof, drop)
+    crate::invoke_without_metrics(proof, drop)
 }

@@ -36,7 +36,7 @@ mod revision;
 mod value;
 
 use firewood::v2::api::DbView;
-use firewood_metrics::firewood_increment;
+use firewood_metrics::{MetricsContext, firewood_increment, firewood_record, set_metrics_context};
 
 pub use crate::handle::*;
 pub use crate::iterator::*;
@@ -68,15 +68,57 @@ fn invoke<T: CResult, V: Into<T>>(once: impl FnOnce() -> V) -> T {
     }
 }
 
-/// Invokes a closure that requires a handle and returns the result as a [`NullHandleResult`].
+/// Trait for types that carry a metrics context.
 ///
-/// If the provided handle is [`None`], the function will return early with the
-/// [`NullHandleResult::null_handle_pointer_error`] result.
-///
-/// Otherwise, the closure is invoked with the handle. If the closure panics,
-/// it will be caught and returned as a [`CResult::from_panic`].
+/// Implemented for FFI handle types that track expensive metrics settings.
+/// Concrete impls live in their respective modules (handle, revision, proposal, iterator).
+pub(crate) trait HasMetricsContext {
+    fn metrics_context(&self) -> MetricsContext;
+}
+
+impl<T: HasMetricsContext + ?Sized> HasMetricsContext for &T {
+    fn metrics_context(&self) -> MetricsContext {
+        (*self).metrics_context()
+    }
+}
+
+impl<T: HasMetricsContext + ?Sized> HasMetricsContext for &mut T {
+    fn metrics_context(&self) -> MetricsContext {
+        (**self).metrics_context()
+    }
+}
+
+impl<T: HasMetricsContext + ?Sized> HasMetricsContext for Box<T> {
+    fn metrics_context(&self) -> MetricsContext {
+        (**self).metrics_context()
+    }
+}
+
+impl<'db> HasMetricsContext for (&'db DatabaseHandle, &mut RangeProofContext<'db>) {
+    fn metrics_context(&self) -> MetricsContext {
+        self.0.metrics_context()
+    }
+}
+
+/// Invokes a closure with metrics context from the handle.
 #[inline]
-fn invoke_with_handle<H, T: NullHandleResult, V: Into<T>>(
+fn invoke_with_handle<H: HasMetricsContext, T: NullHandleResult, V: Into<T>>(
+    handle: Option<H>,
+    once: impl FnOnce(H) -> V,
+) -> T {
+    match handle {
+        Some(handle) => {
+            let _guard = set_metrics_context(Some(handle.metrics_context()));
+            invoke(move || once(handle))
+        }
+        None => T::null_handle_pointer_error(),
+    }
+}
+
+/// Invokes a closure without setting metrics context.
+/// Used for operations that don't record metrics (e.g., serialization, proof verification).
+#[inline]
+fn invoke_without_metrics<H, T: NullHandleResult, V: Into<T>>(
     handle: Option<H>,
     once: impl FnOnce(H) -> V,
 ) -> T {
@@ -522,6 +564,11 @@ pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>)
         proposal.commit_proposal(|commit_time| {
             firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
             firewood_increment!(crate::registry::COMMIT_COUNT, 1);
+            firewood_record!(
+                crate::registry::COMMIT_MS_BUCKET,
+                commit_time.as_f64() * 1000.0,
+                expensive
+            );
         })
     });
 
