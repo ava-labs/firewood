@@ -837,7 +837,12 @@ mod test {
         *area_count = area_count.saturating_add(1);
 
         // write the header
-        test_write_header(nodestore, high_watermark, Some(root_addr), FreeLists::default());
+        test_write_header(
+            nodestore,
+            high_watermark,
+            Some(root_addr),
+            FreeLists::default(),
+        );
 
         let trie_stats = TrieStats {
             branch_bytes: total_branch_bytes_written,
