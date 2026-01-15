@@ -331,7 +331,6 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
     /// Creates a new, empty, [`NodeStore`].
     /// This is used during testing and during the creation of an in-memory merkle for proofs.
     #[cfg(any(test, feature = "test_utils"))]
-    #[must_use]
     pub fn new_empty_proposal(storage: Arc<S>) -> Self {
         NodeStore {
             kind: MutableProposal {
@@ -693,12 +692,6 @@ fn area_index_and_size<S: ReadableStorage>(
 }
 
 impl<T, S: ReadableStorage> NodeStore<T, S> {
-    /// Get a reference to the underlying storage.
-    #[must_use]
-    pub const fn storage(&self) -> &Arc<S> {
-        &self.storage
-    }
-
     /// Read a [Node] from the provided [`LinearAddress`].
     /// `addr` is the address of a `StoredArea` in the `ReadableStorage`.
     ///

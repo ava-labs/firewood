@@ -186,7 +186,7 @@ impl RevisionManager {
             manager
                 .header
                 .lock()
-                .flush_with_padding_to(nodestore.storage().as_ref())?;
+                .flush_with_padding_to(storage.as_ref())?;
         }
 
         // On startup, we always write the latest revision to RootStore

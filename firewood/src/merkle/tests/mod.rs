@@ -64,8 +64,7 @@ where
 {
     let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024)));
     let mut header = NodeStoreHeader::new();
-    let base_ns = NodeStore::new_empty_committed(memstore.clone());
-    let base = Merkle::from(base_ns);
+    let base = Merkle::from(NodeStore::new_empty_committed(memstore.clone()));
     let mut merkle = base.fork().unwrap();
 
     for (k, v) in iter.clone() {
