@@ -37,11 +37,8 @@ fn into_committed(
     merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
     parent: &NodeStore<Committed, MemStore>,
 ) -> Merkle<NodeStore<Committed, MemStore>> {
-    let ns = merkle.into_inner();
-    ns.flush_freelist().unwrap();
-    ns.flush_header().unwrap();
-    let ns = ns.as_committed(parent);
-    ns.flush_nodes().unwrap();
+    let mut ns = merkle.into_inner().as_committed(parent);
+    ns.persist().unwrap();
     ns.into()
 }
 
