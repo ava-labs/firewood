@@ -1115,6 +1115,7 @@ dependencies = [
  "ethereum-types",
  "fastrace",
  "firewood-macros",
+ "firewood-metrics",
  "firewood-storage",
  "firewood-triehash",
  "fjall",
@@ -1174,6 +1175,7 @@ dependencies = [
  "derive-where",
  "env_logger",
  "firewood",
+ "firewood-metrics",
  "firewood-replay",
  "firewood-storage",
  "metrics",
@@ -1220,10 +1222,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "firewood-metrics"
+version = "0.0.18"
+dependencies = [
+ "metrics",
+]
+
+[[package]]
 name = "firewood-replay"
 version = "0.0.18"
 dependencies = [
  "firewood",
+ "firewood-metrics",
  "firewood-storage",
  "metrics",
  "rmp-serde",
@@ -1251,6 +1261,7 @@ dependencies = [
  "derive-where",
  "enum-as-inner",
  "fastrace",
+ "firewood-metrics",
  "hex",
  "indicatif",
  "integer-encoding",

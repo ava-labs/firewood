@@ -41,14 +41,26 @@ pub fn register() {
     use metrics::{describe_counter, describe_gauge};
 
     describe_counter!(PROPOSALS, "Number of proposals created");
-    describe_counter!(PROPOSALS_CREATED, "Number of proposals created by base type");
-    describe_counter!(PROPOSALS_DISCARDED, "Number of proposals dropped without commit");
-    describe_gauge!(PROPOSALS_UNCOMMITTED, "Current number of uncommitted proposals");
+    describe_counter!(
+        PROPOSALS_CREATED,
+        "Number of proposals created by base type"
+    );
+    describe_counter!(
+        PROPOSALS_DISCARDED,
+        "Number of proposals dropped without commit"
+    );
+    describe_gauge!(
+        PROPOSALS_UNCOMMITTED,
+        "Current number of uncommitted proposals"
+    );
     describe_counter!(INSERT, "Number of insert operations");
     describe_counter!(REMOVE, "Number of remove operations");
     describe_counter!(MERKLE_CHANGES, "Number of changes applied to merkle");
     describe_counter!(COMMIT_LATENCY_MS, "Commit latency in milliseconds");
     describe_gauge!(ACTIVE_REVISIONS, "Current number of active revisions");
     describe_gauge!(MAX_REVISIONS, "Maximum number of revisions configured");
-    describe_counter!(HIGHEST_REV_CHANGED, "Number of times the highest revision changed");
+    describe_counter!(
+        HIGHEST_REV_CHANGED,
+        "Number of times the highest revision changed"
+    );
 }

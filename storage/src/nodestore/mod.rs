@@ -45,9 +45,9 @@ pub(crate) mod persist;
 pub(crate) mod primitives;
 
 use crate::linear::OffsetReader;
-use firewood_metrics::firewood_increment;
 use crate::logger::trace;
 use crate::node::branch::ReadSerializable as _;
+use firewood_metrics::firewood_increment;
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind, Read};

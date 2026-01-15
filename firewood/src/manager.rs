@@ -25,8 +25,8 @@ use crate::merkle::Merkle;
 use crate::root_store::RootStore;
 use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
-pub use firewood_storage::CacheReadStrategy;
 use firewood_metrics::{firewood_increment, firewood_set};
+pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
     TrieHash,
@@ -260,7 +260,10 @@ impl RevisionManager {
                     }
                 }
             }
-            firewood_set!(crate::registry::ACTIVE_REVISIONS, self.in_memory_revisions.read().len() as f64);
+            firewood_set!(
+                crate::registry::ACTIVE_REVISIONS,
+                self.in_memory_revisions.read().len() as f64
+            );
             firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions as f64);
         }
 

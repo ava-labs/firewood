@@ -29,11 +29,11 @@
 
 use std::iter::FusedIterator;
 
+use crate::Child;
 use crate::linear::FileIoError;
 use crate::nodestore::AreaIndex;
-use crate::Child;
-use firewood_metrics::firewood_increment;
 use coarsetime::Instant;
+use firewood_metrics::firewood_increment;
 
 use crate::{MaybePersistedNode, NodeReader, WritableStorage};
 
