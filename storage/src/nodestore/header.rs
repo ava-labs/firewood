@@ -38,10 +38,13 @@ use crate::logger::{debug, trace};
 /// From firewood v0.0.4 to sometime between v0.0.18, the 16 bytes "firewood 0.0.x"
 /// followed by enought NUL bytes to pad to 16 bytes. Between v0.0.18 and v0.1.0,
 /// the string was change to the literal "firewood-v1" plus padding. The version
-/// number in the string will stay fixed at `v1`. The firewood version information
-/// stored is now stored in a different location in the header. The fixed string
-/// prevents issues where the version string length changes and causes
-/// misalignment of the header fields.
+/// number in the string will stay fixed at `v1` and will be updated independently
+/// from the package version in the event of a major data format change.
+///
+/// The firewood version information stored is now stored in a different
+/// location in the header. The fixed string prevents issues where the version
+/// string length may overflow the allocated space truncating the string and
+/// losing relevant information.
 ///
 /// Validation will continue to accept the old format for compatibility with
 /// existing databases. This change is purely cosmetic and does not affect any
@@ -323,6 +326,19 @@ impl NodeStoreHeader {
         }
     }
 
+    /// Validates the header fields to ensure correctness and compatibility with
+    /// the current build of firewood.
+    ///
+    /// Checks performed:
+    ///
+    /// - Magic number / version string is valid. The first 16 bytes must match
+    ///   an expected magic number.
+    /// - Endianness test matches expected value (1). If not, reading from the
+    ///   database will produce incorrect results from mis-interpreted byte order.
+    /// - Area size hash matches the expected hash for the current build. This
+    ///   prevents corrupting the allocation structures by changing area sizes.
+    /// - Node hash algorithm flag matches the expected algorithm for this
+    ///   storage.
     pub fn validate(&self, expected_node_hash_algorithm: NodeHashAlgorithm) -> Result<(), Error> {
         trace!("Checking version...");
         self.version.validate()?;
@@ -402,6 +418,15 @@ impl NodeStoreHeader {
         }
     }
 
+    /// Returns a version string identifying the version of `firewood-storage`
+    /// used to create this database, if available.
+    ///
+    /// This field was added between v0.0.18 and v0.1.0 and may be absent in
+    /// older databases.
+    ///
+    /// The returned string is either the `git describe` output (from the time
+    /// of build) if available, otherwise the cargo package version of the
+    /// `firewood-storage` crate.
     pub fn firewood_version_str(&self) -> Option<std::borrow::Cow<'_, str>> {
         self.git_describe()
             .map(GitDescribe::as_str)
