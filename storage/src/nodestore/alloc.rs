@@ -642,8 +642,7 @@ pub mod test_utils {
         header.set_size(size);
         header.set_root_address(root_addr);
         *header.free_lists_mut() = free_lists;
-        let header_bytes = bytemuck::bytes_of(&header);
-        nodestore.storage.write(0, header_bytes).unwrap();
+        header.flush_to(nodestore.storage.as_ref()).unwrap();
         header
     }
 
