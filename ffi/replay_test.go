@@ -43,7 +43,6 @@ type replayLog struct {
 type dbOperation struct {
 	GetLatest         *getLatest         `msgpack:"GetLatest,omitempty"`
 	GetFromProposal   *getFromProposal   `msgpack:"GetFromProposal,omitempty"`
-	GetFromRoot       *getFromRoot       `msgpack:"GetFromRoot,omitempty"`
 	Batch             *batch             `msgpack:"Batch,omitempty"`
 	ProposeOnDB       *proposeOnDB       `msgpack:"ProposeOnDB,omitempty"`
 	ProposeOnProposal *proposeOnProposal `msgpack:"ProposeOnProposal,omitempty"`
@@ -59,12 +58,6 @@ type getLatest struct {
 type getFromProposal struct {
 	ProposalID uint64 `msgpack:"proposal_id"`
 	Key        []byte `msgpack:"key"`
-}
-
-// getFromRoot represents a read from a specific historical root.
-type getFromRoot struct {
-	Root []byte `msgpack:"root"`
-	Key  []byte `msgpack:"key"`
 }
 
 // keyValueOp represents a single key/value mutation.
@@ -303,15 +296,6 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 					return totalCommits, fmt.Errorf("GetLatest: %w", err)
 				}
 
-			case op.GetFromRoot != nil:
-				root, err := bytesToHash(op.GetFromRoot.Root)
-				if err != nil {
-					return totalCommits, fmt.Errorf("GetFromRoot: invalid root: %w", err)
-				}
-				if _, err := db.GetFromRoot(root, op.GetFromRoot.Key); err != nil {
-					return totalCommits, fmt.Errorf("GetFromRoot: %w", err)
-				}
-
 			case op.GetFromProposal != nil:
 				prop, ok := proposals[op.GetFromProposal.ProposalID]
 				if !ok {
@@ -398,13 +382,4 @@ func splitPairs(pairs []keyValueOp) ([][]byte, [][]byte) {
 		vals = append(vals, p.Value)
 	}
 	return keys, vals
-}
-
-func bytesToHash(b []byte) (Hash, error) {
-	if len(b) != RootLength {
-		return Hash{}, fmt.Errorf("expected root length %d, got %d", RootLength, len(b))
-	}
-	var h Hash
-	copy(h[:], b)
-	return h, nil
 }
