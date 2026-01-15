@@ -47,20 +47,30 @@ func ensureMetricsStarted(r *require.Assertions) {
 	})
 }
 
+var initLogs sync.Once
+var activeLogPath string
+
+func ensureLogsStarted(r *require.Assertions, logPath string) {
+	initLogs.Do(func() {
+		logConfig := &LogConfig{
+			Path:        logPath,
+			FilterLevel: "trace",
+		}
+		if err := StartLogs(logConfig); err != nil {
+			r.Contains(err.Error(), "Logging is not available")
+			activeLogPath = ""
+			return
+		}
+		activeLogPath = logPath
+	})
+}
+
 func newDbWithMetricsAndLogs(t *testing.T, opts ...Option) (db *Database, logPath string) {
 	r := require.New(t)
 	db = newTestDatabase(t, opts...)
 	ensureMetricsStarted(r)
-	logPath = filepath.Join(t.TempDir(), "firewood.log")
-	logConfig := &LogConfig{
-		Path:        logPath,
-		FilterLevel: "trace",
-	}
-	if err := StartLogs(logConfig); err != nil {
-		r.Contains(err.Error(), "Logging is not available")
-		logPath = ""
-	}
-	return db, logPath
+	ensureLogsStarted(r, filepath.Join(t.TempDir(), "firewood.log"))
+	return db, activeLogPath
 }
 
 // Test calling metrics exporter along with gathering metrics
