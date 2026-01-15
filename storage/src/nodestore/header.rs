@@ -102,11 +102,7 @@ impl Version {
         u128::from_ne_bytes(self.bytes)
     }
 
-    const fn has_cargo_version(self) -> bool {
-        self.as_u128() == const { Self::VALID_V1_VERSIONS[0].as_u128() }
-    }
-
-    const fn has_git_describe(self) -> bool {
+    const fn is_firewood_v1(self) -> bool {
         self.as_u128() == const { Self::VALID_V1_VERSIONS[0].as_u128() }
     }
 
@@ -424,7 +420,7 @@ impl NodeStoreHeader {
     /// Get the cargo version of `firewood-storage` used to create this database,
     /// if available.
     pub const fn cargo_version(&self) -> Option<&CargoVersion> {
-        if self.version.has_cargo_version() {
+        if self.version.is_firewood_v1() {
             Some(&self.cargo_version)
         } else {
             None
@@ -433,7 +429,7 @@ impl NodeStoreHeader {
 
     /// Get the git describe string of `firewood` used to create this database,
     pub const fn git_describe(&self) -> Option<&GitDescribe> {
-        if self.version.has_git_describe() {
+        if self.version.is_firewood_v1() {
             Some(&self.git_describe)
         } else {
             None
