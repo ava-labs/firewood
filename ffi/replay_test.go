@@ -117,7 +117,7 @@ func TestReplayLogExecution(t *testing.T) {
 	}
 	r.NotEmpty(logs, "expected at least one replay segment")
 
-	db := newTestDatabase(t)
+	db := newTestDatabase(t, WithTruncate(true))
 
 	start := time.Now()
 	commits, err := applyReplayLogs(db, logs, replayConfig{MaxCommits: maxCommits, VerifyHashes: true})
@@ -162,7 +162,7 @@ func BenchmarkReplayLog(b *testing.B) {
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		b.StopTimer()
-		db := newTestDatabase(b)
+		db := newTestDatabase(b, WithTruncate(true))
 		b.StartTimer()
 
 		commits, err = applyReplayLogs(db, logs, replayConfig{MaxCommits: maxCommits})

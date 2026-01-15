@@ -954,6 +954,12 @@ typedef struct DatabaseHandleArgs {
    * Whether to truncate the database file if it exists.
    */
   bool truncate;
+  /**
+   * Whether to enable expensive metrics recording for this database handle.
+   *
+   * Expensive metrics are disabled by default.
+   */
+  bool expensive_metrics;
 } DatabaseHandleArgs;
 
 /**

@@ -94,6 +94,8 @@ type config struct {
 	readCacheStrategy CacheStrategy
 	// rootStore defines whether to enable storing all historical revisions on disk.
 	rootStore bool
+	// expensiveMetricsEnabled controls whether expensive metrics recording is enabled.
+	expensiveMetricsEnabled bool
 }
 
 func defaultConfig() *config {
@@ -165,6 +167,15 @@ func WithRootStore() Option {
 	}
 }
 
+// WithExpensiveMetrics enables expensive metrics recording for this database.
+// Expensive metrics are disabled by default since they can introduce overhead.
+// Default: false
+func WithExpensiveMetrics() Option {
+	return func(c *config) {
+		c.expensiveMetricsEnabled = true
+	}
+}
+
 // A CacheStrategy represents the caching strategy used by a [Database].
 type CacheStrategy uint8
 
@@ -221,6 +232,7 @@ func New(dbDir string, opts ...Option) (*Database, error) {
 		strategy:             C.uint8_t(conf.readCacheStrategy),
 		truncate:             C.bool(conf.truncate),
 		root_store:           C.bool(conf.rootStore),
+		expensive_metrics:    C.bool(conf.expensiveMetricsEnabled),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))
