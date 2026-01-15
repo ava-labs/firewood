@@ -1288,7 +1288,6 @@ mod test {
 
         let rh = testdb.db.root_hash().unwrap().unwrap();
 
-        // overwrite the magic string to simulate an older version
         let file = std::fs::OpenOptions::new()
             .read(true)
             .write(true)
@@ -1301,6 +1300,7 @@ mod test {
         file.read_exact_at(&mut version, 0).unwrap();
         assert_eq!(&version, b"firewood-v1\0\0\0\0\0");
 
+        // overwrite the magic string to simulate an older version
         file.write_at(b"firewood 0.0.18\0", 0).unwrap();
         drop(file);
 
@@ -1310,7 +1310,7 @@ mod test {
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
-    pub(crate) struct TestDb {
+    pub(super) struct TestDb {
         db: Db,
         tmpdir: tempfile::TempDir,
         dbconfig: DbConfig,
