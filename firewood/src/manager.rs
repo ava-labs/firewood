@@ -83,9 +83,10 @@ pub(crate) struct RevisionManager {
     /// is preserved on disk for historical queries.
     max_revisions: usize,
 
-    /// The single source of truth header for persisted state.
-    /// This is loaded from disk on startup and updated during commits.
-    /// Uses Mutex for interior mutability (matches existing pattern with `proposals`).
+    /// Persisted metadata for the database.
+    ///
+    /// Loaded from disk on startup and updated during commits when nodes
+    /// are persisted or deleted nodes are added to the free lists.
     header: Mutex<NodeStoreHeader>,
 
     /// FIFO queue of committed revisions kept in memory. The queue always
@@ -155,7 +156,7 @@ impl RevisionManager {
         fb.lock()?;
 
         let storage = Arc::new(fb);
-        let header = NodeStoreHeader::read_from(storage.as_ref())?;
+        let header = NodeStoreHeader::with_storage(storage.as_ref())?;
         let nodestore = Arc::new(NodeStore::open(&header, storage.clone())?);
         let root_store = config
             .root_store

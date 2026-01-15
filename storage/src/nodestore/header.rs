@@ -197,23 +197,22 @@ impl NodeStoreHeader {
     // Compile-time assertion that SIZE is large enough for the header
     const _ASSERT_SIZE: () = assert!(Self::SIZE as usize >= std::mem::size_of::<NodeStoreHeader>());
 
-    /// Deserialize a `NodeStoreHeader` from bytes using bytemuck
-    pub fn from_bytes(bytes: &[u8]) -> &Self {
+    fn from_bytes(bytes: &[u8]) -> &Self {
         bytemuck::from_bytes(bytes)
     }
 
     /// Creates a new header with default values and no root address.
+    ///
+    /// # Panics
+    ///
+    /// Will panic if ther `area_size_hash` cannot be computed.
+    #[must_use]
     pub fn new() -> Self {
-        Self::with_root(None)
-    }
-
-    /// Creates a new header with the specified root address.
-    pub fn with_root(root_address: Option<LinearAddress>) -> Self {
         Self {
             // The store just contains the header at this point
             size: Self::SIZE,
             endian_test: 1,
-            root_address,
+            root_address: None,
             version: Version::new(),
             free_lists: Default::default(),
             area_size_hash: area_size_hash()
@@ -227,8 +226,35 @@ impl NodeStoreHeader {
         }
     }
 
-    /// Validates the header by checking version, endianness, area size hash, and ethhash flag.
-    pub fn validate(&self) -> Result<(), Error> {
+    /// Read and create a header from storage, or return a new empty header if
+    /// storage is empty.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the header cannot be read or validated.
+    pub fn with_storage<S: ReadableStorage>(storage: &S) -> Result<Self, FileIoError> {
+        let mut stream = storage.stream_from(0)?;
+        let mut header_bytes = vec![0u8; std::mem::size_of::<Self>()];
+
+        if let Err(e) = stream.read_exact(&mut header_bytes) {
+            if e.kind() == ErrorKind::UnexpectedEof {
+                // Storage is empty, return a fresh header
+                return Ok(Self::new());
+            }
+            return Err(storage.file_io_error(e, 0, Some("header read".to_string())));
+        }
+
+        drop(stream);
+
+        let header = *Self::from_bytes(&header_bytes);
+        header
+            .validate()
+            .map_err(|e| storage.file_io_error(e, 0, Some("header validation".to_string())))?;
+
+        Ok(header)
+    }
+
+    fn validate(&self) -> Result<(), Error> {
         trace!("Checking version...");
         self.version.validate()?;
 
@@ -245,6 +271,7 @@ impl NodeStoreHeader {
     }
 
     /// Get the size of the nodestore
+    #[must_use]
     pub const fn size(&self) -> u64 {
         self.size
     }
@@ -255,6 +282,7 @@ impl NodeStoreHeader {
     }
 
     /// Get the free lists
+    #[must_use]
     pub const fn free_lists(&self) -> &FreeLists {
         &self.free_lists
     }
@@ -265,6 +293,7 @@ impl NodeStoreHeader {
     }
 
     /// Get the root address
+    #[must_use]
     pub const fn root_address(&self) -> Option<LinearAddress> {
         self.root_address
     }
@@ -275,6 +304,7 @@ impl NodeStoreHeader {
     }
 
     /// Get the offset of the `free_lists` field for use with `offset_of`!
+    #[must_use]
     pub const fn free_lists_offset() -> u64 {
         std::mem::offset_of!(NodeStoreHeader, free_lists) as u64
     }
@@ -323,33 +353,6 @@ impl NodeStoreHeader {
                 "Database cannot be opened as it was created without ethhash enabled",
             ))
         }
-    }
-
-    /// Read a header from storage, or return a new empty header if storage is empty.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the header cannot be read or validated.
-    pub fn read_from<S: ReadableStorage>(storage: &S) -> Result<Self, FileIoError> {
-        let mut stream = storage.stream_from(0)?;
-        let mut header_bytes = vec![0u8; std::mem::size_of::<Self>()];
-
-        if let Err(e) = stream.read_exact(&mut header_bytes) {
-            if e.kind() == ErrorKind::UnexpectedEof {
-                // Storage is empty, return a fresh header
-                return Ok(Self::new());
-            }
-            return Err(storage.file_io_error(e, 0, Some("header read".to_string())));
-        }
-
-        drop(stream);
-
-        let header = *Self::from_bytes(&header_bytes);
-        header
-            .validate()
-            .map_err(|e| storage.file_io_error(e, 0, Some("header validation".to_string())))?;
-
-        Ok(header)
     }
 
     /// Persist this header to storage.

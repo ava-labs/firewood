@@ -513,9 +513,9 @@ impl<S: ReadableStorage> Iterator for FreeListsIterator<'_, S> {
 impl<T, S: ReadableStorage> NodeStore<T, S> {
     /// Returns an iterator over the free lists of size no smaller than the size corresponding to `start_area_index`.
     /// The iterator returns a tuple of the address and the area index of the free area.
-    /// Since this is a low-level iterator, we avoid safe conversion to AreaIndex for performance.
+    /// Since this is a low-level iterator, we avoid safe conversion to `AreaIndex` for performance.
     ///
-    /// The free_lists parameter should be obtained from the NodeStoreHeader.
+    /// The `free_lists` parameter should be obtained from the `NodeStoreHeader`.
     pub(crate) fn free_list_iter<'a>(
         &'a self,
         free_lists: &'a FreeLists,
@@ -529,7 +529,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
 impl<T, S: WritableStorage> NodeStore<T, S> {
     /// Truncates a free list at the given parent location.
     ///
-    /// The free_lists parameter should be obtained from the NodeStoreHeader.
+    /// The `free_lists` parameter should be obtained from the `NodeStoreHeader`.
     pub(crate) fn truncate_free_list(
         &self,
         free_lists: &mut FreeLists,

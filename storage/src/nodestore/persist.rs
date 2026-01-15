@@ -27,8 +27,8 @@
 //! - Memory-efficient serialization with pre-allocated buffers
 //! - Ring buffer management for io-uring operations
 
-use std::iter::FusedIterator;
 use bumpalo::Bump;
+use std::iter::FusedIterator;
 
 use crate::linear::FileIoError;
 use crate::nodestore::AreaIndex;
@@ -176,11 +176,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), header);
         let mut bump = Bump::with_capacity(super::INITIAL_BUMP_SIZE);
 
-        self.process_unpersisted_nodes(
-            &mut bump,
-            &mut node_allocator,
-            super::INITIAL_BUMP_SIZE,
-        )?;
+        self.process_unpersisted_nodes(&mut bump, &mut node_allocator, super::INITIAL_BUMP_SIZE)?;
 
         let flush_time = flush_start.elapsed().as_millis();
         firewood_counter!("flush_nodes", "amount flushed nodes").increment(flush_time);

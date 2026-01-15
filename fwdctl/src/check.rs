@@ -70,7 +70,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         progress_bar: Some(progress_bar),
     };
 
-    let mut header = NodeStoreHeader::read_from(storage.as_ref())?;
+    let mut header = NodeStoreHeader::with_storage(storage.as_ref())?;
     let nodestore = NodeStore::open(&header, storage)?;
     let check_report = nodestore.check(&header, check_ops);
 

@@ -99,12 +99,9 @@ use super::linear::WritableStorage;
 const INITIAL_BUMP_SIZE: usize = AreaIndex::MAX_AREA_SIZE as usize;
 
 impl<S: ReadableStorage> NodeStore<Committed, S> {
-    /// Open an existing [`NodeStore`]
-    /// Assumes the header is written in the [`ReadableStorage`].
+    /// Open a `NodeStore` from storage using the provided header.
     ///
-    /// Open a NodeStore from storage using the provided header.
-    ///
-    /// The header should be read using [`NodeStoreHeader::read_from`] before calling this.
+    /// The header should be read using [`NodeStoreHeader::with_storage`] before calling this.
     /// This separation allows callers to manage the header lifecycle independently.
     ///
     /// # Errors
@@ -144,7 +141,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     ///
     /// This constructor is used when you have an existing root node at a known
     /// address and hash, typically when reconstructing a [`NodeStore`] from
-    /// a committed state (e.g., loading a historical revision).
+    /// a committed state.
     ///
     /// ## Panics
     ///
@@ -698,7 +695,7 @@ fn area_index_and_size<S: ReadableStorage>(
 impl<T, S: ReadableStorage> NodeStore<T, S> {
     /// Get a reference to the underlying storage.
     #[must_use]
-    pub fn storage(&self) -> &Arc<S> {
+    pub const fn storage(&self) -> &Arc<S> {
         &self.storage
     }
 
@@ -998,7 +995,7 @@ mod tests {
             true,
             CacheReadStrategy::WritesOnly,
         )?);
-        let mut header = NodeStoreHeader::read_from(storage.as_ref())?;
+        let mut header = NodeStoreHeader::with_storage(storage.as_ref())?;
         let nodestore = NodeStore::open(&header, storage)?;
 
         let mut proposal = NodeStore::new(&nodestore)?;

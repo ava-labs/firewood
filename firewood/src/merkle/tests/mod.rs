@@ -181,7 +181,9 @@ fn insert_one() {
 
 fn create_in_memory_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
     let memstore = MemStore::new(vec![]);
+
     let nodestore = NodeStore::new_empty_proposal(memstore.into());
+
     Merkle { nodestore }
 }
 
