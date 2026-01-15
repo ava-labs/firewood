@@ -31,7 +31,7 @@ use firewood_storage::{
     NodeHashAlgorithm, NodeStore, TrieHash, firewood_counter, firewood_gauge,
 };
 
-const DB_FILE_NAME: &str = "firewood.db";
+pub(crate) const DB_FILE_NAME: &str = "firewood.db";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
 /// Revision manager configuratoin
