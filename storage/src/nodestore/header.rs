@@ -109,10 +109,6 @@ impl Version {
         self.as_u128() == const { Self::VALID_V1_VERSIONS[0].as_u128() }
     }
 
-    const fn has_root_hash(self) -> bool {
-        self.as_u128() == const { Self::VALID_V1_VERSIONS[0].as_u128() }
-    }
-
     const fn from_static(bytes: &'static [u8; 16]) -> Self {
         Self { bytes: *bytes }
     }
@@ -422,7 +418,7 @@ impl NodeStoreHeader {
     ///
     /// This is None if the database was created before v0.1.0.
     pub fn root_hash(&self) -> Option<TrieHash> {
-        if self.version.has_root_hash() && self.root_address.is_some() {
+        if self.version.is_firewood_v1() && self.root_address.is_some() {
             Some(TrieHash::from(self.root_hash))
         } else {
             None
