@@ -197,6 +197,7 @@ impl NodeStoreHeader {
     // Compile-time assertion that SIZE is large enough for the header
     const _ASSERT_SIZE: () = assert!(Self::SIZE as usize >= std::mem::size_of::<NodeStoreHeader>());
 
+    /// Deserialize a `NodeStoreHeader` from bytes using bytemuck
     fn from_bytes(bytes: &[u8]) -> &Self {
         bytemuck::from_bytes(bytes)
     }
