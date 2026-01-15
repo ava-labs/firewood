@@ -383,23 +383,6 @@ impl NodeStoreHeader {
         storage.write(0, &header_bytes)?;
         Ok(())
     }
-
-    /// Persist the freelist to storage.
-    ///
-    /// This function is used to ensure that the freelist is advanced after allocating
-    /// nodes for writing. This allows the database to be recovered from an I/O error while
-    /// persisting a revision to disk.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the free list cannot be written to storage.
-    #[fastrace::trace(name = "firewood.flush_freelist")]
-    pub fn flush_freelist_to<S: WritableStorage>(&self, storage: &S) -> Result<(), FileIoError> {
-        let free_list_bytes = bytemuck::bytes_of(self.free_lists());
-        let free_list_offset = Self::free_lists_offset();
-        storage.write(free_list_offset, free_list_bytes)?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
