@@ -378,46 +378,6 @@ pub extern "C" fn fwd_get_from_proposal(
     invoke_with_handle(handle, move |handle| handle.val(key))
 }
 
-/// Gets a value assoicated with the given root hash and key.
-///
-/// The hash may refer to a historical revision or an existing proposal.
-///
-/// # Arguments
-///
-/// * `db` - The database handle returned by [`fwd_open_db`]
-/// * `root` - The root hash to look up as a [`BorrowedBytes`]
-/// * `key` - The key to look up as a [`BorrowedBytes`]
-///
-/// # Returns
-///
-/// - [`ValueResult::NullHandlePointer`] if the provided database handle is null.
-/// - [`ValueResult::RevisionNotFound`] if no revision was found for the specified root.
-/// - [`ValueResult::None`] if the key was not found.
-/// - [`ValueResult::Some`] if the key was found with the associated value.
-/// - [`ValueResult::Err`] if an error occurred while retrieving the value.
-///
-/// # Safety
-///
-/// The caller must:
-/// * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
-/// * ensure that `root` is a valid for [`BorrowedBytes`]
-/// * ensure that `key` is a valid for [`BorrowedBytes`]
-/// * call [`fwd_free_owned_bytes`] to free the memory associated [`OwnedBytes`]
-///   returned in the result.
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_get_from_root(
-    db: Option<&DatabaseHandle>,
-    root: HashKey,
-    key: BorrowedBytes,
-) -> ValueResult {
-    #[cfg(feature = "block-replay")]
-    if db.is_some() {
-        replay::record_get_from_root(root, key);
-    }
-
-    invoke_with_handle(db, move |db| db.get_from_root(root.into(), key))
-}
-
 /// Puts the given key-value pairs into the database.
 ///
 /// # Arguments
@@ -907,29 +867,4 @@ pub extern "C" fn fwd_revision_dump(revision: Option<&RevisionHandle>) -> ValueR
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_proposal_dump(proposal: Option<&ProposalHandle>) -> ValueResult {
     invoke_with_handle(proposal, firewood::v2::api::DbView::dump_to_string)
-}
-
-/// Forces the database to flush and sync the revision associated with root to disk.
-///
-/// NOTE: this function is currently a no-op.
-///
-/// # Arguments
-///
-/// * `db` - The database handle returned by [`fwd_open_db`]
-///
-/// # Returns
-///
-/// - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
-/// - [`VoidResult::Ok`] if the operation was successful.
-/// - [`VoidResult::Err`] if the process panics while persisting.
-///
-/// # Safety
-///
-/// The caller must ensure that `db` is a valid pointer to a [`DatabaseHandle`]
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_flush_and_sync_root_on_db(
-    db: Option<&DatabaseHandle>,
-    root: HashKey,
-) -> VoidResult {
-    invoke_with_handle(db, move |db| db.flush_and_sync_root(root.into()))
 }
