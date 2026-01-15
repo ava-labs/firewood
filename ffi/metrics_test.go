@@ -37,18 +37,16 @@ var (
 		"ffi_propose_ms_bucket": dto.MetricType_HISTOGRAM,
 		"ffi_batch_ms_bucket":   dto.MetricType_HISTOGRAM,
 	}
+	initMetrics   sync.Once
+	initLogs      sync.Once
+	activeLogPath string
 )
-
-var initMetrics sync.Once
 
 func ensureMetricsStarted(r *require.Assertions) {
 	initMetrics.Do(func() {
 		r.NoError(StartMetricsWithExporter(metricsPort))
 	})
 }
-
-var initLogs sync.Once
-var activeLogPath string
 
 func ensureLogsStarted(r *require.Assertions, logPath string) {
 	initLogs.Do(func() {

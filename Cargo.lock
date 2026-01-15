@@ -1172,7 +1172,6 @@ version = "0.0.18"
 dependencies = [
  "cbindgen",
  "coarsetime",
- "derive-where",
  "env_logger",
  "firewood",
  "firewood-metrics",

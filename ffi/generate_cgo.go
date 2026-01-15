@@ -127,7 +127,7 @@ func changeCgoDirectivesForFile(targetMode string, targetFile string) error {
 		fmt.Printf("[INFO] No changes needed to %s\n", targetFile)
 		return nil
 	}
-	return os.WriteFile(targetFile, []byte(newContents), 0644)
+	return os.WriteFile(targetFile, []byte(newContents), 0o644)
 }
 
 func isCGODirective(line string) bool {
@@ -139,6 +139,7 @@ func activateCGOLine(line string) string {
 	// Convert "// // #cgo" to "// #cgo"
 	return strings.Replace(line, "// // #cgo", "// #cgo", 1)
 }
+
 func deactivateCGOLine(line string) string {
 	// Convert "// #cgo" to "// // #cgo" (but not "// // #cgo" to "// // // #cgo")
 	if strings.Contains(line, "// #cgo") && !strings.Contains(line, "// // #cgo") {
