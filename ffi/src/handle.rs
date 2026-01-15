@@ -180,20 +180,6 @@ impl DatabaseHandle {
         self.db.revision(root)?.val(key)
     }
 
-    /// Returns a value from the database for the given key from the specified root hash.
-    ///
-    /// # Errors
-    ///
-    /// An error is returned if the root hash is invalid or if there was an i/o error
-    /// while reading the value.
-    pub fn get_from_root(
-        &self,
-        root: HashKey,
-        key: impl KeyType,
-    ) -> Result<Option<Box<[u8]>>, api::Error> {
-        self.get_root(root)?.val(key.as_ref())
-    }
-
     /// Creates a proposal with the given values and returns the proposal and the start time.
     ///
     /// # Errors
@@ -273,18 +259,6 @@ impl DatabaseHandle {
     /// An error is returned if there was an i/o error while dumping the trie.
     pub fn dump_to_string(&self) -> Result<String, api::Error> {
         self.db.dump_to_string().map_err(api::Error::from)
-    }
-
-    /// Forces the database to flush and sync the revision associated with root
-    /// to disk.
-    ///
-    /// NOTE: this method is currently a no-op.
-    ///
-    /// # Errors
-    ///
-    /// An error is returned if unable to persist to disk.
-    pub fn flush_and_sync_root(&self, root: HashKey) -> Result<(), api::Error> {
-        self.db.flush_and_sync_root(root)
     }
 }
 

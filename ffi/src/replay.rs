@@ -17,8 +17,8 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use firewood_replay::{
-    Batch, Commit, DbOperation, GetFromProposal, GetFromRoot, GetLatest, KeyValueOp, ProposalId,
-    ProposeOnDB, ProposeOnProposal, ReplayLog,
+    Batch, Commit, DbOperation, GetFromProposal, GetLatest, KeyValueOp, ProposalId, ProposeOnDB,
+    ProposeOnProposal, ReplayLog,
 };
 use parking_lot::Mutex;
 
@@ -59,15 +59,6 @@ impl Recorder {
     fn record_get_latest(&mut self, key: &[u8]) {
         self.operations
             .push(DbOperation::GetLatest(GetLatest { key: key.into() }));
-        self.maybe_flush();
-    }
-
-    /// Records a `GetFromRoot` operation.
-    fn record_get_from_root(&mut self, root: &[u8], key: &[u8]) {
-        self.operations.push(DbOperation::GetFromRoot(GetFromRoot {
-            root: root.into(),
-            key: key.into(),
-        }));
         self.maybe_flush();
     }
 
@@ -216,15 +207,6 @@ fn recorder() -> Option<&'static Mutex<Recorder>> {
 pub(crate) fn record_get_latest(key: BorrowedBytes<'_>) {
     if let Some(rec) = recorder() {
         rec.lock().record_get_latest(key.as_slice());
-    }
-}
-
-/// Records a `fwd_get_from_root` call.
-pub(crate) fn record_get_from_root(root: FfiHashKey, key: BorrowedBytes<'_>) {
-    if let Some(rec) = recorder() {
-        let api_hash: firewood::v2::api::HashKey = root.into();
-        let bytes: [u8; 32] = api_hash.into();
-        rec.lock().record_get_from_root(&bytes, key.as_slice());
     }
 }
 
