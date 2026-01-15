@@ -45,10 +45,10 @@ pub(crate) mod header;
 pub(crate) mod persist;
 pub(crate) mod primitives;
 
-use crate::firewood_counter;
 use crate::linear::OffsetReader;
 use crate::logger::{debug, trace};
 use crate::node::branch::ReadSerializable as _;
+use crate::{IntoHashType, firewood_counter};
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind};
@@ -134,7 +134,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
         if let Some(root_address) = header.root_address() {
             let root_hash = if let Some(hash) = header.root_hash() {
-                hash
+                hash.into_hash_type()
             } else {
                 debug!("No root hash in header; computing from disk");
                 nodestore
