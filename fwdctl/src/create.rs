@@ -46,7 +46,10 @@ pub struct Options {
 }
 
 pub(super) fn new(opts: &Options) -> DbConfig {
-    DbConfig::builder().truncate(opts.truncate).build()
+    DbConfig::builder()
+        .node_hash_algorithm(opts.database.node_hash_algorithm.into())
+        .truncate(opts.truncate)
+        .build()
 }
 
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {

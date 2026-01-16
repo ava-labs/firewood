@@ -637,7 +637,7 @@ mod tests {
     }
 
     pub(super) fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let memstore = Arc::new(memstore);
         let nodestore = NodeStore::new_empty_proposal(memstore);
         Merkle::from(nodestore)

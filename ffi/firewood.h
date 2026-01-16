@@ -12,6 +12,22 @@
 
 
 /**
+ * The hashing mode to use for the database.
+ *
+ * This determines the cryptographic hash function and trie structure used.
+ */
+typedef enum NodeHashAlgorithm {
+  /**
+   * MerkleDB Firewood hashing (SHA-256 based)
+   */
+  NodeHashAlgorithm_MerkleDB = 0,
+  /**
+   * Ethereum-compatible hashing (Keccak-256 based)
+   */
+  NodeHashAlgorithm_Ethereum = 1,
+} NodeHashAlgorithm;
+
+/**
  * FFI context for a parsed or generated change proof.
  */
 typedef struct ChangeProofContext ChangeProofContext;
@@ -954,6 +970,16 @@ typedef struct DatabaseHandleArgs {
    * Whether to truncate the database file if it exists.
    */
   bool truncate;
+  /**
+   * The hashing mode to use for the database.
+   *
+   * This must match the compile-time feature:
+   * - [`NodeHashAlgorithm::Ethereum`] if the `ethhash` feature is enabled
+   * - [`NodeHashAlgorithm::MerkleDB`] if the `ethhash` feature is disabled
+   *
+   * Opening returns an error if this does not match the compile-time feature.
+   */
+  enum NodeHashAlgorithm node_hash_algorithm;
 } DatabaseHandleArgs;
 
 /**
