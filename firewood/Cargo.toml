@@ -29,6 +29,7 @@ bytemuck.workspace = true
 coarsetime.workspace = true
 fastrace.workspace = true
 firewood-macros.workspace = true
+firewood-metrics.workspace = true
 firewood-storage.workspace = true
 hex.workspace = true
 integer-encoding.workspace = true

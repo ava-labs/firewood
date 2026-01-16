@@ -10,7 +10,7 @@ use firewood::{
 use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
-use firewood_storage::firewood_counter;
+use firewood_metrics::firewood_increment;
 
 /// The hashing mode to use for the database.
 ///
@@ -193,13 +193,11 @@ impl DatabaseHandle {
             self.create_proposal_handle(values.as_ref())?;
 
         let root_hash = handle.commit_proposal(|commit_time| {
-            firewood_counter!("ffi.commit_ms", "FFI commit timing in milliseconds")
-                .increment(commit_time.as_millis());
+            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
         })?;
 
-        firewood_counter!("ffi.batch_ms", "FFI batch timing in milliseconds")
-            .increment(start_time.elapsed().as_millis());
-        firewood_counter!("ffi.batch", "Number of FFI batch operations").increment(1);
+        firewood_increment!(crate::registry::BATCH_MS, start_time.elapsed().as_millis());
+        firewood_increment!(crate::registry::BATCH_COUNT, 1);
 
         Ok(root_hash)
     }
@@ -227,10 +225,9 @@ impl DatabaseHandle {
         })?;
 
         if cache_miss {
-            firewood_counter!("ffi.cached_view.miss", "Number of FFI cached view misses")
-                .increment(1);
+            firewood_increment!(crate::registry::CACHED_VIEW_MISS, 1);
         } else {
-            firewood_counter!("ffi.cached_view.hit", "Number of FFI cached view hits").increment(1);
+            firewood_increment!(crate::registry::CACHED_VIEW_HIT, 1);
         }
 
         Ok(view)

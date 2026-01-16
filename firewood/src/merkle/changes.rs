@@ -3,9 +3,9 @@
 
 use std::{cmp::Ordering, iter::once};
 
+use firewood_metrics::firewood_increment;
 use firewood_storage::{
     Child, FileIoError, HashedNodeReader, Node, NodeReader, Path, SharedNode, TrieHash,
-    firewood_counter,
 };
 use lender::{Lender, Lending};
 
@@ -421,11 +421,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
     /// the `ComparableNodeInfo` of the current node in `node_info` and keeping that available for the
     /// next call. Skipping traversal of the children then just involves setting `node_info` to None.
     fn next_node_info(&mut self) -> Result<Option<&ComparableNodeInfo>, FileIoError> {
-        firewood_counter!(
-            "firewood.change_proof.next",
-            "number of next calls to calculate a change proof"
-        )
-        .increment(1);
+        firewood_increment!(crate::registry::CHANGE_PROOF_NEXT, 1);
 
         // Take the info of the current node (which will soon be replaced), and check if it is a
         // branch. If it is, add its children onto the traversal stack.
@@ -1766,7 +1762,7 @@ mod tests {
 
             // Check the number of next calls on two full tree traversals.
             let diff_nexts_before =
-                recorder.counter_value("firewood.change_proof.next", &[]);
+                recorder.counter_value(crate::registry::CHANGE_PROOF_NEXT, &[]);
 
             let mut preorder_it = PreOrderIterator::new(m1.nodestore(), &Key::default()).unwrap();
             while preorder_it.next().is_some() {}
@@ -1774,20 +1770,20 @@ mod tests {
             while preorder_it.next().is_some() {}
 
             let diff_nexts_after =
-                recorder.counter_value("firewood.change_proof.next", &[]);
+                recorder.counter_value(crate::registry::CHANGE_PROOF_NEXT, &[]);
             let diff_iteration_count = diff_nexts_after - diff_nexts_before;
             println!("Next calls from traversing tries: {diff_iteration_count}");
 
             // DIFF TEST: Measure next calls from hash-optimized diff operation
             let diff_nexts_before =
-                recorder.counter_value("firewood.change_proof.next", &[]);
+                recorder.counter_value(crate::registry::CHANGE_PROOF_NEXT, &[]);
 
             let diff_stream =
                 DiffMerkleNodeStream::new(m1.nodestore(), m2.nodestore(), Box::new([])).unwrap();
             let diff_immutable_results_count = diff_stream.count();
 
             let diff_nexts_after =
-                recorder.counter_value("firewood.change_proof.next", &[]);
+                recorder.counter_value(crate::registry::CHANGE_PROOF_NEXT, &[]);
             let diff_immutable_nexts = diff_nexts_after - diff_nexts_before;
 
             println!("Diff next calls: {diff_immutable_nexts}");

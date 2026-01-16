@@ -45,10 +45,11 @@ pub(crate) mod header;
 pub(crate) mod persist;
 pub(crate) mod primitives;
 
+use crate::IntoHashType;
 use crate::linear::OffsetReader;
 use crate::logger::{debug, trace};
 use crate::node::branch::ReadSerializable as _;
-use crate::{IntoHashType, firewood_counter};
+use firewood_metrics::firewood_increment;
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind};
@@ -492,11 +493,7 @@ impl ImmutableProposal {
         {
             *guard = NodeStoreParent::Committed(committing.root_hash());
             // Track reparenting events
-            firewood_counter!(
-                "proposals.reparented",
-                "Number of proposals reparented to committed parent"
-            )
-            .increment(1);
+            firewood_increment!(crate::registry::REPARENTED_PROPOSAL_COUNT, 1);
         }
     }
 }

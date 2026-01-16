@@ -4,7 +4,7 @@
 use firewood::v2::api::{self, DbView, HashKey, IntoBatchIter, Proposal as _};
 
 use crate::{IteratorHandle, iterator::CreateIteratorResult};
-use firewood_storage::firewood_counter;
+use firewood_metrics::firewood_increment;
 
 /// An opaque wrapper around a Proposal that also retains a reference to the
 /// database handle it was created from.
@@ -125,9 +125,8 @@ impl<'db> CreateProposalResult<'db> {
         let start_time = coarsetime::Instant::now();
         let proposal = f()?;
         let propose_time = start_time.elapsed();
-        firewood_counter!("ffi.propose_ms", "FFI propose timing in milliseconds")
-            .increment(propose_time.as_millis());
-        firewood_counter!("ffi.propose", "Number of FFI propose operations").increment(1);
+        firewood_increment!(crate::registry::PROPOSE_MS, propose_time.as_millis());
+        firewood_increment!(crate::registry::PROPOSE_COUNT, 1);
 
         let hash_key = proposal.root_hash()?;
 

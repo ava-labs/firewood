@@ -29,14 +29,14 @@ mod logging;
 mod metrics_setup;
 mod proofs;
 mod proposal;
+mod registry;
 #[cfg(feature = "block-replay")]
 mod replay;
 mod revision;
 mod value;
 
-use firewood_storage::firewood_counter;
-
 use firewood::v2::api::DbView;
+use firewood_metrics::firewood_increment;
 
 pub use crate::handle::*;
 pub use crate::iterator::*;
@@ -520,9 +520,8 @@ pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>)
 
     let result = invoke_with_handle(proposal, move |proposal| {
         proposal.commit_proposal(|commit_time| {
-            firewood_counter!("ffi.commit_ms", "FFI commit timing in milliseconds")
-                .increment(commit_time.as_millis());
-            firewood_counter!("ffi.commit", "Number of FFI commit operations").increment(1);
+            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
+            firewood_increment!(crate::registry::COMMIT_COUNT, 1);
         })
     });
 
