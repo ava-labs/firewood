@@ -49,6 +49,17 @@ fn is_valid_key(key: &Path) -> bool {
     key.0.len().is_multiple_of(2)
 }
 
+#[expect(clippy::result_large_err)]
+const fn check_area_aligned(
+    address: LinearAddress,
+    parent: StoredAreaParent,
+) -> Result<(), CheckerError> {
+    if !address.is_aligned() {
+        return Err(CheckerError::AreaMisaligned { address, parent });
+    }
+    Ok(())
+}
+
 /// Options for the checker
 #[derive(Debug)]
 pub struct CheckOpt {
@@ -155,7 +166,6 @@ struct SubTrieMetadata {
 }
 
 /// [`NodeStore`] checker
-#[expect(clippy::result_large_err)]
 impl<T, S: ReadableStorage> NodeStore<T, S>
 where
     NodeStore<T, S>: HashedNodeReader,
@@ -282,7 +292,7 @@ where
         } = subtrie;
 
         // check that address is aligned
-        self.check_area_aligned(subtrie_root_address, StoredAreaParent::TrieNode(parent))?;
+        check_area_aligned(subtrie_root_address, StoredAreaParent::TrieNode(parent))?;
 
         // read the node from the disk - we avoid cache since we will never visit the same node twice
         let (area_index, area_size) =
@@ -498,7 +508,7 @@ where
             };
 
             // check that the area is aligned
-            if let Err(e) = self.check_area_aligned(addr, StoredAreaParent::FreeList(parent)) {
+            if let Err(e) = check_area_aligned(addr, StoredAreaParent::FreeList(parent)) {
                 errors.push(e);
                 free_list_iter.move_to_next_free_list();
                 continue;
@@ -551,17 +561,6 @@ where
             },
             errors,
         )
-    }
-
-    const fn check_area_aligned(
-        &self,
-        address: LinearAddress,
-        parent: StoredAreaParent,
-    ) -> Result<(), CheckerError> {
-        if !address.is_aligned() {
-            return Err(CheckerError::AreaMisaligned { address, parent });
-        }
-        Ok(())
     }
 }
 
