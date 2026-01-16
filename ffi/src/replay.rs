@@ -22,7 +22,7 @@ use firewood_replay::{
 };
 use parking_lot::Mutex;
 
-use crate::value::{BorrowedBytes, BorrowedKeyValuePairs, HashKey as FfiHashKey, KeyValuePair};
+use crate::value::{BorrowedBytes, BorrowedKeyValuePairs, KeyValuePair};
 
 /// Environment variable that controls the output path for the replay log.
 const REPLAY_PATH_ENV: &str = "FIREWOOD_BLOCK_REPLAY_PATH";

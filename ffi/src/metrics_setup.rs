@@ -21,6 +21,8 @@ pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
     crate::registry::register();
     firewood::registry::register();
     firewood_storage::registry::register();
+    #[cfg(feature = "block-replay")]
+    firewood_replay::registry::register();
     // TODO: Switch to Prometheus's native histograms
     // they are cheaper, more efficient, and easier to configure (no predefined buckets)
     // proper default support will start in prometheus v3.9 and v4.0; once our infra switches,
