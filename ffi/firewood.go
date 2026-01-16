@@ -253,12 +253,11 @@ func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 // root node after the batch is applied. This is equivalent to creating a proposal
 // with [Database.ProposeBatch], then committing it with [Proposal.Commit].
 //
-// Use [NewBatch] to create a batch, then [Batch.Put], [Batch.Delete], and
-// [Batch.PrefixDelete] to add operations.
+// Use [Put], [Delete], and [PrefixDelete] to create batch operations.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
-func (db *Database) UpdateBatch(batch *Batch) (Hash, error) {
+func (db *Database) UpdateBatch(batch []BatchOp) (Hash, error) {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {
@@ -300,12 +299,11 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 // is not committed until [Proposal.Commit] is called. See [Database.Close] regarding
 // freeing proposals. All proposals should be freed before closing the database.
 //
-// Use [NewBatch] to create a batch, then [Batch.Put], [Batch.Delete], and
-// [Batch.PrefixDelete] to add operations.
+// Use [Put], [Delete], and [PrefixDelete] to create batch operations.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
-func (db *Database) ProposeBatch(batch *Batch) (*Proposal, error) {
+func (db *Database) ProposeBatch(batch []BatchOp) (*Proposal, error) {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {
