@@ -29,8 +29,11 @@ use std::io::{Error, ErrorKind, Read};
 
 use super::alloc::FreeLists;
 use super::primitives::{LinearAddress, area_size_hash};
-use crate::NodeHashAlgorithm;
 use crate::logger::{debug, trace};
+use crate::{NodeHashAlgorithm, TrieHash};
+
+/// A tuple indicating the address and hash of a node (the root node).
+pub type RootNodeInfo = (LinearAddress, TrieHash);
 
 /// Can be used by filesystem tooling such as "file" to identify the version of
 /// firewood used to create this `NodeStore` file.
@@ -225,12 +228,13 @@ impl GitDescribe {
 /// Persisted metadata for a `NodeStore`.
 /// The [`NodeStoreHeader`] is at the start of the `ReadableStorage`.
 ///
-/// `cargo_version` and `git_describe` were added between v0.0.18 and v0.1.0.
-/// If `version` is not equal to `firewood-v1`, this field may contain "uninitialized"
-/// data and must be ignored. Uninitialized data in this context means whatever the
-/// filesystem returns when reading from the sparse region of the file where there
-/// previously was no data written. This does not mean uninitialized memory with respect
-/// to memory safety, but does mean that the data may be garbage.
+/// `root_hash`, `cargo_version` and `git_describe` were added between v0.0.18
+/// and v0.1.0. If `version` is not equal to `firewood-v1`, this field may contain
+/// "uninitialized" data and must be ignored. Uninitialized data in this context
+/// means whatever the filesystem returns when reading from the sparse region of
+/// the file where there previously was no data written. This does not mean
+/// uninitialized memory with respect to memory safety, but does mean that the
+/// data may be garbage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Zeroable, Pod)]
 #[repr(C)]
 pub struct NodeStoreHeader {
@@ -260,9 +264,10 @@ pub struct NodeStoreHeader {
     area_size_hash: [u8; 32],
     /// Whether ethhash was enabled when this database was created.
     node_hash_algorithm: u64,
-    // TODO(#1605): add the root hash. It is unfortunate that it cannot be closer
-    // to the `root_address` but doing so would not be backwards compatible.
-    _root_hash: [u8; 32],
+    /// The merkle root hash of the entire database when it was last committed.
+    ///
+    /// The value is meaningful only if `root_address` is `Some`.
+    root_hash: [u8; 32],
     /// The cargo version used to create this database.
     ///
     /// This is the value of the `CARGO_PKG_VERSION` environment variable set by
@@ -326,9 +331,11 @@ impl NodeStoreHeader {
     }
 
     pub fn with_root(
-        root_address: Option<LinearAddress>,
+        root_node_info: Option<RootNodeInfo>,
         node_hash_algorithm: NodeHashAlgorithm,
     ) -> Self {
+        let (root_address, root_hash) = root_node_info.unzip();
+        let root_hash = root_hash.unwrap_or_else(TrieHash::empty).into();
         Self {
             // The store just contains the header at this point
             size: Self::SIZE,
@@ -338,7 +345,7 @@ impl NodeStoreHeader {
             free_lists: Default::default(),
             area_size_hash: area_size_hash().into(),
             node_hash_algorithm: node_hash_algorithm as u64,
-            _root_hash: [0; 32],
+            root_hash,
             cargo_version: CargoVersion::INSTANCE,
             git_describe: GitDescribe::INSTANCE,
         }
@@ -407,9 +414,25 @@ impl NodeStoreHeader {
         self.root_address
     }
 
-    /// Set the root address
-    pub const fn set_root_address(&mut self, root_address: Option<LinearAddress>) {
+    /// Get the root hash.
+    ///
+    /// This is None if the database was created before v0.1.0.
+    pub fn root_hash(&self) -> Option<TrieHash> {
+        if self.version.is_firewood_v1() && self.root_address.is_some() {
+            Some(TrieHash::from(self.root_hash))
+        } else {
+            None
+        }
+    }
+
+    /// Update the root location, both address and hash.
+    ///
+    /// Note that this does not overwrite the version field, so it is possible
+    /// the root hash will be ignored when set.
+    pub fn set_root_location(&mut self, root_location: Option<RootNodeInfo>) {
+        let (root_address, root_hash) = root_location.unzip();
         self.root_address = root_address;
+        self.root_hash = root_hash.unwrap_or_else(TrieHash::empty).into();
     }
 
     /// Get the offset of the `free_lists` field for use with `offset_of`!

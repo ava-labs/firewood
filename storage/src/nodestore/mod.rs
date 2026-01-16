@@ -45,8 +45,9 @@ pub(crate) mod header;
 pub(crate) mod persist;
 pub(crate) mod primitives;
 
+use crate::IntoHashType;
 use crate::linear::OffsetReader;
-use crate::logger::trace;
+use crate::logger::{debug, trace};
 use crate::node::branch::ReadSerializable as _;
 use firewood_metrics::firewood_increment;
 use smallvec::SmallVec;
@@ -133,8 +134,15 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         };
 
         if let Some(root_address) = header.root_address() {
-            let node = nodestore.read_node_from_disk(root_address, "open");
-            let root_hash = node.map(|n| hash_node(&n, &Path(SmallVec::default())))?;
+            let root_hash = if let Some(hash) = header.root_hash() {
+                hash.into_hash_type()
+            } else {
+                debug!("No root hash in header; computing from disk");
+                nodestore
+                    .read_node_from_disk(root_address, "open")
+                    .map(|n| hash_node(&n, &Path(SmallVec::default())))?
+            };
+
             nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
         }
 
@@ -168,7 +176,10 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// not equal `root_hash`.
     #[must_use]
     pub fn with_root(root_hash: HashType, root_address: LinearAddress, storage: Arc<S>) -> Self {
-        let header = NodeStoreHeader::with_root(Some(root_address), storage.node_hash_algorithm());
+        let header = NodeStoreHeader::with_root(
+            Some((root_address, root_hash.clone().into_triehash())),
+            storage.node_hash_algorithm(),
+        );
 
         let nodestore = NodeStore {
             header,
@@ -611,7 +622,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
 
         let Some(root) = kind.root else {
             // This trie is now empty.
-            nodestore.header.set_root_address(None);
+            nodestore.header.set_root_location(None);
             return Ok(nodestore);
         };
 
