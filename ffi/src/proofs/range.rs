@@ -14,6 +14,7 @@ use crate::{
     BorrowedBytes, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle, HashResult, Maybe,
     NextKeyRangeResult, RangeProofResult, ValueResult, VoidResult,
 };
+use firewood_metrics::firewood_increment;
 
 /// A key range represented by a start key and an optional end key.
 pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
