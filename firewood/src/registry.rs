@@ -3,6 +3,8 @@
 
 //! Firewood layer metric definitions.
 
+use metrics::{describe_counter, describe_gauge};
+
 /// Number of proposals created.
 pub const PROPOSALS: &str = "proposals";
 
@@ -35,8 +37,6 @@ pub const MAX_REVISIONS: &str = "max_revisions";
 
 /// Registers all firewood metric descriptions.
 pub fn register() {
-    use metrics::{describe_counter, describe_gauge};
-
     describe_counter!(PROPOSALS, "Number of proposals created");
     describe_counter!(
         PROPOSALS_CREATED,

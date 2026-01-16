@@ -19,6 +19,7 @@ static RECORDER: OnceLock<PrometheusHandle> = OnceLock::new();
 /// be initialized if it has already been set up in the same process.
 pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
     crate::registry::register();
+    firewood::registry::register();
     firewood_storage::registry::register();
     // TODO: Switch to Prometheus's native histograms
     // they are cheaper, more efficient, and easier to configure (no predefined buckets)

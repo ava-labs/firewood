@@ -3,7 +3,7 @@
 
 //! FFI layer metric definitions.
 
-use firewood_metrics::describe_counter;
+use metrics::describe_counter;
 
 pub const COMMIT_MS: &str = "ffi.commit_ms";
 pub const COMMIT_COUNT: &str = "ffi.commit";

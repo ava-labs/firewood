@@ -3,6 +3,8 @@
 
 //! Storage layer metric definitions.
 
+use metrics::describe_counter;
+
 /// Amount of space reused from free lists.
 pub const SPACE_REUSED: &str = "space.reused";
 /// Amount of space allocated from end.
@@ -43,8 +45,6 @@ pub mod ring {
 
 /// Registers all storage metric descriptions.
 pub fn register() {
-    use metrics::describe_counter;
-
     describe_counter!(SPACE_REUSED, "Amount of space reused from free lists");
     describe_counter!(SPACE_FROM_END, "Amount of space allocated from end");
     describe_counter!(SPACE_FREED, "Amount of space freed");
