@@ -997,7 +997,7 @@ mod tests {
             CacheReadStrategy::WritesOnly,
             NodeHashAlgorithm::compile_option(),
         )?);
-        let mut header = NodeStoreHeader::read_from_storage(storage.as_ref())?;
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
         let nodestore = NodeStore::open(&header, storage)?;
 
         let mut proposal = NodeStore::new(&nodestore)?;

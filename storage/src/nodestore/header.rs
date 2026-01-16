@@ -310,9 +310,18 @@ impl NodeStoreHeader {
     pub const SIZE: u64 = 2048;
 
     /// Reads the [`NodeStoreHeader`] from the start of the given storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if unable to read the header from storage.
     pub fn read_from_storage<S: crate::linear::ReadableStorage>(
         storage: &S,
     ) -> Result<Self, crate::FileIoError> {
+        // TODO(#1088): remove this after implementing runtime selection of hash algorithms
+        storage.node_hash_algorithm().validate_init().map_err(|e| {
+            storage.file_io_error(e, 0, Some("NodeHashAlgorithm::validate_init".to_string()))
+        })?;
+
         let mut this = bytemuck::zeroed::<Self>();
         let header_bytes = bytemuck::bytes_of_mut(&mut this);
         storage
@@ -419,6 +428,7 @@ impl NodeStoreHeader {
     /// Get the root hash.
     ///
     /// This is None if the database was created before v0.1.0.
+    #[must_use]
     pub fn root_hash(&self) -> Option<TrieHash> {
         if self.version.is_firewood_v1() && self.root_address.is_some() {
             Some(TrieHash::from(self.root_hash))
@@ -445,6 +455,7 @@ impl NodeStoreHeader {
 
     /// Get the cargo version of `firewood-storage` used to create this database,
     /// if available.
+    #[must_use]
     pub const fn cargo_version(&self) -> Option<&CargoVersion> {
         if self.version.is_firewood_v1() {
             Some(&self.cargo_version)
@@ -454,6 +465,7 @@ impl NodeStoreHeader {
     }
 
     /// Get the git describe string of `firewood` used to create this database,
+    #[must_use]
     pub const fn git_describe(&self) -> Option<&GitDescribe> {
         if self.version.is_firewood_v1() {
             Some(&self.git_describe)
