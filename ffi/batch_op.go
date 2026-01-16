@@ -8,58 +8,83 @@ import "C"
 
 import "fmt"
 
-// BatchOp represents a batch operation to be applied to the database.
-// Use Put, Delete, or DeleteRange to create a BatchOp.
-type BatchOp struct {
+// batchOp represents a single batch operation to be applied to the database.
+type batchOp struct {
 	key   []byte
 	value []byte
 	op    C.enum_BatchOpTag
 }
 
-// Put creates a BatchOp that inserts or updates a key with a value.
+// Batch accumulates database operations to be applied atomically.
+// Create a new Batch with [NewBatch], add operations with [Batch.Put],
+// [Batch.Delete], and [Batch.PrefixDelete], then apply with
+// [Database.UpdateBatch] or [Database.ProposeBatch].
+type Batch struct {
+	ops []batchOp
+}
+
+// NewBatch creates a new empty Batch.
+func NewBatch() *Batch {
+	return &Batch{}
+}
+
+// Put adds an operation to insert or update a key with a value.
 // The value may be empty (zero-length) to store an empty value.
-func Put(key, value []byte) BatchOp {
-	return BatchOp{
+func (b *Batch) Put(key, value []byte) {
+	b.ops = append(b.ops, batchOp{
 		key:   key,
 		value: value,
 		op:    C.BatchOpTag_Put,
-	}
+	})
 }
 
-// Delete creates a BatchOp that deletes a specific key.
-func Delete(key []byte) BatchOp {
-	return BatchOp{
+// Delete adds an operation to delete a specific key.
+func (b *Batch) Delete(key []byte) {
+	b.ops = append(b.ops, batchOp{
 		key:   key,
 		value: nil,
 		op:    C.BatchOpTag_Delete,
-	}
+	})
 }
 
-// DeleteRange creates a BatchOp that deletes all keys with the given prefix.
-func DeleteRange(prefix []byte) BatchOp {
-	return BatchOp{
+// PrefixDelete adds an operation to delete all keys with the given prefix.
+func (b *Batch) PrefixDelete(prefix []byte) {
+	b.ops = append(b.ops, batchOp{
 		key:   prefix,
 		value: nil,
 		op:    C.BatchOpTag_DeleteRange,
-	}
+	})
 }
 
-// batchOpsFromKeyValues converts parallel slices of keys and values into BatchOps.
+// Len returns the number of operations in the batch.
+func (b *Batch) Len() int {
+	return len(b.ops)
+}
+
+// batchFromKeyValues converts parallel slices of keys and values into a Batch.
 // This maintains backward compatibility with the old API:
-//   - nil value: DeleteRange operation using the key as a prefix
+//   - nil value: PrefixDelete operation using the key as a prefix
 //   - non-nil value (including empty): Put operation
-func batchOpsFromKeyValues(keys, vals [][]byte) ([]BatchOp, error) {
+func batchFromKeyValues(keys, vals [][]byte) (*Batch, error) {
 	if len(keys) != len(vals) {
 		return nil, fmt.Errorf("%w: %d != %d", errKeysAndValues, len(keys), len(vals))
 	}
 
-	ops := make([]BatchOp, len(keys))
+	batch := &Batch{ops: make([]batchOp, len(keys))}
 	for i := range keys {
 		if vals[i] == nil {
-			ops[i] = DeleteRange(keys[i])
+			batch.ops[i] = batchOp{
+				key:   keys[i],
+				value: nil,
+				op:    C.BatchOpTag_DeleteRange,
+			}
 		} else {
-			ops[i] = Put(keys[i], vals[i])
+			batch.ops[i] = batchOp{
+				key:   keys[i],
+				value: vals[i],
+				op:    C.BatchOpTag_Put,
+			}
 		}
 	}
-	return ops, nil
+	return batch, nil
 }

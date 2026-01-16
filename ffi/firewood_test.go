@@ -292,15 +292,27 @@ func sortKV(keys, vals [][]byte) error {
 	return nil
 }
 
+func makeBatch(keys, vals [][]byte) *Batch {
+	batch := NewBatch()
+	for i := range keys {
+		batch.Put(keys[i], vals[i])
+	}
+	return batch
+}
+
 // Tests that 100 key-value pairs can be inserted and retrieved.
-// This happens in three ways:
+// This happens in 6 ways:
 // 1. By calling [Database.Propose] and then [Proposal.Commit].
 // 2. By calling [Database.Update] directly - no proposal storage is needed.
 // 3. By calling [Database.Propose] and not committing, which returns a proposal.
+// 4. By calling [Database.ProposeBatch] and then [Proposal.Commit].
+// 5. By calling [Database.UpdateBatch] directly - no proposal storage is needed.
+// 6. By calling [Database.ProposeBatch] and not committing, which returns a proposal.
 func TestInsert100(t *testing.T) {
 	type dbView interface {
 		Get(key []byte) ([]byte, error)
 		Propose(keys, vals [][]byte) (*Proposal, error)
+		ProposeBatch(batch *Batch) (*Proposal, error)
 		Root() (Hash, error)
 	}
 
@@ -336,11 +348,40 @@ func TestInsert100(t *testing.T) {
 		{
 			name: "Propose",
 			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
-				proposal, err := db.Propose(keys, vals)
+				return db.Propose(keys, vals)
+			},
+		},
+		{
+			name: "ProposeBatch and Commit",
+			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
+				batch := makeBatch(keys, vals)
+				proposal, err := db.ProposeBatch(batch)
 				if err != nil {
 					return nil, err
 				}
-				return proposal, nil
+				err = proposal.Commit()
+				if err != nil {
+					return nil, err
+				}
+				return db, nil
+			},
+		},
+		{
+			name: "UpdateBatch",
+			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
+				actualDB, ok := db.(*Database)
+				if !ok {
+					return nil, fmt.Errorf("expected *Database, got %T", db)
+				}
+				_, err := actualDB.UpdateBatch(makeBatch(keys, vals))
+				return db, err
+			},
+		},
+		{
+			name: "ProposeBatch",
+			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
+				batch := makeBatch(keys, vals)
+				return db.ProposeBatch(batch)
 			},
 		},
 	}
@@ -377,25 +418,58 @@ func TestInsert100(t *testing.T) {
 
 // Tests that a range of keys can be deleted.
 func TestRangeDelete(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-	keys, vals := kvForTest(100)
-	_, err := db.Update(keys, vals)
-	r.NoError(err)
+	tests := []struct {
+		name   string
+		update func(db *Database, keys, vals [][]byte) error
+		delete func(db *Database, prefix []byte) error
+	}{
+		{
+			name: "Update",
+			update: func(db *Database, keys, vals [][]byte) error {
+				_, err := db.Update(keys, vals)
+				return err
+			},
+			delete: func(db *Database, prefix []byte) error {
+				_, err := db.Update([][]byte{prefix}, [][]byte{nil})
+				return err
+			},
+		},
+		{
+			name: "UpdateBatch",
+			update: func(db *Database, keys, vals [][]byte) error {
+				_, err := db.UpdateBatch(makeBatch(keys, vals))
+				return err
+			},
+			delete: func(db *Database, prefix []byte) error {
+				batch := NewBatch()
+				batch.PrefixDelete(prefix)
+				_, err := db.UpdateBatch(batch)
+				return err
+			},
+		},
+	}
 
-	const deletePrefix = 1
-	_, err = db.Update([][]byte{keyForTest(deletePrefix)}, [][]byte{{}})
-	r.NoError(err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			db := newTestDatabase(t)
+			keys, vals := kvForTest(100)
+			r.NoError(tt.update(db, keys, vals))
 
-	for i := range keys {
-		got, err := db.Get(keys[i])
-		r.NoError(err)
+			const deletePrefix = 1
+			r.NoError(tt.delete(db, keyForTest(deletePrefix)))
 
-		if deleted := bytes.HasPrefix(keys[i], keyForTest(deletePrefix)); deleted {
-			r.NoError(err)
-		} else {
-			r.Equal(vals[i], got)
-		}
+			for i := range keys {
+				got, err := db.Get(keys[i])
+				r.NoError(err)
+
+				if deleted := bytes.HasPrefix(keys[i], keyForTest(deletePrefix)); deleted {
+					r.NoError(err)
+				} else {
+					r.Equal(vals[i], got)
+				}
+			}
+		})
 	}
 }
 
@@ -494,38 +568,65 @@ func TestConflictingProposals(t *testing.T) {
 
 // Tests that a proposal that deletes all keys can be committed.
 func TestDeleteAll(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	keys, vals := kvForTest(10)
-	// Insert 10 key-value pairs.
-	_, err := db.Update(keys, vals)
-	r.NoError(err)
-
-	// Create a proposal that deletes all keys.
-	proposal, err := db.Propose([][]byte{[]byte("key")}, [][]byte{nil})
-	r.NoError(err)
-
-	// Check that the proposal doesn't have the keys we just inserted.
-	for i := range keys {
-		got, err := proposal.Get(keys[i])
-		r.NoError(err, "Get(%d)", i)
-		r.Empty(got, "Get(%d)", i)
+	tests := []struct {
+		name   string
+		delete func(db *Database, prefix []byte) (*Proposal, error)
+	}{
+		{
+			name: "Propose with nil value",
+			delete: func(db *Database, prefix []byte) (*Proposal, error) {
+				return db.Propose(
+					[][]byte{prefix},
+					[][]byte{nil},
+				)
+			},
+		},
+		{
+			name: "ProposeBatch with PrefixDelete",
+			delete: func(db *Database, prefix []byte) (*Proposal, error) {
+				batch := NewBatch()
+				batch.PrefixDelete(prefix)
+				return db.ProposeBatch(batch)
+			},
+		},
 	}
 
-	expectedHash := stringToHash(t, expectedRoots[emptyKey])
-	hash, err := proposal.Root()
-	r.NoError(err, "%T.Root() after commit", proposal)
-	r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			db := newTestDatabase(t)
 
-	// Commit the proposal.
-	err = proposal.Commit()
-	r.NoError(err, "Commit")
+			keys, vals := kvForTest(10)
+			// Insert 10 key-value pairs.
+			_, err := db.Update(keys, vals)
+			r.NoError(err)
 
-	// Check that the database is empty.
-	hash, err = db.Root()
-	r.NoError(err, "%T.Root()", db)
-	r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
+			// Create a proposal that deletes all keys.
+			proposal, err := tt.delete(db, []byte("key"))
+			r.NoError(err)
+
+			// Check that the proposal doesn't have the keys we just inserted.
+			for i := range keys {
+				got, err := proposal.Get(keys[i])
+				r.NoError(err, "Get(%d)", i)
+				r.Empty(got, "Get(%d)", i)
+			}
+
+			expectedHash := stringToHash(t, expectedRoots[emptyKey])
+			hash, err := proposal.Root()
+			r.NoError(err, "%T.Root() after commit", proposal)
+			r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
+
+			// Commit the proposal.
+			err = proposal.Commit()
+			r.NoError(err, "Commit")
+
+			// Check that the database is empty.
+			hash, err = db.Root()
+			r.NoError(err, "%T.Root()", db)
+			r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
+		})
+	}
 }
 
 func TestDropProposal(t *testing.T) {
@@ -1529,258 +1630,4 @@ func parseKVFromDumpFormat(dumpstr string) ([][]byte, [][]byte, error) {
 		values = append(values, valueBytes)
 	}
 	return keys, values, nil
-}
-
-// Tests for BatchOp API - explicit operation types without nil/empty ambiguity
-
-// TestBatchOpPut tests the Put operation.
-func TestBatchOpPut(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	// Insert using BatchOp API
-	ops := []BatchOp{
-		Put([]byte("key1"), []byte("value1")),
-		Put([]byte("key2"), []byte("value2")),
-		Put([]byte("key3"), []byte{}), // Empty value is valid
-	}
-	_, err := db.UpdateBatch(ops)
-	r.NoError(err)
-
-	// Verify insertions
-	got, err := db.Get([]byte("key1"))
-	r.NoError(err)
-	r.Equal([]byte("value1"), got)
-
-	got, err = db.Get([]byte("key2"))
-	r.NoError(err)
-	r.Equal([]byte("value2"), got)
-
-	got, err = db.Get([]byte("key3"))
-	r.NoError(err)
-	r.Equal([]byte{}, got, "empty value should be stored, not nil")
-}
-
-// TestBatchOpDelete tests the Delete operation for single key deletion.
-func TestBatchOpDelete(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	// Insert some keys
-	ops := []BatchOp{
-		Put([]byte("key1"), []byte("value1")),
-		Put([]byte("key10"), []byte("value10")),
-		Put([]byte("key100"), []byte("value100")),
-	}
-	_, err := db.UpdateBatch(ops)
-	r.NoError(err)
-
-	// Delete only "key1" (exact match, not prefix)
-	deleteOps := []BatchOp{
-		Delete([]byte("key1")),
-	}
-	_, err = db.UpdateBatch(deleteOps)
-	r.NoError(err)
-
-	// Verify "key1" is deleted
-	got, err := db.Get([]byte("key1"))
-	r.NoError(err)
-	r.Nil(got, "key1 should be deleted")
-
-	// Verify "key10" and "key100" still exist (not affected by prefix)
-	got, err = db.Get([]byte("key10"))
-	r.NoError(err)
-	r.Equal([]byte("value10"), got, "key10 should still exist")
-
-	got, err = db.Get([]byte("key100"))
-	r.NoError(err)
-	r.Equal([]byte("value100"), got, "key100 should still exist")
-}
-
-// TestBatchOpDeleteRange tests the DeleteRange operation for prefix deletion.
-func TestBatchOpDeleteRange(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	// Insert some keys
-	ops := []BatchOp{
-		Put([]byte("key1"), []byte("value1")),
-		Put([]byte("key10"), []byte("value10")),
-		Put([]byte("key100"), []byte("value100")),
-		Put([]byte("other"), []byte("other_value")),
-	}
-	_, err := db.UpdateBatch(ops)
-	r.NoError(err)
-
-	// Delete all keys with prefix "key1"
-	deleteOps := []BatchOp{
-		DeleteRange([]byte("key1")),
-	}
-	_, err = db.UpdateBatch(deleteOps)
-	r.NoError(err)
-
-	// Verify all keys with prefix "key1" are deleted
-	got, err := db.Get([]byte("key1"))
-	r.NoError(err)
-	r.Nil(got, "key1 should be deleted")
-
-	got, err = db.Get([]byte("key10"))
-	r.NoError(err)
-	r.Nil(got, "key10 should be deleted (has prefix key1)")
-
-	got, err = db.Get([]byte("key100"))
-	r.NoError(err)
-	r.Nil(got, "key100 should be deleted (has prefix key1)")
-
-	// Verify "other" still exists
-	got, err = db.Get([]byte("other"))
-	r.NoError(err)
-	r.Equal([]byte("other_value"), got, "other should still exist")
-}
-
-// TestBatchOpProposeBatch tests the ProposeBatch API.
-func TestBatchOpProposeBatch(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	// Insert initial data
-	_, err := db.UpdateBatch([]BatchOp{
-		Put([]byte("key1"), []byte("value1")),
-		Put([]byte("key2"), []byte("value2")),
-	})
-	r.NoError(err)
-
-	// Create a proposal with BatchOp
-	proposal, err := db.ProposeBatch([]BatchOp{
-		Put([]byte("key3"), []byte("value3")),
-		Delete([]byte("key1")),
-	})
-	r.NoError(err)
-	defer proposal.Drop()
-
-	// Verify proposal state
-	got, err := proposal.Get([]byte("key1"))
-	r.NoError(err)
-	r.Nil(got, "key1 should be deleted in proposal")
-
-	got, err = proposal.Get([]byte("key2"))
-	r.NoError(err)
-	r.Equal([]byte("value2"), got, "key2 should exist in proposal")
-
-	got, err = proposal.Get([]byte("key3"))
-	r.NoError(err)
-	r.Equal([]byte("value3"), got, "key3 should exist in proposal")
-
-	// Verify db state is unchanged
-	got, err = db.Get([]byte("key1"))
-	r.NoError(err)
-	r.Equal([]byte("value1"), got, "key1 should still exist in db")
-}
-
-// TestBatchOpProposalProposeBatch tests chained proposals with BatchOp.
-func TestBatchOpProposalProposeBatch(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	// Insert initial data
-	_, err := db.UpdateBatch([]BatchOp{
-		Put([]byte("key1"), []byte("value1")),
-	})
-	r.NoError(err)
-
-	// Create first proposal
-	proposal1, err := db.ProposeBatch([]BatchOp{
-		Put([]byte("key2"), []byte("value2")),
-	})
-	r.NoError(err)
-
-	// Create second proposal on top of first
-	proposal2, err := proposal1.ProposeBatch([]BatchOp{
-		Put([]byte("key3"), []byte("value3")),
-		Delete([]byte("key1")),
-	})
-	r.NoError(err)
-	defer proposal2.Drop()
-
-	// Verify proposal2 state
-	got, err := proposal2.Get([]byte("key1"))
-	r.NoError(err)
-	r.Nil(got, "key1 should be deleted in proposal2")
-
-	got, err = proposal2.Get([]byte("key2"))
-	r.NoError(err)
-	r.Equal([]byte("value2"), got, "key2 should exist in proposal2")
-
-	got, err = proposal2.Get([]byte("key3"))
-	r.NoError(err)
-	r.Equal([]byte("value3"), got, "key3 should exist in proposal2")
-
-	// Commit proposal1 first, then proposal2
-	err = proposal1.Commit()
-	r.NoError(err)
-
-	err = proposal2.Commit()
-	r.NoError(err)
-
-	// Verify final state
-	got, err = db.Get([]byte("key1"))
-	r.NoError(err)
-	r.Nil(got, "key1 should be deleted")
-
-	got, err = db.Get([]byte("key2"))
-	r.NoError(err)
-	r.Equal([]byte("value2"), got, "key2 should exist")
-
-	got, err = db.Get([]byte("key3"))
-	r.NoError(err)
-	r.Equal([]byte("value3"), got, "key3 should exist")
-}
-
-// TestBatchOpMixedOperations tests a batch with mixed Put, Delete, and DeleteRange.
-func TestBatchOpMixedOperations(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	// Insert initial data
-	_, err := db.UpdateBatch([]BatchOp{
-		Put([]byte("apple"), []byte("fruit")),
-		Put([]byte("apricot"), []byte("fruit")),
-		Put([]byte("banana"), []byte("fruit")),
-		Put([]byte("berry"), []byte("fruit")),
-		Put([]byte("cherry"), []byte("fruit")),
-	})
-	r.NoError(err)
-
-	// Mixed batch: delete "banana" exactly, delete all "ap*" prefix, add "date"
-	_, err = db.UpdateBatch([]BatchOp{
-		Delete([]byte("banana")),
-		DeleteRange([]byte("ap")),
-		Put([]byte("date"), []byte("fruit")),
-	})
-	r.NoError(err)
-
-	// Verify results
-	got, err := db.Get([]byte("apple"))
-	r.NoError(err)
-	r.Nil(got, "apple should be deleted (ap* prefix)")
-
-	got, err = db.Get([]byte("apricot"))
-	r.NoError(err)
-	r.Nil(got, "apricot should be deleted (ap* prefix)")
-
-	got, err = db.Get([]byte("banana"))
-	r.NoError(err)
-	r.Nil(got, "banana should be deleted (exact delete)")
-
-	got, err = db.Get([]byte("berry"))
-	r.NoError(err)
-	r.Equal([]byte("fruit"), got, "berry should still exist")
-
-	got, err = db.Get([]byte("cherry"))
-	r.NoError(err)
-	r.Equal([]byte("fruit"), got, "cherry should still exist")
-
-	got, err = db.Get([]byte("date"))
-	r.NoError(err)
-	r.Equal([]byte("fruit"), got, "date should be added")
 }

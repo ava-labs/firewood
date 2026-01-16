@@ -242,22 +242,23 @@ func New(dbDir string, opts ...Option) (*Database, error) {
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
 func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
-	ops, err := batchOpsFromKeyValues(keys, vals)
+	batch, err := batchFromKeyValues(keys, vals)
 	if err != nil {
 		return EmptyRoot, err
 	}
-	return db.UpdateBatch(ops)
+	return db.UpdateBatch(batch)
 }
 
 // UpdateBatch applies a batch of operations to the database, returning the hash of the
 // root node after the batch is applied. This is equivalent to creating a proposal
 // with [Database.ProposeBatch], then committing it with [Proposal.Commit].
 //
-// Use [Put], [Delete], and [DeleteRange] to construct the operations.
+// Use [NewBatch] to create a batch, then [Batch.Put], [Batch.Delete], and
+// [Batch.PrefixDelete] to add operations.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
-func (db *Database) UpdateBatch(ops []BatchOp) (Hash, error) {
+func (db *Database) UpdateBatch(batch *Batch) (Hash, error) {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {
@@ -270,7 +271,7 @@ func (db *Database) UpdateBatch(ops []BatchOp) (Hash, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	kvp := newKeyValuePairsFromBatchOps(ops, &pinner)
+	kvp := newKeyValuePairsFromBatch(batch, &pinner)
 
 	return getHashKeyFromHashResult(C.fwd_batch(db.handle, kvp))
 }
@@ -288,22 +289,23 @@ func (db *Database) UpdateBatch(ops []BatchOp) (Hash, error) {
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
 func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
-	ops, err := batchOpsFromKeyValues(keys, vals)
+	batch, err := batchFromKeyValues(keys, vals)
 	if err != nil {
 		return nil, err
 	}
-	return db.ProposeBatch(ops)
+	return db.ProposeBatch(batch)
 }
 
 // ProposeBatch creates a new proposal with the given batch operations. The proposal
 // is not committed until [Proposal.Commit] is called. See [Database.Close] regarding
 // freeing proposals. All proposals should be freed before closing the database.
 //
-// Use [Put], [Delete], and [DeleteRange] to construct the operations.
+// Use [NewBatch] to create a batch, then [Batch.Put], [Batch.Delete], and
+// [Batch.PrefixDelete] to add operations.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
-func (db *Database) ProposeBatch(ops []BatchOp) (*Proposal, error) {
+func (db *Database) ProposeBatch(batch *Batch) (*Proposal, error) {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {
@@ -316,7 +318,7 @@ func (db *Database) ProposeBatch(ops []BatchOp) (*Proposal, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	kvp := newKeyValuePairsFromBatchOps(ops, &pinner)
+	kvp := newKeyValuePairsFromBatch(batch, &pinner)
 	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.outstandingHandles, &db.commitLock)
 }
 
