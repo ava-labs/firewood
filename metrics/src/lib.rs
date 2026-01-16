@@ -1,4 +1,4 @@
-// Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2026, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
 //! Shared metric helpers for Firewood.
@@ -38,12 +38,9 @@
 //! | `firewood_record!(name, value)` | Always record to histogram |
 //! | `firewood_record!(name, value, expensive)` | Record only if expensive metrics enabled |
 //!
-//! For registration, use `describe_*` or `describe_*_expensive` macros.
+//! For registration, use `metrics::describe_*` macros.
 
 use std::cell::Cell;
-
-// Re-export metrics crate macros for registration
-pub use metrics::{describe_counter, describe_gauge, describe_histogram};
 
 /// Metric configuration context for the current thread.
 ///
@@ -74,7 +71,7 @@ thread_local! {
     static METRICS_CONTEXT: Cell<Option<MetricsContext>> = const { Cell::new(None) };
 }
 
-/// An RAII guard that restores the previous thread-local [`MetricsContext`].
+/// A guard that restores the previous thread-local [`MetricsContext`].
 #[derive(Debug)]
 pub struct MetricsContextGuard {
     previous: Option<MetricsContext>,
@@ -230,78 +227,41 @@ macro_rules! firewood_histogram {
     };
 }
 
-/// Describes a counter metric marked as expensive.
-///
-/// Appends " (expensive)" to the description for clarity.
-///
-/// # Usage
-/// ```ignore
-/// describe_counter_expensive!(SLOW_OP_COUNT, "Count of slow operations");
-/// ```
-#[macro_export]
-macro_rules! describe_counter_expensive {
-    ($name:expr, $description:expr) => {
-        metrics::describe_counter!($name, concat!($description, " (expensive)"))
-    };
-}
-
-/// Describes a gauge metric marked as expensive.
-#[macro_export]
-macro_rules! describe_gauge_expensive {
-    ($name:expr, $description:expr) => {
-        metrics::describe_gauge!($name, concat!($description, " (expensive)"))
-    };
-}
-
-/// Describes a histogram metric marked as expensive.
-#[macro_export]
-macro_rules! describe_histogram_expensive {
-    ($name:expr, $description:expr) => {
-        metrics::describe_histogram!($name, concat!($description, " (expensive)"))
-    };
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn isolated<F, R>(f: F) -> R
+    where
+        F: FnOnce() -> R,
+    {
+        let _guard = set_metrics_context(None);
+        f()
+    }
+
     #[test]
     fn context_defaults_to_none() {
-        METRICS_CONTEXT.set(None);
-        assert_eq!(current_metrics_context(), None);
-        assert!(!expensive_metrics_enabled());
+        isolated(|| {
+            assert_eq!(current_metrics_context(), None);
+            assert!(!expensive_metrics_enabled());
+        });
     }
 
     #[test]
-    fn context_is_set_and_restored() {
-        METRICS_CONTEXT.set(None);
-        let ctx1 = MetricsContext::new(false);
-        let ctx2 = MetricsContext::new(true);
+    fn nested_guards_restore_in_correct_order() {
+        isolated(|| {
+            let outer = MetricsContext::new(false);
+            let inner = MetricsContext::new(true);
 
-        let guard1 = set_metrics_context(Some(ctx1));
-        assert_eq!(current_metrics_context(), Some(ctx1));
-        assert!(!expensive_metrics_enabled());
+            let guard1 = set_metrics_context(Some(outer));
+            {
+                let _guard2 = set_metrics_context(Some(inner));
+                assert_eq!(current_metrics_context(), Some(inner));
+            }
+            assert_eq!(current_metrics_context(), Some(outer));
 
-        {
-            let _guard2 = set_metrics_context(Some(ctx2));
-            assert_eq!(current_metrics_context(), Some(ctx2));
-            assert!(expensive_metrics_enabled());
-        }
-
-        assert_eq!(current_metrics_context(), Some(ctx1));
-        assert!(!expensive_metrics_enabled());
-
-        drop(guard1);
-        assert_eq!(current_metrics_context(), None);
-        assert!(!expensive_metrics_enabled());
-    }
-
-    #[test]
-    fn expensive_gating() {
-        METRICS_CONTEXT.set(None);
-        assert!(!expensive_metrics_enabled());
-
-        let _guard = set_metrics_context(Some(MetricsContext::new(true)));
-        assert!(expensive_metrics_enabled());
+            drop(guard1);
+            assert_eq!(current_metrics_context(), None);
+        });
     }
 }

@@ -2,13 +2,12 @@
 name = "firewood-metrics"
 version.workspace = true
 edition.workspace = true
-authors = ["Ava Labs, Inc."]
-description = "Shared metrics utilities for Firewood."
 license-file.workspace = true
 homepage.workspace = true
 repository.workspace = true
 readme.workspace = true
 rust-version.workspace = true
+description = "Shared metrics utilities for Firewood."
 
 [dependencies]
 metrics.workspace = true

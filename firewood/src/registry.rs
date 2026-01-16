@@ -3,6 +3,8 @@
 
 //! Firewood layer metric definitions.
 
+use metrics::{describe_counter, describe_gauge};
+
 /// Number of proposals created.
 pub const PROPOSALS: &str = "proposals";
 
@@ -35,8 +37,6 @@ pub const MAX_REVISIONS: &str = "max_revisions";
 
 /// Registers all firewood metric descriptions.
 pub fn register() {
-    use metrics::{describe_counter, describe_gauge};
-
     describe_counter!(PROPOSALS, "Number of proposals created");
     describe_counter!(
         PROPOSALS_CREATED,
@@ -56,7 +56,7 @@ pub fn register() {
         CHANGE_PROOF_NEXT,
         "Number of next calls to calculate a change proof"
     );
-    describe_counter!(COMMIT_LATENCY_MS, "Commit latency in milliseconds");
+    describe_counter!(COMMIT_LATENCY_MS, "Commit latency (ms)");
     describe_gauge!(ACTIVE_REVISIONS, "Current number of active revisions");
     describe_gauge!(MAX_REVISIONS, "Maximum number of revisions configured");
 }

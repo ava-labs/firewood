@@ -3,6 +3,8 @@
 
 //! Storage layer metric definitions.
 
+use metrics::describe_counter;
+
 /// Amount of space reused from free lists.
 pub const SPACE_REUSED: &str = "space.reused";
 /// Amount of space allocated from end.
@@ -43,19 +45,20 @@ pub mod ring {
 
 /// Registers all storage metric descriptions.
 pub fn register() {
-    use metrics::describe_counter;
-
-    describe_counter!(SPACE_REUSED, "Amount of space reused from free lists");
-    describe_counter!(SPACE_FROM_END, "Amount of space allocated from end");
-    describe_counter!(SPACE_FREED, "Amount of space freed");
+    describe_counter!(
+        SPACE_REUSED,
+        "Amount of space reused from free lists (bytes)"
+    );
+    describe_counter!(SPACE_FROM_END, "Amount of space allocated from end (bytes)");
+    describe_counter!(SPACE_FREED, "Amount of space freed (bytes)");
     describe_counter!(DELETE_NODE, "Count of deleted nodes");
-    describe_counter!(FLUSH_NODES, "Time spent flushing nodes");
+    describe_counter!(FLUSH_NODES, "Time spent flushing nodes (ms)");
 
     describe_counter!(READ_NODE, "Number of node reads");
     describe_counter!(CACHE_NODE, "Number of node cache operations");
     describe_counter!(CACHE_FREELIST, "Number of freelist cache operations");
 
-    describe_counter!(IO_READ_MS, "IO read timing in milliseconds");
+    describe_counter!(IO_READ_MS, "IO read timing (ms)");
     describe_counter!(IO_READ_COUNT, "Number of IO read operations");
 
     describe_counter!(
