@@ -6,16 +6,17 @@
 //! This crate provides:
 //! - Recording macros that are simple to use at callsites
 //! - Thread-local context for gating expensive metrics
+//! - Histogram bucket registry for centralized bucket configuration
 //!
 //! Each crate defines its own metric registry (e.g., `ffi::registry`, `storage::registry`).
 //!
 //! # Usage
 //!
 //! ```ignore
-//! use firewood_metrics::firewood_increment;
+//! use firewood_metrics::{firewood_increment, register_histogram_buckets};
 //! use crate::registry;
 //!
-//! // At startup
+//! // At startup - register metrics and their bucket configurations
 //! registry::register();
 //!
 //! // Always increment
@@ -24,6 +25,27 @@
 //! // Expensive histogram (only records if expensive metrics enabled)
 //! firewood_record!(registry::COMMIT_MS_BUCKET, elapsed_ms, expensive);
 //! ```
+//!
+//! # Histogram Bucket Registration
+//!
+//! Use [`register_histogram_buckets!`] to specify custom buckets for histogram metrics.
+//! This should be called in your crate's `register()` function:
+//!
+//! ```ignore
+//! use firewood_metrics::register_histogram_buckets;
+//!
+//! pub fn register() {
+//!     // Register histogram with custom buckets
+//!     register_histogram_buckets!(
+//!         "my.latency_ms",
+//!         "Latency in milliseconds",
+//!         &[1.0, 5.0, 10.0, 50.0, 100.0]
+//!     );
+//! }
+//! ```
+//!
+//! The metrics setup code can then iterate over registered buckets using
+//! [`registered_histogram_buckets()`].
 //!
 //! # Macro Overview
 //!
@@ -38,9 +60,11 @@
 //! | `firewood_record!(name, value)` | Always record to histogram |
 //! | `firewood_record!(name, value, expensive)` | Record only if expensive metrics enabled |
 //!
-//! For registration, use `metrics::describe_*` macros.
+//! For registration, use `metrics::describe_*` macros or [`register_histogram_buckets!`].
 
 use std::cell::Cell;
+
+use parking_lot::RwLock;
 
 /// Metric configuration context for the current thread.
 ///
@@ -102,6 +126,78 @@ pub fn current_metrics_context() -> Option<MetricsContext> {
 #[must_use]
 pub fn expensive_metrics_enabled() -> bool {
     current_metrics_context().is_some_and(MetricsContext::expensive_metrics_enabled)
+}
+
+/// Entry for a registered histogram with custom buckets.
+#[derive(Debug, Clone)]
+pub struct HistogramBucketConfig {
+    /// The metric name (e.g., `ffi.commit_ms_bucket`).
+    pub name: &'static str,
+    /// The bucket boundaries.
+    pub buckets: &'static [f64],
+}
+
+/// Global registry of histogram bucket configurations.
+///
+/// Crates register their histogram buckets during their `register()` call,
+/// and the metrics setup code reads from this registry to configure the exporter.
+static HISTOGRAM_BUCKETS: RwLock<Vec<HistogramBucketConfig>> = RwLock::new(Vec::new());
+
+/// Registers a histogram metric with custom bucket boundaries.
+///
+/// This function both:
+/// 1. Calls `metrics::describe_histogram!` to register the metric description
+/// 2. Stores the bucket configuration in a global registry for later use by exporters
+///
+/// # Arguments
+///
+/// * `name` - The metric name (must be a `&'static str`)
+/// * `description` - Human-readable description of the metric
+/// * `buckets` - Bucket boundaries for the histogram (must be `&'static [f64]`)
+pub fn register_histogram_with_buckets(
+    name: &'static str,
+    description: &'static str,
+    buckets: &'static [f64],
+) {
+    // Register the metric description
+    metrics::describe_histogram!(name, description);
+
+    // Store bucket configuration
+    let config = HistogramBucketConfig { name, buckets };
+    HISTOGRAM_BUCKETS.write().push(config);
+}
+
+/// Returns all registered histogram bucket configurations.
+///
+/// This is used by the metrics setup code to configure the Prometheus exporter
+/// with the appropriate bucket boundaries for each histogram.
+#[must_use]
+pub fn registered_histogram_buckets() -> Vec<HistogramBucketConfig> {
+    HISTOGRAM_BUCKETS.read().clone()
+}
+
+/// Registers a histogram metric with custom bucket boundaries.
+///
+/// This macro simplifies histogram registration by combining metric description
+/// and bucket configuration in one call.
+///
+/// # Usage
+///
+/// ```ignore
+/// use firewood_metrics::register_histogram_buckets;
+///
+/// // In your registry::register() function:
+/// register_histogram_buckets!(
+///     "ffi.commit_ms_bucket",
+///     "Commit duration via FFI in milliseconds",
+///     &[0.1, 0.5, 1.0, 2.0, 5.0, 10.0]
+/// );
+/// ```
+#[macro_export]
+macro_rules! register_histogram_buckets {
+    ($name:expr, $description:expr, $buckets:expr) => {
+        $crate::register_histogram_with_buckets($name, $description, $buckets)
+    };
 }
 
 /// Increments a counter metric.

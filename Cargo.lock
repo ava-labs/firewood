@@ -1225,6 +1225,7 @@ name = "firewood-metrics"
 version = "0.0.18"
 dependencies = [
  "metrics",
+ "parking_lot",
 ]
 
 [[package]]

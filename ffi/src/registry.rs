@@ -3,7 +3,8 @@
 
 //! FFI layer metric definitions.
 
-use metrics::{describe_counter, describe_histogram};
+use firewood_metrics::register_histogram_buckets;
+use metrics::describe_counter;
 
 pub const COMMIT_MS: &str = "ffi.commit_ms";
 pub const COMMIT_COUNT: &str = "ffi.commit";
@@ -22,22 +23,36 @@ pub const CACHED_VIEW_HIT: &str = "ffi.cached_view.hit";
 
 pub const MERGE_COUNT: &str = "firewood.ffi.merge";
 
+const FFI_TIMING_BUCKETS: &[f64] = &[
+    0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 15.0, 20.0,
+    30.0, 50.0,
+];
+
 /// Registers all FFI metric descriptions.
 pub fn register() {
     describe_counter!(COMMIT_MS, "Time spent committing via FFI (ms)");
     describe_counter!(COMMIT_COUNT, "Count of commit operations via FFI");
-    describe_histogram!(COMMIT_MS_BUCKET, "Commit duration via FFI in milliseconds");
+    register_histogram_buckets!(
+        COMMIT_MS_BUCKET,
+        "Commit duration via FFI in milliseconds",
+        FFI_TIMING_BUCKETS
+    );
 
     describe_counter!(PROPOSE_MS, "Time spent proposing via FFI (ms)");
     describe_counter!(PROPOSE_COUNT, "Count of proposal operations via FFI");
-    describe_histogram!(
+    register_histogram_buckets!(
         PROPOSE_MS_BUCKET,
-        "Propose duration via FFI in milliseconds"
+        "Propose duration via FFI in milliseconds",
+        FFI_TIMING_BUCKETS
     );
 
     describe_counter!(BATCH_MS, "Time spent processing batches (ms)");
     describe_counter!(BATCH_COUNT, "Count of batch operations completed");
-    describe_histogram!(BATCH_MS_BUCKET, "Batch processing duration in milliseconds");
+    register_histogram_buckets!(
+        BATCH_MS_BUCKET,
+        "Batch processing duration in milliseconds",
+        FFI_TIMING_BUCKETS
+    );
 
     describe_counter!(CACHED_VIEW_MISS, "Count of cached view misses");
     describe_counter!(CACHED_VIEW_HIT, "Count of cached view hits");
