@@ -36,7 +36,7 @@ mod revision;
 mod value;
 
 use firewood::v2::api::DbView;
-use firewood_metrics::{MetricsContext, firewood_increment, firewood_record, set_metrics_context};
+use firewood_metrics::{firewood_increment, firewood_record, set_metrics_context};
 
 pub use crate::handle::*;
 pub use crate::iterator::*;
@@ -77,11 +77,9 @@ fn invoke_with_handle<H: HasContext, T: NullHandleResult, V: Into<T>>(
 ) -> T {
     match handle {
         Some(handle) => {
-            let _guard = if handle.metrics().is_some() {
-                Some(set_metrics_context(handle.metrics()))
-            } else {
-                None
-            };
+            let _guard = handle
+                .metrics()
+                .map(|_| set_metrics_context(handle.metrics()));
             invoke(move || once(handle))
         }
         None => T::null_handle_pointer_error(),

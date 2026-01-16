@@ -212,14 +212,14 @@ macro_rules! register_histogram_buckets {
 macro_rules! firewood_increment {
     ($name:expr, $value:expr, expensive) => {
         if $crate::expensive_metrics_enabled() {
-            metrics::counter!($name).increment($value);
+            ::metrics::counter!($name).increment($value);
         }
     };
     ($name:expr, $value:expr) => {
-        metrics::counter!($name).increment($value)
+        ::metrics::counter!($name).increment($value)
     };
     ($name:expr, $value:expr, $($labels:tt)+) => {
-        metrics::counter!($name, $($labels)+).increment($value)
+        ::metrics::counter!($name, $($labels)+).increment($value)
     };
 }
 
@@ -234,10 +234,10 @@ macro_rules! firewood_increment {
 #[macro_export]
 macro_rules! firewood_counter {
     ($name:expr) => {
-        metrics::counter!($name)
+        ::metrics::counter!($name)
     };
     ($name:expr, $($labels:tt)+) => {
-        metrics::counter!($name, $($labels)+)
+        ::metrics::counter!($name, $($labels)+)
     };
 }
 
@@ -253,14 +253,14 @@ macro_rules! firewood_counter {
 macro_rules! firewood_set {
     ($name:expr, $value:expr, expensive) => {
         if $crate::expensive_metrics_enabled() {
-            metrics::gauge!($name).set($value);
+            ::metrics::gauge!($name).set($value);
         }
     };
     ($name:expr, $value:expr) => {
-        metrics::gauge!($name).set($value)
+        ::metrics::gauge!($name).set($value)
     };
     ($name:expr, $value:expr, $($labels:tt)+) => {
-        metrics::gauge!($name, $($labels)+).set($value)
+        ::metrics::gauge!($name, $($labels)+).set($value)
     };
 }
 
@@ -276,10 +276,10 @@ macro_rules! firewood_set {
 #[macro_export]
 macro_rules! firewood_gauge {
     ($name:expr) => {
-        metrics::gauge!($name)
+        ::metrics::gauge!($name)
     };
     ($name:expr, $($labels:tt)+) => {
-        metrics::gauge!($name, $($labels)+)
+        ::metrics::gauge!($name, $($labels)+)
     };
 }
 
@@ -295,14 +295,14 @@ macro_rules! firewood_gauge {
 macro_rules! firewood_record {
     ($name:expr, $value:expr, expensive) => {
         if $crate::expensive_metrics_enabled() {
-            metrics::histogram!($name).record($value);
+            ::metrics::histogram!($name).record($value);
         }
     };
     ($name:expr, $value:expr) => {
-        metrics::histogram!($name).record($value)
+        ::metrics::histogram!($name).record($value)
     };
     ($name:expr, $value:expr, $($labels:tt)+) => {
-        metrics::histogram!($name, $($labels)+).record($value)
+        ::metrics::histogram!($name, $($labels)+).record($value)
     };
 }
 
@@ -316,10 +316,10 @@ macro_rules! firewood_record {
 #[macro_export]
 macro_rules! firewood_histogram {
     ($name:expr) => {
-        metrics::histogram!($name)
+        ::metrics::histogram!($name)
     };
     ($name:expr, $($labels:tt)+) => {
-        metrics::histogram!($name, $($labels)+)
+        ::metrics::histogram!($name, $($labels)+)
     };
 }
 

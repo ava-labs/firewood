@@ -3,7 +3,6 @@
 
 use std::error::Error;
 use std::net::Ipv6Addr;
-use std::ops::Deref;
 use std::sync::OnceLock;
 
 use firewood_metrics::MetricsContext;
@@ -23,13 +22,23 @@ pub(crate) trait HasContext {
     fn metrics(&self) -> Option<MetricsContext>;
 }
 
-impl<T> HasContext for T
-where
-    T: Deref,
-    T::Target: HasContext,
-{
+// some blanket implementations. can't go with Deref approach because of
+// tuple handle in range proofs.
+impl<T: HasContext + ?Sized> HasContext for Box<T> {
     fn metrics(&self) -> Option<MetricsContext> {
-        <T::Target as HasContext>::metrics(self.deref())
+        (**self).metrics()
+    }
+}
+
+impl<T: HasContext + ?Sized> HasContext for &T {
+    fn metrics(&self) -> Option<MetricsContext> {
+        (**self).metrics()
+    }
+}
+
+impl<T: HasContext + ?Sized> HasContext for &mut T {
+    fn metrics(&self) -> Option<MetricsContext> {
+        (**self).metrics()
     }
 }
 
