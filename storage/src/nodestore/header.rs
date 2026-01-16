@@ -32,8 +32,8 @@ use super::primitives::{LinearAddress, area_size_hash};
 use crate::logger::{debug, trace};
 use crate::{NodeHashAlgorithm, TrieHash};
 
-/// A pair of root location information: (address, hash)
-pub type RootLocationPair = (LinearAddress, TrieHash);
+/// A tuple indicating the address and hash of a node (the root node).
+pub type RootNodeInfo = (LinearAddress, TrieHash);
 
 /// Can be used by filesystem tooling such as "file" to identify the version of
 /// firewood used to create this `NodeStore` file.
@@ -331,10 +331,10 @@ impl NodeStoreHeader {
     }
 
     pub fn with_root(
-        root_location: Option<RootLocationPair>,
+        root_node_info: Option<RootNodeInfo>,
         node_hash_algorithm: NodeHashAlgorithm,
     ) -> Self {
-        let (root_address, root_hash) = root_location.unzip();
+        let (root_address, root_hash) = root_node_info.unzip();
         let root_hash = root_hash.unwrap_or_else(TrieHash::empty).into();
         Self {
             // The store just contains the header at this point
@@ -429,7 +429,7 @@ impl NodeStoreHeader {
     ///
     /// Note that this does not overwrite the version field, so it is possible
     /// the root hash will be ignored when set.
-    pub fn set_root_location(&mut self, root_location: Option<RootLocationPair>) {
+    pub fn set_root_location(&mut self, root_location: Option<RootNodeInfo>) {
         let (root_address, root_hash) = root_location.unzip();
         self.root_address = root_address;
         self.root_hash = root_hash.unwrap_or_else(TrieHash::empty).into();

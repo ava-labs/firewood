@@ -589,7 +589,7 @@ pub mod test_utils {
 
     use crate::NodeHashAlgorithm;
     use crate::node::Node;
-    use crate::nodestore::header::RootLocationPair;
+    use crate::nodestore::header::RootNodeInfo;
     use crate::nodestore::{Committed, NodeStore, NodeStoreHeader};
 
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
@@ -628,12 +628,12 @@ pub mod test_utils {
     pub fn test_write_header<S: WritableStorage>(
         nodestore: &mut NodeStore<Committed, S>,
         size: u64,
-        root_location: Option<RootLocationPair>,
+        root_node_info: Option<RootNodeInfo>,
         free_lists: FreeLists,
     ) {
         let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
         header.set_size(size);
-        header.set_root_location(root_location);
+        header.set_root_location(root_node_info);
         *header.free_lists_mut() = free_lists;
         let header_bytes = bytemuck::bytes_of(&header);
         nodestore.header = header;
