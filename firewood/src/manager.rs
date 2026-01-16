@@ -25,10 +25,11 @@ use crate::merkle::Merkle;
 use crate::root_store::RootStore;
 use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
+use firewood_metrics::{firewood_increment, firewood_set};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal,
-    NodeHashAlgorithm, NodeStore, NodeStoreHeader, TrieHash, firewood_counter, firewood_gauge,
+    NodeHashAlgorithm, NodeStore, NodeStoreHeader, TrieHash,
 };
 
 pub(crate) const DB_FILE_NAME: &str = "firewood.db";
@@ -285,13 +286,11 @@ impl RevisionManager {
                     }
                 }
             }
-            firewood_gauge!(
-                "active_revisions",
-                "Current number of active revisions in memory"
-            )
-            .set(self.in_memory_revisions.read().len() as f64);
-            firewood_gauge!("max_revisions", "Maximum number of revisions configured")
-                .set(self.max_revisions as f64);
+            firewood_set!(
+                crate::registry::ACTIVE_REVISIONS,
+                self.in_memory_revisions.read().len() as f64
+            );
+            firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions as f64);
         }
 
         // 3. Persist to disk.
@@ -333,19 +332,11 @@ impl RevisionManager {
             });
 
             if discarded > 0 {
-                firewood_counter!(
-                    "proposals.discarded",
-                    "Number of proposals dropped without commit"
-                )
-                .increment(discarded);
+                firewood_increment!(crate::registry::PROPOSALS_DISCARDED, discarded);
             }
 
             // Update uncommitted proposals gauge after cleanup
-            firewood_gauge!(
-                "proposals.uncommitted",
-                "Current number of uncommitted proposals"
-            )
-            .set(lock.len() as f64);
+            firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len() as f64);
         }
 
         // then reparent any proposals that have this proposal as a parent
@@ -391,11 +382,7 @@ impl RevisionManager {
             lock.len()
         };
         // Update uncommitted proposals gauge after adding
-        firewood_gauge!(
-            "proposals.uncommitted",
-            "Current number of uncommitted proposals"
-        )
-        .set(len as f64);
+        firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, len as f64);
     }
 
     /// Retrieve a committed revision by its root hash.

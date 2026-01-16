@@ -25,7 +25,10 @@ use std::time::Instant;
 
 use firewood::db::{BatchOp, Db, Proposal};
 use firewood::v2::api::{self, Db as DbApi, DbView as DbViewApi, Proposal as ProposalApi};
-use firewood_storage::{InvalidTrieHashLength, firewood_counter};
+use firewood_metrics::firewood_increment;
+use firewood_storage::InvalidTrieHashLength;
+
+pub mod registry;
 use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use thiserror::Error;
@@ -246,9 +249,8 @@ fn apply_operation<'db>(
             let ops = into_batch_ops(pairs);
             let start = Instant::now();
             let proposal = DbApi::propose(db, ops)?;
-            firewood_counter!("replay.propose_ns", "Time spent in propose (ns)")
-                .increment(start.elapsed().as_nanos() as u64);
-            firewood_counter!("replay.propose", "Number of propose calls").increment(1);
+            firewood_increment!(registry::PROPOSE_NS, start.elapsed().as_nanos() as u64);
+            firewood_increment!(registry::PROPOSE_COUNT, 1);
             proposals.insert(returned_proposal_id, proposal);
             Ok(None)
         }
@@ -262,9 +264,8 @@ fn apply_operation<'db>(
             let start = Instant::now();
             let parent = get_proposal(proposals, proposal_id)?;
             let new_proposal = ProposalApi::propose(parent, ops)?;
-            firewood_counter!("replay.propose_ns", "Time spent in propose (ns)")
-                .increment(start.elapsed().as_nanos() as u64);
-            firewood_counter!("replay.propose", "Number of propose calls").increment(1);
+            firewood_increment!(registry::PROPOSE_NS, start.elapsed().as_nanos() as u64);
+            firewood_increment!(registry::PROPOSE_COUNT, 1);
             proposals.insert(returned_proposal_id, new_proposal);
             Ok(None)
         }
@@ -276,9 +277,8 @@ fn apply_operation<'db>(
             let proposal = take_proposal(proposals, proposal_id)?;
             let start = Instant::now();
             proposal.commit()?;
-            firewood_counter!("replay.commit_ns", "Time spent in commit (ns)")
-                .increment(start.elapsed().as_nanos() as u64);
-            firewood_counter!("replay.commit", "Number of commit calls").increment(1);
+            firewood_increment!(registry::COMMIT_NS, start.elapsed().as_nanos() as u64);
+            firewood_increment!(registry::COMMIT_COUNT, 1);
             Ok(returned_hash)
         }
     }

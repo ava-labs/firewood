@@ -32,9 +32,7 @@ use std::io::{Error, ErrorKind, Read};
 use std::iter::FusedIterator;
 
 use crate::node::ExtendableBytes;
-use crate::{
-    FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage, firewood_counter,
-};
+use crate::{FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage};
 
 /// Returns the maximum size needed to encode a `VarInt`.
 const fn var_int_max_size<VI>() -> usize {
@@ -239,12 +237,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
                 *free_stored_area_addr = free_head.next_free_block;
             }
 
-            firewood_counter!(
-                "space.reused",
-                "Bytes reused from free list by index",
-                "index" => index_name(index)
-            )
-            .increment(index.size());
+            firewood_metrics::firewood_increment!(crate::registry::SPACE_REUSED, index.size(), "index" => index_name(index));
 
             // Return the address of the newly allocated block.
             trace!("Allocating from free list: addr: {address:?}, size: {index}");
@@ -252,12 +245,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         }
 
         trace!("No free blocks of sufficient size {index} found");
-        firewood_counter!(
-            "space.from_end",
-            "Space allocated from end of nodestore",
-            "index" => index_name(index)
-        )
-        .increment(index.size());
+        firewood_metrics::firewood_increment!(crate::registry::SPACE_FROM_END, index.size(), "index" => index_name(index));
         Ok(None)
     }
 
@@ -316,18 +304,8 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
 
         let (area_size_index, _) = self.area_index_and_size(addr)?;
         trace!("Deleting node at {addr:?} of size {area_size_index}");
-        firewood_counter!(
-            "delete_node",
-            "Nodes deleted",
-            "index" => index_name(area_size_index)
-        )
-        .increment(1);
-        firewood_counter!(
-            "space.freed",
-            "Bytes freed in nodestore",
-            "index" => index_name(area_size_index)
-        )
-        .increment(area_size_index.size());
+        firewood_metrics::firewood_increment!(crate::registry::DELETE_NODE, 1, "index" => index_name(area_size_index));
+        firewood_metrics::firewood_increment!(crate::registry::SPACE_FREED, area_size_index.size(), "index" => index_name(area_size_index));
 
         // The area that contained the node is now free.
         let mut stored_area_bytes = Vec::new();

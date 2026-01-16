@@ -372,9 +372,9 @@ impl NodeStoreHeader {
     ///   prevents corrupting the allocation structures by changing area sizes.
     /// - Node hash algorithm flag matches the expected algorithm for this
     ///   storage.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns an error if validation fails.
     pub fn validate(&self, expected_node_hash_algorithm: NodeHashAlgorithm) -> Result<(), Error> {
         trace!("Checking version...");
