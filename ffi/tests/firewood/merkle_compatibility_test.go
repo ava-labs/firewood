@@ -63,7 +63,7 @@ func newTestFirewoodDatabase(t *testing.T) *firewood.Database {
 }
 
 func newFirewoodDatabase(dbFile string) (*firewood.Database, error) {
-	f, err := firewood.New(dbFile)
+	f, err := firewood.New(dbFile, firewood.MerkleDBNodeHashing)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
 	}

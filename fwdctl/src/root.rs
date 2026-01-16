@@ -11,13 +11,16 @@ use crate::DatabasePath;
 #[derive(Debug, Args)]
 pub struct Options {
     #[command(flatten)]
-    pub database_dir: DatabasePath,
+    pub database: DatabasePath,
 }
 
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
-    let cfg = DbConfig::builder().create_if_missing(false).truncate(false);
+    let cfg = DbConfig::builder()
+        .node_hash_algorithm(opts.database.node_hash_algorithm.into())
+        .create_if_missing(false)
+        .truncate(false);
 
-    let db = Db::new(opts.database_dir.dbpath.clone(), cfg.build())?;
+    let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
 
     let hash = db.root_hash()?;
 

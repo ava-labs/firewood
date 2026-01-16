@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -160,8 +161,28 @@ func newTestDatabase(tb testing.TB, opts ...Option) *Database {
 	return db
 }
 
+var (
+	// detectedNodeHashAlgorithm is cached after first detection to avoid repeated attempts
+	detectedNodeHashAlgorithm     NodeHashAlgorithm
+	detectedNodeHashAlgorithmOnce sync.Once
+)
+
 func newDatabase(dbDir string, opts ...Option) (*Database, error) {
-	f, err := New(dbDir, opts...)
+	// Detect the correct algo once and cache it
+	detectedNodeHashAlgorithmOnce.Do(func() {
+		// Try ethhash first, if it fails try merkledb
+		tempDir := filepath.Join(os.TempDir(), fmt.Sprintf("firewood-hash-detection-%d", time.Now().UnixNano()))
+		defer os.RemoveAll(tempDir)
+
+		_, err := New(tempDir, EthereumNodeHashing, WithTruncate(true))
+		if err == nil {
+			detectedNodeHashAlgorithm = EthereumNodeHashing
+		} else {
+			detectedNodeHashAlgorithm = MerkleDBNodeHashing
+		}
+	})
+
+	f, err := New(dbDir, detectedNodeHashAlgorithm, opts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new database in directory %q: %w", dbDir, err)
 	}
@@ -178,6 +199,48 @@ func TestUpdateSingleKV(t *testing.T) {
 	got, err := db.Get(keys[0])
 	r.NoError(err)
 	r.Equal(vals[0], got)
+}
+
+func TestNodeHashAlgorithmValidation(t *testing.T) {
+	r := require.New(t)
+
+	// Try to create a database with ethhash
+	dbDirEth := t.TempDir()
+	dbEth, errEth := New(dbDirEth, EthereumNodeHashing, WithTruncate(true))
+
+	// Try to create a database with merkledb
+	dbDirMerkledb := t.TempDir()
+	dbMerkledb, errMerkledb := New(dbDirMerkledb, MerkleDBNodeHashing, WithTruncate(true))
+
+	// Exactly one should succeed based on compile-time feature
+	type resultType int
+	const (
+		ethereumOnly resultType = iota
+		merkledbOnly
+		bothOrNeither
+	)
+
+	result := bothOrNeither
+	switch {
+	case errEth == nil && errMerkledb != nil:
+		result = ethereumOnly
+	case errMerkledb == nil && errEth != nil:
+		result = merkledbOnly
+	}
+
+	switch result {
+	case ethereumOnly:
+		r.NoError(dbEth.Close(oneSecCtx(t)))
+		r.Error(errMerkledb)
+		r.ErrorContains(errMerkledb, "node store hash algorithm mismatch: want to initialize with MerkleDB, but build option is for Ethereum")
+	case merkledbOnly:
+		r.NoError(dbMerkledb.Close(oneSecCtx(t)))
+		r.Error(errEth)
+		r.ErrorContains(errEth, "node store hash algorithm mismatch: want to initialize with Ethereum, but build option is for MerkleDB")
+	case bothOrNeither:
+		// Both succeeded or both failed - this should not happen
+		r.Failf("Expected exactly one hash type to succeed", "got errEth=%v, errNative=%v", errEth, errMerkledb)
+	}
 }
 
 func TestUpdateMultiKV(t *testing.T) {
@@ -198,7 +261,7 @@ func TestTruncateDatabase(t *testing.T) {
 	r := require.New(t)
 	dbDir := t.TempDir()
 	// Create a new database with truncate enabled.
-	db, err := New(dbDir, WithTruncate(true))
+	db, err := newDatabase(dbDir, WithTruncate(true))
 	r.NoError(err)
 
 	// Insert some data.
@@ -210,7 +273,7 @@ func TestTruncateDatabase(t *testing.T) {
 	r.NoError(db.Close(oneSecCtx(t)))
 
 	// Reopen the database with truncate enabled.
-	db, err = New(dbDir, WithTruncate(true))
+	db, err = newDatabase(dbDir, WithTruncate(true))
 	r.NoError(err)
 
 	// Check that the database is empty after truncation.
@@ -1166,7 +1229,7 @@ func TestFjallStore(t *testing.T) {
 	// Setting the number of in-memory revisions to 5 tests that revision nodes
 	// are not reaped prior to closing the database.
 	dbDir := t.TempDir()
-	db, err := New(dbDir,
+	db, err := newDatabase(dbDir,
 		WithRootStore(),
 		WithRevisions(5),
 	)
@@ -1189,7 +1252,7 @@ func TestFjallStore(t *testing.T) {
 	// Close and reopen the database
 	r.NoError(db.Close(t.Context()))
 
-	db, err = New(dbDir,
+	db, err = newDatabase(dbDir,
 		WithRootStore(),
 		WithRevisions(5),
 	)

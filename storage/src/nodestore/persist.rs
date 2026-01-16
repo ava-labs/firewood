@@ -348,7 +348,7 @@ mod tests {
 
     /// Helper to create a test node store with a specific root
     fn create_test_store_with_root(root: Node) -> NodeStore<MutableProposal, MemStore> {
-        let mem_store = MemStore::new(vec![]).into();
+        let mem_store = MemStore::default().into();
         let mut store = NodeStore::new_empty_proposal(mem_store);
         store.root_mut().replace(root);
         store
@@ -386,7 +386,7 @@ mod tests {
 
     #[test]
     fn test_empty_nodestore() {
-        let mem_store = MemStore::new(vec![]).into();
+        let mem_store = MemStore::default().into();
         let store = NodeStore::new_empty_proposal(mem_store);
         let mut iter = UnPersistedNodeIterator::new(&store);
 
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn test_into_committed_with_generic_storage() {
         // Create a base committed store with MemStore
-        let mem_store = MemStore::new(vec![]);
+        let mem_store = MemStore::default();
         let base_committed = NodeStore::new_empty_committed(mem_store.into());
 
         // Create a mutable proposal from the base

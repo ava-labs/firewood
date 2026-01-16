@@ -49,6 +49,8 @@ pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
     crate::registry::register();
     firewood::registry::register();
     firewood_storage::registry::register();
+    #[cfg(feature = "block-replay")]
+    firewood_replay::registry::register();
 
     // Build the Prometheus exporter with bucket configurations from the registry
     // TODO: Switch to Prometheus's native histograms
