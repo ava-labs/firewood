@@ -55,7 +55,8 @@ pub use node::path::{NibblesIterator, Path};
 pub use node::{BranchNode, Child, Children, ChildrenSlots, LeafNode, Node, PathIterItem};
 pub use nodestore::{
     AreaIndex, Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal,
-    NodeReader, NodeStore, Parentable, RootReader, TrieReader,
+    NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError, NodeReader, NodeStore, Parentable,
+    RootReader, TrieReader,
 };
 pub use path::{
     ComponentIter, IntoSplitPath, JoinedPath, PackedBytes, PackedPathComponents, PackedPathRef,

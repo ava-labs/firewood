@@ -20,7 +20,8 @@ use crate::v2::api::{
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieReader, firewood_counter,
+    ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, TrieReader,
+    firewood_counter,
 };
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -113,6 +114,9 @@ pub enum UseParallel {
 #[derive(Clone, TypedBuilder, Debug)]
 #[non_exhaustive]
 pub struct DbConfig {
+    /// The algorithm used for hashing nodes (required).
+    #[cfg_attr(test, builder(default = NodeHashAlgorithm::compile_option()))]
+    pub node_hash_algorithm: NodeHashAlgorithm,
     /// Whether to create the DB if it doesn't exist.
     #[builder(default = true)]
     pub create_if_missing: bool,
@@ -178,13 +182,14 @@ impl Db {
             proposals: firewood_counter!("proposals", "Number of proposals created"),
         });
         let config_manager = ConfigManager::builder()
+            .root_dir(db_dir.as_ref().to_path_buf())
+            .node_hash_algorithm(cfg.node_hash_algorithm)
             .create(cfg.create_if_missing)
             .truncate(cfg.truncate)
             .root_store(cfg.root_store)
             .manager(cfg.manager)
             .build();
-
-        let manager = RevisionManager::new(db_dir.as_ref().to_path_buf(), config_manager)?;
+        let manager = RevisionManager::new(config_manager)?;
         let db = Self {
             metrics,
             manager,

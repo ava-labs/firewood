@@ -40,6 +40,7 @@ pub struct FileBacked {
     cache: Mutex<LruCache<LinearAddress, SharedNode>>,
     free_list_cache: Mutex<LruCache<LinearAddress, Option<LinearAddress>>>,
     cache_read_strategy: CacheReadStrategy,
+    node_hash_algorithm: crate::NodeHashAlgorithm,
     // keep before `fd` so that it is dropped first (fields are dropped in the order they are declared)
     #[cfg(feature = "io-uring")]
     ring: super::io_uring::IoUringProxy,
@@ -68,6 +69,7 @@ impl FileBacked {
         truncate: bool,
         create: bool,
         cache_read_strategy: CacheReadStrategy,
+        node_hash_algorithm: crate::NodeHashAlgorithm,
     ) -> Result<Self, FileIoError> {
         let fd = OpenOptions::new()
             .read(true)
@@ -95,6 +97,7 @@ impl FileBacked {
             free_list_cache: Mutex::new(LruCache::new(free_list_cache_size)),
             cache_read_strategy,
             filename: path,
+            node_hash_algorithm,
             #[cfg(feature = "io-uring")]
             ring,
             fd: UnlockOnDrop(fd),
@@ -103,6 +106,10 @@ impl FileBacked {
 }
 
 impl ReadableStorage for FileBacked {
+    fn node_hash_algorithm(&self) -> crate::NodeHashAlgorithm {
+        self.node_hash_algorithm
+    }
+
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
         firewood_counter!("read_node", "Number of node reads", "from" => "file").increment(1);
         Ok(PredictiveReader::new(self, addr))
@@ -296,6 +303,8 @@ impl std::ops::DerefMut for UnlockOnDrop {
 mod test {
     #![expect(clippy::unwrap_used)]
 
+    use crate::NodeHashAlgorithm;
+
     use super::*;
     use nonzero_ext::nonzero;
     use std::io::Write;
@@ -317,6 +326,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
         )
         .unwrap();
 
@@ -359,6 +369,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
         )
         .unwrap();
 
