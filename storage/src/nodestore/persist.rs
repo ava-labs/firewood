@@ -293,7 +293,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 mod tests {
     use super::*;
     use crate::{
-        Child, Children, HashType, ImmutableProposal, LinearAddress, NodeHashAlgorithm, NodeStore, NodeStoreHeader, Path, PathComponent, SharedNode, linear::memory::MemStore, node::{BranchNode, LeafNode, Node}, nodestore::MutableProposal
+        Child, Children, HashType, ImmutableProposal, LinearAddress, NodeHashAlgorithm, NodeStore,
+        NodeStoreHeader, Path, PathComponent, SharedNode,
+        linear::memory::MemStore,
+        node::{BranchNode, LeafNode, Node},
+        nodestore::MutableProposal,
     };
     use std::sync::Arc;
 

@@ -16,7 +16,8 @@ use std::fmt::Write;
 
 use super::*;
 use firewood_storage::{
-    Committed, MemStore, MutableProposal, NodeHashAlgorithm, NodeStore, NodeStoreHeader, RootReader, TrieHash,
+    Committed, MemStore, MutableProposal, NodeHashAlgorithm, NodeStore, NodeStoreHeader,
+    RootReader, TrieHash,
 };
 
 // Returns n random key-value pairs.
