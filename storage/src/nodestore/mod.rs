@@ -102,7 +102,7 @@ const INITIAL_BUMP_SIZE: usize = AreaIndex::MAX_AREA_SIZE as usize;
 impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Open a `NodeStore` from storage using the provided header.
     ///
-    /// The header should be read using [`NodeStoreHeader::with_storage`] before calling this.
+    /// The header should be read using [`NodeStoreHeader::read_from_storage`] before calling this.
     /// This separation allows callers to manage the header lifecycle independently.
     ///
     /// # Errors
