@@ -40,22 +40,23 @@
 
 pub(crate) mod alloc;
 pub(crate) mod hash;
+pub(crate) mod hash_algo;
 pub(crate) mod header;
 pub(crate) mod persist;
 pub(crate) mod primitives;
 
-use crate::firewood_counter;
 use crate::linear::OffsetReader;
-use crate::logger::trace;
+use crate::logger::{debug, trace};
 use crate::node::branch::ReadSerializable as _;
+use crate::{IntoHashType, firewood_counter};
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind};
 
 // Re-export types from alloc module
 pub use alloc::NodeAllocator;
+pub use hash_algo::{NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError};
 pub use primitives::{AreaIndex, LinearAddress};
-
 // Re-export types from header module
 pub use header::NodeStoreHeader;
 
@@ -117,8 +118,15 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         };
 
         if let Some(root_address) = header.root_address() {
-            let node = nodestore.read_node_from_disk(root_address, "open");
-            let root_hash = node.map(|n| hash_node(&n, &Path(SmallVec::default())))?;
+            let root_hash = if let Some(hash) = header.root_hash() {
+                hash.into_hash_type()
+            } else {
+                debug!("No root hash in header; computing from disk");
+                nodestore
+                    .read_node_from_disk(root_address, "open")
+                    .map(|n| hash_node(&n, &Path(SmallVec::default())))?
+            };
+
             nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
         }
 
@@ -889,7 +897,7 @@ mod tests {
     #[test]
     fn test_reparent() {
         // create an empty base revision
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let base = NodeStore::new_empty_committed(memstore.into());
 
         // create an empty r1, check that it's parent is the empty committed version
@@ -923,7 +931,7 @@ mod tests {
 
     #[test]
     fn test_slow_giant_node() {
-        let memstore = Arc::new(MemStore::new(vec![]));
+        let memstore = Arc::new(MemStore::default());
         let mut header = NodeStoreHeader::new();
         let empty_root = NodeStore::new_empty_committed(Arc::clone(&memstore));
 
@@ -987,6 +995,7 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
         )?);
         let mut header = NodeStoreHeader::with_storage(storage.as_ref())?;
         let nodestore = NodeStore::open(&header, storage)?;

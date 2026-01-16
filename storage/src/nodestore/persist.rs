@@ -30,9 +30,9 @@
 use bumpalo::Bump;
 use std::iter::FusedIterator;
 
+use crate::firewood_counter;
 use crate::linear::FileIoError;
 use crate::nodestore::AreaIndex;
-use crate::{Child, firewood_counter};
 use coarsetime::Instant;
 
 use crate::{MaybePersistedNode, NodeReader, WritableStorage};
@@ -275,8 +275,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         self.flush_nodes(header)?;
 
         // Set the root address in the header based on the persisted root
-        let root_address = self.kind.root.as_ref().and_then(Child::persisted_address);
-        header.set_root_address(root_address);
+        let root_location = self.kind.root.as_ref().and_then(|child| {
+            let (addr, hash) = child.persist_info()?;
+            Some((addr, hash.clone().into_triehash()))
+        });
+        header.set_root_location(root_location);
 
         // Finally persist the header
         header.flush_to(self.storage.as_ref())?;
@@ -309,7 +312,7 @@ mod tests {
 
     /// Helper to create a test node store with a specific root
     fn create_test_store_with_root(root: Node) -> NodeStore<MutableProposal, MemStore> {
-        let mem_store = MemStore::new(vec![]).into();
+        let mem_store = MemStore::default().into();
         let mut store = NodeStore::new_empty_proposal(mem_store);
         store.root_mut().replace(root);
         store
@@ -347,7 +350,7 @@ mod tests {
 
     #[test]
     fn test_empty_nodestore() {
-        let mem_store = MemStore::new(vec![]).into();
+        let mem_store = MemStore::default().into();
         let store = NodeStore::new_empty_proposal(mem_store);
         let mut iter = UnPersistedNodeIterator::new(&store);
 
@@ -510,7 +513,7 @@ mod tests {
     #[test]
     fn test_into_committed_with_generic_storage() {
         // Create a base committed store with MemStore
-        let mem_store = MemStore::new(vec![]);
+        let mem_store = MemStore::default();
         let mut header = NodeStoreHeader::new();
         let base_committed = NodeStore::new_empty_committed(mem_store.into());
 

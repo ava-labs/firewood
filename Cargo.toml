@@ -68,7 +68,7 @@ firewood-triehash = { path = "triehash", version = "0.0.16" }
 
 # common dependencies
 aquamarine = "0.6.0"
-bytemuck = "1.24.0"
+bytemuck = { version = "1.24.0", features = ["const_zeroed"] }
 bytemuck_derive = "1.10.2"
 clap = { version = "4.5.53", features = ["derive"] }
 coarsetime = "0.1.36"

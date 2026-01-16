@@ -16,7 +16,9 @@ use std::fmt::Write;
 
 use super::*;
 use firewood_storage::{
-    Committed, MemStore, MutableProposal, NodeStore, NodeStoreHeader, RootReader, TrieHash,
+    
+    Committed, MemStore, MutableProposal, NodeHashAlgorithm, NodeStore, NodeStoreHeader, RootReader, TrieHash,
+,
 };
 
 // Returns n random key-value pairs.
@@ -62,7 +64,10 @@ where
     K: AsRef<[u8]>,
     V: AsRef<[u8]>,
 {
-    let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024)));
+    let memstore = Arc::new(MemStore::new(
+        Vec::with_capacity(64 * 1024),
+        NodeHashAlgorithm::compile_option(),
+    ));
     let mut header = NodeStoreHeader::new();
     let base = Merkle::from(NodeStore::new_empty_committed(memstore.clone()));
     let mut merkle = base.fork().unwrap();
@@ -179,7 +184,7 @@ fn insert_one() {
 }
 
 fn create_in_memory_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
-    let memstore = MemStore::new(vec![]);
+    let memstore = MemStore::default();
 
     let nodestore = NodeStore::new_empty_proposal(memstore.into());
 
