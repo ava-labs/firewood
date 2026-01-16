@@ -20,7 +20,8 @@ use crate::v2::api::{
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieReader, firewood_counter,
+    ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, TrieReader,
+    firewood_counter,
 };
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -113,6 +114,9 @@ pub enum UseParallel {
 #[derive(Clone, TypedBuilder, Debug)]
 #[non_exhaustive]
 pub struct DbConfig {
+    /// The algorithm used for hashing nodes (required).
+    #[cfg_attr(test, builder(default = NodeHashAlgorithm::compile_option()))]
+    pub node_hash_algorithm: NodeHashAlgorithm,
     /// Whether to create the DB if it doesn't exist.
     #[builder(default = true)]
     pub create_if_missing: bool,
@@ -178,13 +182,14 @@ impl Db {
             proposals: firewood_counter!("proposals", "Number of proposals created"),
         });
         let config_manager = ConfigManager::builder()
+            .root_dir(db_dir.as_ref().to_path_buf())
+            .node_hash_algorithm(cfg.node_hash_algorithm)
             .create(cfg.create_if_missing)
             .truncate(cfg.truncate)
             .root_store(cfg.root_store)
             .manager(cfg.manager)
             .build();
-
-        let manager = RevisionManager::new(db_dir.as_ref().to_path_buf(), config_manager)?;
+        let manager = RevisionManager::new(config_manager)?;
         let db = Self {
             metrics,
             manager,
@@ -418,7 +423,7 @@ mod test {
     use std::iter::Peekable;
     use std::num::NonZeroUsize;
     use std::ops::{Deref, DerefMut};
-    use std::path::PathBuf;
+    use std::path::Path;
 
     use firewood_storage::{
         CheckOpt, CheckerError, HashedNodeReader, IntoHashType, LinearAddress, MaybePersistedNode,
@@ -1261,6 +1266,42 @@ mod test {
         assert!(Db::new(tmpdir, DbConfig::builder().create_if_missing(false).build()).is_err());
     }
 
+    #[test]
+    fn test_backwards_compatible_magic_string() {
+        use std::os::unix::fs::FileExt;
+
+        let testdb = TestDb::new();
+
+        testdb
+            .db
+            .propose([(b"key", b"value")])
+            .unwrap()
+            .commit()
+            .unwrap();
+
+        let rh = testdb.db.root_hash().unwrap().unwrap();
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .append(false)
+            .truncate(false)
+            .open(testdb.path().join(crate::manager::DB_FILE_NAME))
+            .unwrap();
+
+        let mut version = [0_u8; 16];
+        file.read_exact_at(&mut version, 0).unwrap();
+        assert_eq!(&version, b"firewood-v1\0\0\0\0\0");
+
+        // overwrite the magic string to simulate an older version
+        file.write_at(b"firewood 0.0.18\0", 0).unwrap();
+        drop(file);
+
+        let testdb = testdb.reopen();
+
+        assert_eq!(rh, testdb.db.root_hash().unwrap().unwrap());
+    }
+
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
     pub(super) struct TestDb {
         db: Db,
@@ -1299,7 +1340,6 @@ mod test {
         /// This method closes the current database instance (releasing the advisory lock),
         /// then opens it again at the same path while keeping the same configuration.
         pub fn reopen(self) -> Self {
-            let path = self.path();
             let TestDb {
                 db,
                 tmpdir,
@@ -1308,7 +1348,7 @@ mod test {
 
             drop(db);
 
-            let db = Db::new(path, dbconfig.clone()).unwrap();
+            let db = Db::new(tmpdir.path(), dbconfig.clone()).unwrap();
             TestDb {
                 db,
                 tmpdir,
@@ -1326,7 +1366,6 @@ mod test {
         /// This is useful for testing scenarios where you want to start with a clean slate
         /// while maintaining the same temporary directory structure.
         pub fn replace(self) -> Self {
-            let path = self.path();
             let TestDb {
                 db,
                 tmpdir,
@@ -1336,7 +1375,7 @@ mod test {
             drop(db);
 
             let dbconfig = DbConfig::builder().truncate(true).build();
-            let db = Db::new(path, dbconfig.clone()).unwrap();
+            let db = Db::new(tmpdir.path(), dbconfig.clone()).unwrap();
             TestDb {
                 db,
                 tmpdir,
@@ -1344,8 +1383,8 @@ mod test {
             }
         }
 
-        pub fn path(&self) -> PathBuf {
-            self.tmpdir.path().to_path_buf()
+        pub fn path(&self) -> &Path {
+            self.tmpdir.path()
         }
     }
 }

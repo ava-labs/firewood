@@ -27,11 +27,11 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    TrieHash, firewood_counter, firewood_gauge,
+    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal,
+    NodeHashAlgorithm, NodeStore, TrieHash, firewood_counter, firewood_gauge,
 };
 
-const DB_FILE_NAME: &str = "firewood.db";
+pub(crate) const DB_FILE_NAME: &str = "firewood.db";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
 /// Revision manager configuratoin
@@ -55,6 +55,11 @@ pub struct RevisionManagerConfig {
 #[non_exhaustive]
 /// Configuration manager that contains both truncate and revision manager config
 pub struct ConfigManager {
+    /// The directory where the database files will be stored (required).
+    pub root_dir: PathBuf,
+    /// The algorithm used for hashing nodes (required).
+    pub node_hash_algorithm: NodeHashAlgorithm,
+
     /// Whether to create the DB if it doesn't exist.
     #[builder(default = true)]
     pub create: bool,
@@ -130,12 +135,12 @@ pub(crate) enum RevisionManagerError {
 }
 
 impl RevisionManager {
-    pub fn new(db_dir: PathBuf, config: ConfigManager) -> Result<Self, RevisionManagerError> {
+    pub fn new(config: ConfigManager) -> Result<Self, RevisionManagerError> {
         if config.create {
-            std::fs::create_dir_all(&db_dir).map_err(RevisionManagerError::IOError)?;
+            std::fs::create_dir_all(&config.root_dir).map_err(RevisionManagerError::IOError)?;
         }
 
-        let file = db_dir.join(DB_FILE_NAME);
+        let file = config.root_dir.join(DB_FILE_NAME);
         let fb = FileBacked::new(
             file,
             config.manager.node_cache_size,
@@ -143,6 +148,7 @@ impl RevisionManager {
             config.truncate,
             config.create,
             config.manager.cache_read_strategy,
+            config.node_hash_algorithm,
         )?;
 
         // Acquire an advisory lock on the database file to prevent multiple processes
@@ -154,8 +160,7 @@ impl RevisionManager {
         let root_store = config
             .root_store
             .then(|| {
-                let root_store_dir = db_dir.join("root_store");
-
+                let root_store_dir = config.root_dir.join("root_store");
                 RootStore::new(root_store_dir, storage.clone(), config.truncate)
                     .map_err(RevisionManagerError::RootStoreError)
             })
@@ -453,19 +458,21 @@ mod tests {
         let db_dir = tempfile::tempdir().unwrap();
 
         let config = ConfigManager::builder()
+            .root_dir(db_dir.as_ref().to_path_buf())
+            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .create(true)
             .truncate(false)
             .build();
 
         // First database instance should open successfully
-        let first_manager = RevisionManager::new(db_dir.as_ref().to_path_buf(), config.clone());
+        let first_manager = RevisionManager::new(config.clone());
         assert!(
             first_manager.is_ok(),
             "First database should open successfully"
         );
 
         // Second database instance should fail to open due to file locking
-        let second_manager = RevisionManager::new(db_dir.as_ref().to_path_buf(), config.clone());
+        let second_manager = RevisionManager::new(config.clone());
         assert!(
             second_manager.is_err(),
             "Second database should fail to open"
@@ -485,7 +492,7 @@ mod tests {
         drop(first_manager.unwrap());
 
         // Now the second database should open successfully
-        let third_manager = RevisionManager::new(db_dir.as_ref().to_path_buf(), config);
+        let third_manager = RevisionManager::new(config);
         assert!(
             third_manager.is_ok(),
             "Database should open after first instance is dropped"
@@ -510,6 +517,8 @@ mod tests {
         let db_dir = tempfile::tempdir().unwrap();
 
         let config = ConfigManager::builder()
+            .root_dir(db_dir.as_ref().to_path_buf())
+            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .create(true)
             .manager(
                 RevisionManagerConfig::builder()
@@ -518,8 +527,7 @@ mod tests {
             )
             .build();
 
-        let manager =
-            Arc::new(RevisionManager::new(db_dir.as_ref().to_path_buf(), config).unwrap());
+        let manager = Arc::new(RevisionManager::new(config).unwrap());
 
         // Create an initial proposal and commit it to have a non-empty base
         let base_revision = manager.current_revision();
@@ -683,11 +691,13 @@ mod tests {
 
         // Create a database with root_store disabled (default)
         let config = ConfigManager::builder()
+            .root_dir(db_path.clone())
+            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .create(true)
             .root_store(false)
             .build();
 
-        let _manager = RevisionManager::new(db_path.clone(), config).unwrap();
+        let _manager = RevisionManager::new(config).unwrap();
 
         // Verify that the root_store directory does NOT exist
         let root_store_dir = db_path.join("root_store");
@@ -705,11 +715,13 @@ mod tests {
 
         // Create a database with root_store enabled
         let config = ConfigManager::builder()
+            .root_dir(db_path.clone())
+            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .create(true)
             .root_store(true)
             .build();
 
-        let _manager = RevisionManager::new(db_path.clone(), config).unwrap();
+        let _manager = RevisionManager::new(config).unwrap();
 
         // Verify that the root_store directory DOES exist
         let root_store_dir = db_path.join("root_store");

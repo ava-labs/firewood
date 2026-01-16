@@ -375,6 +375,7 @@ mod tests {
     use super::*;
     use firewood::db::DbConfig;
     use firewood::manager::RevisionManagerConfig;
+    use firewood_storage::NodeHashAlgorithm;
     use std::io::Cursor;
     use tempfile::tempdir;
 
@@ -382,6 +383,7 @@ mod tests {
         let tmpdir = tempdir().expect("create tempdir");
         let db_path = tmpdir.path().join("test.db");
         let cfg = DbConfig::builder()
+            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .truncate(true)
             .manager(RevisionManagerConfig::builder().build())
             .build();

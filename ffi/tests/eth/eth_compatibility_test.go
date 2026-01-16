@@ -68,7 +68,7 @@ type merkleTriePair struct {
 func newFirewoodDB(t *testing.T) *firewood.Database {
 	t.Helper()
 
-	db, err := firewood.New(t.TempDir())
+	db, err := firewood.New(t.TempDir(), firewood.EthereumNodeHashing)
 	require.NoError(t, err, "firewood.New()")
 	t.Cleanup(func() {
 		require.NoErrorf(t, db.Close(context.Background()), "%T.Close()", db)
