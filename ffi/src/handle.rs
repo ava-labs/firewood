@@ -271,9 +271,9 @@ impl<'db> CView<'db> for &'db crate::DatabaseHandle {
     }
 }
 
-impl crate::HasMetricsContext for DatabaseHandle {
-    fn metrics_context(&self) -> MetricsContext {
-        self.metrics_context
+impl crate::HasContext for DatabaseHandle {
+    fn metrics(&self) -> Option<MetricsContext> {
+        Some(self.metrics_context)
     }
 }
 

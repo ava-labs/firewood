@@ -3,8 +3,10 @@
 
 use std::error::Error;
 use std::net::Ipv6Addr;
+use std::ops::Deref;
 use std::sync::OnceLock;
 
+use firewood_metrics::MetricsContext;
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use oxhttp::Server;
 use oxhttp::model::{Body, Response, StatusCode};
@@ -12,6 +14,24 @@ use std::net::Ipv4Addr;
 use std::time::Duration;
 
 static RECORDER: OnceLock<PrometheusHandle> = OnceLock::new();
+
+/// Trait for types that carry a context.
+///
+/// Implemented for FFI handle types.
+/// Concrete impls live in their respective modules (handle, revision, proposal, iterator).
+pub(crate) trait HasContext {
+    fn metrics(&self) -> Option<MetricsContext>;
+}
+
+impl<T> HasContext for T
+where
+    T: Deref,
+    T::Target: HasContext,
+{
+    fn metrics(&self) -> Option<MetricsContext> {
+        <T::Target as HasContext>::metrics(self.deref())
+    }
+}
 
 /// Starts metrics recorder.
 /// This happens on a per-process basis, meaning that the metrics system cannot

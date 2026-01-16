@@ -213,8 +213,8 @@ impl<'db> CView<'db> for &ProposalHandle<'db> {
     }
 }
 
-impl crate::HasMetricsContext for ProposalHandle<'_> {
-    fn metrics_context(&self) -> firewood_metrics::MetricsContext {
-        crate::HasMetricsContext::metrics_context(self.handle)
+impl crate::HasContext for ProposalHandle<'_> {
+    fn metrics(&self) -> Option<firewood_metrics::MetricsContext> {
+        self.handle.metrics()
     }
 }

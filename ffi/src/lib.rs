@@ -26,7 +26,7 @@ mod arc_cache;
 mod handle;
 mod iterator;
 mod logging;
-mod metrics_setup;
+mod metrics;
 mod proofs;
 mod proposal;
 mod registry;
@@ -41,6 +41,7 @@ use firewood_metrics::{MetricsContext, firewood_increment, firewood_record, set_
 pub use crate::handle::*;
 pub use crate::iterator::*;
 pub use crate::logging::*;
+use crate::metrics::HasContext;
 pub use crate::proofs::*;
 pub use crate::proposal::*;
 pub use crate::revision::*;
@@ -68,62 +69,21 @@ fn invoke<T: CResult, V: Into<T>>(once: impl FnOnce() -> V) -> T {
     }
 }
 
-/// Trait for types that carry a metrics context.
-///
-/// Implemented for FFI handle types that track expensive metrics settings.
-/// Concrete impls live in their respective modules (handle, revision, proposal, iterator).
-pub(crate) trait HasMetricsContext {
-    fn metrics_context(&self) -> MetricsContext;
-}
-
-impl<T: HasMetricsContext + ?Sized> HasMetricsContext for &T {
-    fn metrics_context(&self) -> MetricsContext {
-        (*self).metrics_context()
-    }
-}
-
-impl<T: HasMetricsContext + ?Sized> HasMetricsContext for &mut T {
-    fn metrics_context(&self) -> MetricsContext {
-        (**self).metrics_context()
-    }
-}
-
-impl<T: HasMetricsContext + ?Sized> HasMetricsContext for Box<T> {
-    fn metrics_context(&self) -> MetricsContext {
-        (**self).metrics_context()
-    }
-}
-
-impl<'db> HasMetricsContext for (&'db DatabaseHandle, &mut RangeProofContext<'db>) {
-    fn metrics_context(&self) -> MetricsContext {
-        self.0.metrics_context()
-    }
-}
-
-/// Invokes a closure with metrics context from the handle.
+/// Invokes a closure with context from the handle.
 #[inline]
-fn invoke_with_handle<H: HasMetricsContext, T: NullHandleResult, V: Into<T>>(
+fn invoke_with_handle<H: HasContext, T: NullHandleResult, V: Into<T>>(
     handle: Option<H>,
     once: impl FnOnce(H) -> V,
 ) -> T {
     match handle {
         Some(handle) => {
-            let _guard = set_metrics_context(Some(handle.metrics_context()));
+            let _guard = if handle.metrics().is_some() {
+                Some(set_metrics_context(handle.metrics()))
+            } else {
+                None
+            };
             invoke(move || once(handle))
         }
-        None => T::null_handle_pointer_error(),
-    }
-}
-
-/// Invokes a closure without setting metrics context.
-/// Used for operations that don't record metrics (e.g., serialization, proof verification).
-#[inline]
-fn invoke_without_metrics<H, T: NullHandleResult, V: Into<T>>(
-    handle: Option<H>,
-    once: impl FnOnce(H) -> V,
-) -> T {
-    match handle {
-        Some(handle) => invoke(move || once(handle)),
         None => T::null_handle_pointer_error(),
     }
 }
@@ -635,7 +595,7 @@ pub extern "C" fn fwd_root_hash(db: Option<&DatabaseHandle>) -> HashResult {
 /// - [`VoidResult::Err`] if an error occurs during initialization.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_start_metrics() -> VoidResult {
-    invoke(metrics_setup::setup_metrics)
+    invoke(metrics::setup_metrics)
 }
 
 /// Start metrics recorder and exporter for this process.
@@ -656,7 +616,7 @@ pub extern "C" fn fwd_start_metrics() -> VoidResult {
 ///   returned error (if any).
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_start_metrics_with_exporter(metrics_port: u16) -> VoidResult {
-    invoke(move || metrics_setup::setup_metrics_with_exporter(metrics_port))
+    invoke(move || metrics::setup_metrics_with_exporter(metrics_port))
 }
 
 /// Gather latest metrics for this process.
@@ -675,7 +635,7 @@ pub extern "C" fn fwd_start_metrics_with_exporter(metrics_port: u16) -> VoidResu
 ///   returned error or value.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_gather() -> ValueResult {
-    invoke(metrics_setup::gather_metrics)
+    invoke(metrics::gather_metrics)
 }
 
 /// Open a database with the given arguments.

@@ -86,8 +86,8 @@ pub struct GetRevisionResult {
     pub root_hash: HashKey,
 }
 
-impl crate::HasMetricsContext for RevisionHandle {
-    fn metrics_context(&self) -> MetricsContext {
-        self.metrics_context
+impl crate::HasContext for RevisionHandle {
+    fn metrics(&self) -> Option<MetricsContext> {
+        Some(self.metrics_context)
     }
 }

@@ -69,8 +69,8 @@ impl IteratorHandle<'_> {
 #[derive(Debug, Default)]
 pub struct CreateIteratorResult<'db>(pub IteratorHandle<'db>);
 
-impl crate::HasMetricsContext for IteratorHandle<'_> {
-    fn metrics_context(&self) -> MetricsContext {
-        self.metrics_context
+impl crate::HasContext for IteratorHandle<'_> {
+    fn metrics(&self) -> Option<MetricsContext> {
+        Some(self.metrics_context)
     }
 }

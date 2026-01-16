@@ -8,7 +8,7 @@ use firewood::{
     logger::warn,
     v2::api::{self, DbView, FrozenRangeProof, HashKey},
 };
-use firewood_metrics::firewood_increment;
+use firewood_metrics::{MetricsContext, firewood_increment};
 
 use crate::{
     BorrowedBytes, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle, HashResult, Maybe,
@@ -372,7 +372,7 @@ pub extern "C" fn fwd_range_proof_verify(args: VerifyRangeProofArgs) -> VoidResu
         max_length,
     } = args;
 
-    crate::invoke_without_metrics(proof, |ctx| {
+    crate::invoke_with_handle(proof, |ctx| {
         let start_key = start_key.into_option();
         let end_key = end_key.into_option();
         ctx.verify(
@@ -524,7 +524,7 @@ pub extern "C" fn fwd_db_verify_and_commit_range_proof<'db>(
 pub extern "C" fn fwd_range_proof_find_next_key(
     proof: Option<&mut RangeProofContext>,
 ) -> NextKeyRangeResult {
-    crate::invoke_without_metrics(proof, RangeProofContext::find_next_key)
+    crate::invoke_with_handle(proof, RangeProofContext::find_next_key)
 }
 
 /// Returns an iterator over the code hashes contained in the range proof.
@@ -553,7 +553,7 @@ pub extern "C" fn fwd_range_proof_find_next_key(
 pub extern "C" fn fwd_range_proof_code_hash_iter<'a>(
     proof: Option<&'a RangeProofContext>,
 ) -> CodeIteratorResult<'a> {
-    crate::invoke_without_metrics(proof, RangeProofContext::code_hash_iter)
+    crate::invoke_with_handle(proof, RangeProofContext::code_hash_iter)
 }
 
 /// Advances the code hash iterator and returns the next code hash.
@@ -580,7 +580,7 @@ pub extern "C" fn fwd_range_proof_code_hash_iter<'a>(
 pub extern "C" fn fwd_code_hash_iter_next<'a>(
     iter: Option<&'a mut CodeIteratorHandle<'a>>,
 ) -> HashResult {
-    crate::invoke_without_metrics(iter, CodeIteratorHandle::next)
+    crate::invoke_with_handle(iter, CodeIteratorHandle::next)
 }
 
 /// Frees the memory associated with a `CodeIteratorHandle`.
@@ -595,7 +595,7 @@ pub extern "C" fn fwd_code_hash_iter_next<'a>(
 /// - [`VoidResult::Err`] if the process panics while freeing the memory.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_code_hash_iter_free(iter: Option<Box<CodeIteratorHandle>>) -> VoidResult {
-    crate::invoke_without_metrics(iter, drop)
+    crate::invoke_with_handle(iter, drop)
 }
 
 /// Serialize a `RangeProof` to bytes.
@@ -613,7 +613,7 @@ pub extern "C" fn fwd_code_hash_iter_free(iter: Option<Box<CodeIteratorHandle>>)
 /// - [`ValueResult::Err`] if the caller provided a null pointer.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_range_proof_to_bytes(proof: Option<&RangeProofContext>) -> ValueResult {
-    crate::invoke_without_metrics(proof, |ctx| {
+    crate::invoke_with_handle(proof, |ctx| {
         let mut vec = Vec::new();
         ctx.proof.write_to_vec(&mut vec);
         vec
@@ -655,5 +655,11 @@ pub extern "C" fn fwd_range_proof_from_bytes(
 /// - [`VoidResult::Err`] if the process panics while freeing the memory.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_free_range_proof(proof: Option<Box<RangeProofContext>>) -> VoidResult {
-    crate::invoke_without_metrics(proof, drop)
+    crate::invoke_with_handle(proof, drop)
+}
+
+impl<'a> crate::HasContext for (&'a DatabaseHandle, &RangeProofContext<'a>) {
+    fn metrics(&self) -> Option<MetricsContext> {
+        Some(self.0.metrics())
+    }
 }
