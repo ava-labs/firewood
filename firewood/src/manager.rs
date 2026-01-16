@@ -162,7 +162,7 @@ impl RevisionManager {
         fb.lock()?;
 
         let storage = Arc::new(fb);
-        let header = NodeStoreHeader::with_storage(storage.as_ref())?;
+        let header = NodeStoreHeader::read_from_storage(storage.as_ref())?;
         let nodestore = Arc::new(NodeStore::open(&header, storage.clone())?);
         let root_store = config
             .root_store

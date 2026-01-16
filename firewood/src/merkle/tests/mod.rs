@@ -16,9 +16,7 @@ use std::fmt::Write;
 
 use super::*;
 use firewood_storage::{
-    
     Committed, MemStore, MutableProposal, NodeHashAlgorithm, NodeStore, NodeStoreHeader, RootReader, TrieHash,
-,
 };
 
 // Returns n random key-value pairs.
@@ -68,7 +66,7 @@ where
         Vec::with_capacity(64 * 1024),
         NodeHashAlgorithm::compile_option(),
     ));
-    let mut header = NodeStoreHeader::new();
+    let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
     let base = Merkle::from(NodeStore::new_empty_committed(memstore.clone()));
     let mut merkle = base.fork().unwrap();
 

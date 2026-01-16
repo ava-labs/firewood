@@ -25,7 +25,7 @@
 //!
 
 use bytemuck_derive::{Pod, Zeroable};
-use std::io::{Error, ErrorKind, Read, Read};
+use std::io::{Error, ErrorKind, Read};
 
 use super::alloc::FreeLists;
 use super::primitives::{LinearAddress, area_size_hash};
@@ -35,7 +35,7 @@ use crate::{NodeHashAlgorithm, TrieHash};
 
 /// A tuple indicating the address and hash of a node (the root node).
 pub type RootNodeInfo = (LinearAddress, TrieHash);
-use crate::{ReadableStorage, WritableStorage};
+use crate::WritableStorage;
 
 /// Can be used by filesystem tooling such as "file" to identify the version of
 /// firewood used to create this `NodeStore` file.
@@ -328,16 +328,13 @@ impl NodeStoreHeader {
         Ok(this)
     }
 
+    /// Creates a new header with default values and no root address.
+    ///
+    /// # Panics
+    ///
+    /// Will panic if ther `area_size_hash` cannot be computed.
+    #[must_use]
     pub fn new(node_hash_algorithm: NodeHashAlgorithm) -> Self {
-        Self::with_root(None, node_hash_algorithm)
-    }
-
-    pub fn with_root(
-        root_node_info: Option<RootNodeInfo>,
-        node_hash_algorithm: NodeHashAlgorithm,
-    ) -> Self {
-        let (root_address, root_hash) = root_node_info.unzip();
-        let root_hash = root_hash.unwrap_or_else(TrieHash::empty).into();
         Self {
             // The store just contains the header at this point
             size: Self::SIZE,
@@ -347,7 +344,7 @@ impl NodeStoreHeader {
             free_lists: Default::default(),
             area_size_hash: area_size_hash().into(),
             node_hash_algorithm: node_hash_algorithm as u64,
-            root_hash,
+            root_hash: TrieHash::empty().into(),
             cargo_version: CargoVersion::INSTANCE,
             git_describe: GitDescribe::INSTANCE,
         }
@@ -513,6 +510,35 @@ impl NodeStoreHeader {
             })?
             .validate_open(expected)
     }
+
+    /// Persist this header to storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the header cannot be written.
+    pub fn flush_to<S: WritableStorage>(&self, storage: &S) -> Result<(), FileIoError> {
+        let header_bytes = bytemuck::bytes_of(self);
+        storage.write(0, header_bytes)?;
+        Ok(())
+    }
+
+    /// Persist this header to storage including all the padding.
+    /// This is only done the first time we write the header.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the header cannot be written.
+    pub fn flush_with_padding_to<S: WritableStorage>(
+        &self,
+        storage: &S,
+    ) -> Result<(), FileIoError> {
+        let mut header_bytes = bytemuck::bytes_of(self).to_vec();
+        header_bytes.resize(Self::SIZE as usize, 0);
+        debug_assert_eq!(header_bytes.len(), Self::SIZE as usize);
+
+        storage.write(0, &header_bytes)?;
+        Ok(())
+    }
 }
 
 // memcpy but in const context. This bypasses the current limitation that
@@ -529,71 +555,11 @@ const fn const_copy(src: &[u8], dst: &mut [u8]) {
         dst[i] = src[i];
         i += 1;
     }
-
-    /// Persist this header to storage.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the header cannot be written.
-    pub fn flush_to<S: WritableStorage>(&self, storage: &S) -> Result<(), FileIoError> {
-        let header_bytes = bytemuck::bytes_of(self);
-        storage.write(0, header_bytes)?;
-        Ok(())
-    }
-
-    /// Persist this header to storage including all the padding.
-    /// This is only done the first time we write the header.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the header cannot be written.
-    pub fn flush_with_padding_to<S: WritableStorage>(
-        &self,
-        storage: &S,
-    ) -> Result<(), FileIoError> {
-        let mut header_bytes = bytemuck::bytes_of(self).to_vec();
-        header_bytes.resize(Self::SIZE as usize, 0);
-        debug_assert_eq!(header_bytes.len(), Self::SIZE as usize);
-
-        storage.write(0, &header_bytes)?;
-        Ok(())
-    }
-
-    /// Persist this header to storage.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the header cannot be written.
-    pub fn flush_to<S: WritableStorage>(&self, storage: &S) -> Result<(), FileIoError> {
-        let header_bytes = bytemuck::bytes_of(self);
-        storage.write(0, header_bytes)?;
-        Ok(())
-    }
-
-    /// Persist this header to storage including all the padding.
-    /// This is only done the first time we write the header.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the header cannot be written.
-    pub fn flush_with_padding_to<S: WritableStorage>(
-        &self,
-        storage: &S,
-    ) -> Result<(), FileIoError> {
-        let mut header_bytes = bytemuck::bytes_of(self).to_vec();
-        header_bytes.resize(Self::SIZE as usize, 0);
-        debug_assert_eq!(header_bytes.len(), Self::SIZE as usize);
-
-        storage.write(0, &header_bytes)?;
-        Ok(())
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::linear::memory::MemStore;
-    use crate::nodestore::NodeStore;
     use test_case::test_case;
 
     #[test]
@@ -612,7 +578,7 @@ mod tests {
 
     #[test]
     fn test_header_new() {
-        let header = NodeStoreHeader::new();
+        let header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
 
         // Check the header is correctly initialized.
         assert_eq!(header.version, Version::new());

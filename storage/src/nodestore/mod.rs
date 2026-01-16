@@ -932,7 +932,7 @@ mod tests {
     #[test]
     fn test_slow_giant_node() {
         let memstore = Arc::new(MemStore::default());
-        let mut header = NodeStoreHeader::new();
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
         let empty_root = NodeStore::new_empty_committed(Arc::clone(&memstore));
 
         let mut node_store = NodeStore::new(&empty_root).unwrap();
@@ -997,7 +997,7 @@ mod tests {
             CacheReadStrategy::WritesOnly,
             NodeHashAlgorithm::compile_option(),
         )?);
-        let mut header = NodeStoreHeader::with_storage(storage.as_ref())?;
+        let mut header = NodeStoreHeader::read_from_storage(storage.as_ref())?;
         let nodestore = NodeStore::open(&header, storage)?;
 
         let mut proposal = NodeStore::new(&nodestore)?;
