@@ -100,7 +100,7 @@ use super::linear::WritableStorage;
 const INITIAL_BUMP_SIZE: usize = AreaIndex::MAX_AREA_SIZE as usize;
 
 impl<S: ReadableStorage> NodeStore<Committed, S> {
-    /// Open a `NodeStore` from storage using the provided header.
+    /// Creates a new `NodeStore` using the provided header and storage.
     ///
     /// The header should be read using [`NodeStoreHeader::read_from_storage`] before calling this.
     /// This separation allows callers to manage the header lifecycle independently.
