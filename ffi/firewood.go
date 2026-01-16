@@ -242,24 +242,11 @@ func New(dbDir string, opts ...Option) (*Database, error) {
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
 func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return EmptyRoot, errDBClosed
-	}
-
-	db.commitLock.Lock()
-	defer db.commitLock.Unlock()
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
+	ops, err := batchOpsFromKeyValues(keys, vals)
 	if err != nil {
 		return EmptyRoot, err
 	}
-
-	return getHashKeyFromHashResult(C.fwd_batch(db.handle, kvp))
+	return db.UpdateBatch(ops)
 }
 
 // UpdateBatch applies a batch of operations to the database, returning the hash of the
@@ -301,23 +288,11 @@ func (db *Database) UpdateBatch(ops []BatchOp) (Hash, error) {
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
 func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return nil, errDBClosed
-	}
-
-	db.commitLock.Lock()
-	defer db.commitLock.Unlock()
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
+	ops, err := batchOpsFromKeyValues(keys, vals)
 	if err != nil {
 		return nil, err
 	}
-	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.outstandingHandles, &db.commitLock)
+	return db.ProposeBatch(ops)
 }
 
 // ProposeBatch creates a new proposal with the given batch operations. The proposal

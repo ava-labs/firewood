@@ -103,18 +103,11 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 //   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
 //   - non-empty value: Inserts/updates the key with the provided value
 func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
-	if p.handle == nil {
-		return nil, errDroppedProposal
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
+	ops, err := batchOpsFromKeyValues(keys, vals)
 	if err != nil {
 		return nil, err
 	}
-	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.handle, kvp), p.keepAliveHandle.outstandingHandles, p.commitLock)
+	return p.ProposeBatch(ops)
 }
 
 // ProposeBatch is equivalent to [Database.ProposeBatch] except that the new proposal is

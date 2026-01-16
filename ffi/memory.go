@@ -122,35 +122,6 @@ func newBorrowedKeyValuePairs(pairs []C.KeyValuePair, pinner Pinner) C.BorrowedK
 	}
 }
 
-// newKeyValuePairs creates a new BorrowedKeyValuePairs from slices of keys and values.
-//
-// The keys and values must have the same length.
-//
-// Deprecated: Use [newKeyValuePairsFromBatchOps] instead which provides explicit
-// operation types. This function maintains backward compatibility by treating:
-//   - nil values as DeleteRange operations
-//   - non-nil values (including empty slices) as Put operations
-//
-// Provide a Pinner to ensure the memory is pinned while the BorrowedKeyValuePairs is
-// in use.
-func newKeyValuePairs(keys, vals [][]byte, pinner Pinner) (C.BorrowedKeyValuePairs, error) {
-	if len(keys) != len(vals) {
-		return C.BorrowedKeyValuePairs{}, fmt.Errorf("%w: %d != %d", errKeysAndValues, len(keys), len(vals))
-	}
-
-	pairs := make([]C.KeyValuePair, len(keys))
-	for i := range keys {
-		// Maintain backward compatibility: nil value = DeleteRange, non-nil = Put
-		var op C.enum_BatchOpTag = C.BatchOpTag_Put
-		if vals[i] == nil {
-			op = C.BatchOpTag_DeleteRange
-		}
-		pairs[i] = newKeyValuePair(keys[i], vals[i], op, pinner)
-	}
-
-	return newBorrowedKeyValuePairs(pairs, pinner), nil
-}
-
 // newKeyValuePairsFromBatchOps creates a new BorrowedKeyValuePairs from a slice of BatchOps.
 //
 // Provide a Pinner to ensure the memory is pinned while the BorrowedKeyValuePairs is
