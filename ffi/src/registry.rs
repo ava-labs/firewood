@@ -21,13 +21,13 @@ pub const MERGE_COUNT: &str = "ffi.merge";
 
 /// Registers all FFI metric descriptions.
 pub fn register() {
-    describe_counter!(COMMIT_MS, "Time spent committing via FFI in milliseconds");
+    describe_counter!(COMMIT_MS, "Time spent committing via FFI (ms)");
     describe_counter!(COMMIT_COUNT, "Count of commit operations via FFI");
 
-    describe_counter!(PROPOSE_MS, "Time spent proposing via FFI in milliseconds");
+    describe_counter!(PROPOSE_MS, "Time spent proposing via FFI (ms)");
     describe_counter!(PROPOSE_COUNT, "Count of proposal operations via FFI");
 
-    describe_counter!(BATCH_MS, "Time spent processing batches in milliseconds");
+    describe_counter!(BATCH_MS, "Time spent processing batches (ms)");
     describe_counter!(BATCH_COUNT, "Count of batch operations completed");
 
     describe_counter!(CACHED_VIEW_MISS, "Count of cached view misses");

@@ -56,7 +56,7 @@ pub fn register() {
         CHANGE_PROOF_NEXT,
         "Number of next calls to calculate a change proof"
     );
-    describe_counter!(COMMIT_LATENCY_MS, "Commit latency in milliseconds");
+    describe_counter!(COMMIT_LATENCY_MS, "Commit latency (ms)");
     describe_gauge!(ACTIVE_REVISIONS, "Current number of active revisions");
     describe_gauge!(MAX_REVISIONS, "Maximum number of revisions configured");
 }
