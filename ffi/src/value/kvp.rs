@@ -10,19 +10,42 @@ use firewood::v2::api;
 /// A type alias for a rust-owned byte slice.
 pub type OwnedKeyValueBatch = OwnedSlice<OwnedKeyValuePair>;
 
-/// A `KeyValue` represents a key-value pair, passed to the FFI.
+/// Tag indicating the type of batch operation.
+///
+/// This is used by the FFI to explicitly distinguish between different
+/// operation types instead of relying on nil vs empty pointer semantics.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchOpTag {
+    /// Insert or update a key with a value.
+    /// The value may be empty (zero-length).
+    Put = 0,
+    /// Delete a specific key.
+    /// The value field is ignored for this operation.
+    Delete = 1,
+    /// Delete all keys with a given prefix.
+    /// The key field is used as the prefix.
+    /// The value field is ignored for this operation.
+    DeleteRange = 2,
+}
+
+/// A `KeyValue` represents a key-value pair with an operation tag, passed to the FFI.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct KeyValuePair<'a> {
     pub key: BorrowedBytes<'a>,
     pub value: BorrowedBytes<'a>,
+    /// The operation type for this key-value pair.
+    pub op: BatchOpTag,
 }
 
 impl<'a> KeyValuePair<'a> {
+    /// Creates a new `KeyValuePair` with a `Put` operation.
     pub fn new((key, value): &'a (impl AsRef<[u8]>, impl AsRef<[u8]>)) -> Self {
         Self {
             key: BorrowedBytes::from_slice(key.as_ref()),
             value: BorrowedBytes::from_slice(value.as_ref()),
+            op: BatchOpTag::Put,
         }
     }
 }
@@ -45,15 +68,13 @@ impl<'a> api::TryIntoBatch for KeyValuePair<'a> {
 
     #[inline]
     fn try_into_batch(self) -> Result<api::BatchOp<Self::Key, Self::Value>, Self::Error> {
-        // Check if the value pointer is null (nil slice in Go)
-        // vs non-null but empty (empty slice []byte{} in Go)
-        Ok(if self.value.is_null() {
-            api::BatchOp::DeleteRange { prefix: self.key }
-        } else {
-            api::BatchOp::Put {
+        Ok(match self.op {
+            BatchOpTag::Put => api::BatchOp::Put {
                 key: self.key,
                 value: self.value,
-            }
+            },
+            BatchOpTag::Delete => api::BatchOp::Delete { key: self.key },
+            BatchOpTag::DeleteRange => api::BatchOp::DeleteRange { prefix: self.key },
         })
     }
 }

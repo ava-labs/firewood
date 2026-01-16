@@ -1530,3 +1530,257 @@ func parseKVFromDumpFormat(dumpstr string) ([][]byte, [][]byte, error) {
 	}
 	return keys, values, nil
 }
+
+// Tests for BatchOp API - explicit operation types without nil/empty ambiguity
+
+// TestBatchOpPut tests the Put operation.
+func TestBatchOpPut(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert using BatchOp API
+	ops := []BatchOp{
+		Put([]byte("key1"), []byte("value1")),
+		Put([]byte("key2"), []byte("value2")),
+		Put([]byte("key3"), []byte{}), // Empty value is valid
+	}
+	_, err := db.UpdateBatch(ops)
+	r.NoError(err)
+
+	// Verify insertions
+	got, err := db.Get([]byte("key1"))
+	r.NoError(err)
+	r.Equal([]byte("value1"), got)
+
+	got, err = db.Get([]byte("key2"))
+	r.NoError(err)
+	r.Equal([]byte("value2"), got)
+
+	got, err = db.Get([]byte("key3"))
+	r.NoError(err)
+	r.Equal([]byte{}, got, "empty value should be stored, not nil")
+}
+
+// TestBatchOpDelete tests the Delete operation for single key deletion.
+func TestBatchOpDelete(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert some keys
+	ops := []BatchOp{
+		Put([]byte("key1"), []byte("value1")),
+		Put([]byte("key10"), []byte("value10")),
+		Put([]byte("key100"), []byte("value100")),
+	}
+	_, err := db.UpdateBatch(ops)
+	r.NoError(err)
+
+	// Delete only "key1" (exact match, not prefix)
+	deleteOps := []BatchOp{
+		Delete([]byte("key1")),
+	}
+	_, err = db.UpdateBatch(deleteOps)
+	r.NoError(err)
+
+	// Verify "key1" is deleted
+	got, err := db.Get([]byte("key1"))
+	r.NoError(err)
+	r.Nil(got, "key1 should be deleted")
+
+	// Verify "key10" and "key100" still exist (not affected by prefix)
+	got, err = db.Get([]byte("key10"))
+	r.NoError(err)
+	r.Equal([]byte("value10"), got, "key10 should still exist")
+
+	got, err = db.Get([]byte("key100"))
+	r.NoError(err)
+	r.Equal([]byte("value100"), got, "key100 should still exist")
+}
+
+// TestBatchOpDeleteRange tests the DeleteRange operation for prefix deletion.
+func TestBatchOpDeleteRange(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert some keys
+	ops := []BatchOp{
+		Put([]byte("key1"), []byte("value1")),
+		Put([]byte("key10"), []byte("value10")),
+		Put([]byte("key100"), []byte("value100")),
+		Put([]byte("other"), []byte("other_value")),
+	}
+	_, err := db.UpdateBatch(ops)
+	r.NoError(err)
+
+	// Delete all keys with prefix "key1"
+	deleteOps := []BatchOp{
+		DeleteRange([]byte("key1")),
+	}
+	_, err = db.UpdateBatch(deleteOps)
+	r.NoError(err)
+
+	// Verify all keys with prefix "key1" are deleted
+	got, err := db.Get([]byte("key1"))
+	r.NoError(err)
+	r.Nil(got, "key1 should be deleted")
+
+	got, err = db.Get([]byte("key10"))
+	r.NoError(err)
+	r.Nil(got, "key10 should be deleted (has prefix key1)")
+
+	got, err = db.Get([]byte("key100"))
+	r.NoError(err)
+	r.Nil(got, "key100 should be deleted (has prefix key1)")
+
+	// Verify "other" still exists
+	got, err = db.Get([]byte("other"))
+	r.NoError(err)
+	r.Equal([]byte("other_value"), got, "other should still exist")
+}
+
+// TestBatchOpProposeBatch tests the ProposeBatch API.
+func TestBatchOpProposeBatch(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert initial data
+	_, err := db.UpdateBatch([]BatchOp{
+		Put([]byte("key1"), []byte("value1")),
+		Put([]byte("key2"), []byte("value2")),
+	})
+	r.NoError(err)
+
+	// Create a proposal with BatchOp
+	proposal, err := db.ProposeBatch([]BatchOp{
+		Put([]byte("key3"), []byte("value3")),
+		Delete([]byte("key1")),
+	})
+	r.NoError(err)
+	defer proposal.Drop()
+
+	// Verify proposal state
+	got, err := proposal.Get([]byte("key1"))
+	r.NoError(err)
+	r.Nil(got, "key1 should be deleted in proposal")
+
+	got, err = proposal.Get([]byte("key2"))
+	r.NoError(err)
+	r.Equal([]byte("value2"), got, "key2 should exist in proposal")
+
+	got, err = proposal.Get([]byte("key3"))
+	r.NoError(err)
+	r.Equal([]byte("value3"), got, "key3 should exist in proposal")
+
+	// Verify db state is unchanged
+	got, err = db.Get([]byte("key1"))
+	r.NoError(err)
+	r.Equal([]byte("value1"), got, "key1 should still exist in db")
+}
+
+// TestBatchOpProposalProposeBatch tests chained proposals with BatchOp.
+func TestBatchOpProposalProposeBatch(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert initial data
+	_, err := db.UpdateBatch([]BatchOp{
+		Put([]byte("key1"), []byte("value1")),
+	})
+	r.NoError(err)
+
+	// Create first proposal
+	proposal1, err := db.ProposeBatch([]BatchOp{
+		Put([]byte("key2"), []byte("value2")),
+	})
+	r.NoError(err)
+
+	// Create second proposal on top of first
+	proposal2, err := proposal1.ProposeBatch([]BatchOp{
+		Put([]byte("key3"), []byte("value3")),
+		Delete([]byte("key1")),
+	})
+	r.NoError(err)
+	defer proposal2.Drop()
+
+	// Verify proposal2 state
+	got, err := proposal2.Get([]byte("key1"))
+	r.NoError(err)
+	r.Nil(got, "key1 should be deleted in proposal2")
+
+	got, err = proposal2.Get([]byte("key2"))
+	r.NoError(err)
+	r.Equal([]byte("value2"), got, "key2 should exist in proposal2")
+
+	got, err = proposal2.Get([]byte("key3"))
+	r.NoError(err)
+	r.Equal([]byte("value3"), got, "key3 should exist in proposal2")
+
+	// Commit proposal1 first, then proposal2
+	err = proposal1.Commit()
+	r.NoError(err)
+
+	err = proposal2.Commit()
+	r.NoError(err)
+
+	// Verify final state
+	got, err = db.Get([]byte("key1"))
+	r.NoError(err)
+	r.Nil(got, "key1 should be deleted")
+
+	got, err = db.Get([]byte("key2"))
+	r.NoError(err)
+	r.Equal([]byte("value2"), got, "key2 should exist")
+
+	got, err = db.Get([]byte("key3"))
+	r.NoError(err)
+	r.Equal([]byte("value3"), got, "key3 should exist")
+}
+
+// TestBatchOpMixedOperations tests a batch with mixed Put, Delete, and DeleteRange.
+func TestBatchOpMixedOperations(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert initial data
+	_, err := db.UpdateBatch([]BatchOp{
+		Put([]byte("apple"), []byte("fruit")),
+		Put([]byte("apricot"), []byte("fruit")),
+		Put([]byte("banana"), []byte("fruit")),
+		Put([]byte("berry"), []byte("fruit")),
+		Put([]byte("cherry"), []byte("fruit")),
+	})
+	r.NoError(err)
+
+	// Mixed batch: delete "banana" exactly, delete all "ap*" prefix, add "date"
+	_, err = db.UpdateBatch([]BatchOp{
+		Delete([]byte("banana")),
+		DeleteRange([]byte("ap")),
+		Put([]byte("date"), []byte("fruit")),
+	})
+	r.NoError(err)
+
+	// Verify results
+	got, err := db.Get([]byte("apple"))
+	r.NoError(err)
+	r.Nil(got, "apple should be deleted (ap* prefix)")
+
+	got, err = db.Get([]byte("apricot"))
+	r.NoError(err)
+	r.Nil(got, "apricot should be deleted (ap* prefix)")
+
+	got, err = db.Get([]byte("banana"))
+	r.NoError(err)
+	r.Nil(got, "banana should be deleted (exact delete)")
+
+	got, err = db.Get([]byte("berry"))
+	r.NoError(err)
+	r.Equal([]byte("fruit"), got, "berry should still exist")
+
+	got, err = db.Get([]byte("cherry"))
+	r.NoError(err)
+	r.Equal([]byte("fruit"), got, "cherry should still exist")
+
+	got, err = db.Get([]byte("date"))
+	r.NoError(err)
+	r.Equal([]byte("fruit"), got, "date should be added")
+}

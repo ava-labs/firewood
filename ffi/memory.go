@@ -84,11 +84,19 @@ func newBorrowedBytes(slice []byte, pinner Pinner) C.BorrowedBytes {
 // newKeyValuePair creates a new KeyValuePair from Go byte slices for key and value.
 //
 // Provide a Pinner to ensure the memory is pinned while the KeyValuePair is in use.
-func newKeyValuePair(key, value []byte, pinner Pinner) C.KeyValuePair {
+func newKeyValuePair(key, value []byte, op C.enum_BatchOpTag, pinner Pinner) C.KeyValuePair {
 	return C.KeyValuePair{
 		key:   newBorrowedBytes(key, pinner),
 		value: newBorrowedBytes(value, pinner),
+		op:    op,
 	}
+}
+
+// newKeyValuePairFromBatchOp creates a new KeyValuePair from a BatchOp.
+//
+// Provide a Pinner to ensure the memory is pinned while the KeyValuePair is in use.
+func newKeyValuePairFromBatchOp(batchOp BatchOp, pinner Pinner) C.KeyValuePair {
+	return newKeyValuePair(batchOp.key, batchOp.value, batchOp.op, pinner)
 }
 
 // newBorrowedKeyValuePairs creates a new BorrowedKeyValuePairs from a slice of KeyValuePair.
@@ -118,6 +126,11 @@ func newBorrowedKeyValuePairs(pairs []C.KeyValuePair, pinner Pinner) C.BorrowedK
 //
 // The keys and values must have the same length.
 //
+// Deprecated: Use [newKeyValuePairsFromBatchOps] instead which provides explicit
+// operation types. This function maintains backward compatibility by treating:
+//   - nil values as DeleteRange operations
+//   - non-nil values (including empty slices) as Put operations
+//
 // Provide a Pinner to ensure the memory is pinned while the BorrowedKeyValuePairs is
 // in use.
 func newKeyValuePairs(keys, vals [][]byte, pinner Pinner) (C.BorrowedKeyValuePairs, error) {
@@ -127,10 +140,27 @@ func newKeyValuePairs(keys, vals [][]byte, pinner Pinner) (C.BorrowedKeyValuePai
 
 	pairs := make([]C.KeyValuePair, len(keys))
 	for i := range keys {
-		pairs[i] = newKeyValuePair(keys[i], vals[i], pinner)
+		// Maintain backward compatibility: nil value = DeleteRange, non-nil = Put
+		var op C.enum_BatchOpTag = C.BatchOpTag_Put
+		if vals[i] == nil {
+			op = C.BatchOpTag_DeleteRange
+		}
+		pairs[i] = newKeyValuePair(keys[i], vals[i], op, pinner)
 	}
 
 	return newBorrowedKeyValuePairs(pairs, pinner), nil
+}
+
+// newKeyValuePairsFromBatchOps creates a new BorrowedKeyValuePairs from a slice of BatchOps.
+//
+// Provide a Pinner to ensure the memory is pinned while the BorrowedKeyValuePairs is
+// in use.
+func newKeyValuePairsFromBatchOps(ops []BatchOp, pinner Pinner) C.BorrowedKeyValuePairs {
+	pairs := make([]C.KeyValuePair, len(ops))
+	for i, op := range ops {
+		pairs[i] = newKeyValuePairFromBatchOp(op, pinner)
+	}
+	return newBorrowedKeyValuePairs(pairs, pinner)
 }
 
 // ownedBytes is a wrapper around C.OwnedBytes that provides a Go interface

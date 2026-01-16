@@ -12,6 +12,31 @@
 
 
 /**
+ * Tag indicating the type of batch operation.
+ *
+ * This is used by the FFI to explicitly distinguish between different
+ * operation types instead of relying on nil vs empty pointer semantics.
+ */
+typedef enum BatchOpTag {
+  /**
+   * Insert or update a key with a value.
+   * The value may be empty (zero-length).
+   */
+  BatchOpTag_Put = 0,
+  /**
+   * Delete a specific key.
+   * The value field is ignored for this operation.
+   */
+  BatchOpTag_Delete = 1,
+  /**
+   * Delete all keys with a given prefix.
+   * The key field is used as the prefix.
+   * The value field is ignored for this operation.
+   */
+  BatchOpTag_DeleteRange = 2,
+} BatchOpTag;
+
+/**
  * FFI context for a parsed or generated change proof.
  */
 typedef struct ChangeProofContext ChangeProofContext;
@@ -159,11 +184,15 @@ typedef struct BorrowedSlice_u8 {
 typedef struct BorrowedSlice_u8 BorrowedBytes;
 
 /**
- * A `KeyValue` represents a key-value pair, passed to the FFI.
+ * A `KeyValue` represents a key-value pair with an operation tag, passed to the FFI.
  */
 typedef struct KeyValuePair {
   BorrowedBytes key;
   BorrowedBytes value;
+  /**
+   * The operation type for this key-value pair.
+   */
+  enum BatchOpTag op;
 } KeyValuePair;
 
 /**

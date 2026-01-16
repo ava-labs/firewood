@@ -97,7 +97,8 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 // The returned proposal cannot be committed until the parent proposal `p` has been
 // committed. Additionally, it must be committed or dropped before the [Database] is closed.
 //
-// Value Semantics:
+// Deprecated: Use [Proposal.ProposeBatch] instead which provides explicit operation types.
+// This function maintains backward compatibility by treating:
 //   - nil value (vals[i] == nil): Performs a DeleteRange operation using the key as a prefix
 //   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
 //   - non-empty value: Inserts/updates the key with the provided value
@@ -113,6 +114,24 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 	if err != nil {
 		return nil, err
 	}
+	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.handle, kvp), p.keepAliveHandle.outstandingHandles, p.commitLock)
+}
+
+// ProposeBatch is equivalent to [Database.ProposeBatch] except that the new proposal is
+// based on `p`.
+// The returned proposal cannot be committed until the parent proposal `p` has been
+// committed. Additionally, it must be committed or dropped before the [Database] is closed.
+//
+// Use [Put], [Delete], and [DeleteRange] to construct the operations.
+func (p *Proposal) ProposeBatch(ops []BatchOp) (*Proposal, error) {
+	if p.handle == nil {
+		return nil, errDroppedProposal
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	kvp := newKeyValuePairsFromBatchOps(ops, &pinner)
 	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.handle, kvp), p.keepAliveHandle.outstandingHandles, p.commitLock)
 }
 
