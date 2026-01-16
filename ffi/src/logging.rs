@@ -9,14 +9,16 @@ use crate::BorrowedBytes;
 pub struct LogArgs<'a> {
     /// The file path where logs for this process are stored.
     ///
-    /// If empty, this is set to `${TMPDIR}/firewood-log.txt`.
+    /// This is required and must not be empty. Use "/dev/stdout" for stdout logging.
     ///
     /// This is required to be a valid UTF-8 string.
     pub path: BorrowedBytes<'a>,
 
-    /// The filter level for logs.
+    /// The filter string in `RUST_LOG` format.
     ///
-    /// If empty, this is set to `info`.
+    /// If empty, `env_logger` defaults will be used.
+    /// Common example: "info" to show info-level and above logs.
+    /// See <https://docs.rs/env_logger> for full `RUST_LOG` format documentation.
     ///
     /// This is required to be a valid UTF-8 string.
     pub filter_level: BorrowedBytes<'a>,
@@ -24,7 +26,7 @@ pub struct LogArgs<'a> {
 
 #[cfg(feature = "logger")]
 impl LogArgs<'_> {
-    fn path(&self) -> std::io::Result<std::borrow::Cow<'_, std::path::Path>> {
+    fn path(&self) -> std::io::Result<&std::path::Path> {
         let path = self.path.as_str().map_err(|err| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -32,34 +34,33 @@ impl LogArgs<'_> {
             )
         })?;
         if path.is_empty() {
-            Ok(std::borrow::Cow::Owned(
-                std::env::temp_dir().join("firewood-log.txt"),
-            ))
-        } else {
-            Ok(std::borrow::Cow::Borrowed(std::path::Path::new(path)))
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "log path must not be empty",
+            ));
         }
+        Ok(std::path::Path::new(path))
     }
 
-    fn log_level(&self) -> std::io::Result<&str> {
-        let level = self.filter_level.as_str().map_err(|err| {
+    fn log_filter(&self) -> std::io::Result<&str> {
+        let filter = self.filter_level.as_str().map_err(|err| {
             std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                format!("log level contains invalid utf-8: {err}"),
+                format!("log filter contains invalid utf-8: {err}"),
             )
         })?;
-        if level.is_empty() {
-            Ok("info")
-        } else {
-            Ok(level)
-        }
+        Ok(filter)
     }
 
-    /// Starts logging to the specified file path with the given filter level.
+    /// Starts logging to the specified file path with the given filter.
+    ///
+    /// The filter uses `RUST_LOG` format. See `env_logger` documentation for details.
+    /// Logging is global per-process and can only be initialized once.
     ///
     /// # Errors
     ///
-    /// If the log file cannot be created or opened, or if the log level is invalid,
-    /// this will return an error.
+    /// If the log file cannot be created or opened, if the log filter is invalid,
+    /// or if the logger has already been initialized, this will return an error.
     pub fn start_logging(&self) -> std::io::Result<()> {
         use env_logger::Target::Pipe;
         use std::fs::OpenOptions;
@@ -78,19 +79,12 @@ impl LogArgs<'_> {
             })?;
         }
 
-        let level = self.log_level()?;
-        let level = level.parse().map_err(|e| {
-            std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("invalid log level `{level}`: {e}"),
-            )
-        })?;
+        let filter = self.log_filter()?;
 
         let file = OpenOptions::new()
             .create(true)
-            .write(true)
-            .truncate(false)
-            .open(&log_path)
+            .append(true)
+            .open(log_path)
             .map_err(|e| {
                 std::io::Error::new(
                     e.kind(),
@@ -98,9 +92,14 @@ impl LogArgs<'_> {
                 )
             })?;
 
-        env_logger::Builder::new()
-            .filter_level(level)
-            .target(Pipe(Box::new(file)))
+        let mut builder = env_logger::Builder::new();
+        builder.target(Pipe(Box::new(file)));
+
+        if !filter.is_empty() {
+            builder.parse_filters(filter);
+        }
+
+        builder
             .try_init()
             .map_err(|e| std::io::Error::other(format!("failed to initialize logger: {e}")))?;
 

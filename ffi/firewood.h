@@ -1084,15 +1084,17 @@ typedef struct LogArgs {
   /**
    * The file path where logs for this process are stored.
    *
-   * If empty, this is set to `${TMPDIR}/firewood-log.txt`.
+   * This is required and must not be empty. Use "/dev/stdout" for stdout logging.
    *
    * This is required to be a valid UTF-8 string.
    */
   BorrowedBytes path;
   /**
-   * The filter level for logs.
+   * The filter string in `RUST_LOG` format.
    *
-   * If empty, this is set to `info`.
+   * If empty, `env_logger` defaults will be used.
+   * Common example: "info" to show info-level and above logs.
+   * See <https://docs.rs/env_logger> for full `RUST_LOG` format documentation.
    *
    * This is required to be a valid UTF-8 string.
    */
@@ -2147,14 +2149,18 @@ struct HashResult fwd_root_hash(const struct DatabaseHandle *db);
 /**
  * Start logs for this process.
  *
+ * Logging is global per-process and can only be initialized once. Subsequent calls
+ * will return an error.
+ *
  * # Arguments
  *
  * See [`LogArgs`].
  *
  * # Returns
  *
- * - [`VoidResult::Ok`] if the recorder was initialized.
- * - [`VoidResult::Err`] if an error occurs during initialization.
+ * - [`VoidResult::Ok`] if the logger was initialized.
+ * - [`VoidResult::Err`] if an error occurs during initialization (e.g., invalid path,
+ *   invalid filter, or logger already initialized).
  *
  * # Safety
  *
