@@ -115,16 +115,16 @@ func newBorrowedKeyValuePairs(pairs []C.KeyValuePair, pinner Pinner) C.BorrowedK
 	}
 }
 
-// newKeyValuePairsFromBatch creates a new BorrowedKeyValuePairs from a slice of BatchOp.
+// newKeyValuePairsFromBatch creates a new BorrowedKeyValuePairs from a Batch.
 //
 // Provide a Pinner to ensure the memory is pinned while the BorrowedKeyValuePairs is
 // in use.
-func newKeyValuePairsFromBatch(batch []BatchOp, pinner Pinner) C.BorrowedKeyValuePairs {
-	if len(batch) == 0 {
+func newKeyValuePairsFromBatch(batch *Batch, pinner Pinner) C.BorrowedKeyValuePairs {
+	if batch == nil || len(batch.ops) == 0 {
 		return C.BorrowedKeyValuePairs{ptr: nil, len: 0}
 	}
-	pairs := make([]C.KeyValuePair, len(batch))
-	for i, op := range batch {
+	pairs := make([]C.KeyValuePair, len(batch.ops))
+	for i, op := range batch.ops {
 		pairs[i] = newKeyValuePair(op.key, op.value, op.op, pinner)
 	}
 	return newBorrowedKeyValuePairs(pairs, pinner)
