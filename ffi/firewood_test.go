@@ -484,7 +484,7 @@ func TestRangeDelete(t *testing.T) {
 	tests := []struct {
 		name   string
 		update func(db *Database, keys, vals [][]byte) error
-		delete func(db *Database, prefix []byte) error
+		delete func(db *Database, keys [][]byte, prefix []byte) error
 	}{
 		{
 			name: "Update",
@@ -492,19 +492,37 @@ func TestRangeDelete(t *testing.T) {
 				_, err := db.Update(keys, vals)
 				return err
 			},
-			delete: func(db *Database, prefix []byte) error {
+			delete: func(db *Database, _ [][]byte, prefix []byte) error {
 				_, err := db.Update([][]byte{prefix}, [][]byte{nil})
 				return err
 			},
 		},
 		{
-			name: "UpdateBatch",
+			name: "UpdateBatch with PrefixDelete",
 			update: func(db *Database, keys, vals [][]byte) error {
 				_, err := db.UpdateBatch(makeBatch(keys, vals))
 				return err
 			},
-			delete: func(db *Database, prefix []byte) error {
+			delete: func(db *Database, _ [][]byte, prefix []byte) error {
 				_, err := db.UpdateBatch([]BatchOp{PrefixDelete(prefix)})
+				return err
+			},
+		},
+		{
+			name: "UpdateBatch with Delete",
+			update: func(db *Database, keys, vals [][]byte) error {
+				_, err := db.UpdateBatch(makeBatch(keys, vals))
+				return err
+			},
+			delete: func(db *Database, keys [][]byte, prefix []byte) error {
+				// Delete each key that has the prefix individually
+				var batch []BatchOp
+				for _, key := range keys {
+					if bytes.HasPrefix(key, prefix) {
+						batch = append(batch, Delete(key))
+					}
+				}
+				_, err := db.UpdateBatch(batch)
 				return err
 			},
 		},
@@ -518,7 +536,7 @@ func TestRangeDelete(t *testing.T) {
 			r.NoError(tt.update(db, keys, vals))
 
 			const deletePrefix = 1
-			r.NoError(tt.delete(db, keyForTest(deletePrefix)))
+			r.NoError(tt.delete(db, keys, keyForTest(deletePrefix)))
 
 			for i := range keys {
 				got, err := db.Get(keys[i])
