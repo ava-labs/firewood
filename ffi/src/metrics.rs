@@ -5,7 +5,7 @@ use std::error::Error;
 use std::net::Ipv6Addr;
 use std::sync::OnceLock;
 
-use firewood_metrics::MetricsContext;
+use firewood_metrics::{HistogramBucketConfig, MetricsContext};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use oxhttp::Server;
 use oxhttp::model::{Body, Response, StatusCode};
@@ -46,7 +46,9 @@ impl<T: HasContext + ?Sized> HasContext for &mut T {
 /// This happens on a per-process basis, meaning that the metrics system cannot
 /// be initialized if it has already been set up in the same process.
 pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
-    crate::registry::register();
+    // Collect histogram bucket configurations from all crates
+    let mut histogram_configs: Vec<HistogramBucketConfig> = Vec::new();
+    crate::registry::register(&mut histogram_configs);
     firewood::registry::register();
     firewood_storage::registry::register();
     #[cfg(feature = "block-replay")]
@@ -60,7 +62,7 @@ pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
     let mut builder = PrometheusBuilder::new();
 
     // Apply bucket configurations from the global registry
-    for config in firewood_metrics::registered_histogram_buckets() {
+    for config in histogram_configs {
         builder = builder
             .set_buckets_for_metric(Matcher::Full(config.name.to_string()), config.buckets)?;
     }

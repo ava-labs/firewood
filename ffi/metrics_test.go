@@ -42,20 +42,24 @@ var (
 	activeLogPath string
 )
 
-func ensureMetricsStarted(r *require.Assertions) {
+func ensureMetricsStarted(t *testing.T) {
+	t.Helper()
 	initMetrics.Do(func() {
-		r.NoError(StartMetricsWithExporter(metricsPort))
+		require.NoError(t, StartMetricsWithExporter(metricsPort))
 	})
 }
 
-func ensureLogsStarted(r *require.Assertions, logPath string) {
+func ensureLogsStarted(t *testing.T, logPath string) {
+	t.Helper()
 	initLogs.Do(func() {
 		logConfig := &LogConfig{
 			Path:        logPath,
 			FilterLevel: "trace",
 		}
 		if err := StartLogs(logConfig); err != nil {
-			r.Contains(err.Error(), "Logging is not available")
+			// "Logging is not available" error occurs when the FFI library was
+			// built without the "logger" feature flag enabled.
+			require.ErrorContains(t, err, "Logging is not available")
 			activeLogPath = ""
 			return
 		}
@@ -64,10 +68,10 @@ func ensureLogsStarted(r *require.Assertions, logPath string) {
 }
 
 func newDbWithMetricsAndLogs(t *testing.T, opts ...Option) (db *Database, logPath string) {
-	r := require.New(t)
+	t.Helper()
 	db = newTestDatabase(t, opts...)
-	ensureMetricsStarted(r)
-	ensureLogsStarted(r, filepath.Join(t.TempDir(), "firewood.log"))
+	ensureMetricsStarted(t)
+	ensureLogsStarted(t, filepath.Join(t.TempDir(), "firewood.log"))
 	return db, activeLogPath
 }
 
