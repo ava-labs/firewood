@@ -127,6 +127,9 @@ pub mod manager;
 /// Merkle module, containing merkle operations
 pub mod merkle;
 
+/// Metrics registry for firewood layer metrics
+pub mod registry;
+
 /// Cryptographic proof system for Merkle tries.
 ///
 /// This module provides types and functionality for creating and verifying proofs

@@ -43,8 +43,9 @@ pub mod logger;
 #[macro_use]
 /// Macros module for defining macros used in the storage module
 pub mod macros;
-#[cfg(test)]
-mod macros_test;
+
+/// Metrics registry for storage layer metrics
+pub mod registry;
 // re-export these so callers don't need to know where they are
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
@@ -55,7 +56,8 @@ pub use node::path::{NibblesIterator, Path};
 pub use node::{BranchNode, Child, Children, ChildrenSlots, LeafNode, Node, PathIterItem};
 pub use nodestore::{
     AreaIndex, Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal,
-    NodeReader, NodeStore, Parentable, RootReader, TrieReader,
+    NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError, NodeReader, NodeStore, Parentable,
+    RootReader, TrieReader,
 };
 pub use path::{
     ComponentIter, IntoSplitPath, JoinedPath, PackedBytes, PackedPathComponents, PackedPathRef,

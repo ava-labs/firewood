@@ -26,7 +26,7 @@ use std::num::NonZero;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
-use crate::firewood_counter;
+use firewood_metrics::firewood_increment;
 use lru::LruCache;
 
 use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
@@ -40,6 +40,7 @@ pub struct FileBacked {
     cache: Mutex<LruCache<LinearAddress, SharedNode>>,
     free_list_cache: Mutex<LruCache<LinearAddress, Option<LinearAddress>>>,
     cache_read_strategy: CacheReadStrategy,
+    node_hash_algorithm: crate::NodeHashAlgorithm,
     // keep before `fd` so that it is dropped first (fields are dropped in the order they are declared)
     #[cfg(feature = "io-uring")]
     ring: super::io_uring::IoUringProxy,
@@ -68,6 +69,7 @@ impl FileBacked {
         truncate: bool,
         create: bool,
         cache_read_strategy: CacheReadStrategy,
+        node_hash_algorithm: crate::NodeHashAlgorithm,
     ) -> Result<Self, FileIoError> {
         let fd = OpenOptions::new()
             .read(true)
@@ -95,6 +97,7 @@ impl FileBacked {
             free_list_cache: Mutex::new(LruCache::new(free_list_cache_size)),
             cache_read_strategy,
             filename: path,
+            node_hash_algorithm,
             #[cfg(feature = "io-uring")]
             ring,
             fd: UnlockOnDrop(fd),
@@ -103,8 +106,12 @@ impl FileBacked {
 }
 
 impl ReadableStorage for FileBacked {
+    fn node_hash_algorithm(&self) -> crate::NodeHashAlgorithm {
+        self.node_hash_algorithm
+    }
+
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
-        firewood_counter!("read_node", "Number of node reads", "from" => "file").increment(1);
+        firewood_increment!(crate::registry::READ_NODE, 1, "from" => "file");
         Ok(PredictiveReader::new(self, addr))
     }
 
@@ -119,15 +126,14 @@ impl ReadableStorage for FileBacked {
     fn read_cached_node(&self, addr: LinearAddress, mode: &'static str) -> Option<SharedNode> {
         let mut guard = self.cache.lock();
         let cached = guard.get(&addr).cloned();
-        firewood_counter!("cache.node", "Number of node cache operations", "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" })
-            .increment(1);
+        firewood_increment!(crate::registry::CACHE_NODE, 1, "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" });
         cached
     }
 
     fn free_list_cache(&self, addr: LinearAddress) -> Option<Option<LinearAddress>> {
         let mut guard = self.free_list_cache.lock();
         let cached = guard.pop(&addr);
-        firewood_counter!("cache.freelist", "Number of freelist cache operations", "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
+        firewood_increment!(crate::registry::CACHE_FREELIST, 1, "type" => if cached.is_some() { "hit" } else { "miss" });
         cached
     }
 
@@ -237,9 +243,8 @@ impl<'a> PredictiveReader<'a> {
 impl Drop for PredictiveReader<'_> {
     fn drop(&mut self) {
         let elapsed = self.started.elapsed();
-        firewood_counter!("io.read_ms", "IO read timing in milliseconds")
-            .increment(elapsed.as_millis());
-        firewood_counter!("io.read", "Number of IO read operations").increment(1);
+        firewood_increment!(crate::registry::IO_READ_MS, elapsed.as_millis());
+        firewood_increment!(crate::registry::IO_READ_COUNT, 1);
     }
 }
 
@@ -296,6 +301,8 @@ impl std::ops::DerefMut for UnlockOnDrop {
 mod test {
     #![expect(clippy::unwrap_used)]
 
+    use crate::NodeHashAlgorithm;
+
     use super::*;
     use nonzero_ext::nonzero;
     use std::io::Write;
@@ -317,6 +324,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
         )
         .unwrap();
 
@@ -359,6 +367,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
         )
         .unwrap();
 

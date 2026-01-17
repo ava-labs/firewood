@@ -10,7 +10,28 @@ use firewood::{
 use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
-use firewood_storage::firewood_counter;
+use firewood_metrics::firewood_increment;
+
+/// The hashing mode to use for the database.
+///
+/// This determines the cryptographic hash function and trie structure used.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeHashAlgorithm {
+    /// MerkleDB Firewood hashing (SHA-256 based)
+    MerkleDB = 0,
+    /// Ethereum-compatible hashing (Keccak-256 based)
+    Ethereum = 1,
+}
+
+impl From<NodeHashAlgorithm> for firewood_storage::NodeHashAlgorithm {
+    fn from(alg: NodeHashAlgorithm) -> Self {
+        match alg {
+            NodeHashAlgorithm::MerkleDB => firewood_storage::NodeHashAlgorithm::MerkleDB,
+            NodeHashAlgorithm::Ethereum => firewood_storage::NodeHashAlgorithm::Ethereum,
+        }
+    }
+}
 
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
 ///
@@ -58,6 +79,15 @@ pub struct DatabaseHandleArgs<'a> {
 
     /// Whether to truncate the database file if it exists.
     pub truncate: bool,
+
+    /// The hashing mode to use for the database.
+    ///
+    /// This must match the compile-time feature:
+    /// - [`NodeHashAlgorithm::Ethereum`] if the `ethhash` feature is enabled
+    /// - [`NodeHashAlgorithm::MerkleDB`] if the `ethhash` feature is disabled
+    ///
+    /// Opening returns an error if this does not match the compile-time feature.
+    pub node_hash_algorithm: NodeHashAlgorithm,
 }
 
 impl DatabaseHandleArgs<'_> {
@@ -108,6 +138,7 @@ impl DatabaseHandle {
     /// If the path is empty, or if the configuration is invalid, this will return an error.
     pub fn new(args: DatabaseHandleArgs<'_>) -> Result<Self, api::Error> {
         let cfg = DbConfig::builder()
+            .node_hash_algorithm(args.node_hash_algorithm.into())
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
             .root_store(args.root_store)
@@ -162,13 +193,11 @@ impl DatabaseHandle {
             self.create_proposal_handle(values.as_ref())?;
 
         let root_hash = handle.commit_proposal(|commit_time| {
-            firewood_counter!("ffi.commit_ms", "FFI commit timing in milliseconds")
-                .increment(commit_time.as_millis());
+            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
         })?;
 
-        firewood_counter!("ffi.batch_ms", "FFI batch timing in milliseconds")
-            .increment(start_time.elapsed().as_millis());
-        firewood_counter!("ffi.batch", "Number of FFI batch operations").increment(1);
+        firewood_increment!(crate::registry::BATCH_MS, start_time.elapsed().as_millis());
+        firewood_increment!(crate::registry::BATCH_COUNT, 1);
 
         Ok(root_hash)
     }
@@ -196,10 +225,9 @@ impl DatabaseHandle {
         })?;
 
         if cache_miss {
-            firewood_counter!("ffi.cached_view.miss", "Number of FFI cached view misses")
-                .increment(1);
+            firewood_increment!(crate::registry::CACHED_VIEW_MISS, 1);
         } else {
-            firewood_counter!("ffi.cached_view.hit", "Number of FFI cached view hits").increment(1);
+            firewood_increment!(crate::registry::CACHED_VIEW_HIT, 1);
         }
 
         Ok(view)

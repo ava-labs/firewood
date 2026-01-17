@@ -32,9 +32,7 @@ use std::io::{Error, ErrorKind, Read};
 use std::iter::FusedIterator;
 
 use crate::node::ExtendableBytes;
-use crate::{
-    FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage, firewood_counter,
-};
+use crate::{FreeListParent, MaybePersistedNode, ReadableStorage, WritableStorage};
 
 /// Returns the maximum size needed to encode a `VarInt`.
 const fn var_int_max_size<VI>() -> usize {
@@ -239,12 +237,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
                 *free_stored_area_addr = free_head.next_free_block;
             }
 
-            firewood_counter!(
-                "space.reused",
-                "Bytes reused from free list by index",
-                "index" => index_name(index)
-            )
-            .increment(index.size());
+            firewood_metrics::firewood_increment!(crate::registry::SPACE_REUSED, index.size(), "index" => index_name(index));
 
             // Return the address of the newly allocated block.
             trace!("Allocating from free list: addr: {address:?}, size: {index}");
@@ -252,12 +245,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
         }
 
         trace!("No free blocks of sufficient size {index} found");
-        firewood_counter!(
-            "space.from_end",
-            "Space allocated from end of nodestore",
-            "index" => index_name(index)
-        )
-        .increment(index.size());
+        firewood_metrics::firewood_increment!(crate::registry::SPACE_FROM_END, index.size(), "index" => index_name(index));
         Ok(None)
     }
 
@@ -316,18 +304,8 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
 
         let (area_size_index, _) = self.area_index_and_size(addr)?;
         trace!("Deleting node at {addr:?} of size {area_size_index}");
-        firewood_counter!(
-            "delete_node",
-            "Nodes deleted",
-            "index" => index_name(area_size_index)
-        )
-        .increment(1);
-        firewood_counter!(
-            "space.freed",
-            "Bytes freed in nodestore",
-            "index" => index_name(area_size_index)
-        )
-        .increment(area_size_index.size());
+        firewood_metrics::firewood_increment!(crate::registry::DELETE_NODE, 1, "index" => index_name(area_size_index));
+        firewood_metrics::firewood_increment!(crate::registry::SPACE_FREED, area_size_index.size(), "index" => index_name(area_size_index));
 
         // The area that contained the node is now free.
         let mut stored_area_bytes = Vec::new();
@@ -587,7 +565,9 @@ fn read_bincode_varint_u64_le(reader: &mut impl Read) -> std::io::Result<u64> {
 pub mod test_utils {
     use super::*;
 
+    use crate::NodeHashAlgorithm;
     use crate::node::Node;
+    use crate::nodestore::header::RootNodeInfo;
     use crate::nodestore::{Committed, NodeStore, NodeStoreHeader};
 
     // Helper function to wrap the node in a StoredArea and write it to the given offset. Returns the size of the area on success.
@@ -626,12 +606,12 @@ pub mod test_utils {
     pub fn test_write_header<S: WritableStorage>(
         nodestore: &mut NodeStore<Committed, S>,
         size: u64,
-        root_addr: Option<LinearAddress>,
+        root_node_info: Option<RootNodeInfo>,
         free_lists: FreeLists,
     ) {
-        let mut header = NodeStoreHeader::new();
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
         header.set_size(size);
-        header.set_root_address(root_addr);
+        header.set_root_location(root_node_info);
         *header.free_lists_mut() = free_lists;
         let header_bytes = bytemuck::bytes_of(&header);
         nodestore.header = header;
@@ -680,7 +660,7 @@ mod tests {
     // Create a random free list and test that `FreeListIterator` is able to traverse all the free areas
     fn free_list_iterator() {
         let mut rng = crate::SeededRng::from_env_or_random();
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let area_index = rng.random_range(0..AreaIndex::NUM_AREA_SIZES as u8);
@@ -735,7 +715,7 @@ mod tests {
     #[test]
     fn free_list_iter_with_metadata() {
         let rng = crate::SeededRng::from_env_or_random();
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let mut free_lists = FreeLists::default();
@@ -861,7 +841,7 @@ mod tests {
         const AREA_INDEX2: AreaIndex = area_index!(5);
         const AREA_INDEX2_PLUS_1: AreaIndex = area_index!(6);
 
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let mut free_lists = FreeLists::default();

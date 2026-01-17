@@ -31,8 +31,8 @@ use std::iter::FusedIterator;
 
 use crate::linear::FileIoError;
 use crate::nodestore::AreaIndex;
-use crate::{Child, firewood_counter};
 use coarsetime::Instant;
+use firewood_metrics::firewood_increment;
 
 use crate::{MaybePersistedNode, NodeReader, WritableStorage};
 
@@ -217,7 +217,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         };
 
         let flush_time = flush_start.elapsed().as_millis();
-        firewood_counter!("flush_nodes", "amount flushed nodes").increment(flush_time);
+        firewood_increment!(crate::registry::FLUSH_NODES, flush_time);
 
         Ok(header)
     }
@@ -313,8 +313,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         self.header = self.flush_nodes()?;
 
         // Set the root address in the header based on the persisted root
-        let root_address = self.kind.root.as_ref().and_then(Child::persisted_address);
-        self.header.set_root_address(root_address);
+        let root_location = self.kind.root.as_ref().and_then(|child| {
+            let (addr, hash) = child.persist_info()?;
+            Some((addr, hash.clone().into_triehash()))
+        });
+        self.header.set_root_location(root_location);
 
         // Finally persist the header
         self.flush_header()?;
@@ -347,7 +350,7 @@ mod tests {
 
     /// Helper to create a test node store with a specific root
     fn create_test_store_with_root(root: Node) -> NodeStore<MutableProposal, MemStore> {
-        let mem_store = MemStore::new(vec![]).into();
+        let mem_store = MemStore::default().into();
         let mut store = NodeStore::new_empty_proposal(mem_store);
         store.root_mut().replace(root);
         store
@@ -385,7 +388,7 @@ mod tests {
 
     #[test]
     fn test_empty_nodestore() {
-        let mem_store = MemStore::new(vec![]).into();
+        let mem_store = MemStore::default().into();
         let store = NodeStore::new_empty_proposal(mem_store);
         let mut iter = UnPersistedNodeIterator::new(&store);
 
@@ -548,7 +551,7 @@ mod tests {
     #[test]
     fn test_into_committed_with_generic_storage() {
         // Create a base committed store with MemStore
-        let mem_store = MemStore::new(vec![]);
+        let mem_store = MemStore::default();
         let base_committed = NodeStore::new_empty_committed(mem_store.into());
 
         // Create a mutable proposal from the base
