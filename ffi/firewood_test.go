@@ -292,10 +292,10 @@ func sortKV(keys, vals [][]byte) error {
 	return nil
 }
 
-func makeBatch(keys, vals [][]byte) *Batch {
-	batch := NewBatch()
+func makeBatch(keys, vals [][]byte) []BatchOp {
+	batch := make([]BatchOp, len(keys))
 	for i := range keys {
-		batch.Put(keys[i], vals[i])
+		batch[i] = Put(keys[i], vals[i])
 	}
 	return batch
 }
@@ -312,7 +312,7 @@ func TestInsert100(t *testing.T) {
 	type dbView interface {
 		Get(key []byte) ([]byte, error)
 		Propose(keys, vals [][]byte) (*Proposal, error)
-		ProposeBatch(batch *Batch) (*Proposal, error)
+		ProposeBatch(batch []BatchOp) (*Proposal, error)
 		Root() (Hash, error)
 	}
 
@@ -441,9 +441,7 @@ func TestRangeDelete(t *testing.T) {
 				return err
 			},
 			delete: func(db *Database, prefix []byte) error {
-				batch := NewBatch()
-				batch.PrefixDelete(prefix)
-				_, err := db.UpdateBatch(batch)
+				_, err := db.UpdateBatch([]BatchOp{PrefixDelete(prefix)})
 				return err
 			},
 		},
@@ -584,9 +582,7 @@ func TestDeleteAll(t *testing.T) {
 		{
 			name: "ProposeBatch with PrefixDelete",
 			delete: func(db *Database, prefix []byte) (*Proposal, error) {
-				batch := NewBatch()
-				batch.PrefixDelete(prefix)
-				return db.ProposeBatch(batch)
+				return db.ProposeBatch([]BatchOp{PrefixDelete(prefix)})
 			},
 		},
 	}

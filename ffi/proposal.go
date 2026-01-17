@@ -115,9 +115,8 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 // The returned proposal cannot be committed until the parent proposal `p` has been
 // committed. Additionally, it must be committed or dropped before the [Database] is closed.
 //
-// Use [NewBatch] to create a batch, then [Batch.Put], [Batch.Delete], and
-// [Batch.PrefixDelete] to add operations.
-func (p *Proposal) ProposeBatch(batch *Batch) (*Proposal, error) {
+// Use [Put], [Delete], and [PrefixDelete] to create batch operations.
+func (p *Proposal) ProposeBatch(batch []BatchOp) (*Proposal, error) {
 	if p.handle == nil {
 		return nil, errDroppedProposal
 	}
