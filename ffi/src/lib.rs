@@ -383,7 +383,7 @@ pub extern "C" fn fwd_get_from_proposal(
 /// # Arguments
 ///
 /// * `db` - The database handle returned by [`fwd_open_db`]
-/// * `values` - A [`BorrowedKeyValuePairs`] containing the key-value pairs to put.
+/// * `values` - A [`BorrowedBatchOps`] containing the batch operations to apply.
 ///
 /// # Returns
 ///
@@ -396,15 +396,12 @@ pub extern "C" fn fwd_get_from_proposal(
 ///
 /// The caller must:
 /// * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
-/// * ensure that `values` is valid for [`BorrowedKeyValuePairs`]
+/// * ensure that `values` is valid for [`BorrowedBatchOps`]
 /// * call [`fwd_free_owned_bytes`] to free the memory associated with the
 ///   returned error ([`HashKey`] does not need to be freed as it is returned by
 ///   value).
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_batch(
-    db: Option<&DatabaseHandle>,
-    values: BorrowedKeyValuePairs<'_>,
-) -> HashResult {
+pub extern "C" fn fwd_batch(db: Option<&DatabaseHandle>, values: BorrowedBatchOps<'_>) -> HashResult {
     #[cfg(feature = "block-replay")]
     if db.is_some() {
         replay::record_batch(values);
@@ -418,7 +415,7 @@ pub extern "C" fn fwd_batch(
 /// # Arguments
 ///
 /// * `db` - The database handle returned by [`fwd_open_db`]
-/// * `values` - A [`BorrowedKeyValuePairs`] containing the key-value pairs to put.
+/// * `values` - A [`BorrowedBatchOps`] containing the batch operations to apply.
 ///
 /// # Returns
 ///
@@ -431,14 +428,14 @@ pub extern "C" fn fwd_batch(
 ///
 /// The caller must:
 /// * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
-/// * ensure that `values` is valid for [`BorrowedKeyValuePairs`]
+/// * ensure that `values` is valid for [`BorrowedBatchOps`]
 /// * call [`fwd_commit_proposal`] or [`fwd_free_proposal`] to free the memory
 ///   associated with the proposal. And, the caller must ensure this is done
 ///   before calling [`fwd_close_db`] to avoid memory leaks or undefined behavior.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_propose_on_db<'db>(
     db: Option<&'db DatabaseHandle>,
-    values: BorrowedKeyValuePairs<'_>,
+    values: BorrowedBatchOps<'_>,
 ) -> ProposalResult<'db> {
     let result = invoke_with_handle(db, move |db| db.create_proposal_handle(values));
 
@@ -456,7 +453,7 @@ pub extern "C" fn fwd_propose_on_db<'db>(
 ///
 /// * `handle` - The proposal handle returned by [`fwd_propose_on_db`] or
 ///   [`fwd_propose_on_proposal`].
-/// * `values` - A [`BorrowedKeyValuePairs`] containing the key-value pairs to put.
+/// * `values` - A [`BorrowedBatchOps`] containing the batch operations to apply.
 ///
 /// # Returns
 ///
@@ -469,14 +466,14 @@ pub extern "C" fn fwd_propose_on_db<'db>(
 ///
 /// The caller must:
 /// * ensure that `handle` is a valid pointer to a [`ProposalHandle`]
-/// * ensure that `values` is valid for [`BorrowedKeyValuePairs`]
+/// * ensure that `values` is valid for [`BorrowedBatchOps`]
 /// * call [`fwd_commit_proposal`] or [`fwd_free_proposal`] to free the memory
 ///   associated with the proposal. And, the caller must ensure this is done
 ///   before calling [`fwd_close_db`] to avoid memory leaks or undefined behavior.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_propose_on_proposal<'db>(
     handle: Option<&ProposalHandle<'db>>,
-    values: BorrowedKeyValuePairs<'_>,
+    values: BorrowedBatchOps<'_>,
 ) -> ProposalResult<'db> {
     let result = invoke_with_handle(handle, move |p| p.create_proposal_handle(values));
 

@@ -10,83 +10,66 @@ use firewood::v2::api;
 /// A type alias for a rust-owned byte slice.
 pub type OwnedKeyValueBatch = OwnedSlice<OwnedKeyValuePair>;
 
-/// Tag indicating the type of batch operation.
+/// A batch operation passed to the FFI.
 ///
-/// This is used by the FFI to explicitly distinguish between different
+/// This is a tagged union that explicitly distinguishes between different
 /// operation types instead of relying on nil vs empty pointer semantics.
 #[repr(C)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BatchOpTag {
+#[derive(Debug, Clone, Copy)]
+pub enum BatchOp<'a> {
     /// Insert or update a key with a value.
     /// The value may be empty (zero-length).
-    Put = 0,
+    Put {
+        key: BorrowedBytes<'a>,
+        value: BorrowedBytes<'a>,
+    },
     /// Delete a specific key.
-    /// The value field is ignored for this operation.
-    Delete = 1,
+    Delete { key: BorrowedBytes<'a> },
     /// Delete all keys with a given prefix.
-    /// The key field is used as the prefix.
-    /// The value field is ignored for this operation.
-    DeleteRange = 2,
+    DeleteRange { prefix: BorrowedBytes<'a> },
 }
 
-/// A `KeyValue` represents a key-value pair with an operation tag, passed to the FFI.
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-pub struct KeyValuePair<'a> {
-    pub key: BorrowedBytes<'a>,
-    pub value: BorrowedBytes<'a>,
-    /// The operation type for this key-value pair.
-    pub op: BatchOpTag,
-}
-
-impl<'a> KeyValuePair<'a> {
-    /// Creates a new `KeyValuePair` with a `Put` operation.
+impl<'a> BatchOp<'a> {
+    /// Creates a new `BatchOp::Put` operation.
     pub fn new((key, value): &'a (impl AsRef<[u8]>, impl AsRef<[u8]>)) -> Self {
-        Self {
+        Self::Put {
             key: BorrowedBytes::from_slice(key.as_ref()),
             value: BorrowedBytes::from_slice(value.as_ref()),
-            op: BatchOpTag::Put,
         }
     }
 }
 
-impl fmt::Display for KeyValuePair<'_> {
+impl fmt::Display for BatchOp<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let precision = f.precision().unwrap_or(64);
-        write!(
-            f,
-            "Key: {:.precision$}, Value: {:.precision$}",
-            self.key, self.value
-        )
+        match self {
+            BatchOp::Put { key, value } => {
+                write!(f, "Put(Key: {key:.precision$}, Value: {value:.precision$})")
+            }
+            BatchOp::Delete { key } => write!(f, "Delete(Key: {key:.precision$})"),
+            BatchOp::DeleteRange { prefix } => {
+                write!(f, "DeleteRange(Prefix: {prefix:.precision$})")
+            }
+        }
     }
 }
 
-impl<'a> api::TryIntoBatch for KeyValuePair<'a> {
+impl<'a> api::TryIntoBatch for BatchOp<'a> {
     type Key = BorrowedBytes<'a>;
     type Value = BorrowedBytes<'a>;
     type Error = std::convert::Infallible;
 
     #[inline]
     fn try_into_batch(self) -> Result<api::BatchOp<Self::Key, Self::Value>, Self::Error> {
-        Ok(match self.op {
-            BatchOpTag::Put => api::BatchOp::Put {
-                key: self.key,
-                value: self.value,
-            },
-            BatchOpTag::Delete => api::BatchOp::Delete { key: self.key },
-            BatchOpTag::DeleteRange => api::BatchOp::DeleteRange { prefix: self.key },
+        Ok(match self {
+            BatchOp::Put { key, value } => api::BatchOp::Put { key, value },
+            BatchOp::Delete { key } => api::BatchOp::Delete { key },
+            BatchOp::DeleteRange { prefix } => api::BatchOp::DeleteRange { prefix },
         })
     }
 }
 
-impl api::KeyValuePair for KeyValuePair<'_> {
-    #[inline]
-    fn try_into_tuple(self) -> Result<(Self::Key, Self::Value), Self::Error> {
-        Ok((self.key, self.value))
-    }
-}
-
-impl<'a> api::TryIntoBatch for &KeyValuePair<'a> {
+impl<'a> api::TryIntoBatch for &BatchOp<'a> {
     type Key = BorrowedBytes<'a>;
     type Value = BorrowedBytes<'a>;
     type Error = std::convert::Infallible;
@@ -94,13 +77,6 @@ impl<'a> api::TryIntoBatch for &KeyValuePair<'a> {
     #[inline]
     fn try_into_batch(self) -> Result<api::BatchOp<Self::Key, Self::Value>, Self::Error> {
         (*self).try_into_batch()
-    }
-}
-
-impl api::KeyValuePair for &KeyValuePair<'_> {
-    #[inline]
-    fn try_into_tuple(self) -> Result<(Self::Key, Self::Value), Self::Error> {
-        (*self).try_into_tuple()
     }
 }
 

@@ -12,31 +12,6 @@
 
 
 /**
- * Tag indicating the type of batch operation.
- *
- * This is used by the FFI to explicitly distinguish between different
- * operation types instead of relying on nil vs empty pointer semantics.
- */
-typedef enum BatchOpTag {
-  /**
-   * Insert or update a key with a value.
-   * The value may be empty (zero-length).
-   */
-  BatchOpTag_Put = 0,
-  /**
-   * Delete a specific key.
-   * The value field is ignored for this operation.
-   */
-  BatchOpTag_Delete = 1,
-  /**
-   * Delete all keys with a given prefix.
-   * The key field is used as the prefix.
-   * The value field is ignored for this operation.
-   */
-  BatchOpTag_DeleteRange = 2,
-} BatchOpTag;
-
-/**
  * The hashing mode to use for the database.
  *
  * This determines the cryptographic hash function and trie structure used.
@@ -200,22 +175,54 @@ typedef struct BorrowedSlice_u8 {
 typedef struct BorrowedSlice_u8 BorrowedBytes;
 
 /**
- * A `KeyValue` represents a key-value pair with an operation tag, passed to the FFI.
+ * A batch operation passed to the FFI.
+ *
+ * This is a tagged union that explicitly distinguishes between different
+ * operation types instead of relying on nil vs empty pointer semantics.
  */
-typedef struct KeyValuePair {
+typedef enum BatchOp_Tag {
+  /**
+   * Insert or update a key with a value.
+   * The value may be empty (zero-length).
+   */
+  BatchOp_Put,
+  /**
+   * Delete a specific key.
+   */
+  BatchOp_Delete,
+  /**
+   * Delete all keys with a given prefix.
+   */
+  BatchOp_DeleteRange,
+} BatchOp_Tag;
+
+typedef struct BatchOp_Put_Body {
   BorrowedBytes key;
   BorrowedBytes value;
-  /**
-   * The operation type for this key-value pair.
-   */
-  enum BatchOpTag op;
-} KeyValuePair;
+} BatchOp_Put_Body;
+
+typedef struct BatchOp_Delete_Body {
+  BorrowedBytes key;
+} BatchOp_Delete_Body;
+
+typedef struct BatchOp_DeleteRange_Body {
+  BorrowedBytes prefix;
+} BatchOp_DeleteRange_Body;
+
+typedef struct BatchOp {
+  BatchOp_Tag tag;
+  union {
+    BatchOp_Put_Body put;
+    BatchOp_Delete_Body delete_;
+    BatchOp_DeleteRange_Body delete_range;
+  };
+} BatchOp;
 
 /**
  * A borrowed byte slice. Used to represent data that was passed in from C
  * callers and will not be freed or retained by Rust code.
  */
-typedef struct BorrowedSlice_KeyValuePair {
+typedef struct BorrowedSlice_BatchOp {
   /**
    * A pointer to the slice of bytes. This can be null if the slice is empty.
    *
@@ -228,26 +235,26 @@ typedef struct BorrowedSlice_KeyValuePair {
    *
    * [`NonNull`]: std::ptr::NonNull
    */
-  const struct KeyValuePair *ptr;
+  const struct BatchOp *ptr;
   /**
    * The length of the slice. It is ignored if the pointer is null; however,
    * if the pointer is not null, it must be equal to the number of elements
    * pointed to by `ptr`.
    */
   size_t len;
-} BorrowedSlice_KeyValuePair;
+} BorrowedSlice_BatchOp;
 
 /**
- * A type alias for a borrowed slice of [`KeyValuePair`]s.
+ * A type alias for a borrowed slice of [`BatchOp`]s.
  *
- * C callers can use this to pass in a slice of key-value pairs that will not
+ * C callers can use this to pass in a slice of batch operations that will not
  * be freed by Rust code.
  *
  * C callers must ensure that the pointer, if not null, points to a valid slice
- * of key-value pairs of length `len`. C callers must also ensure that the slice
+ * of batch operations of length `len`. C callers must also ensure that the slice
  * is valid for the duration of the C function call that was passed this slice.
  */
-typedef struct BorrowedSlice_KeyValuePair BorrowedKeyValuePairs;
+typedef struct BorrowedSlice_BatchOp BorrowedBatchOps;
 
 /**
  * The result type returned from an FFI function that returns no value but may
@@ -1134,7 +1141,7 @@ typedef struct LogArgs {
  * # Arguments
  *
  * * `db` - The database handle returned by [`fwd_open_db`]
- * * `values` - A [`BorrowedKeyValuePairs`] containing the key-value pairs to put.
+ * * `values` - A [`BorrowedBatchOps`] containing the batch operations to apply.
  *
  * # Returns
  *
@@ -1147,12 +1154,12 @@ typedef struct LogArgs {
  *
  * The caller must:
  * * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
- * * ensure that `values` is valid for [`BorrowedKeyValuePairs`]
+ * * ensure that `values` is valid for [`BorrowedBatchOps`]
  * * call [`fwd_free_owned_bytes`] to free the memory associated with the
  *   returned error ([`HashKey`] does not need to be freed as it is returned by
  *   value).
  */
-struct HashResult fwd_batch(const struct DatabaseHandle *db, BorrowedKeyValuePairs values);
+struct HashResult fwd_batch(const struct DatabaseHandle *db, BorrowedBatchOps values);
 
 /**
  * Flushes buffered block replay operations to disk.
@@ -1961,7 +1968,7 @@ struct ValueResult fwd_proposal_dump(const struct ProposalHandle *proposal);
  * # Arguments
  *
  * * `db` - The database handle returned by [`fwd_open_db`]
- * * `values` - A [`BorrowedKeyValuePairs`] containing the key-value pairs to put.
+ * * `values` - A [`BorrowedBatchOps`] containing the batch operations to apply.
  *
  * # Returns
  *
@@ -1974,13 +1981,12 @@ struct ValueResult fwd_proposal_dump(const struct ProposalHandle *proposal);
  *
  * The caller must:
  * * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
- * * ensure that `values` is valid for [`BorrowedKeyValuePairs`]
+ * * ensure that `values` is valid for [`BorrowedBatchOps`]
  * * call [`fwd_commit_proposal`] or [`fwd_free_proposal`] to free the memory
  *   associated with the proposal. And, the caller must ensure this is done
  *   before calling [`fwd_close_db`] to avoid memory leaks or undefined behavior.
  */
-struct ProposalResult fwd_propose_on_db(const struct DatabaseHandle *db,
-                                        BorrowedKeyValuePairs values);
+struct ProposalResult fwd_propose_on_db(const struct DatabaseHandle *db, BorrowedBatchOps values);
 
 /**
  * Proposes a batch of operations to the database on top of an existing proposal.
@@ -1989,7 +1995,7 @@ struct ProposalResult fwd_propose_on_db(const struct DatabaseHandle *db,
  *
  * * `handle` - The proposal handle returned by [`fwd_propose_on_db`] or
  *   [`fwd_propose_on_proposal`].
- * * `values` - A [`BorrowedKeyValuePairs`] containing the key-value pairs to put.
+ * * `values` - A [`BorrowedBatchOps`] containing the batch operations to apply.
  *
  * # Returns
  *
@@ -2002,13 +2008,13 @@ struct ProposalResult fwd_propose_on_db(const struct DatabaseHandle *db,
  *
  * The caller must:
  * * ensure that `handle` is a valid pointer to a [`ProposalHandle`]
- * * ensure that `values` is valid for [`BorrowedKeyValuePairs`]
+ * * ensure that `values` is valid for [`BorrowedBatchOps`]
  * * call [`fwd_commit_proposal`] or [`fwd_free_proposal`] to free the memory
  *   associated with the proposal. And, the caller must ensure this is done
  *   before calling [`fwd_close_db`] to avoid memory leaks or undefined behavior.
  */
 struct ProposalResult fwd_propose_on_proposal(const struct ProposalHandle *handle,
-                                              BorrowedKeyValuePairs values);
+                                              BorrowedBatchOps values);
 
 /**
  * Returns an iterator over the code hashes contained in the range proof.

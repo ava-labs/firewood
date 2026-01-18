@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use crate::value::KeyValuePair;
+use crate::value::BatchOp;
 
 /// A type alias for a borrowed byte slice.
 ///
@@ -15,15 +15,15 @@ use crate::value::KeyValuePair;
 /// for the duration of the C function call that was passed this slice.
 pub type BorrowedBytes<'a> = BorrowedSlice<'a, u8>;
 
-/// A type alias for a borrowed slice of [`KeyValuePair`]s.
+/// A type alias for a borrowed slice of [`BatchOp`]s.
 ///
-/// C callers can use this to pass in a slice of key-value pairs that will not
+/// C callers can use this to pass in a slice of batch operations that will not
 /// be freed by Rust code.
 ///
 /// C callers must ensure that the pointer, if not null, points to a valid slice
-/// of key-value pairs of length `len`. C callers must also ensure that the slice
+/// of batch operations of length `len`. C callers must also ensure that the slice
 /// is valid for the duration of the C function call that was passed this slice.
-pub type BorrowedKeyValuePairs<'a> = BorrowedSlice<'a, KeyValuePair<'a>>;
+pub type BorrowedBatchOps<'a> = BorrowedSlice<'a, BatchOp<'a>>;
 
 /// A borrowed byte slice. Used to represent data that was passed in from C
 /// callers and will not be freed or retained by Rust code.

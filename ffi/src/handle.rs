@@ -7,7 +7,7 @@ use firewood::{
     v2::api::{self, ArcDynDbView, Db as _, DbView, HashKey, HashKeyExt, IntoBatchIter, KeyType},
 };
 
-use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
+use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult, arc_cache::ArcCache};
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
 use firewood_metrics::firewood_increment;
@@ -185,9 +185,9 @@ impl DatabaseHandle {
     /// # Errors
     ///
     /// An error is returned if the proposal could not be created.
-    pub fn create_batch<'kvp>(
+    pub fn create_batch<'a>(
         &self,
-        values: impl AsRef<[KeyValuePair<'kvp>]> + 'kvp,
+        values: impl AsRef<[BatchOp<'a>]> + 'a,
     ) -> Result<Option<HashKey>, api::Error> {
         let CreateProposalResult { handle, start_time } =
             self.create_proposal_handle(values.as_ref())?;
