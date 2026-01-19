@@ -201,7 +201,8 @@ func (tr *merkleTriePair) deleteAccount(accountIndex int) {
 		return deleteAddr == addr
 	})
 
-	tr.pendingFwdBatch = append(tr.pendingFwdBatch, firewood.Delete(accHash[:]))
+	// an account's storage is under the account hash prefix
+	tr.pendingFwdBatch = append(tr.pendingFwdBatch, firewood.PrefixDelete(accHash[:]))
 }
 
 // openStorageTrie opens the storage trie for the provided account address.
