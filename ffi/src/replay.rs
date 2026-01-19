@@ -97,7 +97,12 @@ impl Recorder {
     }
 
     /// Records a `ProposeOnProposal` operation.
-    fn record_propose_on_proposal(&mut self, parent_ptr: usize, new_ptr: usize, ops: &[BatchOp<'_>]) {
+    fn record_propose_on_proposal(
+        &mut self,
+        parent_ptr: usize,
+        new_ptr: usize,
+        ops: &[BatchOp<'_>],
+    ) {
         let Some(&parent_id) = self.proposal_ids.get(&parent_ptr) else {
             return;
         };
@@ -230,7 +235,10 @@ pub(crate) fn record_batch(values: BorrowedBatchOps<'_>) {
 }
 
 /// Records a `fwd_propose_on_db` call after the proposal is created.
-pub(crate) fn record_propose_on_db(result: &crate::ProposalResult<'_>, values: BorrowedBatchOps<'_>) {
+pub(crate) fn record_propose_on_db(
+    result: &crate::ProposalResult<'_>,
+    values: BorrowedBatchOps<'_>,
+) {
     let Some(rec) = recorder() else { return };
     let crate::ProposalResult::Ok { handle, .. } = result else {
         return;

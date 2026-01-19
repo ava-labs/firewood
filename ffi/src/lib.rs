@@ -401,7 +401,10 @@ pub extern "C" fn fwd_get_from_proposal(
 ///   returned error ([`HashKey`] does not need to be freed as it is returned by
 ///   value).
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_batch(db: Option<&DatabaseHandle>, values: BorrowedBatchOps<'_>) -> HashResult {
+pub extern "C" fn fwd_batch(
+    db: Option<&DatabaseHandle>,
+    values: BorrowedBatchOps<'_>,
+) -> HashResult {
     #[cfg(feature = "block-replay")]
     if db.is_some() {
         replay::record_batch(values);

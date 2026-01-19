@@ -368,16 +368,17 @@ func makeBatch(keys, vals [][]byte) []BatchOp {
 func TestInsert100(t *testing.T) {
 	type dbView interface {
 		Get(key []byte) ([]byte, error)
+		Propose(batch []BatchOp) (*Proposal, error)
 		Root() (Hash, error)
 	}
 
 	tests := []struct {
 		name   string
-		insert func(*testing.T, *Database, []BatchOp) (dbView, error)
+		insert func(*testing.T, dbView, []BatchOp) (dbView, error)
 	}{
 		{
 			name: "Propose and Commit",
-			insert: func(_ *testing.T, db *Database, batch []BatchOp) (dbView, error) {
+			insert: func(_ *testing.T, db dbView, batch []BatchOp) (dbView, error) {
 				proposal, err := db.Propose(batch)
 				if err != nil {
 					return nil, err
@@ -390,14 +391,18 @@ func TestInsert100(t *testing.T) {
 		},
 		{
 			name: "Update",
-			insert: func(_ *testing.T, db *Database, batch []BatchOp) (dbView, error) {
-				_, err := db.Update(batch)
+			insert: func(_ *testing.T, db dbView, batch []BatchOp) (dbView, error) {
+				actualDB, ok := db.(*Database)
+				if !ok {
+					return nil, fmt.Errorf("expected *Database, got %T", db)
+				}
+				_, err := actualDB.Update(batch)
 				return db, err
 			},
 		},
 		{
 			name: "Propose",
-			insert: func(t *testing.T, db *Database, batch []BatchOp) (dbView, error) {
+			insert: func(t *testing.T, db dbView, batch []BatchOp) (dbView, error) {
 				proposal, err := db.Propose(batch)
 				if err != nil {
 					return nil, err
