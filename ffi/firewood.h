@@ -1277,8 +1277,8 @@ struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
  * concurrently. The caller must ensure exclusive access to the proof context
  * for the duration of the call.
  */
-struct HashResult fwd_db_verify_and_commit_change_proof(const struct DatabaseHandle *_db,
-                                                        struct VerifyChangeProofArgs _args);
+struct HashResult fwd_db_verify_and_commit_change_proof(const struct DatabaseHandle *db,
+                                                        struct VerifyChangeProofArgs args);
 
 /**
  * Verify and commit a range proof to the database.

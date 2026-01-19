@@ -8,6 +8,7 @@ use firewood::{
     logger::warn,
     v2::api::{self, FrozenChangeProof},
 };
+use firewood_storage::{TrieHash, firewood_counter};
 
 use crate::{
     BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
@@ -106,13 +107,16 @@ impl ChangeProofContext {
         max_length: Option<NonZeroUsize>,
     ) -> Result<(), api::Error> {
         warn!("change proof verification not yet implemented");
+        // Verify current root is start_root?
+
         // For now, just verify the keys are in sorted order.
         if self
             .proof
             .key_values()
             .iter()
-            .is_sorted_by(|a, b| b.key().cmp(a.key()) != Ordering::Less)
+            .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
         {
+            // TODO: Keeping a verification state may not be needed
             self.verification = Some(VerificationContext {
                 start_root,
                 end_root,
@@ -124,6 +128,68 @@ impl ChangeProofContext {
         } else {
             Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted))
         }
+    }
+
+    fn verify_and_commit(
+        &mut self,
+        db: &crate::DatabaseHandle,
+        start_root: HashKey,
+        end_root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<Option<TrieHash>, api::Error> {
+        self.verify(start_root, end_root, start_key, end_key, max_length)?;
+
+        // Rename to apply change proof.
+        let proposal_handle = db
+            .apply_change_proof(start_root.into(), start_key, end_key, &self.proof)?
+            .handle;
+
+        /*
+        let mut allow_rebase = true;
+        let proposal_handle = match self.proposal_state.take() {
+            Some(ProposalState::Committed(hash)) => {
+                self.proposal_state = Some(ProposalState::Committed(hash.clone()));
+                return Ok(hash);
+            }
+            Some(ProposalState::Proposed(proposal)) => proposal,
+            None => {
+                allow_rebase = false;
+                db.merge_key_value_range(start_key, end_key, self.proof.key_values())?
+                    .handle
+            }
+        };
+        */
+
+        let metrics_cb = |commit_time: coarsetime::Duration| {
+            firewood_counter!(
+                "firewood.ffi.commit_ms",
+                "FFI commit timing in milliseconds"
+            )
+            .increment(commit_time.as_millis());
+            firewood_counter!("firewood.ffi.merge", "Number of FFI merge operations").increment(1);
+        };
+
+        proposal_handle.commit_proposal(metrics_cb)
+        /*
+        let result = if let Err(api::Error::ParentNotLatest { .. }) = result
+            && allow_rebase
+        {
+            // proposal is stale, try rebasing and committing again
+            let proposal_handle = db
+                .merge_key_value_range(start_key, end_key, self.proof.key_values())?
+                .handle;
+            proposal_handle.commit_proposal(metrics_cb)
+        } else {
+            result
+        };
+
+        let hash = result?;
+        self.proposal_state = Some(ProposalState::Committed(hash.clone()));
+
+        Ok(hash)
+        */
     }
 }
 
@@ -259,10 +325,31 @@ pub extern "C" fn fwd_db_verify_change_proof(
 /// for the duration of the call.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_verify_and_commit_change_proof(
-    _db: Option<&DatabaseHandle>,
-    _args: VerifyChangeProofArgs,
+    db: Option<&DatabaseHandle>,
+    args: VerifyChangeProofArgs,
 ) -> HashResult {
-    CResult::from_err("not yet implemented")
+    let VerifyChangeProofArgs {
+        proof,
+        start_root,
+        end_root,
+        start_key,
+        end_key,
+        max_length,
+    } = args;
+
+    let handle = db.and_then(|db| proof.map(|p| (db, p)));
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        let start_key = start_key.into_option();
+        let end_key = end_key.into_option();
+        ctx.verify_and_commit(
+            db,
+            start_root,
+            end_root,
+            start_key.as_deref(),
+            end_key.as_deref(),
+            NonZeroUsize::new(max_length as usize),
+        )
+    })
 }
 
 /// Returns the next key range that should be fetched after processing the

@@ -13,7 +13,8 @@ use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
-    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter, KeyType, KeyValuePair, OptionalHashKeyExt
+    self, ArcDynDbView, FrozenChangeProof, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter,
+    KeyType, KeyValuePair, OptionalHashKeyExt,
 };
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
@@ -87,7 +88,7 @@ where
         )
     }
 
-    /* 
+    /*
     fn change_proof<K: KeyType>(
         &self,
         first_key: Option<K>,
@@ -317,6 +318,20 @@ impl Db {
         )
     }
 
+    // TODO: Ignore first and last key for now
+    pub fn apply_change_proof_with_parent<F: Parentable>(
+        &self,
+        _first_key: Option<impl KeyType>,
+        _last_key: Option<impl KeyType>,
+        key_values: &FrozenChangeProof,
+        parent: &NodeStore<F, FileBacked>,
+    ) -> Result<Proposal<'_>, api::Error>
+    where
+        NodeStore<F, FileBacked>: HashedNodeReader,
+    {
+        self.propose_with_parent(key_values.into_iter(), parent)
+    }
+
     /// Merge a range of key-values into a new proposal on top of a specified parent.
     ///
     /// All items within the range `(first_key..=last_key)` will be replaced with
@@ -376,7 +391,7 @@ impl api::DbView for Proposal<'_> {
         api::DbView::range_proof(&*self.nodestore, first_key, last_key, limit)
     }
 
-    /* 
+    /*
     fn change_proof<K: KeyType, T: HashedNodeReader>(
         &self,
         first_key: Option<K>,

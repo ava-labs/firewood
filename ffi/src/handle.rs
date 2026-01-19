@@ -280,6 +280,36 @@ impl DatabaseHandle {
             limit,
         )
     }
+    #[allow(clippy::missing_errors_doc)]
+    pub fn apply_change_proof(
+        &self,
+        start_hash: HashKey,
+        first_key: Option<impl KeyType>,
+        last_key: Option<impl KeyType>,
+        key_values: &FrozenChangeProof,
+    ) -> Result<CreateProposalResult<'_>, Error> {
+        // Verify that the current hash is the start_hash
+        let start_hash = match self.db.root_hash()? {
+            Some(root_hash) => {
+                let start_hash = start_hash.into_triehash();
+                if start_hash == root_hash {
+                    Ok(start_hash)
+                } else {
+                    Err(api::Error::ParentNotLatest {
+                        provided: Some(root_hash),
+                        expected: Some(start_hash),
+                    })
+                }
+            }
+            None => Err(api::Error::LatestIsEmpty),
+        }?;
+
+        let parent = &self.db.revision(start_hash)?;
+        CreateProposalResult::new(self, || {
+            self.db
+                .apply_change_proof_with_parent(first_key, last_key, key_values, parent)
+        })
+    }
 }
 
 impl From<Db> for DatabaseHandle {
