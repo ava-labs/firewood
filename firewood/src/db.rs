@@ -13,7 +13,7 @@ use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
-    self, ArcDynDbView, FrozenChangeProof, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter,
+    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter,
     KeyType, KeyValuePair, OptionalHashKeyExt,
 };
 
@@ -321,15 +321,13 @@ impl Db {
     // TODO: Ignore first and last key for now
     pub fn apply_change_proof_with_parent<F: Parentable>(
         &self,
-        _first_key: Option<impl KeyType>,
-        _last_key: Option<impl KeyType>,
-        key_values: &FrozenChangeProof,
+        key_values: impl IntoBatchIter,
         parent: &NodeStore<F, FileBacked>,
     ) -> Result<Proposal<'_>, api::Error>
     where
         NodeStore<F, FileBacked>: HashedNodeReader,
     {
-        self.propose_with_parent(key_values.into_iter(), parent)
+        self.propose_with_parent(key_values, parent)
     }
 
     /// Merge a range of key-values into a new proposal on top of a specified parent.

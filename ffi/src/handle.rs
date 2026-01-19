@@ -284,8 +284,6 @@ impl DatabaseHandle {
     pub fn apply_change_proof(
         &self,
         start_hash: HashKey,
-        first_key: Option<impl KeyType>,
-        last_key: Option<impl KeyType>,
         key_values: &FrozenChangeProof,
     ) -> Result<CreateProposalResult<'_>, Error> {
         // Verify that the current hash is the start_hash
@@ -307,7 +305,7 @@ impl DatabaseHandle {
         let parent = &self.db.revision(start_hash)?;
         CreateProposalResult::new(self, || {
             self.db
-                .apply_change_proof_with_parent(first_key, last_key, key_values, parent)
+                .apply_change_proof_with_parent(key_values, parent)
         })
     }
 }

@@ -73,7 +73,7 @@ pub struct ChangeProofContext {
     //_validation_context: (), // placeholder for future use
     //_commit_context: (),     // placeholder for future use
     proof: FrozenChangeProof,
-    verification: Option<VerificationContext>,
+    //verification: Option<VerificationContext>,
     //proposal_state: Option<ProposalState<'db>>,
 }
 
@@ -81,12 +81,13 @@ impl From<FrozenChangeProof> for ChangeProofContext {
     fn from(proof: FrozenChangeProof) -> Self {
         Self {
             proof,
-            verification: None,
+            //verification: None,
             //proposal_state: None,
         }
     }
 }
 
+/*
 #[derive(Debug)]
 #[expect(dead_code)]
 struct VerificationContext {
@@ -96,27 +97,56 @@ struct VerificationContext {
     end_key: Option<Box<[u8]>>,
     max_length: Option<NonZeroUsize>,
 }
+*/
 
 impl ChangeProofContext {
     fn verify(
         &mut self,
-        start_root: HashKey,
-        end_root: HashKey,
+        _start_root: HashKey,
+        _end_root: HashKey,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
     ) -> Result<(), api::Error> {
         warn!("change proof verification not yet implemented");
-        // Verify current root is start_root?
 
-        // For now, just verify the keys are in sorted order.
-        if self
-            .proof
-            .key_values()
+        let key_values = self.proof.key_values();
+        if key_values.is_empty() {
+            return Err(api::Error::ProofError(ProofError::Empty));
+        }
+
+        // Check to make sure the BatchOp array size is less than or equal to `max_length`
+        if let Some(max_length) = max_length
+            && key_values.len() > max_length.into()
+        {
+            return Err(api::Error::ProofError(
+                ProofError::ProofIsLargerThanMaxLength,
+            ));
+        }
+
+        // Check the start key is not greater than the first key in the proof.
+        if let (Some(start_key), Some(first_key)) = (start_key, key_values.first())
+            && start_key.cmp(first_key.key()) == Ordering::Greater
+        {
+            return Err(api::Error::ProofError(
+                ProofError::StartKeyLargerThanFirstKey,
+            ));
+        }
+
+        // Check the end key is not less than the last key in the proof.
+        if let (Some(end_key), Some(last_key)) = (end_key, key_values.last())
+            && end_key.cmp(last_key.key()) == Ordering::Less
+        {
+            return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
+        }
+
+        // Verify the keys are in sorted order.
+        if key_values
             .iter()
             .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
         {
             // TODO: Keeping a verification state may not be needed
+            /*
             self.verification = Some(VerificationContext {
                 start_root,
                 end_root,
@@ -124,6 +154,7 @@ impl ChangeProofContext {
                 end_key: end_key.map(Box::from),
                 max_length,
             });
+            */
             Ok(())
         } else {
             Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted))
@@ -143,7 +174,7 @@ impl ChangeProofContext {
 
         // Rename to apply change proof.
         let proposal_handle = db
-            .apply_change_proof(start_root.into(), start_key, end_key, &self.proof)?
+            .apply_change_proof(start_root.into(), &self.proof)?
             .handle;
 
         /*

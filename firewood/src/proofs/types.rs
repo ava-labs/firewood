@@ -121,7 +121,18 @@ pub enum ProofError {
 
     /// Change proof keys are not sorted
     #[error("the change proof keys are not sorted")]
-    ChangeProofKeysNotSorted
+    ChangeProofKeysNotSorted,
+
+    /// Start key is larger than first key
+    #[error("the start key of the change proof is larger than the first key in the proof array")]
+    StartKeyLargerThanFirstKey,
+
+    /// End key is smaller than last key
+    #[error("the end key of the change proof is larger than the end key in the proof array")]
+    EndKeyLessThanLastKey,
+
+    #[error("larger than max length")]
+    ProofIsLargerThanMaxLength,
 }
 
 #[derive(Clone, PartialEq, Eq)]
