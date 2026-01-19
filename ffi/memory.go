@@ -87,13 +87,20 @@ func newBorrowedBytes(slice []byte, pinner Pinner) C.BorrowedBytes {
 func newCBatchOp(op BatchOp, pinner Pinner) C.BatchOp {
 	var cOp C.BatchOp
 	cOp.tag = op.tag
-	// Always write the Put body (largest union member). The key field in Put
-	// is at the same offset as key in Delete and prefix in DeleteRange, so this
-	// works for all variants. The value write is harmless for Delete/DeleteRange
-	// since Rust ignores it based on the tag.
-	*(*C.BatchOp_Put_Body)(unsafe.Pointer(&cOp.anon0)) = C.BatchOp_Put_Body{
-		key:   newBorrowedBytes(op.key, pinner),
-		value: newBorrowedBytes(op.value, pinner),
+	switch op.tag {
+	case C.BatchOp_Put:
+		*(*C.BatchOp_Put_Body)(unsafe.Pointer(&cOp.anon0)) = C.BatchOp_Put_Body{
+			key:   newBorrowedBytes(op.key, pinner),
+			value: newBorrowedBytes(op.value, pinner),
+		}
+	case C.BatchOp_Delete:
+		*(*C.BatchOp_Delete_Body)(unsafe.Pointer(&cOp.anon0)) = C.BatchOp_Delete_Body{
+			key: newBorrowedBytes(op.key, pinner),
+		}
+	case C.BatchOp_DeleteRange:
+		*(*C.BatchOp_DeleteRange_Body)(unsafe.Pointer(&cOp.anon0)) = C.BatchOp_DeleteRange_Body{
+			prefix: newBorrowedBytes(op.key, pinner),
+		}
 	}
 	return cOp
 }
