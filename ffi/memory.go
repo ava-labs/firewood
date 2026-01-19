@@ -14,10 +14,7 @@ import (
 	"unsafe"
 )
 
-var (
-	errKeysAndValues = errors.New("keys and values must have the same length")
-	errFreeingValue  = errors.New("unexpected error while freeing value")
-)
+var errFreeingValue = errors.New("unexpected error while freeing value")
 
 type Pinner interface {
 	Pin(ptr any)

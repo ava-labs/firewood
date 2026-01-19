@@ -97,26 +97,8 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 // The returned proposal cannot be committed until the parent proposal `p` has been
 // committed. Additionally, it must be committed or dropped before the [Database] is closed.
 //
-// Deprecated: Use [Proposal.ProposeBatch] instead which provides explicit operation types.
-// This function maintains backward compatibility by treating:
-//   - nil value (vals[i] == nil): Performs a DeleteRange operation using the key as a prefix
-//   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
-//   - non-empty value: Inserts/updates the key with the provided value
-func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
-	batch, err := batchFromKeyValues(keys, vals)
-	if err != nil {
-		return nil, err
-	}
-	return p.ProposeBatch(batch)
-}
-
-// ProposeBatch is equivalent to [Database.ProposeBatch] except that the new proposal is
-// based on `p`.
-// The returned proposal cannot be committed until the parent proposal `p` has been
-// committed. Additionally, it must be committed or dropped before the [Database] is closed.
-//
 // Use [Put], [Delete], and [PrefixDelete] to create batch operations.
-func (p *Proposal) ProposeBatch(batch []BatchOp) (*Proposal, error) {
+func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
 	if p.handle == nil {
 		return nil, errDroppedProposal
 	}

@@ -252,38 +252,15 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))
 }
 
-// Update applies a batch of updates to the database, returning the hash of the
+// Update applies a batch of operations to the database, returning the hash of the
 // root node after the batch is applied. This is equivalent to creating a proposal
 // with [Database.Propose], then committing it with [Proposal.Commit].
-//
-// Deprecated: Use [Database.UpdateBatch] instead which provides explicit operation types.
-// This function maintains backward compatibility by treating:
-//   - nil value (vals[i] == nil): Performs a DeleteRange operation using the key as a prefix
-//   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
-//   - non-empty value: Inserts/updates the key with the provided value
-//
-// WARNING: Calling Update with an empty key and nil value will delete the entire database
-// due to prefix deletion semantics.
-//
-// This function conflicts with all other calls that access the latest state of the database,
-// and will lock for the duration of this function.
-func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
-	batch, err := batchFromKeyValues(keys, vals)
-	if err != nil {
-		return EmptyRoot, err
-	}
-	return db.UpdateBatch(batch)
-}
-
-// UpdateBatch applies a batch of operations to the database, returning the hash of the
-// root node after the batch is applied. This is equivalent to creating a proposal
-// with [Database.ProposeBatch], then committing it with [Proposal.Commit].
 //
 // Use [Put], [Delete], and [PrefixDelete] to create batch operations.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
-func (db *Database) UpdateBatch(batch []BatchOp) (Hash, error) {
+func (db *Database) Update(batch []BatchOp) (Hash, error) {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {
@@ -301,27 +278,7 @@ func (db *Database) UpdateBatch(batch []BatchOp) (Hash, error) {
 	return getHashKeyFromHashResult(C.fwd_batch(db.handle, kvp))
 }
 
-// Propose creates a new proposal with the given keys and values. The proposal
-// is not committed until [Proposal.Commit] is called. See [Database.Close] regarding
-// freeing proposals. All proposals should be freed before closing the database.
-//
-// Deprecated: Use [Database.ProposeBatch] instead which provides explicit operation types.
-// This function maintains backward compatibility by treating:
-//   - nil value (vals[i] == nil): Performs a DeleteRange operation using the key as a prefix
-//   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
-//   - non-empty value: Inserts/updates the key with the provided value
-//
-// This function conflicts with all other calls that access the latest state of the database,
-// and will lock for the duration of this function.
-func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
-	batch, err := batchFromKeyValues(keys, vals)
-	if err != nil {
-		return nil, err
-	}
-	return db.ProposeBatch(batch)
-}
-
-// ProposeBatch creates a new proposal with the given batch operations. The proposal
+// Propose creates a new proposal with the given batch operations. The proposal
 // is not committed until [Proposal.Commit] is called. See [Database.Close] regarding
 // freeing proposals. All proposals should be freed before closing the database.
 //
@@ -329,7 +286,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
-func (db *Database) ProposeBatch(batch []BatchOp) (*Proposal, error) {
+func (db *Database) Propose(batch []BatchOp) (*Proposal, error) {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {

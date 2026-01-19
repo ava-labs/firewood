@@ -44,8 +44,8 @@ func TestMetrics(t *testing.T) {
 	}
 
 	// Populate DB
-	keys, vals := kvForTest(10)
-	_, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(10)
+	_, err := db.Update(batch)
 	r.NoError(err)
 
 	req, err := http.NewRequestWithContext(

@@ -105,8 +105,8 @@ func TestRangeProofNonExistentRoot(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// insert some data
-	keys, vals := kvForTest(100)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(100)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
 	// create a bogus root
@@ -122,8 +122,8 @@ func TestRangeProofPartialRange(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Insert a lot of data.
-	keys, vals := kvForTest(10000)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(10000)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
 	// get a proof over some partial range
@@ -141,15 +141,15 @@ func TestRangeProofDiffersAfterUpdate(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Insert some data.
-	keys, vals := kvForTest(100)
-	root1, err := db.Update(keys[:50], vals[:50])
+	_, _, batch := kvForTest(100)
+	root1, err := db.Update(batch[:50])
 	r.NoError(err)
 
 	// get a proof
 	proof := newSerializedRangeProof(t, db, root1, nothing(), nothing(), rangeProofLenTruncated)
 
 	// insert more data
-	root2, err := db.Update(keys[50:], vals[50:])
+	root2, err := db.Update(batch[50:])
 	r.NoError(err)
 	r.NotEqual(root1, root2)
 
@@ -165,8 +165,8 @@ func TestRoundTripSerialization(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Insert some data.
-	keys, vals := kvForTest(10)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(10)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
 	// get a proof
@@ -188,8 +188,8 @@ func TestRangeProofVerify(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals := kvForTest(100)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(100)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
 	// not using `newVerifiedRangeProof` so we can test Verify separately
@@ -216,8 +216,8 @@ func TestVerifyAndCommitRangeProof(t *testing.T) {
 	dbTarget := newTestDatabase(t)
 
 	// Populate source
-	keys, vals := kvForTest(50)
-	sourceRoot, err := dbSource.Update(keys, vals)
+	keys, vals, batch := kvForTest(50)
+	sourceRoot, err := dbSource.Update(batch)
 	r.NoError(err)
 
 	proof := newVerifiedRangeProof(t, dbSource, sourceRoot, nothing(), nothing(), rangeProofLenUnbounded)
@@ -239,8 +239,8 @@ func TestRangeProofFindNextKey(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals := kvForTest(100)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(100)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
 	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
@@ -282,7 +282,7 @@ func TestRangeProofCodeHashes(t *testing.T) {
 	r.NoError(err)
 	codeHash := stringToHash(t, "044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
 
-	root, err := db.Update([][]byte{key[:]}, [][]byte{val})
+	root, err := db.Update([]BatchOp{Put(key[:], val)})
 	r.NoError(err)
 
 	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenUnbounded)
@@ -306,8 +306,8 @@ func TestRangeProofCodeHashes(t *testing.T) {
 func TestRangeProofFreeReleasesKeepAlive(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals := kvForTest(50)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(50)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
 	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
@@ -329,8 +329,8 @@ func TestRangeProofFreeReleasesKeepAlive(t *testing.T) {
 func TestRangeProofCommitReleasesKeepAlive(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals := kvForTest(50)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(50)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
 	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
@@ -362,8 +362,8 @@ func TestRangeProofCommitReleasesKeepAlive(t *testing.T) {
 func TestRangeProofFinalizerCleanup(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals := kvForTest(50)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(50)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
 	// note: this does not use newVerifiedRangeProof because it sets a cleanup
