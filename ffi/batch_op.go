@@ -11,10 +11,9 @@ import "fmt"
 // BatchOp represents a single batch operation to be applied to the database.
 // Create BatchOp values using the [Put], [Delete], and [PrefixDelete] functions.
 type BatchOp struct {
-	tag    C.BatchOp_Tag
-	key    []byte
-	value  []byte  // only used for Put
-	prefix []byte  // only used for DeleteRange (alias for key)
+	tag   C.BatchOp_Tag
+	key   []byte // key for Put/Delete, prefix for DeleteRange
+	value []byte // only used for Put
 }
 
 // Put creates a BatchOp that inserts or updates a key with a value.
@@ -38,8 +37,8 @@ func Delete(key []byte) BatchOp {
 // PrefixDelete creates a BatchOp that deletes all keys with the given prefix.
 func PrefixDelete(prefix []byte) BatchOp {
 	return BatchOp{
-		tag:    C.BatchOp_DeleteRange,
-		prefix: prefix,
+		tag: C.BatchOp_DeleteRange,
+		key: prefix, // stored in key field; C union has prefix at same offset
 	}
 }
 
