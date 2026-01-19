@@ -39,6 +39,7 @@ func FuzzRangeProofCreation(f *testing.F) {
 
 		keys := make([][]byte, 0, numAccounts)
 		values := make([][]byte, 0, numAccounts)
+		batch := make([]ffi.BatchOp, 0, numAccounts)
 		expected := make(map[common.Hash]int)
 		for i := range numAccounts {
 			addr := common.BytesToAddress(crypto.Keccak256Hash(binary.BigEndian.AppendUint64(nil, uint64(i))).Bytes())
@@ -60,9 +61,10 @@ func FuzzRangeProofCreation(f *testing.F) {
 			require.NoError(t, err)
 			keys = append(keys, accHash.Bytes())
 			values = append(values, accountRLP)
+			batch = append(batch, ffi.Put(keys[i], values[i]))
 		}
 
-		root, err := db.Update(keys, values)
+		root, err := db.Update(batch)
 		require.NoErrorf(t, err, "%T.Update()", db)
 
 		proof, err := db.RangeProof(root, nothing{}, nothing{}, uint32(numAccounts))
