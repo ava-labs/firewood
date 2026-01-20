@@ -10,62 +10,66 @@ use firewood::v2::api;
 /// A type alias for a rust-owned byte slice.
 pub type OwnedKeyValueBatch = OwnedSlice<OwnedKeyValuePair>;
 
-/// A `KeyValue` represents a key-value pair, passed to the FFI.
+/// A batch operation passed to the FFI.
+///
+/// This is a tagged union that explicitly distinguishes between different
+/// operation types instead of relying on nil vs empty pointer semantics.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
-pub struct KeyValuePair<'a> {
-    pub key: BorrowedBytes<'a>,
-    pub value: BorrowedBytes<'a>,
+pub enum BatchOp<'a> {
+    /// Insert or update a key with a value.
+    /// The value may be empty (zero-length).
+    Put {
+        key: BorrowedBytes<'a>,
+        value: BorrowedBytes<'a>,
+    },
+    /// Delete a specific key.
+    Delete { key: BorrowedBytes<'a> },
+    /// Delete all keys with a given prefix.
+    DeleteRange { prefix: BorrowedBytes<'a> },
 }
 
-impl<'a> KeyValuePair<'a> {
+impl<'a> BatchOp<'a> {
+    /// Creates a new `BatchOp::Put` operation.
     pub fn new((key, value): &'a (impl AsRef<[u8]>, impl AsRef<[u8]>)) -> Self {
-        Self {
+        Self::Put {
             key: BorrowedBytes::from_slice(key.as_ref()),
             value: BorrowedBytes::from_slice(value.as_ref()),
         }
     }
 }
 
-impl fmt::Display for KeyValuePair<'_> {
+impl fmt::Display for BatchOp<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let precision = f.precision().unwrap_or(64);
-        write!(
-            f,
-            "Key: {:.precision$}, Value: {:.precision$}",
-            self.key, self.value
-        )
+        match self {
+            BatchOp::Put { key, value } => {
+                write!(f, "Put(Key: {key:.precision$}, Value: {value:.precision$})")
+            }
+            BatchOp::Delete { key } => write!(f, "Delete(Key: {key:.precision$})"),
+            BatchOp::DeleteRange { prefix } => {
+                write!(f, "DeleteRange(Prefix: {prefix:.precision$})")
+            }
+        }
     }
 }
 
-impl<'a> api::TryIntoBatch for KeyValuePair<'a> {
+impl<'a> api::TryIntoBatch for BatchOp<'a> {
     type Key = BorrowedBytes<'a>;
     type Value = BorrowedBytes<'a>;
     type Error = std::convert::Infallible;
 
     #[inline]
     fn try_into_batch(self) -> Result<api::BatchOp<Self::Key, Self::Value>, Self::Error> {
-        // Check if the value pointer is null (nil slice in Go)
-        // vs non-null but empty (empty slice []byte{} in Go)
-        Ok(if self.value.is_null() {
-            api::BatchOp::DeleteRange { prefix: self.key }
-        } else {
-            api::BatchOp::Put {
-                key: self.key,
-                value: self.value,
-            }
+        Ok(match self {
+            BatchOp::Put { key, value } => api::BatchOp::Put { key, value },
+            BatchOp::Delete { key } => api::BatchOp::Delete { key },
+            BatchOp::DeleteRange { prefix } => api::BatchOp::DeleteRange { prefix },
         })
     }
 }
 
-impl api::KeyValuePair for KeyValuePair<'_> {
-    #[inline]
-    fn try_into_tuple(self) -> Result<(Self::Key, Self::Value), Self::Error> {
-        Ok((self.key, self.value))
-    }
-}
-
-impl<'a> api::TryIntoBatch for &KeyValuePair<'a> {
+impl<'a> api::TryIntoBatch for &BatchOp<'a> {
     type Key = BorrowedBytes<'a>;
     type Value = BorrowedBytes<'a>;
     type Error = std::convert::Infallible;
@@ -73,13 +77,6 @@ impl<'a> api::TryIntoBatch for &KeyValuePair<'a> {
     #[inline]
     fn try_into_batch(self) -> Result<api::BatchOp<Self::Key, Self::Value>, Self::Error> {
         (*self).try_into_batch()
-    }
-}
-
-impl api::KeyValuePair for &KeyValuePair<'_> {
-    #[inline]
-    fn try_into_tuple(self) -> Result<(Self::Key, Self::Value), Self::Error> {
-        (*self).try_into_tuple()
     }
 }
 

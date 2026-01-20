@@ -192,8 +192,8 @@ func newDatabase(dbDir string, opts ...Option) (*Database, error) {
 func TestUpdateSingleKV(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals := kvForTest(1)
-	_, err := db.Update(keys, vals)
+	keys, vals, batch := kvForTest(1)
+	_, err := db.Update(batch)
 	r.NoError(err)
 
 	got, err := db.Get(keys[0])
@@ -246,8 +246,8 @@ func TestNodeHashAlgorithmValidation(t *testing.T) {
 func TestUpdateMultiKV(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals := kvForTest(10)
-	_, err := db.Update(keys, vals)
+	keys, vals, batch := kvForTest(10)
+	_, err := db.Update(batch)
 	r.NoError(err)
 
 	for i, key := range keys {
@@ -265,8 +265,8 @@ func TestTruncateDatabase(t *testing.T) {
 	r.NoError(err)
 
 	// Insert some data.
-	keys, vals := kvForTest(10)
-	_, err = db.Update(keys, vals)
+	_, _, batch := kvForTest(10)
+	_, err = db.Update(batch)
 	r.NoError(err)
 
 	// Close the database.
@@ -295,10 +295,7 @@ func TestClosedDatabase(t *testing.T) {
 	_, err = db.Root()
 	r.ErrorIs(err, errDBClosed)
 
-	root, err := db.Update(
-		[][]byte{[]byte("key")},
-		[][]byte{[]byte("value")},
-	)
+	root, err := db.Update([]BatchOp{Put([]byte("key"), []byte("value"))})
 	r.Empty(root)
 	r.ErrorIs(err, errDBClosed)
 
@@ -313,7 +310,7 @@ func valForTest(i int) []byte {
 	return []byte("value" + strconv.Itoa(i))
 }
 
-func kvForTest(num int) ([][]byte, [][]byte) {
+func kvForTest(num int) ([][]byte, [][]byte, []BatchOp) {
 	keys := make([][]byte, num)
 	vals := make([][]byte, num)
 	for i := range keys {
@@ -321,7 +318,7 @@ func kvForTest(num int) ([][]byte, [][]byte) {
 		vals[i] = valForTest(i)
 	}
 	_ = sortKV(keys, vals)
-	return keys, vals
+	return keys, vals, makeBatch(keys, vals)
 }
 
 // sortKV sorts keys lexicographically and keeps vals paired.
@@ -355,31 +352,38 @@ func sortKV(keys, vals [][]byte) error {
 	return nil
 }
 
+func makeBatch(keys, vals [][]byte) []BatchOp {
+	batch := make([]BatchOp, len(keys))
+	for i := range keys {
+		batch[i] = Put(keys[i], vals[i])
+	}
+	return batch
+}
+
 // Tests that 100 key-value pairs can be inserted and retrieved.
-// This happens in three ways:
+// This happens in 3 ways:
 // 1. By calling [Database.Propose] and then [Proposal.Commit].
 // 2. By calling [Database.Update] directly - no proposal storage is needed.
 // 3. By calling [Database.Propose] and not committing, which returns a proposal.
 func TestInsert100(t *testing.T) {
 	type dbView interface {
 		Get(key []byte) ([]byte, error)
-		Propose(keys, vals [][]byte) (*Proposal, error)
+		Propose(batch []BatchOp) (*Proposal, error)
 		Root() (Hash, error)
 	}
 
 	tests := []struct {
 		name   string
-		insert func(dbView, [][]byte, [][]byte) (dbView, error)
+		insert func(*testing.T, dbView, []BatchOp) (dbView, error)
 	}{
 		{
 			name: "Propose and Commit",
-			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
-				proposal, err := db.Propose(keys, vals)
+			insert: func(_ *testing.T, db dbView, batch []BatchOp) (dbView, error) {
+				proposal, err := db.Propose(batch)
 				if err != nil {
 					return nil, err
 				}
-				err = proposal.Commit()
-				if err != nil {
+				if err := proposal.Commit(); err != nil {
 					return nil, err
 				}
 				return db, nil
@@ -387,34 +391,37 @@ func TestInsert100(t *testing.T) {
 		},
 		{
 			name: "Update",
-			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
+			insert: func(_ *testing.T, db dbView, batch []BatchOp) (dbView, error) {
 				actualDB, ok := db.(*Database)
 				if !ok {
 					return nil, fmt.Errorf("expected *Database, got %T", db)
 				}
-				_, err := actualDB.Update(keys, vals)
+				_, err := actualDB.Update(batch)
 				return db, err
 			},
 		},
 		{
 			name: "Propose",
-			insert: func(db dbView, keys, vals [][]byte) (dbView, error) {
-				proposal, err := db.Propose(keys, vals)
+			insert: func(t *testing.T, db dbView, batch []BatchOp) (dbView, error) {
+				proposal, err := db.Propose(batch)
 				if err != nil {
 					return nil, err
 				}
+				t.Cleanup(func() {
+					require.NoError(t, proposal.Drop())
+				})
 				return proposal, nil
 			},
 		},
 	}
 
 	for _, tt := range tests {
-		keys, vals := kvForTest(100)
 		t.Run(tt.name, func(t *testing.T) {
 			r := require.New(t)
 			db := newTestDatabase(t)
 
-			newDB, err := tt.insert(db, keys, vals)
+			keys, vals, batch := kvForTest(100)
+			newDB, err := tt.insert(t, db, batch)
 			r.NoError(err)
 
 			for i := range keys {
@@ -440,25 +447,56 @@ func TestInsert100(t *testing.T) {
 
 // Tests that a range of keys can be deleted.
 func TestRangeDelete(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-	keys, vals := kvForTest(100)
-	_, err := db.Update(keys, vals)
-	r.NoError(err)
+	tests := []struct {
+		name   string
+		delete func(db *Database, keys [][]byte, prefix []byte) error
+	}{
+		{
+			name: "PrefixDelete",
+			delete: func(db *Database, _ [][]byte, prefix []byte) error {
+				_, err := db.Update([]BatchOp{PrefixDelete(prefix)})
+				return err
+			},
+		},
+		{
+			name: "Delete",
+			delete: func(db *Database, keys [][]byte, prefix []byte) error {
+				// Delete each key that has the prefix individually
+				batch := make([]BatchOp, 0)
+				for _, key := range keys {
+					if bytes.HasPrefix(key, prefix) {
+						batch = append(batch, Delete(key))
+					}
+				}
+				_, err := db.Update(batch)
+				return err
+			},
+		},
+	}
 
-	const deletePrefix = 1
-	_, err = db.Update([][]byte{keyForTest(deletePrefix)}, [][]byte{{}})
-	r.NoError(err)
-
-	for i := range keys {
-		got, err := db.Get(keys[i])
-		r.NoError(err)
-
-		if deleted := bytes.HasPrefix(keys[i], keyForTest(deletePrefix)); deleted {
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			db := newTestDatabase(t)
+			keys, vals, batch := kvForTest(100)
+			_, err := db.Update(batch)
 			r.NoError(err)
-		} else {
-			r.Equal(vals[i], got)
-		}
+
+			const deletePrefix = 1
+			prefix := keyForTest(deletePrefix)
+			r.NoError(tt.delete(db, keys, prefix))
+
+			for i := range keys {
+				got, err := db.Get(keys[i])
+				r.NoError(err)
+
+				if deleted := bytes.HasPrefix(keys[i], prefix); deleted {
+					r.Nil(got)
+				} else {
+					r.Equal(vals[i], got)
+				}
+			}
+		})
 	}
 }
 
@@ -492,7 +530,7 @@ func TestConflictingProposals(t *testing.T) {
 			keys[j] = keyForTest(i*numKeys + j)
 			vals[j] = valForTest(i*numKeys + j)
 		}
-		proposal, err := db.Propose(keys, vals)
+		proposal, err := db.Propose(makeBatch(keys, vals))
 		r.NoError(err)
 		proposals[i] = proposal
 	}
@@ -557,38 +595,66 @@ func TestConflictingProposals(t *testing.T) {
 
 // Tests that a proposal that deletes all keys can be committed.
 func TestDeleteAll(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	keys, vals := kvForTest(10)
-	// Insert 10 key-value pairs.
-	_, err := db.Update(keys, vals)
-	r.NoError(err)
-
-	// Create a proposal that deletes all keys.
-	proposal, err := db.Propose([][]byte{[]byte("key")}, [][]byte{nil})
-	r.NoError(err)
-
-	// Check that the proposal doesn't have the keys we just inserted.
-	for i := range keys {
-		got, err := proposal.Get(keys[i])
-		r.NoError(err, "Get(%d)", i)
-		r.Empty(got, "Get(%d)", i)
+	tests := []struct {
+		name   string
+		delete func(db *Database, keys [][]byte, prefix []byte) (*Proposal, error)
+	}{
+		{
+			name: "PrefixDelete",
+			delete: func(db *Database, _ [][]byte, prefix []byte) (*Proposal, error) {
+				return db.Propose([]BatchOp{PrefixDelete(prefix)})
+			},
+		},
+		{
+			name: "Delete",
+			delete: func(db *Database, keys [][]byte, prefix []byte) (*Proposal, error) {
+				batch := make([]BatchOp, 0, len(keys))
+				for _, key := range keys {
+					if bytes.HasPrefix(key, prefix) {
+						batch = append(batch, Delete(key))
+					}
+				}
+				return db.Propose(batch)
+			},
+		},
 	}
 
-	expectedHash := stringToHash(t, expectedRoots[emptyKey])
-	hash, err := proposal.Root()
-	r.NoError(err, "%T.Root() after commit", proposal)
-	r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			db := newTestDatabase(t)
 
-	// Commit the proposal.
-	err = proposal.Commit()
-	r.NoError(err, "Commit")
+			keys, _, batch := kvForTest(10)
+			// Insert 10 key-value pairs.
+			_, err := db.Update(batch)
+			r.NoError(err)
 
-	// Check that the database is empty.
-	hash, err = db.Root()
-	r.NoError(err, "%T.Root()", db)
-	r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
+			// Create a proposal that deletes all keys.
+			proposal, err := tt.delete(db, keys, []byte("key"))
+			r.NoError(err)
+
+			// Check that the proposal doesn't have the keys we just inserted.
+			for i := range keys {
+				got, err := proposal.Get(keys[i])
+				r.NoError(err, "Get(%d)", i)
+				r.Empty(got, "Get(%d)", i)
+			}
+
+			expectedHash := stringToHash(t, expectedRoots[emptyKey])
+			hash, err := proposal.Root()
+			r.NoError(err, "%T.Root() after commit", proposal)
+			r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
+
+			// Commit the proposal.
+			err = proposal.Commit()
+			r.NoError(err, "Commit")
+
+			// Check that the database is empty.
+			hash, err = db.Root()
+			r.NoError(err, "%T.Root()", db)
+			r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
+		})
+	}
 }
 
 func TestDropProposal(t *testing.T) {
@@ -596,8 +662,8 @@ func TestDropProposal(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Create a proposal with 10 keys.
-	keys, vals := kvForTest(10)
-	proposal, err := db.Propose(keys, vals)
+	keys, _, batch := kvForTest(10)
+	proposal, err := db.Propose(batch)
 	r.NoError(err, "Propose")
 
 	// Drop the proposal.
@@ -642,10 +708,10 @@ func TestProposeFromProposal(t *testing.T) {
 	}
 
 	// Create the first proposal.
-	proposal1, err := db.Propose(keys1, vals1)
+	proposal1, err := db.Propose(makeBatch(keys1, vals1))
 	r.NoError(err)
 	// Create the second proposal from the first.
-	proposal2, err := proposal1.Propose(keys2, vals2)
+	proposal2, err := proposal1.Propose(makeBatch(keys2, vals2))
 	r.NoError(err)
 
 	// Assert that the first proposal doesn't have keys from the second.
@@ -698,22 +764,23 @@ func TestDeepPropose(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	// Create a chain of two proposals, each with 10 keys.
+	// Create a chain of proposals, each with 10 keys.
 	const numKeys = 10
 	const numProposals = 10
 	proposals := make([]*Proposal, numProposals)
-	keys, vals := kvForTest(numKeys * numProposals)
+	keys, vals, batch := kvForTest(numKeys * numProposals)
 
 	for i := range proposals {
 		var (
 			p   *Proposal
 			err error
 		)
+		ops := batch[i*numKeys : (i+1)*numKeys]
 		if i == 0 {
-			p, err = db.Propose(keys[i:(i+1)*numKeys], vals[i:(i+1)*numKeys])
+			p, err = db.Propose(ops)
 			r.NoError(err, "Propose(%d)", i)
 		} else {
-			p, err = proposals[i-1].Propose(keys[i:(i+1)*numKeys], vals[i:(i+1)*numKeys])
+			p, err = proposals[i-1].Propose(ops)
 			r.NoError(err, "Propose(%d)", i)
 		}
 		proposals[i] = p
@@ -762,10 +829,10 @@ func TestDropProposalAndCommit(t *testing.T) {
 			err error
 		)
 		if i == 0 {
-			p, err = db.Propose(keys[i:(i+1)*numKeys], vals[i:(i+1)*numKeys])
+			p, err = db.Propose(makeBatch(keys[i:(i+1)*numKeys], vals[i:(i+1)*numKeys]))
 			r.NoError(err, "Propose(%d)", i)
 		} else {
-			p, err = proposals[i-1].Propose(keys[i:(i+1)*numKeys], vals[i:(i+1)*numKeys])
+			p, err = proposals[i-1].Propose(makeBatch(keys[i:(i+1)*numKeys], vals[i:(i+1)*numKeys]))
 			r.NoError(err, "Propose(%d)", i)
 		}
 		proposals[i] = p
@@ -802,17 +869,17 @@ func TestProposeSameRoot(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Create two chains of proposals, resulting in the same root.
-	keys, vals := kvForTest(10)
+	keys, vals, batch := kvForTest(10)
 
 	// Create the first proposal chain.
-	proposal1, err := db.Propose(keys[0:5], vals[0:5])
+	proposal1, err := db.Propose(batch[0:5])
 	r.NoError(err)
-	proposal3Top, err := proposal1.Propose(keys[5:10], vals[5:10])
+	proposal3Top, err := proposal1.Propose(batch[5:10])
 	r.NoError(err)
 	// Create the second proposal chain.
-	proposal2, err := db.Propose(keys[5:10], vals[5:10])
+	proposal2, err := db.Propose(batch[5:10])
 	r.NoError(err)
-	proposal3Bottom, err := proposal2.Propose(keys[0:5], vals[0:5])
+	proposal3Bottom, err := proposal2.Propose(batch[0:5])
 	r.NoError(err)
 	// Because the proposals are identical, they should have the same root.
 
@@ -829,9 +896,9 @@ func TestProposeSameRoot(t *testing.T) {
 		bottomKeys[i] = keyForTest(i + 20)
 		bottomVals[i] = valForTest(i + 20)
 	}
-	proposal4, err := proposal3Top.Propose(topKeys, topVals)
+	proposal4, err := proposal3Top.Propose(makeBatch(topKeys, topVals))
 	r.NoError(err)
-	proposal5, err := proposal3Bottom.Propose(bottomKeys, bottomVals)
+	proposal5, err := proposal3Bottom.Propose(makeBatch(bottomKeys, bottomVals))
 	r.NoError(err)
 
 	// Now we will commit the top chain, and check that the bottom chain is still valid.
@@ -865,10 +932,10 @@ func TestRevision(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals := kvForTest(10)
+	keys, _, batch := kvForTest(10)
 
 	// Create a proposal with 10 key-value pairs.
-	proposal, err := db.Propose(keys, vals)
+	proposal, err := db.Propose(batch)
 	r.NoError(err)
 
 	// Commit the proposal.
@@ -898,7 +965,7 @@ func TestRevision(t *testing.T) {
 		keys2[i] = keyForTest(i + 10)
 		vals2[i] = valForTest(i + 10)
 	}
-	proposal2, err := db.Propose(keys2, vals2)
+	proposal2, err := db.Propose(makeBatch(keys2, vals2))
 	r.NoError(err)
 	// Commit the proposal.
 	err = proposal2.Commit()
@@ -925,13 +992,13 @@ func TestRevisionOutlivesProposal(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals := kvForTest(20)
-	_, err := db.Update(keys[:10], vals[:10])
+	keys, vals, batch := kvForTest(20)
+	_, err := db.Update(batch[:10])
 	r.NoError(err)
 
 	// Create a proposal with 10 key-value pairs.
 	nKeys, nVals := keys[10:], vals[10:]
-	proposal, err := db.Propose(nKeys, nVals)
+	proposal, err := db.Propose(batch[10:])
 	r.NoError(err)
 	root, err := proposal.Root()
 	r.NoError(err)
@@ -957,15 +1024,14 @@ func TestCommitWithRevisionHeld(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals := kvForTest(20)
-	root, err := db.Update(keys[:10], vals[:10])
+	keys, vals, batch := kvForTest(20)
+	root, err := db.Update(batch[:10])
 	r.NoError(err)
 	base, err := db.Revision(root)
 	r.NoError(err)
 
 	// Create a proposal with 10 key-value pairs.
-	nKeys, nVals := keys[10:], vals[10:]
-	proposal, err := db.Propose(nKeys, nVals)
+	proposal, err := db.Propose(batch[10:])
 	r.NoError(err)
 	root, err = proposal.Root()
 	r.NoError(err)
@@ -979,13 +1045,13 @@ func TestCommitWithRevisionHeld(t *testing.T) {
 		val, err := base.Get(key)
 		r.NoErrorf(err, "base.Get(): %d", i)
 		if i < 10 {
-			r.Equalf(val, vals[i], "base.Get(): %d", i)
+			r.Equalf(vals[i], val, "base.Get(): %d", i)
 		} else {
 			r.Emptyf(val, "base.Get(): %d", i)
 		}
 		val, err = rev.Get(key)
 		r.NoErrorf(err, "rev.Get(): %d", i)
-		r.Equalf(val, vals[i], "rev.Get(): %d", i)
+		r.Equalf(vals[i], val, "rev.Get(): %d", i)
 	}
 	r.NoError(base.Drop())
 	r.NoError(rev.Drop())
@@ -996,17 +1062,17 @@ func TestRevisionOutlivesReaping(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t, WithRevisions(2))
 
-	keys, vals := kvForTest(40)
-	firstRoot, err := db.Update(keys[:10], vals[:10])
+	keys, vals, batch := kvForTest(40)
+	firstRoot, err := db.Update(batch[:10])
 	r.NoError(err)
 	// let's get a revision at root
 	rev, err := db.Revision(firstRoot)
 	r.NoError(err)
 
 	// commit two times, this would normally reap the first revision
-	secondRoot, err := db.Update(keys[10:20], vals[10:20])
+	secondRoot, err := db.Update(batch[10:20])
 	r.NoError(err)
-	_, err = db.Update(keys[20:30], vals[20:30])
+	_, err = db.Update(batch[20:30])
 	r.NoError(err)
 
 	// revision should be still accessible, as we're hanging on to it, prevent reaping
@@ -1019,7 +1085,7 @@ func TestRevisionOutlivesReaping(t *testing.T) {
 	r.NoError(rev.Drop())
 
 	// since we dropped the revision, if we commit, reaping will happen (cleaning first two revisions)
-	_, err = db.Update(keys[30:], vals[30:])
+	_, err = db.Update(batch[30:])
 	r.NoError(err)
 
 	_, err = db.Revision(firstRoot)
@@ -1045,12 +1111,12 @@ func TestGetNilCases(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Commit 10 key-value pairs.
-	keys, vals := kvForTest(20)
-	root, err := db.Update(keys[:10], vals[:10])
+	_, _, batch := kvForTest(20)
+	root, err := db.Update(batch[:10])
 	r.NoError(err)
 
 	// Create the other views
-	proposal, err := db.Propose(keys[10:], vals[10:])
+	proposal, err := db.Propose(batch[10:])
 	r.NoError(err)
 	revision, err := db.Revision(root)
 	r.NoError(err)
@@ -1089,9 +1155,9 @@ func TestEmptyProposals(t *testing.T) {
 		// Create a proposal with no keys.
 		var err error
 		if i == 0 {
-			emptyProposals[i], err = db.Propose(nil, nil)
+			emptyProposals[i], err = db.Propose(nil)
 		} else {
-			emptyProposals[i], err = emptyProposals[i-1].Propose(nil, nil)
+			emptyProposals[i], err = emptyProposals[i-1].Propose(nil)
 		}
 		r.NoError(err, "Propose(%d)", i)
 
@@ -1102,8 +1168,8 @@ func TestEmptyProposals(t *testing.T) {
 	}
 
 	// Create one non-empty proposal.
-	keys, vals := kvForTest(10)
-	nonEmptyProposal, err := db.Propose(keys, vals)
+	keys, vals, batch := kvForTest(10)
+	nonEmptyProposal, err := db.Propose(batch)
 	r.NoError(err, "Propose non-empty proposal")
 
 	// Check that the proposal has the keys we just inserted.
@@ -1137,7 +1203,7 @@ func TestHandlesFreeImplicitly(t *testing.T) {
 	require.NoError(t, err)
 
 	// make the db non-empty
-	_, err = db.Update([][]byte{keyForTest(1)}, [][]byte{valForTest(1)})
+	_, err = db.Update([]BatchOp{Put(keyForTest(1), valForTest(1))})
 	require.NoError(t, err)
 
 	var (
@@ -1157,14 +1223,16 @@ func TestHandlesFreeImplicitly(t *testing.T) {
 
 	// These MUST NOT be committed nor dropped as they demonstrate that the GC
 	// finalizer does it for us.
-	p0, err := db.Propose(kvForTest(1))
+	_, _, batch0 := kvForTest(1)
+	p0, err := db.Propose(batch0)
 	require.NoErrorf(t, err, "%T.Propose(...)", db)
 	root0, err := p0.Root()
 	require.NoErrorf(t, err, "%T.Root()", p0)
 	rev0, err := db.Revision(root0)
 	require.NoErrorf(t, err, "%T.Revision(...)", db)
 	implicitlyDropped = append(implicitlyDropped, p0, rev0)
-	p1, err := p0.Propose(kvForTest(1))
+	_, _, batch1 := kvForTest(1)
+	p1, err := p0.Propose(batch1)
 	require.NoErrorf(t, err, "%T.Propose(...)", p0)
 	root1, err := p1.Root()
 	require.NoErrorf(t, err, "%T.Root()", p1)
@@ -1179,7 +1247,8 @@ func TestHandlesFreeImplicitly(t *testing.T) {
 		"Commit": (*Proposal).Commit,
 		"Drop":   (*Proposal).Drop,
 	} {
-		p, err := db.Propose(kvForTest(1))
+		_, _, batch := kvForTest(1)
+		p, err := db.Propose(batch)
 		require.NoErrorf(t, err, "%T.Propose(...)", db)
 		root, err := p.Root()
 		require.NoErrorf(t, err, "%T.Root()", p)
@@ -1238,10 +1307,10 @@ func TestFjallStore(t *testing.T) {
 	// Create and commit 10 proposals
 	numRevisions := 10
 	key := []byte("root_store")
-	_, vals := kvForTest(numRevisions)
+	_, vals, _ := kvForTest(numRevisions)
 	revisionRoots := make([]Hash, numRevisions)
 	for i := range numRevisions {
-		proposal, err := db.Propose([][]byte{key}, [][]byte{vals[i]})
+		proposal, err := db.Propose([]BatchOp{Put(key, vals[i])})
 		r.NoError(err)
 		r.NoError(proposal.Commit())
 
@@ -1275,8 +1344,8 @@ func TestFjallStore(t *testing.T) {
 	}
 }
 
-// TestNilVsEmptyValue tests that nil values cause delete operations while
-// empty []byte{} values result in inserts with empty values.
+// TestNilVsEmptyValue tests that empty []byte{} values result in inserts with
+// empty values (not missing keys), and that deletes are explicit via BatchOp.
 func TestNilVsEmptyValue(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
@@ -1284,7 +1353,7 @@ func TestNilVsEmptyValue(t *testing.T) {
 	// Insert a key with a non-empty value
 	key1 := []byte("key1")
 	value1 := []byte("value1")
-	_, err := db.Update([][]byte{key1}, [][]byte{value1})
+	_, err := db.Update([]BatchOp{Put(key1, value1)})
 	r.NoError(err, "Insert key1 with value1")
 
 	// Verify the key exists
@@ -1295,7 +1364,7 @@ func TestNilVsEmptyValue(t *testing.T) {
 	// Insert another key with an empty value (not nil)
 	key2 := []byte("key2")
 	emptyValue := []byte{} // empty slice, not nil
-	_, err = db.Update([][]byte{key2}, [][]byte{emptyValue})
+	_, err = db.Update([]BatchOp{Put(key2, emptyValue)})
 	r.NoError(err, "Insert key2 with empty value")
 
 	// Verify key2 exists with empty value
@@ -1304,10 +1373,9 @@ func TestNilVsEmptyValue(t *testing.T) {
 	r.NotNil(got, "key2 should exist (not be nil)")
 	r.Empty(got, "key2 should have empty value")
 
-	// Now use nil value to delete key1 (DeleteRange operation)
-	var nilValue []byte = nil
-	_, err = db.Update([][]byte{key1}, [][]byte{nilValue})
-	r.NoError(err, "Delete key1 with nil value")
+	// Now delete key1 via PrefixDelete operation
+	_, err = db.Update([]BatchOp{PrefixDelete(key1)})
+	r.NoError(err, "Delete key1 with PrefixDelete")
 
 	// Verify key1 is deleted
 	got, err = db.Get(key1)
@@ -1326,10 +1394,10 @@ func TestNilVsEmptyValue(t *testing.T) {
 	key4 := []byte("key4")
 	emptyValue4 := []byte{}
 
-	_, err = db.Update(
-		[][]byte{key3, key4},
-		[][]byte{value3, emptyValue4},
-	)
+	_, err = db.Update([]BatchOp{
+		Put(key3, value3),
+		Put(key4, emptyValue4),
+	})
 	r.NoError(err, "Batch insert key3 and key4")
 
 	// Verify both keys exist
@@ -1343,6 +1411,42 @@ func TestNilVsEmptyValue(t *testing.T) {
 	r.Empty(got, "key4 should have empty value")
 }
 
+// TestDeleteKeyWithChildren verifies that deleting a key that has children (keys
+// that are extensions of it) does not delete the children. This is to ensure
+// Delete doesn't do prefix delete.
+func TestDeleteKeyWithChildren(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys := [][]byte{[]byte("parent"), []byte("parent/child1"), []byte("parent/child2")}
+	values := [][]byte{[]byte("parent-value"), []byte("child1-value"), []byte("child2-value")}
+	batch := makeBatch(keys, values)
+	_, err := db.Update(batch)
+	r.NoError(err, "Insert parent and children")
+
+	for _, key := range keys {
+		got, err := db.Get(key)
+		r.NoError(err)
+		r.NotNil(got, "key %s should exist", key)
+	}
+
+	// Delete only the parent key (not using PrefixDelete which would delete all)
+	_, err = db.Update([]BatchOp{Delete(keys[0])})
+	r.NoError(err, "Delete parent key")
+
+	// Verify parent is deleted
+	got, err := db.Get(keys[0])
+	r.NoError(err)
+	r.Nil(got, "parent key should be deleted")
+
+	// Verify all children still exist
+	for _, key := range keys[1:] {
+		got, err := db.Get(key)
+		r.NoError(err)
+		r.NotNil(got, "key %s should still exist after parent deletion", key)
+	}
+}
+
 // TestCloseWithCancelledContext verifies that Database.Close returns
 // ErrActiveKeepAliveHandles when the context is cancelled before handles are dropped.
 func TestCloseWithCancelledContext(t *testing.T) {
@@ -1351,8 +1455,8 @@ func TestCloseWithCancelledContext(t *testing.T) {
 	r.NoError(err)
 
 	// Create a proposal to keep a handle active
-	keys, vals := kvForTest(1)
-	proposal, err := db.Propose(keys, vals)
+	_, _, batch := kvForTest(1)
+	proposal, err := db.Propose(batch)
 	r.NoError(err)
 
 	ctx, cancel := context.WithCancel(t.Context())
@@ -1386,18 +1490,18 @@ func TestCloseWithMultipleActiveHandles(t *testing.T) {
 	r.NoError(err)
 
 	// Create multiple proposals
-	keys1, vals1 := kvForTest(3)
-	proposal1, err := db.Propose(keys1[:1], vals1[:1])
+	_, _, batch := kvForTest(3)
+	proposal1, err := db.Propose(batch[:1])
 	r.NoError(err)
-	proposal2, err := db.Propose(keys1[1:2], vals1[1:2])
+	proposal2, err := db.Propose(batch[1:2])
 	r.NoError(err)
-	proposal3, err := db.Propose(keys1[2:3], vals1[2:3])
+	proposal3, err := db.Propose(batch[2:3])
 	r.NoError(err)
 
 	// Create multiple revisions
-	root1, err := db.Update([][]byte{keyForTest(10)}, [][]byte{valForTest(10)})
+	root1, err := db.Update([]BatchOp{Put(keyForTest(10), valForTest(10))})
 	r.NoError(err)
-	root2, err := db.Update([][]byte{keyForTest(20)}, [][]byte{valForTest(20)})
+	root2, err := db.Update([]BatchOp{Put(keyForTest(20), valForTest(20))})
 	r.NoError(err)
 
 	revision1, err := db.Revision(root1)
@@ -1433,10 +1537,10 @@ func TestCloseSucceedsWhenHandlesDroppedInTime(t *testing.T) {
 	r.NoError(err)
 
 	// Create two active proposals
-	keys, vals := kvForTest(2)
-	proposal1, err := db.Propose(keys[:1], vals[:1])
+	_, _, batch := kvForTest(2)
+	proposal1, err := db.Propose(batch[:1])
 	r.NoError(err)
-	proposal2, err := db.Propose(keys[1:2], vals[1:2])
+	proposal2, err := db.Propose(batch[1:2])
 	r.NoError(err)
 
 	// Channel to receive Close result
@@ -1466,7 +1570,7 @@ func TestDump(t *testing.T) {
 	// Insert a few keys and values
 	keys := [][]byte{[]byte("key1"), []byte("key2"), []byte("key3")}
 	vals := [][]byte{[]byte("value1"), []byte("value2"), []byte("value3")}
-	root, err := db.Update(keys, vals)
+	root, err := db.Update(makeBatch(keys, vals))
 	r.NoError(err)
 	r.NotNil(root)
 
@@ -1496,7 +1600,7 @@ func TestDump(t *testing.T) {
 	// Test dump on proposal
 	newKeys := [][]byte{[]byte("key4")}
 	newVals := [][]byte{[]byte("value4")}
-	proposal, err := db.Propose(newKeys, newVals)
+	proposal, err := db.Propose(makeBatch(newKeys, newVals))
 	r.NoError(err)
 	defer func() {
 		r.NoError(proposal.Drop())
@@ -1539,11 +1643,11 @@ func TestProposeOnProposalRehash(t *testing.T) {
 	{
 		db := newTestDatabase(t)
 
-		p1, err := db.Propose(b307k, b307v)
+		p1, err := db.Propose(makeBatch(b307k, b307v))
 		r.NoError(err, "propose 307")
 		r.NoError(p1.Commit(), "commit 307")
 
-		p2, err := db.Propose(b308k, b308v)
+		p2, err := db.Propose(makeBatch(b308k, b308v))
 		r.NoError(err, "propose 308")
 
 		normalRoot, err = p2.Root()
@@ -1553,10 +1657,10 @@ func TestProposeOnProposalRehash(t *testing.T) {
 	{
 		db := newTestDatabase(t)
 
-		p1, err := db.Propose(b307k, b307v)
+		p1, err := db.Propose(makeBatch(b307k, b307v))
 		r.NoError(err, "propose 307")
 
-		p2, err := p1.Propose(b308k, b308v)
+		p2, err := p1.Propose(makeBatch(b308k, b308v))
 		r.NoError(err, "propose#2 308")
 
 		proposeOnProposalRoot, err = p2.Root()

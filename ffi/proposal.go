@@ -97,11 +97,8 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 // The returned proposal cannot be committed until the parent proposal `p` has been
 // committed. Additionally, it must be committed or dropped before the [Database] is closed.
 //
-// Value Semantics:
-//   - nil value (vals[i] == nil): Performs a DeleteRange operation using the key as a prefix
-//   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
-//   - non-empty value: Inserts/updates the key with the provided value
-func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
+// Use [Put], [Delete], and [PrefixDelete] to create batch operations.
+func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
 	if p.handle == nil {
 		return nil, errDroppedProposal
 	}
@@ -109,10 +106,7 @@ func (p *Proposal) Propose(keys, vals [][]byte) (*Proposal, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
-	if err != nil {
-		return nil, err
-	}
+	kvp := newKeyValuePairsFromBatch(batch, &pinner)
 	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.handle, kvp), p.keepAliveHandle.outstandingHandles, p.commitLock)
 }
 

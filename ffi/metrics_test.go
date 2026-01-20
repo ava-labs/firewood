@@ -82,8 +82,8 @@ func TestMetrics(t *testing.T) {
 
 	db, logPath := newDbWithMetricsAndLogs(t)
 	// batch update
-	keys, vals := kvForTest(10)
-	_, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(10)
+	_, err := db.Update(batch)
 	r.NoError(err)
 
 	assertMetrics(t, metricsPort, expectedMetrics)
@@ -96,8 +96,8 @@ func TestExpensiveMetrics(t *testing.T) {
 	r := require.New(t)
 	db, _ := newDbWithMetricsAndLogs(t, WithExpensiveMetrics())
 	// batch update
-	keys, vals := kvForTest(10)
-	_, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(10)
+	_, err := db.Update(batch)
 	r.NoError(err)
 
 	merged := make(map[string]dto.MetricType, len(expectedMetrics)+len(expectedExpensiveMetrics))
