@@ -196,10 +196,8 @@ impl RevisionManager {
         }
 
         if config.truncate {
-            manager
-                .header
-                .lock()
-                .flush_with_padding_to(storage.as_ref())?;
+            manager.header.lock().flush_to(storage.as_ref())?;
+            storage.set_len(NodeStoreHeader::SIZE)?;
         }
 
         // On startup, we always write the latest revision to RootStore
