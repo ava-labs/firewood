@@ -26,7 +26,7 @@ mod arc_cache;
 mod handle;
 mod iterator;
 mod logging;
-mod metrics_setup;
+mod metrics;
 mod proofs;
 mod proposal;
 mod registry;
@@ -36,11 +36,12 @@ mod revision;
 mod value;
 
 use firewood::v2::api::DbView;
-use firewood_metrics::firewood_increment;
+use firewood_metrics::{firewood_increment, firewood_record, set_metrics_context};
 
 pub use crate::handle::*;
 pub use crate::iterator::*;
 pub use crate::logging::*;
+use crate::metrics::MetricsContextExt;
 pub use crate::proofs::*;
 pub use crate::proposal::*;
 pub use crate::revision::*;
@@ -68,20 +69,17 @@ fn invoke<T: CResult, V: Into<T>>(once: impl FnOnce() -> V) -> T {
     }
 }
 
-/// Invokes a closure that requires a handle and returns the result as a [`NullHandleResult`].
-///
-/// If the provided handle is [`None`], the function will return early with the
-/// [`NullHandleResult::null_handle_pointer_error`] result.
-///
-/// Otherwise, the closure is invoked with the handle. If the closure panics,
-/// it will be caught and returned as a [`CResult::from_panic`].
+/// Invokes a closure with context from the handle.
 #[inline]
-fn invoke_with_handle<H, T: NullHandleResult, V: Into<T>>(
+fn invoke_with_handle<H: MetricsContextExt, T: NullHandleResult, V: Into<T>>(
     handle: Option<H>,
     once: impl FnOnce(H) -> V,
 ) -> T {
     match handle {
-        Some(handle) => invoke(move || once(handle)),
+        Some(handle) => {
+            let _guard = set_metrics_context(handle.metrics_context());
+            invoke(move || once(handle))
+        }
         None => T::null_handle_pointer_error(),
     }
 }
@@ -522,6 +520,11 @@ pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>)
         proposal.commit_proposal(|commit_time| {
             firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
             firewood_increment!(crate::registry::COMMIT_COUNT, 1);
+            firewood_record!(
+                crate::registry::COMMIT_MS_BUCKET,
+                commit_time.as_f64() * 1000.0,
+                expensive
+            );
         })
     });
 
@@ -588,7 +591,7 @@ pub extern "C" fn fwd_root_hash(db: Option<&DatabaseHandle>) -> HashResult {
 /// - [`VoidResult::Err`] if an error occurs during initialization.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_start_metrics() -> VoidResult {
-    invoke(metrics_setup::setup_metrics)
+    invoke(metrics::setup_metrics)
 }
 
 /// Start metrics recorder and exporter for this process.
@@ -609,7 +612,7 @@ pub extern "C" fn fwd_start_metrics() -> VoidResult {
 ///   returned error (if any).
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_start_metrics_with_exporter(metrics_port: u16) -> VoidResult {
-    invoke(move || metrics_setup::setup_metrics_with_exporter(metrics_port))
+    invoke(move || metrics::setup_metrics_with_exporter(metrics_port))
 }
 
 /// Gather latest metrics for this process.
@@ -628,7 +631,7 @@ pub extern "C" fn fwd_start_metrics_with_exporter(metrics_port: u16) -> VoidResu
 ///   returned error or value.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_gather() -> ValueResult {
-    invoke(metrics_setup::gather_metrics)
+    invoke(metrics::gather_metrics)
 }
 
 /// Open a database with the given arguments.

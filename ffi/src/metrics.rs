@@ -5,35 +5,68 @@ use std::error::Error;
 use std::net::Ipv6Addr;
 use std::sync::OnceLock;
 
+use firewood_metrics::{HistogramBucketConfig, MetricsContext};
+use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use oxhttp::Server;
 use oxhttp::model::{Body, Response, StatusCode};
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
-
 static RECORDER: OnceLock<PrometheusHandle> = OnceLock::new();
+
+/// Trait for types that carry a [`MetricsContext`].
+///
+/// Implemented for FFI handle types.
+/// Concrete impls live in their respective modules (handle, revision, proposal, iterator).
+pub(crate) trait MetricsContextExt {
+    fn metrics_context(&self) -> Option<MetricsContext>;
+}
+
+// some blanket implementations. can't go with Deref approach because of
+// tuple handle in range proofs.
+impl<T: MetricsContextExt + ?Sized> MetricsContextExt for Box<T> {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        (**self).metrics_context()
+    }
+}
+
+impl<T: MetricsContextExt + ?Sized> MetricsContextExt for &T {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        (**self).metrics_context()
+    }
+}
+
+impl<T: MetricsContextExt + ?Sized> MetricsContextExt for &mut T {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        (**self).metrics_context()
+    }
+}
 
 /// Starts metrics recorder.
 /// This happens on a per-process basis, meaning that the metrics system cannot
 /// be initialized if it has already been set up in the same process.
 pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
-    crate::registry::register();
+    // Collect histogram bucket configurations from all crates
+    let mut histogram_configs: Vec<HistogramBucketConfig> = Vec::new();
+    crate::registry::register(&mut histogram_configs);
     firewood::registry::register();
     firewood_storage::registry::register();
     #[cfg(feature = "block-replay")]
     firewood_replay::registry::register();
+
+    // Build the Prometheus exporter with bucket configurations from the registry
     // TODO: Switch to Prometheus's native histograms
     // they are cheaper, more efficient, and easier to configure (no predefined buckets)
     // proper default support will start in prometheus v3.9 and v4.0; once our infra switches,
     // we should switch too.
-    let builder = PrometheusBuilder::new().set_buckets_for_metric(
-        metrics_exporter_prometheus::Matcher::Suffix("_ms_bucket".to_string()),
-        &[
-            0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0,
-            15.0, 20.0, 30.0, 50.0,
-        ],
-    )?;
+    let mut builder = PrometheusBuilder::new();
+
+    // Apply bucket configurations from the global registry
+    for config in histogram_configs {
+        builder = builder
+            .set_buckets_for_metric(Matcher::Full(config.name.to_string()), config.buckets)?;
+    }
+
     let handle = builder.install_recorder()?;
 
     RECORDER

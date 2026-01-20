@@ -34,17 +34,15 @@ const (
 	maxStep
 )
 
-var (
-	stepMap = map[byte]string{
-		commit:        "commit",
-		createAccount: "createAccount",
-		updateAccount: "updateAccount",
-		deleteAccount: "deleteAccount",
-		addStorage:    "addStorage",
-		updateStorage: "updateStorage",
-		deleteStorage: "deleteStorage",
-	}
-)
+var stepMap = map[byte]string{
+	commit:        "commit",
+	createAccount: "createAccount",
+	updateAccount: "updateAccount",
+	deleteAccount: "deleteAccount",
+	addStorage:    "addStorage",
+	updateStorage: "updateStorage",
+	deleteStorage: "deleteStorage",
+}
 
 type merkleTriePair struct {
 	fwdDB       *firewood.Database

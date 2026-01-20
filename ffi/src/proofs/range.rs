@@ -8,12 +8,12 @@ use firewood::{
     logger::warn,
     v2::api::{self, DbView, FrozenRangeProof, HashKey},
 };
+use firewood_metrics::{MetricsContext, firewood_increment};
 
 use crate::{
     BorrowedBytes, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle, HashResult, Maybe,
     NextKeyRangeResult, RangeProofResult, ValueResult, VoidResult,
 };
-use firewood_metrics::firewood_increment;
 
 /// A key range represented by a start key and an optional end key.
 pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
@@ -656,4 +656,16 @@ pub extern "C" fn fwd_range_proof_from_bytes(
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_free_range_proof(proof: Option<Box<RangeProofContext>>) -> VoidResult {
     crate::invoke_with_handle(proof, drop)
+}
+
+impl crate::MetricsContextExt for RangeProofContext<'_> {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        None
+    }
+}
+
+impl<'a> crate::MetricsContextExt for (&'a DatabaseHandle, &mut RangeProofContext<'a>) {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        self.0.metrics_context()
+    }
 }
