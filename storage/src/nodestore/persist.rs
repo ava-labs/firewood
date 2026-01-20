@@ -47,6 +47,37 @@ use super::{Committed, NodeStore};
 #[cfg(not(test))]
 use super::RootReader;
 
+impl NodeStoreHeader {
+    /// Persist this header to storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the header cannot be written.
+    pub fn flush_to<S: WritableStorage>(&self, storage: &S) -> Result<(), FileIoError> {
+        let header_bytes = bytemuck::bytes_of(self);
+        storage.write(0, header_bytes)?;
+        Ok(())
+    }
+
+    /// Persist this header to storage including all the padding.
+    /// This is only done the first time we write the header.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the header cannot be written.
+    pub fn flush_with_padding_to<S: WritableStorage>(
+        &self,
+        storage: &S,
+    ) -> Result<(), FileIoError> {
+        let mut header_bytes = bytemuck::bytes_of(self).to_vec();
+        header_bytes.resize(Self::SIZE as usize, 0);
+        debug_assert_eq!(header_bytes.len(), Self::SIZE as usize);
+
+        storage.write(0, &header_bytes)?;
+        Ok(())
+    }
+}
+
 /// Iterator that returns unpersisted nodes in depth first order.
 ///
 /// This iterator assumes the root node is unpersisted and will return it as the

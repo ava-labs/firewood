@@ -29,13 +29,11 @@ use std::io::{Error, ErrorKind, Read};
 
 use super::alloc::FreeLists;
 use super::primitives::{LinearAddress, area_size_hash};
-use crate::linear::FileIoError;
 use crate::logger::{debug, trace};
 use crate::{NodeHashAlgorithm, TrieHash};
 
 /// A tuple indicating the address and hash of a node (the root node).
 pub type RootNodeInfo = (LinearAddress, TrieHash);
-use crate::WritableStorage;
 
 /// Can be used by filesystem tooling such as "file" to identify the version of
 /// firewood used to create this `NodeStore` file.
@@ -525,35 +523,6 @@ impl NodeStoreHeader {
                 )
             })?
             .validate_open(expected)
-    }
-
-    /// Persist this header to storage.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the header cannot be written.
-    pub fn flush_to<S: WritableStorage>(&self, storage: &S) -> Result<(), FileIoError> {
-        let header_bytes = bytemuck::bytes_of(self);
-        storage.write(0, header_bytes)?;
-        Ok(())
-    }
-
-    /// Persist this header to storage including all the padding.
-    /// This is only done the first time we write the header.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`FileIoError`] if the header cannot be written.
-    pub fn flush_with_padding_to<S: WritableStorage>(
-        &self,
-        storage: &S,
-    ) -> Result<(), FileIoError> {
-        let mut header_bytes = bytemuck::bytes_of(self).to_vec();
-        header_bytes.resize(Self::SIZE as usize, 0);
-        debug_assert_eq!(header_bytes.len(), Self::SIZE as usize);
-
-        storage.write(0, &header_bytes)?;
-        Ok(())
     }
 }
 
