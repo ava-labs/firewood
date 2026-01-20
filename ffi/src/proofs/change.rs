@@ -8,7 +8,7 @@ use firewood::{
     logger::warn,
     v2::api::{self, FrozenChangeProof},
 };
-use firewood_storage::{TrieHash, firewood_counter};
+use firewood_storage::{FileBacked, MutableProposal, NodeStore, firewood_counter};
 
 use crate::{
     BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
@@ -66,6 +66,14 @@ pub struct VerifyChangeProofArgs<'a> {
     pub max_length: u32,
 }
 
+#[expect(clippy::large_enum_variant)]
+#[derive(Debug)]
+enum ProposalState {
+    Mutable(NodeStore<MutableProposal, FileBacked>),
+    //Immutable(crate::ProposalHandle<'db>),
+    Committed(Option<HashKey>),
+}
+
 /// FFI context for a parsed or generated change proof.
 #[derive(Debug)]
 pub struct ChangeProofContext {
@@ -74,7 +82,7 @@ pub struct ChangeProofContext {
     //_commit_context: (),     // placeholder for future use
     proof: FrozenChangeProof,
     //verification: Option<VerificationContext>,
-    //proposal_state: Option<ProposalState<'db>>,
+    proposal_state: Option<ProposalState>,
 }
 
 impl From<FrozenChangeProof> for ChangeProofContext {
@@ -82,7 +90,7 @@ impl From<FrozenChangeProof> for ChangeProofContext {
         Self {
             proof,
             //verification: None,
-            //proposal_state: None,
+            proposal_state: None,
         }
     }
 }
@@ -102,7 +110,8 @@ struct VerificationContext {
 impl ChangeProofContext {
     fn verify(
         &mut self,
-        _start_root: HashKey,
+        db: &crate::DatabaseHandle,
+        start_root: HashKey,
         _end_root: HashKey,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
@@ -145,6 +154,23 @@ impl ChangeProofContext {
             .iter()
             .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
         {
+            self.proposal_state = Some(ProposalState::Mutable(
+                if let Some(proposal_state) = self.proposal_state.take() {
+                    match proposal_state {
+                        ProposalState::Mutable(node_store) => db.apply_change_proof_to_proposal(
+                            start_root.into(),
+                            &self.proof,
+                            node_store,
+                        )?,
+                        ProposalState::Committed(_) => {
+                            return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
+                        }
+                    }
+                } else {
+                    db.apply_change_proof_to_parent(start_root.into(), &self.proof)?
+                },
+            ));
+
             // TODO: Keeping a verification state may not be needed
             /*
             self.verification = Some(VerificationContext {
@@ -169,29 +195,21 @@ impl ChangeProofContext {
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
-    ) -> Result<Option<TrieHash>, api::Error> {
-        self.verify(start_root, end_root, start_key, end_key, max_length)?;
+    ) -> Result<Option<HashKey>, api::Error> {
+        self.verify(db, start_root, end_root, start_key, end_key, max_length)?;
 
-        // Rename to apply change proof.
-        let proposal_handle = db
-            .apply_change_proof(start_root.into(), &self.proof)?
-            .handle;
-
-        /*
-        let mut allow_rebase = true;
         let proposal_handle = match self.proposal_state.take() {
             Some(ProposalState::Committed(hash)) => {
-                self.proposal_state = Some(ProposalState::Committed(hash.clone()));
+                self.proposal_state = Some(ProposalState::Committed(hash));
                 return Ok(hash);
             }
-            Some(ProposalState::Proposed(proposal)) => proposal,
+            Some(ProposalState::Mutable(nodestore)) => db.mutable_to_propsal(nodestore)?.handle,
             None => {
-                allow_rebase = false;
-                db.merge_key_value_range(start_key, end_key, self.proof.key_values())?
-                    .handle
+                // TODO: Is this the right error to return in this case. It should never happen after
+                //       a successful verify.
+                return Err(api::Error::ProofError(ProofError::Empty));
             }
         };
-        */
 
         let metrics_cb = |commit_time: coarsetime::Duration| {
             firewood_counter!(
@@ -202,25 +220,10 @@ impl ChangeProofContext {
             firewood_counter!("firewood.ffi.merge", "Number of FFI merge operations").increment(1);
         };
 
-        proposal_handle.commit_proposal(metrics_cb)
-        /*
-        let result = if let Err(api::Error::ParentNotLatest { .. }) = result
-            && allow_rebase
-        {
-            // proposal is stale, try rebasing and committing again
-            let proposal_handle = db
-                .merge_key_value_range(start_key, end_key, self.proof.key_values())?
-                .handle;
-            proposal_handle.commit_proposal(metrics_cb)
-        } else {
-            result
-        };
-
-        let hash = result?;
-        self.proposal_state = Some(ProposalState::Committed(hash.clone()));
-
+        let result = proposal_handle.commit_proposal(metrics_cb);
+        let hash = result?.map(std::convert::Into::into);
+        self.proposal_state = Some(ProposalState::Committed(hash));
         Ok(hash)
-        */
     }
 }
 
@@ -258,7 +261,7 @@ pub struct NextKeyRange {
 /// - [`ChangeProofResult::Err`] containing an error message if the proof could not be created.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_change_proof(
-    db: Option<&DatabaseHandle>,
+    db: Option<&'_ DatabaseHandle>,
     args: CreateChangeProofArgs,
 ) -> ChangeProofResult {
     crate::invoke_with_handle(db, |db| {
@@ -300,9 +303,13 @@ pub extern "C" fn fwd_db_change_proof(
 /// for the duration of the call.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_verify_change_proof(
-    _db: Option<&DatabaseHandle>,
+    db: Option<&DatabaseHandle>,
     args: VerifyChangeProofArgs,
 ) -> VoidResult {
+    // TODO: this should be modified to create a proposal and save the proposal to the
+    //       context. Subsequent calls will add to the proposal. Finally, the last call
+    //       (with an end key representing the end of the DB) should call verify_and_commit
+    //       to commit the proof.
     let VerifyChangeProofArgs {
         proof,
         start_root,
@@ -312,10 +319,12 @@ pub extern "C" fn fwd_db_verify_change_proof(
         max_length,
     } = args;
 
-    crate::invoke_with_handle(proof, |ctx| {
+    let handle = db.and_then(|db| proof.map(|p| (db, p)));
+    crate::invoke_with_handle(handle, |(db, ctx)| {
         let start_key = start_key.into_option();
         let end_key = end_key.into_option();
         ctx.verify(
+            db,
             start_root,
             end_root,
             start_key.as_deref(),
@@ -369,9 +378,11 @@ pub extern "C" fn fwd_db_verify_and_commit_change_proof(
     } = args;
 
     let handle = db.and_then(|db| proof.map(|p| (db, p)));
+
     crate::invoke_with_handle(handle, |(db, ctx)| {
         let start_key = start_key.into_option();
         let end_key = end_key.into_option();
+
         ctx.verify_and_commit(
             db,
             start_root,
@@ -380,6 +391,7 @@ pub extern "C" fn fwd_db_verify_and_commit_change_proof(
             end_key.as_deref(),
             NonZeroUsize::new(max_length as usize),
         )
+        .map(|f| f.map(std::convert::Into::into))
     })
 }
 

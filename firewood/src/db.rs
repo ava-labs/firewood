@@ -13,14 +13,15 @@ use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
-    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter,
-    KeyType, KeyValuePair, OptionalHashKeyExt,
+    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter, KeyType,
+    KeyValuePair, OptionalHashKeyExt,
 };
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieReader, firewood_counter,
+    ImmutableProposal, MutableProposal, NodeStore, Parentable, ReadableStorage, TrieReader,
+    firewood_counter,
 };
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -318,16 +319,58 @@ impl Db {
         )
     }
 
-    // TODO: Ignore first and last key for now
-    pub fn apply_change_proof_with_parent<F: Parentable>(
+    pub fn apply_change_proof_to_parent<F: Parentable>(
         &self,
         key_values: impl IntoBatchIter,
         parent: &NodeStore<F, FileBacked>,
-    ) -> Result<Proposal<'_>, api::Error>
+    ) -> Result<NodeStore<MutableProposal, FileBacked>, api::Error>
     where
         NodeStore<F, FileBacked>: HashedNodeReader,
     {
-        self.propose_with_parent(key_values, parent)
+        // Create a new proposal from the parent
+        let proposal = NodeStore::new(parent)?;
+        self.apply_change_proof_to_proposal(key_values, proposal)
+    }
+
+    // TODO: Ignore first and last key for now
+    //       Let's return a MutableProposal so we can add to it with the next part of the
+    //       change proof.
+    pub fn apply_change_proof_to_proposal(
+        &self,
+        key_values: impl IntoBatchIter,
+        proposal: NodeStore<MutableProposal, FileBacked>,
+    ) -> Result<NodeStore<MutableProposal, FileBacked>, api::Error> {
+        let mut merkle = Merkle::from(proposal);
+        let span = fastrace::Span::enter_with_local_parent("merkleops");
+        for res in key_values.into_batch_iter::<api::Error>() {
+            match res? {
+                BatchOp::Put { key, value } => {
+                    merkle.insert(key.as_ref(), value.as_ref().into())?;
+                }
+                BatchOp::Delete { key } => {
+                    merkle.remove(key.as_ref())?;
+                }
+                BatchOp::DeleteRange { prefix } => {
+                    merkle.remove_prefix(prefix.as_ref())?;
+                }
+            }
+        }
+        drop(span);
+        let _span = fastrace::Span::enter_with_local_parent("freeze");
+        Ok(merkle.into_inner())
+    }
+
+    pub fn mutable_to_proposal(
+        &self,
+        nodestore: NodeStore<MutableProposal, FileBacked>,
+    ) -> Result<Proposal<'_>, api::Error> { 
+        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> = Arc::new(nodestore.try_into()?);
+        self.manager.add_proposal(immutable.clone());
+        self.metrics.proposals.increment(1);
+        Ok(Proposal {
+            nodestore: immutable,
+            db: self,
+        })
     }
 
     /// Merge a range of key-values into a new proposal on top of a specified parent.

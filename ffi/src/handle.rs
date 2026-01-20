@@ -16,7 +16,7 @@ use firewood::{
 use crate::{BorrowedBytes, CView, CreateProposalResult, KeyValuePair, arc_cache::ArcCache};
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
-use firewood_storage::firewood_counter;
+use firewood_storage::{FileBacked, MutableProposal, NodeStore, firewood_counter};
 
 /// Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
 ///
@@ -251,6 +251,13 @@ impl DatabaseHandle {
         })
     }
 
+    pub(crate) fn mutable_to_propsal(
+        &self,
+        nodestore: NodeStore<MutableProposal, FileBacked>,
+    ) -> Result<CreateProposalResult<'_>, api::Error> {
+        CreateProposalResult::new(self, || self.db.mutable_to_proposal(nodestore))
+    }
+
     /// Dumps the Trie structure of the latest revision to a DOT (Graphviz) format string.
     ///
     /// # Errors
@@ -281,11 +288,11 @@ impl DatabaseHandle {
         )
     }
     #[allow(clippy::missing_errors_doc)]
-    pub fn apply_change_proof(
+    pub fn apply_change_proof_to_parent(
         &self,
         start_hash: HashKey,
         key_values: &FrozenChangeProof,
-    ) -> Result<CreateProposalResult<'_>, Error> {
+    ) -> Result<NodeStore<MutableProposal, FileBacked>, Error> {
         // Verify that the current hash is the start_hash
         let start_hash = match self.db.root_hash()? {
             Some(root_hash) => {
@@ -301,12 +308,34 @@ impl DatabaseHandle {
             }
             None => Err(api::Error::LatestIsEmpty),
         }?;
-
         let parent = &self.db.revision(start_hash)?;
-        CreateProposalResult::new(self, || {
-            self.db
-                .apply_change_proof_with_parent(key_values, parent)
-        })
+        self.db.apply_change_proof_to_parent(key_values, parent)
+    }
+
+    #[allow(clippy::missing_errors_doc)]
+    pub fn apply_change_proof_to_proposal(
+        &self,
+        start_hash: HashKey,
+        key_values: &FrozenChangeProof,
+        proposal: NodeStore<MutableProposal, FileBacked>,
+    ) -> Result<NodeStore<MutableProposal, FileBacked>, Error> {
+        // TODO: Refactor start_hash verification into helper
+        // Verify that the current hash is the start_hash
+        match self.db.root_hash()? {
+            Some(root_hash) => {
+                let start_hash = start_hash.into_triehash();
+                if start_hash == root_hash {
+                    Ok(start_hash)
+                } else {
+                    Err(api::Error::ParentNotLatest {
+                        provided: Some(root_hash),
+                        expected: Some(start_hash),
+                    })
+                }
+            }
+            None => Err(api::Error::LatestIsEmpty),
+        }?;
+        self.db.apply_change_proof_to_proposal(key_values, proposal)
     }
 }
 
