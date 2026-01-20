@@ -27,11 +27,12 @@ use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
 use lru::LruCache;
-use metrics::counter;
 
 use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
+
+const MAX_GAP_FOR_BATCHING: u64 = 256;
 
 /// A [`ReadableStorage`] and [`WritableStorage`] backed by a file
 #[derive(Debug)]
@@ -104,7 +105,6 @@ impl FileBacked {
 
 impl ReadableStorage for FileBacked {
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
-        counter!("firewood.read_node", "from" => "file").increment(1);
         Ok(PredictiveReader::new(self, addr))
     }
 
@@ -116,19 +116,14 @@ impl ReadableStorage for FileBacked {
             .len())
     }
 
-    fn read_cached_node(&self, addr: LinearAddress, mode: &'static str) -> Option<SharedNode> {
+    fn read_cached_node(&self, addr: LinearAddress, _mode: &'static str) -> Option<SharedNode> {
         let mut guard = self.cache.lock();
-        let cached = guard.get(&addr).cloned();
-        counter!("firewood.cache.node", "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" })
-            .increment(1);
-        cached
+        guard.get(&addr).cloned()
     }
 
     fn free_list_cache(&self, addr: LinearAddress) -> Option<Option<LinearAddress>> {
         let mut guard = self.free_list_cache.lock();
-        let cached = guard.pop(&addr);
-        counter!("firewood.cache.freelist", "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
-        cached
+        guard.pop(&addr)
     }
 
     fn cache_read_strategy(&self) -> &CacheReadStrategy {
@@ -176,6 +171,75 @@ impl WritableStorage for FileBacked {
             .map_err(|err| err.into_file_io_error(Some(self.filename.clone())))
     }
 
+    #[cfg(not(feature = "io-uring"))]
+    fn write_batch<'a, I: IntoIterator<Item = (u64, &'a [u8])> + Clone>(
+        &self,
+        writes: I,
+    ) -> Result<usize, FileIoError> {
+        let mut writes: Vec<_> = writes.into_iter().collect();
+        if writes.is_empty() {
+            return Ok(0);
+        }
+
+        // Sort by offset to maximize contiguous batching
+        writes.sort_unstable_by_key(|(offset, _)| *offset);
+
+        let mut total_written = 0usize;
+        let mut i = 0;
+
+        while i < writes.len() {
+            // Find range of nearby writes (allowing small gaps)
+            let base_offset = writes[i].0;
+            let mut batch_end = i + 1;
+            let mut total_span = writes[i].1.len() as u64;
+
+            // Collect writes that are "close enough" to batch
+            while batch_end < writes.len() {
+                let prev_end = writes[batch_end - 1].0 + writes[batch_end - 1].1.len() as u64;
+                let next_offset = writes[batch_end].0;
+
+                // Check if next write is within gap tolerance
+                if next_offset >= prev_end && next_offset - prev_end <= MAX_GAP_FOR_BATCHING {
+                    total_span = (next_offset + writes[batch_end].1.len() as u64) - base_offset;
+                    batch_end += 1;
+                } else {
+                    break; // Gap too large, end batch here
+                }
+            }
+
+            let batch_size = batch_end - i;
+
+            if batch_size == 1 {
+                // Single write - use regular pwrite
+                let (offset, data) = &writes[i];
+                let written = self.fd.write_at(data, *offset).map_err(|e| {
+                    self.file_io_error(e, *offset, Some("write".to_string()))
+                })?;
+                total_written += written;
+            } else {
+                // Multiple nearby writes - combine into single buffer and write
+                // This handles both contiguous writes AND writes with small gaps
+                let mut combined_buffer = vec![0u8; total_span as usize];
+
+                // Copy each write's data into the correct position
+                for (offset, data) in &writes[i..batch_end] {
+                    let rel_offset = (*offset - base_offset) as usize;
+                    combined_buffer[rel_offset..rel_offset + data.len()].copy_from_slice(data);
+                }
+
+                // Write the combined buffer with a single syscall
+                let written = self.fd.write_at(&combined_buffer, base_offset).map_err(|e| {
+                    self.file_io_error(e, base_offset, Some("batched_write".to_string()))
+                })?;
+                total_written += written;
+            }
+
+            i = batch_end;
+        }
+
+        Ok(total_written)
+    }
+
     fn write_cached_nodes(
         &self,
         nodes: impl IntoIterator<Item = MaybePersistedNode>,
@@ -216,7 +280,6 @@ struct PredictiveReader<'a> {
     offset: u64,
     len: usize,
     pos: usize,
-    started: coarsetime::Instant,
 }
 
 impl<'a> PredictiveReader<'a> {
@@ -229,16 +292,7 @@ impl<'a> PredictiveReader<'a> {
             offset: start,
             len: 0,
             pos: 0,
-            started: coarsetime::Instant::now(),
         }
-    }
-}
-
-impl Drop for PredictiveReader<'_> {
-    fn drop(&mut self) {
-        let elapsed = self.started.elapsed();
-        counter!("firewood.io.read_ms").increment(elapsed.as_millis());
-        counter!("firewood.io.read").increment(1);
     }
 }
 

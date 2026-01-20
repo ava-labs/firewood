@@ -230,7 +230,10 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
             use bumpalo::Bump;
 
             let mut header = self.header;
-            let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), &mut header);
+            // Use contiguous mode to allocate nodes sequentially from end of file.
+            // This enables pwritev batching for better I/O performance.
+            let mut node_allocator =
+                NodeAllocator::new_contiguous(self.storage.as_ref(), &mut header);
             let mut bump = Bump::with_capacity(super::INITIAL_BUMP_SIZE);
 
             self.process_unpersisted_nodes(

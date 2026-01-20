@@ -193,11 +193,37 @@ use super::NodeStore;
 pub struct NodeAllocator<'a, S> {
     storage: &'a S,
     header: &'a mut NodeStoreHeader,
+    /// When true, skip freelist and allocate from end of file for contiguous writes.
+    /// This enables `pwritev` batching at the cost of not reusing freed space.
+    contiguous_mode: bool,
 }
 
 impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
     pub const fn new(storage: &'a S, header: &'a mut NodeStoreHeader) -> Self {
-        Self { storage, header }
+        Self {
+            storage,
+            header,
+            contiguous_mode: false,
+        }
+    }
+
+    /// Create a new allocator in contiguous mode.
+    /// In this mode, allocations skip the freelist and allocate from the end of file,
+    /// producing contiguous addresses that enable efficient `pwritev` batching.
+    ///
+    /// **Tradeoff**: File grows faster, freed space is not reused until compaction.
+    pub const fn new_contiguous(storage: &'a S, header: &'a mut NodeStoreHeader) -> Self {
+        Self {
+            storage,
+            header,
+            contiguous_mode: true,
+        }
+    }
+
+    /// Enable or disable contiguous allocation mode.
+    #[allow(dead_code)] // Available for future use / testing
+    pub fn set_contiguous_mode(&mut self, enabled: bool) {
+        self.contiguous_mode = enabled;
     }
 
     /// Returns (index, `area_size`) for the stored area at `addr`.
@@ -287,6 +313,11 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
             self.storage
                 .file_io_error(e, 0, Some("allocate_node".to_owned()))
         })?;
+
+        if self.contiguous_mode {
+            let addr = self.allocate_from_end(area_index)?;
+            return Ok((addr, area_index));
+        }
 
         // Attempt to allocate from a free list.
         // If we can't allocate from a free list, allocate past the existing
