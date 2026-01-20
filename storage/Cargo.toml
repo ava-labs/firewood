@@ -1,6 +1,6 @@
 [package]
 name = "firewood-storage"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 authors = [
      "Aaron Buchwald <aaron.buchwald56@gmail.com>",

@@ -2,6 +2,61 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.1.0] - 2026-01-20
+
+### 🚀 Features
+
+- *(metrics)* Switch to `metrics-exporter-prometheus` and histogram support in FFI ([#1490](https://github.com/ava-labs/firewood/pull/1490))
+- [**breaking**] Use AWS profile in launch script ([#1587](https://github.com/ava-labs/firewood/pull/1587))
+- *(metrics)* [**breaking**] Proposal tracking ([#1571](https://github.com/ava-labs/firewood/pull/1571))
+- Add `FlushAndSync()` ([#1595](https://github.com/ava-labs/firewood/pull/1595))
+- Difference iterator for change proofs part 1 ([#1553](https://github.com/ava-labs/firewood/pull/1553))
+- *(replay)* Add `firewood-replay` crate for operation recording and replay (1/5) ([#1590](https://github.com/ava-labs/firewood/pull/1590))
+- Difference iterator for change proofs part 2 ([#1554](https://github.com/ava-labs/firewood/pull/1554))
+- Difference iterator for change proofs part 3 ([#1555](https://github.com/ava-labs/firewood/pull/1555))
+- *(ffi/replay)* Add `block-replay` feature for recording FFI operations (2/5) ([#1591](https://github.com/ava-labs/firewood/pull/1591))
+- *(ffi/replay)* Add Go replay log decoder and execution tests (3/5) ([#1592](https://github.com/ava-labs/firewood/pull/1592))
+- *(fwdctl/replay)* Add command for replaying recorded operations (4/5) ([#1593](https://github.com/ava-labs/firewood/pull/1593))
+- CodeHashes() for range proofs ([#1597](https://github.com/ava-labs/firewood/pull/1597))
+- [**breaking**] Remove `GetFromRoot` API ([#1614](https://github.com/ava-labs/firewood/pull/1614))
+- [**breaking**] Make `NodeHashAlgorithm` a required option on storage ([#1608](https://github.com/ava-labs/firewood/pull/1608))
+- Add cargo_version and git_describe to storage header ([#1611](https://github.com/ava-labs/firewood/pull/1611))
+- [**breaking**] Add the hash of the root node to the header ([#1612](https://github.com/ava-labs/firewood/pull/1612))
+- *(metrics)* Metrics crate, separate registries and expensive metrics (1/2) ([#1619](https://github.com/ava-labs/firewood/pull/1619))
+- *(metrics)* Integrate FFI with expensive metrics and add Go tests (2/2) ([#1620](https://github.com/ava-labs/firewood/pull/1620))
+- *(ffi)* BatchOp in FFI ([#1624](https://github.com/ava-labs/firewood/pull/1624))
+
+### 🐛 Bug Fixes
+
+- Eager evaluation causing fjall store creation when root_store disabled ([#1577](https://github.com/ava-labs/firewood/pull/1577))
+- *(ci)* Update golang-ci patch ([#1584](https://github.com/ava-labs/firewood/pull/1584))
+- *(benchmark)* Align metrics config with new avalanchego task format ([#1580](https://github.com/ava-labs/firewood/pull/1580))
+- *(benchmark/bootstrap)* Update script to use new task ([#1601](https://github.com/ava-labs/firewood/pull/1601))
+
+### 🚜 Refactor
+
+- Replace counter! with firewood_counter! macro ([#1569](https://github.com/ava-labs/firewood/pull/1569))
+- Simplify `into_committed()` ([#1621](https://github.com/ava-labs/firewood/pull/1621))
+- *(checker)* Extract `check_area_aligned()` from `NodeStore` ([#1623](https://github.com/ava-labs/firewood/pull/1623))
+
+### 📚 Documentation
+
+- *(ffi)* Update iterator documentation ([#1585](https://github.com/ava-labs/firewood/pull/1585))
+- *(nodestore)* Expand header documentation ([#1610](https://github.com/ava-labs/firewood/pull/1610))
+
+### ⚡ Performance
+
+- *(ffi)* Elide panic handling if not needed ([#1606](https://github.com/ava-labs/firewood/pull/1606))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(ffi)* Add `io-uring` feature flag ([#1565](https://github.com/ava-labs/firewood/pull/1565))
+- Add Rodrigo as codeowner ([#1573](https://github.com/ava-labs/firewood/pull/1573))
+- Stop fwdctl from rebuilding every time ([#1574](https://github.com/ava-labs/firewood/pull/1574))
+- Remove 'firewood' from metric names ([#1581](https://github.com/ava-labs/firewood/pull/1581))
+- Update to go 1.24.11 ([#1599](https://github.com/ava-labs/firewood/pull/1599))
+- [**breaking**] Remove `FlushAndSyncRoot()` API ([#1617](https://github.com/ava-labs/firewood/pull/1617))
+
 ## [0.0.18] - 2025-12-17
 
 ### 🐛 Bug Fixes

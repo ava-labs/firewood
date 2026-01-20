@@ -1,6 +1,6 @@
 [package]
 name = "firewood"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 authors = [
      "Angel Leon <gubatron@gmail.com>",
@@ -39,7 +39,7 @@ thiserror.workspace = true
 typed-builder = "0.23.2"
 rayon = "1.11.0"
 parking_lot.workspace = true
-fjall = "2.11.2"
+fjall = "=2.11.2" # 3.0.0 has breaking changes
 derive-where = "1.6.0"
 weak-table = "0.3.2"
 lender = "0.4.2"
