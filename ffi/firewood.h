@@ -1007,6 +1007,12 @@ typedef struct DatabaseHandleArgs {
    */
   bool truncate;
   /**
+   * Whether to enable expensive metrics recording for this database handle.
+   *
+   * Expensive metrics are disabled by default.
+   */
+  bool expensive_metrics;
+  /**
    * The hashing mode to use for the database.
    *
    * This must match the compile-time feature:

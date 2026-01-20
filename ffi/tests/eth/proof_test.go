@@ -103,6 +103,5 @@ func FuzzRangeProofCreation(f *testing.F) {
 			}
 		}
 		require.Len(t, expected, len(seen), "%T.CodeHashes() returned wrong number of unique code hashes", proof)
-
 	})
 }

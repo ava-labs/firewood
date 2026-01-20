@@ -1,19 +1,25 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::metrics::MetricsContextExt;
 use crate::{CreateIteratorResult, IteratorHandle};
 use firewood::v2::api;
 use firewood::v2::api::{ArcDynDbView, BoxKeyValueIter, DbView, HashKey};
+use firewood_metrics::MetricsContext;
 
 #[derive(Debug)]
 pub struct RevisionHandle {
     view: ArcDynDbView,
+    metrics_context: MetricsContext,
 }
 
 impl RevisionHandle {
     /// Creates a new revision handle for the provided database view.
-    pub(crate) fn new(view: ArcDynDbView) -> RevisionHandle {
-        RevisionHandle { view }
+    pub(crate) fn new(view: ArcDynDbView, metrics_context: MetricsContext) -> RevisionHandle {
+        RevisionHandle {
+            view,
+            metrics_context,
+        }
     }
 
     /// Creates an iterator on the revision starting from the given key.
@@ -24,7 +30,11 @@ impl RevisionHandle {
             .view
             .iter_option(first_key)
             .expect("infallible; see issue #1329");
-        CreateIteratorResult(IteratorHandle::new(self.view.clone(), it))
+        CreateIteratorResult(IteratorHandle::new(
+            self.view.clone(),
+            it,
+            self.metrics_context(),
+        ))
     }
 }
 
@@ -75,4 +85,10 @@ impl DbView for RevisionHandle {
 pub struct GetRevisionResult {
     pub handle: RevisionHandle,
     pub root_hash: HashKey,
+}
+
+impl crate::MetricsContextExt for RevisionHandle {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        Some(self.metrics_context)
+    }
 }
