@@ -242,11 +242,6 @@ impl DatabaseHandle {
         })
     }
 
-    #[must_use]
-    pub(crate) const fn metrics_context(&self) -> MetricsContext {
-        self.metrics_context
-    }
-
     pub(crate) fn get_root(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {
         let mut cache_miss = false;
         let view = self.cached_view.get_or_try_insert_with(root, |key| {
@@ -302,8 +297,8 @@ impl<'db> CView<'db> for &'db crate::DatabaseHandle {
     }
 }
 
-impl crate::HasContext for DatabaseHandle {
-    fn metrics(&self) -> Option<MetricsContext> {
+impl crate::MetricsContextExt for DatabaseHandle {
+    fn metrics_context(&self) -> Option<MetricsContext> {
         Some(self.metrics_context)
     }
 }

@@ -1,6 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::metrics::MetricsContextExt;
 use crate::{CreateIteratorResult, IteratorHandle};
 use firewood::v2::api;
 use firewood::v2::api::{ArcDynDbView, BoxKeyValueIter, DbView, HashKey};
@@ -32,7 +33,7 @@ impl RevisionHandle {
         CreateIteratorResult(IteratorHandle::new(
             self.view.clone(),
             it,
-            self.metrics_context,
+            self.metrics_context(),
         ))
     }
 }
@@ -86,8 +87,8 @@ pub struct GetRevisionResult {
     pub root_hash: HashKey,
 }
 
-impl crate::HasContext for RevisionHandle {
-    fn metrics(&self) -> Option<MetricsContext> {
+impl crate::MetricsContextExt for RevisionHandle {
+    fn metrics_context(&self) -> Option<MetricsContext> {
         Some(self.metrics_context)
     }
 }

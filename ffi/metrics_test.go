@@ -87,7 +87,9 @@ func TestMetrics(t *testing.T) {
 	r.NoError(err)
 
 	assertMetrics(t, metricsPort, expectedMetrics)
-	r.True((logPath == "") || assertNonEmptyFile(r, logPath))
+	if logPath != "" {
+		r.True(assertNonEmptyFile(t, logPath))
+	}
 }
 
 func TestExpensiveMetrics(t *testing.T) {
@@ -104,10 +106,11 @@ func TestExpensiveMetrics(t *testing.T) {
 	assertMetrics(t, metricsPort, merged)
 }
 
-func assertNonEmptyFile(r *require.Assertions, path string) bool {
+func assertNonEmptyFile(t *testing.T, path string) bool {
+	t.Helper()
 	f, err := os.ReadFile(path)
-	r.NoError(err)
-	r.NotEmpty(f)
+	require.NoError(t, err)
+	require.NotEmpty(t, f)
 	return true
 }
 

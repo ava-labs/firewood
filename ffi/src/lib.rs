@@ -41,7 +41,7 @@ use firewood_metrics::{firewood_increment, firewood_record, set_metrics_context}
 pub use crate::handle::*;
 pub use crate::iterator::*;
 pub use crate::logging::*;
-use crate::metrics::HasContext;
+use crate::metrics::MetricsContextExt;
 pub use crate::proofs::*;
 pub use crate::proposal::*;
 pub use crate::revision::*;
@@ -71,15 +71,13 @@ fn invoke<T: CResult, V: Into<T>>(once: impl FnOnce() -> V) -> T {
 
 /// Invokes a closure with context from the handle.
 #[inline]
-fn invoke_with_handle<H: HasContext, T: NullHandleResult, V: Into<T>>(
+fn invoke_with_handle<H: MetricsContextExt, T: NullHandleResult, V: Into<T>>(
     handle: Option<H>,
     once: impl FnOnce(H) -> V,
 ) -> T {
     match handle {
         Some(handle) => {
-            let _guard = handle
-                .metrics()
-                .map(|_| set_metrics_context(handle.metrics()));
+            let _guard = set_metrics_context(handle.metrics_context());
             invoke(move || once(handle))
         }
         None => T::null_handle_pointer_error(),

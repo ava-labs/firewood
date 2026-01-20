@@ -351,14 +351,14 @@ pub extern "C" fn fwd_free_change_proof(proof: Option<Box<ChangeProofContext>>) 
     crate::invoke_with_handle(proof, drop)
 }
 
-impl crate::HasContext for ChangeProofContext {
-    fn metrics(&self) -> Option<firewood_metrics::MetricsContext> {
+impl crate::MetricsContextExt for ChangeProofContext {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         None
     }
 }
 
-impl crate::HasContext for CodeIteratorHandle<'_> {
-    fn metrics(&self) -> Option<firewood_metrics::MetricsContext> {
+impl crate::MetricsContextExt for CodeIteratorHandle<'_> {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         None
     }
 }

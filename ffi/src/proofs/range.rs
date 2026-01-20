@@ -658,14 +658,14 @@ pub extern "C" fn fwd_free_range_proof(proof: Option<Box<RangeProofContext>>) ->
     crate::invoke_with_handle(proof, drop)
 }
 
-impl crate::HasContext for RangeProofContext<'_> {
-    fn metrics(&self) -> Option<MetricsContext> {
+impl crate::MetricsContextExt for RangeProofContext<'_> {
+    fn metrics_context(&self) -> Option<MetricsContext> {
         None
     }
 }
 
-impl<'a> crate::HasContext for (&'a DatabaseHandle, &mut RangeProofContext<'a>) {
-    fn metrics(&self) -> Option<MetricsContext> {
-        self.0.metrics()
+impl<'a> crate::MetricsContextExt for (&'a DatabaseHandle, &mut RangeProofContext<'a>) {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        self.0.metrics_context()
     }
 }

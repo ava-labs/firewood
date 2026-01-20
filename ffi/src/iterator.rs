@@ -17,7 +17,7 @@ type KeyValueItem = (merkle::Key, merkle::Value);
 pub struct IteratorHandle<'view> {
     iter: Option<BoxKeyValueIter<'view>>,
     view: Option<ArcDynDbView>,
-    metrics_context: MetricsContext,
+    metrics_context: Option<MetricsContext>,
 }
 
 impl fmt::Debug for IteratorHandle<'_> {
@@ -33,7 +33,7 @@ impl<'view> IteratorHandle<'view> {
     pub(crate) fn new(
         view: ArcDynDbView,
         iter: BoxKeyValueIter<'view>,
-        metrics_context: MetricsContext,
+        metrics_context: Option<MetricsContext>,
     ) -> Self {
         Self {
             iter: Some(iter),
@@ -69,8 +69,8 @@ impl IteratorHandle<'_> {
 #[derive(Debug, Default)]
 pub struct CreateIteratorResult<'db>(pub IteratorHandle<'db>);
 
-impl crate::HasContext for IteratorHandle<'_> {
-    fn metrics(&self) -> Option<MetricsContext> {
-        Some(self.metrics_context)
+impl crate::MetricsContextExt for IteratorHandle<'_> {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        self.metrics_context
     }
 }

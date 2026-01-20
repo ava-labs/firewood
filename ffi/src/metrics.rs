@@ -14,31 +14,31 @@ use std::time::Duration;
 
 static RECORDER: OnceLock<PrometheusHandle> = OnceLock::new();
 
-/// Trait for types that carry a context.
+/// Trait for types that carry a [`MetricsContext`].
 ///
 /// Implemented for FFI handle types.
 /// Concrete impls live in their respective modules (handle, revision, proposal, iterator).
-pub(crate) trait HasContext {
-    fn metrics(&self) -> Option<MetricsContext>;
+pub(crate) trait MetricsContextExt {
+    fn metrics_context(&self) -> Option<MetricsContext>;
 }
 
 // some blanket implementations. can't go with Deref approach because of
 // tuple handle in range proofs.
-impl<T: HasContext + ?Sized> HasContext for Box<T> {
-    fn metrics(&self) -> Option<MetricsContext> {
-        (**self).metrics()
+impl<T: MetricsContextExt + ?Sized> MetricsContextExt for Box<T> {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        (**self).metrics_context()
     }
 }
 
-impl<T: HasContext + ?Sized> HasContext for &T {
-    fn metrics(&self) -> Option<MetricsContext> {
-        (**self).metrics()
+impl<T: MetricsContextExt + ?Sized> MetricsContextExt for &T {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        (**self).metrics_context()
     }
 }
 
-impl<T: HasContext + ?Sized> HasContext for &mut T {
-    fn metrics(&self) -> Option<MetricsContext> {
-        (**self).metrics()
+impl<T: MetricsContextExt + ?Sized> MetricsContextExt for &mut T {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        (**self).metrics_context()
     }
 }
 

@@ -3,7 +3,7 @@
 
 use firewood::v2::api::{self, BoxKeyValueIter, DbView, HashKey, IntoBatchIter, Proposal as _};
 
-use crate::{IteratorHandle, iterator::CreateIteratorResult};
+use crate::{IteratorHandle, iterator::CreateIteratorResult, metrics::MetricsContextExt};
 use firewood_metrics::{firewood_increment, firewood_record};
 
 /// An opaque wrapper around a Proposal that also retains a reference to the
@@ -213,8 +213,8 @@ impl<'db> CView<'db> for &ProposalHandle<'db> {
     }
 }
 
-impl crate::HasContext for ProposalHandle<'_> {
-    fn metrics(&self) -> Option<firewood_metrics::MetricsContext> {
-        self.handle.metrics()
+impl crate::MetricsContextExt for ProposalHandle<'_> {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
+        self.handle.metrics_context()
     }
 }
