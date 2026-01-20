@@ -32,7 +32,6 @@
 
       # Extract crate info from Cargo.toml files
       ffiCargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
-      workspaceCargoToml = builtins.fromTOML (builtins.readFile ../Cargo.toml);
 
       src = lib.cleanSourceWith {
         src = craneLib.path ./..;
@@ -52,7 +51,7 @@
 
         # Build only the firewood-ffi crate
         pname = ffiCargoToml.package.name;
-        version = workspaceCargoToml.workspace.package.version;
+        version = ffiCargoToml.package.version;
 
         nativeBuildInputs = with pkgs; [
           pkg-config
