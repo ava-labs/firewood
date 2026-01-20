@@ -1,6 +1,6 @@
 [package]
 name = "firewood-ffi"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 authors = [
      "Aaron Buchwald <aaron.buchwald56@gmail.com>",
@@ -30,7 +30,7 @@ parking_lot.workspace = true
 # Regular dependencies
 oxhttp = "0.3.1"
 tikv-jemallocator = "0.6.1"
-metrics-exporter-prometheus = { version = "0.17.2", default-features = false }
+metrics-exporter-prometheus = { version = "0.18.1", default-features = false }
 # Optional dependencies
 rlp = { version = "0.6.1", optional = true }
 env_logger = { workspace = true, optional = true }
