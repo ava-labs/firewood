@@ -316,6 +316,10 @@ impl RevisionManager {
             self.by_hash.write().insert(hash, committed.clone());
         }
 
+        // At this point, we can release the lock on the header as the header
+        // and the last committed revision are up-to-date.
+        drop(header);
+
         // 6. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
         // referenced by anyone else. Track how many were discarded (dropped without commit).
