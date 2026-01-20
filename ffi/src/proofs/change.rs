@@ -446,8 +446,13 @@ pub extern "C" fn fwd_change_proof_find_next_key(
 ///
 /// The other [`ValueResult`] variants are not used.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_change_proof_to_bytes(_proof: Option<&ChangeProofContext>) -> ValueResult {
-    CResult::from_err("not yet implemented")
+pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) -> ValueResult {
+    //CResult::from_err("not yet implemented")
+    crate::invoke_with_handle(proof, |ctx| {
+        let mut vec = Vec::new();
+        ctx.proof.write_to_vec(&mut vec);
+        vec
+    })
 }
 
 /// Deserialize a `ChangeProof` from bytes.

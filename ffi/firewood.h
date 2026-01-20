@@ -1120,7 +1120,7 @@ struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes _bytes);
  *
  * The other [`ValueResult`] variants are not used.
  */
-struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *_proof);
+struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *proof);
 
 /**
  * Close and free the memory for a database handle
