@@ -6,6 +6,7 @@
 //! This crate provides:
 //! - Recording macros that are simple to use at callsites
 //! - Thread-local context for gating expensive metrics
+//! - Histogram bucket registry for bucket configuration
 //!
 //! Each crate defines its own metric registry (e.g., `ffi::registry`, `storage::registry`).
 //!
@@ -15,7 +16,7 @@
 //! use firewood_metrics::firewood_increment;
 //! use crate::registry;
 //!
-//! // At startup
+//! // At startup - register metrics and their bucket configurations
 //! registry::register();
 //!
 //! // Always increment
@@ -23,6 +24,26 @@
 //!
 //! // Expensive histogram (only records if expensive metrics enabled)
 //! firewood_record!(registry::COMMIT_MS_BUCKET, elapsed_ms, expensive);
+//! ```
+//!
+//! # Histogram Bucket Registration
+//!
+//! Use [`register_histogram_with_buckets`] to specify custom buckets for histogram metrics.
+//! This should be called in your crate's `register()` function, collecting configs into
+//! a vector:
+//!
+//! ```ignore
+//! use firewood_metrics::{HistogramBucketConfig, register_histogram_with_buckets};
+//!
+//! pub fn register(histogram_configs: &mut Vec<HistogramBucketConfig>) {
+//!     // Register histogram with custom buckets
+//!     register_histogram_with_buckets(
+//!         histogram_configs,
+//!         "my.latency_ms",
+//!         "Latency in milliseconds",
+//!         &[1.0, 5.0, 10.0, 50.0, 100.0],
+//!     );
+//! }
 //! ```
 //!
 //! # Macro Overview
@@ -38,7 +59,7 @@
 //! | `firewood_record!(name, value)` | Always record to histogram |
 //! | `firewood_record!(name, value, expensive)` | Record only if expensive metrics enabled |
 //!
-//! For registration, use `metrics::describe_*` macros.
+//! For registration, use `metrics::describe_*` macros or [`register_histogram_with_buckets`].
 
 use std::cell::Cell;
 
@@ -104,6 +125,40 @@ pub fn expensive_metrics_enabled() -> bool {
     current_metrics_context().is_some_and(MetricsContext::expensive_metrics_enabled)
 }
 
+/// Entry for a registered histogram with custom buckets.
+#[derive(Debug, Clone)]
+pub struct HistogramBucketConfig {
+    /// The metric name (e.g., `ffi.commit_ms_bucket`).
+    pub name: &'static str,
+    /// The bucket boundaries.
+    pub buckets: &'static [f64],
+}
+
+/// Registers a histogram metric with custom bucket boundaries.
+///
+/// This function:
+/// 1. Calls `metrics::describe_histogram!` to register the metric description
+/// 2. Appends the bucket configuration to the provided vector
+///
+/// # Arguments
+///
+/// * `configs` - Mutable vector to collect bucket configurations
+/// * `name` - The metric name (must be a `&'static str`)
+/// * `description` - Human-readable description of the metric
+/// * `buckets` - Bucket boundaries for the histogram (must be `&'static [f64]`)
+pub fn register_histogram_with_buckets(
+    configs: &mut Vec<HistogramBucketConfig>,
+    name: &'static str,
+    description: &'static str,
+    buckets: &'static [f64],
+) {
+    // Register the metric description
+    metrics::describe_histogram!(name, description);
+
+    // Collect bucket configuration
+    configs.push(HistogramBucketConfig { name, buckets });
+}
+
 /// Increments a counter metric.
 ///
 /// # Usage
@@ -116,14 +171,14 @@ pub fn expensive_metrics_enabled() -> bool {
 macro_rules! firewood_increment {
     ($name:expr, $value:expr, expensive) => {
         if $crate::expensive_metrics_enabled() {
-            metrics::counter!($name).increment($value);
+            ::metrics::counter!($name).increment($value);
         }
     };
     ($name:expr, $value:expr) => {
-        metrics::counter!($name).increment($value)
+        ::metrics::counter!($name).increment($value)
     };
     ($name:expr, $value:expr, $($labels:tt)+) => {
-        metrics::counter!($name, $($labels)+).increment($value)
+        ::metrics::counter!($name, $($labels)+).increment($value)
     };
 }
 
@@ -138,10 +193,10 @@ macro_rules! firewood_increment {
 #[macro_export]
 macro_rules! firewood_counter {
     ($name:expr) => {
-        metrics::counter!($name)
+        ::metrics::counter!($name)
     };
     ($name:expr, $($labels:tt)+) => {
-        metrics::counter!($name, $($labels)+)
+        ::metrics::counter!($name, $($labels)+)
     };
 }
 
@@ -157,14 +212,14 @@ macro_rules! firewood_counter {
 macro_rules! firewood_set {
     ($name:expr, $value:expr, expensive) => {
         if $crate::expensive_metrics_enabled() {
-            metrics::gauge!($name).set($value);
+            ::metrics::gauge!($name).set($value);
         }
     };
     ($name:expr, $value:expr) => {
-        metrics::gauge!($name).set($value)
+        ::metrics::gauge!($name).set($value)
     };
     ($name:expr, $value:expr, $($labels:tt)+) => {
-        metrics::gauge!($name, $($labels)+).set($value)
+        ::metrics::gauge!($name, $($labels)+).set($value)
     };
 }
 
@@ -180,10 +235,10 @@ macro_rules! firewood_set {
 #[macro_export]
 macro_rules! firewood_gauge {
     ($name:expr) => {
-        metrics::gauge!($name)
+        ::metrics::gauge!($name)
     };
     ($name:expr, $($labels:tt)+) => {
-        metrics::gauge!($name, $($labels)+)
+        ::metrics::gauge!($name, $($labels)+)
     };
 }
 
@@ -199,14 +254,14 @@ macro_rules! firewood_gauge {
 macro_rules! firewood_record {
     ($name:expr, $value:expr, expensive) => {
         if $crate::expensive_metrics_enabled() {
-            metrics::histogram!($name).record($value);
+            ::metrics::histogram!($name).record($value);
         }
     };
     ($name:expr, $value:expr) => {
-        metrics::histogram!($name).record($value)
+        ::metrics::histogram!($name).record($value)
     };
     ($name:expr, $value:expr, $($labels:tt)+) => {
-        metrics::histogram!($name, $($labels)+).record($value)
+        ::metrics::histogram!($name, $($labels)+).record($value)
     };
 }
 
@@ -220,10 +275,10 @@ macro_rules! firewood_record {
 #[macro_export]
 macro_rules! firewood_histogram {
     ($name:expr) => {
-        metrics::histogram!($name)
+        ::metrics::histogram!($name)
     };
     ($name:expr, $($labels:tt)+) => {
-        metrics::histogram!($name, $($labels)+)
+        ::metrics::histogram!($name, $($labels)+)
     };
 }
 

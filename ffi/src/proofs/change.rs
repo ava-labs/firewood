@@ -350,3 +350,15 @@ pub extern "C" fn fwd_change_proof_from_bytes(_bytes: BorrowedBytes) -> ChangePr
 pub extern "C" fn fwd_free_change_proof(proof: Option<Box<ChangeProofContext>>) -> VoidResult {
     crate::invoke_with_handle(proof, drop)
 }
+
+impl crate::MetricsContextExt for ChangeProofContext {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
+        None
+    }
+}
+
+impl crate::MetricsContextExt for CodeIteratorHandle<'_> {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
+        None
+    }
+}
