@@ -181,6 +181,11 @@ impl RevisionManager {
             })
             .transpose()?;
 
+        if config.truncate {
+            header.flush_to(storage.as_ref())?;
+            storage.set_len(NodeStoreHeader::SIZE)?;
+        }
+
         let manager = Self {
             max_revisions: config.manager.max_revisions,
             header: Mutex::new(header),
@@ -193,11 +198,6 @@ impl RevisionManager {
 
         if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
             manager.by_hash.write().insert(hash, nodestore.clone());
-        }
-
-        if config.truncate {
-            manager.header.lock().flush_to(storage.as_ref())?;
-            storage.set_len(NodeStoreHeader::SIZE)?;
         }
 
         // On startup, we always write the latest revision to RootStore
