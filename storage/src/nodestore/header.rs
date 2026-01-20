@@ -336,10 +336,6 @@ impl NodeStoreHeader {
     }
 
     /// Creates a new header with default values and no root address.
-    ///
-    /// # Panics
-    ///
-    /// Will panic if ther `area_size_hash` cannot be computed.
     #[must_use]
     pub fn new(node_hash_algorithm: NodeHashAlgorithm) -> Self {
         Self {
