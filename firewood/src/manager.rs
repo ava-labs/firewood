@@ -186,19 +186,20 @@ impl RevisionManager {
             storage.set_len(NodeStoreHeader::SIZE)?;
         }
 
+        let mut by_hash = HashMap::new();
+        if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
+            by_hash.insert(hash, nodestore.clone());
+        }
+
         let manager = Self {
             max_revisions: config.manager.max_revisions,
             header: Mutex::new(header),
             in_memory_revisions: RwLock::new(VecDeque::from([nodestore.clone()])),
-            by_hash: RwLock::new(Default::default()),
+            by_hash: RwLock::new(by_hash),
             proposals: Mutex::new(Default::default()),
             threadpool: OnceLock::new(),
             root_store,
         };
-
-        if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
-            manager.by_hash.write().insert(hash, nodestore.clone());
-        }
 
         // On startup, we always write the latest revision to RootStore
         if let Some(root_hash) = manager.current_revision().root_hash() {
