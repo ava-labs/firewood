@@ -10,7 +10,7 @@
     reason = "Found 3 occurrences after enabling the lint."
 )]
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Mutex, MutexGuard, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::num::NonZero;
@@ -423,10 +423,10 @@ impl RevisionManager {
             .clone()
     }
 
-    /// Returns a clone of the current header.
+    /// Returns a guard to the current header.
     /// This is used for read-only operations like checking the database.
-    pub fn header(&self) -> NodeStoreHeader {
-        *self.header.lock()
+    pub(crate) fn header(&self) -> MutexGuard<'_, NodeStoreHeader> {
+        self.header.lock()
     }
 
     /// Gets or creates a threadpool associated with the revision manager.
