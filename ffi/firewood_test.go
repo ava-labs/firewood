@@ -1411,6 +1411,42 @@ func TestNilVsEmptyValue(t *testing.T) {
 	r.Empty(got, "key4 should have empty value")
 }
 
+// TestDeleteKeyWithChildren verifies that deleting a key that has children (keys
+// that are extensions of it) does not delete the children. This is to ensure
+// Delete doesn't do prefix delete.
+func TestDeleteKeyWithChildren(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys := [][]byte{[]byte("parent"), []byte("parent/child1"), []byte("parent/child2")}
+	values := [][]byte{[]byte("parent-value"), []byte("child1-value"), []byte("child2-value")}
+	batch := makeBatch(keys, values)
+	_, err := db.Update(batch)
+	r.NoError(err, "Insert parent and children")
+
+	for _, key := range keys {
+		got, err := db.Get(key)
+		r.NoError(err)
+		r.NotNil(got, "key %s should exist", key)
+	}
+
+	// Delete only the parent key (not using PrefixDelete which would delete all)
+	_, err = db.Update([]BatchOp{Delete(keys[0])})
+	r.NoError(err, "Delete parent key")
+
+	// Verify parent is deleted
+	got, err := db.Get(keys[0])
+	r.NoError(err)
+	r.Nil(got, "parent key should be deleted")
+
+	// Verify all children still exist
+	for _, key := range keys[1:] {
+		got, err := db.Get(key)
+		r.NoError(err)
+		r.NotNil(got, "key %s should still exist after parent deletion", key)
+	}
+}
+
 // TestCloseWithCancelledContext verifies that Database.Close returns
 // ErrActiveKeepAliveHandles when the context is cancelled before handles are dropped.
 func TestCloseWithCancelledContext(t *testing.T) {
