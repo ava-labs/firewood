@@ -311,7 +311,8 @@ impl NodeStoreHeader {
     ///
     /// # Errors
     ///
-    /// Returns an error if unable to read the header from storage.
+    /// Returns an error if unable to read the header from storage or if there's
+    /// a node hash algorithm mismatch.
     pub fn read_from_storage<S: crate::linear::ReadableStorage>(
         storage: &S,
     ) -> Result<Self, crate::FileIoError> {
