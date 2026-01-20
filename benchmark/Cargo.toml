@@ -1,6 +1,6 @@
 [package]
 name = "firewood-benchmark"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 authors = [
      "Aaron Buchwald <aaron.buchwald56@gmail.com>",
@@ -46,7 +46,7 @@ tikv-jemallocator = "0.6.1"
 
 [dependencies.tokio]
 optional = true
-version = "1.48.0"
+version = "1.49.0"
 features = ["mio", "net", "parking_lot", "rt", "time"]
 
 [features]

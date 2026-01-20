@@ -43,7 +43,7 @@ type replayLog struct {
 type dbOperation struct {
 	GetLatest         *getLatest         `msgpack:"GetLatest,omitempty"`
 	GetFromProposal   *getFromProposal   `msgpack:"GetFromProposal,omitempty"`
-	Batch             *batch             `msgpack:"Batch,omitempty"`
+	Batch             *replayBatch       `msgpack:"Batch,omitempty"`
 	ProposeOnDB       *proposeOnDB       `msgpack:"ProposeOnDB,omitempty"`
 	ProposeOnProposal *proposeOnProposal `msgpack:"ProposeOnProposal,omitempty"`
 	Commit            *commit            `msgpack:"Commit,omitempty"`
@@ -66,8 +66,8 @@ type keyValueOp struct {
 	Value []byte `msgpack:"value"` // nil represents delete-range
 }
 
-// batch represents a batch operation that commits immediately.
-type batch struct {
+// replayBatch represents a batch operation that commits immediately.
+type replayBatch struct {
 	Pairs []keyValueOp `msgpack:"pairs"`
 }
 
@@ -183,13 +183,13 @@ func TestBlockReplayRoundTrip(t *testing.T) {
 	// Phase 1: Record operations
 	db1 := newTestDatabase(t)
 
-	keys, vals := kvForTest(20)
+	_, _, batch := kvForTest(20)
 
-	p1, err := db1.Propose(keys[:10], vals[:10])
+	p1, err := db1.Propose(batch[:10])
 	r.NoError(err)
 	r.NoError(p1.Commit())
 
-	p2, err := db1.Propose(keys[10:], vals[10:])
+	p2, err := db1.Propose(batch[10:])
 	r.NoError(err)
 	r.NoError(p2.Commit())
 
@@ -306,14 +306,14 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				}
 
 			case op.Batch != nil:
-				keys, vals := splitPairs(op.Batch.Pairs)
-				if _, err := db.Update(keys, vals); err != nil {
+				batch := batchFromReplayPairs(op.Batch.Pairs)
+				if _, err := db.Update(batch); err != nil {
 					return totalCommits, fmt.Errorf("Batch: %w", err)
 				}
 
 			case op.ProposeOnDB != nil:
-				keys, vals := splitPairs(op.ProposeOnDB.Pairs)
-				prop, err := db.Propose(keys, vals)
+				batch := batchFromReplayPairs(op.ProposeOnDB.Pairs)
+				prop, err := db.Propose(batch)
 				if err != nil {
 					return totalCommits, fmt.Errorf("ProposeOnDB: %w", err)
 				}
@@ -324,8 +324,8 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				if !ok {
 					return totalCommits, fmt.Errorf("ProposeOnProposal: unknown parent proposal id %d", op.ProposeOnProposal.ProposalID)
 				}
-				keys, vals := splitPairs(op.ProposeOnProposal.Pairs)
-				prop, err := parent.Propose(keys, vals)
+				batch := batchFromReplayPairs(op.ProposeOnProposal.Pairs)
+				prop, err := parent.Propose(batch)
 				if err != nil {
 					return totalCommits, fmt.Errorf("ProposeOnProposal: %w", err)
 				}
@@ -374,12 +374,14 @@ func loadReplayLogs(logPath string, maxCommits int) ([]replayLog, error) {
 	return decodeReplayLogs(data, maxCommits)
 }
 
-func splitPairs(pairs []keyValueOp) ([][]byte, [][]byte) {
-	keys := make([][]byte, 0, len(pairs))
-	vals := make([][]byte, 0, len(pairs))
-	for _, p := range pairs {
-		keys = append(keys, p.Key)
-		vals = append(vals, p.Value)
+func batchFromReplayPairs(pairs []keyValueOp) []BatchOp {
+	batch := make([]BatchOp, len(pairs))
+	for i, p := range pairs {
+		if p.Value == nil {
+			batch[i] = PrefixDelete(p.Key)
+		} else {
+			batch[i] = Put(p.Key, p.Value)
+		}
 	}
-	return keys, vals
+	return batch
 }

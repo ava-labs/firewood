@@ -79,8 +79,8 @@ func runIteratorTestForAllModes(parentT *testing.T, fn func(*testing.T, iterator
 func TestIter(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals := kvForTest(100)
-	_, err := db.Update(keys, vals)
+	keys, vals, batch := kvForTest(100)
+	_, err := db.Update(batch)
 	r.NoError(err)
 
 	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
@@ -101,12 +101,12 @@ func TestIter(t *testing.T) {
 func TestIterOnRoot(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals := kvForTest(240)
-	firstRoot, err := db.Update(keys[:80], vals[:80])
+	keys, vals, batch := kvForTest(240)
+	firstRoot, err := db.Update(batch[:80])
 	r.NoError(err)
-	secondRoot, err := db.Update(keys[80:160], vals[80:160])
+	secondRoot, err := db.Update(batch[80:160])
 	r.NoError(err)
-	thirdRoot, err := db.Update(keys[160:], vals[160:])
+	thirdRoot, err := db.Update(batch[160:])
 	r.NoError(err)
 
 	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
@@ -147,8 +147,8 @@ func TestIterOnRoot(t *testing.T) {
 func TestIterOnProposal(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals := kvForTest(240)
-	_, err := db.Update(keys, vals)
+	keys, vals, batch := kvForTest(240)
+	_, err := db.Update(batch)
 	r.NoError(err)
 
 	runIteratorTestForAllModes(t, func(t *testing.T, cfn iteratorConfigFn) {
@@ -164,7 +164,7 @@ func TestIterOnProposal(t *testing.T) {
 			changedVals = append(changedVals, newVal)
 			updatedValues[i] = newVal
 		}
-		p, err := db.Propose(changedKeys, changedVals)
+		p, err := db.Propose(makeBatch(changedKeys, changedVals))
 		r.NoError(err)
 		it, err := p.Iter(nil)
 		r.NoError(err)
@@ -181,8 +181,8 @@ func TestIterAfterProposalCommit(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals := kvForTest(10)
-	p, err := db.Propose(keys, vals)
+	keys, vals, batch := kvForTest(10)
+	p, err := db.Propose(batch)
 	r.NoError(err)
 
 	it, err := p.Iter(nil)
@@ -205,8 +205,8 @@ func TestIterUpdate(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals := kvForTest(10)
-	_, err := db.Update(keys, vals)
+	keys, vals, batch := kvForTest(10)
+	_, err := db.Update(batch)
 	r.NoError(err)
 
 	// get an iterator on latest revision
@@ -220,8 +220,8 @@ func TestIterUpdate(t *testing.T) {
 	})
 
 	// update the database
-	keys2, vals2 := kvForTest(10)
-	_, err = db.Update(keys2, vals2)
+	_, _, batch2 := kvForTest(10)
+	_, err = db.Update(batch2)
 	r.NoError(err)
 
 	// iterate after commit
@@ -234,8 +234,8 @@ func TestIterDone(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals := kvForTest(18)
-	_, err := db.Update(keys, vals)
+	keys, vals, batch := kvForTest(18)
+	_, err := db.Update(batch)
 	r.NoError(err)
 
 	// get an iterator on latest revision
@@ -273,8 +273,8 @@ func TestIterOutlivesRevision(t *testing.T) {
 		config.revisions = 2
 	})
 
-	keys, vals := kvForTest(30)
-	_, err := db.Update(keys[:10], vals[:10])
+	keys, vals, batch := kvForTest(30)
+	_, err := db.Update(batch[:10])
 	r.NoErrorf(err, "%T.Update(...)", db)
 	rev, err := db.LatestRevision()
 	r.NoErrorf(err, "%T.LatestRevision()", db)
@@ -288,9 +288,9 @@ func TestIterOutlivesRevision(t *testing.T) {
 	r.NoErrorf(rev.Drop(), "%T.Drop()", rev)
 
 	// Commit two more times to force reaping of the first revision
-	_, err = db.Update(keys[10:20], vals[10:20])
+	_, err = db.Update(batch[10:20])
 	r.NoErrorf(err, "%T.Update(...)", db)
-	_, err = db.Update(keys[20:], vals[20:])
+	_, err = db.Update(batch[20:])
 	r.NoErrorf(err, "%T.Update(...)", db)
 
 	// iterate after reaping
@@ -303,8 +303,8 @@ func TestIterOutlivesProposal(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals := kvForTest(4)
-	p, err := db.Propose(keys[:2], vals[:2])
+	keys, vals, batch := kvForTest(4)
+	p, err := db.Propose(batch[:2])
 	r.NoErrorf(err, "%T.Propose(...)", db)
 
 	it, err := p.Iter(nil)
@@ -318,7 +318,7 @@ func TestIterOutlivesProposal(t *testing.T) {
 	// the revision manager and cleanup only runs when commit is called.
 	// So here we create a new proposal with different keys, and commit
 	// to trigger cleanup of the dropped proposal.
-	p2, err := db.Propose(keys[2:], vals[2:])
+	p2, err := db.Propose(batch[2:])
 	r.NoErrorf(err, "%T.Propose(...)", db)
 	r.NoErrorf(p2.Commit(), "%T.Commit(...)", db)
 

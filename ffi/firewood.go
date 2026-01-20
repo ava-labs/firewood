@@ -264,21 +264,15 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))
 }
 
-// Update applies a batch of updates to the database, returning the hash of the
-// root node after the batch is applied. This is equilalent to creating a proposal
+// Update applies a batch of operations to the database, returning the hash of the
+// root node after the batch is applied. This is equivalent to creating a proposal
 // with [Database.Propose], then committing it with [Proposal.Commit].
 //
-// Value Semantics:
-//   - nil value (vals[i] == nil): Performs a DeleteRange operation using the key as a prefix
-//   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
-//   - non-empty value: Inserts/updates the key with the provided value
-//
-// WARNING: Calling Update with an empty key and nil value will delete the entire database
-// due to prefix deletion semantics.
+// Use [Put], [Delete], and [PrefixDelete] to create batch operations.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
-func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
+func (db *Database) Update(batch []BatchOp) (Hash, error) {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {
@@ -291,26 +285,20 @@ func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
-	if err != nil {
-		return EmptyRoot, err
-	}
+	kvp := newKeyValuePairsFromBatch(batch, &pinner)
 
 	return getHashKeyFromHashResult(C.fwd_batch(db.handle, kvp))
 }
 
-// Propose creates a new proposal with the given keys and values. The proposal
+// Propose creates a new proposal with the given batch operations. The proposal
 // is not committed until [Proposal.Commit] is called. See [Database.Close] regarding
 // freeing proposals. All proposals should be freed before closing the database.
 //
-// Value Semantics:
-//   - nil value (vals[i] == nil): Performs a DeleteRange operation using the key as a prefix
-//   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
-//   - non-empty value: Inserts/updates the key with the provided value
+// Use [Put], [Delete], and [PrefixDelete] to create batch operations.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
-func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
+func (db *Database) Propose(batch []BatchOp) (*Proposal, error) {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {
@@ -323,10 +311,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
-	if err != nil {
-		return nil, err
-	}
+	kvp := newKeyValuePairsFromBatch(batch, &pinner)
 	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.outstandingHandles, &db.commitLock)
 }
 
