@@ -114,4 +114,8 @@ pub(super) mod magic {
 
     /// Branching factor identifier for branch factor 16
     pub const BRANCH_FACTOR: u8 = 16;
+
+    pub const BATCH_PUT: u8 = 0;
+    pub const BATCH_DELETE: u8 = 1;
+    pub const BATCH_DELETE_RANGE: u8 = 2;
 }

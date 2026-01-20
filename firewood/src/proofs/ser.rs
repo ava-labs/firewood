@@ -18,6 +18,7 @@ use super::{
 use crate::{
     db::BatchOp,
     merkle::{Key, Value},
+    proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
     v2::api::{FrozenChangeProof, FrozenRangeProof},
 };
 
@@ -165,12 +166,21 @@ impl WriteItem for [BatchOp<Key, Value>] {
     fn write_item(&self, out: &mut Vec<u8>) {
         out.push_var_int(self.len());
         for item in self {
-            item.key().write_item(out);
-            if let Some(val) = item.value() {
-                out.push(1);
-                val.write_item(out);
-            } else {
-                out.push(0);
+            match item {
+                BatchOp::Put { key, value } => {
+                    out.push(BATCH_PUT);
+                    key.write_item(out);
+                    value.write_item(out);
+                }
+                BatchOp::Delete { key } => {
+                    out.push(BATCH_DELETE);
+                    key.write_item(out);
+                }
+                BatchOp::DeleteRange { prefix } => {
+                    // TODO: Add logging as there currently should not be any DeleteRanges.
+                    out.push(BATCH_DELETE_RANGE);
+                    prefix.write_item(out);
+                }
             }
         }
     }
