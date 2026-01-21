@@ -3,6 +3,12 @@ name: ffi-nix
 on:
   push:
     branches: [main]
+  pull_request:
+    paths:
+      - ffi/flake.nix
+      - ffi/flake.lock
+      - ffi/go.mod
+      - ffi/go.sum
 
 jobs:
   ffi-nix:
