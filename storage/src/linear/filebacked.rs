@@ -19,15 +19,19 @@
     reason = "Found 1 occurrences after enabling the lint."
 )]
 
-use parking_lot::Mutex;
+use quick_cache::sync::Cache as ConcurrentCache;
 use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::num::NonZero;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
-use lru::LruCache;
 use metrics::counter;
+
+/// Concurrent node cache - sharded internally to reduce contention
+type NodeCache = ConcurrentCache<LinearAddress, SharedNode>;
+/// Concurrent free list cache
+type FreeListCache = ConcurrentCache<LinearAddress, Option<LinearAddress>>;
 
 use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
 
@@ -37,8 +41,8 @@ use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
 #[derive(Debug)]
 pub struct FileBacked {
     filename: PathBuf,
-    cache: Mutex<LruCache<LinearAddress, SharedNode>>,
-    free_list_cache: Mutex<LruCache<LinearAddress, Option<LinearAddress>>>,
+    cache: NodeCache,
+    free_list_cache: FreeListCache,
     cache_read_strategy: CacheReadStrategy,
     // keep before `fd` so that it is dropped first (fields are dropped in the order they are declared)
     #[cfg(feature = "io-uring")]
@@ -91,8 +95,8 @@ impl FileBacked {
         })?;
 
         Ok(Self {
-            cache: Mutex::new(LruCache::new(node_cache_size)),
-            free_list_cache: Mutex::new(LruCache::new(free_list_cache_size)),
+            cache: NodeCache::new(node_cache_size.get()),
+            free_list_cache: FreeListCache::new(free_list_cache_size.get()),
             cache_read_strategy,
             filename: path,
             #[cfg(feature = "io-uring")]
@@ -117,16 +121,15 @@ impl ReadableStorage for FileBacked {
     }
 
     fn read_cached_node(&self, addr: LinearAddress, mode: &'static str) -> Option<SharedNode> {
-        let mut guard = self.cache.lock();
-        let cached = guard.get(&addr).cloned();
+        // Concurrent cache - no mutex needed, internally sharded
+        let cached = self.cache.get(&addr);
         counter!("firewood.cache.node", "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" })
             .increment(1);
         cached
     }
 
     fn free_list_cache(&self, addr: LinearAddress) -> Option<Option<LinearAddress>> {
-        let mut guard = self.free_list_cache.lock();
-        let cached = guard.pop(&addr);
+        let cached = self.free_list_cache.remove(&addr).map(|(_, v)| v);
         counter!("firewood.cache.freelist", "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
         cached
     }
@@ -141,13 +144,11 @@ impl ReadableStorage for FileBacked {
                 // we don't cache reads
             }
             CacheReadStrategy::All => {
-                let mut guard = self.cache.lock();
-                guard.put(addr, node);
+                self.cache.insert(addr, node);
             }
             CacheReadStrategy::BranchReads => {
                 if !node.is_leaf() {
-                    let mut guard = self.cache.lock();
-                    guard.put(addr, node);
+                    self.cache.insert(addr, node);
                 }
             }
         }
@@ -180,14 +181,13 @@ impl WritableStorage for FileBacked {
         &self,
         nodes: impl IntoIterator<Item = MaybePersistedNode>,
     ) -> Result<(), FileIoError> {
-        let mut guard = self.cache.lock();
         for maybe_persisted_node in nodes {
             // Since we know the node is in Allocated state, we can get both address and shared node
             let (addr, shared_node) = maybe_persisted_node
                 .allocated_info()
                 .expect("node should be allocated");
 
-            guard.put(addr, shared_node);
+            self.cache.insert(addr, shared_node);
             // The node can now be read from the general cache, so we can delete the local copy
             maybe_persisted_node.persist_at(addr);
         }
@@ -195,15 +195,13 @@ impl WritableStorage for FileBacked {
     }
 
     fn invalidate_cached_nodes<'a>(&self, nodes: impl Iterator<Item = &'a MaybePersistedNode>) {
-        let mut guard = self.cache.lock();
         for addr in nodes.filter_map(MaybePersistedNode::as_linear_address) {
-            guard.pop(&addr);
+            self.cache.remove(&addr);
         }
     }
 
     fn add_to_free_list_cache(&self, addr: LinearAddress, next: Option<LinearAddress>) {
-        let mut guard = self.free_list_cache.lock();
-        guard.put(addr, next);
+        self.free_list_cache.insert(addr, next);
     }
 }
 
