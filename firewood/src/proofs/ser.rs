@@ -16,9 +16,13 @@ use super::{
     types::{ProofNode, ProofType},
 };
 use crate::{
+    InvalidHeader, ReadError,
     db::BatchOp,
     merkle::{Key, Value},
-    proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
+    proofs::{
+        magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
+        reader::{ProofReader, V0Reader},
+    },
     v2::api::{FrozenChangeProof, FrozenRangeProof},
 };
 
@@ -85,8 +89,37 @@ impl FrozenRangeProof {
 
 impl FrozenChangeProof {
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
-        Header::from(ProofType::Range).write_item(out);
+        Header::from(ProofType::Change).write_item(out);
         self.write_item(out);
+    }
+
+    #[allow(clippy::missing_errors_doc)]
+    pub fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
+        let mut reader = ProofReader::new(data);
+
+        let header = reader.read_item::<Header>()?;
+        header
+            .validate(Some(ProofType::Change))
+            .map_err(ReadError::InvalidHeader)?;
+
+        match header.version {
+            0 => {
+                let mut reader = V0Reader::new(reader, header);
+                let this = reader.read_v0_item()?;
+                if reader.remainder().is_empty() {
+                    Ok(this)
+                } else {
+                    Err(reader.invalid_item(
+                        "trailing bytes",
+                        "no data after the proof",
+                        format!("{} bytes", reader.remainder().len()),
+                    ))
+                }
+            }
+            found => Err(ReadError::InvalidHeader(
+                InvalidHeader::UnsupportedVersion { found },
+            )),
+        }
     }
 }
 

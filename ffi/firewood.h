@@ -1084,7 +1084,7 @@ struct HashResult fwd_batch(const struct DatabaseHandle *db, BorrowedKeyValuePai
  * concurrently. The caller must ensure exclusive access to the proof context
  * for the duration of the call.
  */
-struct NextKeyRangeResult fwd_change_proof_find_next_key(struct ChangeProofContext *_proof);
+struct NextKeyRangeResult fwd_change_proof_find_next_key(struct ChangeProofContext *proof);
 
 /**
  * Deserialize a `ChangeProof` from bytes.
@@ -1101,7 +1101,7 @@ struct NextKeyRangeResult fwd_change_proof_find_next_key(struct ChangeProofConte
  *   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
  * - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed.
  */
-struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes _bytes);
+struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes bytes);
 
 /**
  * Serialize a `ChangeProof` to bytes.

@@ -11,7 +11,7 @@ use firewood::{
 use firewood_storage::{FileBacked, MutableProposal, NodeStore, firewood_counter};
 
 use crate::{
-    BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
+    BorrowedBytes, ChangeProofResult, DatabaseHandle, HashKey, HashResult, KeyRange, Maybe,
     NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
 };
 
@@ -69,6 +69,8 @@ pub struct VerifyChangeProofArgs<'a> {
 #[expect(clippy::large_enum_variant)]
 #[derive(Debug)]
 enum ProposalState {
+    // TODO: Make a MutableHandle abstraction so NodeStore does not need to be
+    //       exposed directly.
     Mutable(NodeStore<MutableProposal, FileBacked>),
     //Immutable(crate::ProposalHandle<'db>),
     Committed(Option<HashKey>),
@@ -81,7 +83,7 @@ pub struct ChangeProofContext {
     //_validation_context: (), // placeholder for future use
     //_commit_context: (),     // placeholder for future use
     proof: FrozenChangeProof,
-    //verification: Option<VerificationContext>,
+    verification: Option<VerificationContext>,
     proposal_state: Option<ProposalState>,
 }
 
@@ -89,13 +91,12 @@ impl From<FrozenChangeProof> for ChangeProofContext {
     fn from(proof: FrozenChangeProof) -> Self {
         Self {
             proof,
-            //verification: None,
+            verification: None,
             proposal_state: None,
         }
     }
 }
 
-/*
 #[derive(Debug)]
 #[expect(dead_code)]
 struct VerificationContext {
@@ -105,14 +106,50 @@ struct VerificationContext {
     end_key: Option<Box<[u8]>>,
     max_length: Option<NonZeroUsize>,
 }
-*/
 
 impl ChangeProofContext {
+    fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
+        let verification = self
+            .verification
+            .as_ref()
+            .ok_or(api::Error::ProofError(ProofError::Unverified))?;
+
+        let Some(last_op) = self.proof.key_values().last() else {
+            // no key-values in the proof, so we are done
+            return Ok(None);
+        };
+
+        let root_hash = match self.proposal_state {
+            Some(ProposalState::Committed(ref hash)) => Ok(*hash),
+            Some(ProposalState::Mutable(ref _proposal)) => Ok(None),
+            None => Err(api::Error::ProofError(ProofError::Unverified)),
+        }?;
+        if root_hash.as_ref() == Some(&verification.end_root) {
+            // already at the target root, so we are done
+            return Ok(None);
+        }
+
+        if self.proof.end_proof().is_empty() {
+            // unbounded, so we are done
+            return Ok(None);
+        }
+
+        if let Some(ref end_key) = verification.end_key
+            && **last_op.key() >= **end_key
+        {
+            // reached or exceeded the end key, so we are done
+            return Ok(None);
+        }
+
+        //let end_key: Option<OwnedSlice<u8>> = verification.end_key.clone().map(std::convert::Into::into);
+        Ok(Some((last_op.key().clone(), verification.end_key.clone())))
+    }
+
     fn verify(
         &mut self,
         db: &crate::DatabaseHandle,
         start_root: HashKey,
-        _end_root: HashKey,
+        end_root: HashKey,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
@@ -162,8 +199,10 @@ impl ChangeProofContext {
                             &self.proof,
                             node_store,
                         )?,
-                        ProposalState::Committed(_) => {
-                            return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
+                        ProposalState::Committed(hashkey) => {
+                            // TODO: Change the ProofError to something more appropriate
+                            self.proposal_state = Some(ProposalState::Committed(hashkey));
+                            return Err(api::Error::ProofError(ProofError::Empty));
                         }
                     }
                 } else {
@@ -172,7 +211,6 @@ impl ChangeProofContext {
             ));
 
             // TODO: Keeping a verification state may not be needed
-            /*
             self.verification = Some(VerificationContext {
                 start_root,
                 end_root,
@@ -180,7 +218,6 @@ impl ChangeProofContext {
                 end_key: end_key.map(Box::from),
                 max_length,
             });
-            */
             Ok(())
         } else {
             Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted))
@@ -425,9 +462,9 @@ pub extern "C" fn fwd_db_verify_and_commit_change_proof(
 /// for the duration of the call.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_change_proof_find_next_key(
-    _proof: Option<&mut ChangeProofContext>,
+    proof: Option<&mut ChangeProofContext>,
 ) -> NextKeyRangeResult {
-    CResult::from_err("not yet implemented")
+    crate::invoke_with_handle(proof, ChangeProofContext::find_next_key)
 }
 
 /// Serialize a `ChangeProof` to bytes.
@@ -469,8 +506,11 @@ pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) 
 ///   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
 /// - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_change_proof_from_bytes(_bytes: BorrowedBytes) -> ChangeProofResult {
-    CResult::from_err("not yet implemented")
+pub extern "C" fn fwd_change_proof_from_bytes(bytes: BorrowedBytes) -> ChangeProofResult {
+    crate::invoke(move || {
+        FrozenChangeProof::from_slice(&bytes)
+            .map_err(|err| api::Error::ProofError(ProofError::Deserialization(err)))
+    })
 }
 
 /// Frees the memory associated with a `ChangeProofContext`.
