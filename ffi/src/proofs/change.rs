@@ -157,9 +157,9 @@ impl ChangeProofContext {
         warn!("change proof verification not yet implemented");
 
         let key_values = self.proof.key_values();
-        if key_values.is_empty() {
-            return Err(api::Error::ProofError(ProofError::Empty));
-        }
+        //if key_values.is_empty() {
+        //    return Err(api::Error::ProofError(ProofError::Empty));
+        //}
 
         // Check to make sure the BatchOp array size is less than or equal to `max_length`
         if let Some(max_length) = max_length
