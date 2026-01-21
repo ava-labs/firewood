@@ -427,9 +427,8 @@ impl RevisionManager {
             .clone()
     }
 
-    /// Returns a guard to the current header.
-    /// This is used for read-only operations like checking the database.
-    pub(crate) fn header(&self) -> MutexGuard<'_, NodeStoreHeader> {
+    /// Acquires a lock on the header and returns a guard.
+    pub(crate) fn locked_header(&self) -> MutexGuard<'_, NodeStoreHeader> {
         self.header.lock()
     }
 
