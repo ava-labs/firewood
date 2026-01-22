@@ -169,84 +169,50 @@ release-step-refresh-changelog tag:
     echo "Generating changelog..."
     git cliff -o CHANGELOG.md --tag "{{tag}}"
 
-# Trigger task based reexecution in AvalancheGo
-trigger-reexecution firewood avalanchego task runner libevm="" timeout-minutes="120":
-    just _trigger-workflow "{{ firewood }}" "{{ libevm }}" "{{ avalanchego }}" "{{ runner }}" "{{ timeout-minutes }}" \
-        -f "task={{ task }}"
+# Run a C-Chain reexecution benchmark
+# just bench <test>                                    - predefined test
+# FIREWOOD_REF=v0.1.0 just bench firewood-101-250k     - with specific ref
+# Custom: START_BLOCK=101 END_BLOCK=250000 BLOCK_DIR_SRC=<s3> CURRENT_STATE_DIR_SRC=<s3> just bench
+bench test="":
+    ./scripts/bench-cchain-reexecution.sh trigger "{{ test }}"
 
-# Trigger custom param reexecution in AvalancheGo
-trigger-custom-reexecution firewood avalanchego config start-block end-block block-dir-src current-state-dir-src runner libevm="" timeout-minutes="120":
-    just _trigger-workflow "{{ firewood }}" "{{ libevm }}" "{{ avalanchego }}" "{{ runner }}" "{{ timeout-minutes }}" \
-        -f "config={{ config }}" \
-        -f "start-block={{ start-block }}" \
-        -f "end-block={{ end-block }}" \
-        -f "block-dir-src={{ block-dir-src }}" \
-        -f "current-state-dir-src={{ current-state-dir-src }}"
+# Check status of a benchmark run
+bench-status run_id:
+    ./scripts/bench-cchain-reexecution.sh status "{{ run_id }}"
 
-# Wait for reexecution run to complete
-wait-reexecution run_id: check-nix
-    nix run ./ffi#gh -- run watch "{{ run_id }}" --repo ava-labs/avalanchego --exit-status
+# List recent benchmark runs
+bench-list:
+    ./scripts/bench-cchain-reexecution.sh list
 
-# Download reexecution results
-download-reexecution-results run_id: check-nix
-    #!/usr/bin/env -S bash -euo pipefail
-    mkdir -p ./results
-    nix run ./ffi#gh -- run download "{{ run_id }}" \
-        --repo ava-labs/avalanchego \
-        --name benchmark-output \
-        --dir ./results
-    cat ./results/benchmark-output.txt
-
-# List recent reexecution runs in AvalancheGo
-list-reexecutions: check-nix
-    nix run ./ffi#gh -- run list --repo ava-labs/avalanchego --workflow="C-Chain Re-Execution Benchmark w/ Container" --limit 10
-
-# Internal helpers (not intended for direct use)
-
-_trigger-workflow firewood libevm avalanchego runner timeout-minutes +extra_flags: check-nix
-    #!/usr/bin/env -S bash -euo pipefail
-    GH="nix run ./ffi#gh --"
-
-    # Validate refs contain only safe characters
-    if [[ ! "{{ firewood }}" =~ ^[a-zA-Z0-9/_.-]+$ ]]; then
-        echo "Error: firewood ref contains invalid characters: {{ firewood }}" >&2
-        exit 1
-    fi
-    if [[ -n "{{ libevm }}" && ! "{{ libevm }}" =~ ^[a-zA-Z0-9/_.-]+$ ]]; then
-        echo "Error: libevm ref contains invalid characters: {{ libevm }}" >&2
-        exit 1
-    fi
-
-    WITH_VALUE="firewood={{ firewood }}"
-    if [ -n "{{ libevm }}" ]; then
-        WITH_VALUE="${WITH_VALUE},libevm={{ libevm }}"
-    fi
-
-    $GH workflow run "C-Chain Re-Execution Benchmark w/ Container" \
-        --repo ava-labs/avalanchego \
-        --ref "{{ avalanchego }}" \
-        -f runner="{{ runner }}" \
-        -f timeout-minutes="{{ timeout-minutes }}" \
-        -f with="$WITH_VALUE" \
-        {{ extra_flags }}
-
-    just _wait-for-workflow-run
-
-_wait-for-workflow-run: check-nix
-    #!/usr/bin/env -S bash -euo pipefail
-    GH="nix run ./ffi#gh --"
-    for i in {1..18}; do
-        sleep 10
-        RUN_ID=$($GH run list \
-            --repo ava-labs/avalanchego \
-            --workflow "C-Chain Re-Execution Benchmark w/ Container" \
-            --limit 5 \
-            --json databaseId,createdAt \
-            --jq '[.[] | select(.createdAt | fromdateiso8601 > (now - 180))] | .[0].databaseId')
-        if [ -n "$RUN_ID" ] && [ "$RUN_ID" != "null" ]; then
-            echo "$RUN_ID"
-            exit 0
-        fi
-    done
-    echo "Error: Could not find workflow run after 3min. Check AvalancheGo logs." >&2
-    exit 1
+# Show benchmark help
+bench-help:
+    #!/usr/bin/env bash
+    echo "USAGE"
+    echo "  just bench <test>              Predefined test"
+    echo "  [CUSTOM_VARS] just bench       Custom mode"
+    echo "  just bench-status <run_id>"
+    echo "  just bench-list"
+    echo ""
+    echo "ENVIRONMENT VARIABLES"
+    echo "  FIREWOOD_REF             Firewood ref (default: HEAD)"
+    echo "  AVALANCHEGO_REF          AvalancheGo ref (default: master)"
+    echo "  LIBEVM_REF               libevm ref (optional)"
+    echo "  RUNNER                   GitHub Actions runner (default: avalanche-avalanchego-runner-2ti)"
+    echo "  CONFIG                   VM config (default: firewood)"
+    echo "  START_BLOCK              Start block for custom mode"
+    echo "  END_BLOCK                End block for custom mode"
+    echo "  BLOCK_DIR_SRC            S3 block directory"
+    echo "  CURRENT_STATE_DIR_SRC    S3 state directory"
+    echo ""
+    echo "EXAMPLES"
+    echo "  # Predefined test"
+    echo "  just bench firewood-101-250k"
+    echo "  FIREWOOD_REF=v0.1.0 just bench firewood-33m-40m"
+    echo ""
+    echo "  # Custom mode"
+    echo "  START_BLOCK=101 END_BLOCK=250000 \\"
+    echo "    BLOCK_DIR_SRC=cchain-mainnet-blocks-1m-ldb \\"
+    echo "    CURRENT_STATE_DIR_SRC=cchain-current-state-mainnet-ldb \\"
+    echo "    just bench"
+    echo ""
+    echo "Advanced: ./scripts/bench-cchain-reexecution.sh help"

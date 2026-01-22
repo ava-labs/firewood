@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Triggers and monitors C-Chain re-execution benchmarks in AvalancheGo.
+#
+# USAGE
+#   ./bench-cchain-reexecution.sh <command> [args]
+#
+# COMMANDS
+#   trigger [test]       Trigger benchmark, wait, download results
+#   download <run_id>    Download results for a run
+#   status <run_id>      Check run status
+#   list                 List recent runs
+#   tests                Show available tests
+#   help                 Show this help
+#
+# ENVIRONMENT
+#   GH_TOKEN              (string, required)                          GitHub token for API access
+#   TEST                  (string, optional)                          Predefined test name (alternative to arg)
+#   FIREWOOD_REF          (string, HEAD)                              Firewood commit/tag/branch
+#   AVALANCHEGO_REF       (string, master)                            AvalancheGo ref to test against
+#   RUNNER                (string, avalanche-avalanchego-runner-2ti)  GitHub Actions runner label
+#   LIBEVM_REF            (string, optional)                          Optional libevm ref
+#   TIMEOUT_MINUTES       (int, optional)                             Workflow timeout
+#
+#   Custom mode (when no TEST/test arg specified):
+#   CONFIG                (string, firewood)  VM config (https://github.com/ava-labs/avalanchego/blob/3c645de551294b8db0f695563e386a2f38c1aded/tests/reexecute/c/vm_reexecute.go#L64)
+#   START_BLOCK           (required)  First block number
+#   END_BLOCK             (required)  Last block number
+#   BLOCK_DIR_SRC         (required)  S3 block directory (without S3:// prefix, e.g., cchain-mainnet-blocks-200-ldb)
+#   CURRENT_STATE_DIR_SRC (required)  S3 state directory (without S3:// prefix, e.g., cchain-current-state-mainnet-100-firewood)
+#
+#
+# EXAMPLES
+#   ./bench-cchain-reexecution.sh trigger firewood-101-250k
+#
+#   TEST=firewood-33m-40m FIREWOOD_REF=v0.1.0 ./bench-cchain-reexecution.sh trigger
+#
+#   START_BLOCK=101 END_BLOCK=250000 \
+#     BLOCK_DIR_SRC=cchain-mainnet-blocks-1m-ldb \
+#     CURRENT_STATE_DIR_SRC=cchain-current-state-mainnet-ldb \
+#     ./bench-cchain-reexecution.sh trigger
+#
+#   ./bench-cchain-reexecution.sh download 12345678
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+AVALANCHEGO_REPO="ava-labs/avalanchego"
+WORKFLOW_NAME="C-Chain Re-Execution Benchmark w/ Container"
+
+: "${FIREWOOD_REF:=HEAD}"
+: "${AVALANCHEGO_REF:=master}"
+: "${RUNNER:=avalanche-avalanchego-runner-2ti}"
+: "${LIBEVM_REF:=}"
+: "${TIMEOUT_MINUTES:=}"
+: "${CONFIG:=firewood}"
+
+# Polling config for workflow registration. gh workflow run doesn't return
+# the run ID, so we poll until the run appears. 180s accommodates busy runners.
+POLL_INTERVAL=1
+POLL_TIMEOUT=180
+
+# Subset of tests for discoverability. AvalancheGo is the source of truth:
+# https://github.com/ava-labs/avalanchego/blob/master/scripts/benchmark_cchain_range.sh
+declare -A TESTS=(
+    ["firewood-101-250k"]="Blocks 101-250k"
+    ["firewood-archive-101-250k"]="Blocks 101-250k (archive)"
+    ["firewood-33m-33m500k"]="Blocks 33m-33.5m"
+    ["firewood-archive-33m-33m500k"]="Blocks 33m-33.5m (archive)"
+    ["firewood-33m-40m"]="Blocks 33m-40m"
+    ["firewood-archive-33m-40m"]="Blocks 33m-40m (archive)"
+)
+
+log() { echo "==> $1"; }
+
+# Use GitHub Actions error annotation format in CI for better visibility
+err() {
+    if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
+        echo "::error::$1"
+    else
+        echo "error: $1" >&2
+    fi
+}
+
+die() { err "$1"; exit 1; }
+
+require_gh() {
+    if ! command -v gh &>/dev/null; then
+        die "gh CLI not found. Run from nix shell: nix develop ./ffi"
+    fi
+    [[ -z "${GH_TOKEN:-}" ]] && die "GH_TOKEN is required"
+}
+
+# Prevent command injection via malicious ref names passed to gh CLI
+validate_ref() {
+    local ref="$1" name="$2"
+    [[ "$ref" =~ ^[a-zA-Z0-9/_.-]+$ ]] || die "$name contains invalid characters: $ref"
+}
+
+poll_workflow_registration() {
+    local trigger_time="$1"
+    log "Waiting for workflow to register..."
+    
+    for ((i=0; i<POLL_TIMEOUT; i++)); do
+        sleep "$POLL_INTERVAL"
+        local run_id
+        run_id=$(gh run list \
+            --repo "$AVALANCHEGO_REPO" \
+            --workflow "$WORKFLOW_NAME" \
+            --limit 5 \
+            --json databaseId,createdAt \
+            --jq --arg t "$trigger_time" '[.[] | select(.createdAt > $t)] | .[0].databaseId' 2>/dev/null || echo "")
+        
+        if [[ -n "$run_id" && "$run_id" != "null" ]]; then
+            echo "$run_id"
+            return 0
+        fi
+    done
+    
+    die "workflow not found after ${POLL_TIMEOUT}s"
+}
+
+trigger_workflow() {
+    local test="${1:-}"
+    local firewood="$FIREWOOD_REF"
+    
+    # Resolve HEAD to commit SHA for reproducibility—"HEAD" means different things at different times
+    [[ "$firewood" == "HEAD" ]] && firewood=$(git -C "$REPO_ROOT" rev-parse HEAD)
+    validate_ref "$firewood" "FIREWOOD_REF"
+    [[ -n "$LIBEVM_REF" ]] && validate_ref "$LIBEVM_REF" "LIBEVM_REF"
+    
+    local args=(-f runner="$RUNNER")
+    [[ -n "$TIMEOUT_MINUTES" ]] && args+=(-f timeout-minutes="$TIMEOUT_MINUTES")
+    
+    if [[ -n "$test" ]]; then
+        args+=(-f test="$test")
+        log "Triggering: $test"
+    else
+        # Custom mode: block params required, config defaults to firewood
+        [[ -z "${START_BLOCK:-}${END_BLOCK:-}${BLOCK_DIR_SRC:-}${CURRENT_STATE_DIR_SRC:-}" ]] && \
+            die "Provide a test name or set START_BLOCK, END_BLOCK, BLOCK_DIR_SRC, CURRENT_STATE_DIR_SRC"
+        : "${START_BLOCK:?START_BLOCK required}"
+        : "${END_BLOCK:?END_BLOCK required}"
+        : "${BLOCK_DIR_SRC:?BLOCK_DIR_SRC required}"
+        : "${CURRENT_STATE_DIR_SRC:?CURRENT_STATE_DIR_SRC required}"
+        args+=(
+            -f config="$CONFIG"
+            -f start-block="$START_BLOCK"
+            -f end-block="$END_BLOCK"
+            -f block-dir-src="$BLOCK_DIR_SRC"
+            -f current-state-dir-src="$CURRENT_STATE_DIR_SRC"
+        )
+        log "Triggering: $CONFIG $START_BLOCK-$END_BLOCK"
+    fi
+    
+    log "firewood:    $firewood"
+    log "avalanchego: $AVALANCHEGO_REF"
+    log "runner:      $RUNNER"
+    
+    # Record time BEFORE triggering to avoid race condition: we only look for
+    # runs created after this timestamp, so concurrent triggers don't collide
+    local trigger_time
+    trigger_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    
+    gh workflow run "$WORKFLOW_NAME" \
+        --repo "$AVALANCHEGO_REPO" \
+        --ref "$AVALANCHEGO_REF" \
+        "${args[@]}"
+    
+    poll_workflow_registration "$trigger_time"
+}
+
+wait_for_completion() {
+    local run_id="$1"
+    log "Waiting for run $run_id"
+    log "https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
+    gh run watch "$run_id" --repo "$AVALANCHEGO_REPO" --exit-status
+}
+
+download_artifact() {
+    local run_id="$1"
+    local tmp_dir results_dir
+    # Download to tmp to avoid permission issues only the final JSON goes to results
+    tmp_dir=$(mktemp -d)
+    results_dir="${REPO_ROOT}/results"
+    
+    gh run download "$run_id" \
+        --repo "$AVALANCHEGO_REPO" \
+        --pattern "benchmark-output-*" \
+        --dir "$tmp_dir"
+    
+    mkdir -p "$results_dir"
+    find "$tmp_dir" -name "benchmark-output.json" -exec cp {} "$results_dir/" \;
+    rm -rf "$tmp_dir"
+    
+    [[ -f "$results_dir/benchmark-output.json" ]] || die "No benchmark results found"
+    log "Results: $results_dir/benchmark-output.json"
+}
+
+check_status() {
+    local run_id="$1"
+    echo "https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
+    
+    local status
+    status=$(gh run view "$run_id" --repo "$AVALANCHEGO_REPO" --json status,conclusion \
+        --jq '.status + " (" + (.conclusion // "in progress") + ")"')
+    echo "status: $status"
+}
+
+list_runs() {
+    gh run list --repo "$AVALANCHEGO_REPO" --workflow "$WORKFLOW_NAME" --limit 10
+}
+
+list_tests() {
+    for test in "${!TESTS[@]}"; do
+        [[ "$test" == firewood* ]] && printf "  %-25s %s\n" "$test" "${TESTS[$test]}"
+    done | sort
+}
+
+cmd_trigger() {
+    require_gh
+    
+    local test="${1:-${TEST:-}}"
+    local run_id
+    run_id=$(trigger_workflow "$test")
+    log "run_id: $run_id"
+    
+    wait_for_completion "$run_id"
+    download_artifact "$run_id"
+}
+
+cmd_download() {
+    [[ -z "${1:-}" ]] && die "usage: $0 download <run_id>"
+    require_gh
+    download_artifact "$1"
+}
+
+cmd_status() {
+    [[ -z "${1:-}" ]] && die "usage: $0 status <run_id>"
+    require_gh
+    check_status "$1"
+}
+
+cmd_list() {
+    require_gh
+    list_runs
+}
+
+cmd_tests() {
+    list_tests
+}
+
+cmd_help() {
+    cat <<EOF
+USAGE
+  ./bench-cchain-reexecution.sh <command> [args]
+
+COMMANDS
+  trigger [test]       Trigger benchmark, wait, download results
+  download <run_id>    Download results for a run
+  status <run_id>      Check run status
+  list                 List recent runs
+  tests                Show available tests
+  help                 Show this help
+
+TESTS
+EOF
+    list_tests
+}
+
+main() {
+    local cmd="${1:-help}"
+    shift || true
+    
+    case "$cmd" in
+        trigger)        cmd_trigger "$@" ;;
+        download)       cmd_download "$@" ;;
+        status)         cmd_status "$@" ;;
+        list)           cmd_list "$@" ;;
+        tests)          cmd_tests "$@" ;;
+        help|-h|--help) cmd_help ;;
+        *)              err "unknown command: $cmd"; cmd_help; exit 1 ;;
+    esac
+}
+
+main "$@"

@@ -14,15 +14,11 @@ on:
       avalanchego:
         description: 'AvalancheGo commit/branch/tag to test against'
         default: 'master'
-      task:
-        description: 'Predefined task (leave empty to use custom parameters below)'
-        type: choice
-        options:
-          - c-chain-reexecution-firewood-101-250k
-          - c-chain-reexecution-firewood-33m-33m500k
-          - c-chain-reexecution-firewood-33m-40m
+      test:
+        description: 'Predefined test (leave empty to use custom parameters below)' # https://github.com/ava-labs/avalanchego/blob/a85295d87193b30ff17c594680dadd6618022f5e/scripts/benchmark_cchain_range.sh#L63
+        default: ''
       config:
-        description: 'VM config (e.g., firewood, hashdb)'
+        description: 'Config (e.g., firewood, hashdb)'
         default: ''
       start-block:
         default: ''
@@ -43,8 +39,8 @@ on:
           - avago-runner-i4i-4xlarge-local-ssd
           - avago-runner-m6i-4xlarge-ebs-fast
       timeout-minutes:
-        description: 'Timeout in minutes for the benchmark job'
-        default: '120'
+        description: 'Timeout in minutes'
+        default: ''
 
 jobs:
   record-benchmark-to-gh-pages:
@@ -57,80 +53,48 @@ jobs:
         with:
           fetch-depth: 0  # Needed for github-action-benchmark
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@02a151ada4993995686f9ed4f1be7cfbb229e56f # v31
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Validate inputs
-        run: |
-          if [ -z "${{ inputs.task }}" ]; then
-            missing=()
-            [ -z "${{ inputs.config }}" ] && missing+=("config")
-            [ -z "${{ inputs.start-block }}" ] && missing+=("start-block")
-            [ -z "${{ inputs.end-block }}" ] && missing+=("end-block")
-            [ -z "${{ inputs.block-dir-src }}" ] && missing+=("block-dir-src")
-            [ -z "${{ inputs.current-state-dir-src }}" ] && missing+=("current-state-dir-src")
-            
-            if [ ${#missing[@]} -gt 0 ]; then
-              echo "Error: When using custom mode, these fields are required: ${missing[*]}"
-              exit 1
-            fi
-          fi
-
-      - name: Trigger C-Chain reexecution in AvalancheGo
-        id: trigger
-        shell: nix develop ./ffi --command bash {0}
-        run: |
-          FIREWOOD="${{ inputs.firewood || github.sha }}"
-          echo "firewood=$FIREWOOD" >> "$GITHUB_OUTPUT"
-          
-          if [ -n "${{ inputs.task }}" ]; then
-            RUN_ID=$(just trigger-reexecution "$FIREWOOD" "${{ inputs.avalanchego }}" "${{ inputs.task }}" "${{ inputs.runner }}" "${{ inputs.libevm }}" "${{ inputs.timeout-minutes }}")
-          else
-            RUN_ID=$(just trigger-custom-reexecution "$FIREWOOD" "${{ inputs.avalanchego }}" "${{ inputs.config }}" "${{ inputs.start-block }}" "${{ inputs.end-block }}" "${{ inputs.block-dir-src }}" "${{ inputs.current-state-dir-src }}" "${{ inputs.runner }}" "${{ inputs.libevm }}" "${{ inputs.timeout-minutes }}")
-          fi
-          
-          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
-          echo "run_url=https://github.com/ava-labs/avalanchego/actions/runs/$RUN_ID" >> "$GITHUB_OUTPUT"
+      - name: Trigger C-Chain Reexecution Benchmark
+        run: ./scripts/bench-cchain-reexecution.sh trigger "${{ inputs.test }}"
         env:
           GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
+          # Custom mode (ignored when test is specified)
+          CONFIG: ${{ inputs.config }}
+          START_BLOCK: ${{ inputs.start-block }}
+          END_BLOCK: ${{ inputs.end-block }}
+          BLOCK_DIR_SRC: ${{ inputs.block-dir-src }}
+          CURRENT_STATE_DIR_SRC: ${{ inputs.current-state-dir-src }}
+          # Refs
+          FIREWOOD_REF: ${{ inputs.firewood || github.sha }}
+          AVALANCHEGO_REF: ${{ inputs.avalanchego }}
+          LIBEVM_REF: ${{ inputs.libevm }}
+          # Execution
+          RUNNER: ${{ inputs.runner }}
+          TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
 
-      - name: Wait for completion
-        shell: nix develop ./ffi --command bash {0}
-        run: just wait-reexecution "${{ steps.trigger.outputs.run_id }}"
-        env:
-          GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
-
-      - name: Download artifacts
-        id: download
-        shell: nix develop ./ffi --command bash {0}
+      # Store main branch results in bench/, feature branches in dev/bench/{branch}/
+      # to keep official benchmark history clean
+      - name: Determine results location
+        id: location
         run: |
-          just download-reexecution-results "${{ steps.trigger.outputs.run_id }}"
-          
-          # Determine target dashboard
           if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
             echo "data-dir=bench" >> "$GITHUB_OUTPUT"
           else
-            SAFE_NAME=$(echo "${{ github.ref_name }}" | tr '/' '-')
-            echo "data-dir=dev/bench/$SAFE_NAME" >> "$GITHUB_OUTPUT"
+            echo "data-dir=dev/bench/$(echo '${{ github.ref_name }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
           fi
-        env:
-          GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
 
-      - name: Store benchmark results
+      - name: Publish benchmark results
         id: store
         continue-on-error: true
         uses: benchmark-action/github-action-benchmark@v1
         with:
-          name: C-Chain Reexecution Performance
-          tool: 'go'
-          output-file-path: ./results/benchmark-output.txt
+          name: C-Chain Reexecution with Firewood
+          tool: 'customBiggerIsBetter'
+          output-file-path: ./results/benchmark-output.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
           gh-pages-branch: benchmark-data
-          benchmark-data-dir-path: ${{ steps.download.outputs.data-dir }}
-          fail-on-alert: false
+          benchmark-data-dir-path: ${{ steps.location.outputs.data-dir }}
+          fail-on-alert: true
           comment-on-alert: false
 
       - name: Summary
@@ -144,9 +108,9 @@ jobs:
             echo
             echo "**Configuration:**"
             
-            if [ -n "${{ inputs.task }}" ]; then
-              echo "- Mode: Task-based"
-              echo "- Task: \`${{ inputs.task }}\`"
+            if [ -n "${{ inputs.test }}" ]; then
+              echo "- Mode: Predefined test"
+              echo "- Test: \`${{ inputs.test }}\`"
             else
               echo "- Mode: Custom parameters"
               echo "- Config: \`${{ inputs.config }}\`"
@@ -155,7 +119,7 @@ jobs:
               echo "- State source: \`${{ inputs.current-state-dir-src }}\`"
             fi
             
-            echo "- Firewood: \`${{ steps.trigger.outputs.firewood }}\`"
+            echo "- Firewood: \`${{ inputs.firewood || github.sha }}\`"
             if [ -n "${{ inputs.libevm }}" ]; then
               echo "- libevm: \`${{ inputs.libevm }}\`"
             fi
@@ -164,13 +128,7 @@ jobs:
             echo "- Timeout: \`${{ inputs.timeout-minutes }}\` minutes"
             echo
             
-            if [ "${{ steps.download.outcome }}" = "success" ]; then
-              echo "**Links:**"
-              echo "- [AvalancheGo Workflow](${{ steps.trigger.outputs.run_url }})"
-              echo "- [Performance Trends](https://ava-labs.github.io/firewood/${{ steps.download.outputs.data-dir }}/)"
-            else
-              echo "**Status:** Failed"
-              echo "Check [workflow logs](${{ steps.trigger.outputs.run_url }}) for details."
-            fi
+            echo "**Links:**"
+            echo "- [Performance Trends](https://ava-labs.github.io/firewood/${{ steps.location.outputs.data-dir }}/)"
           } >> $GITHUB_STEP_SUMMARY
 
