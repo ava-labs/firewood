@@ -247,7 +247,7 @@ impl From<Result<api::FrozenRangeProof, api::Error>> for RangeProofResult<'_> {
 /// [`fwd_free_change_proof`]: crate::fwd_free_change_proof
 #[derive(Debug)]
 #[repr(C)]
-pub enum ChangeProofResult {
+pub enum ChangeProofResult<'db> {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
     /// The provided root was not found in the database.
@@ -257,7 +257,7 @@ pub enum ChangeProofResult {
     /// If the value was parsed from a serialized proof, this does not imply that
     /// the proof is valid, only that it is well-formed. The verify method must
     /// be called to ensure the proof is cryptographically valid.
-    Ok(Box<ChangeProofContext>),
+    Ok(Box<ChangeProofContext<'db>>),
     /// An error occurred and the message is returned as an [`OwnedBytes`]. If
     /// value is guaranteed to contain only valid UTF-8.
     ///
@@ -539,6 +539,19 @@ impl<'db, E: fmt::Display> From<Result<CreateProposalResult<'db>, E>> for Propos
     }
 }
 
+impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult<'_> {
+    fn from(value: Result<api::FrozenChangeProof, api::Error>) -> Self {
+        match value {
+            Ok(proof) => ChangeProofResult::Ok(Box::new(proof.into())),
+            Err(api::Error::RevisionNotFound { provided }) => ChangeProofResult::RevisionNotFound(
+                HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
+            ),
+            //Err(api::Error::RangeProofOnEmptyTrie) => ChangeProofResult::EmptyTrie,
+            Err(err) => ChangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 /// Helper trait to handle the different result types returned from FFI functions.
 ///
 /// Once Try trait is stable, we can use that instead of this trait:
@@ -602,7 +615,7 @@ impl_null_handle_result!(
     ValueResult,
     HashResult,
     RangeProofResult<'_>,
-    ChangeProofResult,
+    ChangeProofResult<'_>,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
@@ -618,7 +631,7 @@ impl_cresult!(
     HashResult,
     HandleResult,
     RangeProofResult<'_>,
-    ChangeProofResult,
+    ChangeProofResult<'_>,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,

@@ -4,12 +4,13 @@
 #[cfg(test)]
 pub(crate) mod tests;
 
-mod changes;
+pub(crate) mod changes;
 mod merge;
 /// Parallel merkle
 pub mod parallel;
 
 use crate::iter::{MerkleKeyValueIter, PathIterator};
+use crate::merkle::changes::{ChangeProof, DiffMerkleNodeStream};
 use crate::v2::api::{
     self, BatchIter, FrozenProof, FrozenRangeProof, KeyType, KeyValuePair, ValueType,
 };
@@ -135,7 +136,8 @@ impl<T: TrieReader> Merkle<T> {
         self.nodestore.root_node()
     }
 
-    pub(crate) const fn nodestore(&self) -> &T {
+    // TODO: Check why this must be pub instead of pub(crate)
+    pub const fn nodestore(&self) -> &T {
         &self.nodestore
     }
 
@@ -458,6 +460,80 @@ impl<T: TrieReader> Merkle<T> {
 }
 
 impl<T: HashedNodeReader> Merkle<T> {
+    /// Generate a change proof
+    ///
+    /// # Errors
+    ///
+    /// * `api::Error::InvalidRange` - If `start_key` > `end_key` when both are provided.
+    ///   This ensures the range bounds are logically consistent.
+    ///
+    /// * `api::Error` - Various other errors can occur during proof generation, such as:
+    ///   - I/O errors when reading nodes from storage
+    ///   - Corrupted trie structure
+    ///   - Invalid node references
+    pub fn change_proof(
+        &self,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        source_trie: &T,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<api::FrozenChangeProof, api::Error> {
+        if let (Some(k1), Some(k2)) = (&start_key, &end_key)
+            && k1 > k2
+        {
+            return Err(api::Error::InvalidRange {
+                start_key: k1.to_vec().into(),
+                end_key: k2.to_vec().into(),
+            });
+        }
+
+        // if there is a requested lower bound, the start proof must always be
+        // for that key even if (especially if) the key is not present in the
+        // trie so that the requestor can assert no keys exist between the
+        // requested key and the first provided key.
+        let start_proof = start_key
+            .map(|key| self.prove(key))
+            .transpose()?
+            .unwrap_or_default();
+
+        let mut iter = DiffMerkleNodeStream::new(
+            source_trie,
+            self.nodestore(),
+            start_key.unwrap_or_default().into(),
+        )?;
+
+        let key_values = iter
+            .by_ref()
+            .take(limit.map_or(usize::MAX, NonZeroUsize::get))
+            .collect::<Result<Box<_>, FileIoError>>()?;
+
+        /*
+        if key_values.is_empty() && start_key.is_none() && end_key.is_none() {
+            // unbounded range proof yielded no key-values, so the trie must be empty
+            // TODO: Change the Error type
+            return Err(api::Error::RangeProofOnEmptyTrie);
+        }
+        */
+
+        let end_proof = if let Some(limit) = limit
+            && limit.get() <= key_values.len()
+            && iter.next().is_some()
+        {
+            // limit was provided, we hit it, and there is at least one more key
+            // end proof is for the last key provided
+            key_values.last().map(|largest_key| &**largest_key.key())
+        } else {
+            // limit was not hit or not provided, end proof is for the requested
+            // end key so that we can prove we have all keys up to that key
+            end_key
+        }
+        .map(|end_key| self.prove(end_key))
+        .transpose()?
+        .unwrap_or_default();
+
+        Ok(ChangeProof::new(start_proof, end_proof, key_values))
+    }
+
     /// Dump a node, recursively, to a dot file
     pub(crate) fn dump_node<W: std::io::Write + ?Sized>(
         &self,

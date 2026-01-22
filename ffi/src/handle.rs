@@ -1,10 +1,10 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::num::NonZeroUsize;
+
 use firewood::{
-    db::{Db, DbConfig},
-    manager::RevisionManagerConfig,
-    v2::api::{self, ArcDynDbView, Db as _, DbView, HashKey, HashKeyExt, IntoBatchIter, KeyType},
+    db::{Db, DbConfig}, manager::RevisionManagerConfig, merkle::Merkle, v2::api::{self, ArcDynDbView, Db as _, DbView, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter, KeyType}
 };
 
 use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult, arc_cache::ArcCache};
@@ -272,6 +272,27 @@ impl DatabaseHandle {
             self.db
                 .merge_key_value_range(first_key, last_key, key_values)
         })
+    }
+
+    /// Create a Change Proof between two revisions specified by the start and end hash.
+    ///
+    /// # Errors
+    ///
+    /// An error is returned if the revision cannot be found or if there is an I/O error.
+    pub(crate) fn change_proof(
+        &self,
+        start_hash: HashKey,
+        end_hash: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenChangeProof, api::Error> {
+        Merkle::from(self.db.revision(end_hash)?).change_proof(
+            start_key,
+            end_key,
+            Merkle::from(self.db.revision(start_hash)?).nodestore(),
+            limit,
+        )
     }
 
     /// Dumps the Trie structure of the latest revision to a DOT (Graphviz) format string.

@@ -10,6 +10,7 @@ use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use crate::merkle::changes::ChangeProof;
 pub use crate::v2::batch_op::{BatchIter, BatchOp, IntoBatchIter, KeyValuePair, TryIntoBatch};
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
@@ -82,6 +83,8 @@ impl OptionalHashKeyExt for Option<HashKey> {
 
 /// A frozen proof is a proof that is stored in immutable memory.
 pub type FrozenRangeProof = RangeProof<Key, Value, Box<[ProofNode]>>;
+
+pub type FrozenChangeProof = ChangeProof<Key, Value, Box<[ProofNode]>>;
 
 /// A frozen proof uses an immutable collection of proof nodes.
 pub type FrozenProof = Proof<Box<[ProofNode]>>;

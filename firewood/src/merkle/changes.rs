@@ -181,7 +181,7 @@ impl ComparableNodeInfo {
 }
 
 /// Iterator that outputs the difference between two tries and skips matching sub-tries.
-struct DiffMerkleNodeStream<'a, Left: HashedNodeReader, Right: HashedNodeReader> {
+pub(crate) struct DiffMerkleNodeStream<'a, Left: HashedNodeReader, Right: HashedNodeReader> {
     // Contains the state of the diff traversal. It is only None after calling `next` or
     // `next_internal` if we have reached the end of the traversal.
     state: Option<DiffIterationNodeState>,
@@ -191,7 +191,6 @@ struct DiffMerkleNodeStream<'a, Left: HashedNodeReader, Right: HashedNodeReader>
 
 impl<'a, Left: HashedNodeReader, Right: HashedNodeReader> DiffMerkleNodeStream<'a, Left, Right> {
     /// Constructor where the left and right tries implement the trait `HashedNodeReader`.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub fn new(
         left_tree: &'a Left,
         right_tree: &'a Right,
@@ -670,10 +669,14 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
 #[expect(clippy::unwrap_used, clippy::arithmetic_side_effects)]
 mod tests {
     use crate::{
-        Proof, db::{BatchOp, Db, DbConfig}, iter::{MerkleKeyValueIter, key_from_nibble_iter}, merkle::{
+        Proof,
+        db::{BatchOp, Db, DbConfig},
+        iter::{MerkleKeyValueIter, key_from_nibble_iter},
+        merkle::{
             Key, Merkle, Value,
             changes::{ChangeProof, DiffMerkleNodeStream, PreOrderIterator},
-        }, v2::api::{Db as _, DbView, Proposal as _}
+        },
+        v2::api::{Db as _, DbView, Proposal as _},
     };
 
     use firewood_storage::{
