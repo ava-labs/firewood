@@ -10,10 +10,122 @@ use firewood_storage::{
 use lender::{Lender, Lending};
 
 use crate::{
+    Proof, ProofCollection,
     db::BatchOp,
     iter::key_from_nibble_iter,
     merkle::{Key, PrefixOverlap, Value},
 };
+
+#[derive(Debug)]
+pub struct ChangeProof<K: AsRef<[u8]> + std::fmt::Debug, V: AsRef<[u8]> + std::fmt::Debug, H> {
+    start_proof: Proof<H>,
+    end_proof: Proof<H>,
+    key_values: Box<[BatchOp<K, V>]>,
+}
+
+impl<K, V, H> ChangeProof<K, V, H>
+where
+    K: AsRef<[u8]> + std::fmt::Debug,
+    V: AsRef<[u8]> + std::fmt::Debug,
+    H: ProofCollection,
+{
+    #[must_use]
+    pub const fn new(
+        start_proof: Proof<H>,
+        end_proof: Proof<H>,
+        key_values: Box<[BatchOp<K, V>]>,
+    ) -> Self {
+        Self {
+            start_proof,
+            end_proof,
+            key_values,
+        }
+    }
+
+    /// Returns a reference to the start proof, which may be empty.
+    #[must_use]
+    pub const fn start_proof(&self) -> &Proof<H> {
+        &self.start_proof
+    }
+
+    /// Returns a reference to the end proof, which may be empty.
+    #[must_use]
+    pub const fn end_proof(&self) -> &Proof<H> {
+        &self.end_proof
+    }
+
+    /// Returns the key-value pairs included in the change proof, which may be empty.
+    #[must_use]
+    pub const fn key_values(&self) -> &[BatchOp<K, V>] {
+        &self.key_values
+    }
+
+    /// Returns true if the change proof is empty, meaning it has no start or end proof
+    /// and no key-value pairs.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.start_proof.is_empty() && self.end_proof.is_empty() && self.key_values.is_empty()
+    }
+
+    /// Returns an iterator over the key-value pairs in this change proof.
+    ///
+    /// The iterator yields references to the key-value pairs in the order they
+    /// appear in the proof (which should be lexicographic order as they appear
+    /// in the trie).
+    #[must_use]
+    pub fn iter(&self) -> ChangeProofIter<'_, K, V> {
+        ChangeProofIter(self.key_values.iter())
+    }
+}
+
+#[derive(Debug)]
+pub struct ChangeProofIter<'a, K: AsRef<[u8]> + std::fmt::Debug, V: AsRef<[u8]> + std::fmt::Debug>(
+    std::slice::Iter<'a, BatchOp<K, V>>,
+);
+
+impl<'a, K, V> Iterator for ChangeProofIter<'a, K, V>
+where
+    K: AsRef<[u8]> + std::fmt::Debug,
+    V: AsRef<[u8]> + std::fmt::Debug,
+{
+    type Item = &'a BatchOp<K, V>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next()
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.0.size_hint()
+    }
+}
+
+impl<K, V> ExactSizeIterator for ChangeProofIter<'_, K, V>
+where
+    K: AsRef<[u8]> + std::fmt::Debug,
+    V: AsRef<[u8]> + std::fmt::Debug,
+{
+}
+
+impl<K, V> std::iter::FusedIterator for ChangeProofIter<'_, K, V>
+where
+    K: AsRef<[u8]> + std::fmt::Debug,
+    V: AsRef<[u8]> + std::fmt::Debug,
+{
+}
+
+impl<'a, K, V, H> IntoIterator for &'a ChangeProof<K, V, H>
+where
+    K: AsRef<[u8]> + std::fmt::Debug,
+    V: AsRef<[u8]> + std::fmt::Debug,
+    H: ProofCollection,
+{
+    type Item = &'a BatchOp<K, V>;
+    type IntoIter = ChangeProofIter<'a, K, V>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.iter()
+    }
+}
 
 /// Enum containing all possible states that we can be in as we iterate through the diff
 /// between two Merkle tries.
@@ -558,13 +670,10 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
 #[expect(clippy::unwrap_used, clippy::arithmetic_side_effects)]
 mod tests {
     use crate::{
-        db::{BatchOp, Db, DbConfig},
-        iter::{MerkleKeyValueIter, key_from_nibble_iter},
-        merkle::{
+        Proof, db::{BatchOp, Db, DbConfig}, iter::{MerkleKeyValueIter, key_from_nibble_iter}, merkle::{
             Key, Merkle, Value,
-            changes::{DiffMerkleNodeStream, PreOrderIterator},
-        },
-        v2::api::{Db as _, DbView, Proposal as _},
+            changes::{ChangeProof, DiffMerkleNodeStream, PreOrderIterator},
+        }, v2::api::{Db as _, DbView, Proposal as _}
     };
 
     use firewood_storage::{
@@ -1800,5 +1909,99 @@ mod tests {
 
             println!("Traversal optimization verified: {diff_immutable_nexts} vs {diff_iteration_count} next calls");
         });
+    }
+
+    #[test]
+    fn test_change_proof_iterator() {
+        // Create test data
+        let key_values: Box<[BatchOp<Key, Value>]> = Box::new([
+            BatchOp::Put {
+                key: b"key1".to_vec().into_boxed_slice(),
+                value: b"value1".to_vec().into_boxed_slice(),
+            },
+            BatchOp::Put {
+                key: b"key2".to_vec().into_boxed_slice(),
+                value: b"value2".to_vec().into_boxed_slice(),
+            },
+            BatchOp::Put {
+                key: b"key3".to_vec().into_boxed_slice(),
+                value: b"value3".to_vec().into_boxed_slice(),
+            },
+        ]);
+
+        // Create empty proofs for testing
+        let start_proof = Proof::empty();
+        let end_proof = Proof::empty();
+
+        let change_proof = ChangeProof::new(start_proof, end_proof, key_values);
+
+        // Test basic iterator functionality
+        let mut iter = change_proof.iter();
+        assert_eq!(iter.len(), 3);
+
+        let first = iter.next().unwrap();
+        assert!(
+            matches!(first, BatchOp::Put { key, value } if **key == *b"key1" && **value == *b"value1"),
+        );
+
+        let second = iter.next().unwrap();
+        assert!(
+            matches!(second, BatchOp::Put { key, value } if **key == *b"key2" && **value == *b"value2"),
+        );
+
+        let third = iter.next().unwrap();
+        assert!(
+            matches!(third, BatchOp::Put { key, value } if **key == *b"key3" && **value == *b"value3"),
+        );
+
+        assert!(iter.next().is_none());
+    }
+
+    #[test]
+    #[expect(clippy::indexing_slicing)]
+    fn test_change_proof_into_iterator() {
+        let key_values: Box<[BatchOp<Key, Value>]> = Box::new([
+            BatchOp::Put {
+                key: b"a".to_vec().into_boxed_slice(),
+                value: b"alpha".to_vec().into_boxed_slice(),
+            },
+            BatchOp::Put {
+                key: b"b".to_vec().into_boxed_slice(),
+                value: b"beta".to_vec().into_boxed_slice(),
+            },
+        ]);
+
+        let start_proof = Proof::empty();
+        let end_proof = Proof::empty();
+        let change_proof = ChangeProof::new(start_proof, end_proof, key_values);
+
+        // Test that we can use for-loop syntax
+        let mut items = Vec::new();
+        for item in &change_proof {
+            items.push(item);
+        }
+
+        assert_eq!(items.len(), 2);
+        assert!(
+            matches!(items[0], BatchOp::Put{ key, value } if **key == *b"a" && **value == *b"alpha"),
+        );
+        assert!(
+            matches!(items[1], BatchOp::Put{ key, value } if **key == *b"b" && **value == *b"beta"),
+        );
+    }
+
+    #[test]
+    fn test_empty_change_proof_iterator() {
+        let key_values: Box<[BatchOp<Key, Value>]> = Box::new([]);
+        let start_proof = Proof::empty();
+        let end_proof = Proof::empty();
+        let change_proof = ChangeProof::new(start_proof, end_proof, key_values);
+
+        let mut iter = change_proof.iter();
+        assert_eq!(iter.len(), 0);
+        assert!(iter.next().is_none());
+
+        let items: Vec<_> = change_proof.into_iter().collect();
+        assert!(items.is_empty());
     }
 }
