@@ -86,9 +86,6 @@ enum ProposalState<'db> {
 #[derive(Debug)]
 #[expect(dead_code)]
 pub struct ChangeProofContext<'db> {
-    //_proof: (),              // currently not implemented
-    //_validation_context: (), // placeholder for future use
-    //_commit_context: (),     // placeholder for future use
     proof: FrozenChangeProof,
     verification: Option<VerificationContext>,
     proposal_state: Option<ProposalState<'db>>,
@@ -228,7 +225,6 @@ pub extern "C" fn fwd_db_change_proof<'db>(
     db: Option<&'db DatabaseHandle>,
     args: CreateChangeProofArgs<'db>,
 ) -> ChangeProofResult<'db> {
-    //CResult::from_err("not yet implemented")
     crate::invoke_with_handle(db, |db| {
         db.change_proof(
             args.start_root.into(),
