@@ -167,7 +167,8 @@ impl ReadableStorage for FileBacked {
 impl WritableStorage for FileBacked {
     fn write(&self, offset: u64, object: &[u8]) -> Result<usize, FileIoError> {
         self.fd
-            .write_at(object, offset)
+            .write_all_at(object, offset)
+            .map(|()| object.len())
             .map_err(|e| self.file_io_error(e, offset, Some("write".to_string())))
     }
 

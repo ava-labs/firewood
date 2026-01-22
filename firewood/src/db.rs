@@ -1284,7 +1284,7 @@ mod test {
         assert_eq!(&version, b"firewood-v1\0\0\0\0\0");
 
         // overwrite the magic string to simulate an older version
-        file.write_at(b"firewood 0.0.18\0", 0).unwrap();
+        file.write_all_at(b"firewood 0.0.18\0", 0).unwrap();
         drop(file);
 
         let testdb = testdb.reopen();
