@@ -2,7 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use super::*;
-use crate::range_proof::RangeProof;
+use crate::RangeProof;
 
 type KeyValuePairs = Vec<(Box<[u8]>, Box<[u8]>)>;
 

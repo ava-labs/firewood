@@ -30,7 +30,7 @@ coarsetime = "0.1"
 ```rust
 use firewood_macros::metrics;
 
-#[metrics("firewood.example")]
+#[metrics("example")]
 fn example() -> Result<Vec<Data>, DatabaseError> {
     // Your function implementation
     Ok(vec![])
@@ -40,7 +40,7 @@ fn example() -> Result<Vec<Data>, DatabaseError> {
 ### With Description
 
 ```rust
-#[metrics("firewood.example", "example operation")]
+#[metrics("example", "example operation")]
 fn example(user: User) -> Result<(), DatabaseError> {
     // Your function implementation
     Ok(())
@@ -59,14 +59,16 @@ Both metrics include a `success` label:
 - `success="true"` for `Ok(_)` results
 - `success="false"` for `Err(_)` results
 
+**Note**: Metrics are registered without a namespace prefix in code. When exported (via FFI or benchmark tools), the `firewood.` prefix is automatically added by the exporter layer.
+
 ### Example Output
 
-For `#[metrics("firewood.query", "data retrieval")]`:
+For `#[metrics("query", "data retrieval")]`:
 
-- `firewood.example{success="true"}` - Count of successful queries
-- `firewood.example{success="false"}` - Count of failed queries
-- `firewood.example_ms{success="true"}` - Timing of successful queries
-- `firewood.example_ms{success="false"}` - Timing of failed queries
+- `query{success="true"}` - Count of successful queries (exported as `firewood.query`)
+- `query{success="false"}` - Count of failed queries (exported as `firewood.query`)
+- `query_ms{success="true"}` - Timing of successful queries (exported as `firewood.query_ms`)
+- `query_ms{success="false"}` - Timing of failed queries (exported as `firewood.query_ms`)
 
 ## Requirements
 
@@ -149,7 +151,7 @@ fn my_function() -> Result<String, Error> {
 The crate includes comprehensive tests:
 
 ```bash
-cargo test -p firewood-macros
+cargo nextest -p firewood-macros
 ```
 
 ## License

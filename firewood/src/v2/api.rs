@@ -4,13 +4,12 @@
 use crate::manager::RevisionManagerError;
 use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
-use crate::proof::{Proof, ProofError, ProofNode};
+use crate::{Proof, ProofError, ProofNode, RangeProof};
 use firewood_storage::{FileIoError, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
-pub use crate::range_proof::RangeProof;
 pub use crate::v2::batch_op::{BatchIter, BatchOp, IntoBatchIter, KeyValuePair, TryIntoBatch};
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
@@ -173,6 +172,10 @@ pub enum Error {
     // Error converting a u8 index into a path component
     #[error("error converting a u8 index into a path component")]
     InvalidConversionToPathComponent,
+
+    // Feature not supported in this build
+    #[error("feature not supported in this build: {0}")]
+    FeatureNotSupported(String),
 }
 
 impl From<std::convert::Infallible> for Error {
@@ -184,7 +187,8 @@ impl From<std::convert::Infallible> for Error {
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
         use RevisionManagerError::{
-            FileIoError, NotLatest, RevisionNotFound, RevisionWithoutAddress, RootStoreError,
+            FileIoError, IOError, NotLatest, RevisionNotFound, RevisionWithoutAddress,
+            RootStoreError,
         };
         match err {
             NotLatest { provided, expected } => Self::ParentNotLatest { provided, expected },
@@ -193,6 +197,7 @@ impl From<RevisionManagerError> for Error {
             },
             RevisionWithoutAddress { provided } => Self::RevisionWithoutAddress { provided },
             FileIoError(io_err) => Self::FileIO(io_err),
+            IOError(err) => Self::IO(err),
             RootStoreError(err) => Self::RootStoreError(err),
         }
     }
@@ -247,10 +252,6 @@ pub trait Db {
     /// In that case, we return the special ethhash compatible empty trie hash.
     #[expect(clippy::missing_errors_doc)]
     fn root_hash(&self) -> Result<Option<TrieHash>, Error>;
-
-    /// Get all the hashes available
-    #[expect(clippy::missing_errors_doc)]
-    fn all_hashes(&self) -> Result<Vec<TrieHash>, Error>;
 
     /// Propose a change to the database via a batch
     ///
@@ -336,6 +337,13 @@ pub trait DbView {
     fn iter_from<K: KeyType>(&self, first_key: K) -> Result<Self::Iter<'_>, Error> {
         self.iter_option(Some(first_key))
     }
+
+    /// Dump the Trie structure in DOT (Graphviz) format
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the dump operation fails
+    fn dump_to_string(&self) -> Result<String, Error>;
 }
 
 /// A boxed iterator over key/value pairs.
@@ -404,6 +412,13 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     fn iter_from(&self, first_key: &[u8]) -> Result<BoxKeyValueIter<'_>, Error> {
         self.iter_option(Some(first_key))
     }
+
+    /// Dump the Trie structure in DOT (Graphviz) format
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the dump operation fails
+    fn dump_to_string(&self) -> Result<String, Error>;
 }
 
 impl<T: Debug + DbView + Send + Sync + 'static> DynDbView for T
@@ -438,6 +453,10 @@ where
             Ok(iter) => Ok(Box::new(iter)),
             Err(e) => Err(e),
         }
+    }
+
+    fn dump_to_string(&self) -> Result<String, Error> {
+        DbView::dump_to_string(self)
     }
 }
 

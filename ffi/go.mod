@@ -8,13 +8,14 @@ go 1.24
 //   - ffi/tests/eth/go.mod
 //   - ffi/tests/firewood/go.mod
 // `just check-golang-version` validates that these versions are in sync and will run in CI as part of the ffi-nix job.
-toolchain go1.24.9
+toolchain go1.24.11
 
 require (
 	github.com/prometheus/client_golang v1.22.0
 	github.com/prometheus/client_model v0.6.1
 	github.com/prometheus/common v0.62.0
 	github.com/stretchr/testify v1.10.0
+	github.com/vmihailenco/msgpack/v5 v5.4.1
 )
 
 require (
@@ -25,6 +26,7 @@ require (
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/procfs v0.15.1 // indirect
+	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	golang.org/x/sys v0.30.0 // indirect
 	google.golang.org/protobuf v1.36.5 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

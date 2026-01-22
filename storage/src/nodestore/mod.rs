@@ -40,23 +40,24 @@
 
 pub(crate) mod alloc;
 pub(crate) mod hash;
+pub(crate) mod hash_algo;
 pub(crate) mod header;
 pub(crate) mod persist;
-#[cfg(feature = "io-uring")]
-pub(crate) mod persist_io_uring;
 pub(crate) mod primitives;
 
+use crate::IntoHashType;
 use crate::linear::OffsetReader;
-use crate::logger::trace;
+use crate::logger::{debug, trace};
 use crate::node::branch::ReadSerializable as _;
+use firewood_metrics::firewood_increment;
 use smallvec::SmallVec;
 use std::fmt::Debug;
-use std::io::{Error, ErrorKind, Read};
+use std::io::{Error, ErrorKind};
 
 // Re-export types from alloc module
 pub use alloc::NodeAllocator;
+pub use hash_algo::{NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError};
 pub use primitives::{AreaIndex, LinearAddress};
-
 // Re-export types from header module
 pub use header::NodeStoreHeader;
 
@@ -107,21 +108,21 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     ///
     /// Returns a [`FileIoError`] if the header cannot be read or validated.
     pub fn open(storage: Arc<S>) -> Result<Self, FileIoError> {
-        let mut stream = storage.stream_from(0)?;
-        let mut header_bytes = vec![0u8; std::mem::size_of::<NodeStoreHeader>()];
-        if let Err(e) = stream.read_exact(&mut header_bytes) {
-            if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                return Ok(Self::new_empty_committed(storage.clone()));
+        // TODO(#1088): remove this after implementing runtime selection of hash algorithms
+        storage.node_hash_algorithm().validate_init().map_err(|e| {
+            storage.file_io_error(e, 0, Some("NodeHashAlgorithm::validate_init".to_string()))
+        })?;
+
+        let header = match NodeStoreHeader::read_from_storage(&*storage) {
+            Ok(header) => header,
+            Err(err) => {
+                return if matches!(err.kind(), ErrorKind::UnexpectedEof) {
+                    Ok(Self::new_empty_committed(storage))
+                } else {
+                    Err(err)
+                };
             }
-            return Err(storage.file_io_error(e, 0, Some("header read".to_string())));
-        }
-
-        drop(stream);
-
-        let header = *NodeStoreHeader::from_bytes(&header_bytes);
-        header
-            .validate()
-            .map_err(|e| storage.file_io_error(e, 0, Some("header read".to_string())))?;
+        };
 
         let mut nodestore = Self {
             header,
@@ -133,8 +134,15 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
         };
 
         if let Some(root_address) = header.root_address() {
-            let node = nodestore.read_node_from_disk(root_address, "open");
-            let root_hash = node.map(|n| hash_node(&n, &Path(SmallVec::default())))?;
+            let root_hash = if let Some(hash) = header.root_hash() {
+                hash.into_hash_type()
+            } else {
+                debug!("No root hash in header; computing from disk");
+                nodestore
+                    .read_node_from_disk(root_address, "open")
+                    .map(|n| hash_node(&n, &Path(SmallVec::default())))?
+            };
+
             nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
         }
 
@@ -144,7 +152,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// Create a new, empty, Committed [`NodeStore`] and clobber
     /// the underlying store with an empty freelist and no root node
     pub fn new_empty_committed(storage: Arc<S>) -> Self {
-        let header = NodeStoreHeader::new();
+        let header = NodeStoreHeader::new(storage.node_hash_algorithm());
 
         Self {
             header,
@@ -168,7 +176,10 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// not equal `root_hash`.
     #[must_use]
     pub fn with_root(root_hash: HashType, root_address: LinearAddress, storage: Arc<S>) -> Self {
-        let header = NodeStoreHeader::with_root(Some(root_address));
+        let header = NodeStoreHeader::with_root(
+            Some((root_address, root_hash.clone().into_triehash())),
+            storage.node_hash_algorithm(),
+        );
 
         let nodestore = NodeStore {
             header,
@@ -352,7 +363,7 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
     /// Panics if the header cannot be written.
     #[cfg(any(test, feature = "test_utils"))]
     pub fn new_empty_proposal(storage: Arc<S>) -> Self {
-        let header = NodeStoreHeader::new();
+        let header = NodeStoreHeader::new(storage.node_hash_algorithm());
         let header_bytes = bytemuck::bytes_of(&header);
         storage
             .write(0, header_bytes)
@@ -481,6 +492,8 @@ impl ImmutableProposal {
             && Arc::ptr_eq(parent, committing)
         {
             *guard = NodeStoreParent::Committed(committing.root_hash());
+            // Track reparenting events
+            firewood_increment!(crate::registry::REPARENTED_PROPOSAL_COUNT, 1);
         }
     }
 }
@@ -609,7 +622,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
 
         let Some(root) = kind.root else {
             // This trie is now empty.
-            nodestore.header.set_root_address(None);
+            nodestore.header.set_root_location(None);
             return Ok(nodestore);
         };
 
@@ -695,6 +708,16 @@ where
 
     fn root_hash(&self) -> Option<TrieHash> {
         self.kind.root_hash()
+    }
+}
+
+impl<T: HashedNodeReader> HashedNodeReader for &T {
+    fn root_address(&self) -> Option<LinearAddress> {
+        (**self).root_address()
+    }
+
+    fn root_hash(&self) -> Option<TrieHash> {
+        (**self).root_hash()
     }
 }
 
@@ -927,7 +950,7 @@ mod tests {
     #[test]
     fn test_reparent() {
         // create an empty base revision
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let base = NodeStore::new_empty_committed(memstore.into());
 
         // create an empty r1, check that it's parent is the empty committed version
@@ -960,8 +983,8 @@ mod tests {
     }
 
     #[test]
-    fn giant_node() {
-        let memstore = Arc::new(MemStore::new(vec![]));
+    fn test_slow_giant_node() {
+        let memstore = Arc::new(MemStore::default());
         let empty_root = NodeStore::new_empty_committed(Arc::clone(&memstore));
 
         let mut node_store = NodeStore::new(&empty_root).unwrap();
@@ -1024,6 +1047,7 @@ mod tests {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
         )?))?;
 
         let mut proposal = NodeStore::new(&nodestore)?;

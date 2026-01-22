@@ -65,7 +65,6 @@ impl From<LeafNode> for Node {
     }
 }
 
-#[cfg(not(feature = "branch_factor_256"))]
 bitfield! {
     struct BranchFirstByte(u8);
     impl Debug;
@@ -75,20 +74,7 @@ bitfield! {
     number_children, set_number_children: 5, 2;
     partial_path_length, set_partial_path_length: 7, 6;
 }
-#[cfg(not(feature = "branch_factor_256"))]
 const BRANCH_PARTIAL_PATH_LEN_OVERFLOW: u8 = (1 << 2) - 1; // 3 nibbles
-
-#[cfg(feature = "branch_factor_256")]
-bitfield! {
-    struct BranchFirstByte(u8);
-    impl Debug;
-    impl new;
-    u8;
-    has_value, set_has_value: 1, 1;
-    partial_path_length, set_partial_path_length: 7, 2;
-}
-#[cfg(feature = "branch_factor_256")]
-const BRANCH_PARTIAL_PATH_LEN_OVERFLOW: u8 = (1 << 6) - 1; // 63 nibbles
 
 bitfield! {
     struct LeafFirstByte(u8);
@@ -207,9 +193,8 @@ impl Node {
     ///  - Byte 0:
     ///   - Bit 0: always 0
     ///   - Bit 1: indicates if the branch has a value
-    ///   - Bits 2-5: the number of children (unless `branch_factor_256`, which stores it in the next byte)
+    ///   - Bits 2-5: the number of children
     ///   - Bits 6-7: 0: empty `partial_path`, 1: 1 nibble, 2: 2 nibbles, 3: length is encoded in the next byte
-    ///     (for `branch_factor_256`, bits 2-7 are used for `partial_path` length, up to 63 nibbles)
     ///
     /// The remaining bytes are in the following order:
     ///   - The partial path, possibly preceeded by the length if it is longer than 3 nibbles (varint encoded)
@@ -247,23 +232,17 @@ impl Node {
                     _ => BRANCH_PARTIAL_PATH_LEN_OVERFLOW,
                 };
 
-                #[cfg(not(feature = "branch_factor_256"))]
                 let first_byte: BranchFirstByte = BranchFirstByte::new(
                     u8::from(b.value.is_some()),
                     (childcount % BranchNode::MAX_CHILDREN) as u8,
                     pp_len,
                 );
-                #[cfg(feature = "branch_factor_256")]
-                let first_byte: BranchFirstByte =
-                    BranchFirstByte::new(u8::from(b.value.is_some()), pp_len);
 
                 // create an output stack item, which can overflow to memory for very large branch nodes
                 const OPTIMIZE_BRANCHES_FOR_SIZE: usize = 1024;
                 encoded.reserve(OPTIMIZE_BRANCHES_FOR_SIZE);
                 encoded.push(prefix.get());
                 encoded.push(first_byte.0);
-                #[cfg(feature = "branch_factor_256")]
-                encoded.push((childcount % BranchNode::MAX_CHILDREN) as u8);
 
                 // encode the partial path, including the length if it didn't fit above
                 if pp_len == BRANCH_PARTIAL_PATH_LEN_OVERFLOW {
@@ -347,10 +326,7 @@ impl Node {
                 let branch_first_byte = BranchFirstByte(branch_first_byte);
 
                 let has_value = branch_first_byte.has_value() == 1;
-                #[cfg(not(feature = "branch_factor_256"))]
                 let childcount = branch_first_byte.number_children() as usize;
-                #[cfg(feature = "branch_factor_256")]
-                let childcount = serialized.read_byte()? as usize;
 
                 let partial_path = read_path_with_overflow_length(
                     &mut serialized,
@@ -580,18 +556,14 @@ than 126 bytes as the length would be encoded in multiple bytes.
     // When ethhash is enabled, we don't actually check the `expected_length`
     fn test_serialize_deserialize(
         node: Node,
-        #[cfg_attr(
-            any(feature = "branch_factor_256", feature = "ethhash"),
-            expect(unused_variables)
-        )]
-        expected_length: usize,
+        #[cfg_attr(feature = "ethhash", expect(unused_variables))] expected_length: usize,
     ) {
         use crate::node::Node;
         use std::io::Cursor;
 
         let mut serialized = Vec::new();
         node.as_bytes(AreaIndex::MIN, &mut serialized);
-        #[cfg(not(any(feature = "branch_factor_256", feature = "ethhash")))]
+        #[cfg(not(feature = "ethhash"))]
         assert_eq!(serialized.len(), expected_length);
         let mut cursor = Cursor::new(&serialized);
         cursor.set_position(1);

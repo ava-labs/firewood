@@ -9,6 +9,7 @@ Before running the script, you'll need:
 - AWS CLI installed and configured on your machine
 - Authenticated AWS session: `aws sso login`
   - Your session should be configured to use the `Experimental` account.
+  - This must either be the AWS default or named and passed to this script as `--profile PROFILE`.
 
 ## What It Does
 
@@ -20,7 +21,6 @@ The `aws-launch.sh` script automatically:
 4. Clones and builds:
    - Firewood (from specified branch or default)
    - AvalancheGo (from specified branch or default)
-   - Coreth (from specified branch or default)
    - LibEVM (from specified branch or default)
 5. Downloads pre-existing blockchain data from S3 (1M, 10M, or 50M blocks)
 6. Executes the bootstrapping benchmark to test Firewood's performance
@@ -48,7 +48,7 @@ For a complete list of options, run:
 ### Test multiple component branches together
 
 ```bash
-./aws-launch.sh --firewood-branch my-firewood-branch --avalanchego-branch develop --coreth-branch foo --libevm-branch bar
+./aws-launch.sh --firewood-branch my-firewood-branch --avalanchego-branch foo --libevm-commit bar
 ```
 
 ### Preview a configuration without launching

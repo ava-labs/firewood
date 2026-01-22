@@ -8,14 +8,16 @@ mod ethhash;
 // TODO: get the hashes from merkledb and verify compatibility with branch factor 256
 mod proof;
 mod range;
-#[cfg(not(any(feature = "ethhash", feature = "branch_factor_256")))]
+#[cfg(not(feature = "ethhash"))]
 mod triehash;
 
 use std::collections::HashMap;
 use std::fmt::Write;
 
 use super::*;
-use firewood_storage::{Committed, MemStore, MutableProposal, NodeStore, RootReader, TrieHash};
+use firewood_storage::{
+    Committed, MemStore, MutableProposal, NodeHashAlgorithm, NodeStore, RootReader, TrieHash,
+};
 
 // Returns n random key-value pairs.
 fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<u8>, Vec<u8>)> {
@@ -37,11 +39,8 @@ fn into_committed(
     merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
     parent: &NodeStore<Committed, MemStore>,
 ) -> Merkle<NodeStore<Committed, MemStore>> {
-    let ns = merkle.into_inner();
-    ns.flush_freelist().unwrap();
-    ns.flush_header().unwrap();
-    let mut ns = ns.as_committed(parent);
-    ns.flush_nodes().unwrap();
+    let mut ns = merkle.into_inner().as_committed(parent);
+    ns.persist().unwrap();
     ns.into()
 }
 
@@ -51,7 +50,10 @@ where
     K: AsRef<[u8]>,
     V: AsRef<[u8]>,
 {
-    let memstore = Arc::new(MemStore::new(Vec::with_capacity(64 * 1024)));
+    let memstore = Arc::new(MemStore::new(
+        Vec::with_capacity(64 * 1024),
+        NodeHashAlgorithm::compile_option(),
+    ));
     let base = Merkle::from(NodeStore::new_empty_committed(memstore.clone()));
     let mut merkle = base.fork().unwrap();
 
@@ -167,7 +169,7 @@ fn insert_one() {
 }
 
 fn create_in_memory_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
-    let memstore = MemStore::new(vec![]);
+    let memstore = MemStore::default();
 
     let nodestore = NodeStore::new_empty_proposal(memstore.into());
 
@@ -631,8 +633,7 @@ fn test_root_hash_fuzz_insertions() -> Result<(), FileIoError> {
         key
     };
 
-    // TODO: figure out why this fails if we use more than 27 iterations with branch_factor_256
-    for _ in 0..27 {
+    for _ in 0..32 {
         let mut items = Vec::new();
 
         for _ in 0..100 {

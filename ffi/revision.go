@@ -72,9 +72,13 @@ func (r *Revision) Get(key []byte) ([]byte, error) {
 	))
 }
 
-// Iter creates an iterator starting from the provided key on revision.
-// pass empty slice to start from beginning
-// It returns ErrDroppedRevision if Drop has already been called.
+// Iter creates an [Iterator] over the key-value pairs in this revision,
+// starting at the first key greater than or equal to the provided key.
+// Pass nil or an empty slice to iterate from the beginning.
+//
+// The Iterator must be released with [Iterator.Drop] when no longer needed.
+//
+// It returns [ErrDroppedRevision] if Drop has already been called.
 func (r *Revision) Iter(key []byte) (*Iterator, error) {
 	if r.handle == nil {
 		return nil, ErrDroppedRevision
@@ -109,6 +113,23 @@ func (r *Revision) Drop() error {
 // Root returns the root hash of the revision.
 func (r *Revision) Root() Hash {
 	return r.root
+}
+
+// Dump returns a DOT (Graphviz) format representation of the trie structure
+// of this revision for debugging purposes.
+//
+// Returns ErrDroppedRevision if Drop has already been called.
+func (r *Revision) Dump() (string, error) {
+	if r.handle == nil {
+		return "", ErrDroppedRevision
+	}
+
+	bytes, err := getValueFromValueResult(C.fwd_revision_dump(r.handle))
+	if err != nil {
+		return "", err
+	}
+
+	return string(bytes), nil
 }
 
 // getRevisionFromResult converts a C.RevisionResult to a Revision or error.

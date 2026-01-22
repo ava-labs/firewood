@@ -41,7 +41,7 @@ pub struct Options {
 }
 
 pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
-    let db_path = PathBuf::from(&opts.database.dbpath);
+    let db_path = PathBuf::from(&opts.database.dbpath).join("firewood.db");
     let node_cache_size = nonzero!(1usize);
     let free_list_cache_size = nonzero!(1usize);
 
@@ -52,6 +52,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         false,
         false,                         // don't create if missing
         CacheReadStrategy::WritesOnly, // we scan the database once - no need to cache anything
+        opts.database.node_hash_algorithm.into(),
     )?;
     let storage = Arc::new(fb);
 

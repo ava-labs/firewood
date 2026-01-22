@@ -5,13 +5,18 @@ set +e
 INSTANCE_TYPE=i4g.large
 FIREWOOD_BRANCH=""
 AVALANCHEGO_BRANCH=""
-CORETH_BRANCH=""
-LIBEVM_COMMIT=""
+LIBEVM_BRANCH=""
 NBLOCKS="1m"
 CONFIG="firewood"
+PROFILE=""
+METRICS_SERVER="true"
 REGION="us-west-2"
 DRY_RUN=false
 SPOT_INSTANCE=false
+SHOW_INSTANCES=false
+TERMINATE_MINE=false
+TERMINATE_INSTANCES=()
+COMMON_ARGS=()
 
 # Valid instance types and their architectures
 declare -A VALID_INSTANCES=(
@@ -22,7 +27,7 @@ declare -A VALID_INSTANCES=(
     ["m6id.xlarge"]="amd64"
     ["c6gd.2xlarge"]="arm64"
     ["x2gd.xlarge"]="arm64"
-    ["m5ad.2xlarge"]="arm64"
+    ["m5ad.2xlarge"]="amd64"
     ["r6gd.2xlarge"]="arm64"
     ["r6id.2xlarge"]="amd64"
     ["x2gd.2xlarge"]="arm64"
@@ -58,25 +63,29 @@ show_usage() {
     echo "  --instance-type TYPE        EC2 instance type (default: i4g.large)"
     echo "  --firewood-branch BRANCH    Firewood git branch to checkout"
     echo "  --avalanchego-branch BRANCH AvalancheGo git branch to checkout"
-    echo "  --coreth-branch BRANCH      Coreth git branch to checkout"
-    echo "  --libevm-commit COMMIT      LibEVM git commit to checkout"
+    echo "  --libevm-branch BRANCH      LibEVM git branch to checkout"
     echo "  --nblocks BLOCKS            Number of blocks to download (default: 1m)"
     echo "  --config CONFIG             The VM reexecution config to use (default: firewood)"
+    echo "  --profile PROFILE           AWS CLI profile to use (default: AWS default)"
+    echo "  --metrics-server BOOL       Enable metrics server (true/false, default: true)"
     echo "  --region REGION             AWS region (default: us-west-2)"
     echo "  --spot                      Use spot instance pricing (default depends on instance type)"
     echo "  --dry-run                   Show the aws command that would be run without executing it"
+    echo "  --show                      Show currently running instances in the region"
+    echo "  --terminate-mine            Terminate all running instances created by current user"
+    echo "  --terminate ID [ID...]      Terminate specific instance(s) by instance ID"
     echo "  --help                      Show this help message"
     echo ""
     echo "Valid instance types:"
     echo "  # name         Type  disk vcpu memory   $/hr    notes"
     echo "  i4g.large      arm64 468  2    16 GiB   \$0.1544 Graviton2-powered"
     echo "  i4i.large      amd64 468  2    16 GiB   \$0.1720 Intel Xeon Scalable"
-    echo "  m6id.xlarge    arm64 237  4    16 GiB   \$0.2373 Intel Xeon Scalable"
+    echo "  m6id.xlarge    amd64 237  4    16 GiB   \$0.2373 Intel Xeon Scalable"
     echo "  c6gd.2xlarge   arm64 474  8    16 GiB   \$0.3072 Graviton2 compute-optimized"
     echo "  i4g.xlarge     arm64 937  4    32 GiB   \$0.3088 Graviton2-powered"
     echo "  i4i.xlarge     amd64 937  4    32 GiB   \$0.3440 Intel Xeon Scalable"
     echo "  x2gd.xlarge    arm64 237  4    64 GiB   \$0.3340 Graviton2 memory-optimized"
-    echo "  m5ad.2xlarge   arm64 300  8    32 GiB   \$0.4120 AMD EPYC processors"
+    echo "  m5ad.2xlarge   amd64 300  8    32 GiB   \$0.4120 AMD EPYC processors"
     echo "  r6gd.2xlarge   arm64 474  8    64 GiB   \$0.4608 Graviton2 memory-optimized"
     echo "  r6id.2xlarge   amd64 474  8    64 GiB   \$0.6048 Intel Xeon Scalable"
     echo "  x2gd.2xlarge   arm64 475  8    128 GiB  \$0.6680 Graviton2 memory-optimized"
@@ -106,12 +115,8 @@ while [[ $# -gt 0 ]]; do
             AVALANCHEGO_BRANCH="$2"
             shift 2
             ;;
-        --coreth-branch)
-            CORETH_BRANCH="$2"
-            shift 2
-            ;;
-        --libevm-commit)
-            LIBEVM_COMMIT="$2"
+        --libevm-branch)
+            LIBEVM_BRANCH="$2"
             shift 2
             ;;
         --nblocks)
@@ -128,6 +133,21 @@ while [[ $# -gt 0 ]]; do
             CONFIG="$2"
             shift 2
             ;;
+        --profile)
+            PROFILE="$2"
+            shift 2
+            ;;
+        --metrics-server)
+            # Normalize to lowercase
+            METRICS_SERVER="${2,,}"
+            # Validate boolean value
+            if [[ "$METRICS_SERVER" != "true" && "$METRICS_SERVER" != "false" ]]; then
+                echo "Error: Invalid --metrics-server value '$2'"
+                echo "Valid values: true, false"
+                exit 1
+            fi
+            shift 2
+            ;;
         --region)
             REGION="$2"
             shift 2
@@ -139,6 +159,26 @@ while [[ $# -gt 0 ]]; do
         --dry-run)
             DRY_RUN=true
             shift
+            ;;
+        --show)
+            SHOW_INSTANCES=true
+            shift
+            ;;
+        --terminate-mine)
+            TERMINATE_MINE=true
+            shift
+            ;;
+        --terminate)
+            shift
+            # Collect all following arguments as instance IDs until we hit another flag or end
+            while [[ $# -gt 0 ]] && [[ ! $1 =~ ^-- ]]; do
+                TERMINATE_INSTANCES+=("$1")
+                shift
+            done
+            if [[ ${#TERMINATE_INSTANCES[@]} -eq 0 ]]; then
+                echo "Error: --terminate requires at least one instance ID"
+                exit 1
+            fi
             ;;
         --help)
             show_usage
@@ -152,6 +192,78 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+if [ -n "$PROFILE" ]; then
+    COMMON_ARGS+=("--profile" "$PROFILE")
+fi
+COMMON_ARGS+=("--region" "$REGION")
+
+# Handle --terminate option
+if [ ${#TERMINATE_INSTANCES[@]} -gt 0 ]; then
+    # Check if any incompatible options are present
+    if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || \
+       [ -n "$LIBEVM_BRANCH" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
+       [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ] || \
+       [ "$SHOW_INSTANCES" = true ] || [ "$TERMINATE_MINE" = true ]; then
+        echo "Error: --terminate cannot be used with other options except --profile and --region"
+        exit 1
+    fi
+    
+    echo "Terminating instances: ${TERMINATE_INSTANCES[*]}"
+    aws ec2 terminate-instances \
+      "${COMMON_ARGS[*]}" \
+      --instance-ids "${TERMINATE_INSTANCES[@]}"
+    exit 0
+fi
+
+# Handle --terminate-mine option
+if [ "$TERMINATE_MINE" = true ]; then
+    # Check if any incompatible options are present
+    if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || \
+       [ -n "$LIBEVM_BRANCH" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
+       [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ] || \
+       [ "$SHOW_INSTANCES" = true ]; then
+        echo "Error: --terminate-mine cannot be used with other options except --profile and --region"
+        exit 1
+    fi
+    
+    # Get instances created by current user (Name tag starts with username)
+    INSTANCE_IDS=$(aws ec2 describe-instances \
+      ${COMMON_ARGS[*]} \
+      --filters "Name=tag:Name,Values=$USER-*" "Name=instance-state-name,Values=running" \
+      --query "Reservations[*].Instances[*].InstanceId" \
+      --output text)
+    
+    if [ -z "$INSTANCE_IDS" ]; then
+        echo "No running instances found for user: $USER"
+        exit 0
+    fi
+    
+    echo "Terminating instances for user $USER: $INSTANCE_IDS"
+    aws ec2 terminate-instances \
+      ${COMMON_ARGS[*]} \
+      --instance-ids $INSTANCE_IDS
+    exit 0
+fi
+
+# Handle --show option
+if [ "$SHOW_INSTANCES" = true ]; then
+    # Check if any incompatible options are present
+    if [ -n "$FIREWOOD_BRANCH" ] || [ -n "$AVALANCHEGO_BRANCH" ] || \
+       [ -n "$LIBEVM_BRANCH" ] || [ "$INSTANCE_TYPE" != "i4g.large" ] || [ "$NBLOCKS" != "1m" ] || \
+       [ "$CONFIG" != "firewood" ] || [ "$DRY_RUN" = true ] || [ "$SPOT_INSTANCE" = true ]; then
+        echo "Error: --show cannot be used with other options except --region"
+        exit 1
+    fi
+    
+    # Execute the AWS command to show instances
+    aws ec2 describe-instances \
+      ${COMMON_ARGS[*]} \
+      --filters "Name=key-name,Values=rkuris" "Name=instance-state-name,Values=running" \
+      --query "Reservations[*].Instances[?PublicIpAddress!=null].[InstanceId, LaunchTime, PublicIpAddress, InstanceType, Tags[?Key=='Name']|[0].Value]" \
+      --output json | jq -r '.[][] | @sh'
+    exit 0
+fi
+
 # Set architecture type based on instance type
 TYPE=${VALID_INSTANCES[$INSTANCE_TYPE]}
 
@@ -159,10 +271,11 @@ echo "Configuration:"
 echo "  Instance Type: $INSTANCE_TYPE ($TYPE)"
 echo "  Firewood Branch: ${FIREWOOD_BRANCH:-default}"
 echo "  AvalancheGo Branch: ${AVALANCHEGO_BRANCH:-default}"
-echo "  Coreth Branch: ${CORETH_BRANCH:-default}"
-echo "  LibEVM Commit: ${LIBEVM_COMMIT:-default}"
+echo "  LibEVM Branch: ${LIBEVM_BRANCH:-default}"
 echo "  Number of Blocks: $NBLOCKS"
 echo "  Config: $CONFIG"
+echo "  AWS Profile: $PROFILE"
+echo "  Metrics Server: $METRICS_SERVER"
 echo "  Region: $REGION"
 if [ "$SPOT_INSTANCE" = true ]; then
     echo "  Spot Instance: Yes (max price: \$${MAX_SPOT_PRICES[$INSTANCE_TYPE]})"
@@ -181,7 +294,7 @@ if [ "$DRY_RUN" = true ]; then
 else
     # find the latest ubuntu-noble base image ID (only works for intel processors)
     AMI_ID=$(aws ec2 describe-images \
-        --region "$REGION" \
+        ${COMMON_ARGS[*]} \
         --owners 099720109477 \
         --filters "Name=name,Values=ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-$TYPE-server-*" \
                   "Name=state,Values=available" \
@@ -194,7 +307,6 @@ if [ "$DRY_RUN" = false ]; then
     # Prepare branch arguments for cloud-init
 FIREWOOD_BRANCH_ARG=""
 AVALANCHEGO_BRANCH_ARG=""
-CORETH_BRANCH_ARG=""
 
 if [ -n "$FIREWOOD_BRANCH" ]; then
     FIREWOOD_BRANCH_ARG="--branch $FIREWOOD_BRANCH"
@@ -202,12 +314,9 @@ fi
 if [ -n "$AVALANCHEGO_BRANCH" ]; then
     AVALANCHEGO_BRANCH_ARG="--branch $AVALANCHEGO_BRANCH"
 fi
-if [ -n "$CORETH_BRANCH" ]; then
-    CORETH_BRANCH_ARG="--branch $CORETH_BRANCH"
-fi
 
-# For libevm, default to main branch if no commit specified
-LIBEVM_COMMIT_CHECKOUT="${LIBEVM_COMMIT:-main}"
+# For libevm, default to main branch if no branch specified
+LIBEVM_BRANCH_CHECKOUT="${LIBEVM_BRANCH:-main}"
 
 # set up this script to run at startup, installing a few packages, creating user accounts,
 # and downloading the blocks for the C-chain
@@ -253,7 +362,7 @@ users:
     shell: /usr/bin/bash
     sudo: "ALL=(ALL) NOPASSWD:ALL"
     ssh_authorized_keys:
-      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFuwpEMnsBLdfr7V9SFRTm9XWHEFX3yQQP7nmsFHetBo cardno:26_763_547 brandon
+      - ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHWuCq/y50S0yFPJQEAifeeN4n6EL3IlUuYbAdk2w2kL cardno:33_731_913 brandon
   - name: amin
     lock_passwd: true
     groups: users, adm, sudo
@@ -319,38 +428,31 @@ runcmd:
   # install go and grafana
   - bash /mnt/nvme/ubuntu/firewood/benchmark/setup-scripts/install-golang.sh
   - bash /mnt/nvme/ubuntu/firewood/benchmark/setup-scripts/install-grafana.sh
-  # install task, avalanchego, coreth
+  # install task, avalanchego, libevm
   - snap install task --classic
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu
     git clone --depth 100 __AVALANCHEGO_BRANCH_ARG__ https://github.com/ava-labs/avalanchego.git
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu
-    git clone --depth 100 __CORETH_BRANCH_ARG__ https://github.com/ava-labs/coreth.git
-  - >
-    sudo -u ubuntu -D /mnt/nvme/ubuntu
     git clone https://github.com/ava-labs/libevm.git
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu/libevm
-    git checkout __LIBEVM_COMMIT__
-  # force coreth to use the checked-out versions of libevm and firewood
+    git checkout __LIBEVM_BRANCH__
+  # force coreth to use the checked-out version of firewood and libevm
   - >
-    sudo -u ubuntu -D /mnt/nvme/ubuntu/coreth
+    sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego/graft/coreth
     /usr/local/go/bin/go mod edit -replace
-    github.com/ava-labs/firewood-go-ethhash/ffi=../firewood/ffi
+    github.com/ava-labs/firewood-go-ethhash/ffi=../../../firewood/ffi
   - >
-    sudo -u ubuntu -D /mnt/nvme/ubuntu/coreth
+    sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego/graft/coreth
     /usr/local/go/bin/go mod edit -replace
-    github.com/ava-labs/libevm=../libevm
-  # force avalanchego to use the checked-out versions of coreth, libevm, and firewood
-  - >
-    sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego
-    /usr/local/go/bin/go mod edit -replace
-    github.com/ava-labs/firewood-go-ethhash/ffi=../firewood/ffi
+    github.com/ava-labs/libevm=../../../libevm
+  # force avalanchego to use the checked-out versions of libevm and firewood
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego
     /usr/local/go/bin/go mod edit -replace
-    github.com/ava-labs/coreth=../coreth
+    github.com/ava-labs/firewood-go-ethhash/ffi=../firewood/ffi
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego
     /usr/local/go/bin/go mod edit -replace
@@ -362,7 +464,7 @@ runcmd:
     --features ethhash,logger
     > /mnt/nvme/ubuntu/firewood/build.log 2>&1
   # run go mod tidy for coreth and avalanchego
-  - sudo -u ubuntu --login -D /mnt/nvme/ubuntu/coreth go mod tidy
+  - sudo -u ubuntu --login -D /mnt/nvme/ubuntu/avalanchego/graft/coreth go mod tidy
   - sudo -u ubuntu --login -D /mnt/nvme/ubuntu/avalanchego go mod tidy
   # build avalanchego
   - >
@@ -379,7 +481,7 @@ runcmd:
   # execute bootstrapping
   - >
     sudo -u ubuntu -D /mnt/nvme/ubuntu/avalanchego --login
-    time task reexecute-cchain-range CURRENT_STATE_DIR=/mnt/nvme/ubuntu/exec-data/current-state BLOCK_DIR=/mnt/nvme/ubuntu/exec-data/blocks START_BLOCK=1 END_BLOCK=__END_BLOCK__ CONFIG=__CONFIG__ METRICS_ENABLED=false
+    time METRICS_SERVER_ENABLED=__METRICS_SERVER__ CURRENT_STATE_DIR=/mnt/nvme/ubuntu/exec-data/current-state BLOCK_DIR=/mnt/nvme/ubuntu/exec-data/blocks START_BLOCK=1 END_BLOCK=__END_BLOCK__ CONFIG=__CONFIG__ task test-cchain-reexecution
     > /var/log/bootstrap.log 2>&1
 END_HEREDOC
 )
@@ -396,18 +498,19 @@ esac
 USERDATA=$(echo "$USERDATA_TEMPLATE" | \
   sed "s|__FIREWOOD_BRANCH_ARG__|$FIREWOOD_BRANCH_ARG|g" | \
   sed "s|__AVALANCHEGO_BRANCH_ARG__|$AVALANCHEGO_BRANCH_ARG|g" | \
-  sed "s|__CORETH_BRANCH_ARG__|$CORETH_BRANCH_ARG|g" | \
-  sed "s|__LIBEVM_COMMIT__|$LIBEVM_COMMIT_CHECKOUT|g" | \
+  sed "s|__LIBEVM_BRANCH__|$LIBEVM_BRANCH_CHECKOUT|g" | \
   sed "s|__NBLOCKS__|$NBLOCKS|g" | \
   sed "s|__END_BLOCK__|$END_BLOCK|g" | \
   sed "s|__CONFIG__|$CONFIG|g" | \
+  sed "s|__METRICS_SERVER__|$METRICS_SERVER|g" | \
   base64)
 export USERDATA
 
 fi  # End of DRY_RUN=false conditional
 
 
-SUFFIX=$(hexdump -vn4 -e'4/4 "%08X" 1 "\n"' /dev/urandom)
+# Generate a compact 8-hex-digit suffix without spaces/newlines
+SUFFIX=$(hexdump -vn4 -e '1/4 "%08X"' /dev/urandom)
 
 # Build instance name with branch info
 INSTANCE_NAME="$USER-fw-$SUFFIX"
@@ -417,11 +520,8 @@ fi
 if [ -n "$AVALANCHEGO_BRANCH" ]; then
     INSTANCE_NAME="$INSTANCE_NAME-ag-$AVALANCHEGO_BRANCH"
 fi
-if [ -n "$CORETH_BRANCH" ]; then
-    INSTANCE_NAME="$INSTANCE_NAME-ce-$CORETH_BRANCH"
-fi
-if [ -n "$LIBEVM_COMMIT" ]; then
-    INSTANCE_NAME="$INSTANCE_NAME-le-$LIBEVM_COMMIT"
+if [ -n "$LIBEVM_BRANCH" ]; then
+    INSTANCE_NAME="$INSTANCE_NAME-le-$LIBEVM_BRANCH"
 fi
 
 # Build spot instance market options if requested
@@ -434,8 +534,7 @@ fi
 if [ "$DRY_RUN" = true ]; then
     echo "DRY RUN - Would execute the following command:"
     echo ""
-    echo "aws ec2 run-instances \\"
-    echo "  --region \"$REGION\" \\"
+    echo "aws ec2 run-instances ${COMMON_ARGS[*]} \\"
     echo "  --image-id \"$AMI_ID\" \\"
     echo "  --count 1 \\"
     echo "  --instance-type $INSTANCE_TYPE \\"
@@ -456,6 +555,7 @@ else
     set -e
     # Build the AWS command with conditional spot options
     AWS_CMD="aws ec2 run-instances \
+        ${COMMON_ARGS[*]} \
       --region \"$REGION\" \
       --image-id \"$AMI_ID\" \
       --count 1 \
@@ -481,7 +581,7 @@ else
 fi
 
 if [ "$DRY_RUN" = false ]; then
-    # IP=$(aws ec2 describe-instances --instance-ids "$INSTANCE_ID" --query 'Reservations[].Instances[].PublicIpAddress' --output text)
+    # IP=$(aws ec2 describe-instances --profile "$PROFILE" --instance-ids "$INSTANCE_ID" --query 'Reservations[].Instances[].PublicIpAddress' --output text)
     set +e
 
     #IP=$(echo "$JSON" | jq -r '.PublicIpAddress')

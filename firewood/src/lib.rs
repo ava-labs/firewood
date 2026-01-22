@@ -115,11 +115,6 @@
     )
 )]
 
-#[cfg(all(feature = "ethhash", feature = "branch_factor_256"))]
-compile_error!(
-    "feature \"ethhash\" and feature \"branch_factor_256\" cannot be enabled at the same time"
-);
-
 /// Database module for Firewood.
 pub mod db;
 
@@ -132,18 +127,34 @@ pub mod manager;
 /// Merkle module, containing merkle operations
 pub mod merkle;
 
-/// Proof module
-pub mod proof;
+/// Metrics registry for firewood layer metrics
+pub mod registry;
 
-/// Change, Range, and Key proofs for the Merkle Trie
-// TODO: push `proof` and `range_proof` modules into this module
+/// Cryptographic proof system for Merkle tries.
+///
+/// This module provides types and functionality for creating and verifying proofs
+/// of key-value pairs in Firewood's Merkle trie. For convenience, the most commonly
+/// used types are re-exported at the crate root level.
+///
+/// # Recommended Usage
+///
+/// Import proof types directly from the crate root rather than through this module:
+///
+/// ```rust,ignore
+/// use firewood::{Proof, ProofNode, RangeProof};  // Recommended
+/// // instead of
+/// use firewood::proofs::{Proof, ProofNode, RangeProof};  // Also works
+/// ```
 pub mod proofs;
+
+// Re-export commonly used proof types at the crate root for ergonomic access
+pub use proofs::{
+    EmptyProofCollection, InvalidHeader, Proof, ProofCollection, ProofError, ProofNode, ProofType,
+    RangeProof, ReadError,
+};
 
 // Re-export the proc macro from firewood-macros
 pub use firewood_macros::metrics;
-
-/// Range proof module
-pub mod range_proof;
 
 /// Root store module
 pub mod root_store;

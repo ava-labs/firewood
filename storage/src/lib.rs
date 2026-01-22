@@ -26,6 +26,7 @@ mod checker;
 mod hashednode;
 mod hashedshunt;
 mod hashers;
+mod hashtype;
 mod iter;
 mod linear;
 mod node;
@@ -33,7 +34,6 @@ mod nodestore;
 mod path;
 #[cfg(any(test, feature = "test_utils"))]
 mod test_utils;
-mod trie_hash;
 mod tries;
 mod u4;
 
@@ -43,27 +43,27 @@ pub mod logger;
 #[macro_use]
 /// Macros module for defining macros used in the storage module
 pub mod macros;
+
+/// Metrics registry for storage layer metrics
+pub mod registry;
 // re-export these so callers don't need to know where they are
 pub use checker::{CheckOpt, CheckerReport, DBStats, FreeListsStats, TrieStats};
 pub use hashednode::{Hashable, Preimage, ValueDigest, hash_node, hash_preimage};
 pub use hashedshunt::HashableShunt;
+pub use hashtype::{HashType, IntoHashType, InvalidTrieHashLength, TrieHash};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
-pub use node::{
-    BranchNode, Child, Children, ChildrenSlots, LeafNode, Node, PathIterItem,
-    branch::{HashType, IntoHashType},
-};
+pub use node::{BranchNode, Child, Children, ChildrenSlots, LeafNode, Node, PathIterItem};
 pub use nodestore::{
     AreaIndex, Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal,
-    NodeReader, NodeStore, Parentable, RootReader, TrieReader,
+    NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError, NodeReader, NodeStore, Parentable,
+    RootReader, TrieReader,
 };
 pub use path::{
-    ComponentIter, IntoSplitPath, JoinedPath, PartialPath, PathBuf, PathCommonPrefix,
-    PathComponent, PathComponentSliceExt, PathGuard, SplitPath, TriePath, TriePathAsPackedBytes,
-    TriePathFromPackedBytes, TriePathFromUnpackedBytes,
+    ComponentIter, IntoSplitPath, JoinedPath, PackedBytes, PackedPathComponents, PackedPathRef,
+    PartialPath, PathBuf, PathCommonPrefix, PathComponent, PathComponentSliceExt, PathGuard,
+    SplitPath, TriePath, TriePathAsPackedBytes, TriePathFromPackedBytes, TriePathFromUnpackedBytes,
 };
-#[cfg(not(feature = "branch_factor_256"))]
-pub use path::{PackedBytes, PackedPathComponents, PackedPathRef};
 pub use tries::{
     DuplicateKeyError, HashedKeyValueTrieRoot, HashedTrieNode, IterAscending, IterDescending,
     KeyValueTrieRoot, TrieEdgeIter, TrieEdgeState, TrieNode, TrieValueIter,
@@ -75,7 +75,8 @@ pub use linear::memory::MemStore;
 pub use node::persist::MaybePersistedNode;
 #[cfg(any(test, feature = "test_utils"))]
 pub use test_utils::SeededRng;
-pub use trie_hash::{InvalidTrieHashLength, TrieHash};
+#[cfg(any(test, feature = "test_utils"))]
+pub use test_utils::TestRecorder;
 
 /// A shared node, which is just a triophe Arc of a node
 pub type SharedNode = triomphe::Arc<Node>;

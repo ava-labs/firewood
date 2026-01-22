@@ -5,6 +5,7 @@
 // insert some random keys using the front-end API.
 
 use clap::Parser;
+use firewood_storage::NodeHashAlgorithm;
 use std::collections::HashMap;
 use std::error::Error;
 use std::num::NonZeroUsize;
@@ -58,11 +59,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max_revisions(args.revisions)
         .build();
     let cfg = DbConfig::builder()
+        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
         .truncate(args.truncate)
         .manager(mgrcfg)
         .build();
 
-    let db = Db::new("rev_db", cfg).expect("db initiation should succeed");
+    let db = Db::new("firewood", cfg).expect("db initiation should succeed");
 
     let keys = args.batch_size;
     let start = Instant::now();

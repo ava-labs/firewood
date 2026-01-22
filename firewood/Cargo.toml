@@ -1,6 +1,6 @@
 [package]
 name = "firewood"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 authors = [
      "Angel Leon <gubatron@gmail.com>",
@@ -29,24 +29,26 @@ bytemuck.workspace = true
 coarsetime.workspace = true
 fastrace.workspace = true
 firewood-macros.workspace = true
+firewood-metrics.workspace = true
+firewood-storage.workspace = true
 hex.workspace = true
 integer-encoding.workspace = true
 metrics.workspace = true
 thiserror.workspace = true
 # Regular dependencies
-typed-builder = "0.23.1"
+typed-builder = "0.23.2"
 rayon = "1.11.0"
 parking_lot.workspace = true
-fjall = "2.11.2"
+fjall = "=2.11.2" # 3.0.0 has breaking changes
 derive-where = "1.6.0"
 weak-table = "0.3.2"
+lender = "0.4.2"
 
 [features]
 default = []
 nightly = []
 io-uring = ["firewood-storage/io-uring"]
 logger = ["firewood-storage/logger"]
-branch_factor_256 = ["firewood-storage/branch_factor_256"]
 ethhash = ["firewood-storage/ethhash"]
 
 [dev-dependencies]
@@ -63,7 +65,7 @@ rand.workspace = true
 tempfile.workspace = true
 test-case.workspace = true
 # Regular dependencies
-ctor = "0.6.1"
+ctor = "0.6.3"
 hash-db = "0.16.0"
 plain_hasher = "0.2.3"
 rlp = "0.6.1"
@@ -72,12 +74,6 @@ sha3 = "0.10.8"
 [[bench]]
 name = "hashops"
 harness = false
-
-[target.'cfg(target_os = "linux")'.dependencies]
-firewood-storage = { workspace = true, features = ["io-uring"] }
-
-[target.'cfg(not(target_os = "linux"))'.dependencies]
-firewood-storage.workspace = true
 
 [lints]
 workspace = true

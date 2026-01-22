@@ -1,6 +1,6 @@
 [package]
 name = "firewood-benchmark"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 authors = [
      "Aaron Buchwald <aaron.buchwald56@gmail.com>",
@@ -36,7 +36,7 @@ rand_distr.workspace = true
 sha2.workspace = true
 # Regular dependencies
 fastrace-opentelemetry = { version = "=0.14.0" }
-metrics-exporter-prometheus = { version = "0.17.2", optional = true }
+metrics-exporter-prometheus = { version = "0.18.1", optional = true }
 opentelemetry = "=0.31.0"
 opentelemetry-otlp = { version = "=0.31.0", features = ["grpc-tonic"] }
 opentelemetry-proto = "=0.31.0"
@@ -46,7 +46,7 @@ tikv-jemallocator = "0.6.1"
 
 [dependencies.tokio]
 optional = true
-version = "1.48.0"
+version = "1.49.0"
 features = ["mio", "net", "parking_lot", "rt", "time"]
 
 [features]

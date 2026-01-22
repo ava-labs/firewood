@@ -11,6 +11,7 @@ import (
 	"encoding"
 	"errors"
 	"fmt"
+	"iter"
 	"runtime"
 	"unsafe"
 )
@@ -73,6 +74,10 @@ type NextKeyRange struct {
 	endKey   Maybe[*ownedBytes]
 }
 
+type codeIterator struct {
+	handle *C.CodeIteratorHandle
+}
+
 // RangeProof returns a proof that the values in the range [startKey, endKey] are
 // included in the tree with the current root. The proof may be truncated to at
 // most [maxLength] entries, if non-zero. If either [startKey] or [endKey] is
@@ -83,6 +88,8 @@ func (db *Database) RangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) (*RangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -137,6 +144,12 @@ func (db *Database) VerifyRangeProof(
 	rootHash Hash,
 	maxLength uint32,
 ) error {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return errDBClosed
+	}
+
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
@@ -169,6 +182,8 @@ func (db *Database) VerifyAndCommitRangeProof(
 	rootHash Hash,
 	maxLength uint32,
 ) (Hash, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return EmptyRoot, errDBClosed
 	}
@@ -187,6 +202,8 @@ func (db *Database) VerifyAndCommitRangeProof(
 	var hash Hash
 	err := proof.keepAliveHandle.disown(true /* evenOnError */, func() error {
 		var err error
+		db.commitLock.Lock()
+		defer db.commitLock.Unlock()
 		hash, err = getHashKeyFromHashResult(C.fwd_db_verify_and_commit_range_proof(db.handle, args))
 		return err
 	})
@@ -199,8 +216,54 @@ func (db *Database) VerifyAndCommitRangeProof(
 //
 // FindNextKey can only be called after a successful call to [*Database.VerifyRangeProof] or
 // [*Database.VerifyAndCommitRangeProof].
+//
+// The next key range indicates the next `(startKey, endKey]` range of keys that
+// should be synchronized to complete the requested range. `startKey` is non-
+// inclusive and `endKey`, if present, is inclusive.
+//
+// TODO(#352): the start key will be inclusive in the future; update documentation then.
 func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
 	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_range_proof_find_next_key(p.handle))
+}
+
+// CodeHashes returns an iterator for the code hashes contained in the account nodes
+// of this proof. This list may contain duplicates and is not guaranteed to be in any particular order.
+//
+// Note: this method is only relevant for Ethereum tries.
+// This method can only be called anytime after the proof is created.
+func (p *RangeProof) CodeHashes() iter.Seq2[Hash, error] {
+	return func(yield func(Hash, error) bool) {
+		iter, err := getCodeHashIteratorFromCodeHashIteratorResult(C.fwd_range_proof_code_hash_iter(p.handle))
+		if err != nil {
+			yield(EmptyRoot, err)
+			return
+		}
+		defer func() {
+			if err := iter.Free(); err != nil {
+				panic(err)
+			}
+		}()
+		for hash, err := iter.Next(); ; hash, err = iter.Next() {
+			if err != nil {
+				yield(EmptyRoot, err)
+				return
+			}
+			if hash == EmptyRoot {
+				return
+			}
+			if !yield(hash, err) {
+				return
+			}
+		}
+	}
+}
+
+func (it *codeIterator) Next() (Hash, error) {
+	return getHashKeyFromHashResult(C.fwd_code_hash_iter_next(it.handle))
+}
+
+func (it *codeIterator) Free() error {
+	return getErrorFromVoidResult(C.fwd_code_hash_iter_free(it.handle))
 }
 
 // MarshalBinary returns a serialized representation of this RangeProof.
@@ -259,6 +322,8 @@ func (db *Database) ChangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) (*ChangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return nil, errDBClosed
 	}
@@ -288,6 +353,12 @@ func (db *Database) VerifyChangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) error {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return errDBClosed
+	}
+
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
@@ -314,6 +385,8 @@ func (db *Database) VerifyAndCommitChangeProof(
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
 ) (Hash, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
 	if db.handle == nil {
 		return EmptyRoot, errDBClosed
 	}
@@ -341,6 +414,18 @@ func (db *Database) VerifyAndCommitChangeProof(
 // [*Database.VerifyAndCommitChangeProof].
 func (p *ChangeProof) FindNextKey() (*NextKeyRange, error) {
 	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_change_proof_find_next_key(p.handle))
+}
+
+// CodeHashes returns an iterator for the code hashes contained in the account nodes
+// of this proof. This list may contain duplicates and is not guaranteed to be in any particular order.
+//
+// Note: this method is only relevant for Ethereum tries.
+// This method can only be called after a successful verification of the proof,
+// otherwise an error is returned on the first iteration.
+//
+// TODO(#1598): implement this method to extract code hashes from account nodes.
+func (*ChangeProof) CodeHashes() iter.Seq2[Hash, error] {
+	return func(func(Hash, error) bool) {}
 }
 
 // MarshalBinary returns a serialized representation of this ChangeProof.
@@ -391,19 +476,19 @@ func (p *ChangeProof) Free() error {
 
 // StartKey returns the inclusive start key of this key range.
 func (r *NextKeyRange) StartKey() []byte {
-	return r.startKey.BorrowedBytes()
+	return r.startKey.CopiedBytes()
 }
 
 // HasEndKey returns true if this key range has an exclusive end key.
 func (r *NextKeyRange) HasEndKey() bool {
-	return r.endKey.HasValue()
+	return r.endKey != nil && r.endKey.HasValue()
 }
 
 // EndKey returns the exclusive end key of this key range if it exists or nil if
 // it does not.
 func (r *NextKeyRange) EndKey() []byte {
-	if r.endKey.HasValue() {
-		return r.endKey.Value().BorrowedBytes()
+	if r.HasEndKey() {
+		return r.endKey.Value().CopiedBytes()
 	}
 	return nil
 }
@@ -416,7 +501,7 @@ func (r *NextKeyRange) Free() error {
 	var err1, err2 error
 
 	err1 = r.startKey.Free()
-	if r.endKey != nil && r.endKey.HasValue() {
+	if r.HasEndKey() {
 		err2 = r.endKey.Value().Free()
 	}
 
@@ -452,6 +537,21 @@ func getNextKeyRangeFromNextKeyRangeResult(result C.NextKeyRangeResult) (*NextKe
 	}
 }
 
+func getCodeHashIteratorFromCodeHashIteratorResult(result C.CodeIteratorResult) (*codeIterator, error) {
+	switch result.tag {
+	case C.CodeIteratorResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.CodeIteratorResult_Ok:
+		ptr := *(**C.CodeIteratorHandle)(unsafe.Pointer(&result.anon0))
+		return &codeIterator{handle: ptr}, nil
+	case C.CodeIteratorResult_Err:
+		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return nil, err
+	default:
+		return nil, fmt.Errorf("unknown C.CodeIteratorResult tag: %d", result.tag)
+	}
+}
+
 func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, error) {
 	switch result.tag {
 	case C.RangeProofResult_NullHandlePointer:
@@ -464,7 +564,9 @@ func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, 
 		return nil, errEmptyTrie
 	case C.RangeProofResult_Ok:
 		ptr := *(**C.RangeProofContext)(unsafe.Pointer(&result.anon0))
-		return &RangeProof{handle: ptr}, nil
+		return &RangeProof{
+			handle: ptr,
+		}, nil
 	case C.RangeProofResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err

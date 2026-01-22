@@ -63,8 +63,7 @@ func newTestFirewoodDatabase(t *testing.T) *firewood.Database {
 }
 
 func newFirewoodDatabase(dbFile string) (*firewood.Database, error) {
-	conf := firewood.DefaultConfig()
-	f, err := firewood.New(dbFile, conf)
+	f, err := firewood.New(dbFile, firewood.MerkleDBNodeHashing)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
 	}
@@ -146,7 +145,7 @@ func (tr *tree) dbUpdate() {
 
 	// Insert the key-value pair into both databases.
 	tr.require.NoError(tr.merkleDB.Put(key, val))
-	_, err := tr.fwdDB.Update([][]byte{key}, [][]byte{val})
+	_, err := tr.fwdDB.Update([]firewood.BatchOp{firewood.Put(key, val)})
 	tr.require.NoError(err)
 
 	tr.dropAllProposals()
@@ -198,7 +197,11 @@ func (tr *tree) dbBatch() {
 	}
 	tr.require.NoError(batch.Write())
 
-	_, err := tr.fwdDB.Update(keys, vals)
+	fwdBatch := make([]firewood.BatchOp, 0, len(keys))
+	for i := range len(keys) {
+		fwdBatch = append(fwdBatch, firewood.Put(keys[i], vals[i]))
+	}
+	_, err := tr.fwdDB.Update(fwdBatch)
 	tr.require.NoError(err)
 
 	tr.dropAllProposals()
@@ -252,7 +255,11 @@ func (tr *tree) createProposalOnProposal() {
 	fwdPr := pr.fwdView
 	merkleView := pr.merkleView
 
-	fwdChildPr, err := fwdPr.Propose(keys, vals)
+	fwdBatch := make([]firewood.BatchOp, 0, len(keys))
+	for i := range len(keys) {
+		fwdBatch = append(fwdBatch, firewood.Put(keys[i], vals[i]))
+	}
+	fwdChildPr, err := fwdPr.Propose(fwdBatch)
 	tr.require.NoError(err)
 
 	merkleViewChange := merkledb.ViewChanges{}
@@ -285,7 +292,11 @@ func (tr *tree) createProposalOnProposal() {
 func (tr *tree) createProposalOnDB() {
 	batchSize := tr.rand.Intn(maxBatchSize) + 1 // ensure at least one key-value pair
 	keys, vals := tr.createRandomBatch(batchSize)
-	fwdPr, err := tr.fwdDB.Propose(keys, vals)
+	fwdBatch := make([]firewood.BatchOp, 0, len(keys))
+	for i := range len(keys) {
+		fwdBatch = append(fwdBatch, firewood.Put(keys[i], vals[i]))
+	}
+	fwdPr, err := tr.fwdDB.Propose(fwdBatch)
 	tr.require.NoError(err)
 
 	merkleViewChange := merkledb.ViewChanges{}

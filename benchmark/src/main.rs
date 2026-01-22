@@ -15,6 +15,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use firewood::logger::trace;
+use firewood_storage::NodeHashAlgorithm;
 use log::LevelFilter;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
@@ -235,6 +236,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max_revisions(args.global_opts.revisions)
         .build();
     let cfg = DbConfig::builder()
+        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
         .truncate(matches!(args.test_name, TestName::Create))
         .manager(mgrcfg)
         .build();
@@ -302,6 +304,7 @@ fn spawn_prometheus_listener(
 
     let handle = recorder.handle();
 
+    // Register the Prometheus recorder directly; prefixing is handled by Grafana/Prometheus relabeling.
     metrics::set_global_recorder(recorder)?;
 
     Ok(handle)

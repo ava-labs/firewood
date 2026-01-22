@@ -7,9 +7,9 @@ use std::fmt;
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
-    ChangeProofContext, CreateIteratorResult, CreateProposalResult, HashKey, IteratorHandle,
-    NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair, ProposalHandle,
-    RangeProofContext,
+    ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult, HashKey,
+    IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair,
+    ProposalHandle, RangeProofContext,
 };
 
 /// The result type returned from an FFI function that returns no value but may
@@ -181,6 +181,18 @@ impl<E: fmt::Display> From<Result<Option<api::HashKey>, E>> for HashResult {
     }
 }
 
+impl From<Option<Result<HashKey, api::Error>>> for HashResult {
+    fn from(value: Option<Result<HashKey, api::Error>>) -> Self {
+        match value {
+            Some(value) => match value {
+                Ok(hash) => HashResult::Some(hash),
+                Err(err) => HashResult::Err(err.to_string().into_bytes().into()),
+            },
+            None => HashResult::None,
+        }
+    }
+}
+
 /// A result type returned from FFI functions that create or parse range proofs.
 ///
 /// The caller must ensure that [`fwd_free_range_proof`] is called to
@@ -275,6 +287,56 @@ pub enum NextKeyRangeResult {
     ///
     /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
     Err(OwnedBytes),
+}
+
+impl From<Result<Option<KeyRange>, api::Error>> for NextKeyRangeResult {
+    fn from(value: Result<Option<KeyRange>, api::Error>) -> Self {
+        match value {
+            Ok(None) => NextKeyRangeResult::None,
+            Ok(Some((start_key, end_key))) => NextKeyRangeResult::Some(NextKeyRange {
+                start_key: start_key.into(),
+                end_key: end_key.map(Into::into).into(),
+            }),
+            Err(api::Error::ProofError(firewood::ProofError::Unverified)) => {
+                NextKeyRangeResult::NotPrepared
+            }
+            Err(err) => NextKeyRangeResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+/// A result type returned from FFI functions that create an code hash iterator
+#[derive(Debug)]
+#[repr(C)]
+pub enum CodeIteratorResult<'p> {
+    /// The caller provided a null pointer to a proof handle.
+    NullHandlePointer,
+    /// Building the iterator was successful and the iterator handle is returned
+    Ok {
+        /// An opaque pointer to the [`CodeIteratorHandle`].
+        /// The value should be freed with [`fwd_code_hash_iter_free`]
+        ///
+        /// [`fwd_code_hash_iter_free`]: crate::fwd_code_hash_iter_free
+        handle: Box<CodeIteratorHandle<'p>>,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`].
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl<'a> From<Result<CodeIteratorHandle<'a>, api::Error>> for CodeIteratorResult<'a> {
+    fn from(value: Result<CodeIteratorHandle<'a>, api::Error>) -> Self {
+        match value {
+            Ok(res) => CodeIteratorResult::Ok {
+                handle: Box::new(res),
+            },
+            Err(err) => CodeIteratorResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
 }
 
 /// A result type returned from FFI functions that create a proposal but do not
@@ -502,6 +564,7 @@ pub(crate) trait NullHandleResult: CResult {
 pub(crate) trait CResult: Sized {
     fn from_err(err: impl ToString) -> Self;
 
+    #[cfg(panic = "unwind")]
     fn from_panic(panic: Box<dyn std::any::Any + Send>) -> Self
     where
         Self: Sized,
@@ -541,6 +604,7 @@ impl_null_handle_result!(
     RangeProofResult<'_>,
     ChangeProofResult,
     NextKeyRangeResult,
+    CodeIteratorResult<'_>,
     ProposalResult<'_>,
     IteratorResult<'_>,
     RevisionResult,
@@ -556,6 +620,7 @@ impl_cresult!(
     RangeProofResult<'_>,
     ChangeProofResult,
     NextKeyRangeResult,
+    CodeIteratorResult<'_>,
     ProposalResult<'_>,
     IteratorResult<'_>,
     RevisionResult,
@@ -563,6 +628,7 @@ impl_cresult!(
     KeyValueResult,
 );
 
+#[cfg(panic = "unwind")]
 enum Panic {
     Static(&'static str),
     Formatted(String),
@@ -573,6 +639,7 @@ enum Panic {
     // https://doc.rust-lang.org/stable/std/panic/fn.set_hook.html
 }
 
+#[cfg(panic = "unwind")]
 impl From<Box<dyn std::any::Any + Send>> for Panic {
     fn from(panic: Box<dyn std::any::Any + Send>) -> Self {
         macro_rules! downcast {
@@ -593,6 +660,7 @@ impl From<Box<dyn std::any::Any + Send>> for Panic {
     }
 }
 
+#[cfg(panic = "unwind")]
 impl fmt::Display for Panic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

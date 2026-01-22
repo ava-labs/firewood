@@ -49,6 +49,17 @@ fn is_valid_key(key: &Path) -> bool {
     key.0.len().is_multiple_of(2)
 }
 
+#[expect(clippy::result_large_err)]
+const fn check_area_aligned(
+    address: LinearAddress,
+    parent: StoredAreaParent,
+) -> Result<(), CheckerError> {
+    if !address.is_aligned() {
+        return Err(CheckerError::AreaMisaligned { address, parent });
+    }
+    Ok(())
+}
+
 /// Options for the checker
 #[derive(Debug)]
 pub struct CheckOpt {
@@ -155,7 +166,6 @@ struct SubTrieMetadata {
 }
 
 /// [`NodeStore`] checker
-#[expect(clippy::result_large_err)]
 impl<T, S: ReadableStorage> NodeStore<T, S>
 where
     NodeStore<T, S>: HashedNodeReader,
@@ -282,7 +292,7 @@ where
         } = subtrie;
 
         // check that address is aligned
-        self.check_area_aligned(subtrie_root_address, StoredAreaParent::TrieNode(parent))?;
+        check_area_aligned(subtrie_root_address, StoredAreaParent::TrieNode(parent))?;
 
         // read the node from the disk - we avoid cache since we will never visit the same node twice
         let (area_index, area_size) =
@@ -498,7 +508,7 @@ where
             };
 
             // check that the area is aligned
-            if let Err(e) = self.check_area_aligned(addr, StoredAreaParent::FreeList(parent)) {
+            if let Err(e) = check_area_aligned(addr, StoredAreaParent::FreeList(parent)) {
                 errors.push(e);
                 free_list_iter.move_to_next_free_list();
                 continue;
@@ -551,17 +561,6 @@ where
             },
             errors,
         )
-    }
-
-    const fn check_area_aligned(
-        &self,
-        address: LinearAddress,
-        parent: StoredAreaParent,
-    ) -> Result<(), CheckerError> {
-        if !address.is_aligned() {
-            return Err(CheckerError::AreaMisaligned { address, parent });
-        }
-        Ok(())
     }
 }
 
@@ -833,7 +832,7 @@ mod test {
         test_write_header(
             nodestore,
             high_watermark,
-            Some(root_addr),
+            Some((root_addr, root_hash.clone().into_triehash())),
             FreeLists::default(),
         );
 
@@ -985,7 +984,7 @@ mod test {
     // This test creates a simple trie and checks that the checker traverses it correctly.
     // We use primitive calls here to do a low-level check.
     fn checker_traverse_correct_trie() {
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let test_trie = gen_test_trie(&mut nodestore);
@@ -1009,7 +1008,7 @@ mod test {
     #[test]
     // This test permutes the simple trie with a wrong hash and checks that the checker detects it.
     fn checker_traverse_trie_with_wrong_hash() {
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let mut test_trie = gen_test_trie(&mut nodestore);
@@ -1083,7 +1082,7 @@ mod test {
     fn traverse_correct_freelist() {
         let rng = crate::SeededRng::from_env_or_random();
 
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
 
         // write free areas
@@ -1129,7 +1128,7 @@ mod test {
 
     #[test]
     fn traverse_freelist_should_skip_offspring_of_incorrect_areas() {
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
         let TestFreelist {
             high_watermark,
@@ -1149,7 +1148,7 @@ mod test {
 
     #[test]
     fn fix_freelist_with_overlap() {
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
         let TestFreelist {
             high_watermark,
@@ -1187,7 +1186,7 @@ mod test {
 
         let mut rng = crate::SeededRng::from_env_or_random();
 
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let mut nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let num_areas = 10;
@@ -1244,7 +1243,7 @@ mod test {
     // When traversing it should break consecutive areas.
     #[expect(clippy::arithmetic_side_effects)]
     fn split_range_of_zeros_into_leaked_areas() {
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let expected_leaked_area_indices = vec![
@@ -1295,7 +1294,7 @@ mod test {
     // With both valid and invalid areas in the range, return the valid areas until reaching one invalid area, then use heuristics to split the rest of the range.
     #[expect(clippy::arithmetic_side_effects)]
     fn split_range_into_leaked_areas_test() {
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let nodestore = NodeStore::new_empty_committed(memstore.into());
 
         // write two free areas

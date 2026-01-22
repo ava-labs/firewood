@@ -12,9 +12,27 @@
 
 
 /**
+ * The hashing mode to use for the database.
+ *
+ * This determines the cryptographic hash function and trie structure used.
+ */
+typedef enum NodeHashAlgorithm {
+  /**
+   * MerkleDB Firewood hashing (SHA-256 based)
+   */
+  NodeHashAlgorithm_MerkleDB = 0,
+  /**
+   * Ethereum-compatible hashing (Keccak-256 based)
+   */
+  NodeHashAlgorithm_Ethereum = 1,
+} NodeHashAlgorithm;
+
+/**
  * FFI context for a parsed or generated change proof.
  */
 typedef struct ChangeProofContext ChangeProofContext;
+
+typedef struct CodeIteratorHandle CodeIteratorHandle;
 
 /**
  * A handle to the database, returned by `fwd_open_db`.
@@ -25,7 +43,9 @@ typedef struct ChangeProofContext ChangeProofContext;
 typedef struct DatabaseHandle DatabaseHandle;
 
 /**
- * An opaque wrapper around a [`BoxKeyValueIter`].
+ * An opaque wrapper around a [`BoxKeyValueIter`] and a reference
+ * to the [`ArcDynDbView`] backing it, preventing the view from
+ * being dropped while iteration is in progress.
  */
 typedef struct IteratorHandle IteratorHandle;
 
@@ -155,18 +175,54 @@ typedef struct BorrowedSlice_u8 {
 typedef struct BorrowedSlice_u8 BorrowedBytes;
 
 /**
- * A `KeyValue` represents a key-value pair, passed to the FFI.
+ * A batch operation passed to the FFI.
+ *
+ * This is a tagged union that explicitly distinguishes between different
+ * operation types instead of relying on nil vs empty pointer semantics.
  */
-typedef struct KeyValuePair {
+typedef enum BatchOp_Tag {
+  /**
+   * Insert or update a key with a value.
+   * The value may be empty (zero-length).
+   */
+  BatchOp_Put,
+  /**
+   * Delete a specific key.
+   */
+  BatchOp_Delete,
+  /**
+   * Delete all keys with a given prefix.
+   */
+  BatchOp_DeleteRange,
+} BatchOp_Tag;
+
+typedef struct BatchOp_Put_Body {
   BorrowedBytes key;
   BorrowedBytes value;
-} KeyValuePair;
+} BatchOp_Put_Body;
+
+typedef struct BatchOp_Delete_Body {
+  BorrowedBytes key;
+} BatchOp_Delete_Body;
+
+typedef struct BatchOp_DeleteRange_Body {
+  BorrowedBytes prefix;
+} BatchOp_DeleteRange_Body;
+
+typedef struct BatchOp {
+  BatchOp_Tag tag;
+  union {
+    BatchOp_Put_Body put;
+    BatchOp_Delete_Body delete_;
+    BatchOp_DeleteRange_Body delete_range;
+  };
+} BatchOp;
 
 /**
  * A borrowed byte slice. Used to represent data that was passed in from C
  * callers and will not be freed or retained by Rust code.
  */
-typedef struct BorrowedSlice_KeyValuePair {
+typedef struct BorrowedSlice_BatchOp {
   /**
    * A pointer to the slice of bytes. This can be null if the slice is empty.
    *
@@ -179,26 +235,60 @@ typedef struct BorrowedSlice_KeyValuePair {
    *
    * [`NonNull`]: std::ptr::NonNull
    */
-  const struct KeyValuePair *ptr;
+  const struct BatchOp *ptr;
   /**
    * The length of the slice. It is ignored if the pointer is null; however,
    * if the pointer is not null, it must be equal to the number of elements
    * pointed to by `ptr`.
    */
   size_t len;
-} BorrowedSlice_KeyValuePair;
+} BorrowedSlice_BatchOp;
 
 /**
- * A type alias for a borrowed slice of [`KeyValuePair`]s.
+ * A type alias for a borrowed slice of [`BatchOp`]s.
  *
- * C callers can use this to pass in a slice of key-value pairs that will not
+ * C callers can use this to pass in a slice of batch operations that will not
  * be freed by Rust code.
  *
  * C callers must ensure that the pointer, if not null, points to a valid slice
- * of key-value pairs of length `len`. C callers must also ensure that the slice
+ * of batch operations of length `len`. C callers must also ensure that the slice
  * is valid for the duration of the C function call that was passed this slice.
  */
-typedef struct BorrowedSlice_KeyValuePair BorrowedKeyValuePairs;
+typedef struct BorrowedSlice_BatchOp BorrowedBatchOps;
+
+/**
+ * The result type returned from an FFI function that returns no value but may
+ * return an error.
+ */
+typedef enum VoidResult_Tag {
+  /**
+   * The caller provided a null pointer to the input handle.
+   */
+  VoidResult_NullHandlePointer,
+  /**
+   * The operation was successful and no error occurred.
+   */
+  VoidResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. Its
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  VoidResult_Err,
+} VoidResult_Tag;
+
+typedef struct VoidResult {
+  VoidResult_Tag tag;
+  union {
+    struct {
+      OwnedBytes err;
+    };
+  };
+} VoidResult;
 
 /**
  * Maybe is a C-compatible optional type using a tagged union pattern.
@@ -389,40 +479,6 @@ typedef struct ValueResult {
     };
   };
 } ValueResult;
-
-/**
- * The result type returned from an FFI function that returns no value but may
- * return an error.
- */
-typedef enum VoidResult_Tag {
-  /**
-   * The caller provided a null pointer to the input handle.
-   */
-  VoidResult_NullHandlePointer,
-  /**
-   * The operation was successful and no error occurred.
-   */
-  VoidResult_Ok,
-  /**
-   * An error occurred and the message is returned as an [`OwnedBytes`]. Its
-   * value is guaranteed to contain only valid UTF-8.
-   *
-   * The caller must call [`fwd_free_owned_bytes`] to free the memory
-   * associated with this error.
-   *
-   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
-   */
-  VoidResult_Err,
-} VoidResult_Tag;
-
-typedef struct VoidResult {
-  VoidResult_Tag tag;
-  union {
-    struct {
-      OwnedBytes err;
-    };
-  };
-} VoidResult;
 
 /**
  * Maybe is a C-compatible optional type using a tagged union pattern.
@@ -903,25 +959,21 @@ typedef struct HandleResult {
  */
 typedef struct DatabaseHandleArgs {
   /**
-   * The path to the database file.
+   * The path to the database directory.
    *
    * This must be a valid UTF-8 string.
    *
    * If this is empty, an error will be returned.
    */
-  BorrowedBytes path;
+  BorrowedBytes dir;
   /**
-   * The path to the `RootStore` directory.
+   * Whether to enable `RootStore`.
    *
-   * This must be a valid UTF-8 string.
-   *
-   * If this is empty, then the archival feature is disabled.
-   *
-   * Note: Setting this directory will only track new revisions going forward
+   * Note: Setting this feature will only track new revisions going forward
    * and will not contain revisions from a prior database instance that didn't
-   * set a `root_store_path`.
+   * enable `root_store`.
    */
-  BorrowedBytes root_store_path;
+  bool root_store;
   /**
    * The size of the node cache.
    *
@@ -954,6 +1006,22 @@ typedef struct DatabaseHandleArgs {
    * Whether to truncate the database file if it exists.
    */
   bool truncate;
+  /**
+   * Whether to enable expensive metrics recording for this database handle.
+   *
+   * Expensive metrics are disabled by default.
+   */
+  bool expensive_metrics;
+  /**
+   * The hashing mode to use for the database.
+   *
+   * This must match the compile-time feature:
+   * - [`NodeHashAlgorithm::Ethereum`] if the `ethhash` feature is enabled
+   * - [`NodeHashAlgorithm::MerkleDB`] if the `ethhash` feature is disabled
+   *
+   * Opening returns an error if this does not match the compile-time feature.
+   */
+  enum NodeHashAlgorithm node_hash_algorithm;
 } DatabaseHandleArgs;
 
 /**
@@ -1009,6 +1077,49 @@ typedef struct ProposalResult {
 } ProposalResult;
 
 /**
+ * A result type returned from FFI functions that create an code hash iterator
+ */
+typedef enum CodeIteratorResult_Tag {
+  /**
+   * The caller provided a null pointer to a proof handle.
+   */
+  CodeIteratorResult_NullHandlePointer,
+  /**
+   * Building the iterator was successful and the iterator handle is returned
+   */
+  CodeIteratorResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`].
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  CodeIteratorResult_Err,
+} CodeIteratorResult_Tag;
+
+typedef struct CodeIteratorResult_Ok_Body {
+  /**
+   * An opaque pointer to the [`CodeIteratorHandle`].
+   * The value should be freed with [`fwd_code_hash_iter_free`]
+   *
+   * [`fwd_code_hash_iter_free`]: crate::fwd_code_hash_iter_free
+   */
+  struct CodeIteratorHandle *handle;
+} CodeIteratorResult_Ok_Body;
+
+typedef struct CodeIteratorResult {
+  CodeIteratorResult_Tag tag;
+  union {
+    CodeIteratorResult_Ok_Body ok;
+    struct {
+      OwnedBytes err;
+    };
+  };
+} CodeIteratorResult;
+
+/**
  * Arguments for initializing logging for the Firewood FFI.
  */
 typedef struct LogArgs {
@@ -1036,7 +1147,7 @@ typedef struct LogArgs {
  * # Arguments
  *
  * * `db` - The database handle returned by [`fwd_open_db`]
- * * `values` - A [`BorrowedKeyValuePairs`] containing the key-value pairs to put.
+ * * `values` - A [`BorrowedBatchOps`] containing the batch operations to apply.
  *
  * # Returns
  *
@@ -1049,12 +1160,26 @@ typedef struct LogArgs {
  *
  * The caller must:
  * * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
- * * ensure that `values` is valid for [`BorrowedKeyValuePairs`]
+ * * ensure that `values` is valid for [`BorrowedBatchOps`]
  * * call [`fwd_free_owned_bytes`] to free the memory associated with the
  *   returned error ([`HashKey`] does not need to be freed as it is returned by
  *   value).
  */
-struct HashResult fwd_batch(const struct DatabaseHandle *db, BorrowedKeyValuePairs values);
+struct HashResult fwd_batch(const struct DatabaseHandle *db, BorrowedBatchOps values);
+
+/**
+ * Flushes buffered block replay operations to disk.
+ *
+ * This function is only meaningful when the `block-replay` feature is enabled
+ * and the `FIREWOOD_BLOCK_REPLAY_PATH` environment variable is set. Otherwise,
+ * it is a no-op.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the flush succeeded or was a no-op.
+ * - [`VoidResult::Err`] if an I/O error occurred during the flush.
+ */
+struct VoidResult fwd_block_replay_flush(void);
 
 /**
  * Returns the next key range that should be fetched after processing the
@@ -1152,6 +1277,44 @@ struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *_p
 struct VoidResult fwd_close_db(struct DatabaseHandle *db);
 
 /**
+ * Frees the memory associated with a `CodeIteratorHandle`.
+ *
+ * # Arguments
+ *
+ * - `iter` - The `CodeIteratorHandle` to free, previously returned from any Rust function.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ */
+struct VoidResult fwd_code_hash_iter_free(struct CodeIteratorHandle *iter);
+
+/**
+ * Advances the code hash iterator and returns the next code hash.
+ *
+ * # Arguments
+ *
+ * - `iter` - A [`CodeIteratorHandle`] previously returned from the
+ *   `fwd_range_proof_code_hash_iter` method.
+ *
+ * # Returns
+ *
+ * - [`HashResult::NullHandlePointer`] if the caller provided a null pointer.
+ * - [`HashResult::Some`] containing the next code hash if successful.
+ * - [`HashResult::None`] if there are no more code hashes to iterate over.
+ * - [`HashResult::Err`] containing an error message if the next code hash could not be retrieved.
+ *
+ * # Thread Safety
+ *
+ * It is not safe to call this function concurrently with the same iterator
+ * nor is it safe to call any other function that accesses the same iterator
+ * concurrently. The caller must ensure exclusive access to the iterator
+ * for the duration of the call.
+ */
+struct HashResult fwd_code_hash_iter_next(struct CodeIteratorHandle *iter);
+
+/**
  * Commits a proposal to the database.
  *
  * This function will consume the proposal regardless of whether the commit
@@ -1203,6 +1366,30 @@ struct HashResult fwd_commit_proposal(struct ProposalHandle *proposal);
  */
 struct ChangeProofResult fwd_db_change_proof(const struct DatabaseHandle *_db,
                                              struct CreateChangeProofArgs _args);
+
+/**
+ * Dumps the Trie structure of the latest revision of the database to a DOT
+ * (Graphviz) format string for debugging.
+ *
+ * # Arguments
+ *
+ * * `db` - The database handle returned by [`fwd_open_db`]
+ *
+ * # Returns
+ *
+ * - [`ValueResult::NullHandlePointer`] if the provided database handle is null.
+ * - [`ValueResult::Some`] with the DOT format string if successful (the data is
+ *   guaranteed to be utf-8 data, not null terminated).
+ * - [`ValueResult::Err`] if an error occurred while dumping the database.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`DatabaseHandle`].
+ * * call [`fwd_free_owned_bytes`] to free the memory associated with the
+ *   returned value.
+ */
+struct ValueResult fwd_db_dump(const struct DatabaseHandle *db);
 
 /**
  * Generate a range proof for the given range of keys for the latest revision.
@@ -1571,38 +1758,6 @@ struct ValueResult fwd_get_from_proposal(const struct ProposalHandle *handle, Bo
 struct ValueResult fwd_get_from_revision(const struct RevisionHandle *revision, BorrowedBytes key);
 
 /**
- * Gets a value assoicated with the given root hash and key.
- *
- * The hash may refer to a historical revision or an existing proposal.
- *
- * # Arguments
- *
- * * `db` - The database handle returned by [`fwd_open_db`]
- * * `root` - The root hash to look up as a [`BorrowedBytes`]
- * * `key` - The key to look up as a [`BorrowedBytes`]
- *
- * # Returns
- *
- * - [`ValueResult::NullHandlePointer`] if the provided database handle is null.
- * - [`ValueResult::RevisionNotFound`] if no revision was found for the specified root.
- * - [`ValueResult::None`] if the key was not found.
- * - [`ValueResult::Some`] if the key was found with the associated value.
- * - [`ValueResult::Err`] if an error occurred while retrieving the value.
- *
- * # Safety
- *
- * The caller must:
- * * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
- * * ensure that `root` is a valid for [`BorrowedBytes`]
- * * ensure that `key` is a valid for [`BorrowedBytes`]
- * * call [`fwd_free_owned_bytes`] to free the memory associated [`OwnedBytes`]
- *   returned in the result.
- */
-struct ValueResult fwd_get_from_root(const struct DatabaseHandle *db,
-                                     struct HashKey root,
-                                     BorrowedBytes key);
-
-/**
  * Gets the value associated with the given key from the database for the
  * latest revision.
  *
@@ -1790,12 +1945,36 @@ struct IteratorResult fwd_iter_on_revision(const struct RevisionHandle *revision
 struct HandleResult fwd_open_db(struct DatabaseHandleArgs args);
 
 /**
+ * Dumps the Trie structure of a proposal to a DOT (Graphviz) format string for debugging.
+ *
+ * # Arguments
+ *
+ * * `proposal` - The proposal handle returned by [`fwd_propose_on_db`] or
+ *   [`fwd_propose_on_proposal`].
+ *
+ * # Returns
+ *
+ * - [`ValueResult::NullHandlePointer`] if the provided proposal handle is null.
+ * - [`ValueResult::Some`] with the DOT format string if successful (the data is
+ *   guaranteed to be utf-8 data, not null terminated).
+ * - [`ValueResult::Err`] if an error occurred while dumping the proposal.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `proposal` is a valid pointer to a [`ProposalHandle`].
+ * * call [`fwd_free_owned_bytes`] to free the memory associated with the
+ *   returned value.
+ */
+struct ValueResult fwd_proposal_dump(const struct ProposalHandle *proposal);
+
+/**
  * Proposes a batch of operations to the database.
  *
  * # Arguments
  *
  * * `db` - The database handle returned by [`fwd_open_db`]
- * * `values` - A [`BorrowedKeyValuePairs`] containing the key-value pairs to put.
+ * * `values` - A [`BorrowedBatchOps`] containing the batch operations to apply.
  *
  * # Returns
  *
@@ -1808,13 +1987,12 @@ struct HandleResult fwd_open_db(struct DatabaseHandleArgs args);
  *
  * The caller must:
  * * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
- * * ensure that `values` is valid for [`BorrowedKeyValuePairs`]
+ * * ensure that `values` is valid for [`BorrowedBatchOps`]
  * * call [`fwd_commit_proposal`] or [`fwd_free_proposal`] to free the memory
  *   associated with the proposal. And, the caller must ensure this is done
  *   before calling [`fwd_close_db`] to avoid memory leaks or undefined behavior.
  */
-struct ProposalResult fwd_propose_on_db(const struct DatabaseHandle *db,
-                                        BorrowedKeyValuePairs values);
+struct ProposalResult fwd_propose_on_db(const struct DatabaseHandle *db, BorrowedBatchOps values);
 
 /**
  * Proposes a batch of operations to the database on top of an existing proposal.
@@ -1823,7 +2001,7 @@ struct ProposalResult fwd_propose_on_db(const struct DatabaseHandle *db,
  *
  * * `handle` - The proposal handle returned by [`fwd_propose_on_db`] or
  *   [`fwd_propose_on_proposal`].
- * * `values` - A [`BorrowedKeyValuePairs`] containing the key-value pairs to put.
+ * * `values` - A [`BorrowedBatchOps`] containing the batch operations to apply.
  *
  * # Returns
  *
@@ -1836,13 +2014,39 @@ struct ProposalResult fwd_propose_on_db(const struct DatabaseHandle *db,
  *
  * The caller must:
  * * ensure that `handle` is a valid pointer to a [`ProposalHandle`]
- * * ensure that `values` is valid for [`BorrowedKeyValuePairs`]
+ * * ensure that `values` is valid for [`BorrowedBatchOps`]
  * * call [`fwd_commit_proposal`] or [`fwd_free_proposal`] to free the memory
  *   associated with the proposal. And, the caller must ensure this is done
  *   before calling [`fwd_close_db`] to avoid memory leaks or undefined behavior.
  */
 struct ProposalResult fwd_propose_on_proposal(const struct ProposalHandle *handle,
-                                              BorrowedKeyValuePairs values);
+                                              BorrowedBatchOps values);
+
+/**
+ * Returns an iterator over the code hashes contained in the range proof.
+ * The iterator must be freed after use.
+ *
+ * Can be called at any time after the proof has been created.
+ *
+ * # Arguments
+ *
+ * - `proof` - A [`RangeProofContext`] previously returned from the create
+ *   method.
+ *
+ * # Returns
+ *
+ * - [`CodeIteratorResult::NullHandlePointer`] if the caller provided a null pointer.
+ * - [`CodeIteratorResult::Ok`] containing a pointer to the `CodeIteratorHandle` if successful.
+ * - [`CodeIteratorResult::Err`] containing an error message if the iterator could not be created.
+ *
+ * # Thread Safety
+ *
+ * It is not safe to call this function concurrently with the same proof context
+ * nor is it safe to call any other function that accesses the same proof context
+ * concurrently. The caller must ensure exclusive access to the proof context
+ * for the duration of the call.
+ */
+struct CodeIteratorResult fwd_range_proof_code_hash_iter(const struct RangeProofContext *proof);
 
 /**
  * Returns the next key range that should be fetched after processing the
@@ -1933,6 +2137,30 @@ struct ValueResult fwd_range_proof_to_bytes(const struct RangeProofContext *proo
  * for the duration of the call.
  */
 struct VoidResult fwd_range_proof_verify(struct VerifyRangeProofArgs args);
+
+/**
+ * Dumps the Trie structure of a revision to a DOT (Graphviz) format string for debugging.
+ *
+ * # Arguments
+ *
+ * * `revision` - A pointer to a [`RevisionHandle`] previously returned by
+ *   [`fwd_get_revision`].
+ *
+ * # Returns
+ *
+ * - [`ValueResult::NullHandlePointer`] if the provided revision handle is null.
+ * - [`ValueResult::Some`] with the DOT format string if successful (the data is
+ *   guaranteed to be utf-8 data, not null terminated).
+ * - [`ValueResult::Err`] if an error occurred while dumping the revision.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `revision` is a valid pointer to a [`RevisionHandle`].
+ * * call [`fwd_free_owned_bytes`] to free the memory associated with the
+ *   returned value.
+ */
+struct ValueResult fwd_revision_dump(const struct RevisionHandle *revision);
 
 /**
  * Get the root hash of the latest version of the database

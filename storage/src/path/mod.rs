@@ -4,14 +4,12 @@
 mod buf;
 mod component;
 mod joined;
-#[cfg(not(feature = "branch_factor_256"))]
 mod packed;
 mod split;
 
 pub use self::buf::{PartialPath, PathBuf, PathGuard};
 pub use self::component::{ComponentIter, PathComponent, PathComponentSliceExt};
 pub use self::joined::JoinedPath;
-#[cfg(not(feature = "branch_factor_256"))]
 pub use self::packed::{PackedBytes, PackedPathComponents, PackedPathRef};
 pub use self::split::{IntoSplitPath, PathCommonPrefix, SplitPath};
 
@@ -150,34 +148,6 @@ pub trait TriePathAsPackedBytes {
     ///
     /// If the final path component does not fill a whole byte, it is padded with zero.
     fn as_packed_bytes(&self) -> Self::PackedBytesIter<'_>;
-}
-
-/// Blanket implementation of [`TriePathFromPackedBytes`] for 256-ary tries
-/// because packed bytes and unpacked bytes are identical.
-#[cfg(feature = "branch_factor_256")]
-impl<'input, T> TriePathFromPackedBytes<'input> for T
-where
-    T: TriePathFromUnpackedBytes<'input, Error = std::convert::Infallible>,
-{
-    fn path_from_packed_bytes(bytes: &'input [u8]) -> Self {
-        match Self::path_from_unpacked_bytes(bytes) {
-            Ok(p) => p,
-            // no Err(_) branch because Infallible is an uninhabited type and
-            // cannot be represented, therefore a match on is impossible
-        }
-    }
-}
-
-#[cfg(feature = "branch_factor_256")]
-impl<T: TriePath + ?Sized> TriePathAsPackedBytes for T {
-    type PackedBytesIter<'a>
-        = std::iter::Map<T::Components<'a>, fn(PathComponent) -> u8>
-    where
-        Self: 'a;
-
-    fn as_packed_bytes(&self) -> Self::PackedBytesIter<'_> {
-        self.components().map(PathComponent::as_u8)
-    }
 }
 
 #[inline]

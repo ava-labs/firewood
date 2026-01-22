@@ -139,6 +139,36 @@ update-ffi-flake: check-nix
     echo "checking for a consistent golang verion"
     ../scripts/run-just.sh check-golang-version
 
+# RELEASE PREP: update all rust dependencies
+release-step-update-rust-dependencies:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Checking that cargo-edit is installed and up-to-date..."
+    cargo install --locked cargo-edit
+
+    echo "Upgrading all cargo dependencies in the workspace..."
+    cargo upgrade
+    # MAY FAIL: temporarily comment out if resolving updates requires significant code changes
+    echo "Upgrading all incompatible cargo dependencies in the workspace..." >&2
+    echo "NOTICE: This step may fail if incompatible upgrades require code changes." >&2
+    cargo upgrade --incompatible
+    echo "Updating Cargo.lock with upgraded dependencies..."
+    cargo update --verbose
+
+    echo "Executing tests to ensure upgrades did not break anything..."
+    cargo test --workspace --all-targets -F logger
+    cargo test --workspace --all-targets -F ethhash,logger
+
+# RELEASE PREP: refresh changelog
+release-step-refresh-changelog tag:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Checking that git-cliff is installed and up-to-date..."
+    cargo install --locked git-cliff
+
+    echo "Generating changelog..."
+    git cliff -o CHANGELOG.md --tag "{{tag}}"
+
 # Trigger task based reexecution in AvalancheGo
 trigger-reexecution firewood avalanchego task runner libevm="" timeout-minutes="120":
     just _trigger-workflow "{{ firewood }}" "{{ libevm }}" "{{ avalanchego }}" "{{ runner }}" "{{ timeout-minutes }}" \
@@ -176,7 +206,7 @@ list-reexecutions: check-nix
 _trigger-workflow firewood libevm avalanchego runner timeout-minutes +extra_flags: check-nix
     #!/usr/bin/env -S bash -euo pipefail
     GH="nix run ./ffi#gh --"
-    
+
     # Validate refs contain only safe characters
     if [[ ! "{{ firewood }}" =~ ^[a-zA-Z0-9/_.-]+$ ]]; then
         echo "Error: firewood ref contains invalid characters: {{ firewood }}" >&2
@@ -186,12 +216,12 @@ _trigger-workflow firewood libevm avalanchego runner timeout-minutes +extra_flag
         echo "Error: libevm ref contains invalid characters: {{ libevm }}" >&2
         exit 1
     fi
-    
+
     WITH_VALUE="firewood={{ firewood }}"
     if [ -n "{{ libevm }}" ]; then
         WITH_VALUE="${WITH_VALUE},libevm={{ libevm }}"
     fi
-    
+
     $GH workflow run "C-Chain Re-Execution Benchmark w/ Container" \
         --repo ava-labs/avalanchego \
         --ref "{{ avalanchego }}" \
@@ -199,7 +229,7 @@ _trigger-workflow firewood libevm avalanchego runner timeout-minutes +extra_flag
         -f timeout-minutes="{{ timeout-minutes }}" \
         -f with="$WITH_VALUE" \
         {{ extra_flags }}
-    
+
     just _wait-for-workflow-run
 
 _wait-for-workflow-run: check-nix

@@ -18,70 +18,33 @@
     clippy::missing_errors_doc,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![expect(
-    clippy::missing_fields_in_debug,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
 
 use parking_lot::Mutex;
 use std::fs::{File, OpenOptions};
 use std::io::Read;
-#[cfg(feature = "io-uring")]
-use std::mem::ManuallyDrop;
 use std::num::NonZero;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
+use firewood_metrics::firewood_increment;
 use lru::LruCache;
-use metrics::counter;
 
 use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
 
 /// A [`ReadableStorage`] and [`WritableStorage`] backed by a file
+#[derive(Debug)]
 pub struct FileBacked {
-    fd: File,
     filename: PathBuf,
     cache: Mutex<LruCache<LinearAddress, SharedNode>>,
     free_list_cache: Mutex<LruCache<LinearAddress, Option<LinearAddress>>>,
     cache_read_strategy: CacheReadStrategy,
+    node_hash_algorithm: crate::NodeHashAlgorithm,
+    // keep before `fd` so that it is dropped first (fields are dropped in the order they are declared)
     #[cfg(feature = "io-uring")]
-    pub(crate) ring: Mutex<ManuallyDrop<io_uring::IoUring>>,
-}
-
-impl Drop for FileBacked {
-    fn drop(&mut self) {
-        #[cfg(feature = "io-uring")]
-        {
-            // non-blocking because we have mutable access to self
-            let ring = self.ring.get_mut();
-
-            // We are manually dropping the ring here to ensure that it is
-            // flushed and dropped before we unlock the file descriptor.
-            #[expect(unsafe_code)]
-            // SAFETY: this is the only time `ring` is dropped. Furthermore,
-            // `Drop` ensures that this is only ever called once in a context
-            // where we are guaranteed to never use `ring` again.
-            unsafe {
-                ManuallyDrop::drop(ring);
-            }
-        }
-
-        _ = self.fd.unlock().ok();
-    }
-}
-
-// Manual implementation since ring doesn't implement Debug :(
-impl std::fmt::Debug for FileBacked {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FileBacked")
-            .field("fd", &self.fd)
-            .field("cache", &self.cache)
-            .field("free_list_cache", &self.free_list_cache)
-            .field("cache_read_strategy", &self.cache_read_strategy)
-            .finish()
-    }
+    ring: super::io_uring::IoUringProxy,
+    fd: UnlockOnDrop,
 }
 
 impl FileBacked {
@@ -98,27 +61,6 @@ impl FileBacked {
         })
     }
 
-    /// Make a write operation from a raw data buffer for this file
-    #[cfg(feature = "io-uring")]
-    pub(crate) fn make_op(&self, data: &[u8]) -> io_uring::opcode::Write {
-        use std::os::fd::AsRawFd as _;
-
-        use io_uring::opcode::Write;
-        use io_uring::types;
-
-        Write::new(
-            types::Fd(self.fd.as_raw_fd()),
-            data.as_ptr(),
-            data.len() as _,
-        )
-    }
-
-    #[cfg(feature = "io-uring")]
-    // The size of the kernel ring buffer. This buffer will control how many writes we do with
-    // a single system call.
-    // TODO: make this configurable
-    pub(crate) const RINGSIZE: u32 = 32;
-
     /// Create or open a file at a given path
     pub fn new(
         path: PathBuf,
@@ -127,6 +69,7 @@ impl FileBacked {
         truncate: bool,
         create: bool,
         cache_read_strategy: CacheReadStrategy,
+        node_hash_algorithm: crate::NodeHashAlgorithm,
     ) -> Result<Self, FileIoError> {
         let fd = OpenOptions::new()
             .read(true)
@@ -142,42 +85,33 @@ impl FileBacked {
             })?;
 
         #[cfg(feature = "io-uring")]
-        let ring = {
-            // The kernel will stop the worker thread in this many ms if there is no work to do
-            const IDLETIME_MS: u32 = 1000;
-
-            io_uring::IoUring::builder()
-                // we promise not to fork and we are the only issuer of writes to this ring
-                .dontfork()
-                .setup_single_issuer()
-                // completion queue should be larger than the request queue, we allocate double
-                .setup_cqsize(FileBacked::RINGSIZE * 2)
-                // start a kernel thread to do the IO
-                .setup_sqpoll(IDLETIME_MS)
-                .build(FileBacked::RINGSIZE)
-                .map_err(|e| FileIoError {
-                    inner: e,
-                    filename: Some(path.clone()),
-                    offset: 0,
-                    context: Some("IO-uring setup".to_string()),
-                })?
-        };
+        let ring = super::io_uring::IoUringProxy::new().map_err(|err| FileIoError {
+            inner: err,
+            filename: Some(path.clone()),
+            offset: 0,
+            context: Some("io_uring setup".to_string()),
+        })?;
 
         Ok(Self {
-            fd,
             cache: Mutex::new(LruCache::new(node_cache_size)),
             free_list_cache: Mutex::new(LruCache::new(free_list_cache_size)),
             cache_read_strategy,
             filename: path,
+            node_hash_algorithm,
             #[cfg(feature = "io-uring")]
-            ring: Mutex::new(ManuallyDrop::new(ring)),
+            ring,
+            fd: UnlockOnDrop(fd),
         })
     }
 }
 
 impl ReadableStorage for FileBacked {
+    fn node_hash_algorithm(&self) -> crate::NodeHashAlgorithm {
+        self.node_hash_algorithm
+    }
+
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
-        counter!("firewood.read_node", "from" => "file").increment(1);
+        firewood_increment!(crate::registry::READ_NODE, 1, "from" => "file");
         Ok(PredictiveReader::new(self, addr))
     }
 
@@ -192,15 +126,14 @@ impl ReadableStorage for FileBacked {
     fn read_cached_node(&self, addr: LinearAddress, mode: &'static str) -> Option<SharedNode> {
         let mut guard = self.cache.lock();
         let cached = guard.get(&addr).cloned();
-        counter!("firewood.cache.node", "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" })
-            .increment(1);
+        firewood_increment!(crate::registry::CACHE_NODE, 1, "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" });
         cached
     }
 
     fn free_list_cache(&self, addr: LinearAddress) -> Option<Option<LinearAddress>> {
         let mut guard = self.free_list_cache.lock();
         let cached = guard.pop(&addr);
-        counter!("firewood.cache.freelist", "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
+        firewood_increment!(crate::registry::CACHE_FREELIST, 1, "type" => if cached.is_some() { "hit" } else { "miss" });
         cached
     }
 
@@ -236,6 +169,17 @@ impl WritableStorage for FileBacked {
         self.fd
             .write_at(object, offset)
             .map_err(|e| self.file_io_error(e, offset, Some("write".to_string())))
+    }
+
+    #[cfg(feature = "io-uring")]
+    fn write_batch<'a, I: IntoIterator<Item = (u64, &'a [u8])> + Clone>(
+        &self,
+        writes: I,
+    ) -> Result<usize, FileIoError> {
+        use std::os::fd::AsRawFd;
+        self.ring
+            .write_batch(self.fd.as_raw_fd(), writes)
+            .map_err(|err| err.into_file_io_error(Some(self.filename.clone())))
     }
 
     fn write_cached_nodes(
@@ -299,8 +243,8 @@ impl<'a> PredictiveReader<'a> {
 impl Drop for PredictiveReader<'_> {
     fn drop(&mut self) {
         let elapsed = self.started.elapsed();
-        counter!("firewood.io.read_ms").increment(elapsed.as_millis());
-        counter!("firewood.io.read").increment(1);
+        firewood_increment!(crate::registry::IO_READ_MS, elapsed.as_millis());
+        firewood_increment!(crate::registry::IO_READ_COUNT, 1);
     }
 }
 
@@ -329,9 +273,35 @@ impl OffsetReader for PredictiveReader<'_> {
     }
 }
 
+#[derive(Debug)]
+struct UnlockOnDrop(File);
+
+impl Drop for UnlockOnDrop {
+    fn drop(&mut self) {
+        // ignore the error, we might not have ever called `lock`
+        _ = self.0.unlock();
+    }
+}
+
+impl std::ops::Deref for UnlockOnDrop {
+    type Target = File;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for UnlockOnDrop {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 #[cfg(test)]
 mod test {
     #![expect(clippy::unwrap_used)]
+
+    use crate::NodeHashAlgorithm;
 
     use super::*;
     use nonzero_ext::nonzero;
@@ -354,6 +324,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
         )
         .unwrap();
 
@@ -396,6 +367,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
         )
         .unwrap();
 

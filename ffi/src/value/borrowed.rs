@@ -3,7 +3,7 @@
 
 use std::fmt;
 
-use crate::value::KeyValuePair;
+use crate::value::BatchOp;
 
 /// A type alias for a borrowed byte slice.
 ///
@@ -15,19 +15,19 @@ use crate::value::KeyValuePair;
 /// for the duration of the C function call that was passed this slice.
 pub type BorrowedBytes<'a> = BorrowedSlice<'a, u8>;
 
-/// A type alias for a borrowed slice of [`KeyValuePair`]s.
+/// A type alias for a borrowed slice of [`BatchOp`]s.
 ///
-/// C callers can use this to pass in a slice of key-value pairs that will not
+/// C callers can use this to pass in a slice of batch operations that will not
 /// be freed by Rust code.
 ///
 /// C callers must ensure that the pointer, if not null, points to a valid slice
-/// of key-value pairs of length `len`. C callers must also ensure that the slice
+/// of batch operations of length `len`. C callers must also ensure that the slice
 /// is valid for the duration of the C function call that was passed this slice.
-pub type BorrowedKeyValuePairs<'a> = BorrowedSlice<'a, KeyValuePair<'a>>;
+pub type BorrowedBatchOps<'a> = BorrowedSlice<'a, BatchOp<'a>>;
 
 /// A borrowed byte slice. Used to represent data that was passed in from C
 /// callers and will not be freed or retained by Rust code.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug)]
 #[repr(C)]
 pub struct BorrowedSlice<'a, T> {
     /// A pointer to the slice of bytes. This can be null if the slice is empty.
@@ -49,6 +49,16 @@ pub struct BorrowedSlice<'a, T> {
     /// lifetime of the slice passed in to C functions.
     marker: std::marker::PhantomData<&'a [T]>,
 }
+
+// Manual Clone/Copy impls: BorrowedSlice holds a pointer and length, not T values.
+// Copying the struct is valid for any T, regardless of whether T is Copy.
+impl<T> Clone for BorrowedSlice<'_, T> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<T> Copy for BorrowedSlice<'_, T> {}
 
 impl<'a, T> BorrowedSlice<'a, T> {
     /// Creates a slice from the given pointer and length.

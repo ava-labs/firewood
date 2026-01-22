@@ -1,6 +1,6 @@
 [package]
 name = "firewood-ffi"
-version.workspace = true
+version = "0.1.0"
 edition.workspace = true
 authors = [
      "Aaron Buchwald <aaron.buchwald56@gmail.com>",
@@ -23,17 +23,18 @@ crate-type = ["staticlib"]
 # Workspace dependencies
 coarsetime.workspace = true
 firewood.workspace = true
+firewood-metrics.workspace = true
 firewood-storage.workspace = true
 metrics.workspace = true
-metrics-util.workspace = true
 parking_lot.workspace = true
 # Regular dependencies
-chrono = "0.4.42"
 oxhttp = "0.3.1"
 tikv-jemallocator = "0.6.1"
+metrics-exporter-prometheus = { version = "0.18.1", default-features = false }
 # Optional dependencies
+rlp = { version = "0.6.1", optional = true }
 env_logger = { workspace = true, optional = true }
-derive-where = "1.6.0"
+firewood-replay = { workspace = true, optional = true }
 
 [dev-dependencies]
 # Workspace dependencies
@@ -41,7 +42,9 @@ test-case.workspace = true
 
 [features]
 logger = ["dep:env_logger", "firewood/logger"]
-ethhash = ["firewood/ethhash"]
+ethhash = ["firewood/ethhash", "rlp"]
+io-uring = ["firewood/io-uring", "firewood-storage/io-uring"]
+block-replay = ["dep:firewood-replay"]
 
 [build-dependencies]
 cbindgen = "0.29.2"
@@ -50,4 +53,4 @@ cbindgen = "0.29.2"
 workspace = true
 
 [package.metadata.cargo-machete]
-ignored = ["cbindgen"]
+ignored = ["cbindgen", "metrics"]

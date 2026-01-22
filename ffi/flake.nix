@@ -12,7 +12,7 @@
     rust-overlay.url = "github:oxalica/rust-overlay";
     crane.url = "github:ipetkov/crane";
     flake-utils.url = "github:numtide/flake-utils";
-    golang.url = "github:ava-labs/avalanchego?dir=nix/go&ref=f10757d594eedf0f016bc1400739788c542f005f";
+    golang.url = "github:ava-labs/avalanchego?dir=nix/go&ref=1a59a6f646ef18167dde10d24d4efbf05e3de177";
   };
 
   outputs = { self, nixpkgs, rust-overlay, crane, flake-utils, golang }:
@@ -32,7 +32,6 @@
 
       # Extract crate info from Cargo.toml files
       ffiCargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
-      workspaceCargoToml = builtins.fromTOML (builtins.readFile ../Cargo.toml);
 
       src = lib.cleanSourceWith {
         src = craneLib.path ./..;
@@ -52,7 +51,7 @@
 
         # Build only the firewood-ffi crate
         pname = ffiCargoToml.package.name;
-        version = workspaceCargoToml.workspace.package.version;
+        version = ffiCargoToml.package.version;
 
         nativeBuildInputs = with pkgs; [
           pkg-config

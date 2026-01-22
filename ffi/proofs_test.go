@@ -4,6 +4,7 @@
 package ffi
 
 import (
+	"encoding/hex"
 	"runtime"
 	"testing"
 
@@ -104,8 +105,8 @@ func TestRangeProofNonExistentRoot(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// insert some data
-	keys, vals := kvForTest(100)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(100)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
 	// create a bogus root
@@ -121,8 +122,8 @@ func TestRangeProofPartialRange(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Insert a lot of data.
-	keys, vals := kvForTest(10000)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(10000)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
 	// get a proof over some partial range
@@ -140,15 +141,15 @@ func TestRangeProofDiffersAfterUpdate(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Insert some data.
-	keys, vals := kvForTest(100)
-	root1, err := db.Update(keys[:50], vals[:50])
+	_, _, batch := kvForTest(100)
+	root1, err := db.Update(batch[:50])
 	r.NoError(err)
 
 	// get a proof
 	proof := newSerializedRangeProof(t, db, root1, nothing(), nothing(), rangeProofLenTruncated)
 
 	// insert more data
-	root2, err := db.Update(keys[50:], vals[50:])
+	root2, err := db.Update(batch[50:])
 	r.NoError(err)
 	r.NotEqual(root1, root2)
 
@@ -164,8 +165,8 @@ func TestRoundTripSerialization(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Insert some data.
-	keys, vals := kvForTest(10)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(10)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
 	// get a proof
@@ -187,11 +188,13 @@ func TestRangeProofVerify(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals := kvForTest(100)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(100)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
-	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
+	// not using `newVerifiedRangeProof` so we can test Verify separately
+	proof, err := db.RangeProof(root, nothing(), nothing(), rangeProofLenTruncated)
+	r.NoError(err)
 
 	// Database should be immediately closeable (no keep-alive)
 	r.NoError(db.Close(oneSecCtx(t)))
@@ -213,8 +216,8 @@ func TestVerifyAndCommitRangeProof(t *testing.T) {
 	dbTarget := newTestDatabase(t)
 
 	// Populate source
-	keys, vals := kvForTest(50)
-	sourceRoot, err := dbSource.Update(keys, vals)
+	keys, vals, batch := kvForTest(50)
+	sourceRoot, err := dbSource.Update(batch)
 	r.NoError(err)
 
 	proof := newVerifiedRangeProof(t, dbSource, sourceRoot, nothing(), nothing(), rangeProofLenUnbounded)
@@ -236,8 +239,8 @@ func TestRangeProofFindNextKey(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals := kvForTest(100)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(100)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
 	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
@@ -269,11 +272,42 @@ func TestRangeProofFindNextKey(t *testing.T) {
 	r.NoError(nextRange.Free())
 }
 
+func TestRangeProofCodeHashes(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// RLP encoded account with code hash
+	key := [32]byte{0x12, 0x34, 0x56} // key must be length 32
+	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
+	r.NoError(err)
+	codeHash := stringToHash(t, "044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
+
+	root, err := db.Update([]BatchOp{Put(key[:], val)})
+	r.NoError(err)
+
+	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenUnbounded)
+
+	i := 0
+	mode, err := inferHashingMode(t.Context())
+	r.NoError(err)
+	for h, err := range proof.CodeHashes() {
+		i++
+		if mode == ethhashKey {
+			r.NoError(err, "%T.CodeHashes()", proof)
+			r.Equal(codeHash, h)
+		} else {
+			require.ErrorContains(t, err, "feature not supported in this build: ethhash code hash iterator")
+		}
+	}
+
+	require.Equalf(t, 1, i, "expected one yield from %T.CodeHashes()", proof)
+}
+
 func TestRangeProofFreeReleasesKeepAlive(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals := kvForTest(50)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(50)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
 	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
@@ -295,8 +329,8 @@ func TestRangeProofFreeReleasesKeepAlive(t *testing.T) {
 func TestRangeProofCommitReleasesKeepAlive(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals := kvForTest(50)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(50)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
 	proof := newVerifiedRangeProof(t, db, root, nothing(), nothing(), rangeProofLenTruncated)
@@ -328,8 +362,8 @@ func TestRangeProofCommitReleasesKeepAlive(t *testing.T) {
 func TestRangeProofFinalizerCleanup(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals := kvForTest(50)
-	root, err := db.Update(keys, vals)
+	_, _, batch := kvForTest(50)
+	root, err := db.Update(batch)
 	r.NoError(err)
 
 	// note: this does not use newVerifiedRangeProof because it sets a cleanup

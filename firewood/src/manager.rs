@@ -12,12 +12,12 @@
 
 use parking_lot::{Mutex, RwLock};
 use std::collections::{HashMap, VecDeque};
+use std::io;
 use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
 use firewood_storage::logger::{trace, warn};
-use metrics::gauge;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
@@ -25,16 +25,19 @@ use crate::merkle::Merkle;
 use crate::root_store::RootStore;
 use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
+use firewood_metrics::{firewood_increment, firewood_set};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    TrieHash,
+    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal,
+    NodeHashAlgorithm, NodeStore, TrieHash,
 };
+
+pub(crate) const DB_FILE_NAME: &str = "firewood.db";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
 /// Revision manager configuratoin
 pub struct RevisionManagerConfig {
-    /// The number of historical revisions to keep in memory.
+    /// The number of committed revisions to keep in memory.
     #[builder(default = 128)]
     max_revisions: usize,
 
@@ -53,6 +56,11 @@ pub struct RevisionManagerConfig {
 #[non_exhaustive]
 /// Configuration manager that contains both truncate and revision manager config
 pub struct ConfigManager {
+    /// The directory where the database files will be stored (required).
+    pub root_dir: PathBuf,
+    /// The algorithm used for hashing nodes (required).
+    pub node_hash_algorithm: NodeHashAlgorithm,
+
     /// Whether to create the DB if it doesn't exist.
     #[builder(default = true)]
     pub create: bool,
@@ -60,9 +68,9 @@ pub struct ConfigManager {
     /// existing contents will be lost.
     #[builder(default = false)]
     pub truncate: bool,
-    /// `RootStore` directory path
-    #[builder(default = None)]
-    pub root_store_dir: Option<PathBuf>,
+    /// Whether to enable `RootStore`.
+    #[builder(default = false)]
+    pub root_store: bool,
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
@@ -73,16 +81,36 @@ type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
 #[derive(Debug)]
 pub(crate) struct RevisionManager {
-    /// Maximum number of revisions to keep on disk
+    /// Maximum number of revisions to keep in memory.
+    ///
+    /// When this limit is exceeded, the oldest revision is removed from memory.
+    /// If `root_store` is `None`, the oldest revision's nodes are added to the
+    /// free list for space reuse. Otherwise, the oldest revision
+    /// is preserved on disk for historical queries.
     max_revisions: usize,
 
-    /// The list of revisions that are on disk; these point to the different roots
-    /// stored in the filebacked storage.
-    historical: RwLock<VecDeque<CommittedRevision>>,
-    proposals: Mutex<Vec<ProposedRevision>>,
-    // committing_proposals: VecDeque<Arc<ProposedImmutable>>,
+    /// FIFO queue of committed revisions kept in memory. The queue always
+    /// contains at least one revision.
+    in_memory_revisions: RwLock<VecDeque<CommittedRevision>>,
+
+    /// Hash-based index of committed revisions kept in memory.
+    ///
+    /// Maps root hash to the corresponding committed revision for O(1) lookup
+    /// performance. This allows efficient retrieval of revisions without
+    /// scanning through the `in_memory_revisions` queue.
     by_hash: RwLock<HashMap<TrieHash, CommittedRevision>>,
+
+    /// Active proposals that have not yet been committed.
+    proposals: Mutex<Vec<ProposedRevision>>,
+
+    /// Lazily initialized thread pool for parallel operations.
     threadpool: OnceLock<ThreadPool>,
+
+    /// Optional persistent store for historical root addresses.
+    ///
+    /// When present, enables retrieval of revisions beyond `max_revisions` by
+    /// persisting root hash to disk address mappings. This allows historical
+    /// queries of arbitrarily old revisions without keeping them in memory.
     root_store: Option<RootStore>,
 }
 
@@ -99,21 +127,29 @@ pub(crate) enum RevisionManagerError {
         provided: Option<HashKey>,
         expected: Option<HashKey>,
     },
-    #[error("An IO error occurred during the commit: {0}")]
+    #[error("A FileIO error occurred during the commit: {0}")]
     FileIoError(#[from] FileIoError),
+    #[error("An IO error occurred while creating the database directory: {0}")]
+    IOError(#[from] io::Error),
     #[error("A RootStore error occurred: {0}")]
     RootStoreError(#[source] Box<dyn std::error::Error + Send + Sync>),
 }
 
 impl RevisionManager {
-    pub fn new(filename: PathBuf, config: ConfigManager) -> Result<Self, RevisionManagerError> {
+    pub fn new(config: ConfigManager) -> Result<Self, RevisionManagerError> {
+        if config.create {
+            std::fs::create_dir_all(&config.root_dir).map_err(RevisionManagerError::IOError)?;
+        }
+
+        let file = config.root_dir.join(DB_FILE_NAME);
         let fb = FileBacked::new(
-            filename,
+            file,
             config.manager.node_cache_size,
             config.manager.free_list_cache_size,
             config.truncate,
             config.create,
             config.manager.cache_read_strategy,
+            config.node_hash_algorithm,
         )?;
 
         // Acquire an advisory lock on the database file to prevent multiple processes
@@ -123,17 +159,19 @@ impl RevisionManager {
         let storage = Arc::new(fb);
         let nodestore = Arc::new(NodeStore::open(storage.clone())?);
         let root_store = config
-            .root_store_dir
-            .map(|path| RootStore::new(path, storage.clone()))
-            .transpose()
-            .map_err(RevisionManagerError::RootStoreError)?;
+            .root_store
+            .then(|| {
+                let root_store_dir = config.root_dir.join("root_store");
+                RootStore::new(root_store_dir, storage.clone(), config.truncate)
+                    .map_err(RevisionManagerError::RootStoreError)
+            })
+            .transpose()?;
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,
-            historical: RwLock::new(VecDeque::from([nodestore.clone()])),
+            in_memory_revisions: RwLock::new(VecDeque::from([nodestore.clone()])),
             by_hash: RwLock::new(Default::default()),
             proposals: Mutex::new(Default::default()),
-            // committing_proposals: Default::default(),
             threadpool: OnceLock::new(),
             root_store,
         };
@@ -182,7 +220,7 @@ impl RevisionManager {
     /// 6. Proposal Cleanup.
     ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
     #[fastrace::trace(short_name = true)]
-    #[crate::metrics("firewood.proposal.commit", "proposal commit to storage")]
+    #[crate::metrics("proposal.commit", "proposal commit to storage")]
     pub fn commit(&self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
         // 1. Commit check
         let current_revision = self.current_revision();
@@ -200,9 +238,9 @@ impl RevisionManager {
         // If `RootStore` does not exist, add the oldest revision's nodes to the free list.
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
-        while self.historical.read().len() >= self.max_revisions {
+        while self.in_memory_revisions.read().len() >= self.max_revisions {
             let oldest = self
-                .historical
+                .in_memory_revisions
                 .write()
                 .pop_front()
                 .expect("must be present");
@@ -222,13 +260,16 @@ impl RevisionManager {
                     Ok(oldest) => oldest.reap_deleted(&mut committed)?,
                     Err(original) => {
                         warn!("Oldest revision could not be reaped; still referenced");
-                        self.historical.write().push_front(original);
+                        self.in_memory_revisions.write().push_front(original);
                         break;
                     }
                 }
             }
-            gauge!("firewood.active_revisions").set(self.historical.read().len() as f64);
-            gauge!("firewood.max_revisions").set(self.max_revisions as f64);
+            firewood_set!(
+                crate::registry::ACTIVE_REVISIONS,
+                self.in_memory_revisions.read().len() as f64
+            );
+            firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions as f64);
         }
 
         // 3. Persist to disk.
@@ -246,18 +287,38 @@ impl RevisionManager {
         }
 
         // 5. Set last committed revision
+        // The revision is added to `by_hash` here while it still exists in `proposals`.
+        // The `view()` method relies on this ordering - it checks `proposals` first,
+        // then `by_hash`, ensuring the revision is always findable during the transition.
         let committed: CommittedRevision = committed.into();
-        self.historical.write().push_back(committed.clone());
+        self.in_memory_revisions
+            .write()
+            .push_back(committed.clone());
         if let Some(hash) = committed.root_hash().or_default_root_hash() {
             self.by_hash.write().insert(hash, committed.clone());
         }
 
         // 6. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
-        // referenced by anyone else.
-        self.proposals
-            .lock()
-            .retain(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1);
+        // referenced by anyone else. Track how many were discarded (dropped without commit).
+        {
+            let mut lock = self.proposals.lock();
+            let mut discarded = 0u64;
+            lock.retain(|p| {
+                let should_retain = !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1;
+                if !should_retain {
+                    discarded = discarded.wrapping_add(1);
+                }
+                should_retain
+            });
+
+            if discarded > 0 {
+                firewood_increment!(crate::registry::PROPOSALS_DISCARDED, discarded);
+            }
+
+            // Update uncommitted proposals gauge after cleanup
+            firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len() as f64);
+        }
 
         // then reparent any proposals that have this proposal as a parent
         for p in &*self.proposals.lock() {
@@ -276,45 +337,33 @@ impl RevisionManager {
 
     /// View the database at a specific hash.
     /// To view the database at a specific hash involves a few steps:
-    /// 1. Try to find it in committed revisions.
-    /// 2. Try to find it in proposals.
+    /// 1. Try to find it in proposals.
+    /// 2. Try to find it in committed revisions.
     pub fn view(&self, root_hash: HashKey) -> Result<ArcDynDbView, RevisionManagerError> {
-        // 1. Try to find it in committed revisions.
-        if let Ok(committed) = self.revision(root_hash.clone()) {
-            return Ok(committed);
-        }
-
-        // 2. Try to find it in proposals.
+        // 1. Try to find it in proposals.
         let proposal = self
             .proposals
             .lock()
             .iter()
             .find(|p| p.root_hash().as_ref() == Some(&root_hash))
-            .cloned()
-            .ok_or(RevisionManagerError::RevisionNotFound {
-                provided: root_hash,
-            })?;
+            .cloned();
 
-        Ok(proposal)
+        if let Some(proposal) = proposal {
+            return Ok(proposal);
+        }
+
+        // 2. Try to find it in committed revisions.
+        self.revision(root_hash).map(|r| r as ArcDynDbView)
     }
 
     pub fn add_proposal(&self, proposal: ProposedRevision) {
-        self.proposals.lock().push(proposal);
-    }
-
-    /// TODO: should we support fetching all hashes from `RootStore`?
-    pub fn all_hashes(&self) -> Vec<TrieHash> {
-        self.historical
-            .read()
-            .iter()
-            .filter_map(|r| r.root_hash().or_default_root_hash())
-            .chain(
-                self.proposals
-                    .lock()
-                    .iter()
-                    .filter_map(|p| p.root_hash().or_default_root_hash()),
-            )
-            .collect()
+        let len = {
+            let mut lock = self.proposals.lock();
+            lock.push(proposal);
+            lock.len()
+        };
+        // Update uncommitted proposals gauge after adding
+        firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, len as f64);
     }
 
     /// Retrieve a committed revision by its root hash.
@@ -349,7 +398,7 @@ impl RevisionManager {
     }
 
     pub fn current_revision(&self) -> CommittedRevision {
-        self.historical
+        self.in_memory_revisions
             .read()
             .back()
             .expect("there is always one revision")
@@ -378,28 +427,39 @@ impl RevisionManager {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use tempfile::NamedTempFile;
+
+    impl RevisionManager {
+        /// Get all proposal hashes available.
+        pub fn proposal_hashes(&self) -> Vec<TrieHash> {
+            self.proposals
+                .lock()
+                .iter()
+                .filter_map(|p| p.root_hash().or_default_root_hash())
+                .collect()
+        }
+    }
 
     #[test]
     fn test_file_advisory_lock() {
         // Create a temporary file for testing
-        let temp_file = NamedTempFile::new().unwrap();
-        let db_path = temp_file.path().to_path_buf();
+        let db_dir = tempfile::tempdir().unwrap();
 
         let config = ConfigManager::builder()
+            .root_dir(db_dir.as_ref().to_path_buf())
+            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .create(true)
             .truncate(false)
             .build();
 
         // First database instance should open successfully
-        let first_manager = RevisionManager::new(db_path.clone(), config.clone());
+        let first_manager = RevisionManager::new(config.clone());
         assert!(
             first_manager.is_ok(),
             "First database should open successfully"
         );
 
         // Second database instance should fail to open due to file locking
-        let second_manager = RevisionManager::new(db_path.clone(), config.clone());
+        let second_manager = RevisionManager::new(config.clone());
         assert!(
             second_manager.is_err(),
             "Second database should fail to open"
@@ -419,10 +479,242 @@ mod tests {
         drop(first_manager.unwrap());
 
         // Now the second database should open successfully
-        let third_manager = RevisionManager::new(db_path, config);
+        let third_manager = RevisionManager::new(config);
         assert!(
             third_manager.is_ok(),
             "Database should open after first instance is dropped"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::too_many_lines)]
+    fn test_slow_concurrent_view_during_commit() {
+        use firewood_storage::{
+            ImmutableProposal, LeafNode, NibblesIterator, Node, NodeStore, Path,
+        };
+        use std::sync::Barrier;
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::thread;
+
+        const NUM_ITERATIONS: usize = 1000;
+        const NUM_VIEWER_THREADS: usize = 10;
+        const NUM_COMMITTER_THREADS: usize = 5;
+
+        // Create a temporary database
+        let db_dir = tempfile::tempdir().unwrap();
+
+        let config = ConfigManager::builder()
+            .root_dir(db_dir.as_ref().to_path_buf())
+            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+            .create(true)
+            .manager(
+                RevisionManagerConfig::builder()
+                    .max_revisions(100_000) // Set very high to prevent reaping during test
+                    .build(),
+            )
+            .build();
+
+        let manager = Arc::new(RevisionManager::new(config).unwrap());
+
+        // Create an initial proposal and commit it to have a non-empty base
+        let base_revision = manager.current_revision();
+        let mut proposal = NodeStore::new(&*base_revision).unwrap();
+        {
+            let root = proposal.root_mut();
+            *root = Some(Node::Leaf(LeafNode {
+                partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"initial")),
+                value: b"value".to_vec().into_boxed_slice(),
+            }));
+        }
+        let proposal: Arc<NodeStore<Arc<ImmutableProposal>, _>> =
+            Arc::new(proposal.try_into().unwrap());
+        manager.add_proposal(proposal.clone());
+        manager.commit(proposal).unwrap();
+
+        let error_count = Arc::new(AtomicUsize::new(0));
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        let barrier = Arc::new(Barrier::new(NUM_VIEWER_THREADS + NUM_COMMITTER_THREADS));
+
+        let mut handles = vec![];
+
+        // Spawn viewer threads
+        for thread_id in 0..NUM_VIEWER_THREADS {
+            let manager = Arc::clone(&manager);
+            let error_count = Arc::clone(&error_count);
+            let stop_flag = Arc::clone(&stop_flag);
+            let barrier = Arc::clone(&barrier);
+
+            let handle = thread::spawn(move || {
+                barrier.wait(); // Synchronize thread start
+
+                let mut local_errors = 0;
+                for _ in 0..NUM_ITERATIONS {
+                    if stop_flag.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    // Try to view the current revision
+                    let current_hash = manager.current_revision().root_hash();
+                    if let Some(hash) = current_hash {
+                        match manager.view(hash.clone()) {
+                            Ok(_) => {}
+                            Err(RevisionManagerError::RevisionNotFound { .. }) => {
+                                local_errors += 1;
+                                eprintln!("Thread {thread_id}: RevisionNotFound for hash {hash:?}");
+                            }
+                            Err(e) => {
+                                eprintln!("Thread {thread_id}: Unexpected error: {e:?}");
+                            }
+                        }
+                    }
+
+                    // Small yield to increase contention
+                    thread::yield_now();
+                }
+
+                error_count.fetch_add(local_errors, Ordering::Relaxed);
+            });
+
+            handles.push(handle);
+        }
+
+        // Spawn committer threads
+        for thread_id in 0..NUM_COMMITTER_THREADS {
+            let manager = Arc::clone(&manager);
+            let stop_flag = Arc::clone(&stop_flag);
+            let barrier = Arc::clone(&barrier);
+
+            let handle = thread::spawn(move || {
+                barrier.wait(); // Synchronize thread start
+
+                for i in 0..NUM_ITERATIONS {
+                    if stop_flag.load(Ordering::Relaxed) {
+                        break;
+                    }
+
+                    // Create and commit a proposal
+                    let current = manager.current_revision();
+                    let mut new_proposal = match NodeStore::new(&*current) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            eprintln!("Thread {thread_id}: Failed to create proposal: {e:?}");
+                            continue;
+                        }
+                    };
+
+                    // Modify the proposal
+                    {
+                        let root = new_proposal.root_mut();
+                        let key = format!("key_{thread_id}_{i}");
+                        *root = Some(Node::Leaf(LeafNode {
+                            partial_path: Path::from_nibbles_iterator(NibblesIterator::new(
+                                key.as_bytes(),
+                            )),
+                            value: format!("value_{i}").as_bytes().to_vec().into_boxed_slice(),
+                        }));
+                    }
+
+                    let immutable: Arc<NodeStore<Arc<ImmutableProposal>, _>> =
+                        Arc::new(match new_proposal.try_into() {
+                            Ok(p) => p,
+                            Err(e) => {
+                                eprintln!(
+                                    "Thread {thread_id}: Failed to convert to immutable: {e:?}"
+                                );
+                                continue;
+                            }
+                        });
+
+                    manager.add_proposal(immutable.clone());
+
+                    match manager.commit(immutable) {
+                        Ok(()) | Err(RevisionManagerError::NotLatest { .. }) => {
+                            // Expected when multiple threads try to commit
+                        }
+                        Err(e) => {
+                            eprintln!("Thread {thread_id}: Unexpected commit error: {e:?}");
+                            stop_flag.store(true, Ordering::Relaxed);
+                            break;
+                        }
+                    }
+
+                    thread::yield_now();
+                }
+            });
+
+            handles.push(handle);
+        }
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let total_errors = error_count.load(Ordering::Relaxed);
+
+        if total_errors > 0 {
+            eprintln!(
+                "\nRace condition detected! {total_errors} RevisionNotFound errors occurred."
+            );
+            eprintln!("This confirms the race condition exists between commit and view.");
+        } else {
+            eprintln!(
+                "\nNo race condition detected in this run. Try running the test multiple times or increasing iterations."
+            );
+        }
+
+        // For now, we expect the race to occur, so we fail if we see errors
+        assert_eq!(
+            total_errors, 0,
+            "Race condition detected: {total_errors} threads failed to find revisions that should exist"
+        );
+    }
+
+    #[test]
+    fn test_no_fjall_directory_when_root_store_disabled() {
+        // Create a temporary directory for the database
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.as_ref().to_path_buf();
+
+        // Create a database with root_store disabled (default)
+        let config = ConfigManager::builder()
+            .root_dir(db_path.clone())
+            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+            .create(true)
+            .root_store(false)
+            .build();
+
+        let _manager = RevisionManager::new(config).unwrap();
+
+        // Verify that the root_store directory does NOT exist
+        let root_store_dir = db_path.join("root_store");
+        assert!(
+            !root_store_dir.exists(),
+            "root_store directory should not be created when root_store is disabled"
+        );
+    }
+
+    #[test]
+    fn test_fjall_directory_when_root_store_enabled() {
+        // Create a temporary directory for the database
+        let db_dir = tempfile::tempdir().unwrap();
+        let db_path = db_dir.as_ref().to_path_buf();
+
+        // Create a database with root_store enabled
+        let config = ConfigManager::builder()
+            .root_dir(db_path.clone())
+            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+            .create(true)
+            .root_store(true)
+            .build();
+
+        let _manager = RevisionManager::new(config).unwrap();
+
+        // Verify that the root_store directory DOES exist
+        let root_store_dir = db_path.join("root_store");
+        assert!(
+            root_store_dir.exists(),
+            "root_store directory should be created when root_store is enabled"
         );
     }
 }

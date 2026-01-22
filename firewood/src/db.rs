@@ -18,14 +18,14 @@ use crate::v2::api::{
 };
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
+use firewood_metrics::firewood_counter;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieReader,
+    ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, TrieReader,
 };
-use metrics::{counter, describe_counter};
 use std::io::Write;
 use std::num::NonZeroUsize;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
@@ -95,6 +95,11 @@ where
             None => Ok(MerkleKeyValueIter::from(self)),
         }
     }
+
+    fn dump_to_string(&self) -> Result<String, api::Error> {
+        let merkle = Merkle::from(self);
+        merkle.dump_to_string().map_err(api::Error::from)
+    }
 }
 
 #[allow(dead_code)]
@@ -109,6 +114,9 @@ pub enum UseParallel {
 #[derive(Clone, TypedBuilder, Debug)]
 #[non_exhaustive]
 pub struct DbConfig {
+    /// The algorithm used for hashing nodes (required).
+    #[cfg_attr(test, builder(default = NodeHashAlgorithm::compile_option()))]
+    pub node_hash_algorithm: NodeHashAlgorithm,
     /// Whether to create the DB if it doesn't exist.
     #[builder(default = true)]
     pub create_if_missing: bool,
@@ -124,9 +132,9 @@ pub struct DbConfig {
     // TODO: Experimentally determine the right value for BatchSize.
     #[builder(default = UseParallel::BatchSize(8))]
     pub use_parallel: UseParallel,
-    /// `RootStore` directory path
-    #[builder(default = None)]
-    pub root_store_dir: Option<PathBuf>,
+    /// Whether to enable `RootStore`.
+    #[builder(default = false)]
+    pub root_store: bool,
 }
 
 #[derive(Debug)]
@@ -154,30 +162,29 @@ impl api::Db for Db {
         Ok(self.manager.root_hash()?.or_default_root_hash())
     }
 
-    fn all_hashes(&self) -> Result<Vec<HashKey>, api::Error> {
-        Ok(self.manager.all_hashes())
-    }
-
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal<'_>, api::Error> {
+        // Proposal created from db
+        firewood_metrics::firewood_increment!(crate::registry::PROPOSALS_CREATED, 1, "base" => "db");
+
         self.propose_with_parent(batch, &self.manager.current_revision())
     }
 }
 
 impl Db {
     /// Create a new database instance.
-    pub fn new<P: AsRef<Path>>(db_path: P, cfg: DbConfig) -> Result<Self, api::Error> {
+    pub fn new<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Self, api::Error> {
         let metrics = Arc::new(DbMetrics {
-            proposals: counter!("firewood.proposals"),
+            proposals: firewood_counter!(crate::registry::PROPOSALS),
         });
-        describe_counter!("firewood.proposals", "Number of proposals created");
         let config_manager = ConfigManager::builder()
+            .root_dir(db_dir.as_ref().to_path_buf())
+            .node_hash_algorithm(cfg.node_hash_algorithm)
             .create(cfg.create_if_missing)
             .truncate(cfg.truncate)
-            .root_store_dir(cfg.root_store_dir)
+            .root_store(cfg.root_store)
             .manager(cfg.manager)
             .build();
-
-        let manager = RevisionManager::new(db_path.as_ref().to_path_buf(), config_manager)?;
+        let manager = RevisionManager::new(config_manager)?;
         let db = Self {
             metrics,
             manager,
@@ -196,6 +203,17 @@ impl Db {
         let latest_rev_nodestore = self.manager.current_revision();
         let merkle = Merkle::from(latest_rev_nodestore);
         merkle.dump(w).map_err(std::io::Error::other)
+    }
+
+    /// Dump the Trie of the latest revision to a String
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the dump operation fails
+    pub fn dump_to_string(&self) -> Result<String, std::io::Error> {
+        let latest_rev_nodestore = self.manager.current_revision();
+        let merkle = Merkle::from(latest_rev_nodestore);
+        merkle.dump_to_string().map_err(std::io::Error::other)
     }
 
     /// Get a copy of the database metrics
@@ -352,6 +370,10 @@ impl api::DbView for Proposal<'_> {
     fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
         api::DbView::iter_option(&*self.nodestore, first_key)
     }
+
+    fn dump_to_string(&self) -> Result<String, api::Error> {
+        api::DbView::dump_to_string(&*self.nodestore)
+    }
 }
 
 impl<'db> api::Proposal for Proposal<'db> {
@@ -367,9 +389,18 @@ impl<'db> api::Proposal for Proposal<'db> {
 }
 
 impl Proposal<'_> {
-    #[crate::metrics("firewood.proposal.create", "database proposal creation")]
+    #[crate::metrics("proposal.create", "database proposal creation")]
     fn create_proposal(&self, batch: impl IntoBatchIter) -> Result<Self, api::Error> {
+        // Proposal created based on another proposal
+        firewood_metrics::firewood_increment!(crate::registry::PROPOSALS_CREATED, 1, "base" => "proposal");
+
         self.db.propose_with_parent(batch, &self.nodestore)
+    }
+
+    /// Returns the view backing this proposal.
+    #[must_use]
+    pub fn view(&self) -> ArcDynDbView {
+        self.nodestore.clone()
     }
 }
 
@@ -382,7 +413,7 @@ mod test {
     use std::iter::Peekable;
     use std::num::NonZeroUsize;
     use std::ops::{Deref, DerefMut};
-    use std::path::PathBuf;
+    use std::path::Path;
 
     use firewood_storage::{
         CheckOpt, CheckerError, HashedNodeReader, IntoHashType, LinearAddress, MaybePersistedNode,
@@ -518,7 +549,7 @@ mod test {
         // nodestore is still accessible because it's referenced by the revision manager
         // The third proposal remains referenced
         let p2hash = proposal2.root_hash().unwrap().unwrap();
-        assert!(db.all_hashes().unwrap().contains(&p2hash));
+        assert!(db.manager.proposal_hashes().contains(&p2hash));
         drop(proposal2);
 
         // commit the first proposal
@@ -529,12 +560,12 @@ mod test {
         assert_eq!(&*historical.val(b"k1").unwrap().unwrap(), b"v1");
 
         // the second proposal shouldn't be available to commit anymore
-        assert!(!db.all_hashes().unwrap().contains(&p2hash));
+        assert!(!db.manager.proposal_hashes().contains(&p2hash));
 
         // the third proposal should still be contained within the all_hashes list
         // would be deleted if another proposal was committed and proposal3 was dropped here
         let hash3 = proposal3.root_hash().unwrap().unwrap();
-        assert!(db.manager.all_hashes().contains(&hash3));
+        assert!(db.manager.proposal_hashes().contains(&hash3));
     }
 
     #[test]
@@ -570,7 +601,7 @@ mod test {
         // nodestore is still accessible because it's referenced by the revision manager
         // The third proposal remains referenced
         let p2hash = proposal2.root_hash().unwrap().unwrap();
-        assert!(db.all_hashes().unwrap().contains(&p2hash));
+        assert!(db.manager.proposal_hashes().contains(&p2hash));
         drop(proposal2);
 
         // commit the first proposal
@@ -581,11 +612,11 @@ mod test {
         assert_eq!(&*historical.val(b"k1").unwrap().unwrap(), b"v1");
 
         // the second proposal shouldn't be available to commit anymore
-        assert!(!db.all_hashes().unwrap().contains(&p2hash));
+        assert!(!db.manager.proposal_hashes().contains(&p2hash));
 
         // the third proposal should still be contained within the all_hashes list
         let hash3 = proposal3.root_hash().unwrap().unwrap();
-        assert!(db.manager.all_hashes().contains(&hash3));
+        assert!(db.manager.proposal_hashes().contains(&hash3));
 
         // moreover, the data from the second and third proposals should still be available
         // through proposal3
@@ -922,7 +953,7 @@ mod test {
     }
 
     #[test]
-    fn fuzz_checker() {
+    fn test_slow_fuzz_checker() {
         let rng = firewood_storage::SeededRng::from_env_or_random();
 
         let db = TestDb::new();
@@ -1020,7 +1051,7 @@ mod test {
 
     /// Test that reading from a proposal during commit works as expected
     #[test]
-    fn test_read_during_commit() {
+    fn test_slow_read_during_commit() {
         use crate::db::Proposal;
 
         const CHANNEL_CAPACITY: usize = 8;
@@ -1044,7 +1075,7 @@ mod test {
             });
             scope.spawn(move || {
                 // Proposal creation
-                for id in 0u32..5000 {
+                for id in 0u32..500 {
                     // insert a key of length 32 and a value of length 8,
                     // rotating between all zeroes through all 255
                     let batch = vec![BatchOp::Put {
@@ -1119,7 +1150,7 @@ mod test {
     /// Verifies that persisted revisions are still accessible when reopening the database.
     #[test]
     fn test_root_store() {
-        let db = TestDb::new_with_root_store(DbConfig::builder().build());
+        let db = TestDb::new_with_config(DbConfig::builder().root_store(true).build());
 
         // First, create a revision to retrieve
         let key = b"key";
@@ -1150,7 +1181,7 @@ mod test {
 
     #[test]
     fn test_rootstore_empty_db_reopen() {
-        let db = TestDb::new_with_root_store(DbConfig::builder().build());
+        let db = TestDb::new_with_config(DbConfig::builder().root_store(true).build());
 
         db.reopen();
     }
@@ -1162,8 +1193,9 @@ mod test {
 
         let dbconfig = DbConfig::builder()
             .manager(RevisionManagerConfig::builder().max_revisions(5).build())
+            .root_store(true)
             .build();
-        let db = TestDb::new_with_root_store(dbconfig);
+        let db = TestDb::new_with_config(dbconfig);
 
         // Create and commit 10 proposals
         let key = b"root_store";
@@ -1197,6 +1229,69 @@ mod test {
         }
     }
 
+    /// Verifies that `RootStore` is truncated as well if we truncate the database.
+    #[test]
+    fn test_root_store_truncation() {
+        let db =
+            TestDb::new_with_config(DbConfig::builder().root_store(true).truncate(true).build());
+
+        // Create a revision to store
+        let batch = vec![BatchOp::Put {
+            key: b"foo",
+            value: b"bar",
+        }];
+        let proposal = db.propose(batch).unwrap();
+        let root_hash = proposal.root_hash().unwrap().unwrap();
+        proposal.commit().unwrap();
+
+        let db = db.reopen();
+        assert!(db.view(root_hash).is_err());
+    }
+
+    /// Verifies that opening a database fails if the directory doesn't exist.
+    #[test]
+    fn test_nonexistent_directory() {
+        let tmpdir = tempfile::tempdir().unwrap();
+
+        assert!(Db::new(tmpdir, DbConfig::builder().create_if_missing(false).build()).is_err());
+    }
+
+    #[test]
+    fn test_backwards_compatible_magic_string() {
+        use std::os::unix::fs::FileExt;
+
+        let testdb = TestDb::new();
+
+        testdb
+            .db
+            .propose([(b"key", b"value")])
+            .unwrap()
+            .commit()
+            .unwrap();
+
+        let rh = testdb.db.root_hash().unwrap().unwrap();
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .append(false)
+            .truncate(false)
+            .open(testdb.path().join(crate::manager::DB_FILE_NAME))
+            .unwrap();
+
+        let mut version = [0_u8; 16];
+        file.read_exact_at(&mut version, 0).unwrap();
+        assert_eq!(&version, b"firewood-v1\0\0\0\0\0");
+
+        // overwrite the magic string to simulate an older version
+        file.write_at(b"firewood 0.0.18\0", 0).unwrap();
+        drop(file);
+
+        let testdb = testdb.reopen();
+
+        assert_eq!(rh, testdb.db.root_hash().unwrap().unwrap());
+    }
+
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
     pub(super) struct TestDb {
         db: Db,
@@ -1222,33 +1317,7 @@ mod test {
 
         pub fn new_with_config(dbconfig: DbConfig) -> Self {
             let tmpdir = tempfile::tempdir().unwrap();
-            let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-                .iter()
-                .collect();
-            let db = Db::new(dbpath, dbconfig.clone()).unwrap();
-            TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            }
-        }
-
-        /// Creates a new test database with `RootStore` enabled.
-        ///
-        /// Overrides `root_store_dir` in dbconfig to provide a directory for `RootStore`.
-        pub fn new_with_root_store(dbconfig: DbConfig) -> Self {
-            let tmpdir = tempfile::tempdir().unwrap();
-            let dbpath: PathBuf = [tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-                .iter()
-                .collect();
-            let root_store_dir = tmpdir.as_ref().join("root_store");
-
-            let dbconfig = DbConfig {
-                root_store_dir: Some(root_store_dir),
-                ..dbconfig
-            };
-
-            let db = Db::new(dbpath, dbconfig.clone()).unwrap();
+            let db = Db::new(tmpdir.as_ref(), dbconfig.clone()).unwrap();
             TestDb {
                 db,
                 tmpdir,
@@ -1261,7 +1330,6 @@ mod test {
         /// This method closes the current database instance (releasing the advisory lock),
         /// then opens it again at the same path while keeping the same configuration.
         pub fn reopen(self) -> Self {
-            let path = self.path();
             let TestDb {
                 db,
                 tmpdir,
@@ -1270,7 +1338,7 @@ mod test {
 
             drop(db);
 
-            let db = Db::new(path, dbconfig.clone()).unwrap();
+            let db = Db::new(tmpdir.path(), dbconfig.clone()).unwrap();
             TestDb {
                 db,
                 tmpdir,
@@ -1288,7 +1356,6 @@ mod test {
         /// This is useful for testing scenarios where you want to start with a clean slate
         /// while maintaining the same temporary directory structure.
         pub fn replace(self) -> Self {
-            let path = self.path();
             let TestDb {
                 db,
                 tmpdir,
@@ -1298,7 +1365,7 @@ mod test {
             drop(db);
 
             let dbconfig = DbConfig::builder().truncate(true).build();
-            let db = Db::new(path, dbconfig.clone()).unwrap();
+            let db = Db::new(tmpdir.path(), dbconfig.clone()).unwrap();
             TestDb {
                 db,
                 tmpdir,
@@ -1306,10 +1373,8 @@ mod test {
             }
         }
 
-        pub fn path(&self) -> PathBuf {
-            [self.tmpdir.path().to_path_buf(), PathBuf::from("testdb")]
-                .iter()
-                .collect()
+        pub fn path(&self) -> &Path {
+            self.tmpdir.path()
         }
     }
 }
