@@ -262,12 +262,64 @@ impl<T: TrieReader> Merkle<T> {
     ///   incremental range proof verification
     pub fn verify_range_proof(
         &self,
-        _first_key: Option<impl KeyType>,
-        _last_key: Option<impl KeyType>,
-        _root_hash: &TrieHash,
-        _proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
+        first_key: Option<impl KeyType>,
+        last_key: Option<impl KeyType>,
+        root_hash: &TrieHash,
+        proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
     ) -> Result<(), api::Error> {
-        todo!()
+        // check that the keys are in ascending order
+        let key_values = proof.key_values();
+        if !key_values
+            .iter()
+            .zip(key_values.iter().skip(1))
+            .all(|(a, b)| a.0.as_ref() < b.0.as_ref())
+        {
+            return Err(api::Error::ProofError(
+                ProofError::NonMonotonicIncreaseRange,
+            ));
+        }
+
+        // check that the start and end proofs are valid
+        let left = key_values
+            .first()
+            .ok_or(api::Error::ProofError(ProofError::Empty))?;
+
+        // Verify that first_key (if provided) is <= the first key in the proof
+        if let Some(ref requested_first) = first_key
+            && requested_first.as_ref() > left.0.as_ref()
+        {
+            return Err(api::Error::InvalidRange {
+                start_key: requested_first.as_ref().to_vec().into(),
+                end_key: left.0.as_ref().to_vec().into(),
+            });
+        }
+
+        proof
+            .start_proof()
+            .verify(&left.0, Some(&left.1), root_hash)?;
+
+        let right = key_values
+            .last()
+            .ok_or(api::Error::ProofError(ProofError::Empty))?;
+
+        // Verify that last_key (if provided) is >= the last key in the proof
+        if let Some(ref requested_last) = last_key
+            && requested_last.as_ref() < right.0.as_ref()
+        {
+            return Err(api::Error::InvalidRange {
+                start_key: right.0.as_ref().to_vec().into(),
+                end_key: requested_last.as_ref().to_vec().into(),
+            });
+        }
+
+        proof
+            .end_proof()
+            .verify(&right.0, Some(&right.1), root_hash)?;
+
+        // TODO: build a merkle and reshape it, filling in hashes from the
+        // provided proofs on the left and right edges, then verify the root hash
+
+        Ok(())
     }
 
     /// Merges a sequence of key-value pairs with the base merkle trie, yielding
