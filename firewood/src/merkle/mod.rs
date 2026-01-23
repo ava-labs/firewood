@@ -487,7 +487,7 @@ impl<T: HashedNodeReader> Merkle<T> {
             });
         }
 
-        // if there is a requested lower bound, the start proof must always be
+        // If there is a requested lower bound, the start proof must always be
         // for that key even if (especially if) the key is not present in the
         // trie so that the requestor can assert no keys exist between the
         // requested key and the first provided key.
@@ -502,26 +502,20 @@ impl<T: HashedNodeReader> Merkle<T> {
             start_key.unwrap_or_default().into(),
         )?;
 
-        let key_values = iter
+        // Create an array of `BatchOp`s representing the difference between the two
+        // revisions. The size of the array is bounded by `limit`.
+        let batch_ops = iter
             .by_ref()
             .take(limit.map_or(usize::MAX, NonZeroUsize::get))
             .collect::<Result<Box<_>, FileIoError>>()?;
 
-        /*
-        if key_values.is_empty() && start_key.is_none() && end_key.is_none() {
-            // unbounded range proof yielded no key-values, so the trie must be empty
-            // TODO: Change the Error type
-            return Err(api::Error::RangeProofOnEmptyTrie);
-        }
-        */
-
         let end_proof = if let Some(limit) = limit
-            && limit.get() <= key_values.len()
+            && limit.get() <= batch_ops.len()
             && iter.next().is_some()
         {
             // limit was provided, we hit it, and there is at least one more key
             // end proof is for the last key provided
-            key_values.last().map(|largest_key| &**largest_key.key())
+            batch_ops.last().map(|largest_key| &**largest_key.key())
         } else {
             // limit was not hit or not provided, end proof is for the requested
             // end key so that we can prove we have all keys up to that key
@@ -531,7 +525,7 @@ impl<T: HashedNodeReader> Merkle<T> {
         .transpose()?
         .unwrap_or_default();
 
-        Ok(ChangeProof::new(start_proof, end_proof, key_values))
+        Ok(ChangeProof::new(start_proof, end_proof, batch_ops))
     }
 
     /// Dump a node, recursively, to a dot file

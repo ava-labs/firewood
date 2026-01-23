@@ -4,7 +4,13 @@
 use std::num::NonZeroUsize;
 
 use firewood::{
-    db::{Db, DbConfig}, manager::RevisionManagerConfig, merkle::Merkle, v2::api::{self, ArcDynDbView, Db as _, DbView, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter, KeyType}
+    db::{Db, DbConfig},
+    manager::RevisionManagerConfig,
+    merkle::Merkle,
+    v2::api::{
+        self, ArcDynDbView, Db as _, DbView, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter,
+        KeyType,
+    },
 };
 
 use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult, arc_cache::ArcCache};

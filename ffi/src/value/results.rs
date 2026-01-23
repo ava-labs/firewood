@@ -546,7 +546,6 @@ impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult<'_> 
             Err(api::Error::RevisionNotFound { provided }) => ChangeProofResult::RevisionNotFound(
                 HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
             ),
-            //Err(api::Error::RangeProofOnEmptyTrie) => ChangeProofResult::EmptyTrie,
             Err(err) => ChangeProofResult::Err(err.to_string().into_bytes().into()),
         }
     }

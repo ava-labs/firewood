@@ -75,6 +75,9 @@ pub struct VerifyChangeProofArgs<'a> {
     pub max_length: u32,
 }
 
+/// Tracks the state of a proposal created from a change proof. A proposal is
+/// created after calling `fwd_db_verify_change_proof` and is committed after
+/// calling `fwd_db_verify_and_commit_change_proof`.
 #[derive(Debug)]
 #[expect(dead_code)]
 enum ProposalState<'db> {
@@ -101,6 +104,7 @@ impl From<FrozenChangeProof> for ChangeProofContext<'_> {
     }
 }
 
+/// FFI context for verifying a change proof
 #[derive(Debug)]
 #[expect(dead_code)]
 struct VerificationContext {
