@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	rangeProofLenUnbounded = 0
-	rangeProofLenTruncated = 10
+	rangeProofLenUnbounded  = 0
+	rangeProofLenTruncated  = 10
 	changeProofLenUnbounded = 0
 )
 
@@ -386,7 +386,6 @@ func TestRangeProofFinalizerCleanup(t *testing.T) {
 
 	r.NoError(db.Close(t.Context()), "Database should be closeable after proof is garbage collected")
 }
-
 
 func TestChangeProofEmptyDB(t *testing.T) {
 	r := require.New(t)
