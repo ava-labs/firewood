@@ -489,24 +489,33 @@ impl<S: ReadableStorage> Iterator for FreeListsIterator<'_, S> {
 
 /// Extension methods for `NodeStore` to provide free list iteration capabilities
 impl<T, S: ReadableStorage> NodeStore<T, S> {
-    // Returns an iterator over the free lists of size no smaller than the size corresponding to `start_area_index`.
-    // The iterator returns a tuple of the address and the area index of the free area.
-    // Since this is a low-level iterator, we avoid safe conversion to AreaIndex for performance
-    pub(crate) fn free_list_iter(&self, start_area_index: AreaIndex) -> FreeListsIterator<'_, S> {
-        FreeListsIterator::new(self.storage.as_ref(), self.freelists(), start_area_index)
+    /// Returns an iterator over the free lists of size no smaller than the size corresponding to `start_area_index`.
+    /// The iterator returns a tuple of the address and the area index of the free area.
+    /// Since this is a low-level iterator, we avoid safe conversion to `AreaIndex` for performance.
+    ///
+    /// The `free_lists` parameter should be obtained from the `NodeStoreHeader`.
+    pub(crate) fn free_list_iter<'a>(
+        &'a self,
+        free_lists: &'a FreeLists,
+        start_area_index: AreaIndex,
+    ) -> FreeListsIterator<'a, S> {
+        FreeListsIterator::new(self.storage.as_ref(), free_lists, start_area_index)
     }
 }
 
 // Functionalities use by the checker
 impl<T, S: WritableStorage> NodeStore<T, S> {
+    /// Truncates a free list at the given parent location.
+    ///
+    /// The `free_lists` parameter should be obtained from the `NodeStoreHeader`.
     pub(crate) fn truncate_free_list(
-        &mut self,
+        &self,
+        free_lists: &mut FreeLists,
         free_list_parent: FreeListParent,
     ) -> Result<(), FileIoError> {
         match free_list_parent {
             FreeListParent::FreeListHead(area_size_index) => {
-                *self
-                    .freelists_mut()
+                *free_lists
                     .get_mut(area_size_index.as_usize())
                     .expect("area_size_index is less than AreaIndex::NUM_AREA_SIZES") = None;
                 Ok(())
@@ -602,20 +611,19 @@ pub mod test_utils {
         nodestore.storage.write(offset, &stored_area_bytes).unwrap();
     }
 
-    // Helper function to write the NodeStoreHeader
+    // Helper function to write the NodeStoreHeader and return it
     pub fn test_write_header<S: WritableStorage>(
-        nodestore: &mut NodeStore<Committed, S>,
+        nodestore: &NodeStore<Committed, S>,
         size: u64,
         root_node_info: Option<RootNodeInfo>,
         free_lists: FreeLists,
-    ) {
+    ) -> NodeStoreHeader {
         let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
         header.set_size(size);
         header.set_root_location(root_node_info);
         *header.free_lists_mut() = free_lists;
-        let header_bytes = bytemuck::bytes_of(&header);
-        nodestore.header = header;
-        nodestore.storage.write(0, header_bytes).unwrap();
+        header.flush_to(nodestore.storage.as_ref()).unwrap();
+        header
     }
 
     // Helper function to write a random stored area to the given offset.
@@ -716,7 +724,7 @@ mod tests {
     fn free_list_iter_with_metadata() {
         let rng = crate::SeededRng::from_env_or_random();
         let memstore = MemStore::default();
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let mut free_lists = FreeLists::default();
         let mut offset = NodeStoreHeader::SIZE;
@@ -762,10 +770,10 @@ mod tests {
         free_lists[area_index2.as_usize()] = next_free_block2;
 
         // write header
-        test_write_header(&mut nodestore, offset, None, free_lists);
+        test_write_header(&nodestore, offset, None, free_lists);
 
         // test iterator
-        let mut free_list_iter = nodestore.free_list_iter(AreaIndex::MIN);
+        let mut free_list_iter = nodestore.free_list_iter(&free_lists, AreaIndex::MIN);
 
         // expected
         let expected_free_list1 = vec![
@@ -842,7 +850,7 @@ mod tests {
         const AREA_INDEX2_PLUS_1: AreaIndex = area_index!(6);
 
         let memstore = MemStore::default();
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let mut free_lists = FreeLists::default();
         let mut offset = NodeStoreHeader::SIZE;
@@ -881,10 +889,10 @@ mod tests {
         free_lists[AREA_INDEX2.as_usize()] = next_free_block2;
 
         // write header
-        test_write_header(&mut nodestore, offset, None, free_lists);
+        test_write_header(&nodestore, offset, None, free_lists);
 
         // test iterator
-        let mut free_list_iter = nodestore.free_list_iter(AreaIndex::MIN);
+        let mut free_list_iter = nodestore.free_list_iter(&free_lists, AreaIndex::MIN);
 
         // start at the first free list
         assert_eq!(
