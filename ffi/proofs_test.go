@@ -395,3 +395,20 @@ func TestChangeProofEmptyDB(t *testing.T) {
 	r.ErrorIs(err, errRevisionNotFound)
 	r.Nil(proof)
 }
+
+func TestChangeProofCreation(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert first half of data in the first batch
+	_, _, batch := kvForTest(10000)
+	root1, err := db.Update(batch[:5000])
+	r.NoError(err)
+
+	// Insert the rest in the second batch
+	root2, err := db.Update(batch[5000:])
+	r.NoError(err)
+
+	_, err = db.ChangeProof(root1, root2, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+}
