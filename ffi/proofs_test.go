@@ -14,6 +14,7 @@ import (
 const (
 	rangeProofLenUnbounded = 0
 	rangeProofLenTruncated = 10
+	changeProofLenUnbounded = 0
 )
 
 type maybe struct {
@@ -384,4 +385,14 @@ func TestRangeProofFinalizerCleanup(t *testing.T) {
 	runtime.GC()
 
 	r.NoError(db.Close(t.Context()), "Database should be closeable after proof is garbage collected")
+}
+
+
+func TestChangeProofEmptyDB(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	proof, err := db.ChangeProof(EmptyRoot, EmptyRoot, nothing(), nothing(), changeProofLenUnbounded)
+	r.ErrorIs(err, errRevisionNotFound)
+	r.Nil(proof)
 }
