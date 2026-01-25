@@ -322,37 +322,79 @@ The easiest way to trigger a benchmark is via the GitHub Actions UI:
 3. Select parameters from the dropdowns (task, runner) or enter custom values
 4. Click "Run workflow"
 
-### Running Reexecution Locally
+### Triggering Benchmarks via CLI
 
-Reexecution test can be triggered locally using `just` commands (requires nix).
+Benchmarks run on AvalancheGo's self-hosted runners, not locally. This enables end-to-end integration testing where:
 
-Example: Trigger a C-Chain reexecution in AvalancheGo, wait for completion, and download results:
+- Firewood team can benchmark changes against the full AvalancheGo stack
+- AvalancheGo team can iterate on their Firewood integration
 
-```bash
-RUN_ID=$(just trigger-reexecution firewood=v0.0.15 avalanchego=master task=c-chain-reexecution-firewood-101-250k runner=avalanche-avalanchego-runner-2ti) \
-  && just wait-reexecution run_id=$RUN_ID \
-  && just download-reexecution-results run_id=$RUN_ID
+```mermaid
+sequenceDiagram
+    participant F as Firewood
+    participant A as AvalancheGo
+    participant G as GitHub Pages
+
+    F->>A: 1. trigger workflow
+    A->>A: 2. run benchmark
+    A-->>F: 3. download results
+    F->>G: 4. publish
 ```
 
-**Custom example:** Trigger with specific block range and config:
+The CLI commands trigger the remote workflow, wait for completion, and download the results.
 
 ```bash
-RUN_ID=$(just trigger-custom-reexecution firewood=v0.0.15 avalanchego=master config=firewood start-block=101 end-block=250000 block-dir-src=cchain-mainnet-blocks-1m-ldb current-state-dir-src=cchain-mainnet-state-100-fw runner=avalanche-avalanchego-runner-2ti) \
-  && just wait-reexecution run_id=$RUN_ID \
-  && just download-reexecution-results run_id=$RUN_ID
+# Predefined test
+just bench-cchain firewood-101-250k
+
+# With specific Firewood version
+FIREWOOD_REF=v0.1.0 just bench-cchain firewood-33m-40m
+
+# Custom block range
+START_BLOCK=101 END_BLOCK=250000 \
+  BLOCK_DIR_SRC=cchain-mainnet-blocks-1m-ldb \
+  CURRENT_STATE_DIR_SRC=cchain-current-state-firewood-100 \
+  just bench-cchain
 ```
 
-**Available commands:**
+**Commands:**
 
 | Command | Description |
 |---------|-------------|
-| `trigger-reexecution` | Trigger task-based reexecution, returns run_id |
-| `trigger-custom-reexecution` | Trigger with custom block range/config |
-| `wait-reexecution` | Wait for run to complete |
-| `download-reexecution-results` | Download results to `./results/` |
-| `list-reexecutions` | List recent reexecution runs |
+| `bench-cchain [test]` | Trigger remote benchmark, wait, download results |
+| `status-cchain <run_id>` | Check status of a run |
+| `list-cchain` | List recent runs |
+| `help-cchain` | Show help and available options |
 
-**Tasks and runners** are defined in AvalancheGo:
+**Environment variables:**
 
-- [Available tasks](https://github.com/ava-labs/avalanchego/blob/master/.github/workflows/c-chain-reexecution-benchmark-container.json)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GH_TOKEN` | required | GitHub token for API access |
+| `FIREWOOD_REF` | HEAD | Firewood commit/tag/branch |
+| `AVALANCHEGO_REF` | master | AvalancheGo ref to test against |
+| `LIBEVM_REF` | - | Optional libevm ref |
+| `RUNNER` | avalanche-avalanchego-runner-2ti | GitHub Actions runner |
+| `TIMEOUT_MINUTES` | - | Workflow timeout |
+| `DOWNLOAD_DIR` | ./results | Directory for downloaded artifacts |
+
+**Custom mode variables** (when no test specified):
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CONFIG` | firewood | VM config (firewood, hashdb, etc.) |
+| `START_BLOCK` | required | First block number |
+| `END_BLOCK` | required | Last block number |
+| `BLOCK_DIR_SRC` | required | S3 block directory |
+| `CURRENT_STATE_DIR_SRC` | required | S3 state directory |
+
+**Tests and runners** are defined in AvalancheGo:
+
+- [Available tests](https://github.com/ava-labs/avalanchego/blob/master/scripts/benchmark_cchain_range.sh)
 - [C-Chain benchmark docs](https://github.com/ava-labs/avalanchego/blob/master/tests/reexecute/c/README.md)
+
+### Viewing Results
+
+Results are published to GitHub Pages via [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark). View trends at:
+
+- [Performance Trends](https://ava-labs.github.io/firewood/bench/)
