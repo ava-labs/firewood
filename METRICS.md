@@ -303,8 +303,6 @@ rate(firewood_proposal_commit[5m])
 
 Firewood tracks its performance over time by running [C-Chain reexecution benchmarks](https://github.com/ava-labs/avalanchego/blob/master/tests/reexecute/c/README.md) in AvalancheGo. These benchmarks re-execute historical mainnet C-Chain blocks against a state snapshot, measuring throughput in mgas/s (million gas per second).
 
-By default, the benchmark processes ~250,000 blocks (101 → 250k) and takes approximately 7 minutes on self-hosted runners.
-
 This allows us to:
 
 - Monitor performance across commits and releases
@@ -344,6 +342,9 @@ sequenceDiagram
 The CLI commands trigger the remote workflow, wait for completion, and download the results.
 
 ```bash
+nix run ./ffi#gh -- gh auth login
+export GH_TOKEN=$(gh auth token)
+
 # Predefined test
 just bench-cchain firewood-101-250k
 
@@ -357,26 +358,25 @@ START_BLOCK=101 END_BLOCK=250000 \
   just bench-cchain
 ```
 
-**Commands:**
+**Command:**
 
-| Command | Description |
-|---------|-------------|
-| `bench-cchain [test]` | Trigger remote benchmark, wait, download results |
-| `status-cchain <run_id>` | Check status of a run |
-| `list-cchain` | List recent runs |
-| `help-cchain` | Show help and available options |
+```bash
+just bench-cchain [test]
+```
+
+Triggers Firewood's `track-performance.yml` workflow, which orchestrates the AvalancheGo benchmark. The command polls for the workflow run and watches progress in terminal.
+
+> **Note:** Changes must be pushed to the remote branch for the workflow to use them. By default, the workflow builds Firewood from the current commit. To benchmark a specific version (e.g., a release tag), set `FIREWOOD_REF` explicitly.
 
 **Environment variables:**
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GH_TOKEN` | required | GitHub token for API access |
-| `FIREWOOD_REF` | HEAD | Firewood commit/tag/branch |
+| `FIREWOOD_REF` | current commit | Firewood commit/tag/branch to build |
 | `AVALANCHEGO_REF` | master | AvalancheGo ref to test against |
 | `LIBEVM_REF` | - | Optional libevm ref |
 | `RUNNER` | avalanche-avalanchego-runner-2ti | GitHub Actions runner |
 | `TIMEOUT_MINUTES` | - | Workflow timeout |
-| `DOWNLOAD_DIR` | ./results | Directory for downloaded artifacts |
 
 **Custom mode variables** (when no test specified):
 
@@ -386,7 +386,7 @@ START_BLOCK=101 END_BLOCK=250000 \
 | `START_BLOCK` | required | First block number |
 | `END_BLOCK` | required | Last block number |
 | `BLOCK_DIR_SRC` | required | S3 block directory |
-| `CURRENT_STATE_DIR_SRC` | required | S3 state directory |
+| `CURRENT_STATE_DIR_SRC` | - | S3 state directory (empty = genesis run) |
 
 **Tests and runners** are defined in AvalancheGo:
 
