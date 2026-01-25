@@ -10,7 +10,10 @@ use firewood_storage::TrieHash;
 #[cfg(feature = "ethhash")]
 use rlp::Rlp;
 
-use firewood::{ProofError, v2::api::{self, FrozenChangeProof}};
+use firewood::{
+    ProofError,
+    v2::api::{self, FrozenChangeProof},
+};
 
 use crate::{
     BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
