@@ -52,9 +52,11 @@ jobs:
           git checkout origin/benchmark-data -- dev 2>/dev/null || echo "No dev/ directory (no feature branch benchmarks yet)"
           git checkout origin/benchmark-data -- bench 2>/dev/null || echo "No bench/ directory (no main branch benchmarks yet)"
           
-          # Copy to _site (directories may not exist if no benchmarks run yet)
+          # Copy to _site - at least one must exist
           [[ -d dev ]] && cp -rv dev _site/
           [[ -d bench ]] && cp -rv bench _site/
+          
+          [[ -d dev || -d bench ]] || { echo "::error::No benchmark data (dev/ or bench/) found"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: pages
