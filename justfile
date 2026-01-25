@@ -174,6 +174,8 @@ release-step-refresh-changelog tag:
 # This ensures results appear in Firewood's workflow summary and get published
 # to GitHub Pages for the current branch.
 #
+# Note: Changes must be pushed to the remote branch for the workflow to use them.
+#
 # By default, uses the current HEAD commit to build Firewood. If you want to
 # benchmark a specific version (e.g., a release tag), set FIREWOOD_REF explicitly:
 #   FIREWOOD_REF=v0.1.0 just bench-cchain firewood-101-250k
@@ -223,15 +225,37 @@ bench-cchain test="" runner="avalanche-avalanchego-runner-2ti":
     [[ -n "${CURRENT_STATE_DIR_SRC:-}" ]] && args+=(-f current-state-dir-src="$CURRENT_STATE_DIR_SRC")
     [[ -n "${TIMEOUT_MINUTES:-}" ]] && args+=(-f timeout-minutes="$TIMEOUT_MINUTES")
     
-    commit=$(git rev-parse HEAD)
+    branch=$(git rev-parse --abbrev-ref HEAD)
     
-    echo "==> Triggering benchmark on commit: $commit"
     [[ -n "$test" ]] && echo "==> Test: $test"
     [[ -n "${START_BLOCK:-}" ]] && echo "==> Custom: blocks $START_BLOCK-${END_BLOCK:-?}"
     echo "==> Runner: {{ runner }}"
     
-    $GH workflow run track-performance.yml --ref "$commit" "${args[@]}"
+    # Record time before triggering to find our run (avoid race conditions)
+    trigger_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+    
+    $GH workflow run track-performance.yml --ref "$branch" "${args[@]}"
+    
+    # Poll for workflow registration (runs created after trigger_time)
     echo ""
-    echo "Workflow triggered. View at:"
-    echo "  https://github.com/ava-labs/firewood/actions/workflows/track-performance.yml"
+    echo "Polling for workflow to register..."
+    for i in {1..30}; do
+        sleep 1
+        run_id=$($GH run list --workflow=track-performance.yml --limit=10 --json databaseId,createdAt \
+            --jq "[.[] | select(.createdAt > \"$trigger_time\")] | .[-1].databaseId // empty")
+        [[ -n "$run_id" ]] && break
+    done
+    
+    if [[ -z "$run_id" ]]; then
+        echo "warning: Could not find run ID. Check manually at:"
+        echo "  https://github.com/ava-labs/firewood/actions/workflows/track-performance.yml"
+        exit 0
+    fi
+    
+    echo ""
+    echo "Workflow triggered. Run ID: $run_id"
+    echo "https://github.com/ava-labs/firewood/actions/runs/$run_id"
+    echo ""
+    
+    $GH run watch "$run_id"
 

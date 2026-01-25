@@ -101,8 +101,52 @@ validate_ref() {
     [[ "$ref" =~ ^[a-zA-Z0-9/_.-]+$ ]] || die "$name contains invalid characters: $ref"
 }
 
+# Verify a run's inputs match what we triggered with
+# Returns 0 if match, 1 if no match
+#
+# NOTE: We rely on AvalancheGo's workflow job naming convention:
+#   "c-chain-reexecution (start, end, block-dir, config, runner...)"
+# If AvalancheGo changes this format, this matching logic will need updating.
+verify_run_inputs() {
+    local run_id="$1" expected_test="$2" expected_config="$3" expected_start="$4" expected_end="$5" expected_runner="$6"
+    
+    # Get the c-chain-reexecution job name (second job, after define-matrix)
+    local job_name
+    job_name=$(gh run view "$run_id" --repo "$AVALANCHEGO_REPO" --json jobs \
+        --jq '.jobs[] | select(.name | startswith("c-chain-reexecution")) | .name // ""' 2>/dev/null) || return 1
+    
+    # If job hasn't started yet (only define-matrix exists), accept for now
+    [[ -z "$job_name" ]] && return 0
+    
+    # If we have a test name, check if it appears in job name
+    if [[ -n "$expected_test" ]]; then
+        [[ "$job_name" == *"$expected_test"* ]] && return 0
+        return 1
+    fi
+    
+    # For custom mode, check that our params appear in job name
+    # Job name: "c-chain-reexecution (1, 100, cchain-mainnet-blocks-200-ldb, firewood, runner...)"
+    local match=true
+    [[ -n "$expected_start" && "$job_name" != *"$expected_start"* ]] && match=false
+    [[ -n "$expected_config" && "$job_name" != *"$expected_config"* ]] && match=false
+    [[ -n "$expected_runner" && "$job_name" != *"$expected_runner"* ]] && match=false
+    
+    $match && return 0
+    
+    # Fallback: if no identifiers to match, accept the run
+    [[ -z "$expected_test" && -z "$expected_start" && -z "$expected_runner" ]] && return 0
+    
+    return 1
+}
+
 poll_workflow_registration() {
     local trigger_time="$1"
+    local expected_test="${2:-}"
+    local expected_config="${3:-}"
+    local expected_start="${4:-}"
+    local expected_end="${5:-}"
+    local expected_runner="${6:-}"
+    
     log "Waiting for workflow to register (looking for runs after $trigger_time)..."
     
     # Verify we can list runs (fail fast on permission issues)
@@ -112,11 +156,11 @@ poll_workflow_registration() {
     
     for ((i=0; i<POLL_TIMEOUT; i++)); do
         sleep "$POLL_INTERVAL"
-        local run_id raw_output
+        local raw_output
         raw_output=$(gh run list \
             --repo "$AVALANCHEGO_REPO" \
             --workflow "$WORKFLOW_NAME" \
-            --limit 5 \
+            --limit 10 \
             --json databaseId,createdAt 2>&1) || {
             log "gh run list failed: $raw_output"
             continue
@@ -125,12 +169,18 @@ poll_workflow_registration() {
         # Debug: show first result on first iteration
         ((i == 0)) && log "Latest run: $(echo "$raw_output" | jq -c '.[0] // "none"')"
         
-        run_id=$(echo "$raw_output" | jq -r --arg t "$trigger_time" '[.[] | select(.createdAt > $t)] | .[0].databaseId // empty')
+        # Get candidate runs (created after trigger_time), oldest first
+        local candidates
+        candidates=$(echo "$raw_output" | jq -r --arg t "$trigger_time" \
+            '[.[] | select(.createdAt > $t)] | reverse | .[].databaseId')
         
-        if [[ -n "$run_id" && "$run_id" != "null" ]]; then
-            echo "$run_id"
-            return 0
-        fi
+        # Check each candidate's inputs to find our run
+        for run_id in $candidates; do
+            if verify_run_inputs "$run_id" "$expected_test" "$expected_config" "$expected_start" "$expected_end" "$expected_runner"; then
+                echo "$run_id"
+                return 0
+            fi
+        done
         
         # Progress indicator every 10 seconds
         ((i % 10 == 0)) && ((i > 0)) && log "Polling (${i}s)"
@@ -195,7 +245,8 @@ trigger_workflow() {
         --ref es/enable-firewood-dev-workflow \
         "${args[@]}"
     
-    poll_workflow_registration "$trigger_time"
+    # Pass test/custom params to help identify our specific run among concurrent triggers
+    poll_workflow_registration "$trigger_time" "$test" "$CONFIG" "${START_BLOCK:-}" "${END_BLOCK:-}" "$RUNNER"
 }
 
 wait_for_completion() {

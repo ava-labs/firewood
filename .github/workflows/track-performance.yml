@@ -94,6 +94,7 @@ jobs:
           tool: 'customBiggerIsBetter'
           output-file-path: ./results/benchmark-output.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
+          summary-always: true
           auto-push: true
           gh-pages-branch: benchmark-data
           benchmark-data-dir-path: ${{ steps.location.outputs.data-dir }}
