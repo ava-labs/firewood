@@ -52,7 +52,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Trigger C-Chain Reexecution Benchmark
-        run: ./scripts/bench-cchain-reexecution.sh trigger "${{ inputs.test }}"
+        run: |
+          if [[ -n "${{ inputs.test }}" ]]; then
+            ./scripts/bench-cchain-reexecution.sh trigger "${{ inputs.test }}"
+          else
+            ./scripts/bench-cchain-reexecution.sh trigger
+          fi
         env:
           GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
           # Custom mode (ignored when test is specified)
