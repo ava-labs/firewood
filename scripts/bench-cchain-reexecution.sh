@@ -189,9 +189,10 @@ trigger_workflow() {
     local trigger_time
     trigger_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
     
+    # TODO: use $AVALANCHEGO_REF once ava-labs/avalanchego#4560 is merged
     gh workflow run "$WORKFLOW_NAME" \
         --repo "$AVALANCHEGO_REPO" \
-        --ref es/enable-firewood-dev-workflow \ # @TODO: update to use AVALANCHEGO_REF once '#4560' in AvalancheGo is merged
+        --ref es/enable-firewood-dev-workflow \
         "${args[@]}"
     
     poll_workflow_registration "$trigger_time"
