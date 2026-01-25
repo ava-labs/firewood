@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1769350676084,
+  "lastUpdate": 1769353432451,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -46,6 +46,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[1,100]-Config-firewood-Runner-avalanche-avalanchego-runner-2ti - block_accept_ms/ggas",
             "value": 131.47544028985476,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Elvis S.",
+            "username": "Elvis339",
+            "email": "elvissabanovic3@gmail.com"
+          },
+          "committer": {
+            "name": "Elvis S.",
+            "username": "Elvis339",
+            "email": "elvissabanovic3@gmail.com"
+          },
+          "id": "bfc7c8a4a8ac770d2a8d0aac088e2d89775dcd33",
+          "message": "ci(gh-pages): preserve benchmark data when deploying docs\n\nGitHub Pages overwrites on each deploy, which would lose benchmark\nhistory stored on the benchmark-data branch. This adds a step to\nmerge benchmark directories (bench/, dev/) into the Pages deployment\nso both docs and performance charts are served together.\n\n- Fetch benchmark-data branch during docs build\n- Extract bench/ (main) and dev/ (feature branches) directories\n- Copy to _site/ before deployment\n- Handle bootstrap case when no benchmarks exist yet",
+          "timestamp": "2026-01-25T14:56:51Z",
+          "url": "https://github.com/ava-labs/firewood/commit/bfc7c8a4a8ac770d2a8d0aac088e2d89775dcd33"
+        },
+        "date": 1769353431698,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[1,100]-Config-firewood-Runner-avalanche-avalanchego-runner-2ti - mgas/s",
+            "value": 914.8258330625005,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[1,100]-Config-firewood-Runner-avalanche-avalanchego-runner-2ti - ms/ggas",
+            "value": 1093.104243298823,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[1,100]-Config-firewood-Runner-avalanche-avalanchego-runner-2ti - block_parse_ms/ggas",
+            "value": 81.48662458341437,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[1,100]-Config-firewood-Runner-avalanche-avalanchego-runner-2ti - block_verify_ms/ggas",
+            "value": 870.4234013627982,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[1,100]-Config-firewood-Runner-avalanche-avalanchego-runner-2ti - block_accept_ms/ggas",
+            "value": 137.78709336697068,
             "unit": "block_accept_ms/ggas"
           }
         ]
