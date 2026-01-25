@@ -53,6 +53,9 @@ jobs:
 
       - name: Trigger C-Chain Reexecution Benchmark
         run: |
+          echo "==> Starting benchmark trigger"
+          echo "==> Script exists: $(test -f ./scripts/bench-cchain-reexecution.sh && echo yes || echo no)"
+          echo "==> Test input: '${{ inputs.test }}'"
           if [[ -n "${{ inputs.test }}" ]]; then
             ./scripts/bench-cchain-reexecution.sh trigger "${{ inputs.test }}"
           else
