@@ -1,6 +1,6 @@
 # Triggers AvalancheGo's C-Chain reexecution benchmark and publishes
 # results to GitHub Pages for trend analysis.
-name: C-Chain Performance Tracking
+name: C-Chain Reexecution Performance Tracking
 
 on:
   workflow_dispatch:
@@ -50,8 +50,6 @@ jobs:
     steps:
       - name: Checkout Firewood
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Needed for github-action-benchmark
 
       - name: Trigger C-Chain Reexecution Benchmark
         run: ./scripts/bench-cchain-reexecution.sh trigger "${{ inputs.test }}"
