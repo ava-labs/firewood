@@ -170,49 +170,68 @@ release-step-refresh-changelog tag:
     git cliff -o CHANGELOG.md --tag "{{tag}}"
 
 # Run a C-Chain reexecution benchmark
-# just bench-cchain <test>                                    - predefined test
-# FIREWOOD_REF=v0.1.0 just bench-cchain firewood-101-250k     - with specific ref
-# Custom: START_BLOCK=101 END_BLOCK=250000 BLOCK_DIR_SRC=<s3> CURRENT_STATE_DIR_SRC=<s3> just bench-cchain
-bench-cchain test="":
-    ./scripts/bench-cchain-reexecution.sh trigger "{{ test }}"
+# Triggers Firewood's track-performance.yml which then triggers AvalancheGo.
+# This ensures results appear in Firewood's workflow summary and get published
+# to GitHub Pages for the current branch.
+#
+# By default, uses the current HEAD commit to build Firewood. If you want to
+# benchmark a specific version (e.g., a release tag), set FIREWOOD_REF explicitly:
+#   FIREWOOD_REF=v0.1.0 just bench-cchain firewood-101-250k
+#
+# Examples:
+#   just bench-cchain firewood-101-250k
+#   FIREWOOD_REF=v0.1.0 just bench-cchain firewood-101-250k
+#   START_BLOCK=1 END_BLOCK=100 BLOCK_DIR_SRC=cchain-mainnet-blocks-200-ldb just bench-cchain
+bench-cchain test="" runner="avalanche-avalanchego-runner-2ti":
+    #!/usr/bin/env -S bash -euo pipefail
+    
+    # Resolve gh CLI
+    if command -v gh &>/dev/null; then
+        GH=gh
+    elif command -v nix &>/dev/null; then
+        GH="nix run ./ffi#gh --"
+    else
+        echo "error: 'gh' CLI not found. Install it or use 'nix develop ./ffi'" >&2
+        exit 1
+    fi
+    
+    test="{{ test }}"
+    
+    # Validate: need either test name OR custom block params
+    if [[ -z "$test" && -z "${START_BLOCK:-}" ]]; then
+        echo "error: Provide a test name or set START_BLOCK, END_BLOCK, BLOCK_DIR_SRC" >&2
+        echo "" >&2
+        echo "Predefined tests:" >&2
+        echo "  firewood-101-250k, firewood-33m-33m500k, firewood-33m-40m" >&2
+        echo "  firewood-archive-101-250k, firewood-archive-33m-33m500k, firewood-archive-33m-40m" >&2
+        echo "" >&2
+        echo "Custom mode example:" >&2
+        echo "  START_BLOCK=1 END_BLOCK=100 BLOCK_DIR_SRC=cchain-mainnet-blocks-200-ldb just bench-cchain" >&2
+        exit 1
+    fi
+    
+    # Build workflow args
+    args=(-f runner="{{ runner }}")
+    [[ -n "$test" ]] && args+=(-f test="$test")
+    [[ -n "${FIREWOOD_REF:-}" ]] && args+=(-f firewood="$FIREWOOD_REF")
+    [[ -n "${LIBEVM_REF:-}" ]] && args+=(-f libevm="$LIBEVM_REF")
+    [[ -n "${AVALANCHEGO_REF:-}" ]] && args+=(-f avalanchego="$AVALANCHEGO_REF")
+    [[ -n "${CONFIG:-}" ]] && args+=(-f config="$CONFIG")
+    [[ -n "${START_BLOCK:-}" ]] && args+=(-f start-block="$START_BLOCK")
+    [[ -n "${END_BLOCK:-}" ]] && args+=(-f end-block="$END_BLOCK")
+    [[ -n "${BLOCK_DIR_SRC:-}" ]] && args+=(-f block-dir-src="$BLOCK_DIR_SRC")
+    [[ -n "${CURRENT_STATE_DIR_SRC:-}" ]] && args+=(-f current-state-dir-src="$CURRENT_STATE_DIR_SRC")
+    [[ -n "${TIMEOUT_MINUTES:-}" ]] && args+=(-f timeout-minutes="$TIMEOUT_MINUTES")
+    
+    commit=$(git rev-parse HEAD)
+    
+    echo "==> Triggering benchmark on commit: $commit"
+    [[ -n "$test" ]] && echo "==> Test: $test"
+    [[ -n "${START_BLOCK:-}" ]] && echo "==> Custom: blocks $START_BLOCK-${END_BLOCK:-?}"
+    echo "==> Runner: {{ runner }}"
+    
+    $GH workflow run track-performance.yml --ref "$commit" "${args[@]}"
+    echo ""
+    echo "Workflow triggered. View at:"
+    echo "  https://github.com/ava-labs/firewood/actions/workflows/track-performance.yml"
 
-# Check status of a C-Chain benchmark run
-status-cchain run_id:
-    ./scripts/bench-cchain-reexecution.sh status "{{ run_id }}"
-
-# List recent C-Chain benchmark runs
-list-cchain:
-    ./scripts/bench-cchain-reexecution.sh list
-
-# Show C-Chain benchmark help
-help-cchain:
-    #!/usr/bin/env bash
-    echo "USAGE"
-    echo "  just bench-cchain <test>              Predefined test"
-    echo "  [CUSTOM_VARS] just bench-cchain       Custom mode"
-    echo "  just status-cchain <run_id>"
-    echo "  just list-cchain"
-    echo ""
-    echo "ENVIRONMENT VARIABLES"
-    echo "  FIREWOOD_REF             Firewood ref (default: HEAD)"
-    echo "  AVALANCHEGO_REF          AvalancheGo ref (default: master)"
-    echo "  LIBEVM_REF               libevm ref (optional)"
-    echo "  RUNNER                   GitHub Actions runner (default: avalanche-avalanchego-runner-2ti)"
-    echo "  CONFIG                   VM config (default: firewood)"
-    echo "  START_BLOCK              Start block for custom mode"
-    echo "  END_BLOCK                End block for custom mode"
-    echo "  BLOCK_DIR_SRC            S3 block directory"
-    echo "  CURRENT_STATE_DIR_SRC    S3 state directory"
-    echo ""
-    echo "EXAMPLES"
-    echo "  # Predefined test"
-    echo "  just bench-cchain firewood-101-250k"
-    echo "  FIREWOOD_REF=v0.1.0 just bench-cchain firewood-33m-40m"
-    echo ""
-    echo "  # Custom mode"
-    echo "  START_BLOCK=101 END_BLOCK=250000 \\"
-    echo "    BLOCK_DIR_SRC=cchain-mainnet-blocks-1m-ldb \\"
-    echo "    CURRENT_STATE_DIR_SRC=cchain-current-state-mainnet-ldb \\"
-    echo "    just bench-cchain"
-    echo ""
-    echo "Advanced: ./scripts/bench-cchain-reexecution.sh help"

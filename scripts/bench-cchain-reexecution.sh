@@ -152,9 +152,13 @@ trigger_workflow() {
     [[ -n "$LIBEVM_REF" ]] && validate_ref "$LIBEVM_REF" "LIBEVM_REF"
     
     local args=(-f runner="$RUNNER")
-    [[ -n "$firewood" ]] && args+=(-f firewood-ref="$firewood")
-    [[ -n "$LIBEVM_REF" ]] && args+=(-f libevm-ref="$LIBEVM_REF")
     [[ -n "$TIMEOUT_MINUTES" ]] && args+=(-f timeout-minutes="$TIMEOUT_MINUTES")
+    
+    # Build with-dependencies string (format: "firewood=abc,libevm=xyz")
+    local deps=""
+    [[ -n "$firewood" ]] && deps="firewood=$firewood"
+    [[ -n "$LIBEVM_REF" ]] && deps="${deps:+$deps,}libevm=$LIBEVM_REF"
+    [[ -n "$deps" ]] && args+=(-f with-dependencies="$deps")
     
     if [[ -n "$test" ]]; then
         args+=(-f test="$test")
