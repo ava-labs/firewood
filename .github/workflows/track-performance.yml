@@ -87,7 +87,6 @@ jobs:
 
       - name: Publish benchmark results
         id: store
-        continue-on-error: true
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: C-Chain Reexecution with Firewood
@@ -96,10 +95,10 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           summary-always: true
           auto-push: true
-          gh-pages-branch: benchmark-data
-          benchmark-data-dir-path: ${{ steps.location.outputs.data-dir }}
           fail-on-alert: true
           comment-on-alert: false
+          gh-pages-branch: benchmark-data
+          benchmark-data-dir-path: ${{ steps.location.outputs.data-dir }}
 
       - name: Summary
         run: |
