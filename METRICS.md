@@ -377,6 +377,7 @@ Triggers Firewood's `track-performance.yml` workflow, which orchestrates the Ava
 | `LIBEVM_REF` | - | Optional libevm ref |
 | `RUNNER` | avalanche-avalanchego-runner-2ti | GitHub Actions runner |
 | `TIMEOUT_MINUTES` | - | Workflow timeout |
+| `DOWNLOAD_DIR` | ./results | Directory for downloaded artifacts |
 
 **Custom mode variables** (when no test specified):
 
