@@ -239,7 +239,7 @@ trigger_workflow() {
 
     gh workflow run "$WORKFLOW_NAME" \
         --repo "$AVALANCHEGO_REPO" \
-        --ref "$AVALANCHEGO_REF" \
+        --ref es/enable-firewood-dev-workflow \ # @TODO: update to use AVALANCHEGO_REF once '#4560' in AvalancheGo is merged
         "${args[@]}"
     
     # Pass test/custom params to help identify our specific run among concurrent triggers
