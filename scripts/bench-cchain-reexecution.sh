@@ -8,7 +8,6 @@ set -euo pipefail
 #
 # COMMANDS
 #   trigger [test]       Trigger benchmark, wait, download results
-#   download <run_id>    Download results for a run
 #   status <run_id>      Check run status
 #   list                 List recent runs
 #   tests                Show available tests
@@ -22,6 +21,7 @@ set -euo pipefail
 #   RUNNER                (string, avalanche-avalanchego-runner-2ti)  GitHub Actions runner label
 #   LIBEVM_REF            (string, optional)                          Optional libevm ref
 #   TIMEOUT_MINUTES       (int, optional)                             Workflow timeout
+#   DOWNLOAD_DIR          (string, ./results)                         Directory for downloaded artifacts
 #
 #   Custom mode (when no TEST/test arg specified):
 #   CONFIG                (string, firewood)  VM config (https://github.com/ava-labs/avalanchego/blob/3c645de551294b8db0f695563e386a2f38c1aded/tests/reexecute/c/vm_reexecute.go#L64)
@@ -41,7 +41,7 @@ set -euo pipefail
 #     CURRENT_STATE_DIR_SRC=cchain-current-state-mainnet-ldb \
 #     ./bench-cchain-reexecution.sh trigger
 #
-#   ./bench-cchain-reexecution.sh download 12345678
+#   ./bench-cchain-reexecution.sh status 12345678
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -55,6 +55,7 @@ WORKFLOW_NAME="C-Chain Re-Execution Benchmark w/ Container"
 : "${LIBEVM_REF:=}"
 : "${TIMEOUT_MINUTES:=}"
 : "${CONFIG:=firewood}"
+: "${DOWNLOAD_DIR:=${REPO_ROOT}/results}"
 
 # Polling config for workflow registration. gh workflow run doesn't return
 # the run ID, so we poll until the run appears. 180s accommodates busy runners.
@@ -180,22 +181,20 @@ wait_for_completion() {
 
 download_artifact() {
     local run_id="$1"
-    local tmp_dir results_dir
-    # Download to tmp to avoid permission issues only the final JSON goes to results
-    tmp_dir=$(mktemp -d)
-    results_dir="${REPO_ROOT}/results"
+    local output_file="$DOWNLOAD_DIR/benchmark-output.json"
     
+    mkdir -p "$DOWNLOAD_DIR"
     gh run download "$run_id" \
         --repo "$AVALANCHEGO_REPO" \
         --pattern "benchmark-output-*" \
-        --dir "$tmp_dir"
+        --dir "$DOWNLOAD_DIR"
     
-    mkdir -p "$results_dir"
-    find "$tmp_dir" -name "benchmark-output.json" -exec cp {} "$results_dir/" \;
-    rm -rf "$tmp_dir"
+    # Flatten: gh extracts to $DOWNLOAD_DIR/<artifact-name>/benchmark-output.json
+    find "$DOWNLOAD_DIR" -name "benchmark-output.json" -type f -exec mv {} "$output_file" \;
+    find "$DOWNLOAD_DIR" -mindepth 1 -type d -delete 2>/dev/null || true
     
-    [[ -f "$results_dir/benchmark-output.json" ]] || die "No benchmark results found"
-    log "Results: $results_dir/benchmark-output.json"
+    [[ -f "$output_file" ]] || die "No benchmark results found"
+    log "Results: $output_file"
 }
 
 check_status() {
@@ -230,12 +229,6 @@ cmd_trigger() {
     download_artifact "$run_id"
 }
 
-cmd_download() {
-    [[ -z "${1:-}" ]] && die "usage: $0 download <run_id>"
-    require_gh
-    download_artifact "$1"
-}
-
 cmd_status() {
     [[ -z "${1:-}" ]] && die "usage: $0 status <run_id>"
     require_gh
@@ -257,12 +250,11 @@ USAGE
   ./bench-cchain-reexecution.sh <command> [args]
 
 COMMANDS
-  trigger [test]       Trigger benchmark, wait, download results
-  download <run_id>    Download results for a run
-  status <run_id>      Check run status
-  list                 List recent runs
-  tests                Show available tests
-  help                 Show this help
+  trigger [test]   Trigger benchmark, wait, download results
+  status <run_id>  Check run status
+  list             List recent runs
+  tests            Show available tests
+  help             Show this help
 
 TESTS
 EOF
@@ -275,7 +267,6 @@ main() {
     
     case "$cmd" in
         trigger)        cmd_trigger "$@" ;;
-        download)       cmd_download "$@" ;;
         status)         cmd_status "$@" ;;
         list)           cmd_list "$@" ;;
         tests)          cmd_tests "$@" ;;

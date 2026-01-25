@@ -170,28 +170,28 @@ release-step-refresh-changelog tag:
     git cliff -o CHANGELOG.md --tag "{{tag}}"
 
 # Run a C-Chain reexecution benchmark
-# just bench <test>                                    - predefined test
-# FIREWOOD_REF=v0.1.0 just bench firewood-101-250k     - with specific ref
-# Custom: START_BLOCK=101 END_BLOCK=250000 BLOCK_DIR_SRC=<s3> CURRENT_STATE_DIR_SRC=<s3> just bench
-bench test="":
+# just bench-cchain <test>                                    - predefined test
+# FIREWOOD_REF=v0.1.0 just bench-cchain firewood-101-250k     - with specific ref
+# Custom: START_BLOCK=101 END_BLOCK=250000 BLOCK_DIR_SRC=<s3> CURRENT_STATE_DIR_SRC=<s3> just bench-cchain
+bench-cchain test="":
     ./scripts/bench-cchain-reexecution.sh trigger "{{ test }}"
 
-# Check status of a benchmark run
-bench-status run_id:
+# Check status of a C-Chain benchmark run
+status-cchain run_id:
     ./scripts/bench-cchain-reexecution.sh status "{{ run_id }}"
 
-# List recent benchmark runs
-bench-list:
+# List recent C-Chain benchmark runs
+list-cchain:
     ./scripts/bench-cchain-reexecution.sh list
 
-# Show benchmark help
-bench-help:
+# Show C-Chain benchmark help
+help-cchain:
     #!/usr/bin/env bash
     echo "USAGE"
-    echo "  just bench <test>              Predefined test"
-    echo "  [CUSTOM_VARS] just bench       Custom mode"
-    echo "  just bench-status <run_id>"
-    echo "  just bench-list"
+    echo "  just bench-cchain <test>              Predefined test"
+    echo "  [CUSTOM_VARS] just bench-cchain       Custom mode"
+    echo "  just status-cchain <run_id>"
+    echo "  just list-cchain"
     echo ""
     echo "ENVIRONMENT VARIABLES"
     echo "  FIREWOOD_REF             Firewood ref (default: HEAD)"
@@ -206,13 +206,13 @@ bench-help:
     echo ""
     echo "EXAMPLES"
     echo "  # Predefined test"
-    echo "  just bench firewood-101-250k"
-    echo "  FIREWOOD_REF=v0.1.0 just bench firewood-33m-40m"
+    echo "  just bench-cchain firewood-101-250k"
+    echo "  FIREWOOD_REF=v0.1.0 just bench-cchain firewood-33m-40m"
     echo ""
     echo "  # Custom mode"
     echo "  START_BLOCK=101 END_BLOCK=250000 \\"
     echo "    BLOCK_DIR_SRC=cchain-mainnet-blocks-1m-ldb \\"
     echo "    CURRENT_STATE_DIR_SRC=cchain-current-state-mainnet-ldb \\"
-    echo "    just bench"
+    echo "    just bench-cchain"
     echo ""
     echo "Advanced: ./scripts/bench-cchain-reexecution.sh help"
