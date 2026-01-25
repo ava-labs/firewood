@@ -10,7 +10,7 @@ use firewood_storage::TrieHash;
 #[cfg(feature = "ethhash")]
 use rlp::Rlp;
 
-use firewood::v2::api::{self, FrozenChangeProof};
+use firewood::{ProofError, v2::api::{self, FrozenChangeProof}};
 
 use crate::{
     BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
@@ -362,8 +362,12 @@ pub extern "C" fn fwd_change_proof_find_next_key(
 ///
 /// The other [`ValueResult`] variants are not used.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_change_proof_to_bytes(_proof: Option<&ChangeProofContext>) -> ValueResult {
-    CResult::from_err("not yet implemented")
+pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) -> ValueResult {
+    crate::invoke_with_handle(proof, |ctx| {
+        let mut vec = Vec::new();
+        ctx.proof.write_to_vec(&mut vec);
+        vec
+    })
 }
 
 /// Deserialize a `ChangeProof` from bytes.
@@ -380,8 +384,11 @@ pub extern "C" fn fwd_change_proof_to_bytes(_proof: Option<&ChangeProofContext>)
 ///   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
 /// - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_change_proof_from_bytes(_bytes: BorrowedBytes) -> ChangeProofResult {
-    CResult::from_err("not yet implemented")
+pub extern "C" fn fwd_change_proof_from_bytes(bytes: BorrowedBytes) -> ChangeProofResult {
+    crate::invoke(move || {
+        FrozenChangeProof::from_slice(&bytes)
+            .map_err(|err| api::Error::ProofError(ProofError::Deserialization(err)))
+    })
 }
 
 /// Frees the memory associated with a `ChangeProofContext`.

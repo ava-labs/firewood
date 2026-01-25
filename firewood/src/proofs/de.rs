@@ -18,7 +18,11 @@ use super::{
     reader::{ProofReader, ReadError, ReadItem, V0Reader, Version0},
     types::{Proof, ProofNode, ProofType},
 };
-use crate::v2::api::FrozenRangeProof;
+use crate::{
+    db::BatchOp,
+    merkle::{Key, Value},
+    v2::api::{FrozenChangeProof, FrozenRangeProof},
+};
 
 impl FrozenRangeProof {
     /// Parses a `FrozenRangeProof` from the given byte slice.
@@ -72,6 +76,45 @@ impl<T: Version0> Version0 for Box<[T]> {
     }
 }
 
+impl FrozenChangeProof {
+    /// Parses a `FrozenChangeProof` from the given byte slice.
+    ///
+    /// Currently only V0 proofs are supported. See [`FrozenChangeProof::write_to_vec`]
+    /// for the serialization format.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ReadError`] if the data is invalid. See the enum variants for
+    /// the possible reasons.
+    pub fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
+        let mut reader = ProofReader::new(data);
+
+        let header = reader.read_item::<Header>()?;
+        header
+            .validate(Some(ProofType::Change))
+            .map_err(ReadError::InvalidHeader)?;
+
+        match header.version {
+            0 => {
+                let mut reader = V0Reader::new(reader, header);
+                let this = reader.read_v0_item()?;
+                if reader.remainder().is_empty() {
+                    Ok(this)
+                } else {
+                    Err(reader.invalid_item(
+                        "trailing bytes",
+                        "no data after the proof",
+                        format!("{} bytes", reader.remainder().len()),
+                    ))
+                }
+            }
+            found => Err(ReadError::InvalidHeader(
+                InvalidHeader::UnsupportedVersion { found },
+            )),
+        }
+    }
+}
+
 impl Version0 for FrozenRangeProof {
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
         let start_proof = reader.read_v0_item()?;
@@ -83,6 +126,41 @@ impl Version0 for FrozenRangeProof {
             Proof::new(end_proof),
             key_values,
         ))
+    }
+}
+
+impl Version0 for FrozenChangeProof {
+    fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
+        let start_proof = reader.read_v0_item()?;
+        let end_proof = reader.read_v0_item()?;
+        let key_values = reader.read_v0_item()?;
+
+        Ok(Self::new(
+            Proof::new(start_proof),
+            Proof::new(end_proof),
+            key_values,
+        ))
+    }
+}
+
+impl Version0 for BatchOp<Key, Value> {
+    fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError> {
+        match reader
+            .read_item::<u8>()
+            .map_err(|err| err.set_item("option discriminant"))?
+        {
+            0 => Ok(BatchOp::Put {
+                key: reader.read_item()?,
+                value: reader.read_item()?,
+            }),
+            1 => Ok(BatchOp::Delete {
+                key: reader.read_item()?,
+            }),
+            2 => Ok(BatchOp::DeleteRange {
+                prefix: reader.read_item()?,
+            }),
+            found => Err(reader.invalid_item("option discriminant", "0, 1, or 2", found)),
+        }
     }
 }
 
