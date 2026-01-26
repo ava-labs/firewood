@@ -495,6 +495,7 @@ func TestVerifyChangeProof(t *testing.T) {
 	// Insert some data.
 	_, _, batch := kvForTest(10)
 	root1, err := db1.Update(batch[:5])
+	r.NoError(err)
 	root2, err := db2.Update(batch[:5])
 	r.NoError(err)
 
@@ -504,6 +505,7 @@ func TestVerifyChangeProof(t *testing.T) {
 
 	// Create a change proof from db1.
 	change_proof, err := db1.ChangeProof(root1, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
 
 	// Verify the change proof and create a proposal on db2.
 	err = db2.VerifyChangeProof(change_proof, root2, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
