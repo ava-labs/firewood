@@ -166,7 +166,7 @@ impl<'db> ChangeProofContext<'db> {
             .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
         {
             warn!("change proof verification not yet implemented");
-            
+
             self.verification = Some(VerificationContext {
                 start_root,
                 end_root,
