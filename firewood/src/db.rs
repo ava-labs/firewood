@@ -224,7 +224,8 @@ impl Db {
     /// Check the database for consistency
     pub fn check(&self, opt: CheckOpt) -> CheckerReport {
         let latest_rev_nodestore = self.manager.current_revision();
-        latest_rev_nodestore.check(opt)
+        let header = self.manager.locked_header();
+        latest_rev_nodestore.check(&header, opt)
     }
 
     /// Create a proposal with a specified parent. A proposal is created in parallel if `use_parallel`
@@ -1284,7 +1285,7 @@ mod test {
         assert_eq!(&version, b"firewood-v1\0\0\0\0\0");
 
         // overwrite the magic string to simulate an older version
-        file.write_at(b"firewood 0.0.18\0", 0).unwrap();
+        file.write_all_at(b"firewood 0.0.18\0", 0).unwrap();
         drop(file);
 
         let testdb = testdb.reopen();

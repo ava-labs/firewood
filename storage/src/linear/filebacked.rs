@@ -103,6 +103,13 @@ impl FileBacked {
             fd: UnlockOnDrop(fd),
         })
     }
+
+    /// Set the length of this file.
+    pub fn set_len(&self, size: u64) -> Result<(), FileIoError> {
+        self.fd
+            .set_len(size)
+            .map_err(|e| self.file_io_error(e, 0, Some("set_len".to_string())))
+    }
 }
 
 impl ReadableStorage for FileBacked {
@@ -167,7 +174,8 @@ impl ReadableStorage for FileBacked {
 impl WritableStorage for FileBacked {
     fn write(&self, offset: u64, object: &[u8]) -> Result<usize, FileIoError> {
         self.fd
-            .write_at(object, offset)
+            .write_all_at(object, offset)
+            .map(|()| object.len())
             .map_err(|e| self.file_io_error(e, offset, Some("write".to_string())))
     }
 
