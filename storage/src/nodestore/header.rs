@@ -308,9 +308,19 @@ impl NodeStoreHeader {
     pub const SIZE: u64 = 2048;
 
     /// Reads the [`NodeStoreHeader`] from the start of the given storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if unable to read the header from storage or if there's
+    /// a node hash algorithm mismatch.
     pub fn read_from_storage<S: crate::linear::ReadableStorage>(
         storage: &S,
     ) -> Result<Self, crate::FileIoError> {
+        // TODO(#1088): remove this after implementing runtime selection of hash algorithms
+        storage.node_hash_algorithm().validate_init().map_err(|e| {
+            storage.file_io_error(e, 0, Some("NodeHashAlgorithm::validate_init".to_string()))
+        })?;
+
         let mut this = bytemuck::zeroed::<Self>();
         let header_bytes = bytemuck::bytes_of_mut(&mut this);
         storage
@@ -326,26 +336,19 @@ impl NodeStoreHeader {
         Ok(this)
     }
 
+    /// Creates a new header with default values and no root address.
+    #[must_use]
     pub fn new(node_hash_algorithm: NodeHashAlgorithm) -> Self {
-        Self::with_root(None, node_hash_algorithm)
-    }
-
-    pub fn with_root(
-        root_node_info: Option<RootNodeInfo>,
-        node_hash_algorithm: NodeHashAlgorithm,
-    ) -> Self {
-        let (root_address, root_hash) = root_node_info.unzip();
-        let root_hash = root_hash.unwrap_or_else(TrieHash::empty).into();
         Self {
             // The store just contains the header at this point
             size: Self::SIZE,
             endian_test: 1,
-            root_address,
+            root_address: None,
             version: Version::new(),
             free_lists: Default::default(),
             area_size_hash: area_size_hash().into(),
             node_hash_algorithm: node_hash_algorithm as u64,
-            root_hash,
+            root_hash: TrieHash::empty().into(),
             cargo_version: CargoVersion::INSTANCE,
             git_describe: GitDescribe::INSTANCE,
         }
@@ -364,6 +367,10 @@ impl NodeStoreHeader {
     ///   prevents corrupting the allocation structures by changing area sizes.
     /// - Node hash algorithm flag matches the expected algorithm for this
     ///   storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if validation fails.
     pub fn validate(&self, expected_node_hash_algorithm: NodeHashAlgorithm) -> Result<(), Error> {
         trace!("Checking version...");
         self.version.validate()?;
@@ -390,6 +397,7 @@ impl NodeStoreHeader {
     }
 
     /// Get the size of the nodestore
+    #[must_use]
     pub const fn size(&self) -> u64 {
         self.size
     }
@@ -400,6 +408,7 @@ impl NodeStoreHeader {
     }
 
     /// Get the free lists
+    #[must_use]
     pub const fn free_lists(&self) -> &FreeLists {
         &self.free_lists
     }
@@ -410,6 +419,7 @@ impl NodeStoreHeader {
     }
 
     /// Get the root address
+    #[must_use]
     pub const fn root_address(&self) -> Option<LinearAddress> {
         self.root_address
     }
@@ -417,6 +427,7 @@ impl NodeStoreHeader {
     /// Get the root hash.
     ///
     /// This is None if the database was created before v0.1.0.
+    #[must_use]
     pub fn root_hash(&self) -> Option<TrieHash> {
         if self.version.is_firewood_v1() && self.root_address.is_some() {
             Some(TrieHash::from(self.root_hash))
@@ -436,12 +447,14 @@ impl NodeStoreHeader {
     }
 
     /// Get the offset of the `free_lists` field for use with `offset_of`!
+    #[must_use]
     pub const fn free_lists_offset() -> u64 {
         std::mem::offset_of!(NodeStoreHeader, free_lists) as u64
     }
 
     /// Get the cargo version of `firewood-storage` used to create this database,
     /// if available.
+    #[must_use]
     pub const fn cargo_version(&self) -> Option<&CargoVersion> {
         if self.version.is_firewood_v1() {
             Some(&self.cargo_version)
@@ -451,6 +464,7 @@ impl NodeStoreHeader {
     }
 
     /// Get the git describe string of `firewood` used to create this database,
+    #[must_use]
     pub const fn git_describe(&self) -> Option<&GitDescribe> {
         if self.version.is_firewood_v1() {
             Some(&self.git_describe)
@@ -526,11 +540,8 @@ const fn const_copy(src: &[u8], dst: &mut [u8]) {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::linear::memory::MemStore;
-    use crate::nodestore::NodeStore;
     use test_case::test_case;
 
     #[test]
@@ -548,12 +559,10 @@ mod tests {
     }
 
     #[test]
-    fn test_node_store_new() {
-        let memstore = MemStore::default();
-        let node_store = NodeStore::new_empty_proposal(memstore.into());
+    fn test_header_new() {
+        let header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
 
-        // Check the empty header is written at the start of the ReadableStorage.
-        let header = NodeStoreHeader::read_from_storage(&*node_store.storage).unwrap();
+        // Check the header is correctly initialized.
         assert_eq!(header.version, Version::new());
         let empty_free_list: FreeLists = Default::default();
         assert_eq!(*header.free_lists(), empty_free_list);
