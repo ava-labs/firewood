@@ -102,12 +102,13 @@ validate_ref() {
 }
 
 # Verify a run's inputs match what we triggered with
-# Returns 0 if match, 1 if no match
+# Check if a workflow run's inputs match expected values.
+# Returns: 0 if inputs match, 1 if mismatch
 #
 # NOTE: We rely on AvalancheGo's workflow job naming convention:
 #   "c-chain-reexecution (start, end, block-dir, config, runner...)"
 # If AvalancheGo changes this format, this matching logic will need updating.
-verify_run_inputs() {
+run_inputs_match() {
     local run_id="$1" expected_test="$2" expected_config="$3" expected_start="$4" expected_end="$5" expected_runner="$6"
     
     # Get the c-chain-reexecution job name (second job, after define-matrix)
@@ -176,7 +177,7 @@ poll_workflow_registration() {
         
         # Check each candidate's inputs to find our run
         for run_id in $candidates; do
-            if verify_run_inputs "$run_id" "$expected_test" "$expected_config" "$expected_start" "$expected_end" "$expected_runner"; then
+            if run_inputs_match "$run_id" "$expected_test" "$expected_config" "$expected_start" "$expected_end" "$expected_runner"; then
                 echo "$run_id"
                 return 0
             fi
