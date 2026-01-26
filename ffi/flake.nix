@@ -120,11 +120,17 @@
         program = "${pkgs.just}/bin/just";
       };
 
+      apps.gh = {
+        type = "app";
+        program = "${pkgs.gh}/bin/gh";
+      };
+
       devShells.default = craneLib.devShell {
         inputsFrom = [ firewood-ffi ];
 
         packages = with pkgs; [
           firewood-ffi
+          gh
           go
           jq
           just
