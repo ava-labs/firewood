@@ -332,6 +332,19 @@ impl Db {
         let merge_ops = merkle.merge_key_value_range(first_key, last_key, key_values);
         self.propose_with_parent(merge_ops, merkle.nodestore())
     }
+
+    pub fn apply_change_proof_to_parent<F: Parentable>(
+        &self,
+        batch_ops: impl IntoBatchIter,
+        parent: &NodeStore<F, FileBacked>,
+    ) -> Result<Proposal<'_>, api::Error>
+    where
+        NodeStore<F, FileBacked>: HashedNodeReader,
+    {
+        // Create a new proposal from the parent
+        let merkle = Merkle::from(parent);
+        self.propose_with_parent(batch_ops, merkle.nodestore())
+    }
 }
 
 #[derive(Debug)]

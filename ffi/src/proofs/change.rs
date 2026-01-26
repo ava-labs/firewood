@@ -10,8 +10,11 @@ use rlp::Rlp;
 
 use firewood::{
     ProofError,
+    logger::warn,
     v2::api::{self, FrozenChangeProof},
 };
+
+use std::cmp::Ordering;
 
 use crate::{
     BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
@@ -80,7 +83,7 @@ pub struct VerifyChangeProofArgs<'a> {
 /// created after calling `fwd_db_verify_change_proof` and is committed after
 /// calling `fwd_db_verify_and_commit_change_proof`.
 #[derive(Debug)]
-#[expect(dead_code)]
+#[expect(unused)]
 enum ProposalState<'db> {
     Immutable(crate::ProposalHandle<'db>),
     Committed(Option<HashKey>),
@@ -88,7 +91,6 @@ enum ProposalState<'db> {
 
 /// FFI context for a parsed or generated change proof.
 #[derive(Debug)]
-#[expect(dead_code)]
 pub struct ChangeProofContext<'db> {
     proof: FrozenChangeProof,
     verification: Option<VerificationContext>,
@@ -105,9 +107,99 @@ impl From<FrozenChangeProof> for ChangeProofContext<'_> {
     }
 }
 
+impl<'db> ChangeProofContext<'db> {
+    fn verify(
+        &mut self,
+        start_root: HashKey,
+        end_root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<(), api::Error> {
+        if let Some(ref ctx) = self.verification {
+            if ctx.start_root == start_root
+                && ctx.end_root == end_root
+                && ctx.start_key.as_deref() == start_key
+                && ctx.end_key.as_deref() == end_key
+                && ctx.max_length == max_length
+            {
+                // already verified with the same context
+                return Ok(());
+            }
+
+            return Err(api::Error::ProofError(ProofError::ValueMismatch));
+        }
+
+        let batch_ops = self.proof.batch_ops();
+        if batch_ops.is_empty() {
+            return Err(api::Error::ProofError(ProofError::Empty));
+        }
+
+        // Check to make sure the BatchOp array size is less than or equal to `max_length`
+        if let Some(max_length) = max_length
+            && batch_ops.len() > max_length.into()
+        {
+            return Err(api::Error::ProofError(
+                ProofError::ProofIsLargerThanMaxLength,
+            ));
+        }
+
+        // Check the start key is not greater than the first key in the proof.
+        if let (Some(start_key), Some(first_key)) = (start_key, batch_ops.first())
+            && start_key.cmp(first_key.key()) == Ordering::Greater
+        {
+            return Err(api::Error::ProofError(
+                ProofError::StartKeyLargerThanFirstKey,
+            ));
+        }
+
+        // Check the end key is not less than the last key in the proof.
+        if let (Some(end_key), Some(last_key)) = (end_key, batch_ops.last())
+            && end_key.cmp(last_key.key()) == Ordering::Less
+        {
+            return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
+        }
+
+        // Verify the keys are in sorted order.
+        if batch_ops
+            .iter()
+            .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
+        {
+            warn!("change proof verification not yet implemented");
+            self.verification = Some(VerificationContext {
+                start_root,
+                end_root,
+                start_key: start_key.map(Box::from),
+                end_key: end_key.map(Box::from),
+                max_length,
+            });
+            Ok(())
+        } else {
+            Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted))
+        }
+    }
+
+    fn verify_and_propose(
+        &mut self,
+        db: &'db crate::DatabaseHandle,
+        start_root: HashKey,
+        end_root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<(), api::Error> {
+        self.verify(start_root, end_root, start_key, end_key, max_length)?;
+        if self.proposal_state.is_some() {
+            return Ok(());
+        }
+        let proposal = db.apply_change_proof_to_parent(start_root.into(), &self.proof)?;
+        self.proposal_state = Some(ProposalState::Immutable(proposal.handle));
+        Ok(())
+    }
+}
+
 /// FFI context for verifying a change proof
 #[derive(Debug)]
-#[expect(dead_code)]
 struct VerificationContext {
     start_root: HashKey,
     end_root: HashKey,
@@ -268,11 +360,32 @@ pub extern "C" fn fwd_db_change_proof<'db>(
 /// concurrently. The caller must ensure exclusive access to the proof context
 /// for the duration of the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_db_verify_change_proof(
-    _db: Option<&DatabaseHandle>,
-    _args: VerifyChangeProofArgs,
+pub extern "C" fn fwd_db_verify_change_proof<'db>(
+    db: Option<&'db DatabaseHandle>,
+    args: VerifyChangeProofArgs<'db>,
 ) -> VoidResult {
-    CResult::from_err("not yet implemented")
+    let VerifyChangeProofArgs {
+        proof,
+        start_root,
+        end_root,
+        start_key,
+        end_key,
+        max_length,
+    } = args;
+
+    let handle = db.and_then(|db| proof.map(|p| (db, p)));
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        let start_key = start_key.into_option();
+        let end_key = end_key.into_option();
+        ctx.verify_and_propose(
+            db,
+            start_root,
+            end_root,
+            start_key.as_deref(),
+            end_key.as_deref(),
+            NonZeroUsize::new(max_length as usize),
+        )
+    })
 }
 
 /// Verify and commit a change proof to the database.
@@ -410,6 +523,12 @@ pub extern "C" fn fwd_free_change_proof(proof: Option<Box<ChangeProofContext>>) 
 impl crate::MetricsContextExt for ChangeProofContext<'_> {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         None
+    }
+}
+
+impl<'a> crate::MetricsContextExt for (&'a DatabaseHandle, &mut ChangeProofContext<'a>) {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
+        self.0.metrics_context()
     }
 }
 

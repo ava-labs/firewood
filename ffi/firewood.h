@@ -1502,8 +1502,8 @@ struct HashResult fwd_db_verify_and_commit_range_proof(const struct DatabaseHand
  * concurrently. The caller must ensure exclusive access to the proof context
  * for the duration of the call.
  */
-struct VoidResult fwd_db_verify_change_proof(const struct DatabaseHandle *_db,
-                                             struct VerifyChangeProofArgs _args);
+struct VoidResult fwd_db_verify_change_proof(const struct DatabaseHandle *db,
+                                             struct VerifyChangeProofArgs args);
 
 /**
  * Verify a range proof and prepare a proposal to later commit or drop. If the

@@ -101,7 +101,6 @@ func newSerializedChangeProof(
 ) []byte {
 	r := require.New(t)
 
-	// TODO: Replace with newVerifiedChangeProof after adding verify.
 	proof, err := db.ChangeProof(startRoot, endRoot, startKey, endKey, proofLen)
 	r.NoError(err)
 
@@ -486,4 +485,27 @@ func TestRoundTripChangeProofSerialization(t *testing.T) {
 	serialized, err := proof.MarshalBinary()
 	r.NoError(err)
 	r.Equal(proofBytes, serialized)
+}
+
+func TestVerifyChangeProof(t *testing.T) {
+	r := require.New(t)
+	db1 := newTestDatabase(t)
+	db2 := newTestDatabase(t)
+
+	// Insert some data.
+	_, _, batch := kvForTest(10)
+	root1, err := db1.Update(batch[:5])
+	root2, err := db2.Update(batch[:5])
+	r.NoError(err)
+
+	// Insert more data into db1 but not db2.
+	root1_updated, err := db1.Update(batch[5:])
+	r.NoError(err)
+
+	// Create a change proof from db1.
+	change_proof, err := db1.ChangeProof(root1, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
+
+	// Verify the change proof and create a proposal on db2.
+	err = db2.VerifyChangeProof(change_proof, root2, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
 }
