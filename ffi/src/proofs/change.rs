@@ -34,11 +34,11 @@ const EMPTY_CODE_HASH: [u8; 32] = [
 pub struct CreateChangeProofArgs<'a> {
     /// The root hash of the starting revision. This must be provided.
     /// If the root is not found in the database, the function will return
-    /// [`ChangeProofResult::RevisionNotFound`].
+    /// [`ChangeProofResult::StartRevisionNotFound`].
     pub start_root: HashKey,
     /// The root hash of the ending revision. This must be provided.
     /// If the root is not found in the database, the function will return
-    /// [`ChangeProofResult::RevisionNotFound`].
+    /// [`ChangeProofResult::EndRevisionNotFound`].
     pub end_root: HashKey,
     /// The start key of the range to create the proof for. If `None`, the range
     /// starts from the beginning of the keyspace.
@@ -311,9 +311,13 @@ impl<'a> CodeIteratorHandle<'a> {
 /// # Returns
 ///
 /// - [`ChangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
-/// - [`ChangeProofResult::RevisionNotFound`] if the caller provided a start or end root
+/// - [`ChangeProofResult::StartRevisionNotFound`] if the caller provided a start root
 ///   that was not found in the database. The missing root hash is included in the result.
-///   The start root is checked first, and if both are missing, only the start root is
+///   If both the start root and end root are missing, then only the end root is
+///   reported.
+/// - [`ChangeProofResult::EndRevisionNotFound`] if the caller provided an end root
+///   that was not found in the database. The missing root hash is included in the result.
+///   If both the start root and end root are missing, then only the end root is
 ///   reported.
 /// - [`ChangeProofResult::Ok`] containing a pointer to the `ChangeProofContext` if the proof
 ///   was successfully created.
