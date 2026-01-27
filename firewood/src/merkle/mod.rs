@@ -136,7 +136,7 @@ impl<T: TrieReader> Merkle<T> {
         self.nodestore.root_node()
     }
 
-    // TODO: Check why this must be pub instead of pub(crate)
+    // Must be pub because it is used in FFI calls.
     pub const fn nodestore(&self) -> &T {
         &self.nodestore
     }
