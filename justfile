@@ -204,7 +204,7 @@ bench-cchain test="" runner="avalanche-avalanchego-runner-2ti":
         echo "error: Provide a test name or set START_BLOCK, END_BLOCK, BLOCK_DIR_SRC" >&2
         echo "" >&2
         echo "Predefined tests:" >&2
-        echo "  firewood-101-250k, firewood-33m-33m500k, firewood-33m-40m" >&2
+        echo "  firewood-101k-250k, firewood-33m-33m500k, firewood-33m-40m" >&2
         echo "  firewood-archive-101-250k, firewood-archive-33m-33m500k, firewood-archive-33m-40m" >&2
         echo "" >&2
         echo "Custom mode example:" >&2
@@ -253,8 +253,8 @@ bench-cchain test="" runner="avalanche-avalanchego-runner-2ti":
     fi
     
     echo ""
-    echo "Workflow triggered. Run ID: $run_id"
-    echo "https://github.com/ava-labs/firewood/actions/runs/$run_id"
+    echo "Monitor this workflow with cli: $GH run watch $run_id"
+    echo " or with this URL: https://github.com/ava-labs/firewood/actions/runs/$run_id"
     echo ""
     
     $GH run watch "$run_id"
