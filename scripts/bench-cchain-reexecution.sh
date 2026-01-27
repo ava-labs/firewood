@@ -239,11 +239,10 @@ trigger_workflow() {
     # runs created after this timestamp, so concurrent triggers don't collide
     local trigger_time
     trigger_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    
-    # TODO: use $AVALANCHEGO_REF once ava-labs/avalanchego#4560 is merged
+
     gh workflow run "$WORKFLOW_NAME" \
         --repo "$AVALANCHEGO_REPO" \
-        --ref es/enable-firewood-dev-workflow \
+        --ref "$AVALANCHEGO_REF" \
         "${args[@]}"
     
     # Pass test/custom params to help identify our specific run among concurrent triggers
