@@ -411,7 +411,7 @@ func TestChangeProofEmptyDB(t *testing.T) {
 	db := newTestDatabase(t)
 
 	proof, err := db.ChangeProof(EmptyRoot, EmptyRoot, nothing(), nothing(), changeProofLenUnbounded)
-	r.ErrorIs(err, errRevisionNotFound)
+	r.ErrorIs(err, ErrEndRevisionNotFound)
 	r.Nil(proof)
 }
 
