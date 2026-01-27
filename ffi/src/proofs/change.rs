@@ -4,8 +4,6 @@
 use std::num::NonZeroUsize;
 
 #[cfg(feature = "ethhash")]
-use firewood::ProofError;
-#[cfg(feature = "ethhash")]
 use firewood_storage::TrieHash;
 #[cfg(feature = "ethhash")]
 use rlp::Rlp;
