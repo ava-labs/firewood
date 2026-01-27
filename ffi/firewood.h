@@ -390,9 +390,13 @@ typedef enum ChangeProofResult_Tag {
    */
   ChangeProofResult_NullHandlePointer,
   /**
-   * The provided root was not found in the database.
+   * The provided start root was not found in the database.
    */
-  ChangeProofResult_RevisionNotFound,
+  ChangeProofResult_StartRevisionNotFound,
+  /**
+   * The provided end root was not found in the database.
+   */
+  ChangeProofResult_EndRevisionNotFound,
   /**
    * The proof was successfully created or parsed.
    *
@@ -417,7 +421,10 @@ typedef struct ChangeProofResult {
   ChangeProofResult_Tag tag;
   union {
     struct {
-      struct HashKey revision_not_found;
+      struct HashKey start_revision_not_found;
+    };
+    struct {
+      struct HashKey end_revision_not_found;
     };
     struct {
       struct ChangeProofContext *ok;

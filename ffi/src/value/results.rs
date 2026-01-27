@@ -250,8 +250,10 @@ impl From<Result<api::FrozenRangeProof, api::Error>> for RangeProofResult<'_> {
 pub enum ChangeProofResult<'db> {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
-    /// The provided root was not found in the database.
-    RevisionNotFound(HashKey),
+    /// The provided start root was not found in the database.
+    StartRevisionNotFound(HashKey),
+    /// The provided end root was not found in the database.
+    EndRevisionNotFound(HashKey),
     /// The proof was successfully created or parsed.
     ///
     /// If the value was parsed from a serialized proof, this does not imply that
@@ -543,7 +545,10 @@ impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult<'_> 
     fn from(value: Result<api::FrozenChangeProof, api::Error>) -> Self {
         match value {
             Ok(proof) => ChangeProofResult::Ok(Box::new(proof.into())),
-            Err(api::Error::RevisionNotFound { provided }) => ChangeProofResult::RevisionNotFound(
+            Err(api::Error::StartRevisionNotFound { provided }) => ChangeProofResult::StartRevisionNotFound(
+                HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
+            ),
+            Err(api::Error::EndRevisionNotFound { provided }) => ChangeProofResult::EndRevisionNotFound(
                 HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
             ),
             Err(err) => ChangeProofResult::Err(err.to_string().into_bytes().into()),

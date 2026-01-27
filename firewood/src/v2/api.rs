@@ -100,6 +100,20 @@ pub enum Error {
         provided: Option<HashKey>,
     },
 
+    /// The start hash key is not available in the database
+    #[error("Start revision for {provided:?} not found")]
+    StartRevisionNotFound {
+        /// the provided hash key
+        provided: Option<HashKey>,
+    },
+
+    /// The end hash key is not available in the database
+    #[error("End revision for {provided:?} not found")]
+    EndRevisionNotFound {
+        /// the provided hash key
+        provided: Option<HashKey>,
+    },
+
     /// A committed revision does not have an address.
     #[error("Revision for {provided:?} has no address")]
     RevisionWithoutAddress { provided: HashKey },

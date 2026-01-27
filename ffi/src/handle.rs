@@ -293,10 +293,26 @@ impl DatabaseHandle {
         end_key: Option<&[u8]>,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenChangeProof, api::Error> {
-        Merkle::from(self.db.revision(end_hash)?).change_proof(
+        // Convert `RevisionNotFound` to either `EndRevisionNotFound` or
+        // `StartRevisionNotFound` depending on which revision is missing.
+        Merkle::from(self.db.revision(end_hash).map_err(|err| {
+            if let api::Error::RevisionNotFound { provided } = err {
+                api::Error::EndRevisionNotFound { provided }
+            } else {
+                err
+            }
+        })?)
+        .change_proof(
             start_key,
             end_key,
-            Merkle::from(self.db.revision(start_hash)?).nodestore(),
+            Merkle::from(self.db.revision(start_hash).map_err(|err| {
+                if let api::Error::RevisionNotFound { provided } = err {
+                    api::Error::StartRevisionNotFound { provided }
+                } else {
+                    err
+                }
+            })?)
+            .nodestore(),
             limit,
         )
     }
