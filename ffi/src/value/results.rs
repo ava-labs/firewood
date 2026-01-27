@@ -545,12 +545,16 @@ impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult<'_> 
     fn from(value: Result<api::FrozenChangeProof, api::Error>) -> Self {
         match value {
             Ok(proof) => ChangeProofResult::Ok(Box::new(proof.into())),
-            Err(api::Error::StartRevisionNotFound { provided }) => ChangeProofResult::StartRevisionNotFound(
-                HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
-            ),
-            Err(api::Error::EndRevisionNotFound { provided }) => ChangeProofResult::EndRevisionNotFound(
-                HashKey::from(provided.unwrap_or_else(api::HashKey::empty)),
-            ),
+            Err(api::Error::StartRevisionNotFound { provided }) => {
+                ChangeProofResult::StartRevisionNotFound(HashKey::from(
+                    provided.unwrap_or_else(api::HashKey::empty),
+                ))
+            }
+            Err(api::Error::EndRevisionNotFound { provided }) => {
+                ChangeProofResult::EndRevisionNotFound(HashKey::from(
+                    provided.unwrap_or_else(api::HashKey::empty),
+                ))
+            }
             Err(err) => ChangeProofResult::Err(err.to_string().into_bytes().into()),
         }
     }
