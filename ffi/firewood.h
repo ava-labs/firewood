@@ -520,13 +520,13 @@ typedef struct CreateChangeProofArgs {
   /**
    * The root hash of the starting revision. This must be provided.
    * If the root is not found in the database, the function will return
-   * [`ChangeProofResult::RevisionNotFound`].
+   * [`ChangeProofResult::StartRevisionNotFound`].
    */
   struct HashKey start_root;
   /**
    * The root hash of the ending revision. This must be provided.
    * If the root is not found in the database, the function will return
-   * [`ChangeProofResult::RevisionNotFound`].
+   * [`ChangeProofResult::EndRevisionNotFound`].
    */
   struct HashKey end_root;
   /**
@@ -1363,9 +1363,13 @@ struct HashResult fwd_commit_proposal(struct ProposalHandle *proposal);
  * # Returns
  *
  * - [`ChangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
- * - [`ChangeProofResult::RevisionNotFound`] if the caller provided a start or end root
+ * - [`ChangeProofResult::StartRevisionNotFound`] if the caller provided a start root
  *   that was not found in the database. The missing root hash is included in the result.
- *   The start root is checked first, and if both are missing, only the start root is
+ *   If both the start root and end root are missing, then only the end root is
+ *   reported.
+ * - [`ChangeProofResult::EndRevisionNotFound`] if the caller provided an end root
+ *   that was not found in the database. The missing root hash is included in the result.
+ *   If both the start root and end root are missing, then only the end root is
  *   reported.
  * - [`ChangeProofResult::Ok`] containing a pointer to the `ChangeProofContext` if the proof
  *   was successfully created.
