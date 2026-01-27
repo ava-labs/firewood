@@ -18,8 +18,8 @@ import (
 var (
 	ErrDroppedRevision       = errors.New("revision already dropped")
 	errRevisionNotFound      = errors.New("revision not found")
-	errEndRevisionNotFound   = errors.New("end revision not found")
-	errStartRevisionNotFound = errors.New("start revision not found")
+	ErrEndRevisionNotFound   = errors.New("end revision not found")
+	ErrStartRevisionNotFound = errors.New("start revision not found")
 )
 
 // Revision is an immutable view over the state at a specific root hash.
