@@ -1,6 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::num::NonZeroUsize;
+
 #[cfg(feature = "ethhash")]
 use firewood::ProofError;
 #[cfg(feature = "ethhash")]
@@ -8,7 +10,7 @@ use firewood_storage::TrieHash;
 #[cfg(feature = "ethhash")]
 use rlp::Rlp;
 
-use firewood::v2::api;
+use firewood::v2::api::{self, FrozenChangeProof};
 
 use crate::{
     BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
@@ -28,11 +30,11 @@ const EMPTY_CODE_HASH: [u8; 32] = [
 pub struct CreateChangeProofArgs<'a> {
     /// The root hash of the starting revision. This must be provided.
     /// If the root is not found in the database, the function will return
-    /// [`ChangeProofResult::RevisionNotFound`].
+    /// [`ChangeProofResult::StartRevisionNotFound`].
     pub start_root: HashKey,
     /// The root hash of the ending revision. This must be provided.
     /// If the root is not found in the database, the function will return
-    /// [`ChangeProofResult::RevisionNotFound`].
+    /// [`ChangeProofResult::EndRevisionNotFound`].
     pub end_root: HashKey,
     /// The start key of the range to create the proof for. If `None`, the range
     /// starts from the beginning of the keyspace.
@@ -54,7 +56,7 @@ pub struct VerifyChangeProofArgs<'a> {
     /// The change proof to verify. If null, the function will return
     /// [`VoidResult::NullHandlePointer`]. We need a mutable reference to
     /// update the validation context.
-    pub proof: Option<&'a mut ChangeProofContext>,
+    pub proof: Option<&'a mut ChangeProofContext<'a>>,
     /// The root hash of the starting revision. This must match the starting
     /// root of the proof.
     pub start_root: HashKey,
@@ -73,12 +75,44 @@ pub struct VerifyChangeProofArgs<'a> {
     pub max_length: u32,
 }
 
+/// Tracks the state of a proposal created from a change proof. A proposal is
+/// created after calling `fwd_db_verify_change_proof` and is committed after
+/// calling `fwd_db_verify_and_commit_change_proof`.
+#[derive(Debug)]
+#[expect(dead_code)]
+enum ProposalState<'db> {
+    Immutable(crate::ProposalHandle<'db>),
+    Committed(Option<HashKey>),
+}
+
 /// FFI context for a parsed or generated change proof.
 #[derive(Debug)]
-pub struct ChangeProofContext {
-    _proof: (),              // currently not implemented
-    _validation_context: (), // placeholder for future use
-    _commit_context: (),     // placeholder for future use
+#[expect(dead_code)]
+pub struct ChangeProofContext<'db> {
+    proof: FrozenChangeProof,
+    verification: Option<VerificationContext>,
+    proposal_state: Option<ProposalState<'db>>,
+}
+
+impl From<FrozenChangeProof> for ChangeProofContext<'_> {
+    fn from(proof: FrozenChangeProof) -> Self {
+        Self {
+            proof,
+            verification: None,
+            proposal_state: None,
+        }
+    }
+}
+
+/// FFI context for verifying a change proof
+#[derive(Debug)]
+#[expect(dead_code)]
+struct VerificationContext {
+    start_root: HashKey,
+    end_root: HashKey,
+    start_key: Option<Box<[u8]>>,
+    end_key: Option<Box<[u8]>>,
+    max_length: Option<NonZeroUsize>,
 }
 
 /// A key range that should be fetched to continue iterating through a range
@@ -183,19 +217,37 @@ impl<'a> CodeIteratorHandle<'a> {
 /// # Returns
 ///
 /// - [`ChangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
-/// - [`ChangeProofResult::RevisionNotFound`] if the caller provided a start or end root
+/// - [`ChangeProofResult::StartRevisionNotFound`] if the caller provided a start root
 ///   that was not found in the database. The missing root hash is included in the result.
-///   The start root is checked first, and if both are missing, only the start root is
+///   If both the start root and end root are missing, then only the end root is
+///   reported.
+/// - [`ChangeProofResult::EndRevisionNotFound`] if the caller provided an end root
+///   that was not found in the database. The missing root hash is included in the result.
+///   If both the start root and end root are missing, then only the end root is
 ///   reported.
 /// - [`ChangeProofResult::Ok`] containing a pointer to the `ChangeProofContext` if the proof
 ///   was successfully created.
 /// - [`ChangeProofResult::Err`] containing an error message if the proof could not be created.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_db_change_proof(
-    _db: Option<&DatabaseHandle>,
-    _args: CreateChangeProofArgs,
-) -> ChangeProofResult {
-    CResult::from_err("not yet implemented")
+pub extern "C" fn fwd_db_change_proof<'db>(
+    db: Option<&'db DatabaseHandle>,
+    args: CreateChangeProofArgs<'db>,
+) -> ChangeProofResult<'db> {
+    crate::invoke_with_handle(db, |db| {
+        db.change_proof(
+            args.start_root.into(),
+            args.end_root.into(),
+            args.start_key
+                .as_ref()
+                .map(BorrowedBytes::as_slice)
+                .into_option(),
+            args.end_key
+                .as_ref()
+                .map(BorrowedBytes::as_slice)
+                .into_option(),
+            NonZeroUsize::new(args.max_length as usize),
+        )
+    })
 }
 
 /// Verify a change proof and prepare a proposal to later commit or drop.
@@ -351,7 +403,7 @@ pub extern "C" fn fwd_free_change_proof(proof: Option<Box<ChangeProofContext>>) 
     crate::invoke_with_handle(proof, drop)
 }
 
-impl crate::MetricsContextExt for ChangeProofContext {
+impl crate::MetricsContextExt for ChangeProofContext<'_> {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         None
     }

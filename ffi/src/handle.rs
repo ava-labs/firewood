@@ -1,10 +1,16 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::num::NonZeroUsize;
+
 use firewood::{
     db::{Db, DbConfig},
     manager::RevisionManagerConfig,
-    v2::api::{self, ArcDynDbView, Db as _, DbView, HashKey, HashKeyExt, IntoBatchIter, KeyType},
+    merkle::Merkle,
+    v2::api::{
+        self, ArcDynDbView, Db as _, DbView, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter,
+        KeyType,
+    },
 };
 
 use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult, arc_cache::ArcCache};
@@ -272,6 +278,56 @@ impl DatabaseHandle {
             self.db
                 .merge_key_value_range(first_key, last_key, key_values)
         })
+    }
+
+    /// Create a Change Proof between two revisions specified by the start and end hash.
+    ///
+    /// # Errors
+    ///
+    /// * `api::Error::StartRevisionNotFound` - If the revision for `start_hash` cannot
+    ///   be found. Note that only an `EndRevisionNotFound` is returned when both
+    ///   `start_hash` and `end_hash` cannot be found.
+    ///
+    /// * `api::Error::EndRevisionNotFound` - If the revision for `end_hash` cannot be
+    ///   found. Note that only an `EndRevisionNotFound` is returned when both
+    ///   `start_hash` and `end_hash` cannot be found.
+    ///
+    /// * `api::Error::InvalidRange` - If `start_key` > `end_key` when both are provided.
+    ///   This ensures the range bounds are logically consistent.
+    ///
+    /// * `api::Error` - Various other errors can occur during proof generation, such as:
+    ///   - I/O errors when reading nodes from storage
+    ///   - Corrupted trie structure
+    ///   - Invalid node references
+    pub(crate) fn change_proof(
+        &self,
+        start_hash: HashKey,
+        end_hash: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenChangeProof, api::Error> {
+        // Convert `RevisionNotFound` to `EndRevisionNotFound`. We get the end merkle
+        // before the start merkle since we want to return an `EndRevisionNotFound` in
+        // the case where both the start and end keys are not available.
+        let end_merkle = Merkle::from(self.db.revision(end_hash).map_err(|err| {
+            if let api::Error::RevisionNotFound { provided } = err {
+                api::Error::EndRevisionNotFound { provided }
+            } else {
+                err
+            }
+        })?);
+
+        // Convert `RevisionNotFound` to `StartRevisionNotFound`.
+        let start_merkle = Merkle::from(self.db.revision(start_hash).map_err(|err| {
+            if let api::Error::RevisionNotFound { provided } = err {
+                api::Error::StartRevisionNotFound { provided }
+            } else {
+                err
+            }
+        })?);
+
+        end_merkle.change_proof(start_key, end_key, start_merkle.nodestore(), limit)
     }
 
     /// Dumps the Trie structure of the latest revision to a DOT (Graphviz) format string.
