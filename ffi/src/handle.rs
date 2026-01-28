@@ -330,6 +330,39 @@ impl DatabaseHandle {
         end_merkle.change_proof(start_key, end_key, start_merkle.nodestore(), limit)
     }
 
+    /// Applies the `BatchOp`s of a change proof to the parent.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `ParentNotLatest` error if `start_hash` does not match the current root hash.
+    /// Returns a `LatestIsEmpty` error if the trie is empty. A range proof should be used in
+    /// this case.
+    pub fn apply_change_proof_to_parent(
+        &self,
+        start_hash: HashKey,
+        change_proof: &FrozenChangeProof,
+    ) -> Result<CreateProposalResult<'_>, api::Error> {
+        // Verify that the current hash is the start_hash
+        let start_hash = match self.db.root_hash()? {
+            Some(root_hash) => {
+                let start_hash = start_hash.into_triehash();
+                if start_hash == root_hash {
+                    Ok(start_hash)
+                } else {
+                    Err(api::Error::ParentNotLatest {
+                        provided: Some(root_hash),
+                        expected: Some(start_hash),
+                    })
+                }
+            }
+            None => Err(api::Error::LatestIsEmpty),
+        }?;
+        CreateProposalResult::new(self, || {
+            let parent = &self.db.revision(start_hash)?;
+            self.db.apply_change_proof_to_parent(change_proof, parent)
+        })
+    }
+
     /// Dumps the Trie structure of the latest revision to a DOT (Graphviz) format string.
     ///
     /// # Errors
