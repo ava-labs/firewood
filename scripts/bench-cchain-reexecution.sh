@@ -17,7 +17,8 @@ set -euo pipefail
 #   GH_TOKEN              GitHub token for API access (required)
 #   TEST                  Predefined test name, alternative to arg (optional)
 #   FIREWOOD_REF          Firewood commit/tag/branch, empty = AvalancheGo's go.mod default (optional)
-#   AVALANCHEGO_REF       AvalancheGo ref to test against (default: master)
+#   AVALANCHEGO_REF       AvalancheGo branch/tag to test against (default: master)
+#                         NOTE: Must be a branch or tag name, not a commit SHA (GitHub API limitation)
 #   RUNNER                GitHub Actions runner label (default: avalanche-avalanchego-runner-2ti)
 #   LIBEVM_REF            libevm ref (optional)
 #   TIMEOUT_MINUTES       Workflow timeout in minutes (optional)
@@ -330,7 +331,7 @@ COMMANDS
   status <run_id>  Check run status
   list             List recent runs
   tests            Show available tests
-  help             Show this help
+  help             Show this help message
 
 TESTS
 EOF
