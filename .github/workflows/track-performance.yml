@@ -10,6 +10,11 @@ on:
     - cron: '0 5 * * 0'
   workflow_dispatch:
     inputs:
+      firewood:
+        description: 'Firewood commit/branch/tag to test (leave empty to use the commit that triggered the workflow)'
+        default: ''
+      libevm:
+        description: 'libevm commit/branch/tag to test (leave empty to use AvalancheGo version of libevm)'
         default: ''
       avalanchego:
         description: 'AvalancheGo commit/branch/tag to test against'
@@ -19,7 +24,7 @@ on:
         default: ''
       config:
         description: 'Config (e.g., firewood, hashdb)'
-        default: ''
+        default: 'firewood'
       start-block:
         default: ''
       end-block:
@@ -30,14 +35,21 @@ on:
       current-state-dir-src:
         description: 'Current state directory source (e.g., cchain-mainnet-blocks-30m-40m-ldb [without S3 path])'
         default: ''
-      runner:
+      runner: # runners defined here: https://github.com/ava-labs/devops-argocd/blob/main/base/system/actions-runners/action-runner.yaml
         description: 'Runner to use in AvalancheGo'
         required: true
         type: choice
         options:
+          - avalanche-avalanchego-runner
           - avalanche-avalanchego-runner-2ti
-          - avago-runner-i4i-4xlarge-local-ssd
           - avago-runner-m6i-4xlarge-ebs-fast
+          - avago-runner-m6i-4xlarge-ebs-fast-5ti
+          - avago-runner-m6i-4xlarge-ebs-fast-10ti
+          - avago-runner-m6i-4xlarge-io2-xfast-10ti
+          - avago-runner-i4i-2xlarge-local-ssd
+          - avago-runner-i4i-4xlarge-local-ssd
+          - avago-runner-i4i-8xlarge-local-ssd
+          - avago-runner-i4i-16xlarge-local-ssd
       timeout-minutes:
         description: 'Timeout in minutes'
         default: ''
