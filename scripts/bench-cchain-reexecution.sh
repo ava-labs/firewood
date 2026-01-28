@@ -330,7 +330,7 @@ COMMANDS
   status <run_id>  Check run status
   list             List recent runs
   tests            Show available tests
-  help             Show this help
+  help             Show this help message
 
 TESTS
 EOF
