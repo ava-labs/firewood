@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	rangeProofLenUnbounded = 0
-	rangeProofLenTruncated = 10
+	rangeProofLenUnbounded  = 0
+	rangeProofLenTruncated  = 10
+	changeProofLenUnbounded = 0
 )
 
 type maybe struct {
@@ -384,4 +385,30 @@ func TestRangeProofFinalizerCleanup(t *testing.T) {
 	runtime.GC()
 
 	r.NoError(db.Close(t.Context()), "Database should be closeable after proof is garbage collected")
+}
+
+func TestChangeProofEmptyDB(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	proof, err := db.ChangeProof(EmptyRoot, EmptyRoot, nothing(), nothing(), changeProofLenUnbounded)
+	r.ErrorIs(err, ErrEndRevisionNotFound)
+	r.Nil(proof)
+}
+
+func TestChangeProofCreation(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert first half of data in the first batch
+	_, _, batch := kvForTest(10000)
+	root1, err := db.Update(batch[:5000])
+	r.NoError(err)
+
+	// Insert the rest in the second batch
+	root2, err := db.Update(batch[5000:])
+	r.NoError(err)
+
+	_, err = db.ChangeProof(root1, root2, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
 }

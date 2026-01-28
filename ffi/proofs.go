@@ -579,6 +579,10 @@ func getChangeProofFromChangeProofResult(result C.ChangeProofResult) (*ChangePro
 	switch result.tag {
 	case C.ChangeProofResult_NullHandlePointer:
 		return nil, errDBClosed
+	case C.ChangeProofResult_StartRevisionNotFound:
+		return nil, ErrStartRevisionNotFound
+	case C.ChangeProofResult_EndRevisionNotFound:
+		return nil, ErrEndRevisionNotFound
 	case C.ChangeProofResult_Ok:
 		ptr := *(**C.ChangeProofContext)(unsafe.Pointer(&result.anon0))
 		return &ChangeProof{handle: ptr}, nil
