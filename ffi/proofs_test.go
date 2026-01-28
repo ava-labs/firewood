@@ -92,6 +92,25 @@ func newSerializedRangeProof(
 	return proofBytes
 }
 
+func newSerializedChangeProof(
+	t *testing.T,
+	db *Database,
+	startRoot, endRoot Hash,
+	startKey, endKey maybe,
+	proofLen uint32,
+) []byte {
+	r := require.New(t)
+
+	// TODO: Replace with newVerifiedChangeProof after adding verify.
+	proof, err := db.ChangeProof(startRoot, endRoot, startKey, endKey, proofLen)
+	r.NoError(err)
+
+	proofBytes, err := proof.MarshalBinary()
+	r.NoError(err)
+
+	return proofBytes
+}
+
 func TestRangeProofEmptyDB(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
@@ -411,4 +430,60 @@ func TestChangeProofCreation(t *testing.T) {
 
 	_, err = db.ChangeProof(root1, root2, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
+}
+
+func TestChangeProofDiffersAfterUpdate(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert first half of data in the first batch
+	_, _, batch := kvForTest(10000)
+	root1, err := db.Update(batch[:2500])
+	r.NoError(err)
+
+	// Insert the rest in the second batch
+	root2, err := db.Update(batch[2500:5000])
+	r.NoError(err)
+	r.NotEqual(root1, root2)
+
+	// get a proof
+	proof1 := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+
+	// insert more data
+	root3, err := db.Update(batch[5000:])
+	r.NoError(err)
+	r.NotEqual(root2, root3)
+
+	// get a proof again
+	proof2 := newSerializedChangeProof(t, db, root2, root3, nothing(), nothing(), changeProofLenUnbounded)
+	// ensure the proofs are different
+	r.NotEqual(proof1, proof2)
+}
+
+func TestRoundTripChangeProofSerialization(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert some data.
+	_, _, batch := kvForTest(10)
+	root1, err := db.Update(batch[:5])
+	r.NoError(err)
+
+	root2, err := db.Update(batch[5:])
+	r.NoError(err)
+
+	// get a proof
+	proofBytes := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing(), changeProofLenUnbounded)
+
+	// Deserialize the proof.
+	proof := new(ChangeProof)
+	err = proof.UnmarshalBinary(proofBytes)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(proof.Free()) })
+
+	// serialize the proof again
+	serialized, err := proof.MarshalBinary()
+	r.NoError(err)
+	r.Equal(proofBytes, serialized)
 }
