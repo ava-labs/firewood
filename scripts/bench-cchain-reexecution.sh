@@ -75,7 +75,6 @@ declare -A TESTS=(
 
 log() { echo "==> $1" >&2; }
 
-# Use GitHub Actions error annotation format in CI for better visibility
 err() {
     if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
         echo "::error::$1"
@@ -84,21 +83,19 @@ err() {
     fi
 }
 
-die() { err "$1"; exit 1; }
-
 require_gh() {
     if ! command -v gh &>/dev/null; then
-        die "gh CLI not found. Run from nix shell: nix develop ./ffi"
+        err "gh CLI not found. Run from nix shell: nix develop ./ffi"; exit 1
     fi
     if [[ -z "${GH_TOKEN:-}" ]]; then
-        die "GH_TOKEN is required"
+        err "GH_TOKEN is required"; exit 1
     fi
 }
 
 # Prevent command injection via malicious ref names passed to gh CLI
 validate_ref() {
     local ref="$1" name="$2"
-    [[ "$ref" =~ ^[a-zA-Z0-9/_.-]+$ ]] || die "$name contains invalid characters: $ref"
+    [[ "$ref" =~ ^[a-zA-Z0-9/_.-]+$ ]] || { err "$name contains invalid characters: $ref"; exit 1; }
 }
 
 # Verify a run's inputs match what we triggered with
@@ -152,7 +149,7 @@ poll_workflow_registration() {
     
     # Verify we can list runs (fail fast on permission issues)
     if ! gh run list --repo "$AVALANCHEGO_REPO" --workflow "$WORKFLOW_NAME" --limit 1 &>/dev/null; then
-        die "Cannot list runs in $AVALANCHEGO_REPO. Check token permissions."
+        err "Cannot list runs in $AVALANCHEGO_REPO. Check token permissions."; exit 1
     fi
     
     for ((i=0; i<POLL_TIMEOUT; i++)); do
@@ -187,7 +184,7 @@ poll_workflow_registration() {
         ((i % 10 == 0)) && ((i > 0)) && log "Polling (${i}s)"
     done
     
-    die "Workflow not found after ${POLL_TIMEOUT}s. The workflow may have been triggered but couldn't be detected. Check: https://github.com/$AVALANCHEGO_REPO/actions/workflows"
+    err "Workflow not found after ${POLL_TIMEOUT}s. The workflow may have been triggered but couldn't be detected. Check: https://github.com/$AVALANCHEGO_REPO/actions/workflows"; exit 1
 }
 
 trigger_workflow() {
@@ -217,7 +214,7 @@ trigger_workflow() {
     else
         # Custom mode: block params required, CURRENT_STATE_DIR_SRC optional (empty = genesis)
         [[ -z "${START_BLOCK:-}${END_BLOCK:-}${BLOCK_DIR_SRC:-}" ]] && \
-            die "Provide a test name or set START_BLOCK, END_BLOCK, BLOCK_DIR_SRC"
+            err "Provide a test name or set START_BLOCK, END_BLOCK, BLOCK_DIR_SRC"; exit 1
         : "${START_BLOCK:?START_BLOCK required}"
         : "${END_BLOCK:?END_BLOCK required}"
         : "${BLOCK_DIR_SRC:?BLOCK_DIR_SRC required}"
@@ -271,7 +268,7 @@ download_artifact() {
     find "$DOWNLOAD_DIR" -name "benchmark-output.json" -type f -exec mv {} "$output_file" \;
     find "$DOWNLOAD_DIR" -mindepth 1 -type d -delete 2>/dev/null || true
     
-    [[ -f "$output_file" ]] || die "No benchmark results found"
+    [[ -f "$output_file" ]] || { err "No benchmark results found"; exit 1; }
     log "Results: $output_file"
 }
 
@@ -309,7 +306,7 @@ cmd_trigger() {
 }
 
 cmd_status() {
-    [[ -z "${1:-}" ]] && die "usage: $0 status <run_id>"
+    [[ -z "${1:-}" ]] && { err "usage: $0 status <run_id>"; exit 1; }
     require_gh
     check_status "$1"
 }
