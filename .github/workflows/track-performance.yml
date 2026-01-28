@@ -48,6 +48,10 @@ jobs:
     permissions:
       contents: write  # Required for github-action-benchmark to push to gh-pages
     steps:
+      # NOTE: This checkout is only to get the bench-cchain-reexecution.sh script.
+      # We're not building or testing Firewood here—the script triggers AvalancheGo's
+      # workflow via API and passes FIREWOOD_REF to it. AvalancheGo is responsible
+      # for checking out and building Firewood at that ref.
       - name: Checkout Firewood
         uses: actions/checkout@v4
 
@@ -74,8 +78,10 @@ jobs:
           RUNNER: ${{ inputs.runner }}
           TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
 
-      # Store main branch results in bench/, feature branches in dev/bench/{branch}/
-      # to keep official benchmark history clean
+      # github.ref controls where results are stored (not what gets benchmarked):
+      # - main branch → bench/ (official history)
+      # - feature branches → dev/bench/{branch}/ (experimental, won't pollute trends)
+      # inputs.firewood controls what gets benchmarked (passed to AvalancheGo).
       - name: Determine results location
         id: location
         run: |

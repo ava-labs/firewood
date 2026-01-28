@@ -11,24 +11,24 @@ set -euo pipefail
 #   status <run_id>      Check run status
 #   list                 List recent runs
 #   tests                Show available tests
-#   help                 Show this help
+#   help                 Show this help message
 #
 # ENVIRONMENT
-#   GH_TOKEN              (string, required)                          GitHub token for API access
-#   TEST                  (string, optional)                          Predefined test name (alternative to arg)
-#   FIREWOOD_REF          (string, optional)                          Firewood commit/tag/branch (empty = AvalancheGo's go.mod default)
-#   AVALANCHEGO_REF       (string, master)                            AvalancheGo ref to test against
-#   RUNNER                (string, avalanche-avalanchego-runner-2ti)  GitHub Actions runner label
-#   LIBEVM_REF            (string, optional)                          Optional libevm ref
-#   TIMEOUT_MINUTES       (int, optional)                             Workflow timeout
-#   DOWNLOAD_DIR          (string, ./results)                         Directory for downloaded artifacts
+#   GH_TOKEN              GitHub token for API access (required)
+#   TEST                  Predefined test name, alternative to arg (optional)
+#   FIREWOOD_REF          Firewood commit/tag/branch, empty = AvalancheGo's go.mod default (optional)
+#   AVALANCHEGO_REF       AvalancheGo ref to test against (default: master)
+#   RUNNER                GitHub Actions runner label (default: avalanche-avalanchego-runner-2ti)
+#   LIBEVM_REF            libevm ref (optional)
+#   TIMEOUT_MINUTES       Workflow timeout in minutes (optional)
+#   DOWNLOAD_DIR          Directory for downloaded artifacts (default: ./results)
 #
 #   Custom mode (when no TEST/test arg specified):
-#   CONFIG                (string, firewood)  VM config (https://github.com/ava-labs/avalanchego/blob/3c645de551294b8db0f695563e386a2f38c1aded/tests/reexecute/c/vm_reexecute.go#L64)
-#   START_BLOCK           (required)  First block number
-#   END_BLOCK             (required)  Last block number
-#   BLOCK_DIR_SRC         (required)  S3 block directory (without S3:// prefix, e.g., cchain-mainnet-blocks-200-ldb)
-#   CURRENT_STATE_DIR_SRC (optional)  S3 state directory (empty = genesis run)
+#   CONFIG                VM config (default: firewood)
+#   START_BLOCK           First block number (required)
+#   END_BLOCK             Last block number (required)
+#   BLOCK_DIR_SRC         S3 block directory, e.g., cchain-mainnet-blocks-200-ldb (required)
+#   CURRENT_STATE_DIR_SRC S3 state directory, empty = genesis run (optional)
 #
 #
 # EXAMPLES
