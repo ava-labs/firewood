@@ -10,7 +10,7 @@
     reason = "Found 3 occurrences after enabling the lint."
 )]
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::{Mutex, MutexGuard, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::io;
 use std::num::NonZero;
@@ -29,7 +29,7 @@ use firewood_metrics::{firewood_increment, firewood_set};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal,
-    NodeHashAlgorithm, NodeStore, TrieHash,
+    NodeHashAlgorithm, NodeStore, NodeStoreHeader, TrieHash,
 };
 
 pub(crate) const DB_FILE_NAME: &str = "firewood.db";
@@ -88,6 +88,12 @@ pub(crate) struct RevisionManager {
     /// free list for space reuse. Otherwise, the oldest revision
     /// is preserved on disk for historical queries.
     max_revisions: usize,
+
+    /// Persisted metadata for the database.
+    ///
+    /// Loaded from disk on startup and updated during commits when nodes
+    /// are persisted or deleted nodes are added to the free lists.
+    header: Mutex<NodeStoreHeader>,
 
     /// FIFO queue of committed revisions kept in memory. The queue always
     /// contains at least one revision.
@@ -157,7 +163,15 @@ impl RevisionManager {
         fb.lock()?;
 
         let storage = Arc::new(fb);
-        let nodestore = Arc::new(NodeStore::open(storage.clone())?);
+        let header = match NodeStoreHeader::read_from_storage(storage.as_ref()) {
+            Ok(header) => header,
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
+                // Empty file - create a new header for a fresh database
+                NodeStoreHeader::new(config.node_hash_algorithm)
+            }
+            Err(err) => return Err(err.into()),
+        };
+        let nodestore = Arc::new(NodeStore::open(&header, storage.clone())?);
         let root_store = config
             .root_store
             .then(|| {
@@ -167,22 +181,25 @@ impl RevisionManager {
             })
             .transpose()?;
 
+        if config.truncate {
+            header.flush_to(storage.as_ref())?;
+            storage.set_len(NodeStoreHeader::SIZE)?;
+        }
+
+        let mut by_hash = HashMap::new();
+        if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
+            by_hash.insert(hash, nodestore.clone());
+        }
+
         let manager = Self {
             max_revisions: config.manager.max_revisions,
+            header: Mutex::new(header),
             in_memory_revisions: RwLock::new(VecDeque::from([nodestore.clone()])),
-            by_hash: RwLock::new(Default::default()),
+            by_hash: RwLock::new(by_hash),
             proposals: Mutex::new(Default::default()),
             threadpool: OnceLock::new(),
             root_store,
         };
-
-        if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
-            manager.by_hash.write().insert(hash, nodestore.clone());
-        }
-
-        if config.truncate {
-            nodestore.flush_header_with_padding()?;
-        }
 
         // On startup, we always write the latest revision to RootStore
         if let Some(root_hash) = manager.current_revision().root_hash() {
@@ -231,7 +248,10 @@ impl RevisionManager {
             });
         }
 
-        let mut committed = proposal.as_committed(&current_revision);
+        let committed = proposal.as_committed();
+
+        // Lock header for the duration of reaping and persistence
+        let mut header = self.header.lock();
 
         // 2. Revision reaping
         // When we exceed max_revisions, remove the oldest revision from memory.
@@ -257,7 +277,7 @@ impl RevisionManager {
                 // This guarantee is there because we have a `&mut self` reference to the manager, so
                 // the compiler guarantees we are the only one using this manager.
                 match Arc::try_unwrap(oldest) {
-                    Ok(oldest) => oldest.reap_deleted(&mut committed)?,
+                    Ok(oldest) => oldest.reap_deleted(&mut header)?,
                     Err(original) => {
                         warn!("Oldest revision could not be reaped; still referenced");
                         self.in_memory_revisions.write().push_front(original);
@@ -273,9 +293,7 @@ impl RevisionManager {
         }
 
         // 3. Persist to disk.
-        // TODO: We can probably do this in another thread, but it requires that
-        // we move the header out of NodeStore, which is in a future PR.
-        committed.persist()?;
+        committed.persist(&mut header)?;
 
         // 4. Persist revision to root store
         if let Some(store) = &self.root_store
@@ -297,6 +315,10 @@ impl RevisionManager {
         if let Some(hash) = committed.root_hash().or_default_root_hash() {
             self.by_hash.write().insert(hash, committed.clone());
         }
+
+        // At this point, we can release the lock on the header as the header
+        // and the last committed revision are up-to-date.
+        drop(header);
 
         // 6. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
@@ -403,6 +425,11 @@ impl RevisionManager {
             .back()
             .expect("there is always one revision")
             .clone()
+    }
+
+    /// Acquires a lock on the header and returns a guard.
+    pub(crate) fn locked_header(&self) -> MutexGuard<'_, NodeStoreHeader> {
+        self.header.lock()
     }
 
     /// Gets or creates a threadpool associated with the revision manager.

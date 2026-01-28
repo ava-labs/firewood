@@ -10,7 +10,7 @@ use crate::nodestore::primitives::{AreaIndex, area_size_iter};
 use crate::{
     CheckerError, Committed, FileIoError, HashType, HashedNodeReader, IntoHashType, LinearAddress,
     MutableProposal, Node, NodeReader, NodeStore, Path, ReadableStorage, RootReader,
-    StoredAreaParent, TrieNodeParent, WritableStorage,
+    StoredAreaParent, TrieNodeParent, WritableStorage, nodestore::NodeStoreHeader,
 };
 
 #[cfg(not(feature = "ethhash"))]
@@ -177,9 +177,9 @@ where
     /// 4. report leaked areas (areas that have not yet been visited)
     /// # Errors
     /// Returns a [`CheckerError`] if the database is inconsistent.
-    pub fn check(&self, opt: CheckOpt) -> CheckerReport {
+    pub fn check(&self, header: &NodeStoreHeader, opt: CheckOpt) -> CheckerReport {
         // 1. Check the header
-        let high_watermark = self.size();
+        let high_watermark = header.size();
         let mut visited = match LinearAddressRangeSet::new(high_watermark) {
             Ok(visited) => visited,
             Err(e) => {
@@ -223,7 +223,7 @@ where
             progress_bar.set_message("Traversing free lists...");
         }
         let (free_list_stats, free_list_traverse_errors) =
-            self.visit_freelist(&mut visited, opt.progress_bar.as_ref());
+            self.visit_freelist(header.free_lists(), &mut visited, opt.progress_bar.as_ref());
         errors.extend(free_list_traverse_errors);
 
         // 4. report leaked areas (areas that have not yet been visited)
@@ -479,8 +479,9 @@ where
     }
 
     /// Traverse all the free areas in the freelist
-    fn visit_freelist(
-        &self,
+    fn visit_freelist<'a>(
+        &'a self,
+        free_lists: &'a crate::nodestore::alloc::FreeLists,
         visited: &mut LinearAddressRangeSet,
         progress_bar: Option<&ProgressBar>,
     ) -> (FreeListsStats, Vec<CheckerError>) {
@@ -489,7 +490,7 @@ where
         let mut area_extra_unaligned_page = 0u64;
         let mut errors = Vec::new();
 
-        let mut free_list_iter = self.free_list_iter(AreaIndex::MIN);
+        let mut free_list_iter = self.free_list_iter(free_lists, AreaIndex::MIN);
         while let Some((free_area, parent)) = free_list_iter.next_with_metadata() {
             let FreeAreaWithMetadata {
                 addr,
@@ -582,15 +583,19 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if a mutable proposal cannot be created from the current nodestore.
-    pub fn fix(&self, check_report: CheckerReport) -> Result<FixReport, FileIoError> {
+    pub fn fix(
+        &self,
+        header: &mut NodeStoreHeader,
+        check_report: CheckerReport,
+    ) -> Result<FixReport, FileIoError> {
         let mut proposal = NodeStore::<MutableProposal, S>::new(self)?;
 
-        Ok(proposal.fix(check_report))
+        Ok(proposal.fix(header, check_report))
     }
 }
 
 impl<S: WritableStorage> NodeStore<MutableProposal, S> {
-    fn fix(&mut self, check_report: CheckerReport) -> FixReport {
+    fn fix(&mut self, header: &mut NodeStoreHeader, check_report: CheckerReport) -> FixReport {
         let mut fixed = Vec::new();
         let mut unfixable = Vec::new();
 
@@ -601,7 +606,9 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
                     unfixable.push((error, None));
                 }
                 Some(StoredAreaParent::FreeList(free_list_parent)) => {
-                    if let Err(e) = self.truncate_free_list(free_list_parent) {
+                    if let Err(e) =
+                        self.truncate_free_list(header.free_lists_mut(), free_list_parent)
+                    {
                         unfixable.push((error, Some(e)));
                     } else {
                         fixed.push(error);
@@ -774,7 +781,7 @@ mod test {
     ///     Branch -->|"nibble 1"| Leaf
     /// ```
     #[expect(clippy::arithmetic_side_effects)]
-    fn gen_test_trie(nodestore: &mut NodeStore<Committed, MemStore>) -> TestTrie {
+    fn gen_test_trie(nodestore: &NodeStore<Committed, MemStore>) -> TestTrie {
         let mut high_watermark = NodeStoreHeader::SIZE;
         let mut total_branch_bytes_written = 0;
         let mut total_leaf_bytes_written = 0;
@@ -866,6 +873,7 @@ mod test {
         free_ranges: Vec<Range<LinearAddress>>,
         errors: Vec<CheckerError>,
         stats: FreeListsStats,
+        header: NodeStoreHeader,
     }
 
     // Free list 1: 2048 bytes
@@ -877,9 +885,7 @@ mod test {
     //                                                             ^ free_list1_area1 and free_list1_area2 overlap by 16 bytes      ^ 1 byte
     //              ^ 16 empty bytes to ensure that free_list1_area1, free_list1_area2, and free_list2_area1 are page-aligned                ^ missaligned
     #[expect(clippy::arithmetic_side_effects)]
-    fn gen_test_freelist_with_errors(
-        nodestore: &mut NodeStore<Committed, MemStore>,
-    ) -> TestFreelist {
+    fn gen_test_freelist_with_errors(nodestore: &NodeStore<Committed, MemStore>) -> TestFreelist {
         const AREA_INDEX1: AreaIndex = area_index!(9); // 2048
         const AREA_INDEX2: AreaIndex = area_index!(12); // 16384
         const AREA_INDEX3: AreaIndex = area_index!(3); // 96
@@ -940,9 +946,9 @@ mod test {
         free_lists[AREA_INDEX3.as_usize()] = next_free_block3;
 
         // write header
-        test_write_header(nodestore, high_watermark, None, free_lists);
+        let header = test_write_header(nodestore, high_watermark, None, free_lists);
 
-        let expected_start_addr = free_lists[AREA_INDEX1.as_usize()].unwrap();
+        let expected_start_addr = header.free_lists()[AREA_INDEX1.as_usize()].unwrap();
         let expected_end_addr = LinearAddress::new(expected_high_watermark).unwrap();
         let expected_free_areas = vec![expected_start_addr..expected_end_addr];
         let expected_freelist_errors = vec![
@@ -975,6 +981,7 @@ mod test {
             free_ranges: expected_free_areas,
             errors: expected_freelist_errors,
             stats: expected_free_lists_stats,
+            header,
         }
     }
 
@@ -985,9 +992,9 @@ mod test {
     // We use primitive calls here to do a low-level check.
     fn checker_traverse_correct_trie() {
         let memstore = MemStore::default();
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore = NodeStore::new_empty_committed(memstore.into());
 
-        let test_trie = gen_test_trie(&mut nodestore);
+        let test_trie = gen_test_trie(&nodestore);
         // let (_, high_watermark, (root_addr, root_hash)) = gen_test_trie(&mut nodestore);
 
         // verify that all of the space is accounted for - since there is no free area
@@ -1009,9 +1016,9 @@ mod test {
     // This test permutes the simple trie with a wrong hash and checks that the checker detects it.
     fn checker_traverse_trie_with_wrong_hash() {
         let memstore = MemStore::default();
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore = NodeStore::new_empty_committed(memstore.into());
 
-        let mut test_trie = gen_test_trie(&mut nodestore);
+        let mut test_trie = gen_test_trie(&nodestore);
         let root_addr = test_trie.root_address;
 
         // find the root node and replace the branch hash with an incorrect (default) hash
@@ -1083,7 +1090,7 @@ mod test {
         let rng = crate::SeededRng::from_env_or_random();
 
         let memstore = MemStore::default();
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore = NodeStore::new_empty_committed(memstore.into());
 
         // write free areas
         let mut high_watermark = NodeStoreHeader::SIZE;
@@ -1114,12 +1121,12 @@ mod test {
         };
 
         // write header
-        test_write_header(&mut nodestore, high_watermark, None, freelist);
+        let header = test_write_header(&nodestore, high_watermark, None, freelist);
 
         // test that the we traversed all the free areas
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
         let (actual_free_lists_stats, free_list_errors) =
-            nodestore.visit_freelist(&mut visited, None);
+            nodestore.visit_freelist(header.free_lists(), &mut visited, None);
         let complement = visited.complement();
         assert_eq!(complement.into_iter().collect::<Vec<_>>(), vec![]);
         assert_eq!(free_list_errors, vec![]);
@@ -1129,18 +1136,19 @@ mod test {
     #[test]
     fn traverse_freelist_should_skip_offspring_of_incorrect_areas() {
         let memstore = MemStore::default();
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore = NodeStore::new_empty_committed(memstore.into());
         let TestFreelist {
             high_watermark,
             free_ranges,
             errors,
             stats,
-        } = gen_test_freelist_with_errors(&mut nodestore);
+            header,
+        } = gen_test_freelist_with_errors(&nodestore);
 
         // test that the we traversed all the free areas
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
         let (actual_free_lists_stats, free_list_errors) =
-            nodestore.visit_freelist(&mut visited, None);
+            nodestore.visit_freelist(header.free_lists(), &mut visited, None);
         assert_eq!(visited.into_iter().collect::<Vec<_>>(), free_ranges);
         assert_eq!(actual_free_lists_stats, stats);
         assert_eq!(free_list_errors, errors);
@@ -1149,32 +1157,37 @@ mod test {
     #[test]
     fn fix_freelist_with_overlap() {
         let memstore = MemStore::default();
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore = NodeStore::new_empty_committed(memstore.into());
         let TestFreelist {
             high_watermark,
             free_ranges: _,
             errors,
             stats,
-        } = gen_test_freelist_with_errors(&mut nodestore);
+            mut header,
+        } = gen_test_freelist_with_errors(&nodestore);
         let expected_error_num = errors.len();
 
         // fix the freelist
         let mut proposal = NodeStore::<MutableProposal, _>::new(&nodestore).unwrap();
-        let fix_report = proposal.fix(CheckerReport {
-            errors,
-            db_stats: DBStats {
-                high_watermark,
-                trie_stats: TrieStats::default(),
-                free_list_stats: stats,
+        let fix_report = proposal.fix(
+            &mut header,
+            CheckerReport {
+                errors,
+                db_stats: DBStats {
+                    high_watermark,
+                    trie_stats: TrieStats::default(),
+                    free_list_stats: stats,
+                },
             },
-        });
+        );
         assert_eq!(fix_report.fixed.len(), expected_error_num);
         assert_eq!(fix_report.unfixable.len(), 0);
 
         let immutable_proposal =
             NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal).unwrap();
         let mut visited = LinearAddressRangeSet::new(high_watermark).unwrap();
-        let (_, free_list_errors) = immutable_proposal.visit_freelist(&mut visited, None);
+        let (_, free_list_errors) =
+            immutable_proposal.visit_freelist(header.free_lists(), &mut visited, None);
         assert_eq!(free_list_errors, vec![]);
     }
 
@@ -1187,7 +1200,7 @@ mod test {
         let mut rng = crate::SeededRng::from_env_or_random();
 
         let memstore = MemStore::default();
-        let mut nodestore = NodeStore::new_empty_committed(memstore.into());
+        let nodestore = NodeStore::new_empty_committed(memstore.into());
 
         let num_areas = 10;
 
@@ -1201,7 +1214,7 @@ mod test {
             stored_areas.push((area_addr, area_size_index, area_size));
             high_watermark += area_size;
         }
-        test_write_header(&mut nodestore, high_watermark, None, FreeLists::default());
+        test_write_header(&nodestore, high_watermark, None, FreeLists::default());
 
         // randomly pick some areas as leaked
         let mut leaked = Vec::new();

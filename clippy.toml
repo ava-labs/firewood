@@ -11,6 +11,7 @@ doc-valid-idents = [
 
 disallowed-methods = [
   { path = "rand::rng", replacement = "firewood_storage::SeededRng::from_env_or_random", reason = "use a prng with a user-defined seed instead", allow-invalid = true },
+  { path = "std::os::unix::fs::FileExt::write_at", replacement = "write_all_at", reason = "use write_all_at instead of write_at to handle short writes ensuring the entire buffer is written", allow-invalid = true },
 ]
 
 disallowed-types = [

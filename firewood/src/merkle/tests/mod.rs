@@ -16,7 +16,8 @@ use std::fmt::Write;
 
 use super::*;
 use firewood_storage::{
-    Committed, MemStore, MutableProposal, NodeHashAlgorithm, NodeStore, RootReader, TrieHash,
+    Committed, MemStore, MutableProposal, NodeHashAlgorithm, NodeStore, NodeStoreHeader,
+    RootReader, TrieHash,
 };
 
 // Returns n random key-value pairs.
@@ -37,10 +38,10 @@ fn generate_random_kvs(rng: &firewood_storage::SeededRng, n: usize) -> Vec<(Vec<
 
 fn into_committed(
     merkle: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>,
-    parent: &NodeStore<Committed, MemStore>,
+    header: &mut NodeStoreHeader,
 ) -> Merkle<NodeStore<Committed, MemStore>> {
-    let mut ns = merkle.into_inner().as_committed(parent);
-    ns.persist().unwrap();
+    let ns = merkle.into_inner().as_committed();
+    ns.persist(header).unwrap();
     ns.into()
 }
 
@@ -50,10 +51,23 @@ where
     K: AsRef<[u8]>,
     V: AsRef<[u8]>,
 {
+    let (merkle, _header) = init_merkle_with_header(iter);
+    merkle
+}
+
+pub(crate) fn init_merkle_with_header<I, K, V>(
+    iter: I,
+) -> (Merkle<NodeStore<Committed, MemStore>>, NodeStoreHeader)
+where
+    I: Clone + IntoIterator<Item = (K, V)>,
+    K: AsRef<[u8]>,
+    V: AsRef<[u8]>,
+{
     let memstore = Arc::new(MemStore::new(
         Vec::with_capacity(64 * 1024),
         NodeHashAlgorithm::compile_option(),
     ));
+    let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
     let base = Merkle::from(NodeStore::new_empty_committed(memstore.clone()));
     let mut merkle = base.fork().unwrap();
 
@@ -65,7 +79,7 @@ where
     }
 
     let merkle = merkle.hash();
-    let merkle = into_committed(merkle, base.nodestore());
+    let merkle = into_committed(merkle, &mut header);
 
     // Single verification pass at the end to ensure correctness
     for (k, v) in iter {
@@ -79,7 +93,7 @@ where
         );
     }
 
-    merkle
+    (merkle, header)
 }
 
 // generate pseudorandom data, but prefix it with some known data

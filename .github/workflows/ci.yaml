@@ -35,6 +35,8 @@ jobs:
             os: macos-latest
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
+          - profile-key: debug-all-features
+            profile-args: "--all-features"
           - profile-key: maxperf-ethhash-logger
             profile-args: "--profile maxperf --features ethhash,logger"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
@@ -89,6 +91,8 @@ jobs:
             os: macos-latest
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
+          - profile-key: debug-all-features
+            profile-args: "--all-features"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
@@ -121,6 +125,8 @@ jobs:
             os: macos-latest
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
+          - profile-key: debug-all-features
+            profile-args: "--all-features"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v4
@@ -150,6 +156,8 @@ jobs:
             os: macos-latest
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
+          - profile-key: debug-all-features
+            profile-args: "--all-features"
           - profile-key: maxperf-ethhash-logger
             profile-args: "--cargo-profile maxperf --features ethhash,logger"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
@@ -178,6 +186,8 @@ jobs:
             os: macos-latest
           - profile-key: debug-ethhash-logger
             profile-args: "--features ethhash,logger"
+          - profile-key: debug-all-features
+            profile-args: "--all-features"
           - profile-key: maxperf-ethhash-logger
             profile-args: "--profile maxperf --features ethhash,logger"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
