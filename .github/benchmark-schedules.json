@@ -1,0 +1,29 @@
+{
+  "schedule": {
+    "include": [
+      {
+        "name": "daily-40m-41m",
+        "cron": "0 5 * * *",
+        "runner": "avago-runner-i4i-4xlarge-local-ssd",
+        "config": "firewood",
+        "start-block": 40000001,
+        "end-block": 41000000,
+        "block-dir-src": "cchain-mainnet-blocks-40m-50m-ldb",
+        "current-state-dir-src": "cchain-current-state-firewood-40m",
+        "timeout-minutes": 720
+      },
+      {
+        "name": "weekly-50m-60m",
+        "cron": "0 5 * * 0",
+        "runner": "avago-runner-i4i-4xlarge-local-ssd",
+        "config": "firewood",
+        "start-block": 50000001,
+        "end-block": 60000000,
+        "block-dir-src": "cchain-mainnet-blocks-50m-60m-ldb",
+        "current-state-dir-src": "cchain-current-state-firewood-50m",
+        "timeout-minutes": 2880
+      }
+    ]
+  }
+}
+

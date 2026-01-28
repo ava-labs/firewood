@@ -3,6 +3,11 @@
 name: C-Chain Reexecution Performance Tracking
 
 on:
+  schedule:
+    # Daily at 05:00 UTC (00:00 ET) - 1M blocks: 40M → 41M
+    - cron: '0 5 * * *'
+    # Weekly Sunday at 05:00 UTC (00:00 ET) - 10M blocks: 50M → 60M
+    - cron: '0 5 * * 0'
   workflow_dispatch:
     inputs:
         default: ''
@@ -38,10 +43,56 @@ on:
         default: ''
 
 jobs:
-  record-benchmark-to-gh-pages:
+  resolve-config:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.resolve.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Resolve benchmark config
+        id: resolve
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            let matrix;
+
+            if (context.eventName === 'schedule') {
+              const cron = context.payload.schedule;
+              const config = JSON.parse(fs.readFileSync('.github/benchmark-schedules.json', 'utf8'));
+              const matches = config.schedule.include.filter(c => c.cron.toLowerCase() === cron.toLowerCase());
+              if (matches.length === 0) {
+                core.setFailed(`No configuration found for schedule: ${cron}`);
+                return;
+              }
+              matrix = { include: matches };
+            } else {
+              matrix = {
+                include: [{
+                  name: 'manual',
+                  test: '${{ inputs.test }}',
+                  config: '${{ inputs.config }}',
+                  'start-block': '${{ inputs.start-block }}',
+                  'end-block': '${{ inputs.end-block }}',
+                  'block-dir-src': '${{ inputs.block-dir-src }}',
+                  'current-state-dir-src': '${{ inputs.current-state-dir-src }}',
+                  runner: '${{ inputs.runner }}',
+                  'timeout-minutes': '${{ inputs.timeout-minutes }}'
+                }]
+              };
+            }
+
+            core.setOutput('matrix', JSON.stringify(matrix));
+            console.log('Matrix:', JSON.stringify(matrix, null, 2));
+
+  benchmark:
+    needs: resolve-config
     runs-on: ubuntu-latest
     permissions:
       contents: write  # Required for github-action-benchmark to push to gh-pages
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.resolve-config.outputs.matrix) }}
     steps:
       # NOTE: This checkout is only to get the bench-cchain-reexecution.sh script.
       # We're not building or testing Firewood here—the script triggers AvalancheGo's
@@ -52,26 +103,26 @@ jobs:
 
       - name: Trigger C-Chain Reexecution Benchmark
         run: |
-          if [[ -n "${{ inputs.test }}" ]]; then
-            ./scripts/bench-cchain-reexecution.sh trigger "${{ inputs.test }}"
+          if [[ -n "${{ matrix.test }}" ]]; then
+            ./scripts/bench-cchain-reexecution.sh trigger "${{ matrix.test }}"
           else
             ./scripts/bench-cchain-reexecution.sh trigger
           fi
         env:
           GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
           # Custom mode (ignored when test is specified)
-          CONFIG: ${{ inputs.config }}
-          START_BLOCK: ${{ inputs.start-block }}
-          END_BLOCK: ${{ inputs.end-block }}
-          BLOCK_DIR_SRC: ${{ inputs.block-dir-src }}
-          CURRENT_STATE_DIR_SRC: ${{ inputs.current-state-dir-src }}
+          CONFIG: ${{ matrix.config }}
+          START_BLOCK: ${{ matrix.start-block }}
+          END_BLOCK: ${{ matrix.end-block }}
+          BLOCK_DIR_SRC: ${{ matrix.block-dir-src }}
+          CURRENT_STATE_DIR_SRC: ${{ matrix.current-state-dir-src }}
           # Refs
-          FIREWOOD_REF: ${{ inputs.firewood || github.sha }}
-          AVALANCHEGO_REF: ${{ inputs.avalanchego }}
-          LIBEVM_REF: ${{ inputs.libevm }}
+          FIREWOOD_REF: ${{ matrix.firewood || github.sha }}
+          AVALANCHEGO_REF: ${{ matrix.avalanchego }}
+          LIBEVM_REF: ${{ matrix.libevm }}
           # Execution
-          RUNNER: ${{ inputs.runner }}
-          TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+          RUNNER: ${{ matrix.runner }}
+          TIMEOUT_MINUTES: ${{ matrix.timeout-minutes }}
 
       # github.ref controls where results are stored (not what gets benchmarked):
       # - main branch → bench/ (official history)
@@ -103,36 +154,28 @@ jobs:
 
       - name: Summary
         run: |
-          if [ "${{ steps.store.outcome }}" == "failure" ]; then
-            echo "::warning::Benchmark storage failed - results were not saved to GitHub Pages"
-          fi
+          [[ "${{ steps.store.outcome }}" == "failure" ]] && echo "::warning::Benchmark storage failed"
           
           {
-            echo "## Firewood Performance Benchmark Results"
+            echo "## Benchmark: ${{ matrix.name }}"
             echo
-            echo "**Configuration:**"
-            
-            if [ -n "${{ inputs.test }}" ]; then
-              echo "- Mode: Predefined test"
-              echo "- Test: \`${{ inputs.test }}\`"
+            if [[ -n "${{ matrix.test }}" ]]; then
+              echo "| Parameter | Value |"
+              echo "|-----------|-------|"
+              echo "| Test | \`${{ matrix.test }}\` |"
             else
-              echo "- Mode: Custom parameters"
-              echo "- Config: \`${{ inputs.config }}\`"
-              echo "- Blocks: \`${{ inputs.start-block }}\` → \`${{ inputs.end-block }}\`"
-              echo "- Block source: \`${{ inputs.block-dir-src }}\`"
-              echo "- State source: \`${{ inputs.current-state-dir-src }}\`"
+              echo "| Parameter | Value |"
+              echo "|-----------|-------|"
+              echo "| Config | \`${{ matrix.config }}\` |"
+              echo "| Blocks | \`${{ matrix.start-block }}\` → \`${{ matrix.end-block }}\` |"
+              echo "| Block source | \`${{ matrix.block-dir-src }}\` |"
+              echo "| State source | \`${{ matrix.current-state-dir-src }}\` |"
             fi
-            
-            echo "- Firewood: \`${{ inputs.firewood || github.sha }}\`"
-            if [ -n "${{ inputs.libevm }}" ]; then
-              echo "- libevm: \`${{ inputs.libevm }}\`"
-            fi
-            echo "- AvalancheGo: \`${{ inputs.avalanchego }}\`"
-            echo "- Runner: \`${{ inputs.runner }}\`"
-            echo "- Timeout: \`${{ inputs.timeout-minutes }}\` minutes"
+            echo "| Firewood | \`${{ matrix.firewood || github.sha }}\` |"
+            echo "| AvalancheGo | \`${{ matrix.avalanchego || 'master' }}\` |"
+            echo "| libevm | \`${{ matrix.libevm || '-' }}\` |"
+            echo "| Runner | \`${{ matrix.runner }}\` |"
             echo
-            
-            echo "**Links:**"
-            echo "- [Performance Trends](https://ava-labs.github.io/firewood/${{ steps.location.outputs.data-dir }}/)"
-          } >> $GITHUB_STEP_SUMMARY
+            echo "[View trends](https://ava-labs.github.io/firewood/${{ steps.location.outputs.data-dir }}/)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
