@@ -5,8 +5,8 @@ on:
     branches:
       - "main"
       - "rkuris/gh-pages"
-  repository_dispatch:
-    types: [deploy-pages]
+      - "benchmark-data"
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
