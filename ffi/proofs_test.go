@@ -511,3 +511,40 @@ func TestVerifyChangeProof(t *testing.T) {
 	err = db2.VerifyChangeProof(change_proof, root2, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 }
+
+func TestVerifyAndCommitChangeProof(t *testing.T) {
+	r := require.New(t)
+	db1 := newTestDatabase(t)
+	db2 := newTestDatabase(t)
+
+	// Insert some data.
+	keys, vals, batch := kvForTest(100)
+	root1, err := db1.Update(batch[:50])
+	r.NoError(err)
+	root2, err := db2.Update(batch[:50])
+	r.NoError(err)
+
+	// Insert more data into db1 but not db2.
+	root1_updated, err := db1.Update(batch[50:])
+	r.NoError(err)
+
+	// Create a change proof from db1.
+	change_proof, err := db1.ChangeProof(root1, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+
+	// Verify the change proof and create a proposal on db2.
+	err = db2.VerifyChangeProof(change_proof, root2, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+
+	// Commit the proposal on db2.
+	root2_updated, err := db2.VerifyAndCommitChangeProof(change_proof, root2, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	r.Equal(root1_updated, root2_updated)
+
+	// Verify all keys are now in db2
+	for i, key := range keys {
+		got, err := db2.Get(key)
+		r.NoError(err, "Get key %d", i)
+		r.Equal(vals[i], got, "Value mismatch for key %d", i)
+	}
+}

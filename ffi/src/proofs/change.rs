@@ -3,6 +3,7 @@
 
 use std::num::NonZeroUsize;
 
+use firewood_metrics::firewood_increment;
 #[cfg(feature = "ethhash")]
 use firewood_storage::TrieHash;
 #[cfg(feature = "ethhash")]
@@ -83,7 +84,6 @@ pub struct VerifyChangeProofArgs<'a> {
 /// created after calling `fwd_db_verify_change_proof` and is committed after
 /// calling `fwd_db_verify_and_commit_change_proof`.
 #[derive(Debug)]
-#[expect(unused)]
 enum ProposalState<'db> {
     Immutable(crate::ProposalHandle<'db>),
     Committed(Option<HashKey>),
@@ -196,6 +196,41 @@ impl<'db> ChangeProofContext<'db> {
         let proposal = db.apply_change_proof_to_parent(start_root.into(), &self.proof)?;
         self.proposal_state = Some(ProposalState::Immutable(proposal.handle));
         Ok(())
+    }
+
+    fn verify_and_commit(
+        &mut self,
+        db: &'db crate::DatabaseHandle,
+        start_root: HashKey,
+        end_root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<Option<HashKey>, api::Error> {
+        self.verify(start_root, end_root, start_key, end_key, max_length)?;
+
+        let proposal_handle = match self.proposal_state.take() {
+            Some(ProposalState::Committed(hash)) => {
+                self.proposal_state = Some(ProposalState::Committed(hash));
+                return Ok(hash);
+            }
+            Some(ProposalState::Immutable(proposal)) => proposal,
+            None => {
+                // Create an immutable proposal
+                db.apply_change_proof_to_parent(start_root.into(), &self.proof)?
+                    .handle
+            }
+        };
+
+        let metrics_cb = |commit_time: coarsetime::Duration| {
+            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
+            firewood_increment!(crate::registry::MERGE_COUNT, 1);
+        };
+
+        let result = proposal_handle.commit_proposal(metrics_cb);
+        let hash = result?.map(std::convert::Into::into);
+        self.proposal_state = Some(ProposalState::Committed(hash));
+        Ok(hash)
     }
 }
 
@@ -423,11 +458,33 @@ pub extern "C" fn fwd_db_verify_change_proof<'db>(
 /// concurrently. The caller must ensure exclusive access to the proof context
 /// for the duration of the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_db_verify_and_commit_change_proof(
-    _db: Option<&DatabaseHandle>,
-    _args: VerifyChangeProofArgs,
+pub extern "C" fn fwd_db_verify_and_commit_change_proof<'db>(
+    db: Option<&'db DatabaseHandle>,
+    args: VerifyChangeProofArgs<'db>,
 ) -> HashResult {
-    CResult::from_err("not yet implemented")
+    let VerifyChangeProofArgs {
+        proof,
+        start_root,
+        end_root,
+        start_key,
+        end_key,
+        max_length,
+    } = args;
+
+    let handle = db.and_then(|db| proof.map(|p| (db, p)));
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        let start_key = start_key.into_option();
+        let end_key = end_key.into_option();
+        ctx.verify_and_commit(
+            db,
+            start_root,
+            end_root,
+            start_key.as_deref(),
+            end_key.as_deref(),
+            NonZeroUsize::new(max_length as usize),
+        )
+        .map(|hash_key| hash_key.map(std::convert::Into::into))
+    })
 }
 
 /// Returns the next key range that should be fetched after processing the
