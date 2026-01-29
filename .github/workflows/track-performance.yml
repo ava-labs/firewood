@@ -172,6 +172,12 @@ jobs:
           gh-pages-branch: benchmark-data
           benchmark-data-dir-path: ${{ steps.location.outputs.data-dir }}
 
+      - name: Deploy to GitHub Pages
+        if: success()
+        run: gh workflow run gh-pages.yaml
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Summary
         run: |
           [[ "${{ steps.store.outcome }}" == "failure" ]] && echo "::warning::Benchmark storage failed"
