@@ -599,3 +599,56 @@ func TestChangeProofFindNextKey(t *testing.T) {
 	r.Equal(nextRange.StartKey(), startKey)
 	r.NoError(nextRange.Free())
 }
+
+func TestMultiRoundChangeProof(t *testing.T) {
+	r := require.New(t)
+	db1 := newTestDatabase(t)
+	db2 := newTestDatabase(t)
+
+	// Insert first half of data in the first batch
+	keys, vals, batch := kvForTest(100)
+	root1, err := db1.Update(batch[:50])
+	r.NoError(err)
+
+	root2, err := db2.Update(batch[:50])
+	r.NoError(err)
+
+	// Insert the rest in the second batch
+	root1_updated, err := db1.Update(batch[50:])
+	r.NoError(err)
+
+	// Create and commit multiple change proofs to update db2 to match db1.
+	startKey := nothing()
+	for true {
+		proof, err := db1.ChangeProof(root1, root1_updated, startKey, nothing(), changeProofLenTruncated)
+		r.NoError(err)
+		t.Cleanup(func() { r.NoError(proof.Free()) })
+
+		// Verify the proof
+		r.NoError(db2.VerifyChangeProof(proof, root2, root1_updated, startKey, nothing(), changeProofLenTruncated))
+
+		// Commit the proof
+		root2, err = db2.VerifyAndCommitChangeProof(proof, root2, root1_updated, startKey, nothing(), changeProofLenTruncated)
+		r.NoError(err)
+
+		// Find the next start key
+		nextRange, err := proof.FindNextKey()
+		r.NoError(err)
+		if nextRange == nil {
+			t.Log("nextRange is nil\n")
+			break
+		}
+		startKey = maybe{
+			hasValue: true,
+			value:    append([]byte{}, nextRange.StartKey()...), // copy to new slice to avoid use-after-free
+		}
+		r.NoError(nextRange.Free())
+	}
+
+	// Verify all keys are now in db2
+	for i, key := range keys {
+		got, err := db2.Get(key)
+		r.NoError(err, "Get key %d", i)
+		r.Equal(vals[i], got, "Value mismatch for key %d", i)
+	}
+}
