@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1769717769622,
+  "lastUpdate": 1769718871224,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -187,6 +187,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[101,250000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 728.0097779136032,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Elvis S.",
+            "username": "Elvis339",
+            "email": "elvissabanovic3@gmail.com"
+          },
+          "committer": {
+            "name": "Elvis S.",
+            "username": "Elvis339",
+            "email": "elvissabanovic3@gmail.com"
+          },
+          "id": "07ce5ca5ff69939aebbcf20a9aace89516a4ee35",
+          "message": "test",
+          "timestamp": "2026-01-29T20:22:29Z",
+          "url": "https://github.com/ava-labs/firewood/commit/07ce5ca5ff69939aebbcf20a9aace89516a4ee35"
+        },
+        "date": 1769718870809,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[101,250000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 109.1275692450096,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[101,250000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 9163.587230233572,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[101,250000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 461.3560722443497,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[101,250000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 7942.648189857963,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[101,250000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 736.3434911719924,
             "unit": "block_accept_ms/ggas"
           }
         ]
