@@ -165,7 +165,7 @@ jobs:
 
       - name: Deploy to GitHub Pages
         if: success()
-        run: gh workflow run gh-pages.yaml
+        run: gh api repos/${{ github.repository }}/dispatches -f event_type=deploy-pages
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
