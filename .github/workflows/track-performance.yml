@@ -39,17 +39,14 @@ on:
         description: 'Runner to use in AvalancheGo'
         required: true
         type: choice
+        # Only ephemeral runners - some self-hosted runners preserve the workspace (checked out
+        # code) between runs it's a known issue.
         options:
-          - avalanche-avalanchego-runner
           - avalanche-avalanchego-runner-2ti
           - avago-runner-m6i-4xlarge-ebs-fast
           - avago-runner-m6i-4xlarge-ebs-fast-5ti
           - avago-runner-m6i-4xlarge-ebs-fast-10ti
           - avago-runner-m6i-4xlarge-io2-xfast-10ti
-          - avago-runner-i4i-2xlarge-local-ssd
-          - avago-runner-i4i-4xlarge-local-ssd
-          - avago-runner-i4i-8xlarge-local-ssd
-          - avago-runner-i4i-16xlarge-local-ssd
       timeout-minutes:
         description: 'Timeout in minutes'
         default: ''
