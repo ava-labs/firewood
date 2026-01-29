@@ -507,6 +507,7 @@ func TestVerifyChangeProof(t *testing.T) {
 	// Create a change proof from db1.
 	change_proof, err := db1.ChangeProof(root1, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(change_proof.Free()) })
 
 	// Verify the change proof and create a proposal on db2.
 	err = db2.VerifyChangeProof(change_proof, root2, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
@@ -532,6 +533,7 @@ func TestVerifyAndCommitChangeProof(t *testing.T) {
 	// Create a change proof from db1.
 	change_proof, err := db1.ChangeProof(root1, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(change_proof.Free()) })
 
 	// Verify the change proof and create a proposal on db2.
 	err = db2.VerifyChangeProof(change_proof, root2, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
@@ -569,6 +571,7 @@ func TestChangeProofFindNextKey(t *testing.T) {
 
 	proof, err := db1.ChangeProof(root1, root1_updated, nothing(), nothing(), changeProofLenTruncated)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(proof.Free()) })
 
 	// FindNextKey should fail before preparing a proposal or committing
 	_, err = proof.FindNextKey()
