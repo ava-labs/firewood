@@ -1218,7 +1218,7 @@ struct VoidResult fwd_block_replay_flush(void);
  * concurrently. The caller must ensure exclusive access to the proof context
  * for the duration of the call.
  */
-struct NextKeyRangeResult fwd_change_proof_find_next_key(struct ChangeProofContext *_proof);
+struct NextKeyRangeResult fwd_change_proof_find_next_key(struct ChangeProofContext *proof);
 
 /**
  * Deserialize a `ChangeProof` from bytes.

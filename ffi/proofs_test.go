@@ -15,6 +15,7 @@ const (
 	rangeProofLenUnbounded  = 0
 	rangeProofLenTruncated  = 10
 	changeProofLenUnbounded = 0
+	changeProofLenTruncated = 10
 )
 
 type maybe struct {
@@ -547,4 +548,51 @@ func TestVerifyAndCommitChangeProof(t *testing.T) {
 		r.NoError(err, "Get key %d", i)
 		r.Equal(vals[i], got, "Value mismatch for key %d", i)
 	}
+}
+
+func TestChangeProofFindNextKey(t *testing.T) {
+	r := require.New(t)
+	db1 := newTestDatabase(t)
+	db2 := newTestDatabase(t)
+
+	// Insert first half of data in the first batch
+	_, _, batch := kvForTest(10000)
+	root1, err := db1.Update(batch[:5000])
+	r.NoError(err)
+
+	root2, err := db2.Update(batch[:5000])
+	r.NoError(err)
+
+	// Insert the rest in the second batch
+	root1_updated, err := db1.Update(batch[5000:])
+	r.NoError(err)
+
+	proof, err := db1.ChangeProof(root1, root1_updated, nothing(), nothing(), changeProofLenTruncated)
+	r.NoError(err)
+
+	// FindNextKey should fail before preparing a proposal or committing
+	_, err = proof.FindNextKey()
+	r.ErrorIs(err, errNotPrepared, "FindNextKey should fail on unverified proof")
+
+	// Verify the proof
+	r.NoError(db2.VerifyChangeProof(proof, root2, root1_updated, nothing(), nothing(), changeProofLenTruncated))
+
+	// Now FindNextKey should work
+	nextRange, err := proof.FindNextKey()
+	r.NoError(err)
+	r.NotNil(nextRange)
+	startKey := nextRange.StartKey()
+	r.NotEmpty(startKey)
+	startKey = append([]byte{}, startKey...) // copy to new slice to avoid use-after-free
+	r.NoError(nextRange.Free())
+
+	_, err = db2.VerifyAndCommitChangeProof(proof, root2, root1_updated, nothing(), nothing(), changeProofLenTruncated)
+	r.NoError(err)
+
+	// FindNextKey should still work after commit
+	nextRange, err = proof.FindNextKey()
+	r.NoError(err)
+	r.NotNil(nextRange)
+	r.Equal(nextRange.StartKey(), startKey)
+	r.NoError(nextRange.Free())
 }

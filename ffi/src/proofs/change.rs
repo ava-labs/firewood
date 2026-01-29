@@ -12,13 +12,13 @@ use rlp::Rlp;
 use firewood::{
     ProofError,
     logger::warn,
-    v2::api::{self, FrozenChangeProof},
+    v2::api::{self, DbView, FrozenChangeProof},
 };
 
 use std::cmp::Ordering;
 
 use crate::{
-    BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
+    BorrowedBytes, ChangeProofResult, DatabaseHandle, HashKey, HashResult, KeyRange, Maybe,
     NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
 };
 
@@ -231,6 +231,45 @@ impl<'db> ChangeProofContext<'db> {
         let hash = result?.map(std::convert::Into::into);
         self.proposal_state = Some(ProposalState::Committed(hash));
         Ok(hash)
+    }
+
+    fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
+        let verification = self
+            .verification
+            .as_ref()
+            .ok_or(api::Error::ProofError(ProofError::Unverified))?;
+
+        let Some(last_op) = self.proof.batch_ops().last() else {
+            // no BatchOps in the proof, so we are done
+            return Ok(None);
+        };
+
+        let root_hash = match self.proposal_state {
+            Some(ProposalState::Committed(ref hash)) => Ok(*hash),
+            Some(ProposalState::Immutable(ref proposal)) => proposal
+                .root_hash()
+                .map(|hash| hash.map(std::convert::Into::into)),
+            None => Err(api::Error::ProofError(ProofError::Unverified)),
+        }?;
+        if root_hash.as_ref() == Some(&verification.end_root) {
+            // already at the target root, so we are done
+            return Ok(None);
+        }
+
+        if self.proof.end_proof().is_empty() {
+            // unbounded, so we are done
+            return Ok(None);
+        }
+
+        if let Some(ref end_key) = verification.end_key
+            && **last_op.key() >= **end_key
+        {
+            // reached or exceeded the end key, so we are done
+            return Ok(None);
+        }
+
+        //let end_key: Option<OwnedSlice<u8>> = verification.end_key.clone().map(std::convert::Into::into);
+        Ok(Some((last_op.key().clone(), verification.end_key.clone())))
     }
 }
 
@@ -517,9 +556,9 @@ pub extern "C" fn fwd_db_verify_and_commit_change_proof<'db>(
 /// for the duration of the call.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_change_proof_find_next_key(
-    _proof: Option<&mut ChangeProofContext>,
+    proof: Option<&mut ChangeProofContext>,
 ) -> NextKeyRangeResult {
-    CResult::from_err("not yet implemented")
+    crate::invoke_with_handle(proof, ChangeProofContext::find_next_key)
 }
 
 /// Serialize a `ChangeProof` to bytes.

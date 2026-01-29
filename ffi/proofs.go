@@ -130,7 +130,7 @@ func (p *RangeProof) Verify(
 	return getErrorFromVoidResult(C.fwd_range_proof_verify(args))
 }
 
-// VerifyChangeProof verifies the provided change [proof] proves the changes
+// VerifyRangeProof verifies the provided change [proof] proves the changes
 // between [startRoot] and [endRoot] for keys in the range [startKey, endKey]. If
 // the proof is valid, a proposal containing the changes is prepared. The
 // call to [*Database.VerifyAndCommitRangeProof] will skip verification and commit the
