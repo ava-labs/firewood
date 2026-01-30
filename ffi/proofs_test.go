@@ -619,7 +619,7 @@ func TestMultiRoundChangeProof(t *testing.T) {
 
 	// Create and commit multiple change proofs to update db2 to match db1.
 	startKey := nothing()
-	for true {
+	for {
 		proof, err := db1.ChangeProof(root1, root1_updated, startKey, nothing(), changeProofLenTruncated)
 		r.NoError(err)
 		t.Cleanup(func() { r.NoError(proof.Free()) })
@@ -682,7 +682,7 @@ func TestMultiRoundChangeProofWithDeletes(t *testing.T) {
 
 	// Create and commit multiple change proofs to update db2 to match db1.
 	startKey := nothing()
-	for true {
+	for {
 		proof, err := db1.ChangeProof(root1, root1_updated, startKey, nothing(), changeProofLenTruncated)
 		r.NoError(err)
 		t.Cleanup(func() { r.NoError(proof.Free()) })
