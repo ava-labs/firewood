@@ -648,7 +648,7 @@ func TestMultiRoundChangeProof(t *testing.T) {
 	for i, key := range keys {
 		got, err := db2.Get(key)
 		r.NoError(err, "Get key %d", i)
-		r.Equal(vals[i], got, "Value mismatch for key %d", i)
+		r.Equal(vals[i], got, "Value mismatch for %s", string(key))
 	}
 }
 
