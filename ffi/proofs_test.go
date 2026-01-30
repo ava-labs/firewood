@@ -15,6 +15,7 @@ const (
 	rangeProofLenUnbounded  = 0
 	rangeProofLenTruncated  = 10
 	changeProofLenUnbounded = 0
+	changeProofLenTruncated = 10
 )
 
 type maybe struct {
@@ -506,8 +507,216 @@ func TestVerifyChangeProof(t *testing.T) {
 	// Create a change proof from db1.
 	change_proof, err := db1.ChangeProof(root1, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(change_proof.Free()) })
 
 	// Verify the change proof and create a proposal on db2.
 	err = db2.VerifyChangeProof(change_proof, root2, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
+}
+
+func TestVerifyAndCommitChangeProof(t *testing.T) {
+	r := require.New(t)
+	db1 := newTestDatabase(t)
+	db2 := newTestDatabase(t)
+
+	// Insert some data.
+	keys, vals, batch := kvForTest(100)
+	root1, err := db1.Update(batch[:50])
+	r.NoError(err)
+	root2, err := db2.Update(batch[:50])
+	r.NoError(err)
+
+	// Insert more data into db1 but not db2.
+	root1_updated, err := db1.Update(batch[50:])
+	r.NoError(err)
+
+	// Create a change proof from db1.
+	change_proof, err := db1.ChangeProof(root1, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(change_proof.Free()) })
+
+	// Verify the change proof and create a proposal on db2.
+	err = db2.VerifyChangeProof(change_proof, root2, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+
+	// Commit the proposal on db2.
+	root2_updated, err := db2.VerifyAndCommitChangeProof(change_proof, root2, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	r.Equal(root1_updated, root2_updated)
+
+	// Verify all keys are now in db2
+	for i, key := range keys {
+		got, err := db2.Get(key)
+		r.NoError(err, "Get key %d", i)
+		r.Equal(vals[i], got, "Value mismatch for key %d", i)
+	}
+}
+
+func TestChangeProofFindNextKey(t *testing.T) {
+	r := require.New(t)
+	db1 := newTestDatabase(t)
+	db2 := newTestDatabase(t)
+
+	// Insert first half of data in the first batch
+	_, _, batch := kvForTest(10000)
+	root1, err := db1.Update(batch[:5000])
+	r.NoError(err)
+
+	root2, err := db2.Update(batch[:5000])
+	r.NoError(err)
+
+	// Insert the rest in the second batch
+	root1_updated, err := db1.Update(batch[5000:])
+	r.NoError(err)
+
+	proof, err := db1.ChangeProof(root1, root1_updated, nothing(), nothing(), changeProofLenTruncated)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(proof.Free()) })
+
+	// FindNextKey should fail before preparing a proposal or committing
+	_, err = proof.FindNextKey()
+	r.ErrorIs(err, errNotPrepared, "FindNextKey should fail on unverified proof")
+
+	// Verify the proof
+	r.NoError(db2.VerifyChangeProof(proof, root2, root1_updated, nothing(), nothing(), changeProofLenTruncated))
+
+	// Now FindNextKey should work
+	nextRange, err := proof.FindNextKey()
+	r.NoError(err)
+	r.NotNil(nextRange)
+	startKey := nextRange.StartKey()
+	r.NotEmpty(startKey)
+	startKey = append([]byte{}, startKey...) // copy to new slice to avoid use-after-free
+	r.NoError(nextRange.Free())
+
+	_, err = db2.VerifyAndCommitChangeProof(proof, root2, root1_updated, nothing(), nothing(), changeProofLenTruncated)
+	r.NoError(err)
+
+	// FindNextKey should still work after commit
+	nextRange, err = proof.FindNextKey()
+	r.NoError(err)
+	r.NotNil(nextRange)
+	r.Equal(nextRange.StartKey(), startKey)
+	r.NoError(nextRange.Free())
+}
+
+func TestMultiRoundChangeProof(t *testing.T) {
+	r := require.New(t)
+	db1 := newTestDatabase(t)
+	db2 := newTestDatabase(t)
+
+	// Insert first half of data in the first batch
+	keys, vals, batch := kvForTest(100)
+	root1, err := db1.Update(batch[:50])
+	r.NoError(err)
+
+	root2, err := db2.Update(batch[:50])
+	r.NoError(err)
+
+	// Insert the rest in the second batch
+	root1_updated, err := db1.Update(batch[50:])
+	r.NoError(err)
+
+	// Create and commit multiple change proofs to update db2 to match db1.
+	startKey := nothing()
+	for {
+		proof, err := db1.ChangeProof(root1, root1_updated, startKey, nothing(), changeProofLenTruncated)
+		r.NoError(err)
+		t.Cleanup(func() { r.NoError(proof.Free()) })
+
+		// Verify the proof
+		r.NoError(db2.VerifyChangeProof(proof, root2, root1_updated, startKey, nothing(), changeProofLenTruncated))
+
+		// Commit the proof
+		root2, err = db2.VerifyAndCommitChangeProof(proof, root2, root1_updated, startKey, nothing(), changeProofLenTruncated)
+		r.NoError(err)
+
+		// Find the next start key
+		nextRange, err := proof.FindNextKey()
+		r.NoError(err)
+		if nextRange == nil {
+			break
+		}
+		startKey = maybe{
+			hasValue: true,
+			value:    append([]byte{}, nextRange.StartKey()...), // copy to new slice to avoid use-after-free
+		}
+		r.NoError(nextRange.Free())
+	}
+
+	// Verify all keys are now in db2
+	for i, key := range keys {
+		got, err := db2.Get(key)
+		r.NoError(err, "Get key %d", i)
+		r.Equal(vals[i], got, "Value mismatch for %s", string(key))
+	}
+}
+
+func TestMultiRoundChangeProofWithDeletes(t *testing.T) {
+	r := require.New(t)
+	db1 := newTestDatabase(t)
+	db2 := newTestDatabase(t)
+
+	// Insert first half of data in the first batch
+	keys, vals, batch := kvForTest(100)
+	root1, err := db1.Update(batch[:50])
+	r.NoError(err)
+
+	root2, err := db2.Update(batch[:50])
+	r.NoError(err)
+
+	// Insert the rest in the second batch
+	_, err = db1.Update(batch[50:])
+	r.NoError(err)
+
+	// Delete some of the keys. This will create Delete BatchOps in the
+	// change proof.
+	delKeys := make([]BatchOp, 20)
+	for i := range delKeys {
+		keyIdx := i * 2
+		delKeys[i] = Delete(keys[keyIdx])
+		keys[keyIdx] = nil
+	}
+	root1_updated, err := db1.Update(delKeys)
+	r.NoError(err)
+
+	// Create and commit multiple change proofs to update db2 to match db1.
+	startKey := nothing()
+	for {
+		proof, err := db1.ChangeProof(root1, root1_updated, startKey, nothing(), changeProofLenTruncated)
+		r.NoError(err)
+		t.Cleanup(func() { r.NoError(proof.Free()) })
+
+		// Verify the proof
+		r.NoError(db2.VerifyChangeProof(proof, root2, root1_updated, startKey, nothing(), changeProofLenTruncated))
+
+		// Commit the proof
+		root2, err = db2.VerifyAndCommitChangeProof(proof, root2, root1_updated, startKey, nothing(), changeProofLenTruncated)
+		r.NoError(err)
+
+		// Find the next start key
+		nextRange, err := proof.FindNextKey()
+		r.NoError(err)
+		if nextRange == nil {
+			break
+		}
+		startKey = maybe{
+			hasValue: true,
+			value:    append([]byte{}, nextRange.StartKey()...), // copy to new slice to avoid use-after-free
+		}
+		r.NoError(nextRange.Free())
+	}
+
+	// Verify that the root hashes match
+	r.Equal(root1_updated, root2)
+
+	// Verify all keys are now in db2
+	for i, key := range keys {
+		if key == nil {
+			continue
+		}
+		got, err := db2.Get(key)
+		r.NoError(err, "Get key %d", i)
+		r.Equal(vals[i], got, "Value mismatch for %s", string(key))
+	}
 }
