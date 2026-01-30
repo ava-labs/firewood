@@ -12,7 +12,7 @@ on:
   workflow_run:
     workflows: ["C-Chain Reexecution Performance Tracking"]
     types: [completed]
-    branches: [main, es/scheduled-perf-tracking]  # TODO: remove es/scheduled-perf-tracking after testing
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
