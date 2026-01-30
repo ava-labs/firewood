@@ -6,8 +6,8 @@ on:
   schedule:
     # Daily at 05:00 UTC (00:00 ET) - 1M blocks: 40M → 41M
     - cron: '0 5 * * *'
-    # Weekly Sunday at 05:00 UTC (00:00 ET) - 10M blocks: 50M → 60M
-    - cron: '0 5 * * 0'
+    # Weekly Saturday at 05:00 UTC (00:00 ET) - 10M blocks: 50M → 60M
+    - cron: '0 5 * * 6'
   workflow_dispatch:
     inputs:
       firewood:
@@ -71,7 +71,7 @@ jobs:
                 echo "runner=avago-runner-i4i-2xlarge-local-ssd" >> "$GITHUB_OUTPUT"
                 echo "timeout-minutes=720" >> "$GITHUB_OUTPUT"
                 ;;
-              "0 5 * * 0")  # Weekly Sunday at 05:00 UTC: 10M blocks (50M → 60M)
+              "0 5 * * 6")  # Weekly Saturday at 05:00 UTC: 10M blocks (50M → 60M)
                 echo "name=weekly-50m-60m" >> "$GITHUB_OUTPUT"
                 echo "config=firewood" >> "$GITHUB_OUTPUT"
                 echo "start-block=50000001" >> "$GITHUB_OUTPUT"
