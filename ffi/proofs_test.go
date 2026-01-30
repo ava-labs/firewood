@@ -673,9 +673,9 @@ func TestMultiRoundChangeProofWithDeletes(t *testing.T) {
 	// change proof.
 	delKeys := make([]BatchOp, 20)
 	for i := range delKeys {
-		delIdx := i * 2
-		delKeys[i] = Delete(keys[delIdx])
-		keys[delIdx] = nil
+		keyIdx := i * 2
+		delKeys[i] = Delete(keys[keyIdx])
+		keys[keyIdx] = nil
 	}
 	root1_updated, err := db1.Update(delKeys)
 	r.NoError(err)
