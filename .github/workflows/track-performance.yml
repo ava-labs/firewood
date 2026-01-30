@@ -159,6 +159,7 @@ jobs:
           summary-always: true
           auto-push: true
           fail-on-alert: true
+          alert-threshold: "150%"
           comment-on-alert: false
           gh-pages-branch: benchmark-data
           benchmark-data-dir-path: ${{ steps.location.outputs.data-dir }}
