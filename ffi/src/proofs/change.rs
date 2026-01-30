@@ -268,7 +268,6 @@ impl<'db> ChangeProofContext<'db> {
             return Ok(None);
         }
 
-        //let end_key: Option<OwnedSlice<u8>> = verification.end_key.clone().map(std::convert::Into::into);
         Ok(Some((last_op.key().clone(), verification.end_key.clone())))
     }
 }
