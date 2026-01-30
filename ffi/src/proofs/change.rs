@@ -12,7 +12,7 @@ use rlp::Rlp;
 use firewood::{
     ProofError,
     logger::warn,
-    v2::api::{self, DbView, FrozenChangeProof},
+    v2::api::{self, DbView as _, FrozenChangeProof},
 };
 
 use std::cmp::Ordering;
