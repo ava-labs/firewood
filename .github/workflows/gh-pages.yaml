@@ -5,18 +5,27 @@ on:
     branches:
       - "main"
       - "rkuris/gh-pages"
-      - "benchmark-data"  # Auto-rebuild when benchmark results are pushed
+  # Rebuild pages after benchmark workflow completes.
+  # Currently only scheduled runs (which run on main) trigger this.
+  # If we later add feature branch benchmarks, remove `branches` filter -
+  # data separation is handled in track-performance.yml (bench/ vs dev/bench/).
+  workflow_run:
+    workflows: ["C-Chain Reexecution Performance Tracking"]
+    types: [completed]
+    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   build:
+    # Skip if triggered by failed workflow_run
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main  # Always build docs from main (even when triggered by benchmark-data push)
+          ref: main  # Always build docs from main
       - uses: dtolnay/rust-toolchain@stable
       # caution: this is the same restore as in ci.yaml
       - uses: Swatinem/rust-cache@v2
