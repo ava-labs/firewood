@@ -346,10 +346,10 @@ nix run ./ffi#gh -- gh auth login
 export GH_TOKEN=$(gh auth token)
 
 # Predefined test
-just bench-cchain firewood-101-250k
+just bench-cchain test=firewood-101-250k
 
 # With specific Firewood version
-FIREWOOD_REF=v0.1.0 just bench-cchain firewood-33m-40m
+FIREWOOD_REF=v0.1.0 just bench-cchain test=firewood-33m-40m
 
 # Custom block range
 START_BLOCK=101 END_BLOCK=250000 \
@@ -396,6 +396,14 @@ Triggers Firewood's `track-performance.yml` workflow, which orchestrates the Ava
 
 ### Viewing Results
 
-Results are published to GitHub Pages via [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark). View trends at:
+Results are published to GitHub Pages via [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark).
 
-- [Performance Trends](https://ava-labs.github.io/firewood/bench/)
+**Graph location:**
+
+- [Main branch trends](https://ava-labs.github.io/firewood/bench/) — official benchmark history
+- [Feature branch trends](https://ava-labs.github.io/firewood/dev/bench/) — experimental runs
+
+**Downloading raw data:**
+
+- Click "Download data as JSON" at the bottom of any benchmark page
+- Or view raw data directly: [benchmark-data/bench/data.js](https://github.com/ava-labs/firewood/blob/benchmark-data/bench/data.js)

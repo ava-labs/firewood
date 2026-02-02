@@ -178,11 +178,11 @@ release-step-refresh-changelog tag:
 #
 # By default, uses the current HEAD commit to build Firewood. If you want to
 # benchmark a specific version (e.g., a release tag), set FIREWOOD_REF explicitly:
-#   FIREWOOD_REF=v0.1.0 just bench-cchain firewood-101-250k
+#   FIREWOOD_REF=v0.1.0 just bench-cchain test=firewood-101-250k
 #
 # Examples:
-#   just bench-cchain firewood-101-250k
-#   FIREWOOD_REF=v0.1.0 just bench-cchain firewood-101-250k
+#   just bench-cchain test=firewood-101-250k
+#   FIREWOOD_REF=v0.1.0 just bench-cchain test=firewood-101-250k
 #   START_BLOCK=1 END_BLOCK=100 BLOCK_DIR_SRC=cchain-mainnet-blocks-200-ldb just bench-cchain
 bench-cchain test="" runner="avalanche-avalanchego-runner-2ti":
     #!/usr/bin/env -S bash -euo pipefail
