@@ -7,8 +7,6 @@ on:
       - "rkuris/gh-pages"
   # Rebuild pages after benchmark workflow completes.
   # Currently only scheduled runs (which run on main) trigger this.
-  # If we later add feature branch benchmarks, remove `branches` filter -
-  # data separation is handled in track-performance.yml (bench/ vs dev/bench/).
   workflow_run:
     workflows: ["C-Chain Reexecution Performance Tracking"]
     types: [completed]
