@@ -271,11 +271,8 @@ impl RevisionManager {
 
             // We reap the revision's nodes only if `RootStore` does not exist.
             if self.root_store.is_none() {
-                // This `try_unwrap` is safe because nobody else will call `try_unwrap` on this Arc
-                // in a different thread, so we don't have to worry about the race condition where
-                // the Arc we get back is not usable as indicated in the docs for `try_unwrap`.
-                // This guarantee is there because we have a `&mut self` reference to the manager, so
-                // the compiler guarantees we are the only one using this manager.
+                // The warning in the docs for `Arc::try_unwrap` does not apply here
+                // because `original` is retained and not immediately dropped.
                 match Arc::try_unwrap(oldest) {
                     Ok(oldest) => oldest.reap_deleted(&mut header)?,
                     Err(original) => {
