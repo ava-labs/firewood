@@ -12,7 +12,6 @@ on:
   workflow_run:
     workflows: ["C-Chain Reexecution Performance Tracking"]
     types: [completed]
-    branches: [main]
 
 env:
   CARGO_TERM_COLOR: always
