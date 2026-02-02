@@ -135,6 +135,9 @@ pub struct DbConfig {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
+    /// If nonzero, enables deferred persistence.
+    #[builder(default = 0)]
+    deferred_persistence_commit_count: usize,
 }
 
 #[derive(Debug)]
@@ -183,6 +186,7 @@ impl Db {
             .truncate(cfg.truncate)
             .root_store(cfg.root_store)
             .manager(cfg.manager)
+            .deferred_persistence_commit_count(cfg.deferred_persistence_commit_count)
             .build();
         let manager = RevisionManager::new(config_manager)?;
         let db = Self {
@@ -333,7 +337,11 @@ impl Db {
         self.propose_with_parent(merge_ops, merkle.nodestore())
     }
 
-    /// Closes the database gracefully.
+    /// Closes the database gracefully, ensuring all data is persisted.
+    ///
+    /// This method shuts down the background persistence worker and persists 
+    /// any remaining uncommitted data. If not called explicitly, `Drop` will 
+    /// attempt a best-effort shutdown but cannot report errors.
     pub fn close(self) -> Result<(), api::Error> {
         self.manager.close().map_err(Into::into)
     }
@@ -423,7 +431,7 @@ mod test {
 
     use firewood_storage::{
         CheckOpt, CheckerError, HashedNodeReader, IntoHashType, LinearAddress, MaybePersistedNode,
-        NodeStore, TrieHash,
+        NodeStore, RootReader, TrieHash,
     };
 
     use crate::db::{Db, Proposal, UseParallel};
@@ -1296,6 +1304,142 @@ mod test {
         let testdb = testdb.reopen();
 
         assert_eq!(rh, testdb.db.root_hash().unwrap().unwrap());
+    }
+
+    #[test]
+    fn test_persist_latest_committed_revision_on_shutdown() {
+        // Set commit count to an arbitrarily high number so persist happens
+        // only on shutdown
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(1_000_000)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        // Then, commit once and see what the latest revision it
+        let key = b"foo";
+        let value = b"bar";
+        let batch = vec![BatchOp::Put { key, value }];
+        let proposal = db.propose(batch).unwrap();
+        let root_hash = proposal.root_hash().unwrap().unwrap();
+
+        proposal.commit().unwrap();
+        let db = db.reopen();
+
+        let revision = db.view(root_hash).unwrap();
+        let new_value = revision.val(b"foo").unwrap().unwrap();
+
+        assert_eq!(value, new_value.as_ref());
+    }
+
+    #[test]
+    fn test_persist_after_hitting_commit_count() {
+        const COMMIT_COUNT: usize = 10;
+        const SUB_INTERVAL: usize = COMMIT_COUNT / 2;
+
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        // Commit SUB_INTERVAL proposals to trigger the first persistence
+        for i in 0..SUB_INTERVAL {
+            let batch = vec![BatchOp::Put {
+                key: format!("key{i}").as_bytes().to_vec(),
+                value: format!("value{i}").as_bytes().to_vec(),
+            }];
+            let proposal = db.propose(batch).unwrap();
+            proposal.commit().unwrap();
+        }
+
+        // Wait for the background thread to complete persistence
+        db.manager.wait_persisted();
+
+        // Verify the root is now persisted
+        let revision = db.manager.current_revision();
+        let is_persisted = revision
+            .root_as_maybe_persisted_node()
+            .is_some_and(|node| node.unpersisted().is_none());
+
+        assert!(
+            is_persisted,
+            "Root should be persisted after hitting commit count"
+        );
+    }
+
+    #[test]
+    fn test_deferred_persist_with_commit_count_one() {
+        const COMMIT_COUNT: usize = 1;
+
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        let batch = vec![BatchOp::Put {
+            key: b"key",
+            value: b"value",
+        }];
+        let proposal = db.propose(batch).unwrap();
+        let root_hash = proposal.root_hash().unwrap().unwrap();
+        proposal.commit().unwrap();
+
+        // Wait for the background thread to complete persistence
+        db.manager.wait_persisted();
+
+        // Verify that the proposal was persisted
+        let revision = db.revision(root_hash).unwrap();
+        let is_persisted = revision
+            .root_as_maybe_persisted_node()
+            .is_some_and(|node| node.unpersisted().is_none());
+
+        assert!(
+            is_persisted,
+            "Root should be persisted when commit count is set to 1"
+        );
+    }
+
+    #[test]
+    fn test_deferred_persistence_root_store() {
+        const NUM_COMMITS: usize = 20;
+        const COMMIT_COUNT: usize = 10;
+
+        // Revisions to verify after reopen (1-indexed commit numbers)
+        const CHECKPOINTS: [usize; 4] = [5, 10, 15, 20];
+
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .root_store(true)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        // Track root hashes at checkpoint commits
+        let mut checkpoint_roots: Vec<TrieHash> = Vec::new();
+
+        // Commit NUM_COMMITS proposals
+        for i in 1..=NUM_COMMITS {
+            let batch = vec![BatchOp::Put {
+                key: format!("key{i}").as_bytes().to_vec(),
+                value: format!("value{i}").as_bytes().to_vec(),
+            }];
+            let proposal = db.propose(batch).unwrap();
+
+            if CHECKPOINTS.contains(&i) {
+                checkpoint_roots.push(proposal.root_hash().unwrap().unwrap());
+            }
+
+            proposal.commit().unwrap();
+        }
+
+        let db = db.reopen();
+
+        // Verify that checkpoint revisions are accessible after reopen
+        for root in checkpoint_roots {
+            db.view(root).unwrap();
+        }
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear

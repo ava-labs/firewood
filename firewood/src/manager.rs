@@ -22,6 +22,7 @@ use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
+use crate::persist_worker::{AsyncPersistWorker, PersistError, PersistWorker, SyncPersistWorker};
 use crate::root_store::RootStore;
 use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
@@ -71,6 +72,10 @@ pub struct ConfigManager {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
+    /// Configuration for deferred persistence - if nonzero, enables deferred
+    /// persistence and sets the maximum number of commits to roll back.
+    #[builder(default = 0)]
+    deferred_persistence_commit_count: usize,
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
@@ -88,12 +93,6 @@ pub(crate) struct RevisionManager {
     /// free list for space reuse. Otherwise, the oldest revision
     /// is preserved on disk for historical queries.
     max_revisions: usize,
-
-    /// Persisted metadata for the database.
-    ///
-    /// Loaded from disk on startup and updated during commits when nodes
-    /// are persisted or deleted nodes are added to the free lists.
-    header: Mutex<NodeStoreHeader>,
 
     /// FIFO queue of committed revisions kept in memory. The queue always
     /// contains at least one revision.
@@ -117,7 +116,14 @@ pub(crate) struct RevisionManager {
     /// When present, enables retrieval of revisions beyond `max_revisions` by
     /// persisting root hash to disk address mappings. This allows historical
     /// queries of arbitrarily old revisions without keeping them in memory.
-    root_store: Option<RootStore>,
+    root_store: Option<Arc<RootStore>>,
+
+    /// Worker responsible for persisting revisions to disk.
+    persist_worker: Arc<dyn PersistWorker + Send + Sync>,
+
+    /// Lock for upholding the invariant that only one revision may be comitting
+    /// at any given time.
+    commit_lock: Mutex<()>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -139,6 +145,8 @@ pub(crate) enum RevisionManagerError {
     IOError(#[from] io::Error),
     #[error("A RootStore error occurred: {0}")]
     RootStoreError(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("A deferred persistence error occurred: {0}")]
+    PersistError(#[source] PersistError),
 }
 
 impl RevisionManager {
@@ -179,7 +187,8 @@ impl RevisionManager {
                 RootStore::new(root_store_dir, storage.clone(), config.truncate)
                     .map_err(RevisionManagerError::RootStoreError)
             })
-            .transpose()?;
+            .transpose()?
+            .map(Arc::new);
 
         if config.truncate {
             header.flush_to(storage.as_ref())?;
@@ -191,14 +200,26 @@ impl RevisionManager {
             by_hash.insert(hash, nodestore.clone());
         }
 
+        let persist_worker: Arc<dyn PersistWorker + Send + Sync> =
+            if config.deferred_persistence_commit_count > 0 {
+                Arc::new(AsyncPersistWorker::new(
+                    config.deferred_persistence_commit_count,
+                    header,
+                    root_store.clone(),
+                ))
+            } else {
+                Arc::new(SyncPersistWorker::new(header, root_store.clone()))
+            };
+
         let manager = Self {
             max_revisions: config.manager.max_revisions,
-            header: Mutex::new(header),
             in_memory_revisions: RwLock::new(VecDeque::from([nodestore.clone()])),
             by_hash: RwLock::new(by_hash),
             proposals: Mutex::new(Default::default()),
             threadpool: OnceLock::new(),
             root_store,
+            persist_worker,
+            commit_lock: Mutex::new(()),
         };
 
         // On startup, we always write the latest revision to RootStore
@@ -221,25 +242,38 @@ impl RevisionManager {
 
     /// Commit a proposal
     /// To commit a proposal involves a few steps:
-    /// 1. Commit check.
+    /// 1. Check if the persist worker has failed.
+    ///    If so, return the error as this means we won't be able to make any
+    ///    further progress.
+    /// 2. Commit check.
     ///    The proposal's parent must be the last committed revision, otherwise the commit fails.
     ///    It only contains the address of the nodes that are deleted, which should be very small.
-    /// 2. Revision reaping.
+    /// 3. Revision reaping.
     ///    If more than the maximum number of revisions are kept in memory, the
     ///    oldest revision is removed from memory. If `RootStore` does not exist,
     ///    the oldest revision's nodes are added to the free list for space reuse.
     ///    Otherwise, the oldest revision's nodes are preserved on disk, which
     ///    is useful for historical queries.
-    /// 3. Persist to disk. This includes flushing everything to disk.
-    /// 4. Persist the revision to `RootStore`.
+    /// 4. Persist to disk.
+    ///    This step is handled by the persist worker.    
     /// 5. Set last committed revision.
     ///    Set last committed revision in memory.
     /// 6. Proposal Cleanup.
     ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
+    ///
+    /// Steps 2 through 5 are executed behind a lock to maintain the invariant
+    /// that only one revision can commit at a time.
     #[fastrace::trace(short_name = true)]
     #[crate::metrics("proposal.commit", "proposal commit to storage")]
     pub fn commit(&self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
-        // 1. Commit check
+        // 1. Check if the persist worker has failed.
+        self.persist_worker
+            .check_error()
+            .map_err(RevisionManagerError::PersistError)?;
+
+        let commit_lock = self.commit_lock.lock();
+
+        // 2. Commit check
         let current_revision = self.current_revision();
         if !proposal.parent_hash_is(current_revision.root_hash()) {
             return Err(RevisionManagerError::NotLatest {
@@ -250,10 +284,7 @@ impl RevisionManager {
 
         let committed = proposal.as_committed();
 
-        // Lock header for the duration of reaping and persistence
-        let mut header = self.header.lock();
-
-        // 2. Revision reaping
+        // 3. Revision reaping
         // When we exceed max_revisions, remove the oldest revision from memory.
         // If `RootStore` does not exist, add the oldest revision's nodes to the free list.
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
@@ -274,7 +305,10 @@ impl RevisionManager {
                 // The warning in the docs for `Arc::try_unwrap` does not apply here
                 // because `original` is retained and not immediately dropped.
                 match Arc::try_unwrap(oldest) {
-                    Ok(oldest) => oldest.reap_deleted(&mut header)?,
+                    Ok(oldest) => self
+                        .persist_worker
+                        .reap(oldest)
+                        .map_err(RevisionManagerError::PersistError)?,
                     Err(original) => {
                         warn!("Oldest revision could not be reaped; still referenced");
                         self.in_memory_revisions.write().push_front(original);
@@ -289,23 +323,16 @@ impl RevisionManager {
             firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions as f64);
         }
 
-        // 3. Persist to disk.
-        committed.persist(&mut header)?;
-
-        // 4. Persist revision to root store
-        if let Some(store) = &self.root_store
-            && let (Some(hash), Some(address)) = (committed.root_hash(), committed.root_address())
-        {
-            store
-                .add_root(&hash, &address)
-                .map_err(RevisionManagerError::RootStoreError)?;
-        }
+        // 4. Persist the revision.
+        let committed: CommittedRevision = committed.into();
+        self.persist_worker
+            .persist(committed.clone())
+            .map_err(RevisionManagerError::PersistError)?;
 
         // 5. Set last committed revision
         // The revision is added to `by_hash` here while it still exists in `proposals`.
         // The `view()` method relies on this ordering - it checks `proposals` first,
         // then `by_hash`, ensuring the revision is always findable during the transition.
-        let committed: CommittedRevision = committed.into();
         self.in_memory_revisions
             .write()
             .push_back(committed.clone());
@@ -313,9 +340,7 @@ impl RevisionManager {
             self.by_hash.write().insert(hash, committed.clone());
         }
 
-        // At this point, we can release the lock on the header as the header
-        // and the last committed revision are up-to-date.
-        drop(header);
+        drop(commit_lock);
 
         // 6. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
@@ -426,7 +451,7 @@ impl RevisionManager {
 
     /// Acquires a lock on the header and returns a guard.
     pub(crate) fn locked_header(&self) -> MutexGuard<'_, NodeStoreHeader> {
-        self.header.lock()
+        self.persist_worker.locked_header()
     }
 
     /// Gets or creates a threadpool associated with the revision manager.
@@ -446,10 +471,21 @@ impl RevisionManager {
         })
     }
 
-    /// Closes the revision manager gracefully.
-    #[allow(clippy::missing_const_for_fn)]
+    /// Closes the revision manager gracefully, ensuring all data is persisted.
+    ///
+    /// This method shuts down the background persistence worker and persists 
+    /// any remaining uncommitted data. If not called explicitly, `Drop` will 
+    /// attempt a best-effort shutdown but cannot report errors.
     pub fn close(&self) -> Result<(), RevisionManagerError> {
-        Ok(())
+        self.persist_worker
+            .close()
+            .map_err(RevisionManagerError::PersistError)
+    }
+
+    /// Wait until all pending commits have been persisted.
+    #[cfg(test)]
+    pub(crate) fn wait_persisted(&self) {
+        self.persist_worker.wait_persisted();
     }
 }
 
