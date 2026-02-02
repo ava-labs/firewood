@@ -4,6 +4,7 @@ name: C-Chain Reexecution Performance Tracking
 
 on:
   schedule:
+    # These cron expressions are matched exactly in configure-benchmark to set parameters
     # Daily at 05:00 UTC (00:00 ET) - 1M blocks: 40M → 41M
     - cron: '0 5 * * *'
     # Weekly Saturday at 05:00 UTC (00:00 ET) - 10M blocks: 50M → 60M
@@ -60,25 +61,26 @@ jobs:
         id: resolve
         run: |
           if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            # Common config for all scheduled runs
+            echo "config=firewood" >> "$GITHUB_OUTPUT"
+            echo "runner=avago-runner-i4i-2xlarge-local-ssd" >> "$GITHUB_OUTPUT"
+
+            # Cron strings must match exactly from schedule definitions above
             case "${{ github.event.schedule }}" in
               "0 5 * * *")  # Daily at 05:00 UTC: 1M blocks (40M → 41M)
                 echo "name=daily-40m-41m" >> "$GITHUB_OUTPUT"
-                echo "config=firewood" >> "$GITHUB_OUTPUT"
                 echo "start-block=40000001" >> "$GITHUB_OUTPUT"
                 echo "end-block=41000000" >> "$GITHUB_OUTPUT"
                 echo "block-dir-src=cchain-mainnet-blocks-40m-50m-ldb" >> "$GITHUB_OUTPUT"
                 echo "current-state-dir-src=cchain-current-state-firewood-40m" >> "$GITHUB_OUTPUT"
-                echo "runner=avago-runner-i4i-2xlarge-local-ssd" >> "$GITHUB_OUTPUT"
                 echo "timeout-minutes=720" >> "$GITHUB_OUTPUT"
                 ;;
               "0 5 * * 6")  # Weekly Saturday at 05:00 UTC: 10M blocks (50M → 60M)
                 echo "name=weekly-50m-60m" >> "$GITHUB_OUTPUT"
-                echo "config=firewood" >> "$GITHUB_OUTPUT"
                 echo "start-block=50000001" >> "$GITHUB_OUTPUT"
                 echo "end-block=60000000" >> "$GITHUB_OUTPUT"
                 echo "block-dir-src=cchain-mainnet-blocks-50m-60m-ldb" >> "$GITHUB_OUTPUT"
                 echo "current-state-dir-src=cchain-current-state-firewood-50m" >> "$GITHUB_OUTPUT"
-                echo "runner=avago-runner-i4i-2xlarge-local-ssd" >> "$GITHUB_OUTPUT"
                 echo "timeout-minutes=2880" >> "$GITHUB_OUTPUT"
                 ;;
               *)
