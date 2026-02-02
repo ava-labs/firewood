@@ -368,26 +368,7 @@ Triggers Firewood's `track-performance.yml` workflow, which orchestrates the Ava
 
 > **Note:** Changes must be pushed to the remote branch for the workflow to use them. By default, the workflow builds Firewood from the current commit. To benchmark a specific version (e.g., a release tag), set `FIREWOOD_REF` explicitly.
 
-**Environment variables:**
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `FIREWOOD_REF` | current commit | Firewood commit/tag/branch to build |
-| `AVALANCHEGO_REF` | master | AvalancheGo ref to test against |
-| `LIBEVM_REF` | - | Optional libevm ref |
-| `RUNNER` | avalanche-avalanchego-runner-2ti | GitHub Actions runner |
-| `TIMEOUT_MINUTES` | - | Workflow timeout |
-| `DOWNLOAD_DIR` | ./results | Directory for downloaded artifacts |
-
-**Custom mode variables** (when no test specified):
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `CONFIG` | firewood | VM config (firewood, hashdb, etc.) |
-| `START_BLOCK` | required | First block number |
-| `END_BLOCK` | required | Last block number |
-| `BLOCK_DIR_SRC` | required | S3 block directory |
-| `CURRENT_STATE_DIR_SRC` | - | S3 state directory (empty = genesis run) |
+**Environment variables and options:** See [scripts/bench-cchain-reexecution.sh](scripts/bench-cchain-reexecution.sh) header for full documentation.
 
 **Tests and runners** are defined in AvalancheGo:
 
