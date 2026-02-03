@@ -338,6 +338,15 @@ impl DatabaseHandle {
     pub fn dump_to_string(&self) -> Result<String, api::Error> {
         self.db.dump_to_string().map_err(api::Error::from)
     }
+
+    /// Closes the database gracefully.
+    ///
+    /// # Errors
+    ///
+    /// An error is returned if there was an error when closing the database.
+    pub fn close(self) -> Result<(), api::Error> {
+        self.db.close()
+    }
 }
 
 impl<'db> CView<'db> for &'db crate::DatabaseHandle {

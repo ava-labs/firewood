@@ -445,6 +445,20 @@ impl RevisionManager {
                 .expect("Error in creating threadpool")
         })
     }
+
+    /// Closes the revision manager gracefully.
+    pub fn close(&self) -> Result<(), RevisionManagerError> {
+        Ok(())
+    }
+}
+
+impl Drop for RevisionManager {
+    fn drop(&mut self) {
+        // Best-effort graceful shutdown - users are suggested to call `close()` instead.
+        if let Err(e) = self.close() {
+            warn!("Error during RevisionManager shutdown: {e}");
+        }
+    }
 }
 
 #[cfg(test)]
