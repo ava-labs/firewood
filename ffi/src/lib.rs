@@ -679,6 +679,8 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 
 /// Close and free the memory for a database handle
 ///
+/// This also stops the background persistence thread.
+///
 /// # Arguments
 ///
 /// * `db` - The database handle to close, previously returned from a call to [`fwd_open_db`].

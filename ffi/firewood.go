@@ -415,7 +415,8 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 	return rev, nil
 }
 
-// Close releases the memory associated with the Database.
+// Close releases the memory associated with the Database and stops the
+// background persistence thread.
 //
 // This blocks until all outstanding keep-alive handles are disowned or the
 // [context.Context] is cancelled. That is, until all Revisions and Proposals
