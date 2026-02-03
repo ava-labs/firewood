@@ -468,8 +468,8 @@ impl RevisionManager {
 
     /// Closes the revision manager gracefully, ensuring all data is persisted.
     ///
-    /// This method shuts down the background persistence worker and persists 
-    /// any remaining uncommitted data. If not called explicitly, `Drop` will 
+    /// This method shuts down the background persistence worker and persists
+    /// any remaining uncommitted data. If not called explicitly, `Drop` will
     /// attempt a best-effort shutdown but cannot report errors.
     pub fn close(&self) -> Result<(), RevisionManagerError> {
         self.persist_worker
