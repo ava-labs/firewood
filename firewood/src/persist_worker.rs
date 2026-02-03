@@ -59,13 +59,18 @@ impl PersistWorker {
     ///
     /// Returns the worker for sending messages to the background thread.
     #[allow(clippy::large_types_passed_by_value)]
-    pub(crate) fn new(header: NodeStoreHeader, root_store: Option<Arc<RootStore>>) -> Self {
+    pub(crate) fn new(
+        commit_count: usize,
+        header: NodeStoreHeader, 
+        root_store: Option<Arc<RootStore>>,
+    ) -> Self {
         let (sender, receiver) = channel::unbounded();
-        let sub_interval = 1;
+        // Persist every sub_interval commits. With commit_count=1, persist every commit.
+        let sub_interval = (commit_count / 2).max(1);
 
         let shared = Arc::new(SharedState {
             error: OnceLock::new(),
-            semaphore: PersistSemaphore::new(sub_interval),
+            semaphore: PersistSemaphore::new(commit_count),
             root_store,
             header: Mutex::new(header),
         });

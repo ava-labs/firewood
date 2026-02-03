@@ -76,6 +76,10 @@ sha3 = "0.10.8"
 name = "hashops"
 harness = false
 
+[[bench]]
+name = "deferred_persistence"
+harness = false
+
 [lints]
 workspace = true
 
