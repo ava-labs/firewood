@@ -61,7 +61,7 @@ impl PersistWorker {
     #[allow(clippy::large_types_passed_by_value)]
     pub(crate) fn new(
         commit_count: usize,
-        header: NodeStoreHeader, 
+        header: NodeStoreHeader,
         root_store: Option<Arc<RootStore>>,
     ) -> Self {
         let (sender, receiver) = channel::unbounded();
