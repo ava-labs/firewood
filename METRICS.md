@@ -368,7 +368,7 @@ Triggers Firewood's `track-performance.yml` workflow, which orchestrates the Ava
 
 > **Note:** Changes must be pushed to the remote branch for the workflow to use them. By default, the workflow builds Firewood from the current commit. To benchmark a specific version (e.g., a release tag), set `FIREWOOD_REF` explicitly.
 
-**Environment variables and options:** See [scripts/bench-cchain-reexecution.sh](scripts/bench-cchain-reexecution.sh) header for full documentation.
+**Environment variables and options:** See [scripts/bench-cchain-reexecution.sh](scripts/bench-cchain-reexecution.sh) or run `./scripts/bench-cchain-reexecution.sh help`.
 
 **Tests and runners** are defined in AvalancheGo:
 

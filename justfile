@@ -178,13 +178,13 @@ release-step-refresh-changelog tag:
 #
 # By default, uses the current HEAD commit to build Firewood. If you want to
 # benchmark a specific version (e.g., a release tag), set FIREWOOD_REF explicitly:
-#   FIREWOOD_REF=v0.1.0 just bench-cchain test=firewood-101-250k
+#   FIREWOOD_REF=v0.1.0 TEST=firewood-101-250k just bench-cchain
 #
 # Examples:
-#   just bench-cchain test=firewood-101-250k
-#   FIREWOOD_REF=v0.1.0 just bench-cchain test=firewood-101-250k
+#   TEST=firewood-101-250k just bench-cchain
+#   FIREWOOD_REF=v0.1.0 TEST=firewood-33m-40m just bench-cchain
 #   START_BLOCK=1 END_BLOCK=100 BLOCK_DIR_SRC=cchain-mainnet-blocks-200-ldb just bench-cchain
-bench-cchain test="" runner="avalanche-avalanchego-runner-2ti":
+bench-cchain:
     #!/usr/bin/env -S bash -euo pipefail
     
     # Resolve gh CLI
@@ -197,14 +197,12 @@ bench-cchain test="" runner="avalanche-avalanchego-runner-2ti":
         exit 1
     fi
     
-    test="{{ test }}"
-    
     # Validate: need either test name OR custom block params
-    if [[ -z "$test" && -z "${START_BLOCK:-}" ]]; then
-        echo "error: Provide a test name or set START_BLOCK, END_BLOCK, BLOCK_DIR_SRC" >&2
+    if [[ -z "${TEST:-}" && -z "${START_BLOCK:-}" ]]; then
+        echo "error: Provide TEST or set START_BLOCK, END_BLOCK, BLOCK_DIR_SRC" >&2
         echo "" >&2
         echo "Predefined tests:" >&2
-        echo "  firewood-101k-250k, firewood-33m-33m500k, firewood-33m-40m" >&2
+        echo "  firewood-101-250k, firewood-33m-33m500k, firewood-33m-40m" >&2
         echo "  firewood-archive-101-250k, firewood-archive-33m-33m500k, firewood-archive-33m-40m" >&2
         echo "" >&2
         echo "Custom mode example:" >&2
@@ -212,9 +210,11 @@ bench-cchain test="" runner="avalanche-avalanchego-runner-2ti":
         exit 1
     fi
     
+    : "${RUNNER:=avalanche-avalanchego-runner-2ti}"
+    
     # Build workflow args
-    args=(-f runner="{{ runner }}")
-    [[ -n "$test" ]] && args+=(-f test="$test")
+    args=(-f runner="$RUNNER")
+    [[ -n "${TEST:-}" ]] && args+=(-f test="$TEST")
     [[ -n "${FIREWOOD_REF:-}" ]] && args+=(-f firewood="$FIREWOOD_REF")
     [[ -n "${LIBEVM_REF:-}" ]] && args+=(-f libevm="$LIBEVM_REF")
     [[ -n "${AVALANCHEGO_REF:-}" ]] && args+=(-f avalanchego="$AVALANCHEGO_REF")
@@ -227,9 +227,9 @@ bench-cchain test="" runner="avalanche-avalanchego-runner-2ti":
     
     branch=$(git rev-parse --abbrev-ref HEAD)
     
-    [[ -n "$test" ]] && echo "==> Test: $test"
+    [[ -n "${TEST:-}" ]] && echo "==> Test: $TEST"
     [[ -n "${START_BLOCK:-}" ]] && echo "==> Custom: blocks $START_BLOCK-${END_BLOCK:-?}"
-    echo "==> Runner: {{ runner }}"
+    echo "==> Runner: $RUNNER"
     
     # Record time before triggering to find our run (avoid race conditions)
     trigger_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
