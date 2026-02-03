@@ -22,7 +22,7 @@ use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
-use crate::persist_worker::{AsyncPersistWorker, PersistError, PersistWorker, SyncPersistWorker};
+use crate::persist_worker::{PersistError, PersistWorker};
 use crate::root_store::RootStore;
 use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
@@ -72,10 +72,10 @@ pub struct ConfigManager {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
-    /// Configuration for deferred persistence - if nonzero, enables deferred
-    /// persistence and sets the maximum number of commits to roll back.
-    #[builder(default = 0)]
-    deferred_persistence_commit_count: usize,
+    /// Maximum number of commits that can be replayed on crash.
+    /// The persist worker will persist every `commit_count / 2` commits.
+    #[builder(default = 1)]
+    pub deferred_persistence_commit_count: usize,
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
@@ -119,7 +119,7 @@ pub(crate) struct RevisionManager {
     root_store: Option<Arc<RootStore>>,
 
     /// Worker responsible for persisting revisions to disk.
-    persist_worker: Arc<dyn PersistWorker + Send + Sync>,
+    persist_worker: PersistWorker,
 
     /// Lock for upholding the invariant that only one revision may be comitting
     /// at any given time.
@@ -200,16 +200,11 @@ impl RevisionManager {
             by_hash.insert(hash, nodestore.clone());
         }
 
-        let persist_worker: Arc<dyn PersistWorker + Send + Sync> =
-            if config.deferred_persistence_commit_count > 0 {
-                Arc::new(AsyncPersistWorker::new(
-                    config.deferred_persistence_commit_count,
-                    header,
-                    root_store.clone(),
-                ))
-            } else {
-                Arc::new(SyncPersistWorker::new(header, root_store.clone()))
-            };
+        let persist_worker = PersistWorker::new(
+            config.deferred_persistence_commit_count,
+            header,
+            root_store.clone(),
+        );
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,

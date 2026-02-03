@@ -135,9 +135,10 @@ pub struct DbConfig {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
-    /// If nonzero, enables deferred persistence.
-    #[builder(default = 0)]
-    deferred_persistence_commit_count: usize,
+    /// Maximum number of commits that can be replayed on crash.
+    /// The persist worker will persist every `commit_count / 2` commits.
+    #[builder(default = 1)]
+    pub deferred_persistence_commit_count: usize,
 }
 
 #[derive(Debug)]
@@ -1126,6 +1127,9 @@ mod test {
         let root_hash = proposal.root_hash().unwrap().unwrap();
         proposal.commit().unwrap();
 
+        // Wait for background persistence to complete
+        db.manager.wait_persisted();
+
         let root_address = db
             .revision(root_hash.clone())
             .unwrap()
@@ -1282,6 +1286,9 @@ mod test {
             .unwrap()
             .commit()
             .unwrap();
+
+        // Wait for background persistence to complete before reading the file
+        testdb.manager.wait_persisted();
 
         let rh = testdb.db.root_hash().unwrap().unwrap();
 

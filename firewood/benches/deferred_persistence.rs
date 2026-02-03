@@ -9,14 +9,14 @@ use rand::{Rng, distr::Alphanumeric};
 use std::iter::repeat_with;
 
 #[expect(clippy::unwrap_used)]
-fn bench_sync_persists<const N: usize>(criterion: &mut Criterion) {
+fn bench_persists_commit_count_1<const N: usize>(criterion: &mut Criterion) {
     const KEY_LEN: usize = 4;
     let rng = &firewood_storage::SeededRng::from_option(Some(1234));
 
     criterion
         .benchmark_group("deferred_persistence")
         .sample_size(20)
-        .bench_function("sync_commit", |b| {
+        .bench_function("commit_count_1", |b| {
             b.iter_batched(
                 || {
                     let batch_ops: Vec<_> =
@@ -49,7 +49,7 @@ fn bench_sync_persists<const N: usize>(criterion: &mut Criterion) {
 }
 
 #[expect(clippy::unwrap_used)]
-fn bench_async_persists<const N: usize>(criterion: &mut Criterion) {
+fn bench_persists_commit_count_100<const N: usize>(criterion: &mut Criterion) {
     const KEY_LEN: usize = 4;
     const COMMIT_COUNT: usize = 100;
     let rng = &firewood_storage::SeededRng::from_option(Some(1234));
@@ -57,7 +57,7 @@ fn bench_async_persists<const N: usize>(criterion: &mut Criterion) {
     criterion
         .benchmark_group("deferred_persistence")
         .sample_size(20)
-        .bench_function("async_commit", |b| {
+        .bench_function("commit_count_100", |b| {
             b.iter_batched(
                 || {
                     let batch_ops: Vec<_> =
@@ -93,7 +93,7 @@ fn bench_async_persists<const N: usize>(criterion: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default();
-    targets = bench_sync_persists::<1_000>, bench_async_persists::<1_000>
+    targets = bench_persists_commit_count_1::<1_000>, bench_persists_commit_count_100::<1_000>
 }
 
 criterion_main!(benches);

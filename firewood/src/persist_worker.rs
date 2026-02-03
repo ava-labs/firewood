@@ -1,11 +1,9 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-//! Implementation of a background thread responsible for persisting revisions
-//! when running in deferred persistence mode.
+//! Implementation of a background thread responsible for persisting revisions.
 
 use derive_where::derive_where;
-use std::fmt::Debug;
 use std::{
     sync::{Arc, OnceLock},
     thread::{self, JoinHandle},
@@ -34,86 +32,7 @@ pub enum PersistError {
     ChannelDisconnected,
 }
 
-pub(crate) trait PersistWorker: Debug {
-    /// Persist this revision to disk.
-    fn persist(&self, committed: CommittedRevision) -> Result<(), PersistError>;
-
-    /// Reap a revision's deleted nodes.
-    fn reap(&self, nodestore: NodeStore<Committed, FileBacked>) -> Result<(), PersistError>;
-
-    /// Get a lock to the header of the database.
-    fn locked_header(&self) -> MutexGuard<'_, NodeStoreHeader>;
-
-    /// Check if the persist worker has errored.
-    fn check_error(&self) -> Result<(), PersistError>;
-
-    /// Close the persist worker.
-    fn close(&self) -> Result<(), PersistError>;
-
-    /// Wait until all pending commits have been persisted.
-    #[cfg(test)]
-    fn wait_persisted(&self);
-}
-
-#[derive(Debug)]
-pub(crate) struct SyncPersistWorker {
-    header: Mutex<NodeStoreHeader>,
-    root_store: Option<Arc<RootStore>>,
-}
-
-impl SyncPersistWorker {
-    #[allow(clippy::large_types_passed_by_value)]
-    pub(crate) const fn new(header: NodeStoreHeader, root_store: Option<Arc<RootStore>>) -> Self {
-        Self {
-            header: Mutex::new(header),
-            root_store,
-        }
-    }
-}
-
-impl PersistWorker for SyncPersistWorker {
-    fn persist(&self, committed: CommittedRevision) -> Result<(), PersistError> {
-        // XXX: do we need to wrap the error in an ARC?
-        let mut header = self.header.lock();
-        committed
-            .persist(&mut header)
-            .map_err(|e| PersistError::FileIo(e.into()))?;
-
-        if let Some(store) = &self.root_store
-            && let (Some(hash), Some(address)) = (committed.root_hash(), committed.root_address())
-        {
-            store
-                .add_root(&hash, &address)
-                .map_err(|e| PersistError::RootStore(e.into()))?;
-        }
-
-        Ok(())
-    }
-
-    fn reap(&self, nodestore: NodeStore<Committed, FileBacked>) -> Result<(), PersistError> {
-        let mut header = self.header.lock();
-        nodestore
-            .reap_deleted(&mut header)
-            .map_err(|e| PersistError::FileIo(e.into()))
-    }
-
-    fn locked_header(&self) -> MutexGuard<'_, NodeStoreHeader> {
-        self.header.lock()
-    }
-
-    fn check_error(&self) -> Result<(), PersistError> {
-        Ok(())
-    }
-
-    fn close(&self) -> Result<(), PersistError> {
-        Ok(())
-    }
-
-    #[cfg(test)]
-    fn wait_persisted(&self) {}
-}
-
-enum AsyncPersistMessage {
+enum PersistMessage {
     /// A committed revision that may be persisted.
     Persist(CommittedRevision),
     /// A persisted revision to be reaped.
@@ -130,17 +49,17 @@ enum AsyncPersistMessage {
 /// - Waiting for graceful shutdown
 #[derive_where(Debug)]
 #[derive_where(skip_inner)]
-pub(crate) struct AsyncPersistWorker {
+pub(crate) struct PersistWorker {
     /// The background thread responsible for persisting commits async.
     handle: Mutex<Option<JoinHandle<Result<(), PersistError>>>>,
 
-    sender: Sender<AsyncPersistMessage>,
+    sender: Sender<PersistMessage>,
 
     /// Shared state with background thread.
     shared: Arc<SharedState>,
 }
 
-impl AsyncPersistWorker {
+impl PersistWorker {
     /// Creates a new `PersistWorker` and starts the background thread.
     ///
     /// Returns the worker and a sender for sending messages to the background thread.
@@ -184,10 +103,9 @@ impl AsyncPersistWorker {
             shared,
         }
     }
-}
 
-impl PersistWorker for AsyncPersistWorker {
-    fn persist(&self, committed: CommittedRevision) -> Result<(), PersistError> {
+    /// Persist this revision to disk.
+    pub(crate) fn persist(&self, committed: CommittedRevision) -> Result<(), PersistError> {
         // Acquire a permit before sending. Blocks if we've hit the limit of
         // unpersisted commits.
         self.shared.semaphore.acquire();
@@ -199,43 +117,50 @@ impl PersistWorker for AsyncPersistWorker {
         *self.shared.latest_committed.lock() = Some(committed.clone());
 
         self.sender
-            .send(AsyncPersistMessage::Persist(committed))
+            .send(PersistMessage::Persist(committed))
             .map_err(|_| PersistError::ChannelDisconnected)
     }
 
-    fn reap(&self, nodestore: NodeStore<Committed, FileBacked>) -> Result<(), PersistError> {
+    /// Reap a revision's deleted nodes.
+    pub(crate) fn reap(
+        &self,
+        nodestore: NodeStore<Committed, FileBacked>,
+    ) -> Result<(), PersistError> {
         let is_persisted = nodestore
             .root_as_maybe_persisted_node()
             .is_some_and(|node| node.unpersisted().is_none());
 
         if is_persisted {
             self.sender
-                .send(AsyncPersistMessage::Reap(nodestore))
+                .send(PersistMessage::Reap(nodestore))
                 .map_err(|_| PersistError::ChannelDisconnected)?;
         }
 
         Ok(())
     }
 
-    fn locked_header(&self) -> MutexGuard<'_, NodeStoreHeader> {
+    /// Get a lock to the header of the database.
+    pub(crate) fn locked_header(&self) -> MutexGuard<'_, NodeStoreHeader> {
         self.shared.header.lock()
     }
 
-    fn check_error(&self) -> Result<(), PersistError> {
+    /// Check if the persist worker has errored.
+    pub(crate) fn check_error(&self) -> Result<(), PersistError> {
         match self.shared.error.get() {
             Some(err) => Err(err.clone()),
             None => Ok(()),
         }
     }
 
-    fn close(&self) -> Result<(), PersistError> {
+    /// Close the persist worker.
+    pub(crate) fn close(&self) -> Result<(), PersistError> {
         // Signal the background thread to shutdown before waiting for it.
         // This is necessary because the thread is blocked on recv(), which will
         // only unblock when a message is sent or the channel is closed.
         //
         // If the send fails, the background thread has already exited unexpectedly
         // (due to error or panic). We'll still try to join to get the actual error.
-        let send_failed = self.sender.send(AsyncPersistMessage::Shutdown).is_err();
+        let send_failed = self.sender.send(PersistMessage::Shutdown).is_err();
 
         // Wait for the background thread to finish and return its result.
         match self.handle.lock().take() {
@@ -276,8 +201,9 @@ impl PersistWorker for AsyncPersistWorker {
         Ok(())
     }
 
+    /// Wait until all pending commits have been persisted.
     #[cfg(test)]
-    fn wait_persisted(&self) {
+    pub(crate) fn wait_persisted(&self) {
         self.shared.semaphore.wait_all_released();
     }
 }
@@ -363,7 +289,7 @@ struct SharedState {
 /// - Release semaphore permits when persistence completes
 struct PersistLoop {
     /// Channel for receiving messages.
-    receiver: Receiver<AsyncPersistMessage>,
+    receiver: Receiver<PersistMessage>,
     /// Persist every `sub_interval` commits.
     sub_interval: usize,
     /// Shared state for coordination with `PersistWorker`.
@@ -384,15 +310,12 @@ impl PersistLoop {
 
         loop {
             // An error indicates that the channel is closed.
-            let message = self
-                .receiver
-                .recv()
-                .unwrap_or(AsyncPersistMessage::Shutdown);
+            let message = self.receiver.recv().unwrap_or(PersistMessage::Shutdown);
 
             match message {
-                AsyncPersistMessage::Shutdown => return Ok(()),
-                AsyncPersistMessage::Reap(nodestore) => self.reap(nodestore)?,
-                AsyncPersistMessage::Persist(revision) => {
+                PersistMessage::Shutdown => return Ok(()),
+                PersistMessage::Reap(nodestore) => self.reap(nodestore)?,
+                PersistMessage::Persist(revision) => {
                     num_commits = num_commits.wrapping_add(1);
 
                     if num_commits.is_multiple_of(self.sub_interval) {
