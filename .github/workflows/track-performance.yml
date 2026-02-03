@@ -68,6 +68,7 @@ jobs:
             # Cron strings must match exactly from schedule definitions above
             case "${{ github.event.schedule }}" in
               "0 5 * * *")  # Daily at 05:00 UTC: 1M blocks (40M → 41M)
+                echo "::notice::Schedule: daily-40m-41m (blocks 40000001-41000000)"
                 echo "name=daily-40m-41m" >> "$GITHUB_OUTPUT"
                 echo "start-block=40000001" >> "$GITHUB_OUTPUT"
                 echo "end-block=41000000" >> "$GITHUB_OUTPUT"
@@ -76,6 +77,7 @@ jobs:
                 echo "timeout-minutes=720" >> "$GITHUB_OUTPUT"
                 ;;
               "0 5 * * 6")  # Weekly Saturday at 05:00 UTC: 10M blocks (50M → 60M)
+                echo "::notice::Schedule: weekly-50m-60m (blocks 50000001-60000000)"
                 echo "name=weekly-50m-60m" >> "$GITHUB_OUTPUT"
                 echo "start-block=50000001" >> "$GITHUB_OUTPUT"
                 echo "end-block=60000000" >> "$GITHUB_OUTPUT"
@@ -115,15 +117,10 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Trigger C-Chain Reexecution Benchmark
-        run: |
-          if [[ -n "${{ needs.configure-benchmark.outputs.test }}" ]]; then
-            ./scripts/bench-cchain-reexecution.sh trigger "${{ needs.configure-benchmark.outputs.test }}"
-          else
-            ./scripts/bench-cchain-reexecution.sh trigger
-          fi
+        run: ./scripts/bench-cchain-reexecution.sh trigger
         env:
           GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
-          # Custom mode (ignored when test is specified)
+          # Custom mode (ignored when TEST is specified)
           CONFIG: ${{ needs.configure-benchmark.outputs.config }}
           START_BLOCK: ${{ needs.configure-benchmark.outputs.start-block }}
           END_BLOCK: ${{ needs.configure-benchmark.outputs.end-block }}
@@ -134,6 +131,7 @@ jobs:
           AVALANCHEGO_REF: ${{ inputs.avalanchego }}
           LIBEVM_REF: ${{ inputs.libevm }}
           # Execution
+          TEST: ${{ needs.configure-benchmark.outputs.test }}
           RUNNER: ${{ needs.configure-benchmark.outputs.runner }}
           TIMEOUT_MINUTES: ${{ needs.configure-benchmark.outputs.timeout-minutes }}
 
