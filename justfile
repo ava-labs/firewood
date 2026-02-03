@@ -187,6 +187,15 @@ release-step-refresh-changelog tag:
 bench-cchain:
     #!/usr/bin/env -S bash -euo pipefail
     
+    # Prevent accidental runs from main (would pollute official bench/ data)
+    branch=$(git rev-parse --abbrev-ref HEAD)
+    if [[ "$branch" == "main" ]]; then
+        echo "error: Cannot run bench-cchain from main branch" >&2
+        echo "       Main branch benchmarks go to bench/ (official history) — use scheduled workflows only." >&2
+        echo "       Feature branch benchmarks go to dev/bench/{branch}/ — create a branch first." >&2
+        exit 1
+    fi
+    
     # Resolve gh CLI
     if command -v gh &>/dev/null; then
         GH=gh
@@ -224,8 +233,6 @@ bench-cchain:
     [[ -n "${BLOCK_DIR_SRC:-}" ]] && args+=(-f block-dir-src="$BLOCK_DIR_SRC")
     [[ -n "${CURRENT_STATE_DIR_SRC:-}" ]] && args+=(-f current-state-dir-src="$CURRENT_STATE_DIR_SRC")
     [[ -n "${TIMEOUT_MINUTES:-}" ]] && args+=(-f timeout-minutes="$TIMEOUT_MINUTES")
-    
-    branch=$(git rev-parse --abbrev-ref HEAD)
     
     [[ -n "${TEST:-}" ]] && echo "==> Test: $TEST"
     [[ -n "${START_BLOCK:-}" ]] && echo "==> Custom: blocks $START_BLOCK-${END_BLOCK:-?}"
