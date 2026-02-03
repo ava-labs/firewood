@@ -334,6 +334,10 @@ impl Db {
     }
 
     /// Closes the database gracefully.
+    ///
+    /// This method shuts down the background persistence worker. If not called
+    /// explicitly, `Drop` will attempt a best-effort shutdown but cannot report
+    /// errors.
     pub fn close(self) -> Result<(), api::Error> {
         self.manager.close().map_err(Into::into)
     }
@@ -423,7 +427,7 @@ mod test {
 
     use firewood_storage::{
         CheckOpt, CheckerError, HashedNodeReader, IntoHashType, LinearAddress, MaybePersistedNode,
-        NodeStore, TrieHash,
+        NodeStore, RootReader, TrieHash,
     };
 
     use crate::db::{Db, Proposal, UseParallel};
@@ -467,6 +471,13 @@ mod test {
     }
 
     impl<T: Iterator> IterExt for T {}
+
+    impl Db {
+        /// Wait until all pending commits have been persisted.
+        fn wait_persisted(&self) {
+            self.manager.wait_persisted();
+        }
+    }
 
     #[test]
     fn test_proposal_reads() {
@@ -881,6 +892,11 @@ mod test {
             .propose(update_keys.iter().zip(update_values.iter()))
             .unwrap();
 
+        // Wait for background persistence to complete before creating update proposals
+        // so both DBs are in the same persisted state
+        parallel_db.wait_persisted();
+        single_threaded_db.wait_persisted();
+
         let parallel_deleted = update_parallel_proposal.nodestore.deleted().to_vec();
         let single_deleted = update_single_proposal.nodestore.deleted().to_vec();
 
@@ -984,6 +1000,9 @@ mod test {
             });
             let proposal = db.propose(batch).unwrap();
             proposal.commit().unwrap();
+
+            // Wait for background persistence to complete before checking consistency
+            db.wait_persisted();
 
             // check the database for consistency, sometimes checking the hashes
             let hash_check = rng.random();
@@ -1117,6 +1136,9 @@ mod test {
         let proposal = db.propose(batch).unwrap();
         let root_hash = proposal.root_hash().unwrap().unwrap();
         proposal.commit().unwrap();
+
+        // Wait for background persistence to complete
+        db.manager.wait_persisted();
 
         let root_address = db
             .revision(root_hash.clone())
@@ -1275,6 +1297,9 @@ mod test {
             .commit()
             .unwrap();
 
+        // Wait for background persistence to complete before reading the file
+        testdb.wait_persisted();
+
         let rh = testdb.db.root_hash().unwrap().unwrap();
 
         let file = std::fs::OpenOptions::new()
@@ -1296,6 +1321,73 @@ mod test {
         let testdb = testdb.reopen();
 
         assert_eq!(rh, testdb.db.root_hash().unwrap().unwrap());
+    }
+
+    #[test]
+    fn test_deferred_persist_multiple_commits_with_commit_count_one() {
+        const NUM_REVISIONS: usize = 20;
+
+        let dbcfg = DbConfig::builder()
+            .manager(
+                RevisionManagerConfig::builder()
+                    .max_revisions(NUM_REVISIONS)
+                    .build(),
+            )
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        // Create and commit NUM_REVISIONS proposals, storing their root hashes
+        let root_hashes: Vec<TrieHash> = (0..NUM_REVISIONS)
+            .map(|i| {
+                let batch = vec![BatchOp::Put {
+                    key: format!("key{i}").as_bytes().to_vec(),
+                    value: format!("value{i}").as_bytes().to_vec(),
+                }];
+                let proposal = db.propose(batch).unwrap();
+                let root_hash = proposal.root_hash().unwrap().unwrap();
+                proposal.commit().unwrap();
+                root_hash
+            })
+            .collect();
+
+        // Wait for the background thread to complete persistence
+        db.wait_persisted();
+
+        // Verify that all revisions were persisted
+        for (i, root_hash) in root_hashes.iter().enumerate() {
+            let revision = db.revision(root_hash.clone()).unwrap();
+            let is_persisted = revision
+                .root_as_maybe_persisted_node()
+                .is_some_and(|node| node.unpersisted().is_none());
+
+            assert!(
+                is_persisted,
+                "Revision {i} with root hash {root_hash:?} should be persisted"
+            );
+        }
+    }
+
+    #[test]
+    fn test_deferred_persist_close_with_commit_count_one() {
+        let dbcfg = DbConfig::builder().build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        // Then, commit once and see what the latest revision it
+        let key = b"foo";
+        let value = b"bar";
+        let batch = vec![BatchOp::Put { key, value }];
+        let proposal = db.propose(batch).unwrap();
+        let root_hash = proposal.root_hash().unwrap().unwrap();
+
+        proposal.commit().unwrap();
+        let db = db.reopen();
+
+        let revision = db.view(root_hash).unwrap();
+        let new_value = revision.val(b"foo").unwrap().unwrap();
+
+        assert_eq!(value, new_value.as_ref());
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear

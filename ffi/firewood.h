@@ -1275,6 +1275,8 @@ struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *_p
 /**
  * Close and free the memory for a database handle
  *
+ * This also stops the background persistence thread.
+ *
  * # Arguments
  *
  * * `db` - The database handle to close, previously returned from a call to [`fwd_open_db`].
