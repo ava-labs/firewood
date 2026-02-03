@@ -86,6 +86,10 @@ func TestMetrics(t *testing.T) {
 	_, err := db.Update(batch)
 	r.NoError(err)
 
+	// Close database to ensure background persistence completes before checking metrics.
+	// The flush_nodes metric is recorded during persistence, which happens asynchronously.
+	r.NoError(db.Close(t.Context()))
+
 	assertMetrics(t, metricsPort, expectedMetrics)
 	if logPath != "" {
 		r.True(assertNonEmptyFile(t, logPath))
@@ -99,6 +103,10 @@ func TestExpensiveMetrics(t *testing.T) {
 	_, _, batch := kvForTest(10)
 	_, err := db.Update(batch)
 	r.NoError(err)
+
+	// Close database to ensure background persistence completes before checking metrics.
+	// The flush_nodes metric is recorded during persistence, which happens asynchronously.
+	r.NoError(db.Close(t.Context()))
 
 	merged := make(map[string]dto.MetricType, len(expectedMetrics)+len(expectedExpensiveMetrics))
 	maps.Copy(merged, expectedMetrics)
