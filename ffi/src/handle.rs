@@ -21,8 +21,8 @@ use firewood_metrics::{MetricsContext, firewood_increment, firewood_record};
 /// The hashing mode to use for the database.
 ///
 /// This determines the cryptographic hash function and trie structure used.
-#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
 pub enum NodeHashAlgorithm {
     /// MerkleDB Firewood hashing (SHA-256 based)
     MerkleDB = 0,

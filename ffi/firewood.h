@@ -96,7 +96,7 @@ typedef struct OwnedSlice_u8 OwnedBytes;
  * A result type returned from FFI functions return the database root hash. This
  * may or may not be after a mutation.
  */
-typedef enum HashResult_Tag {
+enum HashResult_Tag {
   /**
    * The caller provided a null pointer to a database handle.
    */
@@ -122,7 +122,8 @@ typedef enum HashResult_Tag {
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   HashResult_Err,
-} HashResult_Tag;
+};
+typedef size_t HashResult_Tag;
 
 typedef struct HashResult {
   HashResult_Tag tag;
@@ -180,7 +181,7 @@ typedef struct BorrowedSlice_u8 BorrowedBytes;
  * This is a tagged union that explicitly distinguishes between different
  * operation types instead of relying on nil vs empty pointer semantics.
  */
-typedef enum BatchOp_Tag {
+enum BatchOp_Tag {
   /**
    * Insert or update a key with a value.
    * The value may be empty (zero-length).
@@ -194,7 +195,8 @@ typedef enum BatchOp_Tag {
    * Delete all keys with a given prefix.
    */
   BatchOp_DeleteRange,
-} BatchOp_Tag;
+};
+typedef size_t BatchOp_Tag;
 
 typedef struct BatchOp_Put_Body {
   BorrowedBytes key;
@@ -260,7 +262,7 @@ typedef struct BorrowedSlice_BatchOp BorrowedBatchOps;
  * The result type returned from an FFI function that returns no value but may
  * return an error.
  */
-typedef enum VoidResult_Tag {
+enum VoidResult_Tag {
   /**
    * The caller provided a null pointer to the input handle.
    */
@@ -279,7 +281,8 @@ typedef enum VoidResult_Tag {
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   VoidResult_Err,
-} VoidResult_Tag;
+};
+typedef size_t VoidResult_Tag;
 
 typedef struct VoidResult {
   VoidResult_Tag tag;
@@ -296,7 +299,7 @@ typedef struct VoidResult {
  * FFI methods and types can use this to represent optional values where `Optional<T>`
  * does not work due to it not having a C-compatible layout.
  */
-typedef enum Maybe_OwnedBytes_Tag {
+enum Maybe_OwnedBytes_Tag {
   /**
    * No value present.
    */
@@ -305,7 +308,8 @@ typedef enum Maybe_OwnedBytes_Tag {
    * A value is present.
    */
   Maybe_OwnedBytes_Some_OwnedBytes,
-} Maybe_OwnedBytes_Tag;
+};
+typedef size_t Maybe_OwnedBytes_Tag;
 
 typedef struct Maybe_OwnedBytes {
   Maybe_OwnedBytes_Tag tag;
@@ -334,7 +338,7 @@ typedef struct NextKeyRange {
   struct Maybe_OwnedBytes end_key;
 } NextKeyRange;
 
-typedef enum NextKeyRangeResult_Tag {
+enum NextKeyRangeResult_Tag {
   /**
    * The caller provided a null pointer to the input handle.
    */
@@ -361,7 +365,8 @@ typedef enum NextKeyRangeResult_Tag {
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   NextKeyRangeResult_Err,
-} NextKeyRangeResult_Tag;
+};
+typedef size_t NextKeyRangeResult_Tag;
 
 typedef struct NextKeyRangeResult {
   NextKeyRangeResult_Tag tag;
@@ -384,7 +389,7 @@ typedef struct NextKeyRangeResult {
  *
  * [`fwd_free_change_proof`]: crate::fwd_free_change_proof
  */
-typedef enum ChangeProofResult_Tag {
+enum ChangeProofResult_Tag {
   /**
    * The caller provided a null pointer to the input handle.
    */
@@ -415,7 +420,8 @@ typedef enum ChangeProofResult_Tag {
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   ChangeProofResult_Err,
-} ChangeProofResult_Tag;
+};
+typedef size_t ChangeProofResult_Tag;
 
 typedef struct ChangeProofResult {
   ChangeProofResult_Tag tag;
@@ -438,7 +444,7 @@ typedef struct ChangeProofResult {
 /**
  * A result type returned from FFI functions that retrieve a single value.
  */
-typedef enum ValueResult_Tag {
+enum ValueResult_Tag {
   /**
    * The caller provided a null pointer to a database handle.
    */
@@ -470,7 +476,8 @@ typedef enum ValueResult_Tag {
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   ValueResult_Err,
-} ValueResult_Tag;
+};
+typedef size_t ValueResult_Tag;
 
 typedef struct ValueResult {
   ValueResult_Tag tag;
@@ -493,7 +500,7 @@ typedef struct ValueResult {
  * FFI methods and types can use this to represent optional values where `Optional<T>`
  * does not work due to it not having a C-compatible layout.
  */
-typedef enum Maybe_BorrowedBytes_Tag {
+enum Maybe_BorrowedBytes_Tag {
   /**
    * No value present.
    */
@@ -502,7 +509,8 @@ typedef enum Maybe_BorrowedBytes_Tag {
    * A value is present.
    */
   Maybe_BorrowedBytes_Some_BorrowedBytes,
-} Maybe_BorrowedBytes_Tag;
+};
+typedef size_t Maybe_BorrowedBytes_Tag;
 
 typedef struct Maybe_BorrowedBytes {
   Maybe_BorrowedBytes_Tag tag;
@@ -557,7 +565,7 @@ typedef struct CreateChangeProofArgs {
  *
  * [`fwd_free_range_proof`]: crate::fwd_free_range_proof
  */
-typedef enum RangeProofResult_Tag {
+enum RangeProofResult_Tag {
   /**
    * The caller provided a null pointer to the input handle.
    */
@@ -588,7 +596,8 @@ typedef enum RangeProofResult_Tag {
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   RangeProofResult_Err,
-} RangeProofResult_Tag;
+};
+typedef size_t RangeProofResult_Tag;
 
 typedef struct RangeProofResult {
   RangeProofResult_Tag tag;
@@ -744,7 +753,7 @@ typedef struct OwnedSlice_OwnedKeyValuePair OwnedKeyValueBatch;
 /**
  * A result type returned from FFI functions that get a revision
  */
-typedef enum RevisionResult_Tag {
+enum RevisionResult_Tag {
   /**
    * The caller provided a null pointer to a database handle.
    */
@@ -768,7 +777,8 @@ typedef enum RevisionResult_Tag {
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   RevisionResult_Err,
-} RevisionResult_Tag;
+};
+typedef size_t RevisionResult_Tag;
 
 typedef struct RevisionResult_Ok_Body {
   /**
@@ -800,7 +810,7 @@ typedef struct RevisionResult {
 /**
  * A result type returned from iterator FFI functions
  */
-typedef enum KeyValueResult_Tag {
+enum KeyValueResult_Tag {
   /**
    * The caller provided a null pointer to an iterator handle.
    */
@@ -828,7 +838,8 @@ typedef enum KeyValueResult_Tag {
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   KeyValueResult_Err,
-} KeyValueResult_Tag;
+};
+typedef size_t KeyValueResult_Tag;
 
 typedef struct KeyValueResult {
   KeyValueResult_Tag tag;
@@ -845,7 +856,7 @@ typedef struct KeyValueResult {
 /**
  * A result type returned from iterator FFI functions
  */
-typedef enum KeyValueBatchResult_Tag {
+enum KeyValueBatchResult_Tag {
   /**
    * The caller provided a null pointer to an iterator handle.
    */
@@ -864,7 +875,8 @@ typedef enum KeyValueBatchResult_Tag {
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   KeyValueBatchResult_Err,
-} KeyValueBatchResult_Tag;
+};
+typedef size_t KeyValueBatchResult_Tag;
 
 typedef struct KeyValueBatchResult {
   KeyValueBatchResult_Tag tag;
@@ -881,7 +893,7 @@ typedef struct KeyValueBatchResult {
 /**
  * A result type returned from FFI functions that create an iterator
  */
-typedef enum IteratorResult_Tag {
+enum IteratorResult_Tag {
   /**
    * The caller provided a null pointer to a revision/proposal handle.
    */
@@ -899,7 +911,8 @@ typedef enum IteratorResult_Tag {
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   IteratorResult_Err,
-} IteratorResult_Tag;
+};
+typedef size_t IteratorResult_Tag;
 
 typedef struct IteratorResult_Ok_Body {
   /**
@@ -924,7 +937,7 @@ typedef struct IteratorResult {
 /**
  * The result type returned from the open or create database functions.
  */
-typedef enum HandleResult_Tag {
+enum HandleResult_Tag {
   /**
    * The database was opened or created successfully and the handle is
    * returned as an opaque pointer.
@@ -945,7 +958,8 @@ typedef enum HandleResult_Tag {
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   HandleResult_Err,
-} HandleResult_Tag;
+};
+typedef size_t HandleResult_Tag;
 
 typedef struct HandleResult {
   HandleResult_Tag tag;
@@ -1035,7 +1049,7 @@ typedef struct DatabaseHandleArgs {
  * A result type returned from FFI functions that create a proposal but do not
  * commit it to the database.
  */
-typedef enum ProposalResult_Tag {
+enum ProposalResult_Tag {
   /**
    * The caller provided a null pointer to a database handle.
    */
@@ -1055,7 +1069,8 @@ typedef enum ProposalResult_Tag {
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   ProposalResult_Err,
-} ProposalResult_Tag;
+};
+typedef size_t ProposalResult_Tag;
 
 typedef struct ProposalResult_Ok_Body {
   /**
@@ -1086,7 +1101,7 @@ typedef struct ProposalResult {
 /**
  * A result type returned from FFI functions that create an code hash iterator
  */
-typedef enum CodeIteratorResult_Tag {
+enum CodeIteratorResult_Tag {
   /**
    * The caller provided a null pointer to a proof handle.
    */
@@ -1104,7 +1119,8 @@ typedef enum CodeIteratorResult_Tag {
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   CodeIteratorResult_Err,
-} CodeIteratorResult_Tag;
+};
+typedef size_t CodeIteratorResult_Tag;
 
 typedef struct CodeIteratorResult_Ok_Body {
   /**

@@ -25,7 +25,7 @@ pub use self::results::{
 /// FFI methods and types can use this to represent optional values where `Optional<T>`
 /// does not work due to it not having a C-compatible layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum Maybe<T> {
     /// No value present.
     None,
