@@ -4,7 +4,6 @@
 [![Ecosystem license](https://img.shields.io/badge/License-Ecosystem-blue.svg)](./LICENSE.md)
 
 > :warning: Firewood is beta-level software.
-> The Firewood API may change with little to no warning.
 
 Firewood is an embedded key-value store, optimized to store recent Merkleized blockchain
 state with minimal overhead. Most blockchains, including Avalanche's C-Chain and Ethereum, store their state in Merkle tries to support efficient generation and verification of state proofs.
@@ -77,6 +76,18 @@ as well as carefully managing the free list during the creation and expiration o
 ## Metrics
 
 Firewood provides comprehensive metrics for monitoring database performance, resource utilization, and operational characteristics. For detailed information about all available metrics, how to enable them, and how to interpret them, see [METRICS.md](METRICS.md).
+
+We run benchmarks that measure and track
+mgas/s,
+ms/ggas,
+block\_parse\_ms/ggas
+block\_verify\_ms/ggas,
+block\_accept\_ms/ggas
+and graph the results
+[here](https://ava-labs.github.io/firewood/dev/bench/).
+
+You can also access the raw data for runs against the main branch
+[here](https://github.com/ava-labs/firewood/blob/benchmark-data/bench/data.js).
 
 ## Build
 
