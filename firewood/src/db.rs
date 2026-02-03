@@ -1351,7 +1351,7 @@ mod test {
             })
             .collect();
 
-        // Wait for the background thread to complete persistence
+        // Wait for the background thread to finish persisting
         db.wait_persisted();
 
         // Verify that all revisions were persisted
@@ -1374,7 +1374,7 @@ mod test {
 
         let db = TestDb::new_with_config(dbcfg);
 
-        // Then, commit once and see what the latest revision it
+        // Then, commit once and see what the latest revision is
         let key = b"foo";
         let value = b"bar";
         let batch = vec![BatchOp::Put { key, value }];
