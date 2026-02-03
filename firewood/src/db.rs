@@ -879,6 +879,11 @@ mod test {
         initial_parallel_proposal.commit().unwrap();
         initial_single_proposal.commit().unwrap();
 
+        // Wait for background persistence to complete before creating update proposals
+        // so both DBs are in the same persisted state
+        parallel_db.manager.wait_persisted();
+        single_threaded_db.manager.wait_persisted();
+
         // Second batch: update only the first key.
         let update_keys: Vec<[u8; 1]> = vec![[0x00]];
         let update_values: Vec<Box<[u8]>> = vec![Box::new([3u8])];
@@ -993,6 +998,9 @@ mod test {
             });
             let proposal = db.propose(batch).unwrap();
             proposal.commit().unwrap();
+
+            // Wait for background persistence to complete before checking consistency
+            db.manager.wait_persisted();
 
             // check the database for consistency, sometimes checking the hashes
             let hash_check = rng.random();
