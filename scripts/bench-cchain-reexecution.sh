@@ -214,8 +214,10 @@ trigger_workflow() {
         log "Triggering: $test"
     else
         # Custom mode: block params required, CURRENT_STATE_DIR_SRC optional (empty = genesis)
-        [[ -z "${START_BLOCK:-}${END_BLOCK:-}${BLOCK_DIR_SRC:-}" ]] && \
-            err "Provide a test name or set START_BLOCK, END_BLOCK, BLOCK_DIR_SRC"; exit 1
+        if [[ -z "${START_BLOCK:-}${END_BLOCK:-}${BLOCK_DIR_SRC:-}" ]]; then
+            err "Provide a test name or set START_BLOCK, END_BLOCK, BLOCK_DIR_SRC"
+            exit 1
+        fi
         : "${START_BLOCK:?START_BLOCK required}"
         : "${END_BLOCK:?END_BLOCK required}"
         : "${BLOCK_DIR_SRC:?BLOCK_DIR_SRC required}"

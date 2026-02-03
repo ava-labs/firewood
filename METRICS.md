@@ -342,7 +342,7 @@ sequenceDiagram
 The CLI commands trigger the remote workflow, wait for completion, and download the results.
 
 ```bash
-nix run ./ffi#gh -- gh auth login
+nix run ./ffi#gh -- auth login
 export GH_TOKEN=$(gh auth token)
 
 # Predefined test
