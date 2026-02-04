@@ -435,28 +435,28 @@ func TestChangeProofDiffersAfterUpdate(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	// Insert first half of data in the first batch
+	// Insert 2500 entries in the first batch
 	_, _, batch := kvForTest(10000)
 	root1, err := db.Update(batch[:2500])
 	r.NoError(err)
 
-	// Insert the rest in the second batch
+	// Insert 2500 more entries in the second batch
 	root2, err := db.Update(batch[2500:5000])
 	r.NoError(err)
 	r.NotEqual(root1, root2)
 
-	// get a proof
+	// Get a proof
 	proof1 := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 
-	// insert more data
+	// Insert more data
 	root3, err := db.Update(batch[5000:])
 	r.NoError(err)
 	r.NotEqual(root2, root3)
 
-	// get a proof again
+	// Get a proof again
 	proof2 := newSerializedChangeProof(t, db, root2, root3, nothing(), nothing(), changeProofLenUnbounded)
-	// ensure the proofs are different
+	// Ensure the proofs are different
 	r.NotEqual(proof1, proof2)
 }
 
@@ -541,7 +541,7 @@ func TestVerifyEmptyChangeProofRange(t *testing.T) {
 	}
 
 	// Create a change proof from dbA. This should create an empty changeProof because
-	// of the start and end keys.
+	// the start and end keys are both from the first insert.
 	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, startKey, endKey, 5)
 	r.NoError(err)
 
