@@ -689,7 +689,8 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 ///
 /// - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
 /// - [`VoidResult::Ok`] if the database handle was successfully closed and freed.
-/// - [`VoidResult::Err`] if the process panics while closing the database handle.
+/// - [`VoidResult::Err`] if the process panics while closing the database
+///   handle or if the background thread errored.
 ///
 /// # Safety
 ///
