@@ -17,7 +17,7 @@ use std::num::NonZero;
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use firewood_storage::logger::{trace, warn};
+use firewood_storage::logger::{error, trace, warn};
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
@@ -457,7 +457,7 @@ impl Drop for RevisionManager {
     fn drop(&mut self) {
         // Best-effort graceful shutdown - users are suggested to call `close()` instead.
         if let Err(e) = self.close() {
-            warn!("Error during RevisionManager shutdown: {e}");
+            error!("Error during RevisionManager shutdown: {e}");
         }
     }
 }
