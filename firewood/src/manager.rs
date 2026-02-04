@@ -453,6 +453,13 @@ impl RevisionManager {
         })
     }
 
+    /// Checks if the `PersistWorker` has errored.
+    pub fn check_persist_error(&self) -> Result<(), RevisionManagerError> {
+        self.persist_worker
+            .check_error()
+            .map_err(RevisionManagerError::PersistError)
+    }
+
     /// Closes the revision manager gracefully.
     ///
     /// This method shuts down the background persistence worker. If not called
