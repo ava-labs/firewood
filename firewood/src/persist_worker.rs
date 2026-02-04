@@ -135,40 +135,16 @@ impl PersistWorker {
     ///
     /// This method is idempotent for compatibility with `drop` (as `drop` is
     /// called after this function).
-    pub(crate) fn close(&self, latest_committed: CommittedRevision) -> Result<(), PersistError> {
+    pub(crate) fn close(&self) -> Result<(), PersistError> {
         // Signal to the background thread to exit.
         // We ignore any errors here as the background thread may already have exited.
         let _ = self.sender.send(PersistMessage::Shutdown);
 
         // Wait for the background thread to finish and return its result.
         match self.handle.lock().take() {
-            Some(handle) => handle.join().unwrap_or(Err(PersistError::ThreadPanic))?,
-            None => self.check_error()?,
+            Some(handle) => handle.join().unwrap_or(Err(PersistError::ThreadPanic)),
+            None => self.check_error(),
         }
-
-        let has_unpersisted = latest_committed
-            .root_as_maybe_persisted_node()
-            .is_some_and(|node| node.unpersisted().is_some());
-
-        if has_unpersisted {
-            let mut header = self.shared.header.lock();
-            latest_committed
-                .persist(&mut header)
-                .map_err(|e| PersistError::FileIo(e.into()))?;
-
-            // Save to root store if configured
-            if let Some(store) = &self.shared.root_store
-                && let (Some(hash), Some(address)) = (
-                    latest_committed.root_hash(),
-                    latest_committed.root_address(),
-                )
-            {
-                store
-                    .add_root(&hash, &address)
-                    .map_err(|e| PersistError::RootStore(e.into()))?;
-            }
-        }
-        Ok(())
     }
 
     /// Wait until all pending commits have been persisted.

@@ -460,7 +460,7 @@ impl RevisionManager {
     /// errors.
     pub fn close(&self) -> Result<(), RevisionManagerError> {
         self.persist_worker
-            .close(self.current_revision())
+            .close()
             .map_err(RevisionManagerError::PersistError)
     }
 }
