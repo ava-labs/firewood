@@ -1138,7 +1138,7 @@ mod test {
         proposal.commit().unwrap();
 
         // Wait for background persistence to complete
-        db.manager.wait_persisted();
+        db.wait_persisted();
 
         let root_address = db
             .revision(root_hash.clone())
