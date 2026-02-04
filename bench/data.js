@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1770153929400,
+  "lastUpdate": 1770191059419,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -46,6 +46,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 99.52880453102385,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "21dc752a25dc41af7eba78bfa335e1a90637289f",
+          "message": "fix(ffi): force correct alignment on certain c structs (#1652)\n\n## Why this should be merged\n\nWhen enabling race detection in Go, it alerted us that Go was producing\nstructs that were not properly aligned. This was due to the union part\nbeing reduced down to a byte array which always has an alignment of 1.\nThe enum part had an automatic alignment of 4 bytes, resulting in a\n4-byte padding between the tag and the union as well as a 4-byte\nalignment when the struct was created in Go. The 4-byte alignment is\nincorrect on 64-bit platforms and should be pointer-width alignment for\nthe tagged enums that contain pointers.\n\n## How this works\n\nThis resolves the issue by explicitly setting the alignment of the tag\npart of the tagged union structs to be pointer-width aligned. This is\nflexible enough to handle both 32-bit and 64-bit architectures as well\nas any future 128-bit architectures. I included all enums with pointers\nin their bodies and not just the ones created in Go for consistency and\nto reduce ambiguity.\n\n## How this was tested\n\nRace detection was enabled in the tests, which no longer fails.\n\nCloses: #1651",
+          "timestamp": "2026-02-03T21:33:35Z",
+          "url": "https://github.com/ava-labs/firewood/commit/21dc752a25dc41af7eba78bfa335e1a90637289f"
+        },
+        "date": 1770191058584,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 143.20966530170773,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6982.768920611919,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 113.61592016820593,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6774.77296312794,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 90.95787458298983,
             "unit": "block_accept_ms/ggas"
           }
         ]
