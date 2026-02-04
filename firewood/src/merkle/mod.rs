@@ -506,9 +506,7 @@ impl<T: HashedNodeReader> Merkle<T> {
         )?
         .map_while(|op| match op {
             Ok(op) => {
-                if iter_stop_key.is_empty() {
-                    Some(Ok(op))
-                } else if op.key() <= &iter_stop_key {
+                if iter_stop_key.is_empty() || op.key() <= &iter_stop_key {
                     Some(Ok(op))
                 } else {
                     None
