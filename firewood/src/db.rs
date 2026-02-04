@@ -240,6 +240,8 @@ impl Db {
         batch: impl IntoBatchIter,
         parent: &NodeStore<F, FileBacked>,
     ) -> Result<Proposal<'_>, api::Error> {
+        // Return immediately if the background thread is no longer running.
+        self.manager.check_persist_error()?;
         // If use_parallel is BatchSize, then perform parallel proposal creation if the batch
         // size is >= BatchSize.
         let batch = batch.into_iter();
