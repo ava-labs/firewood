@@ -705,7 +705,7 @@ pub extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidResult {
     #[cfg(feature = "block-replay")]
     let _ = replay::flush_to_disk();
 
-    invoke_with_handle(db, drop)
+    invoke_with_handle(db, |db| db.close())
 }
 
 /// Flushes buffered block replay operations to disk.
