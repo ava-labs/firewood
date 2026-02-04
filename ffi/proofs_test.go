@@ -500,15 +500,52 @@ func TestVerifyChangeProof(t *testing.T) {
 	r.NoError(err)
 	r.Equal(rootA, rootB)
 
-	// Insert more data into db1 but not db2.
+	// Insert more data into dbA but not dbB.
 	rootAUpdated, err := dbA.Update(batch[5:])
 	r.NoError(err)
 
-	// Create a change proof from db1.
+	// Create a change proof from dbA.
 	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 
-	// Verify the change proof and create a proposal on db2.
+	// Verify the change proof and create a proposal on dbB.
 	err = dbB.VerifyChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+}
+
+func TestVerifyEmptyChangeProofRange(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	// Insert some data.
+	_, _, batch := kvForTest(9)
+	rootA, err := dbA.Update(batch[:5])
+	r.NoError(err)
+	rootB, err := dbB.Update(batch[:5])
+	r.NoError(err)
+	r.Equal(rootA, rootB)
+
+	// Insert more data into dbA but not dbB.
+	rootAUpdated, err := dbA.Update(batch[5:])
+	r.NoError(err)
+
+	startKey := maybe{
+		hasValue: true,
+		value:    []byte("key0"),
+	}
+
+	endKey := maybe{
+		hasValue: true,
+		value:    []byte("key1"),
+	}
+
+	// Create a change proof from dbA. This should create an empty changeProof because
+	// of the start and end keys.
+	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, startKey, endKey, 5)
+	r.NoError(err)
+
+	// Verify the change proof and create an empty proposal on dbB.
+	err = dbB.VerifyChangeProof(changeProof, rootB, rootAUpdated, startKey, endKey, 5)
 	r.NoError(err)
 }

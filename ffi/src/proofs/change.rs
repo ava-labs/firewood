@@ -117,6 +117,9 @@ impl<'db> ChangeProofContext<'db> {
         max_length: Option<NonZeroUsize>,
     ) -> Result<(), api::Error> {
         if let Some(ref ctx) = self.verification {
+            // Checking that the saved verification context matches exactly with the
+            // current change proof context. If it does, then verification has already
+            // been completed.
             if ctx.start_root == start_root
                 && ctx.end_root == end_root
                 && ctx.start_key.as_deref() == start_key
@@ -126,14 +129,10 @@ impl<'db> ChangeProofContext<'db> {
                 // already verified with the same context
                 return Ok(());
             }
-
             return Err(api::Error::ProofError(ProofError::ValueMismatch));
         }
 
         let batch_ops = self.proof.batch_ops();
-        if batch_ops.is_empty() {
-            return Err(api::Error::ProofError(ProofError::Empty));
-        }
 
         // Check to make sure the BatchOp array size is less than or equal to `max_length`
         if let Some(max_length) = max_length
