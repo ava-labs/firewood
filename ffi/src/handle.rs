@@ -99,6 +99,9 @@ pub struct DatabaseHandleArgs<'a> {
     ///
     /// Opening returns an error if this does not match the compile-time feature.
     pub node_hash_algorithm: NodeHashAlgorithm,
+
+    /// The maximum number of uncommitted revisions that can exist at a given time.
+    pub deferred_persistence_commit_count: usize,
 }
 
 impl DatabaseHandleArgs<'_> {
@@ -157,6 +160,7 @@ impl DatabaseHandle {
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
             .root_store(args.root_store)
+            .deferred_persistence_commit_count(args.deferred_persistence_commit_count)
             .build();
 
         let path = args

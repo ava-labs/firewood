@@ -1043,6 +1043,10 @@ typedef struct DatabaseHandleArgs {
    * Opening returns an error if this does not match the compile-time feature.
    */
   enum NodeHashAlgorithm node_hash_algorithm;
+  /**
+   * The maximum number of uncommitted revisions that can exist at a given time.
+   */
+  size_t deferred_persistence_commit_count;
 } DatabaseHandleArgs;
 
 /**

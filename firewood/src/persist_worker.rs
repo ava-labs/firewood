@@ -59,13 +59,18 @@ impl PersistWorker {
     ///
     /// Returns the worker for sending messages to the background thread.
     #[allow(clippy::large_types_passed_by_value)]
-    pub(crate) fn new(header: NodeStoreHeader, root_store: Option<Arc<RootStore>>) -> Self {
+    pub(crate) fn new(
+        commit_count: usize,
+        header: NodeStoreHeader,
+        root_store: Option<Arc<RootStore>>,
+    ) -> Self {
         let (sender, receiver) = channel::unbounded();
-        let sub_interval = 1;
+        // Persist every sub_interval commits. With commit_count=1, persist every commit.
+        let sub_interval = (commit_count / 2).max(1);
 
         let shared = Arc::new(SharedState {
             error: OnceLock::new(),
-            semaphore: PersistSemaphore::new(sub_interval),
+            semaphore: PersistSemaphore::new(commit_count),
             root_store,
             header: Mutex::new(header),
         });
@@ -131,20 +136,45 @@ impl PersistWorker {
         }
     }
 
-    /// Close the persist worker.
+    /// Close the persist worker and persist `latest_committed` if it hasn't
+    /// been persisted yet.
     ///
     /// This method is idempotent for compatibility with `drop` (as `drop` is
     /// called after this function).
-    pub(crate) fn close(&self) -> Result<(), PersistError> {
+    pub(crate) fn close(&self, latest_committed: CommittedRevision) -> Result<(), PersistError> {
         // Signal to the background thread to exit.
         // We ignore any errors here as the background thread may already have exited.
         let _ = self.sender.send(PersistMessage::Shutdown);
 
         // Wait for the background thread to finish and return its result.
         match self.handle.lock().take() {
-            Some(handle) => handle.join().unwrap_or(Err(PersistError::ThreadPanic)),
-            None => self.check_error(),
+            Some(handle) => handle.join().unwrap_or(Err(PersistError::ThreadPanic))?,
+            None => self.check_error()?,
         }
+
+        let has_unpersisted = latest_committed
+            .root_as_maybe_persisted_node()
+            .is_some_and(|node| node.unpersisted().is_some());
+
+        if has_unpersisted {
+            let mut header = self.shared.header.lock();
+            latest_committed
+                .persist(&mut header)
+                .map_err(|e| PersistError::FileIo(e.into()))?;
+
+            // Save to root store if configured
+            if let Some(store) = &self.shared.root_store
+                && let (Some(hash), Some(address)) = (
+                    latest_committed.root_hash(),
+                    latest_committed.root_address(),
+                )
+            {
+                store
+                    .add_root(&hash, &address)
+                    .map_err(|e| PersistError::RootStore(e.into()))?;
+            }
+        }
+        Ok(())
     }
 
     /// Wait until all pending commits have been persisted.

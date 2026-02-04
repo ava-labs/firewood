@@ -72,6 +72,9 @@ pub struct ConfigManager {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
+    /// The maximum number of uncommitted revisions that can exist at a given time.
+    #[builder(default = 1)]
+    pub deferred_persistence_commit_count: usize,
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
@@ -196,7 +199,11 @@ impl RevisionManager {
             by_hash.insert(hash, nodestore.clone());
         }
 
-        let persist_worker = PersistWorker::new(header, root_store.clone());
+        let persist_worker = PersistWorker::new(
+            config.deferred_persistence_commit_count,
+            header,
+            root_store.clone(),
+        );
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,
@@ -461,14 +468,14 @@ impl RevisionManager {
             .map_err(RevisionManagerError::PersistError)
     }
 
-    /// Closes the revision manager gracefully.
+    /// Closes the revision manager gracefully, ensuring all data is persisted.
     ///
-    /// This method shuts down the background persistence worker. If not called
-    /// explicitly, `Drop` will attempt a best-effort shutdown but cannot report
-    /// errors.
+    /// This method shuts down the background persistence worker and persists
+    /// any remaining uncommitted data. If not called explicitly, `Drop` will
+    /// attempt a best-effort shutdown but cannot report errors.
     pub fn close(&self) -> Result<(), RevisionManagerError> {
         self.persist_worker
-            .close()
+            .close(self.current_revision())
             .map_err(RevisionManagerError::PersistError)
     }
 }
