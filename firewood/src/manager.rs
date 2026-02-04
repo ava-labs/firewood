@@ -475,7 +475,7 @@ impl RevisionManager {
     /// attempt a best-effort shutdown but cannot report errors.
     pub fn close(&self) -> Result<(), RevisionManagerError> {
         self.persist_worker
-            .close()
+            .close(self.current_revision())
             .map_err(RevisionManagerError::PersistError)
     }
 }
