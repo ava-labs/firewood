@@ -14,8 +14,8 @@ pub type OwnedKeyValueBatch = OwnedSlice<OwnedKeyValuePair>;
 ///
 /// This is a tagged union that explicitly distinguishes between different
 /// operation types instead of relying on nil vs empty pointer semantics.
-#[repr(C)]
 #[derive(Debug, Clone, Copy)]
+#[repr(C, usize)]
 pub enum BatchOp<'a> {
     /// Insert or update a key with a value.
     /// The value may be empty (zero-length).
