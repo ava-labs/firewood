@@ -447,7 +447,7 @@ impl RevisionManager {
     }
 
     /// Closes the revision manager gracefully.
-    #[allow(clippy::missing_const_for_fn)]
+    #[expect(clippy::missing_const_for_fn)]
     pub fn close(&self) -> Result<(), RevisionManagerError> {
         Ok(())
     }

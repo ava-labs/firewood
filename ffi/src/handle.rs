@@ -340,10 +340,7 @@ impl DatabaseHandle {
     }
 
     /// Closes the database gracefully.
-    ///
-    /// # Errors
-    ///
-    /// An error is returned if there was an error when closing the database.
+    #[expect(clippy::missing_errors_doc)]
     pub fn close(self) -> Result<(), api::Error> {
         self.db.close()
     }
