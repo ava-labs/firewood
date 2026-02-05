@@ -1,6 +1,45 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+//! Deferred persistence for committed revisions.
+//!
+//! This module decouples commit operations from disk I/O by offloading persistence
+//! to a background thread. Commits return immediately after updating in-memory state,
+//! while disk writes happen asynchronously.
+//!
+//! [`PersistWorker`] is the main entry point. It spawns a background thread and provides
+//! methods to send revisions for persistence, with built-in backpressure to limit
+//! the number of unpersisted commits.
+//!
+//! The diagram below shows how commits are handled under deferred persistence.
+//! The main thread validates and updates in-memory state, then hands off the
+//! committed revision to the background thread for disk I/O. A semaphore provides
+//! backpressure when the background thread falls behind.
+//!
+//!
+//! ```text
+//!   Caller             Main Thread              Background Thread        Disk
+//!     │                     │                          │                   │
+//!     │  commit()           │                          │                   │
+//!     │────────────────────>│                          │                   │
+//!     │                     │                          │                   │
+//!     │                     │ Validate proposal        │                   │
+//!     │                     │ Update in-memory state   │                   │
+//!     │                     │ Acquire semaphore permit │                   │
+//!     │                     │                          │                   │
+//!     │                     │     Persist message      │                   │
+//!     │                     │─────────────────────────>│                   │
+//!     │                     │                          │                   │
+//!     │<─ ─ ─ ─ ─ ─ ─ ─ ─ ─ │                          │  Write revision   │
+//!     │       Return        │                          │──────────────────>│
+//!     │                     │                          │                   │
+//!     │                     │                          │ Update RootStore  │
+//!     │                     │                          │──────────────────>│
+//!     │                     │                          │                   │
+//!     │                     │                          │  Release permit   │
+//!     │                     │                          │                   │
+//! ```
+
 use std::{
     num::NonZeroU64,
     sync::{Arc, OnceLock},
