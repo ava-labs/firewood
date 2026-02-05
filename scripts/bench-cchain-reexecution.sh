@@ -184,7 +184,8 @@ poll_workflow_registration() {
         # Check each candidate's inputs to find our run
         for run_id in $candidates; do
             if run_inputs_match "$run_id" "$expected_test" "$expected_config" "$expected_start" "$expected_end" "$expected_runner"; then
-                echo "$run_id"
+                # Set global to avoid $() subshell where set -e doesn't work
+                TRIGGER_RUN_ID="$run_id"
                 return 0
             fi
         done
@@ -248,7 +249,6 @@ trigger_workflow() {
     local trigger_time
     trigger_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-    # TESTING: Removed defensive check to see if set -e catches gh errors
     gh workflow run "$WORKFLOW_NAME" \
         --repo "$AVALANCHEGO_REPO" \
         --ref "$AVALANCHEGO_REF" \
@@ -262,10 +262,7 @@ wait_for_completion() {
     local run_id="$1"
     log "Waiting for run $run_id"
     log "https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
-    gh run watch "$run_id" --repo "$AVALANCHEGO_REPO" --exit-status || {
-        err "Workflow run failed or could not be watched"
-        exit 1
-    }
+    gh run watch "$run_id" --repo "$AVALANCHEGO_REPO" --exit-status
 }
 
 download_artifact() {
@@ -277,10 +274,7 @@ download_artifact() {
     gh run download "$run_id" \
         --repo "$AVALANCHEGO_REPO" \
         --pattern "benchmark-output-*" \
-        --dir "$DOWNLOAD_DIR" || {
-        err "Failed to download artifact"
-        exit 1
-    }
+        --dir "$DOWNLOAD_DIR"
     
     # Flatten: gh extracts to $DOWNLOAD_DIR/<artifact-name>/benchmark-output.json
     find "$DOWNLOAD_DIR" -name "benchmark-output.json" -type f -exec mv {} "$output_file" \;
@@ -296,18 +290,12 @@ check_status() {
     
     local status
     status=$(gh run view "$run_id" --repo "$AVALANCHEGO_REPO" --json status,conclusion \
-        --jq '.status + " (" + (.conclusion // "in progress") + ")"') || {
-        err "Failed to get run status"
-        exit 1
-    }
+        --jq '.status + " (" + (.conclusion // "in progress") + ")"') || exit 1
     echo "status: $status"
 }
 
 list_runs() {
-    gh run list --repo "$AVALANCHEGO_REPO" --workflow "$WORKFLOW_NAME" --limit 10 || {
-        err "Failed to list runs"
-        exit 1
-    }
+    gh run list --repo "$AVALANCHEGO_REPO" --workflow "$WORKFLOW_NAME" --limit 10
 }
 
 list_tests() {
@@ -320,8 +308,12 @@ cmd_trigger() {
     require_gh
     
     local test="${1:-${TEST:-}}"
-    local run_id
-    run_id=$(trigger_workflow "$test")
+    
+    # Call directly (not via $()) so set -e propagates failures properly.
+    # trigger_workflow sets TRIGGER_RUN_ID on success.
+    trigger_workflow "$test"
+    
+    local run_id="$TRIGGER_RUN_ID"
     log "Run ID: $run_id"
     
     wait_for_completion "$run_id"
