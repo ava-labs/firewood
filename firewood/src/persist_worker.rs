@@ -2,6 +2,7 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::{
+    num::NonZeroU64,
     sync::{Arc, OnceLock},
     thread::{self, JoinHandle},
 };
@@ -59,7 +60,7 @@ impl PersistWorker {
     #[allow(clippy::large_types_passed_by_value)]
     pub(crate) fn new(header: NodeStoreHeader, root_store: Option<Arc<RootStore>>) -> Self {
         let (sender, receiver) = channel::unbounded();
-        let persist_interval = 1;
+        let persist_interval = NonZeroU64::new(1).expect("should be nonzero");
 
         let shared = Arc::new(SharedState {
             error: OnceLock::new(),
@@ -72,7 +73,7 @@ impl PersistWorker {
             receiver,
             persist_interval,
             shared: shared.clone(),
-            last_persisted_commit: 0,
+            last_persisted_commit: None,
         };
 
         let handle = thread::spawn(move || persist_loop.run());
@@ -162,16 +163,16 @@ impl PersistWorker {
 /// based on how many commits were persisted in a batch.
 #[derive(Debug)]
 struct PersistSemaphore {
-    state: Mutex<usize>,
+    state: Mutex<u64>,
     condvar: Condvar,
-    max_permits: usize,
+    max_permits: NonZeroU64,
 }
 
 impl PersistSemaphore {
     /// Creates a new semaphore with `max_permits`.
-    const fn new(max_permits: usize) -> Self {
+    const fn new(max_permits: NonZeroU64) -> Self {
         Self {
-            state: Mutex::new(max_permits),
+            state: Mutex::new(max_permits.get()),
             condvar: Condvar::new(),
             max_permits,
         }
@@ -192,12 +193,11 @@ impl PersistSemaphore {
     ///
     /// The number of permits will not exceed `max_permits`.
     #[inline]
-    fn release(&self, count: usize) {
-        if count == 0 {
-            return;
-        }
+    fn release(&self, count: NonZeroU64) {
         let mut permits = self.state.lock();
-        *permits = permits.saturating_add(count).min(self.max_permits);
+        *permits = permits
+            .saturating_add(count.get())
+            .min(self.max_permits.get());
         self.condvar.notify_all();
     }
 
@@ -205,7 +205,7 @@ impl PersistSemaphore {
     #[cfg(test)]
     fn wait_all_released(&self) {
         let mut permits = self.state.lock();
-        while *permits < self.max_permits {
+        while *permits < self.max_permits.get() {
             self.condvar.wait(&mut permits);
         }
     }
@@ -230,11 +230,11 @@ struct PersistLoop {
     /// Channel for receiving messages from `PersistWorker`.
     receiver: Receiver<PersistMessage>,
     /// Persist every `persist_interval` commits.
-    persist_interval: usize,
+    persist_interval: NonZeroU64,
     /// Shared state for coordination with `PersistWorker`.
     shared: Arc<SharedState>,
     /// The commit number of the last successful persist (for calculating permits to release).
-    last_persisted_commit: usize,
+    last_persisted_commit: Option<NonZeroU64>,
 }
 
 impl PersistLoop {
@@ -248,7 +248,7 @@ impl PersistLoop {
     /// - On `Commit`: persists the revision if the number of revisions recieved
     ///   modulo `persist_interval` is zero.
     fn run(mut self) -> Result<(), PersistError> {
-        let mut num_commits = 0usize;
+        let mut num_commits = NonZeroU64::new(1).expect("should be nonzero");
 
         loop {
             // An error indicates that the channel is closed.
@@ -258,11 +258,14 @@ impl PersistLoop {
                 PersistMessage::Shutdown => return Ok(()),
                 PersistMessage::Reap(nodestore) => self.reap(nodestore)?,
                 PersistMessage::Persist(revision) => {
-                    num_commits = num_commits.wrapping_add(1);
-
-                    if num_commits.is_multiple_of(self.persist_interval) {
+                    if num_commits
+                        .get()
+                        .is_multiple_of(self.persist_interval.get())
+                    {
                         self.persist(&revision, num_commits)?;
                     }
+
+                    num_commits = num_commits.saturating_add(1);
                 }
             }
         }
@@ -272,7 +275,7 @@ impl PersistLoop {
     fn persist(
         &mut self,
         revision: &CommittedRevision,
-        num_commits: usize,
+        num_commits: NonZeroU64,
     ) -> Result<(), PersistError> {
         // Persist the revision
         let mut header = self.shared.header.lock();
@@ -306,10 +309,13 @@ impl PersistLoop {
     }
 
     /// Releases semaphore permits for commits up to `num_commits`.
-    fn release_permits(&mut self, num_commits: usize) {
-        let permits_to_release = num_commits.saturating_sub(self.last_persisted_commit);
-        self.shared.semaphore.release(permits_to_release);
-        self.last_persisted_commit = num_commits;
+    fn release_permits(&mut self, num_commits: NonZeroU64) {
+        let last = self.last_persisted_commit.map_or(0, NonZeroU64::get);
+        let permits_to_release = num_commits.get().saturating_sub(last);
+        if let Some(count) = NonZeroU64::new(permits_to_release) {
+            self.shared.semaphore.release(count);
+            self.last_persisted_commit = Some(num_commits);
+        }
     }
 
     /// Add the nodes of this revision to the free lists.
