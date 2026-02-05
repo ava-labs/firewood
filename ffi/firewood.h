@@ -1285,8 +1285,9 @@ struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *_p
  *
  * - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
  * - [`VoidResult::Ok`] if the database handle was successfully closed and freed.
- * - [`VoidResult::Err`] if the process panics while closing the database
- *   handle or if the background thread errored.
+ * - [`VoidResult::Err`] if the background persistence worker thread panics while
+ *   closing the database handle or if the background persistence worker thread
+ *   errored.
  *
  * # Safety
  *
