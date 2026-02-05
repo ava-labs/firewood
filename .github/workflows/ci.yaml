@@ -1,6 +1,7 @@
 name: ci
 
 on:
+  workflow_dispatch:  # Manual trigger for testing
   pull_request:
   push:
     branches: [main]
@@ -13,86 +14,46 @@ jobs:
   # =============================================================================
   # Shell Error Handling Verification
   # =============================================================================
-  # Purpose: Prove that if a command prints an error but script continues,
-  # the command returned exit code 0 (not a shell misconfiguration).
+  # Purpose: Test if the script fails when gh returns non-zero, without the
+  # defensive `if ! gh workflow run` check.
   #
   # Context: We observed `gh workflow run` printing HTTP 422 but the script
-  # continuing despite `set -euo pipefail`. This test verifies shell behavior.
-  #
-  # Reference: https://copdips.com/2023/11/github-actions-bash-shell--e--o-pipefail.html
+  # continuing despite `set -euo pipefail`. This test runs the actual script
+  # with the defensive check removed to see if set -e catches the error.
   # =============================================================================
   shell-error-handling:
     runs-on: ubuntu-latest
     steps:
-      - name: Check gh version
-        run: gh --version
+      - uses: actions/checkout@v4
 
-      - name: Verify shell options are enabled by default
+      - name: Show gh version and shell options
         run: |
-          echo "==> Default shell options in GitHub Actions:"
-          echo "    GitHub runs: /usr/bin/bash --noprofile --norc -e -o pipefail {0}"
+          echo "==> gh version:"
+          gh --version
           echo ""
-          echo "==> Current shell options:"
+          echo "==> Shell options:"
           set -o | grep -E "errexit|pipefail"
-          echo ""
-          echo "==> Test: Does set -e catch a failing command?"
-          # This should fail the step if errexit works
-          if bash -c 'set -e; false; echo "FAIL: errexit not working"'; then
-            echo "::error::set -e did not catch failing command"
-            exit 1
-          fi
-          echo "==> Verified: set -e catches failing commands ✓"
 
-      - name: Test gh exit code on HTTP 422 (commit SHA as ref)
-        env:
-          GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
-        run: |
-          set -uo pipefail
-          # Note: errexit deliberately OFF for this test so we can capture exit code
-          
-          echo "==> Testing gh exit code with commit SHA (triggers HTTP 422)..."
-          echo "    Command: gh workflow run with avalanchego=<commit-sha>"
-          echo ""
-          
-          # This should trigger HTTP 422: "No ref found for: <sha>"
-          exit_code=0
-          gh workflow run "C-Chain Reexecution Performance Tracking" \
-            --repo ava-labs/firewood \
-            --ref ${{ github.head_ref || github.ref_name }} \
-            -f test="firewood-101-250k" \
-            -f avalanchego="2f6b55f384af4e313ae4b2aa8a15f161552e2222" 2>&1 || exit_code=$?
-          
-          echo ""
-          echo "==> gh exit code: $exit_code"
-          
-          if [[ $exit_code -eq 0 ]]; then
-            echo "::warning::gh returned 0 despite HTTP error - this explains the mystery!"
-          else
-            echo "==> gh correctly returned non-zero exit code ✓"
-          fi
-
-      - name: Test set -e with HTTP 422 (expect failure)
-        if: always()
+      - name: Test script without defensive check (expect failure)
         continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
+          TEST: "firewood-101-250k"
+          AVALANCHEGO_REF: "2f6b55f384af4e313ae4b2aa8a15f161552e2222"
+          RUNNER: "avago-runner-i4i-2xlarge-local-ssd"
         run: |
-          set -euo pipefail
-          
-          echo "==> Testing: Does set -e catch gh HTTP 422 errors?"
-          echo "    If this step FAILS, gh correctly returned non-zero and set -e caught it."
-          echo "    If this step PASSES, gh returned 0 despite the error (the mystery!)."
+          echo "==> Running script with bad AVALANCHEGO_REF (commit SHA)..."
+          echo "    AVALANCHEGO_REF=$AVALANCHEGO_REF"
+          echo "    This should trigger HTTP 422 and fail the step."
+          echo ""
+          echo "    If this step FAILS: set -e caught the gh error ✓"
+          echo "    If this step PASSES: script continued despite error (mystery!)"
           echo ""
           
-          # This SHOULD fail the step if gh returns non-zero on HTTP 422
-          gh workflow run "C-Chain Reexecution Performance Tracking" \
-            --repo ava-labs/firewood \
-            --ref ${{ github.head_ref || github.ref_name }} \
-            -f test="firewood-101-250k" \
-            -f avalanchego="2f6b55f384af4e313ae4b2aa8a15f161552e2222"
+          ./scripts/bench-cchain-reexecution.sh trigger
           
           echo ""
-          echo "::warning::Script continued after gh HTTP 422 error - gh returned exit code 0!"
+          echo "::warning::Script completed without failing - the mystery is real!"
 
   # =============================================================================
   # Original jobs commented out for focused testing

@@ -248,13 +248,11 @@ trigger_workflow() {
     local trigger_time
     trigger_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-    if ! gh workflow run "$WORKFLOW_NAME" \
+    # TESTING: Removed defensive check to see if set -e catches gh errors
+    gh workflow run "$WORKFLOW_NAME" \
         --repo "$AVALANCHEGO_REPO" \
         --ref "$AVALANCHEGO_REF" \
-        "${args[@]}"; then
-        err "Failed to trigger workflow."
-        exit 1
-    fi
+        "${args[@]}"
     
     # Pass test/custom params to help identify our specific run among concurrent triggers
     poll_workflow_registration "$trigger_time" "$test" "$CONFIG" "${START_BLOCK:-}" "${END_BLOCK:-}" "$RUNNER"
