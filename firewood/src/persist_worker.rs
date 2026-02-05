@@ -61,18 +61,18 @@ impl PersistWorker {
     #[allow(clippy::large_types_passed_by_value)]
     pub(crate) fn new(header: NodeStoreHeader, root_store: Option<Arc<RootStore>>) -> Self {
         let (sender, receiver) = channel::unbounded();
-        let sub_interval = 1;
+        let persist_interval = 1;
 
         let shared = Arc::new(SharedState {
             error: OnceLock::new(),
-            semaphore: PersistSemaphore::new(sub_interval),
+            semaphore: PersistSemaphore::new(persist_interval),
             root_store,
             header: Mutex::new(header),
         });
 
         let persist_loop = PersistLoop {
             receiver,
-            sub_interval,
+            persist_interval,
             shared: shared.clone(),
             last_persisted_commit: 0,
         };
@@ -229,8 +229,8 @@ struct SharedState {
 struct PersistLoop {
     /// Channel for receiving messages from `PersistWorker`.
     receiver: Receiver<PersistMessage>,
-    /// Persist every `sub_interval` commits.
-    sub_interval: usize,
+    /// Persist every `persist_interval` commits.
+    persist_interval: usize,
     /// Shared state for coordination with `PersistWorker`.
     shared: Arc<SharedState>,
     /// The commit number of the last successful persist (for calculating permits to release).
@@ -246,7 +246,7 @@ impl PersistLoop {
     ///   If persisted, the revision's nodes are added to the free lists only if
     ///   not running in archival mode.
     /// - On `Commit`: persists the revision if the number of revisions recieved
-    ///   modulo `sub_interval` is zero.
+    ///   modulo `persist_interval` is zero.
     fn run(mut self) -> Result<(), PersistError> {
         let mut num_commits = 0usize;
 
@@ -260,7 +260,7 @@ impl PersistLoop {
                 PersistMessage::Persist(revision) => {
                     num_commits = num_commits.wrapping_add(1);
 
-                    if num_commits.is_multiple_of(self.sub_interval) {
+                    if num_commits.is_multiple_of(self.persist_interval) {
                         self.persist(&revision, num_commits)?;
                     }
                 }
