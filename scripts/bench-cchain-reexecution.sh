@@ -60,7 +60,6 @@ WORKFLOW_NAME="C-Chain Re-Execution Benchmark w/ Container"
 
 : "${FIREWOOD_REF:=}"
 : "${AVALANCHEGO_REF:=master}"
-
 : "${RUNNER:=avalanche-avalanchego-runner-2ti}"
 : "${LIBEVM_REF:=}"
 : "${TIMEOUT_MINUTES:=}"
