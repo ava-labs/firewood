@@ -86,7 +86,7 @@ impl PersistWorker {
         }
     }
 
-    /// Sends `committed` to the background thread for persistence. This calls
+    /// Sends `committed` to the background thread for persistence. This call
     /// blocks if the limit of unpersisted commits has been reached.
     pub(crate) fn persist(&self, committed: CommittedRevision) -> Result<(), PersistError> {
         self.shared.semaphore.acquire();
