@@ -1,7 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use derive_where::derive_where;
 use std::{
     sync::{Arc, OnceLock},
     thread::{self, JoinHandle},
@@ -41,8 +40,7 @@ enum PersistMessage {
 }
 
 /// Handle for managing the background persistence thread.
-#[derive_where(Debug)]
-#[derive_where(skip_inner)]
+#[derive(Debug)]
 pub(crate) struct PersistWorker {
     /// The background thread responsible for persisting commits async.
     handle: Mutex<Option<JoinHandle<Result<(), PersistError>>>>,
@@ -162,6 +160,7 @@ impl PersistWorker {
 ///
 /// This design allows the persist loop to release multiple permits at once
 /// based on how many commits were persisted in a batch.
+#[derive(Debug)]
 struct PersistSemaphore {
     state: Mutex<usize>,
     condvar: Condvar,
@@ -213,6 +212,7 @@ impl PersistSemaphore {
 }
 
 /// Shared state between `PersistWorker` and `PersistLoop` for coordination.
+#[derive(Debug)]
 struct SharedState {
     /// Shared error state that can be checked without joining the thread.
     error: OnceLock<PersistError>,
