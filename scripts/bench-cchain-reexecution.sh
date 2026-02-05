@@ -60,6 +60,7 @@ WORKFLOW_NAME="C-Chain Re-Execution Benchmark w/ Container"
 
 : "${FIREWOOD_REF:=}"
 : "${AVALANCHEGO_REF:=master}"
+
 : "${RUNNER:=avalanche-avalanchego-runner-2ti}"
 : "${LIBEVM_REF:=}"
 : "${TIMEOUT_MINUTES:=}"
@@ -248,10 +249,13 @@ trigger_workflow() {
     local trigger_time
     trigger_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-    gh workflow run "$WORKFLOW_NAME" \
+    if ! gh workflow run "$WORKFLOW_NAME" \
         --repo "$AVALANCHEGO_REPO" \
         --ref "$AVALANCHEGO_REF" \
-        "${args[@]}"
+        "${args[@]}"; then
+        err "Failed to trigger workflow."
+        exit 1
+    fi
     
     # Pass test/custom params to help identify our specific run among concurrent triggers
     poll_workflow_registration "$trigger_time" "$test" "$CONFIG" "${START_BLOCK:-}" "${END_BLOCK:-}" "$RUNNER"
@@ -261,7 +265,10 @@ wait_for_completion() {
     local run_id="$1"
     log "Waiting for run $run_id"
     log "https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
-    gh run watch "$run_id" --repo "$AVALANCHEGO_REPO" --exit-status
+    gh run watch "$run_id" --repo "$AVALANCHEGO_REPO" --exit-status || {
+        err "Workflow run failed or could not be watched"
+        exit 1
+    }
 }
 
 download_artifact() {
@@ -273,7 +280,10 @@ download_artifact() {
     gh run download "$run_id" \
         --repo "$AVALANCHEGO_REPO" \
         --pattern "benchmark-output-*" \
-        --dir "$DOWNLOAD_DIR"
+        --dir "$DOWNLOAD_DIR" || {
+        err "Failed to download artifact"
+        exit 1
+    }
     
     # Flatten: gh extracts to $DOWNLOAD_DIR/<artifact-name>/benchmark-output.json
     find "$DOWNLOAD_DIR" -name "benchmark-output.json" -type f -exec mv {} "$output_file" \;
@@ -289,12 +299,18 @@ check_status() {
     
     local status
     status=$(gh run view "$run_id" --repo "$AVALANCHEGO_REPO" --json status,conclusion \
-        --jq '.status + " (" + (.conclusion // "in progress") + ")"')
+        --jq '.status + " (" + (.conclusion // "in progress") + ")"') || {
+        err "Failed to get run status"
+        exit 1
+    }
     echo "status: $status"
 }
 
 list_runs() {
-    gh run list --repo "$AVALANCHEGO_REPO" --workflow "$WORKFLOW_NAME" --limit 10
+    gh run list --repo "$AVALANCHEGO_REPO" --workflow "$WORKFLOW_NAME" --limit 10 || {
+        err "Failed to list runs"
+        exit 1
+    }
 }
 
 list_tests() {
