@@ -68,6 +68,9 @@ WORKFLOW_NAME="C-Chain Re-Execution Benchmark w/ Container"
 
 # Polling config for workflow registration. gh workflow run doesn't return
 # the run ID, so we poll until the run appears. 180s accommodates busy runners.
+#
+# TRIGGER_RUN_ID is global and ensuring gh errors propagate and fail the script.
+TRIGGER_RUN_ID=""
 POLL_INTERVAL=1
 POLL_TIMEOUT=180
 
@@ -117,7 +120,8 @@ validate_ref() {
 run_inputs_match() {
     local run_id="$1" expected_test="$2" expected_config="$3" expected_start="$4" expected_end="$5" expected_runner="$6"
     
-    # Get the c-chain-reexecution job name (second job, after define-matrix)
+    # Get the c-chain-reexecution job name (second job, after define-matrix).
+    # If gh fails (e.g., run doesn't exist yet), return 1 to try the next candidate.
     local job_name
     job_name=$(gh run view "$run_id" --repo "$AVALANCHEGO_REPO" --json jobs \
         --jq '.jobs[] | select(.name | startswith("c-chain-reexecution")) | .name // ""' 2>/dev/null) || return 1
@@ -131,10 +135,12 @@ run_inputs_match() {
         return 1
     fi
     
-    # For custom mode, check that our params appear in job name
-    # Job name: "c-chain-reexecution (1, 100, cchain-mainnet-blocks-200-ldb, firewood, runner...)"
+    # For custom mode, check that our params appear in job name.
+    # Job name format from matrix: "c-chain-reexecution (start, end, block-dir, current-state-dir, config, runner)"
+    # Example: "c-chain-reexecution (10000001, 20000000, cchain-mainnet-blocks-50m-ldb, cchain-current-state-firewood-10m, firewood, avago-runner-...)"
     local match=true
     [[ -n "$expected_start" && "$job_name" != *"$expected_start"* ]] && match=false
+    [[ -n "$expected_end" && "$job_name" != *"$expected_end"* ]] && match=false
     [[ -n "$expected_config" && "$job_name" != *"$expected_config"* ]] && match=false
     [[ -n "$expected_runner" && "$job_name" != *"$expected_runner"* ]] && match=false
     
@@ -161,6 +167,8 @@ poll_workflow_registration() {
         err "Cannot list runs in $AVALANCHEGO_REPO. Check token permissions."; exit 1
     fi
     
+    local last_error=""
+    local consecutive_failures=0
     for ((i=0; i<POLL_TIMEOUT; i++)); do
         sleep "$POLL_INTERVAL"
         local raw_output
@@ -169,9 +177,16 @@ poll_workflow_registration() {
             --workflow "$WORKFLOW_NAME" \
             --limit 10 \
             --json databaseId,createdAt 2>&1) || {
-            log "gh run list failed: $raw_output"
+            last_error="$raw_output"
+            ((consecutive_failures++))
+            log "gh run list failed ($consecutive_failures/5): $raw_output"
+            if ((consecutive_failures >= 5)); then
+                err "gh run list failed 5 times consecutively: $last_error"
+                exit 1
+            fi
             continue
         }
+        consecutive_failures=0  # Reset on success
         
         # Debug: show first result on first iteration
         ((i == 0)) && log "Latest run: $(echo "$raw_output" | jq -c '.[0] // "none"')"
@@ -179,12 +194,11 @@ poll_workflow_registration() {
         # Get candidate runs (created after trigger_time), oldest first
         local candidates
         candidates=$(echo "$raw_output" | jq -r --arg t "$trigger_time" \
-            '[.[] | select(.createdAt > $t)] | reverse | .[].databaseId')
+            '[.[] | select(.createdAt > $t)] | reverse | .[].databaseId') || continue
         
         # Check each candidate's inputs to find our run
         for run_id in $candidates; do
             if run_inputs_match "$run_id" "$expected_test" "$expected_config" "$expected_start" "$expected_end" "$expected_runner"; then
-                # Set global to avoid $() subshell where set -e doesn't work
                 TRIGGER_RUN_ID="$run_id"
                 return 0
             fi
@@ -194,7 +208,10 @@ poll_workflow_registration() {
         ((i % 10 == 0)) && ((i > 0)) && log "Polling (${i}s)"
     done
     
-    err "Workflow not found after ${POLL_TIMEOUT}s. The workflow may have been triggered but couldn't be detected. Check: https://github.com/$AVALANCHEGO_REPO/actions/workflows"; exit 1
+    local msg="Workflow not found after ${POLL_TIMEOUT}s."
+    [[ -n "$last_error" ]] && msg+=" Last error: $last_error"
+    msg+=" Check: https://github.com/$AVALANCHEGO_REPO/actions/workflows"
+    err "$msg"; exit 1
 }
 
 trigger_workflow() {
@@ -287,11 +304,9 @@ download_artifact() {
 check_status() {
     local run_id="$1"
     echo "https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
-    
-    local status
-    status=$(gh run view "$run_id" --repo "$AVALANCHEGO_REPO" --json status,conclusion \
-        --jq '.status + " (" + (.conclusion // "in progress") + ")"') || exit 1
-    echo "status: $status"
+    echo -n "status: "
+    gh run view "$run_id" --repo "$AVALANCHEGO_REPO" --json status,conclusion \
+        --jq '.status + " (" + (.conclusion // "in progress") + ")"'
 }
 
 list_runs() {
@@ -309,10 +324,12 @@ cmd_trigger() {
     
     local test="${1:-${TEST:-}}"
     
-    # Call directly (not via $()) so set -e propagates failures properly.
-    # trigger_workflow sets TRIGGER_RUN_ID on success.
-    trigger_workflow "$test"
+    trigger_workflow "$test"  # Sets TRIGGER_RUN_ID on success
     
+    if [[ -z "$TRIGGER_RUN_ID" ]]; then
+        err "No run ID returned"
+        exit 1
+    fi
     local run_id="$TRIGGER_RUN_ID"
     log "Run ID: $run_id"
     
