@@ -343,8 +343,8 @@ impl DatabaseHandle {
     ///
     /// # Errors
     ///
-    /// An error is returned if the background thread failed to return or if
-    /// the background thread encountered an error during execution.
+    /// An error is returned if the persistence background thread panicked or
+    /// errored during execution.
     pub fn close(self) -> Result<(), api::Error> {
         self.db.close()
     }

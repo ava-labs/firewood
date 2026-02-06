@@ -23,7 +23,7 @@
 //!    participant Main as Main Thread
 //!    participant BG as Background Thread
 //!    participant Disk
-//! 
+//!
 //!    Caller->>Main: commit(proposal)
 //!    Main->>Main: Validate proposal
 //!    Main->>Main: Update in-memory state
