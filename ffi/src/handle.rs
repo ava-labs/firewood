@@ -340,7 +340,11 @@ impl DatabaseHandle {
     }
 
     /// Closes the database gracefully.
-    #[expect(clippy::missing_errors_doc)]
+    ///
+    /// # Errors
+    ///
+    /// An error is returned if the persistence background thread panicked or
+    /// errored during execution.
     pub fn close(self) -> Result<(), api::Error> {
         self.db.close()
     }
