@@ -38,6 +38,7 @@
 
 use std::{
     num::NonZeroU64,
+    panic::resume_unwind,
     sync::{Arc, OnceLock},
     thread::{self, JoinHandle},
 };
@@ -59,9 +60,7 @@ pub enum PersistError {
     FileIo(#[from] Arc<FileIoError>),
     #[error("RootStore error during persistence: {0}")]
     RootStore(#[source] Arc<dyn std::error::Error + Send + Sync>),
-    #[error("Background thread panicked")]
-    ThreadPanic,
-    #[error("Failed to send message to background thread: channel disconnected")]
+    #[error("Failed to send message after background thread channel disconnected")]
     ChannelDisconnected,
 }
 
@@ -130,7 +129,7 @@ impl PersistWorker {
 
         self.sender
             .send(PersistMessage::Persist(committed))
-            .map_err(|_| PersistError::ChannelDisconnected)
+            .map_err(|_| self.resolve_send_error())
     }
 
     /// Sends `nodestore` to the background thread for reaping if persisted and
@@ -146,7 +145,7 @@ impl PersistWorker {
         if is_persisted && self.shared.root_store.is_none() {
             self.sender
                 .send(PersistMessage::Reap(nodestore))
-                .map_err(|_| PersistError::ChannelDisconnected)?;
+                .map_err(|_| self.resolve_send_error())?;
         }
 
         Ok(())
@@ -174,11 +173,41 @@ impl PersistWorker {
         // We ignore any errors here as the background thread may already have exited.
         let _ = self.sender.send(PersistMessage::Shutdown);
 
-        // Wait for the background thread to finish and return its result.
-        match self.handle.lock().take() {
-            Some(handle) => handle.join().unwrap_or(Err(PersistError::ThreadPanic)),
-            None => self.check_error(),
+        self.join_handle();
+        self.check_error()
+    }
+
+    /// Joins the background thread if the handle is still available.
+    ///
+    /// This is a no-op if the handle was already taken (e.g., by a prior call
+    /// to `close()`), which guarantees idempotency.
+    ///
+    /// # Panics
+    ///
+    /// Propagates the panic if the background thread panicked.
+    fn join_handle(&self) {
+        if let Some(handle) = self.handle.lock().take()
+            && let Err(payload) = handle.join()
+        {
+            resume_unwind(payload);
         }
+    }
+
+    /// Joins the background thread and returns the error that caused it to exit.
+    ///
+    /// Returns the stored error if one was set, or
+    /// `PersistError::ChannelDisconnected` as a fallback if the thread exited
+    /// cleanly without storing an error (e.g., `persist()` or `reap()` called
+    /// after `close()`).
+    ///
+    /// # Panics
+    ///
+    /// Propagates the panic if the background thread panicked.
+    fn resolve_send_error(&self) -> PersistError {
+        self.join_handle();
+        self.check_error()
+            .err()
+            .unwrap_or(PersistError::ChannelDisconnected)
     }
 
     /// Wait until all pending commits have been persisted.
