@@ -99,7 +99,7 @@ impl PersistWorker {
 
         let shared = Arc::new(SharedState {
             error: OnceLock::new(),
-            semaphore: PersistSemaphore::new(persist_interval),
+            commit_throttle: PersistSemaphore::new(persist_interval),
             root_store,
             header: Mutex::new(header),
         });
@@ -123,7 +123,7 @@ impl PersistWorker {
     /// Sends `committed` to the background thread for persistence. This call
     /// blocks if the limit of unpersisted commits has been reached.
     pub(crate) fn persist(&self, committed: CommittedRevision) -> Result<(), PersistError> {
-        self.shared.semaphore.acquire();
+        self.shared.commit_throttle.acquire();
 
         // Check for errors after potentially blocking
         self.check_error()?;
@@ -184,7 +184,7 @@ impl PersistWorker {
     /// Wait until all pending commits have been persisted.
     #[cfg(test)]
     pub(crate) fn wait_persisted(&self) {
-        self.shared.semaphore.wait_all_released();
+        self.shared.commit_throttle.wait_all_released();
     }
 }
 
@@ -252,7 +252,7 @@ struct SharedState {
     /// Shared error state that can be checked without joining the thread.
     error: OnceLock<PersistError>,
     /// Semaphore for limiting the number of unpersisted commits.
-    semaphore: PersistSemaphore,
+    commit_throttle: PersistSemaphore,
     /// Persisted metadata for the database.
     /// Updated on persists or when revisions are reaped.
     header: Mutex<NodeStoreHeader>,
@@ -348,7 +348,7 @@ impl PersistLoop {
         let last = self.last_persisted_commit.map_or(0, NonZeroU64::get);
         let permits_to_release = num_commits.get().saturating_sub(last);
         if let Some(count) = NonZeroU64::new(permits_to_release) {
-            self.shared.semaphore.release(count);
+            self.shared.commit_throttle.release(count);
             self.last_persisted_commit = Some(num_commits);
         }
     }
