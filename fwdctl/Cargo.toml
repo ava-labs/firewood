@@ -37,6 +37,20 @@ csv = "1.4.0"
 indicatif = "0.18.3"
 askama = "0.15.1"
 num-format = "0.4.4"
+serde = { version = "1.0.213", features = ["derive"] }
+serde_json = "1.0.135"
+serde_yaml = "0.9"
+thiserror = "2.0"
+# AWS SDK dependencies
+aws-config = "1.0"
+aws-sdk-ec2 = "1.0"
+aws-sdk-ssm = "1.0"
+aws-smithy-runtime-api = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+base64 = "0.22"
+rand.workspace = true
+dirs = "6.0"
+aws-sdk-sts = "1.96.0"
 
 [features]
 ethhash = ["firewood/ethhash"]

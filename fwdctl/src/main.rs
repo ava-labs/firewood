@@ -15,6 +15,7 @@ pub mod dump;
 pub mod get;
 pub mod graph;
 pub mod insert;
+pub mod launch;
 pub mod replay;
 pub mod root;
 
@@ -109,6 +110,8 @@ enum Commands {
     Check(check::Options),
     /// Replay recorded operations from a log file
     Replay(replay::Options),
+    /// Launch AWS instance for benchmarking
+    Launch(launch::Options),
 }
 
 fn main() -> Result<(), api::Error> {
@@ -128,6 +131,7 @@ fn main() -> Result<(), api::Error> {
         Commands::Graph(opts) => graph::run(opts),
         Commands::Check(opts) => check::run(opts),
         Commands::Replay(opts) => replay::run(opts),
+        Commands::Launch(opts) => launch::run(opts),
     }
 }
 
