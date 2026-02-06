@@ -239,8 +239,20 @@ impl RevisionManager {
     #[fastrace::trace(short_name = true)]
     #[crate::metrics("proposal.commit", "proposal commit to storage")]
     pub fn commit(&self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
+        // Hold a write lock on `in_memory_revisions` for the duration of the
+        // critical section (steps 1-5). This is necessary because:
+        // 1. Without the lock, two proposals with the same parent could pass the
+        //    commit check simultaneously, allowing both to commit.
+        // 2. New proposals rely on the latest committed revision via
+        //    `current_revision()`, which takes a read lock on `in_memory_revisions`.
+        //    The write lock here prevents proposals from being created against
+        //    an older revision while a newer revision is mid-commit.
+        let mut in_memory_revisions = self.in_memory_revisions.write();
+
         // 1. Commit check
-        let current_revision = self.current_revision();
+        let current_revision = in_memory_revisions
+            .back()
+            .expect("there is always one revision");
         if !proposal.parent_hash_is(current_revision.root_hash()) {
             return Err(RevisionManagerError::NotLatest {
                 provided: proposal.root_hash(),
@@ -258,12 +270,8 @@ impl RevisionManager {
         // If `RootStore` does not exist, add the oldest revision's nodes to the free list.
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
-        while self.in_memory_revisions.read().len() >= self.max_revisions {
-            let oldest = self
-                .in_memory_revisions
-                .write()
-                .pop_front()
-                .expect("must be present");
+        while in_memory_revisions.len() >= self.max_revisions {
+            let oldest = in_memory_revisions.pop_front().expect("must be present");
             let oldest_hash = oldest.root_hash().or_default_root_hash();
             if let Some(ref hash) = oldest_hash {
                 self.by_hash.write().remove(hash);
@@ -277,14 +285,14 @@ impl RevisionManager {
                     Ok(oldest) => oldest.reap_deleted(&mut header)?,
                     Err(original) => {
                         warn!("Oldest revision could not be reaped; still referenced");
-                        self.in_memory_revisions.write().push_front(original);
+                        in_memory_revisions.push_front(original);
                         break;
                     }
                 }
             }
             firewood_set!(
                 crate::registry::ACTIVE_REVISIONS,
-                self.in_memory_revisions.read().len() as f64
+                in_memory_revisions.len() as f64
             );
             firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions as f64);
         }
@@ -306,9 +314,7 @@ impl RevisionManager {
         // The `view()` method relies on this ordering - it checks `proposals` first,
         // then `by_hash`, ensuring the revision is always findable during the transition.
         let committed: CommittedRevision = committed.into();
-        self.in_memory_revisions
-            .write()
-            .push_back(committed.clone());
+        in_memory_revisions.push_back(committed.clone());
         if let Some(hash) = committed.root_hash().or_default_root_hash() {
             self.by_hash.write().insert(hash, committed.clone());
         }
@@ -316,6 +322,10 @@ impl RevisionManager {
         // At this point, we can release the lock on the header as the header
         // and the last committed revision are up-to-date.
         drop(header);
+
+        // At this point, we can release the lock on the queue of in-memory
+        // revisions as we've now set the new latest committed revision.
+        drop(in_memory_revisions);
 
         // 6. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
