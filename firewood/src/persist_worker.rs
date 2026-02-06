@@ -17,27 +17,23 @@
 //! backpressure when the background thread falls behind.
 //!
 //!
-//! ```text
-//!   Caller             Main Thread              Background Thread        Disk
-//!     │                     │                          │                   │
-//!     │  commit()           │                          │                   │
-//!     │────────────────────>│                          │                   │
-//!     │                     │                          │                   │
-//!     │                     │ Validate proposal        │                   │
-//!     │                     │ Update in-memory state   │                   │
-//!     │                     │ Acquire semaphore permit │                   │
-//!     │                     │                          │                   │
-//!     │                     │     Persist message      │                   │
-//!     │                     │─────────────────────────>│                   │
-//!     │                     │                          │                   │
-//!     │<─ ─ ─ ─ ─ ─ ─ ─ ─ ─ │                          │  Write revision   │
-//!     │       Return        │                          │──────────────────>│
-//!     │                     │                          │                   │
-//!     │                     │                          │ Update RootStore  │
-//!     │                     │                          │──────────────────>│
-//!     │                     │                          │                   │
-//!     │                     │                          │  Release permit   │
-//!     │                     │                          │                   │
+//! ```mermaid
+//! sequenceDiagram
+//!    participant Caller
+//!    participant Main as Main Thread
+//!    participant BG as Background Thread
+//!    participant Disk
+//! 
+//!    Caller->>Main: commit(proposal)
+//!    Main->>Main: Validate proposal
+//!    Main->>Main: Update in-memory state
+//!    Main->>Main: Acquire semaphore permit
+//!
+//!    Main->>BG: Send Persist message
+//!    Main-->>Caller: Return
+//!    BG->>Disk: Write revision
+//!    BG->>Disk: Update RootStore
+//!    BG->>BG: Release semaphore permit
 //! ```
 
 use std::{
