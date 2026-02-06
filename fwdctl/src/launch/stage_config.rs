@@ -46,7 +46,7 @@ pub struct StageConfig {
     pub scenarios: HashMap<String, ScenarioDefinition>,
 }
 
-pub const DEFAULT_SCENARIO: &str = "default";
+pub const DEFAULT_SCENARIO: &str = "reexecute";
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct SharedStage {

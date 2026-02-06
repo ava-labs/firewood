@@ -141,9 +141,12 @@ impl CloudInitContext {
     }
 
     fn build_runcmd(&self) -> Vec<String> {
-        let Ok(stages) = self.config.process(&self.template_ctx, DEFAULT_SCENARIO) else {
-            log::error!("Failed to process stage config");
-            return Vec::new();
+        let stages = match self.config.process(&self.template_ctx, DEFAULT_SCENARIO) {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!("Failed to process stage config: {e}");
+                return Vec::new();
+            }
         };
         let cmds = stages
             .into_iter()
