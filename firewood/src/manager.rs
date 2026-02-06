@@ -245,8 +245,8 @@ impl RevisionManager {
         //    commit check simultaneously, allowing both to commit.
         // 2. New proposals rely on the latest committed revision via
         //    `current_revision()`, which takes a read lock on `in_memory_revisions`.
-        //    The write lock here prevents proposals from being created against a
-        //    revision that is mid-commit, which would be a logical race.
+        //    The write lock here prevents proposals from being created against
+        //    an older revision while a newer revision is mid-commit.
         let mut in_memory_revisions = self.in_memory_revisions.write();
 
         // 1. Commit check
