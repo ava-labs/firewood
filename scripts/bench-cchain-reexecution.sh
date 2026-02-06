@@ -275,11 +275,60 @@ trigger_workflow() {
     poll_workflow_registration "$trigger_time" "$test" "$CONFIG" "${START_BLOCK:-}" "${END_BLOCK:-}" "$RUNNER"
 }
 
+# Wait for workflow run to complete with retry and fallback.
+# GitHub's API can return transient 502/503 errors during long-running jobs.
+# We retry gh run watch with exponential backoff, then fall back to polling
+# gh run view for final status. This prevents false failures when the actual
+# benchmark succeeds but API monitoring fails.
 wait_for_completion() {
     local run_id="$1"
     log "Waiting for run $run_id"
     log "https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
-    gh run watch "$run_id" --repo "$AVALANCHEGO_REPO" --exit-status
+    
+    # Retry gh run watch with exponential backoff on transient API errors
+    local max_retries=3
+    local delay=5
+    for ((attempt=1; attempt<=max_retries; attempt++)); do
+        if gh run watch "$run_id" --repo "$AVALANCHEGO_REPO" --exit-status; then
+            return 0
+        fi
+        local exit_code=$?
+        
+        if ((attempt < max_retries)); then
+            log "gh run watch failed (attempt $attempt/$max_retries), retrying in ${delay}s..."
+            sleep "$delay"
+            delay=$((delay * 2))
+        fi
+    done
+    
+    # Fallback: poll gh run view for final status
+    log "gh run watch exhausted retries, checking final status..."
+    local conclusion
+    for ((i=0; i<10; i++)); do
+        conclusion=$(gh run view "$run_id" --repo "$AVALANCHEGO_REPO" --json status,conclusion \
+            --jq 'if .status == "completed" then .conclusion else "pending" end') || {
+            sleep 5
+            continue
+        }
+        
+        case "$conclusion" in
+            success)
+                log "Run completed successfully"
+                return 0
+                ;;
+            pending)
+                log "Run still in progress, waiting..."
+                sleep 30
+                ;;
+            *)
+                err "Run failed with conclusion: $conclusion"
+                return 1
+                ;;
+        esac
+    done
+    
+    err "Could not determine run status after retries"
+    return 1
 }
 
 download_artifact() {
