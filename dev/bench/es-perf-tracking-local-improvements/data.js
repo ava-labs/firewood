@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1770323044273,
+  "lastUpdate": 1770377924916,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -46,6 +46,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[101,250000]-Config-firewood-Runner-avalanche-avalanchego-runner-2ti - block_accept_ms/ggas",
             "value": 733.2799066468216,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Elvis S.",
+            "username": "Elvis339",
+            "email": "elvissabanovic3@gmail.com"
+          },
+          "committer": {
+            "name": "Elvis S.",
+            "username": "Elvis339",
+            "email": "elvissabanovic3@gmail.com"
+          },
+          "id": "e532416686b446309fb4dfbe5b93cace081df5ee",
+          "message": "Merge branch 'es/perf-tracking-local-improvements' of https://github.com/ava-labs/firewood into es/perf-tracking-local-improvements",
+          "timestamp": "2026-02-06T11:25:29Z",
+          "url": "https://github.com/ava-labs/firewood/commit/e532416686b446309fb4dfbe5b93cace081df5ee"
+        },
+        "date": 1770377924474,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[101,250000]-Config-firewood-Runner-avalanche-avalanchego-runner-2ti - mgas/s",
+            "value": 116.4930351488261,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[101,250000]-Config-firewood-Runner-avalanche-avalanchego-runner-2ti - ms/ggas",
+            "value": 8584.204186305611,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[101,250000]-Config-firewood-Runner-avalanche-avalanchego-runner-2ti - block_parse_ms/ggas",
+            "value": 351.04193410137486,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[101,250000]-Config-firewood-Runner-avalanche-avalanchego-runner-2ti - block_verify_ms/ggas",
+            "value": 7578.075833990075,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[101,250000]-Config-firewood-Runner-avalanche-avalanchego-runner-2ti - block_accept_ms/ggas",
+            "value": 634.0727977729334,
             "unit": "block_accept_ms/ggas"
           }
         ]
