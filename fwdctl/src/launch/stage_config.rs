@@ -100,29 +100,11 @@ pub struct StageOverride {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct UserDefinition {
     pub name: String,
-    #[serde(default = "default_groups")]
     pub groups: String,
-    #[serde(default = "default_shell")]
     pub shell: String,
-    #[serde(default = "default_sudo")]
     pub sudo: String,
-    #[serde(default)]
     pub ssh_authorized_keys: Vec<String>,
-    #[serde(default = "default_lock_passwd")]
     pub lock_passwd: bool,
-}
-
-fn default_groups() -> String {
-    "users, adm, sudo".into()
-}
-fn default_shell() -> String {
-    "/usr/bin/bash".into()
-}
-fn default_sudo() -> String {
-    "ALL=(ALL) NOPASSWD:ALL".into()
-}
-fn default_lock_passwd() -> bool {
-    true
 }
 
 /// A fully resolved stage ready for processing.
@@ -164,13 +146,16 @@ pub struct TemplateContext {
 const DEFAULT_CONFIG: &str = include_str!("../../../benchmark/launch/launch-stages.yaml");
 
 impl StageConfig {
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] if the config file cannot be read or parsed.
     pub fn load() -> Result<Self, ConfigError> {
-        if let Some(user_path) = user_config_path() {
-            if user_path.exists() {
-                log::info!("Loading stage config from: {}", user_path.display());
-                let content = std::fs::read_to_string(&user_path)?;
-                return serde_yaml::from_str(&content).map_err(ConfigError::from);
-            }
+        if let Some(user_path) = user_config_path()
+            && user_path.exists()
+        {
+            log::info!("Loading stage config from: {}", user_path.display());
+            let content = std::fs::read_to_string(&user_path)?;
+            return serde_yaml::from_str(&content).map_err(ConfigError::from);
         }
         log::debug!("Using embedded default stage config");
         serde_yaml::from_str(DEFAULT_CONFIG).map_err(ConfigError::from)
@@ -247,6 +232,10 @@ impl StageConfig {
             .collect()
     }
 
+    /// # Errors
+    ///
+    /// Returns [`ConfigError`] if the scenario is not found, a referenced stage
+    /// is missing, or a template variable cannot be resolved.
     pub fn process(
         &self,
         ctx: &TemplateContext,
@@ -259,21 +248,17 @@ impl StageConfig {
         let mut base_vars = self.variables.clone();
         base_vars.extend(ctx.variables.clone());
 
+        // Reuse a single mutable context to avoid cloning args/branches per stage
+        let mut stage_ctx = TemplateContext {
+            variables: HashMap::new(),
+            args: ctx.args.clone(),
+            branches: ctx.branches.clone(),
+        };
+
         for stage in stages {
-            // Merge stage-specific variables on top
-            let mut stage_vars = base_vars.clone();
-            stage_vars.extend(stage.variables.clone());
-
-            let stage_ctx = TemplateContext {
-                variables: stage_vars,
-                args: ctx.args.clone(),
-                branches: ctx.branches.clone(),
-            };
-
-            if !is_stage_enabled(&stage.enabled, &stage_ctx) {
-                log::debug!("Skipping disabled stage: {}", stage.id);
-                continue;
-            }
+            // Reset to base vars + stage vars
+            stage_ctx.variables.clone_from(&base_vars);
+            stage_ctx.variables.extend(stage.variables);
 
             let commands: Vec<String> = stage
                 .commands
@@ -299,27 +284,26 @@ pub struct ProcessedStage {
     pub commands: Vec<String>,
 }
 
-fn is_stage_enabled(enabled: &EnabledValue, ctx: &TemplateContext) -> bool {
-    match enabled {
-        EnabledValue::Bool(b) => *b,
-        EnabledValue::Template(template) => {
-            let result = process_template(template, ctx).unwrap_or_default();
-            let trimmed = result.trim();
-            !trimmed.is_empty() && trimmed != "false" && trimmed != "null" && trimmed != "{{}}"
-        }
-    }
-}
-
+/// Processes `{{ namespace.key }}` placeholders in a template string.
 fn process_template(template: &str, ctx: &TemplateContext) -> Result<String, ConfigError> {
-    let mut result = template.to_string();
-    while let (Some(s), Some(e)) = (result.find("{{"), result.find("}}")) {
-        if s >= e {
-            break;
-        }
-        let val = resolve_var(result[s + 2..e].trim(), ctx)?;
-        result = format!("{}{}{}", &result[..s], val, &result[e + 2..]);
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+
+    while let Some((before, after_open)) = rest.split_once("{{") {
+        out.push_str(before);
+        let Some((expr, after_close)) = after_open.split_once("}}") else {
+            // No closing braces: keep the remainder unchanged
+            out.push_str("{{");
+            out.push_str(after_open);
+            return Ok(out);
+        };
+        let val = resolve_var(expr.trim(), ctx)?;
+        out.push_str(&val);
+        rest = after_close;
     }
-    Ok(result)
+
+    out.push_str(rest);
+    Ok(out)
 }
 
 fn resolve_var(path: &str, ctx: &TemplateContext) -> Result<String, ConfigError> {
@@ -337,3 +321,34 @@ fn user_config_path() -> Option<PathBuf> {
     dirs::config_dir().map(|p| p.join("fwdctl").join("launch-stages.yaml"))
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn embedded_config_parses() {
+        let config: StageConfig =
+            serde_yaml::from_str(DEFAULT_CONFIG).expect("embedded config should parse");
+        assert!(
+            config.scenarios.contains_key("reexecute"),
+            "should contain 'reexecute' scenario"
+        );
+        assert!(
+            !config.stages.is_empty(),
+            "should contain shared stage definitions"
+        );
+    }
+
+    #[test]
+    fn template_interpolation() {
+        let ctx = TemplateContext {
+            variables: HashMap::from([("name".into(), "world".into())]),
+            args: HashMap::from([("count".into(), "42".into())]),
+            branches: HashMap::new(),
+        };
+        let result = process_template("hello {{ variables.name }} ({{ args.count }})", &ctx);
+        assert_eq!(result.unwrap(), "hello world (42)");
+        let result = process_template("{{ variables.missing }}", &ctx);
+        assert!(result.is_err());
+    }
+}

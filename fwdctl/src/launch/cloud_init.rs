@@ -7,7 +7,7 @@ use serde::Serialize;
 
 use std::collections::HashMap;
 
-use super::DeployOptions;
+use super::{DeployOptions, LaunchError};
 use super::stage_config::{DEFAULT_SCENARIO, StageConfig, TemplateContext};
 
 #[derive(Serialize)]
@@ -43,21 +43,34 @@ pub struct CloudInitContext {
 }
 
 impl CloudInitContext {
-    pub fn new(opts: &DeployOptions) -> Self {
-        let config = StageConfig::load().unwrap_or_else(|e| {
-            log::warn!("Failed to load stage config: {e}, using embedded default");
-            serde_yaml::from_str(include_str!("../../../benchmark/launch/launch-stages.yaml"))
-                .expect("invalid embedded config")
-        });
+    pub fn new(opts: &DeployOptions) -> Result<Self, LaunchError> {
+        let config = match StageConfig::load() {
+            Ok(c) => c,
+            Err(e) => {
+                log::warn!("Failed to load stage config: {e}, using embedded default");
+                serde_yaml::from_str(include_str!(
+                    "../../../benchmark/launch/launch-stages.yaml"
+                ))?
+            }
+        };
+        let end_block = opts.end_block.unwrap_or(1_000_000).to_string();
+        let mut variables = config.variables.clone();
+        variables.insert("end_block".into(), end_block.clone());
+        variables.insert(
+            "tag".into(),
+            opts.custom_tag
+                .as_ref()
+                .map(|t| format!("-{t}"))
+                .unwrap_or_default(),
+        );
+
         let template_ctx = TemplateContext {
-            variables: config.variables.clone(),
+            variables,
             args: HashMap::from([
-                (
-                    "end_block".into(),
-                    opts.end_block.unwrap_or(1000000).to_string(),
-                ),
+                ("end_block".into(), end_block),
+                ("nblocks".into(), opts.nblocks.to_string()),
                 ("config".into(), opts.config.clone()),
-                ("metrics_server".into(), opts.metrics_server.clone()),
+                ("metrics_server".into(), opts.metrics_server.to_string()),
             ]),
             branches: opts
                 .branches()
@@ -70,25 +83,25 @@ impl CloudInitContext {
                 })
                 .collect(),
         };
-        Self {
+        Ok(Self {
             swap_gib: 16,
             template_ctx,
             config,
-        }
+        })
     }
 
-    pub fn render_yaml(&self) -> Result<String, serde_yaml::Error> {
+    pub fn render_yaml(&self) -> Result<String, LaunchError> {
         let yaml = self.build_yaml()?;
         let mut output = String::from("#cloud-config\n");
         output.push_str(&serde_yaml::to_string(&yaml)?);
         Ok(output)
     }
 
-    pub fn render_base64(&self) -> Result<String, serde_yaml::Error> {
+    pub fn render_base64(&self) -> Result<String, LaunchError> {
         Ok(BASE64.encode(self.render_yaml()?.as_bytes()))
     }
 
-    fn build_yaml(&self) -> Result<CloudInitYaml, serde_yaml::Error> {
+    fn build_yaml(&self) -> Result<CloudInitYaml, LaunchError> {
         Ok(CloudInitYaml {
             package_update: true,
             package_upgrade: true,
@@ -96,7 +109,7 @@ impl CloudInitContext {
             users: self.build_users()?,
             swap: self.build_swap(),
             write_files: self.build_write_files(),
-            runcmd: self.build_runcmd(),
+            runcmd: self.build_runcmd()?,
         })
     }
 
@@ -140,18 +153,11 @@ impl CloudInitContext {
         ]
     }
 
-    fn build_runcmd(&self) -> Vec<String> {
-        let stages = match self.config.process(&self.template_ctx, DEFAULT_SCENARIO) {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!("Failed to process stage config: {e}");
-                return Vec::new();
-            }
-        };
-        let cmds = stages
+    fn build_runcmd(&self) -> Result<Vec<String>, LaunchError> {
+        let stages = self.config.process(&self.template_ctx, DEFAULT_SCENARIO)?;
+        Ok(stages
             .into_iter()
             .flat_map(|x| x.commands)
-            .collect::<Vec<String>>();
-        cmds
+            .collect())
     }
 }

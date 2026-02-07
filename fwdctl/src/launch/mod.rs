@@ -11,10 +11,6 @@ use thiserror::Error;
 
 type FwdError = firewood::v2::api::Error;
 
-fn internal_err(msg: impl std::fmt::Display) -> FwdError {
-    FwdError::InternalError(msg.to_string().into())
-}
-
 #[derive(Debug, Error)]
 pub enum LaunchError {
     #[error("Invalid instance type '{0}'. Valid types: {1}")]
@@ -28,6 +24,9 @@ pub enum LaunchError {
 
     #[error("Cloud-init generation failed: {0}")]
     CloudInit(#[from] serde_yaml::Error),
+
+    #[error("Stage configuration error: {0}")]
+    StageConfig(#[from] stage_config::ConfigError),
 
     #[error("Timeout waiting for {0} after {1} seconds")]
     Timeout(&'static str, u64),
@@ -48,14 +47,14 @@ where
     R: std::fmt::Debug,
 {
     fn from(e: aws_smithy_runtime_api::client::result::SdkError<E, R>) -> Self {
-        log::debug!("AWS SDK error: {:#?}", e);
+        log::debug!("AWS SDK error: {e:#?}");
         Self::AwsSdk(e.to_string())
     }
 }
 
 impl From<aws_sdk_ec2::error::BuildError> for LaunchError {
     fn from(e: aws_sdk_ec2::error::BuildError) -> Self {
-        log::debug!("AWS build error: {:#?}", e);
+        log::debug!("AWS build error: {e:#?}");
         Self::AwsSdk(e.to_string())
     }
 }
@@ -85,7 +84,7 @@ pub struct DeployOptions {
     #[arg(long = "firewood-branch", value_name = "BRANCH")]
     pub firewood_branch: Option<String>,
 
-    /// AvalancheGo git branch to checkout
+    /// `AvalancheGo` git branch to checkout
     #[arg(long = "avalanchego-branch", value_name = "BRANCH")]
     pub avalanchego_branch: Option<String>,
 
@@ -93,7 +92,7 @@ pub struct DeployOptions {
     #[arg(long = "coreth-branch", value_name = "BRANCH")]
     pub coreth_branch: Option<String>,
 
-    /// LibEVM git branch to checkout
+    /// `LibEVM` git branch to checkout
     #[arg(long = "libevm-branch", value_name = "BRANCH")]
     pub libevm_branch: Option<String>,
 
@@ -101,13 +100,17 @@ pub struct DeployOptions {
     #[arg(long = "end-block", value_name = "BLOCK")]
     pub end_block: Option<u64>,
 
+    /// Number of blocks dataset to download from S3
+    #[arg(long = "nblocks", value_name = "N", default_value_t = 1000000)]
+    pub nblocks: u64,
+
     /// VM reexecution config (firewood, hashdb, pathdb, etc.)
     #[arg(long = "config", value_name = "CONFIG", default_value = "firewood")]
     pub config: String,
 
     /// Enable metrics server during execution
-    #[arg(long = "metrics-server", value_name = "BOOL", default_value = "true")]
-    pub metrics_server: String,
+    #[arg(long = "metrics-server", default_value_t = true)]
+    pub metrics_server: bool,
 
     /// AWS region
     #[arg(long = "region", value_name = "REGION", default_value = "us-west-2")]
@@ -145,7 +148,9 @@ pub struct DeployOptions {
     #[arg(long = "tag", value_name = "TAG")]
     pub custom_tag: Option<String>,
 }
+
 impl DeployOptions {
+    #[must_use]
     pub fn branches(&self) -> [(&str, Option<&str>); 4] {
         [
             ("firewood", self.firewood_branch.as_deref()),
@@ -155,6 +160,7 @@ impl DeployOptions {
         ]
     }
 }
+
 pub(super) fn run(opts: &Options) -> Result<(), FwdError> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(run_internal(opts))
@@ -173,7 +179,7 @@ async fn run_internal(opts: &Options) -> Result<(), FwdError> {
 async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
     log_launch_config(opts);
 
-    let ctx = cloud_init::CloudInitContext::new(opts);
+    let ctx = cloud_init::CloudInitContext::new(opts)?;
 
     if opts.dry_run {
         let yaml = ctx.render_yaml()?;
@@ -226,10 +232,6 @@ fn log_launch_config(opts: &DeployOptions) {
         "  LibEVM:            {}",
         opts.libevm_branch.as_deref().unwrap_or("default")
     );
-    // info!(
-    //     "  Blocks:            {} (end: {})",
-    //
-    // );
     info!("  Config:            {}", opts.config);
     info!("  Metrics Server:    {}", opts.metrics_server);
     info!("  Region:            {}", opts.region);

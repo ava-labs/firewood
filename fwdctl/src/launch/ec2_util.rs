@@ -3,11 +3,12 @@
 
 use std::time::Duration;
 
-use tokio::sync::OnceCell;
-
 use aws_config::BehaviorVersion;
-use aws_sdk_ec2::{Client as Ec2Client, Error};
-use aws_sdk_ec2::types::{ArchitectureType, BlockDeviceMapping, EbsBlockDevice, Filter, IamInstanceProfileSpecification, InstanceType as Ec2InstanceType, ResourceType, SpotMarketOptions, Tag, TagSpecification, VolumeType};
+use aws_sdk_ec2::Client as Ec2Client;
+use aws_sdk_ec2::types::{
+    ArchitectureType, BlockDeviceMapping, EbsBlockDevice, Filter, IamInstanceProfileSpecification,
+    InstanceType as Ec2InstanceType, ResourceType, Tag, TagSpecification, VolumeType,
+};
 use aws_sdk_sts::Client as StsClient;
 use log::info;
 use tokio::time::{sleep, timeout};
@@ -32,10 +33,11 @@ pub async fn ec2_client(region: &str) -> Ec2Client {
 async fn get_instance_architecture(
     client: &Ec2Client,
     instance_type: &str,
-) -> Result<Option<ArchitectureType>, Error> {
+) -> Result<Option<ArchitectureType>, LaunchError> {
+    let parsed = parse_instance_type(instance_type)?;
     let resp = client
         .describe_instance_types()
-        .instance_types(instance_type.parse().unwrap())
+        .instance_types(parsed)
         .send()
         .await?;
 
@@ -43,7 +45,7 @@ async fn get_instance_architecture(
         .instance_types()
         .first()
         .and_then(|i| i.processor_info())
-        .and_then(|p| Some(p.supported_architectures()))
+        .map(aws_sdk_ec2::types::ProcessorInfo::supported_architectures)
         .and_then(|a| a.first().cloned());
 
     Ok(arch)
@@ -53,7 +55,12 @@ pub async fn latest_ubuntu_ami(ec2: &Ec2Client, instance_type: &str) -> Result<S
     let arch = match get_instance_architecture(ec2, instance_type).await? {
         Some(ArchitectureType::Arm64) => "arm64",
         Some(ArchitectureType::X8664) => "amd64",
-        _ => return Err(LaunchError::InvalidInstanceType(instance_type.to_string(), "".to_string())),
+        _ => {
+            return Err(LaunchError::InvalidInstanceType(
+                instance_type.to_string(),
+                "unsupported architecture".to_string(),
+            ))
+        }
     };
     let name_pattern = format!("ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-{arch}-server-*");
 
@@ -83,7 +90,7 @@ pub async fn launch_instance(
 ) -> Result<String, LaunchError> {
     let instance_type = parse_instance_type(&opts.instance_type)?;
     let instance_name = build_instance_name(opts);
-    let username = get_aws_username(Some(&opts.region)).await;
+    let username = get_aws_username().await;
     let tags = build_tags(opts, &instance_name, &username);
 
     let root_volume = BlockDeviceMapping::builder()
@@ -141,7 +148,6 @@ fn parse_instance_type(s: &str) -> Result<Ec2InstanceType, LaunchError> {
     Ec2InstanceType::from_str(s)
         .map_err(|_| LaunchError::InvalidInstanceType(s.to_owned(), "SDK parse error".to_owned()))
 }
-
 
 fn build_instance_name(opts: &DeployOptions) -> String {
     let mut name = format!("{}-fw-{:08X}", opts.name_prefix, rand::random::<u32>());
@@ -213,8 +219,7 @@ async fn get_instance_state(ec2: &Ec2Client, instance_id: &str) -> Result<String
         .and_then(|r| r.instances().first())
         .and_then(|i| i.state())
         .and_then(|s| s.name())
-        .map(|n| n.as_str())
-        .unwrap_or("unknown")
+        .map_or("unknown", aws_sdk_ec2::types::InstanceStateName::as_str)
         .to_owned())
 }
 
@@ -240,31 +245,29 @@ pub async fn describe_ips(
     .unwrap_or_default())
 }
 
-static AWS_USERNAME: OnceCell<String> = OnceCell::const_new();
-
-pub async fn get_aws_username(region: Option<&str>) -> String {
-    AWS_USERNAME
-        .get_or_init(|| async {
-            let sts = StsClient::new(&aws_config(region).await);
-            sts.get_caller_identity()
-                .send()
-                .await
-                .ok()
-                .and_then(|id| {
-                    id.arn().map(|arn| {
-                        arn.rsplit('/')
-                            .next()
-                            .or_else(|| arn.rsplit(':').next())
-                            .unwrap_or("unknown")
-                            .into()
-                    })
-                })
-                .unwrap_or_else(|| {
-                    std::env::var("USER")
-                        .or_else(|_| std::env::var("USERNAME"))
-                        .unwrap_or_else(|_| "unknown".into())
-                })
-        })
+/// Returns the AWS username for the current caller identity.
+///
+/// Uses STS `GetCallerIdentity` (a global service, region-independent).
+/// The result is cached for the lifetime of the process.
+async fn get_aws_username() -> String {
+    // STS GetCallerIdentity is region-independent; use default config.
+    let sts = StsClient::new(&aws_config(None).await);
+    sts.get_caller_identity()
+        .send()
         .await
-        .clone()
+        .ok()
+        .and_then(|id| {
+            id.arn().map(|arn| {
+                arn.rsplit('/')
+                    .next()
+                    .or_else(|| arn.rsplit(':').next())
+                    .unwrap_or("unknown")
+                    .into()
+            })
+        })
+        .unwrap_or_else(|| {
+            std::env::var("USER")
+                .or_else(|_| std::env::var("USERNAME"))
+                .unwrap_or_else(|_| "unknown".into())
+        })
 }

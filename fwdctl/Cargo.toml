@@ -39,7 +39,7 @@ askama = "0.15.1"
 num-format = "0.4.4"
 serde = { version = "1.0.213", features = ["derive"] }
 serde_json = "1.0.135"
-serde_yaml = "0.9"
+serde_yaml = { version = "0.10", package = "serde_yaml_ng" }
 thiserror = "2.0"
 # AWS SDK dependencies
 aws-config = "1.0"
