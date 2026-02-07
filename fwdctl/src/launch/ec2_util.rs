@@ -182,7 +182,6 @@ fn build_tags(opts: &DeployOptions, instance_name: &str, username: &str) -> Vec<
     for (tag_name, (_, branch)) in [
         "FirewoodBranch",
         "AvalancheGoBranch",
-        "CorethBranch",
         "LibEVMBranch",
     ]
     .into_iter()

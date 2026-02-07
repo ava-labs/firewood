@@ -5,7 +5,7 @@ mod cloud_init;
 mod ec2_util;
 pub mod stage_config;
 
-use clap::{Args, Subcommand};
+use clap::{Args, Subcommand, ValueEnum};
 use log::info;
 use thiserror::Error;
 
@@ -73,6 +73,32 @@ pub enum LaunchCommand {
     Deploy(DeployOptions),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+pub enum NBlocks {
+    #[value(name = "10k")]
+    TenK = 10_000,
+    #[value(name = "1m")]
+    OneM = 1_000_000,
+    #[value(name = "50m")]
+    FiftyM = 50_000_000,
+}
+
+impl NBlocks {
+    #[must_use]
+    pub const fn end_block(self) -> u64 {
+        self as u64
+    }
+
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TenK => "10k",
+            Self::OneM => "1m",
+            Self::FiftyM => "50m",
+        }
+    }
+}
+
 #[derive(Debug, Args)]
 pub struct DeployOptions {
     /// EC2 instance type
@@ -91,17 +117,13 @@ pub struct DeployOptions {
     #[arg(long = "avalanchego-branch", value_name = "BRANCH")]
     pub avalanchego_branch: Option<String>,
 
-    /// Coreth git branch to checkout
-    #[arg(long = "coreth-branch", value_name = "BRANCH")]
-    pub coreth_branch: Option<String>,
-
     /// `LibEVM` git branch to checkout
     #[arg(long = "libevm-branch", value_name = "BRANCH")]
     pub libevm_branch: Option<String>,
 
-    /// Ending block number
-    #[arg(long = "end-block", value_name = "BLOCK", default_value_t = 1_000_000)]
-    pub end_block: u64,
+    /// Dataset size to download from S3 (also sets the execution end block)
+    #[arg(long = "nblocks", value_name = "SIZE", value_enum, default_value_t = NBlocks::OneM)]
+    pub nblocks: NBlocks,
 
     /// VM reexecution config (firewood, hashdb, pathdb, etc.)
     #[arg(long = "config", value_name = "CONFIG", default_value = "firewood")]
@@ -119,10 +141,6 @@ pub struct DeployOptions {
     /// AWS region
     #[arg(long = "region", value_name = "REGION", default_value = "us-west-2")]
     pub region: String,
-
-    /// Print the generated cloud-init YAML and exit without launching
-    #[arg(long = "dry-run")]
-    pub dry_run: bool,
 
     /// EC2 key pair name to attach
     #[arg(long = "key-name", value_name = "KEY")]
@@ -151,13 +169,17 @@ pub struct DeployOptions {
 
 impl DeployOptions {
     #[must_use]
-    pub fn branches(&self) -> [(&str, Option<&str>); 4] {
+    pub fn branches(&self) -> [(&str, Option<&str>); 3] {
         [
             ("firewood", self.firewood_branch.as_deref()),
             ("avalanchego", self.avalanchego_branch.as_deref()),
-            ("coreth", self.coreth_branch.as_deref()),
             ("libevm", self.libevm_branch.as_deref()),
         ]
+    }
+
+    #[must_use]
+    pub const fn end_block(&self) -> u64 {
+        self.nblocks.end_block()
     }
 }
 
@@ -180,13 +202,6 @@ async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
     log_launch_config(opts);
 
     let ctx = cloud_init::CloudInitContext::new(opts)?;
-
-    if opts.dry_run {
-        let yaml = ctx.render_yaml()?;
-        info!("--- cloud-init config ({} bytes) ---", yaml.len());
-        println!("{yaml}");
-        return Ok(());
-    }
 
     let user_data_b64 = ctx.render_base64()?;
 
@@ -225,14 +240,10 @@ fn log_launch_config(opts: &DeployOptions) {
         opts.avalanchego_branch.as_deref().unwrap_or("default")
     );
     info!(
-        "  Coreth:            {}",
-        opts.coreth_branch.as_deref().unwrap_or("default")
-    );
-    info!(
         "  LibEVM:            {}",
         opts.libevm_branch.as_deref().unwrap_or("default")
     );
-    info!("  End Block:         {}", opts.end_block);
+    info!("  Blocks:            {}", opts.nblocks.as_str());
     info!("  Config:            {}", opts.config);
     info!("  Metrics Server:    {}", opts.metrics_server);
     info!("  Region:            {}", opts.region);

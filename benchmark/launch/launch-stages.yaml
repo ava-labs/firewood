@@ -64,7 +64,6 @@ variables:
   nvme_base: "/mnt/nvme"
   firewood_repo: "https://github.com/ava-labs/firewood.git"
   avalanchego_repo: "https://github.com/ava-labs/avalanchego.git"
-  coreth_repo: "https://github.com/ava-labs/coreth.git"
   libevm_repo: "https://github.com/ava-labs/libevm.git"
   s3_bucket: "avalanchego-bootstrap-testing"
 
