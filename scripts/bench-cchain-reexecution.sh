@@ -27,7 +27,6 @@ ENVIRONMENT
   LIBEVM_REF            libevm ref (optional)
   TIMEOUT_MINUTES       Workflow timeout in minutes (optional)
   DOWNLOAD_DIR          Directory for downloaded artifacts (default: ./results)
-  WATCH_INTERVAL        Polling interval in seconds for gh run watch (default: 60)
 
   Custom mode (when no TEST/test arg specified):
   CONFIG                VM config (default: firewood)
@@ -66,7 +65,6 @@ WORKFLOW_NAME="C-Chain Re-Execution Benchmark w/ Container"
 : "${TIMEOUT_MINUTES:=}"
 : "${CONFIG:=firewood}"
 : "${DOWNLOAD_DIR:=${REPO_ROOT}/results}"
-: "${WATCH_INTERVAL:=60}"
 
 # Polling config for workflow registration. gh workflow run doesn't return
 # the run ID, so we poll until the run appears. 180s accommodates busy runners.
@@ -78,14 +76,19 @@ POLL_TIMEOUT=180
 
 # Subset of tests for discoverability. AvalancheGo is the source of truth:
 # https://github.com/ava-labs/avalanchego/blob/master/scripts/benchmark_cchain_range.sh
+# Format: "description|poll_interval_seconds"
 declare -A TESTS=(
-    ["firewood-101-250k"]="Blocks 101-250k"
-    ["firewood-archive-101-250k"]="Blocks 101-250k (archive)"
-    ["firewood-33m-33m500k"]="Blocks 33m-33.5m"
-    ["firewood-archive-33m-33m500k"]="Blocks 33m-33.5m (archive)"
-    ["firewood-33m-40m"]="Blocks 33m-40m"
-    ["firewood-archive-33m-40m"]="Blocks 33m-40m (archive)"
+    ["firewood-101-250k"]="Blocks 101-250k|10"
+    ["firewood-archive-101-250k"]="Blocks 101-250k (archive)|10"
+    ["firewood-33m-33m500k"]="Blocks 33m-33.5m|30"
+    ["firewood-archive-33m-33m500k"]="Blocks 33m-33.5m (archive)|30"
+    ["firewood-33m-40m"]="Blocks 33m-40m|300"
+    ["firewood-archive-33m-40m"]="Blocks 33m-40m (archive)|300"
 )
+
+# Parse test metadata
+get_test_description() { echo "${TESTS[$1]%%|*}"; }
+get_test_poll_interval() { echo "${TESTS[$1]##*|}"; }
 
 log() { echo "==> $1" >&2; }
 
@@ -277,20 +280,50 @@ trigger_workflow() {
     poll_workflow_registration "$trigger_time" "$test" "$CONFIG" "${START_BLOCK:-}" "${END_BLOCK:-}" "$RUNNER"
 }
 
+# Calculate watch interval based on predefined test or block count.
+# Longer runs poll less frequently to avoid GitHub API rate limits.
+calculate_watch_interval() {
+    # Check predefined test first
+    if [[ -n "${TEST:-}" && -n "${TESTS[$TEST]:-}" ]]; then
+        get_test_poll_interval "$TEST"
+        return
+    fi
+    
+    # Calculate from block range
+    local start="${START_BLOCK:-}"
+    local end="${END_BLOCK:-}"
+    if [[ "$start" =~ ^[0-9]+$ && "$end" =~ ^[0-9]+$ && "$end" -gt "$start" ]]; then
+        local blocks=$((end - start))
+        if ((blocks < 1000000)); then
+            echo 30    # < 1M blocks: 30s
+        elif ((blocks < 5000000)); then
+            echo 60    # 1M-5M blocks: 60s
+        elif ((blocks < 10000000)); then
+            echo 300   # 5M-10M blocks: 5 min
+        else
+            echo 600   # > 10M blocks: 10 min
+        fi
+    else
+        echo 60  # Default
+    fi
+}
+
 # GitHub's API can return transient errors (502/503, 403 rate limits) during
 # long-running jobs. We retry gh run watch with exponential backoff, then fall
 # back to polling gh run view for final status. This prevents false failures
 # when the actual benchmark succeeds but API monitoring fails.
 wait_for_completion() {
     local run_id="$1"
-    log "Waiting for run $run_id (updates every ${WATCH_INTERVAL}s)"
+    local interval
+    interval=$(calculate_watch_interval)
+    log "Waiting for run $run_id (updates every ${interval}s)"
     log "https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
     
     # Retry gh run watch with exponential backoff on transient API errors
     local max_retries=3
     local delay=5
     for ((attempt=1; attempt<=max_retries; attempt++)); do
-        if gh run watch "$run_id" --repo "$AVALANCHEGO_REPO" --interval "$WATCH_INTERVAL" --exit-status; then
+        if gh run watch "$run_id" --repo "$AVALANCHEGO_REPO" --interval "$interval" --exit-status; then
             return 0
         fi
         local exit_code=$?
@@ -365,7 +398,7 @@ list_runs() {
 
 list_tests() {
     for test in "${!TESTS[@]}"; do
-        [[ "$test" == firewood* ]] && printf "  %-25s %s\n" "$test" "${TESTS[$test]}"
+        [[ "$test" == firewood* ]] && printf "  %-25s %s\n" "$test" "$(get_test_description "$test")"
     done | sort
 }
 
