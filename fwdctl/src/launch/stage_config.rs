@@ -52,8 +52,6 @@ pub const DEFAULT_SCENARIO: &str = "reexecute";
 pub struct SharedStage {
     pub name: String,
     #[serde(default)]
-    pub enabled: EnabledValue,
-    #[serde(default)]
     pub variables: HashMap<String, String>,
     pub commands: Vec<String>,
 }
@@ -90,8 +88,6 @@ pub struct StageOverride {
     #[serde(default)]
     pub name: Option<String>,
     #[serde(default)]
-    pub enabled: Option<EnabledValue>,
-    #[serde(default)]
     pub variables: HashMap<String, String>,
     #[serde(default)]
     pub commands: Option<Vec<String>>,
@@ -113,22 +109,8 @@ pub struct UserDefinition {
 pub struct ResolvedStage {
     pub id: String,
     pub name: String,
-    pub enabled: EnabledValue,
     pub variables: HashMap<String, String>,
     pub commands: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-#[serde(untagged)]
-pub enum EnabledValue {
-    Bool(bool),
-    Template(String),
-}
-
-impl Default for EnabledValue {
-    fn default() -> Self {
-        Self::Bool(true)
-    }
 }
 
 /// Template context for variable interpolation.
@@ -172,7 +154,6 @@ impl StageConfig {
                 Ok(ResolvedStage {
                     id: id.clone(),
                     name: shared.name.clone(),
-                    enabled: shared.enabled.clone(),
                     variables: shared.variables.clone(),
                     commands: shared.commands.clone(),
                 })
@@ -187,10 +168,6 @@ impl StageConfig {
                     Ok(ResolvedStage {
                         id: ovr.id.clone(),
                         name: ovr.name.clone().unwrap_or_else(|| shared.name.clone()),
-                        enabled: ovr
-                            .enabled
-                            .clone()
-                            .unwrap_or_else(|| shared.enabled.clone()),
                         variables,
                         commands: ovr
                             .commands
@@ -211,7 +188,6 @@ impl StageConfig {
                     Ok(ResolvedStage {
                         id: ovr.id.clone(),
                         name,
-                        enabled: ovr.enabled.clone().unwrap_or_default(),
                         variables: ovr.variables.clone(),
                         commands,
                     })

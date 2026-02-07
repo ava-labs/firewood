@@ -15,6 +15,7 @@ pub mod dump;
 pub mod get;
 pub mod graph;
 pub mod insert;
+#[cfg(feature = "launch")]
 pub mod launch;
 pub mod replay;
 pub mod root;
@@ -110,6 +111,7 @@ enum Commands {
     Check(check::Options),
     /// Replay recorded operations from a log file
     Replay(replay::Options),
+    #[cfg(feature = "launch")]
     /// Launch AWS instance for benchmarking
     Launch(launch::Options),
 }
@@ -131,6 +133,7 @@ fn main() -> Result<(), api::Error> {
         Commands::Graph(opts) => graph::run(opts),
         Commands::Check(opts) => check::run(opts),
         Commands::Replay(opts) => replay::run(opts),
+        #[cfg(feature = "launch")]
         Commands::Launch(opts) => launch::run(opts),
     }
 }

@@ -100,26 +100,27 @@ pub struct DeployOptions {
     pub libevm_branch: Option<String>,
 
     /// Ending block number
-    #[arg(long = "end-block", value_name = "BLOCK")]
-    pub end_block: Option<u64>,
-
-    /// Number of blocks dataset to download from S3
-    #[arg(long = "nblocks", value_name = "N", default_value_t = 1000000)]
-    pub nblocks: u64,
+    #[arg(long = "end-block", value_name = "BLOCK", default_value_t = 1_000_000)]
+    pub end_block: u64,
 
     /// VM reexecution config (firewood, hashdb, pathdb, etc.)
     #[arg(long = "config", value_name = "CONFIG", default_value = "firewood")]
     pub config: String,
 
-    /// Enable metrics server during execution
-    #[arg(long = "metrics-server", default_value_t = true)]
+    /// Enable metrics server during execution (`--metrics-server=false` disables)
+    #[arg(
+        long = "metrics-server",
+        value_name = "BOOL",
+        default_value_t = true,
+        action = clap::ArgAction::Set
+    )]
     pub metrics_server: bool,
 
     /// AWS region
     #[arg(long = "region", value_name = "REGION", default_value = "us-west-2")]
     pub region: String,
 
-    /// Show the aws command that would be run without executing it
+    /// Print the generated cloud-init YAML and exit without launching
     #[arg(long = "dry-run")]
     pub dry_run: bool,
 
@@ -231,6 +232,7 @@ fn log_launch_config(opts: &DeployOptions) {
         "  LibEVM:            {}",
         opts.libevm_branch.as_deref().unwrap_or("default")
     );
+    info!("  End Block:         {}", opts.end_block);
     info!("  Config:            {}", opts.config);
     info!("  Metrics Server:    {}", opts.metrics_server);
     info!("  Region:            {}", opts.region);

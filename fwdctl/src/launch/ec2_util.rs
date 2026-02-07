@@ -155,7 +155,7 @@ fn parse_instance_type(s: &str) -> Result<Ec2InstanceType, LaunchError> {
 }
 
 fn build_instance_name(opts: &DeployOptions) -> String {
-    let mut name = format!("{}-fw-{:08X}", opts.name_prefix, rand::random::<u32>());
+    let mut name = format!("{}-{:08X}", opts.name_prefix, rand::random::<u32>());
     for (prefix, (_, branch)) in ["-fw-", "-ag-", "-ce-", "-le-"]
         .into_iter()
         .zip(opts.branches())
@@ -263,26 +263,29 @@ pub async fn describe_ips(
 async fn get_aws_username() -> String {
     AWS_USERNAME
         .get_or_init(|| async {
+            let fallback_username = || {
+                std::env::var("USER")
+                    .or_else(|_| std::env::var("USERNAME"))
+                    .unwrap_or_else(|_| "unknown".into())
+            };
+
             // STS GetCallerIdentity is region-independent; use default config.
             let sts = StsClient::new(&aws_config(None).await);
-            sts.get_caller_identity()
-                .send()
-                .await
-                .ok()
-                .and_then(|id| {
-                    id.arn().map(|arn| {
+            match sts.get_caller_identity().send().await {
+                Ok(id) => id
+                    .arn()
+                    .and_then(|arn| {
                         arn.rsplit('/')
                             .next()
                             .or_else(|| arn.rsplit(':').next())
-                            .unwrap_or("unknown")
-                            .into()
+                            .map(ToOwned::to_owned)
                     })
-                })
-                .unwrap_or_else(|| {
-                    std::env::var("USER")
-                        .or_else(|_| std::env::var("USERNAME"))
-                        .unwrap_or_else(|_| "unknown".into())
-                })
+                    .unwrap_or_else(fallback_username),
+                Err(e) => {
+                    log::debug!("STS GetCallerIdentity failed: {e}");
+                    fallback_username()
+                }
+            }
         })
         .await
         .clone()

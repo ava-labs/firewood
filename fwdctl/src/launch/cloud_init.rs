@@ -51,7 +51,8 @@ impl CloudInitContext {
                 serde_yaml::from_str(include_str!("../../../benchmark/launch/launch-stages.yaml"))?
             }
         };
-        let end_block = opts.end_block.unwrap_or(1_000_000).to_string();
+        let end_block = opts.end_block.to_string();
+        let nblocks = end_block.clone();
         let mut variables = config.variables.clone();
         variables.insert("end_block".into(), end_block.clone());
         variables.insert(
@@ -66,7 +67,7 @@ impl CloudInitContext {
             variables,
             args: HashMap::from([
                 ("end_block".into(), end_block),
-                ("nblocks".into(), opts.nblocks.to_string()),
+                ("nblocks".into(), nblocks),
                 ("config".into(), opts.config.clone()),
                 ("metrics_server".into(), opts.metrics_server.to_string()),
             ]),

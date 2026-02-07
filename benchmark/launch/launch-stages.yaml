@@ -162,7 +162,7 @@ scenarios:
       - build-firewood-ffi
       - build-avalanchego
       - install-s5cmd
-      - download-blocks      
+      - download-blocks
       - init-state-dir
       - id: execute-range
         name: "Executing blocks"
