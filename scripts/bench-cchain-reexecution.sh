@@ -27,6 +27,7 @@ ENVIRONMENT
   LIBEVM_REF            libevm ref (optional)
   TIMEOUT_MINUTES       Workflow timeout in minutes (optional)
   DOWNLOAD_DIR          Directory for downloaded artifacts (default: ./results)
+  WATCH_INTERVAL        Polling interval in seconds for gh run watch (default: 60)
 
   Custom mode (when no TEST/test arg specified):
   CONFIG                VM config (default: firewood)
@@ -65,6 +66,7 @@ WORKFLOW_NAME="C-Chain Re-Execution Benchmark w/ Container"
 : "${TIMEOUT_MINUTES:=}"
 : "${CONFIG:=firewood}"
 : "${DOWNLOAD_DIR:=${REPO_ROOT}/results}"
+: "${WATCH_INTERVAL:=60}"
 
 # Polling config for workflow registration. gh workflow run doesn't return
 # the run ID, so we poll until the run appears. 180s accommodates busy runners.
@@ -275,21 +277,20 @@ trigger_workflow() {
     poll_workflow_registration "$trigger_time" "$test" "$CONFIG" "${START_BLOCK:-}" "${END_BLOCK:-}" "$RUNNER"
 }
 
-# Wait for workflow run to complete with retry and fallback.
-# GitHub's API can return transient 502/503 errors during long-running jobs.
-# We retry gh run watch with exponential backoff, then fall back to polling
-# gh run view for final status. This prevents false failures when the actual
-# benchmark succeeds but API monitoring fails.
+# GitHub's API can return transient errors (502/503, 403 rate limits) during
+# long-running jobs. We retry gh run watch with exponential backoff, then fall
+# back to polling gh run view for final status. This prevents false failures
+# when the actual benchmark succeeds but API monitoring fails.
 wait_for_completion() {
     local run_id="$1"
-    log "Waiting for run $run_id"
+    log "Waiting for run $run_id (updates every ${WATCH_INTERVAL}s)"
     log "https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
     
     # Retry gh run watch with exponential backoff on transient API errors
     local max_retries=3
     local delay=5
     for ((attempt=1; attempt<=max_retries; attempt++)); do
-        if gh run watch "$run_id" --repo "$AVALANCHEGO_REPO" --exit-status; then
+        if gh run watch "$run_id" --repo "$AVALANCHEGO_REPO" --interval "$WATCH_INTERVAL" --exit-status; then
             return 0
         fi
         local exit_code=$?

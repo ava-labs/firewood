@@ -56,6 +56,7 @@ jobs:
       current-state-dir-src: ${{ steps.resolve.outputs.current-state-dir-src }}
       runner: ${{ steps.resolve.outputs.runner }}
       timeout-minutes: ${{ steps.resolve.outputs.timeout-minutes }}
+      watch-interval: ${{ steps.resolve.outputs.watch-interval }}
     steps:
       - name: Resolve benchmark config
         id: resolve
@@ -75,6 +76,7 @@ jobs:
                 echo "block-dir-src=cchain-mainnet-blocks-40m-50m-ldb" >> "$GITHUB_OUTPUT"
                 echo "current-state-dir-src=cchain-current-state-firewood-40m" >> "$GITHUB_OUTPUT"
                 echo "timeout-minutes=720" >> "$GITHUB_OUTPUT"
+                echo "watch-interval=300" >> "$GITHUB_OUTPUT"  # 5 min
                 ;;
               "0 5 * * 6")  # Weekly Saturday at 05:00 UTC: 10M blocks (50M → 60M)
                 echo "::notice::Schedule: weekly-50m-60m (blocks 50000001-60000000)"
@@ -84,6 +86,7 @@ jobs:
                 echo "block-dir-src=cchain-mainnet-blocks-50m-60m-ldb" >> "$GITHUB_OUTPUT"
                 echo "current-state-dir-src=cchain-current-state-firewood-50m" >> "$GITHUB_OUTPUT"
                 echo "timeout-minutes=2880" >> "$GITHUB_OUTPUT"
+                echo "watch-interval=600" >> "$GITHUB_OUTPUT"  # 10 min
                 ;;
               *)
                 echo "::error::Unknown schedule: ${{ github.event.schedule }}"
@@ -134,6 +137,7 @@ jobs:
           TEST: ${{ needs.configure-benchmark.outputs.test }}
           RUNNER: ${{ needs.configure-benchmark.outputs.runner }}
           TIMEOUT_MINUTES: ${{ needs.configure-benchmark.outputs.timeout-minutes }}
+          WATCH_INTERVAL: ${{ needs.configure-benchmark.outputs.watch-interval }}
 
       # github.ref controls where results are stored (not what gets benchmarked):
       # - main branch → bench/ (official history)
