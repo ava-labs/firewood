@@ -37,6 +37,9 @@ pub enum LaunchError {
     #[error("No matching Ubuntu AMI found for architecture '{0}'")]
     NoMatchingAmi(String),
 
+    #[error("Instance '{instance_id}' entered terminal state '{state}' before running")]
+    TerminalInstanceState { instance_id: String, state: String },
+
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
 }
@@ -115,10 +118,6 @@ pub struct DeployOptions {
     /// AWS region
     #[arg(long = "region", value_name = "REGION", default_value = "us-west-2")]
     pub region: String,
-
-    /// Use spot instance pricing
-    #[arg(long = "spot")]
-    pub spot: bool,
 
     /// Show the aws command that would be run without executing it
     #[arg(long = "dry-run")]
@@ -235,5 +234,4 @@ fn log_launch_config(opts: &DeployOptions) {
     info!("  Config:            {}", opts.config);
     info!("  Metrics Server:    {}", opts.metrics_server);
     info!("  Region:            {}", opts.region);
-    info!("  Spot:              {}", opts.spot);
 }

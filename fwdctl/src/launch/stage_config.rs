@@ -104,6 +104,7 @@ pub struct UserDefinition {
     pub shell: String,
     pub sudo: String,
     pub ssh_authorized_keys: Vec<String>,
+    #[serde(alias = "lock_pass")]
     pub lock_passwd: bool,
 }
 

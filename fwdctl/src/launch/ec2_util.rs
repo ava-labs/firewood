@@ -11,12 +11,14 @@ use aws_sdk_ec2::types::{
 };
 use aws_sdk_sts::Client as StsClient;
 use log::info;
+use tokio::sync::OnceCell;
 use tokio::time::{sleep, timeout};
 
 use super::{DeployOptions, LaunchError};
 
 const WAIT_RUNNING_TIMEOUT: Duration = Duration::from_secs(300);
 const POLL_INTERVAL_RUNNING: Duration = Duration::from_secs(3);
+static AWS_USERNAME: OnceCell<String> = OnceCell::const_new();
 
 async fn aws_config(region: Option<&str>) -> aws_config::SdkConfig {
     let mut loader = aws_config::defaults(BehaviorVersion::latest());
@@ -51,7 +53,10 @@ async fn get_instance_architecture(
     Ok(arch)
 }
 
-pub async fn latest_ubuntu_ami(ec2: &Ec2Client, instance_type: &str) -> Result<String, LaunchError> {
+pub async fn latest_ubuntu_ami(
+    ec2: &Ec2Client,
+    instance_type: &str,
+) -> Result<String, LaunchError> {
     let arch = match get_instance_architecture(ec2, instance_type).await? {
         Some(ArchitectureType::Arm64) => "arm64",
         Some(ArchitectureType::X8664) => "amd64",
@@ -59,7 +64,7 @@ pub async fn latest_ubuntu_ami(ec2: &Ec2Client, instance_type: &str) -> Result<S
             return Err(LaunchError::InvalidInstanceType(
                 instance_type.to_string(),
                 "unsupported architecture".to_string(),
-            ))
+            ));
         }
     };
     let name_pattern = format!("ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-{arch}-server-*");
@@ -196,10 +201,16 @@ pub async fn wait_for_running(ec2: &Ec2Client, instance_id: &str) -> Result<(), 
     timeout(WAIT_RUNNING_TIMEOUT, async {
         loop {
             let state = get_instance_state(ec2, instance_id).await?;
-            if state == "running" {
-                return Ok(());
+            match state.as_str() {
+                "running" => return Ok(()),
+                "terminated" | "shutting-down" | "stopped" | "stopping" => {
+                    return Err(LaunchError::TerminalInstanceState {
+                        instance_id: instance_id.to_owned(),
+                        state,
+                    });
+                }
+                _ => sleep(POLL_INTERVAL_RUNNING).await,
             }
-            sleep(POLL_INTERVAL_RUNNING).await;
         }
     })
     .await
@@ -250,24 +261,29 @@ pub async fn describe_ips(
 /// Uses STS `GetCallerIdentity` (a global service, region-independent).
 /// The result is cached for the lifetime of the process.
 async fn get_aws_username() -> String {
-    // STS GetCallerIdentity is region-independent; use default config.
-    let sts = StsClient::new(&aws_config(None).await);
-    sts.get_caller_identity()
-        .send()
+    AWS_USERNAME
+        .get_or_init(|| async {
+            // STS GetCallerIdentity is region-independent; use default config.
+            let sts = StsClient::new(&aws_config(None).await);
+            sts.get_caller_identity()
+                .send()
+                .await
+                .ok()
+                .and_then(|id| {
+                    id.arn().map(|arn| {
+                        arn.rsplit('/')
+                            .next()
+                            .or_else(|| arn.rsplit(':').next())
+                            .unwrap_or("unknown")
+                            .into()
+                    })
+                })
+                .unwrap_or_else(|| {
+                    std::env::var("USER")
+                        .or_else(|_| std::env::var("USERNAME"))
+                        .unwrap_or_else(|_| "unknown".into())
+                })
+        })
         .await
-        .ok()
-        .and_then(|id| {
-            id.arn().map(|arn| {
-                arn.rsplit('/')
-                    .next()
-                    .or_else(|| arn.rsplit(':').next())
-                    .unwrap_or("unknown")
-                    .into()
-            })
-        })
-        .unwrap_or_else(|| {
-            std::env::var("USER")
-                .or_else(|_| std::env::var("USERNAME"))
-                .unwrap_or_else(|_| "unknown".into())
-        })
+        .clone()
 }

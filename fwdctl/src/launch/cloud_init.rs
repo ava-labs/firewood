@@ -7,8 +7,8 @@ use serde::Serialize;
 
 use std::collections::HashMap;
 
-use super::{DeployOptions, LaunchError};
 use super::stage_config::{DEFAULT_SCENARIO, StageConfig, TemplateContext};
+use super::{DeployOptions, LaunchError};
 
 #[derive(Serialize)]
 struct CloudInitYaml {
@@ -48,9 +48,7 @@ impl CloudInitContext {
             Ok(c) => c,
             Err(e) => {
                 log::warn!("Failed to load stage config: {e}, using embedded default");
-                serde_yaml::from_str(include_str!(
-                    "../../../benchmark/launch/launch-stages.yaml"
-                ))?
+                serde_yaml::from_str(include_str!("../../../benchmark/launch/launch-stages.yaml"))?
             }
         };
         let end_block = opts.end_block.unwrap_or(1_000_000).to_string();
@@ -155,9 +153,6 @@ impl CloudInitContext {
 
     fn build_runcmd(&self) -> Result<Vec<String>, LaunchError> {
         let stages = self.config.process(&self.template_ctx, DEFAULT_SCENARIO)?;
-        Ok(stages
-            .into_iter()
-            .flat_map(|x| x.commands)
-            .collect())
+        Ok(stages.into_iter().flat_map(|x| x.commands).collect())
     }
 }
