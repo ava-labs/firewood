@@ -3,6 +3,7 @@
 
 mod cloud_init;
 mod ec2_util;
+mod ssm_monitor;
 pub mod stage_config;
 
 use clap::{Args, Subcommand, ValueEnum};
@@ -264,7 +265,7 @@ async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
     let user_data_b64 = ctx.render_base64()?;
 
     let ec2 = ec2_util::ec2_client(&opts.region).await;
-    let ssm = ec2_util::ssm_client(&opts.region).await;
+    let ssm = ssm_monitor::ssm_client(&opts.region).await;
 
     let ami_id = ec2_util::latest_ubuntu_ami(&ec2, &opts.instance_type).await?;
     info!("Using AMI: {ami_id}");
@@ -287,17 +288,17 @@ async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
     info!("To monitor:  fwdctl launch monitor {instance_id}");
 
     if opts.follow_logs {
-        ec2_util::wait_for_ssm_registration(&ssm, &instance_id).await?;
+        ssm_monitor::wait_for_ssm_registration(&ssm, &instance_id).await?;
         info!("");
         info!("Following cloud-init stage progress via SSM...");
-        ec2_util::stream_logs_via_ssm(&ssm, &instance_id, opts.observe).await?;
+        ssm_monitor::stream_logs_via_ssm(&ssm, &instance_id, opts.observe).await?;
     }
 
     Ok(())
 }
 
 async fn run_monitor(opts: &MonitorOptions) -> Result<(), LaunchError> {
-    let ssm = ec2_util::ssm_client(&opts.region).await;
+    let ssm = ssm_monitor::ssm_client(&opts.region).await;
 
     info!("Monitoring instance: {}", opts.instance_id);
     if opts.observe {
@@ -305,8 +306,8 @@ async fn run_monitor(opts: &MonitorOptions) -> Result<(), LaunchError> {
     }
     info!("");
 
-    ec2_util::wait_for_ssm_registration(&ssm, &opts.instance_id).await?;
-    ec2_util::stream_logs_via_ssm(&ssm, &opts.instance_id, opts.observe).await
+    ssm_monitor::wait_for_ssm_registration(&ssm, &opts.instance_id).await?;
+    ssm_monitor::stream_logs_via_ssm(&ssm, &opts.instance_id, opts.observe).await
 }
 
 fn log_launch_config(opts: &DeployOptions) {
