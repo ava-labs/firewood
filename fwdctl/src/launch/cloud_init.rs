@@ -4,6 +4,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Serialize;
+use serde_json::json;
 use std::collections::HashMap;
 
 use super::stage_config::{DEFAULT_SCENARIO, StageConfig, TemplateContext};
@@ -153,7 +154,16 @@ impl CloudInitContext {
         let stages = self.config.process(&self.template_ctx, DEFAULT_SCENARIO)?;
         let total = stages.len();
         let mut runcmd = Vec::with_capacity(total * 3 + 2);
-        runcmd.push(format!("{STATE_HELPER} init {total}"));
+        let stage_names: Vec<_> = stages.iter().map(|stage| stage.name.as_str()).collect();
+        let state = json!({
+            "step": 0,
+            "total": total,
+            "name": "",
+            "status": "pending",
+            "stages": stage_names,
+            "last_error": serde_json::Value::Null,
+        });
+        runcmd.push(write_json_file_command(STATE_FILE, &state)?);
 
         for (stage_idx, stage) in stages.iter().enumerate() {
             let step = stage_idx + 1;
@@ -179,6 +189,14 @@ impl CloudInitContext {
 
         Ok(runcmd)
     }
+}
+
+fn write_json_file_command<T: Serialize>(path: &str, payload: &T) -> Result<String, LaunchError> {
+    let value = serde_json::to_string(payload)?;
+    Ok(format!(
+        "printf '%s\\n' '{}' > {path}",
+        shell_single_quote(&value)
+    ))
 }
 
 fn state_update_command(step: usize, total: usize, name: &str, status: &str) -> String {
@@ -215,11 +233,6 @@ cmd="${{1:-}}"
 shift || true
 
 case "$cmd" in
-  init)
-    total="${{1:?missing total}}"
-    jq -n --argjson total "$total" \
-      '{{"step":0,"total":$total,"name":"","status":"pending","last_error":null}}' > "$STATE_FILE_TMP"
-    ;;
   update)
     step="${{1:?missing step}}"
     total="${{2:?missing total}}"

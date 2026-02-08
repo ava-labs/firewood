@@ -130,6 +130,8 @@ struct CloudInitState {
     name: String,
     status: String,
     #[serde(default)]
+    stages: Vec<String>,
+    #[serde(default)]
     last_error: Option<CommandError>,
 }
 
@@ -149,7 +151,12 @@ struct StageTracker {
 impl StageTracker {
     fn update(&mut self, state: &CloudInitState) {
         for skipped in (self.shown_step + 1)..state.step {
-            info!("[{:>2}/{}] ✓ ?", skipped, state.total);
+            info!(
+                "[{:>2}/{}] ✓ {}",
+                skipped,
+                state.total,
+                stage_name(state, skipped)
+            );
         }
 
         let is_complete = state.status == "completed";
@@ -178,14 +185,24 @@ fn failure_context(state: &CloudInitState) -> String {
     format!(
         "stage {} [{}] failed (exit={}) command #{}",
         err.stage,
-        if err.stage == state.step {
-            state.name.as_str()
-        } else {
-            "?"
-        },
+        stage_name(state, err.stage),
         err.exit,
         err.cmd
     )
+}
+
+fn stage_name(state: &CloudInitState, stage: usize) -> &str {
+    state
+        .stages
+        .get(stage.saturating_sub(1))
+        .map(String::as_str)
+        .unwrap_or_else(|| {
+            if stage == state.step {
+                state.name.as_str()
+            } else {
+                "?"
+            }
+        })
 }
 
 #[derive(Default)]
