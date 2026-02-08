@@ -179,13 +179,9 @@ fn build_tags(opts: &DeployOptions, instance_name: &str, username: &str) -> Vec<
     if let Some(t) = &opts.custom_tag {
         tags.push(tag("CustomTag", t));
     }
-    for (tag_name, (_, branch)) in [
-        "FirewoodBranch",
-        "AvalancheGoBranch",
-        "LibEVMBranch",
-    ]
-    .into_iter()
-    .zip(opts.branches())
+    for (tag_name, (_, branch)) in ["FirewoodBranch", "AvalancheGoBranch", "LibEVMBranch"]
+        .into_iter()
+        .zip(opts.branches())
     {
         if let Some(b) = branch {
             tags.push(tag(tag_name, b));

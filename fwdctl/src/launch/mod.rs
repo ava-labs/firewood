@@ -47,11 +47,11 @@ pub enum LaunchError {
 impl<E, R> From<aws_smithy_runtime_api::client::result::SdkError<E, R>> for LaunchError
 where
     E: std::error::Error + Send + Sync + 'static,
-    R: std::fmt::Debug,
+    R: std::fmt::Debug + 'static,
 {
     fn from(e: aws_smithy_runtime_api::client::result::SdkError<E, R>) -> Self {
         log::debug!("AWS SDK error: {e:#?}");
-        Self::AwsSdk(e.to_string())
+        Self::AwsSdk(format_aws_sdk_error(&e))
     }
 }
 
@@ -60,6 +60,32 @@ impl From<aws_sdk_ec2::error::BuildError> for LaunchError {
         log::debug!("AWS build error: {e:#?}");
         Self::AwsSdk(e.to_string())
     }
+}
+
+fn format_aws_sdk_error<E, R>(e: &aws_smithy_runtime_api::client::result::SdkError<E, R>) -> String
+where
+    E: std::error::Error + Send + Sync + 'static,
+    R: std::fmt::Debug + 'static,
+{
+    let chain = error_chain(e);
+    if chain.is_empty() {
+        "unknown AWS SDK error".into()
+    } else {
+        chain.join("/")
+    }
+}
+
+fn error_chain(err: &(dyn std::error::Error + 'static)) -> Vec<String> {
+    let mut messages = Vec::new();
+    let mut current = Some(err);
+    while let Some(e) = current {
+        let msg = e.to_string();
+        if !msg.is_empty() && messages.last() != Some(&msg) {
+            messages.push(msg);
+        }
+        current = e.source();
+    }
+    messages
 }
 
 #[derive(Debug, Args)]
