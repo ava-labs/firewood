@@ -4,6 +4,7 @@ packages:
   - git
   - build-essential
   - curl
+  - jq
   - protobuf-compiler
   - make
   - apt-transport-https

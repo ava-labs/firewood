@@ -163,53 +163,46 @@ impl CloudInitContext {
             })
             .collect();
 
-        runcmd.push(write_json_file_command(STAGES_FILE, &stage_names)?);
-        runcmd.push(write_json_file_command(COMMANDS_FILE, &command_map)?);
+        let state = json!({
+            "step": 0,
+            "total": total,
+            "name": "",
+            "status": "pending",
+            "stages": stage_names,
+            "commands": command_map,
+            "last_error": serde_json::Value::Null,
+        });
+        runcmd.push(write_json_file_command(STATE_FILE, &state)?);
 
         for (stage_idx, stage) in stages.iter().enumerate() {
             let step = stage_idx + 1;
-            runcmd.push(write_progress_command(
+            runcmd.push(jq_update_state_command(
                 step,
                 total,
                 &stage.name,
                 "in_progress",
-            )?);
+            ));
 
             for (cmd_idx, cmd) in stage.commands.iter().enumerate() {
                 runcmd.push(cmd.clone());
-
-                // Fail-fast with explicit context so monitor output can map to stage/command.
-                let failed_progress_json = progress_json(step, total, &stage.name, "failed")?;
-                runcmd.push(format!(
-                    "_ec=$?; if [ $_ec -ne 0 ]; then echo \"[FWDCTL_ERROR] stage={step} cmd={} exit=$_ec\" >> {ERROR_LOG}; printf '%s\\n' '{}' > {PROGRESS_FILE}; exit $_ec; fi",
+                runcmd.push(jq_mark_failed_command(
+                    step,
+                    total,
+                    &stage.name,
                     cmd_idx + 1,
-                    shell_single_quote(&failed_progress_json)
                 ));
             }
 
-            runcmd.push(write_progress_command(
+            runcmd.push(jq_update_state_command(
                 step,
                 total,
                 &stage.name,
                 "completed",
-            )?);
+            ));
         }
 
         Ok(runcmd)
     }
-}
-
-fn write_progress_command(
-    step: usize,
-    total: usize,
-    name: &str,
-    status: &str,
-) -> Result<String, LaunchError> {
-    let progress = progress_json(step, total, name, status)?;
-    Ok(format!(
-        "printf '%s\\n' '{}' > {PROGRESS_FILE}",
-        shell_single_quote(&progress)
-    ))
 }
 
 fn write_json_file_command<T: Serialize>(path: &str, payload: &T) -> Result<String, LaunchError> {
@@ -220,25 +213,24 @@ fn write_json_file_command<T: Serialize>(path: &str, payload: &T) -> Result<Stri
     ))
 }
 
-fn progress_json(
-    step: usize,
-    total: usize,
-    name: &str,
-    status: &str,
-) -> Result<String, LaunchError> {
-    Ok(serde_json::to_string(&json!({
-        "step": step,
-        "total": total,
-        "name": name,
-        "status": status,
-    }))?)
+fn jq_update_state_command(step: usize, total: usize, name: &str, status: &str) -> String {
+    format!(
+        "jq --argjson step {step} --argjson total {total} --arg name '{}' --arg status '{}' '.step=$step | .total=$total | .name=$name | .status=$status | .last_error=null' {STATE_FILE} > {STATE_FILE_TMP} && mv {STATE_FILE_TMP} {STATE_FILE}",
+        shell_single_quote(name),
+        shell_single_quote(status),
+    )
+}
+
+fn jq_mark_failed_command(step: usize, total: usize, name: &str, cmd: usize) -> String {
+    format!(
+        "_ec=$?; if [ $_ec -ne 0 ]; then jq --argjson step {step} --argjson total {total} --arg name '{}' --argjson cmd {cmd} --argjson exit \"$_ec\" '.step=$step | .total=$total | .name=$name | .status=\"failed\" | .last_error={{\"stage\":$step,\"cmd\":$cmd,\"exit\":$exit}}' {STATE_FILE} > {STATE_FILE_TMP} && mv {STATE_FILE_TMP} {STATE_FILE}; exit $_ec; fi",
+        shell_single_quote(name),
+    )
 }
 
 fn shell_single_quote(value: &str) -> String {
     value.replace('\'', "'\\''")
 }
 
-pub const PROGRESS_FILE: &str = "/var/log/cloud-init-progress.json";
-pub const STAGES_FILE: &str = "/var/log/cloud-init-stages.json";
-pub const COMMANDS_FILE: &str = "/var/log/cloud-init-commands.json";
-pub const ERROR_LOG: &str = "/var/log/cloud-init-errors.log";
+pub const STATE_FILE: &str = "/var/log/cloud-init-state.json";
+const STATE_FILE_TMP: &str = "/var/log/cloud-init-state.json.tmp";

@@ -13,7 +13,7 @@ use serde::de::DeserializeOwned;
 use tokio::time::sleep;
 
 use super::LaunchError;
-use super::cloud_init::{COMMANDS_FILE, ERROR_LOG, PROGRESS_FILE, STAGES_FILE};
+use super::cloud_init::STATE_FILE;
 
 const SSM_MAX_RETRIES: u32 = 30;
 const SSM_RETRY_DELAY: Duration = Duration::from_secs(5);
@@ -79,31 +79,18 @@ pub async fn stream_logs_via_ssm(
     let mut tracker = StageTracker::default();
 
     loop {
-        tracker.refresh_metadata(ssm, instance_id).await?;
-
-        if let Some(progress) =
-            read_optional_json::<StageProgress>(ssm, instance_id, PROGRESS_FILE).await?
+        if let Some(state) =
+            read_optional_json::<CloudInitState>(ssm, instance_id, STATE_FILE).await?
         {
-            tracker.update(&progress);
-            if progress.status == "failed" {
-                let context = read_latest_error(ssm, instance_id)
-                    .await?
-                    .map(|line| tracker.context_from_error_line(&line))
-                    .or_else(|| tracker.failure_context_from_progress(&progress))
-                    .unwrap_or_else(|| {
-                        format!("stage {} [{}] failed", progress.step, progress.name)
-                    });
-                return Err(LaunchError::AwsSdk(context));
+            tracker.update(&state);
+            if state.status == "failed" {
+                return Err(LaunchError::AwsSdk(failure_context(&state)));
             }
-            if progress.status == "completed" && progress.step == progress.total {
+            if state.status == "completed" && state.step == state.total {
                 info!("");
-                info!("All {} stages completed.", progress.total);
+                info!("All {} stages completed.", state.total);
                 break;
             }
-        }
-
-        if let Some(line) = read_latest_error(ssm, instance_id).await? {
-            return Err(LaunchError::AwsSdk(tracker.context_from_error_line(&line)));
         }
 
         sleep(LOG_POLL_INTERVAL).await;
@@ -138,131 +125,87 @@ async fn stream_bootstrap_log(ssm: &SsmClient, instance_id: &str) -> Result<(), 
 }
 
 #[derive(Debug, Deserialize)]
-struct StageProgress {
+struct CloudInitState {
     step: usize,
     total: usize,
     name: String,
     status: String,
+    #[serde(default)]
+    stages: Vec<String>,
+    #[serde(default)]
+    commands: HashMap<String, Vec<String>>,
+    #[serde(default)]
+    last_error: Option<CommandError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CommandError {
+    stage: usize,
+    cmd: usize,
+    exit: i64,
 }
 
 #[derive(Default)]
 struct StageTracker {
     shown_step: usize,
     shown_completed: bool,
-    stage_names: Vec<String>,
-    commands: HashMap<String, Vec<String>>,
 }
 
 impl StageTracker {
-    async fn refresh_metadata(
-        &mut self,
-        ssm: &SsmClient,
-        instance_id: &str,
-    ) -> Result<(), LaunchError> {
-        if self.stage_names.is_empty()
-            && let Some(names) = read_optional_json(ssm, instance_id, STAGES_FILE).await?
-        {
-            self.stage_names = names;
-        }
-        if self.commands.is_empty()
-            && let Some(commands) = read_optional_json(ssm, instance_id, COMMANDS_FILE).await?
-        {
-            self.commands = commands;
-        }
-        Ok(())
-    }
-
-    fn update(&mut self, progress: &StageProgress) {
-        for skipped in (self.shown_step + 1)..progress.step {
+    fn update(&mut self, state: &CloudInitState) {
+        for skipped in (self.shown_step + 1)..state.step {
             info!(
                 "[{:>2}/{}] ✓ {}",
                 skipped,
-                progress.total,
-                self.stage_name(skipped)
+                state.total,
+                stage_name(state, skipped)
             );
         }
 
-        let is_complete = progress.status == "completed";
-        let should_print = progress.step > self.shown_step
-            || (progress.step == self.shown_step && is_complete && !self.shown_completed);
+        let is_complete = state.status == "completed";
+        let should_print = state.step > self.shown_step
+            || (state.step == self.shown_step && is_complete && !self.shown_completed);
         if should_print {
-            let symbol = match progress.status.as_str() {
+            let symbol = match state.status.as_str() {
                 "completed" => "✓",
                 "failed" => "✗",
                 _ => "…",
             };
             info!(
                 "[{:>2}/{}] {} {}",
-                progress.step, progress.total, symbol, progress.name
+                state.step, state.total, symbol, state.name
             );
-            self.shown_step = progress.step;
+            self.shown_step = state.step;
             self.shown_completed = is_complete;
         }
     }
-
-    fn failure_context_from_progress(&self, progress: &StageProgress) -> Option<String> {
-        self.command_for(progress.step, 1).map(|cmd| {
-            format!(
-                "stage {} [{}] failed while running: {}",
-                progress.step,
-                self.stage_name(progress.step),
-                cmd
-            )
-        })
-    }
-
-    fn context_from_error_line(&self, line: &str) -> String {
-        let marker = parse_error_marker(line);
-        let Some(stage) = marker.stage else {
-            return line.to_owned();
-        };
-        let cmd = marker.cmd.unwrap_or(1);
-        let exit = marker.exit.unwrap_or_default();
-        let command = self.command_for(stage, cmd).unwrap_or("?");
-
-        format!(
-            "stage {stage} [{}] failed (exit={exit}) while running: {command}",
-            self.stage_name(stage),
-        )
-    }
-
-    fn stage_name(&self, stage: usize) -> &str {
-        self.stage_names
-            .get(stage.saturating_sub(1))
-            .map(String::as_str)
-            .unwrap_or("?")
-    }
-
-    fn command_for(&self, stage: usize, cmd: usize) -> Option<&str> {
-        self.commands
-            .get(&stage.to_string())
-            .and_then(|commands| commands.get(cmd.saturating_sub(1)))
-            .map(String::as_str)
-    }
 }
 
-#[derive(Default)]
-struct ErrorMarker {
-    stage: Option<usize>,
-    cmd: Option<usize>,
-    exit: Option<usize>,
+fn failure_context(state: &CloudInitState) -> String {
+    let Some(err) = &state.last_error else {
+        return format!("stage {} [{}] failed", state.step, state.name);
+    };
+    let command = state
+        .commands
+        .get(&err.stage.to_string())
+        .and_then(|commands| commands.get(err.cmd.saturating_sub(1)))
+        .map(String::as_str)
+        .unwrap_or("?");
+    format!(
+        "stage {} [{}] failed (exit={}) while running: {}",
+        err.stage,
+        stage_name(state, err.stage),
+        err.exit,
+        command
+    )
 }
 
-fn parse_error_marker(line: &str) -> ErrorMarker {
-    ErrorMarker {
-        stage: extract_num(line, "stage="),
-        cmd: extract_num(line, "cmd="),
-        exit: extract_num(line, "exit="),
-    }
-}
-
-fn extract_num(line: &str, prefix: &str) -> Option<usize> {
-    line.find(prefix).and_then(|start| {
-        line[start + prefix.len()..]
-            .split(|c: char| !c.is_ascii_digit())
-            .next()
-            .and_then(|value| value.parse().ok())
-    })
+fn stage_name(state: &CloudInitState, stage: usize) -> &str {
+    state
+        .stages
+        .get(stage.saturating_sub(1))
+        .map(String::as_str)
+        .unwrap_or("?")
 }
 
 #[derive(Default)]
@@ -379,20 +322,6 @@ async fn read_optional_json<T: DeserializeOwned>(
             Ok(None)
         }
     }
-}
-
-async fn read_latest_error(
-    ssm: &SsmClient,
-    instance_id: &str,
-) -> Result<Option<String>, LaunchError> {
-    let output = run_ssm_command(
-        ssm,
-        instance_id,
-        &format!("tail -n 1 {ERROR_LOG} 2>/dev/null || true"),
-    )
-    .await?;
-    let line = output.trim();
-    Ok((!line.is_empty()).then(|| line.to_owned()))
 }
 
 async fn read_log_chunk(
