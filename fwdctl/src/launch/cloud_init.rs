@@ -4,6 +4,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Serialize;
+use serde_json::json;
 
 use std::collections::HashMap;
 
@@ -147,6 +148,97 @@ impl CloudInitContext {
 
     fn build_runcmd(&self) -> Result<Vec<String>, LaunchError> {
         let stages = self.config.process(&self.template_ctx, DEFAULT_SCENARIO)?;
-        Ok(stages.into_iter().flat_map(|x| x.commands).collect())
+        let total = stages.len();
+        let mut runcmd = Vec::with_capacity(total * 4 + 2);
+
+        let stage_names: Vec<_> = stages.iter().map(|stage| stage.name.as_str()).collect();
+        let command_map: HashMap<String, Vec<&str>> = stages
+            .iter()
+            .enumerate()
+            .map(|(index, stage)| {
+                (
+                    (index + 1).to_string(),
+                    stage.commands.iter().map(String::as_str).collect(),
+                )
+            })
+            .collect();
+
+        runcmd.push(write_json_file_command(STAGES_FILE, &stage_names)?);
+        runcmd.push(write_json_file_command(COMMANDS_FILE, &command_map)?);
+
+        for (stage_idx, stage) in stages.iter().enumerate() {
+            let step = stage_idx + 1;
+            runcmd.push(write_progress_command(
+                step,
+                total,
+                &stage.name,
+                "in_progress",
+            )?);
+
+            for (cmd_idx, cmd) in stage.commands.iter().enumerate() {
+                runcmd.push(cmd.clone());
+
+                // Fail-fast with explicit context so monitor output can map to stage/command.
+                let failed_progress_json = progress_json(step, total, &stage.name, "failed")?;
+                runcmd.push(format!(
+                    "_ec=$?; if [ $_ec -ne 0 ]; then echo \"[FWDCTL_ERROR] stage={step} cmd={} exit=$_ec\" >> {ERROR_LOG}; printf '%s\\n' '{}' > {PROGRESS_FILE}; exit $_ec; fi",
+                    cmd_idx + 1,
+                    shell_single_quote(&failed_progress_json)
+                ));
+            }
+
+            runcmd.push(write_progress_command(
+                step,
+                total,
+                &stage.name,
+                "completed",
+            )?);
+        }
+
+        Ok(runcmd)
     }
 }
+
+fn write_progress_command(
+    step: usize,
+    total: usize,
+    name: &str,
+    status: &str,
+) -> Result<String, LaunchError> {
+    let progress = progress_json(step, total, name, status)?;
+    Ok(format!(
+        "printf '%s\\n' '{}' > {PROGRESS_FILE}",
+        shell_single_quote(&progress)
+    ))
+}
+
+fn write_json_file_command<T: Serialize>(path: &str, payload: &T) -> Result<String, LaunchError> {
+    let value = serde_json::to_string(payload)?;
+    Ok(format!(
+        "printf '%s\\n' '{}' > {path}",
+        shell_single_quote(&value)
+    ))
+}
+
+fn progress_json(
+    step: usize,
+    total: usize,
+    name: &str,
+    status: &str,
+) -> Result<String, LaunchError> {
+    Ok(serde_json::to_string(&json!({
+        "step": step,
+        "total": total,
+        "name": name,
+        "status": status,
+    }))?)
+}
+
+fn shell_single_quote(value: &str) -> String {
+    value.replace('\'', "'\\''")
+}
+
+pub const PROGRESS_FILE: &str = "/var/log/cloud-init-progress.json";
+pub const STAGES_FILE: &str = "/var/log/cloud-init-stages.json";
+pub const COMMANDS_FILE: &str = "/var/log/cloud-init-commands.json";
+pub const ERROR_LOG: &str = "/var/log/cloud-init-errors.log";

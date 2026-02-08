@@ -19,11 +19,17 @@ pub enum LaunchError {
     #[error("EC2 operation failed: {0}")]
     Ec2(#[from] aws_sdk_ec2::Error),
 
+    #[error("SSM operation failed: {0}")]
+    Ssm(#[from] aws_sdk_ssm::Error),
+
     #[error("AWS SDK error: {0}")]
     AwsSdk(String),
 
     #[error("Cloud-init generation failed: {0}")]
     CloudInit(#[from] serde_yaml::Error),
+
+    #[error("JSON serialization error: {0}")]
+    Json(#[from] serde_json::Error),
 
     #[error("Stage configuration error: {0}")]
     StageConfig(#[from] stage_config::ConfigError),
@@ -97,6 +103,7 @@ pub struct Options {
 #[derive(Debug, Subcommand)]
 pub enum LaunchCommand {
     Deploy(DeployOptions),
+    Monitor(MonitorOptions),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
@@ -191,6 +198,14 @@ pub struct DeployOptions {
     /// Custom tag to identify this instance (e.g., "pathdb-test", "pr-123")
     #[arg(long = "tag", value_name = "TAG")]
     pub custom_tag: Option<String>,
+
+    /// Follow cloud-init stage progress via SSM after launch
+    #[arg(long = "follow")]
+    pub follow_logs: bool,
+
+    /// Monitor bootstrap re-execution progress from `/var/log/bootstrap.log` (requires `--follow`)
+    #[arg(long = "observe", requires = "follow_logs")]
+    pub observe: bool,
 }
 
 impl DeployOptions {
@@ -209,6 +224,21 @@ impl DeployOptions {
     }
 }
 
+#[derive(Debug, Args)]
+pub struct MonitorOptions {
+    /// Instance ID to monitor
+    #[arg(value_name = "INSTANCE_ID")]
+    pub instance_id: String,
+
+    /// AWS region
+    #[arg(long = "region", value_name = "REGION", default_value = "us-west-2")]
+    pub region: String,
+
+    /// Monitor bootstrap re-execution progress from `/var/log/bootstrap.log`
+    #[arg(long = "observe")]
+    pub observe: bool,
+}
+
 pub(super) fn run(opts: &Options) -> Result<(), FwdError> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(run_internal(opts))
@@ -216,10 +246,14 @@ pub(super) fn run(opts: &Options) -> Result<(), FwdError> {
 
 async fn run_internal(opts: &Options) -> Result<(), FwdError> {
     log::debug!("launch command {opts:?}");
-    let LaunchCommand::Deploy(deploy) = &opts.command;
-    run_deploy(deploy)
-        .await
-        .map_err(|e| FwdError::InternalError(Box::from(e)))
+    match &opts.command {
+        LaunchCommand::Deploy(deploy) => run_deploy(deploy)
+            .await
+            .map_err(|e| FwdError::InternalError(Box::from(e))),
+        LaunchCommand::Monitor(monitor) => run_monitor(monitor)
+            .await
+            .map_err(|e| FwdError::InternalError(Box::from(e))),
+    }
 }
 
 async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
@@ -230,6 +264,7 @@ async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
     let user_data_b64 = ctx.render_base64()?;
 
     let ec2 = ec2_util::ec2_client(&opts.region).await;
+    let ssm = ec2_util::ssm_client(&opts.region).await;
 
     let ami_id = ec2_util::latest_ubuntu_ami(&ec2, &opts.instance_type).await?;
     info!("Using AMI: {ami_id}");
@@ -248,18 +283,46 @@ async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
     if let Some(ip) = &private_ip {
         info!("Private IP:  {ip}");
     }
+    info!("");
+    info!("To monitor:  fwdctl launch monitor {instance_id}");
+
+    if opts.follow_logs {
+        ec2_util::wait_for_ssm_registration(&ssm, &instance_id).await?;
+        info!("");
+        info!("Following cloud-init stage progress via SSM...");
+        ec2_util::stream_logs_via_ssm(&ssm, &instance_id, opts.observe).await?;
+    }
 
     Ok(())
+}
+
+async fn run_monitor(opts: &MonitorOptions) -> Result<(), LaunchError> {
+    let ssm = ec2_util::ssm_client(&opts.region).await;
+
+    info!("Monitoring instance: {}", opts.instance_id);
+    if opts.observe {
+        info!("Observe mode: tracking bootstrap re-execution after cloud-init stages.");
+    }
+    info!("");
+
+    ec2_util::wait_for_ssm_registration(&ssm, &opts.instance_id).await?;
+    ec2_util::stream_logs_via_ssm(&ssm, &opts.instance_id, opts.observe).await
 }
 
 fn log_launch_config(opts: &DeployOptions) {
     info!("Launch configuration:");
     info!("\t{:24}{}", "Instance Type:", opts.instance_type);
     for (label, value) in opts.branches() {
-        info!("\t{:24}{}", format!("{label} branch:"), value.unwrap_or("default"));
+        info!(
+            "\t{:24}{}",
+            format!("{label} branch:"),
+            value.unwrap_or("default")
+        );
     }
     info!("\t{:24}{}", "Blocks:", opts.nblocks.as_str());
     info!("\t{:24}{}", "Config:", opts.config);
     info!("\t{:24}{}", "Metrics Server:", opts.metrics_server);
     info!("\t{:24}{}", "Region:", opts.region);
+    info!("\t{:24}{}", "Follow logs:", opts.follow_logs);
+    info!("\t{:24}{}", "Observe progress:", opts.observe);
 }
