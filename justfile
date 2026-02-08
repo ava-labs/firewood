@@ -271,5 +271,3 @@ bench-cchain:
     echo "Monitor this workflow with cli: $GH run watch $run_id"
     echo " or with this URL: https://github.com/ava-labs/firewood/actions/runs/$run_id"
     echo ""
-    
-    $GH run watch "$run_id"
