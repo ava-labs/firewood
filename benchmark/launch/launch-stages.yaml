@@ -166,4 +166,4 @@ scenarios:
       - id: execute-range
         name: "Executing blocks"
         commands:
-          - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego --login METRICS_SERVER_ENABLED={{ args.metrics_server }} CURRENT_STATE_DIR={{ variables.nvme_base }}/ubuntu/exec-data/current-state BLOCK_DIR={{ variables.nvme_base }}/ubuntu/exec-data/blocks START_BLOCK=1 END_BLOCK={{ variables.end_block }} CONFIG={{ args.config }} time task test-cchain-reexecution > /var/log/bootstrap{{ variables.tag }}.log 2>&1 &"
+          - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego --login METRICS_SERVER_ENABLED={{ args.metrics_server }} CURRENT_STATE_DIR={{ variables.nvme_base }}/ubuntu/exec-data/current-state BLOCK_DIR={{ variables.nvme_base }}/ubuntu/exec-data/blocks START_BLOCK=1 END_BLOCK={{ variables.end_block }} CONFIG={{ args.config }} time task test-cchain-reexecution > /var/log/bootstrap.log 2>&1 &"
