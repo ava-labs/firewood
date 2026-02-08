@@ -167,24 +167,14 @@ impl CloudInitContext {
 
         for (stage_idx, stage) in stages.iter().enumerate() {
             let step = stage_idx + 1;
-            runcmd.push(state_update_command(
-                step,
-                total,
-                &stage.name,
-                "in_progress",
-            ));
+            runcmd.push(state_update_command(step, "in_progress"));
 
             for (cmd_idx, cmd) in stage.commands.iter().enumerate() {
                 runcmd.push(cmd.clone());
-                runcmd.push(state_fail_if_needed_command(
-                    step,
-                    total,
-                    &stage.name,
-                    cmd_idx + 1,
-                ));
+                runcmd.push(state_fail_if_needed_command(step, cmd_idx + 1));
             }
 
-            runcmd.push(state_update_command(step, total, &stage.name, "completed"));
+            runcmd.push(state_update_command(step, "completed"));
         }
 
         Ok(runcmd)
@@ -199,17 +189,13 @@ fn write_json_file_command<T: Serialize>(path: &str, payload: &T) -> Result<Stri
     ))
 }
 
-fn state_update_command(step: usize, total: usize, name: &str, status: &str) -> String {
-    format!(
-        "{STATE_HELPER} update {step} {total} '{}' {status}",
-        shell_single_quote(name),
-    )
+fn state_update_command(step: usize, status: &str) -> String {
+    format!("{STATE_HELPER} update {step} {status} || true")
 }
 
-fn state_fail_if_needed_command(step: usize, total: usize, name: &str, cmd: usize) -> String {
+fn state_fail_if_needed_command(step: usize, cmd: usize) -> String {
     format!(
-        "_ec=$?; if [ $_ec -ne 0 ]; then {STATE_HELPER} fail {step} {total} '{}' {cmd} \"$_ec\"; exit $_ec; fi",
-        shell_single_quote(name),
+        "_ec=$?; if [ $_ec -ne 0 ]; then {STATE_HELPER} fail {step} {cmd} \"$_ec\" || true; exit $_ec; fi"
     )
 }
 
@@ -235,22 +221,17 @@ shift || true
 case "$cmd" in
   update)
     step="${{1:?missing step}}"
-    total="${{2:?missing total}}"
-    name="${{3:?missing name}}"
-    status="${{4:?missing status}}"
-    jq --argjson step "$step" --argjson total "$total" --arg name "$name" --arg status "$status" \
-      '.step=$step | .total=$total | .name=$name | .status=$status | .last_error=null' \
+    status="${{2:?missing status}}"
+    jq --argjson step "$step" --arg status "$status" \
+      '.step=$step | .name=(.stages[$step-1] // ("stage-\($step)")) | .status=$status | .last_error=null' \
       "$STATE_FILE" > "$STATE_FILE_TMP"
     ;;
   fail)
     step="${{1:?missing step}}"
-    total="${{2:?missing total}}"
-    name="${{3:?missing name}}"
-    cmd_idx="${{4:?missing cmd}}"
-    exit_code="${{5:?missing exit}}"
-    jq --argjson step "$step" --argjson total "$total" --arg name "$name" \
-      --argjson cmd "$cmd_idx" --argjson exit "$exit_code" \
-      '.step=$step | .total=$total | .name=$name | .status="failed" | .last_error={{"stage":$step,"cmd":$cmd,"exit":$exit}}' \
+    cmd_idx="${{2:?missing cmd}}"
+    exit_code="${{3:?missing exit}}"
+    jq --argjson step "$step" --argjson cmd "$cmd_idx" --argjson exit "$exit_code" \
+      '.step=$step | .name=(.stages[$step-1] // ("stage-\($step)")) | .status="failed" | .last_error={{"stage":$step,"cmd":$cmd,"exit":$exit}}' \
       "$STATE_FILE" > "$STATE_FILE_TMP"
     ;;
   *)

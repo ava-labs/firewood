@@ -72,11 +72,9 @@ stages:
   rust-install:
     name: "Installing Rust"
     commands:
-      - "echo 'PATH=/usr/local/go/bin:$HOME/.cargo/bin:$PATH' >> ~ubuntu/.profile"
-      - "curl https://sh.rustup.rs -sSf | RUSTUP_HOME=/usr/local/rust CARGO_HOME=/usr/local/rust sh -s -- -y --no-modify-path"
-      - "install -d -m 0755 /usr/local/rust"
-      - "chown -R ubuntu:ubuntu /usr/local/rust"
-      - "sudo -u ubuntu --login rustup default stable"
+      - "install -d -m 0755 -o ubuntu -g ubuntu /usr/local/rust"
+      - "sudo -u ubuntu --login env RUSTUP_HOME=/usr/local/rust CARGO_HOME=/usr/local/rust sh -c 'curl https://sh.rustup.rs -sSf | sh -s -- -y --no-modify-path'"
+      - "sudo -u ubuntu --login env RUSTUP_HOME=/usr/local/rust CARGO_HOME=/usr/local/rust /usr/local/rust/bin/rustup default stable"
   ssm-agent:
     name: "Installing SSM Agent"
     commands:

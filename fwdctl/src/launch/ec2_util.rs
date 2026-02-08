@@ -126,10 +126,8 @@ pub async fn launch_instance(
     if let Some(key) = &opts.key_name {
         request = request.key_name(key);
     }
-    let mut sg = vec!["fwdctl-launch-default-sg".to_string()];
-    sg.extend(opts.security_group_ids.clone());
     if !opts.security_group_ids.is_empty() {
-        request = request.set_security_group_ids(Some(sg));
+        request = request.set_security_group_ids(Some(opts.security_group_ids.clone()));
     }
     if !opts.iam_instance_profile_name.is_empty() {
         request = request.iam_instance_profile(
@@ -210,16 +208,9 @@ pub async fn wait_for_running(ec2: &Ec2Client, instance_id: &str) -> Result<(), 
 }
 
 async fn get_instance_state(ec2: &Ec2Client, instance_id: &str) -> Result<String, LaunchError> {
-    let response = ec2
-        .describe_instances()
-        .instance_ids(instance_id)
-        .send()
-        .await?;
-
-    Ok(response
-        .reservations()
-        .first()
-        .and_then(|r| r.instances().first())
+    Ok(describe_instance(ec2, instance_id)
+        .await?
+        .as_ref()
         .and_then(|i| i.state())
         .and_then(|s| s.name())
         .map_or("unknown", aws_sdk_ec2::types::InstanceStateName::as_str)
@@ -230,22 +221,31 @@ pub async fn describe_ips(
     ec2: &Ec2Client,
     instance_id: &str,
 ) -> Result<(Option<String>, Option<String>), LaunchError> {
+    Ok(describe_instance(ec2, instance_id).await?.map_or_else(
+        || (None, None),
+        |instance| {
+            (
+                instance.public_ip_address().map(Into::into),
+                instance.private_ip_address().map(Into::into),
+            )
+        },
+    ))
+}
+
+async fn describe_instance(
+    ec2: &Ec2Client,
+    instance_id: &str,
+) -> Result<Option<aws_sdk_ec2::types::Instance>, LaunchError> {
     let response = ec2
         .describe_instances()
         .instance_ids(instance_id)
         .send()
         .await?;
-    let i = response
+
+    Ok(response
         .reservations()
         .first()
-        .and_then(|r| r.instances().first());
-    Ok(i.map(|i| {
-        (
-            i.public_ip_address().map(Into::into),
-            i.private_ip_address().map(Into::into),
-        )
-    })
-    .unwrap_or_default())
+        .and_then(|r| r.instances().first().cloned()))
 }
 
 /// Returns the AWS username for the current caller identity.

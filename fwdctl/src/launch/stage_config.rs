@@ -321,7 +321,10 @@ mod tests {
             branches: HashMap::new(),
         };
         let result = process_template("hello {{ variables.name }} ({{ args.count }})", &ctx);
-        assert_eq!(result.unwrap(), "hello world (42)");
+        assert_eq!(
+            result.expect("template interpolation should succeed"),
+            "hello world (42)"
+        );
         let result = process_template("{{ variables.missing }}", &ctx);
         assert!(result.is_err());
     }

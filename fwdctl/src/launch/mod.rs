@@ -18,10 +18,10 @@ pub enum LaunchError {
     InvalidInstanceType(String, String),
 
     #[error("EC2 operation failed: {0}")]
-    Ec2(#[from] aws_sdk_ec2::Error),
+    Ec2(Box<aws_sdk_ec2::Error>),
 
     #[error("SSM operation failed: {0}")]
-    Ssm(#[from] aws_sdk_ssm::Error),
+    Ssm(Box<aws_sdk_ssm::Error>),
 
     #[error("AWS SDK error: {0}")]
     AwsSdk(String),
@@ -52,6 +52,18 @@ pub enum LaunchError {
 
     #[error("Encoded user-data size {actual} exceeds EC2 limit {limit} bytes")]
     UserDataTooLarge { actual: usize, limit: usize },
+}
+
+impl From<aws_sdk_ec2::Error> for LaunchError {
+    fn from(error: aws_sdk_ec2::Error) -> Self {
+        Self::Ec2(Box::new(error))
+    }
+}
+
+impl From<aws_sdk_ssm::Error> for LaunchError {
+    fn from(error: aws_sdk_ssm::Error) -> Self {
+        Self::Ssm(Box::new(error))
+    }
 }
 
 impl<E, R> From<aws_smithy_runtime_api::client::result::SdkError<E, R>> for LaunchError
@@ -106,7 +118,7 @@ pub struct Options {
 
 #[derive(Debug, Subcommand)]
 pub enum LaunchCommand {
-    Deploy(DeployOptions),
+    Deploy(Box<DeployOptions>),
     Monitor(MonitorOptions),
 }
 
