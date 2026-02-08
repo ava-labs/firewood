@@ -74,6 +74,8 @@ stages:
     commands:
       - "echo 'PATH=/usr/local/go/bin:$HOME/.cargo/bin:$PATH' >> ~ubuntu/.profile"
       - "curl https://sh.rustup.rs -sSf | RUSTUP_HOME=/usr/local/rust CARGO_HOME=/usr/local/rust sh -s -- -y --no-modify-path"
+      - "install -d -m 0755 /usr/local/rust"
+      - "chown -R ubuntu:ubuntu /usr/local/rust"
       - "sudo -u ubuntu --login rustup default stable"
   ssm-agent:
     name: "Installing SSM Agent"

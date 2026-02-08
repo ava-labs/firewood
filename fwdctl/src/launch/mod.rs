@@ -49,6 +49,9 @@ pub enum LaunchError {
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+
+    #[error("Encoded user-data size {actual} exceeds EC2 limit {limit} bytes")]
+    UserDataTooLarge { actual: usize, limit: usize },
 }
 
 impl<E, R> From<aws_smithy_runtime_api::client::result::SdkError<E, R>> for LaunchError
@@ -258,11 +261,21 @@ async fn run_internal(opts: &Options) -> Result<(), FwdError> {
 }
 
 async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
+    const EC2_USER_DATA_B64_LIMIT: usize = 25_600;
+
     log_launch_config(opts);
 
     let ctx = cloud_init::CloudInitContext::new(opts)?;
 
     let user_data_b64 = ctx.render_base64()?;
+    let user_data_size = user_data_b64.len();
+    info!("Cloud-init user-data size: {user_data_size} bytes (base64)");
+    if user_data_size > EC2_USER_DATA_B64_LIMIT {
+        return Err(LaunchError::UserDataTooLarge {
+            actual: user_data_size,
+            limit: EC2_USER_DATA_B64_LIMIT,
+        });
+    }
 
     let ec2 = ec2_util::ec2_client(&opts.region).await;
     let ssm = ssm_monitor::ssm_client(&opts.region).await;

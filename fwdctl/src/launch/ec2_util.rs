@@ -126,8 +126,10 @@ pub async fn launch_instance(
     if let Some(key) = &opts.key_name {
         request = request.key_name(key);
     }
+    let mut sg = vec!["fwdctl-launch-default-sg".to_string()];
+    sg.extend(opts.security_group_ids.clone());
     if !opts.security_group_ids.is_empty() {
-        request = request.set_security_group_ids(Some(opts.security_group_ids.clone()));
+        request = request.set_security_group_ids(Some(sg));
     }
     if !opts.iam_instance_profile_name.is_empty() {
         request = request.iam_instance_profile(

@@ -4,8 +4,6 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Serialize;
-use serde_json::json;
-
 use std::collections::HashMap;
 
 use super::stage_config::{DEFAULT_SCENARIO, StageConfig, TemplateContext};
@@ -143,40 +141,23 @@ impl CloudInitContext {
                 )
                 .into(),
             },
+            WriteFile {
+                path: STATE_HELPER,
+                permissions: "0755",
+                content: state_helper_script(),
+            },
         ]
     }
 
     fn build_runcmd(&self) -> Result<Vec<String>, LaunchError> {
         let stages = self.config.process(&self.template_ctx, DEFAULT_SCENARIO)?;
         let total = stages.len();
-        let mut runcmd = Vec::with_capacity(total * 4 + 2);
-
-        let stage_names: Vec<_> = stages.iter().map(|stage| stage.name.as_str()).collect();
-        let command_map: HashMap<String, Vec<&str>> = stages
-            .iter()
-            .enumerate()
-            .map(|(index, stage)| {
-                (
-                    (index + 1).to_string(),
-                    stage.commands.iter().map(String::as_str).collect(),
-                )
-            })
-            .collect();
-
-        let state = json!({
-            "step": 0,
-            "total": total,
-            "name": "",
-            "status": "pending",
-            "stages": stage_names,
-            "commands": command_map,
-            "last_error": serde_json::Value::Null,
-        });
-        runcmd.push(write_json_file_command(STATE_FILE, &state)?);
+        let mut runcmd = Vec::with_capacity(total * 3 + 2);
+        runcmd.push(format!("{STATE_HELPER} init {total}"));
 
         for (stage_idx, stage) in stages.iter().enumerate() {
             let step = stage_idx + 1;
-            runcmd.push(jq_update_state_command(
+            runcmd.push(state_update_command(
                 step,
                 total,
                 &stage.name,
@@ -185,7 +166,7 @@ impl CloudInitContext {
 
             for (cmd_idx, cmd) in stage.commands.iter().enumerate() {
                 runcmd.push(cmd.clone());
-                runcmd.push(jq_mark_failed_command(
+                runcmd.push(state_fail_if_needed_command(
                     step,
                     total,
                     &stage.name,
@@ -193,37 +174,23 @@ impl CloudInitContext {
                 ));
             }
 
-            runcmd.push(jq_update_state_command(
-                step,
-                total,
-                &stage.name,
-                "completed",
-            ));
+            runcmd.push(state_update_command(step, total, &stage.name, "completed"));
         }
 
         Ok(runcmd)
     }
 }
 
-fn write_json_file_command<T: Serialize>(path: &str, payload: &T) -> Result<String, LaunchError> {
-    let value = serde_json::to_string(payload)?;
-    Ok(format!(
-        "printf '%s\\n' '{}' > {path}",
-        shell_single_quote(&value)
-    ))
-}
-
-fn jq_update_state_command(step: usize, total: usize, name: &str, status: &str) -> String {
+fn state_update_command(step: usize, total: usize, name: &str, status: &str) -> String {
     format!(
-        "jq --argjson step {step} --argjson total {total} --arg name '{}' --arg status '{}' '.step=$step | .total=$total | .name=$name | .status=$status | .last_error=null' {STATE_FILE} > {STATE_FILE_TMP} && mv {STATE_FILE_TMP} {STATE_FILE}",
+        "{STATE_HELPER} update {step} {total} '{}' {status}",
         shell_single_quote(name),
-        shell_single_quote(status),
     )
 }
 
-fn jq_mark_failed_command(step: usize, total: usize, name: &str, cmd: usize) -> String {
+fn state_fail_if_needed_command(step: usize, total: usize, name: &str, cmd: usize) -> String {
     format!(
-        "_ec=$?; if [ $_ec -ne 0 ]; then jq --argjson step {step} --argjson total {total} --arg name '{}' --argjson cmd {cmd} --argjson exit \"$_ec\" '.step=$step | .total=$total | .name=$name | .status=\"failed\" | .last_error={{\"stage\":$step,\"cmd\":$cmd,\"exit\":$exit}}' {STATE_FILE} > {STATE_FILE_TMP} && mv {STATE_FILE_TMP} {STATE_FILE}; exit $_ec; fi",
+        "_ec=$?; if [ $_ec -ne 0 ]; then {STATE_HELPER} fail {step} {total} '{}' {cmd} \"$_ec\"; exit $_ec; fi",
         shell_single_quote(name),
     )
 }
@@ -234,3 +201,52 @@ fn shell_single_quote(value: &str) -> String {
 
 pub const STATE_FILE: &str = "/var/log/cloud-init-state.json";
 const STATE_FILE_TMP: &str = "/var/log/cloud-init-state.json.tmp";
+const STATE_HELPER: &str = "/usr/local/bin/fwdctl-state";
+
+fn state_helper_script() -> String {
+    format!(
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+
+STATE_FILE="{STATE_FILE}"
+STATE_FILE_TMP="{STATE_FILE_TMP}"
+
+cmd="${{1:-}}"
+shift || true
+
+case "$cmd" in
+  init)
+    total="${{1:?missing total}}"
+    jq -n --argjson total "$total" \
+      '{{"step":0,"total":$total,"name":"","status":"pending","last_error":null}}' > "$STATE_FILE_TMP"
+    ;;
+  update)
+    step="${{1:?missing step}}"
+    total="${{2:?missing total}}"
+    name="${{3:?missing name}}"
+    status="${{4:?missing status}}"
+    jq --argjson step "$step" --argjson total "$total" --arg name "$name" --arg status "$status" \
+      '.step=$step | .total=$total | .name=$name | .status=$status | .last_error=null' \
+      "$STATE_FILE" > "$STATE_FILE_TMP"
+    ;;
+  fail)
+    step="${{1:?missing step}}"
+    total="${{2:?missing total}}"
+    name="${{3:?missing name}}"
+    cmd_idx="${{4:?missing cmd}}"
+    exit_code="${{5:?missing exit}}"
+    jq --argjson step "$step" --argjson total "$total" --arg name "$name" \
+      --argjson cmd "$cmd_idx" --argjson exit "$exit_code" \
+      '.step=$step | .total=$total | .name=$name | .status="failed" | .last_error={{"stage":$step,"cmd":$cmd,"exit":$exit}}' \
+      "$STATE_FILE" > "$STATE_FILE_TMP"
+    ;;
+  *)
+    echo "unknown subcommand: $cmd" >&2
+    exit 2
+    ;;
+esac
+
+mv "$STATE_FILE_TMP" "$STATE_FILE"
+"#
+    )
+}

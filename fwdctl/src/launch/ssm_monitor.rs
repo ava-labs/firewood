@@ -1,7 +1,6 @@
 // Copyright (C) 2026, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use aws_config::BehaviorVersion;
@@ -131,10 +130,6 @@ struct CloudInitState {
     name: String,
     status: String,
     #[serde(default)]
-    stages: Vec<String>,
-    #[serde(default)]
-    commands: HashMap<String, Vec<String>>,
-    #[serde(default)]
     last_error: Option<CommandError>,
 }
 
@@ -154,12 +149,7 @@ struct StageTracker {
 impl StageTracker {
     fn update(&mut self, state: &CloudInitState) {
         for skipped in (self.shown_step + 1)..state.step {
-            info!(
-                "[{:>2}/{}] ✓ {}",
-                skipped,
-                state.total,
-                stage_name(state, skipped)
-            );
+            info!("[{:>2}/{}] ✓ ?", skipped, state.total);
         }
 
         let is_complete = state.status == "completed";
@@ -185,27 +175,17 @@ fn failure_context(state: &CloudInitState) -> String {
     let Some(err) = &state.last_error else {
         return format!("stage {} [{}] failed", state.step, state.name);
     };
-    let command = state
-        .commands
-        .get(&err.stage.to_string())
-        .and_then(|commands| commands.get(err.cmd.saturating_sub(1)))
-        .map(String::as_str)
-        .unwrap_or("?");
     format!(
-        "stage {} [{}] failed (exit={}) while running: {}",
+        "stage {} [{}] failed (exit={}) command #{}",
         err.stage,
-        stage_name(state, err.stage),
+        if err.stage == state.step {
+            state.name.as_str()
+        } else {
+            "?"
+        },
         err.exit,
-        command
+        err.cmd
     )
-}
-
-fn stage_name(state: &CloudInitState, stage: usize) -> &str {
-    state
-        .stages
-        .get(stage.saturating_sub(1))
-        .map(String::as_str)
-        .unwrap_or("?")
 }
 
 #[derive(Default)]
