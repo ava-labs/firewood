@@ -52,7 +52,7 @@ impl CloudInitContext {
             }
         };
         let end_block = opts.end_block().to_string();
-        let nblocks = opts.nblocks.as_str();
+        let nblocks = opts.nblocks.as_str().to_owned();
         let mut variables = config.variables.clone();
         variables.insert("end_block".into(), end_block.clone());
 
@@ -60,17 +60,17 @@ impl CloudInitContext {
             variables,
             args: HashMap::from([
                 ("end_block".into(), end_block),
-                ("nblocks".into(), nblocks.to_string()),
+                ("nblocks".into(), nblocks),
                 ("config".into(), opts.config.clone()),
                 ("metrics_server".into(), opts.metrics_server.to_string()),
             ]),
             branches: opts
                 .branches()
                 .into_iter()
-                .map(|(k, v)| {
+                .map(|(name, branch)| {
                     (
-                        k.into(),
-                        v.map(|s| format!("--branch {s}")).unwrap_or_default(),
+                        name.into(),
+                        branch.map_or_else(String::new, |value| format!("--branch {value}")),
                     )
                 })
                 .collect(),

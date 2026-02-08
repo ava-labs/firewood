@@ -156,10 +156,7 @@ fn parse_instance_type(s: &str) -> Result<Ec2InstanceType, LaunchError> {
 
 fn build_instance_name(opts: &DeployOptions) -> String {
     let mut name = format!("{}-{:08X}", opts.name_prefix, rand::random::<u32>());
-    for (prefix, (_, branch)) in ["-fw-", "-ag-", "-ce-", "-le-"]
-        .into_iter()
-        .zip(opts.branches())
-    {
+    for (prefix, (_, branch)) in ["-fw-", "-ag-", "-le-"].into_iter().zip(opts.branches()) {
         if let Some(b) = branch {
             name.push_str(prefix);
             name.push_str(b);
@@ -179,14 +176,12 @@ fn build_tags(opts: &DeployOptions, instance_name: &str, username: &str) -> Vec<
     if let Some(t) = &opts.custom_tag {
         tags.push(tag("CustomTag", t));
     }
-    for (tag_name, (_, branch)) in ["FirewoodBranch", "AvalancheGoBranch", "LibEVMBranch"]
-        .into_iter()
-        .zip(opts.branches())
-    {
-        if let Some(b) = branch {
-            tags.push(tag(tag_name, b));
-        }
-    }
+    tags.extend(
+        ["FirewoodBranch", "AvalancheGoBranch", "LibEVMBranch"]
+            .into_iter()
+            .zip(opts.branches())
+            .filter_map(|(tag_name, (_, branch))| branch.map(|value| tag(tag_name, value))),
+    );
     tags
 }
 

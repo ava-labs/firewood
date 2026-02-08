@@ -216,12 +216,10 @@ pub(super) fn run(opts: &Options) -> Result<(), FwdError> {
 
 async fn run_internal(opts: &Options) -> Result<(), FwdError> {
     log::debug!("launch command {opts:?}");
-
-    match &opts.command {
-        LaunchCommand::Deploy(o) => run_deploy(o)
-            .await
-            .map_err(|e| FwdError::InternalError(Box::from(e))),
-    }
+    let LaunchCommand::Deploy(deploy) = &opts.command;
+    run_deploy(deploy)
+        .await
+        .map_err(|e| FwdError::InternalError(Box::from(e)))
 }
 
 async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
@@ -256,21 +254,12 @@ async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
 
 fn log_launch_config(opts: &DeployOptions) {
     info!("Launch configuration:");
-    info!("  Instance Type:     {}", opts.instance_type);
-    info!(
-        "  Firewood Branch:   {}",
-        opts.firewood_branch.as_deref().unwrap_or("default")
-    );
-    info!(
-        "  AvalancheGo:       {}",
-        opts.avalanchego_branch.as_deref().unwrap_or("default")
-    );
-    info!(
-        "  LibEVM:            {}",
-        opts.libevm_branch.as_deref().unwrap_or("default")
-    );
-    info!("  Blocks:            {}", opts.nblocks.as_str());
-    info!("  Config:            {}", opts.config);
-    info!("  Metrics Server:    {}", opts.metrics_server);
-    info!("  Region:            {}", opts.region);
+    info!("\t{:24}{}", "Instance Type:", opts.instance_type);
+    for (label, value) in opts.branches() {
+        info!("\t{:24}{}", format!("{label} branch:"), value.unwrap_or("default"));
+    }
+    info!("\t{:24}{}", "Blocks:", opts.nblocks.as_str());
+    info!("\t{:24}{}", "Config:", opts.config);
+    info!("\t{:24}{}", "Metrics Server:", opts.metrics_server);
+    info!("\t{:24}{}", "Region:", opts.region);
 }

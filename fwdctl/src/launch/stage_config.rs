@@ -197,12 +197,9 @@ impl StageConfig {
     }
 
     fn get_scenario_stages(&self, scenario_name: &str) -> Result<Vec<ResolvedStage>, ConfigError> {
-        let scenario = self
-            .scenarios
+        self.scenarios
             .get(scenario_name)
-            .ok_or_else(|| ConfigError::ScenarioNotFound(scenario_name.to_string()))?;
-
-        scenario
+            .ok_or_else(|| ConfigError::ScenarioNotFound(scenario_name.to_string()))?
             .stages
             .iter()
             .map(|r| self.resolve_stage_ref(r))
@@ -237,7 +234,7 @@ impl StageConfig {
             stage_ctx.variables.clone_from(&base_vars);
             stage_ctx.variables.extend(stage.variables);
 
-            let commands: Vec<String> = stage
+            let commands = stage
                 .commands
                 .iter()
                 .map(|cmd| process_template(cmd, &stage_ctx))
