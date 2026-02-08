@@ -55,13 +55,6 @@ impl CloudInitContext {
         let nblocks = opts.nblocks.as_str();
         let mut variables = config.variables.clone();
         variables.insert("end_block".into(), end_block.clone());
-        variables.insert(
-            "tag".into(),
-            opts.custom_tag
-                .as_ref()
-                .map(|t| format!("-{t}"))
-                .unwrap_or_default(),
-        );
 
         let template_ctx = TemplateContext {
             variables,

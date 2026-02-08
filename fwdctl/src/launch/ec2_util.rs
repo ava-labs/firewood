@@ -256,9 +256,6 @@ pub async fn describe_ips(
 }
 
 /// Returns the AWS username for the current caller identity.
-///
-/// Uses STS `GetCallerIdentity` (a global service, region-independent).
-/// The result is cached for the lifetime of the process.
 async fn get_aws_username() -> String {
     AWS_USERNAME
         .get_or_init(|| async {
