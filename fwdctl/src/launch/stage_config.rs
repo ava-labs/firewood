@@ -406,7 +406,12 @@ scenarios:
             .expect("nested variable interpolation should succeed");
 
         assert_eq!(
-            stages.first().expect("expected stage").commands.first().expect("expected command"),
+            stages
+                .first()
+                .expect("expected stage")
+                .commands
+                .first()
+                .expect("expected command"),
             "echo /mnt/nvme/ubuntu/exec-data/current-state/replay_50k_log_db"
         );
     }
