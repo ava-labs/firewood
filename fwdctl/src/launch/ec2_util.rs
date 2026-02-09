@@ -35,7 +35,7 @@ pub(super) struct ManagedInstance {
     pub custom_tag: Option<String>,
 }
 
-async fn aws_config(region: Option<&str>) -> aws_config::SdkConfig {
+pub(crate) async fn aws_config(region: Option<&str>) -> aws_config::SdkConfig {
     let mut loader = aws_config::defaults(BehaviorVersion::latest());
     if let Some(r) = region {
         loader = loader.region(aws_config::Region::new(r.to_owned()));
@@ -141,9 +141,7 @@ pub async fn launch_instance(
     if let Some(key) = &opts.key_name {
         request = request.key_name(key);
     }
-    if !opts.security_group_ids.is_empty() {
-        request = request.set_security_group_ids(Some(opts.security_group_ids.clone()));
-    }
+    request = request.set_security_group_ids(Some(vec![opts.security_group_id.clone()]));
     if !opts.iam_instance_profile_name.is_empty() {
         request = request.iam_instance_profile(
             IamInstanceProfileSpecification::builder()
@@ -372,8 +370,8 @@ pub(super) async fn get_aws_username() -> String {
                     .unwrap_or_else(|_| "unknown".into())
             };
 
-            // STS GetCallerIdentity is region-independent; use default config.
-            let sts = StsClient::new(&aws_config(None).await);
+            // STS GetCallerIdentity is region-independent; use us-west-2.
+            let sts = StsClient::new(&aws_config(Some("us-west-2")).await);
             match sts.get_caller_identity().send().await {
                 Ok(id) => id
                     .arn()

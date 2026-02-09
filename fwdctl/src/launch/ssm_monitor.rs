@@ -3,7 +3,6 @@
 
 use std::time::{Duration, Instant};
 
-use aws_config::BehaviorVersion;
 use aws_sdk_ssm::Client as SsmClient;
 use aws_sdk_ssm::error::ProvideErrorMetadata;
 use aws_sdk_ssm::types::{InstanceInformationFilter, InstanceInformationFilterKey, PingStatus};
@@ -11,7 +10,7 @@ use log::info;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tokio::time::sleep;
-
+use crate::launch::ec2_util::aws_config;
 use super::LaunchError;
 use super::cloud_init::STATE_FILE;
 
@@ -23,14 +22,6 @@ const LOG_POLL_INTERVAL: Duration = Duration::from_secs(3);
 const LOG_CHUNK_SIZE: u64 = 500;
 const BOOTSTRAP_LOG: &str = "/var/log/bootstrap.log";
 const STATE_FILE_TIMEOUT: Duration = Duration::from_secs(600);
-
-async fn aws_config(region: Option<&str>) -> aws_config::SdkConfig {
-    let mut loader = aws_config::defaults(BehaviorVersion::latest());
-    if let Some(r) = region {
-        loader = loader.region(aws_config::Region::new(r.to_owned()));
-    }
-    loader.load().await
-}
 
 pub async fn ssm_client(region: &str) -> SsmClient {
     SsmClient::new(&aws_config(Some(region)).await)

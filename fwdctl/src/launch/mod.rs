@@ -180,11 +180,7 @@ pub struct DeployOptions {
     pub nblocks: NBlocks,
 
     /// Launch scenario from `benchmark/launch/launch-stages.yaml`
-    #[arg(
-        long = "scenario",
-        value_name = "SCENARIO",
-        default_value = "default"
-    )]
+    #[arg(long = "scenario", value_name = "SCENARIO", default_value = "default")]
     pub scenario: String,
 
     /// VM reexecution config (firewood, hashdb, pathdb, etc.)
@@ -208,9 +204,13 @@ pub struct DeployOptions {
     #[arg(long = "key-name", value_name = "KEY")]
     pub key_name: Option<String>,
 
-    /// Security group IDs to attach (repeatable)
-    #[arg(long = "sg", value_name = "SG_ID", num_args = 0..)]
-    pub security_group_ids: Vec<String>,
+    /// Security group ID to attach
+    #[arg(
+        long = "sg",
+        value_name = "SG_ID",
+        default_value = "sg-0ac5ceb1761087d04"
+    )]
+    pub security_group_id: String,
 
     /// IAM instance profile name
     #[arg(
@@ -235,6 +235,10 @@ pub struct DeployOptions {
     /// Monitor bootstrap re-execution progress from `/var/log/bootstrap.log` (requires `--follow`)
     #[arg(long = "observe", requires = "follow_logs")]
     pub observe: bool,
+
+    /// Don't launch
+    #[arg(long = "dry-run")]
+    pub dry_run: bool,
 }
 
 impl DeployOptions {
@@ -343,6 +347,12 @@ async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
     log_launch_config(opts);
 
     let ctx = cloud_init::CloudInitContext::new(opts)?;
+
+    if opts.dry_run {
+        let c = ctx.render_yaml()?;
+        println!("{}", c);
+        return Ok(());
+    }
 
     let user_data_b64 = ctx.render_base64()?;
     let user_data_size = user_data_b64.len();

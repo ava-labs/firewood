@@ -119,8 +119,10 @@ stages:
       - "sudo -u ubuntu --login -D {{ variables.nvme_base }}/ubuntu/avalanchego/graft/coreth go mod tidy"
   build-firewood-ffi:
     name: "Building firewood FFI"
+    variables:
+      features: "ethhash,logger"
     commands:
-      - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/firewood/ffi --login time cargo build --profile maxperf --features ethhash,logger > {{ variables.nvme_base }}/ubuntu/firewood/build.log 2>&1"
+      - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/firewood/ffi --login time cargo build --profile maxperf --features {{ variables.features }} > {{ variables.nvme_base }}/ubuntu/firewood/build.log 2>&1"
   build-avalanchego:
     name: "Building avalanchego"
     commands:
@@ -153,12 +155,17 @@ stages:
       start_block: "1"
       end_block: "{{ args.end_block }}"
       background: ""
+      replay_path: ""
     commands:
-      - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego --login  METRICS_SERVER_ENABLED={{ args.metrics_server }} CURRENT_STATE_DIR={{ variables.nvme_base }}/ubuntu/exec-data/current-state BLOCK_DIR={{ variables.nvme_base }}/ubuntu/exec-data/blocks START_BLOCK={{ variables.start_block }} END_BLOCK={{ variables.end_block }} CONFIG={{ args.config }} time task test-cchain-reexecution > /var/log/bootstrap.log 2>&1 {{ variables.background }}"
+      - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego --login {{ variables.replay_path }} METRICS_SERVER_ENABLED={{ args.metrics_server }} CURRENT_STATE_DIR={{ variables.nvme_base }}/ubuntu/exec-data/current-state BLOCK_DIR={{ variables.nvme_base }}/ubuntu/exec-data/blocks START_BLOCK={{ variables.start_block }} END_BLOCK={{ variables.end_block }} CONFIG={{ args.config }} time task test-cchain-reexecution > /var/log/bootstrap.log 2>&1 {{ variables.background }}"
   snapshot-to-s3:
     name: "Snapshotting state at block {{ variables.snapshot_block }}"
     commands:
-      - "s5cmd cp '{{ variables.nvme_base }}/ubuntu/exec-data/current-state/*' 's3://{{ variables.s3_bucket }}/snapshots/{{ variables.snapshot_block }}/'"
+        - "s5cmd cp '{{ variables.nvme_base }}/ubuntu/exec-data/current-state/*' 's3://{{ variables.s3_bucket }}/snapshots/{{ variables.snapshot_block }}/'"
+  copy-to-s3:
+    name: "Copy file(s) from {{ variables.src }} to s3://{{ variables.s3_bucket }}/{{ variables.dst }}"
+    commands:
+      - "s5cmd cp '{{ variables.src }}' 's3://{{ variables.s3_bucket }}/{{ variables.dst }}'"
 
 scenarios:
   reexecute:
@@ -179,6 +186,31 @@ scenarios:
       - id: execute-range
         variables:
           background: "&"
+  replay-log-gen:
+    description: "Re-execute up to 50k blocks, and save replay log to S3"
+    stages:
+      - rust-install
+      - ssm-agent
+      - clone-firewood
+      - setup-environment
+      - install-go-grafana
+      - clone-repos
+      - configure-go-modules
+      - id: build-firewood-ffi
+        variables:
+          features: "ethhash,logger,block-replay"
+      - build-avalanchego
+      - install-s5cmd
+      - download-blocks
+      - init-state-dir
+      - id: execute-range
+        variables:
+          end_block: "50000"
+          replay_path: "FIREWOOD_BLOCK_REPLAY_PATH='{{ variables.nvme_base }}/ubuntu/exec-data/current-state/replay_50k_log_db'"
+      - id: copy-to-s3
+        variables:
+          src: "{{ variables.nvme_base }}/ubuntu/exec-data/current-state/replay_50k_log_db"
+          dst: "amin-replay-logs/replay_50k_log_db"
   snapshotter:
     description: "Execute and snapshot state at 1m, 10m, 20m, and 30m blocks"
     stages:

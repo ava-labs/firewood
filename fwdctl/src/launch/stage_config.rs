@@ -30,6 +30,9 @@ pub enum ConfigError {
 
     #[error("Unknown variable: {0}")]
     UnknownVariable(String),
+
+    #[error("Unresolved template remains in variable: {0}")]
+    UnresolvedTemplate(String),
 }
 
 /// Root configuration structure.
@@ -233,6 +236,7 @@ impl StageConfig {
             // Reset to base vars + stage vars
             stage_ctx.variables.clone_from(&base_vars);
             stage_ctx.variables.extend(stage.variables);
+            resolve_stage_variables(&mut stage_ctx)?;
 
             let commands = stage
                 .commands
@@ -278,6 +282,48 @@ fn process_template(template: &str, ctx: &TemplateContext) -> Result<String, Con
 
     out.push_str(rest);
     Ok(out)
+}
+
+fn resolve_stage_variables(ctx: &mut TemplateContext) -> Result<(), ConfigError> {
+    let max_passes = (ctx.variables.len() + 1).max(2);
+    let mut render_ctx = TemplateContext {
+        variables: HashMap::new(),
+        args: ctx.args.clone(),
+        branches: ctx.branches.clone(),
+    };
+
+    for _ in 0..max_passes {
+        render_ctx.variables.clone_from(&ctx.variables);
+        let mut changed = false;
+
+        for value in ctx.variables.values_mut() {
+            let rendered = process_template(value, &render_ctx)?;
+            if rendered != *value {
+                *value = rendered;
+                changed = true;
+            }
+        }
+
+        if !changed {
+            break;
+        }
+    }
+
+    if let Some((key, value)) = ctx
+        .variables
+        .iter()
+        .find(|(_, value)| contains_template_marker(value))
+    {
+        return Err(ConfigError::UnresolvedTemplate(format!(
+            "variables.{key}={value}"
+        )));
+    }
+
+    Ok(())
+}
+
+fn contains_template_marker(value: &str) -> bool {
+    value.contains("{{") && value.contains("}}")
 }
 
 fn resolve_var(path: &str, ctx: &TemplateContext) -> Result<String, ConfigError> {
@@ -331,5 +377,37 @@ mod tests {
         );
         let result = process_template("{{ variables.missing }}", &ctx);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn nested_stage_variable_interpolation() {
+        let yaml = r#"
+variables:
+  nvme_base: "/mnt/nvme"
+
+stages:
+  copy-to-s3:
+    name: "Copy"
+    variables:
+      src: "{{ variables.nvme_base }}/ubuntu/exec-data/current-state/replay_50k_log_db"
+    commands:
+      - "echo {{ variables.src }}"
+
+scenarios:
+  test:
+    stages:
+      - copy-to-s3
+"#;
+
+        let config: StageConfig =
+            serde_yaml::from_str(yaml).expect("nested variable config should parse");
+        let stages = config
+            .process(&TemplateContext::default(), "test")
+            .expect("nested variable interpolation should succeed");
+
+        assert_eq!(
+            stages[0].commands[0],
+            "echo /mnt/nvme/ubuntu/exec-data/current-state/replay_50k_log_db"
+        );
     }
 }
