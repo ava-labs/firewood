@@ -332,6 +332,11 @@ impl Db {
         let merge_ops = merkle.merge_key_value_range(first_key, last_key, key_values);
         self.propose_with_parent(merge_ops, merkle.nodestore())
     }
+
+    /// Closes the database gracefully.
+    pub fn close(self) -> Result<(), api::Error> {
+        self.manager.close().map_err(Into::into)
+    }
 }
 
 #[derive(Debug)]
@@ -1337,7 +1342,7 @@ mod test {
                 dbconfig,
             } = self;
 
-            drop(db);
+            db.close().unwrap();
 
             let db = Db::new(tmpdir.path(), dbconfig.clone()).unwrap();
             TestDb {
@@ -1363,7 +1368,7 @@ mod test {
                 dbconfig: _,
             } = self;
 
-            drop(db);
+            db.close().unwrap();
 
             let dbconfig = DbConfig::builder().truncate(true).build();
             let db = Db::new(tmpdir.path(), dbconfig.clone()).unwrap();
