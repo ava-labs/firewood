@@ -256,7 +256,11 @@ fn log_launch_config(opts: &DeployOptions) {
     info!("Launch configuration:");
     info!("\t{:24}{}", "Instance Type:", opts.instance_type);
     for (label, value) in opts.branches() {
-        info!("\t{:24}{}", format!("{label} branch:"), value.unwrap_or("default"));
+        info!(
+            "\t{:24}{}",
+            format!("{label} branch:"),
+            value.unwrap_or("default")
+        );
     }
     info!("\t{:24}{}", "Blocks:", opts.nblocks.as_str());
     info!("\t{:24}{}", "Config:", opts.config);
