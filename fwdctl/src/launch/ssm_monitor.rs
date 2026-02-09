@@ -3,6 +3,9 @@
 
 use std::time::{Duration, Instant};
 
+use super::LaunchError;
+use super::cloud_init::STATE_FILE;
+use crate::launch::ec2_util::aws_config;
 use aws_sdk_ssm::Client as SsmClient;
 use aws_sdk_ssm::error::ProvideErrorMetadata;
 use aws_sdk_ssm::types::{InstanceInformationFilter, InstanceInformationFilterKey, PingStatus};
@@ -10,9 +13,6 @@ use log::info;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tokio::time::sleep;
-use crate::launch::ec2_util::aws_config;
-use super::LaunchError;
-use super::cloud_init::STATE_FILE;
 
 const SSM_MAX_RETRIES: u32 = 30;
 const SSM_RETRY_DELAY: Duration = Duration::from_secs(5);

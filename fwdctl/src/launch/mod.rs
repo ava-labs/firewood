@@ -180,7 +180,11 @@ pub struct DeployOptions {
     pub nblocks: NBlocks,
 
     /// Launch scenario from `benchmark/launch/launch-stages.yaml`
-    #[arg(long = "scenario", value_name = "SCENARIO", default_value = "reexecute")]
+    #[arg(
+        long = "scenario",
+        value_name = "SCENARIO",
+        default_value = "reexecute"
+    )]
     pub scenario: String,
 
     /// VM reexecution config (firewood, hashdb, pathdb, etc.)
