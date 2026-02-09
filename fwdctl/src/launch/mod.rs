@@ -243,6 +243,10 @@ pub struct DeployOptions {
     /// Don't launch
     #[arg(long = "dry-run")]
     pub dry_run: bool,
+
+    /// Print rendered cloud-init YAML during dry-run
+    #[arg(long = "dump-cloud-init", requires = "dry_run")]
+    pub dump_cloud_init: bool,
 }
 
 impl DeployOptions {
@@ -351,16 +355,8 @@ async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
     log_launch_config(opts);
 
     let ctx = cloud_init::CloudInitContext::new(opts)?;
-
-    if opts.dry_run {
-        let c = ctx.render_yaml()?;
-        println!("{}", c);
-        return Ok(());
-    }
-
     let user_data_b64 = ctx.render_base64()?;
     let user_data_size = user_data_b64.len();
-    info!("Cloud-init user-data size: {user_data_size} bytes (base64)");
     if user_data_size > EC2_USER_DATA_B64_LIMIT {
         return Err(LaunchError::UserDataTooLarge {
             actual: user_data_size,
@@ -369,9 +365,21 @@ async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
     }
 
     let ec2 = ec2_util::ec2_client(&opts.region).await;
-    let ssm = ssm_monitor::ssm_client(&opts.region).await;
-
     let ami_id = ec2_util::latest_ubuntu_ami(&ec2, &opts.instance_type).await?;
+
+    if opts.dry_run {
+        let launched_by = ec2_util::get_aws_username().await;
+        log_dry_run_plan(opts, &ami_id, user_data_size, &launched_by);
+        if opts.dump_cloud_init {
+            println!("{}", ctx.render_yaml()?);
+        } else {
+            info!("Cloud-init YAML not printed. Re-run with `--dump-cloud-init` to inspect it.");
+        }
+        return Ok(());
+    }
+
+    info!("Cloud-init user-data size: {user_data_size} bytes (base64)");
+    let ssm = ssm_monitor::ssm_client(&opts.region).await;
     info!("Using AMI: {ami_id}");
 
     let instance_id = ec2_util::launch_instance(&ec2, &ami_id, opts, &user_data_b64).await?;
@@ -538,6 +546,46 @@ async fn run_kill(opts: &KillOptions) -> Result<(), LaunchError> {
     Ok(())
 }
 
+fn log_dry_run_plan(opts: &DeployOptions, ami_id: &str, user_data_size: usize, launched_by: &str) {
+    info!("");
+    info!("DRY RUN: no AWS resources will be created.");
+    info!("Planned AWS actions:");
+    info!("  [1] RunInstances request (not executed in dry-run):");
+    info!("      region: {}", opts.region);
+    info!("      image_id: {ami_id}");
+    info!("      instance_type: {}", opts.instance_type);
+    info!("      root volume: gp3 50 GiB on /dev/sda1");
+    info!("      security_group_id: {}", opts.security_group_id);
+    info!(
+        "      key_name: {}",
+        opts.key_name.as_deref().unwrap_or("<none>")
+    );
+    info!(
+        "      iam_instance_profile: {}",
+        if opts.iam_instance_profile_name.is_empty() {
+            "<none>"
+        } else {
+            opts.iam_instance_profile_name.as_str()
+        }
+    );
+    info!("      user_data(base64): {user_data_size} bytes");
+    info!("      tags:");
+    info!("        ManagedBy=fwdctl");
+    info!("        Component=firewood");
+    info!("        LaunchedBy={launched_by}");
+    if let Some(tag) = &opts.custom_tag {
+        info!("        CustomTag={tag}");
+    }
+    for (tag_key, (_, value)) in ["FirewoodBranch", "AvalancheGoBranch", "LibEVMBranch"]
+        .into_iter()
+        .zip(opts.branches())
+    {
+        if let Some(value) = value {
+            info!("        {tag_key}={value}");
+        }
+    }
+}
+
 fn log_launch_config(opts: &DeployOptions) {
     info!("Launch configuration:");
     info!("\t{:24}{}", "Instance Type:", opts.instance_type);
@@ -555,4 +603,6 @@ fn log_launch_config(opts: &DeployOptions) {
     info!("\t{:24}{}", "Region:", opts.region);
     info!("\t{:24}{}", "Follow logs:", opts.follow_logs);
     info!("\t{:24}{}", "Observe progress:", opts.observe);
+    info!("\t{:24}{}", "Dry run:", opts.dry_run);
+    info!("\t{:24}{}", "Dump cloud-init:", opts.dump_cloud_init);
 }

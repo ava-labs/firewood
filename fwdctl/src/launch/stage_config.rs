@@ -285,7 +285,7 @@ fn process_template(template: &str, ctx: &TemplateContext) -> Result<String, Con
 }
 
 fn resolve_stage_variables(ctx: &mut TemplateContext) -> Result<(), ConfigError> {
-    let max_passes = (ctx.variables.len() + 1).max(2);
+    let max_passes = ctx.variables.len().saturating_add(1).max(2);
     let mut render_ctx = TemplateContext {
         variables: HashMap::new(),
         args: ctx.args.clone(),
@@ -406,7 +406,7 @@ scenarios:
             .expect("nested variable interpolation should succeed");
 
         assert_eq!(
-            stages[0].commands[0],
+            stages.first().expect("expected stage").commands.first().expect("expected command"),
             "echo /mnt/nvme/ubuntu/exec-data/current-state/replay_50k_log_db"
         );
     }
