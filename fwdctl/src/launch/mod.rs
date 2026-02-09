@@ -153,6 +153,48 @@ impl NBlocks {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+pub enum FollowMode {
+    Follow,
+    FollowWithProgress,
+}
+
+impl FollowMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Follow => "follow",
+            Self::FollowWithProgress => "follow-with-progress",
+        }
+    }
+
+    #[must_use]
+    pub const fn observe_progress(self) -> bool {
+        matches!(self, Self::FollowWithProgress)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+pub enum DryRunMode {
+    Plan,
+    PlanWithCloudInit,
+}
+
+impl DryRunMode {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Plan => "plan",
+            Self::PlanWithCloudInit => "plan-with-cloud-init",
+        }
+    }
+
+    #[must_use]
+    pub const fn dump_cloud_init(self) -> bool {
+        matches!(self, Self::PlanWithCloudInit)
+    }
+}
+
 #[derive(Debug, Args)]
 pub struct DeployOptions {
     /// EC2 instance type
@@ -232,21 +274,25 @@ pub struct DeployOptions {
     #[arg(long = "tag", value_name = "TAG")]
     pub custom_tag: Option<String>,
 
-    /// Follow cloud-init stage progress via SSM after launch
-    #[arg(long = "follow")]
-    pub follow_logs: bool,
+    /// Follow cloud-init logs after launch (`follow` or `follow-with-progress`)
+    #[arg(
+        long = "follow",
+        value_name = "MODE",
+        value_enum,
+        num_args = 0..=1,
+        default_missing_value = "follow"
+    )]
+    pub follow_mode: Option<FollowMode>,
 
-    /// Monitor bootstrap re-execution progress from `/var/log/bootstrap.log` (requires `--follow`)
-    #[arg(long = "observe", requires = "follow_logs")]
-    pub observe: bool,
-
-    /// Don't launch
-    #[arg(long = "dry-run")]
-    pub dry_run: bool,
-
-    /// Print rendered cloud-init YAML during dry-run
-    #[arg(long = "dump-cloud-init", requires = "dry_run")]
-    pub dump_cloud_init: bool,
+    /// Plan launch without creating resources (`plan` or `plan-with-cloud-init`)
+    #[arg(
+        long = "dry-run",
+        value_name = "MODE",
+        value_enum,
+        num_args = 0..=1,
+        default_missing_value = "plan"
+    )]
+    pub dry_run_mode: Option<DryRunMode>,
 }
 
 impl DeployOptions {
@@ -267,6 +313,16 @@ impl DeployOptions {
     #[must_use]
     pub fn scenario_name(&self) -> &str {
         &self.scenario
+    }
+
+    #[must_use]
+    pub const fn follow_mode(&self) -> Option<FollowMode> {
+        self.follow_mode
+    }
+
+    #[must_use]
+    pub const fn dry_run_mode(&self) -> Option<DryRunMode> {
+        self.dry_run_mode
     }
 }
 
@@ -367,13 +423,15 @@ async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
     let ec2 = ec2_util::ec2_client(&opts.region).await;
     let ami_id = ec2_util::latest_ubuntu_ami(&ec2, &opts.instance_type).await?;
 
-    if opts.dry_run {
+    if let Some(dry_run_mode) = opts.dry_run_mode() {
         let launched_by = ec2_util::get_aws_username().await;
         log_dry_run_plan(opts, &ami_id, user_data_size, &launched_by);
-        if opts.dump_cloud_init {
+        if dry_run_mode.dump_cloud_init() {
             println!("{}", ctx.render_yaml()?);
         } else {
-            info!("Cloud-init YAML not printed. Re-run with `--dump-cloud-init` to inspect it.");
+            info!(
+                "Cloud-init YAML not printed. Re-run with `--dry-run plan-with-cloud-init` to inspect it."
+            );
         }
         return Ok(());
     }
@@ -401,11 +459,12 @@ async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
     info!("To list:     fwdctl launch list");
     info!("To kill:     fwdctl launch kill {instance_id} --yes");
 
-    if opts.follow_logs {
+    if let Some(follow_mode) = opts.follow_mode() {
         ssm_monitor::wait_for_ssm_registration(&ssm, &instance_id).await?;
         info!("");
         info!("Following cloud-init stage progress via SSM...");
-        ssm_monitor::stream_logs_via_ssm(&ssm, &instance_id, opts.observe).await?;
+        ssm_monitor::stream_logs_via_ssm(&ssm, &instance_id, follow_mode.observe_progress())
+            .await?;
     }
 
     Ok(())
@@ -584,6 +643,16 @@ fn log_dry_run_plan(opts: &DeployOptions, ami_id: &str, user_data_size: usize, l
             info!("        {tag_key}={value}");
         }
     }
+    if let Some(follow_mode) = opts.follow_mode() {
+        info!("  [2] Poll SSM registration for the instance");
+        info!(
+            "  [3] Stream cloud-init stage state via SSM (mode: {})",
+            follow_mode.as_str()
+        );
+        if follow_mode.observe_progress() {
+            info!("  [4] Stream bootstrap progress from /var/log/bootstrap.log");
+        }
+    }
 }
 
 fn log_launch_config(opts: &DeployOptions) {
@@ -601,8 +670,14 @@ fn log_launch_config(opts: &DeployOptions) {
     info!("\t{:24}{}", "Config:", opts.config);
     info!("\t{:24}{}", "Metrics Server:", opts.metrics_server);
     info!("\t{:24}{}", "Region:", opts.region);
-    info!("\t{:24}{}", "Follow logs:", opts.follow_logs);
-    info!("\t{:24}{}", "Observe progress:", opts.observe);
-    info!("\t{:24}{}", "Dry run:", opts.dry_run);
-    info!("\t{:24}{}", "Dump cloud-init:", opts.dump_cloud_init);
+    info!(
+        "\t{:24}{}",
+        "Follow mode:",
+        opts.follow_mode().map_or("off", FollowMode::as_str)
+    );
+    info!(
+        "\t{:24}{}",
+        "Dry run mode:",
+        opts.dry_run_mode().map_or("off", DryRunMode::as_str)
+    );
 }
