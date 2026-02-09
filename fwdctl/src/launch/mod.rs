@@ -26,6 +26,9 @@ pub enum LaunchError {
     #[error("AWS SDK error: {0}")]
     AwsSdk(String),
 
+    #[error("{0}")]
+    Validation(String),
+
     #[error("Cloud-init generation failed: {0}")]
     CloudInit(#[from] serde_yaml::Error),
 
@@ -120,6 +123,8 @@ pub struct Options {
 pub enum LaunchCommand {
     Deploy(Box<DeployOptions>),
     Monitor(MonitorOptions),
+    List(ListOptions),
+    Kill(KillOptions),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
@@ -173,6 +178,14 @@ pub struct DeployOptions {
     /// Dataset size to download from S3 (also sets the execution end block)
     #[arg(long = "nblocks", value_name = "SIZE", value_enum, default_value_t = NBlocks::OneM)]
     pub nblocks: NBlocks,
+
+    /// Launch scenario from `benchmark/launch/launch-stages.yaml`
+    #[arg(
+        long = "scenario",
+        value_name = "SCENARIO",
+        default_value = "default"
+    )]
+    pub scenario: String,
 
     /// VM reexecution config (firewood, hashdb, pathdb, etc.)
     #[arg(long = "config", value_name = "CONFIG", default_value = "firewood")]
@@ -238,6 +251,11 @@ impl DeployOptions {
     pub const fn end_block(&self) -> u64 {
         self.nblocks.end_block()
     }
+
+    #[must_use]
+    pub fn scenario_name(&self) -> &str {
+        &self.scenario
+    }
 }
 
 #[derive(Debug, Args)]
@@ -255,6 +273,47 @@ pub struct MonitorOptions {
     pub observe: bool,
 }
 
+#[derive(Debug, Args)]
+pub struct ListOptions {
+    /// AWS region
+    #[arg(long = "region", value_name = "REGION", default_value = "us-west-2")]
+    pub region: String,
+
+    /// Show only running/pending instances
+    #[arg(long = "running")]
+    pub running_only: bool,
+
+    /// Show only instances launched by your AWS identity
+    #[arg(long = "mine")]
+    pub mine_only: bool,
+}
+
+#[derive(Debug, Args)]
+pub struct KillOptions {
+    /// Instance ID to terminate
+    #[arg(
+        value_name = "INSTANCE_ID",
+        conflicts_with_all = ["all", "mine"]
+    )]
+    pub instance_id: Option<String>,
+
+    /// Terminate all `fwdctl` managed instances in this region
+    #[arg(long = "all", conflicts_with = "mine")]
+    pub all: bool,
+
+    /// Terminate all instances launched by your AWS identity
+    #[arg(long = "mine", conflicts_with = "all")]
+    pub mine: bool,
+
+    /// AWS region
+    #[arg(long = "region", value_name = "REGION", default_value = "us-west-2")]
+    pub region: String,
+
+    /// Skip termination confirmation
+    #[arg(long = "yes", short = 'y')]
+    pub skip_confirm: bool,
+}
+
 pub(super) fn run(opts: &Options) -> Result<(), FwdError> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(run_internal(opts))
@@ -267,6 +326,12 @@ async fn run_internal(opts: &Options) -> Result<(), FwdError> {
             .await
             .map_err(|e| FwdError::InternalError(Box::from(e))),
         LaunchCommand::Monitor(monitor) => run_monitor(monitor)
+            .await
+            .map_err(|e| FwdError::InternalError(Box::from(e))),
+        LaunchCommand::List(list) => run_list(list)
+            .await
+            .map_err(|e| FwdError::InternalError(Box::from(e))),
+        LaunchCommand::Kill(kill) => run_kill(kill)
             .await
             .map_err(|e| FwdError::InternalError(Box::from(e))),
     }
@@ -311,6 +376,8 @@ async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
     }
     info!("");
     info!("To monitor:  fwdctl launch monitor {instance_id}");
+    info!("To list:     fwdctl launch list");
+    info!("To kill:     fwdctl launch kill {instance_id} --yes");
 
     if opts.follow_logs {
         ssm_monitor::wait_for_ssm_registration(&ssm, &instance_id).await?;
@@ -335,6 +402,128 @@ async fn run_monitor(opts: &MonitorOptions) -> Result<(), LaunchError> {
     ssm_monitor::stream_logs_via_ssm(&ssm, &opts.instance_id, opts.observe).await
 }
 
+async fn run_list(opts: &ListOptions) -> Result<(), LaunchError> {
+    let ec2 = ec2_util::ec2_client(&opts.region).await;
+    let me = ec2_util::get_aws_username().await;
+
+    let mut instances = ec2_util::list_instances(&ec2, opts.running_only).await?;
+    if opts.mine_only {
+        instances.retain(|instance| instance.launched_by.as_deref() == Some(me.as_str()));
+    }
+
+    if instances.is_empty() {
+        if opts.mine_only {
+            info!("No instances launched by '{me}' were found.");
+        } else {
+            info!("No fwdctl-managed instances found.");
+        }
+        return Ok(());
+    }
+
+    info!(
+        "{:<20} {:<11} {:<11} {:<12} {:<16} {:<12} NAME",
+        "INSTANCE_ID", "USER", "STATE", "TYPE", "IP", "TAG"
+    );
+    info!("{}", "-".repeat(110));
+
+    for instance in &instances {
+        let user = instance.launched_by.as_deref().unwrap_or("-");
+        let user_with_marker = if user == me.as_str() {
+            format!("{user}*")
+        } else {
+            user.to_owned()
+        };
+        let ip = instance
+            .public_ip
+            .as_deref()
+            .or(instance.private_ip.as_deref())
+            .unwrap_or("-");
+        info!(
+            "{:<20} {:<11} {:<11} {:<12} {:<16} {:<12} {}",
+            instance.instance_id,
+            user_with_marker,
+            instance.state,
+            instance.instance_type,
+            ip,
+            instance.custom_tag.as_deref().unwrap_or("-"),
+            instance.name
+        );
+    }
+
+    let my_count = instances
+        .iter()
+        .filter(|instance| instance.launched_by.as_deref() == Some(me.as_str()))
+        .count();
+    info!("");
+    if opts.mine_only {
+        info!("Total: {} instance(s)", instances.len());
+    } else {
+        info!(
+            "Total: {} instance(s), {} yours (*)",
+            instances.len(),
+            my_count
+        );
+    }
+    Ok(())
+}
+
+async fn run_kill(opts: &KillOptions) -> Result<(), LaunchError> {
+    let ec2 = ec2_util::ec2_client(&opts.region).await;
+    let me = ec2_util::get_aws_username().await;
+    let instances = ec2_util::list_instances(&ec2, false).await?;
+
+    let to_kill = if opts.all {
+        instances
+            .iter()
+            .map(|instance| instance.instance_id.clone())
+            .collect()
+    } else if opts.mine {
+        instances
+            .iter()
+            .filter(|instance| instance.launched_by.as_deref() == Some(me.as_str()))
+            .map(|instance| instance.instance_id.clone())
+            .collect()
+    } else if let Some(instance_id) = &opts.instance_id {
+        if instances
+            .iter()
+            .any(|instance| instance.instance_id == *instance_id)
+        {
+            vec![instance_id.clone()]
+        } else {
+            return Err(LaunchError::Validation(format!(
+                "Instance '{instance_id}' is not managed by fwdctl in region '{}'",
+                opts.region
+            )));
+        }
+    } else {
+        info!("Specify an instance ID, `--mine`, or `--all`.");
+        info!("Use `fwdctl launch list` to discover active instances.");
+        return Ok(());
+    };
+
+    if to_kill.is_empty() {
+        info!("No matching instances to terminate.");
+        return Ok(());
+    }
+
+    if !opts.skip_confirm {
+        info!("Will terminate {} instance(s):", to_kill.len());
+        for instance_id in &to_kill {
+            info!("  - {instance_id}");
+        }
+        return Err(LaunchError::Validation(
+            "Confirmation required. Re-run with `--yes` (`-y`).".to_owned(),
+        ));
+    }
+
+    info!("Terminating {} instance(s)...", to_kill.len());
+    ec2_util::terminate_instances(&ec2, &to_kill).await?;
+    for instance_id in &to_kill {
+        info!("  Terminated: {instance_id}");
+    }
+    Ok(())
+}
+
 fn log_launch_config(opts: &DeployOptions) {
     info!("Launch configuration:");
     info!("\t{:24}{}", "Instance Type:", opts.instance_type);
@@ -345,6 +534,7 @@ fn log_launch_config(opts: &DeployOptions) {
             value.unwrap_or("default")
         );
     }
+    info!("\t{:24}{}", "Scenario:", opts.scenario_name());
     info!("\t{:24}{}", "Blocks:", opts.nblocks.as_str());
     info!("\t{:24}{}", "Config:", opts.config);
     info!("\t{:24}{}", "Metrics Server:", opts.metrics_server);

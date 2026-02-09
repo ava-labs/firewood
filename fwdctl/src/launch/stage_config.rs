@@ -304,8 +304,12 @@ mod tests {
         let config: StageConfig =
             serde_yaml::from_str(DEFAULT_CONFIG).expect("embedded config should parse");
         assert!(
-            config.scenarios.contains_key("reexecute"),
-            "should contain 'reexecute' scenario"
+            config.scenarios.contains_key(DEFAULT_SCENARIO),
+            "should contain default scenario"
+        );
+        assert!(
+            config.scenarios.contains_key("snapshotter"),
+            "should contain 'snapshotter' scenario"
         );
         assert!(
             !config.stages.is_empty(),

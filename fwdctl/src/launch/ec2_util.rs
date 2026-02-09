@@ -18,7 +18,22 @@ use super::{DeployOptions, LaunchError};
 
 const WAIT_RUNNING_TIMEOUT: Duration = Duration::from_secs(300);
 const POLL_INTERVAL_RUNNING: Duration = Duration::from_secs(3);
+const MANAGED_BY_TAG_KEY: &str = "ManagedBy";
+const MANAGED_BY_TAG_VALUE: &str = "fwdctl";
 static AWS_USERNAME: OnceCell<String> = OnceCell::const_new();
+
+#[derive(Debug, Clone)]
+pub(super) struct ManagedInstance {
+    pub instance_id: String,
+    pub name: String,
+    pub state: String,
+    pub instance_type: String,
+    pub public_ip: Option<String>,
+    pub private_ip: Option<String>,
+    pub launch_time: Option<String>,
+    pub launched_by: Option<String>,
+    pub custom_tag: Option<String>,
+}
 
 async fn aws_config(region: Option<&str>) -> aws_config::SdkConfig {
     let mut loader = aws_config::defaults(BehaviorVersion::latest());
@@ -248,8 +263,107 @@ async fn describe_instance(
         .and_then(|r| r.instances().first().cloned()))
 }
 
+pub(super) async fn list_instances(
+    ec2: &Ec2Client,
+    running_only: bool,
+) -> Result<Vec<ManagedInstance>, LaunchError> {
+    let mut next_token = None::<String>;
+    let mut instances = Vec::new();
+
+    loop {
+        let mut request = ec2
+            .describe_instances()
+            .filters(managed_filter())
+            .filters(state_filter(running_only));
+        if let Some(token) = next_token.as_deref() {
+            request = request.next_token(token);
+        }
+
+        let response = request.send().await?;
+        for reservation in response.reservations() {
+            for instance in reservation.instances() {
+                instances.push(map_managed_instance(instance));
+            }
+        }
+
+        match response.next_token() {
+            Some(token) => next_token = Some(token.to_owned()),
+            None => break,
+        }
+    }
+
+    instances.sort_by(|left, right| right.launch_time.cmp(&left.launch_time));
+    Ok(instances)
+}
+
+pub(super) async fn terminate_instances(
+    ec2: &Ec2Client,
+    instance_ids: &[String],
+) -> Result<(), LaunchError> {
+    if instance_ids.is_empty() {
+        return Ok(());
+    }
+    ec2.terminate_instances()
+        .set_instance_ids(Some(instance_ids.to_vec()))
+        .send()
+        .await?;
+    Ok(())
+}
+
+fn managed_filter() -> Filter {
+    Filter::builder()
+        .name(format!("tag:{MANAGED_BY_TAG_KEY}"))
+        .values(MANAGED_BY_TAG_VALUE)
+        .build()
+}
+
+fn state_filter(running_only: bool) -> Filter {
+    let mut builder = Filter::builder()
+        .name("instance-state-name")
+        .values("pending")
+        .values("running");
+
+    if !running_only {
+        builder = builder
+            .values("stopping")
+            .values("stopped")
+            .values("shutting-down");
+    }
+
+    builder.build()
+}
+
+fn map_managed_instance(instance: &aws_sdk_ec2::types::Instance) -> ManagedInstance {
+    ManagedInstance {
+        instance_id: instance.instance_id().unwrap_or_default().to_owned(),
+        name: instance_tag(instance, "Name").unwrap_or_default(),
+        state: instance
+            .state()
+            .and_then(|state| state.name())
+            .map_or_else(|| "unknown".to_owned(), |state| state.as_str().to_owned()),
+        instance_type: instance.instance_type().map_or_else(
+            || "unknown".to_owned(),
+            |instance_type| instance_type.as_str().to_owned(),
+        ),
+        public_ip: instance.public_ip_address().map(ToOwned::to_owned),
+        private_ip: instance.private_ip_address().map(ToOwned::to_owned),
+        launch_time: instance.launch_time().map(ToString::to_string),
+        launched_by: instance_tag(instance, "LaunchedBy"),
+        custom_tag: instance_tag(instance, "CustomTag"),
+    }
+}
+
+fn instance_tag(instance: &aws_sdk_ec2::types::Instance, key: &str) -> Option<String> {
+    instance
+        .tags()
+        .iter()
+        .find(|tag| tag.key() == Some(key))
+        .and_then(|tag| tag.value())
+        .map(ToOwned::to_owned)
+}
+
 /// Returns the AWS username for the current caller identity.
-async fn get_aws_username() -> String {
+pub(super) async fn get_aws_username() -> String {
     AWS_USERNAME
         .get_or_init(|| async {
             let fallback_username = || {

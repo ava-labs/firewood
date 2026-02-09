@@ -147,6 +147,18 @@ stages:
     name: "Initializing state directory"
     commands:
       - "sudo -u ubuntu mkdir -p {{ variables.nvme_base }}/ubuntu/exec-data/current-state"
+  execute-range:
+    name: "Executing blocks {{ variables.start_block }} to {{ variables.end_block }}"
+    variables:
+      start_block: "1"
+      end_block: "{{ args.end_block }}"
+      background: ""
+    commands:
+      - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego --login  METRICS_SERVER_ENABLED={{ args.metrics_server }} CURRENT_STATE_DIR={{ variables.nvme_base }}/ubuntu/exec-data/current-state BLOCK_DIR={{ variables.nvme_base }}/ubuntu/exec-data/blocks START_BLOCK={{ variables.start_block }} END_BLOCK={{ variables.end_block }} CONFIG={{ args.config }} time task test-cchain-reexecution > /var/log/bootstrap.log 2>&1 {{ variables.background }}"
+  snapshot-to-s3:
+    name: "Snapshotting state at block {{ variables.snapshot_block }}"
+    commands:
+      - "s5cmd cp '{{ variables.nvme_base }}/ubuntu/exec-data/current-state/*' 's3://{{ variables.s3_bucket }}/snapshots/{{ variables.snapshot_block }}/'"
 
 scenarios:
   reexecute:
@@ -165,6 +177,48 @@ scenarios:
       - download-blocks
       - init-state-dir
       - id: execute-range
-        name: "Executing blocks"
-        commands:
-          - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego --login METRICS_SERVER_ENABLED={{ args.metrics_server }} CURRENT_STATE_DIR={{ variables.nvme_base }}/ubuntu/exec-data/current-state BLOCK_DIR={{ variables.nvme_base }}/ubuntu/exec-data/blocks START_BLOCK=1 END_BLOCK={{ variables.end_block }} CONFIG={{ args.config }} time task test-cchain-reexecution > /var/log/bootstrap.log 2>&1 &"
+        variables:
+          background: "&"
+  snapshotter:
+    description: "Execute and snapshot state at 1m, 10m, 20m, and 30m blocks"
+    stages:
+      - rust-install
+      - ssm-agent
+      - clone-firewood
+      - setup-environment
+      - install-go-grafana
+      - clone-repos
+      - configure-go-modules
+      - build-firewood-ffi
+      - build-avalanchego
+      - install-s5cmd
+      - download-blocks
+      - init-state-dir
+      - id: execute-range
+        variables:
+          start_block: "1"
+          end_block: "1000000"
+      - id: snapshot-to-s3
+        variables:
+          snapshot_block: "1000000"
+      - id: execute-range
+        variables:
+          start_block: "1000000"
+          end_block: "10000000"
+      - id: snapshot-to-s3
+        variables:
+          snapshot_block: "10000000"
+      - id: execute-range
+        variables:
+          start_block: "10000000"
+          end_block: "20000000"
+      - id: snapshot-to-s3
+        variables:
+          snapshot_block: "20000000"
+      - id: execute-range
+        variables:
+          start_block: "20000000"
+          end_block: "30000000"
+      - id: snapshot-to-s3
+        variables:
+          snapshot_block: "30000000"

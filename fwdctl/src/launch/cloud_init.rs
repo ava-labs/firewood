@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde_json::json;
 use std::collections::HashMap;
 
-use super::stage_config::{DEFAULT_SCENARIO, StageConfig, TemplateContext};
+use super::stage_config::{StageConfig, TemplateContext};
 use super::{DeployOptions, LaunchError};
 
 #[derive(Serialize)]
@@ -38,6 +38,7 @@ struct WriteFile {
 
 pub struct CloudInitContext {
     swap_gib: u64,
+    scenario_name: String,
     template_ctx: TemplateContext,
     config: StageConfig,
 }
@@ -77,6 +78,7 @@ impl CloudInitContext {
         };
         Ok(Self {
             swap_gib: 16,
+            scenario_name: opts.scenario_name().to_string(),
             template_ctx,
             config,
         })
@@ -151,7 +153,9 @@ impl CloudInitContext {
     }
 
     fn build_runcmd(&self) -> Result<Vec<String>, LaunchError> {
-        let stages = self.config.process(&self.template_ctx, DEFAULT_SCENARIO)?;
+        let stages = self
+            .config
+            .process(&self.template_ctx, &self.scenario_name)?;
         let total = stages.len();
         let mut runcmd = Vec::with_capacity(total * 3 + 2);
         let stage_names: Vec<_> = stages.iter().map(|stage| stage.name.as_str()).collect();
