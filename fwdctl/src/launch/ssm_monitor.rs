@@ -122,8 +122,9 @@ async fn stream_bootstrap_log(ssm: &SsmClient, instance_id: &str) -> Result<(), 
     let mut observer = LogObserver::default();
 
     loop {
+        let start_line = last_line.saturating_add(1);
         let (output, lines_read) =
-            read_log_chunk(ssm, instance_id, BOOTSTRAP_LOG, last_line + 1).await?;
+            read_log_chunk(ssm, instance_id, BOOTSTRAP_LOG, start_line).await?;
         if !output.is_empty() {
             for line in output.lines() {
                 if observer.process_line(line) {
@@ -131,7 +132,7 @@ async fn stream_bootstrap_log(ssm: &SsmClient, instance_id: &str) -> Result<(), 
                     return Ok(());
                 }
             }
-            last_line += lines_read;
+            last_line = last_line.saturating_add(lines_read);
         }
         sleep(LOG_POLL_INTERVAL).await;
     }
@@ -164,7 +165,7 @@ struct StageTracker {
 
 impl StageTracker {
     fn update(&mut self, state: &CloudInitState) {
-        for skipped in (self.shown_step + 1)..state.step {
+        for skipped in self.shown_step.saturating_add(1)..state.step {
             info!(
                 "[{:>2}/{}] ✓ {}",
                 skipped,
@@ -339,11 +340,8 @@ async fn read_log_chunk(
     log_path: &str,
     start_line: u64,
 ) -> Result<(String, u64), LaunchError> {
-    let command = format!(
-        "sudo sed -n '{start},{end}p' {log_path} 2>/dev/null || true",
-        start = start_line,
-        end = start_line + LOG_CHUNK_SIZE - 1,
-    );
+    let end_line = start_line.saturating_add(LOG_CHUNK_SIZE.saturating_sub(1));
+    let command = format!("sudo sed -n '{start_line},{end_line}p' {log_path} 2>/dev/null || true");
     let output = run_ssm_command(ssm, instance_id, &command).await?;
     let lines_read = output.lines().count() as u64;
     Ok((output, lines_read))

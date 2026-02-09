@@ -157,7 +157,7 @@ impl CloudInitContext {
             .config
             .process(&self.template_ctx, &self.scenario_name)?;
         let total = stages.len();
-        let mut runcmd = Vec::with_capacity(total * 3 + 2);
+        let mut runcmd = Vec::new();
         let stage_names: Vec<_> = stages.iter().map(|stage| stage.name.as_str()).collect();
         let state = json!({
             "step": 0,
@@ -170,12 +170,13 @@ impl CloudInitContext {
         runcmd.push(write_json_file_command(STATE_FILE, &state)?);
 
         for (stage_idx, stage) in stages.iter().enumerate() {
-            let step = stage_idx + 1;
+            let step = stage_idx.saturating_add(1);
             runcmd.push(state_update_command(step, "in_progress"));
 
             for (cmd_idx, cmd) in stage.commands.iter().enumerate() {
+                let cmd_num = cmd_idx.saturating_add(1);
                 runcmd.push(cmd.clone());
-                runcmd.push(state_fail_if_needed_command(step, cmd_idx + 1));
+                runcmd.push(state_fail_if_needed_command(step, cmd_num));
             }
 
             runcmd.push(state_update_command(step, "completed"));
