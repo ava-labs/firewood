@@ -79,63 +79,58 @@ pub struct VerifyChangeProofArgs<'a> {
     pub max_length: u32,
 }
 
-/// Tracks the state of a proposal created from a change proof. A proposal is
-/// created after calling `fwd_db_verify_change_proof` and is committed after
-/// calling `fwd_db_verify_and_commit_change_proof`.
-#[derive(Debug)]
-#[expect(unused)]
-enum ProposalState<'db> {
-    Immutable(crate::ProposalHandle<'db>),
-    Committed(Option<HashKey>),
-}
-
 /// FFI context for a parsed or generated change proof.
 #[derive(Debug)]
 pub struct ChangeProofContext<'db> {
+    state: ChangeProofState<'db>,
     proof: FrozenChangeProof,
-    verification: Option<VerificationContext>,
-    proposal_state: Option<ProposalState<'db>>,
+}
+
+/// A `ChangeProofContext` can be in four different states. Calling `verify_and_propose`
+/// and `verify_and_commit` will perform state transitions on the `ChangeProofContext`.
+/// The state keeps a saved version of any previous verification context or database
+/// handle. The saved version is used to eliminate repeated verifications or proposal
+/// creation on a change proof.
+///
+/// If the new verification context doesn't match the the saved version exactly, then
+/// we treat the change proof as unverified and verify it again.
+///
+/// The function `std::ptr::eq` is used to check that the saved database handle is
+/// pointing to the same memory location as the handle passed to the propose and commit
+/// functions. This ensures that we don't accidentally try to commit a proposal created
+/// for one database when calling commit on a different database. If the database
+/// handles don't match, we set the state back to `Unverified` and re-perform
+/// `verify_and_propose` or `verify_and_commit` depending on which was called.
+#[derive(Debug)]
+#[expect(unused)]
+enum ChangeProofState<'db> {
+    Unverified,
+    Verified(VerificationContext),
+    Proposed(
+        VerificationContext,
+        &'db DatabaseHandle,
+        crate::ProposalHandle<'db>,
+    ),
+    Committed(VerificationContext, &'db DatabaseHandle, Option<HashKey>),
 }
 
 impl From<FrozenChangeProof> for ChangeProofContext<'_> {
     fn from(proof: FrozenChangeProof) -> Self {
         Self {
+            state: ChangeProofState::Unverified,
             proof,
-            verification: None,
-            proposal_state: None,
         }
     }
 }
 
 impl<'db> ChangeProofContext<'db> {
-    fn verify(
-        &mut self,
-        start_root: HashKey,
-        end_root: HashKey,
-        start_key: Option<&[u8]>,
-        end_key: Option<&[u8]>,
-        max_length: Option<NonZeroUsize>,
-    ) -> Result<(), api::Error> {
-        if let Some(ref ctx) = self.verification {
-            // Checking that the saved verification context matches exactly with the
-            // current change proof context. If it does, then verification has already
-            // been completed.
-            if ctx.start_root == start_root
-                && ctx.end_root == end_root
-                && ctx.start_key.as_deref() == start_key
-                && ctx.end_key.as_deref() == end_key
-                && ctx.max_length == max_length
-            {
-                // already verified with the same context
-                return Ok(());
-            }
-            return Err(api::Error::ProofError(ProofError::ValueMismatch));
-        }
-
+    /// Only called if `ChangeProofContext` is in the unverified state. Causes a transition
+    /// to the verified state.
+    fn verify_helper(&mut self, context: VerificationContext) -> Result<(), api::Error> {
         let batch_ops = self.proof.batch_ops();
 
         // Check to make sure the BatchOp array size is less than or equal to `max_length`
-        if let Some(max_length) = max_length
+        if let Some(max_length) = context.max_length
             && batch_ops.len() > max_length.into()
         {
             return Err(api::Error::ProofError(
@@ -144,7 +139,7 @@ impl<'db> ChangeProofContext<'db> {
         }
 
         // Check the start key is not greater than the first key in the proof.
-        if let (Some(start_key), Some(first_key)) = (start_key, batch_ops.first())
+        if let (Some(start_key), Some(first_key)) = (&context.start_key, batch_ops.first())
             && start_key.cmp(first_key.key()) == Ordering::Greater
         {
             return Err(api::Error::ProofError(
@@ -153,7 +148,7 @@ impl<'db> ChangeProofContext<'db> {
         }
 
         // Check the end key is not less than the last key in the proof.
-        if let (Some(end_key), Some(last_key)) = (end_key, batch_ops.last())
+        if let (Some(end_key), Some(last_key)) = (&context.end_key, batch_ops.last())
             && end_key.cmp(last_key.key()) == Ordering::Less
         {
             return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
@@ -165,41 +160,67 @@ impl<'db> ChangeProofContext<'db> {
             .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
         {
             warn!("change proof verification not yet implemented");
-
-            self.verification = Some(VerificationContext {
-                start_root,
-                end_root,
-                start_key: start_key.map(Box::from),
-                end_key: end_key.map(Box::from),
-                max_length,
-            });
+            self.state = ChangeProofState::Verified(context);
             Ok(())
         } else {
             Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted))
         }
     }
 
+    /// Only called if `ChangeProofContext` is in the verified state. Causes a transition to the
+    /// proposed state.
+    fn propose_helper(
+        &mut self,
+        db: &'db crate::DatabaseHandle,
+        context: VerificationContext,
+    ) -> Result<(), api::Error> {
+        let proposal = db.apply_change_proof_to_parent(context.start_root.into(), &self.proof)?;
+        self.state = ChangeProofState::Proposed(context, db, proposal.handle);
+        Ok(())
+    }
+
     fn verify_and_propose(
         &mut self,
         db: &'db crate::DatabaseHandle,
-        start_root: HashKey,
-        end_root: HashKey,
-        start_key: Option<&[u8]>,
-        end_key: Option<&[u8]>,
-        max_length: Option<NonZeroUsize>,
+        context: VerificationContext,
     ) -> Result<(), api::Error> {
-        self.verify(start_root, end_root, start_key, end_key, max_length)?;
-        if self.proposal_state.is_some() {
-            return Ok(());
+        match &mut self.state {
+            ChangeProofState::Unverified => {
+                self.verify_helper(context.clone())?;
+                self.propose_helper(db, context)
+            }
+            // Check that the verification context matches the saved context exactly. If it
+            // does, then verification has already been completed and we can create the proposal.
+            ChangeProofState::Verified(ctx) if context == *ctx => self.propose_helper(db, context),
+            // Check that the verification context and the database match the saved versions.
+            ChangeProofState::Proposed(ctx, db_handle, _)
+                if context == *ctx && std::ptr::eq(*db_handle, db) =>
+            {
+                Ok(()) // Already been verified and proposed
+            }
+            // Check that the verification context and the database match the saved
+            // versions. Keeping this separate from the `ChangeProofState::Proposed` arm
+            // in case we want to separate their behavior in the future.
+            ChangeProofState::Committed(ctx, db_handle, _)
+                if context == *ctx && std::ptr::eq(*db_handle, db) =>
+            {
+                Ok(()) // Already been verified, proposed and even committed.
+            }
+            _ => {
+                // Verification context or database didn't match. Redo from unverified. We could
+                // further distinguish between the two cases to not perform verification if only
+                // the database didn't match. However, it may be better to always re-perform the
+                // verification in case verification is changed in the future to be database
+                // specific.
+                self.state = ChangeProofState::Unverified;
+                self.verify_and_propose(db, context)
+            }
         }
-        let proposal = db.apply_change_proof_to_parent(start_root.into(), &self.proof)?;
-        self.proposal_state = Some(ProposalState::Immutable(proposal.handle));
-        Ok(())
     }
 }
 
 /// FFI context for verifying a change proof
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 struct VerificationContext {
     start_root: HashKey,
     end_root: HashKey,
@@ -323,8 +344,8 @@ impl<'a> CodeIteratorHandle<'a> {
 /// - [`ChangeProofResult::Err`] containing an error message if the proof could not be created.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_change_proof<'db>(
-    db: Option<&'db DatabaseHandle>,
-    args: CreateChangeProofArgs<'db>,
+    db: Option<&DatabaseHandle>,
+    args: CreateChangeProofArgs,
 ) -> ChangeProofResult<'db> {
     crate::invoke_with_handle(db, |db| {
         db.change_proof(
@@ -381,14 +402,14 @@ pub extern "C" fn fwd_db_verify_change_proof<'db>(
     crate::invoke_with_handle(handle, |(db, ctx)| {
         let start_key = start_key.into_option();
         let end_key = end_key.into_option();
-        ctx.verify_and_propose(
-            db,
+        let context = VerificationContext {
             start_root,
             end_root,
-            start_key.as_deref(),
-            end_key.as_deref(),
-            NonZeroUsize::new(max_length as usize),
-        )
+            start_key: start_key.as_deref().map(Box::from),
+            end_key: end_key.as_deref().map(Box::from),
+            max_length: NonZeroUsize::new(max_length as usize),
+        };
+        ctx.verify_and_propose(db, context)
     })
 }
 
