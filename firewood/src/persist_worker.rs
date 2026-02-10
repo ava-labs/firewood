@@ -44,7 +44,7 @@ use std::{
 };
 
 use firewood_storage::{
-    Committed, FileBacked, FileIoError, HashedNodeReader, NodeStore, NodeStoreHeader, RootReader,
+    Committed, FileBacked, FileIoError, HashedNodeReader, NodeStore, NodeStoreHeader,
 };
 use nonzero_ext::nonzero;
 use parking_lot::{Condvar, Mutex, MutexGuard};
@@ -130,25 +130,19 @@ impl PersistWorker {
             .map_err(|_| self.resolve_worker_error())
     }
 
-    /// Sends `nodestore` to the background thread for reaping if persisted and
-    /// if archival mode is disabled. Otherwise, the `nodestore` is dropped.
+    /// Sends `nodestore` to the background thread for reaping if archival mode
+    /// is disabled. Otherwise, the `nodestore` is dropped.
     pub(crate) fn reap(
         &self,
         nodestore: NodeStore<Committed, FileBacked>,
     ) -> Result<(), PersistError> {
         if self.shared.root_store.is_none() {
-            // Empty tries are considered not persisted. This is fine as empty
-            // tries do not write any nodes to disk and so there's no nodes to
-            // reap, meaning we can skip sending a reap message altogether.
-            let is_persisted = nodestore
-                .root_as_maybe_persisted_node()
-                .is_some_and(|node| node.unpersisted().is_none());
-
-            if is_persisted {
-                self.sender
-                    .send(PersistMessage::Reap(nodestore))
-                    .map_err(|_| self.resolve_worker_error())?;
-            }
+            // Always send the reap message, even for empty tries. A committed
+            // revision with no root can still carry deleted nodes from the
+            // previous revision that need their disk space freed.
+            self.sender
+                .send(PersistMessage::Reap(nodestore))
+                .map_err(|_| self.resolve_worker_error())?;
         }
 
         Ok(())
