@@ -6,7 +6,7 @@ mod display_hex;
 mod hash_key;
 mod kvp;
 mod owned;
-mod results;
+pub(crate) mod results;
 
 pub use self::borrowed::{BorrowedBatchOps, BorrowedBytes, BorrowedSlice};
 use self::display_hex::DisplayHex;

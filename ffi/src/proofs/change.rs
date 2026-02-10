@@ -18,7 +18,7 @@ use std::cmp::Ordering;
 
 use crate::{
     BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
-    NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
+    NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult, results::{ProposedChangeProofResult, VerifiedChangeProofResult},
 };
 
 #[cfg(feature = "ethhash")]
@@ -60,7 +60,7 @@ pub struct VerifyChangeProofArgs<'a> {
     /// The change proof to verify. If null, the function will return
     /// [`VoidResult::NullHandlePointer`]. We need a mutable reference to
     /// update the validation context.
-    pub proof: Option<&'a mut ChangeProofContext<'a>>,
+    pub proof: Option<&'a mut ChangeProofContext>,
     /// The root hash of the starting revision. This must match the starting
     /// root of the proof.
     pub start_root: HashKey,
@@ -79,54 +79,23 @@ pub struct VerifyChangeProofArgs<'a> {
     pub max_length: u32,
 }
 
+#[derive(Debug)]
+#[repr(C)]
+pub struct ProposedChangeProofArgs<'a> {
+    pub proof: Option<&'a mut VerifiedChangeProofContext>,
+}
+
 /// FFI context for a parsed or generated change proof.
 #[derive(Debug)]
-pub struct ChangeProofContext<'db> {
-    state: ChangeProofState<'db>,
+pub struct ChangeProofContext {
     proof: FrozenChangeProof,
 }
 
-/// A `ChangeProofContext` can be in four different states. Calling `verify_and_propose`
-/// and `verify_and_commit` will perform state transitions on the `ChangeProofContext`.
-/// The state keeps a saved version of any previous verification context or database
-/// handle. The saved version is used to eliminate repeated verifications or proposal
-/// creation on a change proof.
-///
-/// If the new verification context doesn't match the the saved version exactly, then
-/// we treat the change proof as unverified and verify it again.
-///
-/// The function `std::ptr::eq` is used to check that the saved database handle is
-/// pointing to the same memory location as the handle passed to the propose and commit
-/// functions. This ensures that we don't accidentally try to commit a proposal created
-/// for one database when calling commit on a different database. If the database
-/// handles don't match, we set the state back to `Unverified` and re-perform
-/// `verify_and_propose` or `verify_and_commit` depending on which was called.
-#[derive(Debug)]
-#[expect(unused)]
-enum ChangeProofState<'db> {
-    Unverified,
-    Verified(VerificationContext),
-    Proposed(
-        VerificationContext,
-        &'db DatabaseHandle,
-        crate::ProposalHandle<'db>,
-    ),
-    Committed(VerificationContext, &'db DatabaseHandle, Option<HashKey>),
-}
-
-impl From<FrozenChangeProof> for ChangeProofContext<'_> {
-    fn from(proof: FrozenChangeProof) -> Self {
-        Self {
-            state: ChangeProofState::Unverified,
-            proof,
-        }
-    }
-}
-
-impl<'db> ChangeProofContext<'db> {
-    /// Only called if `ChangeProofContext` is in the unverified state. Causes a transition
-    /// to the verified state.
-    fn verify_helper(&mut self, context: VerificationContext) -> Result<(), api::Error> {
+impl ChangeProofContext {
+    fn verify(
+        &mut self,
+        context: VerificationContext,
+    ) -> Result<VerifiedChangeProofContext, api::Error> {
         let batch_ops = self.proof.batch_ops();
 
         // Check to make sure the BatchOp array size is less than or equal to `max_length`
@@ -160,62 +129,85 @@ impl<'db> ChangeProofContext<'db> {
             .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
         {
             warn!("change proof verification not yet implemented");
-            self.state = ChangeProofState::Verified(context);
-            Ok(())
+            Ok(VerifiedChangeProofContext {
+                proof: std::mem::take(&mut self.proof),
+                context,
+            })
         } else {
             Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted))
         }
     }
+}
 
-    /// Only called if `ChangeProofContext` is in the verified state. Causes a transition to the
-    /// proposed state.
-    fn propose_helper(
-        &mut self,
-        db: &'db crate::DatabaseHandle,
-        context: VerificationContext,
-    ) -> Result<(), api::Error> {
-        let proposal = db.apply_change_proof_to_parent(context.start_root.into(), &self.proof)?;
-        self.state = ChangeProofState::Proposed(context, db, proposal.handle);
-        Ok(())
+#[derive(Debug)]
+pub struct VerifiedChangeProofContext {
+    proof: FrozenChangeProof,
+    context: VerificationContext,
+}
+
+impl VerifiedChangeProofContext {
+    fn propose<'db>(
+        &'db mut self,
+        db: &'db DatabaseHandle,
+    ) -> Result<ProposedChangeProofContext<'db>, api::Error> {
+        let proposal =
+            db.apply_change_proof_to_parent(self.context.start_root.into(), &self.proof)?;
+        Ok(ProposedChangeProofContext {
+            proof: std::mem::take(&mut self.proof),
+            db,
+            proposal: proposal.handle,
+        })
     }
+}
 
-    fn verify_and_propose(
-        &mut self,
-        db: &'db crate::DatabaseHandle,
-        context: VerificationContext,
-    ) -> Result<(), api::Error> {
-        match &mut self.state {
-            ChangeProofState::Unverified => {
-                self.verify_helper(context.clone())?;
-                self.propose_helper(db, context)
-            }
-            // Check that the verification context matches the saved context exactly. If it
-            // does, then verification has already been completed and we can create the proposal.
-            ChangeProofState::Verified(ctx) if context == *ctx => self.propose_helper(db, context),
-            // Check that the verification context and the database match the saved version.
-            ChangeProofState::Proposed(ctx, db_handle, _)
-                if context == *ctx && std::ptr::eq(*db_handle, db) =>
-            {
-                Ok(()) // Already been verified and proposed
-            }
-            // Check that the verification context and the database match the saved version.
-            // Keeping this separate from the `ChangeProofState::Proposed` arm in case we want to
-            // separate their behavior in the future.
-            ChangeProofState::Committed(ctx, db_handle, _)
-                if context == *ctx && std::ptr::eq(*db_handle, db) =>
-            {
-                Ok(()) // Already been verified, proposed and even committed.
-            }
-            _ => {
-                // Verification context or database didn't match. Redo from unverified. We could
-                // further distinguish between the two cases to not perform verification if only
-                // the database didn't match. However, it may be better to always re-perform the
-                // verification in case verification is changed in the future to be database
-                // specific.
-                self.state = ChangeProofState::Unverified;
-                self.verify_and_propose(db, context)
-            }
-        }
+#[expect(unused)]
+#[derive(Debug)]
+pub struct ProposedChangeProofContext<'db> {
+    proof: FrozenChangeProof,
+    db: &'db DatabaseHandle,
+    proposal: crate::ProposalHandle<'db>,
+}
+
+/*
+pub struct CommittedChangeProofContext {
+    proof: FrozenChangeProof,
+    key: Option<HashKey>,
+}
+*/
+
+/* 
+/// A `ChangeProofContext` can be in four different states. Calling `verify_and_propose`
+/// and `verify_and_commit` will perform state transitions on the `ChangeProofContext`.
+/// The state keeps a saved version of any previous verification context or database
+/// handle. The saved version is used to eliminate repeated verifications or proposal
+/// creation on a change proof.
+///
+/// If the new verification context doesn't match the the saved version exactly, then
+/// we treat the change proof as unverified and verify it again.
+///
+/// The function `std::ptr::eq` is used to check that the saved database handle is
+/// pointing to the same memory location as the handle passed to the propose and commit
+/// functions. This ensures that we don't accidentally try to commit a proposal created
+/// for one database when calling commit on a different database. If the database
+/// handles don't match, we set the state back to `Unverified` and re-perform
+/// `verify_and_propose` or `verify_and_commit` depending on which was called.
+#[derive(Debug)]
+#[expect(unused)]
+enum ChangeProofState<'db> {
+    Unverified,
+    Verified(VerificationContext),
+    Proposed(
+        VerificationContext,
+        &'db DatabaseHandle,
+        crate::ProposalHandle<'db>,
+    ),
+    Committed(VerificationContext, &'db DatabaseHandle, Option<HashKey>),
+}
+*/
+
+impl From<FrozenChangeProof> for ChangeProofContext {
+    fn from(proof: FrozenChangeProof) -> Self {
+        Self { proof }
     }
 }
 
@@ -343,10 +335,10 @@ impl<'a> CodeIteratorHandle<'a> {
 ///   was successfully created.
 /// - [`ChangeProofResult::Err`] containing an error message if the proof could not be created.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_db_change_proof<'db>(
+pub extern "C" fn fwd_db_change_proof(
     db: Option<&DatabaseHandle>,
     args: CreateChangeProofArgs,
-) -> ChangeProofResult<'db> {
+) -> ChangeProofResult {
     crate::invoke_with_handle(db, |db| {
         db.change_proof(
             args.start_root.into(),
@@ -385,12 +377,10 @@ pub extern "C" fn fwd_db_change_proof<'db>(
 /// concurrently. The caller must ensure exclusive access to the proof context
 /// for the duration of the call.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_db_verify_change_proof<'db>(
-    db: Option<&'db DatabaseHandle>,
-    args: VerifyChangeProofArgs<'db>,
-) -> VoidResult {
-    let handle = db.and_then(|db| args.proof.map(|p| (db, p)));
-    crate::invoke_with_handle(handle, |(db, ctx)| {
+pub extern "C" fn fwd_verify_change_proof(
+    args: VerifyChangeProofArgs,
+) -> VerifiedChangeProofResult {
+    crate::invoke_with_handle(args.proof, |ctx| {
         let context = VerificationContext {
             start_root: args.start_root,
             end_root: args.end_root,
@@ -398,7 +388,18 @@ pub extern "C" fn fwd_db_verify_change_proof<'db>(
             end_key: args.end_key.into_option().as_deref().map(Box::from),
             max_length: NonZeroUsize::new(args.max_length as usize),
         };
-        ctx.verify_and_propose(db, context)
+        ctx.verify(context)
+    })
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_db_propose_change_proof<'db>(
+    db: Option<&'db DatabaseHandle>,
+    args: ProposedChangeProofArgs<'db>,
+) -> ProposedChangeProofResult<'db> {
+    let handle = db.and_then(|db| args.proof.map(|p| (db, p)));
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        ctx.propose(db)
     })
 }
 
@@ -534,13 +535,19 @@ pub extern "C" fn fwd_free_change_proof(proof: Option<Box<ChangeProofContext>>) 
     crate::invoke_with_handle(proof, drop)
 }
 
-impl crate::MetricsContextExt for ChangeProofContext<'_> {
+impl crate::MetricsContextExt for ChangeProofContext {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         None
     }
 }
 
-impl<'a> crate::MetricsContextExt for (&'a DatabaseHandle, &mut ChangeProofContext<'a>) {
+impl crate::MetricsContextExt for (&DatabaseHandle, &mut ChangeProofContext) {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
+        self.0.metrics_context()
+    }
+}
+
+impl crate::MetricsContextExt for (&DatabaseHandle, &mut VerifiedChangeProofContext) {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         self.0.metrics_context()
     }

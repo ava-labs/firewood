@@ -66,6 +66,14 @@ type ChangeProof struct {
 	handle *C.ChangeProofContext
 }
 
+type VerifiedChangeProof struct {
+	handle *C.VerifiedChangeProofContext
+}
+
+type ProposedChangeProof struct {
+	handle *C.ProposedChangeProofContext
+}
+
 // NextKeyRange represents a range of keys to fetch from the database. The start
 // key is inclusive while the end key is exclusive. If the end key is Nothing,
 // the range is unbounded in that direction.
@@ -342,23 +350,34 @@ func (db *Database) ChangeProof(
 	return getChangeProofFromChangeProofResult(C.fwd_db_change_proof(db.handle, args))
 }
 
+func (db *Database) ProposeChangeProof(
+	proof *VerifiedChangeProof,
+) (*ProposedChangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	args := C.ProposedChangeProofArgs{
+		proof: proof.handle,
+	}
+	return getProposedChangeProofFromProposedChangeProofResult(C.fwd_db_propose_change_proof(db.handle, args))
+}
+
 // VerifyChangeProof verifies the provided change [proof] proves the changes
 // between [startRoot] and [endRoot] for keys in the range [startKey, endKey]. If
 // the proof is valid, a proposal containing the changes is prepared. The call
 // to [*Database.VerifyAndCommitChangeProof] will skip verification and commit the
 // prepared proposal.
-func (db *Database) VerifyChangeProof(
-	proof *ChangeProof,
+func (proof *ChangeProof) VerifyChangeProof(
 	startRoot, endRoot Hash,
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
-) error {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return errDBClosed
-	}
-
+) (*VerifiedChangeProof, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
@@ -371,7 +390,7 @@ func (db *Database) VerifyChangeProof(
 		max_length: C.uint32_t(maxLength),
 	}
 
-	return getErrorFromVoidResult(C.fwd_db_verify_change_proof(db.handle, args))
+	return getVerifiedChangeProofFromVerifiedChangeProofResult(C.fwd_verify_change_proof(args))
 }
 
 // VerifyAndCommitChangeProof verifies the provided change [proof] proves the changes
@@ -591,5 +610,35 @@ func getChangeProofFromChangeProofResult(result C.ChangeProofResult) (*ChangePro
 		return nil, err
 	default:
 		return nil, fmt.Errorf("unknown C.ChangeProofResult tag: %d", result.tag)
+	}
+}
+
+func getVerifiedChangeProofFromVerifiedChangeProofResult(result C.VerifiedChangeProofResult) (*VerifiedChangeProof, error) {
+	switch result.tag {
+	case C.VerifiedChangeProofResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.VerifiedChangeProofResult_Ok:
+		ptr := *(**C.VerifiedChangeProofContext)(unsafe.Pointer(&result.anon0))
+		return &VerifiedChangeProof{handle: ptr}, nil
+	case C.VerifiedChangeProofResult_Err:
+		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return nil, err
+	default:
+		return nil, fmt.Errorf("unknown C.VerifiedChangeProofResult tag: %d", result.tag)
+	}
+}
+
+func getProposedChangeProofFromProposedChangeProofResult(result C.ProposedChangeProofResult) (*ProposedChangeProof, error) {
+	switch result.tag {
+	case C.ProposedChangeProofResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.ProposedChangeProofResult_Ok:
+		ptr := *(**C.ProposedChangeProofContext)(unsafe.Pointer(&result.anon0))
+		return &ProposedChangeProof{handle: ptr}, nil
+	case C.ProposedChangeProofResult_Err:
+		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return nil, err
+	default:
+		return nil, fmt.Errorf("unknown C.VerifiedChangeProofResult tag: %d", result.tag)
 	}
 }
