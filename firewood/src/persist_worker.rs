@@ -382,7 +382,10 @@ impl PersistLoop {
     /// Releases semaphore permits for commits up to `num_commits`.
     fn release_permits(&mut self, num_commits: NonZeroU64) {
         let last = self.last_persisted_commit.map_or(0, NonZeroU64::get);
-        let permits_to_release = num_commits.get().saturating_sub(last);
+        let permits_to_release = num_commits
+            .get()
+            .checked_sub(last)
+            .expect("should be positive");
         if let Some(count) = NonZeroU64::new(permits_to_release) {
             self.shared.commit_throttle.release(count);
             self.last_persisted_commit = Some(num_commits);
