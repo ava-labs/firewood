@@ -198,9 +198,9 @@ impl<'db> ChangeProofContext<'db> {
             {
                 Ok(()) // Already been verified and proposed
             }
-            // Check that the verification context and the database match the saved
-            // versions. Keeping this separate from the `ChangeProofState::Proposed` arm
-            // in case we want to separate their behavior in the future.
+            // Check that the verification context and the database match the saved versions.
+            // Keeping this separate from the `ChangeProofState::Proposed` arm in case we want to
+            // separate their behavior in the future.
             ChangeProofState::Committed(ctx, db_handle, _)
                 if context == *ctx && std::ptr::eq(*db_handle, db) =>
             {
