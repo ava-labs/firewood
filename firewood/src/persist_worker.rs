@@ -138,14 +138,16 @@ impl PersistWorker {
         &self,
         nodestore: NodeStore<Committed, FileBacked>,
     ) -> Result<(), PersistError> {
-        let is_persisted = nodestore
-            .root_as_maybe_persisted_node()
-            .is_some_and(|node| node.unpersisted().is_none());
+        if self.shared.root_store.is_none() {
+            let is_persisted = nodestore
+                .root_as_maybe_persisted_node()
+                .is_some_and(|node| node.unpersisted().is_none());
 
-        if is_persisted && self.shared.root_store.is_none() {
-            self.sender
-                .send(PersistMessage::Reap(nodestore))
-                .map_err(|_| self.resolve_send_error())?;
+            if is_persisted {
+                self.sender
+                    .send(PersistMessage::Reap(nodestore))
+                    .map_err(|_| self.resolve_send_error())?;
+            }
         }
 
         Ok(())
