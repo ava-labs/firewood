@@ -124,9 +124,6 @@ impl PersistWorker {
     pub(crate) fn persist(&self, committed: CommittedRevision) -> Result<(), PersistError> {
         self.shared.commit_throttle.acquire();
 
-        // Check for errors after potentially blocking
-        self.check_error()?;
-
         self.sender
             .send(PersistMessage::Persist(committed))
             .map_err(|_| self.resolve_send_error())
