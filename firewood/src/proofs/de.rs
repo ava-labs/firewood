@@ -94,23 +94,24 @@ impl FrozenChangeProof {
             .validate(Some(ProofType::Change))
             .map_err(ReadError::InvalidHeader)?;
 
-        match header.version {
-            0 => {
-                let mut reader = V0Reader::new(reader, header);
-                let this = reader.read_v0_item()?;
-                if reader.remainder().is_empty() {
-                    Ok(this)
-                } else {
-                    Err(reader.invalid_item(
-                        "trailing bytes",
-                        "no data after the proof",
-                        format!("{} bytes", reader.remainder().len()),
-                    ))
-                }
-            }
-            found => Err(ReadError::InvalidHeader(
-                InvalidHeader::UnsupportedVersion { found },
-            )),
+        if header.version != 0 {
+            return Err(ReadError::InvalidHeader(
+                InvalidHeader::UnsupportedVersion {
+                    found: header.version,
+                },
+            ));
+        }
+
+        let mut reader = V0Reader::new(reader, header);
+        let this = reader.read_v0_item()?;
+        if reader.remainder().is_empty() {
+            Ok(this)
+        } else {
+            Err(reader.invalid_item(
+                "trailing bytes",
+                "no data after the proof",
+                format!("{} bytes", reader.remainder().len()),
+            ))
         }
     }
 }

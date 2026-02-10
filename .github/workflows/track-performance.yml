@@ -3,13 +3,19 @@
 name: C-Chain Reexecution Performance Tracking
 
 on:
+  schedule:
+    # These cron expressions are matched exactly in configure-benchmark to set parameters
+    # Daily at 05:00 UTC (00:00 ET) - 1M blocks: 40M → 41M
+    - cron: '0 5 * * *'
+    # Weekly Saturday at 05:00 UTC (00:00 ET) - 10M blocks: 50M → 60M
+    - cron: '0 5 * * 6'
   workflow_dispatch:
     inputs:
       firewood:
         description: 'Firewood commit/branch/tag to test (leave empty to use the commit that triggered the workflow)'
         default: ''
       libevm:
-        description: 'libevm commit/branch/tag to test (leave empty to skip)'
+        description: 'libevm commit/branch/tag to test (leave empty to use AvalancheGo version of libevm)'
         default: ''
       avalanchego:
         description: 'AvalancheGo commit/branch/tag to test against'
@@ -19,7 +25,7 @@ on:
         default: ''
       config:
         description: 'Config (e.g., firewood, hashdb)'
-        default: ''
+        default: 'firewood'
       start-block:
         default: ''
       end-block:
@@ -33,17 +39,72 @@ on:
       runner:
         description: 'Runner to use in AvalancheGo'
         required: true
-        type: choice
-        options:
-          - avalanche-avalanchego-runner-2ti
-          - avago-runner-i4i-4xlarge-local-ssd
-          - avago-runner-m6i-4xlarge-ebs-fast
       timeout-minutes:
         description: 'Timeout in minutes'
         default: ''
 
 jobs:
-  record-benchmark-to-gh-pages:
+  configure-benchmark:
+    runs-on: ubuntu-latest
+    outputs:
+      name: ${{ steps.resolve.outputs.name }}
+      test: ${{ steps.resolve.outputs.test }}
+      config: ${{ steps.resolve.outputs.config }}
+      start-block: ${{ steps.resolve.outputs.start-block }}
+      end-block: ${{ steps.resolve.outputs.end-block }}
+      block-dir-src: ${{ steps.resolve.outputs.block-dir-src }}
+      current-state-dir-src: ${{ steps.resolve.outputs.current-state-dir-src }}
+      runner: ${{ steps.resolve.outputs.runner }}
+      timeout-minutes: ${{ steps.resolve.outputs.timeout-minutes }}
+    steps:
+      - name: Resolve benchmark config
+        id: resolve
+        run: |
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            # Common config for all scheduled runs
+            echo "config=firewood" >> "$GITHUB_OUTPUT"
+            echo "runner=avago-runner-i4i-2xlarge-local-ssd" >> "$GITHUB_OUTPUT"
+
+            # Cron strings must match exactly from schedule definitions above
+            case "${{ github.event.schedule }}" in
+              "0 5 * * *")  # Daily at 05:00 UTC: 1M blocks (40M → 41M)
+                echo "::notice::Schedule: daily-40m-41m (blocks 40000001-41000000)"
+                echo "name=daily-40m-41m" >> "$GITHUB_OUTPUT"
+                echo "start-block=40000001" >> "$GITHUB_OUTPUT"
+                echo "end-block=41000000" >> "$GITHUB_OUTPUT"
+                echo "block-dir-src=cchain-mainnet-blocks-40m-50m-ldb" >> "$GITHUB_OUTPUT"
+                echo "current-state-dir-src=cchain-current-state-firewood-40m" >> "$GITHUB_OUTPUT"
+                echo "timeout-minutes=720" >> "$GITHUB_OUTPUT"
+                ;;
+              "0 5 * * 6")  # Weekly Saturday at 05:00 UTC: 10M blocks (50M → 60M)
+                echo "::notice::Schedule: weekly-50m-60m (blocks 50000001-60000000)"
+                echo "name=weekly-50m-60m" >> "$GITHUB_OUTPUT"
+                echo "start-block=50000001" >> "$GITHUB_OUTPUT"
+                echo "end-block=60000000" >> "$GITHUB_OUTPUT"
+                echo "block-dir-src=cchain-mainnet-blocks-50m-60m-ldb" >> "$GITHUB_OUTPUT"
+                echo "current-state-dir-src=cchain-current-state-firewood-50m" >> "$GITHUB_OUTPUT"
+                echo "timeout-minutes=2880" >> "$GITHUB_OUTPUT"
+                ;;
+              *)
+                echo "::error::Unknown schedule: ${{ github.event.schedule }}"
+                exit 1
+                ;;
+            esac
+          else
+            # Manual dispatch - pass through inputs directly
+            echo "name=manual" >> "$GITHUB_OUTPUT"
+            echo "test=${{ inputs.test }}" >> "$GITHUB_OUTPUT"
+            echo "config=${{ inputs.config }}" >> "$GITHUB_OUTPUT"
+            echo "start-block=${{ inputs.start-block }}" >> "$GITHUB_OUTPUT"
+            echo "end-block=${{ inputs.end-block }}" >> "$GITHUB_OUTPUT"
+            echo "block-dir-src=${{ inputs.block-dir-src }}" >> "$GITHUB_OUTPUT"
+            echo "current-state-dir-src=${{ inputs.current-state-dir-src }}" >> "$GITHUB_OUTPUT"
+            echo "runner=${{ inputs.runner }}" >> "$GITHUB_OUTPUT"
+            echo "timeout-minutes=${{ inputs.timeout-minutes }}" >> "$GITHUB_OUTPUT"
+          fi
+
+  benchmark:
+    needs: configure-benchmark
     runs-on: ubuntu-latest
     permissions:
       contents: write  # Required for github-action-benchmark to push to gh-pages
@@ -56,27 +117,23 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Trigger C-Chain Reexecution Benchmark
-        run: |
-          if [[ -n "${{ inputs.test }}" ]]; then
-            ./scripts/bench-cchain-reexecution.sh trigger "${{ inputs.test }}"
-          else
-            ./scripts/bench-cchain-reexecution.sh trigger
-          fi
+        run: ./scripts/bench-cchain-reexecution.sh trigger
         env:
           GH_TOKEN: ${{ secrets.FIREWOOD_AVALANCHEGO_GITHUB_TOKEN }}
-          # Custom mode (ignored when test is specified)
-          CONFIG: ${{ inputs.config }}
-          START_BLOCK: ${{ inputs.start-block }}
-          END_BLOCK: ${{ inputs.end-block }}
-          BLOCK_DIR_SRC: ${{ inputs.block-dir-src }}
-          CURRENT_STATE_DIR_SRC: ${{ inputs.current-state-dir-src }}
+          # Custom mode (ignored when TEST is specified)
+          CONFIG: ${{ needs.configure-benchmark.outputs.config }}
+          START_BLOCK: ${{ needs.configure-benchmark.outputs.start-block }}
+          END_BLOCK: ${{ needs.configure-benchmark.outputs.end-block }}
+          BLOCK_DIR_SRC: ${{ needs.configure-benchmark.outputs.block-dir-src }}
+          CURRENT_STATE_DIR_SRC: ${{ needs.configure-benchmark.outputs.current-state-dir-src }}
           # Refs
           FIREWOOD_REF: ${{ inputs.firewood || github.sha }}
           AVALANCHEGO_REF: ${{ inputs.avalanchego }}
           LIBEVM_REF: ${{ inputs.libevm }}
           # Execution
-          RUNNER: ${{ inputs.runner }}
-          TIMEOUT_MINUTES: ${{ inputs.timeout-minutes }}
+          TEST: ${{ needs.configure-benchmark.outputs.test }}
+          RUNNER: ${{ needs.configure-benchmark.outputs.runner }}
+          TIMEOUT_MINUTES: ${{ needs.configure-benchmark.outputs.timeout-minutes }}
 
       # github.ref controls where results are stored (not what gets benchmarked):
       # - main branch → bench/ (official history)
@@ -102,42 +159,35 @@ jobs:
           summary-always: true
           auto-push: true
           fail-on-alert: true
+          alert-threshold: "150%"
           comment-on-alert: false
           gh-pages-branch: benchmark-data
           benchmark-data-dir-path: ${{ steps.location.outputs.data-dir }}
 
       - name: Summary
         run: |
-          if [ "${{ steps.store.outcome }}" == "failure" ]; then
-            echo "::warning::Benchmark storage failed - results were not saved to GitHub Pages"
-          fi
+          [[ "${{ steps.store.outcome }}" == "failure" ]] && echo "::warning::Benchmark storage failed"
           
           {
-            echo "## Firewood Performance Benchmark Results"
+            echo "## Benchmark: ${{ needs.configure-benchmark.outputs.name }}"
             echo
-            echo "**Configuration:**"
-            
-            if [ -n "${{ inputs.test }}" ]; then
-              echo "- Mode: Predefined test"
-              echo "- Test: \`${{ inputs.test }}\`"
+            if [[ -n "${{ needs.configure-benchmark.outputs.test }}" ]]; then
+              echo "| Parameter | Value |"
+              echo "|-----------|-------|"
+              echo "| Test | \`${{ needs.configure-benchmark.outputs.test }}\` |"
             else
-              echo "- Mode: Custom parameters"
-              echo "- Config: \`${{ inputs.config }}\`"
-              echo "- Blocks: \`${{ inputs.start-block }}\` → \`${{ inputs.end-block }}\`"
-              echo "- Block source: \`${{ inputs.block-dir-src }}\`"
-              echo "- State source: \`${{ inputs.current-state-dir-src }}\`"
+              echo "| Parameter | Value |"
+              echo "|-----------|-------|"
+              echo "| Config | \`${{ needs.configure-benchmark.outputs.config }}\` |"
+              echo "| Blocks | \`${{ needs.configure-benchmark.outputs.start-block }}\` → \`${{ needs.configure-benchmark.outputs.end-block }}\` |"
+              echo "| Block source | \`${{ needs.configure-benchmark.outputs.block-dir-src }}\` |"
+              echo "| State source | \`${{ needs.configure-benchmark.outputs.current-state-dir-src }}\` |"
             fi
-            
-            echo "- Firewood: \`${{ inputs.firewood || github.sha }}\`"
-            if [ -n "${{ inputs.libevm }}" ]; then
-              echo "- libevm: \`${{ inputs.libevm }}\`"
-            fi
-            echo "- AvalancheGo: \`${{ inputs.avalanchego }}\`"
-            echo "- Runner: \`${{ inputs.runner }}\`"
-            echo "- Timeout: \`${{ inputs.timeout-minutes }}\` minutes"
+            echo "| Firewood | \`${{ inputs.firewood || github.sha }}\` |"
+            echo "| AvalancheGo | \`${{ inputs.avalanchego || 'master' }}\` |"
+            echo "| libevm | \`${{ inputs.libevm || '-' }}\` |"
+            echo "| Runner | \`${{ needs.configure-benchmark.outputs.runner }}\` |"
             echo
-            
-            echo "**Links:**"
-            echo "- [Performance Trends](https://ava-labs.github.io/firewood/${{ steps.location.outputs.data-dir }}/)"
-          } >> $GITHUB_STEP_SUMMARY
+            echo "[View trends](https://ava-labs.github.io/firewood/${{ steps.location.outputs.data-dir }}/)"
+          } >> "$GITHUB_STEP_SUMMARY"
 
