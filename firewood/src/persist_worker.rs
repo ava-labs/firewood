@@ -126,7 +126,7 @@ impl PersistWorker {
 
         self.sender
             .send(PersistMessage::Persist(committed))
-            .map_err(|_| self.resolve_send_error())
+            .map_err(|_| self.resolve_worker_error())
     }
 
     /// Sends `nodestore` to the background thread for reaping if persisted and
@@ -143,7 +143,7 @@ impl PersistWorker {
             if is_persisted {
                 self.sender
                     .send(PersistMessage::Reap(nodestore))
-                    .map_err(|_| self.resolve_send_error())?;
+                    .map_err(|_| self.resolve_worker_error())?;
             }
         }
 
@@ -202,7 +202,7 @@ impl PersistWorker {
     /// # Panics
     ///
     /// Propagates the panic if the background thread panicked.
-    fn resolve_send_error(&self) -> PersistError {
+    fn resolve_worker_error(&self) -> PersistError {
         self.join_handle();
         self.check_error()
             .err()
