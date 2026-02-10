@@ -265,9 +265,19 @@ impl PersistSemaphore {
     /// Waits until all permits have been released back to the semaphore.
     #[cfg(test)]
     fn wait_all_released(&self) {
+        use firewood_storage::logger::warn;
+        use std::time::Duration;
+
+        const WARN_INTERVAL: Duration = Duration::from_secs(60);
+
         let mut permits = self.state.lock();
+        let mut elapsed_secs = 0;
         while *permits < self.max_permits.get() {
-            self.condvar.wait(&mut permits);
+            let result = self.condvar.wait_for(&mut permits, WARN_INTERVAL);
+            if result.timed_out() && *permits < self.max_permits.get() {
+                elapsed_secs += WARN_INTERVAL.as_secs();
+                warn!("all permits have not been released back after {elapsed_secs}s");
+            }
         }
     }
 }
