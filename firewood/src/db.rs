@@ -340,7 +340,7 @@ impl Db {
     /// This method shuts down the background persistence worker. If not called
     /// explicitly, `Drop` will attempt a best-effort shutdown but cannot report
     /// errors.
-    pub fn close(self) -> Result<(), api::Error> {
+    pub fn close(mut self) -> Result<(), api::Error> {
         self.manager.close().map_err(Into::into)
     }
 }

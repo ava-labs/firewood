@@ -465,7 +465,7 @@ impl RevisionManager {
     /// This method shuts down the background persistence worker. If not called
     /// explicitly, `Drop` will attempt a best-effort shutdown but cannot report
     /// errors.
-    pub fn close(&self) -> Result<(), RevisionManagerError> {
+    pub fn close(&mut self) -> Result<(), RevisionManagerError> {
         self.persist_worker
             .close()
             .map_err(RevisionManagerError::PersistError)

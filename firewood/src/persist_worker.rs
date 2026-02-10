@@ -71,8 +71,6 @@ enum PersistMessage {
     Persist(CommittedRevision),
     /// A persisted revision to be reaped.
     Reap(NodeStore<Committed, FileBacked>),
-    /// The background thread should shutdown.
-    Shutdown,
 }
 
 /// Handle for managing the background persistence thread.
@@ -82,7 +80,10 @@ pub(crate) struct PersistWorker {
     handle: Mutex<Option<JoinHandle<Result<(), PersistError>>>>,
 
     /// Channel for sending messages to the background thread.
-    sender: Sender<PersistMessage>,
+    ///
+    /// Wrapped in `Option` so that `close()` can drop the sender to signal
+    /// shutdown to the background thread via channel close.
+    sender: Option<Sender<PersistMessage>>,
 
     /// Shared state with background thread.
     shared: Arc<SharedState>,
@@ -115,7 +116,7 @@ impl PersistWorker {
 
         Self {
             handle: Mutex::new(Some(handle)),
-            sender,
+            sender: Some(sender),
             shared,
         }
     }
@@ -126,6 +127,8 @@ impl PersistWorker {
         self.shared.commit_throttle.acquire();
 
         self.sender
+            .as_ref()
+            .ok_or(PersistError::ChannelDisconnected)?
             .send(PersistMessage::Persist(committed))
             .map_err(|_| self.resolve_worker_error())
     }
@@ -141,6 +144,8 @@ impl PersistWorker {
             // revision with no root can still carry deleted nodes from the
             // previous revision that need their disk space freed.
             self.sender
+                .as_ref()
+                .ok_or(PersistError::ChannelDisconnected)?
                 .send(PersistMessage::Reap(nodestore))
                 .map_err(|_| self.resolve_worker_error())?;
         }
@@ -165,10 +170,10 @@ impl PersistWorker {
     ///
     /// This method is idempotent for compatibility with `drop` (as `drop` is
     /// called after this function).
-    pub(crate) fn close(&self) -> Result<(), PersistError> {
-        // Signal to the background thread to exit.
-        // We ignore any errors here as the background thread may already have exited.
-        let _ = self.sender.send(PersistMessage::Shutdown);
+    pub(crate) fn close(&mut self) -> Result<(), PersistError> {
+        // Drop the sender to close the channel, signaling the background
+        // thread to exit.
+        drop(self.sender.take());
 
         self.join_handle();
         self.check_error()
@@ -322,10 +327,9 @@ impl PersistLoop {
         result
     }
 
-    /// Processes messages until shutdown or error.
+    /// Processes messages until the channel is closed or an error occurs.
     ///
-    /// Upon receiving a message, this can do one of three things:
-    /// - On `Shutdown` or channel close: exits gracefully.
+    /// Upon receiving a message, this can do one of two things:
     /// - On `Reap`: drops the revision.
     ///   If persisted, the revision's nodes are added to the free lists only if
     ///   not running in archival mode.
@@ -334,12 +338,8 @@ impl PersistLoop {
     fn event_loop(&mut self) -> Result<(), PersistError> {
         let mut num_commits = nonzero!(1u64);
 
-        loop {
-            // An error indicates that the channel is closed.
-            let message = self.receiver.recv().unwrap_or(PersistMessage::Shutdown);
-
+        while let Ok(message) = self.receiver.recv() {
             match message {
-                PersistMessage::Shutdown => return Ok(()),
                 PersistMessage::Reap(nodestore) => self.reap(nodestore)?,
                 PersistMessage::Persist(revision) => {
                     if num_commits
@@ -353,6 +353,8 @@ impl PersistLoop {
                 }
             }
         }
+
+        Ok(())
     }
 
     /// Persists the given revision and releases semaphore permits.
