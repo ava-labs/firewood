@@ -314,8 +314,7 @@ calculate_watch_interval() {
 # when the actual benchmark succeeds but API monitoring fails.
 wait_for_completion() {
     local run_id="$1"
-    local interval
-    interval=$(calculate_watch_interval)
+    local interval=$(calculate_watch_interval)
     log "Waiting for run $run_id (updates every ${interval}s)"
     log "https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
     
