@@ -508,8 +508,12 @@ func TestVerifyChangeProof(t *testing.T) {
 	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 
-	// Verify the change proof and create a proposal on dbB.
-	_, err = changeProof.VerifyChangeProof(rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	// Verify the change proof
+	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+
+	// Create a proposal on dbB.
+	_, err = dbB.ProposeChangeProof(verifiedChangeProof)
 	r.NoError(err)
 }
 
@@ -545,7 +549,11 @@ func TestVerifyEmptyChangeProofRange(t *testing.T) {
 	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, startKey, endKey, 5)
 	r.NoError(err)
 
-	// Verify the change proof and create an empty proposal on dbB.
-	_, err = changeProof.VerifyChangeProof(rootB, rootAUpdated, startKey, endKey, 5)
+	// Verify the change proof.
+	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, startKey, endKey, 5)
+	r.NoError(err)
+
+	// Create an empty proposal on dbB.
+	_, err = dbB.ProposeChangeProof(verifiedChangeProof)
 	r.NoError(err)
 }

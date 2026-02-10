@@ -560,7 +560,7 @@ typedef struct CreateChangeProofArgs {
   uint32_t max_length;
 } CreateChangeProofArgs;
 
-typedef enum ProposedChangeProofResult_Tag {
+enum ProposedChangeProofResult_Tag {
   /**
    * The caller provided a null pointer to the input handle.
    */
@@ -576,7 +576,8 @@ typedef enum ProposedChangeProofResult_Tag {
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   ProposedChangeProofResult_Err,
-} ProposedChangeProofResult_Tag;
+};
+typedef size_t ProposedChangeProofResult_Tag;
 
 typedef struct ProposedChangeProofResult {
   ProposedChangeProofResult_Tag tag;
@@ -1202,7 +1203,7 @@ typedef struct LogArgs {
   BorrowedBytes filter_level;
 } LogArgs;
 
-typedef enum VerifiedChangeProofResult_Tag {
+enum VerifiedChangeProofResult_Tag {
   /**
    * The caller provided a null pointer to the input handle.
    */
@@ -1218,7 +1219,8 @@ typedef enum VerifiedChangeProofResult_Tag {
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
   VerifiedChangeProofResult_Err,
-} VerifiedChangeProofResult_Tag;
+};
+typedef size_t VerifiedChangeProofResult_Tag;
 
 typedef struct VerifiedChangeProofResult {
   VerifiedChangeProofResult_Tag tag;

@@ -271,7 +271,7 @@ pub enum ChangeProofResult {
 }
 
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum VerifiedChangeProofResult {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
@@ -287,7 +287,7 @@ pub enum VerifiedChangeProofResult {
 }
 
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum ProposedChangeProofResult<'db> {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
