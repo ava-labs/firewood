@@ -136,6 +136,9 @@ impl PersistWorker {
         nodestore: NodeStore<Committed, FileBacked>,
     ) -> Result<(), PersistError> {
         if self.shared.root_store.is_none() {
+            // Empty tries are considered not persisted. This is fine as empty
+            // tries do not write any nodes to disk and so there's no nodes to
+            // reap, meaning we can skip sending a reap message altogether.
             let is_persisted = nodestore
                 .root_as_maybe_persisted_node()
                 .is_some_and(|node| node.unpersisted().is_none());
