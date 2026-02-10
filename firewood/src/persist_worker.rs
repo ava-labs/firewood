@@ -46,6 +46,7 @@ use std::{
 use firewood_storage::{
     Committed, FileBacked, FileIoError, HashedNodeReader, NodeStore, NodeStoreHeader, RootReader,
 };
+use nonzero_ext::nonzero;
 use parking_lot::{Condvar, Mutex, MutexGuard};
 
 use crate::{manager::CommittedRevision, root_store::RootStore};
@@ -94,7 +95,7 @@ impl PersistWorker {
     #[allow(clippy::large_types_passed_by_value)]
     pub(crate) fn new(header: NodeStoreHeader, root_store: Option<Arc<RootStore>>) -> Self {
         let (sender, receiver) = channel::unbounded();
-        let persist_interval = NonZeroU64::new(1).expect("should be nonzero");
+        let persist_interval = nonzero!(1u64);
 
         let shared = Arc::new(SharedState {
             error: OnceLock::new(),
@@ -326,7 +327,7 @@ impl PersistLoop {
     /// - On `Persist`: persists the revision if the number of revisions received
     ///   modulo `persist_interval` is zero.
     fn event_loop(&mut self) -> Result<(), PersistError> {
-        let mut num_commits = NonZeroU64::new(1).expect("should be nonzero");
+        let mut num_commits = nonzero!(1u64);
 
         loop {
             // An error indicates that the channel is closed.

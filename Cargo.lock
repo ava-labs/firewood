@@ -1167,6 +1167,7 @@ dependencies = [
  "integer-encoding",
  "lender",
  "metrics",
+ "nonzero_ext",
  "parking_lot",
  "plain_hasher",
  "pprof",
