@@ -15,7 +15,7 @@ use crate::{
 /// The result type returned from an FFI function that returns no value but may
 /// return an error.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum VoidResult {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
@@ -50,7 +50,7 @@ impl<E: fmt::Display> From<Result<(), E>> for VoidResult {
 
 /// The result type returned from the open or create database functions.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum HandleResult {
     /// The database was opened or created successfully and the handle is
     /// returned as an opaque pointer.
@@ -82,7 +82,7 @@ impl<E: fmt::Display> From<Result<crate::DatabaseHandle, E>> for HandleResult {
 
 /// A result type returned from FFI functions that retrieve a single value.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum ValueResult {
     /// The caller provided a null pointer to a database handle.
     NullHandlePointer,
@@ -150,7 +150,7 @@ impl From<Box<[u8]>> for ValueResult {
 /// A result type returned from FFI functions return the database root hash. This
 /// may or may not be after a mutation.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum HashResult {
     /// The caller provided a null pointer to a database handle.
     NullHandlePointer,
@@ -201,7 +201,7 @@ impl From<Option<Result<HashKey, api::Error>>> for HashResult {
 ///
 /// [`fwd_free_range_proof`]: crate::fwd_free_range_proof
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum RangeProofResult<'db> {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
@@ -246,7 +246,7 @@ impl From<Result<api::FrozenRangeProof, api::Error>> for RangeProofResult<'_> {
 ///
 /// [`fwd_free_change_proof`]: crate::fwd_free_change_proof
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum ChangeProofResult {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
@@ -303,7 +303,7 @@ pub enum ProposedChangeProofResult<'db> {
 }
 
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum NextKeyRangeResult {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
@@ -341,7 +341,7 @@ impl From<Result<Option<KeyRange>, api::Error>> for NextKeyRangeResult {
 
 /// A result type returned from FFI functions that create an code hash iterator
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum CodeIteratorResult<'p> {
     /// The caller provided a null pointer to a proof handle.
     NullHandlePointer,
@@ -376,7 +376,7 @@ impl<'a> From<Result<CodeIteratorHandle<'a>, api::Error>> for CodeIteratorResult
 /// A result type returned from FFI functions that create a proposal but do not
 /// commit it to the database.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum ProposalResult<'db> {
     /// The caller provided a null pointer to a database handle.
     NullHandlePointer,
@@ -406,7 +406,7 @@ pub enum ProposalResult<'db> {
 
 /// A result type returned from FFI functions that create an iterator
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum IteratorResult<'db> {
     /// The caller provided a null pointer to a revision/proposal handle.
     NullHandlePointer,
@@ -429,7 +429,7 @@ pub enum IteratorResult<'db> {
 
 /// A result type returned from iterator FFI functions
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum KeyValueResult {
     /// The caller provided a null pointer to an iterator handle.
     NullHandlePointer,
@@ -466,7 +466,7 @@ impl From<Option<Result<(merkle::Key, merkle::Value), api::Error>>> for KeyValue
 
 /// A result type returned from iterator FFI functions
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum KeyValueBatchResult {
     /// The caller provided a null pointer to an iterator handle.
     NullHandlePointer,
@@ -513,7 +513,7 @@ impl<'db, E: fmt::Display> From<Result<CreateIteratorResult<'db>, E>> for Iterat
 
 /// A result type returned from FFI functions that get a revision
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum RevisionResult {
     /// The caller provided a null pointer to a database handle.
     NullHandlePointer,

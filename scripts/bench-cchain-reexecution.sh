@@ -2,46 +2,55 @@
 set -euo pipefail
 
 # Triggers and monitors C-Chain re-execution benchmarks in AvalancheGo.
-#
-# USAGE
-#   ./bench-cchain-reexecution.sh <command> [args]
-#
-# COMMANDS
-#   trigger [test]       Trigger benchmark, wait, download results
-#   status <run_id>      Check run status
-#   list                 List recent runs
-#   tests                Show available tests
-#   help                 Show this help message
-#
-# ENVIRONMENT
-#   GH_TOKEN              GitHub token for API access (required)
-#   TEST                  Predefined test name, alternative to arg (optional)
-#   FIREWOOD_REF          Firewood commit/tag/branch, empty = AvalancheGo's go.mod default (optional)
-#   AVALANCHEGO_REF       AvalancheGo ref to test against (default: master)
-#   RUNNER                GitHub Actions runner label (default: avalanche-avalanchego-runner-2ti)
-#   LIBEVM_REF            libevm ref (optional)
-#   TIMEOUT_MINUTES       Workflow timeout in minutes (optional)
-#   DOWNLOAD_DIR          Directory for downloaded artifacts (default: ./results)
-#
-#   Custom mode (when no TEST/test arg specified):
-#   CONFIG                VM config (default: firewood)
-#   START_BLOCK           First block number (required)
-#   END_BLOCK             Last block number (required)
-#   BLOCK_DIR_SRC         S3 block directory, e.g., cchain-mainnet-blocks-200-ldb (required)
-#   CURRENT_STATE_DIR_SRC S3 state directory, empty = genesis run (optional)
-#
-#
-# EXAMPLES
-#   ./bench-cchain-reexecution.sh trigger firewood-101-250k
-#
-#   TEST=firewood-33m-40m FIREWOOD_REF=v0.1.0 ./bench-cchain-reexecution.sh trigger
-#
-#   START_BLOCK=101 END_BLOCK=250000 \
-#     BLOCK_DIR_SRC=cchain-mainnet-blocks-1m-ldb \
-#     CURRENT_STATE_DIR_SRC=cchain-current-state-mainnet-ldb \
-#     ./bench-cchain-reexecution.sh trigger
-#
-#   ./bench-cchain-reexecution.sh status 12345678
+
+cmd_help() {
+    cat <<'EOF'
+Triggers and monitors C-Chain re-execution benchmarks in AvalancheGo.
+
+USAGE
+  ./bench-cchain-reexecution.sh <command> [args]
+
+COMMANDS
+  trigger [test]   Trigger benchmark, wait, download results
+  status <run_id>  Check run status
+  list             List recent runs
+  tests            Show available tests
+  help             Show this help message
+
+ENVIRONMENT
+  GH_TOKEN              GitHub token for API access (required)
+  TEST                  Predefined test name, alternative to arg (optional)
+  FIREWOOD_REF          Firewood commit/tag/branch, empty = AvalancheGo's go.mod default (optional)
+  AVALANCHEGO_REF       AvalancheGo branch/tag to test against (default: master)
+                        NOTE: Must be a branch or tag name, not a commit SHA (GitHub API limitation)
+  RUNNER                GitHub Actions runner label (default: avalanche-avalanchego-runner-2ti)
+  LIBEVM_REF            libevm ref (optional)
+  TIMEOUT_MINUTES       Workflow timeout in minutes (optional)
+  DOWNLOAD_DIR          Directory for downloaded artifacts (default: ./results)
+
+  Custom mode (when no TEST/test arg specified):
+  CONFIG                VM config (default: firewood)
+  START_BLOCK           First block number (required)
+  END_BLOCK             Last block number (required)
+  BLOCK_DIR_SRC         S3 block directory, e.g., cchain-mainnet-blocks-200-ldb (required)
+  CURRENT_STATE_DIR_SRC S3 state directory, empty = genesis run (optional)
+
+EXAMPLES
+  ./bench-cchain-reexecution.sh trigger firewood-101-250k
+
+  TEST=firewood-33m-40m FIREWOOD_REF=v0.1.0 ./bench-cchain-reexecution.sh trigger
+
+  START_BLOCK=101 END_BLOCK=250000 \
+    BLOCK_DIR_SRC=cchain-mainnet-blocks-1m-ldb \
+    CURRENT_STATE_DIR_SRC=cchain-current-state-mainnet-ldb \
+    ./bench-cchain-reexecution.sh trigger
+
+  ./bench-cchain-reexecution.sh status 12345678
+
+TESTS
+EOF
+    list_tests
+}
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -213,8 +222,10 @@ trigger_workflow() {
         log "Triggering: $test"
     else
         # Custom mode: block params required, CURRENT_STATE_DIR_SRC optional (empty = genesis)
-        [[ -z "${START_BLOCK:-}${END_BLOCK:-}${BLOCK_DIR_SRC:-}" ]] && \
-            err "Provide a test name or set START_BLOCK, END_BLOCK, BLOCK_DIR_SRC"; exit 1
+        if [[ -z "${START_BLOCK:-}${END_BLOCK:-}${BLOCK_DIR_SRC:-}" ]]; then
+            err "Provide a test name or set START_BLOCK, END_BLOCK, BLOCK_DIR_SRC"
+            exit 1
+        fi
         : "${START_BLOCK:?START_BLOCK required}"
         : "${END_BLOCK:?END_BLOCK required}"
         : "${BLOCK_DIR_SRC:?BLOCK_DIR_SRC required}"
@@ -317,23 +328,6 @@ cmd_list() {
 }
 
 cmd_tests() {
-    list_tests
-}
-
-cmd_help() {
-    cat <<EOF
-USAGE
-  ./bench-cchain-reexecution.sh <command> [args]
-
-COMMANDS
-  trigger [test]   Trigger benchmark, wait, download results
-  status <run_id>  Check run status
-  list             List recent runs
-  tests            Show available tests
-  help             Show this help
-
-TESTS
-EOF
     list_tests
 }
 
