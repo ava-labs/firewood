@@ -306,14 +306,26 @@ struct PersistLoop {
 impl PersistLoop {
     /// Runs the persistence loop until shutdown or error.
     ///
-    /// Upon receiving a message, `run()` can do one of three things:
+    /// If the event loop exits with an error, it is stored in shared state
+    /// so the main thread can observe it without joining.
+    fn run(mut self) -> Result<(), PersistError> {
+        let result = self.event_loop();
+        if let Err(ref err) = result {
+            self.shared.error.set(err.clone()).expect("should be empty");
+        }
+        result
+    }
+
+    /// Processes messages until shutdown or error.
+    ///
+    /// Upon receiving a message, this can do one of three things:
     /// - On `Shutdown` or channel close: exits gracefully.
-    /// - On `Reap`: drops the revision
+    /// - On `Reap`: drops the revision.
     ///   If persisted, the revision's nodes are added to the free lists only if
     ///   not running in archival mode.
-    /// - On `Commit`: persists the revision if the number of revisions recieved
+    /// - On `Persist`: persists the revision if the number of revisions received
     ///   modulo `persist_interval` is zero.
-    fn run(mut self) -> Result<(), PersistError> {
+    fn event_loop(&mut self) -> Result<(), PersistError> {
         let mut num_commits = NonZeroU64::new(1).expect("should be nonzero");
 
         loop {
@@ -352,7 +364,6 @@ impl PersistLoop {
             error!("Failed to persist revision: {e}");
 
             let err = PersistError::FileIo(Arc::new(e));
-            self.shared.error.set(err.clone()).expect("should be empty");
             // Release permits even on error to unblock waiting threads
             self.release_permits(num_commits);
 
@@ -363,7 +374,6 @@ impl PersistLoop {
         if let Err(e) = self.save_to_root_store(revision) {
             error!("Failed to persist revision address to RootStore: {e}");
 
-            self.shared.error.set(e.clone()).expect("should be empty");
             // Release permits even on error to unblock waiting threads
             self.release_permits(num_commits);
             return Err(e);
@@ -386,13 +396,9 @@ impl PersistLoop {
 
     /// Add the nodes of this revision to the free lists.
     fn reap(&self, nodestore: NodeStore<Committed, FileBacked>) -> Result<(), PersistError> {
-        if let Err(e) = nodestore.reap_deleted(&mut self.shared.header.lock()) {
-            let err = PersistError::FileIo(Arc::new(e));
-            self.shared.error.set(err.clone()).expect("should be empty");
-            return Err(err);
-        }
-
-        Ok(())
+        nodestore
+            .reap_deleted(&mut self.shared.header.lock())
+            .map_err(|e| PersistError::FileIo(Arc::new(e)))
     }
 
     /// Saves the revision's root address to `RootStore` if configured.
