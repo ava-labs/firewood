@@ -192,13 +192,13 @@ impl<'db> ChangeProofContext<'db> {
             // Check that the verification context matches the saved context exactly. If it
             // does, then verification has already been completed and we can create the proposal.
             ChangeProofState::Verified(ctx) if context == *ctx => self.propose_helper(db, context),
-            // Check that the verification context and the database match the saved versions.
+            // Check that the verification context and the database match the saved version.
             ChangeProofState::Proposed(ctx, db_handle, _)
                 if context == *ctx && std::ptr::eq(*db_handle, db) =>
             {
                 Ok(()) // Already been verified and proposed
             }
-            // Check that the verification context and the database match the saved versions.
+            // Check that the verification context and the database match the saved version.
             // Keeping this separate from the `ChangeProofState::Proposed` arm in case we want to
             // separate their behavior in the future.
             ChangeProofState::Committed(ctx, db_handle, _)
