@@ -389,25 +389,14 @@ pub extern "C" fn fwd_db_verify_change_proof<'db>(
     db: Option<&'db DatabaseHandle>,
     args: VerifyChangeProofArgs<'db>,
 ) -> VoidResult {
-    let VerifyChangeProofArgs {
-        proof,
-        start_root,
-        end_root,
-        start_key,
-        end_key,
-        max_length,
-    } = args;
-
-    let handle = db.and_then(|db| proof.map(|p| (db, p)));
+    let handle = db.and_then(|db| args.proof.map(|p| (db, p)));
     crate::invoke_with_handle(handle, |(db, ctx)| {
-        let start_key = start_key.into_option();
-        let end_key = end_key.into_option();
         let context = VerificationContext {
-            start_root,
-            end_root,
-            start_key: start_key.as_deref().map(Box::from),
-            end_key: end_key.as_deref().map(Box::from),
-            max_length: NonZeroUsize::new(max_length as usize),
+            start_root: args.start_root,
+            end_root: args.end_root,
+            start_key: args.start_key.into_option().as_deref().map(Box::from),
+            end_key: args.end_key.into_option().as_deref().map(Box::from),
+            max_length: NonZeroUsize::new(args.max_length as usize),
         };
         ctx.verify_and_propose(db, context)
     })
