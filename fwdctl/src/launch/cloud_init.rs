@@ -205,7 +205,6 @@ fn shell_single_quote(value: &str) -> String {
 }
 
 pub const STATE_FILE: &str = "/var/log/cloud-init-state.json";
-const STATE_FILE_TMP: &str = "/var/log/cloud-init-state.json.tmp";
 const STATE_HELPER: &str = "/usr/local/bin/fwdctl-state";
 
 fn state_helper_script() -> String {
@@ -214,7 +213,8 @@ fn state_helper_script() -> String {
 set -euo pipefail
 
 STATE_FILE="{STATE_FILE}"
-STATE_FILE_TMP="{STATE_FILE_TMP}"
+STATE_FILE_TMP="$(mktemp "${STATE_FILE}.tmp.XXXXXX")"
+trap 'rm -f "$STATE_FILE_TMP"' EXIT
 
 cmd="${{1:-}}"
 shift || true
