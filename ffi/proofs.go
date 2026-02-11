@@ -350,29 +350,8 @@ func (db *Database) ChangeProof(
 	return getChangeProofFromChangeProofResult(C.fwd_db_change_proof(db.handle, args))
 }
 
-func (db *Database) ProposeChangeProof(
-	proof *VerifiedChangeProof,
-) (*ProposedChangeProof, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return nil, errDBClosed
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	args := C.ProposedChangeProofArgs{
-		proof: proof.handle,
-	}
-	return getProposedChangeProofFromProposedChangeProofResult(C.fwd_db_propose_change_proof(db.handle, args))
-}
-
 // VerifyChangeProof verifies the provided change [proof] proves the changes
-// between [startRoot] and [endRoot] for keys in the range [startKey, endKey]. If
-// the proof is valid, a proposal containing the changes is prepared. The call
-// to [*Database.VerifyAndCommitChangeProof] will skip verification and commit the
-// prepared proposal.
+// between [startRoot] and [endRoot] for keys in the range [startKey, endKey].
 func (proof *ChangeProof) VerifyChangeProof(
 	startRoot, endRoot Hash,
 	startKey, endKey Maybe[[]byte],
@@ -391,6 +370,25 @@ func (proof *ChangeProof) VerifyChangeProof(
 	}
 
 	return getVerifiedChangeProofFromVerifiedChangeProofResult(C.fwd_verify_change_proof(args))
+}
+
+// ProposeChangeProof creates a proposal from a VerifiedChangeProof.
+func (db *Database) ProposeChangeProof(
+	proof *VerifiedChangeProof,
+) (*ProposedChangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	args := C.ProposedChangeProofArgs{
+		proof: proof.handle,
+	}
+	return getProposedChangeProofFromProposedChangeProofResult(C.fwd_db_propose_change_proof(db.handle, args))
 }
 
 // VerifyAndCommitChangeProof verifies the provided change [proof] proves the changes
