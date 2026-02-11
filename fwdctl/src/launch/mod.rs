@@ -6,7 +6,7 @@ mod ec2_util;
 pub mod stage_config;
 
 use clap::{Args, Subcommand, ValueEnum};
-use log::info;
+use log::{debug, info};
 use thiserror::Error;
 
 type FwdError = firewood::v2::api::Error;
@@ -50,14 +50,14 @@ where
     R: std::fmt::Debug + 'static,
 {
     fn from(e: aws_smithy_runtime_api::client::result::SdkError<E, R>) -> Self {
-        log::debug!("AWS SDK error: {e:#?}");
+        debug!("AWS SDK error: {e:#?}");
         Self::AwsSdk(format_aws_sdk_error(&e))
     }
 }
 
 impl From<aws_sdk_ec2::error::BuildError> for LaunchError {
     fn from(e: aws_sdk_ec2::error::BuildError) -> Self {
-        log::debug!("AWS build error: {e:#?}");
+        debug!("AWS build error: {e:#?}");
         Self::AwsSdk(e.to_string())
     }
 }
@@ -215,7 +215,7 @@ pub(super) fn run(opts: &Options) -> Result<(), FwdError> {
 }
 
 async fn run_internal(opts: &Options) -> Result<(), FwdError> {
-    log::debug!("launch command {opts:?}");
+    debug!("launch command {opts:?}");
     let LaunchCommand::Deploy(deploy) = &opts.command;
     run_deploy(deploy)
         .await
@@ -246,7 +246,7 @@ async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
         info!("Public IP:   {ip}");
     }
     if let Some(ip) = &private_ip {
-        info!("Private IP:  {ip}");
+        debug!("Private IP:  {ip}");
     }
 
     Ok(())
