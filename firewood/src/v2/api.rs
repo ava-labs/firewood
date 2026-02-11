@@ -272,7 +272,6 @@ pub trait Db {
     ///
     /// If the database is empty, this will return None, unless the ethhash feature is enabled.
     /// In that case, we return the special ethhash compatible empty trie hash.
-    #[expect(clippy::missing_errors_doc)]
     fn root_hash(&self) -> Option<TrieHash>;
 
     /// Propose a change to the database via a batch
@@ -308,7 +307,6 @@ pub trait DbView {
     ///
     /// If the database is empty, this will return None, unless the ethhash feature is enabled.
     /// In that case, we return the special ethhash compatible empty trie hash.
-    #[expect(clippy::missing_errors_doc)]
     fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
@@ -383,7 +381,6 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     ///
     /// If the database is empty, this will return None, unless the ethhash feature is enabled.
     /// In that case, we return the special ethhash compatible empty trie hash.
-    #[expect(clippy::missing_errors_doc)]
     fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
