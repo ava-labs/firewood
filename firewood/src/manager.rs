@@ -2,10 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 #![expect(
-    clippy::cast_precision_loss,
-    reason = "Found 2 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::default_trait_access,
     reason = "Found 3 occurrences after enabling the lint."
 )]
@@ -284,9 +280,9 @@ impl RevisionManager {
             }
             firewood_set!(
                 crate::registry::ACTIVE_REVISIONS,
-                self.in_memory_revisions.read().len() as f64
+                self.in_memory_revisions.read().len()
             );
-            firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions as f64);
+            firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions);
         }
 
         // 3. Persist to disk.
@@ -336,7 +332,7 @@ impl RevisionManager {
             }
 
             // Update uncommitted proposals gauge after cleanup
-            firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len() as f64);
+            firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len());
         }
 
         // then reparent any proposals that have this proposal as a parent
@@ -382,7 +378,7 @@ impl RevisionManager {
             lock.len()
         };
         // Update uncommitted proposals gauge after adding
-        firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, len as f64);
+        firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, len);
     }
 
     /// Retrieve a committed revision by its root hash.
