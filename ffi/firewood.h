@@ -578,6 +578,9 @@ enum ProposedChangeProofResult_Tag {
    * The caller provided a null pointer to the input handle.
    */
   ProposedChangeProofResult_NullHandlePointer,
+  /**
+   * A proposal was successfully created for this proof.
+   */
   ProposedChangeProofResult_Ok,
   /**
    * An error occurred and the message is returned as an [`OwnedBytes`]. If

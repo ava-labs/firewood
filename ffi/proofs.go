@@ -66,10 +66,12 @@ type ChangeProof struct {
 	handle *C.ChangeProofContext
 }
 
+// VerifiedChangeProof is a ChangeProof that has been verified.
 type VerifiedChangeProof struct {
 	handle *C.VerifiedChangeProofContext
 }
 
+// ProposedChangeProof contains a proposal for the ChangeProof.
 type ProposedChangeProof struct {
 	handle *C.ProposedChangeProofContext
 }

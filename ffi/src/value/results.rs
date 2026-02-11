@@ -275,6 +275,7 @@ pub enum ChangeProofResult {
 pub enum VerifiedChangeProofResult {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
+    // The proof was successfully verified.
     Ok(Box<VerifiedChangeProofContext>),
     /// An error occurred and the message is returned as an [`OwnedBytes`]. If
     /// value is guaranteed to contain only valid UTF-8.
@@ -291,6 +292,7 @@ pub enum VerifiedChangeProofResult {
 pub enum ProposedChangeProofResult<'db> {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
+    /// A proposal was successfully created for this proof.
     Ok(Box<ProposedChangeProofContext<'db>>),
     /// An error occurred and the message is returned as an [`OwnedBytes`]. If
     /// value is guaranteed to contain only valid UTF-8.
