@@ -532,8 +532,9 @@ mod test {
         drop(historical);
 
         let db = db.replace();
-        println!("{:?}", db.root_hash().unwrap());
-        assert!(db.root_hash() == initial_root);
+        let final_root = db.root_hash();
+        println!("{:?}", final_root);
+        assert!(final_root == initial_root);
     }
 
     #[test]
