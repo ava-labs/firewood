@@ -294,10 +294,7 @@ impl RevisionManager {
                     break;
                 }
             }
-            firewood_set!(
-                crate::registry::ACTIVE_REVISIONS,
-                in_memory_revisions.len()
-            );
+            firewood_set!(crate::registry::ACTIVE_REVISIONS, in_memory_revisions.len());
             firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions);
         }
 

@@ -59,7 +59,10 @@ pub fn register() {
     describe_counter!(READ_NODE, "Number of node reads");
     describe_counter!(CACHE_NODE, "Number of node cache operations");
     describe_counter!(CACHE_FREELIST, "Number of freelist cache operations");
-    describe_gauge!(FREELIST_CACHE_SIZE, "Current number of entries in freelist cache");
+    describe_gauge!(
+        FREELIST_CACHE_SIZE,
+        "Current number of entries in freelist cache"
+    );
 
     describe_counter!(IO_READ_MS, "IO read timing (ms)");
     describe_counter!(IO_READ_COUNT, "Number of IO read operations");
