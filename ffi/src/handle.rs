@@ -180,9 +180,9 @@ impl DatabaseHandle {
     ///
     /// # Errors
     ///
-    /// An error is returned if there was an i/o error while reading the root hash.
+    /// Never errors.
     pub fn current_root_hash(&self) -> Result<Option<HashKey>, api::Error> {
-        self.db.root_hash()
+        Ok(self.db.root_hash())
     }
 
     /// Returns a value from the database for the given key from the latest root hash.

@@ -273,7 +273,7 @@ pub trait Db {
     /// If the database is empty, this will return None, unless the ethhash feature is enabled.
     /// In that case, we return the special ethhash compatible empty trie hash.
     #[expect(clippy::missing_errors_doc)]
-    fn root_hash(&self) -> Result<Option<TrieHash>, Error>;
+    fn root_hash(&self) -> Option<TrieHash>;
 
     /// Propose a change to the database via a batch
     ///
@@ -309,7 +309,7 @@ pub trait DbView {
     /// If the database is empty, this will return None, unless the ethhash feature is enabled.
     /// In that case, we return the special ethhash compatible empty trie hash.
     #[expect(clippy::missing_errors_doc)]
-    fn root_hash(&self) -> Result<Option<HashKey>, Error>;
+    fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
     #[expect(clippy::missing_errors_doc)]
@@ -384,7 +384,7 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     /// If the database is empty, this will return None, unless the ethhash feature is enabled.
     /// In that case, we return the special ethhash compatible empty trie hash.
     #[expect(clippy::missing_errors_doc)]
-    fn root_hash(&self) -> Result<Option<HashKey>, Error>;
+    fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
     #[expect(clippy::missing_errors_doc)]
@@ -447,7 +447,7 @@ impl<T: Debug + DbView + Send + Sync + 'static> DynDbView for T
 where
     for<'view> T::Iter<'view>: Sized,
 {
-    fn root_hash(&self) -> Result<Option<HashKey>, Error> {
+    fn root_hash(&self) -> Option<HashKey> {
         DbView::root_hash(self)
     }
 

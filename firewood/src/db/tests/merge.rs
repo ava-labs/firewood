@@ -183,7 +183,7 @@ fn test_merge_key_value_range(
 
     // Apply the expected operations manually
     let mut batch = Vec::new();
-    if let Some(root) = db2.root_hash().unwrap() {
+    if let Some(root) = db2.root_hash() {
         batch.extend(
             db2.revision(root)
                 .unwrap()
@@ -221,7 +221,7 @@ fn test_merge_key_value_range(
     proposal.commit().unwrap();
 
     // Verify the committed state
-    if let Some(root) = db.root_hash().unwrap() {
+    if let Some(root) = db.root_hash() {
         let committed = db.revision(root).unwrap();
         for (key, expected_value) in expected_kvs {
             let actual_value = committed.val(key).unwrap();

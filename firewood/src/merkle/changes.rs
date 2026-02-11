@@ -1674,7 +1674,7 @@ mod tests {
             if rng.random_range(0..100) < CHANCE_COMMIT_PERCENT {
                 let proposal = db.propose(batch.into_iter()).unwrap();
                 proposal.commit().unwrap();
-                let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+                let committed = db.revision(db.root_hash().unwrap()).unwrap();
                 // Have to regenerate the committed keys hash set if we commit the proposal
                 committed_keys.clear();
                 committed_keys.extend(
@@ -1704,7 +1704,7 @@ mod tests {
 
         // Create the committed revision that we will use to compare against proposal. We also generate
         // a hashset of all of the keys in the trie for use in selecting delete keys.
-        let mut committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+        let mut committed = db.revision(db.root_hash().unwrap()).unwrap();
         committed_keys.extend(
             committed
                 .iter()
@@ -1743,7 +1743,7 @@ mod tests {
 
             // Create the committed revision that we will use to compare against proposal. We also generate
             // a hashset of all of the keys in the trie for use in selecting delete keys.
-            let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+            let committed = db.revision(db.root_hash().unwrap()).unwrap();
             committed_keys.extend(
                 committed
                     .iter()
@@ -1796,10 +1796,7 @@ mod tests {
             // Apply ops in partial_vec to the db
             let proposal = db.propose(partial_vec.iter()).unwrap();
             proposal.commit().unwrap();
-            let committed = db
-                .revision(db.root_hash().unwrap().unwrap())
-                .unwrap()
-                .into();
+            let committed = db.revision(db.root_hash().unwrap()).unwrap().into();
             let diff_it =
                 diff_merkle_iterator(&committed, &target_immutable, next_key.clone()).unwrap();
 
@@ -1813,10 +1810,7 @@ mod tests {
             // Apply ops in partial_vec to the db one last time
             let proposal = db.propose(partial_vec.iter()).unwrap();
             proposal.commit().unwrap();
-            let committed = db
-                .revision(db.root_hash().unwrap().unwrap())
-                .unwrap()
-                .into();
+            let committed = db.revision(db.root_hash().unwrap()).unwrap().into();
             let first_diff_item = diff_merkle_iterator(&committed, &target_immutable, Box::new([]))
                 .unwrap()
                 .next();
