@@ -533,7 +533,7 @@ mod test {
 
         let db = db.replace();
         let final_root = db.root_hash();
-        println!("{:?}", final_root);
+        println!("{final_root:?}");
         assert!(final_root == initial_root);
     }
 
