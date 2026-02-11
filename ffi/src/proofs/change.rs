@@ -89,22 +89,23 @@ pub struct ProposedChangeProofArgs<'a> {
 }
 
 /// FFI context for a parsed or generated change proof. This change proof has not
-/// been verified. Calling verify on it will generate a `VerifiedChangeProofContext`.
+/// been verified. Calling `verify` on it will generate a `VerifiedChangeProofContext`
+/// and consume the `proof` and replacing it with None.
 #[derive(Debug)]
 pub struct ChangeProofContext {
-    proof: FrozenChangeProof,
+    proof: Option<FrozenChangeProof>,
 }
 
 impl From<FrozenChangeProof> for ChangeProofContext {
     fn from(proof: FrozenChangeProof) -> Self {
-        Self { proof }
+        Self { proof: Some(proof) }
     }
 }
 
 impl ChangeProofContext {
     /// Verifies the `ChangeProofContext` and creates a `VerifiedChangeProofContext`
-    /// on success. Should only be called once on a `ChangeProofContext` as its
-    /// change proof is given to the `VerifiedChangeProofContext`.
+    /// on success. Calling `verify` consumes the proof, and calling it again will
+    /// return a `ProofIsNone` error.
     ///
     /// Currently only performs a cursory verification, such as whether
     /// the keys in the change proof is sorted.
@@ -112,7 +113,11 @@ impl ChangeProofContext {
         &mut self,
         params: VerificationParams,
     ) -> Result<VerifiedChangeProofContext, api::Error> {
-        let batch_ops = self.proof.batch_ops();
+        let Some(proof) = self.proof.take() else {
+            return Err(api::Error::ProofError(ProofError::ProofIsNone));
+        };
+
+        let batch_ops = proof.batch_ops();
 
         // Check to make sure the BatchOp array size is less than or equal to `max_length`
         if let Some(max_length) = params.max_length
@@ -146,9 +151,7 @@ impl ChangeProofContext {
         {
             warn!("change proof verification not yet implemented");
             Ok(VerifiedChangeProofContext {
-                // The change proof in `ChangeProofContext` is given to this new context
-                // and is replaced with an empty change proof.
-                proof: std::mem::take(&mut self.proof),
+                proof: Some(proof),
                 params,
             })
         } else {
@@ -159,27 +162,29 @@ impl ChangeProofContext {
 
 /// FFI context for a verified change proof. It is created from calling `verify`
 /// on a `ChangeProofContext` and stores the parameters of that call in `params`.
+/// Calling `propose` on it will consume the proof to create a
+/// `ProposedChangeProofContext`.
 #[derive(Debug)]
 pub struct VerifiedChangeProofContext {
-    proof: FrozenChangeProof,
+    proof: Option<FrozenChangeProof>,
     params: VerificationParams,
 }
 
 impl VerifiedChangeProofContext {
     /// Creates a proposal from the verified change proof context, and stores the change
     /// proof, database handle, and proposal handle in a `ProposedChangeProofContext`.
-    /// Should only be called once on a `VerifiedChangeProofContext` as its change proof
-    /// is given to the `ProposedChangeProofContext`.
+    /// Calling `propose` consumes the proof, and calling it again will return a
+    /// `ProofIsNone` error.
     fn propose<'db>(
         &'db mut self,
         db: &'db DatabaseHandle,
     ) -> Result<ProposedChangeProofContext<'db>, api::Error> {
-        let proposal =
-            db.apply_change_proof_to_parent(self.params.start_root.into(), &self.proof)?;
+        let Some(proof) = self.proof.take() else {
+            return Err(api::Error::ProofError(ProofError::ProofIsNone));
+        };
+        let proposal = db.apply_change_proof_to_parent(self.params.start_root.into(), &proof)?;
         Ok(ProposedChangeProofContext {
-            // The change proof in `VerifiedChangeProofContext` is given to this new
-            // context and is replaced with an empty change proof.
-            proof: std::mem::take(&mut self.proof),
+            proof: Some(proof),
             db,
             proposal: proposal.handle,
         })
@@ -188,10 +193,11 @@ impl VerifiedChangeProofContext {
 
 /// FFI context for a proposed change proof. It is created from calling `propose`
 /// on a `VerifiedChangeProofContext` and stores the database and proposal handle.
+/// Calling `commit` on it will consume the proof.
 #[expect(unused)]
 #[derive(Debug)]
 pub struct ProposedChangeProofContext<'db> {
-    proof: FrozenChangeProof,
+    proof: Option<FrozenChangeProof>,
     db: &'db DatabaseHandle,
     proposal: crate::ProposalHandle<'db>,
 }
@@ -342,19 +348,18 @@ pub extern "C" fn fwd_db_change_proof(
     })
 }
 
-/// Verify a change proof and prepare a proposal to later commit or drop.
+/// Verify a change proof and return a `VerifiedChangeProofResult`.
 ///
 /// # Arguments
 ///
-/// - `db` - The database to verify the proof against.
 /// - `args` - The arguments for verifying the change proof.
 ///
 /// # Returns
 ///
-/// - [`VoidResult::NullHandlePointer`] if the caller provided a null pointer to either
-///   the database or the proof.
-/// - [`VoidResult::Ok`] if the proof was successfully verified.
-/// - [`VoidResult::Err`] containing an error message if the proof could not be verified
+/// - [`VerifiedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer to the
+///   proof.
+/// - [`VerifiedChangeProofResult::Ok`] if the proof was successfully verified.
+/// - [`VerifiedChangeProofResult::Err`] containing an error message if the proof could not be verified
 ///
 /// # Thread Safety
 ///
@@ -378,6 +383,26 @@ pub extern "C" fn fwd_verify_change_proof(
     })
 }
 
+/// Create a proposal from a change proof and return a `ProposedChangeProofResult`.
+///
+/// # Arguments
+///
+/// - `db` - The database to create the proposal.
+/// - `args` - The arguments for verifying the change proof.
+///
+/// # Returns
+///
+/// - [`ProposedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer to either
+///   the database or the proof.
+/// - [`ProposedChangeProofResult::Ok`] if a proposal was successfully created.
+/// - [`ProposedChangeProofResult::Err`] containing an error message if the proposal could not be created.
+///
+/// # Thread Safety
+///
+/// It is not safe to call this function concurrently with the same proof context
+/// nor is it safe to call any other function that accesses the same proof context
+/// concurrently. The caller must ensure exclusive access to the proof context
+/// for the duration of the call.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_propose_change_proof<'db>(
     db: Option<&'db DatabaseHandle>,
@@ -478,7 +503,9 @@ pub extern "C" fn fwd_change_proof_find_next_key(
 pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) -> ValueResult {
     crate::invoke_with_handle(proof, |ctx| {
         let mut vec = Vec::new();
-        ctx.proof.write_to_vec(&mut vec);
+        if let Some(proof) = &ctx.proof {
+            proof.write_to_vec(&mut vec);
+        }
         vec
     })
 }

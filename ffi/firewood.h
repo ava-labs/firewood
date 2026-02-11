@@ -29,7 +29,8 @@ typedef enum NodeHashAlgorithm {
 
 /**
  * FFI context for a parsed or generated change proof. This change proof has not
- * been verified. Calling verify on it will generate a `VerifiedChangeProofContext`.
+ * been verified. Calling `verify` on it will generate a `VerifiedChangeProofContext`
+ * and consume the `proof` and replacing it with None.
  */
 typedef struct ChangeProofContext ChangeProofContext;
 
@@ -59,6 +60,7 @@ typedef struct ProposalHandle ProposalHandle;
 /**
  * FFI context for a proposed change proof. It is created from calling `propose`
  * on a `VerifiedChangeProofContext` and stores the database and proposal handle.
+ * Calling `commit` on it will consume the proof.
  */
 typedef struct ProposedChangeProofContext ProposedChangeProofContext;
 
@@ -72,6 +74,8 @@ typedef struct RevisionHandle RevisionHandle;
 /**
  * FFI context for a verified change proof. It is created from calling `verify`
  * on a `ChangeProofContext` and stores the parameters of that call in `params`.
+ * Calling `propose` on it will consume the proof to create a
+ * `ProposedChangeProofContext`.
  */
 typedef struct VerifiedChangeProofContext VerifiedChangeProofContext;
 
@@ -1500,6 +1504,28 @@ struct ChangeProofResult fwd_db_change_proof(const struct DatabaseHandle *db,
  */
 struct ValueResult fwd_db_dump(const struct DatabaseHandle *db);
 
+/**
+ * Create a proposal from a change proof and return a `ProposedChangeProofResult`.
+ *
+ * # Arguments
+ *
+ * - `db` - The database to create the proposal.
+ * - `args` - The arguments for verifying the change proof.
+ *
+ * # Returns
+ *
+ * - [`ProposedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer to either
+ *   the database or the proof.
+ * - [`ProposedChangeProofResult::Ok`] if a proposal was successfully created.
+ * - [`ProposedChangeProofResult::Err`] containing an error message if the proposal could not be created.
+ *
+ * # Thread Safety
+ *
+ * It is not safe to call this function concurrently with the same proof context
+ * nor is it safe to call any other function that accesses the same proof context
+ * concurrently. The caller must ensure exclusive access to the proof context
+ * for the duration of the call.
+ */
 struct ProposedChangeProofResult fwd_db_propose_change_proof(const struct DatabaseHandle *db,
                                                              struct ProposedChangeProofArgs args);
 
@@ -2323,19 +2349,18 @@ struct VoidResult fwd_start_metrics(void);
 struct VoidResult fwd_start_metrics_with_exporter(uint16_t metrics_port);
 
 /**
- * Verify a change proof and prepare a proposal to later commit or drop.
+ * Verify a change proof and return a `VerifiedChangeProofResult`.
  *
  * # Arguments
  *
- * - `db` - The database to verify the proof against.
  * - `args` - The arguments for verifying the change proof.
  *
  * # Returns
  *
- * - [`VoidResult::NullHandlePointer`] if the caller provided a null pointer to either
- *   the database or the proof.
- * - [`VoidResult::Ok`] if the proof was successfully verified.
- * - [`VoidResult::Err`] containing an error message if the proof could not be verified
+ * - [`VerifiedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer to the
+ *   proof.
+ * - [`VerifiedChangeProofResult::Ok`] if the proof was successfully verified.
+ * - [`VerifiedChangeProofResult::Err`] containing an error message if the proof could not be verified
  *
  * # Thread Safety
  *
