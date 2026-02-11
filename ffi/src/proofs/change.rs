@@ -91,10 +91,16 @@ pub struct ChangeProofContext {
     proof: FrozenChangeProof,
 }
 
+impl From<FrozenChangeProof> for ChangeProofContext {
+    fn from(proof: FrozenChangeProof) -> Self {
+        Self { proof }
+    }
+}
+
 impl ChangeProofContext {
     fn verify(
         &mut self,
-        context: VerificationContext,
+        context: VerificationParams,
     ) -> Result<VerifiedChangeProofContext, api::Error> {
         let batch_ops = self.proof.batch_ops();
 
@@ -142,7 +148,7 @@ impl ChangeProofContext {
 #[derive(Debug)]
 pub struct VerifiedChangeProofContext {
     proof: FrozenChangeProof,
-    context: VerificationContext,
+    context: VerificationParams,
 }
 
 impl VerifiedChangeProofContext {
@@ -168,52 +174,10 @@ pub struct ProposedChangeProofContext<'db> {
     proposal: crate::ProposalHandle<'db>,
 }
 
-/*
-pub struct CommittedChangeProofContext {
-    proof: FrozenChangeProof,
-    key: Option<HashKey>,
-}
-*/
-
-/* 
-/// A `ChangeProofContext` can be in four different states. Calling `verify_and_propose`
-/// and `verify_and_commit` will perform state transitions on the `ChangeProofContext`.
-/// The state keeps a saved version of any previous verification context or database
-/// handle. The saved version is used to eliminate repeated verifications or proposal
-/// creation on a change proof.
-///
-/// If the new verification context doesn't match the the saved version exactly, then
-/// we treat the change proof as unverified and verify it again.
-///
-/// The function `std::ptr::eq` is used to check that the saved database handle is
-/// pointing to the same memory location as the handle passed to the propose and commit
-/// functions. This ensures that we don't accidentally try to commit a proposal created
-/// for one database when calling commit on a different database. If the database
-/// handles don't match, we set the state back to `Unverified` and re-perform
-/// `verify_and_propose` or `verify_and_commit` depending on which was called.
-#[derive(Debug)]
+/// FFI parameters for verifying a change proof
 #[expect(unused)]
-enum ChangeProofState<'db> {
-    Unverified,
-    Verified(VerificationContext),
-    Proposed(
-        VerificationContext,
-        &'db DatabaseHandle,
-        crate::ProposalHandle<'db>,
-    ),
-    Committed(VerificationContext, &'db DatabaseHandle, Option<HashKey>),
-}
-*/
-
-impl From<FrozenChangeProof> for ChangeProofContext {
-    fn from(proof: FrozenChangeProof) -> Self {
-        Self { proof }
-    }
-}
-
-/// FFI context for verifying a change proof
-#[derive(Debug, PartialEq, Clone)]
-struct VerificationContext {
+#[derive(Debug)]
+struct VerificationParams {
     start_root: HashKey,
     end_root: HashKey,
     start_key: Option<Box<[u8]>>,
@@ -381,7 +345,7 @@ pub extern "C" fn fwd_verify_change_proof(
     args: VerifyChangeProofArgs,
 ) -> VerifiedChangeProofResult {
     crate::invoke_with_handle(args.proof, |ctx| {
-        let context = VerificationContext {
+        let context = VerificationParams {
             start_root: args.start_root,
             end_root: args.end_root,
             start_key: args.start_key.into_option().as_deref().map(Box::from),

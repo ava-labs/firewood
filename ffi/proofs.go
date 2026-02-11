@@ -639,6 +639,6 @@ func getProposedChangeProofFromProposedChangeProofResult(result C.ProposedChange
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err
 	default:
-		return nil, fmt.Errorf("unknown C.VerifiedChangeProofResult tag: %d", result.tag)
+		return nil, fmt.Errorf("unknown C.ProposedChangeProofResult tag: %d", result.tag)
 	}
 }
