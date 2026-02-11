@@ -3,8 +3,68 @@
 
 use firewood_storage::Preimage;
 use firewood_storage::logger::debug;
+use rayon::prelude::*;
 
 use super::*;
+
+fn is_sorted_unique<T: Ord>(slice: &[T]) -> bool {
+    slice.windows(2).all(|w| w[0] < w[1])
+}
+
+#[test]
+fn range_proof_into_storage_proof_trie() {
+    const COUNT: u64 = 1024;
+    const START_KEY: u64 = 1 << 60;
+    const END_KEY: u64 = START_KEY + COUNT;
+
+    const PROOF_START: NonZeroUsize = NonZeroUsize::new(COUNT as usize / 4).unwrap();
+    const PROOF_END: usize = PROOF_START.get() * 3;
+
+    let mut kvps: Vec<_> = (START_KEY..END_KEY)
+        .map(|k| {
+            let k_bytes = k.to_be_bytes();
+            let k_hash = <sha2::Sha256 as sha2::Digest>::digest(k_bytes);
+            (k_hash, k_bytes)
+        })
+        .collect();
+    kvps.par_sort_unstable();
+    assert!(kvps.len() == COUNT as usize);
+    assert!(is_sorted_unique(&kvps));
+
+    let proof_start_key = kvps[PROOF_START.get()].0;
+    let proof_end_key = kvps[PROOF_END].0;
+
+    eprintln!("proof_start_key: {proof_start_key:x?}");
+    eprintln!("proof_end_key: {proof_end_key:x?}");
+
+    let merkle = init_merkle(kvps);
+
+    let proof = merkle
+        .range_proof(
+            Some(&proof_start_key),
+            Some(&proof_end_key),
+            Some(PROOF_START), // truncate the proof to half the requested range
+        )
+        .unwrap();
+
+    let key_values_trie = firewood_storage::tries::KeyValueTrieRoot::from_slice(proof.key_values())
+        .unwrap()
+        .unwrap();
+    let start_proof_trie =
+        firewood_storage::tries::KeyProofTrieRoot::new(proof.start_proof()).unwrap();
+    let end_proof_trie = firewood_storage::tries::KeyProofTrieRoot::new(proof.end_proof()).unwrap();
+
+    let key_range_proof_trie =
+        firewood_storage::tries::KeyRangeProofTrieRoot::new(start_proof_trie, end_proof_trie)
+            .unwrap()
+            .map(Box::new);
+
+    let range_proof_trie =
+        firewood_storage::tries::RangeProofTrieRoot::new(key_range_proof_trie, key_values_trie)
+            .unwrap();
+
+    eprintln!("range_proof_trie: {range_proof_trie:#x?}");
+}
 
 #[test]
 fn range_proof_invalid_bounds() {

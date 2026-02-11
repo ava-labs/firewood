@@ -8,7 +8,11 @@ use super::{PathComponent, TriePath};
 /// A trie path that can be (cheaply) split into two sub-paths.
 ///
 /// Implementations are expected to be cheap to split (i.e. no allocations).
-pub trait SplitPath: TriePath + Default + Copy {
+pub trait SplitPath: TriePath + Copy {
+    /// Produce an empty path of this type, for use as the replacement after
+    /// splitting a joined path.
+    fn empty() -> Self;
+
     /// Splits the path at the given index within the path.
     ///
     /// The returned tuple contains the two sub-paths `(prefix, suffix)`.
@@ -99,6 +103,10 @@ impl<A: SplitPath, B: SplitPath, C> PathCommonPrefix<A, B, C> {
 }
 
 impl SplitPath for &[PathComponent] {
+    fn empty() -> Self {
+        &[]
+    }
+
     fn split_at(self, mid: usize) -> (Self, Self) {
         self.split_at(mid)
     }
@@ -132,6 +140,62 @@ impl<'a, A: smallvec::Array<Item = PathComponent>> IntoSplitPath for &'a SmallVe
 
     fn into_split_path(self) -> Self::Path {
         self
+    }
+}
+
+impl<L: SplitPath, R: SplitPath> SplitPath for either::Either<L, R> {
+    fn empty() -> Self {
+        either::Either::Left(L::empty())
+    }
+
+    fn split_at(self, mid: usize) -> (Self, Self) {
+        use either::Either::{Left, Right};
+        match self {
+            Left(path) => {
+                let (prefix, suffix) = path.split_at(mid);
+                (Left(prefix), Left(suffix))
+            }
+            Right(path) => {
+                let (prefix, suffix) = path.split_at(mid);
+                (Right(prefix), Right(suffix))
+            }
+        }
+    }
+
+    fn split_first(self) -> Option<(PathComponent, Self)> {
+        self.map_either(SplitPath::split_first, SplitPath::split_first)
+            .factor_none()
+            .map(either::Either::factor_first)
+    }
+}
+
+impl SplitPath for super::PathRef<'_> {
+    fn empty() -> Self {
+        Self::Slice(&[])
+    }
+
+    fn split_at(self, mid: usize) -> (Self, Self) {
+        match self {
+            Self::Packed(path) => {
+                let (prefix, suffix) = path.split_at(mid);
+                (Self::Packed(prefix), Self::Packed(suffix))
+            }
+            Self::Slice(path) => {
+                let (prefix, suffix) = path.split_at(mid);
+                (Self::Slice(prefix), Self::Slice(suffix))
+            }
+        }
+    }
+
+    fn split_first(self) -> Option<(PathComponent, Self)> {
+        match self {
+            Self::Packed(packed) => packed
+                .split_first()
+                .map(|(first, rest)| (first, Self::Packed(rest))),
+            Self::Slice(slice) => slice
+                .split_first()
+                .map(|(&first, rest)| (first, Self::Slice(rest))),
+        }
     }
 }
 

@@ -65,15 +65,16 @@
 //! The serialization format is versioned to allow for future evolution while maintaining
 //! backward compatibility with proof verification.
 
-pub(super) mod childmap;
-pub(super) mod de;
-pub(crate) mod header;
-pub(crate) mod range;
-pub(crate) mod reader;
-pub(super) mod ser;
+mod childmap;
+mod de;
+mod header;
+mod next_key;
+mod range;
+mod reader;
+mod ser;
 #[cfg(test)]
 mod tests;
-pub(crate) mod types;
+mod types;
 
 pub use self::header::InvalidHeader;
 pub use self::range::RangeProof;

@@ -1,10 +1,12 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::PackedPathRef;
+use super::debug::{DebugChildren, DebugValue};
 use crate::{
-    Children, HashType, Hashable, HashableShunt, HashedTrieNode, JoinedPath, PathBuf,
-    PathComponent, PathGuard, SplitPath, TrieNode, TriePath, TriePathFromPackedBytes, ValueDigest,
+    Children, HashType, Hashable, HashableShunt, JoinedPath, PackedPathRef, PathBuf, PathComponent,
+    PathGuard, SplitPath, TriePath, TriePathFromPackedBytes, ValueDigest,
+    path::PathRef,
+    tries::{HashedTrieNode, TrieNode},
 };
 
 /// A duplicate key error when merging two key-value tries.
@@ -275,18 +277,13 @@ impl<'a, T: AsRef<[u8]> + ?Sized> HashedKeyValueTrieRoot<'a, T> {
     }
 }
 
-impl<T: AsRef<[u8]> + ?Sized> TrieNode<T> for KeyValueTrieRoot<'_, T> {
-    type PartialPath<'a>
-        = PackedPathRef<'a>
-    where
-        Self: 'a;
-
-    fn partial_path(&self) -> Self::PartialPath<'_> {
-        self.partial_path
+impl<T: AsRef<[u8]> + ?Sized> TrieNode for KeyValueTrieRoot<'_, T> {
+    fn partial_path(&self) -> PathRef<'_> {
+        PathRef::Packed(self.partial_path)
     }
 
-    fn value(&self) -> Option<&T> {
-        self.value
+    fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {
+        self.value.map(|v| ValueDigest::Value(v.as_ref()))
     }
 
     fn child_hash(&self, pc: PathComponent) -> Option<&HashType> {
@@ -294,77 +291,67 @@ impl<T: AsRef<[u8]> + ?Sized> TrieNode<T> for KeyValueTrieRoot<'_, T> {
         None
     }
 
-    fn child_node(&self, pc: PathComponent) -> Option<&Self> {
-        self.children[pc].as_deref()
+    fn child_node(&self, pc: PathComponent) -> Option<&dyn TrieNode> {
+        self.children[pc].as_deref().map(TrieNode::upcast)
     }
 
-    fn child_state(&self, pc: PathComponent) -> Option<super::TrieEdgeState<'_, Self>> {
+    fn child_state(&self, pc: PathComponent) -> Option<super::TrieEdgeState<'_>> {
         self.children[pc]
             .as_deref()
+            .map(TrieNode::upcast)
             .map(|node| super::TrieEdgeState::UnhashedChild { node })
     }
 }
 
-impl<T: AsRef<[u8]> + ?Sized> TrieNode<T> for HashedKeyValueTrieRoot<'_, T> {
-    type PartialPath<'a>
-        = PackedPathRef<'a>
-    where
-        Self: 'a;
-
-    fn partial_path(&self) -> Self::PartialPath<'_> {
-        self.partial_path
+impl<T: AsRef<[u8]> + ?Sized> TrieNode for HashedKeyValueTrieRoot<'_, T> {
+    fn partial_path(&self) -> PathRef<'_> {
+        PathRef::Packed(self.partial_path)
     }
 
-    fn value(&self) -> Option<&T> {
-        self.value
+    fn value_digest(&self) -> Option<ValueDigest<&[u8]>> {
+        self.value.map(|v| ValueDigest::Value(v.as_ref()))
     }
 
     fn child_hash(&self, pc: PathComponent) -> Option<&HashType> {
         self.children[pc].as_deref().map(|c| &c.computed)
     }
 
-    fn child_node(&self, pc: PathComponent) -> Option<&Self> {
-        self.children[pc].as_deref()
+    fn child_node(&self, pc: PathComponent) -> Option<&dyn TrieNode> {
+        self.children[pc].as_deref().map(TrieNode::upcast)
     }
 
-    fn child_state(&self, pc: PathComponent) -> Option<super::TrieEdgeState<'_, Self>> {
+    fn child_state(&self, pc: PathComponent) -> Option<super::TrieEdgeState<'_>> {
         self.children[pc]
             .as_deref()
-            .map(|node| super::TrieEdgeState::from_node(node, Some(&node.computed)))
+            .map(|node| super::TrieEdgeState::LocalChild {
+                node: node.upcast(),
+                hash: &node.computed,
+            })
     }
 }
 
-impl<T: AsRef<[u8]> + ?Sized> HashedTrieNode<T> for HashedKeyValueTrieRoot<'_, T> {
+impl<T: AsRef<[u8]> + ?Sized> HashedTrieNode for HashedKeyValueTrieRoot<'_, T> {
     fn computed(&self) -> &HashType {
         &self.computed
     }
 }
 
-impl<'a, T: AsRef<[u8]> + ?Sized> Hashable for HashedKeyValueTrieRoot<'a, T> {
-    type LeadingPath<'b>
-        = &'b [PathComponent]
-    where
-        Self: 'b;
+impl<'a, T: AsRef<[u8]> + ?Sized> Hashable<'a> for HashedKeyValueTrieRoot<'a, T> {
+    type LeadingPath = &'a [PathComponent];
 
-    type PartialPath<'b>
-        = PackedPathRef<'a>
-    where
-        Self: 'b;
+    type PartialPath = PackedPathRef<'a>;
 
-    type FullPath<'b>
-        = JoinedPath<&'b [PathComponent], PackedPathRef<'a>>
-    where
-        Self: 'b;
+    type FullPath = JoinedPath<&'a [PathComponent], PackedPathRef<'a>>;
 
-    fn parent_prefix_path(&self) -> Self::LeadingPath<'_> {
+    fn parent_prefix_path(&'a self) -> Self::LeadingPath {
         &self.leading_path
     }
 
-    fn partial_path(&self) -> Self::PartialPath<'_> {
+    fn partial_path(&'a self) -> Self::PartialPath {
         self.partial_path
     }
 
-    fn full_path(&self) -> Self::FullPath<'_> {
+    fn full_path(&'a self) -> Self::FullPath {
         self.parent_prefix_path().append(self.partial_path)
     }
 
@@ -376,71 +363,6 @@ impl<'a, T: AsRef<[u8]> + ?Sized> Hashable for HashedKeyValueTrieRoot<'a, T> {
         self.children
             .each_ref()
             .map(|_, c| c.as_deref().map(|c| c.computed.clone()))
-    }
-}
-
-struct DebugValue<'a, T: ?Sized> {
-    value: Option<&'a T>,
-}
-
-impl<'a, T: AsRef<[u8]> + ?Sized> DebugValue<'a, T> {
-    const fn new(value: Option<&'a T>) -> Self {
-        Self { value }
-    }
-}
-
-impl<T: AsRef<[u8]> + ?Sized> std::fmt::Debug for DebugValue<'_, T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        #![expect(clippy::indexing_slicing)]
-
-        const MAX_BYTES: usize = 32;
-
-        let Some(value) = self.value else {
-            return write!(f, "None");
-        };
-
-        let value = value.as_ref();
-        let truncated = &value[..value.len().min(MAX_BYTES)];
-
-        let mut hex_buf = [0u8; MAX_BYTES * 2];
-        let hex_buf = &mut hex_buf[..truncated.len().wrapping_mul(2)];
-        hex::encode_to_slice(truncated, hex_buf).expect("exact fit");
-        let s = str::from_utf8(hex_buf).expect("valid hex");
-
-        if truncated.len() < value.len() {
-            write!(f, "0x{s}... (len {})", value.len())
-        } else {
-            write!(f, "0x{s}")
-        }
-    }
-}
-
-struct DebugChildren<'a, T> {
-    children: &'a Children<Option<T>>,
-}
-
-impl<'a, T: std::fmt::Debug> DebugChildren<'a, T> {
-    const fn new(children: &'a Children<Option<T>>) -> Self {
-        Self { children }
-    }
-}
-
-impl<T: std::fmt::Debug> std::fmt::Debug for DebugChildren<'_, T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        if f.alternate() {
-            // if alternate, debug children as-is (which is pretty and recursive)
-            self.children.fmt(f)
-        } else {
-            // otherwise, replace each child with a continuation marker
-            self.children
-                .each_ref()
-                .map(
-                    |_, child| {
-                        if child.is_some() { "Some(...)" } else { "None" }
-                    },
-                )
-                .fmt(f)
-        }
     }
 }
 
@@ -595,7 +517,7 @@ mod tests {
                     slice_key.display(),
                     kvp_path.display(),
                 );
-                assert_eq!(kvp_value, slice_value);
+                assert_eq!(kvp_value, ValueDigest::Value(slice_value.as_bytes()));
             }
         }
     }
@@ -633,7 +555,7 @@ mod tests {
                 slice_key.display(),
                 kvp_path.display(),
             );
-            assert_eq!(kvp_value, slice_value);
+            assert_eq!(kvp_value, ValueDigest::Value(slice_value.as_bytes()));
         }
     }
 

@@ -151,40 +151,34 @@ impl<T: AsRef<[u8]>> AsRef<[u8]> for ValueDigest<T> {
 }
 
 /// A node in the trie that can be hashed.
-pub trait Hashable: std::fmt::Debug {
+pub trait Hashable<'a>: std::fmt::Debug {
     /// The type of the leading path.
-    type LeadingPath<'a>: IntoSplitPath + 'a
-    where
-        Self: 'a;
+    type LeadingPath: IntoSplitPath<Path: 'a>;
 
     /// The type of the partial path.
-    type PartialPath<'a>: IntoSplitPath + 'a
-    where
-        Self: 'a;
+    type PartialPath: IntoSplitPath<Path: 'a>;
 
     /// The type of the full path.
-    type FullPath<'a>: IntoSplitPath + 'a
-    where
-        Self: 'a;
+    type FullPath: IntoSplitPath<Path: 'a>;
 
     /// The full path of this node's parent where each byte is a nibble.
-    fn parent_prefix_path(&self) -> Self::LeadingPath<'_>;
+    fn parent_prefix_path(&'a self) -> Self::LeadingPath;
     /// The partial path of this node where each byte is a nibble.
-    fn partial_path(&self) -> Self::PartialPath<'_>;
+    fn partial_path(&'a self) -> Self::PartialPath;
     /// The full path of this node including the parent's prefix where each byte is a nibble.
-    fn full_path(&self) -> Self::FullPath<'_>;
+    fn full_path(&'a self) -> Self::FullPath;
     /// The node's value or hash.
-    fn value_digest(&self) -> Option<ValueDigest<&[u8]>>;
+    fn value_digest(&'a self) -> Option<ValueDigest<&'a [u8]>>;
     /// Each element is a child's index and hash.
     /// Yields 0 elements if the node is a leaf.
     fn children(&self) -> Children<Option<HashType>>;
 }
 
 /// A preimage of a hash.
-pub trait Preimage: std::fmt::Debug {
+pub trait Preimage<'a>: std::fmt::Debug {
     /// Returns the hash of this preimage.
-    fn to_hash(&self) -> HashType;
+    fn to_hash(&'a self) -> HashType;
 
     /// Write this hash preimage to `buf`.
-    fn write(&self, buf: &mut impl HasUpdate);
+    fn write(&'a self, buf: &mut impl HasUpdate);
 }

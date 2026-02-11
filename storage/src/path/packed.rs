@@ -15,6 +15,27 @@ pub struct PackedPathRef<'a> {
     suffix: Option<PathComponent>,
 }
 
+impl PackedPathRef<'_> {
+    /// Returns the length of this path in path components.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        // NB: this calculation cannot wrap because we can never have more than
+        // `isize::MAX` bytes in the slice and we never partial bytes with a
+        // full slice.
+        self.middle
+            .len()
+            .wrapping_mul(2)
+            .wrapping_add(self.prefix.is_some() as usize)
+            .wrapping_add(self.suffix.is_some() as usize)
+    }
+
+    /// Returns true if this path has no components.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.prefix.is_none() && self.middle.is_empty() && self.suffix.is_none()
+    }
+}
+
 /// An iterator over the components of a [`PackedPathRef`].
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 #[must_use = "iterators are lazy and do nothing unless consumed"]
@@ -38,46 +59,53 @@ impl<I: Iterator<Item = PathComponent>> PackedBytes<I> {
     }
 }
 
-impl TriePath for PackedPathRef<'_> {
-    type Components<'a>
-        = PackedPathComponents<'a>
-    where
-        Self: 'a;
-
-    fn len(&self) -> usize {
-        self.middle
-            .len()
-            .wrapping_mul(2)
-            .wrapping_add(usize::from(self.prefix.is_some()))
-            .wrapping_add(usize::from(self.suffix.is_some()))
+impl Ord for PackedPathRef<'_> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.components().cmp(other.components())
     }
+}
 
-    fn components(&self) -> Self::Components<'_> {
-        PackedPathComponents { path: *self }
+impl PartialOrd for PackedPathRef<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
     }
+}
 
-    fn as_component_slice(&self) -> super::PartialPath<'_> {
-        if self.is_empty() {
-            super::PartialPath::Borrowed(&[])
-        } else {
-            let mut buf = super::PathBuf::with_capacity(self.len());
-            if let Some(prefix) = self.prefix {
-                buf.push(prefix);
-            }
-            for &byte in self.middle {
-                let (upper, lower) = PathComponent::new_pair(byte);
-                buf.push(upper);
-                buf.push(lower);
-            }
-            if let Some(suffix) = self.suffix {
-                buf.push(suffix);
-            }
-            super::PartialPath::Owned(buf)
-        }
+impl<'a> super::AsPathRef<'a> for PackedPathRef<'_> {
+    fn as_path_ref(&'a self) -> super::PathRef<'a> {
+        super::PathRef::Packed(*self)
+    }
+}
+
+impl<'a> super::AsPathRef<'a> for u8 {
+    fn as_path_ref(&'a self) -> super::PathRef<'a> {
+        super::PathRef::Packed(PackedPathRef {
+            prefix: None,
+            middle: std::slice::from_ref(self),
+            suffix: None,
+        })
+    }
+}
+
+impl<'a> super::AsPathRef<'a> for [u8] {
+    fn as_path_ref(&'a self) -> super::PathRef<'a> {
+        super::PathRef::Packed(PackedPathRef {
+            prefix: None,
+            middle: self,
+            suffix: None,
+        })
     }
 }
 
 impl SplitPath for PackedPathRef<'_> {
+    fn empty() -> Self {
+        Self {
+            prefix: None,
+            middle: &[],
+            suffix: None,
+        }
+    }
+
     fn split_at(self, mid: usize) -> (Self, Self) {
         assert!(mid <= self.len(), "mid > self.len()");
 

@@ -24,15 +24,15 @@ impl HasUpdate for Sha256 {
     }
 }
 
-impl<T: Hashable> Preimage for T {
-    fn to_hash(&self) -> TrieHash {
+impl<'a, T: Hashable<'a>> Preimage<'a> for T {
+    fn to_hash(&'a self) -> TrieHash {
         let mut hasher = Sha256::new();
 
         self.write(&mut hasher);
         hasher.finalize().into()
     }
 
-    fn write(&self, buf: &mut impl HasUpdate) {
+    fn write(&'a self, buf: &mut impl HasUpdate) {
         let children = self.children();
 
         let num_children = children.count() as u64;

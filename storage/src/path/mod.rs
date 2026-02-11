@@ -13,6 +13,76 @@ pub use self::joined::JoinedPath;
 pub use self::packed::{PackedBytes, PackedPathComponents, PackedPathRef};
 pub use self::split::{IntoSplitPath, PathCommonPrefix, SplitPath};
 
+/// A reference to a trie path that can be either a packed path or a slice of
+/// components.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PathRef<'a> {
+    /// A packed path reference.
+    Packed(PackedPathRef<'a>),
+    /// A slice of path components.
+    Slice(&'a [PathComponent]),
+}
+
+impl Ord for PathRef<'_> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        TriePath::path_cmp(self, other)
+    }
+}
+
+impl PartialOrd for PathRef<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+pub trait AsPathRef<'a> {
+    fn as_path_ref(&'a self) -> PathRef<'a>;
+}
+
+pub trait IntoPathRef<'a> {
+    fn into_path_ref(self) -> PathRef<'a>;
+}
+
+impl<'a, T: AsPathRef<'a> + ?Sized> IntoPathRef<'a> for &'a T {
+    fn into_path_ref(self) -> PathRef<'a> {
+        self.as_path_ref()
+    }
+}
+
+impl<T: (for<'a> AsPathRef<'a>) + ?Sized> TriePath for T {
+    type Components<'a>
+        = either::Either<PackedPathComponents<'a>, ComponentIter<'a>>
+    where
+        Self: 'a;
+
+    fn len(&self) -> usize {
+        match self.as_path_ref() {
+            PathRef::Packed(packed) => packed.len(),
+            PathRef::Slice(slice) => slice.len(),
+        }
+    }
+
+    fn components(&self) -> Self::Components<'_> {
+        match self.as_path_ref() {
+            PathRef::Packed(packed) => either::Either::Left(packed.into_iter()),
+            PathRef::Slice(slice) => either::Either::Right(slice.iter().copied()),
+        }
+    }
+
+    fn as_component_slice(&self) -> PartialPath<'_> {
+        match self.as_path_ref() {
+            PathRef::Packed(packed) => PartialPath::Owned(packed.into_iter().collect()),
+            PathRef::Slice(slice) => PartialPath::Borrowed(slice),
+        }
+    }
+}
+
+impl<'a> AsPathRef<'a> for PathRef<'_> {
+    fn as_path_ref(&'a self) -> PathRef<'a> {
+        *self
+    }
+}
+
 /// A trie path of components with different underlying representations.
 ///
 /// The underlying representation does not need to be a contiguous array of
@@ -176,97 +246,76 @@ impl<P: TriePath + ?Sized> std::fmt::Display for DisplayPath<'_, P> {
     }
 }
 
-impl<T: TriePath + ?Sized> TriePath for &T {
+impl<L: TriePath, R: TriePath> TriePath for either::Either<L, R> {
     type Components<'a>
-        = T::Components<'a>
+        = either::Either<L::Components<'a>, R::Components<'a>>
     where
         Self: 'a;
 
     fn len(&self) -> usize {
-        (**self).len()
+        either::for_both!(self, this => this.len())
     }
 
     fn components(&self) -> Self::Components<'_> {
-        (**self).components()
+        self.as_ref()
+            .map_either(TriePath::components, TriePath::components)
     }
 
     fn as_component_slice(&self) -> PartialPath<'_> {
-        (**self).as_component_slice()
+        either::for_both!(self, this => this.as_component_slice())
     }
 }
 
-impl<T: TriePath + ?Sized> TriePath for &mut T {
-    type Components<'a>
-        = T::Components<'a>
-    where
-        Self: 'a;
-
-    fn len(&self) -> usize {
-        (**self).len()
-    }
-
-    fn components(&self) -> Self::Components<'_> {
-        (**self).components()
-    }
-
-    fn as_component_slice(&self) -> PartialPath<'_> {
-        (**self).as_component_slice()
+impl<'a, T: AsPathRef<'a> + ?Sized> AsPathRef<'a> for &T {
+    fn as_path_ref(&'a self) -> PathRef<'a> {
+        (**self).as_path_ref()
     }
 }
 
-impl<T: TriePath + ?Sized> TriePath for Box<T> {
-    type Components<'a>
-        = T::Components<'a>
-    where
-        Self: 'a;
-
-    fn len(&self) -> usize {
-        (**self).len()
-    }
-
-    fn components(&self) -> Self::Components<'_> {
-        (**self).components()
-    }
-
-    fn as_component_slice(&self) -> PartialPath<'_> {
-        (**self).as_component_slice()
+impl<'a, T: AsPathRef<'a> + ?Sized> AsPathRef<'a> for &mut T {
+    fn as_path_ref(&'a self) -> PathRef<'a> {
+        (**self).as_path_ref()
     }
 }
 
-impl<T: TriePath + ?Sized> TriePath for std::rc::Rc<T> {
-    type Components<'a>
-        = T::Components<'a>
-    where
-        Self: 'a;
-
-    fn len(&self) -> usize {
-        (**self).len()
-    }
-
-    fn components(&self) -> Self::Components<'_> {
-        (**self).components()
-    }
-
-    fn as_component_slice(&self) -> PartialPath<'_> {
-        (**self).as_component_slice()
+impl<'a, T: AsPathRef<'a> + ?Sized> AsPathRef<'a> for Box<T> {
+    fn as_path_ref(&'a self) -> PathRef<'a> {
+        (**self).as_path_ref()
     }
 }
 
-impl<T: TriePath + ?Sized> TriePath for std::sync::Arc<T> {
-    type Components<'a>
-        = T::Components<'a>
-    where
-        Self: 'a;
-
-    fn len(&self) -> usize {
-        (**self).len()
+impl<'a, T: AsPathRef<'a> + ?Sized> AsPathRef<'a> for std::rc::Rc<T> {
+    fn as_path_ref(&'a self) -> PathRef<'a> {
+        (**self).as_path_ref()
     }
+}
 
-    fn components(&self) -> Self::Components<'_> {
-        (**self).components()
+impl<'a, T: AsPathRef<'a> + ?Sized> AsPathRef<'a> for std::sync::Arc<T> {
+    fn as_path_ref(&'a self) -> PathRef<'a> {
+        (**self).as_path_ref()
     }
+}
 
-    fn as_component_slice(&self) -> PartialPath<'_> {
-        (**self).as_component_slice()
+impl<'a, T: AsPathRef<'a> + ?Sized> AsPathRef<'a> for triomphe::Arc<T> {
+    fn as_path_ref(&'a self) -> PathRef<'a> {
+        (**self).as_path_ref()
+    }
+}
+
+impl<'a, H, T> AsPathRef<'a> for triomphe::ThinArc<H, T>
+where
+    [T]: AsPathRef<'a>,
+{
+    fn as_path_ref(&'a self) -> PathRef<'a> {
+        (**self).as_path_ref()
+    }
+}
+
+impl<'a, H, T> AsPathRef<'a> for triomphe::HeaderSlice<H, [T]>
+where
+    [T]: AsPathRef<'a>,
+{
+    fn as_path_ref(&'a self) -> PathRef<'a> {
+        self.slice.as_path_ref()
     }
 }

@@ -1,10 +1,19 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{ComponentIter, IntoSplitPath, PathComponent, TriePath};
+use crate::{IntoSplitPath, PathComponent, TriePath};
 
 /// An owned buffer of path components.
-pub type PathBuf = smallvec::SmallVec<[PathComponent; 32]>;
+///
+/// This has the same memory layout as `Vec<u8>` but will keep up to 16
+/// components inline before allocating on the heap. This is a common case for
+/// trie paths, which are often short, so this optimization can help reduce heap
+/// allocations and improve performance.
+pub type PathBuf = smallvec::SmallVec<[PathComponent; INLINE_CAP]>;
+
+const INLINE_CAP: usize = size_of::<Vec<u8>>() - size_of::<usize>();
+const _: () = assert!(size_of::<PathBuf>() == size_of::<Vec<u8>>());
+const _: () = assert!(align_of::<PathBuf>() == align_of::<Vec<u8>>());
 
 /// A trie path represented as a slice of path components, either borrowed or owned.
 pub enum PartialPath<'a> {
@@ -101,22 +110,9 @@ impl AsRef<[PathComponent]> for PartialPath<'_> {
     }
 }
 
-impl TriePath for PartialPath<'_> {
-    type Components<'a>
-        = ComponentIter<'a>
-    where
-        Self: 'a;
-
-    fn len(&self) -> usize {
-        self.as_slice().len()
-    }
-
-    fn components(&self) -> Self::Components<'_> {
-        self.as_slice().iter().copied()
-    }
-
-    fn as_component_slice(&self) -> PartialPath<'_> {
-        PartialPath::Borrowed(self.as_slice())
+impl<'a> super::AsPathRef<'a> for PartialPath<'_> {
+    fn as_path_ref(&'a self) -> super::PathRef<'a> {
+        super::PathRef::Slice(self.as_slice())
     }
 }
 
@@ -188,6 +184,20 @@ impl<'a> PathGuard<'a> {
     /// This component will be removed when the guard is dropped.
     pub fn push(&mut self, component: PathComponent) {
         self.buf.push(component);
+    }
+
+    /// A convenience method for cloning the inner path buffer.
+    ///
+    /// This is a convenience method that avoids needing to deref the guard in
+    /// order to correctly clone the inner buffer.
+    ///
+    /// ```ignore
+    /// (*guard).clone() // works, but is cumbersome
+    /// guard.cloned()   // same thing, but doesn't require the parens and deref
+    /// ```
+    #[must_use]
+    pub fn cloned(&self) -> PathBuf {
+        self.buf.clone()
     }
 }
 

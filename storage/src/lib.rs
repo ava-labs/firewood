@@ -34,8 +34,10 @@ mod nodestore;
 mod path;
 #[cfg(any(test, feature = "test_utils"))]
 mod test_utils;
-mod tries;
 mod u4;
+
+/// Generic trie types and traits.
+pub mod tries;
 
 /// Logger module for handling logging functionality
 pub mod logger;
@@ -63,10 +65,6 @@ pub use path::{
     ComponentIter, IntoSplitPath, JoinedPath, PackedBytes, PackedPathComponents, PackedPathRef,
     PartialPath, PathBuf, PathCommonPrefix, PathComponent, PathComponentSliceExt, PathGuard,
     SplitPath, TriePath, TriePathAsPackedBytes, TriePathFromPackedBytes, TriePathFromUnpackedBytes,
-};
-pub use tries::{
-    DuplicateKeyError, HashedKeyValueTrieRoot, HashedTrieNode, IterAscending, IterDescending,
-    KeyValueTrieRoot, TrieEdgeIter, TrieEdgeState, TrieNode, TrieValueIter,
 };
 pub use u4::{TryFromIntError, U4};
 

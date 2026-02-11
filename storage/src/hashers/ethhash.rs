@@ -73,8 +73,8 @@ fn nibbles_to_eth_compact<T: TriePath>(nibbles: T, is_leaf: bool) -> SmallVec<[u
         .collect()
 }
 
-impl<T: Hashable> Preimage for T {
-    fn to_hash(&self) -> HashType {
+impl<'a, T: Hashable<'a>> Preimage<'a> for T {
+    fn to_hash(&'a self) -> HashType {
         // first collect the thing that would be hashed, and if it's smaller than a hash,
         // just use it directly
         let mut collector = SmallVec::with_capacity(32);
@@ -93,7 +93,7 @@ impl<T: Hashable> Preimage for T {
         }
     }
 
-    fn write(&self, buf: &mut impl HasUpdate) {
+    fn write(&'a self, buf: &mut impl HasUpdate) {
         let is_account = self.full_path().len() == 64;
         trace!("is_account: {is_account}");
 

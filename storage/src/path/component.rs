@@ -3,7 +3,7 @@
 
 use smallvec::SmallVec;
 
-use super::{PartialPath, TriePath, TriePathFromUnpackedBytes};
+use super::{TriePath, TriePathFromUnpackedBytes};
 
 /// A path component in a hexary trie; which is only 4 bits (aka a nibble).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -137,117 +137,39 @@ impl std::fmt::UpperHex for PathComponent {
     }
 }
 
-impl TriePath for PathComponent {
-    type Components<'a>
-        = std::option::IntoIter<Self>
-    where
-        Self: 'a;
-
-    fn len(&self) -> usize {
-        1
-    }
-
-    fn components(&self) -> Self::Components<'_> {
-        Some(*self).into_iter()
-    }
-
-    fn as_component_slice(&self) -> PartialPath<'_> {
-        PartialPath::Borrowed(std::slice::from_ref(self))
+impl<'a> super::AsPathRef<'a> for PathComponent {
+    fn as_path_ref(&'a self) -> super::PathRef<'a> {
+        super::PathRef::Slice(std::slice::from_ref(self))
     }
 }
 
-impl TriePath for Option<PathComponent> {
-    type Components<'a>
-        = std::option::IntoIter<PathComponent>
-    where
-        Self: 'a;
-
-    fn len(&self) -> usize {
-        usize::from(self.is_some())
-    }
-
-    fn components(&self) -> Self::Components<'_> {
-        (*self).into_iter()
-    }
-
-    fn as_component_slice(&self) -> PartialPath<'_> {
-        PartialPath::Borrowed(self.as_slice())
+impl<'a> super::AsPathRef<'a> for Option<PathComponent> {
+    fn as_path_ref(&'a self) -> super::PathRef<'a> {
+        super::PathRef::Slice(self.as_slice())
     }
 }
 
-impl TriePath for [PathComponent] {
-    type Components<'a>
-        = ComponentIter<'a>
-    where
-        Self: 'a;
-
-    fn len(&self) -> usize {
-        self.len()
-    }
-
-    fn components(&self) -> Self::Components<'_> {
-        self.iter().copied()
-    }
-
-    fn as_component_slice(&self) -> PartialPath<'_> {
-        PartialPath::Borrowed(self)
+impl<'a> super::AsPathRef<'a> for [PathComponent] {
+    fn as_path_ref(&'a self) -> super::PathRef<'a> {
+        super::PathRef::Slice(self)
     }
 }
 
-impl<const N: usize> TriePath for [PathComponent; N] {
-    type Components<'a>
-        = ComponentIter<'a>
-    where
-        Self: 'a;
-
-    fn len(&self) -> usize {
-        N
-    }
-
-    fn components(&self) -> Self::Components<'_> {
-        self.iter().copied()
-    }
-
-    fn as_component_slice(&self) -> PartialPath<'_> {
-        PartialPath::Borrowed(self)
+impl<'a, const N: usize> super::AsPathRef<'a> for [PathComponent; N] {
+    fn as_path_ref(&'a self) -> super::PathRef<'a> {
+        super::PathRef::Slice(self)
     }
 }
 
-impl TriePath for Vec<PathComponent> {
-    type Components<'a>
-        = ComponentIter<'a>
-    where
-        Self: 'a;
-
-    fn len(&self) -> usize {
-        self.len()
-    }
-
-    fn components(&self) -> Self::Components<'_> {
-        self.iter().copied()
-    }
-
-    fn as_component_slice(&self) -> PartialPath<'_> {
-        PartialPath::Borrowed(self.as_slice())
+impl<'a> super::AsPathRef<'a> for Vec<PathComponent> {
+    fn as_path_ref(&'a self) -> super::PathRef<'a> {
+        super::PathRef::Slice(self)
     }
 }
 
-impl<A: smallvec::Array<Item = PathComponent>> TriePath for SmallVec<A> {
-    type Components<'a>
-        = ComponentIter<'a>
-    where
-        Self: 'a;
-
-    fn len(&self) -> usize {
-        self.len()
-    }
-
-    fn components(&self) -> Self::Components<'_> {
-        self.iter().copied()
-    }
-
-    fn as_component_slice(&self) -> PartialPath<'_> {
-        PartialPath::Borrowed(self.as_slice())
+impl<'a, A: smallvec::Array<Item = PathComponent>> super::AsPathRef<'a> for SmallVec<A> {
+    fn as_path_ref(&'a self) -> super::PathRef<'a> {
+        super::PathRef::Slice(self)
     }
 }
 
@@ -348,6 +270,21 @@ impl super::TriePathFromPackedBytes<'_> for std::rc::Rc<[PathComponent]> {
 impl super::TriePathFromPackedBytes<'_> for std::sync::Arc<[PathComponent]> {
     fn path_from_packed_bytes(bytes: &[u8]) -> Self {
         Vec::<PathComponent>::path_from_packed_bytes(bytes).into()
+    }
+}
+
+impl super::TriePathFromPackedBytes<'_> for triomphe::Arc<[PathComponent]> {
+    fn path_from_packed_bytes(bytes: &[u8]) -> Self {
+        Vec::<PathComponent>::path_from_packed_bytes(bytes).into()
+    }
+}
+
+impl super::TriePathFromPackedBytes<'_> for triomphe::ThinArc<(), PathComponent> {
+    fn path_from_packed_bytes(bytes: &[u8]) -> Self {
+        let path = Vec::<PathComponent>::path_from_packed_bytes(bytes);
+        let header = triomphe::HeaderWithLength::new((), path.len());
+        let arc = triomphe::Arc::from_header_and_vec(header, path);
+        triomphe::Arc::into_thin(arc)
     }
 }
 

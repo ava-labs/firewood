@@ -156,33 +156,24 @@ impl std::fmt::Debug for ProofNode {
     }
 }
 
-impl Hashable for ProofNode {
-    type LeadingPath<'a>
-        = &'a [PathComponent]
-    where
-        Self: 'a;
+impl<'a> Hashable<'a> for ProofNode {
+    type LeadingPath = &'a [PathComponent];
 
-    type PartialPath<'a>
-        = &'a [PathComponent]
-    where
-        Self: 'a;
+    type PartialPath = &'a [PathComponent];
 
-    type FullPath<'a>
-        = &'a [PathComponent]
-    where
-        Self: 'a;
+    type FullPath = &'a [PathComponent];
 
-    fn parent_prefix_path(&self) -> Self::LeadingPath<'_> {
+    fn parent_prefix_path(&'a self) -> Self::LeadingPath {
         let (prefix, _) = self.key.split_at(self.partial_len);
         prefix
     }
 
-    fn partial_path(&self) -> Self::PartialPath<'_> {
+    fn partial_path(&'a self) -> Self::PartialPath {
         let (_, suffix) = self.key.split_at(self.partial_len);
         suffix
     }
 
-    fn full_path(&self) -> Self::FullPath<'_> {
+    fn full_path(&'a self) -> Self::FullPath {
         &self.key
     }
 
@@ -306,6 +297,13 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
     }
 }
 
+impl<T: ProofCollection + ?Sized> AsRef<[T::Node]> for Proof<T> {
+    #[inline]
+    fn as_ref(&self) -> &[T::Node] {
+        self.0.as_ref()
+    }
+}
+
 impl<T: ProofCollection + ?Sized> std::ops::Deref for Proof<T> {
     type Target = T;
 
@@ -342,12 +340,12 @@ impl Proof<EmptyProofCollection> {
     /// Converts an empty immutable proof into an empty mutable proof.
     #[inline]
     #[must_use]
-    pub const fn into_mutable<T: Hashable>(self) -> Proof<Vec<T>> {
+    pub const fn into_mutable<T: for<'a> Hashable<'a>>(self) -> Proof<Vec<T>> {
         Proof::new(Vec::new())
     }
 }
 
-impl<T: Hashable> Proof<Box<[T]>> {
+impl<T: for<'a> Hashable<'a>> Proof<Box<[T]>> {
     /// Converts an immutable proof into a mutable proof.
     #[inline]
     #[must_use]
@@ -356,7 +354,7 @@ impl<T: Hashable> Proof<Box<[T]>> {
     }
 }
 
-impl<T: Hashable> Proof<Vec<T>> {
+impl<T: for<'a> Hashable<'a>> Proof<Vec<T>> {
     /// Converts a mutable proof into an immutable proof.
     #[inline]
     #[must_use]
@@ -367,7 +365,7 @@ impl<T: Hashable> Proof<Vec<T>> {
 
 impl<T, V> Proof<V>
 where
-    T: Hashable,
+    T: for<'a> Hashable<'a>,
     V: ProofCollection<Node = T> + IntoIterator<Item = T> + FromIterator<T>,
 {
     /// Joins two proofs into one.
@@ -411,18 +409,18 @@ impl<V: ProofCollection + IntoIterator<Item = V::Node>> IntoIterator for Proof<V
 /// a `Box<[T]>` or `Vec<T>`, where `T` implements the `Hashable` trait.
 pub trait ProofCollection: AsRef<[Self::Node]> {
     /// The type of nodes in the proof collection.
-    type Node: Hashable;
+    type Node: for<'a> Hashable<'a>;
 }
 
-impl<T: Hashable> ProofCollection for [T] {
+impl<T: for<'a> Hashable<'a>> ProofCollection for [T] {
     type Node = T;
 }
 
-impl<T: Hashable> ProofCollection for Box<[T]> {
+impl<T: for<'a> Hashable<'a>> ProofCollection for Box<[T]> {
     type Node = T;
 }
 
-impl<T: Hashable> ProofCollection for Vec<T> {
+impl<T: for<'a> Hashable<'a>> ProofCollection for Vec<T> {
     type Node = T;
 }
 

@@ -1,73 +1,70 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use crate::{HashType, PathBuf, PathComponent, TrieNode, TriePath, tries::TrieEdgeState};
+use crate::{HashType, PathBuf, PathComponent, TriePath, ValueDigest};
+
+use super::{TrieEdgeState, TrieNode};
 
 /// A marker type for [`TrieEdgeIter`] that indicates that the iterator traverses
 /// the trie in ascending order.
-#[derive(Debug)]
-pub struct IterAscending;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum IterAscending {}
 
 /// A marker type for [`TrieEdgeIter`] that indicates that the iterator traverses
 /// the trie in descending order.
-#[derive(Debug)]
-pub struct IterDescending;
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum IterDescending {}
 
 /// An iterator over the edges in a key-value trie in a specified order.
 ///
 /// Use [`TrieNode::iter_edges`] or [`TrieNode::iter_edges_desc`] to
 /// create an instance of this iterator in ascending or descending order,
 /// respectively.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[must_use = "iterators are lazy and do nothing unless consumed"]
-pub struct TrieEdgeIter<'a, N: ?Sized, V: ?Sized, D> {
+pub struct TrieEdgeIter<'a, D> {
     leading_path: PathBuf,
-    stack: Vec<Frame<'a, N, V>>,
+    stack: Vec<Frame<'a>>,
     marker: std::marker::PhantomData<D>,
 }
 
 /// An iterator over the key-value pairs in a key-value trie.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[must_use = "iterators are lazy and do nothing unless consumed"]
-pub struct TrieValueIter<'a, N: ?Sized, V: ?Sized, D> {
-    edges: TrieEdgeIter<'a, N, V, D>,
+pub struct TrieValueIter<'a, D> {
+    edges: TrieEdgeIter<'a, D>,
 }
 
-#[derive(Debug)]
-struct Frame<'a, N: ?Sized, V: ?Sized> {
-    node: &'a N,
+#[derive(Debug, Clone)]
+struct Frame<'a> {
+    node: &'a dyn TrieNode,
     hash: Option<&'a HashType>,
     leading_path_len: usize,
     children: Option<std::array::IntoIter<PathComponent, { PathComponent::LEN }>>,
-    marker: std::marker::PhantomData<V>,
 }
 
-impl<'a, N, V, D> TrieEdgeIter<'a, N, V, D>
-where
-    N: TrieNode<V> + ?Sized,
-    V: AsRef<[u8]> + ?Sized,
-{
+impl<'a, D> TrieEdgeIter<'a, D> {
     /// Creates a new iterator over the given key-value trie.
-    pub fn new(root: &'a N, root_hash: Option<&'a HashType>) -> Self {
+    pub fn new(root: &'a dyn TrieNode) -> Self {
         let mut this = Self {
             leading_path: PathBuf::new_const(),
             stack: Vec::new(),
             marker: std::marker::PhantomData,
         };
-        this.push_frame(None, root, root_hash);
+        this.push_frame(None, root, None);
         this
     }
 
     /// Transforms this iterator into an iterator over the key-value pairs in
     /// the trie.
-    pub const fn node_values(self) -> TrieValueIter<'a, N, V, D> {
+    pub const fn node_values(self) -> TrieValueIter<'a, D> {
         TrieValueIter { edges: self }
     }
 
     fn push_frame(
         &mut self,
         leading_component: Option<PathComponent>,
-        node: &'a N,
+        node: &'a dyn TrieNode,
         hash: Option<&'a HashType>,
     ) {
         let frame = Frame {
@@ -75,7 +72,6 @@ where
             hash,
             leading_path_len: self.leading_path.len(),
             children: None,
-            marker: std::marker::PhantomData,
         };
         self.stack.push(frame);
         self.leading_path.extend(leading_component);
@@ -115,12 +111,8 @@ macro_rules! descend {
     };
 }
 
-impl<'a, N, V> Iterator for TrieEdgeIter<'a, N, V, IterAscending>
-where
-    N: TrieNode<V> + ?Sized,
-    V: AsRef<[u8]> + ?Sized,
-{
-    type Item = (PathBuf, TrieEdgeState<'a, N>);
+impl<'a> Iterator for TrieEdgeIter<'a, IterAscending> {
+    type Item = (PathBuf, TrieEdgeState<'a>);
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(&mut Frame {
@@ -128,7 +120,6 @@ where
             hash,
             leading_path_len,
             ref mut children,
-            marker: _,
         }) = self.stack.last_mut()
         {
             // ascending iterator yields the node before iterating its children
@@ -157,12 +148,8 @@ where
     }
 }
 
-impl<'a, N, V> Iterator for TrieEdgeIter<'a, N, V, IterDescending>
-where
-    N: TrieNode<V> + ?Sized,
-    V: AsRef<[u8]> + ?Sized,
-{
-    type Item = (PathBuf, TrieEdgeState<'a, N>);
+impl<'a> Iterator for TrieEdgeIter<'a, IterDescending> {
+    type Item = (PathBuf, TrieEdgeState<'a>);
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(&mut Frame {
@@ -170,7 +157,6 @@ where
             hash,
             leading_path_len,
             ref mut children,
-            marker: _,
         }) = self.stack.last_mut()
         {
             // descending iterator yields the node after iterating its children
@@ -192,76 +178,28 @@ where
     }
 }
 
-impl<'a, N, V> Iterator for TrieValueIter<'a, N, V, IterAscending>
-where
-    N: TrieNode<V> + ?Sized,
-    V: AsRef<[u8]> + ?Sized + 'a,
-{
-    type Item = (PathBuf, &'a V);
+impl<'a> Iterator for TrieValueIter<'a, IterAscending> {
+    type Item = (PathBuf, ValueDigest<&'a [u8]>);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.edges
-            .find_map(|(path, node)| node.value().map(|v| (path, v)))
+        self.edges.find_map(|(path, node)| match node {
+            TrieEdgeState::LocalChild { node, hash: _ } | TrieEdgeState::UnhashedChild { node } => {
+                Some((path, node.value_digest()?))
+            }
+            TrieEdgeState::RemoteChild { .. } => None,
+        })
     }
 }
 
-impl<'a, N, V> Iterator for TrieValueIter<'a, N, V, IterDescending>
-where
-    N: TrieNode<V> + ?Sized,
-    V: AsRef<[u8]> + ?Sized + 'a,
-{
-    type Item = (PathBuf, &'a V);
+impl<'a> Iterator for TrieValueIter<'a, IterDescending> {
+    type Item = (PathBuf, ValueDigest<&'a [u8]>);
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.edges
-            .find_map(|(path, node)| node.value().map(|v| (path, v)))
-    }
-}
-
-// auto-derived implementations would require N: Clone, V: Clone which is too much
-
-impl<N: ?Sized, V: ?Sized, D> Clone for TrieEdgeIter<'_, N, V, D> {
-    fn clone(&self) -> Self {
-        Self {
-            leading_path: self.leading_path.clone(),
-            stack: self.stack.clone(),
-            marker: std::marker::PhantomData,
-        }
-    }
-
-    fn clone_from(&mut self, source: &Self) {
-        self.leading_path.clone_from(&source.leading_path);
-        self.stack.clone_from(&source.stack);
-    }
-}
-
-impl<N: ?Sized, V: ?Sized, D> Clone for TrieValueIter<'_, N, V, D> {
-    fn clone(&self) -> Self {
-        Self {
-            edges: self.edges.clone(),
-        }
-    }
-
-    fn clone_from(&mut self, source: &Self) {
-        self.edges.clone_from(&source.edges);
-    }
-}
-
-impl<N: ?Sized, V: ?Sized> Clone for Frame<'_, N, V> {
-    fn clone(&self) -> Self {
-        Self {
-            node: self.node,
-            hash: self.hash,
-            leading_path_len: self.leading_path_len,
-            children: self.children.clone(),
-            marker: std::marker::PhantomData,
-        }
-    }
-
-    fn clone_from(&mut self, source: &Self) {
-        self.node = source.node;
-        self.hash = source.hash;
-        self.leading_path_len = source.leading_path_len;
-        self.children.clone_from(&source.children);
+        self.edges.find_map(|(path, node)| match node {
+            TrieEdgeState::LocalChild { node, hash: _ } | TrieEdgeState::UnhashedChild { node } => {
+                Some((path, node.value_digest()?))
+            }
+            TrieEdgeState::RemoteChild { .. } => None,
+        })
     }
 }

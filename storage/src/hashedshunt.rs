@@ -50,31 +50,22 @@ impl<P1: SplitPath, P2: SplitPath> std::fmt::Debug for HashableShunt<'_, P1, P2>
     }
 }
 
-impl<P1: SplitPath, P2: SplitPath> Hashable for HashableShunt<'_, P1, P2> {
-    type LeadingPath<'a>
-        = P1
-    where
-        Self: 'a;
+impl<'a, P1: SplitPath + 'a, P2: SplitPath + 'a> Hashable<'a> for HashableShunt<'_, P1, P2> {
+    type LeadingPath = P1;
 
-    type PartialPath<'a>
-        = P2
-    where
-        Self: 'a;
+    type PartialPath = P2;
 
-    type FullPath<'a>
-        = JoinedPath<P1, P2>
-    where
-        Self: 'a;
+    type FullPath = JoinedPath<P1, P2>;
 
-    fn parent_prefix_path(&self) -> Self::LeadingPath<'_> {
+    fn parent_prefix_path(&self) -> Self::LeadingPath {
         self.parent_prefix
     }
 
-    fn partial_path(&self) -> Self::PartialPath<'_> {
+    fn partial_path(&self) -> Self::PartialPath {
         self.partial_path
     }
 
-    fn full_path(&self) -> Self::FullPath<'_> {
+    fn full_path(&self) -> Self::FullPath {
         self.parent_prefix_path().append(self.partial_path())
     }
 
