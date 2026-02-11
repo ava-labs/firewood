@@ -67,7 +67,17 @@ jobs:
 
             # Cron strings must match exactly from schedule definitions above
             case "${{ github.event.schedule }}" in
-              "0 5 * * 1-5")  # Weekdays at 05:00 UTC: 1M blocks (40M → 41M)
+              # TODO(elvis339): Remove '0 5 * * *' match and weekend guard once resolved:
+              # https://github.com/actions/runner/issues/4241
+              # GitHub's scheduler fires a stale cron ('0 5 * * *') from a previous
+              # workflow version instead of the current '0 5 * * 1-5'. When that happens
+              # on a weekend, skip the run to avoid wasting runner time.
+              "0 5 * * 1-5"|"0 5 * * *")  # Weekdays at 05:00 UTC: 1M blocks (40M → 41M)
+                DOW=$(date -u +%u)  # 1=Mon ... 6=Sat, 7=Sun
+                if [[ "$DOW" -ge 6 ]]; then
+                  echo "::notice::Weekend (DOW=$DOW) skipping"
+                  exit 0
+                fi
                 echo "::notice::Schedule: daily-40m-41m (blocks 40000001-41000000)"
                 echo "name=daily-40m-41m" >> "$GITHUB_OUTPUT"
                 echo "start-block=40000001" >> "$GITHUB_OUTPUT"

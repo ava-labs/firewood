@@ -3,6 +3,7 @@
 
 mod cloud_init;
 mod ec2_util;
+mod ssm_monitor;
 pub mod stage_config;
 
 use clap::{Args, Subcommand, ValueEnum};
@@ -17,13 +18,19 @@ pub enum LaunchError {
     InvalidInstanceType(String, String),
 
     #[error("EC2 operation failed: {0}")]
-    Ec2(#[from] aws_sdk_ec2::Error),
+    Ec2(Box<aws_sdk_ec2::Error>),
+
+    #[error("SSM operation failed: {0}")]
+    Ssm(Box<aws_sdk_ssm::Error>),
 
     #[error("AWS SDK error: {0}")]
     AwsSdk(String),
 
     #[error("Cloud-init generation failed: {0}")]
     CloudInit(#[from] serde_yaml::Error),
+
+    #[error("JSON serialization error: {0}")]
+    Json(#[from] serde_json::Error),
 
     #[error("Stage configuration error: {0}")]
     StageConfig(#[from] stage_config::ConfigError),
@@ -42,6 +49,21 @@ pub enum LaunchError {
 
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),
+
+    #[error("Encoded user-data size {actual} exceeds EC2 limit {limit} bytes")]
+    UserDataTooLarge { actual: usize, limit: usize },
+}
+
+impl From<aws_sdk_ec2::Error> for LaunchError {
+    fn from(error: aws_sdk_ec2::Error) -> Self {
+        Self::Ec2(Box::new(error))
+    }
+}
+
+impl From<aws_sdk_ssm::Error> for LaunchError {
+    fn from(error: aws_sdk_ssm::Error) -> Self {
+        Self::Ssm(Box::new(error))
+    }
 }
 
 impl<E, R> From<aws_smithy_runtime_api::client::result::SdkError<E, R>> for LaunchError
@@ -96,7 +118,8 @@ pub struct Options {
 
 #[derive(Debug, Subcommand)]
 pub enum LaunchCommand {
-    Deploy(DeployOptions),
+    Deploy(Box<DeployOptions>),
+    Monitor(MonitorOptions),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
@@ -191,6 +214,14 @@ pub struct DeployOptions {
     /// Custom tag to identify this instance (e.g., "pathdb-test", "pr-123")
     #[arg(long = "tag", value_name = "TAG")]
     pub custom_tag: Option<String>,
+
+    /// Follow cloud-init stage progress via SSM after launch
+    #[arg(long = "follow")]
+    pub follow_logs: bool,
+
+    /// Monitor bootstrap re-execution progress from `/var/log/bootstrap.log` (requires `--follow`)
+    #[arg(long = "observe", requires = "follow_logs")]
+    pub observe: bool,
 }
 
 impl DeployOptions {
@@ -209,6 +240,21 @@ impl DeployOptions {
     }
 }
 
+#[derive(Debug, Args)]
+pub struct MonitorOptions {
+    /// Instance ID to monitor
+    #[arg(value_name = "INSTANCE_ID")]
+    pub instance_id: String,
+
+    /// AWS region
+    #[arg(long = "region", value_name = "REGION", default_value = "us-west-2")]
+    pub region: String,
+
+    /// Monitor bootstrap re-execution progress from `/var/log/bootstrap.log`
+    #[arg(long = "observe")]
+    pub observe: bool,
+}
+
 pub(super) fn run(opts: &Options) -> Result<(), FwdError> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(run_internal(opts))
@@ -216,20 +262,35 @@ pub(super) fn run(opts: &Options) -> Result<(), FwdError> {
 
 async fn run_internal(opts: &Options) -> Result<(), FwdError> {
     debug!("launch command {opts:?}");
-    let LaunchCommand::Deploy(deploy) = &opts.command;
-    run_deploy(deploy)
-        .await
-        .map_err(|e| FwdError::InternalError(Box::from(e)))
+    match &opts.command {
+        LaunchCommand::Deploy(deploy) => run_deploy(deploy)
+            .await
+            .map_err(|e| FwdError::InternalError(Box::from(e))),
+        LaunchCommand::Monitor(monitor) => run_monitor(monitor)
+            .await
+            .map_err(|e| FwdError::InternalError(Box::from(e))),
+    }
 }
 
 async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
+    const EC2_USER_DATA_B64_LIMIT: usize = 25_600;
+
     log_launch_config(opts);
 
     let ctx = cloud_init::CloudInitContext::new(opts)?;
 
     let user_data_b64 = ctx.render_base64()?;
+    let user_data_size = user_data_b64.len();
+    info!("Cloud-init user-data size: {user_data_size} bytes (base64)");
+    if user_data_size > EC2_USER_DATA_B64_LIMIT {
+        return Err(LaunchError::UserDataTooLarge {
+            actual: user_data_size,
+            limit: EC2_USER_DATA_B64_LIMIT,
+        });
+    }
 
     let ec2 = ec2_util::ec2_client(&opts.region).await;
+    let ssm = ssm_monitor::ssm_client(&opts.region).await;
 
     let ami_id = ec2_util::latest_ubuntu_ami(&ec2, &opts.instance_type).await?;
     info!("Using AMI: {ami_id}");
@@ -248,8 +309,30 @@ async fn run_deploy(opts: &DeployOptions) -> Result<(), LaunchError> {
     if let Some(ip) = &private_ip {
         debug!("Private IP:  {ip}");
     }
+    info!("");
+    info!("To monitor:  fwdctl launch monitor {instance_id}");
+
+    if opts.follow_logs {
+        ssm_monitor::wait_for_ssm_registration(&ssm, &instance_id).await?;
+        info!("");
+        info!("Following cloud-init stage progress via SSM...");
+        ssm_monitor::stream_logs_via_ssm(&ssm, &instance_id, opts.observe).await?;
+    }
 
     Ok(())
+}
+
+async fn run_monitor(opts: &MonitorOptions) -> Result<(), LaunchError> {
+    let ssm = ssm_monitor::ssm_client(&opts.region).await;
+
+    info!("Monitoring instance: {}", opts.instance_id);
+    if opts.observe {
+        info!("Observe mode: tracking bootstrap re-execution after cloud-init stages.");
+    }
+    info!("");
+
+    ssm_monitor::wait_for_ssm_registration(&ssm, &opts.instance_id).await?;
+    ssm_monitor::stream_logs_via_ssm(&ssm, &opts.instance_id, opts.observe).await
 }
 
 fn log_launch_config(opts: &DeployOptions) {
@@ -266,4 +349,6 @@ fn log_launch_config(opts: &DeployOptions) {
     info!("\t{:24}{}", "Config:", opts.config);
     info!("\t{:24}{}", "Metrics Server:", opts.metrics_server);
     info!("\t{:24}{}", "Region:", opts.region);
+    info!("\t{:24}{}", "Follow logs:", opts.follow_logs);
+    info!("\t{:24}{}", "Observe progress:", opts.observe);
 }
