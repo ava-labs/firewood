@@ -28,7 +28,8 @@ typedef enum NodeHashAlgorithm {
 } NodeHashAlgorithm;
 
 /**
- * FFI context for a parsed or generated change proof.
+ * FFI context for a parsed or generated change proof. This change proof has not
+ * been verified. Calling verify on it will generate a `VerifiedChangeProofContext`.
  */
 typedef struct ChangeProofContext ChangeProofContext;
 
@@ -55,6 +56,10 @@ typedef struct IteratorHandle IteratorHandle;
  */
 typedef struct ProposalHandle ProposalHandle;
 
+/**
+ * FFI context for a proposed change proof. It is created from calling `propose`
+ * on a `VerifiedChangeProofContext` and stores the database and proposal handle.
+ */
 typedef struct ProposedChangeProofContext ProposedChangeProofContext;
 
 /**
@@ -64,6 +69,10 @@ typedef struct RangeProofContext RangeProofContext;
 
 typedef struct RevisionHandle RevisionHandle;
 
+/**
+ * FFI context for a verified change proof. It is created from calling `verify`
+ * on a `ChangeProofContext` and stores the parameters of that call in `params`.
+ */
 typedef struct VerifiedChangeProofContext VerifiedChangeProofContext;
 
 /**
@@ -592,6 +601,9 @@ typedef struct ProposedChangeProofResult {
 } ProposedChangeProofResult;
 
 typedef struct ProposedChangeProofArgs {
+  /**
+   * The verified change proof context that will be used to create a proposal.
+   */
   struct VerifiedChangeProofContext *proof;
 } ProposedChangeProofArgs;
 

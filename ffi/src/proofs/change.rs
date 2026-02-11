@@ -18,7 +18,8 @@ use std::cmp::Ordering;
 
 use crate::{
     BorrowedBytes, CResult, ChangeProofResult, DatabaseHandle, HashKey, HashResult, Maybe,
-    NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult, results::{ProposedChangeProofResult, VerifiedChangeProofResult},
+    NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
+    results::{ProposedChangeProofResult, VerifiedChangeProofResult},
 };
 
 #[cfg(feature = "ethhash")]
@@ -79,13 +80,16 @@ pub struct VerifyChangeProofArgs<'a> {
     pub max_length: u32,
 }
 
+// Arguments for creating a proposal from a verified change proof
 #[derive(Debug)]
 #[repr(C)]
 pub struct ProposedChangeProofArgs<'a> {
+    /// The verified change proof context that will be used to create a proposal.
     pub proof: Option<&'a mut VerifiedChangeProofContext>,
 }
 
-/// FFI context for a parsed or generated change proof.
+/// FFI context for a parsed or generated change proof. This change proof has not
+/// been verified. Calling verify on it will generate a `VerifiedChangeProofContext`.
 #[derive(Debug)]
 pub struct ChangeProofContext {
     proof: FrozenChangeProof,
@@ -98,14 +102,20 @@ impl From<FrozenChangeProof> for ChangeProofContext {
 }
 
 impl ChangeProofContext {
+    /// Verifies the `ChangeProofContext` and creates a `VerifiedChangeProofContext`
+    /// on success. Should only be called once on a `ChangeProofContext` as its
+    /// change proof is given to the `VerifiedChangeProofContext`.
+    ///
+    /// Currently only performs a cursory verification, such as whether
+    /// the keys in the change proof is sorted.
     fn verify(
         &mut self,
-        context: VerificationParams,
+        params: VerificationParams,
     ) -> Result<VerifiedChangeProofContext, api::Error> {
         let batch_ops = self.proof.batch_ops();
 
         // Check to make sure the BatchOp array size is less than or equal to `max_length`
-        if let Some(max_length) = context.max_length
+        if let Some(max_length) = params.max_length
             && batch_ops.len() > max_length.into()
         {
             return Err(api::Error::ProofError(
@@ -114,7 +124,7 @@ impl ChangeProofContext {
         }
 
         // Check the start key is not greater than the first key in the proof.
-        if let (Some(start_key), Some(first_key)) = (&context.start_key, batch_ops.first())
+        if let (Some(start_key), Some(first_key)) = (&params.start_key, batch_ops.first())
             && start_key.cmp(first_key.key()) == Ordering::Greater
         {
             return Err(api::Error::ProofError(
@@ -123,7 +133,7 @@ impl ChangeProofContext {
         }
 
         // Check the end key is not less than the last key in the proof.
-        if let (Some(end_key), Some(last_key)) = (&context.end_key, batch_ops.last())
+        if let (Some(end_key), Some(last_key)) = (&params.end_key, batch_ops.last())
             && end_key.cmp(last_key.key()) == Ordering::Less
         {
             return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
@@ -136,8 +146,10 @@ impl ChangeProofContext {
         {
             warn!("change proof verification not yet implemented");
             Ok(VerifiedChangeProofContext {
+                // The change proof in `ChangeProofContext` is given to this new context
+                // and is replaced with an empty change proof.
                 proof: std::mem::take(&mut self.proof),
-                context,
+                params,
             })
         } else {
             Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted))
@@ -145,20 +157,28 @@ impl ChangeProofContext {
     }
 }
 
+/// FFI context for a verified change proof. It is created from calling `verify`
+/// on a `ChangeProofContext` and stores the parameters of that call in `params`.
 #[derive(Debug)]
 pub struct VerifiedChangeProofContext {
     proof: FrozenChangeProof,
-    context: VerificationParams,
+    params: VerificationParams,
 }
 
 impl VerifiedChangeProofContext {
+    /// Creates a proposal from the verified change proof context, and stores the change
+    /// proof, database handle, and proposal handle in a `ProposedChangeProofContext`.
+    /// Should only be called once on a `VerifiedChangeProofContext` as its change proof
+    /// is given to the `ProposedChangeProofContext`.
     fn propose<'db>(
         &'db mut self,
         db: &'db DatabaseHandle,
     ) -> Result<ProposedChangeProofContext<'db>, api::Error> {
         let proposal =
-            db.apply_change_proof_to_parent(self.context.start_root.into(), &self.proof)?;
+            db.apply_change_proof_to_parent(self.params.start_root.into(), &self.proof)?;
         Ok(ProposedChangeProofContext {
+            // The change proof in `VerifiedChangeProofContext` is given to this new
+            // context and is replaced with an empty change proof.
             proof: std::mem::take(&mut self.proof),
             db,
             proposal: proposal.handle,
@@ -166,6 +186,8 @@ impl VerifiedChangeProofContext {
     }
 }
 
+/// FFI context for a proposed change proof. It is created from calling `propose`
+/// on a `VerifiedChangeProofContext` and stores the database and proposal handle.
 #[expect(unused)]
 #[derive(Debug)]
 pub struct ProposedChangeProofContext<'db> {
@@ -362,9 +384,7 @@ pub extern "C" fn fwd_db_propose_change_proof<'db>(
     args: ProposedChangeProofArgs<'db>,
 ) -> ProposedChangeProofResult<'db> {
     let handle = db.and_then(|db| args.proof.map(|p| (db, p)));
-    crate::invoke_with_handle(handle, |(db, ctx)| {
-        ctx.propose(db)
-    })
+    crate::invoke_with_handle(handle, |(db, ctx)| ctx.propose(db))
 }
 
 /// Verify and commit a change proof to the database.
