@@ -176,8 +176,8 @@ release-step-refresh-changelog tag:
 #
 # Note: Changes must be pushed to the remote branch for the workflow to use them.
 #
-# By default, uses the current HEAD commit to build Firewood. If you want to
-# benchmark a specific version (e.g., a release tag), set FIREWOOD_REF explicitly:
+# By default, uses HEAD of your current branch to build Firewood.
+# If you want to benchmark a specific version (e.g., a release tag), set FIREWOOD_REF explicitly:
 #   FIREWOOD_REF=v0.1.0 TEST=firewood-101-250k just bench-cchain
 #
 # Examples:
@@ -193,6 +193,14 @@ bench-cchain:
         echo "error: Cannot run bench-cchain from main branch" >&2
         echo "       Main branch benchmarks go to bench/ (official history) — use scheduled workflows only." >&2
         echo "       Feature branch benchmarks go to dev/bench/{branch}/ — create a branch first." >&2
+        exit 1
+    fi
+
+    # AVALANCHEGO_REF must be a branch/tag name, not a commit SHA (GitHub API limitation)
+    if [[ "${AVALANCHEGO_REF:-}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+        echo "error: AVALANCHEGO_REF looks like a commit SHA: $AVALANCHEGO_REF" >&2
+        echo "       GitHub's workflow_dispatch API only accepts branch/tag names, not commit SHAs." >&2
+        echo "       Use a branch name (e.g., 'master') or tag instead." >&2
         exit 1
     fi
     
@@ -263,5 +271,3 @@ bench-cchain:
     echo "Monitor this workflow with cli: $GH run watch $run_id"
     echo " or with this URL: https://github.com/ava-labs/firewood/actions/runs/$run_id"
     echo ""
-    
-    $GH run watch "$run_id"

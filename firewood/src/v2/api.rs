@@ -4,6 +4,7 @@
 use crate::manager::RevisionManagerError;
 use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
+use crate::persist_worker::PersistError;
 use crate::{Proof, ProofError, ProofNode, RangeProof};
 use firewood_storage::{FileIoError, TrieHash};
 use std::fmt::Debug;
@@ -150,6 +151,9 @@ pub enum Error {
     /// A `RootStore` error occurred
     RootStoreError(#[source] Box<dyn std::error::Error + Send + Sync>),
 
+    #[error("Deferred persistence error: {0}")]
+    DeferredPersistenceError(#[source] PersistError),
+
     /// Cannot commit a committed proposal
     #[error("Cannot commit a committed proposal")]
     AlreadyCommitted,
@@ -204,8 +208,8 @@ impl From<std::convert::Infallible> for Error {
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
         use RevisionManagerError::{
-            FileIoError, IOError, NotLatest, RevisionNotFound, RevisionWithoutAddress,
-            RootStoreError,
+            FileIoError, IOError, NotLatest, PersistError, RevisionNotFound,
+            RevisionWithoutAddress, RootStoreError,
         };
         match err {
             NotLatest { provided, expected } => Self::ParentNotLatest { provided, expected },
@@ -216,6 +220,7 @@ impl From<RevisionManagerError> for Error {
             FileIoError(io_err) => Self::FileIO(io_err),
             IOError(err) => Self::IO(err),
             RootStoreError(err) => Self::RootStoreError(err),
+            PersistError(err) => Self::DeferredPersistenceError(err),
         }
     }
 }
