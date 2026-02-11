@@ -55,7 +55,7 @@ type Proposal struct {
 
 // Root retrieves the root hash of the proposal.
 func (p *Proposal) Root() Hash {
-	return p.root, 
+	return p.root
 }
 
 // Get retrieves the value for the given key.

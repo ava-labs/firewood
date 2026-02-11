@@ -1347,7 +1347,7 @@ mod test {
                     value: format!("value{i}").as_bytes().to_vec(),
                 }];
                 let proposal = db.propose(batch).unwrap();
-                let root_hash = proposal.root_hash().unwrap().unwrap();
+                let root_hash = proposal.root_hash().unwrap();
                 proposal.commit().unwrap();
                 root_hash
             })
@@ -1381,7 +1381,7 @@ mod test {
         let value = b"bar";
         let batch = vec![BatchOp::Put { key, value }];
         let proposal = db.propose(batch).unwrap();
-        let root_hash = proposal.root_hash().unwrap().unwrap();
+        let root_hash = proposal.root_hash().unwrap();
 
         proposal.commit().unwrap();
         let db = db.reopen();
