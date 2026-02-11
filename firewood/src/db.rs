@@ -509,7 +509,7 @@ mod test {
     #[test]
     fn reopen_test() {
         let db = TestDb::new();
-        let initial_root = db.root_hash().unwrap();
+        let initial_root = db.root_hash();
         let batch = vec![
             BatchOp::Put {
                 key: b"a",
@@ -533,7 +533,7 @@ mod test {
 
         let db = db.replace();
         println!("{:?}", db.root_hash().unwrap());
-        assert!(db.root_hash().unwrap() == initial_root);
+        assert!(db.root_hash() == initial_root);
     }
 
     #[test]

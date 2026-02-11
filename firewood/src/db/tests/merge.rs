@@ -173,7 +173,7 @@ fn test_merge_key_value_range(
         }
     }
 
-    let merge_root_hash = proposal.root_hash().unwrap();
+    let merge_root_hash = proposal.root_hash();
 
     // Create a fresh database with the same initial state
     let db2 = TestDb::new();
@@ -210,7 +210,7 @@ fn test_merge_key_value_range(
     }));
 
     let manual_proposal = db2.propose(batch).unwrap();
-    let manual_root_hash = manual_proposal.root_hash().unwrap();
+    let manual_root_hash = manual_proposal.root_hash();
 
     assert_eq!(
         merge_root_hash, manual_root_hash,
