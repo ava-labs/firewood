@@ -44,6 +44,17 @@ pub enum Node {
     Leaf(LeafNode),
 }
 
+impl lru_mem::HeapSize for Node {
+    fn heap_size(&self) -> usize {
+        match self {
+            Node::Branch(branch) => {
+                std::mem::size_of::<BranchNode>().saturating_add(branch.heap_size())
+            }
+            Node::Leaf(leaf) => leaf.heap_size(),
+        }
+    }
+}
+
 impl Default for Node {
     fn default() -> Self {
         Node::Leaf(LeafNode {

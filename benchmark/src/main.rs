@@ -227,6 +227,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let prometheus_handle = spawn_prometheus_listener(args.global_opts.prometheus_port)
         .expect("failed to spawn prometheus listener");
 
+    #[expect(deprecated)]
     let mgrcfg = RevisionManagerConfig::builder()
         .node_cache_size(args.global_opts.cache_size)
         .free_list_cache_size(

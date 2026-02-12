@@ -68,6 +68,17 @@ pub enum Child {
     MaybePersisted(MaybePersistedNode, HashType),
 }
 
+impl lru_mem::HeapSize for Child {
+    fn heap_size(&self) -> usize {
+        match self {
+            Child::Node(node) => node.heap_size(),
+            Child::AddressWithHash(_, _) => 0,
+            // MaybePersisted contains Arc<Mutex>, we don't count shared data
+            Child::MaybePersisted(_, _) => 0,
+        }
+    }
+}
+
 impl Child {
     /// Return a mutable reference to the underlying Node if the child
     /// is a [`Child::Node`] variant, otherwise None.
@@ -177,6 +188,22 @@ pub struct BranchNode {
     /// Each element is (`child_hash`, `child_address`).
     /// `child_address` is None if we don't know the child's hash.
     pub children: Children<Option<Child>>,
+}
+
+impl lru_mem::HeapSize for BranchNode {
+    fn heap_size(&self) -> usize {
+        let value_size = self.value.as_ref().map_or(0, |v| v.len());
+        let children_size: usize = self
+            .children
+            .iter()
+            .filter_map(|(_, child)| child.as_ref())
+            .map(lru_mem::HeapSize::heap_size)
+            .sum();
+        self.partial_path
+            .heap_size()
+            .saturating_add(value_size)
+            .saturating_add(children_size)
+    }
 }
 
 impl Debug for BranchNode {

@@ -81,6 +81,75 @@ pub use test_utils::TestRecorder;
 /// A shared node, which is just a triophe Arc of a node
 pub type SharedNode = triomphe::Arc<Node>;
 
+/// A wrapper around `SharedNode` for use in memory-sized caches.
+/// This newtype allows implementing foreign traits while maintaining
+/// compatibility with the rest of the codebase that uses `SharedNode` directly.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CachedNode(pub SharedNode);
+
+impl From<SharedNode> for CachedNode {
+    fn from(node: SharedNode) -> Self {
+        CachedNode(node)
+    }
+}
+
+impl From<CachedNode> for SharedNode {
+    fn from(cached: CachedNode) -> Self {
+        cached.0
+    }
+}
+
+impl std::ops::Deref for CachedNode {
+    type Target = Node;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl lru_mem::HeapSize for CachedNode {
+    fn heap_size(&self) -> usize {
+        // Arc overhead plus the inner Node's heap size
+        // Note: We count the full Node size since this is the primary reference
+        self.0.heap_size()
+    }
+}
+
+impl CachedNode {
+    /// Insert this node into the cache, ignoring any errors.
+    ///
+    /// The only error that can occur is `EntryTooLarge`, which happens when a single
+    /// node's size exceeds the cache's maximum capacity. This is extremely unlikely
+    /// (would require a node with hundreds of megabytes of data), and if it occurs,
+    /// the node simply won't be cached. Since the cache is secondary storage and the
+    /// node is already persisted to disk, the database remains fully functional - just
+    /// with cache misses for oversized nodes.
+    ///
+    /// Updates cache memory metrics after insertion.
+    pub fn insert_into_cache(
+        self,
+        cache: &mut lru_mem::LruCache<LinearAddress, Self>,
+        addr: LinearAddress,
+    ) {
+        let _ = cache.insert(addr, self);
+        Self::update_cache_metrics(cache);
+    }
+
+    /// Update cache memory usage metrics.
+    ///
+    /// This is called after cache operations to keep metrics in sync.
+    /// The `current_size()` and `max_size()` methods are simple field accesses,
+    /// so this is very cheap to call frequently.
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "Precision loss is acceptable for metrics; only affects values > 2^52 bytes"
+    )]
+    pub fn update_cache_metrics(cache: &lru_mem::LruCache<LinearAddress, Self>) {
+        use firewood_metrics::firewood_set;
+        firewood_set!(registry::CACHE_MEMORY_USED, cache.current_size() as f64);
+        firewood_set!(registry::CACHE_MEMORY_LIMIT, cache.max_size() as f64);
+    }
+}
+
 /// The strategy for caching nodes that are read
 /// from the storage layer. Generally, we only want to
 /// cache write operations, but for some read-heavy workloads
