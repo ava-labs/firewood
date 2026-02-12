@@ -2,10 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 #![expect(
-    clippy::cast_precision_loss,
-    reason = "Found 2 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::default_trait_access,
     reason = "Found 3 occurrences after enabling the lint."
 )]
@@ -58,7 +54,7 @@ pub struct RevisionManagerConfig {
     #[builder(default, setter(strip_option))]
     node_cache_memory_limit: Option<NonZero<usize>>,
 
-    #[builder(default_code = "NonZero::new(40000).expect(\"non-zero\")")]
+    #[builder(default_code = "NonZero::new(1000000).expect(\"non-zero\")")]
     free_list_cache_size: NonZero<usize>,
 
     #[builder(default = CacheReadStrategy::WritesOnly)]
@@ -352,11 +348,8 @@ impl RevisionManager {
                     break;
                 }
             }
-            firewood_set!(
-                crate::registry::ACTIVE_REVISIONS,
-                in_memory_revisions.len() as f64
-            );
-            firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions as f64);
+            firewood_set!(crate::registry::ACTIVE_REVISIONS, in_memory_revisions.len());
+            firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions);
         }
 
         // 4. Signal to the `PersistWorker` to persist this revision.
@@ -397,7 +390,7 @@ impl RevisionManager {
             }
 
             // Update uncommitted proposals gauge after cleanup
-            firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len() as f64);
+            firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len());
         }
 
         // then reparent any proposals that have this proposal as a parent
@@ -443,7 +436,7 @@ impl RevisionManager {
             lock.len()
         };
         // Update uncommitted proposals gauge after adding
-        firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, len as f64);
+        firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, len);
     }
 
     /// Retrieve a committed revision by its root hash.
