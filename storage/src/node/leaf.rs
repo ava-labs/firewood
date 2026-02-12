@@ -17,9 +17,7 @@ pub struct LeafNode {
 
 impl lru_mem::HeapSize for LeafNode {
     fn heap_size(&self) -> usize {
-        self.partial_path
-            .heap_size()
-            .saturating_add(self.value.len())
+        self.partial_path.heap_size().wrapping_add(self.value.len())
     }
 }
 

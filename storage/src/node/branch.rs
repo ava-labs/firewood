@@ -201,8 +201,8 @@ impl lru_mem::HeapSize for BranchNode {
             .sum();
         self.partial_path
             .heap_size()
-            .saturating_add(value_size)
-            .saturating_add(children_size)
+            .wrapping_add(value_size)
+            .wrapping_add(children_size)
     }
 }
 

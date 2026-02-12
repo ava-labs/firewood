@@ -85,7 +85,7 @@ pub type SharedNode = triomphe::Arc<Node>;
 /// This newtype allows implementing foreign traits while maintaining
 /// compatibility with the rest of the codebase that uses `SharedNode` directly.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CachedNode(pub SharedNode);
+pub(crate) struct CachedNode(pub(crate) SharedNode);
 
 impl From<SharedNode> for CachedNode {
     fn from(node: SharedNode) -> Self {
@@ -125,7 +125,7 @@ impl CachedNode {
     /// with cache misses for oversized nodes.
     ///
     /// Updates cache memory metrics after insertion.
-    pub fn insert_into_cache(
+    pub(crate) fn insert_into_cache(
         self,
         cache: &mut lru_mem::LruCache<LinearAddress, Self>,
         addr: LinearAddress,
@@ -143,7 +143,7 @@ impl CachedNode {
         clippy::cast_precision_loss,
         reason = "Precision loss is acceptable for metrics; only affects values > 2^52 bytes"
     )]
-    pub fn update_cache_metrics(cache: &lru_mem::LruCache<LinearAddress, Self>) {
+    pub(crate) fn update_cache_metrics(cache: &lru_mem::LruCache<LinearAddress, Self>) {
         use firewood_metrics::firewood_set;
         firewood_set!(registry::CACHE_MEMORY_USED, cache.current_size() as f64);
         firewood_set!(registry::CACHE_MEMORY_LIMIT, cache.max_size() as f64);

@@ -47,7 +47,7 @@ pub struct RevisionManagerConfig {
     /// **Deprecated:** Use `node_cache_memory_limit` instead for memory-based sizing.
     /// If specified, this value is multiplied by 128 to estimate memory usage.
     /// Cannot be specified together with `node_cache_memory_limit`.
-    #[deprecated(since = "0.1.0", note = "Use node_cache_memory_limit instead")]
+    #[deprecated(since = "0.2.0", note = "Use node_cache_memory_limit instead")]
     #[builder(default, setter(strip_option))]
     node_cache_size: Option<NonZero<usize>>,
 
@@ -72,25 +72,27 @@ impl RevisionManagerConfig {
     ///
     /// Returns an error if both `node_cache_size` and `node_cache_memory_limit` are specified.
     #[expect(deprecated)]
-    pub(crate) const fn compute_node_cache_memory_limit(
+    pub(crate) fn compute_node_cache_memory_limit(
         &self,
     ) -> Result<NonZero<usize>, crate::v2::api::Error> {
+        // Convert entry count to memory: size × 128 bytes per node (estimate)
+        const BYTES_PER_NODE_ESTIMATE: usize = 128;
+        // Default: 192MB (equivalent to 1,500,000 nodes × 128 bytes)
+        const DEFAULT_MEMORY_LIMIT: usize = 192_000_000;
+
         match (self.node_cache_size, self.node_cache_memory_limit) {
             (Some(_), Some(_)) => Err(crate::v2::api::Error::ConflictingCacheConfig),
             (Some(size), None) => {
-                // Convert entry count to memory: size × 128 bytes per node (estimate)
-                const BYTES_PER_NODE_ESTIMATE: usize = 128;
+                warn!(
+                    "node_cache_size is deprecated as of 0.2.0; use node_cache_memory_limit instead"
+                );
                 Ok(
                     NonZero::new(size.get().saturating_mul(BYTES_PER_NODE_ESTIMATE))
                         .expect("non-zero size produces non-zero memory"),
                 )
             }
             (None, Some(limit)) => Ok(limit),
-            (None, None) => {
-                // Default: 192MB (equivalent to 1,500,000 nodes × 128 bytes)
-                const DEFAULT_MEMORY_LIMIT: usize = 192_000_000;
-                Ok(NonZero::new(DEFAULT_MEMORY_LIMIT).expect("default is non-zero"))
-            }
+            (None, None) => Ok(NonZero::new(DEFAULT_MEMORY_LIMIT).expect("default is non-zero")),
         }
     }
 }
