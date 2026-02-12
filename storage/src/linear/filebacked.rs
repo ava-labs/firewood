@@ -27,9 +27,10 @@ use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
 use firewood_metrics::firewood_increment;
-use lru::LruCache;
+use lru::LruCache as EntryLruCache;
+use lru_mem::LruCache as MemLruCache;
 
-use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
+use crate::{CacheReadStrategy, CachedNode, LinearAddress, MaybePersistedNode, SharedNode};
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
 
@@ -37,8 +38,8 @@ use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
 #[derive(Debug)]
 pub struct FileBacked {
     filename: PathBuf,
-    cache: Mutex<LruCache<LinearAddress, SharedNode>>,
-    free_list_cache: Mutex<LruCache<LinearAddress, Option<LinearAddress>>>,
+    cache: Mutex<MemLruCache<LinearAddress, CachedNode>>,
+    free_list_cache: Mutex<EntryLruCache<LinearAddress, Option<LinearAddress>>>,
     cache_read_strategy: CacheReadStrategy,
     node_hash_algorithm: crate::NodeHashAlgorithm,
     // keep before `fd` so that it is dropped first (fields are dropped in the order they are declared)
@@ -64,7 +65,7 @@ impl FileBacked {
     /// Create or open a file at a given path
     pub fn new(
         path: PathBuf,
-        node_cache_size: NonZero<usize>,
+        node_cache_memory_limit: NonZero<usize>,
         free_list_cache_size: NonZero<usize>,
         truncate: bool,
         create: bool,
@@ -93,8 +94,8 @@ impl FileBacked {
         })?;
 
         Ok(Self {
-            cache: Mutex::new(LruCache::new(node_cache_size)),
-            free_list_cache: Mutex::new(LruCache::new(free_list_cache_size)),
+            cache: Mutex::new(MemLruCache::new(node_cache_memory_limit.get())),
+            free_list_cache: Mutex::new(EntryLruCache::new(free_list_cache_size)),
             cache_read_strategy,
             filename: path,
             node_hash_algorithm,
@@ -132,7 +133,7 @@ impl ReadableStorage for FileBacked {
 
     fn read_cached_node(&self, addr: LinearAddress, mode: &'static str) -> Option<SharedNode> {
         let mut guard = self.cache.lock();
-        let cached = guard.get(&addr).cloned();
+        let cached = guard.get(&addr).map(|cached_node| cached_node.0.clone());
         firewood_increment!(crate::registry::CACHE_NODE, 1, "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" });
         cached
     }
@@ -155,12 +156,12 @@ impl ReadableStorage for FileBacked {
             }
             CacheReadStrategy::All => {
                 let mut guard = self.cache.lock();
-                guard.put(addr, node);
+                CachedNode(node).insert_into_cache(&mut guard, addr);
             }
             CacheReadStrategy::BranchReads => {
                 if !node.is_leaf() {
                     let mut guard = self.cache.lock();
-                    guard.put(addr, node);
+                    CachedNode(node).insert_into_cache(&mut guard, addr);
                 }
             }
         }
@@ -201,7 +202,7 @@ impl WritableStorage for FileBacked {
                 .allocated_info()
                 .expect("node should be allocated");
 
-            guard.put(addr, shared_node);
+            CachedNode(shared_node).insert_into_cache(&mut guard, addr);
             // The node can now be read from the general cache, so we can delete the local copy
             maybe_persisted_node.persist_at(addr);
         }
@@ -211,8 +212,10 @@ impl WritableStorage for FileBacked {
     fn invalidate_cached_nodes<'a>(&self, nodes: impl Iterator<Item = &'a MaybePersistedNode>) {
         let mut guard = self.cache.lock();
         for addr in nodes.filter_map(MaybePersistedNode::as_linear_address) {
-            guard.pop(&addr);
+            guard.remove(&addr);
         }
+        // Update cache metrics after removals
+        CachedNode::update_cache_metrics(&guard);
     }
 
     fn add_to_free_list_cache(&self, addr: LinearAddress, next: Option<LinearAddress>) {
