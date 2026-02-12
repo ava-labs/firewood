@@ -109,6 +109,7 @@ impl DatabaseHandleArgs<'_> {
             2 => firewood::manager::CacheReadStrategy::All,
             _ => return Err(invalid_data("invalid cache strategy")),
         };
+        #[expect(deprecated)]
         let config = RevisionManagerConfig::builder()
             .node_cache_size(
                 self.cache_size

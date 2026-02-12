@@ -197,6 +197,10 @@ pub enum Error {
     // Feature not supported in this build
     #[error("feature not supported in this build: {0}")]
     FeatureNotSupported(String),
+
+    /// Both `node_cache_size` and `node_cache_memory_limit` were specified in configuration
+    #[error("both node_cache_size and node_cache_memory_limit specified; use only one")]
+    ConflictingCacheConfig,
 }
 
 impl From<std::convert::Infallible> for Error {

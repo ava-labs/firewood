@@ -54,6 +54,7 @@ fn string_to_range(input: &str) -> Result<RangeInclusive<usize>, Box<dyn Error +
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
+    #[expect(deprecated)]
     let mgrcfg = RevisionManagerConfig::builder()
         .node_cache_size(args.cache_size)
         .max_revisions(args.revisions)
