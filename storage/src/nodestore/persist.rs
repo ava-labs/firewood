@@ -169,7 +169,7 @@ fn serialize_node_to_bump<'a>(
     let mut bytes = bumpalo::collections::Vec::new_in(bump);
     let area_size_index = shared_node
         .as_bytes(&mut bytes)
-        .map_err(|e| node_allocator.io_error(e, 0, Some("serialize_node_to_bump".to_owned())))?;
+        .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
     let (persisted_address, _) = node_allocator.allocate_node(bytes.as_slice())?;
     bytes.shrink_to_fit();
     let slice = bytes.into_bump_slice();
