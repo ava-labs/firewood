@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1770709649650,
+  "lastUpdate": 1770882374078,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -375,6 +375,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 79.75624108881817,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Elvis",
+            "username": "Elvis339",
+            "email": "43846394+Elvis339@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "99d5a3617cc4ab599fe9d82b9d0e5d93959a2b60",
+          "message": "fix(track-performance): stale cron expression in daily bench (#1667)\n\n## Why this should be merged\n\nToday's scheduled daily benchmark run\n[failed](https://github.com/ava-labs/firewood/actions/runs/21894045008)\nbecause `github.event.schedule` returned `0 5 * * *` a cron expression\nthat was updated to `0 5 * * 1-5`:\nhttps://github.com/ava-labs/firewood/pull/1659\n\n\nhttps://github.com/ava-labs/firewood/actions/runs/21894045008/job/63219300944#step:2:121\n\nOpened bug report https://github.com/actions/runner/issues/4241\n\n## How this works\n- Matches the stale `0 5 * * *` cron alongside `0 5 * * 1-5` in the case\nstatement so the run doesn't hard-fail\n- Adds a weekend guard if the stale cron fires on Saturday or Sunday,\nthe run exits early since those days aren't meant for the daily\nbenchmark\n\n## How this was tested\n\nHard to test cron scheduling without trial and error approach\nunfortunately.",
+          "timestamp": "2026-02-11T20:05:03Z",
+          "url": "https://github.com/ava-labs/firewood/commit/99d5a3617cc4ab599fe9d82b9d0e5d93959a2b60"
+        },
+        "date": 1770882373624,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 140.9334935203382,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 7095.545388262793,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 112.66889150037733,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6895.580071083648,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 84.40526332677803,
             "unit": "block_accept_ms/ggas"
           }
         ]
