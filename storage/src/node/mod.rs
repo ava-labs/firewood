@@ -215,11 +215,22 @@ impl Node {
     /// Note that this means the first byte cannot be 255, which would be a leaf with 127 nibbles. We save this extra
     /// value to mark this as a freed area.
     ///
-    /// Note that there is a "prefix" byte which is the size of the area when serializing this object. Since
-    /// we always have one of those, we include it as a parameter for serialization.
+    /// The first byte of the encoding is the area size index, which is calculated from the total
+    /// size of the encoded node. This method returns the `AreaIndex` for the encoded node.
     ///
     /// TODO: We could pack two bytes of the partial path into one and handle the odd byte length
-    pub fn as_bytes<T: ExtendableBytes>(&self, prefix: AreaIndex, encoded: &mut T) {
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the encoded size exceeds the maximum area size.
+    pub fn as_bytes<T>(&self, encoded: &mut T) -> Result<AreaIndex, Error>
+    where
+        T: ExtendableBytes + AsRef<[u8]> + std::ops::IndexMut<usize, Output = u8>,
+    {
+        // Push placeholder for area size index (will be updated later)
+        let area_size_index_position = encoded.as_ref().len();
+        encoded.push(0);
+
         match self {
             Node::Branch(b) => {
                 let child_iter = b.children.iter_present();
@@ -241,7 +252,6 @@ impl Node {
                 // create an output stack item, which can overflow to memory for very large branch nodes
                 const OPTIMIZE_BRANCHES_FOR_SIZE: usize = 1024;
                 encoded.reserve(OPTIMIZE_BRANCHES_FOR_SIZE);
-                encoded.push(prefix.get());
                 encoded.push(first_byte.0);
 
                 // encode the partial path, including the length if it didn't fit above
@@ -286,7 +296,6 @@ impl Node {
 
                 const OPTIMIZE_LEAVES_FOR_SIZE: usize = 128;
                 encoded.reserve(OPTIMIZE_LEAVES_FOR_SIZE);
-                encoded.push(prefix.get());
                 encoded.push(first_byte.0);
 
                 // encode the partial path, including the length if it didn't fit above
@@ -300,6 +309,14 @@ impl Node {
                 encoded.extend_from_slice(&l.value);
             }
         }
+
+        // Calculate the area index from the encoded length
+        let area_index = AreaIndex::from_size(encoded.as_ref().len() as u64)?;
+
+        // Update the first byte with the correct area size index
+        encoded[area_size_index_position] = area_index.get();
+
+        Ok(area_index)
     }
 
     /// Given a reader, return a [Node] from those bytes
@@ -502,7 +519,6 @@ mod test {
     #![expect(clippy::unwrap_used)]
 
     use crate::node::{BranchNode, LeafNode, Node};
-    use crate::nodestore::AreaIndex;
     use crate::{Child, Children, LinearAddress, NibblesIterator, Path};
     use test_case::test_case;
 
@@ -562,7 +578,7 @@ than 126 bytes as the length would be encoded in multiple bytes.
         use std::io::Cursor;
 
         let mut serialized = Vec::new();
-        node.as_bytes(AreaIndex::MIN, &mut serialized);
+        let _area_index = node.as_bytes(&mut serialized).unwrap();
         #[cfg(not(feature = "ethhash"))]
         assert_eq!(serialized.len(), expected_length);
         let mut cursor = Cursor::new(&serialized);
