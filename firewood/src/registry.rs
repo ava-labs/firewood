@@ -35,6 +35,18 @@ pub const ACTIVE_REVISIONS: &str = "active_revisions";
 /// Maximum number of revisions configured.
 pub const MAX_REVISIONS: &str = "max_revisions";
 
+/// Number of persist operations.
+pub const PERSIST_TOTAL: &str = "persist.total";
+
+/// Persist latency in milliseconds.
+pub const PERSIST_TOTAL_MS: &str = "persist.total_ms";
+
+/// Number of root store save operations.
+pub const PERSIST_ROOT_STORE: &str = "persist.root_store";
+
+/// Root store save latency in milliseconds.
+pub const PERSIST_ROOT_STORE_MS: &str = "persist.root_store_ms";
+
 /// Registers all firewood metric descriptions.
 pub fn register() {
     describe_counter!(PROPOSALS, "Number of proposals created");
@@ -59,4 +71,8 @@ pub fn register() {
     describe_counter!(COMMIT_LATENCY_MS, "Commit latency (ms)");
     describe_gauge!(ACTIVE_REVISIONS, "Current number of active revisions");
     describe_gauge!(MAX_REVISIONS, "Maximum number of revisions configured");
+    describe_counter!(PERSIST_TOTAL, "Number of persist operations");
+    describe_counter!(PERSIST_TOTAL_MS, "Persist latency (ms)");
+    describe_counter!(PERSIST_ROOT_STORE, "Number of root store save operations");
+    describe_counter!(PERSIST_ROOT_STORE_MS, "Root store save latency (ms)");
 }

@@ -63,6 +63,7 @@ use parking_lot::{Condvar, Mutex, MutexGuard};
 use crate::{manager::CommittedRevision, root_store::RootStore};
 use crossbeam::channel::{self, Receiver, Sender};
 
+use firewood_metrics::firewood_increment;
 use firewood_storage::logger::error;
 
 /// Error type for persistence operations.
@@ -264,8 +265,10 @@ impl PersistSemaphore {
     #[inline]
     fn acquire(&self) {
         let mut permits = self.state.lock();
-        while *permits == 0 {
-            self.condvar.wait(&mut permits);
+        if *permits == 0 {
+            while *permits == 0 {
+                self.condvar.wait(&mut permits);
+            }
         }
         // The background loop guarantees permits > 0
         *permits = permits.saturating_sub(1);
@@ -387,6 +390,7 @@ impl PersistLoop {
     }
 
     /// Performs the actual persistence and releases semaphore permits.
+    #[crate::metrics("persist.total", "persist revision to storage")]
     fn persist_and_release(
         &mut self,
         revision: &CommittedRevision,
@@ -428,10 +432,18 @@ impl PersistLoop {
         if let Some(ref store) = self.shared.root_store
             && let (Some(hash), Some(addr)) = (revision.root_hash(), revision.root_address())
         {
-            store.add_root(&hash, &addr).map_err(|e| {
+            let start = coarsetime::Instant::now();
+
+            let result = store.add_root(&hash, &addr).map_err(|e| {
                 error!("Failed to persist revision address to RootStore: {e}");
                 PersistError::RootStore(e.into())
-            })?;
+            });
+
+            let success = if result.is_err() { "false" } else { "true" };
+            firewood_increment!(crate::registry::PERSIST_ROOT_STORE, 1, "success" => success);
+            firewood_increment!(crate::registry::PERSIST_ROOT_STORE_MS, start.elapsed().as_millis(), "success" => success);
+
+            result?;
         }
 
         Ok(())
