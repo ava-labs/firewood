@@ -173,11 +173,7 @@ impl FreeArea {
     /// This is a helper method that combines writing the area size index byte followed by
     /// the `FreeArea` data. This is used when freeing a node - the area size index must be
     /// preserved from the original node, not calculated from the `FreeArea` size.
-    pub fn as_bytes<T: crate::node::ExtendableBytes>(
-        self,
-        area_index: AreaIndex,
-        encoded: &mut T,
-    ) {
+    pub fn as_bytes<T: crate::node::ExtendableBytes>(self, area_index: AreaIndex, encoded: &mut T) {
         const RESERVE_SIZE: usize = size_of::<u8>() + var_int_max_size::<u64>();
 
         encoded.reserve(RESERVE_SIZE);
