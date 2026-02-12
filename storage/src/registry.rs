@@ -24,6 +24,10 @@ pub const CACHE_NODE: &str = "cache.node";
 pub const CACHE_FREELIST: &str = "cache.freelist";
 /// Current number of entries in the freelist cache.
 pub const FREELIST_CACHE_SIZE: &str = "cache.freelist.size";
+/// Current memory used by the node cache in bytes.
+pub const CACHE_MEMORY_USED: &str = "node.cache.memory_used";
+/// Maximum memory capacity of the node cache in bytes.
+pub const CACHE_MEMORY_LIMIT: &str = "node.cache.memory_limit";
 
 /// IO read timing in milliseconds.
 pub const IO_READ_MS: &str = "io.read_ms";
@@ -62,6 +66,14 @@ pub fn register() {
     describe_gauge!(
         FREELIST_CACHE_SIZE,
         "Current number of entries in freelist cache"
+    );
+    describe_gauge!(
+        CACHE_MEMORY_USED,
+        "Current memory used by node cache (bytes)"
+    );
+    describe_gauge!(
+        CACHE_MEMORY_LIMIT,
+        "Maximum memory capacity of node cache (bytes)"
     );
 
     describe_counter!(IO_READ_MS, "IO read timing (ms)");
