@@ -109,6 +109,7 @@ impl DatabaseHandleArgs<'_> {
             2 => firewood::manager::CacheReadStrategy::All,
             _ => return Err(invalid_data("invalid cache strategy")),
         };
+        #[expect(deprecated)]
         let config = RevisionManagerConfig::builder()
             .node_cache_size(
                 self.cache_size
@@ -354,6 +355,16 @@ impl DatabaseHandle {
     /// An error is returned if there was an i/o error while dumping the trie.
     pub fn dump_to_string(&self) -> Result<String, api::Error> {
         self.db.dump_to_string().map_err(api::Error::from)
+    }
+
+    /// Closes the database gracefully.
+    ///
+    /// # Errors
+    ///
+    /// An error is returned if the persistence background thread panicked or
+    /// errored during execution.
+    pub fn close(self) -> Result<(), api::Error> {
+        self.db.close()
     }
 }
 

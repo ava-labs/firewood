@@ -679,6 +679,8 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 
 /// Close and free the memory for a database handle
 ///
+/// This also stops the background persistence thread.
+///
 /// # Arguments
 ///
 /// * `db` - The database handle to close, previously returned from a call to [`fwd_open_db`].
@@ -687,7 +689,9 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 ///
 /// - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
 /// - [`VoidResult::Ok`] if the database handle was successfully closed and freed.
-/// - [`VoidResult::Err`] if the process panics while closing the database handle.
+/// - [`VoidResult::Err`] if the background persistence worker thread panics while
+///   closing the database handle or if the background persistence worker thread
+///   errored.
 ///
 /// # Safety
 ///
@@ -705,7 +709,7 @@ pub extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidResult {
     #[cfg(feature = "block-replay")]
     let _ = replay::flush_to_disk();
 
-    invoke_with_handle(db, drop)
+    invoke_with_handle(db, |db| db.close())
 }
 
 /// Flushes buffered block replay operations to disk.

@@ -21,6 +21,7 @@ use super::{
 use crate::{
     db::BatchOp,
     merkle::{Key, Value},
+    proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
     v2::api::{FrozenChangeProof, FrozenRangeProof},
 };
 
@@ -150,14 +151,14 @@ impl Version0 for BatchOp<Key, Value> {
             .read_item::<u8>()
             .map_err(|err| err.set_item("option discriminant"))?
         {
-            0 => Ok(BatchOp::Put {
+            BATCH_PUT => Ok(BatchOp::Put {
                 key: reader.read_item()?,
                 value: reader.read_item()?,
             }),
-            1 => Ok(BatchOp::Delete {
+            BATCH_DELETE => Ok(BatchOp::Delete {
                 key: reader.read_item()?,
             }),
-            2 => Ok(BatchOp::DeleteRange {
+            BATCH_DELETE_RANGE => Ok(BatchOp::DeleteRange {
                 prefix: reader.read_item()?,
             }),
             found => Err(reader.invalid_item("option discriminant", "0, 1, or 2", found)),
