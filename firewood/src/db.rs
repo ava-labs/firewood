@@ -347,7 +347,7 @@ impl Db {
         let merkle = Merkle::from(parent);
         self.propose_with_parent(batch_ops, merkle.nodestore())
     }
-    
+
     /// Closes the database gracefully.
     ///
     /// This method shuts down the background persistence worker. If not called
