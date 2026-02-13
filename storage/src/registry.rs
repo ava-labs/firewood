@@ -3,7 +3,7 @@
 
 //! Storage layer metric definitions.
 
-use metrics::describe_counter;
+use metrics::{describe_counter, describe_gauge};
 
 /// Amount of space reused from free lists.
 pub const SPACE_REUSED: &str = "space.reused";
@@ -22,6 +22,12 @@ pub const READ_NODE: &str = "read_node";
 pub const CACHE_NODE: &str = "cache.node";
 /// Number of freelist cache operations.
 pub const CACHE_FREELIST: &str = "cache.freelist";
+/// Current number of entries in the freelist cache.
+pub const FREELIST_CACHE_SIZE: &str = "cache.freelist.size";
+/// Current memory used by the node cache in bytes.
+pub const CACHE_MEMORY_USED: &str = "node.cache.memory_used";
+/// Maximum memory capacity of the node cache in bytes.
+pub const CACHE_MEMORY_LIMIT: &str = "node.cache.memory_limit";
 
 /// IO read timing in milliseconds.
 pub const IO_READ_MS: &str = "io.read_ms";
@@ -57,6 +63,18 @@ pub fn register() {
     describe_counter!(READ_NODE, "Number of node reads");
     describe_counter!(CACHE_NODE, "Number of node cache operations");
     describe_counter!(CACHE_FREELIST, "Number of freelist cache operations");
+    describe_gauge!(
+        FREELIST_CACHE_SIZE,
+        "Current number of entries in freelist cache"
+    );
+    describe_gauge!(
+        CACHE_MEMORY_USED,
+        "Current memory used by node cache (bytes)"
+    );
+    describe_gauge!(
+        CACHE_MEMORY_LIMIT,
+        "Maximum memory capacity of node cache (bytes)"
+    );
 
     describe_counter!(IO_READ_MS, "IO read timing (ms)");
     describe_counter!(IO_READ_COUNT, "Number of IO read operations");
