@@ -152,6 +152,8 @@ pub async fn launch_instance(
         .image_id(ami_id)
         .instance_type(instance_type)
         .user_data(user_data_b64)
+        .min_count(1)
+        .max_count(1)
         .block_device_mappings(root_volume)
         .tag_specifications(
             TagSpecification::builder()
