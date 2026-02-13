@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1770882374078,
+  "lastUpdate": 1770968735654,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -422,6 +422,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 84.40526332677803,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "bernard-avalabs",
+            "username": "bernard-avalabs",
+            "email": "53795885+bernard-avalabs@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "38c9956e940d61da8ac3c5b47ef0c5ef9f462a19",
+          "message": "feat: Change proof serialization/deserialization (#1638)\n\n## Why this should be merged\n\nSecond PR for change proof FFI (builds on\nhttps://github.com/ava-labs/firewood/pull/1637). This PR includes\n`fwd_change_proof_to_bytes` and `fwd_change_proof_from_bytes` for\nserialization/deserization of a change proof.\n\n## How this works\nMostly follows the serialization/deserialization implementation in range\nproof. Main change is to support serializing/deserializing `BatchOp`s\nwhich are used for storing the difference between two revisions.\n\n## How this was tested\n\nBasic serialization and deserialization tests in `proofs_test.go`,\nincluding a round trip test where a change proof is serialized,\ndeserialized, and serialized again, and verifying the two serialized\nproofs match.",
+          "timestamp": "2026-02-13T03:12:13Z",
+          "url": "https://github.com/ava-labs/firewood/commit/38c9956e940d61da8ac3c5b47ef0c5ef9f462a19"
+        },
+        "date": 1770968735219,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 141.56204271913762,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 7064.040478590884,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 113.31156801421498,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6860.831584053562,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 86.85180000599526,
             "unit": "block_accept_ms/ggas"
           }
         ]
