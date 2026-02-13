@@ -132,6 +132,10 @@ See the [FFI README](ffi/README.md) for more details on FFI metrics configuratio
   - Labels: `type=hit|miss`
   - Use: Monitor free list cache efficiency
 
+- **`cache.freelist.size`** (gauge)
+  - Description: Current number of entries in the freelist cache
+  - Use: Track actual cache utilization vs configured capacity; helps diagnose low hit rates by showing if cache is filling up
+
 #### I/O Operations
 
 - **`io.read`** (counter)
