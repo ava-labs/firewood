@@ -322,7 +322,8 @@ impl Node {
         }
 
         // Calculate the area index from the encoded length (subtract position to get just this node's size)
-        let area_index = AreaIndex::from_size((encoded.as_ref().len() - area_size_index_position) as u64)?;
+        let area_index =
+            AreaIndex::from_size((encoded.as_ref().len() - area_size_index_position) as u64)?;
 
         // Update the first byte with the correct area size index
         encoded[area_size_index_position] = area_index.get();
