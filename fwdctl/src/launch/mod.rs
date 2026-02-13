@@ -382,21 +382,6 @@ pub struct KillOptions {
     pub skip_confirm: bool,
 }
 
-#[derive(Debug, Args)]
-pub struct MonitorOptions {
-    /// Instance ID to monitor
-    #[arg(value_name = "INSTANCE_ID")]
-    pub instance_id: String,
-
-    /// AWS region
-    #[arg(long = "region", value_name = "REGION", default_value = "us-west-2")]
-    pub region: String,
-
-    /// Monitor bootstrap re-execution progress from `/var/log/bootstrap.log`
-    #[arg(long = "observe")]
-    pub observe: bool,
-}
-
 pub(super) fn run(opts: &Options) -> Result<(), FwdError> {
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(run_internal(opts))

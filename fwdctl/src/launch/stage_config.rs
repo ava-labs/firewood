@@ -36,7 +36,7 @@ pub enum ConfigError {
 
     #[error("Unresolved template remains in variable: {0}")]
     UnresolvedTemplate(String),
-    
+
     #[error("Malformed template: {0}")]
     MalformedTemplate(String),
 }
