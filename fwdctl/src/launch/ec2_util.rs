@@ -16,9 +16,21 @@ use tokio::time::{sleep, timeout};
 
 use super::{DeployOptions, LaunchError};
 
+/// Time to wait after launch for the instance to transition to `running`.
 const WAIT_RUNNING_TIMEOUT: Duration = Duration::from_secs(300);
+/// Poll interval while waiting for the instance state to change.
 const POLL_INTERVAL_RUNNING: Duration = Duration::from_secs(3);
+/// Canonical's AWS account ID for official Ubuntu AMIs.
+const UBUNTU_AMI_OWNER_ID: &str = "099720109477";
+/// Template for Ubuntu 24.04 (Noble) server image names.
+/// `{arch}` will be replaced with selected instance arch.
+const UBUNTU_NOBLE_AMI_NAME_PATTERN: &str =
+    "ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-{arch}-server-*";
+/// Root EBS volume size (GiB) for launched benchmark instances.
+const ROOT_VOLUME_SIZE_GIB: i32 = 50;
+/// Tag key used to identify instances managed by `fwdctl`.
 const MANAGED_BY_TAG_KEY: &str = "ManagedBy";
+/// Tag value used to identify instances managed by `fwdctl`.
 const MANAGED_BY_TAG_VALUE: &str = "fwdctl";
 static AWS_USERNAME: OnceCell<String> = OnceCell::const_new();
 
@@ -82,11 +94,11 @@ pub async fn latest_ubuntu_ami(
             ));
         }
     };
-    let name_pattern = format!("ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-{arch}-server-*");
+    let name_pattern = UBUNTU_NOBLE_AMI_NAME_PATTERN.replace("{arch}", arch);
 
     let response = ec2
         .describe_images()
-        .owners("099720109477")
+        .owners(UBUNTU_AMI_OWNER_ID)
         .filters(Filter::builder().name("name").values(&name_pattern).build())
         .filters(Filter::builder().name("state").values("available").build())
         .send()
@@ -102,6 +114,17 @@ pub async fn latest_ubuntu_ami(
         .ok_or_else(|| LaunchError::NoMatchingAmi(arch.to_string()))
 }
 
+async fn ami_root_device_name(ec2: &Ec2Client, ami_id: &str) -> Result<String, LaunchError> {
+    let response = ec2.describe_images().image_ids(ami_id).send().await?;
+    let image = response
+        .images()
+        .first()
+        .ok_or_else(|| LaunchError::AwsSdk(format!("AMI '{ami_id}' was not found")))?;
+    image.root_device_name().map(str::to_owned).ok_or_else(|| {
+        LaunchError::AwsSdk(format!("AMI '{ami_id}' does not expose a root device name"))
+    })
+}
+
 pub async fn launch_instance(
     ec2: &Ec2Client,
     ami_id: &str,
@@ -112,12 +135,13 @@ pub async fn launch_instance(
     let instance_name = build_instance_name(opts);
     let username = get_aws_username().await;
     let tags = build_tags(opts, &instance_name, &username);
+    let root_device_name = ami_root_device_name(ec2, ami_id).await?;
 
     let root_volume = BlockDeviceMapping::builder()
-        .device_name("/dev/sda1")
+        .device_name(root_device_name)
         .ebs(
             EbsBlockDevice::builder()
-                .volume_size(50)
+                .volume_size(ROOT_VOLUME_SIZE_GIB)
                 .volume_type(VolumeType::Gp3)
                 .build(),
         )
@@ -128,8 +152,6 @@ pub async fn launch_instance(
         .image_id(ami_id)
         .instance_type(instance_type)
         .user_data(user_data_b64)
-        .min_count(1)
-        .max_count(1)
         .block_device_mappings(root_volume)
         .tag_specifications(
             TagSpecification::builder()
@@ -169,6 +191,8 @@ fn parse_instance_type(s: &str) -> Result<Ec2InstanceType, LaunchError> {
 
 fn build_instance_name(opts: &DeployOptions) -> String {
     let mut name = format!("{}-{:08X}", opts.name_prefix, rand::random::<u32>());
+    // add compact branch tags to the instance name for easier identification of branch overrides
+    // fw: firewood, ag: avalanchego, le: libevm
     for (prefix, (_, branch)) in ["-fw-", "-ag-", "-le-"].into_iter().zip(opts.branches()) {
         if let Some(b) = branch {
             name.push_str(prefix);
