@@ -322,8 +322,12 @@ impl Node {
         }
 
         // Calculate the area index from the encoded length (subtract position to get just this node's size)
-        let area_index =
-            AreaIndex::from_size((encoded.as_ref().len() - area_size_index_position) as u64)?;
+        let node_size = encoded
+            .as_ref()
+            .len()
+            .checked_sub(area_size_index_position)
+            .expect("area_size_index_position should always be <= encoded length");
+        let area_index = AreaIndex::from_size(node_size as u64)?;
 
         // Update the first byte with the correct area size index
         encoded[area_size_index_position] = area_index.get();
@@ -598,5 +602,53 @@ than 126 bytes as the length would be encoded in multiple bytes.
         let deserialized = Node::from_reader(&mut cursor).unwrap();
 
         assert_eq!(node, deserialized);
+    }
+
+    #[test]
+    fn test_area_index_with_non_empty_buffer() {
+        use crate::node::Node;
+        use crate::nodestore::AreaIndex;
+
+        // Create a simple leaf node
+        let node = Node::Leaf(LeafNode {
+            partial_path: Path::from(vec![0, 1, 2, 3]),
+            value: vec![4, 5, 6, 7].into(),
+        });
+
+        // First, encode into an empty buffer to get the expected area index
+        let mut empty_buffer = Vec::new();
+        let expected_area_index = node.as_bytes(&mut empty_buffer).unwrap();
+        let expected_size = empty_buffer.len();
+
+        // Now encode into a non-empty buffer with a 100-byte prefix
+        let mut non_empty_buffer = vec![0xFF; 100];
+        let area_index = node.as_bytes(&mut non_empty_buffer).unwrap();
+
+        // The area index should be the same regardless of buffer prefix
+        assert_eq!(
+            area_index, expected_area_index,
+            "Area index should be calculated from node size, not total buffer size"
+        );
+
+        // Verify the area index stored in the buffer is correct
+        assert_eq!(
+            non_empty_buffer.get(100).copied().unwrap(),
+            area_index.get(),
+            "Area index at position 100 should match calculated area index"
+        );
+
+        // Verify the total buffer size is prefix + node size
+        assert_eq!(
+            non_empty_buffer.len(),
+            100 + expected_size,
+            "Total buffer size should be prefix + node size"
+        );
+
+        // Verify the area index corresponds to the node size, not total buffer
+        assert_eq!(
+            AreaIndex::from_size(expected_size as u64).unwrap(),
+            area_index,
+            "Area index should be calculated from node size only"
+        );
     }
 }
