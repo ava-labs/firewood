@@ -68,19 +68,27 @@ WORKFLOW_NAME="C-Chain Re-Execution Benchmark w/ Container"
 
 # Polling config for workflow registration. gh workflow run doesn't return
 # the run ID, so we poll until the run appears. 180s accommodates busy runners.
+#
+# TRIGGER_RUN_ID is global and ensuring gh errors propagate and fail the script.
+TRIGGER_RUN_ID=""
 POLL_INTERVAL=1
 POLL_TIMEOUT=180
 
 # Subset of tests for discoverability. AvalancheGo is the source of truth:
 # https://github.com/ava-labs/avalanchego/blob/master/scripts/benchmark_cchain_range.sh
+# Format: "description|poll_interval_seconds"
 declare -A TESTS=(
-    ["firewood-101-250k"]="Blocks 101-250k"
-    ["firewood-archive-101-250k"]="Blocks 101-250k (archive)"
-    ["firewood-33m-33m500k"]="Blocks 33m-33.5m"
-    ["firewood-archive-33m-33m500k"]="Blocks 33m-33.5m (archive)"
-    ["firewood-33m-40m"]="Blocks 33m-40m"
-    ["firewood-archive-33m-40m"]="Blocks 33m-40m (archive)"
+    ["firewood-101-250k"]="Blocks 101-250k|10"
+    ["firewood-archive-101-250k"]="Blocks 101-250k (archive)|10"
+    ["firewood-33m-33m500k"]="Blocks 33m-33.5m|30"
+    ["firewood-archive-33m-33m500k"]="Blocks 33m-33.5m (archive)|30"
+    ["firewood-33m-40m"]="Blocks 33m-40m|300"
+    ["firewood-archive-33m-40m"]="Blocks 33m-40m (archive)|300"
 )
+
+# Parse test metadata
+get_test_description() { echo "${TESTS[$1]%%|*}"; }
+get_test_poll_interval() { echo "${TESTS[$1]##*|}"; }
 
 log() { echo "==> $1" >&2; }
 
@@ -117,7 +125,8 @@ validate_ref() {
 run_inputs_match() {
     local run_id="$1" expected_test="$2" expected_config="$3" expected_start="$4" expected_end="$5" expected_runner="$6"
     
-    # Get the c-chain-reexecution job name (second job, after define-matrix)
+    # Get the c-chain-reexecution job name (second job, after define-matrix).
+    # If gh fails (e.g., run doesn't exist yet), return 1 to try the next candidate.
     local job_name
     job_name=$(gh run view "$run_id" --repo "$AVALANCHEGO_REPO" --json jobs \
         --jq '.jobs[] | select(.name | startswith("c-chain-reexecution")) | .name // ""' 2>/dev/null) || return 1
@@ -131,10 +140,12 @@ run_inputs_match() {
         return 1
     fi
     
-    # For custom mode, check that our params appear in job name
-    # Job name: "c-chain-reexecution (1, 100, cchain-mainnet-blocks-200-ldb, firewood, runner...)"
+    # For custom mode, check that our params appear in job name.
+    # Job name format from matrix: "c-chain-reexecution (start, end, block-dir, current-state-dir, config, runner)"
+    # Example: "c-chain-reexecution (10000001, 20000000, cchain-mainnet-blocks-50m-ldb, cchain-current-state-firewood-10m, firewood, avago-runner-...)"
     local match=true
     [[ -n "$expected_start" && "$job_name" != *"$expected_start"* ]] && match=false
+    [[ -n "$expected_end" && "$job_name" != *"$expected_end"* ]] && match=false
     [[ -n "$expected_config" && "$job_name" != *"$expected_config"* ]] && match=false
     [[ -n "$expected_runner" && "$job_name" != *"$expected_runner"* ]] && match=false
     
@@ -161,6 +172,8 @@ poll_workflow_registration() {
         err "Cannot list runs in $AVALANCHEGO_REPO. Check token permissions."; exit 1
     fi
     
+    local last_error=""
+    local consecutive_failures=0
     for ((i=0; i<POLL_TIMEOUT; i++)); do
         sleep "$POLL_INTERVAL"
         local raw_output
@@ -169,9 +182,16 @@ poll_workflow_registration() {
             --workflow "$WORKFLOW_NAME" \
             --limit 10 \
             --json databaseId,createdAt 2>&1) || {
-            log "gh run list failed: $raw_output"
+            last_error="$raw_output"
+            ((consecutive_failures++))
+            log "gh run list failed ($consecutive_failures/5): $raw_output"
+            if ((consecutive_failures >= 5)); then
+                err "gh run list failed 5 times consecutively: $last_error"
+                exit 1
+            fi
             continue
         }
+        consecutive_failures=0  # Reset on success
         
         # Debug: show first result on first iteration
         ((i == 0)) && log "Latest run: $(echo "$raw_output" | jq -c '.[0] // "none"')"
@@ -179,12 +199,12 @@ poll_workflow_registration() {
         # Get candidate runs (created after trigger_time), oldest first
         local candidates
         candidates=$(echo "$raw_output" | jq -r --arg t "$trigger_time" \
-            '[.[] | select(.createdAt > $t)] | reverse | .[].databaseId')
+            '[.[] | select(.createdAt > $t)] | reverse | .[].databaseId') || continue
         
         # Check each candidate's inputs to find our run
         for run_id in $candidates; do
             if run_inputs_match "$run_id" "$expected_test" "$expected_config" "$expected_start" "$expected_end" "$expected_runner"; then
-                echo "$run_id"
+                TRIGGER_RUN_ID="$run_id"
                 return 0
             fi
         done
@@ -193,7 +213,10 @@ poll_workflow_registration() {
         ((i % 10 == 0)) && ((i > 0)) && log "Polling (${i}s)"
     done
     
-    err "Workflow not found after ${POLL_TIMEOUT}s. The workflow may have been triggered but couldn't be detected. Check: https://github.com/$AVALANCHEGO_REPO/actions/workflows"; exit 1
+    local msg="Workflow not found after ${POLL_TIMEOUT}s."
+    [[ -n "$last_error" ]] && msg+=" Last error: $last_error"
+    msg+=" Check: https://github.com/$AVALANCHEGO_REPO/actions/workflows"
+    err "$msg"; exit 1
 }
 
 trigger_workflow() {
@@ -257,11 +280,88 @@ trigger_workflow() {
     poll_workflow_registration "$trigger_time" "$test" "$CONFIG" "${START_BLOCK:-}" "${END_BLOCK:-}" "$RUNNER"
 }
 
+# Calculate watch interval based on predefined test or block count.
+# Longer runs poll less frequently to avoid GitHub API rate limits.
+calculate_watch_interval() {
+    # Check predefined test first
+    if [[ -n "${TEST:-}" && -n "${TESTS[$TEST]:-}" ]]; then
+        get_test_poll_interval "$TEST"
+        return
+    fi
+    
+    # Calculate from block range
+    local start="${START_BLOCK:-}"
+    local end="${END_BLOCK:-}"
+    if [[ "$start" =~ ^[0-9]+$ && "$end" =~ ^[0-9]+$ && "$end" -gt "$start" ]]; then
+        local blocks=$((end - start))
+        if ((blocks < 1000000)); then
+            echo 30    # < 1M blocks: 30s
+        elif ((blocks < 5000000)); then
+            echo 60    # 1M-5M blocks: 60s
+        elif ((blocks < 10000000)); then
+            echo 300   # 5M-10M blocks: 5 min
+        else
+            echo 600   # > 10M blocks: 10 min
+        fi
+    else
+        echo 60  # Default
+    fi
+}
+
+# GitHub's API can return transient errors (502/503, 403 rate limits) during
+# long-running jobs. We retry gh run watch with exponential backoff, then fall
+# back to polling gh run view for final status. This prevents false failures
+# when the actual benchmark succeeds but API monitoring fails.
 wait_for_completion() {
     local run_id="$1"
-    log "Waiting for run $run_id"
+    local interval=$(calculate_watch_interval)
+    log "Waiting for run $run_id (updates every ${interval}s)"
     log "https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
-    gh run watch "$run_id" --repo "$AVALANCHEGO_REPO" --exit-status
+    
+    # Retry gh run watch with exponential backoff on transient API errors
+    local max_retries=3
+    local delay=5
+    for ((attempt=1; attempt<=max_retries; attempt++)); do
+        if gh run watch "$run_id" --repo "$AVALANCHEGO_REPO" --interval "$interval" --exit-status; then
+            return 0
+        fi
+        local exit_code=$?
+        
+        if ((attempt < max_retries)); then
+            log "gh run watch failed (attempt $attempt/$max_retries), retrying in ${delay}s..."
+            sleep "$delay"
+            delay=$((delay * 2))
+        fi
+    done
+    
+    # Fallback: poll gh run view for final status
+    log "gh run watch exhausted retries, checking final status..."
+    local conclusion
+    for ((i=0; i<10; i++)); do
+        conclusion=$(gh run view "$run_id" --repo "$AVALANCHEGO_REPO" --json status,conclusion \
+            --jq 'if .status == "completed" then .conclusion else "pending" end') || {
+            sleep 5
+            continue
+        }
+        
+        case "$conclusion" in
+            success)
+                log "Run completed successfully"
+                return 0
+                ;;
+            pending)
+                log "Run still in progress, waiting..."
+                sleep 30
+                ;;
+            *)
+                err "Run failed with conclusion: $conclusion"
+                return 1
+                ;;
+        esac
+    done
+    
+    err "Could not determine run status after retries"
+    return 1
 }
 
 download_artifact() {
@@ -286,11 +386,9 @@ download_artifact() {
 check_status() {
     local run_id="$1"
     echo "https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
-    
-    local status
-    status=$(gh run view "$run_id" --repo "$AVALANCHEGO_REPO" --json status,conclusion \
-        --jq '.status + " (" + (.conclusion // "in progress") + ")"')
-    echo "status: $status"
+    echo -n "status: "
+    gh run view "$run_id" --repo "$AVALANCHEGO_REPO" --json status,conclusion \
+        --jq '.status + " (" + (.conclusion // "in progress") + ")"'
 }
 
 list_runs() {
@@ -299,7 +397,7 @@ list_runs() {
 
 list_tests() {
     for test in "${!TESTS[@]}"; do
-        [[ "$test" == firewood* ]] && printf "  %-25s %s\n" "$test" "${TESTS[$test]}"
+        [[ "$test" == firewood* ]] && printf "  %-25s %s\n" "$test" "$(get_test_description "$test")"
     done | sort
 }
 
@@ -307,8 +405,14 @@ cmd_trigger() {
     require_gh
     
     local test="${1:-${TEST:-}}"
-    local run_id
-    run_id=$(trigger_workflow "$test")
+    
+    trigger_workflow "$test"  # Sets TRIGGER_RUN_ID on success
+    
+    if [[ -z "$TRIGGER_RUN_ID" ]]; then
+        err "No run ID returned"
+        exit 1
+    fi
+    local run_id="$TRIGGER_RUN_ID"
     log "Run ID: $run_id"
     
     wait_for_completion "$run_id"

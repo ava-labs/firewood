@@ -1043,6 +1043,10 @@ typedef struct DatabaseHandleArgs {
    * Opening returns an error if this does not match the compile-time feature.
    */
   enum NodeHashAlgorithm node_hash_algorithm;
+  /**
+   * The maximum number of unpersisted revisions that can exist at a given time.
+   */
+  uint64_t deferred_persistence_commit_count;
 } DatabaseHandleArgs;
 
 /**
@@ -1251,7 +1255,7 @@ struct NextKeyRangeResult fwd_change_proof_find_next_key(struct ChangeProofConte
  *   well-formed. The verify method must be called to ensure the proof is cryptographically valid.
  * - [`ChangeProofResult::Err`] containing an error message if the proof could not be parsed.
  */
-struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes _bytes);
+struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes bytes);
 
 /**
  * Serialize a `ChangeProof` to bytes.
@@ -1270,10 +1274,12 @@ struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes _bytes);
  *
  * The other [`ValueResult`] variants are not used.
  */
-struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *_proof);
+struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *proof);
 
 /**
  * Close and free the memory for a database handle
+ *
+ * This also stops the background persistence thread.
  *
  * # Arguments
  *
@@ -1283,7 +1289,9 @@ struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *_p
  *
  * - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
  * - [`VoidResult::Ok`] if the database handle was successfully closed and freed.
- * - [`VoidResult::Err`] if the process panics while closing the database handle.
+ * - [`VoidResult::Err`] if the background persistence worker thread panics while
+ *   closing the database handle or if the background persistence worker thread
+ *   errored.
  *
  * # Safety
  *

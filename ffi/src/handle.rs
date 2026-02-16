@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 
 use firewood::{
     db::{Db, DbConfig},
@@ -99,6 +99,9 @@ pub struct DatabaseHandleArgs<'a> {
     ///
     /// Opening returns an error if this does not match the compile-time feature.
     pub node_hash_algorithm: NodeHashAlgorithm,
+
+    /// The maximum number of unpersisted revisions that can exist at a given time.
+    pub deferred_persistence_commit_count: u64,
 }
 
 impl DatabaseHandleArgs<'_> {
@@ -109,6 +112,7 @@ impl DatabaseHandleArgs<'_> {
             2 => firewood::manager::CacheReadStrategy::All,
             _ => return Err(invalid_data("invalid cache strategy")),
         };
+        #[expect(deprecated)]
         let config = RevisionManagerConfig::builder()
             .node_cache_size(
                 self.cache_size
@@ -151,12 +155,15 @@ impl DatabaseHandle {
     /// If the path is empty, or if the configuration is invalid, this will return an error.
     pub fn new(args: DatabaseHandleArgs<'_>) -> Result<Self, api::Error> {
         let metrics_context = MetricsContext::new(args.expensive_metrics);
+        let commit_count = NonZeroU64::new(args.deferred_persistence_commit_count)
+            .ok_or(api::Error::ZeroCommitCount)?;
 
         let cfg = DbConfig::builder()
             .node_hash_algorithm(args.node_hash_algorithm.into())
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
             .root_store(args.root_store)
+            .deferred_persistence_commit_count(commit_count)
             .build();
 
         let path = args
@@ -340,7 +347,11 @@ impl DatabaseHandle {
     }
 
     /// Closes the database gracefully.
-    #[expect(clippy::missing_errors_doc)]
+    ///
+    /// # Errors
+    ///
+    /// An error is returned if the persistence background thread panicked or
+    /// errored during execution.
     pub fn close(self) -> Result<(), api::Error> {
         self.db.close()
     }

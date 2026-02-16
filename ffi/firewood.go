@@ -113,14 +113,18 @@ type config struct {
 	rootStore bool
 	// expensiveMetricsEnabled controls whether expensive metrics recording is enabled.
 	expensiveMetricsEnabled bool
+	// deferredPersistenceCommitCount determines the maximum number of unpersisted
+	// revisions that can exist at a given time.
+	deferredPersistenceCommitCount uint64
 }
 
 func defaultConfig() *config {
 	return &config{
-		nodeCacheEntries:     1_000_000,
-		freeListCacheEntries: 40_000,
-		revisions:            100,
-		readCacheStrategy:    OnlyCacheWrites,
+		nodeCacheEntries:               1_000_000,
+		freeListCacheEntries:           1_000_000,
+		revisions:                      100,
+		readCacheStrategy:              OnlyCacheWrites,
+		deferredPersistenceCommitCount: 1,
 	}
 }
 
@@ -148,7 +152,7 @@ func WithNodeCacheEntries(entries uint) Option {
 // WithFreeListCacheEntries sets the number of entries in the freelist cache.
 // The freelist cache manages available disk space for reuse.
 // Must be non-zero.
-// Default: 40,000
+// Default: 1,000,000
 func WithFreeListCacheEntries(entries uint) Option {
 	return func(c *config) {
 		c.freeListCacheEntries = entries
@@ -190,6 +194,15 @@ func WithRootStore() Option {
 func WithExpensiveMetrics() Option {
 	return func(c *config) {
 		c.expensiveMetricsEnabled = true
+	}
+}
+
+// WithDeferredPersistenceCommitCount sets the maximum number of unpersisted revisions
+// that can exist at a time. Note: `commitCount` must be greater than 0.
+// Default: 1
+func WithDeferredPersistenceCommitCount(commitCount uint64) Option {
+	return func(c *config) {
+		c.deferredPersistenceCommitCount = commitCount
 	}
 }
 
@@ -250,15 +263,16 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	defer pinner.Unpin()
 
 	args := C.struct_DatabaseHandleArgs{
-		dir:                  newBorrowedBytes([]byte(dbDir), &pinner),
-		cache_size:           C.size_t(conf.nodeCacheEntries),
-		free_list_cache_size: C.size_t(conf.freeListCacheEntries),
-		revisions:            C.size_t(conf.revisions),
-		strategy:             C.uint8_t(conf.readCacheStrategy),
-		truncate:             C.bool(conf.truncate),
-		root_store:           C.bool(conf.rootStore),
-		expensive_metrics:    C.bool(conf.expensiveMetricsEnabled),
-		node_hash_algorithm:  C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
+		dir:                               newBorrowedBytes([]byte(dbDir), &pinner),
+		cache_size:                        C.size_t(conf.nodeCacheEntries),
+		free_list_cache_size:              C.size_t(conf.freeListCacheEntries),
+		revisions:                         C.size_t(conf.revisions),
+		strategy:                          C.uint8_t(conf.readCacheStrategy),
+		truncate:                          C.bool(conf.truncate),
+		root_store:                        C.bool(conf.rootStore),
+		expensive_metrics:                 C.bool(conf.expensiveMetricsEnabled),
+		node_hash_algorithm:               C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
+		deferred_persistence_commit_count: C.uint64_t(conf.deferredPersistenceCommitCount),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))
@@ -415,7 +429,8 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 	return rev, nil
 }
 
-// Close releases the memory associated with the Database.
+// Close releases the memory associated with the Database and stops the
+// background persistence thread.
 //
 // This blocks until all outstanding keep-alive handles are disowned or the
 // [context.Context] is cancelled. That is, until all Revisions and Proposals

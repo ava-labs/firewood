@@ -14,13 +14,21 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use tokio::time::sleep;
 
+/// Maximum attempts while waiting for an instance to register as SSM `Online`.
 const SSM_MAX_RETRIES: u32 = 30;
+/// Delay between SSM registration retry attempts.
 const SSM_RETRY_DELAY: Duration = Duration::from_secs(5);
+/// Poll interval while waiting for an SSM command invocation status update.
 const SSM_COMMAND_POLL_INTERVAL: Duration = Duration::from_millis(500);
+/// Timeout for a single SSM command invocation.
 const SSM_COMMAND_TIMEOUT: Duration = Duration::from_secs(120);
+/// Poll interval for cloud-init state and bootstrap log streaming loops.
 const LOG_POLL_INTERVAL: Duration = Duration::from_secs(3);
+/// Number of log lines fetched per SSM read when tailing bootstrap output.
 const LOG_CHUNK_SIZE: u64 = 500;
+/// Log file containing benchmark re-execution output on the remote host.
 const BOOTSTRAP_LOG: &str = "/var/log/bootstrap.log";
+/// Maximum time to wait for cloud-init to publish its JSON state file.
 const STATE_FILE_TIMEOUT: Duration = Duration::from_secs(600);
 
 pub async fn ssm_client(region: &str) -> SsmClient {

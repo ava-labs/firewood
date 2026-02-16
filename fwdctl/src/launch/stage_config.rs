@@ -28,23 +28,26 @@ pub enum ConfigError {
     #[error("Scenario '{0}' not found in configuration")]
     ScenarioNotFound(String),
 
+    #[error("Inline stage '{id}' is missing required field '{missing}'")]
+    InvalidInlineStage { id: String, missing: &'static str },
+
     #[error("Unknown variable: {0}")]
     UnknownVariable(String),
 
     #[error("Unresolved template remains in variable: {0}")]
     UnresolvedTemplate(String),
+
+    #[error("Malformed template: {0}")]
+    MalformedTemplate(String),
 }
 
 /// Root configuration structure.
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
+#[serde(default)]
 pub struct StageConfig {
-    #[serde(default)]
     pub packages: Vec<String>,
-    #[serde(default)]
     pub users: Vec<UserDefinition>,
-    #[serde(default)]
     pub variables: HashMap<String, String>,
-    #[serde(default)]
     pub stages: HashMap<String, SharedStage>,
     pub scenarios: HashMap<String, ScenarioDefinition>,
 }
@@ -84,7 +87,8 @@ pub enum StageRef {
 /// A stage reference with optional overrides, or a fully inline stage.
 ///
 /// If `name` and `commands` are provided, this is a fully inline stage.
-/// Otherwise, `id` must reference a shared stage, and `variables` are merged.
+/// Otherwise, `id` must reference a shared stage and `variables` are merged.
+/// Providing only one of `name`/`commands` is rejected.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct StageOverride {
     pub id: String,
@@ -136,15 +140,26 @@ impl StageConfig {
     ///
     /// Returns [`ConfigError`] if the config file cannot be read or parsed.
     pub fn load() -> Result<Self, ConfigError> {
-        if let Some(user_path) = user_config_path()
+        let config: Self = if let Some(user_path) = user_config_path()
             && user_path.exists()
         {
             log::info!("Loading stage config from: {}", user_path.display());
             let content = std::fs::read_to_string(&user_path)?;
-            return serde_yaml::from_str(&content).map_err(ConfigError::from);
+            serde_yaml::from_str(&content).map_err(ConfigError::from)?
+        } else {
+            log::debug!("Using embedded default stage config");
+            serde_yaml::from_str(DEFAULT_CONFIG).map_err(ConfigError::from)?
+        };
+        config.validate()?;
+        Ok(config)
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.scenarios.contains_key(DEFAULT_SCENARIO) {
+            Ok(())
+        } else {
+            Err(ConfigError::ScenarioNotFound(DEFAULT_SCENARIO.to_string()))
         }
-        log::debug!("Using embedded default stage config");
-        serde_yaml::from_str(DEFAULT_CONFIG).map_err(ConfigError::from)
     }
 
     fn resolve_stage_ref(&self, stage_ref: &StageRef) -> Result<ResolvedStage, ConfigError> {
@@ -179,21 +194,23 @@ impl StageConfig {
                     })
                 } else {
                     // Fully inline stage - must have name and commands
-                    let name = ovr
-                        .name
-                        .clone()
-                        .ok_or_else(|| ConfigError::StageNotFound(ovr.id.clone()))?;
-                    let commands = ovr
-                        .commands
-                        .clone()
-                        .ok_or_else(|| ConfigError::StageNotFound(ovr.id.clone()))?;
-
-                    Ok(ResolvedStage {
-                        id: ovr.id.clone(),
-                        name,
-                        variables: ovr.variables.clone(),
-                        commands,
-                    })
+                    match (&ovr.name, &ovr.commands) {
+                        (Some(name), Some(commands)) => Ok(ResolvedStage {
+                            id: ovr.id.clone(),
+                            name: name.clone(),
+                            variables: ovr.variables.clone(),
+                            commands: commands.clone(),
+                        }),
+                        (Some(_), None) => Err(ConfigError::InvalidInlineStage {
+                            id: ovr.id.clone(),
+                            missing: "commands",
+                        }),
+                        (None, Some(_)) => Err(ConfigError::InvalidInlineStage {
+                            id: ovr.id.clone(),
+                            missing: "name",
+                        }),
+                        (None, None) => Err(ConfigError::StageNotFound(ovr.id.clone())),
+                    }
                 }
             }
         }
@@ -212,7 +229,7 @@ impl StageConfig {
     /// # Errors
     ///
     /// Returns [`ConfigError`] if the scenario is not found, a referenced stage
-    /// is missing, or a template variable cannot be resolved.
+    /// is missing, or template rendering fails.
     pub fn process(
         &self,
         ctx: &TemplateContext,
@@ -270,10 +287,9 @@ fn process_template(template: &str, ctx: &TemplateContext) -> Result<String, Con
     while let Some((before, after_open)) = rest.split_once("{{") {
         out.push_str(before);
         let Some((expr, after_close)) = after_open.split_once("}}") else {
-            // No closing braces: keep the remainder unchanged
-            out.push_str("{{");
-            out.push_str(after_open);
-            return Ok(out);
+            return Err(ConfigError::MalformedTemplate(format!(
+                "missing closing template braces in: {template}"
+            )));
         };
         let val = resolve_var(expr.trim(), ctx)?;
         out.push_str(&val);
@@ -349,6 +365,9 @@ mod tests {
     fn embedded_config_parses() {
         let config: StageConfig =
             serde_yaml::from_str(DEFAULT_CONFIG).expect("embedded config should parse");
+        config
+            .validate()
+            .expect("embedded config should include required scenario");
         assert!(
             config.scenarios.contains_key(DEFAULT_SCENARIO),
             "should contain default scenario"
@@ -377,6 +396,8 @@ mod tests {
         );
         let result = process_template("{{ variables.missing }}", &ctx);
         assert!(result.is_err());
+        let result = process_template("{{ variables.name", &ctx);
+        assert!(matches!(result, Err(ConfigError::MalformedTemplate(_))));
     }
 
     #[test]
