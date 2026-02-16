@@ -81,6 +81,14 @@ Useful optional controls:
 - `--follow` (`follow` or `follow-with-progress`) to stream stage logs after deploy.
 - `--firewood-branch`, `--avalanchego-branch`, `--libevm-branch` to test branch combinations.
 - `--tag` to mark instances with a custom value (`CustomTag`).
+- `--variable KEY=VALUE` to override `variables.<key>` in stage templates (repeatable; last value wins).
+
+```sh
+# Override via explicit key/value form (repeatable).
+./target/release/fwdctl launch deploy \
+  --variable nvme_base=/data/nvme \
+  --variable s3_bucket=my-bootstrap-bucket
+```
 
 ## Stage scenarios and config
 

@@ -56,6 +56,7 @@ impl CloudInitContext {
         let nblocks = opts.nblocks.as_str().to_owned();
         let mut variables = config.variables.clone();
         variables.insert("end_block".into(), end_block.clone());
+        variables.extend(opts.variable_overrides_map());
 
         let template_ctx = TemplateContext {
             variables,
