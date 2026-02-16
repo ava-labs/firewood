@@ -286,8 +286,8 @@ jobs:
           sudo prlimit --pid $$ --memlock=-1:-1 || echo "prlimit not available, locking kernel memory may fail when setting up io-uring"
           ulimit -Sa
           ulimit -Ha
-          go test -fuzz=FuzzFirewoodTree -fuzztime=1m
-          go test -fuzz=FuzzRangeProofCreation -fuzztime=1m
+          go test -race -fuzz=FuzzFirewoodTree -fuzztime=1m
+          go test -race -fuzz=FuzzRangeProofCreation -fuzztime=1m
       - name: Upload Fuzz testdata
         if: failure()
         uses: actions/upload-artifact@v4
@@ -322,7 +322,7 @@ jobs:
           sudo prlimit --pid $$ --memlock=-1:-1 || echo "prlimit not available, locking kernel memory may fail when setting up io-uring"
           ulimit -Sa
           ulimit -Ha
-          go test -fuzz=. -fuzztime=1m
+          go test -race -fuzz=. -fuzztime=1m
       - name: Upload Fuzz testdata
         if: failure()
         uses: actions/upload-artifact@v4

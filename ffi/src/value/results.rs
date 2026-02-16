@@ -9,13 +9,13 @@ use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult, HashKey,
     IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair,
-    ProposalHandle, RangeProofContext,
+    ProposalHandle, ProposedChangeProofContext, RangeProofContext, VerifiedChangeProofContext,
 };
 
 /// The result type returned from an FFI function that returns no value but may
 /// return an error.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum VoidResult {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
@@ -50,7 +50,7 @@ impl<E: fmt::Display> From<Result<(), E>> for VoidResult {
 
 /// The result type returned from the open or create database functions.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum HandleResult {
     /// The database was opened or created successfully and the handle is
     /// returned as an opaque pointer.
@@ -82,7 +82,7 @@ impl<E: fmt::Display> From<Result<crate::DatabaseHandle, E>> for HandleResult {
 
 /// A result type returned from FFI functions that retrieve a single value.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum ValueResult {
     /// The caller provided a null pointer to a database handle.
     NullHandlePointer,
@@ -150,7 +150,7 @@ impl From<Box<[u8]>> for ValueResult {
 /// A result type returned from FFI functions return the database root hash. This
 /// may or may not be after a mutation.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum HashResult {
     /// The caller provided a null pointer to a database handle.
     NullHandlePointer,
@@ -201,7 +201,7 @@ impl From<Option<Result<HashKey, api::Error>>> for HashResult {
 ///
 /// [`fwd_free_range_proof`]: crate::fwd_free_range_proof
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum RangeProofResult<'db> {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
@@ -246,8 +246,8 @@ impl From<Result<api::FrozenRangeProof, api::Error>> for RangeProofResult<'_> {
 ///
 /// [`fwd_free_change_proof`]: crate::fwd_free_change_proof
 #[derive(Debug)]
-#[repr(C)]
-pub enum ChangeProofResult<'db> {
+#[repr(C, usize)]
+pub enum ChangeProofResult {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
     /// The provided start root was not found in the database.
@@ -259,7 +259,7 @@ pub enum ChangeProofResult<'db> {
     /// If the value was parsed from a serialized proof, this does not imply that
     /// the proof is valid, only that it is well-formed. The verify method must
     /// be called to ensure the proof is cryptographically valid.
-    Ok(Box<ChangeProofContext<'db>>),
+    Ok(Box<ChangeProofContext>),
     /// An error occurred and the message is returned as an [`OwnedBytes`]. If
     /// value is guaranteed to contain only valid UTF-8.
     ///
@@ -271,7 +271,41 @@ pub enum ChangeProofResult<'db> {
 }
 
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
+pub enum VerifiedChangeProofResult {
+    /// The caller provided a null pointer to the input handle.
+    NullHandlePointer,
+    // The proof was successfully verified.
+    Ok(Box<VerifiedChangeProofContext>),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum ProposedChangeProofResult<'db> {
+    /// The caller provided a null pointer to the input handle.
+    NullHandlePointer,
+    /// A proposal was successfully created for this proof.
+    Ok(Box<ProposedChangeProofContext<'db>>),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+#[derive(Debug)]
+#[repr(C, usize)]
 pub enum NextKeyRangeResult {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
@@ -309,7 +343,7 @@ impl From<Result<Option<KeyRange>, api::Error>> for NextKeyRangeResult {
 
 /// A result type returned from FFI functions that create an code hash iterator
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum CodeIteratorResult<'p> {
     /// The caller provided a null pointer to a proof handle.
     NullHandlePointer,
@@ -344,7 +378,7 @@ impl<'a> From<Result<CodeIteratorHandle<'a>, api::Error>> for CodeIteratorResult
 /// A result type returned from FFI functions that create a proposal but do not
 /// commit it to the database.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum ProposalResult<'db> {
     /// The caller provided a null pointer to a database handle.
     NullHandlePointer,
@@ -374,7 +408,7 @@ pub enum ProposalResult<'db> {
 
 /// A result type returned from FFI functions that create an iterator
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum IteratorResult<'db> {
     /// The caller provided a null pointer to a revision/proposal handle.
     NullHandlePointer,
@@ -397,7 +431,7 @@ pub enum IteratorResult<'db> {
 
 /// A result type returned from iterator FFI functions
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum KeyValueResult {
     /// The caller provided a null pointer to an iterator handle.
     NullHandlePointer,
@@ -434,7 +468,7 @@ impl From<Option<Result<(merkle::Key, merkle::Value), api::Error>>> for KeyValue
 
 /// A result type returned from iterator FFI functions
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum KeyValueBatchResult {
     /// The caller provided a null pointer to an iterator handle.
     NullHandlePointer,
@@ -481,7 +515,7 @@ impl<'db, E: fmt::Display> From<Result<CreateIteratorResult<'db>, E>> for Iterat
 
 /// A result type returned from FFI functions that get a revision
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum RevisionResult {
     /// The caller provided a null pointer to a database handle.
     NullHandlePointer,
@@ -541,7 +575,7 @@ impl<'db, E: fmt::Display> From<Result<CreateProposalResult<'db>, E>> for Propos
     }
 }
 
-impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult<'_> {
+impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
     fn from(value: Result<api::FrozenChangeProof, api::Error>) -> Self {
         match value {
             Ok(proof) => ChangeProofResult::Ok(Box::new(proof.into())),
@@ -556,6 +590,26 @@ impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult<'_> 
                 ))
             }
             Err(err) => ChangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+impl From<Result<VerifiedChangeProofContext, api::Error>> for VerifiedChangeProofResult {
+    fn from(value: Result<VerifiedChangeProofContext, api::Error>) -> Self {
+        match value {
+            Ok(context) => VerifiedChangeProofResult::Ok(Box::new(context)),
+            Err(err) => VerifiedChangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+impl<'db> From<Result<ProposedChangeProofContext<'db>, api::Error>>
+    for ProposedChangeProofResult<'db>
+{
+    fn from(value: Result<ProposedChangeProofContext<'db>, api::Error>) -> Self {
+        match value {
+            Ok(context) => ProposedChangeProofResult::Ok(Box::new(context)),
+            Err(err) => ProposedChangeProofResult::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -623,7 +677,9 @@ impl_null_handle_result!(
     ValueResult,
     HashResult,
     RangeProofResult<'_>,
-    ChangeProofResult<'_>,
+    ChangeProofResult,
+    VerifiedChangeProofResult,
+    ProposedChangeProofResult<'_>,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
@@ -639,7 +695,9 @@ impl_cresult!(
     HashResult,
     HandleResult,
     RangeProofResult<'_>,
-    ChangeProofResult<'_>,
+    ChangeProofResult,
+    VerifiedChangeProofResult,
+    ProposedChangeProofResult<'_>,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,

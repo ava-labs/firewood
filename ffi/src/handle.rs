@@ -21,8 +21,8 @@ use firewood_metrics::{MetricsContext, firewood_increment, firewood_record};
 /// The hashing mode to use for the database.
 ///
 /// This determines the cryptographic hash function and trie structure used.
-#[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
 pub enum NodeHashAlgorithm {
     /// MerkleDB Firewood hashing (SHA-256 based)
     MerkleDB = 0,
@@ -109,6 +109,7 @@ impl DatabaseHandleArgs<'_> {
             2 => firewood::manager::CacheReadStrategy::All,
             _ => return Err(invalid_data("invalid cache strategy")),
         };
+        #[expect(deprecated)]
         let config = RevisionManagerConfig::builder()
             .node_cache_size(
                 self.cache_size
@@ -334,7 +335,6 @@ impl DatabaseHandle {
     ///
     /// # Errors
     ///
-    /// Returns a `ParentNotLatest` error if `start_hash` does not match the current root hash.
     /// Returns a `LatestIsEmpty` error if the trie is empty. A range proof should be used in
     /// this case.
     pub fn apply_change_proof_to_parent(
@@ -342,21 +342,6 @@ impl DatabaseHandle {
         start_hash: HashKey,
         change_proof: &FrozenChangeProof,
     ) -> Result<CreateProposalResult<'_>, api::Error> {
-        // Verify that the current hash is the start_hash
-        let start_hash = match self.db.root_hash()? {
-            Some(root_hash) => {
-                let start_hash = start_hash.into_triehash();
-                if start_hash == root_hash {
-                    Ok(start_hash)
-                } else {
-                    Err(api::Error::ParentNotLatest {
-                        provided: Some(root_hash),
-                        expected: Some(start_hash),
-                    })
-                }
-            }
-            None => Err(api::Error::LatestIsEmpty),
-        }?;
         CreateProposalResult::new(self, || {
             let parent = &self.db.revision(start_hash)?;
             self.db.apply_change_proof_to_parent(change_proof, parent)
@@ -370,6 +355,16 @@ impl DatabaseHandle {
     /// An error is returned if there was an i/o error while dumping the trie.
     pub fn dump_to_string(&self) -> Result<String, api::Error> {
         self.db.dump_to_string().map_err(api::Error::from)
+    }
+
+    /// Closes the database gracefully.
+    ///
+    /// # Errors
+    ///
+    /// An error is returned if the persistence background thread panicked or
+    /// errored during execution.
+    pub fn close(self) -> Result<(), api::Error> {
+        self.db.close()
     }
 }
 

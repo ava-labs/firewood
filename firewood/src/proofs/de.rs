@@ -21,6 +21,7 @@ use super::{
 use crate::{
     db::BatchOp,
     merkle::{Key, Value},
+    proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
     v2::api::{FrozenChangeProof, FrozenRangeProof},
 };
 
@@ -94,23 +95,24 @@ impl FrozenChangeProof {
             .validate(Some(ProofType::Change))
             .map_err(ReadError::InvalidHeader)?;
 
-        match header.version {
-            0 => {
-                let mut reader = V0Reader::new(reader, header);
-                let this = reader.read_v0_item()?;
-                if reader.remainder().is_empty() {
-                    Ok(this)
-                } else {
-                    Err(reader.invalid_item(
-                        "trailing bytes",
-                        "no data after the proof",
-                        format!("{} bytes", reader.remainder().len()),
-                    ))
-                }
-            }
-            found => Err(ReadError::InvalidHeader(
-                InvalidHeader::UnsupportedVersion { found },
-            )),
+        if header.version != 0 {
+            return Err(ReadError::InvalidHeader(
+                InvalidHeader::UnsupportedVersion {
+                    found: header.version,
+                },
+            ));
+        }
+
+        let mut reader = V0Reader::new(reader, header);
+        let this = reader.read_v0_item()?;
+        if reader.remainder().is_empty() {
+            Ok(this)
+        } else {
+            Err(reader.invalid_item(
+                "trailing bytes",
+                "no data after the proof",
+                format!("{} bytes", reader.remainder().len()),
+            ))
         }
     }
 }
@@ -149,14 +151,14 @@ impl Version0 for BatchOp<Key, Value> {
             .read_item::<u8>()
             .map_err(|err| err.set_item("option discriminant"))?
         {
-            0 => Ok(BatchOp::Put {
+            BATCH_PUT => Ok(BatchOp::Put {
                 key: reader.read_item()?,
                 value: reader.read_item()?,
             }),
-            1 => Ok(BatchOp::Delete {
+            BATCH_DELETE => Ok(BatchOp::Delete {
                 key: reader.read_item()?,
             }),
-            2 => Ok(BatchOp::DeleteRange {
+            BATCH_DELETE_RANGE => Ok(BatchOp::DeleteRange {
                 prefix: reader.read_item()?,
             }),
             found => Err(reader.invalid_item("option discriminant", "0, 1, or 2", found)),

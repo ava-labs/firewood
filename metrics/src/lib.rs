@@ -204,7 +204,7 @@ macro_rules! firewood_counter {
 ///
 /// # Usage
 /// ```ignore
-/// firewood_set!(registry::ACTIVE_REVISIONS, count as f64);
+/// firewood_set!(registry::ACTIVE_REVISIONS, count);
 /// firewood_set!(registry::QUEUE_SIZE, size, "queue" => "main");
 /// firewood_set!(registry::DETAILED_STAT, value, expensive);
 /// ```
@@ -212,14 +212,14 @@ macro_rules! firewood_counter {
 macro_rules! firewood_set {
     ($name:expr, $value:expr, expensive) => {
         if $crate::expensive_metrics_enabled() {
-            ::metrics::gauge!($name).set($value);
+            ::metrics::gauge!($name).set($value as f64);
         }
     };
     ($name:expr, $value:expr) => {
-        ::metrics::gauge!($name).set($value)
+        ::metrics::gauge!($name).set($value as f64)
     };
     ($name:expr, $value:expr, $($labels:tt)+) => {
-        ::metrics::gauge!($name, $($labels)+).set($value)
+        ::metrics::gauge!($name, $($labels)+).set($value as f64)
     };
 }
 

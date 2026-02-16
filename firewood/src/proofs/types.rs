@@ -137,6 +137,12 @@ pub enum ProofError {
     /// End key is smaller than last key
     #[error("the end key of the change proof is larger than the end key in the proof array")]
     EndKeyLessThanLastKey,
+
+    #[error("the proof is None as it has been consumed")]
+    ProofIsNone,
+
+    #[error("the proposal for a change proof is None as it has been consumed")]
+    ProposalIsNone,
 }
 
 #[derive(Clone, PartialEq, Eq)]

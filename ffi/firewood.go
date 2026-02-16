@@ -118,7 +118,7 @@ type config struct {
 func defaultConfig() *config {
 	return &config{
 		nodeCacheEntries:     1_000_000,
-		freeListCacheEntries: 40_000,
+		freeListCacheEntries: 1_000_000,
 		revisions:            100,
 		readCacheStrategy:    OnlyCacheWrites,
 	}
@@ -148,7 +148,7 @@ func WithNodeCacheEntries(entries uint) Option {
 // WithFreeListCacheEntries sets the number of entries in the freelist cache.
 // The freelist cache manages available disk space for reuse.
 // Must be non-zero.
-// Default: 40,000
+// Default: 1,000,000
 func WithFreeListCacheEntries(entries uint) Option {
 	return func(c *config) {
 		c.freeListCacheEntries = entries
@@ -415,7 +415,8 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 	return rev, nil
 }
 
-// Close releases the memory associated with the Database.
+// Close releases the memory associated with the Database and stops the
+// background persistence thread.
 //
 // This blocks until all outstanding keep-alive handles are disowned or the
 // [context.Context] is cancelled. That is, until all Revisions and Proposals

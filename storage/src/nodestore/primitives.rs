@@ -241,6 +241,13 @@ pub(super) struct AreaSizeError(pub(super) u64);
 #[repr(transparent)]
 pub struct LinearAddress(NonZeroU64);
 
+impl lru_mem::HeapSize for LinearAddress {
+    fn heap_size(&self) -> usize {
+        // LinearAddress is just a NonZeroU64, no heap allocation
+        0
+    }
+}
+
 #[expect(unsafe_code)]
 // SAFETY: `LinearAddress` is a wrapper around `NonZeroU64` which is also `ZeroableInOption`.
 unsafe impl bytemuck::ZeroableInOption for LinearAddress {}

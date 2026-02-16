@@ -12,7 +12,7 @@
     rust-overlay.url = "github:oxalica/rust-overlay";
     crane.url = "github:ipetkov/crane";
     flake-utils.url = "github:numtide/flake-utils";
-    golang.url = "github:ava-labs/avalanchego?dir=nix/go&ref=1a59a6f646ef18167dde10d24d4efbf05e3de177";
+    golang.url = "github:ava-labs/avalanchego?dir=nix/go&ref=9fe96cc60530f55a2b0d7892561455f916080703";
   };
 
   outputs = { self, nixpkgs, rust-overlay, crane, flake-utils, golang }:
@@ -120,11 +120,17 @@
         program = "${pkgs.just}/bin/just";
       };
 
+      apps.gh = {
+        type = "app";
+        program = "${pkgs.gh}/bin/gh";
+      };
+
       devShells.default = craneLib.devShell {
         inputsFrom = [ firewood-ffi ];
 
         packages = with pkgs; [
           firewood-ffi
+          gh
           go
           jq
           just
