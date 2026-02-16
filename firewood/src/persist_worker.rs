@@ -58,7 +58,6 @@ use std::{
 use firewood_storage::{
     Committed, FileBacked, FileIoError, HashedNodeReader, NodeStore, NodeStoreHeader,
 };
-use nonzero_ext::nonzero;
 use parking_lot::{Condvar, Mutex, MutexGuard};
 
 use crate::{manager::CommittedRevision, root_store::RootStore};
@@ -127,7 +126,7 @@ impl PersistWorker {
             persist_interval,
             shared: shared.clone(),
             last_persisted_commit: None,
-            last_committed_revision: None,
+            persist_on_shutdown: None,
         };
 
         let handle = thread::spawn(move || persist_loop.run());
@@ -279,8 +278,9 @@ impl PersistSemaphore {
     #[inline]
     fn release(&self, count: NonZeroU64) {
         let mut permits = self.state.lock();
+        // wrapping_add is safe here: even at 1ns per commit, u64 overflow would take ~584 years
         *permits = permits
-            .saturating_add(count.get())
+            .wrapping_add(count.get())
             .min(self.max_permits.get());
         self.condvar.notify_all();
     }
@@ -329,9 +329,9 @@ struct PersistLoop {
     /// Shared state for coordination with `PersistWorker`.
     shared: Arc<SharedState>,
     /// The commit number of the last successful persist (for calculating permits to release).
-    last_persisted_commit: Option<NonZeroU64>,
-    /// The last committed revision and its commit number.
-    last_committed_revision: Option<(CommittedRevision, NonZeroU64)>,
+    last_persisted_commit: Option<u64>,
+    /// Unpersisted revision to persist on shutdown.
+    persist_on_shutdown: Option<CommittedRevision>,
 }
 
 impl PersistLoop {
@@ -356,33 +356,30 @@ impl PersistLoop {
     /// - On `Persist`: persists the revision if the number of revisions received
     ///   modulo `persist_interval` is zero.
     fn event_loop(&mut self) -> Result<(), PersistError> {
-        let mut num_commits = nonzero!(1u64);
+        let mut num_commits = 0u64;
 
         while let Ok(message) = self.receiver.recv() {
             match message {
                 PersistMessage::Reap(nodestore) => self.reap(nodestore)?,
                 PersistMessage::Persist(revision) => {
-                    if num_commits
-                        .get()
-                        .is_multiple_of(self.persist_interval.get())
-                    {
-                        // Clear last_committed_revision before persisting to avoid holding
+                    // wrapping_add is safe: even at 1ns per commit, u64 overflow would take ~584 years
+                    num_commits = num_commits.wrapping_add(1);
+                    if num_commits.is_multiple_of(self.persist_interval.get()) {
+                        // Clear persist_on_shutdown before persisting to avoid holding
                         // an Arc reference during the persist operation.
-                        self.last_committed_revision = None;
+                        self.persist_on_shutdown = None;
                         self.persist(&revision, num_commits)?;
                     } else {
                         // Store the revision so we can persist it on shutdown if needed.
-                        self.last_committed_revision = Some((revision, num_commits));
+                        self.persist_on_shutdown = Some(revision);
                     }
-                    num_commits = num_commits.saturating_add(1);
                 }
             }
         }
 
-        if let Some((revision, last_commit_num)) = self.last_committed_revision.take()
-            && Some(last_commit_num) != self.last_persisted_commit
-        {
-            self.persist(&revision, last_commit_num)?;
+        // Persist any unpersisted revision on shutdown
+        if let Some(revision) = self.persist_on_shutdown.take() {
+            self.persist(&revision, num_commits)?;
         }
 
         Ok(())
@@ -392,7 +389,7 @@ impl PersistLoop {
     fn persist(
         &mut self,
         revision: &CommittedRevision,
-        num_commits: NonZeroU64,
+        num_commits: u64,
     ) -> Result<(), PersistError> {
         // Persist the revision
         let mut header = self.shared.header.lock();
@@ -424,12 +421,9 @@ impl PersistLoop {
     }
 
     /// Releases semaphore permits for commits up to `num_commits`.
-    fn release_permits(&mut self, num_commits: NonZeroU64) {
-        let last = self.last_persisted_commit.map_or(0, NonZeroU64::get);
-        let permits_to_release = num_commits
-            .get()
-            .checked_sub(last)
-            .expect("should be positive");
+    fn release_permits(&mut self, num_commits: u64) {
+        let last = self.last_persisted_commit.unwrap_or(0);
+        let permits_to_release = num_commits.checked_sub(last).expect("should be positive");
         if let Some(count) = NonZeroU64::new(permits_to_release) {
             self.shared.commit_throttle.release(count);
             self.last_persisted_commit = Some(num_commits);
