@@ -366,10 +366,14 @@ impl PersistLoop {
                         .get()
                         .is_multiple_of(self.persist_interval.get())
                     {
+                        // Clear last_committed_revision before persisting to avoid holding
+                        // an Arc reference during the persist operation.
+                        self.last_committed_revision = None;
                         self.persist(&revision, num_commits)?;
+                    } else {
+                        // Store the revision so we can persist it on shutdown if needed.
+                        self.last_committed_revision = Some((revision, num_commits));
                     }
-
-                    self.last_committed_revision = Some((revision, num_commits));
                     num_commits = num_commits.saturating_add(1);
                 }
             }
