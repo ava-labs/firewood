@@ -514,7 +514,6 @@ func TestVerifyChangeProof(t *testing.T) {
 	// Verify the change proof
 	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
-	//t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
 
 	// Create a proposal on dbB.
 	_, err = dbB.ProposeChangeProof(verifiedChangeProof)
@@ -583,10 +582,6 @@ func TestVerifyAndCommitChangeProof(t *testing.T) {
 	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
-
-	// Verify the change proof and create a proposal on db2.
-	//err = dbB.VerifyChangeProof(change_proof, root2, root1_updated, nothing(), nothing(), changeProofLenUnbounded)
-	//r.NoError(err)
 
 	// Verify the change proof.
 	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
