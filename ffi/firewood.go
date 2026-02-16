@@ -20,7 +20,7 @@ package ffi
 // #cgo LDFLAGS: -L${SRCDIR}/../target/release
 // #cgo LDFLAGS: -L${SRCDIR}/../target/maxperf
 // // FIREWOOD_CGO_END_LOCAL_LIBS
-// #cgo LDFLAGS: -lfirewood_ffi -lm
+// #cgo LDFLAGS: -lfirewood_ffi -lm -ldl
 // #include <stdlib.h>
 // #include "firewood.h"
 import "C"
