@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1770968735654,
+  "lastUpdate": 1771228364753,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -469,6 +469,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 86.85180000599526,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "23cd1d4768f402ef7ad476dac20227f2ca84f625",
+          "message": "feat: defer persist every `N` commits (#1657)\n\n## Why this should be merged\n\nExtends deferred persistence to allow for persists on every `N`th\ncommit.\n\nThis PR precedes #1650 and #1656 (in order).\n\n## How this works\n\nAdds a new configuration option `deferred_persistence_commit_count`\nwhich controls the maximum number of unpersisted revisions.\n\n  - `N = 1`: preserves current behavior (persist every commit)\n- `N > 1`: defers persistence until `N/2` commits accumulate (the\n\"sub-interval\")\n\nBelow is an example of when `deferred_persistence_commit_count = 10`:\n\n```mermaid\nsequenceDiagram                                                                                                                                                                  \n      participant Caller                                                                                                                                                           \n      participant Main as Main Thread                                                                                                                                                          \n      participant BG as Background Thread                                                                                                                                                    \n      participant Disk                                                                                                                                                             \n                                                                                                                                                                                                                                                                                                                                                                      \n      loop Commits 1-4                                                                                                                                                             \n          Caller->>Main: commit()                                                                                                                                                    \n          Main->>BG: queue revision                                                                                                                                       \n          Note right of BG: Waiting...                                                                                                                             \n      end                                                                                                                                                                          \n                                                                                                                                                                                   \n      Caller->>Main: commit() (5th)                                                                                                                                                  \n      Main->>BG: queue revision                                                                                                                                           \n      BG->>Disk: persist revision 5                                                                                                                                 \n      Note right of Disk: Sub-interval (10/2) reached                                                                                                                              \n                                                                                                                                                                                   \n      loop Commits 6-8                                                                                                                                                             \n          Caller->>Main: commit()                                                                                                                                                    \n          Main->>BG: queue revision                                                                                                                                       \n          Note right of BG: Waiting...                                                                                                                             \n      end                                                                                                                                                                          \n                                                                                                                                                                                   \n      Caller->>Main: close()                                                                                                                                                         \n      Main->>BG: shutdown + persist last committed revision                                                                                                                             \n      BG->>Disk: persist revision 8                                                                                                                                 \n      Note right of Disk: Latest committed revision is persisted        \n```\n\nOn `close()`, the last committed revision is persisted to disk.\n\n## How this was tested\n\nAdded UTs + CI.",
+          "timestamp": "2026-02-13T21:00:44Z",
+          "url": "https://github.com/ava-labs/firewood/commit/23cd1d4768f402ef7ad476dac20227f2ca84f625"
+        },
+        "date": 1771228364283,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 134.34301024262098,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 7443.632520918049,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 118.84664977397887,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 7233.198839920843,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 87.77499880712448,
             "unit": "block_accept_ms/ggas"
           }
         ]
