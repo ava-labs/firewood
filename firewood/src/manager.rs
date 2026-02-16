@@ -6,10 +6,11 @@
     reason = "Found 3 occurrences after enabling the lint."
 )]
 
+use nonzero_ext::nonzero;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::io;
-use std::num::NonZero;
+use std::num::{NonZero, NonZeroU64};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
@@ -112,6 +113,9 @@ pub struct ConfigManager {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
+    /// The maximum number of unpersisted revisions that can exist at a given time.
+    #[builder(default = nonzero!(1u64))]
+    pub deferred_persistence_commit_count: NonZeroU64,
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
@@ -242,7 +246,11 @@ impl RevisionManager {
             by_hash.insert(hash, nodestore.clone());
         }
 
-        let persist_worker = PersistWorker::new(header, root_store.clone());
+        let persist_worker = PersistWorker::new(
+            config.deferred_persistence_commit_count,
+            header,
+            root_store.clone(),
+        );
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,
@@ -531,6 +539,8 @@ impl Drop for RevisionManager {
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use firewood_storage::RootReader;
+
     use super::*;
 
     impl RevisionManager {
@@ -546,6 +556,22 @@ mod tests {
         /// Wait until all pending commits have been persisted.
         pub(crate) fn wait_persisted(&self) {
             self.persist_worker.wait_persisted();
+        }
+
+        /// Returns true if the root node (if it exists) of this revision is
+        /// persisted. Otherwise, returns false.
+        ///
+        /// ## Errors
+        ///
+        /// Returns an error if the revision does not exist.
+        pub(crate) fn revision_persist_status(
+            &self,
+            root_hash: TrieHash,
+        ) -> Result<bool, RevisionManagerError> {
+            let revision = self.revision(root_hash)?;
+            Ok(revision
+                .root_as_maybe_persisted_node()
+                .is_some_and(|node| node.unpersisted().is_none()))
         }
     }
 
