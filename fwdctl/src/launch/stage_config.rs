@@ -249,10 +249,9 @@ impl StageConfig {
 
         // Reuse a single mutable context to avoid cloning args/branches per stage
         let mut stage_ctx = TemplateContext {
-            variables: HashMap::new(),
             args: ctx.args.clone(),
             branches: ctx.branches.clone(),
-            cli_overrides: HashMap::new(),
+            ..TemplateContext::default()
         };
 
         for stage in stages {
@@ -312,10 +311,9 @@ fn process_template(template: &str, ctx: &TemplateContext) -> Result<String, Con
 fn resolve_stage_variables(ctx: &mut TemplateContext) -> Result<(), ConfigError> {
     let max_passes = ctx.variables.len().saturating_add(1).max(2);
     let mut render_ctx = TemplateContext {
-        variables: HashMap::new(),
         args: ctx.args.clone(),
         branches: ctx.branches.clone(),
-        cli_overrides: HashMap::new(),
+        ..TemplateContext::default()
     };
 
     for _ in 0..max_passes {
@@ -397,8 +395,7 @@ mod tests {
         let ctx = TemplateContext {
             variables: HashMap::from([("name".into(), "world".into())]),
             args: HashMap::from([("count".into(), "42".into())]),
-            branches: HashMap::new(),
-            cli_overrides: HashMap::new(),
+            ..TemplateContext::default()
         };
         let result = process_template("hello {{ variables.name }} ({{ args.count }})", &ctx);
         assert_eq!(
@@ -445,6 +442,45 @@ scenarios:
                 .first()
                 .expect("expected command"),
             "echo /mnt/nvme/ubuntu/exec-data/current-state/replay_50k_log_db"
+        );
+    }
+
+    #[test]
+    fn cli_overrides_take_precedence_over_other_variable_sources() {
+        let yaml = r#"
+variables:
+  s3_bucket: "config-bucket"
+
+stages:
+  upload:
+    name: "Upload to {{ variables.s3_bucket }}"
+    variables:
+      s3_bucket: "stage-bucket"
+    commands:
+      - "echo {{ variables.s3_bucket }}"
+
+scenarios:
+  test:
+    stages:
+      - upload
+"#;
+
+        let config: StageConfig =
+            serde_yaml::from_str(yaml).expect("override precedence config should parse");
+        let ctx = TemplateContext {
+            variables: HashMap::from([("s3_bucket".into(), "context-bucket".into())]),
+            cli_overrides: HashMap::from([("s3_bucket".into(), "cli-bucket".into())]),
+            ..TemplateContext::default()
+        };
+        let stages = config
+            .process(&ctx, "test")
+            .expect("override precedence processing should succeed");
+        let stage = stages.first().expect("expected one stage");
+
+        assert_eq!(stage.name, "Upload to cli-bucket");
+        assert_eq!(
+            stage.commands.first().expect("expected command"),
+            "echo cli-bucket"
         );
     }
 }

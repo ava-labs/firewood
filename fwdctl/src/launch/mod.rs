@@ -197,10 +197,19 @@ impl DryRunMode {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct VariableOverride {
     key: String,
     value: String,
+}
+
+impl std::fmt::Debug for VariableOverride {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VariableOverride")
+            .field("key", &self.key)
+            .field("value", &"<redacted>")
+            .finish()
+    }
 }
 
 impl VariableOverride {
@@ -789,6 +798,21 @@ mod tests {
         assert!(
             err.contains("whitespace"),
             "unexpected error message: {err}"
+        );
+    }
+
+    #[test]
+    fn variable_override_debug_redacts_value() {
+        let parsed = parse_variable_override("token=super-secret-value")
+            .expect("expected valid variable override");
+        let debug = format!("{parsed:?}");
+        assert!(
+            debug.contains("token"),
+            "expected key to be visible in debug output: {debug}"
+        );
+        assert!(
+            !debug.contains("super-secret-value"),
+            "expected value to be redacted in debug output: {debug}"
         );
     }
 }

@@ -57,7 +57,6 @@ impl CloudInitContext {
         let cli_overrides = opts.variable_overrides_map();
 
         let template_ctx = TemplateContext {
-            variables: HashMap::new(),
             args: HashMap::from([
                 ("end_block".into(), end_block),
                 ("nblocks".into(), nblocks),
@@ -75,6 +74,7 @@ impl CloudInitContext {
                 })
                 .collect(),
             cli_overrides,
+            ..TemplateContext::default()
         };
         Ok(Self {
             swap_gib: 16,
