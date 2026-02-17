@@ -24,8 +24,10 @@ jobs:
         run: cargo fetch --locked --verbose
       - name: Build
         run: cargo build --frozen --profile maxperf --features ethhash,logger --workspace --benches
-      - name: Run firewood crate benchmarks
+      - name: Run firewood crate hashop benchmark
         run: cargo bench --frozen --profile maxperf --features ethhash,logger -p firewood --bench hashops -- --noplot
+      - name: Run firewood crate defer_persist benchmark
+        run: cargo bench --frozen --profile maxperf --features ethhash,logger -p firewood --bench defer_persist -- --noplot
       - name: Run storage crate benchmarks
         run: cargo bench --frozen --profile maxperf --features ethhash,logger -p firewood-storage --bench serializer -- --noplot
       - name: Upload benchmark results
