@@ -79,7 +79,7 @@ pub enum PersistError {
 /// Message type that is sent to the background thread.
 enum PersistMessage {
     /// A committed revision that may be persisted.
-    Persist(CommittedRevision),
+    Commit(CommittedRevision),
     /// A persisted revision to be reaped.
     Reap(NodeStore<Committed, FileBacked>),
 }
@@ -145,7 +145,7 @@ impl PersistWorker {
         self.sender
             .as_ref()
             .ok_or(PersistError::ChannelDisconnected)?
-            .send(PersistMessage::Persist(committed))
+            .send(PersistMessage::Commit(committed))
             .map_err(|_| self.resolve_worker_error())
     }
 
@@ -351,22 +351,22 @@ impl PersistLoop {
         while let Ok(message) = self.receiver.recv() {
             match message {
                 PersistMessage::Reap(nodestore) => self.reap(nodestore)?,
-                PersistMessage::Persist(revision) => {
-                    self.persist(revision, &mut commits_since_persist)?
+                PersistMessage::Commit(revision) => {
+                    self.commit(revision, &mut commits_since_persist)?;
                 }
             }
         }
 
         // Persist any unpersisted revision on shutdown
         if let Some(revision) = self.persist_on_shutdown.take() {
-            self.do_persist(&revision, &mut commits_since_persist)?;
+            self.persist_and_release(&revision, &mut commits_since_persist)?;
         }
 
         Ok(())
     }
 
-    /// Handles a persist message: increments counter, decides whether to persist now or defer.
-    fn persist(
+    /// Handles a commit message: increments counter, decides whether to persist now or defer.
+    fn commit(
         &mut self,
         revision: CommittedRevision,
         commits_since_persist: &mut u64,
@@ -378,7 +378,7 @@ impl PersistLoop {
             // Clear persist_on_shutdown before persisting to avoid holding
             // an Arc reference during the persist operation.
             self.persist_on_shutdown = None;
-            self.do_persist(&revision, commits_since_persist)
+            self.persist_and_release(&revision, commits_since_persist)
         } else {
             // Store the revision so we can persist it on shutdown if needed.
             self.persist_on_shutdown = Some(revision);
@@ -387,7 +387,7 @@ impl PersistLoop {
     }
 
     /// Performs the actual persistence and releases semaphore permits.
-    fn do_persist(
+    fn persist_and_release(
         &mut self,
         revision: &CommittedRevision,
         commits_since_persist: &mut u64,
