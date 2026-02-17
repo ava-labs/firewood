@@ -242,7 +242,7 @@ jobs:
         working-directory: ffi
         run: cargo build --locked --release
       - name: Set up Go
-        uses: actions/setup-go@3041bf56c941b39d4c52d4f1f6e252ad080a15c5 # @v5 -> v5.2.0
+        uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # @v5 -> v5.2.0
         with:
           go-version-file: "ffi/go.mod"
           cache-dependency-path: "ffi/go.sum"
@@ -269,7 +269,7 @@ jobs:
       - name: Build Firewood FFI (with ethhash)
         run: cargo build --features ethhash,logger
       - name: Set up Go
-        uses: actions/setup-go@3041bf56c941b39d4c52d4f1f6e252ad080a15c5 # @v5 -> v5.2.0
+        uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # @v5 -> v5.2.0
         with:
           go-version-file: "ffi/tests/eth/go.mod"
           cache-dependency-path: "ffi/tests/eth/go.sum"
@@ -309,7 +309,7 @@ jobs:
       - name: Build Firewood FFI
         run: cargo build -p firewood-ffi
       - name: Set up Go
-        uses: actions/setup-go@3041bf56c941b39d4c52d4f1f6e252ad080a15c5 # @v5 -> v5.2.0
+        uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # @v5 -> v5.2.0
         with:
           go-version-file: "ffi/tests/firewood/go.mod"
           cache-dependency-path: "ffi/tests/firewood/go.sum"

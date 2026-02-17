@@ -198,7 +198,7 @@ jobs:
           token: ${{ secrets.FIREWOOD_GO_GITHUB_TOKEN }}
           ref: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
       - name: Set up Go
-        uses: actions/setup-go@3041bf56c941b39d4c52d4f1f6e252ad080a15c5 # @v5 -> v5.2.0
+        uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # @v5 -> v5.2.0
         with:
           go-version-file: "ffi/go.mod"
           cache-dependency-path: "ffi/go.sum"
