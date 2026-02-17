@@ -508,16 +508,17 @@ func TestVerifyChangeProof(t *testing.T) {
 	// Create a change proof from dbA.
 	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
-	// TODO: Do I need to have a Free for verified change proof and proposed change proof?
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
 	// Verify the change proof
 	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
 
 	// Create a proposal on dbB.
-	_, err = dbB.ProposeChangeProof(verifiedChangeProof)
+	proposedChangeProof, err := dbB.ProposeChangeProof(verifiedChangeProof)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
 }
 
 func TestVerifyEmptyChangeProofRange(t *testing.T) {
@@ -556,10 +557,12 @@ func TestVerifyEmptyChangeProofRange(t *testing.T) {
 	// Verify the change proof.
 	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, startKey, endKey, 5)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
 
 	// Create an empty proposal on dbB.
-	_, err = dbB.ProposeChangeProof(verifiedChangeProof)
+	proposedChangeProof, err := dbB.ProposeChangeProof(verifiedChangeProof)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
 }
 
 func TestVerifyAndCommitChangeProof(t *testing.T) {
@@ -586,10 +589,12 @@ func TestVerifyAndCommitChangeProof(t *testing.T) {
 	// Verify the change proof.
 	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
 
 	// Propose change proof
 	proposedChangeProof, err := dbB.ProposeChangeProof(verifiedChangeProof)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
 
 	// Commit the proposal on dbB.
 	rootBUpdated, err := proposedChangeProof.CommitChangeProof()
@@ -628,10 +633,12 @@ func TestChangeProofFindNextKey(t *testing.T) {
 	// Verify the change proof.
 	verifiedChangeProof, err := proof.VerifyChangeProof(rootB, rootAUpdated, nothing(), nothing(), changeProofLenTruncated)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
 
 	// Propose change proof
 	proposedChangeProof, err := dbB.ProposeChangeProof(verifiedChangeProof)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
 
 	// FindNextKey is available after creating a proposal.
 	nextRange, err := proposedChangeProof.FindNextKey()
@@ -681,10 +688,12 @@ func TestMultiRoundChangeProof(t *testing.T) {
 		// Verify the proof
 		verifiedProof, err := proof.VerifyChangeProof(rootB, rootAUpdated, startKey, nothing(), changeProofLenTruncated)
 		r.NoError(err)
+		t.Cleanup(func() { r.NoError(verifiedProof.Free()) })
 
 		// Propose the proof
 		proposedProof, err := dbB.ProposeChangeProof(verifiedProof)
 		r.NoError(err)
+		t.Cleanup(func() { r.NoError(proposedProof.Free()) })
 
 		// Commit the proof
 		rootB, err = proposedProof.CommitChangeProof()
@@ -749,10 +758,12 @@ func TestMultiRoundChangeProofWithDeletes(t *testing.T) {
 		// Verify the proof
 		verifiedProof, err := proof.VerifyChangeProof(rootB, root1_updated, startKey, nothing(), changeProofLenTruncated)
 		r.NoError(err)
+		t.Cleanup(func() { r.NoError(verifiedProof.Free()) })
 
 		// Propose the proof
 		proposedProof, err := dbB.ProposeChangeProof(verifiedProof)
 		r.NoError(err)
+		t.Cleanup(func() { r.NoError(proposedProof.Free()) })
 
 		// Commit the proof
 		rootB, err = proposedProof.CommitChangeProof()

@@ -23,8 +23,9 @@ use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
     ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, TrieReader,
 };
+use nonzero_ext::nonzero;
 use std::io::Write;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
@@ -135,6 +136,9 @@ pub struct DbConfig {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
+    /// The maximum number of unpersisted revisions that can exist at a given time.
+    #[builder(default = nonzero!(1u64))]
+    pub deferred_persistence_commit_count: NonZeroU64,
 }
 
 #[derive(Debug)]
@@ -182,6 +186,7 @@ impl Db {
             .create(cfg.create_if_missing)
             .truncate(cfg.truncate)
             .root_store(cfg.root_store)
+            .deferred_persistence_commit_count(cfg.deferred_persistence_commit_count)
             .manager(cfg.manager)
             .build();
         let manager = RevisionManager::new(config_manager)?;
@@ -350,9 +355,9 @@ impl Db {
 
     /// Closes the database gracefully.
     ///
-    /// This method shuts down the background persistence worker. If not called
-    /// explicitly, `Drop` will attempt a best-effort shutdown but cannot report
-    /// errors.
+    /// This method shuts down the background persistence worker and persists
+    /// the last committed revision. If not called explicitly, `Drop` will
+    /// attempt a best-effort shutdown but cannot report errors.
     pub fn close(mut self) -> Result<(), api::Error> {
         self.manager.close().map_err(Into::into)
     }
@@ -436,18 +441,19 @@ mod test {
     use core::iter::Take;
     use std::collections::HashMap;
     use std::iter::Peekable;
-    use std::num::NonZeroUsize;
+    use std::num::{NonZeroU64, NonZeroUsize};
     use std::ops::{Deref, DerefMut};
     use std::path::Path;
 
     use firewood_storage::{
         CheckOpt, CheckerError, HashedNodeReader, IntoHashType, LinearAddress, MaybePersistedNode,
-        NodeStore, RootReader, TrieHash,
+        NodeStore, TrieHash,
     };
+    use nonzero_ext::nonzero;
 
     use crate::db::{Db, Proposal, UseParallel};
     use crate::manager::RevisionManagerConfig;
-    use crate::v2::api::{Db as _, DbView, Proposal as _};
+    use crate::v2::api::{Db as _, DbView, HashKeyExt, Proposal as _};
 
     use super::{BatchOp, DbConfig};
 
@@ -1371,10 +1377,10 @@ mod test {
 
         // Verify that all revisions were persisted
         for (i, root_hash) in root_hashes.iter().enumerate() {
-            let revision = db.revision(root_hash.clone()).unwrap();
-            let is_persisted = revision
-                .root_as_maybe_persisted_node()
-                .is_some_and(|node| node.unpersisted().is_none());
+            let is_persisted = db
+                .manager
+                .revision_persist_status(root_hash.clone())
+                .unwrap();
 
             assert!(
                 is_persisted,
@@ -1403,6 +1409,210 @@ mod test {
         let new_value = revision.val(b"foo").unwrap().unwrap();
 
         assert_eq!(value, new_value.as_ref());
+    }
+
+    #[test]
+    fn test_deferred_persist_close_with_high_commit_count() {
+        const HIGH_COMMIT_COUNT: NonZeroU64 = nonzero!(1_000_000u64);
+
+        // Set commit count to an arbitrarily high number so persist happens
+        // only on shutdown
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(HIGH_COMMIT_COUNT)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        // Then, commit once and see what the latest revision is
+        let key = b"foo";
+        let value = b"bar";
+        let batch = vec![BatchOp::Put { key, value }];
+        let proposal = db.propose(batch).unwrap();
+        let root_hash = proposal.root_hash().unwrap().unwrap();
+
+        proposal.commit().unwrap();
+        let db = db.reopen();
+
+        let revision = db.view(root_hash).unwrap();
+        let new_value = revision.val(b"foo").unwrap().unwrap();
+
+        assert_eq!(value, new_value.as_ref());
+    }
+
+    #[test]
+    fn test_deferred_persist_with_multiple_commit_count() {
+        const COMMIT_COUNT: NonZeroU64 = nonzero!(5u64);
+        const NUM_REVISIONS: u64 = COMMIT_COUNT.get() + 1;
+
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        let mut root_hashes = Vec::new();
+
+        for i in 0..NUM_REVISIONS {
+            let batch = vec![BatchOp::Put {
+                key: format!("key{i}").as_bytes().to_vec(),
+                value: format!("value{i}").as_bytes().to_vec(),
+            }];
+            let proposal = db.propose(batch).unwrap();
+            root_hashes.push(proposal.root_hash().unwrap().unwrap());
+            proposal.commit().unwrap();
+        }
+
+        // Verify that at least one of the last COMMIT_COUNT revisions is persisted.
+        let commit_count = COMMIT_COUNT.get() as usize;
+        let any_persisted = root_hashes
+            .iter()
+            .rev()
+            .take(commit_count)
+            .any(|hash| db.manager.revision_persist_status(hash.clone()).unwrap());
+
+        assert!(
+            any_persisted,
+            "At least one of the last {COMMIT_COUNT} revisions should be persisted"
+        );
+    }
+
+    /// Verifies that an unpersisted revision which wipes the database is
+    /// persisted when the database closes.
+    #[test]
+    fn test_deferred_persistence_closing_on_empty_trie() {
+        const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
+
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        // Commit COMMIT_COUNT proposals to trigger the first persist
+        for i in 0..COMMIT_COUNT.get() {
+            let batch = vec![BatchOp::Put {
+                key: format!("key{i}").as_bytes().to_vec(),
+                value: format!("value{i}").as_bytes().to_vec(),
+            }];
+            let proposal = db.propose(batch).unwrap();
+            proposal.commit().unwrap();
+        }
+
+        // Empty the trie
+        let batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = vec![BatchOp::DeleteRange { prefix: vec![] }];
+        let proposal = db.propose(batch).unwrap();
+        proposal.commit().unwrap();
+
+        let db = db.reopen();
+
+        // Verify that the latest committed revision is empty.
+        let last_committed_hash = db.root_hash().unwrap();
+        assert_eq!(last_committed_hash, TrieHash::default_root_hash());
+    }
+
+    #[test]
+    fn test_deferred_persistence_root_store() {
+        const NUM_COMMITS: usize = 20;
+        const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
+        const MAX_IN_MEMORY_REVISIONS: usize = 2;
+
+        let dbcfg = DbConfig::builder()
+            .manager(
+                RevisionManagerConfig::builder()
+                    .max_revisions(MAX_IN_MEMORY_REVISIONS)
+                    .build(),
+            )
+            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .root_store(true)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        let mut root_hashes = Vec::new();
+
+        let key = b"key";
+        for i in 0..NUM_COMMITS {
+            let batch = vec![BatchOp::Put {
+                key,
+                value: format!("{i}").as_bytes().to_vec(),
+            }];
+            let proposal = db.propose(batch).unwrap();
+            root_hashes.push(proposal.root_hash().unwrap().unwrap());
+            proposal.commit().unwrap();
+        }
+
+        let db = db.reopen();
+
+        // Verify that we never went more than COMMIT_COUNT revisions without
+        // persisting.
+        let commit_count = COMMIT_COUNT.get() as usize;
+        let mut last_persisted: Option<usize> = None;
+
+        for (i, hash) in root_hashes.iter().enumerate() {
+            let is_persisted = db
+                .manager
+                .revision_persist_status(hash.clone())
+                .is_ok_and(|persisted| persisted);
+
+            if is_persisted {
+                let gap = match last_persisted {
+                    Some(prev) => i.wrapping_sub(prev),
+                    None => i.wrapping_add(1),
+                };
+                assert!(
+                    gap <= commit_count,
+                    "Gap of {gap} between persisted revisions exceeds COMMIT_COUNT of {commit_count}"
+                );
+                last_persisted = Some(i);
+            }
+        }
+
+        assert!(
+            last_persisted.is_some(),
+            "At least one revision should be persisted"
+        );
+    }
+
+    /// Verifies that non-persisted revisions are lost after reopening the database.
+    #[test]
+    fn test_deferred_persistence_unpersisted_revisions() {
+        const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
+
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .root_store(true)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        let mut root_hashes = Vec::new();
+
+        let key = b"key";
+        for i in 0..COMMIT_COUNT.get() {
+            let batch = vec![BatchOp::Put {
+                key,
+                value: format!("{i}").as_bytes().to_vec(),
+            }];
+            let proposal = db.propose(batch).unwrap();
+            root_hashes.push(proposal.root_hash().unwrap().unwrap());
+            proposal.commit().unwrap();
+        }
+
+        let db = db.reopen();
+
+        let persisted_count = root_hashes
+            .iter()
+            .filter(|&hash| {
+                db.manager
+                    .revision_persist_status(hash.clone())
+                    .is_ok_and(|is_persisted| is_persisted)
+            })
+            .count();
+
+        assert!(
+            persisted_count > 0 && persisted_count <= 2,
+            "Expected at most 2 persisted revisions, but found {persisted_count}"
+        );
     }
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear

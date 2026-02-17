@@ -592,7 +592,53 @@ pub extern "C" fn fwd_free_change_proof(proof: Option<Box<ChangeProofContext>>) 
     crate::invoke_with_handle(proof, drop)
 }
 
+/// Frees the memory associated with a `VerifiedChangeProofContext`.
+///
+/// # Arguments
+///
+/// * `proof` - The `VerifiedChangeProofContext` to free, previously returned from any Rust function.
+///
+/// # Returns
+///
+/// - [`VoidResult::Ok`] if the memory was successfully freed.
+/// - [`VoidResult::Err`] if the process panics while freeing the memory.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_free_verified_change_proof(
+    proof: Option<Box<VerifiedChangeProofContext>>,
+) -> VoidResult {
+    crate::invoke_with_handle(proof, drop)
+}
+
+/// Frees the memory associated with a `ProposedChangeProofContext`.
+///
+/// # Arguments
+///
+/// * `proof` - The `ProposedChangeProofContext` to free, previously returned from any Rust function.
+///
+/// # Returns
+///
+/// - [`VoidResult::Ok`] if the memory was successfully freed.
+/// - [`VoidResult::Err`] if the process panics while freeing the memory.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_free_proposed_change_proof(
+    proof: Option<Box<ProposedChangeProofContext>>,
+) -> VoidResult {
+    crate::invoke_with_handle(proof, drop)
+}
+
 impl crate::MetricsContextExt for ChangeProofContext {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
+        None
+    }
+}
+
+impl crate::MetricsContextExt for VerifiedChangeProofContext {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
+        None
+    }
+}
+
+impl crate::MetricsContextExt for ProposedChangeProofContext<'_> {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         None
     }
@@ -607,12 +653,6 @@ impl crate::MetricsContextExt for (&DatabaseHandle, &mut ChangeProofContext) {
 impl crate::MetricsContextExt for (&DatabaseHandle, &mut VerifiedChangeProofContext) {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         self.0.metrics_context()
-    }
-}
-
-impl crate::MetricsContextExt for &mut ProposedChangeProofContext<'_> {
-    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
-        None
     }
 }
 

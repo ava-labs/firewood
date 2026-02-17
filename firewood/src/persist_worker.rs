@@ -16,24 +16,36 @@
 //! committed revision to the background thread for disk I/O. A semaphore provides
 //! backpressure when the background thread falls behind.
 //!
+//! Below is an example when `commit_count` is set to 10:
 //!
 //! ```mermaid
 //! sequenceDiagram
-//!    participant Caller
-//!    participant Main as Main Thread
-//!    participant BG as Background Thread
-//!    participant Disk
+//!     participant Caller
+//!     participant Main as Main Thread
+//!     participant BG as Background Thread
+//!     participant Disk
 //!
-//!    Caller->>Main: commit(proposal)
-//!    Main->>Main: Validate proposal
-//!    Main->>Main: Update in-memory state
-//!    Main->>Main: Acquire semaphore permit
+//!     loop Commits 1-4
+//!         Caller->>Main: commit()
+//!         Main->>BG: queue revision
+//!         Note right of BG: Waiting...
+//!     end
 //!
-//!    Main->>BG: Send Persist message
-//!    Main-->>Caller: Return
-//!    BG->>Disk: Write revision
-//!    BG->>Disk: Update RootStore
-//!    BG->>BG: Release semaphore permit
+//!     Caller->>Main: commit() (5th)
+//!     Main->>BG: queue revision
+//!     BG->>Disk: persist revision 5
+//!     Note right of Disk: Sub-interval (10/2) reached
+//!
+//!     loop Commits 6-8
+//!         Caller->>Main: commit()
+//!         Main->>BG: queue revision
+//!         Note right of BG: Waiting...
+//!     end
+//!
+//!     Caller->>Main: close()
+//!     Main->>BG: shutdown + persist last committed revision
+//!     BG->>Disk: persist revision 8
+//!     Note right of Disk: Latest committed revision is persisted
 //! ```
 
 use std::{
@@ -94,13 +106,18 @@ impl PersistWorker {
     ///
     /// Returns the worker for sending messages to the background thread.
     #[allow(clippy::large_types_passed_by_value)]
-    pub(crate) fn new(header: NodeStoreHeader, root_store: Option<Arc<RootStore>>) -> Self {
+    pub(crate) fn new(
+        commit_count: NonZeroU64,
+        header: NodeStoreHeader,
+        root_store: Option<Arc<RootStore>>,
+    ) -> Self {
         let (sender, receiver) = channel::unbounded();
-        let persist_interval = nonzero!(1u64);
+        let persist_interval = NonZeroU64::new(commit_count.get().div_ceil(2))
+            .expect("a nonzero div_ceil(2) is always positive");
 
         let shared = Arc::new(SharedState {
             error: OnceLock::new(),
-            commit_throttle: PersistSemaphore::new(persist_interval),
+            commit_throttle: PersistSemaphore::new(commit_count),
             root_store,
             header: Mutex::new(header),
         });
@@ -110,6 +127,7 @@ impl PersistWorker {
             persist_interval,
             shared: shared.clone(),
             last_persisted_commit: None,
+            last_committed_revision: None,
         };
 
         let handle = thread::spawn(move || persist_loop.run());
@@ -140,9 +158,9 @@ impl PersistWorker {
         nodestore: NodeStore<Committed, FileBacked>,
     ) -> Result<(), PersistError> {
         if self.shared.root_store.is_none() {
-            // Always send the reap message, even for empty tries. A committed
-            // revision with no root can still carry deleted nodes from the
-            // previous revision that need their disk space freed.
+            // Always send the reap message, even for empty tries. Even if this
+            // revision wasn't persisted, it could be the case that this
+            // revision carries deleted nodes from a previously persisted revision.
             self.sender
                 .as_ref()
                 .ok_or(PersistError::ChannelDisconnected)?
@@ -312,6 +330,8 @@ struct PersistLoop {
     shared: Arc<SharedState>,
     /// The commit number of the last successful persist (for calculating permits to release).
     last_persisted_commit: Option<NonZeroU64>,
+    /// The last committed revision and its commit number.
+    last_committed_revision: Option<(CommittedRevision, NonZeroU64)>,
 }
 
 impl PersistLoop {
@@ -349,9 +369,16 @@ impl PersistLoop {
                         self.persist(&revision, num_commits)?;
                     }
 
+                    self.last_committed_revision = Some((revision, num_commits));
                     num_commits = num_commits.saturating_add(1);
                 }
             }
+        }
+
+        if let Some((revision, last_commit_num)) = self.last_committed_revision.take()
+            && Some(last_commit_num) != self.last_persisted_commit
+        {
+            self.persist(&revision, last_commit_num)?;
         }
 
         Ok(())
