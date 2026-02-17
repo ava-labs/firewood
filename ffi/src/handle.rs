@@ -97,12 +97,13 @@ pub struct DatabaseHandleArgs<'a> {
 
 impl DatabaseHandleArgs<'_> {
     fn as_rev_manager_config(&self) -> Result<RevisionManagerConfig, api::Error> {
-        let cache_read_strategy = match self.strategy {
-            0 => firewood::manager::CacheReadStrategy::WritesOnly,
-            1 => firewood::manager::CacheReadStrategy::BranchReads,
-            2 => firewood::manager::CacheReadStrategy::All,
-            _ => return Err(invalid_data("invalid cache strategy")),
-        };
+        // TEMPORARY: hardcode for cache strategy A/B experiment — remove after benchmarking
+        // Change to CacheReadStrategy::All for B1, WritesOnly for B2
+        let cache_read_strategy = firewood::manager::CacheReadStrategy::WritesOnly;
+        firewood::logger::info!(
+            "Firewood opening with cache_read_strategy={cache_read_strategy} (requested={})",
+            self.strategy
+        );
         let config = RevisionManagerConfig::builder()
             .node_cache_size(
                 self.cache_size
