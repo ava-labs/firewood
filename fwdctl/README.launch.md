@@ -26,38 +26,38 @@ Before using launch commands, make sure:
 
 1. Preview the launch plan without creating resources:
 
-  ```sh
-  ./target/release/fwdctl launch deploy --dry-run
-  ```
+    ```sh
+    ./target/release/fwdctl launch deploy --dry-run
+    ```
 
 2. Deploy and follow cloud-init stage progress:
 
-  ```sh
-  ./target/release/fwdctl launch deploy \
-    --scenario reexecute \
-    --nblocks 1m \
-    --config firewood \
-    --follow follow-with-progress
-  ```
+    ```sh
+    ./target/release/fwdctl launch deploy \
+      --scenario reexecute \
+      --nblocks 1m \
+      --config firewood \
+      --follow follow-with-progress
+    ```
 
 3. List instances launched through `fwdctl`:
 
-  ```sh
-  ./target/release/fwdctl launch list --running --mine
-  ```
+    ```sh
+    ./target/release/fwdctl launch list --running --mine
+    ```
 
 4. Re-attach to monitoring for one instance:
 
-  ```sh
-  ./target/release/fwdctl launch monitor i-0123456789abcdef0 --observe
-  ```
+    ```sh
+    ./target/release/fwdctl launch monitor i-0123456789abcdef0 --observe
+    ```
 
 5. Terminate one or more managed instances:
 
-  ```sh
-  ./target/release/fwdctl launch kill i-0123456789abcdef0 -y
-  ./target/release/fwdctl launch kill --mine -y
-  ```
+    ```sh
+    ./target/release/fwdctl launch kill i-0123456789abcdef0 -y
+    ./target/release/fwdctl launch kill --mine -y
+    ```
 
 ## Deploy defaults
 
