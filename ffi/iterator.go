@@ -184,9 +184,11 @@ func (it *Iterator) Drop() error {
 	if it.handle != nil {
 		// Always free the iterator even if releasing the current KV/batch failed.
 		// The iterator holds a NodeStore ref that must be dropped.
-		return errors.Join(
+		err = errors.Join(
 			err,
 			getErrorFromVoidResult(C.fwd_free_iterator(it.handle)))
+		// prevent use-after-free/double-free
+		it.handle = nil
 	}
 	return err
 }

@@ -255,6 +255,9 @@ func TestIterDone(t *testing.T) {
 
 	// get a new iterator
 	it2, err := rev.Iter(nil)
+	t.Cleanup(func() {
+		r.NoError(it2.Drop())
+	})
 	r.NoError(err)
 	// set batch size to 5
 	it2.SetBatchSize(5)
@@ -263,6 +266,7 @@ func TestIterDone(t *testing.T) {
 	// calling next again should be safe and return false
 	r.False(it.Next())
 	r.NoError(it.Err())
+	r.NoError(it2.Drop())
 }
 
 // Tests the iterator's behavior after revision is dropped, should safely
