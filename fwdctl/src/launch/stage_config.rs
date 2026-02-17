@@ -123,14 +123,17 @@ pub struct ResolvedStage {
 /// Template context for variable interpolation.
 ///
 /// Variables are resolved in this order:
-/// 1. `variables.*` - from config file and stage-specific variables
+/// 1. `variables.*` - from config file, context variables, and stage-specific variables
 /// 2. `args.*` - from CLI arguments
 /// 3. `branches.*` - git branch overrides
+///
+/// CLI `--variable KEY=VALUE` overrides are applied last during stage processing.
 #[derive(Debug, Clone, Default)]
 pub struct TemplateContext {
     pub variables: HashMap<String, String>,
     pub args: HashMap<String, String>,
     pub branches: HashMap<String, String>,
+    pub cli_overrides: HashMap<String, String>,
 }
 
 const DEFAULT_CONFIG: &str = include_str!("../../../benchmark/launch/launch-stages.yaml");
@@ -238,7 +241,9 @@ impl StageConfig {
         let stages = self.get_scenario_stages(scenario_name)?;
         let mut result = Vec::new();
 
-        // Start with config-level variables, then overlay context variables
+        let cli_overrides = &ctx.cli_overrides;
+
+        // Start with config-level variables, then overlay context variables.
         let mut base_vars = self.variables.clone();
         base_vars.extend(ctx.variables.clone());
 
@@ -247,12 +252,16 @@ impl StageConfig {
             variables: HashMap::new(),
             args: ctx.args.clone(),
             branches: ctx.branches.clone(),
+            cli_overrides: HashMap::new(),
         };
 
         for stage in stages {
-            // Reset to base vars + stage vars
+            // Reset to base vars + stage vars + CLI overrides (CLI overrides win).
             stage_ctx.variables.clone_from(&base_vars);
             stage_ctx.variables.extend(stage.variables);
+            for (key, value) in cli_overrides {
+                stage_ctx.variables.insert(key.clone(), value.clone());
+            }
             resolve_stage_variables(&mut stage_ctx)?;
 
             let commands = stage
@@ -306,6 +315,7 @@ fn resolve_stage_variables(ctx: &mut TemplateContext) -> Result<(), ConfigError>
         variables: HashMap::new(),
         args: ctx.args.clone(),
         branches: ctx.branches.clone(),
+        cli_overrides: HashMap::new(),
     };
 
     for _ in 0..max_passes {
@@ -388,6 +398,7 @@ mod tests {
             variables: HashMap::from([("name".into(), "world".into())]),
             args: HashMap::from([("count".into(), "42".into())]),
             branches: HashMap::new(),
+            cli_overrides: HashMap::new(),
         };
         let result = process_template("hello {{ variables.name }} ({{ args.count }})", &ctx);
         assert_eq!(

@@ -54,12 +54,10 @@ impl CloudInitContext {
         };
         let end_block = opts.end_block().to_string();
         let nblocks = opts.nblocks.as_str().to_owned();
-        let mut variables = config.variables.clone();
-        variables.insert("end_block".into(), end_block.clone());
-        variables.extend(opts.variable_overrides_map());
+        let cli_overrides = opts.variable_overrides_map();
 
         let template_ctx = TemplateContext {
-            variables,
+            variables: HashMap::new(),
             args: HashMap::from([
                 ("end_block".into(), end_block),
                 ("nblocks".into(), nblocks),
@@ -76,6 +74,7 @@ impl CloudInitContext {
                     )
                 })
                 .collect(),
+            cli_overrides,
         };
         Ok(Self {
             swap_gib: 16,
