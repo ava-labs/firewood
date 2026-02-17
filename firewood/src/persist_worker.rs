@@ -125,7 +125,6 @@ impl PersistWorker {
             receiver,
             persist_interval,
             shared: shared.clone(),
-            commits_since_persist: 0,
             persist_on_shutdown: None,
         };
 
@@ -328,8 +327,6 @@ struct PersistLoop {
     persist_interval: NonZeroU64,
     /// Shared state for coordination with `PersistWorker`.
     shared: Arc<SharedState>,
-    /// Number of commits received since the last persist.
-    commits_since_persist: u64,
     /// Unpersisted revision to persist on shutdown.
     persist_on_shutdown: Option<CommittedRevision>,
 }
@@ -349,31 +346,39 @@ impl PersistLoop {
 
     /// Processes messages until the channel is closed or an error occurs.
     fn event_loop(&mut self) -> Result<(), PersistError> {
+        let mut commits_since_persist = 0u64;
+
         while let Ok(message) = self.receiver.recv() {
             match message {
                 PersistMessage::Reap(nodestore) => self.reap(nodestore)?,
-                PersistMessage::Persist(revision) => self.persist(revision)?,
+                PersistMessage::Persist(revision) => {
+                    self.persist(revision, &mut commits_since_persist)?
+                }
             }
         }
 
         // Persist any unpersisted revision on shutdown
         if let Some(revision) = self.persist_on_shutdown.take() {
-            self.do_persist(&revision)?;
+            self.do_persist(&revision, &mut commits_since_persist)?;
         }
 
         Ok(())
     }
 
     /// Handles a persist message: increments counter, decides whether to persist now or defer.
-    fn persist(&mut self, revision: CommittedRevision) -> Result<(), PersistError> {
+    fn persist(
+        &mut self,
+        revision: CommittedRevision,
+        commits_since_persist: &mut u64,
+    ) -> Result<(), PersistError> {
         // wrapping_add is safe: we will never exceed persist_interval
-        self.commits_since_persist = self.commits_since_persist.wrapping_add(1);
+        *commits_since_persist = commits_since_persist.wrapping_add(1);
 
-        if self.commits_since_persist >= self.persist_interval.get() {
+        if *commits_since_persist >= self.persist_interval.get() {
             // Clear persist_on_shutdown before persisting to avoid holding
             // an Arc reference during the persist operation.
             self.persist_on_shutdown = None;
-            self.do_persist(&revision)
+            self.do_persist(&revision, commits_since_persist)
         } else {
             // Store the revision so we can persist it on shutdown if needed.
             self.persist_on_shutdown = Some(revision);
@@ -382,11 +387,15 @@ impl PersistLoop {
     }
 
     /// Performs the actual persistence and releases semaphore permits.
-    fn do_persist(&mut self, revision: &CommittedRevision) -> Result<(), PersistError> {
+    fn do_persist(
+        &mut self,
+        revision: &CommittedRevision,
+        commits_since_persist: &mut u64,
+    ) -> Result<(), PersistError> {
         let result = self
             .persist_to_disk(revision)
             .and_then(|()| self.save_to_root_store(revision));
-        self.release_permits();
+        self.release_permits(commits_since_persist);
         result
     }
 
@@ -400,11 +409,11 @@ impl PersistLoop {
     }
 
     /// Releases semaphore permits for commits since last persist if any
-    fn release_permits(&mut self) {
-        if let Some(count) = NonZeroU64::new(self.commits_since_persist) {
+    fn release_permits(&self, commits_since_persist: &mut u64) {
+        if let Some(count) = NonZeroU64::new(*commits_since_persist) {
             self.shared.commit_throttle.release(count);
         }
-        self.commits_since_persist = 0;
+        *commits_since_persist = 0;
     }
 
     /// Add the nodes of this revision to the free lists.
