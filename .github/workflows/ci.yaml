@@ -66,7 +66,7 @@ jobs:
         with:
           components: rustfmt
       - name: Check license headers
-        uses: viperproject/check-license-header@4d4a53ac8cfde86c8dceb24b19b91d3f15e62a0c # @v2
+        uses: viperproject/check-license-header@e06c65614fa9f32e099838df4dd25440c5344b32 # @v2
         with:
           path: .
           config: .github/check-license-headers.yaml
@@ -103,11 +103,10 @@ jobs:
         with:
           save-if: "false"
           shared-key: ${{ matrix.profile-key }}
-      - uses: actions-rs/clippy-check@b5b5f21aae4d8891b5b6e9a83bbb6b123c983f21 # @v1
+      - uses: giraffate/clippy-action@13b9d32482f25d29ead141b79e7e04e7900281e0 # @v1 -> v1.0.1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          name: ${{ matrix.profile-key }}
-          args: --locked ${{ matrix.profile-args }} --workspace --all-targets
+          reporter: 'github-pr-check'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
   rust-lint:
     needs: build
@@ -164,7 +163,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
-      - uses: taiki-e/install-action@83e1aa1e8a64a85f4c6dd73ad6b55b59eb786c18 # @nextest
+      - uses: taiki-e/install-action@a7cecc7ff99ae8eda4fc89463cb7ab6aaa619b43 # @nextest
       - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # @v2 -> v2.8.2
         with:
           save-if: "false"
@@ -214,7 +213,7 @@ jobs:
           save-if: "false"
           shared-key: "debug-no-features"
       - name: md check
-        uses: DavidAnson/markdownlint-cli2-action@f84b1d9e0950dfb8cd9aeb90352a6cda1a1ef6e9 # @v20
+        uses: DavidAnson/markdownlint-cli2-action@992badcdf24e3b8eb7e87ff9287fe931bcb00c6e # @v20
         with:
           globs: |
             *.md
@@ -247,7 +246,7 @@ jobs:
           go-version-file: "ffi/go.mod"
           cache-dependency-path: "ffi/go.sum"
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@0cc9d53df3e6b0f1a0ad31f612a21dfd38cfdeb9 # @v7.0.1
+        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # @v7 -> v7.0.1
         with:
           version: latest
           working-directory: ffi
