@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # @v4 -> v4.2.2
         with:
           fetch-depth: 0 # Fetch full history to compare changes
 
@@ -55,7 +55,7 @@ jobs:
       - name: Look for previous comment
         if: github.repository == github.event.pull_request.head.repo.full_name && steps.check-metrics.outputs.metric_changes_found == 'true'
         id: find-comment
-        uses: peter-evans/find-comment@b30e6a3c0ed37e7c023ccd3f1db5c6c0b0c23aad # v4.0.0
+        uses: peter-evans/find-comment@b30e6a3c0ed37e7c023ccd3f1db5c6c0b0c23aad # @v3 -> v4.0.0
         with:
           issue-number: ${{ github.event.pull_request.number }}
           comment-author: github-actions[bot]
@@ -63,7 +63,7 @@ jobs:
 
       - name: Comment on PR (if applicable)
         if: github.repository == github.event.pull_request.head.repo.full_name && steps.check-metrics.outputs.metric_changes_found == 'true'
-        uses: peter-evans/create-or-update-comment@e8674b075228eee787fea43ef493e45ece1004c9 # v5.0.0
+        uses: peter-evans/create-or-update-comment@e8674b075228eee787fea43ef493e45ece1004c9 # @v4 -> v5.0.0
         with:
           issue-number: ${{ github.event.pull_request.number }}
           body: |

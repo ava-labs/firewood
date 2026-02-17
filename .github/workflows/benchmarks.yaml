@@ -13,9 +13,9 @@ jobs:
   bench:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - uses: dtolnay/rust-toolchain@7bb1479df4dc3e19ca9d98e09e189ab48a6ec762 # stable
-      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # v2.8.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # @v4 -> v4.2.2
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # @v2 -> v2.8.2
         with:
           shared-key: "maxperf-ethhash-logger"
           cache-all-crates: true
@@ -31,7 +31,7 @@ jobs:
       - name: Run storage crate benchmarks
         run: cargo bench --frozen --profile maxperf --features ethhash,logger -p firewood-storage --bench serializer -- --noplot
       - name: Upload benchmark results
-        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # v4.6.0
+        uses: actions/upload-artifact@6f51ac03b9356f520e9adb1b1b7802705f340c2b # @v4 -> v4.6.0
         with:
           name: benchmark-results
           path: target/criterion
