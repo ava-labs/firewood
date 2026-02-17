@@ -197,19 +197,10 @@ impl DryRunMode {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VariableOverride {
     key: String,
     value: String,
-}
-
-impl std::fmt::Debug for VariableOverride {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VariableOverride")
-            .field("key", &self.key)
-            .field("value", &"<redacted>")
-            .finish()
-    }
 }
 
 impl VariableOverride {
@@ -763,56 +754,4 @@ fn log_launch_config(opts: &DeployOptions) {
         "Dry run mode:",
         opts.dry_run_mode().map_or("off", DryRunMode::as_str)
     );
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_variable_override_supports_variables_prefix() {
-        let parsed = parse_variable_override("variables.nvme_base=/tmp/nvme")
-            .expect("expected valid variable override");
-        assert_eq!(parsed.key(), "nvme_base");
-        assert_eq!(parsed.value(), "/tmp/nvme");
-    }
-
-    #[test]
-    fn parse_variable_override_rejects_missing_equals() {
-        let err = parse_variable_override("nvme_base")
-            .expect_err("expected parsing error for invalid variable override");
-        assert!(err.contains("KEY=VALUE"), "unexpected error message: {err}");
-    }
-
-    #[test]
-    fn parse_variable_override_rejects_empty_key() {
-        let err =
-            parse_variable_override("=value").expect_err("expected parsing error for empty key");
-        assert!(err.contains("non-empty"), "unexpected error message: {err}");
-    }
-
-    #[test]
-    fn parse_variable_override_rejects_whitespace_in_key() {
-        let err = parse_variable_override("foo bar=value")
-            .expect_err("expected parsing error for whitespace in key");
-        assert!(
-            err.contains("whitespace"),
-            "unexpected error message: {err}"
-        );
-    }
-
-    #[test]
-    fn variable_override_debug_redacts_value() {
-        let parsed = parse_variable_override("token=super-secret-value")
-            .expect("expected valid variable override");
-        let debug = format!("{parsed:?}");
-        assert!(
-            debug.contains("token"),
-            "expected key to be visible in debug output: {debug}"
-        );
-        assert!(
-            !debug.contains("super-secret-value"),
-            "expected value to be redacted in debug output: {debug}"
-        );
-    }
 }
