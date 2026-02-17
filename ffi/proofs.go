@@ -493,6 +493,42 @@ func (p *ChangeProof) Free() error {
 	return nil
 }
 
+// Free releases the resources associated with this VerifiedChangeProof.
+//
+// It is safe to call Free more than once; subsequent calls after the first
+// will be no-ops.
+func (p *VerifiedChangeProof) Free() error {
+	if p.handle == nil {
+		return nil
+	}
+
+	if err := getErrorFromVoidResult(C.fwd_free_verified_change_proof(p.handle)); err != nil {
+		return err
+	}
+
+	p.handle = nil
+
+	return nil
+}
+
+// Free releases the resources associated with this ProposedChangeProof.
+//
+// It is safe to call Free more than once; subsequent calls after the first
+// will be no-ops.
+func (p *ProposedChangeProof) Free() error {
+	if p.handle == nil {
+		return nil
+	}
+
+	if err := getErrorFromVoidResult(C.fwd_free_proposed_change_proof(p.handle)); err != nil {
+		return err
+	}
+
+	p.handle = nil
+
+	return nil
+}
+
 // StartKey returns the inclusive start key of this key range.
 func (r *NextKeyRange) StartKey() []byte {
 	return r.startKey.CopiedBytes()

@@ -507,14 +507,17 @@ func TestVerifyChangeProof(t *testing.T) {
 	// Create a change proof from dbA.
 	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
 	// Verify the change proof
 	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
 
 	// Create a proposal on dbB.
-	_, err = dbB.ProposeChangeProof(verifiedChangeProof)
+	proposedChangeProof, err := dbB.ProposeChangeProof(verifiedChangeProof)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
 }
 
 func TestVerifyEmptyChangeProofRange(t *testing.T) {
@@ -548,12 +551,15 @@ func TestVerifyEmptyChangeProofRange(t *testing.T) {
 	// the start and end keys are both from the first insert.
 	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, startKey, endKey, 5)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
 	// Verify the change proof.
 	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, startKey, endKey, 5)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
 
 	// Create an empty proposal on dbB.
-	_, err = dbB.ProposeChangeProof(verifiedChangeProof)
+	proposedChangeProof, err := dbB.ProposeChangeProof(verifiedChangeProof)
 	r.NoError(err)
+	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
 }

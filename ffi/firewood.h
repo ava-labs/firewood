@@ -1774,6 +1774,20 @@ struct VoidResult fwd_free_owned_kv_pair(struct OwnedKeyValuePair kv);
 struct VoidResult fwd_free_proposal(struct ProposalHandle *proposal);
 
 /**
+ * Frees the memory associated with a `ProposedChangeProofContext`.
+ *
+ * # Arguments
+ *
+ * * `proof` - The `ProposedChangeProofContext` to free, previously returned from any Rust function.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ */
+struct VoidResult fwd_free_proposed_change_proof(struct ProposedChangeProofContext *proof);
+
+/**
  * Frees the memory associated with a `RangeProofContext`.
  *
  * # Arguments
@@ -1807,6 +1821,20 @@ struct VoidResult fwd_free_range_proof(struct RangeProofContext *proof);
  * this function is called.
  */
 struct VoidResult fwd_free_revision(struct RevisionHandle *revision);
+
+/**
+ * Frees the memory associated with a `VerifiedChangeProofContext`.
+ *
+ * # Arguments
+ *
+ * * `proof` - The `VerifiedChangeProofContext` to free, previously returned from any Rust function.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ */
+struct VoidResult fwd_free_verified_change_proof(struct VerifiedChangeProofContext *proof);
 
 /**
  * Gather latest metrics for this process.
