@@ -10,9 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - name: Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@463e9d51e5cafebb2691888927a662c4ba28822d # v2.2.1
         with:
           draft: true
           generate_release_notes: true
