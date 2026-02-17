@@ -141,9 +141,9 @@ func (p *RangeProof) Verify(
 	return getErrorFromVoidResult(C.fwd_range_proof_verify(args))
 }
 
-// VerifyRangeProof verifies the provided change [proof] proves the changes
-// between [startRoot] and [endRoot] for keys in the range [startKey, endKey]. If
-// the proof is valid, a proposal containing the changes is prepared. The
+// VerifyRangeProof verifies the provided range range [proof] proves the values
+// in the range [startKey, endKey] are included in the tree with the given
+// [rootHash]. If the proof is valid, a proposal containing the values is prepared. The
 // call to [*Database.VerifyAndCommitRangeProof] will skip verification and commit the
 // prepared proposal.
 //
