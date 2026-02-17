@@ -737,7 +737,7 @@ fn log_launch_config(opts: &DeployOptions) {
         } else {
             opts.variable_overrides
                 .iter()
-                .map(|entry| entry.key())
+                .map(VariableOverride::key)
                 .collect::<Vec<_>>()
                 .join(", ")
         }
