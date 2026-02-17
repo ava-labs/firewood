@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1771228364753,
+  "lastUpdate": 1771314303932,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -516,6 +516,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 87.77499880712448,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "d401cd518934088ca8374ecf354a2e3bf2f03df8",
+          "message": "chore(ffi): update CGO LDFLAGS to include -ldl (#1686)\n\nThis change adds an explicit link with `dl` to the `LDFLAGS`. If `dl` is\nultimately unused, this will have no effect.\n\n`jemalloc` has a\n[dependency](https://github.com/jemalloc/jemalloc/blob/1972241cd204c60fb5b66f23c48a117879636161/src/background_thread.c#L64-L69)\non `dlsym`. This causes the Go binary to fail to build in scenarios\nwhere `-ldl` is not otherwise inferred by the Go compiler.\n\n```text\n# github.com/ava-labs/firewood/ffi.test\n/usr/local/go-1.26.0/pkg/tool/linux_arm64/link: running gcc failed: exit status 1\n/usr/bin/gcc -s -Wl,--build-id=0x17a030a4dc77915b6306fe19d5f9f8cda10bea1b -o $WORK/b001/ffi.test -Wl,--export-dynamic-symbol=_cgo_panic -Wl,--export-dynamic-symbol=_cgo_topofstack -Wl,--export-dynamic-symbol=crosscall2 -Wl,--compress-debug-sections=zlib /tmp/go-link-1631042352/go.o /tmp/go-link-1631042352/000000.o /tmp/go-link-1631042352/000001.o /tmp/go-link-1631042352/000002.o /tmp/go-link-1631042352/000003.o /tmp/go-link-1631042352/000004.o /tmp/go-link-1631042352/000005.o /tmp/go-link-1631042352/000006.o /tmp/go-link-1631042352/000007.o /tmp/go-link-1631042352/000008.o /tmp/go-link-1631042352/000009.o /tmp/go-link-1631042352/000010.o /tmp/go-link-1631042352/000011.o /tmp/go-link-1631042352/000012.o /tmp/go-link-1631042352/000013.o /tmp/go-link-1631042352/000014.o /tmp/go-link-1631042352/000015.o /tmp/go-link-1631042352/000016.o /tmp/go-link-1631042352/000017.o /tmp/go-link-1631042352/000018.o /tmp/go-link-1631042352/000019.o /tmp/go-link-1631042352/000020.o /tmp/go-link-1631042352/000021.o /tmp/go-link-1631042352/000022.o /tmp/go-link-1631042352/000023.o /tmp/go-link-1631042352/000024.o /tmp/go-link-1631042352/000025.o /tmp/go-link-1631042352/000026.o /tmp/go-link-1631042352/000027.o /tmp/go-link-1631042352/000028.o /tmp/go-link-1631042352/000029.o /tmp/go-link-1631042352/000030.o /tmp/go-link-1631042352/000031.o /tmp/go-link-1631042352/000032.o /tmp/go-link-1631042352/000033.o -O2 -g -L/workspaces/firewood/ffi/../target/debug -L/workspaces/firewood/ffi/../target/release -L/workspaces/firewood/ffi/../target/maxperf -lfirewood_ffi -lm -O2 -g -lpthread -O2 -g -lresolv -O2 -g -no-pie\n/usr/bin/ld: /workspaces/firewood/ffi/../target/maxperf/libfirewood_ffi.a(firewood_ffi-fd0e8d1e328baab2.firewood_ffi.f340a7ea98169a93-cgu.0.rcgu.o): in function `_RNvNtNtCsd4QvH79tVyM_9getrandom8backends27linux_android_with_fallback4init':\nfirewood_ffi.f340a7ea98169a93-cgu.0:(.text.unlikely._RNvNtNtCsd4QvH79tVyM_9getrandom8backends27linux_android_with_fallback4init+0x18): undefined reference to `dlsym'\n/usr/bin/ld: /workspaces/firewood/ffi/../target/maxperf/libfirewood_ffi.a(firewood_ffi-fd0e8d1e328baab2.firewood_ffi.f340a7ea98169a93-cgu.0.rcgu.o): in function `_RNvMNtNtNtNtNtCsj8W61RwElR7_3std3sys3pal4unix4weak5dlsymINtB2_9DlsymWeakFUKCPNtNtNtNtNtNtNtCs7BotxDYo2ft_4libc4unix10linux_like5linux3gnu3b647aarch6414pthread_attr_tEjE10initializeBc_':\n/rustc/873b4beb0cc726493b94c8ef21f68795c04fbbc1/library/std/src/sys/pal/unix/weak/dlsym.rs:89: undefined reference to `dlsym'\n/usr/bin/ld: /workspaces/firewood/ffi/../target/maxperf/libfirewood_ffi.a(background_thread.pic.o): in function `pthread_create_fptr_init':\n/workspaces/firewood/target/maxperf/build/tikv-jemalloc-sys-3ae46a1d62e6e971/out/build/src/background_thread.c:724: undefined reference to `dlsym'\n/usr/bin/ld: /workspaces/firewood/target/maxperf/build/tikv-jemalloc-sys-3ae46a1d62e6e971/out/build/src/background_thread.c:724: undefined reference to `dlsym'\ncollect2: error: ld returned 1 exit status\n```\n\nFrom the missing symbols list, I also see that the rust\n[stdlib](https://github.com/rust-lang/rust/blob/71e00273c0921e1bc850ae8cc4161fbb44cfa848/library/std/src/sys/pal/unix/weak/mod.rs#L43-L47)\nhas a dependency on dlysm as well.\n\nSigned-off-by: Joachim Brandon LeBlanc <brandon.leblanc@avalabs.org>",
+          "timestamp": "2026-02-16T19:48:12Z",
+          "url": "https://github.com/ava-labs/firewood/commit/d401cd518934088ca8374ecf354a2e3bf2f03df8"
+        },
+        "date": 1771314303081,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 141.76815981841978,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 7053.770051616846,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 110.6102310250383,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6863.508530065195,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 77.05775359136742,
             "unit": "block_accept_ms/ggas"
           }
         ]
