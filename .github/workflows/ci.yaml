@@ -75,7 +75,7 @@ jobs:
         run: cargo fmt -- --check
 
   rust-lint-pr-comments:
-    # caveat emptor: actions-rs/clippy-check can only write comments on pull requests
+    # Note: giraffate/clippy-action can only write comments on pull requests
     # not originating from a fork.
     if: github.event_name == 'pull_request' && github.repository == github.event.pull_request.head.repo.full_name
     needs: build
@@ -95,19 +95,19 @@ jobs:
             profile-args: "--all-features"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: dtolnay/rust-toolchain@7bb1479df4dc3e19ca9d98e09e189ab48a6ec762 # stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@32ba5316a8b04d48c10b8e7ebfb7c53d8b624593 # v2.7.3
         with:
           save-if: "false"
           shared-key: ${{ matrix.profile-key }}
-      - uses: actions-rs/clippy-check@v1
+      - uses: giraffate/clippy-action@13b9d32482f25d29ead141b79e7e04e7900281e0 # v1.0.1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          name: ${{ matrix.profile-key }}
-          args: --locked ${{ matrix.profile-args }} --workspace --all-targets
+          reporter: github-pr-review
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          clippy_flags: --locked ${{ matrix.profile-args }} --workspace --all-targets
 
   rust-lint:
     needs: build
