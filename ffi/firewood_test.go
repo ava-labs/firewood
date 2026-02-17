@@ -156,7 +156,16 @@ func newTestDatabase(tb testing.TB, opts ...Option) *Database {
 	db, err := newDatabase(tb.TempDir(), opts...)
 	r.NoError(err)
 	tb.Cleanup(func() {
-		r.NoError(db.Close(oneSecCtx(tb)))
+		err := db.Close(oneSecCtx(tb))
+		if errors.Is(err, ErrActiveKeepAliveHandles) {
+			// force a GC to clean up dangling handles that are preventing the
+			// database from closing, then try again. Intentionally not looping
+			// since a subsequent attempt is unlikely to succeed if the first
+			// one didn't.
+			runtime.GC()
+			err = db.Close(oneSecCtx(tb))
+		}
+		r.NoError(err)
 	})
 	return db
 }
