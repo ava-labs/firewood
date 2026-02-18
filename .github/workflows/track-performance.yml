@@ -124,7 +124,7 @@ jobs:
       # workflow via API and passes FIREWOOD_REF to it. AvalancheGo is responsible
       # for checking out and building Firewood at that ref.
       - name: Checkout Firewood
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@v4
 
       - name: Trigger C-Chain Reexecution Benchmark
         run: ./scripts/bench-cchain-reexecution.sh trigger
