@@ -58,7 +58,6 @@ use std::{
 use firewood_storage::{
     Committed, FileBacked, FileIoError, HashedNodeReader, NodeStore, NodeStoreHeader,
 };
-use nonzero_ext::nonzero;
 use parking_lot::{Condvar, Mutex, MutexGuard};
 
 use crate::{manager::CommittedRevision, root_store::RootStore};
@@ -80,7 +79,7 @@ pub enum PersistError {
 /// Message type that is sent to the background thread.
 enum PersistMessage {
     /// A committed revision that may be persisted.
-    Persist(CommittedRevision),
+    Commit(CommittedRevision),
     /// A persisted revision to be reaped.
     Reap(NodeStore<Committed, FileBacked>),
 }
@@ -126,8 +125,7 @@ impl PersistWorker {
             receiver,
             persist_interval,
             shared: shared.clone(),
-            last_persisted_commit: None,
-            last_committed_revision: None,
+            persist_on_shutdown: None,
         };
 
         let handle = thread::spawn(move || persist_loop.run());
@@ -147,7 +145,7 @@ impl PersistWorker {
         self.sender
             .as_ref()
             .ok_or(PersistError::ChannelDisconnected)?
-            .send(PersistMessage::Persist(committed))
+            .send(PersistMessage::Commit(committed))
             .map_err(|_| self.resolve_worker_error())
     }
 
@@ -279,8 +277,9 @@ impl PersistSemaphore {
     #[inline]
     fn release(&self, count: NonZeroU64) {
         let mut permits = self.state.lock();
+        // wrapping_add is safe here: even at 1ns per commit, u64 overflow would take ~584 years
         *permits = permits
-            .saturating_add(count.get())
+            .wrapping_add(count.get())
             .min(self.max_permits.get());
         self.condvar.notify_all();
     }
@@ -328,10 +327,8 @@ struct PersistLoop {
     persist_interval: NonZeroU64,
     /// Shared state for coordination with `PersistWorker`.
     shared: Arc<SharedState>,
-    /// The commit number of the last successful persist (for calculating permits to release).
-    last_persisted_commit: Option<NonZeroU64>,
-    /// The last committed revision and its commit number.
-    last_committed_revision: Option<(CommittedRevision, NonZeroU64)>,
+    /// Unpersisted revision to persist on shutdown.
+    persist_on_shutdown: Option<CommittedRevision>,
 }
 
 impl PersistLoop {
@@ -348,88 +345,75 @@ impl PersistLoop {
     }
 
     /// Processes messages until the channel is closed or an error occurs.
-    ///
-    /// Upon receiving a message, this can do one of two things:
-    /// - On `Reap`: drops the revision.
-    ///   If persisted, the revision's nodes are added to the free lists only if
-    ///   not running in archival mode.
-    /// - On `Persist`: persists the revision if the number of revisions received
-    ///   modulo `persist_interval` is zero.
     fn event_loop(&mut self) -> Result<(), PersistError> {
-        let mut num_commits = nonzero!(1u64);
+        let mut commits_since_persist = 0u64;
 
         while let Ok(message) = self.receiver.recv() {
             match message {
                 PersistMessage::Reap(nodestore) => self.reap(nodestore)?,
-                PersistMessage::Persist(revision) => {
-                    if num_commits
-                        .get()
-                        .is_multiple_of(self.persist_interval.get())
-                    {
-                        self.persist(&revision, num_commits)?;
-                    }
-
-                    self.last_committed_revision = Some((revision, num_commits));
-                    num_commits = num_commits.saturating_add(1);
+                PersistMessage::Commit(revision) => {
+                    self.commit(revision, &mut commits_since_persist)?;
                 }
             }
         }
 
-        if let Some((revision, last_commit_num)) = self.last_committed_revision.take()
-            && Some(last_commit_num) != self.last_persisted_commit
-        {
-            self.persist(&revision, last_commit_num)?;
+        // Persist any unpersisted revision on shutdown
+        if let Some(revision) = self.persist_on_shutdown.take() {
+            self.persist_and_release(&revision, &mut commits_since_persist)?;
         }
 
         Ok(())
     }
 
-    /// Persists the given revision and releases semaphore permits.
-    fn persist(
+    /// Handles a commit message: increments counter, decides whether to persist now or defer.
+    fn commit(
+        &mut self,
+        revision: CommittedRevision,
+        commits_since_persist: &mut u64,
+    ) -> Result<(), PersistError> {
+        // wrapping_add is safe: we will never exceed persist_interval
+        *commits_since_persist = commits_since_persist.wrapping_add(1);
+
+        if *commits_since_persist >= self.persist_interval.get() {
+            // Clear persist_on_shutdown before persisting to avoid holding
+            // an Arc reference during the persist operation.
+            self.persist_on_shutdown = None;
+            self.persist_and_release(&revision, commits_since_persist)
+        } else {
+            // Store the revision so we can persist it on shutdown if needed.
+            self.persist_on_shutdown = Some(revision);
+            Ok(())
+        }
+    }
+
+    /// Performs the actual persistence and releases semaphore permits.
+    fn persist_and_release(
         &mut self,
         revision: &CommittedRevision,
-        num_commits: NonZeroU64,
+        commits_since_persist: &mut u64,
     ) -> Result<(), PersistError> {
-        // Persist the revision
-        let mut header = self.shared.header.lock();
-        let result = revision.persist(&mut header);
-        drop(header);
-
-        if let Err(e) = result {
-            error!("Failed to persist revision: {e}");
-
-            let err = PersistError::FileIo(Arc::new(e));
-            // Release permits even on error to unblock waiting threads
-            self.release_permits(num_commits);
-
-            return Err(err);
-        }
-
-        // Save to root store if configured
-        if let Err(e) = self.save_to_root_store(revision) {
-            error!("Failed to persist revision address to RootStore: {e}");
-
-            // Release permits even on error to unblock waiting threads
-            self.release_permits(num_commits);
-            return Err(e);
-        }
-
-        // Release permits for all commits that were persisted
-        self.release_permits(num_commits);
-        Ok(())
+        let result = self
+            .persist_to_disk(revision)
+            .and_then(|()| self.save_to_root_store(revision));
+        self.release_permits(commits_since_persist);
+        result
     }
 
-    /// Releases semaphore permits for commits up to `num_commits`.
-    fn release_permits(&mut self, num_commits: NonZeroU64) {
-        let last = self.last_persisted_commit.map_or(0, NonZeroU64::get);
-        let permits_to_release = num_commits
-            .get()
-            .checked_sub(last)
-            .expect("should be positive");
-        if let Some(count) = NonZeroU64::new(permits_to_release) {
+    /// Persists the revision to disk.
+    fn persist_to_disk(&self, revision: &CommittedRevision) -> Result<(), PersistError> {
+        let mut header = self.shared.header.lock();
+        revision.persist(&mut header).map_err(|e| {
+            error!("Failed to persist revision: {e}");
+            PersistError::FileIo(Arc::new(e))
+        })
+    }
+
+    /// Releases semaphore permits for commits since last persist if any
+    fn release_permits(&self, commits_since_persist: &mut u64) {
+        if let Some(count) = NonZeroU64::new(*commits_since_persist) {
             self.shared.commit_throttle.release(count);
-            self.last_persisted_commit = Some(num_commits);
         }
+        *commits_since_persist = 0;
     }
 
     /// Add the nodes of this revision to the free lists.
@@ -444,9 +428,10 @@ impl PersistLoop {
         if let Some(ref store) = self.shared.root_store
             && let (Some(hash), Some(addr)) = (revision.root_hash(), revision.root_address())
         {
-            store
-                .add_root(&hash, &addr)
-                .map_err(|e| PersistError::RootStore(e.into()))?;
+            store.add_root(&hash, &addr).map_err(|e| {
+                error!("Failed to persist revision address to RootStore: {e}");
+                PersistError::RootStore(e.into())
+            })?;
         }
 
         Ok(())
