@@ -50,7 +50,7 @@ jobs:
     outputs:
       has_secrets: ${{ steps.check_secrets.outputs.has_secrets }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
       - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # @v2 -> v2.8.2
         with:
@@ -71,7 +71,7 @@ jobs:
         run: cargo build-static-ffi --target ${{ matrix.target }}
 
       - name: Upload binary
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.target }}
           path: target/${{ matrix.target }}/maxperf/libfirewood_ffi.a
@@ -123,11 +123,11 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           path: firewood
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           repository: ava-labs/firewood-go-ethhash
           token: ${{ secrets.FIREWOOD_GO_GITHUB_TOKEN }}
@@ -141,7 +141,7 @@ jobs:
         run: FIREWOOD_LD_MODE=STATIC_LIBS go generate
 
       - name: Download binaries into libs directory
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           path: firewood-go-ethhash/ffi/libs
 
@@ -192,13 +192,13 @@ jobs:
     needs: push-firewood-ffi-libs
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           repository: ava-labs/firewood-go-ethhash
           token: ${{ secrets.FIREWOOD_GO_GITHUB_TOKEN }}
           ref: ${{ needs.push-firewood-ffi-libs.outputs.target_branch }}
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: "ffi/go.mod"
           cache-dependency-path: "ffi/go.sum"
@@ -216,7 +216,7 @@ jobs:
       # branch created by the previous job if it is a pull request.
       contents: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           repository: ava-labs/firewood-go-ethhash
           token: ${{ secrets.FIREWOOD_GO_GITHUB_TOKEN }}
