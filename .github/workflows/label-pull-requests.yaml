@@ -19,7 +19,7 @@ jobs:
           fi
 
       - name: Add label to third-party pull request
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         with:
           script: |
             const label = '3rd party contributor';

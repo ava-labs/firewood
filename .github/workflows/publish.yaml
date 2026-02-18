@@ -11,8 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.event.release.tag_name, 'v')
     steps:
-      - uses: actions/checkout@v1
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
       ## NOTE: keep these packages sorted in reverse topological order!
       ## cargo tree --workspace -e all | grep firewood
       - name: publish firewood-macros crate
