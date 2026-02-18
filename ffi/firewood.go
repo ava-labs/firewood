@@ -448,8 +448,6 @@ func (db *Database) Close(ctx context.Context) error {
 		return nil
 	}
 
-	go runtime.GC()
-
 	done := make(chan struct{})
 	go func() {
 		db.outstandingHandles.Wait()
