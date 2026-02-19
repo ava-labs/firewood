@@ -271,8 +271,8 @@ impl<T: TrieReader> Merkle<T> {
         let key_values = proof.key_values();
         if !key_values
             .iter()
-            .zip(key_values.iter().skip(1))
-            .all(|(a, b)| a.0.as_ref() < b.0.as_ref())
+            .map(|(key, _)| key.as_ref())
+            .is_sorted_by(|a, b| a < b)
         {
             return Err(api::Error::ProofError(
                 ProofError::NonMonotonicIncreaseRange,
