@@ -76,7 +76,7 @@ fn test_bad_range_proof() {
     items.sort_unstable();
     let merkle = init_merkle(items.clone());
 
-    'skip_test: for _ in 0..10 {
+    for _ in 0..10 {
         let start = rng.random_range(0..items.len());
         let end = rng.random_range(0..items.len() - start) + start - 1;
 
@@ -96,50 +96,16 @@ fn test_bad_range_proof() {
             vals.push(*item.1);
         }
 
-        let test_case: u32 = rng.random_range(0..6);
-        let index = rng.random_range(0..end - start);
-        match test_case {
-            0 => {
-                // Modified key
-                keys[index] = rng.random::<[u8; 32]>(); // In theory it can't be same
-                continue 'skip_test;
-            }
-            1 => {
-                // Modified val
-                vals[index] = rng.random::<[u8; 20]>(); // In theory it can't be same
-                continue 'skip_test;
-            }
-            2 => {
-                // Gapped entry slice
-                if index == 0 || index == end - start - 1 {
-                    continue;
-                }
-                keys.remove(index);
-                vals.remove(index);
-                continue 'skip_test;
-            }
-            3 => {
-                // Out of order
-                let index_1 = rng.random_range(0..end - start);
-                let index_2 = rng.random_range(0..end - start);
-                if index_1 == index_2 {
-                    continue;
-                }
-                keys.swap(index_1, index_2);
-                vals.swap(index_1, index_2);
-            }
-            4 => {
-                // Set random key to empty, do nothing
-                keys[index] = [0; 32];
-                continue 'skip_test;
-            }
-            5 => {
-                // Set random value to nil
-                vals[index] = [0; 20];
-                continue 'skip_test;
-            }
-            _ => unreachable!(),
+        // Out of order.
+        // Other malformed proof scenarios require fuller range-proof validation
+        // (tracked in issue #738).
+        let index_1 = rng.random_range(0..end - start);
+        let index_2 = rng.random_range(0..end - start);
+        if index_1 == index_2 {
+            continue;
         }
+        keys.swap(index_1, index_2);
+        vals.swap(index_1, index_2);
 
         let key_values: KeyValuePairs = keys
             .iter()

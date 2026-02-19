@@ -279,42 +279,64 @@ impl<T: TrieReader> Merkle<T> {
             ));
         }
 
-        // check that the start and end proofs are valid
-        let left = key_values
-            .first()
-            .ok_or(api::Error::ProofError(ProofError::Empty))?;
+        if key_values.is_empty() && first_key.is_none() && last_key.is_none() {
+            return Err(api::Error::ProofError(ProofError::Empty));
+        }
+
+        let left = key_values.first();
+        let right = key_values.last();
 
         // Verify that first_key (if provided) is <= the first key in the proof
-        if let Some(ref requested_first) = first_key
-            && requested_first.as_ref() > left.0.as_ref()
+        if let (Some(ref requested_first), Some((left_key, _))) = (first_key.as_ref(), left)
+            && requested_first.as_ref() > left_key.as_ref()
         {
             return Err(api::Error::InvalidRange {
                 start_key: requested_first.as_ref().to_vec().into(),
-                end_key: left.0.as_ref().to_vec().into(),
+                end_key: left_key.as_ref().to_vec().into(),
             });
         }
 
-        proof
-            .start_proof()
-            .verify(&left.0, Some(&left.1), root_hash)?;
+        // start proof verifies the requested lower bound (if any), not necessarily
+        // the first key-value included in this proof.
+        if let Some(ref requested_first) = first_key {
+            let expected_start_value = left.and_then(|(key, value)| {
+                (requested_first.as_ref() == key.as_ref()).then_some(value.as_ref())
+            });
 
-        let right = key_values
-            .last()
-            .ok_or(api::Error::ProofError(ProofError::Empty))?;
+            proof
+                .start_proof()
+                .verify(requested_first.as_ref(), expected_start_value, root_hash)?;
+        } else if let Some((left_key, left_value)) = left {
+            proof
+                .start_proof()
+                .verify(left_key.as_ref(), Some(left_value.as_ref()), root_hash)?;
+        }
 
         // Verify that last_key (if provided) is >= the last key in the proof
-        if let Some(ref requested_last) = last_key
-            && requested_last.as_ref() < right.0.as_ref()
+        if let (Some(ref requested_last), Some((right_key, _))) = (last_key.as_ref(), right)
+            && requested_last.as_ref() < right_key.as_ref()
         {
             return Err(api::Error::InvalidRange {
-                start_key: right.0.as_ref().to_vec().into(),
-                end_key: requested_last.as_ref().to_vec().into(),
+                start_key: requested_last.as_ref().to_vec().into(),
+                end_key: right_key.as_ref().to_vec().into(),
             });
         }
 
-        proof
-            .end_proof()
-            .verify(&right.0, Some(&right.1), root_hash)?;
+        // end proof verifies the requested upper bound (if any), not necessarily
+        // the last key-value included in this proof.
+        if let Some(ref requested_last) = last_key {
+            let expected_end_value = right.and_then(|(key, value)| {
+                (requested_last.as_ref() == key.as_ref()).then_some(value.as_ref())
+            });
+
+            proof
+                .end_proof()
+                .verify(requested_last.as_ref(), expected_end_value, root_hash)?;
+        } else if let Some((right_key, right_value)) = right {
+            proof
+                .end_proof()
+                .verify(right_key.as_ref(), Some(right_value.as_ref()), root_hash)?;
+        }
 
         // TODO: build a merkle and reshape it, filling in hashes from the
         // provided proofs on the left and right edges, then verify the root hash
