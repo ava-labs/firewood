@@ -12,9 +12,9 @@
 //! the number of unpersisted commits.
 //!
 //! The diagram below shows how commits are handled under deferred persistence.
-//! The main thread validates and updates in-memory state, then hands off the
-//! committed revision to the background thread for disk I/O. A semaphore provides
-//! backpressure when the background thread falls behind.
+//! The main thread updates shared state and signals the background thread via
+//! condition variables. Backpressure is enforced by waiting when all permits
+//! are exhausted.
 //!
 //! Below is an example when `commit_count` is set to 10:
 //!
@@ -27,24 +27,25 @@
 //!
 //!     loop Commits 1-4
 //!         Caller->>Main: commit()
-//!         Main->>BG: queue revision
-//!         Note right of BG: Waiting...
+//!         Main->>Main: store latest revision, count -= 1
+//!         Note right of BG: Waiting (count > threshold)
 //!     end
 //!
 //!     Caller->>Main: commit() (5th)
-//!     Main->>BG: queue revision
-//!     BG->>Disk: persist revision 5
+//!     Main->>Main: store latest revision, count -= 1
+//!     Main->>BG: notify persist_ready
+//!     BG->>Disk: persist latest revision
 //!     Note right of Disk: Sub-interval (10/2) reached
 //!
 //!     loop Commits 6-8
 //!         Caller->>Main: commit()
-//!         Main->>BG: queue revision
-//!         Note right of BG: Waiting...
+//!         Main->>Main: store latest revision, count -= 1
+//!         Note right of BG: Waiting (count > threshold)
 //!     end
 //!
 //!     Caller->>Main: close()
-//!     Main->>BG: shutdown + persist last committed revision
-//!     BG->>Disk: persist revision 8
+//!     Main->>BG: shutdown signal
+//!     BG->>Disk: persist last committed revision
 //!     Note right of Disk: Latest committed revision is persisted
 //! ```
 
@@ -61,7 +62,6 @@ use firewood_storage::{
 use parking_lot::{Condvar, Mutex, MutexGuard};
 
 use crate::{manager::CommittedRevision, root_store::RootStore};
-use crossbeam::channel::{self, Receiver, Sender};
 
 use firewood_storage::logger::error;
 
@@ -72,16 +72,8 @@ pub enum PersistError {
     FileIo(#[from] Arc<FileIoError>),
     #[error("RootStore error during persistence: {0}")]
     RootStore(#[source] Arc<dyn std::error::Error + Send + Sync>),
-    #[error("Failed to send message after background thread channel disconnected")]
+    #[error("Failed to signal background thread after shutdown")]
     ChannelDisconnected,
-}
-
-/// Message type that is sent to the background thread.
-enum PersistMessage {
-    /// A committed revision that may be persisted.
-    Commit(CommittedRevision),
-    /// A persisted revision to be reaped.
-    Reap(NodeStore<Committed, FileBacked>),
 }
 
 /// Handle for managing the background persistence thread.
@@ -89,12 +81,6 @@ enum PersistMessage {
 pub(crate) struct PersistWorker {
     /// The background thread responsible for persisting commits async.
     handle: Mutex<Option<JoinHandle<Result<(), PersistError>>>>,
-
-    /// Channel for sending messages to the background thread.
-    ///
-    /// Wrapped in `Option` so that `close()` can drop the sender to signal
-    /// shutdown to the background thread via channel close.
-    sender: Option<Sender<PersistMessage>>,
 
     /// Shared state with background thread.
     shared: Arc<SharedState>,
@@ -110,21 +96,28 @@ impl PersistWorker {
         header: NodeStoreHeader,
         root_store: Option<Arc<RootStore>>,
     ) -> Self {
-        let (sender, receiver) = channel::unbounded();
         let persist_interval = NonZeroU64::new(commit_count.get().div_ceil(2))
             .expect("a nonzero div_ceil(2) is always positive");
+        let persist_threshold = commit_count.get().saturating_sub(persist_interval.get());
 
         let shared = Arc::new(SharedState {
             error: OnceLock::new(),
-            commit_throttle: PersistSemaphore::new(commit_count),
+            commit_not_full: Condvar::new(),
+            persist_ready: Condvar::new(),
+            max_permits: commit_count,
+            persist_threshold,
             root_store,
             header: Mutex::new(header),
             persist_on_shutdown: OnceLock::new(),
+            state: Mutex::new(PersistState {
+                count: commit_count.get(),
+                latest_revision: None,
+                pending_reaps: Vec::new(),
+                shutdown: false,
+            }),
         });
 
         let persist_loop = PersistLoop {
-            receiver,
-            persist_interval,
             shared: shared.clone(),
         };
 
@@ -132,7 +125,6 @@ impl PersistWorker {
 
         Self {
             handle: Mutex::new(Some(handle)),
-            sender: Some(sender),
             shared,
         }
     }
@@ -140,13 +132,25 @@ impl PersistWorker {
     /// Sends `committed` to the background thread for persistence. This call
     /// blocks if the limit of unpersisted commits has been reached.
     pub(crate) fn persist(&self, committed: CommittedRevision) -> Result<(), PersistError> {
-        self.shared.commit_throttle.acquire();
+        let mut state = self.shared.state.lock();
+        // Backpressure: block only when all permits are exhausted.
+        while state.count == 0 && !state.shutdown {
+            self.shared.commit_not_full.wait(&mut state);
+        }
 
-        self.sender
-            .as_ref()
-            .ok_or(PersistError::ChannelDisconnected)?
-            .send(PersistMessage::Commit(committed))
-            .map_err(|_| self.resolve_worker_error())
+        if state.shutdown {
+            return Err(PersistError::ChannelDisconnected);
+        }
+
+        state.latest_revision = Some(committed);
+        state.count = state.count.saturating_sub(1);
+
+        // Wake the persister once we reach the threshold (or on any reap).
+        if state.count <= self.shared.persist_threshold {
+            self.shared.persist_ready.notify_one();
+        }
+
+        Ok(())
     }
 
     /// Sends `nodestore` to the background thread for reaping if archival mode
@@ -159,11 +163,13 @@ impl PersistWorker {
             // Always send the reap message, even for empty tries. Even if this
             // revision wasn't persisted, it could be the case that this
             // revision carries deleted nodes from a previously persisted revision.
-            self.sender
-                .as_ref()
-                .ok_or(PersistError::ChannelDisconnected)?
-                .send(PersistMessage::Reap(nodestore))
-                .map_err(|_| self.resolve_worker_error())?;
+            let mut state = self.shared.state.lock();
+            if state.shutdown {
+                return Err(PersistError::ChannelDisconnected);
+            }
+
+            state.pending_reaps.push(nodestore);
+            self.shared.persist_ready.notify_one();
         }
 
         Ok(())
@@ -196,9 +202,12 @@ impl PersistWorker {
             .persist_on_shutdown
             .set(latest_committed_revision);
 
-        // Drop the sender to close the channel, signaling the background
-        // thread to exit.
-        drop(self.sender.take());
+        {
+            let mut state = self.shared.state.lock();
+            state.shutdown = true;
+            self.shared.persist_ready.notify_one();
+            self.shared.commit_not_full.notify_all();
+        }
 
         self.join_handle();
         self.check_error()
@@ -220,97 +229,10 @@ impl PersistWorker {
         }
     }
 
-    /// Joins the background thread and returns the error that caused it to exit.
-    ///
-    /// Returns the stored error if one was set, or
-    /// `PersistError::ChannelDisconnected` as a fallback if the thread exited
-    /// cleanly without storing an error (e.g., `persist()` or `reap()` called
-    /// after `close()`).
-    ///
-    /// # Panics
-    ///
-    /// Propagates the panic if the background thread panicked.
-    fn resolve_worker_error(&self) -> PersistError {
-        self.join_handle();
-        self.check_error()
-            .err()
-            .unwrap_or(PersistError::ChannelDisconnected)
-    }
-
     /// Wait until all pending commits have been persisted.
     #[cfg(test)]
     pub(crate) fn wait_persisted(&self) {
-        self.shared.commit_throttle.wait_all_released();
-    }
-}
-
-/// A semaphore for controlling the rate of commits relative to persistence.
-///
-/// Unlike standard semaphores where `acquire()` returns a guard that auto-releases:
-/// - `acquire()` takes exactly 1 permit and blocks if none available
-/// - `release(n)` returns `n` permits at once (called when persist completes)
-///
-/// This design allows the persist loop to release multiple permits at once
-/// based on how many commits were persisted in a batch.
-#[derive(Debug)]
-struct PersistSemaphore {
-    state: Mutex<u64>,
-    condvar: Condvar,
-    max_permits: NonZeroU64,
-}
-
-impl PersistSemaphore {
-    /// Creates a new semaphore with `max_permits`.
-    const fn new(max_permits: NonZeroU64) -> Self {
-        Self {
-            state: Mutex::new(max_permits.get()),
-            condvar: Condvar::new(),
-            max_permits,
-        }
-    }
-
-    /// Acquires one permit. Blocks if no permits are available.
-    #[inline]
-    fn acquire(&self) {
-        let mut permits = self.state.lock();
-        while *permits == 0 {
-            self.condvar.wait(&mut permits);
-        }
-        // The background loop guarantees permits > 0
-        *permits = permits.saturating_sub(1);
-    }
-
-    /// Releases `count` permits back to the semaphore.
-    ///
-    /// The number of permits will not exceed `max_permits`.
-    #[inline]
-    fn release(&self, count: NonZeroU64) {
-        let mut permits = self.state.lock();
-        // wrapping_add is safe here: even at 1ns per commit, u64 overflow would take ~584 years
-        *permits = permits
-            .wrapping_add(count.get())
-            .min(self.max_permits.get());
-        self.condvar.notify_all();
-    }
-
-    /// Waits until all permits have been released back to the semaphore.
-    #[cfg(test)]
-    #[allow(clippy::arithmetic_side_effects)]
-    fn wait_all_released(&self) {
-        use firewood_storage::logger::warn;
-        use std::time::Duration;
-
-        const WARN_INTERVAL: Duration = Duration::from_secs(60);
-
-        let mut permits = self.state.lock();
-        let mut elapsed_secs = 0;
-        while *permits < self.max_permits.get() {
-            let result = self.condvar.wait_for(&mut permits, WARN_INTERVAL);
-            if result.timed_out() && *permits < self.max_permits.get() {
-                elapsed_secs += WARN_INTERVAL.as_secs();
-                warn!("all permits have not been released back after {elapsed_secs}s");
-            }
-        }
+        self.shared.wait_all_released();
     }
 }
 
@@ -319,8 +241,14 @@ impl PersistSemaphore {
 struct SharedState {
     /// Shared error state that can be checked without joining the thread.
     error: OnceLock<PersistError>,
-    /// Semaphore for limiting the number of unpersisted commits.
-    commit_throttle: PersistSemaphore,
+    /// Condition variable to wake blocked committers when space is available.
+    commit_not_full: Condvar,
+    /// Condition variable to wake the persister when persistence is needed.
+    persist_ready: Condvar,
+    /// Maximum number of unpersisted commits allowed.
+    max_permits: NonZeroU64,
+    /// Persist when remaining permits are at or below this threshold.
+    persist_threshold: u64,
     /// Persisted metadata for the database.
     /// Updated on persists or when revisions are reaped.
     header: Mutex<NodeStoreHeader>,
@@ -328,14 +256,20 @@ struct SharedState {
     root_store: Option<Arc<RootStore>>,
     /// Unpersisted revision to persist on shutdown.
     persist_on_shutdown: OnceLock<CommittedRevision>,
+    /// Coordination state for commit and persist operations.
+    state: Mutex<PersistState>,
+}
+
+#[derive(Debug)]
+struct PersistState {
+    count: u64,
+    latest_revision: Option<CommittedRevision>,
+    pending_reaps: Vec<NodeStore<Committed, FileBacked>>,
+    shutdown: bool,
 }
 
 /// The background persistence loop that runs in a separate thread.
 struct PersistLoop {
-    /// Channel for receiving messages from `PersistWorker`.
-    receiver: Receiver<PersistMessage>,
-    /// Persist every `persist_interval` commits.
-    persist_interval: NonZeroU64,
     /// Shared state for coordination with `PersistWorker`.
     shared: Arc<SharedState>,
 }
@@ -349,44 +283,70 @@ impl PersistLoop {
         let result = self.event_loop();
         if let Err(ref err) = result {
             self.shared.error.set(err.clone()).expect("should be empty");
+            let mut state = self.shared.state.lock();
+            state.shutdown = true;
+            self.shared.persist_ready.notify_one();
+            self.shared.commit_not_full.notify_all();
         }
         result
     }
 
-    /// Processes messages until the channel is closed or an error occurs.
+    /// Processes pending work until shutdown or an error occurs.
     fn event_loop(&mut self) -> Result<(), PersistError> {
-        let mut commits_since_persist = 0u64;
-
-        while let Ok(message) = self.receiver.recv() {
-            match message {
-                PersistMessage::Reap(nodestore) => self.reap(nodestore)?,
-                PersistMessage::Commit(revision) => {
-                    self.commit(revision, &mut commits_since_persist)?;
+        loop {
+            let (revision, reaps, permits_to_release, shutting_down) = {
+                let mut state = self.shared.state.lock();
+                // Sleep until there is work to do (reaps or a pending persist), or shutdown.
+                while !state.shutdown
+                    && state.pending_reaps.is_empty()
+                    && (state.count > self.shared.persist_threshold
+                        || state.latest_revision.is_none())
+                {
+                    self.shared.persist_ready.wait(&mut state);
                 }
+
+                let reaps = std::mem::take(&mut state.pending_reaps);
+                let should_persist =
+                    state.count <= self.shared.persist_threshold && state.latest_revision.is_some();
+                let revision = if should_persist {
+                    state.latest_revision.take()
+                } else {
+                    None
+                };
+                let permits_to_release = if should_persist {
+                    // Release all permits for unpersisted commits observed at this point.
+                    self.shared.max_permits.get().saturating_sub(state.count)
+                } else {
+                    0
+                };
+                let shutting_down = state.shutdown;
+
+                (revision, reaps, permits_to_release, shutting_down)
+            };
+
+            for nodestore in reaps {
+                self.reap(nodestore)?;
+            }
+
+            if let Some(revision) = revision {
+                self.persist_and_release(&revision, permits_to_release)?;
+            }
+
+            if shutting_down {
+                break;
             }
         }
 
+        let outstanding_commits = {
+            let state = self.shared.state.lock();
+            self.shared.max_permits.get().saturating_sub(state.count)
+        };
+
         // Persist the last unpersisted revision on shutdown
         if let Some(revision) = self.shared.persist_on_shutdown.get().cloned()
-            && commits_since_persist > 0
+            && outstanding_commits > 0
         {
-            self.persist_and_release(&revision, &mut commits_since_persist)?;
-        }
-
-        Ok(())
-    }
-
-    /// Handles a commit message: increments counter, decides whether to persist now or defer.
-    fn commit(
-        &mut self,
-        revision: CommittedRevision,
-        commits_since_persist: &mut u64,
-    ) -> Result<(), PersistError> {
-        // wrapping_add is safe: we will never exceed persist_interval
-        *commits_since_persist = commits_since_persist.wrapping_add(1);
-
-        if *commits_since_persist >= self.persist_interval.get() {
-            self.persist_and_release(&revision, commits_since_persist)?;
+            self.persist_and_release(&revision, outstanding_commits)?;
         }
 
         Ok(())
@@ -394,14 +354,14 @@ impl PersistLoop {
 
     /// Performs the actual persistence and releases semaphore permits.
     fn persist_and_release(
-        &mut self,
+        &self,
         revision: &CommittedRevision,
-        commits_since_persist: &mut u64,
+        permits_to_release: u64,
     ) -> Result<(), PersistError> {
         let result = self
             .persist_to_disk(revision)
             .and_then(|()| self.save_to_root_store(revision));
-        self.release_permits(commits_since_persist);
+        self.release_permits(permits_to_release);
         result
     }
 
@@ -414,12 +374,18 @@ impl PersistLoop {
         })
     }
 
-    /// Releases semaphore permits for commits since last persist if any
-    fn release_permits(&self, commits_since_persist: &mut u64) {
-        if let Some(count) = NonZeroU64::new(*commits_since_persist) {
-            self.shared.commit_throttle.release(count);
+    /// Releases permits for commits since last persist if any.
+    fn release_permits(&self, permits_to_release: u64) {
+        if permits_to_release == 0 {
+            return;
         }
-        *commits_since_persist = 0;
+
+        let mut state = self.shared.state.lock();
+        state.count = state
+            .count
+            .saturating_add(permits_to_release)
+            .min(self.shared.max_permits.get());
+        self.shared.commit_not_full.notify_all();
     }
 
     /// Add the nodes of this revision to the free lists.
@@ -441,5 +407,26 @@ impl PersistLoop {
         }
 
         Ok(())
+    }
+}
+
+impl SharedState {
+    #[cfg(test)]
+    #[allow(clippy::arithmetic_side_effects)]
+    fn wait_all_released(&self) {
+        use firewood_storage::logger::warn;
+        use std::time::Duration;
+
+        const WARN_INTERVAL: Duration = Duration::from_secs(60);
+
+        let mut state = self.state.lock();
+        let mut elapsed_secs = 0;
+        while state.count < self.max_permits.get() {
+            let result = self.commit_not_full.wait_for(&mut state, WARN_INTERVAL);
+            if result.timed_out() && state.count < self.max_permits.get() {
+                elapsed_secs += WARN_INTERVAL.as_secs();
+                warn!("all permits have not been released back after {elapsed_secs}s");
+            }
+        }
     }
 }
