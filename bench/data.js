@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1771400631983,
+  "lastUpdate": 1771487013431,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -610,6 +610,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 76.97483233299029,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "f3a60b49c33fdd9fa488cac10f626fc6dbb57d7f",
+          "message": "fix: Avoid holding the last_committed_revision arc (#1685)\n\nTo reliably reproduce the original timing problem, sleep for 200ms or so\nduring the call to `self.persist`.\n\n## Why this should be merged\n\nIt's a bug.\n\n## How this works\n\nWhen persist() is slow, the persist worker holds the Arc reference\nthrough last_committed_revision for an extended period after persistence\ncompletes. This prevents the revision manager from reaping the revision\nbecause Arc::try_unwrap() fails (reference count > 1).\n\nSo, we clear the last_committed_revision the moment we've decided to\npersist it, which lowers the reference count faster.\n\n## How this was tested\n\nAdded that sleep and reproduced the bug. Added the fix and left in the\nsleep and it worked great.\n\nFixes #1684",
+          "timestamp": "2026-02-18T18:57:59Z",
+          "url": "https://github.com/ava-labs/firewood/commit/f3a60b49c33fdd9fa488cac10f626fc6dbb57d7f"
+        },
+        "date": 1771487013120,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 143.8998215045726,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6949.278946591492,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 110.38133411430101,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6759.81477934851,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 76.53656362710137,
             "unit": "block_accept_ms/ggas"
           }
         ]
