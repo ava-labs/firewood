@@ -201,6 +201,9 @@ pub enum Error {
     /// Both `node_cache_size` and `node_cache_memory_limit` were specified in configuration
     #[error("both node_cache_size and node_cache_memory_limit specified; use only one")]
     ConflictingCacheConfig,
+
+    #[error("commit count must be positive")]
+    ZeroCommitCount,
 }
 
 impl From<std::convert::Infallible> for Error {

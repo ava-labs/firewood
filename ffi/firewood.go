@@ -20,7 +20,7 @@ package ffi
 // #cgo LDFLAGS: -L${SRCDIR}/../target/release
 // #cgo LDFLAGS: -L${SRCDIR}/../target/maxperf
 // // FIREWOOD_CGO_END_LOCAL_LIBS
-// #cgo LDFLAGS: -lfirewood_ffi -lm
+// #cgo LDFLAGS: -lfirewood_ffi -lm -ldl
 // #include <stdlib.h>
 // #include "firewood.h"
 import "C"
@@ -113,14 +113,18 @@ type config struct {
 	rootStore bool
 	// expensiveMetricsEnabled controls whether expensive metrics recording is enabled.
 	expensiveMetricsEnabled bool
+	// deferredPersistenceCommitCount determines the maximum number of unpersisted
+	// revisions that can exist at a given time.
+	deferredPersistenceCommitCount uint64
 }
 
 func defaultConfig() *config {
 	return &config{
-		nodeCacheEntries:     1_000_000,
-		freeListCacheEntries: 1_000_000,
-		revisions:            100,
-		readCacheStrategy:    OnlyCacheWrites,
+		nodeCacheEntries:               1_000_000,
+		freeListCacheEntries:           1_000_000,
+		revisions:                      100,
+		readCacheStrategy:              OnlyCacheWrites,
+		deferredPersistenceCommitCount: 1,
 	}
 }
 
@@ -193,6 +197,15 @@ func WithExpensiveMetrics() Option {
 	}
 }
 
+// WithDeferredPersistenceCommitCount sets the maximum number of unpersisted revisions
+// that can exist at a time. Note: `commitCount` must be greater than 0.
+// Default: 1
+func WithDeferredPersistenceCommitCount(commitCount uint64) Option {
+	return func(c *config) {
+		c.deferredPersistenceCommitCount = commitCount
+	}
+}
+
 // A CacheStrategy represents the caching strategy used by a [Database].
 type CacheStrategy uint8
 
@@ -250,15 +263,16 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	defer pinner.Unpin()
 
 	args := C.struct_DatabaseHandleArgs{
-		dir:                  newBorrowedBytes([]byte(dbDir), &pinner),
-		cache_size:           C.size_t(conf.nodeCacheEntries),
-		free_list_cache_size: C.size_t(conf.freeListCacheEntries),
-		revisions:            C.size_t(conf.revisions),
-		strategy:             C.uint8_t(conf.readCacheStrategy),
-		truncate:             C.bool(conf.truncate),
-		root_store:           C.bool(conf.rootStore),
-		expensive_metrics:    C.bool(conf.expensiveMetricsEnabled),
-		node_hash_algorithm:  C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
+		dir:                               newBorrowedBytes([]byte(dbDir), &pinner),
+		cache_size:                        C.size_t(conf.nodeCacheEntries),
+		free_list_cache_size:              C.size_t(conf.freeListCacheEntries),
+		revisions:                         C.size_t(conf.revisions),
+		strategy:                          C.uint8_t(conf.readCacheStrategy),
+		truncate:                          C.bool(conf.truncate),
+		root_store:                        C.bool(conf.rootStore),
+		expensive_metrics:                 C.bool(conf.expensiveMetricsEnabled),
+		node_hash_algorithm:               C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
+		deferred_persistence_commit_count: C.uint64_t(conf.deferredPersistenceCommitCount),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))
@@ -433,8 +447,6 @@ func (db *Database) Close(ctx context.Context) error {
 	if db.handle == nil {
 		return nil
 	}
-
-	go runtime.GC()
 
 	done := make(chan struct{})
 	go func() {
