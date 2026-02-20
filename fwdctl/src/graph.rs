@@ -23,5 +23,5 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
 
     let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
     db.dump(&mut stdout())?;
-    Ok(())
+    db.close()
 }

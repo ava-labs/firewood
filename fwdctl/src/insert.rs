@@ -38,5 +38,5 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     proposal.commit()?;
 
     println!("{}", opts.key);
-    Ok(())
+    db.close()
 }
