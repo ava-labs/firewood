@@ -45,7 +45,7 @@ func (Gatherer) Gather() ([]*dto.MetricFamily, error) {
 	return lst, nil
 }
 
-// Starts global recorder for metrics.
+// StartMetrics starts the global recorder for metrics.
 // This function only needs to be called once.
 // An error is returned if this method is called a second time, or if it is
 // called after StartMetricsWithExporter.
@@ -54,7 +54,8 @@ func StartMetrics() error {
 	return getErrorFromVoidResult(C.fwd_start_metrics())
 }
 
-// Start global recorder for metrics along with an HTTP exporter.
+// StartMetricsWithExporter starts the global recorder for metrics along with an
+// HTTP exporter.
 // This function only needs to be called once.
 // An error is returned if this method is called a second time, if it is
 // called after StartMetrics, or if the exporter failed to start.
@@ -62,7 +63,7 @@ func StartMetricsWithExporter(metricsPort uint16) error {
 	return getErrorFromVoidResult(C.fwd_start_metrics_with_exporter(C.uint16_t(metricsPort)))
 }
 
-// Collect metrics from global recorder
+// GatherMetrics collects metrics from global recorder.
 // Returns an error if the global recorder is not initialized.
 // This method must be called after StartMetrics or StartMetricsWithExporter
 func GatherMetrics() (string, error) {
@@ -80,7 +81,8 @@ type LogConfig struct {
 	FilterLevel string
 }
 
-// Starts global logs.
+// StartLogs initialized the log factor in the Rust library with the provided
+// configuration.
 // This function only needs to be called once.
 // An error is returned if this method is called a second time.
 func StartLogs(config *LogConfig) error {
