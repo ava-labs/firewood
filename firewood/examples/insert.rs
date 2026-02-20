@@ -15,7 +15,7 @@ use std::time::Instant;
 use firewood::db::{BatchOp, Db, DbConfig};
 use firewood::manager::RevisionManagerConfig;
 use firewood::v2::api::{Db as _, DbView, KeyType, Proposal as _, ValueType};
-use rand::{Rng, distr::Alphanumeric};
+use rand::{RngExt, distr::Alphanumeric};
 
 #[derive(Parser, Debug)]
 struct Args {

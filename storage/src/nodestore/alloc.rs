@@ -676,9 +676,7 @@ mod tests {
         let area_size = area_index_type.size();
 
         // create a random free list scattered across the storage
-        let offsets = (1..100u64)
-            .map(|i| i * area_size)
-            .choose_multiple(&mut rng, 10);
+        let offsets = (1..100u64).map(|i| i * area_size).sample(&mut rng, 10);
         for (cur, next) in offsets.iter().zip(offsets.iter().skip(1)) {
             test_utils::test_write_free_area(
                 &nodestore,

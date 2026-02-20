@@ -34,22 +34,22 @@ log.workspace = true
 nonzero_ext.workspace = true
 # Regular dependencies
 csv = "1.4.0"
-indicatif = "0.18.3"
-askama = "0.15.1"
+indicatif = "0.18.4"
+askama = "0.15.4"
 num-format = "0.4.4"
-aws-config = { version = "1.0", optional = true }
-aws-sdk-ec2 = { version = "1.0", optional = true }
-aws-sdk-ssm = { version = "1.0", optional = true }
-aws-sdk-sts = { version = "1.96.0", optional = true }
-aws-smithy-runtime-api = { version = "1.0", optional = true }
+aws-config = { version = "1.8", optional = true }
+aws-sdk-ec2 = { version = "1.212", optional = true }
+aws-sdk-ssm = { version = "1.105", optional = true }
+aws-sdk-sts = { version = "1.99.0", optional = true }
+aws-smithy-runtime-api = { version = "1.11", optional = true }
 base64 = { version = "0.22", optional = true }
 dirs = { version = "6.0", optional = true }
 rand = { workspace = true, optional = true }
-serde = { version = "1.0.213", features = ["derive"], optional = true }
+serde = { version = "1.0.228", features = ["derive"], optional = true }
 serde_json = { version = "1.0", optional = true }
 serde_yaml = { version = "0.10", package = "serde_yaml_ng", optional = true }
 thiserror = { version = "2.0", optional = true }
-tokio = { version = "1.0", features = ["rt-multi-thread", "sync", "time"], optional = true }
+tokio = { version = "1.49", features = ["rt-multi-thread", "sync", "time"], optional = true }
 
 [features]
 ethhash = ["firewood/ethhash"]
@@ -77,7 +77,7 @@ rand.workspace = true
 tempfile.workspace = true
 # Regular dependencies
 assert_cmd = "2.1.2"
-predicates = "3.1.3"
+predicates = "3.1.4"
 
 [lints]
 workspace = true

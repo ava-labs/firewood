@@ -505,6 +505,8 @@ impl<'lend, T: HashedNodeReader> Lending<'lend> for PreOrderIterator<'_, T> {
 }
 
 impl<T: HashedNodeReader> Lender for PreOrderIterator<'_, T> {
+    lender::check_covariance!();
+
     fn next(&mut self) -> Option<Result<&'_ ComparableNodeInfo, FileIoError>> {
         self.next_node_info().transpose()
     }
