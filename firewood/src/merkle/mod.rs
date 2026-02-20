@@ -262,12 +262,86 @@ impl<T: TrieReader> Merkle<T> {
     ///   incremental range proof verification
     pub fn verify_range_proof(
         &self,
-        _first_key: Option<impl KeyType>,
-        _last_key: Option<impl KeyType>,
-        _root_hash: &TrieHash,
-        _proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
+        first_key: Option<impl KeyType>,
+        last_key: Option<impl KeyType>,
+        root_hash: &TrieHash,
+        proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
     ) -> Result<(), api::Error> {
-        todo!()
+        // check that the keys are in ascending order
+        let key_values = proof.key_values();
+        if !key_values
+            .iter()
+            .map(|(key, _)| key.as_ref())
+            .is_sorted_by(|a, b| a < b)
+        {
+            return Err(api::Error::ProofError(
+                ProofError::NonMonotonicIncreaseRange,
+            ));
+        }
+
+        if key_values.is_empty() && first_key.is_none() && last_key.is_none() {
+            return Err(api::Error::ProofError(ProofError::Empty));
+        }
+
+        let left = key_values.first();
+        let right = key_values.last();
+
+        // Verify that first_key (if provided) is <= the first key in the proof
+        if let (Some(ref requested_first), Some((left_key, _))) = (first_key.as_ref(), left)
+            && requested_first.as_ref() > left_key.as_ref()
+        {
+            return Err(api::Error::InvalidRange {
+                start_key: requested_first.as_ref().to_vec().into(),
+                end_key: left_key.as_ref().to_vec().into(),
+            });
+        }
+
+        // start proof verifies the requested lower bound (if any), not necessarily
+        // the first key-value included in this proof.
+        if let Some(ref requested_first) = first_key {
+            let expected_start_value = left.and_then(|(key, value)| {
+                (requested_first.as_ref() == key.as_ref()).then_some(value.as_ref())
+            });
+
+            proof
+                .start_proof()
+                .verify(requested_first.as_ref(), expected_start_value, root_hash)?;
+        } else if let Some((left_key, left_value)) = left {
+            proof
+                .start_proof()
+                .verify(left_key.as_ref(), Some(left_value.as_ref()), root_hash)?;
+        }
+
+        // Verify that last_key (if provided) is >= the last key in the proof
+        if let (Some(ref requested_last), Some((right_key, _))) = (last_key.as_ref(), right)
+            && requested_last.as_ref() < right_key.as_ref()
+        {
+            return Err(api::Error::InvalidRange {
+                start_key: requested_last.as_ref().to_vec().into(),
+                end_key: right_key.as_ref().to_vec().into(),
+            });
+        }
+
+        // end proof verifies the requested upper bound (if any), not necessarily
+        // the last key-value included in this proof.
+        if let Some(ref requested_last) = last_key {
+            let expected_end_value = right.and_then(|(key, value)| {
+                (requested_last.as_ref() == key.as_ref()).then_some(value.as_ref())
+            });
+
+            proof
+                .end_proof()
+                .verify(requested_last.as_ref(), expected_end_value, root_hash)?;
+        } else if let Some((right_key, right_value)) = right {
+            proof
+                .end_proof()
+                .verify(right_key.as_ref(), Some(right_value.as_ref()), root_hash)?;
+        }
+
+        // TODO: build a merkle and reshape it, filling in hashes from the
+        // provided proofs on the left and right edges, then verify the root hash
+
+        Ok(())
     }
 
     /// Merges a sequence of key-value pairs with the base merkle trie, yielding
