@@ -5,7 +5,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use firewood::db::{BatchOp, Db, DbConfig};
 use firewood::v2::api::{Db as _, Proposal as _};
 use firewood_storage::NodeHashAlgorithm;
-use rand::{Rng, distr::Alphanumeric};
+use rand::{RngExt, distr::Alphanumeric};
 use std::iter::repeat_with;
 use std::num::NonZeroU64;
 
