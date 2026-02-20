@@ -6,10 +6,14 @@ package eth
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"math/rand"
+	"runtime"
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/ava-labs/firewood-go-ethhash/ffi"
 	firewood "github.com/ava-labs/firewood-go-ethhash/ffi"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/rawdb"
@@ -62,13 +66,33 @@ type merkleTriePair struct {
 	pendingFwdBatch  []firewood.BatchOp
 }
 
+// oneSecCtx returns `tb.Context()` with a 1-second timeout added. Any existing
+// cancellation on `tb.Context()` is removed, which allows this function to be
+// used inside a `tb.Cleanup()`
+func oneSecCtx(tb testing.TB) context.Context {
+	ctx := context.WithoutCancel(tb.Context())
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	tb.Cleanup(cancel)
+	return ctx
+}
+
 func newFirewoodDB(t *testing.T) *firewood.Database {
 	t.Helper()
+	r := require.New(t)
 
 	db, err := firewood.New(t.TempDir(), firewood.EthereumNodeHashing)
-	require.NoError(t, err, "firewood.New()")
+	r.NoError(err, "firewood.New()")
 	t.Cleanup(func() {
-		require.NoErrorf(t, db.Close(context.Background()), "%T.Close()", db)
+		err := db.Close(oneSecCtx(t))
+		if errors.Is(err, ffi.ErrActiveKeepAliveHandles) {
+			// force a GC to clean up dangling handles that are preventing the
+			// database from closing, then try again. Intentionally not looping
+			// since a subsequent attempt is unlikely to succeed if the first
+			// one didn't.
+			runtime.GC()
+			err = db.Close(oneSecCtx(t))
+		}
+		r.NoError(err, "%T.Close()", db)
 	})
 	return db
 }
