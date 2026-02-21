@@ -113,11 +113,14 @@ fn invoke_with_handle<H: MetricsContextExt, T: NullHandleResult, V: Into<T>>(
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_get_latest(db: Option<&DatabaseHandle>, key: BorrowedBytes) -> ValueResult {
     #[cfg(feature = "block-replay")]
-    if db.is_some() {
-        replay::record_get_latest(key);
-    }
+    let start = std::time::Instant::now();
 
-    invoke_with_handle(db, move |db| db.get_latest(key))
+    let result = invoke_with_handle(db, move |db| db.get_latest(key));
+
+    #[cfg(feature = "block-replay")]
+    replay::record_get_latest(key, &result, start.elapsed().as_nanos() as u64);
+
+    result
 }
 
 /// Returns an iterator optionally starting from a key in the provided revision.
@@ -145,7 +148,15 @@ pub extern "C" fn fwd_iter_on_revision<'view>(
     revision: Option<&'view RevisionHandle>,
     key: BorrowedBytes,
 ) -> IteratorResult<'view> {
-    invoke_with_handle(revision, move |rev| rev.iter_from(Some(key.as_slice())))
+    #[cfg(feature = "block-replay")]
+    let start = std::time::Instant::now();
+
+    let result = invoke_with_handle(revision, move |rev| rev.iter_from(Some(key.as_slice())));
+
+    #[cfg(feature = "block-replay")]
+    replay::record_iter_on_revision(revision, key, &result, start.elapsed().as_nanos() as u64);
+
+    result
 }
 
 /// Returns an iterator on the provided proposal optionally starting from a key
@@ -174,7 +185,15 @@ pub extern "C" fn fwd_iter_on_proposal<'p>(
     handle: Option<&'p ProposalHandle<'_>>,
     key: BorrowedBytes,
 ) -> IteratorResult<'p> {
-    invoke_with_handle(handle, move |p| p.iter_from(Some(key.as_slice())))
+    #[cfg(feature = "block-replay")]
+    let start = std::time::Instant::now();
+
+    let result = invoke_with_handle(handle, move |p| p.iter_from(Some(key.as_slice())));
+
+    #[cfg(feature = "block-replay")]
+    replay::record_iter_on_proposal(handle, key, &result, start.elapsed().as_nanos() as u64);
+
+    result
 }
 
 /// Retrieves the next item from the iterator.
@@ -205,7 +224,19 @@ pub extern "C" fn fwd_iter_on_proposal<'p>(
 ///
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) -> KeyValueResult {
-    invoke_with_handle(handle, Iterator::next)
+    #[cfg(feature = "block-replay")]
+    let iterator_ptr = handle
+        .as_ref()
+        .map(|it| std::ptr::from_ref::<IteratorHandle<'_>>(it));
+    #[cfg(feature = "block-replay")]
+    let start = std::time::Instant::now();
+
+    let result = invoke_with_handle(handle, Iterator::next);
+
+    #[cfg(feature = "block-replay")]
+    replay::record_iter_next(iterator_ptr, &result, start.elapsed().as_nanos() as u64);
+
+    result
 }
 
 /// Retrieves the next batch of items from the iterator.
@@ -239,7 +270,19 @@ pub extern "C" fn fwd_iter_next_n(
     handle: Option<&mut IteratorHandle<'_>>,
     n: usize,
 ) -> KeyValueBatchResult {
-    invoke_with_handle(handle, |it| it.iter_next_n(n))
+    #[cfg(feature = "block-replay")]
+    let iterator_ptr = handle
+        .as_ref()
+        .map(|it| std::ptr::from_ref::<IteratorHandle<'_>>(it));
+    #[cfg(feature = "block-replay")]
+    let start = std::time::Instant::now();
+
+    let result = invoke_with_handle(handle, |it| it.iter_next_n(n));
+
+    #[cfg(feature = "block-replay")]
+    replay::record_iter_next_n(iterator_ptr, n, &result, start.elapsed().as_nanos() as u64);
+
+    result
 }
 
 /// Consumes the [`IteratorHandle`], destroys the iterator, and frees the memory.
@@ -262,7 +305,17 @@ pub extern "C" fn fwd_iter_next_n(
 ///
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_free_iterator(iterator: Option<Box<IteratorHandle<'_>>>) -> VoidResult {
-    invoke_with_handle(iterator, drop)
+    #[cfg(feature = "block-replay")]
+    let iterator_ptr = iterator.as_ref().map(|it| std::ptr::from_ref(&**it));
+    #[cfg(feature = "block-replay")]
+    let start = std::time::Instant::now();
+
+    let result = invoke_with_handle(iterator, drop);
+
+    #[cfg(feature = "block-replay")]
+    replay::record_free_iterator(iterator_ptr, &result, start.elapsed().as_nanos() as u64);
+
+    result
 }
 
 /// Gets a handle to the revision identified by the provided root hash.
@@ -289,7 +342,15 @@ pub extern "C" fn fwd_free_iterator(iterator: Option<Box<IteratorHandle<'_>>>) -
 /// [`RevisionHandle`]: crate::revision::RevisionHandle
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_get_revision(db: Option<&DatabaseHandle>, root: HashKey) -> RevisionResult {
-    invoke_with_handle(db, move |db| db.get_revision(root.into()))
+    #[cfg(feature = "block-replay")]
+    let start = std::time::Instant::now();
+
+    let result = invoke_with_handle(db, move |db| db.get_revision(root.into()));
+
+    #[cfg(feature = "block-replay")]
+    replay::record_get_revision(root, &result, start.elapsed().as_nanos() as u64);
+
+    result
 }
 
 /// Gets the value associated with the given key from the provided revision handle.
@@ -318,7 +379,15 @@ pub extern "C" fn fwd_get_from_revision(
     revision: Option<&RevisionHandle>,
     key: BorrowedBytes,
 ) -> ValueResult {
-    invoke_with_handle(revision, move |rev| rev.val(key))
+    #[cfg(feature = "block-replay")]
+    let start = std::time::Instant::now();
+
+    let result = invoke_with_handle(revision, move |rev| rev.val(key));
+
+    #[cfg(feature = "block-replay")]
+    replay::record_get_from_revision(revision, key, &result, start.elapsed().as_nanos() as u64);
+
+    result
 }
 
 /// Consumes the [`RevisionHandle`] and frees the memory associated with it.
@@ -340,7 +409,17 @@ pub extern "C" fn fwd_get_from_revision(
 /// this function is called.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_free_revision(revision: Option<Box<RevisionHandle>>) -> VoidResult {
-    invoke_with_handle(revision, drop)
+    #[cfg(feature = "block-replay")]
+    let revision_ptr = revision.as_ref().map(|r| std::ptr::from_ref(&**r));
+    #[cfg(feature = "block-replay")]
+    let start = std::time::Instant::now();
+
+    let result = invoke_with_handle(revision, drop);
+
+    #[cfg(feature = "block-replay")]
+    replay::record_free_revision(revision_ptr, &result, start.elapsed().as_nanos() as u64);
+
+    result
 }
 
 /// Gets the value associated with the given key from the proposal provided.
@@ -371,9 +450,14 @@ pub extern "C" fn fwd_get_from_proposal(
     key: BorrowedBytes,
 ) -> ValueResult {
     #[cfg(feature = "block-replay")]
-    replay::record_get_from_proposal(handle, key);
+    let start = std::time::Instant::now();
 
-    invoke_with_handle(handle, move |handle| handle.val(key))
+    let result = invoke_with_handle(handle, move |handle| handle.val(key));
+
+    #[cfg(feature = "block-replay")]
+    replay::record_get_from_proposal(handle, key, &result, start.elapsed().as_nanos() as u64);
+
+    result
 }
 
 /// Puts the given key-value pairs into the database.
@@ -404,11 +488,14 @@ pub extern "C" fn fwd_batch(
     values: BorrowedBatchOps<'_>,
 ) -> HashResult {
     #[cfg(feature = "block-replay")]
-    if db.is_some() {
-        replay::record_batch(values);
-    }
+    let start = std::time::Instant::now();
 
-    invoke_with_handle(db, move |db| db.create_batch(values))
+    let result = invoke_with_handle(db, move |db| db.create_batch(values));
+
+    #[cfg(feature = "block-replay")]
+    replay::record_batch(values, &result, start.elapsed().as_nanos() as u64);
+
+    result
 }
 
 /// Proposes a batch of operations to the database.
@@ -438,12 +525,13 @@ pub extern "C" fn fwd_propose_on_db<'db>(
     db: Option<&'db DatabaseHandle>,
     values: BorrowedBatchOps<'_>,
 ) -> ProposalResult<'db> {
+    #[cfg(feature = "block-replay")]
+    let start = std::time::Instant::now();
+
     let result = invoke_with_handle(db, move |db| db.create_proposal_handle(values));
 
     #[cfg(feature = "block-replay")]
-    if db.is_some() {
-        replay::record_propose_on_db(&result, values);
-    }
+    replay::record_propose_on_db(&result, values, start.elapsed().as_nanos() as u64);
 
     result
 }
@@ -476,10 +564,13 @@ pub extern "C" fn fwd_propose_on_proposal<'db>(
     handle: Option<&ProposalHandle<'db>>,
     values: BorrowedBatchOps<'_>,
 ) -> ProposalResult<'db> {
+    #[cfg(feature = "block-replay")]
+    let start = std::time::Instant::now();
+
     let result = invoke_with_handle(handle, move |p| p.create_proposal_handle(values));
 
     #[cfg(feature = "block-replay")]
-    replay::record_propose_on_proposal(handle, &result, values);
+    replay::record_propose_on_proposal(handle, &result, values, start.elapsed().as_nanos() as u64);
 
     result
 }
@@ -515,6 +606,8 @@ pub extern "C" fn fwd_propose_on_proposal<'db>(
 pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>) -> HashResult {
     #[cfg(feature = "block-replay")]
     let proposal_ptr = proposal.as_ref().map(|h| std::ptr::from_ref(&**h));
+    #[cfg(feature = "block-replay")]
+    let start = std::time::Instant::now();
 
     let result = invoke_with_handle(proposal, move |proposal| {
         proposal.commit_proposal(|commit_time| {
@@ -529,7 +622,7 @@ pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>)
     });
 
     #[cfg(feature = "block-replay")]
-    replay::record_commit(proposal_ptr, &result);
+    replay::record_commit(proposal_ptr, &result, start.elapsed().as_nanos() as u64);
 
     result
 }
@@ -556,7 +649,17 @@ pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>)
 /// will consume the proposal automatically.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_free_proposal(proposal: Option<Box<ProposalHandle<'_>>>) -> VoidResult {
-    invoke_with_handle(proposal, drop)
+    #[cfg(feature = "block-replay")]
+    let proposal_ptr = proposal.as_ref().map(|p| std::ptr::from_ref(&**p));
+    #[cfg(feature = "block-replay")]
+    let start = std::time::Instant::now();
+
+    let result = invoke_with_handle(proposal, drop);
+
+    #[cfg(feature = "block-replay")]
+    replay::record_free_proposal(proposal_ptr, &result, start.elapsed().as_nanos() as u64);
+
+    result
 }
 
 /// Get the root hash of the latest version of the database
@@ -580,7 +683,15 @@ pub extern "C" fn fwd_free_proposal(proposal: Option<Box<ProposalHandle<'_>>>) -
 ///   by value).
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_root_hash(db: Option<&DatabaseHandle>) -> HashResult {
-    invoke_with_handle(db, DatabaseHandle::current_root_hash)
+    #[cfg(feature = "block-replay")]
+    let start = std::time::Instant::now();
+
+    let result = invoke_with_handle(db, DatabaseHandle::current_root_hash);
+
+    #[cfg(feature = "block-replay")]
+    replay::record_root_hash(&result, start.elapsed().as_nanos() as u64);
+
+    result
 }
 
 /// Start metrics recorder for this process.

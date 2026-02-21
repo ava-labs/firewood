@@ -4,11 +4,8 @@
 //! Block replay recording for FFI operations.
 //!
 //! When the `block-replay` feature is enabled and the `FIREWOOD_BLOCK_REPLAY_PATH`
-//! environment variable is set, this module records all database operations
-//! passing through the FFI layer to a file for later replay.
-//!
-//! The recording is length-prefixed messagepack segments, compatible with the
-//! `firewood-replay` crate's replay engine.
+//! environment variable is set, this module records database operations passing
+//! through the FFI layer to a file for later replay and analysis.
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
@@ -17,8 +14,12 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use firewood_replay::{
-    Batch, Commit, DbOperation, GetFromProposal, GetLatest, KeyValueOp, ProposalId, ProposeOnDB,
-    ProposeOnProposal, ReplayLog,
+    Batch, Commit, DbOperation, FreeIterator, FreeProposal, FreeRevision, GetFromProposal,
+    GetFromRevision, GetLatest, GetRevision, HashResultData, IterNext, IterNextN, IterOnProposal,
+    IterOnRevision, IteratorId, IteratorResultData, KeyValueBatchResultData, KeyValueOp,
+    KeyValueRead, KeyValueResultData, OperationMetadata, ProposalId, ProposalResultData,
+    ProposeOnDB, ProposeOnProposal, ReplayLog, RevisionId, RevisionResultData, RootHash,
+    ValueResultData, VoidResultData,
 };
 use parking_lot::Mutex;
 
@@ -26,6 +27,10 @@ use crate::value::{BatchOp, BorrowedBatchOps, BorrowedBytes};
 
 /// Environment variable that controls the output path for the replay log.
 const REPLAY_PATH_ENV: &str = "FIREWOOD_BLOCK_REPLAY_PATH";
+/// Environment variable to include captured call results in replay log entries.
+const INCLUDE_RESULTS_ENV: &str = "FIREWOOD_BLOCK_REPLAY_INCLUDE_RESULTS";
+/// Environment variable to include timing metadata in replay log entries.
+const INCLUDE_METADATA_ENV: &str = "FIREWOOD_BLOCK_REPLAY_INCLUDE_METADATA";
 
 /// Number of operations to buffer before flushing to disk.
 const FLUSH_THRESHOLD: usize = 10_000;
@@ -41,57 +46,170 @@ struct Recorder {
     next_proposal_id: u64,
     /// Map from proposal handle pointer addresses to assigned IDs.
     proposal_ids: HashMap<usize, ProposalId>,
+    /// Counter for assigning revision IDs.
+    next_revision_id: u64,
+    /// Map from revision handle pointer addresses to assigned IDs.
+    revision_ids: HashMap<usize, RevisionId>,
+    /// Counter for assigning iterator IDs.
+    next_iterator_id: u64,
+    /// Map from iterator handle pointer addresses to assigned IDs.
+    iterator_ids: HashMap<usize, IteratorId>,
+    /// Whether to include result payloads in operation logs.
+    include_results: bool,
+    /// Whether to include per-operation timing metadata.
+    include_metadata: bool,
     /// Output path for the replay log.
     output_path: PathBuf,
 }
 
 impl Recorder {
-    fn new(output_path: PathBuf) -> Self {
+    fn new(output_path: PathBuf, include_results: bool, include_metadata: bool) -> Self {
         Self {
             operations: Vec::new(),
-            next_proposal_id: 1, // Start from 1 to make 0 stand out as invalid
+            next_proposal_id: 1,
             proposal_ids: HashMap::new(),
+            next_revision_id: 1,
+            revision_ids: HashMap::new(),
+            next_iterator_id: 1,
+            iterator_ids: HashMap::new(),
+            include_results,
+            include_metadata,
             output_path,
         }
     }
 
+    fn maybe_result<T>(&self, value: T) -> Option<T> {
+        self.include_results.then_some(value)
+    }
+
+    fn metadata(&self, duration_ns: u64) -> Option<OperationMetadata> {
+        self.include_metadata
+            .then_some(OperationMetadata { duration_ns })
+    }
+
     /// Records a `GetLatest` operation.
-    fn record_get_latest(&mut self, key: &[u8]) {
-        self.operations
-            .push(DbOperation::GetLatest(GetLatest { key: key.into() }));
+    fn record_get_latest(&mut self, key: &[u8], result: &crate::ValueResult, duration_ns: u64) {
+        self.operations.push(DbOperation::GetLatest(GetLatest {
+            key: key.into(),
+            result: self.maybe_result(value_result_data(result)),
+            metadata: self.metadata(duration_ns),
+        }));
         self.maybe_flush();
     }
 
     /// Records a `GetFromProposal` operation.
-    fn record_get_from_proposal(&mut self, handle_ptr: usize, key: &[u8]) {
+    fn record_get_from_proposal(
+        &mut self,
+        handle_ptr: usize,
+        key: &[u8],
+        result: &crate::ValueResult,
+        duration_ns: u64,
+    ) {
         let Some(&proposal_id) = self.proposal_ids.get(&handle_ptr) else {
             return;
         };
+
         self.operations
             .push(DbOperation::GetFromProposal(GetFromProposal {
                 proposal_id,
                 key: key.into(),
+                result: self.maybe_result(value_result_data(result)),
+                metadata: self.metadata(duration_ns),
             }));
         self.maybe_flush();
     }
 
+    /// Records a `GetRevision` operation.
+    fn record_get_revision(
+        &mut self,
+        root: crate::HashKey,
+        result: &crate::RevisionResult,
+        duration_ns: u64,
+    ) {
+        let mut returned_revision_id = None;
+
+        if let crate::RevisionResult::Ok { handle, .. } = result {
+            let revision_id = RevisionId(self.next_revision_id);
+            self.next_revision_id = self.next_revision_id.saturating_add(1);
+            let ptr = std::ptr::from_ref(&**handle) as usize;
+            self.revision_ids.insert(ptr, revision_id);
+            returned_revision_id = Some(revision_id);
+        }
+
+        self.operations.push(DbOperation::GetRevision(GetRevision {
+            root: hash_key_to_bytes(root).into(),
+            returned_revision_id,
+            result: self.maybe_result(revision_result_data(result)),
+            metadata: self.metadata(duration_ns),
+        }));
+        self.maybe_flush();
+    }
+
+    /// Records a `GetFromRevision` operation.
+    fn record_get_from_revision(
+        &mut self,
+        handle_ptr: usize,
+        key: &[u8],
+        result: &crate::ValueResult,
+        duration_ns: u64,
+    ) {
+        let Some(&revision_id) = self.revision_ids.get(&handle_ptr) else {
+            return;
+        };
+
+        self.operations
+            .push(DbOperation::GetFromRevision(GetFromRevision {
+                revision_id,
+                key: key.into(),
+                result: self.maybe_result(value_result_data(result)),
+                metadata: self.metadata(duration_ns),
+            }));
+        self.maybe_flush();
+    }
+
+    /// Records a `RootHash` operation.
+    fn record_root_hash(&mut self, result: &crate::HashResult, duration_ns: u64) {
+        self.operations.push(DbOperation::RootHash(RootHash {
+            result: self.maybe_result(hash_result_data(result)),
+            metadata: self.metadata(duration_ns),
+        }));
+        self.maybe_flush();
+    }
+
     /// Records a `Batch` operation.
-    fn record_batch(&mut self, ops: &[BatchOp<'_>]) {
+    fn record_batch(&mut self, ops: &[BatchOp<'_>], result: &crate::HashResult, duration_ns: u64) {
         let pairs = convert_ops(ops);
-        self.operations.push(DbOperation::Batch(Batch { pairs }));
+        self.operations.push(DbOperation::Batch(Batch {
+            pairs,
+            result: self.maybe_result(hash_result_data(result)),
+            metadata: self.metadata(duration_ns),
+        }));
         self.maybe_flush();
     }
 
     /// Records a `ProposeOnDB` operation.
-    fn record_propose_on_db(&mut self, handle_ptr: usize, ops: &[BatchOp<'_>]) {
-        let proposal_id = ProposalId(self.next_proposal_id);
-        self.next_proposal_id = self.next_proposal_id.saturating_add(1);
-        self.proposal_ids.insert(handle_ptr, proposal_id);
+    fn record_propose_on_db(
+        &mut self,
+        result: &crate::ProposalResult<'_>,
+        ops: &[BatchOp<'_>],
+        duration_ns: u64,
+    ) {
+        let mut returned_proposal_id = None;
+
+        if let crate::ProposalResult::Ok { handle, .. } = result {
+            let proposal_id = ProposalId(self.next_proposal_id);
+            self.next_proposal_id = self.next_proposal_id.saturating_add(1);
+            let ptr = std::ptr::from_ref(&**handle) as usize;
+            self.proposal_ids.insert(ptr, proposal_id);
+            returned_proposal_id = Some(proposal_id);
+        }
 
         let pairs = convert_ops(ops);
         self.operations.push(DbOperation::ProposeOnDB(ProposeOnDB {
             pairs,
-            returned_proposal_id: proposal_id,
+            returned_proposal_id,
+            result: self.maybe_result(proposal_result_data(result)),
+            metadata: self.metadata(duration_ns),
         }));
         self.maybe_flush();
     }
@@ -100,46 +218,228 @@ impl Recorder {
     fn record_propose_on_proposal(
         &mut self,
         parent_ptr: usize,
-        new_ptr: usize,
+        result: &crate::ProposalResult<'_>,
         ops: &[BatchOp<'_>],
+        duration_ns: u64,
     ) {
         let Some(&parent_id) = self.proposal_ids.get(&parent_ptr) else {
             return;
         };
 
-        let new_id = ProposalId(self.next_proposal_id);
-        self.next_proposal_id = self.next_proposal_id.saturating_add(1);
-        self.proposal_ids.insert(new_ptr, new_id);
+        let mut returned_proposal_id = None;
+        if let crate::ProposalResult::Ok { handle, .. } = result {
+            let proposal_id = ProposalId(self.next_proposal_id);
+            self.next_proposal_id = self.next_proposal_id.saturating_add(1);
+            let ptr = std::ptr::from_ref(&**handle) as usize;
+            self.proposal_ids.insert(ptr, proposal_id);
+            returned_proposal_id = Some(proposal_id);
+        }
 
         let pairs = convert_ops(ops);
         self.operations
             .push(DbOperation::ProposeOnProposal(ProposeOnProposal {
                 proposal_id: parent_id,
                 pairs,
-                returned_proposal_id: new_id,
+                returned_proposal_id,
+                result: self.maybe_result(proposal_result_data(result)),
+                metadata: self.metadata(duration_ns),
             }));
         self.maybe_flush();
     }
 
-    /// Records a `Commit` operation.
-    fn record_commit(&mut self, handle_ptr: usize, returned_hash: Option<&[u8]>) {
-        let Some(&proposal_id) = self.proposal_ids.get(&handle_ptr) else {
+    /// Records an `IterOnRevision` operation.
+    fn record_iter_on_revision(
+        &mut self,
+        revision_ptr: usize,
+        key: BorrowedBytes<'_>,
+        result: &crate::IteratorResult<'_>,
+        duration_ns: u64,
+    ) {
+        let Some(&revision_id) = self.revision_ids.get(&revision_ptr) else {
             return;
         };
-        // Remove the proposal from tracking since it's now committed
-        self.proposal_ids.remove(&handle_ptr);
+
+        let mut returned_iterator_id = None;
+        if let crate::IteratorResult::Ok { handle } = result {
+            let iterator_id = IteratorId(self.next_iterator_id);
+            self.next_iterator_id = self.next_iterator_id.saturating_add(1);
+            let ptr = std::ptr::from_ref(&**handle) as usize;
+            self.iterator_ids.insert(ptr, iterator_id);
+            returned_iterator_id = Some(iterator_id);
+        }
+
+        self.operations
+            .push(DbOperation::IterOnRevision(IterOnRevision {
+                revision_id,
+                start_key: start_key_from_borrowed(key),
+                returned_iterator_id,
+                result: self.maybe_result(iterator_result_data(result)),
+                metadata: self.metadata(duration_ns),
+            }));
+        self.maybe_flush();
+    }
+
+    /// Records an `IterOnProposal` operation.
+    fn record_iter_on_proposal(
+        &mut self,
+        proposal_ptr: usize,
+        key: BorrowedBytes<'_>,
+        result: &crate::IteratorResult<'_>,
+        duration_ns: u64,
+    ) {
+        let Some(&proposal_id) = self.proposal_ids.get(&proposal_ptr) else {
+            return;
+        };
+
+        let mut returned_iterator_id = None;
+        if let crate::IteratorResult::Ok { handle } = result {
+            let iterator_id = IteratorId(self.next_iterator_id);
+            self.next_iterator_id = self.next_iterator_id.saturating_add(1);
+            let ptr = std::ptr::from_ref(&**handle) as usize;
+            self.iterator_ids.insert(ptr, iterator_id);
+            returned_iterator_id = Some(iterator_id);
+        }
+
+        self.operations
+            .push(DbOperation::IterOnProposal(IterOnProposal {
+                proposal_id,
+                start_key: start_key_from_borrowed(key),
+                returned_iterator_id,
+                result: self.maybe_result(iterator_result_data(result)),
+                metadata: self.metadata(duration_ns),
+            }));
+        self.maybe_flush();
+    }
+
+    /// Records an `IterNext` operation.
+    fn record_iter_next(
+        &mut self,
+        iterator_ptr: usize,
+        result: &crate::KeyValueResult,
+        duration_ns: u64,
+    ) {
+        let Some(&iterator_id) = self.iterator_ids.get(&iterator_ptr) else {
+            return;
+        };
+
+        self.operations.push(DbOperation::IterNext(IterNext {
+            iterator_id,
+            result: self.maybe_result(key_value_result_data(result)),
+            metadata: self.metadata(duration_ns),
+        }));
+        self.maybe_flush();
+    }
+
+    /// Records an `IterNextN` operation.
+    fn record_iter_next_n(
+        &mut self,
+        iterator_ptr: usize,
+        n: usize,
+        result: &crate::KeyValueBatchResult,
+        duration_ns: u64,
+    ) {
+        let Some(&iterator_id) = self.iterator_ids.get(&iterator_ptr) else {
+            return;
+        };
+
+        self.operations.push(DbOperation::IterNextN(IterNextN {
+            iterator_id,
+            n,
+            result: self.maybe_result(key_value_batch_result_data(result)),
+            metadata: self.metadata(duration_ns),
+        }));
+        self.maybe_flush();
+    }
+
+    /// Records a `Commit` operation.
+    fn record_commit(&mut self, handle_ptr: usize, result: &crate::HashResult, duration_ns: u64) {
+        let Some(proposal_id) = self.proposal_ids.remove(&handle_ptr) else {
+            return;
+        };
+
+        let returned_hash = match result {
+            crate::HashResult::Some(hash) => Some(hash_key_to_bytes(*hash).into()),
+            crate::HashResult::None
+            | crate::HashResult::Err(_)
+            | crate::HashResult::NullHandlePointer => None,
+        };
 
         self.operations.push(DbOperation::Commit(Commit {
             proposal_id,
-            returned_hash: returned_hash.map(Into::into),
+            returned_hash,
+            result: self.maybe_result(hash_result_data(result)),
+            metadata: self.metadata(duration_ns),
         }));
+        self.maybe_flush();
+    }
+
+    /// Records a `FreeProposal` operation.
+    fn record_free_proposal(
+        &mut self,
+        handle_ptr: usize,
+        result: &crate::VoidResult,
+        duration_ns: u64,
+    ) {
+        let Some(proposal_id) = self.proposal_ids.remove(&handle_ptr) else {
+            return;
+        };
+
+        self.operations
+            .push(DbOperation::FreeProposal(FreeProposal {
+                proposal_id,
+                result: self.maybe_result(void_result_data(result)),
+                metadata: self.metadata(duration_ns),
+            }));
+        self.maybe_flush();
+    }
+
+    /// Records a `FreeRevision` operation.
+    fn record_free_revision(
+        &mut self,
+        handle_ptr: usize,
+        result: &crate::VoidResult,
+        duration_ns: u64,
+    ) {
+        let Some(revision_id) = self.revision_ids.remove(&handle_ptr) else {
+            return;
+        };
+
+        self.operations
+            .push(DbOperation::FreeRevision(FreeRevision {
+                revision_id,
+                result: self.maybe_result(void_result_data(result)),
+                metadata: self.metadata(duration_ns),
+            }));
+        self.maybe_flush();
+    }
+
+    /// Records a `FreeIterator` operation.
+    fn record_free_iterator(
+        &mut self,
+        handle_ptr: usize,
+        result: &crate::VoidResult,
+        duration_ns: u64,
+    ) {
+        let Some(iterator_id) = self.iterator_ids.remove(&handle_ptr) else {
+            return;
+        };
+
+        self.operations
+            .push(DbOperation::FreeIterator(FreeIterator {
+                iterator_id,
+                result: self.maybe_result(void_result_data(result)),
+                metadata: self.metadata(duration_ns),
+            }));
         self.maybe_flush();
     }
 
     /// Flushes if the buffer exceeds the threshold.
     fn maybe_flush(&mut self) {
         if self.operations.len() >= FLUSH_THRESHOLD {
-            let _ = self.flush_to_disk();
+            if self.flush_to_disk().is_err() {
+                // Keep buffering data if flush fails so callers can retry via
+                // explicit flush/close instead of silently losing operations.
+            }
         }
     }
 
@@ -149,29 +449,53 @@ impl Recorder {
             return Ok(());
         }
 
-        let operations = std::mem::take(&mut self.operations);
-        let log = ReplayLog::new(operations);
+        let log = ReplayLog::new(std::mem::take(&mut self.operations));
 
-        let bytes = log
-            .to_msgpack()
-            .map_err(|e| io::Error::other(format!("failed to serialize replay log: {e}")))?;
+        let bytes = match log.to_msgpack() {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                self.operations = log.operations;
+                return Err(io::Error::other(format!(
+                    "failed to serialize replay log: {e}"
+                )));
+            }
+        };
 
         if let Some(parent) = self.output_path.parent() {
-            fs::create_dir_all(parent)?;
+            if let Err(e) = fs::create_dir_all(parent) {
+                self.operations = log.operations;
+                return Err(e);
+            }
         }
 
-        let mut file = OpenOptions::new()
+        let mut file = match OpenOptions::new()
             .create(true)
             .append(true)
-            .open(&self.output_path)?;
+            .open(&self.output_path)
+        {
+            Ok(file) => file,
+            Err(e) => {
+                self.operations = log.operations;
+                return Err(e);
+            }
+        };
 
-        let len: u64 = bytes
-            .len()
-            .try_into()
-            .map_err(|_| io::Error::other("replay segment too large"))?;
+        let len: u64 = match bytes.len().try_into() {
+            Ok(len) => len,
+            Err(_) => {
+                self.operations = log.operations;
+                return Err(io::Error::other("replay segment too large"));
+            }
+        };
 
-        file.write_all(&len.to_le_bytes())?;
-        file.write_all(&bytes)?;
+        if let Err(e) = file.write_all(&len.to_le_bytes()) {
+            self.operations = log.operations;
+            return Err(e);
+        }
+        if let Err(e) = file.write_all(&bytes) {
+            self.operations = log.operations;
+            return Err(e);
+        }
 
         Ok(())
     }
@@ -184,34 +508,162 @@ fn convert_ops(ops: &[BatchOp<'_>]) -> Vec<KeyValueOp> {
             BatchOp::Put { key, value } => KeyValueOp {
                 key: key.as_slice().into(),
                 value: Some(value.as_slice().into()),
+                delete_exact: false,
             },
             BatchOp::Delete { key } => KeyValueOp {
                 key: key.as_slice().into(),
                 value: None,
+                delete_exact: true,
             },
             BatchOp::DeleteRange { prefix } => KeyValueOp {
                 key: prefix.as_slice().into(),
                 value: None,
+                delete_exact: false,
             },
         })
         .collect()
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| {
+            let value = value.trim();
+            value == "1"
+                || value.eq_ignore_ascii_case("true")
+                || value.eq_ignore_ascii_case("yes")
+                || value.eq_ignore_ascii_case("on")
+        })
+        .unwrap_or(false)
+}
+
+fn hash_key_to_bytes(hash: crate::HashKey) -> [u8; 32] {
+    let api_hash: firewood::v2::api::HashKey = hash.into();
+    api_hash.into()
+}
+
+fn start_key_from_borrowed(key: BorrowedBytes<'_>) -> Option<Box<[u8]>> {
+    if key.is_null() {
+        None
+    } else {
+        Some(key.as_slice().into())
+    }
+}
+
+fn value_result_data(result: &crate::ValueResult) -> ValueResultData {
+    match result {
+        crate::ValueResult::NullHandlePointer => ValueResultData::NullHandlePointer,
+        crate::ValueResult::RevisionNotFound(root) => {
+            ValueResultData::RevisionNotFound(hash_key_to_bytes(*root).into())
+        }
+        crate::ValueResult::None => ValueResultData::None,
+        crate::ValueResult::Some(value) => ValueResultData::Some(value.as_slice().into()),
+        crate::ValueResult::Err(_) => ValueResultData::Err,
+    }
+}
+
+fn hash_result_data(result: &crate::HashResult) -> HashResultData {
+    match result {
+        crate::HashResult::NullHandlePointer => HashResultData::NullHandlePointer,
+        crate::HashResult::None => HashResultData::None,
+        crate::HashResult::Some(hash) => HashResultData::Some(hash_key_to_bytes(*hash).into()),
+        crate::HashResult::Err(_) => HashResultData::Err,
+    }
+}
+
+fn proposal_result_data(result: &crate::ProposalResult<'_>) -> ProposalResultData {
+    match result {
+        crate::ProposalResult::NullHandlePointer => ProposalResultData::NullHandlePointer,
+        crate::ProposalResult::Ok { root_hash, .. } => ProposalResultData::Ok {
+            root_hash: Some(hash_key_to_bytes(*root_hash).into()),
+        },
+        crate::ProposalResult::Err(_) => ProposalResultData::Err,
+    }
+}
+
+fn revision_result_data(result: &crate::RevisionResult) -> RevisionResultData {
+    match result {
+        crate::RevisionResult::NullHandlePointer => RevisionResultData::NullHandlePointer,
+        crate::RevisionResult::RevisionNotFound(root) => {
+            RevisionResultData::RevisionNotFound(hash_key_to_bytes(*root).into())
+        }
+        crate::RevisionResult::Ok { root_hash, .. } => {
+            RevisionResultData::Ok(hash_key_to_bytes(*root_hash).into())
+        }
+        crate::RevisionResult::Err(_) => RevisionResultData::Err,
+    }
+}
+
+fn iterator_result_data(result: &crate::IteratorResult<'_>) -> IteratorResultData {
+    match result {
+        crate::IteratorResult::NullHandlePointer => IteratorResultData::NullHandlePointer,
+        crate::IteratorResult::Ok { .. } => IteratorResultData::Ok,
+        crate::IteratorResult::Err(_) => IteratorResultData::Err,
+    }
+}
+
+fn key_value_result_data(result: &crate::KeyValueResult) -> KeyValueResultData {
+    match result {
+        crate::KeyValueResult::NullHandlePointer => KeyValueResultData::NullHandlePointer,
+        crate::KeyValueResult::None => KeyValueResultData::None,
+        crate::KeyValueResult::Some(kv) => KeyValueResultData::Some(KeyValueRead {
+            key: kv.key.as_slice().into(),
+            value: kv.value.as_slice().into(),
+        }),
+        crate::KeyValueResult::Err(_) => KeyValueResultData::Err,
+    }
+}
+
+fn key_value_batch_result_data(result: &crate::KeyValueBatchResult) -> KeyValueBatchResultData {
+    match result {
+        crate::KeyValueBatchResult::NullHandlePointer => KeyValueBatchResultData::NullHandlePointer,
+        crate::KeyValueBatchResult::Some(batch) => {
+            let pairs = batch
+                .as_slice()
+                .iter()
+                .map(|pair| KeyValueRead {
+                    key: pair.key.as_slice().into(),
+                    value: pair.value.as_slice().into(),
+                })
+                .collect();
+            KeyValueBatchResultData::Some(pairs)
+        }
+        crate::KeyValueBatchResult::Err(_) => KeyValueBatchResultData::Err,
+    }
+}
+
+fn void_result_data(result: &crate::VoidResult) -> VoidResultData {
+    match result {
+        crate::VoidResult::NullHandlePointer => VoidResultData::NullHandlePointer,
+        crate::VoidResult::Ok => VoidResultData::Ok,
+        crate::VoidResult::Err(_) => VoidResultData::Err,
+    }
 }
 
 /// Returns the recorder if recording is enabled.
 fn recorder() -> Option<&'static Mutex<Recorder>> {
     RECORDER
         .get_or_init(|| {
-            std::env::var(REPLAY_PATH_ENV)
-                .ok()
-                .map(|p| Mutex::new(Recorder::new(PathBuf::from(p))))
+            std::env::var(REPLAY_PATH_ENV).ok().map(|p| {
+                Mutex::new(Recorder::new(
+                    PathBuf::from(p),
+                    env_flag(INCLUDE_RESULTS_ENV),
+                    env_flag(INCLUDE_METADATA_ENV),
+                ))
+            })
         })
         .as_ref()
 }
 
 /// Records a `fwd_get_latest` call.
-pub(crate) fn record_get_latest(key: BorrowedBytes<'_>) {
+pub(crate) fn record_get_latest(
+    key: BorrowedBytes<'_>,
+    result: &crate::ValueResult,
+    duration_ns: u64,
+) {
     if let Some(rec) = recorder() {
-        rec.lock().record_get_latest(key.as_slice());
+        rec.lock()
+            .record_get_latest(key.as_slice(), result, duration_ns);
     }
 }
 
@@ -219,75 +671,193 @@ pub(crate) fn record_get_latest(key: BorrowedBytes<'_>) {
 pub(crate) fn record_get_from_proposal(
     handle: Option<&crate::ProposalHandle<'_>>,
     key: BorrowedBytes<'_>,
+    result: &crate::ValueResult,
+    duration_ns: u64,
 ) {
     let Some(rec) = recorder() else { return };
     let Some(handle) = handle else { return };
 
     let ptr = std::ptr::from_ref(handle) as usize;
-    rec.lock().record_get_from_proposal(ptr, key.as_slice());
+    rec.lock()
+        .record_get_from_proposal(ptr, key.as_slice(), result, duration_ns);
 }
 
-/// Records a `fwd_batch` call.
-pub(crate) fn record_batch(values: BorrowedBatchOps<'_>) {
+/// Records a `fwd_get_revision` call.
+pub(crate) fn record_get_revision(
+    root: crate::HashKey,
+    result: &crate::RevisionResult,
+    duration_ns: u64,
+) {
     if let Some(rec) = recorder() {
-        rec.lock().record_batch(values.as_slice());
+        rec.lock().record_get_revision(root, result, duration_ns);
     }
 }
 
-/// Records a `fwd_propose_on_db` call after the proposal is created.
+/// Records a `fwd_get_from_revision` call.
+pub(crate) fn record_get_from_revision(
+    revision: Option<&crate::RevisionHandle>,
+    key: BorrowedBytes<'_>,
+    result: &crate::ValueResult,
+    duration_ns: u64,
+) {
+    let Some(rec) = recorder() else { return };
+    let Some(revision) = revision else { return };
+
+    let ptr = std::ptr::from_ref(revision) as usize;
+    rec.lock()
+        .record_get_from_revision(ptr, key.as_slice(), result, duration_ns);
+}
+
+/// Records a `fwd_root_hash` call.
+pub(crate) fn record_root_hash(result: &crate::HashResult, duration_ns: u64) {
+    if let Some(rec) = recorder() {
+        rec.lock().record_root_hash(result, duration_ns);
+    }
+}
+
+/// Records a `fwd_batch` call.
+pub(crate) fn record_batch(
+    values: BorrowedBatchOps<'_>,
+    result: &crate::HashResult,
+    duration_ns: u64,
+) {
+    if let Some(rec) = recorder() {
+        rec.lock()
+            .record_batch(values.as_slice(), result, duration_ns);
+    }
+}
+
+/// Records a `fwd_propose_on_db` call.
 pub(crate) fn record_propose_on_db(
     result: &crate::ProposalResult<'_>,
     values: BorrowedBatchOps<'_>,
+    duration_ns: u64,
 ) {
     let Some(rec) = recorder() else { return };
-    let crate::ProposalResult::Ok { handle, .. } = result else {
-        return;
-    };
-
-    let ptr = std::ptr::from_ref(&**handle) as usize;
-    rec.lock().record_propose_on_db(ptr, values.as_slice());
+    rec.lock()
+        .record_propose_on_db(result, values.as_slice(), duration_ns);
 }
 
-/// Records a `fwd_propose_on_proposal` call after the proposal is created.
+/// Records a `fwd_propose_on_proposal` call.
 pub(crate) fn record_propose_on_proposal<'db>(
     parent: Option<&crate::ProposalHandle<'db>>,
     result: &crate::ProposalResult<'db>,
     values: BorrowedBatchOps<'_>,
+    duration_ns: u64,
 ) {
     let Some(rec) = recorder() else { return };
     let Some(parent) = parent else { return };
-    let crate::ProposalResult::Ok { handle, .. } = result else {
-        return;
-    };
 
     let parent_ptr = std::ptr::from_ref(parent) as usize;
-    let new_ptr = std::ptr::from_ref(&**handle) as usize;
     rec.lock()
-        .record_propose_on_proposal(parent_ptr, new_ptr, values.as_slice());
+        .record_propose_on_proposal(parent_ptr, result, values.as_slice(), duration_ns);
+}
+
+/// Records a `fwd_iter_on_revision` call.
+pub(crate) fn record_iter_on_revision<'view>(
+    revision: Option<&'view crate::RevisionHandle>,
+    key: BorrowedBytes<'_>,
+    result: &crate::IteratorResult<'view>,
+    duration_ns: u64,
+) {
+    let Some(rec) = recorder() else { return };
+    let Some(revision) = revision else { return };
+
+    let revision_ptr = std::ptr::from_ref(revision) as usize;
+    rec.lock()
+        .record_iter_on_revision(revision_ptr, key, result, duration_ns);
+}
+
+/// Records a `fwd_iter_on_proposal` call.
+pub(crate) fn record_iter_on_proposal<'p>(
+    handle: Option<&'p crate::ProposalHandle<'_>>,
+    key: BorrowedBytes<'_>,
+    result: &crate::IteratorResult<'p>,
+    duration_ns: u64,
+) {
+    let Some(rec) = recorder() else { return };
+    let Some(handle) = handle else { return };
+
+    let proposal_ptr = std::ptr::from_ref(handle) as usize;
+    rec.lock()
+        .record_iter_on_proposal(proposal_ptr, key, result, duration_ns);
+}
+
+/// Records a `fwd_iter_next` call.
+pub(crate) fn record_iter_next(
+    iterator_ptr: Option<*const crate::IteratorHandle<'_>>,
+    result: &crate::KeyValueResult,
+    duration_ns: u64,
+) {
+    let Some(rec) = recorder() else { return };
+    let Some(ptr) = iterator_ptr else { return };
+
+    rec.lock()
+        .record_iter_next(ptr as usize, result, duration_ns);
+}
+
+/// Records a `fwd_iter_next_n` call.
+pub(crate) fn record_iter_next_n(
+    iterator_ptr: Option<*const crate::IteratorHandle<'_>>,
+    n: usize,
+    result: &crate::KeyValueBatchResult,
+    duration_ns: u64,
+) {
+    let Some(rec) = recorder() else { return };
+    let Some(ptr) = iterator_ptr else { return };
+    rec.lock()
+        .record_iter_next_n(ptr as usize, n, result, duration_ns);
 }
 
 /// Records a `fwd_commit_proposal` call after the commit completes.
 pub(crate) fn record_commit(
     proposal_ptr: Option<*const crate::ProposalHandle<'_>>,
     result: &crate::HashResult,
+    duration_ns: u64,
 ) {
     let Some(rec) = recorder() else { return };
     let Some(ptr) = proposal_ptr else { return };
 
-    let returned_hash_bytes = match result {
-        crate::HashResult::Some(hash) => {
-            let api_hash: firewood::v2::api::HashKey = (*hash).into();
-            let bytes: [u8; 32] = api_hash.into();
-            Some(bytes)
-        }
-        crate::HashResult::None => None,
-        _ => return,
-    };
+    rec.lock().record_commit(ptr as usize, result, duration_ns);
+}
 
-    rec.lock().record_commit(
-        ptr as usize,
-        returned_hash_bytes.as_ref().map(AsRef::as_ref),
-    );
+/// Records a `fwd_free_proposal` call.
+pub(crate) fn record_free_proposal(
+    proposal_ptr: Option<*const crate::ProposalHandle<'_>>,
+    result: &crate::VoidResult,
+    duration_ns: u64,
+) {
+    let Some(rec) = recorder() else { return };
+    let Some(ptr) = proposal_ptr else { return };
+
+    rec.lock()
+        .record_free_proposal(ptr as usize, result, duration_ns);
+}
+
+/// Records a `fwd_free_revision` call.
+pub(crate) fn record_free_revision(
+    revision_ptr: Option<*const crate::RevisionHandle>,
+    result: &crate::VoidResult,
+    duration_ns: u64,
+) {
+    let Some(rec) = recorder() else { return };
+    let Some(ptr) = revision_ptr else { return };
+
+    rec.lock()
+        .record_free_revision(ptr as usize, result, duration_ns);
+}
+
+/// Records a `fwd_free_iterator` call.
+pub(crate) fn record_free_iterator(
+    iterator_ptr: Option<*const crate::IteratorHandle<'_>>,
+    result: &crate::VoidResult,
+    duration_ns: u64,
+) {
+    let Some(rec) = recorder() else { return };
+    let Some(ptr) = iterator_ptr else { return };
+
+    rec.lock()
+        .record_free_iterator(ptr as usize, result, duration_ns);
 }
 
 /// Flushes any buffered operations to disk.

@@ -43,10 +43,20 @@ type replayLog struct {
 type dbOperation struct {
 	GetLatest         *getLatest         `msgpack:"GetLatest,omitempty"`
 	GetFromProposal   *getFromProposal   `msgpack:"GetFromProposal,omitempty"`
+	GetRevision       *getRevision       `msgpack:"GetRevision,omitempty"`
+	GetFromRevision   *getFromRevision   `msgpack:"GetFromRevision,omitempty"`
+	RootHash          *rootHash          `msgpack:"RootHash,omitempty"`
 	Batch             *replayBatch       `msgpack:"Batch,omitempty"`
 	ProposeOnDB       *proposeOnDB       `msgpack:"ProposeOnDB,omitempty"`
 	ProposeOnProposal *proposeOnProposal `msgpack:"ProposeOnProposal,omitempty"`
+	IterOnRevision    *iterOnRevision    `msgpack:"IterOnRevision,omitempty"`
+	IterOnProposal    *iterOnProposal    `msgpack:"IterOnProposal,omitempty"`
+	IterNext          *iterNext          `msgpack:"IterNext,omitempty"`
+	IterNextN         *iterNextN         `msgpack:"IterNextN,omitempty"`
 	Commit            *commit            `msgpack:"Commit,omitempty"`
+	FreeProposal      *freeProposal      `msgpack:"FreeProposal,omitempty"`
+	FreeRevision      *freeRevision      `msgpack:"FreeRevision,omitempty"`
+	FreeIterator      *freeIterator      `msgpack:"FreeIterator,omitempty"`
 }
 
 // getLatest represents a read from the latest revision.
@@ -60,10 +70,26 @@ type getFromProposal struct {
 	Key        []byte `msgpack:"key"`
 }
 
+// getRevision represents fetching a revision by root hash.
+type getRevision struct {
+	Root               []byte  `msgpack:"root"`
+	ReturnedRevisionID *uint64 `msgpack:"returned_revision_id,omitempty"`
+}
+
+// getFromRevision represents a read from a revision.
+type getFromRevision struct {
+	RevisionID uint64 `msgpack:"revision_id"`
+	Key        []byte `msgpack:"key"`
+}
+
+// rootHash represents reading the latest root hash.
+type rootHash struct{}
+
 // keyValueOp represents a single key/value mutation.
 type keyValueOp struct {
-	Key   []byte `msgpack:"key"`
-	Value []byte `msgpack:"value"` // nil represents delete-range
+	Key         []byte `msgpack:"key"`
+	Value       []byte `msgpack:"value"` // nil represents delete/delete-range
+	DeleteExact bool   `msgpack:"delete_exact,omitempty"`
 }
 
 // replayBatch represents a batch operation that commits immediately.
@@ -74,20 +100,60 @@ type replayBatch struct {
 // proposeOnDB represents a proposal created on the database.
 type proposeOnDB struct {
 	Pairs              []keyValueOp `msgpack:"pairs"`
-	ReturnedProposalID uint64       `msgpack:"returned_proposal_id"`
+	ReturnedProposalID *uint64      `msgpack:"returned_proposal_id,omitempty"`
 }
 
 // proposeOnProposal represents a proposal created on another proposal.
 type proposeOnProposal struct {
 	ProposalID         uint64       `msgpack:"proposal_id"`
 	Pairs              []keyValueOp `msgpack:"pairs"`
-	ReturnedProposalID uint64       `msgpack:"returned_proposal_id"`
+	ReturnedProposalID *uint64      `msgpack:"returned_proposal_id,omitempty"`
+}
+
+// iterOnRevision represents opening an iterator on a revision.
+type iterOnRevision struct {
+	RevisionID         uint64  `msgpack:"revision_id"`
+	StartKey           []byte  `msgpack:"start_key,omitempty"`
+	ReturnedIteratorID *uint64 `msgpack:"returned_iterator_id,omitempty"`
+}
+
+// iterOnProposal represents opening an iterator on a proposal.
+type iterOnProposal struct {
+	ProposalID         uint64  `msgpack:"proposal_id"`
+	StartKey           []byte  `msgpack:"start_key,omitempty"`
+	ReturnedIteratorID *uint64 `msgpack:"returned_iterator_id,omitempty"`
+}
+
+// iterNext represents advancing an iterator by one.
+type iterNext struct {
+	IteratorID uint64 `msgpack:"iterator_id"`
+}
+
+// iterNextN represents advancing an iterator by up to N entries.
+type iterNextN struct {
+	IteratorID uint64 `msgpack:"iterator_id"`
+	N          uint64 `msgpack:"n"`
 }
 
 // commit represents a commit operation for a proposal.
 type commit struct {
 	ProposalID   uint64 `msgpack:"proposal_id"`
 	ReturnedHash []byte `msgpack:"returned_hash"` // nil when absent
+}
+
+// freeProposal represents releasing an uncommitted proposal.
+type freeProposal struct {
+	ProposalID uint64 `msgpack:"proposal_id"`
+}
+
+// freeRevision represents releasing a revision handle.
+type freeRevision struct {
+	RevisionID uint64 `msgpack:"revision_id"`
+}
+
+// freeIterator represents releasing an iterator handle.
+type freeIterator struct {
+	IteratorID uint64 `msgpack:"iterator_id"`
 }
 
 // TestReplayLogExecution reads a length-prefixed MessagePack replay log
@@ -286,6 +352,8 @@ type replayConfig struct {
 // Returns the number of commits applied and any error encountered.
 func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, error) {
 	proposals := make(map[uint64]*Proposal)
+	revisions := make(map[uint64]*Revision)
+	iterators := make(map[uint64]*Iterator)
 	totalCommits := 0
 
 	for _, segment := range logs {
@@ -305,6 +373,35 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 					return totalCommits, fmt.Errorf("GetFromProposal: %w", err)
 				}
 
+			case op.GetRevision != nil:
+				root, err := hashFromBytes(op.GetRevision.Root)
+				if err != nil {
+					return totalCommits, fmt.Errorf("GetRevision: %w", err)
+				}
+				rev, err := db.Revision(root)
+				if err != nil {
+					return totalCommits, fmt.Errorf("GetRevision: %w", err)
+				}
+				if op.GetRevision.ReturnedRevisionID != nil {
+					revisions[*op.GetRevision.ReturnedRevisionID] = rev
+				} else {
+					_ = rev.Drop()
+				}
+
+			case op.GetFromRevision != nil:
+				rev, ok := revisions[op.GetFromRevision.RevisionID]
+				if !ok {
+					return totalCommits, fmt.Errorf("GetFromRevision: unknown revision id %d", op.GetFromRevision.RevisionID)
+				}
+				if _, err := rev.Get(op.GetFromRevision.Key); err != nil {
+					return totalCommits, fmt.Errorf("GetFromRevision: %w", err)
+				}
+
+			case op.RootHash != nil:
+				if _, err := db.Root(); err != nil {
+					return totalCommits, fmt.Errorf("RootHash: %w", err)
+				}
+
 			case op.Batch != nil:
 				batch := batchFromReplayPairs(op.Batch.Pairs)
 				if _, err := db.Update(batch); err != nil {
@@ -317,7 +414,11 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				if err != nil {
 					return totalCommits, fmt.Errorf("ProposeOnDB: %w", err)
 				}
-				proposals[op.ProposeOnDB.ReturnedProposalID] = prop
+				if op.ProposeOnDB.ReturnedProposalID != nil {
+					proposals[*op.ProposeOnDB.ReturnedProposalID] = prop
+				} else {
+					_ = prop.Drop()
+				}
 
 			case op.ProposeOnProposal != nil:
 				parent, ok := proposals[op.ProposeOnProposal.ProposalID]
@@ -329,7 +430,65 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				if err != nil {
 					return totalCommits, fmt.Errorf("ProposeOnProposal: %w", err)
 				}
-				proposals[op.ProposeOnProposal.ReturnedProposalID] = prop
+				if op.ProposeOnProposal.ReturnedProposalID != nil {
+					proposals[*op.ProposeOnProposal.ReturnedProposalID] = prop
+				} else {
+					_ = prop.Drop()
+				}
+
+			case op.IterOnRevision != nil:
+				rev, ok := revisions[op.IterOnRevision.RevisionID]
+				if !ok {
+					return totalCommits, fmt.Errorf("IterOnRevision: unknown revision id %d", op.IterOnRevision.RevisionID)
+				}
+				it, err := rev.Iter(op.IterOnRevision.StartKey)
+				if err != nil {
+					return totalCommits, fmt.Errorf("IterOnRevision: %w", err)
+				}
+				if op.IterOnRevision.ReturnedIteratorID != nil {
+					iterators[*op.IterOnRevision.ReturnedIteratorID] = it
+				} else {
+					_ = it.Drop()
+				}
+
+			case op.IterOnProposal != nil:
+				prop, ok := proposals[op.IterOnProposal.ProposalID]
+				if !ok {
+					return totalCommits, fmt.Errorf("IterOnProposal: unknown proposal id %d", op.IterOnProposal.ProposalID)
+				}
+				it, err := prop.Iter(op.IterOnProposal.StartKey)
+				if err != nil {
+					return totalCommits, fmt.Errorf("IterOnProposal: %w", err)
+				}
+				if op.IterOnProposal.ReturnedIteratorID != nil {
+					iterators[*op.IterOnProposal.ReturnedIteratorID] = it
+				} else {
+					_ = it.Drop()
+				}
+
+			case op.IterNext != nil:
+				it, ok := iterators[op.IterNext.IteratorID]
+				if !ok {
+					return totalCommits, fmt.Errorf("IterNext: unknown iterator id %d", op.IterNext.IteratorID)
+				}
+				_ = it.Next()
+				if err := it.Err(); err != nil {
+					return totalCommits, fmt.Errorf("IterNext: %w", err)
+				}
+
+			case op.IterNextN != nil:
+				it, ok := iterators[op.IterNextN.IteratorID]
+				if !ok {
+					return totalCommits, fmt.Errorf("IterNextN: unknown iterator id %d", op.IterNextN.IteratorID)
+				}
+				for i := uint64(0); i < op.IterNextN.N; i++ {
+					if !it.Next() {
+						break
+					}
+				}
+				if err := it.Err(); err != nil {
+					return totalCommits, fmt.Errorf("IterNextN: %w", err)
+				}
 
 			case op.Commit != nil:
 				prop, ok := proposals[op.Commit.ProposalID]
@@ -355,6 +514,36 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 					return totalCommits, nil
 				}
 
+			case op.FreeProposal != nil:
+				prop, ok := proposals[op.FreeProposal.ProposalID]
+				if !ok {
+					return totalCommits, fmt.Errorf("FreeProposal: unknown proposal id %d", op.FreeProposal.ProposalID)
+				}
+				delete(proposals, op.FreeProposal.ProposalID)
+				if err := prop.Drop(); err != nil {
+					return totalCommits, fmt.Errorf("FreeProposal: %w", err)
+				}
+
+			case op.FreeRevision != nil:
+				rev, ok := revisions[op.FreeRevision.RevisionID]
+				if !ok {
+					return totalCommits, fmt.Errorf("FreeRevision: unknown revision id %d", op.FreeRevision.RevisionID)
+				}
+				delete(revisions, op.FreeRevision.RevisionID)
+				if err := rev.Drop(); err != nil {
+					return totalCommits, fmt.Errorf("FreeRevision: %w", err)
+				}
+
+			case op.FreeIterator != nil:
+				it, ok := iterators[op.FreeIterator.IteratorID]
+				if !ok {
+					return totalCommits, fmt.Errorf("FreeIterator: unknown iterator id %d", op.FreeIterator.IteratorID)
+				}
+				delete(iterators, op.FreeIterator.IteratorID)
+				if err := it.Drop(); err != nil {
+					return totalCommits, fmt.Errorf("FreeIterator: %w", err)
+				}
+
 			default:
 				return totalCommits, fmt.Errorf("unknown or empty DbOperation: %+v", op)
 			}
@@ -378,10 +567,24 @@ func batchFromReplayPairs(pairs []keyValueOp) []BatchOp {
 	batch := make([]BatchOp, len(pairs))
 	for i, p := range pairs {
 		if p.Value == nil {
-			batch[i] = PrefixDelete(p.Key)
+			if p.DeleteExact {
+				batch[i] = Delete(p.Key)
+			} else {
+				batch[i] = PrefixDelete(p.Key)
+			}
 		} else {
 			batch[i] = Put(p.Key, p.Value)
 		}
 	}
 	return batch
+}
+
+func hashFromBytes(bytes []byte) (Hash, error) {
+	if len(bytes) != len(EmptyRoot) {
+		return EmptyRoot, fmt.Errorf("invalid hash length %d", len(bytes))
+	}
+
+	var out Hash
+	copy(out[:], bytes)
+	return out, nil
 }
