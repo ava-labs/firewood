@@ -223,15 +223,13 @@ impl<T> PersistChannel<T> {
         state.permits_available == state.max_permits.get()
     }
 
-    /// Reaping is only performed as part of the next persist operation.
     fn reap(&self, nodestore: NodeStore<Committed, FileBacked>) -> Result<(), PersistError> {
         let mut state = self.state.lock();
         if state.shutdown {
             return Err(PersistError::ChannelDisconnected);
         }
         state.pending_reaps.push(nodestore);
-        // Note that there is no need to call notify here since reaps
-        // are only performed as part of a persist.
+        self.persist_ready.notify_one();
         Ok(())
     }
 
@@ -257,19 +255,15 @@ impl<T> PersistChannel<T> {
 
     fn pop(&self) -> Result<PersistDataWrapper<'_, T>, PersistError> {
         let mut state = self.state.lock();
-        // Sleep until we have reached the required threshold of pending commits Only performs reaping
-        // the next time that we persist. If we want to perform reaping immediately, then pop should
-        // return a PersistDataWrapper with 0 permits_to_release and None for data when the threshold
-        // has not been met. The pop caller should only perform a persist when the data in
-        // PersistDataWrapper is not None. Small changes will be needed to the while loop below, and
-        // a notify should be performed in the reap function.
+        // Sleep until we have reached the required threshold of pending commits.
         //
         // NOTE: The is None check is only necessary if we have more than one persister. For a single
         //       persister, the data will always be non None since dropping PersistDataWrapper will add
         //       the consumed permits back, causing the permits available to be above the threshold u
         //       unless more commits have been performed.
         while !state.shutdown
-            && (state.permits_available > state.persist_threshold || state.data.is_none())
+            && (state.permits_available > state.persist_threshold && state.pending_reaps.is_empty()
+                || state.data.is_none())
         {
             self.persist_ready.wait(&mut state);
         }
@@ -278,14 +272,25 @@ impl<T> PersistChannel<T> {
             return Err(PersistError::ChannelDisconnected);
         }
 
+        // If threshold has not been met, then we only reap. Set `permits_to_release` to 0 and
+        // data to be None.
+        let (permits_to_release, data) = if state.permits_available > state.persist_threshold {
+            (0, None)
+        } else {
+            (
+                state
+                    .max_permits
+                    .get()
+                    .saturating_sub(state.permits_available),
+                state.data.take(),
+            )
+        };
+
         Ok(PersistDataWrapper {
             channel: self,
-            permits_to_release: state
-                .max_permits
-                .get()
-                .saturating_sub(state.permits_available),
+            permits_to_release,
             pending_reaps: std::mem::take(&mut state.pending_reaps),
-            data: state.data.take(),
+            data,
         })
     }
 
