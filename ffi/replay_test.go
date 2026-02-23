@@ -49,14 +49,9 @@ type dbOperation struct {
 	Batch             *replayBatch       `msgpack:"Batch,omitempty"`
 	ProposeOnDB       *proposeOnDB       `msgpack:"ProposeOnDB,omitempty"`
 	ProposeOnProposal *proposeOnProposal `msgpack:"ProposeOnProposal,omitempty"`
-	IterOnRevision    *iterOnRevision    `msgpack:"IterOnRevision,omitempty"`
-	IterOnProposal    *iterOnProposal    `msgpack:"IterOnProposal,omitempty"`
-	IterNext          *iterNext          `msgpack:"IterNext,omitempty"`
-	IterNextN         *iterNextN         `msgpack:"IterNextN,omitempty"`
 	Commit            *commit            `msgpack:"Commit,omitempty"`
 	FreeProposal      *freeProposal      `msgpack:"FreeProposal,omitempty"`
 	FreeRevision      *freeRevision      `msgpack:"FreeRevision,omitempty"`
-	FreeIterator      *freeIterator      `msgpack:"FreeIterator,omitempty"`
 }
 
 // getLatest represents a read from the latest revision.
@@ -110,31 +105,6 @@ type proposeOnProposal struct {
 	ReturnedProposalID *uint64      `msgpack:"returned_proposal_id,omitempty"`
 }
 
-// iterOnRevision represents opening an iterator on a revision.
-type iterOnRevision struct {
-	RevisionID         uint64  `msgpack:"revision_id"`
-	StartKey           []byte  `msgpack:"start_key,omitempty"`
-	ReturnedIteratorID *uint64 `msgpack:"returned_iterator_id,omitempty"`
-}
-
-// iterOnProposal represents opening an iterator on a proposal.
-type iterOnProposal struct {
-	ProposalID         uint64  `msgpack:"proposal_id"`
-	StartKey           []byte  `msgpack:"start_key,omitempty"`
-	ReturnedIteratorID *uint64 `msgpack:"returned_iterator_id,omitempty"`
-}
-
-// iterNext represents advancing an iterator by one.
-type iterNext struct {
-	IteratorID uint64 `msgpack:"iterator_id"`
-}
-
-// iterNextN represents advancing an iterator by up to N entries.
-type iterNextN struct {
-	IteratorID uint64 `msgpack:"iterator_id"`
-	N          uint64 `msgpack:"n"`
-}
-
 // commit represents a commit operation for a proposal.
 type commit struct {
 	ProposalID   uint64 `msgpack:"proposal_id"`
@@ -149,11 +119,6 @@ type freeProposal struct {
 // freeRevision represents releasing a revision handle.
 type freeRevision struct {
 	RevisionID uint64 `msgpack:"revision_id"`
-}
-
-// freeIterator represents releasing an iterator handle.
-type freeIterator struct {
-	IteratorID uint64 `msgpack:"iterator_id"`
 }
 
 // TestReplayLogExecution reads a length-prefixed MessagePack replay log
@@ -353,7 +318,6 @@ type replayConfig struct {
 func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, error) {
 	proposals := make(map[uint64]*Proposal)
 	revisions := make(map[uint64]*Revision)
-	iterators := make(map[uint64]*Iterator)
 	totalCommits := 0
 
 	for _, segment := range logs {
@@ -436,60 +400,6 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 					_ = prop.Drop()
 				}
 
-			case op.IterOnRevision != nil:
-				rev, ok := revisions[op.IterOnRevision.RevisionID]
-				if !ok {
-					return totalCommits, fmt.Errorf("IterOnRevision: unknown revision id %d", op.IterOnRevision.RevisionID)
-				}
-				it, err := rev.Iter(op.IterOnRevision.StartKey)
-				if err != nil {
-					return totalCommits, fmt.Errorf("IterOnRevision: %w", err)
-				}
-				if op.IterOnRevision.ReturnedIteratorID != nil {
-					iterators[*op.IterOnRevision.ReturnedIteratorID] = it
-				} else {
-					_ = it.Drop()
-				}
-
-			case op.IterOnProposal != nil:
-				prop, ok := proposals[op.IterOnProposal.ProposalID]
-				if !ok {
-					return totalCommits, fmt.Errorf("IterOnProposal: unknown proposal id %d", op.IterOnProposal.ProposalID)
-				}
-				it, err := prop.Iter(op.IterOnProposal.StartKey)
-				if err != nil {
-					return totalCommits, fmt.Errorf("IterOnProposal: %w", err)
-				}
-				if op.IterOnProposal.ReturnedIteratorID != nil {
-					iterators[*op.IterOnProposal.ReturnedIteratorID] = it
-				} else {
-					_ = it.Drop()
-				}
-
-			case op.IterNext != nil:
-				it, ok := iterators[op.IterNext.IteratorID]
-				if !ok {
-					return totalCommits, fmt.Errorf("IterNext: unknown iterator id %d", op.IterNext.IteratorID)
-				}
-				_ = it.Next()
-				if err := it.Err(); err != nil {
-					return totalCommits, fmt.Errorf("IterNext: %w", err)
-				}
-
-			case op.IterNextN != nil:
-				it, ok := iterators[op.IterNextN.IteratorID]
-				if !ok {
-					return totalCommits, fmt.Errorf("IterNextN: unknown iterator id %d", op.IterNextN.IteratorID)
-				}
-				for i := uint64(0); i < op.IterNextN.N; i++ {
-					if !it.Next() {
-						break
-					}
-				}
-				if err := it.Err(); err != nil {
-					return totalCommits, fmt.Errorf("IterNextN: %w", err)
-				}
-
 			case op.Commit != nil:
 				prop, ok := proposals[op.Commit.ProposalID]
 				if !ok {
@@ -532,16 +442,6 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				delete(revisions, op.FreeRevision.RevisionID)
 				if err := rev.Drop(); err != nil {
 					return totalCommits, fmt.Errorf("FreeRevision: %w", err)
-				}
-
-			case op.FreeIterator != nil:
-				it, ok := iterators[op.FreeIterator.IteratorID]
-				if !ok {
-					return totalCommits, fmt.Errorf("FreeIterator: unknown iterator id %d", op.FreeIterator.IteratorID)
-				}
-				delete(iterators, op.FreeIterator.IteratorID)
-				if err := it.Drop(); err != nil {
-					return totalCommits, fmt.Errorf("FreeIterator: %w", err)
 				}
 
 			default:

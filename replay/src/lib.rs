@@ -47,11 +47,6 @@ pub struct ProposalId(pub u64);
 #[serde(transparent)]
 pub struct RevisionId(pub u64);
 
-/// Strongly-typed iterator identifier.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct IteratorId(pub u64);
-
 /// Optional timing metadata for a recorded operation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OperationMetadata {
@@ -117,52 +112,6 @@ pub enum RevisionResultData {
     /// Revision was returned successfully.
     #[serde(with = "serde_bytes")]
     Ok(Box<[u8]>),
-    /// Error occurred.
-    Err,
-}
-
-/// Summary of FFI iterator-create calls.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum IteratorResultData {
-    /// Null handle pointer was provided.
-    NullHandlePointer,
-    /// Iterator was created successfully.
-    Ok,
-    /// Error occurred.
-    Err,
-}
-
-/// A key/value pair returned by an iterator operation.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KeyValueRead {
-    /// The returned key.
-    #[serde(with = "serde_bytes")]
-    pub key: Box<[u8]>,
-    /// The returned value.
-    #[serde(with = "serde_bytes")]
-    pub value: Box<[u8]>,
-}
-
-/// Summary of `iter_next` calls.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum KeyValueResultData {
-    /// Null handle pointer was provided.
-    NullHandlePointer,
-    /// Iterator is exhausted.
-    None,
-    /// Iterator returned a key/value pair.
-    Some(KeyValueRead),
-    /// Error occurred.
-    Err,
-}
-
-/// Summary of `iter_next_n` calls.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum KeyValueBatchResultData {
-    /// Null handle pointer was provided.
-    NullHandlePointer,
-    /// Iterator returned a batch of key/value pairs.
-    Some(Vec<KeyValueRead>),
     /// Error occurred.
     Err,
 }
@@ -334,74 +283,6 @@ pub struct RootHash {
     pub metadata: Option<OperationMetadata>,
 }
 
-/// Operation that opens an iterator on a revision.
-#[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IterOnRevision {
-    /// The revision ID used as iterator source.
-    pub revision_id: RevisionId,
-    /// Optional iterator start key.
-    #[serde_as(as = "Option<serde_with::Bytes>")]
-    pub start_key: Option<Box<[u8]>>,
-    /// Iterator ID assigned to the returned handle, if successful.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub returned_iterator_id: Option<IteratorId>,
-    /// Optional captured FFI result.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<IteratorResultData>,
-    /// Optional timing metadata.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<OperationMetadata>,
-}
-
-/// Operation that opens an iterator on a proposal.
-#[serde_as]
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IterOnProposal {
-    /// The proposal ID used as iterator source.
-    pub proposal_id: ProposalId,
-    /// Optional iterator start key.
-    #[serde_as(as = "Option<serde_with::Bytes>")]
-    pub start_key: Option<Box<[u8]>>,
-    /// Iterator ID assigned to the returned handle, if successful.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub returned_iterator_id: Option<IteratorId>,
-    /// Optional captured FFI result.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<IteratorResultData>,
-    /// Optional timing metadata.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<OperationMetadata>,
-}
-
-/// Operation that advances an iterator once.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IterNext {
-    /// The iterator ID to advance.
-    pub iterator_id: IteratorId,
-    /// Optional captured FFI result.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<KeyValueResultData>,
-    /// Optional timing metadata.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<OperationMetadata>,
-}
-
-/// Operation that advances an iterator by up to `n` entries.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct IterNextN {
-    /// The iterator ID to advance.
-    pub iterator_id: IteratorId,
-    /// Maximum number of entries requested.
-    pub n: usize,
-    /// Optional captured FFI result.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<KeyValueBatchResultData>,
-    /// Optional timing metadata.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<OperationMetadata>,
-}
-
 /// Operation that frees a proposal handle.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FreeProposal {
@@ -420,19 +301,6 @@ pub struct FreeProposal {
 pub struct FreeRevision {
     /// The revision ID being freed.
     pub revision_id: RevisionId,
-    /// Optional captured FFI result.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub result: Option<VoidResultData>,
-    /// Optional timing metadata.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub metadata: Option<OperationMetadata>,
-}
-
-/// Operation that frees an iterator handle.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FreeIterator {
-    /// The iterator ID being freed.
-    pub iterator_id: IteratorId,
     /// Optional captured FFI result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<VoidResultData>,
@@ -460,22 +328,12 @@ pub enum DbOperation {
     ProposeOnDB(ProposeOnDB),
     /// Create a proposal on another proposal.
     ProposeOnProposal(ProposeOnProposal),
-    /// Open an iterator from a revision.
-    IterOnRevision(IterOnRevision),
-    /// Open an iterator from a proposal.
-    IterOnProposal(IterOnProposal),
-    /// Advance an iterator by one entry.
-    IterNext(IterNext),
-    /// Advance an iterator by up to `n` entries.
-    IterNextN(IterNextN),
     /// Commit a proposal.
     Commit(Commit),
     /// Free a proposal handle.
     FreeProposal(FreeProposal),
     /// Free a revision handle.
     FreeRevision(FreeRevision),
-    /// Free an iterator handle.
-    FreeIterator(FreeIterator),
 }
 
 /// A container for a sequence of database operations.
@@ -533,10 +391,6 @@ pub enum ReplayError {
     /// The log referenced a revision ID that was not created or already consumed.
     #[error("unknown revision ID {}", .0.0)]
     UnknownRevision(RevisionId),
-
-    /// The log referenced an iterator ID that was not created or already consumed.
-    #[error("unknown iterator ID {}", .0.0)]
-    UnknownIterator(IteratorId),
 }
 
 /// Alias for the batch operation type used in replay.
@@ -592,68 +446,6 @@ fn take_revision(
         .ok_or(ReplayError::UnknownRevision(id))
 }
 
-/// Iterator replay state.
-#[derive(Clone)]
-struct ReplayIteratorState {
-    view: ArcDynDbView,
-    start_key: Option<Box<[u8]>>,
-    consumed: usize,
-}
-
-/// Retrieves mutable iterator state from the map, returning an error if not found.
-fn get_iterator_mut<'a>(
-    iterators: &'a mut HashMap<IteratorId, ReplayIteratorState>,
-    id: IteratorId,
-) -> Result<&'a mut ReplayIteratorState, ReplayError> {
-    iterators
-        .get_mut(&id)
-        .ok_or(ReplayError::UnknownIterator(id))
-}
-
-/// Removes and returns iterator state from the map, returning an error if not found.
-fn take_iterator(
-    iterators: &mut HashMap<IteratorId, ReplayIteratorState>,
-    id: IteratorId,
-) -> Result<ReplayIteratorState, ReplayError> {
-    iterators
-        .remove(&id)
-        .ok_or(ReplayError::UnknownIterator(id))
-}
-
-/// Rebuilds and advances an iterator based on recorded cursor state.
-///
-/// This intentionally favors simplicity and determinism over performance.
-fn iter_take(
-    state: &mut ReplayIteratorState,
-    n: usize,
-) -> Result<Vec<(Box<[u8]>, Box<[u8]>)>, ReplayError> {
-    let mut iter = state.view.iter_option(state.start_key.as_deref())?;
-
-    // Skip already-consumed entries.
-    for _ in 0..state.consumed {
-        match iter.next() {
-            Some(item) => {
-                let _ = item.map_err(api::Error::from)?;
-            }
-            None => return Ok(Vec::new()),
-        }
-    }
-
-    let mut out = Vec::with_capacity(n);
-    for _ in 0..n {
-        match iter.next() {
-            Some(item) => {
-                let (key, value) = item.map_err(api::Error::from)?;
-                out.push((key, value));
-            }
-            None => break,
-        }
-    }
-
-    state.consumed = state.consumed.saturating_add(out.len());
-    Ok(out)
-}
-
 /// Applies a single operation to the database.
 ///
 /// Returns the root hash if the operation was a commit that produced one.
@@ -661,7 +453,6 @@ fn apply_operation<'db>(
     db: &'db Db,
     proposals: &mut HashMap<ProposalId, Proposal<'db>>,
     revisions: &mut HashMap<RevisionId, ArcDynDbView>,
-    iterators: &mut HashMap<IteratorId, ReplayIteratorState>,
     operation: DbOperation,
 ) -> Result<Option<Box<[u8]>>, ReplayError> {
     match operation {
@@ -775,99 +566,6 @@ fn apply_operation<'db>(
             Ok(None)
         }
 
-        DbOperation::IterOnRevision(IterOnRevision {
-            revision_id,
-            start_key,
-            returned_iterator_id,
-            result,
-            ..
-        }) => {
-            if matches!(
-                result,
-                Some(IteratorResultData::Err | IteratorResultData::NullHandlePointer)
-            ) {
-                return Ok(None);
-            }
-            let Some(returned_iterator_id) = returned_iterator_id else {
-                return Ok(None);
-            };
-
-            let revision = get_revision(revisions, revision_id)?;
-            iterators.insert(
-                returned_iterator_id,
-                ReplayIteratorState {
-                    view: revision.clone(),
-                    start_key,
-                    consumed: 0,
-                },
-            );
-            Ok(None)
-        }
-
-        DbOperation::IterOnProposal(IterOnProposal {
-            proposal_id,
-            start_key,
-            returned_iterator_id,
-            result,
-            ..
-        }) => {
-            if matches!(
-                result,
-                Some(IteratorResultData::Err | IteratorResultData::NullHandlePointer)
-            ) {
-                return Ok(None);
-            }
-            let Some(returned_iterator_id) = returned_iterator_id else {
-                return Ok(None);
-            };
-
-            let proposal = get_proposal(proposals, proposal_id)?;
-            iterators.insert(
-                returned_iterator_id,
-                ReplayIteratorState {
-                    view: proposal.view(),
-                    start_key,
-                    consumed: 0,
-                },
-            );
-            Ok(None)
-        }
-
-        DbOperation::IterNext(IterNext {
-            iterator_id,
-            result,
-            ..
-        }) => {
-            if matches!(
-                result,
-                Some(KeyValueResultData::Err | KeyValueResultData::NullHandlePointer)
-            ) {
-                return Ok(None);
-            }
-
-            let state = get_iterator_mut(iterators, iterator_id)?;
-            let _ = iter_take(state, 1)?;
-            Ok(None)
-        }
-
-        DbOperation::IterNextN(IterNextN {
-            iterator_id,
-            n,
-            result,
-            ..
-        }) => {
-            if matches!(
-                result,
-                Some(KeyValueBatchResultData::Err | KeyValueBatchResultData::NullHandlePointer)
-            ) {
-                return Ok(None);
-            }
-
-            let state = get_iterator_mut(iterators, iterator_id)?;
-            let _ = iter_take(state, n)?;
-            Ok(None)
-        }
-
         DbOperation::Commit(Commit {
             proposal_id,
             returned_hash,
@@ -898,11 +596,6 @@ fn apply_operation<'db>(
 
         DbOperation::FreeRevision(FreeRevision { revision_id, .. }) => {
             let _ = take_revision(revisions, revision_id)?;
-            Ok(None)
-        }
-
-        DbOperation::FreeIterator(FreeIterator { iterator_id, .. }) => {
-            let _ = take_iterator(iterators, iterator_id)?;
             Ok(None)
         }
     }
@@ -937,7 +630,6 @@ pub fn replay_from_reader<R: Read>(
 ) -> Result<Option<Box<[u8]>>, ReplayError> {
     let mut proposals: HashMap<ProposalId, Proposal<'_>> = HashMap::new();
     let mut revisions: HashMap<RevisionId, ArcDynDbView> = HashMap::new();
-    let mut iterators: HashMap<IteratorId, ReplayIteratorState> = HashMap::new();
     let mut last_commit_hash = None;
     let mut commit_count = 0u64;
     let max = max_commits.unwrap_or(u64::MAX);
@@ -964,9 +656,7 @@ pub fn replay_from_reader<R: Read>(
 
         for op in log.operations {
             let is_commit = matches!(op, DbOperation::Commit(_));
-            if let Some(hash) =
-                apply_operation(db, &mut proposals, &mut revisions, &mut iterators, op)?
-            {
+            if let Some(hash) = apply_operation(db, &mut proposals, &mut revisions, op)? {
                 last_commit_hash = Some(hash);
             }
             if is_commit {

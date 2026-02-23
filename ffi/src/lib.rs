@@ -148,15 +148,7 @@ pub extern "C" fn fwd_iter_on_revision<'view>(
     revision: Option<&'view RevisionHandle>,
     key: BorrowedBytes,
 ) -> IteratorResult<'view> {
-    #[cfg(feature = "block-replay")]
-    let start = std::time::Instant::now();
-
-    let result = invoke_with_handle(revision, move |rev| rev.iter_from(Some(key.as_slice())));
-
-    #[cfg(feature = "block-replay")]
-    replay::record_iter_on_revision(revision, key, &result, start.elapsed().as_nanos() as u64);
-
-    result
+    invoke_with_handle(revision, move |rev| rev.iter_from(Some(key.as_slice())))
 }
 
 /// Returns an iterator on the provided proposal optionally starting from a key
@@ -185,15 +177,7 @@ pub extern "C" fn fwd_iter_on_proposal<'p>(
     handle: Option<&'p ProposalHandle<'_>>,
     key: BorrowedBytes,
 ) -> IteratorResult<'p> {
-    #[cfg(feature = "block-replay")]
-    let start = std::time::Instant::now();
-
-    let result = invoke_with_handle(handle, move |p| p.iter_from(Some(key.as_slice())));
-
-    #[cfg(feature = "block-replay")]
-    replay::record_iter_on_proposal(handle, key, &result, start.elapsed().as_nanos() as u64);
-
-    result
+    invoke_with_handle(handle, move |p| p.iter_from(Some(key.as_slice())))
 }
 
 /// Retrieves the next item from the iterator.
@@ -224,19 +208,7 @@ pub extern "C" fn fwd_iter_on_proposal<'p>(
 ///
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) -> KeyValueResult {
-    #[cfg(feature = "block-replay")]
-    let iterator_ptr = handle
-        .as_ref()
-        .map(|it| std::ptr::from_ref::<IteratorHandle<'_>>(it));
-    #[cfg(feature = "block-replay")]
-    let start = std::time::Instant::now();
-
-    let result = invoke_with_handle(handle, Iterator::next);
-
-    #[cfg(feature = "block-replay")]
-    replay::record_iter_next(iterator_ptr, &result, start.elapsed().as_nanos() as u64);
-
-    result
+    invoke_with_handle(handle, Iterator::next)
 }
 
 /// Retrieves the next batch of items from the iterator.
@@ -270,19 +242,7 @@ pub extern "C" fn fwd_iter_next_n(
     handle: Option<&mut IteratorHandle<'_>>,
     n: usize,
 ) -> KeyValueBatchResult {
-    #[cfg(feature = "block-replay")]
-    let iterator_ptr = handle
-        .as_ref()
-        .map(|it| std::ptr::from_ref::<IteratorHandle<'_>>(it));
-    #[cfg(feature = "block-replay")]
-    let start = std::time::Instant::now();
-
-    let result = invoke_with_handle(handle, |it| it.iter_next_n(n));
-
-    #[cfg(feature = "block-replay")]
-    replay::record_iter_next_n(iterator_ptr, n, &result, start.elapsed().as_nanos() as u64);
-
-    result
+    invoke_with_handle(handle, |it| it.iter_next_n(n))
 }
 
 /// Consumes the [`IteratorHandle`], destroys the iterator, and frees the memory.
@@ -305,17 +265,7 @@ pub extern "C" fn fwd_iter_next_n(
 ///
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_free_iterator(iterator: Option<Box<IteratorHandle<'_>>>) -> VoidResult {
-    #[cfg(feature = "block-replay")]
-    let iterator_ptr = iterator.as_ref().map(|it| std::ptr::from_ref(&**it));
-    #[cfg(feature = "block-replay")]
-    let start = std::time::Instant::now();
-
-    let result = invoke_with_handle(iterator, drop);
-
-    #[cfg(feature = "block-replay")]
-    replay::record_free_iterator(iterator_ptr, &result, start.elapsed().as_nanos() as u64);
-
-    result
+    invoke_with_handle(iterator, drop)
 }
 
 /// Gets a handle to the revision identified by the provided root hash.
