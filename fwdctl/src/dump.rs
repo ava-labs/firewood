@@ -150,7 +150,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let latest_hash = db.root_hash()?;
     let Some(latest_hash) = latest_hash else {
         println!("Database is empty");
-        return Ok(());
+        return db.close();
     };
     let latest_rev = db.revision(latest_hash)?;
 
@@ -158,7 +158,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         create_output_handler(opts, &db).expect("Error creating output handler")
     else {
         // dot format is generated in the handler
-        return Ok(());
+        return db.close();
     };
 
     let start_key = opts
@@ -190,7 +190,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     }
     output_handler.flush()?;
 
-    Ok(())
+    db.close()
 }
 
 fn key_count_exceeded(max: Option<u32>, key_count: u32) -> bool {

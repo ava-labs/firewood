@@ -42,7 +42,7 @@ parking_lot.workspace = true
 fjall = "=2.11.2" # 3.0.0 has breaking changes
 derive-where = "1.6.0"
 weak-table = "0.3.2"
-lender = "0.4.2"
+lender = "0.6.2"
 crossbeam = "0.8.4"
 nonzero_ext = "0.3.0"
 

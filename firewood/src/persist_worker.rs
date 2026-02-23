@@ -186,7 +186,7 @@ impl PersistWorker {
     ///
     /// This method is idempotent for compatibility with `drop` (as `drop` is
     /// called after this function).
-    pub(crate) fn close(&mut self) -> Result<(), PersistError> {
+    pub(crate) fn close(mut self) -> Result<(), PersistError> {
         // Drop the sender to close the channel, signaling the background
         // thread to exit.
         drop(self.sender.take());

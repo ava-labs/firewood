@@ -25,5 +25,5 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let hash = db.root_hash()?;
 
     println!("{hash:?}");
-    Ok(())
+    db.close()
 }
