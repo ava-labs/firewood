@@ -251,43 +251,36 @@ impl<T> PersistChannel<T> {
 
     fn pop(&self) -> Result<PersistDataWrapper<'_, T>, PersistError> {
         let mut state = self.state.lock();
-        // Sleep until we have reached the required threshold of pending commits.
-        //
-        // NOTE: The is None check is only necessary if we have more than one persister. For a single
-        //       persister, the data will always be non None since dropping PersistDataWrapper will add
-        //       the consumed permits back, causing the permits available to be above the threshold u
-        //       unless more commits have been performed.
-        while !state.shutdown
-            && (state.permits_available > state.persist_threshold && state.pending_reaps.is_empty()
-                || state.data.is_none())
-        {
+        loop {
+            // Shutdown requested. Return error.
+            if state.shutdown {
+                return Err(PersistError::ChannelDisconnected);
+            }
+            // Unblock to persist when there permits available <= threshold
+            if state.permits_available <= state.persist_threshold {
+                return Ok(PersistDataWrapper {
+                    channel: self,
+                    permits_to_release: state
+                        .max_permits
+                        .get()
+                        .saturating_sub(state.permits_available),
+                    pending_reaps: std::mem::take(&mut state.pending_reaps),
+                    data: state.data.take(),
+                });
+            }
+            // Unblock even if we haven't met the threshold if there are pending reaps.
+            // Permits to release is set to 0, and committed revision is not taken.
+            if !state.pending_reaps.is_empty() {
+                return Ok(PersistDataWrapper {
+                    channel: self,
+                    permits_to_release: 0,
+                    pending_reaps: std::mem::take(&mut state.pending_reaps),
+                    data: None,
+                });
+            }
+            // Block until it is woken up by the committer thread.
             self.persist_ready.wait(&mut state);
         }
-
-        if state.shutdown {
-            return Err(PersistError::ChannelDisconnected);
-        }
-
-        // If threshold has not been met, then we only reap. Set `permits_to_release` to 0 and
-        // data to be None.
-        let (permits_to_release, data) = if state.permits_available > state.persist_threshold {
-            (0, None)
-        } else {
-            (
-                state
-                    .max_permits
-                    .get()
-                    .saturating_sub(state.permits_available),
-                state.data.take(),
-            )
-        };
-
-        Ok(PersistDataWrapper {
-            channel: self,
-            permits_to_release,
-            pending_reaps: std::mem::take(&mut state.pending_reaps),
-            data,
-        })
     }
 
     fn close(&self) {
