@@ -251,36 +251,36 @@ impl<T> PersistChannel<T> {
 
     fn pop(&self) -> Result<PersistDataWrapper<'_, T>, PersistError> {
         let mut state = self.state.lock();
-        loop {
+        let (permits_to_release, pending_reaps, data) = loop {
             // Shutdown requested. Return error.
             if state.shutdown {
                 return Err(PersistError::ChannelDisconnected);
             }
             // Unblock to persist when permits available <= threshold
             if state.permits_available <= state.persist_threshold && state.data.is_some() {
-                return Ok(PersistDataWrapper {
-                    channel: self,
-                    permits_to_release: state
+                break (
+                    state
                         .max_permits
                         .get()
                         .saturating_sub(state.permits_available),
-                    pending_reaps: std::mem::take(&mut state.pending_reaps),
-                    data: state.data.take(),
-                });
+                    std::mem::take(&mut state.pending_reaps),
+                    state.data.take(),
+                );
             }
             // Unblock even if we haven't met the threshold if there are pending reaps.
             // Permits to release is set to 0, and committed revision is not taken.
             if !state.pending_reaps.is_empty() {
-                return Ok(PersistDataWrapper {
-                    channel: self,
-                    permits_to_release: 0,
-                    pending_reaps: std::mem::take(&mut state.pending_reaps),
-                    data: None,
-                });
+                break (0, std::mem::take(&mut state.pending_reaps), None);
             }
             // Block until it is woken up by the committer thread.
             self.persist_ready.wait(&mut state);
-        }
+        };
+        Ok(PersistDataWrapper {
+            channel: self,
+            permits_to_release,
+            pending_reaps,
+            data,
+        })
     }
 
     fn close(&self) {
