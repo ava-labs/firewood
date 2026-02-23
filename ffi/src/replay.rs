@@ -25,10 +25,6 @@ use crate::value::{BatchOp, BorrowedBatchOps, BorrowedBytes};
 
 /// Environment variable that controls the output path for the replay log.
 const REPLAY_PATH_ENV: &str = "FIREWOOD_BLOCK_REPLAY_PATH";
-/// Environment variable to include captured call results in replay log entries.
-const INCLUDE_RESULTS_ENV: &str = "FIREWOOD_BLOCK_REPLAY_INCLUDE_RESULTS";
-/// Environment variable to include timing metadata in replay log entries.
-const INCLUDE_METADATA_ENV: &str = "FIREWOOD_BLOCK_REPLAY_INCLUDE_METADATA";
 
 /// Number of operations to buffer before flushing to disk.
 const FLUSH_THRESHOLD: usize = 10_000;
@@ -48,41 +44,19 @@ struct Recorder {
     next_revision_id: u64,
     /// Map from revision handle pointer addresses to assigned IDs.
     revision_ids: HashMap<usize, RevisionId>,
-    /// Whether to include result payloads in operation logs.
-    include_results: bool,
-    /// Whether to include per-operation timing metadata.
-    include_metadata: bool,
     /// Output path for the replay log.
     output_path: PathBuf,
 }
 
 impl Recorder {
-    fn new(output_path: PathBuf, include_results: bool, include_metadata: bool) -> Self {
+    fn new(output_path: PathBuf) -> Self {
         Self {
             operations: Vec::new(),
             next_proposal_id: 1,
             proposal_ids: HashMap::new(),
             next_revision_id: 1,
             revision_ids: HashMap::new(),
-            include_results,
-            include_metadata,
             output_path,
-        }
-    }
-
-    fn maybe_result<T>(&self, f: impl FnOnce() -> T) -> Option<T> {
-        if self.include_results {
-            Some(f())
-        } else {
-            None
-        }
-    }
-
-    fn metadata(&self, duration_ns: u64) -> Option<OperationMetadata> {
-        if self.include_metadata {
-            Some(OperationMetadata { duration_ns })
-        } else {
-            None
         }
     }
 
@@ -98,8 +72,8 @@ impl Recorder {
     fn record_get_latest(&mut self, key: &[u8], result: &crate::ValueResult, duration_ns: u64) {
         self.operations.push(DbOperation::GetLatest(GetLatest {
             key: key.into(),
-            result: self.maybe_result(|| value_result_data(result)),
-            metadata: self.metadata(duration_ns),
+            result: Some(value_result_data(result)),
+            metadata: Some(OperationMetadata { duration_ns }),
         }));
         self.maybe_flush();
     }
@@ -120,8 +94,8 @@ impl Recorder {
             .push(DbOperation::GetFromProposal(GetFromProposal {
                 proposal_id,
                 key: key.into(),
-                result: self.maybe_result(|| value_result_data(result)),
-                metadata: self.metadata(duration_ns),
+                result: Some(value_result_data(result)),
+                metadata: Some(OperationMetadata { duration_ns }),
             }));
         self.maybe_flush();
     }
@@ -146,8 +120,8 @@ impl Recorder {
         self.operations.push(DbOperation::GetRevision(GetRevision {
             root: hash_key_to_bytes(root).into(),
             returned_revision_id,
-            result: self.maybe_result(|| revision_result_data(result)),
-            metadata: self.metadata(duration_ns),
+            result: Some(revision_result_data(result)),
+            metadata: Some(OperationMetadata { duration_ns }),
         }));
         self.maybe_flush();
     }
@@ -168,8 +142,8 @@ impl Recorder {
             .push(DbOperation::GetFromRevision(GetFromRevision {
                 revision_id,
                 key: key.into(),
-                result: self.maybe_result(|| value_result_data(result)),
-                metadata: self.metadata(duration_ns),
+                result: Some(value_result_data(result)),
+                metadata: Some(OperationMetadata { duration_ns }),
             }));
         self.maybe_flush();
     }
@@ -177,8 +151,8 @@ impl Recorder {
     /// Records a `RootHash` operation.
     fn record_root_hash(&mut self, result: &crate::HashResult, duration_ns: u64) {
         self.operations.push(DbOperation::RootHash(RootHash {
-            result: self.maybe_result(|| hash_result_data(result)),
-            metadata: self.metadata(duration_ns),
+            result: Some(hash_result_data(result)),
+            metadata: Some(OperationMetadata { duration_ns }),
         }));
         self.maybe_flush();
     }
@@ -188,8 +162,8 @@ impl Recorder {
         let pairs = convert_ops(ops);
         self.operations.push(DbOperation::Batch(Batch {
             pairs,
-            result: self.maybe_result(|| hash_result_data(result)),
-            metadata: self.metadata(duration_ns),
+            result: Some(hash_result_data(result)),
+            metadata: Some(OperationMetadata { duration_ns }),
         }));
         self.maybe_flush();
     }
@@ -215,8 +189,8 @@ impl Recorder {
         self.operations.push(DbOperation::ProposeOnDB(ProposeOnDB {
             pairs,
             returned_proposal_id,
-            result: self.maybe_result(|| proposal_result_data(result)),
-            metadata: self.metadata(duration_ns),
+            result: Some(proposal_result_data(result)),
+            metadata: Some(OperationMetadata { duration_ns }),
         }));
         self.maybe_flush();
     }
@@ -248,8 +222,8 @@ impl Recorder {
                 proposal_id: parent_id,
                 pairs,
                 returned_proposal_id,
-                result: self.maybe_result(|| proposal_result_data(result)),
-                metadata: self.metadata(duration_ns),
+                result: Some(proposal_result_data(result)),
+                metadata: Some(OperationMetadata { duration_ns }),
             }));
         self.maybe_flush();
     }
@@ -271,8 +245,8 @@ impl Recorder {
         self.operations.push(DbOperation::Commit(Commit {
             proposal_id,
             returned_hash,
-            result: self.maybe_result(|| hash_result_data(result)),
-            metadata: self.metadata(duration_ns),
+            result: Some(hash_result_data(result)),
+            metadata: Some(OperationMetadata { duration_ns }),
         }));
         self.maybe_flush();
     }
@@ -287,8 +261,8 @@ impl Recorder {
         self.operations
             .push(DbOperation::FreeProposal(FreeProposal {
                 proposal_id,
-                result: self.maybe_result(|| void_result_data(result)),
-                metadata: self.metadata(duration_ns),
+                result: Some(void_result_data(result)),
+                metadata: Some(OperationMetadata { duration_ns }),
             }));
         self.maybe_flush();
     }
@@ -303,8 +277,8 @@ impl Recorder {
         self.operations
             .push(DbOperation::FreeRevision(FreeRevision {
                 revision_id,
-                result: self.maybe_result(|| void_result_data(result)),
-                metadata: self.metadata(duration_ns),
+                result: Some(void_result_data(result)),
+                metadata: Some(OperationMetadata { duration_ns }),
             }));
         self.maybe_flush();
     }
@@ -400,19 +374,6 @@ fn convert_ops(ops: &[BatchOp<'_>]) -> Vec<KeyValueOp> {
         .collect()
 }
 
-fn env_flag(name: &str) -> bool {
-    std::env::var(name)
-        .ok()
-        .map(|value| {
-            let value = value.trim();
-            value == "1"
-                || value.eq_ignore_ascii_case("true")
-                || value.eq_ignore_ascii_case("yes")
-                || value.eq_ignore_ascii_case("on")
-        })
-        .unwrap_or(false)
-}
-
 fn hash_key_to_bytes(hash: crate::HashKey) -> [u8; 32] {
     let api_hash: firewood::v2::api::HashKey = hash.into();
     api_hash.into()
@@ -474,13 +435,9 @@ fn void_result_data(result: &crate::VoidResult) -> VoidResultData {
 fn recorder() -> Option<&'static Mutex<Recorder>> {
     RECORDER
         .get_or_init(|| {
-            std::env::var(REPLAY_PATH_ENV).ok().map(|p| {
-                Mutex::new(Recorder::new(
-                    PathBuf::from(p),
-                    env_flag(INCLUDE_RESULTS_ENV),
-                    env_flag(INCLUDE_METADATA_ENV),
-                ))
-            })
+            std::env::var(REPLAY_PATH_ENV)
+                .ok()
+                .map(|p| Mutex::new(Recorder::new(PathBuf::from(p))))
         })
         .as_ref()
 }

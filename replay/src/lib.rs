@@ -482,7 +482,18 @@ fn apply_operation<'db>(
     operation: DbOperation,
 ) -> Result<Option<Box<[u8]>>, ReplayError> {
     match operation {
-        DbOperation::GetLatest(GetLatest { key, .. }) => {
+        DbOperation::GetLatest(GetLatest { key, result, .. }) => {
+            if matches!(
+                result,
+                Some(
+                    ValueResultData::NullHandlePointer
+                        | ValueResultData::RevisionNotFound(_)
+                        | ValueResultData::Err
+                )
+            ) {
+                return Ok(None);
+            }
+
             if let Some(root) = DbApi::root_hash(db)? {
                 let view = DbApi::revision(db, root)?;
                 let _ = DbViewApi::val(&*view, key)?;
@@ -491,8 +502,22 @@ fn apply_operation<'db>(
         }
 
         DbOperation::GetFromProposal(GetFromProposal {
-            proposal_id, key, ..
+            proposal_id,
+            key,
+            result,
+            ..
         }) => {
+            if matches!(
+                result,
+                Some(
+                    ValueResultData::NullHandlePointer
+                        | ValueResultData::RevisionNotFound(_)
+                        | ValueResultData::Err
+                )
+            ) {
+                return Ok(None);
+            }
+
             let proposal = get_proposal(proposals, proposal_id)?;
             let _ = DbViewApi::val(proposal, key)?;
             Ok(None)
@@ -514,14 +539,34 @@ fn apply_operation<'db>(
         }
 
         DbOperation::GetFromRevision(GetFromRevision {
-            revision_id, key, ..
+            revision_id,
+            key,
+            result,
+            ..
         }) => {
+            if matches!(
+                result,
+                Some(
+                    ValueResultData::NullHandlePointer
+                        | ValueResultData::RevisionNotFound(_)
+                        | ValueResultData::Err
+                )
+            ) {
+                return Ok(None);
+            }
+
             let revision = get_revision(revisions, revision_id)?;
             let _ = revision.val(key.as_ref())?;
             Ok(None)
         }
 
-        DbOperation::RootHash(_) => {
+        DbOperation::RootHash(RootHash { result, .. }) => {
+            if matches!(
+                result,
+                Some(HashResultData::NullHandlePointer | HashResultData::Err)
+            ) {
+                return Ok(None);
+            }
             let _ = DbApi::root_hash(db)?;
             Ok(None)
         }
