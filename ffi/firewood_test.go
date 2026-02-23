@@ -153,7 +153,16 @@ func newTestDatabase(tb testing.TB, opts ...Option) *Database {
 	db, err := newDatabase(tb.TempDir(), opts...)
 	r.NoError(err)
 	tb.Cleanup(func() {
-		r.NoError(db.Close(oneSecCtx(tb)))
+		err := db.Close(oneSecCtx(tb))
+		if errors.Is(err, ErrActiveKeepAliveHandles) {
+			// force a GC to clean up dangling handles that are preventing the
+			// database from closing, then try again. Intentionally not looping
+			// since a subsequent attempt is unlikely to succeed if the first
+			// one didn't.
+			runtime.GC()
+			err = db.Close(oneSecCtx(tb))
+		}
+		r.NoError(err)
 	})
 	return db
 }
@@ -337,7 +346,7 @@ func sortKV(keys, vals [][]byte) error {
 	for dest, orig := range ord {
 		perm[orig] = dest
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		for perm[i] != i {
 			j := perm[i]
 			keys[i], keys[j] = keys[j], keys[i]
@@ -519,7 +528,7 @@ func TestConflictingProposals(t *testing.T) {
 	for i := range proposals {
 		keys := make([][]byte, numKeys)
 		vals := make([][]byte, numKeys)
-		for j := 0; j < numKeys; j++ {
+		for j := range numKeys {
 			keys[j] = keyForTest(i*numKeys + j)
 			vals[j] = valForTest(i*numKeys + j)
 		}
@@ -530,7 +539,7 @@ func TestConflictingProposals(t *testing.T) {
 
 	// Check that each value is present in each proposal.
 	for i, p := range proposals {
-		for j := 0; j < numKeys; j++ {
+		for j := range numKeys {
 			got, err := p.Get(keyForTest(i*numKeys + j))
 			r.NoError(err)
 			r.Equal(valForTest(i*numKeys+j), got, "Get(%d)", i*numKeys+j)
@@ -541,14 +550,14 @@ func TestConflictingProposals(t *testing.T) {
 	err := proposals[0].Commit()
 	r.NoError(err)
 	// Check that the first proposal's keys are present.
-	for j := 0; j < numKeys; j++ {
+	for j := range numKeys {
 		got, err := db.Get(keyForTest(j))
 		r.NoError(err)
 		r.Equal(valForTest(j), got, "Get(%d)", j)
 	}
 	// Check that the other proposals' keys are not present.
 	for i := 1; i < numProposals; i++ {
-		for j := 0; j < numKeys; j++ {
+		for j := range numKeys {
 			got, err := db.Get(keyForTest(i*numKeys + j))
 			r.Empty(got, "Get(%d)", i*numKeys+j)
 			r.NoError(err, "Get(%d)", i*numKeys+j)
@@ -557,7 +566,7 @@ func TestConflictingProposals(t *testing.T) {
 
 	// Ensure we can still get values from the other proposals.
 	for i := 1; i < numProposals; i++ {
-		for j := 0; j < numKeys; j++ {
+		for j := range numKeys {
 			got, err := proposals[i].Get(keyForTest(i*numKeys + j))
 			r.NoError(err, "Get(%d)", i*numKeys+j)
 			r.Equal(valForTest(i*numKeys+j), got, "Get(%d)", i*numKeys+j)
@@ -578,7 +587,7 @@ func TestConflictingProposals(t *testing.T) {
 
 	// Because they're invalid, we should not be able to get values from them.
 	for i := 1; i < numProposals; i++ {
-		for j := 0; j < numKeys; j++ {
+		for j := range numKeys {
 			got, err := proposals[i].Get(keyForTest(i*numKeys + j))
 			r.ErrorIs(err, errDroppedProposal, "Get(%d)", i*numKeys+j)
 			r.Empty(got, "Get(%d)", i*numKeys+j)

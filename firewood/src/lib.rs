@@ -181,7 +181,7 @@ pub use firewood_storage::logger;
 /// In the event of unexpected behavior in testing, disable this first before
 /// looking elsewhere.
 fn init_logger() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace"))
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .is_test(true)
         .try_init()
         .ok();

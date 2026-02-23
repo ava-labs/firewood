@@ -56,10 +56,10 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     let db_config = new(opts);
     log::debug!("database configuration parameters: \n{db_config:?}\n");
 
-    Db::new(opts.database.dbpath.clone(), db_config)?;
+    let db = Db::new(opts.database.dbpath.clone(), db_config)?;
     println!(
         "created firewood database in {}",
         opts.database.dbpath.display()
     );
-    Ok(())
+    db.close()
 }

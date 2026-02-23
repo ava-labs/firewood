@@ -2,22 +2,19 @@
 // See the file LICENSE.md for licensing terms.
 
 #![expect(
-    clippy::cast_precision_loss,
-    reason = "Found 2 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::default_trait_access,
     reason = "Found 3 occurrences after enabling the lint."
 )]
 
+use nonzero_ext::nonzero;
 use parking_lot::{Mutex, MutexGuard, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::io;
-use std::num::NonZero;
+use std::num::{NonZero, NonZeroU64};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use firewood_storage::logger::{error, trace, warn};
+use firewood_storage::logger::{trace, warn};
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
@@ -58,7 +55,7 @@ pub struct RevisionManagerConfig {
     #[builder(default, setter(strip_option))]
     node_cache_memory_limit: Option<NonZero<usize>>,
 
-    #[builder(default_code = "NonZero::new(40000).expect(\"non-zero\")")]
+    #[builder(default_code = "NonZero::new(1000000).expect(\"non-zero\")")]
     free_list_cache_size: NonZero<usize>,
 
     #[builder(default = CacheReadStrategy::WritesOnly)]
@@ -116,6 +113,9 @@ pub struct ConfigManager {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
+    /// The maximum number of unpersisted revisions that can exist at a given time.
+    #[builder(default = nonzero!(1u64))]
+    pub deferred_persistence_commit_count: NonZeroU64,
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
@@ -246,7 +246,11 @@ impl RevisionManager {
             by_hash.insert(hash, nodestore.clone());
         }
 
-        let persist_worker = PersistWorker::new(header, root_store.clone());
+        let persist_worker = PersistWorker::new(
+            config.deferred_persistence_commit_count,
+            header,
+            root_store.clone(),
+        );
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,
@@ -352,11 +356,8 @@ impl RevisionManager {
                     break;
                 }
             }
-            firewood_set!(
-                crate::registry::ACTIVE_REVISIONS,
-                in_memory_revisions.len() as f64
-            );
-            firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions as f64);
+            firewood_set!(crate::registry::ACTIVE_REVISIONS, in_memory_revisions.len());
+            firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions);
         }
 
         // 4. Signal to the `PersistWorker` to persist this revision.
@@ -397,7 +398,7 @@ impl RevisionManager {
             }
 
             // Update uncommitted proposals gauge after cleanup
-            firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len() as f64);
+            firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len());
         }
 
         // then reparent any proposals that have this proposal as a parent
@@ -443,7 +444,7 @@ impl RevisionManager {
             lock.len()
         };
         // Update uncommitted proposals gauge after adding
-        firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, len as f64);
+        firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, len);
     }
 
     /// Retrieve a committed revision by its root hash.
@@ -516,28 +517,20 @@ impl RevisionManager {
 
     /// Closes the revision manager gracefully.
     ///
-    /// This method shuts down the background persistence worker. If not called
-    /// explicitly, `Drop` will attempt a best-effort shutdown but cannot report
-    /// errors.
-    pub fn close(&mut self) -> Result<(), RevisionManagerError> {
+    /// This method shuts down the background persistence worker and persists
+    /// the latest committed revision.
+    pub fn close(self) -> Result<(), RevisionManagerError> {
         self.persist_worker
             .close()
             .map_err(RevisionManagerError::PersistError)
     }
 }
 
-impl Drop for RevisionManager {
-    fn drop(&mut self) {
-        // Best-effort graceful shutdown - users are suggested to call `close()` instead.
-        if let Err(e) = self.close() {
-            error!("Error during RevisionManager shutdown: {e}");
-        }
-    }
-}
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use firewood_storage::RootReader;
+
     use super::*;
 
     impl RevisionManager {
@@ -553,6 +546,22 @@ mod tests {
         /// Wait until all pending commits have been persisted.
         pub(crate) fn wait_persisted(&self) {
             self.persist_worker.wait_persisted();
+        }
+
+        /// Returns true if the root node (if it exists) of this revision is
+        /// persisted. Otherwise, returns false.
+        ///
+        /// ## Errors
+        ///
+        /// Returns an error if the revision does not exist.
+        pub(crate) fn revision_persist_status(
+            &self,
+            root_hash: TrieHash,
+        ) -> Result<bool, RevisionManagerError> {
+            let revision = self.revision(root_hash)?;
+            Ok(revision
+                .root_as_maybe_persisted_node()
+                .is_some_and(|node| node.unpersisted().is_none()))
         }
     }
 

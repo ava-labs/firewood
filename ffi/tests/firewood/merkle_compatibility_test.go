@@ -5,12 +5,16 @@ package firewood
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/ava-labs/firewood-go/ffi"
 	firewood "github.com/ava-labs/firewood-go/ffi"
 
 	"github.com/ava-labs/avalanchego/database"
@@ -50,14 +54,34 @@ var stepMap = map[byte]string{
 	commitProposal:           "commitProposal",
 }
 
+// oneSecCtx returns `tb.Context()` with a 1-second timeout added. Any existing
+// cancellation on `tb.Context()` is removed, which allows this function to be
+// used inside a `tb.Cleanup()`
+func oneSecCtx(tb testing.TB) context.Context {
+	ctx := context.WithoutCancel(tb.Context())
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	tb.Cleanup(cancel)
+	return ctx
+}
+
 func newTestFirewoodDatabase(t *testing.T) *firewood.Database {
 	t.Helper()
+	r := require.New(t)
 
 	dbFile := filepath.Join(t.TempDir(), "test.db")
 	db, err := newFirewoodDatabase(dbFile)
-	require.NoError(t, err)
+	r.NoError(err, "firewood.New()")
 	t.Cleanup(func() {
-		require.NoError(t, db.Close(context.Background())) //nolint:usetesting // t.Context() will already be cancelled
+		err := db.Close(oneSecCtx(t))
+		if errors.Is(err, ffi.ErrActiveKeepAliveHandles) {
+			// force a GC to clean up dangling handles that are preventing the
+			// database from closing, then try again. Intentionally not looping
+			// since a subsequent attempt is unlikely to succeed if the first
+			// one didn't.
+			runtime.GC()
+			err = db.Close(oneSecCtx(t))
+		}
+		r.NoError(err, "%T.Close()", db)
 	})
 	return db
 }

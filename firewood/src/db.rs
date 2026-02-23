@@ -23,8 +23,9 @@ use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
     ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, TrieReader,
 };
+use nonzero_ext::nonzero;
 use std::io::Write;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
@@ -135,10 +136,17 @@ pub struct DbConfig {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
+    /// The maximum number of unpersisted revisions that can exist at a given time.
+    #[builder(default = nonzero!(1u64))]
+    pub deferred_persistence_commit_count: NonZeroU64,
 }
 
-#[derive(Debug)]
 /// A database instance.
+///
+/// Callers **must** call `close()` when they are done with the database
+/// to ensure the latest committed revision is persisted to disk. Dropping a
+/// database without calling `close()` may result in committed data being lost.
+#[derive(Debug)]
 pub struct Db {
     metrics: Arc<DbMetrics>,
     manager: RevisionManager,
@@ -182,6 +190,7 @@ impl Db {
             .create(cfg.create_if_missing)
             .truncate(cfg.truncate)
             .root_store(cfg.root_store)
+            .deferred_persistence_commit_count(cfg.deferred_persistence_commit_count)
             .manager(cfg.manager)
             .build();
         let manager = RevisionManager::new(config_manager)?;
@@ -337,10 +346,10 @@ impl Db {
 
     /// Closes the database gracefully.
     ///
-    /// This method shuts down the background persistence worker. If not called
-    /// explicitly, `Drop` will attempt a best-effort shutdown but cannot report
-    /// errors.
-    pub fn close(mut self) -> Result<(), api::Error> {
+    /// Shuts down the background persistence worker and persists the latest
+    /// committed revision to disk. This method **must** be called before the
+    /// database is dropped as otherwise, any committed data may be lost.
+    pub fn close(self) -> Result<(), api::Error> {
         self.manager.close().map_err(Into::into)
     }
 }
@@ -423,18 +432,19 @@ mod test {
     use core::iter::Take;
     use std::collections::HashMap;
     use std::iter::Peekable;
-    use std::num::NonZeroUsize;
+    use std::num::{NonZeroU64, NonZeroUsize};
     use std::ops::{Deref, DerefMut};
     use std::path::Path;
 
     use firewood_storage::{
         CheckOpt, CheckerError, HashedNodeReader, IntoHashType, LinearAddress, MaybePersistedNode,
-        NodeStore, RootReader, TrieHash,
+        NodeStore, TrieHash,
     };
+    use nonzero_ext::nonzero;
 
     use crate::db::{Db, Proposal, UseParallel};
     use crate::manager::RevisionManagerConfig;
-    use crate::v2::api::{Db as _, DbView, Proposal as _};
+    use crate::v2::api::{Db as _, DbView, HashKeyExt, Proposal as _};
 
     use super::{BatchOp, DbConfig};
 
@@ -1085,7 +1095,7 @@ mod test {
         const CHANNEL_CAPACITY: usize = 8;
 
         let testdb = TestDb::new();
-        let db = &testdb.db;
+        let db = &*testdb;
 
         let (tx, rx) = std::sync::mpsc::sync_channel::<Proposal<'_>>(CHANNEL_CAPACITY);
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(CHANNEL_CAPACITY);
@@ -1294,7 +1304,6 @@ mod test {
         let testdb = TestDb::new();
 
         testdb
-            .db
             .propose([(b"key", b"value")])
             .unwrap()
             .commit()
@@ -1303,7 +1312,7 @@ mod test {
         // Wait for background persistence to complete before reading the file
         testdb.wait_persisted();
 
-        let rh = testdb.db.root_hash().unwrap();
+        let rh = testdb.root_hash().unwrap();
 
         let file = std::fs::OpenOptions::new()
             .read(true)
@@ -1323,7 +1332,7 @@ mod test {
 
         let testdb = testdb.reopen();
 
-        assert_eq!(rh, testdb.db.root_hash().unwrap());
+        assert_eq!(rh, testdb.root_hash().unwrap());
     }
 
     #[test]
@@ -1359,10 +1368,10 @@ mod test {
 
         // Verify that all revisions were persisted
         for (i, root_hash) in root_hashes.iter().enumerate() {
-            let revision = db.revision(root_hash.clone()).unwrap();
-            let is_persisted = revision
-                .root_as_maybe_persisted_node()
-                .is_some_and(|node| node.unpersisted().is_none());
+            let is_persisted = db
+                .manager
+                .revision_persist_status(root_hash.clone())
+                .unwrap();
 
             assert!(
                 is_persisted,
@@ -1393,21 +1402,232 @@ mod test {
         assert_eq!(value, new_value.as_ref());
     }
 
+    #[test]
+    fn test_deferred_persist_close_with_high_commit_count() {
+        const HIGH_COMMIT_COUNT: NonZeroU64 = nonzero!(1_000_000u64);
+
+        // Set commit count to an arbitrarily high number so persist happens
+        // only on shutdown
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(HIGH_COMMIT_COUNT)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        // Then, commit once and see what the latest revision is
+        let key = b"foo";
+        let value = b"bar";
+        let batch = vec![BatchOp::Put { key, value }];
+        let proposal = db.propose(batch).unwrap();
+        let root_hash = proposal.root_hash().unwrap();
+
+        proposal.commit().unwrap();
+        let db = db.reopen();
+
+        let revision = db.view(root_hash).unwrap();
+        let new_value = revision.val(b"foo").unwrap().unwrap();
+
+        assert_eq!(value, new_value.as_ref());
+    }
+
+    #[test]
+    fn test_deferred_persist_with_multiple_commit_count() {
+        const COMMIT_COUNT: NonZeroU64 = nonzero!(5u64);
+        const NUM_REVISIONS: u64 = COMMIT_COUNT.get() + 1;
+
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        let mut root_hashes = Vec::new();
+
+        for i in 0..NUM_REVISIONS {
+            let batch = vec![BatchOp::Put {
+                key: format!("key{i}").as_bytes().to_vec(),
+                value: format!("value{i}").as_bytes().to_vec(),
+            }];
+            let proposal = db.propose(batch).unwrap();
+            root_hashes.push(proposal.root_hash().unwrap());
+            proposal.commit().unwrap();
+        }
+
+        // Verify that at least one of the last COMMIT_COUNT revisions is persisted.
+        let commit_count = COMMIT_COUNT.get() as usize;
+        let any_persisted = root_hashes
+            .iter()
+            .rev()
+            .take(commit_count)
+            .any(|hash| db.manager.revision_persist_status(hash.clone()).unwrap());
+
+        assert!(
+            any_persisted,
+            "At least one of the last {COMMIT_COUNT} revisions should be persisted"
+        );
+    }
+
+    /// Verifies that an unpersisted revision which wipes the database is
+    /// persisted when the database closes.
+    #[test]
+    fn test_deferred_persistence_closing_on_empty_trie() {
+        const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
+
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        // Commit COMMIT_COUNT proposals to trigger the first persist
+        for i in 0..COMMIT_COUNT.get() {
+            let batch = vec![BatchOp::Put {
+                key: format!("key{i}").as_bytes().to_vec(),
+                value: format!("value{i}").as_bytes().to_vec(),
+            }];
+            let proposal = db.propose(batch).unwrap();
+            proposal.commit().unwrap();
+        }
+
+        // Empty the trie
+        let batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = vec![BatchOp::DeleteRange { prefix: vec![] }];
+        let proposal = db.propose(batch).unwrap();
+        proposal.commit().unwrap();
+
+        let db = db.reopen();
+
+        // Verify that the latest committed revision is empty.
+        let last_committed_hash = db.root_hash();
+        assert_eq!(last_committed_hash, TrieHash::default_root_hash());
+    }
+
+    #[test]
+    fn test_deferred_persistence_root_store() {
+        const NUM_COMMITS: usize = 20;
+        const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
+        const MAX_IN_MEMORY_REVISIONS: usize = 2;
+
+        let dbcfg = DbConfig::builder()
+            .manager(
+                RevisionManagerConfig::builder()
+                    .max_revisions(MAX_IN_MEMORY_REVISIONS)
+                    .build(),
+            )
+            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .root_store(true)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        let mut root_hashes = Vec::new();
+
+        let key = b"key";
+        for i in 0..NUM_COMMITS {
+            let batch = vec![BatchOp::Put {
+                key,
+                value: format!("{i}").as_bytes().to_vec(),
+            }];
+            let proposal = db.propose(batch).unwrap();
+            root_hashes.push(proposal.root_hash().unwrap());
+            proposal.commit().unwrap();
+        }
+
+        let db = db.reopen();
+
+        // Verify that we never went more than COMMIT_COUNT revisions without
+        // persisting.
+        let commit_count = COMMIT_COUNT.get() as usize;
+        let mut last_persisted: Option<usize> = None;
+
+        for (i, hash) in root_hashes.iter().enumerate() {
+            let is_persisted = db
+                .manager
+                .revision_persist_status(hash.clone())
+                .is_ok_and(|persisted| persisted);
+
+            if is_persisted {
+                let gap = match last_persisted {
+                    Some(prev) => i.wrapping_sub(prev),
+                    None => i.wrapping_add(1),
+                };
+                assert!(
+                    gap <= commit_count,
+                    "Gap of {gap} between persisted revisions exceeds COMMIT_COUNT of {commit_count}"
+                );
+                last_persisted = Some(i);
+            }
+        }
+
+        assert!(
+            last_persisted.is_some(),
+            "At least one revision should be persisted"
+        );
+    }
+
+    /// Verifies that non-persisted revisions are lost after reopening the database.
+    #[test]
+    fn test_deferred_persistence_unpersisted_revisions() {
+        const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
+
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .root_store(true)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        let mut root_hashes = Vec::new();
+
+        let key = b"key";
+        for i in 0..COMMIT_COUNT.get() {
+            let batch = vec![BatchOp::Put {
+                key,
+                value: format!("{i}").as_bytes().to_vec(),
+            }];
+            let proposal = db.propose(batch).unwrap();
+            root_hashes.push(proposal.root_hash().unwrap());
+            proposal.commit().unwrap();
+        }
+
+        let db = db.reopen();
+
+        let persisted_count = root_hashes
+            .iter()
+            .filter(|&hash| {
+                db.manager
+                    .revision_persist_status(hash.clone())
+                    .is_ok_and(|is_persisted| is_persisted)
+            })
+            .count();
+
+        assert!(
+            persisted_count > 0 && persisted_count <= 2,
+            "Expected at most 2 persisted revisions, but found {persisted_count}"
+        );
+    }
+
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
     pub(super) struct TestDb {
-        db: Db,
+        db: Option<Db>,
         tmpdir: tempfile::TempDir,
         dbconfig: DbConfig,
+    }
+    impl Drop for TestDb {
+        fn drop(&mut self) {
+            if let Some(db) = self.db.take() {
+                db.close().unwrap();
+            }
+        }
     }
     impl Deref for TestDb {
         type Target = Db;
         fn deref(&self) -> &Self::Target {
-            &self.db
+            self.db.as_ref().unwrap()
         }
     }
     impl DerefMut for TestDb {
         fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.db
+            self.db.as_mut().unwrap()
         }
     }
 
@@ -1420,7 +1640,7 @@ mod test {
             let tmpdir = tempfile::tempdir().unwrap();
             let db = Db::new(tmpdir.as_ref(), dbconfig.clone()).unwrap();
             TestDb {
-                db,
+                db: Some(db),
                 tmpdir,
                 dbconfig,
             }
@@ -1430,21 +1650,12 @@ mod test {
         ///
         /// This method closes the current database instance (releasing the advisory lock),
         /// then opens it again at the same path while keeping the same configuration.
-        pub fn reopen(self) -> Self {
-            let TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            } = self;
+        pub fn reopen(mut self) -> Self {
+            self.db.take().unwrap().close().unwrap();
 
-            db.close().unwrap();
-
-            let db = Db::new(tmpdir.path(), dbconfig.clone()).unwrap();
-            TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            }
+            let db = Db::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
+            self.db = Some(db);
+            self
         }
 
         /// Replaces the database with a fresh instance at the same path.
@@ -1456,22 +1667,13 @@ mod test {
         ///
         /// This is useful for testing scenarios where you want to start with a clean slate
         /// while maintaining the same temporary directory structure.
-        pub fn replace(self) -> Self {
-            let TestDb {
-                db,
-                tmpdir,
-                dbconfig: _,
-            } = self;
+        pub fn replace(mut self) -> Self {
+            self.db.take().unwrap().close().unwrap();
 
-            db.close().unwrap();
-
-            let dbconfig = DbConfig::builder().truncate(true).build();
-            let db = Db::new(tmpdir.path(), dbconfig.clone()).unwrap();
-            TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            }
+            self.dbconfig = DbConfig::builder().truncate(true).build();
+            let db = Db::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
+            self.db = Some(db);
+            self
         }
 
         pub fn path(&self) -> &Path {

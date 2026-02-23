@@ -26,7 +26,7 @@ use std::num::NonZero;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
-use firewood_metrics::firewood_increment;
+use firewood_metrics::{firewood_increment, firewood_set};
 use lru::LruCache as EntryLruCache;
 use lru_mem::LruCache as MemLruCache;
 
@@ -142,6 +142,7 @@ impl ReadableStorage for FileBacked {
         let mut guard = self.free_list_cache.lock();
         let cached = guard.pop(&addr);
         firewood_increment!(crate::registry::CACHE_FREELIST, 1, "type" => if cached.is_some() { "hit" } else { "miss" });
+        firewood_set!(crate::registry::FREELIST_CACHE_SIZE, guard.len());
         cached
     }
 
@@ -221,6 +222,7 @@ impl WritableStorage for FileBacked {
     fn add_to_free_list_cache(&self, addr: LinearAddress, next: Option<LinearAddress>) {
         let mut guard = self.free_list_cache.lock();
         guard.put(addr, next);
+        firewood_set!(crate::registry::FREELIST_CACHE_SIZE, guard.len());
     }
 }
 
