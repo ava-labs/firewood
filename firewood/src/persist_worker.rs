@@ -223,7 +223,7 @@ impl<T> PersistChannel<T> {
         state.permits_available == state.max_permits.get()
     }
 
-    /// Reaping is only performed as part of the next persist operation
+    /// Reaping is only performed as part of the next persist operation.
     fn reap(&self, nodestore: NodeStore<Committed, FileBacked>) -> Result<(), PersistError> {
         let mut state = self.state.lock();
         if state.shutdown {
@@ -231,7 +231,7 @@ impl<T> PersistChannel<T> {
         }
         state.pending_reaps.push(nodestore);
         // Note that there is no need to call notify here since reaps
-        // are only performed as part of a persists.
+        // are only performed as part of a persist.
         Ok(())
     }
 
@@ -248,7 +248,7 @@ impl<T> PersistChannel<T> {
         state.data = Some(item);
         state.permits_available = state.permits_available.saturating_sub(1);
 
-        // Wake the persister once we reach the threshold (or on any reap).
+        // Wake the persister once we reach the threshold.
         if state.permits_available <= state.persist_threshold {
             self.persist_ready.notify_one();
         }
@@ -257,11 +257,17 @@ impl<T> PersistChannel<T> {
 
     fn pop(&self) -> Result<PersistDataWrapper<'_, T>, PersistError> {
         let mut state = self.state.lock();
-        // Sleep until we have reached the required threshold of pending commits
-        // Only performs reaping the next time that we persist.
+        // Sleep until we have reached the required threshold of pending commits Only performs reaping
+        // the next time that we persist. If we want to perform reaping immediately, then pop should
+        // return a PersistDataWrapper with 0 permits_to_release and None for data when the threshold
+        // has not been met. The pop caller should only perform a persist when the data in
+        // PersistDataWrapper is not None. Small changes will be needed to the while loop below, and
+        // a notify should be performed in the reap function.
         //
-        // NOTE: The is None check is unnecessary if there is only one
-        //       thread performing the
+        // NOTE: The is None check is only necessary if we have more than one persister. For a single
+        //       persister, the data will always be non None since dropping PersistDataWrapper will add
+        //       the consumed permits back, causing the permits available to be above the threshold u
+        //       unless more commits have been performed.
         while !state.shutdown
             && (state.permits_available > state.persist_threshold || state.data.is_none())
         {
