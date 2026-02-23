@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1771573481563,
+  "lastUpdate": 1771832761562,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -704,6 +704,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 84.94913761504772,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "34bc3fb596654e7d94f6df3f485390ad606a06d3",
+          "message": "refactor: close consumes itself (#1701)\n\n## Why this should be merged\n\nCloses #1699.\n\n## How this works\n\nFollows the\n[RAII](https://doc.rust-lang.org/rust-by-example/scope/raii.html) design\nby having the revision manager consume itself upon closing. This\neliminates the previous scenario where, after calling `close()`, the\nrevision manager was still usable even though calls such as `commit()`\nwould fail.\n\nIn particular, this PR does the following:\n\n- Makes `RevisionManager::close()` consume itself + eliminates its\n`Drop` implementation\n- Refactors `TestDb` to automatically close the inner database at the\nend of the test\n- Adds `close()` calls to the `fwdctl` crate.\n\n## How this was tested\n\nCI.",
+          "timestamp": "2026-02-20T20:18:38Z",
+          "url": "https://github.com/ava-labs/firewood/commit/34bc3fb596654e7d94f6df3f485390ad606a06d3"
+        },
+        "date": 1771832760661,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 141.80786029253252,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 7051.79528086187,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 112.40342972089961,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6855.640269991094,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 80.74854701193435,
             "unit": "block_accept_ms/ggas"
           }
         ]
