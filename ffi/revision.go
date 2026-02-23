@@ -96,6 +96,7 @@ func (r *Revision) Iter(key []byte) (*Iterator, error) {
 //
 // It is safe to call Drop multiple times; subsequent calls after the first are no-ops.
 func (r *Revision) Drop() error {
+	defer runtime.KeepAlive(r) // HACK(#1679)
 	return r.keepAliveHandle.disown(false /* evenOnError */, func() error {
 		if r.handle == nil {
 			return nil

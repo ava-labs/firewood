@@ -120,6 +120,7 @@ func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
 // operations that access it (such as [Database.Get] and [Database.Propose]) will
 // block until this function returns.
 func (p *Proposal) Commit() error {
+	defer runtime.KeepAlive(p) // HACK(#1679)
 	return p.keepAliveHandle.disown(true /* evenOnError */, func() error {
 		if p.handle == nil {
 			return errDroppedProposal
@@ -143,6 +144,7 @@ func (p *Proposal) Commit() error {
 // This is safe to call if the memory has already been released, in which case
 // it does nothing.
 func (p *Proposal) Drop() error {
+	defer runtime.KeepAlive(p) // HACK(#1679)
 	return p.keepAliveHandle.disown(false /* evenOnError */, func() error {
 		if p.handle == nil {
 			return nil

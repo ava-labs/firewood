@@ -200,6 +200,7 @@ func (db *Database) VerifyAndCommitRangeProof(
 	}
 
 	var hash Hash
+	defer runtime.KeepAlive(proof) // HACK(#1679)
 	err := proof.keepAliveHandle.disown(true /* evenOnError */, func() error {
 		var err error
 		db.commitLock.Lock()
@@ -299,6 +300,7 @@ func (p *RangeProof) UnmarshalBinary(data []byte) error {
 // It is safe to call Free more than once; subsequent calls after the first
 // will be no-ops.
 func (p *RangeProof) Free() error {
+	defer runtime.KeepAlive(p) // HACK(#1679)
 	return p.keepAliveHandle.disown(false /* evenOnError */, func() error {
 		if p.handle == nil {
 			return nil
