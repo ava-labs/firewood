@@ -8,7 +8,7 @@ on:
         required: true
   push:
     tags:
-      - "*"
+      - '**' # match all tags
     branches:
       - "main"
   pull_request:
