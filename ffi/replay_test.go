@@ -349,7 +349,9 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				if op.GetRevision.ReturnedRevisionID != nil {
 					revisions[*op.GetRevision.ReturnedRevisionID] = rev
 				} else {
-					_ = rev.Drop()
+					if err := rev.Drop(); err != nil {
+						return totalCommits, fmt.Errorf("GetRevision Drop: %w", err)
+					}
 				}
 
 			case op.GetFromRevision != nil:
@@ -381,7 +383,9 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				if op.ProposeOnDB.ReturnedProposalID != nil {
 					proposals[*op.ProposeOnDB.ReturnedProposalID] = prop
 				} else {
-					_ = prop.Drop()
+					if err := prop.Drop(); err != nil {
+						return totalCommits, fmt.Errorf("ProposeOnDB Drop: %w", err)
+					}
 				}
 
 			case op.ProposeOnProposal != nil:
@@ -397,7 +401,9 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				if op.ProposeOnProposal.ReturnedProposalID != nil {
 					proposals[*op.ProposeOnProposal.ReturnedProposalID] = prop
 				} else {
-					_ = prop.Drop()
+					if err := prop.Drop(); err != nil {
+						return totalCommits, fmt.Errorf("ProposeOnProposal Drop: %w", err)
+					}
 				}
 
 			case op.Commit != nil:

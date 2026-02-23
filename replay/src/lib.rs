@@ -35,6 +35,23 @@ use serde::{Deserialize, Serialize};
 use serde_with::serde_as;
 use thiserror::Error;
 
+const MAX_SEGMENT_BYTES: u64 = 1 << 30; // 1 GiB
+
+/// Options controlling replay behavior.
+#[derive(Debug, Clone, Copy)]
+pub struct ReplayOptions {
+    /// Maximum allowed size of a single length-prefixed log segment.
+    pub max_segment_bytes: u64,
+}
+
+impl Default for ReplayOptions {
+    fn default() -> Self {
+        Self {
+            max_segment_bytes: MAX_SEGMENT_BYTES,
+        }
+    }
+}
+
 /// Strongly-typed proposal identifier.
 ///
 /// Wraps a `u64` to prevent accidental misuse of raw integers as proposal IDs.
@@ -203,9 +220,14 @@ pub struct KeyValueOp {
     /// If true and `value` is `None`, this represents a single-key delete.
     ///
     /// If false and `value` is `None`, this represents a delete-range by prefix.
+    ///
     /// When this field is missing in old logs, replay defaults to delete-range.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "is_false")]
     pub delete_exact: bool,
+}
+
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 /// Batch operation that commits immediately.
@@ -391,6 +413,10 @@ pub enum ReplayError {
     /// The log referenced a revision ID that was not created or already consumed.
     #[error("unknown revision ID {}", .0.0)]
     UnknownRevision(RevisionId),
+
+    /// A log segment length exceeded the allowed maximum.
+    #[error("replay segment too large: {len} bytes (max {max} bytes)")]
+    SegmentTooLarge { len: u64, max: u64 },
 }
 
 /// Alias for the batch operation type used in replay.
@@ -624,9 +650,30 @@ fn apply_operation<'db>(
 /// - A database operation fails
 /// - The log references an unknown proposal ID
 pub fn replay_from_reader<R: Read>(
+    reader: R,
+    db: &Db,
+    max_commits: Option<u64>,
+) -> Result<Option<Box<[u8]>>, ReplayError> {
+    replay_from_reader_with_options(reader, db, max_commits, ReplayOptions::default())
+}
+
+/// Replays all operations from a length-prefixed replay log using the provided options.
+///
+/// See [`replay_from_reader`] for the wire format.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - An I/O error occurs while reading the log
+/// - A log segment cannot be deserialized
+/// - A database operation fails
+/// - The log references an unknown proposal ID or revision ID
+/// - A segment exceeds the configured maximum size
+pub fn replay_from_reader_with_options<R: Read>(
     mut reader: R,
     db: &Db,
     max_commits: Option<u64>,
+    options: ReplayOptions,
 ) -> Result<Option<Box<[u8]>>, ReplayError> {
     let mut proposals: HashMap<ProposalId, Proposal<'_>> = HashMap::new();
     let mut revisions: HashMap<RevisionId, ArcDynDbView> = HashMap::new();
@@ -647,9 +694,19 @@ pub fn replay_from_reader<R: Read>(
         if len == 0 {
             continue;
         }
+        if len > options.max_segment_bytes {
+            return Err(ReplayError::SegmentTooLarge {
+                len,
+                max: options.max_segment_bytes,
+            });
+        }
 
         // Read segment payload
-        let mut buf = vec![0u8; len as usize];
+        let len: usize = len.try_into().map_err(|_| ReplayError::SegmentTooLarge {
+            len,
+            max: options.max_segment_bytes,
+        })?;
+        let mut buf = vec![0u8; len];
         reader.read_exact(&mut buf)?;
 
         let log: ReplayLog = rmp_serde::from_slice(&buf)?;
@@ -684,8 +741,20 @@ pub fn replay_from_file(
     db: &Db,
     max_commits: Option<u64>,
 ) -> Result<Option<Box<[u8]>>, ReplayError> {
+    replay_from_file_with_options(path, db, max_commits, ReplayOptions::default())
+}
+
+/// Replays a log file against the provided database using the provided options.
+///
+/// This is a convenience wrapper around [`replay_from_reader_with_options`].
+pub fn replay_from_file_with_options(
+    path: impl AsRef<std::path::Path>,
+    db: &Db,
+    max_commits: Option<u64>,
+    options: ReplayOptions,
+) -> Result<Option<Box<[u8]>>, ReplayError> {
     let file = std::fs::File::open(path)?;
-    replay_from_reader(file, db, max_commits)
+    replay_from_reader_with_options(file, db, max_commits, options)
 }
 
 #[cfg(test)]

@@ -360,14 +360,18 @@ pub extern "C" fn fwd_get_from_revision(
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_free_revision(revision: Option<Box<RevisionHandle>>) -> VoidResult {
     #[cfg(feature = "block-replay")]
-    let revision_ptr = revision.as_ref().map(|r| std::ptr::from_ref(&**r));
+    let revision_id = revision
+        .as_ref()
+        .and_then(|r| replay::take_revision_id(std::ptr::from_ref(&**r)));
     #[cfg(feature = "block-replay")]
     let start = std::time::Instant::now();
 
     let result = invoke_with_handle(revision, drop);
 
     #[cfg(feature = "block-replay")]
-    replay::record_free_revision(revision_ptr, &result, start.elapsed().as_nanos() as u64);
+    if let Some(revision_id) = revision_id {
+        replay::record_free_revision(revision_id, &result, start.elapsed().as_nanos() as u64);
+    }
 
     result
 }
@@ -555,7 +559,9 @@ pub extern "C" fn fwd_propose_on_proposal<'db>(
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>) -> HashResult {
     #[cfg(feature = "block-replay")]
-    let proposal_ptr = proposal.as_ref().map(|h| std::ptr::from_ref(&**h));
+    let proposal_id = proposal
+        .as_ref()
+        .and_then(|h| replay::take_proposal_id(std::ptr::from_ref(&**h)));
     #[cfg(feature = "block-replay")]
     let start = std::time::Instant::now();
 
@@ -572,7 +578,9 @@ pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>)
     });
 
     #[cfg(feature = "block-replay")]
-    replay::record_commit(proposal_ptr, &result, start.elapsed().as_nanos() as u64);
+    if let Some(proposal_id) = proposal_id {
+        replay::record_commit(proposal_id, &result, start.elapsed().as_nanos() as u64);
+    }
 
     result
 }
@@ -600,14 +608,18 @@ pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>)
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_free_proposal(proposal: Option<Box<ProposalHandle<'_>>>) -> VoidResult {
     #[cfg(feature = "block-replay")]
-    let proposal_ptr = proposal.as_ref().map(|p| std::ptr::from_ref(&**p));
+    let proposal_id = proposal
+        .as_ref()
+        .and_then(|p| replay::take_proposal_id(std::ptr::from_ref(&**p)));
     #[cfg(feature = "block-replay")]
     let start = std::time::Instant::now();
 
     let result = invoke_with_handle(proposal, drop);
 
     #[cfg(feature = "block-replay")]
-    replay::record_free_proposal(proposal_ptr, &result, start.elapsed().as_nanos() as u64);
+    if let Some(proposal_id) = proposal_id {
+        replay::record_free_proposal(proposal_id, &result, start.elapsed().as_nanos() as u64);
+    }
 
     result
 }
@@ -768,9 +780,28 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidResult {
     #[cfg(feature = "block-replay")]
-    let _ = replay::flush_to_disk();
+    let flush_result = if db.is_some() {
+        replay::flush_to_disk()
+    } else {
+        Ok(())
+    };
 
-    invoke_with_handle(db, |db| db.close())
+    let close_result = invoke_with_handle(db, |db| db.close());
+
+    #[cfg(feature = "block-replay")]
+    if let Err(e) = flush_result {
+        return match close_result {
+            VoidResult::Ok => VoidResult::Err(e.to_string().into_bytes().into()),
+            VoidResult::Err(close_err) => {
+                let close_msg = String::from_utf8_lossy(close_err.as_slice());
+                let msg = format!("close_db failed: {close_msg}; block-replay flush failed: {e}");
+                VoidResult::Err(msg.into_bytes().into())
+            }
+            other => other,
+        };
+    }
+
+    close_result
 }
 
 /// Flushes buffered block replay operations to disk.

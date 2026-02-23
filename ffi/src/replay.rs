@@ -70,20 +70,35 @@ impl Recorder {
         }
     }
 
-    fn maybe_result<T>(&self, value: T) -> Option<T> {
-        self.include_results.then_some(value)
+    fn maybe_result<T>(&self, f: impl FnOnce() -> T) -> Option<T> {
+        if self.include_results {
+            Some(f())
+        } else {
+            None
+        }
     }
 
     fn metadata(&self, duration_ns: u64) -> Option<OperationMetadata> {
-        self.include_metadata
-            .then_some(OperationMetadata { duration_ns })
+        if self.include_metadata {
+            Some(OperationMetadata { duration_ns })
+        } else {
+            None
+        }
+    }
+
+    fn take_proposal_id(&mut self, handle_ptr: usize) -> Option<ProposalId> {
+        self.proposal_ids.remove(&handle_ptr)
+    }
+
+    fn take_revision_id(&mut self, handle_ptr: usize) -> Option<RevisionId> {
+        self.revision_ids.remove(&handle_ptr)
     }
 
     /// Records a `GetLatest` operation.
     fn record_get_latest(&mut self, key: &[u8], result: &crate::ValueResult, duration_ns: u64) {
         self.operations.push(DbOperation::GetLatest(GetLatest {
             key: key.into(),
-            result: self.maybe_result(value_result_data(result)),
+            result: self.maybe_result(|| value_result_data(result)),
             metadata: self.metadata(duration_ns),
         }));
         self.maybe_flush();
@@ -105,7 +120,7 @@ impl Recorder {
             .push(DbOperation::GetFromProposal(GetFromProposal {
                 proposal_id,
                 key: key.into(),
-                result: self.maybe_result(value_result_data(result)),
+                result: self.maybe_result(|| value_result_data(result)),
                 metadata: self.metadata(duration_ns),
             }));
         self.maybe_flush();
@@ -131,7 +146,7 @@ impl Recorder {
         self.operations.push(DbOperation::GetRevision(GetRevision {
             root: hash_key_to_bytes(root).into(),
             returned_revision_id,
-            result: self.maybe_result(revision_result_data(result)),
+            result: self.maybe_result(|| revision_result_data(result)),
             metadata: self.metadata(duration_ns),
         }));
         self.maybe_flush();
@@ -153,7 +168,7 @@ impl Recorder {
             .push(DbOperation::GetFromRevision(GetFromRevision {
                 revision_id,
                 key: key.into(),
-                result: self.maybe_result(value_result_data(result)),
+                result: self.maybe_result(|| value_result_data(result)),
                 metadata: self.metadata(duration_ns),
             }));
         self.maybe_flush();
@@ -162,7 +177,7 @@ impl Recorder {
     /// Records a `RootHash` operation.
     fn record_root_hash(&mut self, result: &crate::HashResult, duration_ns: u64) {
         self.operations.push(DbOperation::RootHash(RootHash {
-            result: self.maybe_result(hash_result_data(result)),
+            result: self.maybe_result(|| hash_result_data(result)),
             metadata: self.metadata(duration_ns),
         }));
         self.maybe_flush();
@@ -173,7 +188,7 @@ impl Recorder {
         let pairs = convert_ops(ops);
         self.operations.push(DbOperation::Batch(Batch {
             pairs,
-            result: self.maybe_result(hash_result_data(result)),
+            result: self.maybe_result(|| hash_result_data(result)),
             metadata: self.metadata(duration_ns),
         }));
         self.maybe_flush();
@@ -200,7 +215,7 @@ impl Recorder {
         self.operations.push(DbOperation::ProposeOnDB(ProposeOnDB {
             pairs,
             returned_proposal_id,
-            result: self.maybe_result(proposal_result_data(result)),
+            result: self.maybe_result(|| proposal_result_data(result)),
             metadata: self.metadata(duration_ns),
         }));
         self.maybe_flush();
@@ -233,18 +248,19 @@ impl Recorder {
                 proposal_id: parent_id,
                 pairs,
                 returned_proposal_id,
-                result: self.maybe_result(proposal_result_data(result)),
+                result: self.maybe_result(|| proposal_result_data(result)),
                 metadata: self.metadata(duration_ns),
             }));
         self.maybe_flush();
     }
 
     /// Records a `Commit` operation.
-    fn record_commit(&mut self, handle_ptr: usize, result: &crate::HashResult, duration_ns: u64) {
-        let Some(proposal_id) = self.proposal_ids.remove(&handle_ptr) else {
-            return;
-        };
-
+    fn record_commit(
+        &mut self,
+        proposal_id: ProposalId,
+        result: &crate::HashResult,
+        duration_ns: u64,
+    ) {
         let returned_hash = match result {
             crate::HashResult::Some(hash) => Some(hash_key_to_bytes(*hash).into()),
             crate::HashResult::None
@@ -255,7 +271,7 @@ impl Recorder {
         self.operations.push(DbOperation::Commit(Commit {
             proposal_id,
             returned_hash,
-            result: self.maybe_result(hash_result_data(result)),
+            result: self.maybe_result(|| hash_result_data(result)),
             metadata: self.metadata(duration_ns),
         }));
         self.maybe_flush();
@@ -264,18 +280,14 @@ impl Recorder {
     /// Records a `FreeProposal` operation.
     fn record_free_proposal(
         &mut self,
-        handle_ptr: usize,
+        proposal_id: ProposalId,
         result: &crate::VoidResult,
         duration_ns: u64,
     ) {
-        let Some(proposal_id) = self.proposal_ids.remove(&handle_ptr) else {
-            return;
-        };
-
         self.operations
             .push(DbOperation::FreeProposal(FreeProposal {
                 proposal_id,
-                result: self.maybe_result(void_result_data(result)),
+                result: self.maybe_result(|| void_result_data(result)),
                 metadata: self.metadata(duration_ns),
             }));
         self.maybe_flush();
@@ -284,18 +296,14 @@ impl Recorder {
     /// Records a `FreeRevision` operation.
     fn record_free_revision(
         &mut self,
-        handle_ptr: usize,
+        revision_id: RevisionId,
         result: &crate::VoidResult,
         duration_ns: u64,
     ) {
-        let Some(revision_id) = self.revision_ids.remove(&handle_ptr) else {
-            return;
-        };
-
         self.operations
             .push(DbOperation::FreeRevision(FreeRevision {
                 revision_id,
-                result: self.maybe_result(void_result_data(result)),
+                result: self.maybe_result(|| void_result_data(result)),
                 metadata: self.metadata(duration_ns),
             }));
         self.maybe_flush();
@@ -477,6 +485,18 @@ fn recorder() -> Option<&'static Mutex<Recorder>> {
         .as_ref()
 }
 
+pub(crate) fn take_proposal_id(
+    proposal_ptr: *const crate::ProposalHandle<'_>,
+) -> Option<ProposalId> {
+    let rec = recorder()?;
+    rec.lock().take_proposal_id(proposal_ptr as usize)
+}
+
+pub(crate) fn take_revision_id(revision_ptr: *const crate::RevisionHandle) -> Option<RevisionId> {
+    let rec = recorder()?;
+    rec.lock().take_revision_id(revision_ptr as usize)
+}
+
 /// Records a `fwd_get_latest` call.
 pub(crate) fn record_get_latest(
     key: BorrowedBytes<'_>,
@@ -576,41 +596,31 @@ pub(crate) fn record_propose_on_proposal<'db>(
 }
 
 /// Records a `fwd_commit_proposal` call after the commit completes.
-pub(crate) fn record_commit(
-    proposal_ptr: Option<*const crate::ProposalHandle<'_>>,
-    result: &crate::HashResult,
-    duration_ns: u64,
-) {
+pub(crate) fn record_commit(proposal_id: ProposalId, result: &crate::HashResult, duration_ns: u64) {
     let Some(rec) = recorder() else { return };
-    let Some(ptr) = proposal_ptr else { return };
-
-    rec.lock().record_commit(ptr as usize, result, duration_ns);
+    rec.lock().record_commit(proposal_id, result, duration_ns);
 }
 
 /// Records a `fwd_free_proposal` call.
 pub(crate) fn record_free_proposal(
-    proposal_ptr: Option<*const crate::ProposalHandle<'_>>,
+    proposal_id: ProposalId,
     result: &crate::VoidResult,
     duration_ns: u64,
 ) {
     let Some(rec) = recorder() else { return };
-    let Some(ptr) = proposal_ptr else { return };
-
     rec.lock()
-        .record_free_proposal(ptr as usize, result, duration_ns);
+        .record_free_proposal(proposal_id, result, duration_ns);
 }
 
 /// Records a `fwd_free_revision` call.
 pub(crate) fn record_free_revision(
-    revision_ptr: Option<*const crate::RevisionHandle>,
+    revision_id: RevisionId,
     result: &crate::VoidResult,
     duration_ns: u64,
 ) {
     let Some(rec) = recorder() else { return };
-    let Some(ptr) = revision_ptr else { return };
-
     rec.lock()
-        .record_free_revision(ptr as usize, result, duration_ns);
+        .record_free_revision(revision_id, result, duration_ns);
 }
 
 /// Flushes any buffered operations to disk.
