@@ -260,7 +260,7 @@ impl<T> PersistChannel<T> {
             if state.shutdown {
                 return Err(PersistError::ChannelDisconnected);
             }
-            // Unblock to persist when there permits available <= threshold
+            // Unblock to persist when permits available <= threshold
             if state.permits_available <= state.persist_threshold {
                 return Ok(PersistDataWrapper {
                     channel: self,
