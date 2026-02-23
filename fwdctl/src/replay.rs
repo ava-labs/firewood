@@ -84,5 +84,5 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         println!("Database root: {}", hex::encode(root));
     }
 
-    Ok(())
+    db.close()
 }

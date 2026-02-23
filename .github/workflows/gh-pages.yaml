@@ -22,12 +22,12 @@ jobs:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           ref: main  # Always build docs from main
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
       # caution: this is the same restore as in ci.yaml
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # @v2 -> v2.8.2
         with:
           save-if: "false"
       - name: Build
@@ -67,7 +67,7 @@ jobs:
           [[ -d bench ]] && cp -rv bench _site/
           
           [[ -d dev || -d bench ]] || { echo "::error::No benchmark data (dev/ or bench/) found"; exit 1; }
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: pages
           path: _site
@@ -85,14 +85,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Download pages artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v7
         with:
           name: pages
           path: .
       - name: Setup Pages
-        uses: actions/configure-pages@v3
+        uses: actions/configure-pages@v5
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: .
       - name: Deploy to GitHub pages

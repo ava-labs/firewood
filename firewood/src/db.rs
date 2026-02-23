@@ -141,8 +141,12 @@ pub struct DbConfig {
     pub deferred_persistence_commit_count: NonZeroU64,
 }
 
-#[derive(Debug)]
 /// A database instance.
+///
+/// Callers **must** call `close()` when they are done with the database
+/// to ensure the latest committed revision is persisted to disk. Dropping a
+/// database without calling `close()` may result in committed data being lost.
+#[derive(Debug)]
 pub struct Db {
     metrics: Arc<DbMetrics>,
     manager: RevisionManager,
@@ -355,10 +359,10 @@ impl Db {
 
     /// Closes the database gracefully.
     ///
-    /// This method shuts down the background persistence worker and persists
-    /// the last committed revision. If not called explicitly, `Drop` will
-    /// attempt a best-effort shutdown but cannot report errors.
-    pub fn close(mut self) -> Result<(), api::Error> {
+    /// Shuts down the background persistence worker and persists the latest
+    /// committed revision to disk. This method **must** be called before the
+    /// database is dropped as otherwise, any committed data may be lost.
+    pub fn close(self) -> Result<(), api::Error> {
         self.manager.close().map_err(Into::into)
     }
 }
@@ -1103,7 +1107,7 @@ mod test {
         const CHANNEL_CAPACITY: usize = 8;
 
         let testdb = TestDb::new();
-        let db = &testdb.db;
+        let db = &*testdb;
 
         let (tx, rx) = std::sync::mpsc::sync_channel::<Proposal<'_>>(CHANNEL_CAPACITY);
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(CHANNEL_CAPACITY);
@@ -1312,7 +1316,6 @@ mod test {
         let testdb = TestDb::new();
 
         testdb
-            .db
             .propose([(b"key", b"value")])
             .unwrap()
             .commit()
@@ -1321,7 +1324,7 @@ mod test {
         // Wait for background persistence to complete before reading the file
         testdb.wait_persisted();
 
-        let rh = testdb.db.root_hash().unwrap().unwrap();
+        let rh = testdb.root_hash().unwrap().unwrap();
 
         let file = std::fs::OpenOptions::new()
             .read(true)
@@ -1341,7 +1344,7 @@ mod test {
 
         let testdb = testdb.reopen();
 
-        assert_eq!(rh, testdb.db.root_hash().unwrap().unwrap());
+        assert_eq!(rh, testdb.root_hash().unwrap().unwrap());
     }
 
     #[test]
@@ -1617,19 +1620,26 @@ mod test {
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
     pub(super) struct TestDb {
-        db: Db,
+        db: Option<Db>,
         tmpdir: tempfile::TempDir,
         dbconfig: DbConfig,
+    }
+    impl Drop for TestDb {
+        fn drop(&mut self) {
+            if let Some(db) = self.db.take() {
+                db.close().unwrap();
+            }
+        }
     }
     impl Deref for TestDb {
         type Target = Db;
         fn deref(&self) -> &Self::Target {
-            &self.db
+            self.db.as_ref().unwrap()
         }
     }
     impl DerefMut for TestDb {
         fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.db
+            self.db.as_mut().unwrap()
         }
     }
 
@@ -1642,7 +1652,7 @@ mod test {
             let tmpdir = tempfile::tempdir().unwrap();
             let db = Db::new(tmpdir.as_ref(), dbconfig.clone()).unwrap();
             TestDb {
-                db,
+                db: Some(db),
                 tmpdir,
                 dbconfig,
             }
@@ -1652,21 +1662,12 @@ mod test {
         ///
         /// This method closes the current database instance (releasing the advisory lock),
         /// then opens it again at the same path while keeping the same configuration.
-        pub fn reopen(self) -> Self {
-            let TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            } = self;
+        pub fn reopen(mut self) -> Self {
+            self.db.take().unwrap().close().unwrap();
 
-            db.close().unwrap();
-
-            let db = Db::new(tmpdir.path(), dbconfig.clone()).unwrap();
-            TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            }
+            let db = Db::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
+            self.db = Some(db);
+            self
         }
 
         /// Replaces the database with a fresh instance at the same path.
@@ -1678,22 +1679,13 @@ mod test {
         ///
         /// This is useful for testing scenarios where you want to start with a clean slate
         /// while maintaining the same temporary directory structure.
-        pub fn replace(self) -> Self {
-            let TestDb {
-                db,
-                tmpdir,
-                dbconfig: _,
-            } = self;
+        pub fn replace(mut self) -> Self {
+            self.db.take().unwrap().close().unwrap();
 
-            db.close().unwrap();
-
-            let dbconfig = DbConfig::builder().truncate(true).build();
-            let db = Db::new(tmpdir.path(), dbconfig.clone()).unwrap();
-            TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            }
+            self.dbconfig = DbConfig::builder().truncate(true).build();
+            let db = Db::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
+            self.db = Some(db);
+            self
         }
 
         pub fn path(&self) -> &Path {

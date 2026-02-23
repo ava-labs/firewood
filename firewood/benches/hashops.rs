@@ -10,12 +10,13 @@ use firewood::merkle::Merkle;
 use firewood::v2::api::{Db as _, Proposal as _};
 use firewood_storage::{MemStore, NodeHashAlgorithm, NodeStore};
 use pprof::ProfilerGuard;
-use rand::{Rng, distr::Alphanumeric};
+use rand::{RngExt, distr::Alphanumeric};
 use std::fs::File;
 use std::iter::repeat_with;
 use std::os::raw::c_int;
 use std::path::Path;
 use std::sync::Arc;
+use tempfile::TempDir;
 
 // To enable flamegraph output
 // cargo bench --bench hashops -- --profile-time=N
@@ -113,8 +114,8 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                     batch_ops
                 },
                 |batch_ops| {
-                    let db_path = std::env::temp_dir();
-                    let db_path = db_path.join("benchmark_db");
+                    let db_path = TempDir::new().unwrap();
+                    let db_path = db_path.path().join("benchmark_db");
                     let cfg = DbConfig::builder()
                         .node_hash_algorithm(NodeHashAlgorithm::compile_option())
                         .truncate(true)

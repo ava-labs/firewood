@@ -545,7 +545,7 @@ fn fwdctl_check_empty_db() {
 
 #[test]
 fn test_slow_fwdctl_check_db_with_data() {
-    use rand::{Rng, distr::Alphanumeric};
+    use rand::{RngExt, distr::Alphanumeric};
 
     let tmpdir = tempfile::tempdir().unwrap();
 
