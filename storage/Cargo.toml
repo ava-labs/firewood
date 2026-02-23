@@ -35,11 +35,11 @@ smallvec.workspace = true
 thiserror.workspace = true
 # Regular dependencies
 bitfield = "0.19.4"
-bitflags = "2.10.0"
+bitflags = "2.11.0"
 derive-where = "1.6.0"
-enum-as-inner = "0.6.1"
+enum-as-inner = "0.7.0"
 git-version = "0.3.9"
-indicatif = "0.18.3"
+indicatif = "0.18.4"
 lru = "0.16.3"
 lru-mem = "0.3.0"
 parking_lot.workspace = true
@@ -50,7 +50,7 @@ io-uring = { version = "0.7.11", optional = true }
 log = { version = "0.4.29", optional = true }
 rlp = { version = "0.6.1", optional = true }
 sha3 = { version = "0.10.8", optional = true }
-bumpalo = { version = "3.19.1", features = ["collections", "std"] }
+bumpalo = { version = "3.20.2", features = ["collections", "std"] }
 
 [dev-dependencies]
 cfg-if = "1.0.4"
