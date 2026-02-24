@@ -254,30 +254,32 @@ impl<T> PersistChannel<T> {
     }
 
     fn pop(&self) -> Result<PersistDataWrapper<'_, T>, PersistError> {
-        let mut state = self.state.lock();
-        let (permits_to_release, pending_reaps, data) = loop {
-            // Shutdown requested. Return error.
-            if state.shutdown {
-                return Err(PersistError::ChannelDisconnected);
+        let (permits_to_release, pending_reaps, data) = {
+            let mut state = self.state.lock();
+            loop {
+                // Shutdown requested. Return error.
+                if state.shutdown {
+                    return Err(PersistError::ChannelDisconnected);
+                }
+                // Unblock to persist when permits available <= threshold
+                if state.permits_available <= state.persist_threshold && state.data.is_some() {
+                    break (
+                        state
+                            .max_permits
+                            .get()
+                            .saturating_sub(state.permits_available),
+                        std::mem::take(&mut state.pending_reaps),
+                        state.data.take(),
+                    );
+                }
+                // Unblock even if we haven't met the threshold if there are pending reaps.
+                // Permits to release is set to 0, and committed revision is not taken.
+                if !state.pending_reaps.is_empty() {
+                    break (0, std::mem::take(&mut state.pending_reaps), None);
+                }
+                // Block until it is woken up by the committer thread.
+                self.persist_ready.wait(&mut state);
             }
-            // Unblock to persist when permits available <= threshold
-            if state.permits_available <= state.persist_threshold && state.data.is_some() {
-                break (
-                    state
-                        .max_permits
-                        .get()
-                        .saturating_sub(state.permits_available),
-                    std::mem::take(&mut state.pending_reaps),
-                    state.data.take(),
-                );
-            }
-            // Unblock even if we haven't met the threshold if there are pending reaps.
-            // Permits to release is set to 0, and committed revision is not taken.
-            if !state.pending_reaps.is_empty() {
-                break (0, std::mem::take(&mut state.pending_reaps), None);
-            }
-            // Block until it is woken up by the committer thread.
-            self.persist_ready.wait(&mut state);
         };
         Ok(PersistDataWrapper {
             channel: self,
