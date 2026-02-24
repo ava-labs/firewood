@@ -73,8 +73,8 @@ pub enum PersistError {
     FileIo(#[from] Arc<FileIoError>),
     #[error("RootStore error during persistence: {0}")]
     RootStore(#[source] Arc<dyn std::error::Error + Send + Sync>),
-    #[error("Failed to signal background thread after shutdown")]
-    ChannelDisconnected,
+    #[error("Persist worker has shut down")]
+    Shutdown,
 }
 
 /// Handle for managing the background persistence thread.
@@ -99,7 +99,7 @@ impl PersistWorker {
     ) -> Self {
         let persist_interval = NonZeroU64::new(commit_count.get().div_ceil(2))
             .expect("a nonzero div_ceil(2) is always positive");
-        let persist_threshold = commit_count.get().saturating_sub(persist_interval.get());
+        let persist_threshold = commit_count.get().wrapping_sub(persist_interval.get());
 
         let shared = Arc::new(SharedState {
             error: OnceLock::new(),
@@ -109,11 +109,8 @@ impl PersistWorker {
             channel: PersistChannel::new(commit_count, persist_threshold),
         });
 
-        let persist_loop = PersistLoop {
-            shared: shared.clone(),
-        };
-
-        let handle = thread::spawn(move || persist_loop.run());
+        let bg_shared = shared.clone();
+        let handle = thread::spawn(move || PersistLoop { shared: bg_shared }.run());
 
         Self {
             handle: Mutex::new(Some(handle)),
@@ -123,28 +120,53 @@ impl PersistWorker {
 
     /// Sends `committed` to the background thread for persistence. This call
     /// blocks if the limit of unpersisted commits has been reached.
+    ///
+    /// ## Errors
+    ///
+    /// Returns an error if the background thread has shut down or if it
+    /// exited due to an earlier failure.
+    ///
+    /// ## Panics
+    ///
+    /// Propagates any panic from the background thread.
     pub(crate) fn persist(&self, committed: CommittedRevision) -> Result<(), PersistError> {
-        self.shared.channel.push(committed)
+        if self.shared.channel.push(committed).is_err() {
+            self.join_handle();
+            self.check_error()?;
+        }
+
+        Ok(())
     }
 
     /// Sends `nodestore` to the background thread for reaping if archival mode
     /// is disabled. Otherwise, the `nodestore` is dropped.
+    ///
+    /// ## Errors
+    ///
+    /// Returns an error if the background thread has shut down or if it
+    /// exited due to an earlier failure.
+    ///
+    /// ## Panics
+    ///
+    /// Propagates any panic from the background thread.
     pub(crate) fn reap(
         &self,
         nodestore: NodeStore<Committed, FileBacked>,
     ) -> Result<(), PersistError> {
-        if self.shared.root_store.is_none() {
-            self.shared.channel.reap(nodestore)?;
+        if self.shared.root_store.is_none() && self.shared.channel.reap(nodestore).is_err() {
+            self.join_handle();
+            self.check_error()?;
         }
+
         Ok(())
     }
 
-    /// Get a lock to the header of the database.
+    /// Gets a lock to the header of the database.
     pub(crate) fn locked_header(&self) -> MutexGuard<'_, NodeStoreHeader> {
         self.shared.header.lock()
     }
 
-    /// Check if the persist worker has errored.
+    /// Checks if the persist worker has errored.
     pub(crate) fn check_error(&self) -> Result<(), PersistError> {
         match self.shared.error.get() {
             Some(err) => Err(err.clone()),
@@ -152,14 +174,24 @@ impl PersistWorker {
         }
     }
 
-    /// Close the persist worker and persist `latest_committed_revision`.
+    /// Closes the persist worker and persists `latest_committed_revision`.
+    ///
+    /// ## Errors
+    ///
+    /// Returns an error if the background thread exited due to an earlier
+    /// failure.
+    ///
+    /// ## Panics
+    ///
+    /// Propagates any panic from the background thread.
     pub(crate) fn close(
-        mut self,
+        self,
         latest_committed_revision: CommittedRevision,
     ) -> Result<(), PersistError> {
         self.shared
             .persist_on_shutdown
-            .set(latest_committed_revision);
+            .set(latest_committed_revision)
+            .expect("should be empty");
 
         self.shared.channel.close();
         self.join_handle();
@@ -171,7 +203,7 @@ impl PersistWorker {
     /// This is a no-op if the handle was already taken (e.g., by a prior call
     /// to `close()`), which guarantees idempotency.
     ///
-    /// # Panics
+    /// ## Panics
     ///
     /// Propagates the panic if the background thread panicked.
     fn join_handle(&self) {
@@ -182,23 +214,25 @@ impl PersistWorker {
         }
     }
 
-    /// Wait until all pending commits have been persisted.
+    /// Waits until all pending commits have been persisted.
     #[cfg(test)]
     pub(crate) fn wait_persisted(&self) {
         self.shared.wait_all_released();
     }
 }
 
+/// Abstraction for coordinating between the main thread and the background
+/// persistence thread.
 #[derive(Debug)]
-struct PersistChannel<T> {
-    state: Mutex<PersistChannelState<T>>,
+struct PersistChannel {
+    state: Mutex<PersistChannelState>,
     /// Condition variable to wake blocked committers when space is available.
     commit_not_full: Condvar,
     /// Condition variable to wake the persister when persistence is needed.
     persist_ready: Condvar,
 }
 
-impl<T> PersistChannel<T> {
+impl PersistChannel {
     const fn new(max_permits: NonZeroU64, persist_threshold: u64) -> Self {
         Self {
             state: Mutex::new(PersistChannelState {
@@ -207,40 +241,54 @@ impl<T> PersistChannel<T> {
                 persist_threshold,
                 shutdown: false,
                 pending_reaps: Vec::new(),
-                data: None,
+                latest_committed: None,
             }),
             commit_not_full: Condvar::new(),
             persist_ready: Condvar::new(),
         }
     }
 
+    /// Returns `true` if no permits have been consumed (i.e., no unpersisted
+    /// commits are outstanding).
     fn empty(&self) -> bool {
         let state = self.state.lock();
         state.permits_available == state.max_permits.get()
     }
 
+    /// Enqueues `nodestore` for reaping.
+    ///
+    /// ## Errors
+    ///
+    /// Returns an error if the channel has been shut down.
     fn reap(&self, nodestore: NodeStore<Committed, FileBacked>) -> Result<(), PersistError> {
         let mut state = self.state.lock();
         if state.shutdown {
-            return Err(PersistError::ChannelDisconnected);
+            return Err(PersistError::Shutdown);
         }
         state.pending_reaps.push(nodestore);
         self.persist_ready.notify_one();
+
         Ok(())
     }
 
-    fn push(&self, item: T) -> Result<(), PersistError> {
+    /// Stores a committed revision and consumes one permit. Blocks if all
+    /// permits have been consumed until the background thread releases them.
+    ///
+    /// ## Errors
+    ///
+    /// Returns an error if the channel has been shut down.
+    fn push(&self, revision: CommittedRevision) -> Result<(), PersistError> {
         let mut state = self.state.lock();
-        while state.permits_available == 0 {
+        while state.permits_available == 0 && !state.shutdown {
             self.commit_not_full.wait(&mut state);
         }
 
         if state.shutdown {
-            return Err(PersistError::ChannelDisconnected);
+            return Err(PersistError::Shutdown);
         }
 
-        state.data = Some(item);
-        state.permits_available = state.permits_available.saturating_sub(1);
+        state.latest_committed = Some(revision);
+        state.permits_available = state.permits_available.wrapping_sub(1);
 
         // Wake the persister once we reach the threshold.
         if state.permits_available <= state.persist_threshold {
@@ -249,45 +297,58 @@ impl<T> PersistChannel<T> {
         Ok(())
     }
 
-    fn pop(&self) -> Result<PersistDataWrapper<'_, T>, PersistError> {
-        let mut state = self.state.lock();
-        let (permits_to_release, pending_reaps, data) = loop {
-            // Shutdown requested. Return error.
-            if state.shutdown {
-                return Err(PersistError::ChannelDisconnected);
+    /// Blocks until there is work to do, then returns a [`PersistDataGuard`]
+    /// containing the pending reaps and/or the latest committed revision.
+    ///
+    /// ## Errors
+    ///
+    /// Returns an error if the channel has been shut down.
+    fn pop(&self) -> Result<PersistDataGuard<'_>, PersistError> {
+        let (permits_to_release, pending_reaps, latest_committed) = {
+            let mut state = self.state.lock();
+            loop {
+                // Shutdown requested. Return error.
+                if state.shutdown {
+                    return Err(PersistError::Shutdown);
+                }
+                // Unblock to persist when permits available <= threshold
+                if state.permits_available <= state.persist_threshold
+                    && state.latest_committed.is_some()
+                {
+                    break (
+                        state
+                            .max_permits
+                            .get()
+                            .wrapping_sub(state.permits_available),
+                        std::mem::take(&mut state.pending_reaps),
+                        state.latest_committed.take(),
+                    );
+                }
+                // Unblock even if we haven't met the threshold if there are pending reaps.
+                // Permits to release is set to 0, and committed revision is not taken.
+                if !state.pending_reaps.is_empty() {
+                    break (0, std::mem::take(&mut state.pending_reaps), None);
+                }
+                // Block until it is woken up by the committer thread.
+                self.persist_ready.wait(&mut state);
             }
-            // Unblock to persist when permits available <= threshold
-            if state.permits_available <= state.persist_threshold && state.data.is_some() {
-                break (
-                    state
-                        .max_permits
-                        .get()
-                        .saturating_sub(state.permits_available),
-                    std::mem::take(&mut state.pending_reaps),
-                    state.data.take(),
-                );
-            }
-            // Unblock even if we haven't met the threshold if there are pending reaps.
-            // Permits to release is set to 0, and committed revision is not taken.
-            if !state.pending_reaps.is_empty() {
-                break (0, std::mem::take(&mut state.pending_reaps), None);
-            }
-            // Block until it is woken up by the committer thread.
-            self.persist_ready.wait(&mut state);
         };
-        Ok(PersistDataWrapper {
+
+        Ok(PersistDataGuard {
             channel: self,
             permits_to_release,
             pending_reaps,
-            data,
+            latest_committed,
         })
     }
 
+    /// Signals shutdown and wakes all waiting threads (both committers and
+    /// the background persister).
     fn close(&self) {
         let mut state = self.state.lock();
         state.shutdown = true;
-        self.persist_ready.notify_all();
-        self.commit_not_full.notify_all();
+        self.persist_ready.notify_one();
+        self.commit_not_full.notify_one();
     }
 
     #[cfg(test)]
@@ -311,26 +372,42 @@ impl<T> PersistChannel<T> {
 }
 
 #[derive(Debug)]
-struct PersistChannelState<T> {
+struct PersistChannelState {
+    /// Number of permits currently available for new commits.
     permits_available: u64,
     /// Maximum number of unpersisted commits allowed.
     max_permits: NonZeroU64,
     /// Persist when remaining permits are at or below this threshold.
     persist_threshold: u64,
+    /// Set to `true` when the channel has been closed.
     shutdown: bool,
+    /// Nodestores awaiting reaping by the background thread.
     pending_reaps: Vec<NodeStore<Committed, FileBacked>>,
-    data: Option<T>,
+    /// The most recent committed revision, replaced on each push.
+    latest_committed: Option<CommittedRevision>,
 }
 
-struct PersistDataWrapper<'a, T> {
-    channel: &'a PersistChannel<T>,
+/// RAII guard returned by [`PersistChannel::pop`] that carries the data for
+/// one persistence cycle (a committed revision and/or pending reaps).
+///
+/// On drop, it returns consumed permits back to the channel and notifies
+/// blocked committers via [`commit_not_full`](PersistChannel::commit_not_full),
+/// ensuring backpressure is released even if the persist loop exits early due
+/// to an error.
+struct PersistDataGuard<'a> {
+    channel: &'a PersistChannel,
+    /// Number of permits consumed by commits since the last persist cycle.
+    /// Released back to the channel on drop.
     permits_to_release: u64,
+    /// Expired node stores whose deleted nodes should be returned to free lists.
     pending_reaps: Vec<NodeStore<Committed, FileBacked>>,
-    data: Option<T>,
+    /// The latest committed revision to persist, if the threshold was reached.
+    /// `None` when this cycle was triggered solely by pending reaps.
+    latest_committed: Option<CommittedRevision>,
 }
 
-impl<T> Drop for PersistDataWrapper<'_, T> {
-    /// Handle permit release on drop of the wrapper
+impl Drop for PersistDataGuard<'_> {
+    /// Releases permits back to the channel on drop of the guard.
     fn drop(&mut self) {
         if self.permits_to_release == 0 {
             return;
@@ -346,7 +423,7 @@ impl<T> Drop for PersistDataWrapper<'_, T> {
     }
 }
 
-/// Shared state between `PersistWorker` and `PersistLoop` for coordination.
+/// Shared state between `PersistWorker` and `PersistLoop`.
 #[derive(Debug)]
 struct SharedState {
     /// Shared error state that can be checked without joining the thread.
@@ -356,10 +433,11 @@ struct SharedState {
     header: Mutex<NodeStoreHeader>,
     /// Optional persistent store for historical root addresses.
     root_store: Option<Arc<RootStore>>,
-    /// Unpersisted revision to persist on shutdown.
+    /// Revision to persist on shutdown if there are outstanding unpersisted
+    /// commits.
     persist_on_shutdown: OnceLock<CommittedRevision>,
     /// Channel for coordinating persist and reap operations.
-    channel: PersistChannel<CommittedRevision>,
+    channel: PersistChannel,
 }
 
 /// The background persistence loop that runs in a separate thread.
@@ -368,34 +446,37 @@ struct PersistLoop {
     shared: Arc<SharedState>,
 }
 
+impl Drop for PersistLoop {
+    /// Closes the persist channel so blocked committers are woken up and see the
+    /// shutdown state rather than blocking indefinitely.
+    fn drop(&mut self) {
+        self.shared.channel.close();
+    }
+}
+
 impl PersistLoop {
     /// Runs the persistence loop until shutdown or error.
     ///
     /// If the event loop exits with an error, it is stored in shared state
     /// so the main thread can observe it without joining.
-    fn run(mut self) -> Result<(), PersistError> {
+    fn run(self) -> Result<(), PersistError> {
         let result = self.event_loop();
         if let Err(ref err) = result {
             self.shared.error.set(err.clone()).expect("should be empty");
-            self.shared.channel.close();
         }
         result
     }
 
     /// Processes pending work until shutdown or an error occurs.
-    fn event_loop(&mut self) -> Result<(), PersistError> {
-        loop {
-            let Ok(mut persist_data) = self.shared.channel.pop() else {
-                break; // Channel failed due to a shutdown. Break to handle shutdown gracefully.
-            };
-
+    fn event_loop(&self) -> Result<(), PersistError> {
+        while let Ok(mut persist_data) = self.shared.channel.pop() {
             for nodestore in std::mem::take(&mut persist_data.pending_reaps) {
                 self.reap(nodestore)?;
             }
 
-            if let Some(revision) = persist_data.data.take() {
+            if let Some(revision) = persist_data.latest_committed.take() {
                 self.persist_to_disk(&revision)
-                    .and_then(|()| self.save_to_root_store(&revision))?;
+                    .and_then(|()| self.maybe_save_to_root_store(&revision))?;
             }
         }
 
@@ -404,7 +485,7 @@ impl PersistLoop {
             && !self.shared.channel.empty()
         {
             self.persist_to_disk(&revision)
-                .and_then(|()| self.save_to_root_store(&revision))?;
+                .and_then(|()| self.maybe_save_to_root_store(&revision))?;
         }
 
         Ok(())
@@ -419,11 +500,14 @@ impl PersistLoop {
         })
     }
 
-    /// Add the nodes of this revision to the free lists.
+    /// Adds the nodes of this revision to the free lists.
     fn reap(&self, nodestore: NodeStore<Committed, FileBacked>) -> Result<(), PersistError> {
         nodestore
             .reap_deleted(&mut self.shared.header.lock())
-            .map_err(|e| PersistError::FileIo(Arc::new(e)))
+            .map_err(|e| {
+                error!("Failed to reap deleted nodes: {e}");
+                PersistError::FileIo(Arc::new(e))
+            })
     }
 
     /// Saves the revision's root address to `RootStore` if configured.
@@ -438,9 +522,20 @@ impl PersistLoop {
     }
 }
 
+#[crate::metrics("persist.root_store", "persist revision address to root store")]
+fn save_to_root_store(
+    store: &RootStore,
+    hash: &TrieHash,
+    addr: &LinearAddress,
+) -> Result<(), PersistError> {
+    store.add_root(hash, addr).map_err(|e| {
+        error!("Failed to persist revision address to RootStore: {e}");
+        PersistError::RootStore(e.into())
+    })
+}
+
+#[cfg(test)]
 impl SharedState {
-    #[cfg(test)]
-    #[allow(clippy::arithmetic_side_effects)]
     fn wait_all_released(&self) {
         self.channel.wait_all_released();
     }
