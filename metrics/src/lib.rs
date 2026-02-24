@@ -131,7 +131,20 @@ pub struct HistogramBucketConfig {
     /// The metric name (e.g., `ffi.commit_ms_bucket`).
     pub name: &'static str,
     /// The bucket boundaries.
-    pub buckets: &'static [f64],
+    pub buckets: Vec<f64>,
+}
+
+/// Returns a sorted, deduplicated set of buckets where every value is at least `min_bucket`.
+#[must_use]
+pub fn clamp_histogram_buckets(buckets: &[f64], min_bucket: f64) -> Vec<f64> {
+    let mut clamped = Vec::with_capacity(buckets.len());
+    for &bucket in buckets {
+        let adjusted = bucket.max(min_bucket);
+        if clamped.last().copied() != Some(adjusted) {
+            clamped.push(adjusted);
+        }
+    }
+    clamped
 }
 
 /// Registers a histogram metric with custom bucket boundaries.
@@ -156,7 +169,10 @@ pub fn register_histogram_with_buckets(
     metrics::describe_histogram!(name, description);
 
     // Collect bucket configuration
-    configs.push(HistogramBucketConfig { name, buckets });
+    configs.push(HistogramBucketConfig {
+        name,
+        buckets: buckets.to_vec(),
+    });
 }
 
 /// Increments a counter metric.
@@ -318,5 +334,31 @@ mod tests {
             drop(guard1);
             assert_eq!(current_metrics_context(), None);
         });
+    }
+
+    #[test]
+    fn clamp_histogram_buckets_is_noop_when_minimum_below_first_bucket() {
+        let buckets = [0.1, 0.5, 1.0, 2.0];
+        let clamped = clamp_histogram_buckets(&buckets, 0.01);
+        assert_eq!(clamped, buckets);
+    }
+
+    #[test]
+    fn clamp_histogram_buckets_collapses_lower_buckets_to_minimum() {
+        let buckets = [0.1, 0.25, 0.5, 1.0, 2.0];
+        let clamped = clamp_histogram_buckets(&buckets, 0.5);
+        assert_eq!(clamped, vec![0.5, 1.0, 2.0]);
+    }
+
+    #[test]
+    fn clamp_histogram_buckets_preserves_ascending_unique_order() {
+        let buckets = [0.1, 0.2, 0.3, 0.5, 1.0];
+        let clamped = clamp_histogram_buckets(&buckets, 0.45);
+        assert_eq!(clamped, vec![0.45, 0.5, 1.0]);
+        assert!(
+            clamped
+                .windows(2)
+                .all(|pair| matches!(pair, [a, b] if a < b))
+        );
     }
 }

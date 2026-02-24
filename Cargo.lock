@@ -1680,6 +1680,7 @@ dependencies = [
  "firewood-metrics",
  "firewood-replay",
  "firewood-storage",
+ "libc",
  "metrics",
  "metrics-exporter-prometheus",
  "oxhttp",

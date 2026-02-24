@@ -46,6 +46,9 @@ ethhash = ["firewood/ethhash", "rlp"]
 io-uring = ["firewood/io-uring", "firewood-storage/io-uring"]
 block-replay = ["dep:firewood-replay"]
 
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = "0.2"
+
 [build-dependencies]
 cbindgen = "0.29.2"
 
