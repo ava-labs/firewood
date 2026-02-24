@@ -273,7 +273,7 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	if conf.nodeCacheEntries > 0 && conf.nodeCacheSizeInBytes > 0 {
 		return nil, fmt.Errorf("node cache entries and node cache size in bytes are mutually exclusive")
 	}
-	if conf.nodeCacheEntries > 0 && conf.nodeCacheSizeInBytes < 1 {
+	if conf.nodeCacheEntries < 1 && conf.nodeCacheSizeInBytes < 1 {
 		return nil, fmt.Errorf("node cache entries must be >= 1, got %d", conf.nodeCacheEntries)
 	}
 	if conf.freeListCacheEntries < 1 {
