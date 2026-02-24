@@ -23,7 +23,7 @@
 //! firewood_increment!(registry::COMMIT_COUNT, 1);
 //!
 //! // Expensive histogram (only records if expensive metrics enabled)
-//! firewood_record!(registry::COMMIT_MS_BUCKET, elapsed_ms, expensive);
+//! fwd_histogram_record!(registry::COMMIT_MS_BUCKET, elapsed_ms, expensive);
 //! ```
 //!
 //! # Histogram Bucket Registration
@@ -56,8 +56,8 @@
 //! | `firewood_increment!(name, value, expensive)` | Increment only if expensive metrics enabled |
 //! | `firewood_set!(name, value)` | Always set a gauge value |
 //! | `firewood_set!(name, value, expensive)` | Set only if expensive metrics enabled |
-//! | `firewood_record!(name, value)` | Always record to histogram |
-//! | `firewood_record!(name, value, expensive)` | Record only if expensive metrics enabled |
+//! | `fwd_histogram_record!(name, value)` | Always record to histogram |
+//! | `fwd_histogram_record!(name, value, expensive)` | Record only if expensive metrics enabled |
 //!
 //! For registration, use `metrics::describe_*` macros or [`register_histogram_with_buckets`].
 
@@ -246,12 +246,12 @@ macro_rules! firewood_gauge {
 ///
 /// # Usage
 /// ```ignore
-/// firewood_record!(registry::LATENCY_MS, elapsed_ms);
-/// firewood_record!(registry::LATENCY_MS, elapsed_ms, "op" => "read");
-/// firewood_record!(registry::COMMIT_MS_BUCKET, elapsed_ms, expensive);
+/// fwd_histogram_record!(registry::LATENCY_MS, elapsed_ms);
+/// fwd_histogram_record!(registry::LATENCY_MS, elapsed_ms, "op" => "read");
+/// fwd_histogram_record!(registry::COMMIT_MS_BUCKET, elapsed_ms, expensive);
 /// ```
 #[macro_export]
-macro_rules! firewood_record {
+macro_rules! fwd_histogram_record {
     ($name:expr, $value:expr, expensive) => {
         if $crate::expensive_metrics_enabled() {
             ::metrics::histogram!($name).record($value);

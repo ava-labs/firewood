@@ -16,7 +16,7 @@ use firewood::{
 use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult, arc_cache::ArcCache};
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
-use firewood_metrics::{MetricsContext, firewood_increment, firewood_record};
+use firewood_metrics::{MetricsContext, firewood_increment};
 
 /// The hashing mode to use for the database.
 ///
@@ -216,6 +216,7 @@ impl DatabaseHandle {
     /// # Errors
     ///
     /// An error is returned if the proposal could not be created.
+    #[firewood_macros::histogram_timing(crate::registry::BATCH_MS_BUCKET, expensive)]
     pub fn create_batch<'a>(
         &self,
         values: impl AsRef<[BatchOp<'a>]> + 'a,
@@ -225,21 +226,11 @@ impl DatabaseHandle {
 
         let root_hash = handle.commit_proposal(|commit_time| {
             firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
-            firewood_record!(
-                crate::registry::COMMIT_MS_BUCKET,
-                commit_time.as_f64() * 1000.0,
-                expensive
-            );
         })?;
 
         let elapsed = start_time.elapsed();
         firewood_increment!(crate::registry::BATCH_MS, elapsed.as_millis());
         firewood_increment!(crate::registry::BATCH_COUNT, 1);
-        firewood_record!(
-            crate::registry::BATCH_MS_BUCKET,
-            elapsed.as_f64() * 1000.0,
-            expensive
-        );
 
         Ok(root_hash)
     }

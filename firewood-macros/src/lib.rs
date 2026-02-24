@@ -6,12 +6,18 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::parse::{Parse, ParseStream};
-use syn::{ItemFn, Lit, ReturnType, Token, parse_macro_input};
+use syn::{Expr, Ident, ItemFn, Lit, ReturnType, Token, parse_macro_input};
 
 /// Arguments for the metrics macro
 struct MetricsArgs {
     name: String,
     description: Option<String>,
+}
+
+/// Arguments for the histogram timing macro.
+struct HistogramTimingArgs {
+    metric: Expr,
+    expensive: bool,
 }
 
 impl Parse for MetricsArgs {
@@ -43,6 +49,32 @@ impl Parse for MetricsArgs {
         };
 
         Ok(MetricsArgs { name, description })
+    }
+}
+
+impl Parse for HistogramTimingArgs {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let metric: Expr = input.parse()?;
+
+        let expensive = if input.parse::<Token![,]>().is_ok() {
+            let ident: Ident = input.parse()?;
+            if ident == "expensive" {
+                true
+            } else {
+                return Err(syn::Error::new_spanned(
+                    ident,
+                    "Expected `expensive` as second argument",
+                ));
+            }
+        } else {
+            false
+        };
+
+        if !input.is_empty() {
+            return Err(input.error("Unexpected additional arguments"));
+        }
+
+        Ok(Self { metric, expensive })
     }
 }
 
@@ -152,6 +184,83 @@ pub fn metrics(args: TokenStream, input: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
+/// A proc macro attribute that records successful function latency in a histogram.
+///
+/// This macro instruments functions that return `Result<T, E>` and records elapsed
+/// milliseconds into the provided histogram metric only when the result is `Ok(_)`.
+///
+/// # Usage
+/// ```rust,ignore
+/// #[firewood_macros::histogram_timing(crate::registry::PROPOSE_MS_BUCKET, expensive)]
+/// fn create() -> Result<(), Error> {
+///     Ok(())
+/// }
+/// ```
+#[proc_macro_attribute]
+pub fn histogram_timing(args: TokenStream, input: TokenStream) -> TokenStream {
+    let input_fn = parse_macro_input!(input as ItemFn);
+    let parsed_args = parse_macro_input!(args as HistogramTimingArgs);
+
+    // Validate that the function returns a Result
+    let return_type = match &input_fn.sig.output {
+        ReturnType::Type(_, ty) => ty,
+        ReturnType::Default => {
+            return syn::Error::new_spanned(
+                &input_fn.sig,
+                "Function must return a Result<T, E> to use #[histogram_timing] attribute",
+            )
+            .to_compile_error()
+            .into();
+        }
+    };
+
+    let is_result = match return_type.as_ref() {
+        syn::Type::Path(type_path) => type_path
+            .path
+            .segments
+            .last()
+            .is_some_and(|seg| seg.ident == "Result"),
+        _ => false,
+    };
+
+    if !is_result {
+        return syn::Error::new_spanned(
+            return_type,
+            "Function must return a Result<T, E> to use #[histogram_timing] attribute",
+        )
+        .to_compile_error()
+        .into();
+    }
+
+    let fn_vis = &input_fn.vis;
+    let fn_sig = &input_fn.sig;
+    let fn_block = &input_fn.block;
+    let fn_attrs = &input_fn.attrs;
+    let metric = &parsed_args.metric;
+    let record_code = if parsed_args.expensive {
+        quote! {
+            firewood_metrics::fwd_histogram_record!(#metric, __metrics_elapsed_ms, expensive);
+        }
+    } else {
+        quote! {
+            firewood_metrics::fwd_histogram_record!(#metric, __metrics_elapsed_ms);
+        }
+    };
+
+    TokenStream::from(quote! {
+        #(#fn_attrs)*
+        #fn_vis #fn_sig {
+            let __metrics_start = coarsetime::Instant::now();
+            let __metrics_result = { #fn_block };
+            if __metrics_result.is_ok() {
+                let __metrics_elapsed_ms = __metrics_start.elapsed().as_f64() * 1000.0;
+                #record_code
+            }
+            __metrics_result
+        }
+    })
+}
+
 fn generate_metrics_wrapper(input_fn: &ItemFn, args: &MetricsArgs) -> proc_macro2::TokenStream {
     let fn_vis = &input_fn.vis;
     let fn_sig = &input_fn.sig;
@@ -251,6 +360,24 @@ mod tests {
         // Test that too many arguments fail
         let input = quote::quote! { "test.metric", "description", "extra" };
         let result: syn::Result<MetricsArgs> = syn::parse2(input);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_histogram_timing_args_parsing() {
+        let input = quote::quote! { crate::registry::PROPOSE_MS_BUCKET };
+        let parsed: HistogramTimingArgs = syn::parse2(input).unwrap();
+        assert!(!parsed.expensive);
+
+        let input = quote::quote! { crate::registry::PROPOSE_MS_BUCKET, expensive };
+        let parsed: HistogramTimingArgs = syn::parse2(input).unwrap();
+        assert!(parsed.expensive);
+    }
+
+    #[test]
+    fn test_histogram_timing_args_parsing_rejects_invalid_flag() {
+        let input = quote::quote! { crate::registry::PROPOSE_MS_BUCKET, always };
+        let result: syn::Result<HistogramTimingArgs> = syn::parse2(input);
         assert!(result.is_err());
     }
 

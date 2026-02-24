@@ -4,7 +4,7 @@
 use firewood::v2::api::{self, BoxKeyValueIter, DbView, HashKey, IntoBatchIter, Proposal as _};
 
 use crate::{IteratorHandle, iterator::CreateIteratorResult, metrics::MetricsContextExt};
-use firewood_metrics::{firewood_increment, firewood_record};
+use firewood_metrics::firewood_increment;
 
 /// An opaque wrapper around a Proposal that also retains a reference to the
 /// database handle it was created from.
@@ -73,6 +73,7 @@ impl ProposalHandle<'_> {
     ///
     /// This function will return an error if committing the proposal fails or if the
     /// proposal is empty.
+    #[firewood_macros::histogram_timing(crate::registry::COMMIT_MS_BUCKET, expensive)]
     pub fn commit_proposal(
         self,
         token: impl FnOnce(coarsetime::Duration),
@@ -123,6 +124,7 @@ pub struct CreateProposalResult<'db> {
 }
 
 impl<'db> CreateProposalResult<'db> {
+    #[firewood_macros::histogram_timing(crate::registry::PROPOSE_MS_BUCKET, expensive)]
     pub(crate) fn new(
         handle: &'db crate::DatabaseHandle,
         f: impl FnOnce() -> Result<firewood::db::Proposal<'db>, api::Error>,
@@ -132,11 +134,6 @@ impl<'db> CreateProposalResult<'db> {
         let propose_time = start_time.elapsed();
         firewood_increment!(crate::registry::PROPOSE_MS, propose_time.as_millis());
         firewood_increment!(crate::registry::PROPOSE_COUNT, 1);
-        firewood_record!(
-            crate::registry::PROPOSE_MS_BUCKET,
-            propose_time.as_f64() * 1000.0,
-            expensive
-        );
 
         let hash_key = proposal.root_hash();
 

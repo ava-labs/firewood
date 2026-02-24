@@ -1677,6 +1677,7 @@ dependencies = [
  "coarsetime",
  "env_logger",
  "firewood",
+ "firewood-macros",
  "firewood-metrics",
  "firewood-replay",
  "firewood-storage",
