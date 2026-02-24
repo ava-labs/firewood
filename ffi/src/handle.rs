@@ -61,8 +61,19 @@ pub struct DatabaseHandleArgs<'a> {
 
     /// The size of the node cache.
     ///
-    /// Opening returns an error if this is zero.
+    /// **Deprecated:** Prefer `node_cache_memory_limit`.
+    ///
+    /// If this and `node_cache_memory_limit` are both non-zero, opening
+    /// returns an error.
     pub cache_size: usize,
+
+    /// The optional memory limit for the node cache in bytes.
+    ///
+    /// Set to `0` to leave this unset and rely on `cache_size` (deprecated)
+    /// or the default configured in `RevisionManagerConfig`.
+    ///
+    /// If this and `cache_size` are both non-zero, opening returns an error.
+    pub node_cache_memory_limit: usize,
 
     /// The size of the free list cache.
     ///
@@ -112,21 +123,40 @@ impl DatabaseHandleArgs<'_> {
             2 => firewood::manager::CacheReadStrategy::All,
             _ => return Err(invalid_data("invalid cache strategy")),
         };
-        #[expect(deprecated)]
-        let config = RevisionManagerConfig::builder()
-            .node_cache_size(
-                self.cache_size
-                    .try_into()
-                    .map_err(|_| invalid_data("cache size should be non-zero"))?,
-            )
-            .max_revisions(self.revisions)
-            .cache_read_strategy(cache_read_strategy)
-            .free_list_cache_size(
-                self.free_list_cache_size
-                    .try_into()
-                    .map_err(|_| invalid_data("free list cache size should be non-zero"))?,
-            )
-            .build();
+        let free_list_cache_size = NonZeroUsize::new(self.free_list_cache_size)
+            .ok_or_else(|| invalid_data("free list cache size should be non-zero"))?;
+
+        let cache_size = NonZeroUsize::new(self.cache_size);
+        let memory_limit = NonZeroUsize::new(self.node_cache_memory_limit);
+
+        #[expect(deprecated, reason = "FFI still supports deprecated cache size input")]
+        let config = match (cache_size, memory_limit) {
+            (Some(cache_size), Some(memory_limit)) => RevisionManagerConfig::builder()
+                .max_revisions(self.revisions)
+                .cache_read_strategy(cache_read_strategy)
+                .free_list_cache_size(free_list_cache_size)
+                .node_cache_size(cache_size)
+                .node_cache_memory_limit(memory_limit)
+                .build(),
+            (Some(cache_size), None) => RevisionManagerConfig::builder()
+                .max_revisions(self.revisions)
+                .cache_read_strategy(cache_read_strategy)
+                .free_list_cache_size(free_list_cache_size)
+                .node_cache_size(cache_size)
+                .build(),
+            (None, Some(memory_limit)) => RevisionManagerConfig::builder()
+                .max_revisions(self.revisions)
+                .cache_read_strategy(cache_read_strategy)
+                .free_list_cache_size(free_list_cache_size)
+                .node_cache_memory_limit(memory_limit)
+                .build(),
+            (None, None) => RevisionManagerConfig::builder()
+                .max_revisions(self.revisions)
+                .cache_read_strategy(cache_read_strategy)
+                .free_list_cache_size(free_list_cache_size)
+                .build(),
+        };
+
         Ok(config)
     }
 }

@@ -97,8 +97,12 @@ type config struct {
 	// truncate indicates whether to clear the database file if it already exists.
 	truncate bool
 	// nodeCacheEntries is the number of entries in the cache.
-	// Must be non-zero.
+	// Deprecated: prefer nodeCacheSizeInBytes for memory-based sizing.
+	// Must be non-zero when nodeCacheSizeInBytes is unset.
 	nodeCacheEntries uint
+	// nodeCacheSizeInBytes is the optional memory limit for the node cache in bytes.
+	// If non-zero, this is used instead of nodeCacheEntries.
+	nodeCacheSizeInBytes uint
 	// freeListCacheEntries is the number of entries in the freelist cache.
 	// Must be non-zero.
 	freeListCacheEntries uint
@@ -146,6 +150,17 @@ func WithTruncate(truncate bool) Option {
 func WithNodeCacheEntries(entries uint) Option {
 	return func(c *config) {
 		c.nodeCacheEntries = entries
+		c.nodeCacheSizeInBytes = 0
+	}
+}
+
+// WithNodeCacheSizeInBytes sets the node cache memory limit in bytes.
+// When set to a non-zero value, this overrides node cache entry-based sizing.
+// Must be non-zero to enable memory-based sizing.
+func WithNodeCacheSizeInBytes(sizeInBytes uint) Option {
+	return func(c *config) {
+		c.nodeCacheSizeInBytes = sizeInBytes
+		c.nodeCacheEntries = 0
 	}
 }
 
@@ -252,7 +267,13 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	if conf.revisions < 2 {
 		return nil, fmt.Errorf("revisions must be >= 2, got %d", conf.revisions)
 	}
-	if conf.nodeCacheEntries < 1 {
+	if conf.nodeCacheEntries < 1 && conf.nodeCacheSizeInBytes < 1 {
+		return nil, fmt.Errorf("either node cache entries or node cache size in bytes must be >= 1")
+	}
+	if conf.nodeCacheEntries > 0 && conf.nodeCacheSizeInBytes > 0 {
+		return nil, fmt.Errorf("node cache entries and node cache size in bytes are mutually exclusive")
+	}
+	if conf.nodeCacheEntries > 0 && conf.nodeCacheSizeInBytes < 1 {
 		return nil, fmt.Errorf("node cache entries must be >= 1, got %d", conf.nodeCacheEntries)
 	}
 	if conf.freeListCacheEntries < 1 {
@@ -265,6 +286,7 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	args := C.struct_DatabaseHandleArgs{
 		dir:                               newBorrowedBytes([]byte(dbDir), &pinner),
 		cache_size:                        C.size_t(conf.nodeCacheEntries),
+		node_cache_memory_limit:           C.size_t(conf.nodeCacheSizeInBytes),
 		free_list_cache_size:              C.size_t(conf.freeListCacheEntries),
 		revisions:                         C.size_t(conf.revisions),
 		strategy:                          C.uint8_t(conf.readCacheStrategy),
