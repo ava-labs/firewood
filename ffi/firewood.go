@@ -97,6 +97,7 @@ type config struct {
 	// truncate indicates whether to clear the database file if it already exists.
 	truncate bool
 	// nodeCacheEntries is the number of entries in the cache.
+	//
 	// Deprecated: prefer nodeCacheSizeInBytes for memory-based sizing.
 	// Must be non-zero when nodeCacheSizeInBytes is unset.
 	nodeCacheEntries uint
@@ -268,10 +269,10 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 		return nil, fmt.Errorf("revisions must be >= 2, got %d", conf.revisions)
 	}
 	if conf.nodeCacheEntries < 1 && conf.nodeCacheSizeInBytes < 1 {
-		return nil, fmt.Errorf("either node cache entries or node cache size in bytes must be >= 1")
+		return nil, errors.New("either node cache entries or node cache size in bytes must be >= 1")
 	}
 	if conf.nodeCacheEntries > 0 && conf.nodeCacheSizeInBytes > 0 {
-		return nil, fmt.Errorf("node cache entries and node cache size in bytes are mutually exclusive")
+		return nil, errors.New("node cache entries and node cache size in bytes are mutually exclusive")
 	}
 	if conf.nodeCacheEntries < 1 && conf.nodeCacheSizeInBytes < 1 {
 		return nil, fmt.Errorf("node cache entries must be >= 1, got %d", conf.nodeCacheEntries)
