@@ -128,13 +128,16 @@ fn monotonic_coarse_resolution_ms() -> Option<f64> {
         unsafe_code,
         reason = "Required to call clock_getres for OS timer resolution"
     )]
-    let result = unsafe { libc::clock_getres(libc::CLOCK_MONOTONIC_COARSE, &mut resolution) };
+    // SAFETY: `resolution` points to a valid, writable `timespec` for the duration
+    // of this call, and `CLOCK_MONOTONIC_COARSE` is a valid Linux clock id.
+    let result = unsafe { libc::clock_getres(libc::CLOCK_MONOTONIC_COARSE, &raw mut resolution) };
     if result != 0 || resolution.tv_sec < 0 || resolution.tv_nsec < 0 {
         return None;
     }
 
-    let duration_ms =
-        (resolution.tv_sec as f64 * 1_000.0) + (resolution.tv_nsec as f64 / 1_000_000.0);
+    let seconds = u64::try_from(resolution.tv_sec).ok()?;
+    let nanos = u32::try_from(resolution.tv_nsec).ok()?;
+    let duration_ms = Duration::new(seconds, nanos).as_secs_f64() * 1_000.0;
     if duration_ms.is_finite() && duration_ms > 0.0 {
         Some(duration_ms)
     } else {
