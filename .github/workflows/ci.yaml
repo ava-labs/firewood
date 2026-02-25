@@ -41,11 +41,11 @@ jobs:
             profile-args: "--profile maxperf --features ethhash,logger"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # @v2 -> v2.8.2
         with:
           shared-key: ${{ matrix.profile-key }}
           cache-all-crates: true
@@ -61,12 +61,12 @@ jobs:
   no-rust-cache-lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
         with:
           components: rustfmt
       - name: Check license headers
-        uses: viperproject/check-license-header@v2
+        uses: viperproject/check-license-header@e06c65614fa9f32e099838df4dd25440c5344b32 # @v2
         with:
           path: .
           config: .github/check-license-headers.yaml
@@ -95,19 +95,18 @@ jobs:
             profile-args: "--all-features"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # @v2 -> v2.8.2
         with:
           save-if: "false"
           shared-key: ${{ matrix.profile-key }}
-      - uses: actions-rs/clippy-check@v1
+      - uses: giraffate/clippy-action@13b9d32482f25d29ead141b79e7e04e7900281e0 # @v1 -> v1.0.1
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          name: ${{ matrix.profile-key }}
-          args: --locked ${{ matrix.profile-args }} --workspace --all-targets
+          reporter: 'github-pr-check'
+          github_token: ${{ secrets.GITHUB_TOKEN }}
 
   rust-lint:
     needs: build
@@ -129,11 +128,11 @@ jobs:
             profile-args: "--all-features"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
         with:
           components: clippy
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # @v2 -> v2.8.2
         with:
           save-if: "false"
           shared-key: ${{ matrix.profile-key }}
@@ -162,10 +161,10 @@ jobs:
             profile-args: "--cargo-profile maxperf --features ethhash,logger"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@nextest
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
+      - uses: taiki-e/install-action@a7cecc7ff99ae8eda4fc89463cb7ab6aaa619b43 # @nextest
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # @v2 -> v2.8.2
         with:
           save-if: "false"
           shared-key: ${{ matrix.profile-key }}
@@ -192,9 +191,9 @@ jobs:
             profile-args: "--profile maxperf --features ethhash,logger"
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # @v2 -> v2.8.2
         with:
           save-if: "false"
           shared-key: ${{ matrix.profile-key }}
@@ -207,14 +206,14 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # @v2 -> v2.8.2
         with:
           save-if: "false"
           shared-key: "debug-no-features"
       - name: md check
-        uses: DavidAnson/markdownlint-cli2-action@v20
+        uses: DavidAnson/markdownlint-cli2-action@07035fd053f7be764496c0f8d8f9f41f98305101 # @v22.0.0
         with:
           globs: |
             *.md
@@ -232,9 +231,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # @v2 -> v2.8.2
         with:
           save-if: "false"
           shared-key: "debug-no-features"
@@ -242,12 +241,12 @@ jobs:
         working-directory: ffi
         run: cargo build --locked --release
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: "ffi/go.mod"
           cache-dependency-path: "ffi/go.sum"
       - name: Run golangci-lint
-        uses: golangci/golangci-lint-action@v7.0.1
+        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # @v7 -> v9.2.0
         with:
           version: latest
           working-directory: ffi
@@ -260,16 +259,16 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # @v2 -> v2.8.2
         with:
           save-if: "false"
           shared-key: "debug-ethhash-logger"
       - name: Build Firewood FFI (with ethhash)
         run: cargo build --features ethhash,logger
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: "ffi/tests/eth/go.mod"
           cache-dependency-path: "ffi/tests/eth/go.sum"
@@ -290,7 +289,7 @@ jobs:
           go test -race -fuzz=FuzzRangeProofCreation -fuzztime=1m
       - name: Upload Fuzz testdata
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: ethhash-differential-fuzz-testdata
           path: ffi/tests/eth/testdata
@@ -300,16 +299,16 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # @v2 -> v2.8.2
         with:
           save-if: "false"
           shared-key: "debug-no-features"
       - name: Build Firewood FFI
         run: cargo build -p firewood-ffi
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           go-version-file: "ffi/tests/firewood/go.mod"
           cache-dependency-path: "ffi/tests/firewood/go.sum"
@@ -325,7 +324,7 @@ jobs:
           go test -race -fuzz=. -fuzztime=1m
       - name: Upload Fuzz testdata
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: firewood-merkle-differential-fuzz-testdata
           path: ffi/tests/firewood/testdata
@@ -335,9 +334,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
+      - uses: Swatinem/rust-cache@779680da715d629ac1d338a641029a2f4372abb5 # @v2 -> v2.8.2
         with:
           save-if: "false"
           shared-key: "debug-no-features"

@@ -21,6 +21,6 @@ jobs:
   expected-golangci-yaml-diff:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Validate expected golangci-lint changes
         run: .github/scripts/verify_golangci_yaml_changes.sh

@@ -1,5 +1,5 @@
---- .github/.golangci.yaml	2025-12-29 01:55:58
-+++ ffi/.golangci.yaml	2025-12-29 00:09:32
+--- .github/.golangci.yaml	2026-02-20 16:14:53.739528860 +0000
++++ ffi/.golangci.yaml	2026-02-20 16:00:50.182324273 +0000
 @@ -40,7 +40,7 @@
          - standard
          - default
@@ -9,7 +9,39 @@
          - alias
          - dot
        custom-order: true
-@@ -93,12 +93,10 @@
+@@ -56,26 +56,26 @@
+     - copyloopvar
+     - depguard
+     - durationcheck
+-    # - embeddedstructfieldcheck
++    - embeddedstructfieldcheck
+     - errcheck
+     - errorlint
+     - forbidigo
+     - goconst
+     - gocheckcompilerdirectives
+-    # - godoclint
++    - godoclint
+     - gocritic
+     - goprintffuncname
+     - gosec
+     - govet
+     - importas
+     - ineffassign
+-    # - iotamixing
++    - iotamixing
+     - mirror
+     - misspell
+-    # - modernize
++    - modernize
+     - nakedret
+     - nilerr
+-    # - noctx
++    - noctx
+     - nolintlint
+     - perfsprint
+     - prealloc
+@@ -97,12 +97,10 @@
        rules:
          packages:
            deny:
@@ -24,7 +56,7 @@
              - pkg: io/ioutil
                desc: io/ioutil is deprecated. Use package io or os instead.
      errorlint:
-@@ -109,33 +107,10 @@
+@@ -113,33 +111,10 @@
      forbidigo:
        # Forbid the following identifiers (list of regexp).
        forbid:
@@ -59,7 +91,7 @@
      revive:
        rules:
          # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#bool-literal-in-expr
-@@ -199,17 +174,6 @@
+@@ -203,17 +178,6 @@
          # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#useless-break
          - name: useless-break
            disabled: false

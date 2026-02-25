@@ -191,7 +191,7 @@ impl VerifiedChangeProofContext {
             return Err(api::Error::ProofError(ProofError::ProofIsNone));
         };
         let proposal = db.apply_change_proof_to_parent(self.params.start_root.into(), &proof)?;
-        let root_hash = proposal.handle.root_hash()?.map(std::convert::Into::into);
+        let root_hash = proposal.handle.root_hash().map(std::convert::Into::into);
         Ok(ProposedChangeProofContext {
             proof,
             db,
