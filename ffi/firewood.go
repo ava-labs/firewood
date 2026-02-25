@@ -141,7 +141,7 @@ func WithTruncate(truncate bool) Option {
 
 // WithNodeCacheSizeInBytes sets the node cache memory limit in bytes.
 // Must be non-zero.
-// Default: 128,000,000
+// Default: 128 MB
 func WithNodeCacheSizeInBytes(sizeInBytes uint) Option {
 	return func(c *config) {
 		c.nodeCacheSizeInBytes = sizeInBytes
