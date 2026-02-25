@@ -118,18 +118,17 @@ impl DatabaseHandleArgs<'_> {
 
         let memory_limit = NonZeroUsize::new(self.node_cache_memory_limit);
 
-        let config = match memory_limit {
-            Some(memory_limit) => RevisionManagerConfig::builder()
+        let config = {
+            let builder = RevisionManagerConfig::builder()
                 .max_revisions(self.revisions)
                 .cache_read_strategy(cache_read_strategy)
-                .free_list_cache_size(free_list_cache_size)
-                .node_cache_memory_limit(memory_limit)
-                .build(),
-            None => RevisionManagerConfig::builder()
-                .max_revisions(self.revisions)
-                .cache_read_strategy(cache_read_strategy)
-                .free_list_cache_size(free_list_cache_size)
-                .build(),
+                .free_list_cache_size(free_list_cache_size);
+
+            if let Some(memory_limit) = memory_limit {
+                builder.node_cache_memory_limit(memory_limit).build()
+            } else {
+                builder.build()
+            }
         };
 
         Ok(config)
