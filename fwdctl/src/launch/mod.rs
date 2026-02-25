@@ -26,7 +26,7 @@ pub enum LaunchError {
     #[error("AWS SDK error: {0}")]
     AwsSdk(String),
 
-    #[error("{0}")]
+    #[error("Validation failed: {0}")]
     Validation(String),
 
     #[error("Cloud-init generation failed: {0}")]
