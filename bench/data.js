@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1772005675443,
+  "lastUpdate": 1772048469165,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -845,6 +845,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 82.42763232466919,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "AminR443",
+            "username": "AminR443",
+            "email": "amin.rezaei@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "94641ecefaf724dd76e8c3d839994dbb01d368a1",
+          "message": "feat(fwdctl/launch): add docs, deprecate aws-launch.sh (4/4) (#1665)\n\n## Why this should be merged\nThis PR adds necessary documentation and readme for fwdctl launch\ncommand, it also deprecates the previous `aws-launch.sh` script.\n \n## How this works\nNA.\n\n## How this was tested\nNA.",
+          "timestamp": "2026-02-25T15:28:10Z",
+          "url": "https://github.com/ava-labs/firewood/commit/94641ecefaf724dd76e8c3d839994dbb01d368a1"
+        },
+        "date": 1772048468827,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 135.94324473805395,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 7356.010973012143,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 120.09476766932417,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 7142.705495614944,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 89.49072776746077,
             "unit": "block_accept_ms/ggas"
           }
         ]
