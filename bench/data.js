@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1771919518742,
+  "lastUpdate": 1772005675443,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -798,6 +798,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 93.55734741531414,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "AminR443",
+            "username": "AminR443",
+            "email": "amin.rezaei@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "046ce6a17a11c04ad24af9cf41f572fe96631245",
+          "message": "feat(fwdctl/launch): add scenario-driven deploy, list/kill instance management, and dry-run planning (3/4) (#1664)\n\n## Why this should be merged\n\nThis PR upgrades `fwdctl launch` from deploy/monitor-only into a full\nlifecycle management tool. It adds planning (`--dry-run`), managed\ninstance operations (`list`, `kill`), and scenario-based launches.\n\n## How this works\n\nThe launch CLI now supports:\n- `fwdctl launch list` to show `ManagedBy=fwdctl` instances (with\n`--running` / `--mine`)\n- `fwdctl launch kill` to terminate a specific instance, your instances,\nor all managed instances\n- `fwdctl launch deploy --scenario <name>` to pick a scenario from\n`benchmark/launch/launch-stages.yaml`\n- `fwdctl launch deploy --dry-run [plan|plan-with-cloud-init]` to\npreview actions without creating resources\n- `fwdctl launch deploy --follow [follow|follow-with-progress]` for\nlog/progress streaming modes\n\n## How this was tested\nSome UT. mostly manually launching and ensuring all the cases work fine.\n\n## Design Notes\n\n1. `list`/`kill` are intentionally scoped to `ManagedBy=fwdctl`\nresources to avoid accidental operations on unrelated instances.\n3. `plan-with-cloud-init` was added so generated cloud-init can be\ninspected/reviewed before launch.",
+          "timestamp": "2026-02-25T04:59:05Z",
+          "url": "https://github.com/ava-labs/firewood/commit/046ce6a17a11c04ad24af9cf41f572fe96631245"
+        },
+        "date": 1772005675122,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 139.8154320700256,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 7152.286304841922,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 114.98727760783379,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6951.693292050317,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 82.42763232466919,
             "unit": "block_accept_ms/ggas"
           }
         ]
