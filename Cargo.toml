@@ -27,7 +27,8 @@ debug = true
 panic = "abort"
 codegen-units = 1
 lto = "fat"
-debug = false
+debug = "full"
+split-debuginfo = "packed"
 inherits = "release"
 
 [workspace.lints.rust]
