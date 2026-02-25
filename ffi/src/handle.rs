@@ -59,20 +59,10 @@ pub struct DatabaseHandleArgs<'a> {
     /// enable `root_store`.
     pub root_store: bool,
 
-    /// The size of the node cache.
-    ///
-    /// **Deprecated:** Prefer `node_cache_memory_limit`.
-    ///
-    /// If this and `node_cache_memory_limit` are both non-zero, opening
-    /// returns an error.
-    pub cache_size: usize,
-
     /// The optional memory limit for the node cache in bytes.
     ///
-    /// Set to `0` to leave this unset and rely on `cache_size` (deprecated)
-    /// or the default configured in `RevisionManagerConfig`.
-    ///
-    /// If this and `cache_size` are both non-zero, opening returns an error.
+    /// Set to `0` to leave this unset and rely on the default configured in
+    /// `RevisionManagerConfig`.
     pub node_cache_memory_limit: usize,
 
     /// The size of the free list cache.
@@ -126,31 +116,16 @@ impl DatabaseHandleArgs<'_> {
         let free_list_cache_size = NonZeroUsize::new(self.free_list_cache_size)
             .ok_or_else(|| invalid_data("free list cache size should be non-zero"))?;
 
-        let cache_size = NonZeroUsize::new(self.cache_size);
         let memory_limit = NonZeroUsize::new(self.node_cache_memory_limit);
 
-        #[expect(deprecated, reason = "FFI still supports deprecated cache size input")]
-        let config = match (cache_size, memory_limit) {
-            (Some(cache_size), Some(memory_limit)) => RevisionManagerConfig::builder()
-                .max_revisions(self.revisions)
-                .cache_read_strategy(cache_read_strategy)
-                .free_list_cache_size(free_list_cache_size)
-                .node_cache_size(cache_size)
-                .node_cache_memory_limit(memory_limit)
-                .build(),
-            (Some(cache_size), None) => RevisionManagerConfig::builder()
-                .max_revisions(self.revisions)
-                .cache_read_strategy(cache_read_strategy)
-                .free_list_cache_size(free_list_cache_size)
-                .node_cache_size(cache_size)
-                .build(),
-            (None, Some(memory_limit)) => RevisionManagerConfig::builder()
+        let config = match memory_limit {
+            Some(memory_limit) => RevisionManagerConfig::builder()
                 .max_revisions(self.revisions)
                 .cache_read_strategy(cache_read_strategy)
                 .free_list_cache_size(free_list_cache_size)
                 .node_cache_memory_limit(memory_limit)
                 .build(),
-            (None, None) => RevisionManagerConfig::builder()
+            None => RevisionManagerConfig::builder()
                 .max_revisions(self.revisions)
                 .cache_read_strategy(cache_read_strategy)
                 .free_list_cache_size(free_list_cache_size)
