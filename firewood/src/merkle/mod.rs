@@ -1353,6 +1353,57 @@ impl Merkle<NodeStore<MutableProposal, MemStore>> {
         *self.nodestore.root_mut() = root_node.into();
         Ok(())
     }
+
+    /// Reconciles a branch proof node against the in-memory proving merkle.
+    ///
+    /// This helper never overwrites an existing branch value. It only:
+    /// - creates missing branch structure,
+    /// - inserts a value when the branch exists without one, and
+    /// - errors if an existing value conflicts with the proof.
+    pub(crate) fn reconcile_branch_proof_node(
+        &mut self,
+        proof_node: &ProofNode,
+    ) -> Result<(), ProofError> {
+        let key_nibbles = proof_node
+            .key
+            .iter()
+            .map(|component| component.as_u8())
+            .collect::<Vec<_>>();
+        let key_nibbles = key_nibbles.as_slice();
+
+        if !key_nibbles.len().is_multiple_of(2)
+            && matches!(proof_node.value_digest, Some(ValueDigest::Value(_)))
+        {
+            return Err(ProofError::ValueAtOddNibbleLength);
+        }
+
+        self.insert_branch_from_nibbles(key_nibbles)?;
+
+        let Some(ValueDigest::Value(proof_value)) = proof_node.value_digest.as_ref() else {
+            // Hash-only value digests and absent values are validated in later
+            // proof-hash reconstruction steps.
+            return Ok(());
+        };
+
+        let Some(node) = self.get_node_from_nibbles(key_nibbles)? else {
+            return Err(ProofError::NodeNotInTrie);
+        };
+        let Some(branch) = node.as_branch() else {
+            return Err(ProofError::NodeNotInTrie);
+        };
+
+        match branch.value.as_deref() {
+            Some(existing_value) if existing_value != proof_value.as_ref() => {
+                Err(ProofError::UnexpectedValue)
+            }
+            Some(_) => Ok(()),
+            None => {
+                let key_bytes: Vec<u8> = nibbles_to_bytes_iter(key_nibbles).collect();
+                self.insert(&key_bytes, proof_value.clone())?;
+                Ok(())
+            }
+        }
+    }
 }
 
 /// Returns an iterator where each element is the result of combining
