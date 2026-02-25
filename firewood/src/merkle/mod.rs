@@ -303,9 +303,11 @@ impl<T: TrieReader> Merkle<T> {
                 (requested_first.as_ref() == key.as_ref()).then_some(value.as_ref())
             });
 
-            proof
-                .start_proof()
-                .verify(requested_first.as_ref(), expected_start_value, root_hash)?;
+            proof.start_proof().verify(
+                requested_first.as_ref(),
+                expected_start_value,
+                root_hash,
+            )?;
         } else if let Some((left_key, left_value)) = left {
             proof
                 .start_proof()
