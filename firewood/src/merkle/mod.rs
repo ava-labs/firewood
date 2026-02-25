@@ -16,6 +16,8 @@ use crate::v2::api::{
 };
 use crate::{Proof, ProofCollection, ProofError, ProofNode, RangeProof};
 use firewood_metrics::firewood_increment;
+#[cfg(test)]
+use firewood_storage::MemStore;
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashedNodeReader, ImmutableProposal,
     IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore,
@@ -921,6 +923,111 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         }
     }
 
+    /// Ensures a branch exists at `key` in the subtrie rooted at `node`.
+    /// Each element of `key` is 1 nibble.
+    #[cfg(test)]
+    fn insert_branch_helper(&mut self, mut node: Node, key: &[u8]) -> Result<Node, FileIoError> {
+        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+
+        let unique_key = path_overlap.unique_a;
+        let unique_node = path_overlap.unique_b;
+
+        match (
+            unique_key
+                .split_first()
+                .map(|(index, path)| (*index, path.into())),
+            unique_node
+                .split_first()
+                .map(|(index, path)| (*index, path.into())),
+        ) {
+            (None, None) => match node {
+                Node::Branch(_) => Ok(node),
+                Node::Leaf(leaf) => {
+                    let branch = BranchNode {
+                        partial_path: leaf.partial_path,
+                        value: Some(leaf.value),
+                        children: Children::new(),
+                    };
+                    Ok(Node::Branch(Box::new(branch)))
+                }
+            },
+            (None, Some((child_index, partial_path))) => {
+                let child_index = PathComponent::try_new(child_index).expect("valid component");
+
+                let mut branch = BranchNode {
+                    partial_path: path_overlap.shared.into(),
+                    value: None,
+                    children: Children::new(),
+                };
+
+                node.update_partial_path(partial_path);
+                branch.children[child_index] = Some(Child::Node(node));
+
+                Ok(Node::Branch(Box::new(branch)))
+            }
+            (Some((child_index, partial_path)), None) => {
+                let child_index = PathComponent::try_new(child_index).expect("valid component");
+
+                match node {
+                    Node::Branch(ref mut branch) => {
+                        let Some(child) = branch.children.take(child_index) else {
+                            let new_branch = Node::Branch(Box::new(BranchNode {
+                                partial_path,
+                                value: None,
+                                children: Children::new(),
+                            }));
+                            branch.children[child_index] = Some(Child::Node(new_branch));
+                            return Ok(node);
+                        };
+
+                        let child = self.read_for_update(child)?;
+                        let child = self.insert_branch_helper(child, partial_path.as_ref())?;
+                        branch.children[child_index] = Some(Child::Node(child));
+                        Ok(node)
+                    }
+                    Node::Leaf(leaf) => {
+                        let mut branch = BranchNode {
+                            partial_path: leaf.partial_path,
+                            value: Some(leaf.value),
+                            children: Children::new(),
+                        };
+
+                        let new_branch = Node::Branch(Box::new(BranchNode {
+                            partial_path,
+                            value: None,
+                            children: Children::new(),
+                        }));
+                        branch.children[child_index] = Some(Child::Node(new_branch));
+
+                        Ok(Node::Branch(Box::new(branch)))
+                    }
+                }
+            }
+            (Some((key_index, key_partial_path)), Some((node_index, node_partial_path))) => {
+                let key_index = PathComponent::try_new(key_index).expect("valid component");
+                let node_index = PathComponent::try_new(node_index).expect("valid component");
+
+                let mut branch = BranchNode {
+                    partial_path: path_overlap.shared.into(),
+                    value: None,
+                    children: Children::new(),
+                };
+
+                node.update_partial_path(node_partial_path);
+                branch.children[node_index] = Some(Child::Node(node));
+
+                let new_branch = Node::Branch(Box::new(BranchNode {
+                    partial_path: key_partial_path,
+                    value: None,
+                    children: Children::new(),
+                }));
+                branch.children[key_index] = Some(Child::Node(new_branch));
+
+                Ok(Node::Branch(Box::new(branch)))
+            }
+        }
+    }
+
     /// Removes the value associated with the given `key`.
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
@@ -1204,6 +1311,47 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         child.update_partial_path(child_partial_path);
 
         Ok(Some(child))
+    }
+}
+
+#[cfg(test)]
+impl Merkle<NodeStore<MutableProposal, MemStore>> {
+    /// Returns the node mapped to by `key_nibbles` where each key element is a
+    /// single nibble.
+    pub(crate) fn get_node_from_nibbles(
+        &self,
+        key_nibbles: &[u8],
+    ) -> Result<Option<SharedNode>, FileIoError> {
+        let Some(root) = self.root() else {
+            return Ok(None);
+        };
+
+        get_helper(&self.nodestore, &root, key_nibbles)
+    }
+
+    /// Ensures a branch exists at `key_nibbles` where each key element is a
+    /// single nibble.
+    ///
+    /// This creates missing branch structure without inserting a value at the
+    /// target key. Existing values and descendants are preserved.
+    pub(crate) fn insert_branch_from_nibbles(
+        &mut self,
+        key_nibbles: &[u8],
+    ) -> Result<(), FileIoError> {
+        let root = self.nodestore.root_mut();
+        let Some(root_node) = std::mem::take(root) else {
+            let branch = BranchNode {
+                partial_path: key_nibbles.into(),
+                value: None,
+                children: Children::new(),
+            };
+            *root = Node::Branch(Box::new(branch)).into();
+            return Ok(());
+        };
+
+        let root_node = self.insert_branch_helper(root_node, key_nibbles)?;
+        *self.nodestore.root_mut() = root_node.into();
+        Ok(())
     }
 }
 
