@@ -217,7 +217,7 @@ fn state_helper_script() -> String {
 set -euo pipefail
 
 STATE_FILE="{STATE_FILE}"
-STATE_FILE_TMP="$(mktemp "${STATE_FILE}.tmp.XXXXXX")"
+STATE_FILE_TMP="$(mktemp "$STATE_FILE.tmp.XXXXXX")"
 trap 'rm -f "$STATE_FILE_TMP"' EXIT
 
 cmd="${{1:-}}"
