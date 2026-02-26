@@ -7,6 +7,7 @@ use crate::merkle::{Key, Value};
 use crate::persist_worker::PersistError;
 use crate::{Proof, ProofError, ProofNode, RangeProof};
 use firewood_storage::{FileIoError, TrieHash};
+use rayon::ThreadPool;
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -418,8 +419,14 @@ pub trait Reconstructible: DbView {
     type Reconstructed: DbView + Reconstructible<Reconstructed = Self::Reconstructed>;
 
     /// Reconstruct a new view from this one by applying `data`.
+    ///
+    /// The caller must provide a thread pool used for parallel reconstruction.
     #[expect(clippy::missing_errors_doc)]
-    fn reconstruct(self, data: impl IntoBatchIter) -> Result<Self::Reconstructed, Error>
+    fn reconstruct(
+        self,
+        data: impl IntoBatchIter,
+        pool: &ThreadPool,
+    ) -> Result<Self::Reconstructed, Error>
     where
         Self: Sized;
 }

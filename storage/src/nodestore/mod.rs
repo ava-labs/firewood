@@ -282,6 +282,40 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
         })
     }
 
+    /// Create a new mutable nodestore for reconstruction from a read-capable parent.
+    ///
+    /// Unlike [`NodeStore::new`], this constructor does not require `Parentable`.
+    /// It is intended for linear reconstruction flows (e.g. historical or reconstructed views)
+    /// that should not participate in proposal parent/reparent semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the parent root cannot be read.
+    pub fn new_for_reconstruction<T>(parent: &NodeStore<T, S>) -> Result<Self, FileIoError>
+    where
+        NodeStore<T, S>: TrieReader + HashedNodeReader,
+    {
+        let mut deleted = Vec::default();
+        let root = if let Some(root) = parent.root_as_maybe_persisted_node() {
+            deleted.push(root.clone());
+            let root = root.as_shared_node(parent)?.deref().clone();
+            Some(root)
+        } else {
+            None
+        };
+
+        let kind = MutableProposal {
+            root,
+            deleted,
+            parent: NodeStoreParent::Committed(parent.root_hash()),
+        };
+
+        Ok(NodeStore {
+            kind,
+            storage: parent.storage.clone(),
+        })
+    }
+
     /// Marks the node at `addr` as deleted in this proposal.
     pub fn delete_node(&mut self, node: MaybePersistedNode) {
         trace!("Pending delete at {node:?}");

@@ -21,10 +21,11 @@ use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_metrics::firewood_counter;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage,
+    ImmutableProposal, MutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage,
     Reconstructed as StorageReconstructed, TrieReader,
 };
 use nonzero_ext::nonzero;
+use rayon::ThreadPool;
 use std::io::Write;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
@@ -358,6 +359,23 @@ impl Db {
         self.propose_with_parent(batch_ops, merkle.nodestore())
     }
 
+    /// Reconstruct a view from a parent view by applying batch operations.
+    /// Uses the database's thread pool for parallel reconstruction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reconstruction fails.
+    pub fn reconstruct_from_view<P>(
+        &self,
+        parent: &NodeStore<P, FileBacked>,
+        batch: impl IntoBatchIter,
+    ) -> Result<Reconstructed, api::Error>
+    where
+        NodeStore<P, FileBacked>: TrieReader + HashedNodeReader,
+    {
+        reconstruct_with_parent(parent, batch, self.manager.threadpool())
+    }
+
     /// Closes the database gracefully.
     ///
     /// Shuts down the background persistence worker and persists the latest
@@ -484,27 +502,51 @@ impl api::DbView for Reconstructed {
 impl api::Reconstructible for &NodeStore<Committed, FileBacked> {
     type Reconstructed = Reconstructed;
 
-    fn reconstruct(self, batch: impl IntoBatchIter) -> Result<Self::Reconstructed, api::Error>
+    fn reconstruct(
+        self,
+        batch: impl IntoBatchIter,
+        pool: &ThreadPool,
+    ) -> Result<Self::Reconstructed, api::Error>
     where
         Self: Sized,
     {
-        let _ = batch.into_iter();
-        let _ = self;
-        todo!("historical reconstruction pipeline is not implemented yet")
+        reconstruct_with_parent(self, batch, pool)
     }
 }
 
 impl api::Reconstructible for Reconstructed {
     type Reconstructed = Reconstructed;
 
-    fn reconstruct(self, batch: impl IntoBatchIter) -> Result<Self::Reconstructed, api::Error>
+    fn reconstruct(
+        self,
+        batch: impl IntoBatchIter,
+        pool: &ThreadPool,
+    ) -> Result<Self::Reconstructed, api::Error>
     where
         Self: Sized,
     {
-        let _ = batch.into_iter();
-        let _ = self;
-        todo!("linear reconstructed->reconstructed pipeline is not implemented yet")
+        reconstruct_with_parent(&*self.nodestore, batch, pool)
     }
+}
+
+fn reconstruct_with_parent<P>(
+    parent: &NodeStore<P, FileBacked>,
+    batch: impl IntoBatchIter,
+    pool: &ThreadPool,
+) -> Result<Reconstructed, api::Error>
+where
+    NodeStore<P, FileBacked>: TrieReader + HashedNodeReader,
+{
+    let proposal = NodeStore::<MutableProposal, _>::new_for_reconstruction(parent)?;
+
+    // Apply batch operations in parallel using the provided thread pool
+    let mut parallel_merkle = ParallelMerkle::default();
+    let mutable_nodestore = parallel_merkle.apply_to_mutable(proposal, batch, pool)?;
+
+    let reconstructed = Arc::new(mutable_nodestore.try_into()?);
+    Ok(Reconstructed {
+        nodestore: reconstructed,
+    })
 }
 
 #[cfg(test)]
