@@ -371,6 +371,7 @@ impl Db {
         batch: impl IntoBatchIter,
     ) -> Result<Reconstructed, api::Error>
     where
+        P: Parentable,
         NodeStore<P, FileBacked>: TrieReader + HashedNodeReader,
     {
         reconstruct_with_parent(parent, batch, self.manager.threadpool())
@@ -525,27 +526,54 @@ impl api::Reconstructible for Reconstructed {
     where
         Self: Sized,
     {
-        reconstruct_with_parent(&*self.nodestore, batch, pool)
+        reconstruct_with_reconstructed(self.nodestore, batch, pool)
     }
 }
 
+/// Reconstruction path for a `Reconstructed` view.
+///
+/// Converts `Reconstructed` → `MutableProposal` using the optimized `TryFrom` impl
+/// that moves the root Node when possible and clones otherwise, then applies the batch.
+fn reconstruct_with_reconstructed(
+    nodestore: Arc<NodeStore<StorageReconstructed, FileBacked>>,
+    batch: impl IntoBatchIter,
+    pool: &ThreadPool,
+) -> Result<Reconstructed, api::Error> {
+    // The TryFrom<Arc<NodeStore<Reconstructed>>> impl extracts and moves the root
+    // Node when uniquely owned, or clones when shared.
+    let proposal =
+        NodeStore::<MutableProposal, _>::try_from(nodestore).map_err(api::Error::from)?;
+
+    let mut parallel_merkle = ParallelMerkle::default();
+    let nodestore = parallel_merkle.apply_to_mutable(proposal, batch, pool)?;
+
+    Ok(Reconstructed {
+        nodestore: Arc::new(nodestore.try_into()?),
+    })
+}
+
+/// Reconstruction path for a `DbView` (or other parent-backed view).
+///
+/// Creates a new `NodeStore` from the parent, which requires cloning the root node.
+/// This is significantly slower than the reconstructed path due to the clone.
 fn reconstruct_with_parent<P>(
     parent: &NodeStore<P, FileBacked>,
     batch: impl IntoBatchIter,
     pool: &ThreadPool,
 ) -> Result<Reconstructed, api::Error>
 where
+    P: Parentable,
     NodeStore<P, FileBacked>: TrieReader + HashedNodeReader,
 {
-    let proposal = NodeStore::<MutableProposal, _>::new_for_reconstruction(parent)?;
+    // This clones the root node when creating a mutable nodestore from a parent view.
+    let proposal = NodeStore::<MutableProposal, _>::new(parent)?;
 
     // Apply batch operations in parallel using the provided thread pool
     let mut parallel_merkle = ParallelMerkle::default();
-    let mutable_nodestore = parallel_merkle.apply_to_mutable(proposal, batch, pool)?;
+    let nodestore = parallel_merkle.apply_to_mutable(proposal, batch, pool)?;
 
-    let reconstructed = Arc::new(mutable_nodestore.try_into()?);
     Ok(Reconstructed {
-        nodestore: reconstructed,
+        nodestore: Arc::new(nodestore.try_into()?),
     })
 }
 
@@ -568,7 +596,7 @@ mod test {
 
     use crate::db::{Db, Proposal, UseParallel};
     use crate::manager::RevisionManagerConfig;
-    use crate::v2::api::{Db as _, DbView, HashKeyExt, Proposal as _};
+    use crate::v2::api::{Db as _, DbView, HashKeyExt, Proposal as _, Reconstructible as _};
 
     use super::{BatchOp, DbConfig};
 
@@ -638,6 +666,41 @@ mod test {
         let committed = db.root_hash().unwrap();
         let historical = db.revision(committed).unwrap();
         assert_eq!(&*historical.val(b"k").unwrap().unwrap(), b"v");
+    }
+
+    #[test]
+    fn test_reconstruct_reads_and_chains() {
+        let db = TestDb::new();
+
+        let initial = db
+            .propose(vec![BatchOp::Put {
+                key: b"base",
+                value: b"v0",
+            }])
+            .unwrap();
+        initial.commit().unwrap();
+
+        let historical_hash = db.root_hash().unwrap();
+        let historical = db.revision(historical_hash).unwrap();
+
+        let reconstructed = historical
+            .as_ref()
+            .reconstruct(vec![BatchOp::Put {
+                key: b"base",
+                value: b"v1",
+            }], db.manager.threadpool())
+            .unwrap();
+        assert_eq!(&*reconstructed.val(b"base").unwrap().unwrap(), b"v1");
+
+        let reconstructed = reconstructed
+            .reconstruct(vec![BatchOp::Put {
+                key: b"next",
+                value: b"v2",
+            }], db.manager.threadpool())
+            .unwrap();
+
+        assert_eq!(&*reconstructed.val(b"base").unwrap().unwrap(), b"v1");
+        assert_eq!(&*reconstructed.val(b"next").unwrap().unwrap(), b"v2");
     }
 
     #[test]

@@ -562,6 +562,79 @@ impl<T: Into<NodeStoreParent>, S: ReadableStorage> From<NodeStore<T, S>>
     }
 }
 
+fn resolve_reconstructed_root<R: NodeReader>(
+    root_child: Option<Child>,
+    reader: &R,
+) -> Result<Option<Node>, FileIoError> {
+    match root_child {
+        Some(Child::Node(node)) => Ok(Some(node)),
+        Some(Child::MaybePersisted(maybe_persisted, _hash)) => {
+            Ok(Some(maybe_persisted.try_into_node(reader)?))
+        }
+        Some(Child::AddressWithHash(address, _hash)) => {
+            let shared = reader.read_node(address)?;
+            Ok(Some(shared.deref().clone()))
+        }
+        None => Ok(None),
+    }
+}
+
+impl<S: ReadableStorage> TryFrom<NodeStore<Reconstructed, S>> for NodeStore<MutableProposal, S> {
+    type Error = FileIoError;
+
+    fn try_from(val: NodeStore<Reconstructed, S>) -> Result<Self, Self::Error> {
+        // Extract the root without cloning - just move it!
+        let root_child = val.kind.root;
+        let reader = NodeStore {
+            kind: Reconstructed { root: None },
+            storage: val.storage.clone(),
+        };
+        let root = resolve_reconstructed_root(root_child, &reader)?;
+
+        Ok(NodeStore {
+            kind: MutableProposal {
+                root,
+                // Reconstructed chains never persist, so we don't need to track deletions
+                deleted: Vec::default(),
+                parent: NodeStoreParent::Committed(None),
+            },
+            storage: val.storage,
+        })
+    }
+}
+
+impl<S: ReadableStorage> TryFrom<&NodeStore<Reconstructed, S>> for NodeStore<MutableProposal, S> {
+    type Error = FileIoError;
+
+    fn try_from(val: &NodeStore<Reconstructed, S>) -> Result<Self, Self::Error> {
+        let root_child = val.kind.root.clone();
+        let root = resolve_reconstructed_root(root_child, val)?;
+
+        Ok(NodeStore {
+            kind: MutableProposal {
+                root,
+                // Reconstructed chains never persist, so we don't need to track deletions
+                deleted: Vec::default(),
+                parent: NodeStoreParent::Committed(None),
+            },
+            storage: val.storage.clone(),
+        })
+    }
+}
+
+impl<S: ReadableStorage> TryFrom<Arc<NodeStore<Reconstructed, S>>>
+    for NodeStore<MutableProposal, S>
+{
+    type Error = FileIoError;
+
+    fn try_from(val: Arc<NodeStore<Reconstructed, S>>) -> Result<Self, Self::Error> {
+        match Arc::try_unwrap(val) {
+            Ok(owned) => Self::try_from(owned),
+            Err(shared) => Self::try_from(&*shared),
+        }
+    }
+}
+
 /// Commit a proposal to a new revision of the trie
 impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Committed, S> {
     fn from(val: NodeStore<ImmutableProposal, S>) -> Self {
@@ -642,11 +715,26 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>> for NodeStore<Re
     type Error = FileIoError;
 
     fn try_from(val: NodeStore<MutableProposal, S>) -> Result<Self, Self::Error> {
-        let NodeStore {
-            kind: _kind,
-            storage: _storage,
-        } = val;
-        todo!("convert mutable proposal into reconstructed nodestore")
+        let NodeStore { kind, storage } = val;
+
+        let mut nodestore = NodeStore {
+            kind: Reconstructed { root: None },
+            storage,
+        };
+
+        let Some(root) = kind.root else {
+            return Ok(nodestore);
+        };
+
+        // Hash the trie with an empty path and keep the reconstructed root in-memory.
+        #[cfg(feature = "ethhash")]
+        let (root, root_hash) = nodestore.hash_helper(root, Path::new())?;
+        #[cfg(not(feature = "ethhash"))]
+        let (root, root_hash) = NodeStore::<MutableProposal, S>::hash_helper(root, Path::new())?;
+
+        nodestore.kind.root = Some(Child::MaybePersisted(root, root_hash));
+
+        Ok(nodestore)
     }
 }
 

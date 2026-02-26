@@ -421,7 +421,16 @@ pub trait Reconstructible: DbView {
     /// Reconstruct a new view from this one by applying `data`.
     ///
     /// The caller must provide a thread pool used for parallel reconstruction.
-    #[expect(clippy::missing_errors_doc)]
+    ///
+    /// If the current view is shared (for example, by holding a `view()` clone),
+    /// reconstruction may need to clone the root node or read it from storage.
+    /// For best performance, drop other references to the view before calling
+    /// `reconstruct` in a chain.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if applying the batch fails or if the underlying storage
+    /// cannot be read while resolving nodes.
     fn reconstruct(
         self,
         data: impl IntoBatchIter,
