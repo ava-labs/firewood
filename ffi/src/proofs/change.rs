@@ -1,6 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::convert::Into;
 use std::num::NonZeroUsize;
 
 use firewood_metrics::firewood_increment;
@@ -191,7 +192,7 @@ impl VerifiedChangeProofContext {
             return Err(api::Error::ProofError(ProofError::ProofIsNone));
         };
         let proposal = db.apply_change_proof_to_parent(self.params.start_root.into(), &proof)?;
-        let root_hash = proposal.handle.root_hash().map(std::convert::Into::into);
+        let root_hash = proposal.handle.root_hash().map(Into::into);
         Ok(ProposedChangeProofContext {
             proof,
             db,
@@ -225,11 +226,6 @@ impl<'db> ProposedChangeProofContext<'db> {
             return Ok(None);
         };
 
-        if self.root_hash.as_ref() == Some(&self.end_root) {
-            // already at the target root, so we are done
-            return Ok(None);
-        }
-
         if self.proof.end_proof().is_empty() {
             // unbounded, so we are done
             return Ok(None);
@@ -252,12 +248,12 @@ impl<'db> ProposedChangeProofContext<'db> {
         };
 
         let metrics_cb = |commit_time: coarsetime::Duration| {
-            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
-            firewood_increment!(crate::registry::MERGE_COUNT, 1);
+            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis(), "change" => "commit");
+            firewood_increment!(crate::registry::MERGE_COUNT, 1, "change" => "commit");
         };
 
         let result = proposal_handle.commit_proposal(metrics_cb);
-        let hash = result?.map(std::convert::Into::into);
+        let hash = result?.map(Into::into);
         Ok(hash)
     }
 }
@@ -493,8 +489,7 @@ pub extern "C" fn fwd_db_propose_change_proof<'db>(
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_commit_change_proof(args: CommittedChangeProofArgs<'_>) -> HashResult {
     crate::invoke_with_handle(args.proof, |ctx| {
-        ctx.commit()
-            .map(|hash_key| hash_key.map(std::convert::Into::into))
+        ctx.commit().map(|hash_key| hash_key.map(Into::into))
     })
 }
 
