@@ -96,9 +96,9 @@ type Database struct {
 type config struct {
 	// truncate indicates whether to clear the database file if it already exists.
 	truncate bool
-	// nodeCacheEntries is the number of entries in the cache.
+	// nodeCacheSizeInBytes is the memory limit for the node cache in bytes.
 	// Must be non-zero.
-	nodeCacheEntries uint
+	nodeCacheSizeInBytes uint
 	// freeListCacheEntries is the number of entries in the freelist cache.
 	// Must be non-zero.
 	freeListCacheEntries uint
@@ -120,7 +120,7 @@ type config struct {
 
 func defaultConfig() *config {
 	return &config{
-		nodeCacheEntries:               1_000_000,
+		nodeCacheSizeInBytes:           128_000_000,
 		freeListCacheEntries:           1_000_000,
 		revisions:                      100,
 		readCacheStrategy:              OnlyCacheWrites,
@@ -139,13 +139,12 @@ func WithTruncate(truncate bool) Option {
 	}
 }
 
-// WithNodeCacheEntries sets the number of entries in the node cache.
-// The node cache stores frequently accessed trie nodes to improve read performance.
+// WithNodeCacheSizeInBytes sets the node cache memory limit in bytes.
 // Must be non-zero.
-// Default: 1,000,000
-func WithNodeCacheEntries(entries uint) Option {
+// Default: 128 MB
+func WithNodeCacheSizeInBytes(sizeInBytes uint) Option {
 	return func(c *config) {
-		c.nodeCacheEntries = entries
+		c.nodeCacheSizeInBytes = sizeInBytes
 	}
 }
 
@@ -252,8 +251,8 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	if conf.revisions < 2 {
 		return nil, fmt.Errorf("revisions must be >= 2, got %d", conf.revisions)
 	}
-	if conf.nodeCacheEntries < 1 {
-		return nil, fmt.Errorf("node cache entries must be >= 1, got %d", conf.nodeCacheEntries)
+	if conf.nodeCacheSizeInBytes < 1 {
+		return nil, fmt.Errorf("node cache size in bytes must be >= 1, got %d", conf.nodeCacheSizeInBytes)
 	}
 	if conf.freeListCacheEntries < 1 {
 		return nil, fmt.Errorf("free list cache entries must be >= 1, got %d", conf.freeListCacheEntries)
@@ -264,7 +263,7 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 
 	args := C.struct_DatabaseHandleArgs{
 		dir:                               newBorrowedBytes([]byte(dbDir), &pinner),
-		cache_size:                        C.size_t(conf.nodeCacheEntries),
+		node_cache_memory_limit:           C.size_t(conf.nodeCacheSizeInBytes),
 		free_list_cache_size:              C.size_t(conf.freeListCacheEntries),
 		revisions:                         C.size_t(conf.revisions),
 		strategy:                          C.uint8_t(conf.readCacheStrategy),
@@ -361,14 +360,15 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 
 // Root returns the current root hash of the trie.
 // With Firewood hashing, the empty trie must return [EmptyRoot].
+// If the database is already closed, it returns [EmptyRoot].
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
-func (db *Database) Root() (Hash, error) {
+func (db *Database) Root() Hash {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {
-		return EmptyRoot, errDBClosed
+		return EmptyRoot
 	}
 
 	db.commitLock.Lock()
@@ -377,8 +377,10 @@ func (db *Database) Root() (Hash, error) {
 }
 
 // root assumes db.stateLock is held and the database is open.
-func (db *Database) root() (Hash, error) {
-	return getHashKeyFromHashResult(C.fwd_root_hash(db.handle))
+func (db *Database) root() Hash {
+	// Since we already guaranteed the database is open, we can ignore the error since the only error is that the handle is nil.
+	hash, _ := getHashKeyFromHashResult(C.fwd_root_hash(db.handle))
+	return hash
 }
 
 // LatestRevision returns a [Revision] representing the latest state of the database.
@@ -396,10 +398,7 @@ func (db *Database) LatestRevision() (*Revision, error) {
 
 	db.commitLock.Lock()
 	defer db.commitLock.Unlock()
-	root, err := db.root()
-	if err != nil {
-		return nil, err
-	}
+	root := db.root()
 	if root == EmptyRoot {
 		return nil, errRevisionNotFound
 	}
