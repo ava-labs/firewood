@@ -8,6 +8,6 @@
 
 - [ ] firewood
 - [ ] firewood-storage
-- [ ] firewood-ffi
-- [ ] firewood-go
+- [ ] firewood-ffi (C api)
+- [ ] firewood-go (Go api)
 - [ ] fwdctl
