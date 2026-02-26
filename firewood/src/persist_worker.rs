@@ -143,6 +143,10 @@ impl PersistWorker {
     pub(crate) fn persist(&self, committed: CommittedRevision) -> Result<(), PersistError> {
         self.shared.commit_throttle.acquire();
 
+        // TODO: get rid of this
+        // TODO: another comment
+        // TODO: foo
+        // TODO: bar
         self.sender
             .as_ref()
             .ok_or(PersistError::ChannelDisconnected)?
