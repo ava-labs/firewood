@@ -136,8 +136,8 @@ type config struct {
 	deferredPersistenceCommitCount uint64
 }
 
-func defaultConfig() *config {
-	return &config{
+func defaultConfig() config {
+	return config{
 		nodeCacheSizeInBytes:           128_000_000,
 		freeListCacheEntries:           1_000_000,
 		revisions:                      100,
@@ -260,7 +260,7 @@ const (
 func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Database, error) {
 	conf := defaultConfig()
 	for _, opt := range opts {
-		opt(conf)
+		opt(&conf)
 	}
 
 	if conf.readCacheStrategy >= invalidCacheStrategy {
