@@ -1653,6 +1653,7 @@ dependencies = [
  "metrics-exporter-prometheus",
  "oxhttp",
  "parking_lot",
+ "rayon",
  "rlp",
  "test-case",
  "tikv-jemallocator",

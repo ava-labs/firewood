@@ -384,8 +384,8 @@ func (db *Database) root() Hash {
 }
 
 // LatestRevision returns a [Revision] representing the latest state of the database.
-// If the latest revision has root [EmptyRoot], it returns an error. The [Revision] must
-// be dropped prior to closing the database.
+// If the latest revision has root [EmptyRoot], it returns an error. The
+// [Revision] must be released with [Revision.Drop] before closing the database.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
@@ -406,8 +406,9 @@ func (db *Database) LatestRevision() (*Revision, error) {
 }
 
 // Revision returns a historical revision of the database.
-// If the provided root does not exist (or is the [EmptyRoot]), it returns an error.
-// The [Revision] must be dropped prior to closing the database.
+// If the provided root does not exist (or is the [EmptyRoot]), it returns an
+// error. The [Revision] must be released with [Revision.Drop] before closing
+// the database.
 //
 // This function is thread-safe with all other operations.
 func (db *Database) Revision(root Hash) (*Revision, error) {
@@ -435,7 +436,7 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 // [context.Context] is cancelled. That is, until all Revisions and Proposals
 // created from this Database are either unreachable or one of
 // [Proposal.Commit], [Proposal.Drop], or [Revision.Drop] has been called on
-// them. Unreachable objects will be automatically dropped before Close returns,
+// them. Unreachable objects will be automatically released before Close returns,
 // unless an alternate GC finalizer is set on them.
 //
 // This is safe to call multiple times; subsequent calls after the first will do

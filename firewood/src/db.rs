@@ -577,6 +577,14 @@ where
     })
 }
 
+impl Reconstructed {
+    /// Returns the view backing this reconstructed state.
+    #[must_use]
+    pub fn view(&self) -> ArcDynDbView {
+        self.nodestore.clone()
+    }
+}
+
 #[cfg(test)]
 mod test {
     #![expect(clippy::unwrap_used)]

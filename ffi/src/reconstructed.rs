@@ -4,7 +4,8 @@
 use firewood::v2::api::{
     self, BoxKeyValueIter, DbView, HashKey, IntoBatchIter, Reconstructible as _,
 };
-use rayon::ThreadPool;
+use firewood_storage::BranchNode;
+use rayon::ThreadPoolBuilder;
 
 use crate::{IteratorHandle, iterator::CreateIteratorResult, metrics::MetricsContextExt};
 
@@ -84,12 +85,12 @@ impl ReconstructedHandle {
     /// # Errors
     ///
     /// Returns an error if reconstruction fails.
-    pub fn reconstruct(
-        self,
-        values: impl IntoBatchIter,
-        pool: &ThreadPool,
-    ) -> Result<Self, api::Error> {
-        let next = self.reconstructed.reconstruct(values, pool)?;
+    pub fn reconstruct(self, values: impl IntoBatchIter) -> Result<Self, api::Error> {
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(BranchNode::MAX_CHILDREN)
+            .build()
+            .map_err(|e| api::Error::IO(std::io::Error::other(e)))?;
+        let next = self.reconstructed.reconstruct(values, &pool)?;
         Ok(Self::new(next, self.metrics_context))
     }
 }

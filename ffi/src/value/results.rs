@@ -10,7 +10,8 @@ use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult, HashKey,
     IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair,
-    ProposalHandle, ProposedChangeProofContext, RangeProofContext, VerifiedChangeProofContext,
+    ProposalHandle, ProposedChangeProofContext, RangeProofContext, ReconstructedHandle,
+    VerifiedChangeProofContext,
 };
 
 /// The result type returned from an FFI function that returns no value but may
@@ -551,6 +552,24 @@ pub enum RevisionResult {
     Err(OwnedBytes),
 }
 
+/// A result type returned from FFI functions that create a reconstructed view.
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum ReconstructedResult {
+    /// The caller provided a null pointer to an input handle.
+    NullHandlePointer,
+    /// Building the reconstructed view was successful and the handle is returned.
+    Ok {
+        /// An opaque pointer to the [`ReconstructedHandle`].
+        /// The value should be freed with [`fwd_free_reconstructed`].
+        ///
+        /// [`fwd_free_reconstructed`]: crate::fwd_free_reconstructed
+        handle: Box<ReconstructedHandle>,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`].
+    Err(OwnedBytes),
+}
+
 impl From<GetRevisionResult> for RevisionResult {
     fn from(value: GetRevisionResult) -> Self {
         RevisionResult::Ok {
@@ -580,6 +599,17 @@ impl<'db, E: fmt::Display> From<Result<CreateProposalResult<'db>, E>> for Propos
                 handle: Box::new(handle),
             },
             Err(err) => ProposalResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+impl<E: fmt::Display> From<Result<ReconstructedHandle, E>> for ReconstructedResult {
+    fn from(value: Result<ReconstructedHandle, E>) -> Self {
+        match value {
+            Ok(handle) => ReconstructedResult::Ok {
+                handle: Box::new(handle),
+            },
+            Err(err) => ReconstructedResult::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -694,6 +724,7 @@ impl_null_handle_result!(
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
+    ReconstructedResult,
     IteratorResult<'_>,
     RevisionResult,
     KeyValueBatchResult,
@@ -712,6 +743,7 @@ impl_cresult!(
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
+    ReconstructedResult,
     IteratorResult<'_>,
     RevisionResult,
     KeyValueBatchResult,
