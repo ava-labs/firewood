@@ -47,8 +47,8 @@ pub use crate::proposal::*;
 pub use crate::revision::*;
 pub use crate::value::*;
 
+#[cfg(feature = "jemalloc")]
 #[global_allocator]
-#[doc(hidden)]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 /// Invokes a closure and returns the result as a [`CResult`].
