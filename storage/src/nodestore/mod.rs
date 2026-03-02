@@ -51,6 +51,7 @@ use crate::linear::OffsetReader;
 use crate::logger::{debug, trace};
 use crate::node::branch::ReadSerializable as _;
 use firewood_metrics::firewood_increment;
+use parking_lot::Mutex;
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind};
@@ -531,10 +532,10 @@ pub struct NodeStore<T, S> {
 }
 
 /// Contains state for a reconstructed revision of the trie.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Reconstructed {
     /// The root of the trie in this reconstructed view.
-    root: Option<Child>,
+    root: Mutex<Option<Child>>,
 }
 
 /// Contains the state of a proposal that is still being modified.
@@ -584,9 +585,11 @@ impl<S: ReadableStorage> TryFrom<NodeStore<Reconstructed, S>> for NodeStore<Muta
 
     fn try_from(val: NodeStore<Reconstructed, S>) -> Result<Self, Self::Error> {
         // Extract the root without cloning - just move it!
-        let root_child = val.kind.root;
+        let root_child = val.kind.root.into_inner();
         let reader = NodeStore {
-            kind: Reconstructed { root: None },
+            kind: Reconstructed {
+                root: Mutex::new(None),
+            },
             storage: val.storage.clone(),
         };
         let root = resolve_reconstructed_root(root_child, &reader)?;
@@ -607,7 +610,7 @@ impl<S: ReadableStorage> TryFrom<&NodeStore<Reconstructed, S>> for NodeStore<Mut
     type Error = FileIoError;
 
     fn try_from(val: &NodeStore<Reconstructed, S>) -> Result<Self, Self::Error> {
-        let root_child = val.kind.root.clone();
+        let root_child = val.kind.root.lock().clone();
         let root = resolve_reconstructed_root(root_child, val)?;
 
         Ok(NodeStore {
@@ -717,8 +720,10 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>> for NodeStore<Re
     fn try_from(val: NodeStore<MutableProposal, S>) -> Result<Self, Self::Error> {
         let NodeStore { kind, storage } = val;
 
-        let mut nodestore = NodeStore {
-            kind: Reconstructed { root: None },
+        let nodestore = NodeStore {
+            kind: Reconstructed {
+                root: Mutex::new(None),
+            },
             storage,
         };
 
@@ -726,13 +731,8 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>> for NodeStore<Re
             return Ok(nodestore);
         };
 
-        // Hash the trie with an empty path and keep the reconstructed root in-memory.
-        #[cfg(feature = "ethhash")]
-        let (root, root_hash) = nodestore.hash_helper(root, Path::new())?;
-        #[cfg(not(feature = "ethhash"))]
-        let (root, root_hash) = NodeStore::<MutableProposal, S>::hash_helper(root, Path::new())?;
-
-        nodestore.kind.root = Some(Child::MaybePersisted(root, root_hash));
+        // Reconstructed views stay unpersisted; defer all hashing decisions.
+        *nodestore.kind.root.lock() = Some(Child::Node(root));
 
         Ok(nodestore)
     }
@@ -798,15 +798,21 @@ impl<S: ReadableStorage> RootReader for NodeStore<Arc<ImmutableProposal>, S> {
 
 impl<S: ReadableStorage> RootReader for NodeStore<Reconstructed, S> {
     fn root_node(&self) -> Option<SharedNode> {
-        self.kind
+        let root = self
+            .kind
             .root
+            .lock()
             .as_ref()
-            .map(Child::as_maybe_persisted_node)
-            .and_then(|node| node.as_shared_node(self).ok())
+            .map(Child::as_maybe_persisted_node);
+        root.and_then(|node| node.as_shared_node(self).ok())
     }
 
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
-        self.kind.root.as_ref().map(Child::as_maybe_persisted_node)
+        self.kind
+            .root
+            .lock()
+            .as_ref()
+            .map(Child::as_maybe_persisted_node)
     }
 }
 
@@ -830,14 +836,29 @@ where
     NodeStore<Reconstructed, S>: TrieReader,
 {
     fn root_address(&self) -> Option<LinearAddress> {
-        self.kind.root.as_ref().and_then(Child::persisted_address)
+        // Reconstructed views are read-only overlays and are never persisted.
+        None
     }
 
     fn root_hash(&self) -> Option<TrieHash> {
-        self.kind
-            .root
-            .as_ref()
-            .and_then(|root| root.hash().cloned().map(HashType::into_triehash))
+        let mut root = self.kind.root.lock();
+        let root_child = root.as_ref()?.clone();
+
+        match root_child {
+            Child::AddressWithHash(_, hash) | Child::MaybePersisted(_, hash) => {
+                Some(hash.into_triehash())
+            }
+            Child::Node(node) => {
+                #[cfg(feature = "ethhash")]
+                let (hashed_root, hash) = self.hash_helper(node, Path::new()).ok()?;
+                #[cfg(not(feature = "ethhash"))]
+                let (hashed_root, hash) =
+                    NodeStore::<MutableProposal, S>::hash_helper(node, Path::new()).ok()?;
+
+                *root = Some(Child::MaybePersisted(hashed_root, hash.clone()));
+                Some(hash.into_triehash())
+            }
+        }
     }
 }
 
@@ -1239,5 +1260,71 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn reconstructed_root_address_is_none() {
+        let storage = Arc::new(MemStore::default());
+        let mut proposal = NodeStore::new_empty_proposal(Arc::clone(&storage));
+
+        proposal.root_mut().replace(Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: b"value".to_vec().into_boxed_slice(),
+        }));
+
+        let reconstructed: NodeStore<Reconstructed, _> = proposal.try_into().unwrap();
+
+        assert_eq!(reconstructed.root_address(), None);
+    }
+
+    #[test]
+    fn reconstructed_conversion_defers_hashing() {
+        let storage = Arc::new(MemStore::default());
+        let mut proposal = NodeStore::new_empty_proposal(Arc::clone(&storage));
+
+        proposal.root_mut().replace(Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: b"value".to_vec().into_boxed_slice(),
+        }));
+
+        let reconstructed: NodeStore<Reconstructed, _> = proposal.try_into().unwrap();
+
+        // Conversion should not eagerly hash reconstructed roots.
+        assert!(matches!(
+            *reconstructed.kind.root.lock(),
+            Some(Child::Node(_))
+        ));
+    }
+
+    #[test]
+    fn reconstructed_root_hash_is_memoized() {
+        let storage = Arc::new(MemStore::default());
+        let mut proposal = NodeStore::new_empty_proposal(Arc::clone(&storage));
+
+        proposal.root_mut().replace(Node::Leaf(LeafNode {
+            partial_path: Path::new(),
+            value: b"value".to_vec().into_boxed_slice(),
+        }));
+
+        let reconstructed: NodeStore<Reconstructed, _> = proposal.try_into().unwrap();
+
+        let first_hash = reconstructed.root_hash();
+        let second_hash = reconstructed.root_hash();
+        assert_eq!(first_hash, second_hash);
+        assert!(first_hash.is_some());
+        assert!(matches!(
+            *reconstructed.kind.root.lock(),
+            Some(Child::MaybePersisted(_, _))
+        ));
+    }
+
+    #[test]
+    fn reconstructed_empty_root_hash_is_none() {
+        let storage = Arc::new(MemStore::default());
+        let proposal = NodeStore::new_empty_proposal(Arc::clone(&storage));
+
+        let reconstructed: NodeStore<Reconstructed, _> = proposal.try_into().unwrap();
+
+        assert_eq!(reconstructed.root_hash(), None);
     }
 }

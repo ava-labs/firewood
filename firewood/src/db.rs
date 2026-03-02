@@ -698,6 +698,10 @@ mod test {
                 value: b"v1",
             }], db.manager.threadpool())
             .unwrap();
+        let reconstructed_hash_1 = reconstructed.root_hash();
+        let reconstructed_hash_2 = reconstructed.root_hash();
+        assert_eq!(reconstructed_hash_1, reconstructed_hash_2);
+        assert!(reconstructed_hash_1.is_some());
         assert_eq!(&*reconstructed.val(b"base").unwrap().unwrap(), b"v1");
 
         let reconstructed = reconstructed
