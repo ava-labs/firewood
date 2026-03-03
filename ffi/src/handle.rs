@@ -59,10 +59,11 @@ pub struct DatabaseHandleArgs<'a> {
     /// enable `root_store`.
     pub root_store: bool,
 
-    /// The size of the node cache.
+    /// The optional memory limit for the node cache in bytes.
     ///
-    /// Opening returns an error if this is zero.
-    pub cache_size: usize,
+    /// Set to `0` to leave this unset and rely on the default configured in
+    /// `RevisionManagerConfig`.
+    pub node_cache_memory_limit: usize,
 
     /// The size of the free list cache.
     ///
@@ -112,21 +113,24 @@ impl DatabaseHandleArgs<'_> {
             2 => firewood::manager::CacheReadStrategy::All,
             _ => return Err(invalid_data("invalid cache strategy")),
         };
-        #[expect(deprecated)]
-        let config = RevisionManagerConfig::builder()
-            .node_cache_size(
-                self.cache_size
-                    .try_into()
-                    .map_err(|_| invalid_data("cache size should be non-zero"))?,
-            )
-            .max_revisions(self.revisions)
-            .cache_read_strategy(cache_read_strategy)
-            .free_list_cache_size(
-                self.free_list_cache_size
-                    .try_into()
-                    .map_err(|_| invalid_data("free list cache size should be non-zero"))?,
-            )
-            .build();
+        let free_list_cache_size = NonZeroUsize::new(self.free_list_cache_size)
+            .ok_or_else(|| invalid_data("free list cache size should be non-zero"))?;
+
+        let memory_limit = NonZeroUsize::new(self.node_cache_memory_limit);
+
+        let config = {
+            let builder = RevisionManagerConfig::builder()
+                .max_revisions(self.revisions)
+                .cache_read_strategy(cache_read_strategy)
+                .free_list_cache_size(free_list_cache_size);
+
+            if let Some(memory_limit) = memory_limit {
+                builder.node_cache_memory_limit(memory_limit).build()
+            } else {
+                builder.build()
+            }
+        };
+
         Ok(config)
     }
 }
@@ -187,8 +191,8 @@ impl DatabaseHandle {
     ///
     /// # Errors
     ///
-    /// An error is returned if there was an i/o error while reading the root hash.
-    pub fn current_root_hash(&self) -> Result<Option<HashKey>, api::Error> {
+    /// Never errors.
+    pub fn current_root_hash(&self) -> Option<HashKey> {
         self.db.root_hash()
     }
 
@@ -198,7 +202,7 @@ impl DatabaseHandle {
     ///
     /// An error is returned if there was an i/o error while reading the value.
     pub fn get_latest(&self, key: impl KeyType) -> Result<Option<Box<[u8]>>, api::Error> {
-        let Some(root) = self.current_root_hash()? else {
+        let Some(root) = self.current_root_hash() else {
             return Err(api::Error::RevisionNotFound {
                 provided: HashKey::default_root_hash(),
             });
@@ -335,6 +339,23 @@ impl DatabaseHandle {
         })?);
 
         end_merkle.change_proof(start_key, end_key, start_merkle.nodestore(), limit)
+    }
+
+    /// Applies the `BatchOp`s of a change proof to the parent.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `LatestIsEmpty` error if the trie is empty. A range proof should be used in
+    /// this case.
+    pub fn apply_change_proof_to_parent(
+        &self,
+        start_hash: HashKey,
+        change_proof: &FrozenChangeProof,
+    ) -> Result<CreateProposalResult<'_>, api::Error> {
+        CreateProposalResult::new(self, || {
+            let parent = &self.db.revision(start_hash)?;
+            self.db.apply_change_proof_to_parent(change_proof, parent)
+        })
     }
 
     /// Dumps the Trie structure of the latest revision to a DOT (Graphviz) format string.

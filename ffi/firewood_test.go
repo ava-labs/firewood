@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -81,10 +82,7 @@ func inferHashingMode(ctx context.Context) (string, error) {
 		_ = os.Remove(dbDir)
 	}()
 
-	actualEmptyRoot, err := db.Root()
-	if err != nil {
-		return "", fmt.Errorf("failed to get root of empty database: %w", err)
-	}
+	actualEmptyRoot := db.Root()
 	actualEmptyRootHex := hex.EncodeToString(actualEmptyRoot[:])
 
 	actualFwMode, ok := expectedEmptyRootToMode[actualEmptyRootHex]
@@ -165,7 +163,7 @@ func newTestDatabase(tb testing.TB, opts ...Option) *Database {
 			runtime.GC()
 			err = db.Close(oneSecCtx(tb))
 		}
-		r.NoError(err)
+		assert.NoError(tb, err) // don't mask any earlier error in the test
 	})
 	return db
 }
@@ -286,8 +284,7 @@ func TestTruncateDatabase(t *testing.T) {
 	r.NoError(err)
 
 	// Check that the database is empty after truncation.
-	hash, err := db.Root()
-	r.NoError(err)
+	hash := db.Root()
 	expectedHash := stringToHash(t, expectedRoots[emptyKey])
 	r.Equal(expectedHash, hash, "Root hash mismatch after truncation")
 
@@ -301,10 +298,10 @@ func TestClosedDatabase(t *testing.T) {
 
 	r.NoError(db.Close(oneSecCtx(t)))
 
-	_, err = db.Root()
-	r.ErrorIs(err, errDBClosed)
+	root := db.Root()
+	r.Equal(EmptyRoot, root)
 
-	root, err := db.Update([]BatchOp{Put([]byte("key"), []byte("value"))})
+	root, err = db.Update([]BatchOp{Put([]byte("key"), []byte("value"))})
 	r.Empty(root)
 	r.ErrorIs(err, errDBClosed)
 
@@ -350,7 +347,7 @@ func sortKV(keys, vals [][]byte) error {
 	for dest, orig := range ord {
 		perm[orig] = dest
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		for perm[i] != i {
 			j := perm[i]
 			keys[i], keys[j] = keys[j], keys[i]
@@ -378,7 +375,7 @@ func TestInsert100(t *testing.T) {
 	type dbView interface {
 		Get(key []byte) ([]byte, error)
 		Propose(batch []BatchOp) (*Proposal, error)
-		Root() (Hash, error)
+		Root() Hash
 	}
 
 	tests := []struct {
@@ -441,14 +438,12 @@ func TestInsert100(t *testing.T) {
 				r.Equal(want, string(got))
 			}
 
-			hash, err := newDB.Root()
-			r.NoError(err)
-
 			// Assert the hash is exactly as expected. Test failure indicates a
 			// non-hash compatible change has been made since the string was set.
 			// If that's expected, update the string at the top of the file to
 			// fix this test.
 			expectedHash := stringToHash(t, expectedRoots[insert100Key])
+			hash := newDB.Root()
 			r.Equal(expectedHash, hash, "Root hash mismatch.\nExpected (hex): %x\nActual (hex): %x", expectedHash, hash)
 		})
 	}
@@ -513,8 +508,7 @@ func TestRangeDelete(t *testing.T) {
 func TestInvariants(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	hash, err := db.Root()
-	r.NoError(err)
+	hash := db.Root()
 
 	expectedHash := stringToHash(t, expectedRoots[emptyKey])
 	r.Equalf(expectedHash, hash, "expected %x, got %x", expectedHash, hash)
@@ -535,7 +529,7 @@ func TestConflictingProposals(t *testing.T) {
 	for i := range proposals {
 		keys := make([][]byte, numKeys)
 		vals := make([][]byte, numKeys)
-		for j := 0; j < numKeys; j++ {
+		for j := range numKeys {
 			keys[j] = keyForTest(i*numKeys + j)
 			vals[j] = valForTest(i*numKeys + j)
 		}
@@ -546,7 +540,7 @@ func TestConflictingProposals(t *testing.T) {
 
 	// Check that each value is present in each proposal.
 	for i, p := range proposals {
-		for j := 0; j < numKeys; j++ {
+		for j := range numKeys {
 			got, err := p.Get(keyForTest(i*numKeys + j))
 			r.NoError(err)
 			r.Equal(valForTest(i*numKeys+j), got, "Get(%d)", i*numKeys+j)
@@ -557,14 +551,14 @@ func TestConflictingProposals(t *testing.T) {
 	err := proposals[0].Commit()
 	r.NoError(err)
 	// Check that the first proposal's keys are present.
-	for j := 0; j < numKeys; j++ {
+	for j := range numKeys {
 		got, err := db.Get(keyForTest(j))
 		r.NoError(err)
 		r.Equal(valForTest(j), got, "Get(%d)", j)
 	}
 	// Check that the other proposals' keys are not present.
 	for i := 1; i < numProposals; i++ {
-		for j := 0; j < numKeys; j++ {
+		for j := range numKeys {
 			got, err := db.Get(keyForTest(i*numKeys + j))
 			r.Empty(got, "Get(%d)", i*numKeys+j)
 			r.NoError(err, "Get(%d)", i*numKeys+j)
@@ -573,7 +567,7 @@ func TestConflictingProposals(t *testing.T) {
 
 	// Ensure we can still get values from the other proposals.
 	for i := 1; i < numProposals; i++ {
-		for j := 0; j < numKeys; j++ {
+		for j := range numKeys {
 			got, err := proposals[i].Get(keyForTest(i*numKeys + j))
 			r.NoError(err, "Get(%d)", i*numKeys+j)
 			r.Equal(valForTest(i*numKeys+j), got, "Get(%d)", i*numKeys+j)
@@ -594,7 +588,7 @@ func TestConflictingProposals(t *testing.T) {
 
 	// Because they're invalid, we should not be able to get values from them.
 	for i := 1; i < numProposals; i++ {
-		for j := 0; j < numKeys; j++ {
+		for j := range numKeys {
 			got, err := proposals[i].Get(keyForTest(i*numKeys + j))
 			r.ErrorIs(err, errDroppedProposal, "Get(%d)", i*numKeys+j)
 			r.Empty(got, "Get(%d)", i*numKeys+j)
@@ -650,8 +644,7 @@ func TestDeleteAll(t *testing.T) {
 			}
 
 			expectedHash := stringToHash(t, expectedRoots[emptyKey])
-			hash, err := proposal.Root()
-			r.NoError(err, "%T.Root() after commit", proposal)
+			hash := proposal.Root()
 			r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
 
 			// Commit the proposal.
@@ -659,8 +652,7 @@ func TestDeleteAll(t *testing.T) {
 			r.NoError(err, "Commit")
 
 			// Check that the database is empty.
-			hash, err = db.Root()
-			r.NoError(err, "%T.Root()", db)
+			hash = db.Root()
 			r.Equalf(expectedHash, hash, "%T.Root() of empty trie", db)
 		})
 	}
@@ -684,8 +676,7 @@ func TestDropProposal(t *testing.T) {
 	r.ErrorIs(err, errDroppedProposal)
 	_, err = proposal.Get([]byte("non-existent"))
 	r.ErrorIs(err, errDroppedProposal)
-	_, err = proposal.Root()
-	r.NoError(err, "Root of dropped proposal should still be accessible")
+	_ = proposal.Root()
 
 	// Check that the keys are not in the database.
 	for i := range keys {
@@ -950,8 +941,7 @@ func TestRevision(t *testing.T) {
 	// Commit the proposal.
 	r.NoError(proposal.Commit())
 
-	root, err := db.Root()
-	r.NoError(err)
+	root := db.Root()
 
 	// Create a revision from this root.
 	revision, err := db.Revision(root)
@@ -1009,8 +999,7 @@ func TestRevisionOutlivesProposal(t *testing.T) {
 	nKeys, nVals := keys[10:], vals[10:]
 	proposal, err := db.Propose(batch[10:])
 	r.NoError(err)
-	root, err := proposal.Root()
-	r.NoError(err)
+	root := proposal.Root()
 
 	rev, err := db.Revision(root)
 	r.NoError(err)
@@ -1042,8 +1031,7 @@ func TestCommitWithRevisionHeld(t *testing.T) {
 	// Create a proposal with 10 key-value pairs.
 	proposal, err := db.Propose(batch[10:])
 	r.NoError(err)
-	root, err = proposal.Root()
-	r.NoError(err)
+	root = proposal.Root()
 
 	rev, err := db.Revision(root)
 	r.NoError(err)
@@ -1235,16 +1223,14 @@ func TestHandlesFreeImplicitly(t *testing.T) {
 	_, _, batch0 := kvForTest(1)
 	p0, err := db.Propose(batch0)
 	require.NoErrorf(t, err, "%T.Propose(...)", db)
-	root0, err := p0.Root()
-	require.NoErrorf(t, err, "%T.Root()", p0)
+	root0 := p0.Root()
 	rev0, err := db.Revision(root0)
 	require.NoErrorf(t, err, "%T.Revision(...)", db)
 	implicitlyDropped = append(implicitlyDropped, p0, rev0)
 	_, _, batch1 := kvForTest(1)
 	p1, err := p0.Propose(batch1)
 	require.NoErrorf(t, err, "%T.Propose(...)", p0)
-	root1, err := p1.Root()
-	require.NoErrorf(t, err, "%T.Root()", p1)
+	root1 := p1.Root()
 	rev1, err := db.Revision(root1)
 	require.NoErrorf(t, err, "%T.Revision(...)", db)
 	implicitlyDropped = append(implicitlyDropped, p1, rev1)
@@ -1259,8 +1245,7 @@ func TestHandlesFreeImplicitly(t *testing.T) {
 		_, _, batch := kvForTest(1)
 		p, err := db.Propose(batch)
 		require.NoErrorf(t, err, "%T.Propose(...)", db)
-		root, err := p.Root()
-		require.NoErrorf(t, err, "%T.Root()", p)
+		root := p.Root()
 		rev, err := db.Revision(root)
 		require.NoErrorf(t, err, "%T.Revision(...)", db)
 		require.NoErrorf(t, free(p), "%T.%s()", p, name)
@@ -1323,7 +1308,7 @@ func TestFjallStore(t *testing.T) {
 		r.NoError(err)
 		r.NoError(proposal.Commit())
 
-		revisionRoots[i], err = proposal.Root()
+		revisionRoots[i] = proposal.Root()
 		r.NoError(err)
 	}
 
@@ -1471,12 +1456,9 @@ func TestCloseWithCancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
+	wg.Go(func() {
 		err = db.Close(ctx)
-	}()
+	})
 
 	cancel()
 	wg.Wait()
@@ -1659,7 +1641,7 @@ func TestProposeOnProposalRehash(t *testing.T) {
 		p2, err := db.Propose(makeBatch(b308k, b308v))
 		r.NoError(err, "propose 308")
 
-		normalRoot, err = p2.Root()
+		normalRoot = p2.Root()
 		r.NoError(err, "root")
 	}
 
@@ -1672,7 +1654,7 @@ func TestProposeOnProposalRehash(t *testing.T) {
 		p2, err := p1.Propose(makeBatch(b308k, b308v))
 		r.NoError(err, "propose#2 308")
 
-		proposeOnProposalRoot, err = p2.Root()
+		proposeOnProposalRoot = p2.Root()
 		r.NoError(err, "root")
 	}
 

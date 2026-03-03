@@ -21,6 +21,7 @@ import (
 	"github.com/ava-labs/avalanchego/database/memdb"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/x/merkledb"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -81,7 +82,7 @@ func newTestFirewoodDatabase(t *testing.T) *firewood.Database {
 			runtime.GC()
 			err = db.Close(oneSecCtx(t))
 		}
-		r.NoError(err, "%T.Close()", db)
+		assert.NoError(t, err, "%T.Close()", db)
 	})
 	return db
 }
@@ -259,10 +260,8 @@ func (tr *tree) checkDBHash() {
 	merkleRoot, err := tr.merkleDB.GetMerkleRoot(context.Background())
 	tr.require.NoError(err)
 
-	fwdRoot, err := tr.fwdDB.Root()
-	tr.require.NoError(err)
-
 	// Compare the root hashes.
+	fwdRoot := tr.fwdDB.Root()
 	tr.require.Equal(merkleRoot, ids.ID(fwdRoot))
 }
 
@@ -296,10 +295,9 @@ func (tr *tree) createProposalOnProposal() {
 	merkleChildView, err := merkleView.NewView(context.Background(), merkleViewChange)
 	tr.require.NoError(err)
 
-	fwdRoot, err := fwdChildPr.Root()
-	tr.require.NoError(err)
 	merkleRoot, err := merkleChildView.GetMerkleRoot(context.Background())
 	tr.require.NoError(err)
+	fwdRoot := fwdChildPr.Root()
 	tr.require.Equal(merkleRoot, ids.ID(fwdRoot))
 
 	tr.nextID++
@@ -333,10 +331,9 @@ func (tr *tree) createProposalOnDB() {
 	merkleChildView, err := tr.merkleDB.NewView(context.Background(), merkleViewChange)
 	tr.require.NoError(err)
 
-	fwdRoot, err := fwdPr.Root()
-	tr.require.NoError(err)
 	merkleRoot, err := merkleChildView.GetMerkleRoot(context.Background())
 	tr.require.NoError(err)
+	fwdRoot := fwdPr.Root()
 	tr.require.Equal(merkleRoot, ids.ID(fwdRoot))
 
 	tr.nextID++

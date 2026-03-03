@@ -14,7 +14,7 @@ use std::num::{NonZero, NonZeroU64};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
-use firewood_storage::logger::{error, trace, warn};
+use firewood_storage::logger::{trace, warn};
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
@@ -474,8 +474,8 @@ impl RevisionManager {
         Ok(revision)
     }
 
-    pub fn root_hash(&self) -> Result<Option<HashKey>, RevisionManagerError> {
-        Ok(self.current_revision().root_hash())
+    pub fn root_hash(&self) -> Option<HashKey> {
+        self.current_revision().root_hash()
     }
 
     pub fn current_revision(&self) -> CommittedRevision {
@@ -517,22 +517,13 @@ impl RevisionManager {
 
     /// Closes the revision manager gracefully.
     ///
-    /// This method shuts down the background persistence worker. If not called
-    /// explicitly, `Drop` will attempt a best-effort shutdown but cannot report
-    /// errors.
-    pub fn close(&mut self) -> Result<(), RevisionManagerError> {
+    /// This method shuts down the background persistence worker and persists
+    /// the latest committed revision.
+    pub fn close(self) -> Result<(), RevisionManagerError> {
+        let current_revision = self.current_revision();
         self.persist_worker
-            .close()
+            .close(current_revision)
             .map_err(RevisionManagerError::PersistError)
-    }
-}
-
-impl Drop for RevisionManager {
-    fn drop(&mut self) {
-        // Best-effort graceful shutdown - users are suggested to call `close()` instead.
-        if let Err(e) = self.close() {
-            error!("Error during RevisionManager shutdown: {e}");
-        }
     }
 }
 

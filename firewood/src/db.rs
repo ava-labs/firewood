@@ -63,8 +63,8 @@ where
     where
         Self: 'view;
 
-    fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
-        Ok(HashedNodeReader::root_hash(self).or_default_root_hash())
+    fn root_hash(&self) -> Option<HashKey> {
+        HashedNodeReader::root_hash(self).or_default_root_hash()
     }
 
     fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
@@ -141,8 +141,12 @@ pub struct DbConfig {
     pub deferred_persistence_commit_count: NonZeroU64,
 }
 
-#[derive(Debug)]
 /// A database instance.
+///
+/// Callers **must** call `close()` when they are done with the database
+/// to ensure the latest committed revision is persisted to disk. Dropping a
+/// database without calling `close()` may result in committed data being lost.
+#[derive(Debug)]
 pub struct Db {
     metrics: Arc<DbMetrics>,
     manager: RevisionManager,
@@ -162,8 +166,8 @@ impl api::Db for Db {
         Ok(nodestore)
     }
 
-    fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
-        Ok(self.manager.root_hash()?.or_default_root_hash())
+    fn root_hash(&self) -> Option<HashKey> {
+        self.manager.root_hash().or_default_root_hash()
     }
 
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal<'_>, api::Error> {
@@ -340,12 +344,25 @@ impl Db {
         self.propose_with_parent(merge_ops, merkle.nodestore())
     }
 
+    pub fn apply_change_proof_to_parent<F: Parentable>(
+        &self,
+        batch_ops: impl IntoBatchIter,
+        parent: &NodeStore<F, FileBacked>,
+    ) -> Result<Proposal<'_>, api::Error>
+    where
+        NodeStore<F, FileBacked>: HashedNodeReader,
+    {
+        // Create a new proposal from the parent
+        let merkle = Merkle::from(parent);
+        self.propose_with_parent(batch_ops, merkle.nodestore())
+    }
+
     /// Closes the database gracefully.
     ///
-    /// This method shuts down the background persistence worker and persists
-    /// the last committed revision. If not called explicitly, `Drop` will
-    /// attempt a best-effort shutdown but cannot report errors.
-    pub fn close(mut self) -> Result<(), api::Error> {
+    /// Shuts down the background persistence worker and persists the latest
+    /// committed revision to disk. This method **must** be called before the
+    /// database is dropped as otherwise, any committed data may be lost.
+    pub fn close(self) -> Result<(), api::Error> {
         self.manager.close().map_err(Into::into)
     }
 }
@@ -363,7 +380,7 @@ impl api::DbView for Proposal<'_> {
     where
         Self: 'view;
 
-    fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
+    fn root_hash(&self) -> Option<api::HashKey> {
         api::DbView::root_hash(&*self.nodestore)
     }
 
@@ -507,7 +524,7 @@ mod test {
         let proposal = db.propose(batch).unwrap();
         assert_eq!(&*proposal.val(b"k").unwrap().unwrap(), b"v2");
 
-        let committed = db.root_hash().unwrap().unwrap();
+        let committed = db.root_hash().unwrap();
         let historical = db.revision(committed).unwrap();
         assert_eq!(&*historical.val(b"k").unwrap().unwrap(), b"v");
     }
@@ -515,7 +532,7 @@ mod test {
     #[test]
     fn reopen_test() {
         let db = TestDb::new();
-        let initial_root = db.root_hash().unwrap();
+        let initial_root = db.root_hash();
         let batch = vec![
             BatchOp::Put {
                 key: b"a",
@@ -528,18 +545,19 @@ mod test {
         ];
         let proposal = db.propose(batch).unwrap();
         proposal.commit().unwrap();
-        println!("{:?}", db.root_hash().unwrap().unwrap());
+        println!("{:?}", db.root_hash().unwrap());
 
         let db = db.reopen();
-        println!("{:?}", db.root_hash().unwrap().unwrap());
-        let committed = db.root_hash().unwrap().unwrap();
+        println!("{:?}", db.root_hash().unwrap());
+        let committed = db.root_hash().unwrap();
         let historical = db.revision(committed).unwrap();
         assert_eq!(&*historical.val(b"a").unwrap().unwrap(), b"1");
         drop(historical);
 
         let db = db.replace();
-        println!("{:?}", db.root_hash().unwrap());
-        assert!(db.root_hash().unwrap() == initial_root);
+        let final_root = db.root_hash();
+        println!("{final_root:?}");
+        assert!(final_root == initial_root);
     }
 
     #[test]
@@ -573,14 +591,14 @@ mod test {
         // the proposal is dropped here, but the underlying
         // nodestore is still accessible because it's referenced by the revision manager
         // The third proposal remains referenced
-        let p2hash = proposal2.root_hash().unwrap().unwrap();
+        let p2hash = proposal2.root_hash().unwrap();
         assert!(db.manager.proposal_hashes().contains(&p2hash));
         drop(proposal2);
 
         // commit the first proposal
         proposal1.commit().unwrap();
         // Ensure we committed the first proposal's data
-        let committed = db.root_hash().unwrap().unwrap();
+        let committed = db.root_hash().unwrap();
         let historical = db.revision(committed).unwrap();
         assert_eq!(&*historical.val(b"k1").unwrap().unwrap(), b"v1");
 
@@ -589,7 +607,7 @@ mod test {
 
         // the third proposal should still be contained within the all_hashes list
         // would be deleted if another proposal was committed and proposal3 was dropped here
-        let hash3 = proposal3.root_hash().unwrap().unwrap();
+        let hash3 = proposal3.root_hash().unwrap();
         assert!(db.manager.proposal_hashes().contains(&hash3));
     }
 
@@ -625,14 +643,14 @@ mod test {
         // the proposal is dropped here, but the underlying
         // nodestore is still accessible because it's referenced by the revision manager
         // The third proposal remains referenced
-        let p2hash = proposal2.root_hash().unwrap().unwrap();
+        let p2hash = proposal2.root_hash().unwrap();
         assert!(db.manager.proposal_hashes().contains(&p2hash));
         drop(proposal2);
 
         // commit the first proposal
         proposal1.commit().unwrap();
         // Ensure we committed the first proposal's data
-        let committed = db.root_hash().unwrap().unwrap();
+        let committed = db.root_hash().unwrap();
         let historical = db.revision(committed).unwrap();
         assert_eq!(&*historical.val(b"k1").unwrap().unwrap(), b"v1");
 
@@ -640,7 +658,7 @@ mod test {
         assert!(!db.manager.proposal_hashes().contains(&p2hash));
 
         // the third proposal should still be contained within the all_hashes list
-        let hash3 = proposal3.root_hash().unwrap().unwrap();
+        let hash3 = proposal3.root_hash().unwrap();
         assert!(db.manager.proposal_hashes().contains(&hash3));
 
         // moreover, the data from the second and third proposals should still be available
@@ -659,7 +677,7 @@ mod test {
             value: b"historical_value",
         }];
         let proposal = db.propose(batch).unwrap();
-        let historical_hash = proposal.root_hash().unwrap().unwrap();
+        let historical_hash = proposal.root_hash().unwrap();
         proposal.commit().unwrap();
 
         // Create a new proposal (uncommitted)
@@ -668,7 +686,7 @@ mod test {
             value: b"proposal_value",
         }];
         let proposal = db.propose(batch).unwrap();
-        let proposal_hash = proposal.root_hash().unwrap().unwrap();
+        let proposal_hash = proposal.root_hash().unwrap();
 
         // Test that view_sync can find the historical revision
         let historical_view = db.view(historical_hash).unwrap();
@@ -701,7 +719,7 @@ mod test {
         let db = db.reopen();
         insert_commit(&db, 2);
         // Check that the keys are still there after the commits
-        let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+        let committed = db.revision(db.root_hash().unwrap()).unwrap();
         let keys: Vec<[u8; 1]> = vec![[1; 1], [2; 1]];
         let vals: Vec<Box<[u8]>> = vec![Box::new([1; 1]), Box::new([2; 1])];
         let kviter = keys.iter().zip(vals.iter());
@@ -723,8 +741,8 @@ mod test {
                 .build(),
         );
         insert_commit(&db2, 2);
-        let committed1 = db1.revision(db1.root_hash().unwrap().unwrap()).unwrap();
-        let committed2 = db2.revision(db2.root_hash().unwrap().unwrap()).unwrap();
+        let committed1 = db1.revision(db1.root_hash().unwrap()).unwrap();
+        let committed2 = db2.revision(db2.root_hash().unwrap()).unwrap();
         let keys: Vec<[u8; 1]> = vec![[1; 1], [2; 1]];
         let vals: Vec<Box<[u8]>> = vec![Box::new([1; 1]), Box::new([2; 1])];
         let mut kviter = keys.iter().zip(vals.iter());
@@ -768,7 +786,7 @@ mod test {
         proposal.commit().unwrap();
 
         // Check that the key is still there after the commit
-        let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+        let committed = db.revision(db.root_hash().unwrap()).unwrap();
         let kviter = keys.iter().zip(vals.iter());
         for (k, v) in kviter {
             assert_eq!(&committed.val(k).unwrap().unwrap(), v);
@@ -974,7 +992,7 @@ mod test {
         proposal2.commit().unwrap();
 
         // all keys are in the database
-        let committed = db.root_hash().unwrap().unwrap();
+        let committed = db.root_hash().unwrap();
         let revision = db.revision(committed).unwrap();
 
         for (k, v) in keys.into_iter().zip(vals.into_iter()) {
@@ -1057,7 +1075,7 @@ mod test {
             },
         );
 
-        let last_proposal_root_hash = proposals.last().unwrap().root_hash().unwrap().unwrap();
+        let last_proposal_root_hash = proposals.last().unwrap().root_hash().unwrap();
 
         // commit the proposals
         for proposal in proposals {
@@ -1065,7 +1083,7 @@ mod test {
         }
 
         // get the last committed revision
-        let last_root_hash = db.root_hash().unwrap().unwrap();
+        let last_root_hash = db.root_hash().unwrap();
         let committed = db.revision(last_root_hash.clone()).unwrap();
 
         // the last root hash should be the same as the last proposal root hash
@@ -1090,7 +1108,7 @@ mod test {
         const CHANNEL_CAPACITY: usize = 8;
 
         let testdb = TestDb::new();
-        let db = &testdb.db;
+        let db = &*testdb;
 
         let (tx, rx) = std::sync::mpsc::sync_channel::<Proposal<'_>>(CHANNEL_CAPACITY);
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(CHANNEL_CAPACITY);
@@ -1116,7 +1134,7 @@ mod test {
                         value: [id as u8; 8],
                     }];
                     let proposal = db.propose(batch).unwrap();
-                    let last_hash = proposal.root_hash().unwrap().unwrap();
+                    let last_hash = proposal.root_hash().unwrap();
                     let view = db.view(last_hash).unwrap();
 
                     tx.send(proposal).unwrap();
@@ -1142,7 +1160,7 @@ mod test {
         let batch = vec![BatchOp::Put { key, value }];
 
         let proposal = db.propose(batch).unwrap();
-        let root_hash = proposal.root_hash().unwrap().unwrap();
+        let root_hash = proposal.root_hash().unwrap();
         proposal.commit().unwrap();
 
         // Wait for background persistence to complete
@@ -1167,7 +1185,7 @@ mod test {
         // Finally, reopen the database and make sure that we can retrieve the first revision
         let db = db.reopen();
 
-        let latest_root_hash = db.root_hash().unwrap().unwrap();
+        let latest_root_hash = db.root_hash().unwrap();
         let latest_revision = db.revision(latest_root_hash).unwrap();
 
         let latest_value = latest_revision.val(key).unwrap().unwrap();
@@ -1194,7 +1212,7 @@ mod test {
         let batch = vec![BatchOp::Put { key, value }];
 
         let proposal = db.propose(batch).unwrap();
-        let root_hash = proposal.root_hash().unwrap().unwrap();
+        let root_hash = proposal.root_hash().unwrap();
         proposal.commit().unwrap();
 
         // Next, overwrite the kv-pair with a new revision
@@ -1240,7 +1258,7 @@ mod test {
                 let value = i.to_be_bytes();
                 let batch = vec![BatchOp::Put { key, value }];
                 let proposal = db.propose(batch).unwrap();
-                let root_hash = proposal.root_hash().unwrap().unwrap();
+                let root_hash = proposal.root_hash().unwrap();
                 proposal.commit().unwrap();
 
                 (root_hash, value)
@@ -1277,7 +1295,7 @@ mod test {
             value: b"bar",
         }];
         let proposal = db.propose(batch).unwrap();
-        let root_hash = proposal.root_hash().unwrap().unwrap();
+        let root_hash = proposal.root_hash().unwrap();
         proposal.commit().unwrap();
 
         let db = db.reopen();
@@ -1299,7 +1317,6 @@ mod test {
         let testdb = TestDb::new();
 
         testdb
-            .db
             .propose([(b"key", b"value")])
             .unwrap()
             .commit()
@@ -1308,7 +1325,7 @@ mod test {
         // Wait for background persistence to complete before reading the file
         testdb.wait_persisted();
 
-        let rh = testdb.db.root_hash().unwrap().unwrap();
+        let rh = testdb.root_hash().unwrap();
 
         let file = std::fs::OpenOptions::new()
             .read(true)
@@ -1328,7 +1345,7 @@ mod test {
 
         let testdb = testdb.reopen();
 
-        assert_eq!(rh, testdb.db.root_hash().unwrap().unwrap());
+        assert_eq!(rh, testdb.root_hash().unwrap());
     }
 
     #[test]
@@ -1353,7 +1370,7 @@ mod test {
                     value: format!("value{i}").as_bytes().to_vec(),
                 }];
                 let proposal = db.propose(batch).unwrap();
-                let root_hash = proposal.root_hash().unwrap().unwrap();
+                let root_hash = proposal.root_hash().unwrap();
                 proposal.commit().unwrap();
                 root_hash
             })
@@ -1387,7 +1404,7 @@ mod test {
         let value = b"bar";
         let batch = vec![BatchOp::Put { key, value }];
         let proposal = db.propose(batch).unwrap();
-        let root_hash = proposal.root_hash().unwrap().unwrap();
+        let root_hash = proposal.root_hash().unwrap();
 
         proposal.commit().unwrap();
         let db = db.reopen();
@@ -1415,7 +1432,7 @@ mod test {
         let value = b"bar";
         let batch = vec![BatchOp::Put { key, value }];
         let proposal = db.propose(batch).unwrap();
-        let root_hash = proposal.root_hash().unwrap().unwrap();
+        let root_hash = proposal.root_hash().unwrap();
 
         proposal.commit().unwrap();
         let db = db.reopen();
@@ -1445,7 +1462,7 @@ mod test {
                 value: format!("value{i}").as_bytes().to_vec(),
             }];
             let proposal = db.propose(batch).unwrap();
-            root_hashes.push(proposal.root_hash().unwrap().unwrap());
+            root_hashes.push(proposal.root_hash().unwrap());
             proposal.commit().unwrap();
         }
 
@@ -1493,7 +1510,7 @@ mod test {
         let db = db.reopen();
 
         // Verify that the latest committed revision is empty.
-        let last_committed_hash = db.root_hash().unwrap();
+        let last_committed_hash = db.root_hash();
         assert_eq!(last_committed_hash, TrieHash::default_root_hash());
     }
 
@@ -1524,7 +1541,7 @@ mod test {
                 value: format!("{i}").as_bytes().to_vec(),
             }];
             let proposal = db.propose(batch).unwrap();
-            root_hashes.push(proposal.root_hash().unwrap().unwrap());
+            root_hashes.push(proposal.root_hash().unwrap());
             proposal.commit().unwrap();
         }
 
@@ -1581,7 +1598,7 @@ mod test {
                 value: format!("{i}").as_bytes().to_vec(),
             }];
             let proposal = db.propose(batch).unwrap();
-            root_hashes.push(proposal.root_hash().unwrap().unwrap());
+            root_hashes.push(proposal.root_hash().unwrap());
             proposal.commit().unwrap();
         }
 
@@ -1604,19 +1621,26 @@ mod test {
 
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
     pub(super) struct TestDb {
-        db: Db,
+        db: Option<Db>,
         tmpdir: tempfile::TempDir,
         dbconfig: DbConfig,
+    }
+    impl Drop for TestDb {
+        fn drop(&mut self) {
+            if let Some(db) = self.db.take() {
+                db.close().unwrap();
+            }
+        }
     }
     impl Deref for TestDb {
         type Target = Db;
         fn deref(&self) -> &Self::Target {
-            &self.db
+            self.db.as_ref().unwrap()
         }
     }
     impl DerefMut for TestDb {
         fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.db
+            self.db.as_mut().unwrap()
         }
     }
 
@@ -1629,7 +1653,7 @@ mod test {
             let tmpdir = tempfile::tempdir().unwrap();
             let db = Db::new(tmpdir.as_ref(), dbconfig.clone()).unwrap();
             TestDb {
-                db,
+                db: Some(db),
                 tmpdir,
                 dbconfig,
             }
@@ -1639,21 +1663,12 @@ mod test {
         ///
         /// This method closes the current database instance (releasing the advisory lock),
         /// then opens it again at the same path while keeping the same configuration.
-        pub fn reopen(self) -> Self {
-            let TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            } = self;
+        pub fn reopen(mut self) -> Self {
+            self.db.take().unwrap().close().unwrap();
 
-            db.close().unwrap();
-
-            let db = Db::new(tmpdir.path(), dbconfig.clone()).unwrap();
-            TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            }
+            let db = Db::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
+            self.db = Some(db);
+            self
         }
 
         /// Replaces the database with a fresh instance at the same path.
@@ -1665,22 +1680,13 @@ mod test {
         ///
         /// This is useful for testing scenarios where you want to start with a clean slate
         /// while maintaining the same temporary directory structure.
-        pub fn replace(self) -> Self {
-            let TestDb {
-                db,
-                tmpdir,
-                dbconfig: _,
-            } = self;
+        pub fn replace(mut self) -> Self {
+            self.db.take().unwrap().close().unwrap();
 
-            db.close().unwrap();
-
-            let dbconfig = DbConfig::builder().truncate(true).build();
-            let db = Db::new(tmpdir.path(), dbconfig.clone()).unwrap();
-            TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            }
+            self.dbconfig = DbConfig::builder().truncate(true).build();
+            let db = Db::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
+            self.db = Some(db);
+            self
         }
 
         pub fn path(&self) -> &Path {
