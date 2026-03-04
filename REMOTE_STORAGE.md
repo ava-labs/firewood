@@ -219,6 +219,16 @@ against committed revisions (see the Rust type constraint note above).
 collects up to `batchSize` pairs, checks for more by attempting one extra
 advance, returns `IterBatchResponse` with `has_more` flag.
 
+**`ServerOption` / `WithProposalTTL` (new)**: Functional options for `NewServer`.
+`WithProposalTTL(ttl)` enables a background GC goroutine that reaps proposals
+older than `ttl`. A zero TTL (the default) disables GC, preserving backward
+compatibility. The GC ticker fires at `ttl/2` intervals.
+
+**`Stop()` (new)**: Signals the GC goroutine to exit and waits for it to drain
+all remaining proposals (reaps with `maxAge=0`). Safe to call multiple times.
+Should be called on server shutdown to release FFI resources from leaked
+proposals.
+
 ## Key Design Decisions
 
 ### 1. Cumulative ops for chained proposal witnesses

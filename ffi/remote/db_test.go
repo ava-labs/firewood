@@ -9,18 +9,21 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 
 	ffi "github.com/ava-labs/firewood/ffi"
 	pb "github.com/ava-labs/firewood/ffi/remote/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/proto"
 )
 
-// startServerAndGetAddr starts a gRPC server and returns its address.
-func startServerAndGetAddr(t *testing.T, db *ffi.Database) string {
+// startServerWithOpts starts a gRPC server with the given ServerOptions and
+// returns both the Server (for calling Stop) and the listen address.
+func startServerWithOpts(t *testing.T, db *ffi.Database, opts ...ServerOption) (*Server, string) {
 	t.Helper()
 
-	srv := NewServer(db)
+	srv := NewServer(db, opts...)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("net.Listen: %v", err)
@@ -29,9 +32,17 @@ func startServerAndGetAddr(t *testing.T, db *ffi.Database) string {
 	pb.RegisterFirewoodRemoteServer(grpcServer, srv)
 
 	go func() { _ = grpcServer.Serve(lis) }()
+	t.Cleanup(srv.Stop)
 	t.Cleanup(grpcServer.Stop)
 
-	return lis.Addr().String()
+	return srv, lis.Addr().String()
+}
+
+// startServerAndGetAddr starts a gRPC server and returns its address.
+func startServerAndGetAddr(t *testing.T, db *ffi.Database) string {
+	t.Helper()
+	_, addr := startServerWithOpts(t, db)
+	return addr
 }
 
 func TestNewRemoteDB(t *testing.T) {
@@ -496,6 +507,7 @@ func startServerWithInterceptor(
 	pb.RegisterFirewoodRemoteServer(grpcServer, srv)
 
 	go func() { _ = grpcServer.Serve(lis) }()
+	t.Cleanup(srv.Stop)
 	t.Cleanup(grpcServer.Stop)
 
 	return lis.Addr().String()
@@ -1130,6 +1142,227 @@ func TestRemoteDBLatestRevisionMatchesRoot(t *testing.T) {
 
 	if rev.Root() != rdb.Root() {
 		t.Fatalf("LatestRevision().Root() = %x, want %x", rev.Root(), rdb.Root())
+	}
+}
+
+// ---------- Proposal TTL / GC tests ----------
+
+func TestServerProposalTTLExpiry(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"a": "1"})
+
+	_, addr := startServerWithOpts(t, db, WithProposalTTL(50*time.Millisecond))
+
+	// Connect a raw gRPC client to create a proposal directly.
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	defer conn.Close()
+	rpcClient := pb.NewFirewoodRemoteClient(conn)
+
+	createResp, err := rpcClient.CreateProposal(ctx, &pb.CreateProposalRequest{
+		RootHash: rootHash[:],
+		Ops: []*pb.BatchOperation{
+			{OpType: pb.BatchOperation_PUT, Key: []byte("b"), Value: []byte("2")},
+		},
+		Depth: 4,
+	})
+	if err != nil {
+		t.Fatalf("CreateProposal: %v", err)
+	}
+
+	// Wait for GC to reap the proposal.
+	time.Sleep(150 * time.Millisecond)
+
+	// CommitProposal should fail because the proposal was reaped.
+	_, err = rpcClient.CommitProposal(ctx, &pb.CommitProposalRequest{
+		ProposalId: createResp.GetProposalId(),
+	})
+	if err == nil {
+		t.Fatal("expected error committing expired proposal")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestServerProposalTTLNotExpired(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"a": "1"})
+
+	_, addr := startServerWithOpts(t, db, WithProposalTTL(5*time.Second))
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	defer conn.Close()
+	rpcClient := pb.NewFirewoodRemoteClient(conn)
+
+	createResp, err := rpcClient.CreateProposal(ctx, &pb.CreateProposalRequest{
+		RootHash: rootHash[:],
+		Ops: []*pb.BatchOperation{
+			{OpType: pb.BatchOperation_PUT, Key: []byte("b"), Value: []byte("2")},
+		},
+		Depth: 4,
+	})
+	if err != nil {
+		t.Fatalf("CreateProposal: %v", err)
+	}
+
+	// Commit immediately — well before TTL.
+	_, err = rpcClient.CommitProposal(ctx, &pb.CommitProposalRequest{
+		ProposalId: createResp.GetProposalId(),
+	})
+	if err != nil {
+		t.Fatalf("CommitProposal: %v", err)
+	}
+}
+
+func TestServerStop(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"a": "1"})
+
+	// Use a long TTL so GC won't reap naturally; Stop() should force it.
+	srv, addr := startServerWithOpts(t, db, WithProposalTTL(10*time.Minute))
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	defer conn.Close()
+	rpcClient := pb.NewFirewoodRemoteClient(conn)
+
+	createResp, err := rpcClient.CreateProposal(ctx, &pb.CreateProposalRequest{
+		RootHash: rootHash[:],
+		Ops: []*pb.BatchOperation{
+			{OpType: pb.BatchOperation_PUT, Key: []byte("b"), Value: []byte("2")},
+		},
+		Depth: 4,
+	})
+	if err != nil {
+		t.Fatalf("CreateProposal: %v", err)
+	}
+
+	srv.Stop()
+
+	// All proposals should be cleaned up.
+	_, err = rpcClient.CommitProposal(ctx, &pb.CommitProposalRequest{
+		ProposalId: createResp.GetProposalId(),
+	})
+	if err == nil {
+		t.Fatal("expected error after Stop()")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRemoteDBProposalExpiredOnServer(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"a": "1"})
+
+	_, addr := startServerWithOpts(t, db, WithProposalTTL(50*time.Millisecond))
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	prop, err := rdb.Propose(ctx, []ffi.BatchOp{ffi.Put([]byte("b"), []byte("2"))})
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+
+	// Wait for GC to reap the proposal.
+	time.Sleep(150 * time.Millisecond)
+
+	// All proposal operations should return errors.
+	if err := prop.Commit(ctx); err == nil {
+		t.Fatal("expected error from Commit on expired proposal")
+	}
+
+	if _, err := prop.Iter(ctx, nil); err == nil {
+		t.Fatal("expected error from Iter on expired proposal")
+	}
+
+	if _, err := prop.Propose(ctx, []ffi.BatchOp{ffi.Put([]byte("c"), []byte("3"))}); err == nil {
+		t.Fatal("expected error from Propose on expired proposal")
+	}
+
+	if err := prop.Drop(); err == nil {
+		t.Fatal("expected error from Drop on expired proposal")
+	}
+}
+
+// ---------- Proposal-only-key iteration test (6.11) ----------
+
+func TestRemoteDBProposalIterProposalOnlyKey(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	// Commit {"a": "1"} to the database.
+	rootHash := insertData(t, db, map[string]string{"a": "1"})
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	// Propose a key that exists ONLY in the proposal.
+	prop, err := rdb.Propose(ctx, []ffi.BatchOp{ffi.Put([]byte("x"), []byte("99"))})
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	defer prop.Drop()
+
+	// Iterate the proposal — range proof must be generated from proposal
+	// state. If it were generated from committed state, "x" would be
+	// missing and verifyIterBatch would fail.
+	it, err := prop.Iter(ctx, nil)
+	if err != nil {
+		t.Fatalf("Iter: %v", err)
+	}
+	defer it.Drop()
+
+	var keys []string
+	vals := make(map[string]string)
+	for it.Next() {
+		k := string(it.Key())
+		keys = append(keys, k)
+		vals[k] = string(it.Value())
+	}
+	if err := it.Err(); err != nil {
+		t.Fatalf("Iter.Err: %v", err)
+	}
+
+	// Must see both committed "a" and proposal-only "x".
+	expected := []string{"a", "x"}
+	if len(keys) != len(expected) {
+		t.Fatalf("got %d keys %v, want %v", len(keys), keys, expected)
+	}
+	for i, k := range keys {
+		if k != expected[i] {
+			t.Fatalf("key[%d] = %q, want %q", i, k, expected[i])
+		}
+	}
+	if vals["a"] != "1" {
+		t.Fatalf("val[a] = %q, want %q", vals["a"], "1")
+	}
+	if vals["x"] != "99" {
+		t.Fatalf("val[x] = %q, want %q", vals["x"], "99")
 	}
 }
 

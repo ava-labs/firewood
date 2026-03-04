@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	ffi "github.com/ava-labs/firewood/ffi"
 	pb "github.com/ava-labs/firewood/ffi/remote/proto"
@@ -25,20 +26,86 @@ type proposalEntry struct {
 	// this proposal, so that GenerateWitness (which only works against
 	// committed revisions) can produce a correct witness.
 	cumulativeOps []ffi.BatchOp
+	createdAt     time.Time
+}
+
+// ServerOption configures optional Server behavior.
+type ServerOption func(*Server)
+
+// WithProposalTTL enables automatic garbage collection of proposals older
+// than ttl. A zero TTL (the default) disables GC.
+func WithProposalTTL(ttl time.Duration) ServerOption {
+	return func(s *Server) { s.proposalTTL = ttl }
 }
 
 // Server implements the FirewoodRemote gRPC service backed by an FFI Database.
 type Server struct {
 	pb.UnimplementedFirewoodRemoteServer
 
-	db        *ffi.Database
-	proposals sync.Map       // map[uint64]*proposalEntry
-	nextID    atomic.Uint64
+	db          *ffi.Database
+	proposals   sync.Map // map[uint64]*proposalEntry
+	nextID      atomic.Uint64
+	proposalTTL time.Duration // 0 = no GC
+	stopGC      chan struct{} // closed by Stop()
+	gcDone      chan struct{} // closed when GC goroutine exits
 }
 
 // NewServer creates a new gRPC server wrapping the given database.
-func NewServer(db *ffi.Database) *Server {
-	return &Server{db: db}
+func NewServer(db *ffi.Database, opts ...ServerOption) *Server {
+	s := &Server{
+		db:     db,
+		stopGC: make(chan struct{}),
+		gcDone: make(chan struct{}),
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	if s.proposalTTL > 0 {
+		go s.runProposalGC()
+	} else {
+		close(s.gcDone) // no GC goroutine, mark done immediately
+	}
+	return s
+}
+
+func (s *Server) runProposalGC() {
+	defer close(s.gcDone)
+	ticker := time.NewTicker(s.proposalTTL / 2)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.stopGC:
+			s.reapExpiredProposals(0) // reap all on shutdown
+			return
+		case <-ticker.C:
+			s.reapExpiredProposals(s.proposalTTL)
+		}
+	}
+}
+
+func (s *Server) reapExpiredProposals(maxAge time.Duration) {
+	now := time.Now()
+	s.proposals.Range(func(key, value any) bool {
+		entry := value.(*proposalEntry)
+		if maxAge == 0 || now.Sub(entry.createdAt) > maxAge {
+			if _, loaded := s.proposals.LoadAndDelete(key); loaded {
+				entry.proposal.Drop()
+			}
+		}
+		return true
+	})
+}
+
+// Stop signals the GC goroutine to exit and waits for it to drain all
+// remaining proposals. Safe to call multiple times.
+func (s *Server) Stop() {
+	select {
+	case <-s.stopGC:
+		// already stopped
+	default:
+		close(s.stopGC)
+	}
+	<-s.gcDone
 }
 
 // GetTruncatedTrie creates a truncated trie from the revision matching the
@@ -203,6 +270,7 @@ func (s *Server) CreateProposal(
 		proposal:      proposal,
 		committedRoot: committedRoot,
 		cumulativeOps: cumulativeOps,
+		createdAt:     time.Now(),
 	})
 	stored = true
 

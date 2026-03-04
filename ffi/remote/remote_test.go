@@ -80,6 +80,7 @@ func startServerAndClient(t *testing.T, db *ffi.Database, depth uint) *Client {
 			_ = err
 		}
 	}()
+	t.Cleanup(srv.Stop)
 	t.Cleanup(grpcServer.Stop)
 
 	// Connect client
