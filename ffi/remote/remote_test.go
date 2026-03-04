@@ -80,8 +80,9 @@ func startServerAndClient(t *testing.T, db *ffi.Database, depth uint) *Client {
 			_ = err
 		}
 	}()
-	t.Cleanup(srv.Stop)
+	// Cleanups run LIFO: stop gRPC first, then drain server proposals.
 	t.Cleanup(grpcServer.Stop)
+	t.Cleanup(srv.Stop)
 
 	// Connect client
 	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,6 +39,13 @@ func WithProposalTTL(ttl time.Duration) ServerOption {
 	return func(s *Server) { s.proposalTTL = ttl }
 }
 
+// WithContext sets the context used by the GC goroutine. When the context
+// is cancelled the GC goroutine exits and all remaining proposals are
+// reaped — equivalent to calling [Server.Stop].
+func WithContext(ctx context.Context) ServerOption {
+	return func(s *Server) { s.ctx = ctx }
+}
+
 // Server implements the FirewoodRemote gRPC service backed by an FFI Database.
 type Server struct {
 	pb.UnimplementedFirewoodRemoteServer
@@ -45,15 +53,20 @@ type Server struct {
 	db          *ffi.Database
 	proposals   sync.Map // map[uint64]*proposalEntry
 	nextID      atomic.Uint64
-	proposalTTL time.Duration // 0 = no GC
-	stopGC      chan struct{} // closed by Stop()
-	gcDone      chan struct{} // closed when GC goroutine exits
+	proposalTTL time.Duration      // 0 = no GC
+	ctx         context.Context    // cancelled → GC exits
+	stopGC      chan struct{}      // closed by Stop()
+	gcDone      chan struct{}      // closed when GC goroutine exits
 }
 
 // NewServer creates a new gRPC server wrapping the given database.
+// If WithProposalTTL is used, the caller must call [Server.Stop] or
+// cancel the context passed via [WithContext] to terminate the GC
+// goroutine and free remaining proposals.
 func NewServer(db *ffi.Database, opts ...ServerOption) *Server {
 	s := &Server{
 		db:     db,
+		ctx:    context.Background(),
 		stopGC: make(chan struct{}),
 		gcDone: make(chan struct{}),
 	}
@@ -70,12 +83,19 @@ func NewServer(db *ffi.Database, opts ...ServerOption) *Server {
 
 func (s *Server) runProposalGC() {
 	defer close(s.gcDone)
-	ticker := time.NewTicker(s.proposalTTL / 2)
+	interval := s.proposalTTL / 2
+	if interval < time.Second {
+		interval = time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 	for {
 		select {
 		case <-s.stopGC:
 			s.reapExpiredProposals(0) // reap all on shutdown
+			return
+		case <-s.ctx.Done():
+			s.reapExpiredProposals(0) // reap all on context cancellation
 			return
 		case <-ticker.C:
 			s.reapExpiredProposals(s.proposalTTL)
@@ -89,7 +109,9 @@ func (s *Server) reapExpiredProposals(maxAge time.Duration) {
 		entry := value.(*proposalEntry)
 		if maxAge == 0 || now.Sub(entry.createdAt) > maxAge {
 			if _, loaded := s.proposals.LoadAndDelete(key); loaded {
-				entry.proposal.Drop()
+				if err := entry.proposal.Drop(); err != nil {
+					log.Printf("reapExpiredProposals: dropping proposal %v: %v", key, err)
+				}
 			}
 		}
 		return true

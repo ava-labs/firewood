@@ -32,8 +32,9 @@ func startServerWithOpts(t *testing.T, db *ffi.Database, opts ...ServerOption) (
 	pb.RegisterFirewoodRemoteServer(grpcServer, srv)
 
 	go func() { _ = grpcServer.Serve(lis) }()
-	t.Cleanup(srv.Stop)
+	// Cleanups run LIFO: stop gRPC first, then drain server proposals.
 	t.Cleanup(grpcServer.Stop)
+	t.Cleanup(srv.Stop)
 
 	return srv, lis.Addr().String()
 }
@@ -507,8 +508,9 @@ func startServerWithInterceptor(
 	pb.RegisterFirewoodRemoteServer(grpcServer, srv)
 
 	go func() { _ = grpcServer.Serve(lis) }()
-	t.Cleanup(srv.Stop)
+	// Cleanups run LIFO: stop gRPC first, then drain server proposals.
 	t.Cleanup(grpcServer.Stop)
+	t.Cleanup(srv.Stop)
 
 	return lis.Addr().String()
 }
@@ -1174,8 +1176,8 @@ func TestServerProposalTTLExpiry(t *testing.T) {
 		t.Fatalf("CreateProposal: %v", err)
 	}
 
-	// Wait for GC to reap the proposal.
-	time.Sleep(150 * time.Millisecond)
+	// Wait for GC to reap the proposal (50ms TTL + margin for CI load).
+	time.Sleep(2 * time.Second)
 
 	// CommitProposal should fail because the proposal was reaped.
 	_, err = rpcClient.CommitProposal(ctx, &pb.CommitProposalRequest{
@@ -1284,8 +1286,8 @@ func TestRemoteDBProposalExpiredOnServer(t *testing.T) {
 		t.Fatalf("Propose: %v", err)
 	}
 
-	// Wait for GC to reap the proposal.
-	time.Sleep(150 * time.Millisecond)
+	// Wait for GC to reap the proposal (50ms TTL + margin for CI load).
+	time.Sleep(2 * time.Second)
 
 	// All proposal operations should return errors.
 	if err := prop.Commit(ctx); err == nil {
@@ -1363,6 +1365,96 @@ func TestRemoteDBProposalIterProposalOnlyKey(t *testing.T) {
 	}
 	if vals["x"] != "99" {
 		t.Fatalf("val[x] = %q, want %q", vals["x"], "99")
+	}
+}
+
+// ---------- Mid-pagination expiry and chained-reap tests ----------
+
+func TestRemoteDBIterMidPaginationExpiry(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	// Insert enough keys to require multiple batches (batch size is 256).
+	data := make(map[string]string)
+	for i := 0; i < 300; i++ {
+		key := fmt.Sprintf("key-%04d", i)
+		data[key] = fmt.Sprintf("val-%04d", i)
+	}
+	rootHash := insertData(t, db, data)
+
+	_, addr := startServerWithOpts(t, db, WithProposalTTL(50*time.Millisecond))
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	prop, err := rdb.Propose(ctx, []ffi.BatchOp{ffi.Put([]byte("zzz"), []byte("end"))})
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	defer prop.Drop()
+
+	it, err := prop.Iter(ctx, nil)
+	if err != nil {
+		t.Fatalf("Iter: %v", err)
+	}
+	defer it.Drop()
+
+	// Consume the first batch.
+	for i := 0; i < 256 && it.Next(); i++ {
+	}
+	if err := it.Err(); err != nil {
+		t.Fatalf("Iter.Err after first batch: %v", err)
+	}
+
+	// Wait for GC to reap the proposal (50ms TTL + margin for CI load).
+	time.Sleep(2 * time.Second)
+
+	// Next batch fetch should fail because the proposal was reaped.
+	for it.Next() {
+	}
+	if err := it.Err(); err == nil {
+		t.Fatal("expected error from iterator after proposal was reaped mid-pagination")
+	}
+}
+
+func TestRemoteDBChainedProposalParentReaped(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"a": "1"})
+
+	_, addr := startServerWithOpts(t, db, WithProposalTTL(50*time.Millisecond))
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	// Create p1.
+	p1, err := rdb.Propose(ctx, []ffi.BatchOp{ffi.Put([]byte("b"), []byte("2"))})
+	if err != nil {
+		t.Fatalf("Propose p1: %v", err)
+	}
+
+	// Chain p2 on p1.
+	p2, err := p1.Propose(ctx, []ffi.BatchOp{ffi.Put([]byte("c"), []byte("3"))})
+	if err != nil {
+		t.Fatalf("Propose p2: %v", err)
+	}
+
+	// Wait for GC to reap both proposals (50ms TTL + margin for CI load).
+	time.Sleep(2 * time.Second)
+
+	// Both commits should fail because the proposals were reaped.
+	if err := p1.Commit(ctx); err == nil {
+		t.Fatal("expected error from p1.Commit after GC reap")
+	}
+	if err := p2.Commit(ctx); err == nil {
+		t.Fatal("expected error from p2.Commit after GC reap")
 	}
 }
 

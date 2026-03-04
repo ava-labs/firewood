@@ -222,7 +222,13 @@ advance, returns `IterBatchResponse` with `has_more` flag.
 **`ServerOption` / `WithProposalTTL` (new)**: Functional options for `NewServer`.
 `WithProposalTTL(ttl)` enables a background GC goroutine that reaps proposals
 older than `ttl`. A zero TTL (the default) disables GC, preserving backward
-compatibility. The GC ticker fires at `ttl/2` intervals.
+compatibility. The GC ticker fires at `ttl/2` intervals (clamped to a minimum
+of 1 second to prevent busy-spinning with very small TTLs).
+
+**`WithContext(ctx)` (new)**: Sets the context used by the GC goroutine. When
+the context is cancelled, the GC goroutine exits and all remaining proposals
+are reaped — equivalent to calling `Stop()`. This is useful when the server
+lifecycle is managed by a parent context. Default is `context.Background()`.
 
 **`Stop()` (new)**: Signals the GC goroutine to exit and waits for it to drain
 all remaining proposals (reaps with `maxAge=0`). Safe to call multiple times.
@@ -1165,7 +1171,9 @@ func (c *Client) Revision(root ffi.Hash) ffi.DBRevision {
      starts a background goroutine that reaps proposals older than `ttl`. This
      handles the case where a client crashes after `CreateProposal` but before
      `Commit` or `Drop`. The default TTL is **zero** (GC disabled), so callers
-     must opt in. `Stop()` reaps all remaining proposals on shutdown.
+     must opt in. The GC goroutine exits when `Stop()` is called or when the
+     context passed via `WithContext(ctx)` is cancelled; both paths reap all
+     remaining proposals.
 
 5. **`TruncatedTrie` finalizer safety net**: `TruncatedTrie` now has a
    `runtime.AddCleanup` finalizer that frees the underlying Rust handle if

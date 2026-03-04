@@ -46,7 +46,7 @@ adapters.
 These tests already run against the remote backend via `RemoteDB` or the
 lower-level `Client`/`Server` types.
 
-### `ffi/remote/db_test.go` — RemoteDB high-level tests (30 tests)
+### `ffi/remote/db_test.go` — RemoteDB high-level tests (32 tests)
 
 All tests use the `ffi.DB` / `ffi.DBProposal` / `ffi.DBRevision` /
 `ffi.DBIterator` interfaces via `RemoteDB`.
@@ -83,6 +83,8 @@ All tests use the `ffi.DB` / `ffi.DBProposal` / `ffi.DBRevision` /
 | `TestServerStop` | `CreateProposal`, `Stop()`, `CommitProposal` | Stop() reaps all proposals |
 | `TestRemoteDBProposalExpiredOnServer` | `Propose`, `Commit`, `Iter`, `Propose`, `Drop` | Client surfaces clear errors when server GC reaps proposal |
 | `TestRemoteDBProposalIterProposalOnlyKey` | `Propose`, `Iter`, `Next`, `Key`, `Value` | Verifies range proof from proposal state includes proposal-only keys |
+| `TestRemoteDBIterMidPaginationExpiry` | `Propose`, `Iter`, `Next`, `Err` | Iterator returns error when GC reaps proposal between batches |
+| `TestRemoteDBChainedProposalParentReaped` | `Propose` (chained), `Commit` | Chained proposals fail when GC reaps parent |
 
 The tampered/missing/corrupted iterator tests use `startServerWithInterceptor`
 — a helper that wraps the gRPC server with a `grpc.UnaryInterceptor` to
@@ -324,9 +326,9 @@ compatible" sections now that `DBRevision` exists on the `DB` interface.
 | `ffi/iterator_test.go` | 8 | 0 | 8 | 0 |
 | `ffi/metrics_test.go` | 2 | 0 | 0 | 2 |
 | **ffi/ total** | **50** | **28** | **11** | **11** |
-| `ffi/remote/db_test.go` | 30 | — | — | — |
+| `ffi/remote/db_test.go` | 32 | — | — | — |
 | `ffi/remote/remote_test.go` | 6 | — | — | — |
 | `ffi/remote/cache_test.go` | 12 | — | — | — |
 | `ffi/remote/concurrency_test.go` | 4 | — | — | — |
 | `ffi/remote/eviction_test.go` | 15 | — | — | — |
-| **ffi/remote/ total** | **67** | — | — | — |
+| **ffi/remote/ total** | **69** | — | — | — |
