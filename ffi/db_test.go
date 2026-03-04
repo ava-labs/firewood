@@ -339,3 +339,45 @@ func TestLocalDBProposalIter(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalDBLatestRevision(t *testing.T) {
+	db := newLocalDB(t)
+	ctx := t.Context()
+
+	// Insert data.
+	_, err := db.Update(ctx, []BatchOp{Put([]byte("hello"), []byte("world"))})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	rev, err := db.LatestRevision(ctx)
+	if err != nil {
+		t.Fatalf("LatestRevision: %v", err)
+	}
+	defer rev.Drop()
+
+	// Root should match db root.
+	if rev.Root() != db.Root() {
+		t.Fatalf("root mismatch: got %x, want %x", rev.Root(), db.Root())
+	}
+
+	// Get should return correct data.
+	val, err := rev.Get(ctx, []byte("hello"))
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if string(val) != "world" {
+		t.Fatalf("Get = %q, want %q", val, "world")
+	}
+}
+
+func TestLocalDBLatestRevisionEmpty(t *testing.T) {
+	db := newLocalDB(t)
+	ctx := t.Context()
+
+	// Empty DB should return an error.
+	_, err := db.LatestRevision(ctx)
+	if err == nil {
+		t.Fatal("expected error for LatestRevision on empty DB")
+	}
+}

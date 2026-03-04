@@ -289,6 +289,17 @@ func (c *Client) Revision(root ffi.Hash) ffi.DBRevision {
 	return &remoteRevision{root: root, rpc: c.rpc}
 }
 
+// LatestRevision returns a [ffi.DBRevision] for the client's current root.
+// Returns [ffi.ErrRevisionNotFound] if the client has not been bootstrapped or
+// the database is empty (root is [ffi.EmptyRoot]).
+func (c *Client) LatestRevision() (ffi.DBRevision, error) {
+	root := c.Root()
+	if root == ffi.EmptyRoot {
+		return nil, ffi.ErrRevisionNotFound
+	}
+	return &remoteRevision{root: root, rpc: c.rpc}, nil
+}
+
 // Root returns the current root hash, or an empty hash if not bootstrapped.
 func (c *Client) Root() ffi.Hash {
 	c.mu.RLock()

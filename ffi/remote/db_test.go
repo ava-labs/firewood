@@ -1027,3 +1027,109 @@ func TestRemoteDBRevisionDrop(t *testing.T) {
 	}
 }
 
+func TestRemoteDBLatestRevision(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"apple": "red"})
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	// Update to get a new root.
+	_, err = rdb.Update(ctx, []ffi.BatchOp{ffi.Put([]byte("banana"), []byte("yellow"))})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	rev, err := rdb.LatestRevision(ctx)
+	if err != nil {
+		t.Fatalf("LatestRevision: %v", err)
+	}
+	defer rev.Drop()
+
+	// Root should match db root.
+	if rev.Root() != rdb.Root() {
+		t.Fatalf("root mismatch: got %x, want %x", rev.Root(), rdb.Root())
+	}
+
+	// Get should return correct data.
+	val, err := rev.Get(ctx, []byte("banana"))
+	if err != nil {
+		t.Fatalf("Get(banana): %v", err)
+	}
+	if string(val) != "yellow" {
+		t.Fatalf("Get(banana) = %q, want %q", val, "yellow")
+	}
+}
+
+func TestRemoteDBLatestRevisionAfterUpdate(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"a": "1"})
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	// LatestRevision before update.
+	rev1, err := rdb.LatestRevision(ctx)
+	if err != nil {
+		t.Fatalf("LatestRevision 1: %v", err)
+	}
+	defer rev1.Drop()
+	root1 := rev1.Root()
+
+	// Update.
+	_, err = rdb.Update(ctx, []ffi.BatchOp{ffi.Put([]byte("b"), []byte("2"))})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	// LatestRevision after update should have new root.
+	rev2, err := rdb.LatestRevision(ctx)
+	if err != nil {
+		t.Fatalf("LatestRevision 2: %v", err)
+	}
+	defer rev2.Drop()
+
+	if rev2.Root() == root1 {
+		t.Fatal("LatestRevision root should change after update")
+	}
+	if rev2.Root() != rdb.Root() {
+		t.Fatalf("root mismatch: got %x, want %x", rev2.Root(), rdb.Root())
+	}
+}
+
+func TestRemoteDBLatestRevisionMatchesRoot(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"x": "0"})
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	rev, err := rdb.LatestRevision(ctx)
+	if err != nil {
+		t.Fatalf("LatestRevision: %v", err)
+	}
+	defer rev.Drop()
+
+	if rev.Root() != rdb.Root() {
+		t.Fatalf("LatestRevision().Root() = %x, want %x", rev.Root(), rdb.Root())
+	}
+}
+

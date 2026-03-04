@@ -27,8 +27,8 @@ Merkle proofs, writes via witness proofs, iteration via server-side batching.
 
 Defines three interfaces and their local (FFI-backed) implementations:
 
-- **`DB`** interface: `Get`, `Update`, `Propose`, `Revision`, `Root`, `Close`
-  — all with `context.Context` except `Root`.
+- **`DB`** interface: `Get`, `Update`, `Propose`, `Revision`,
+  `LatestRevision`, `Root`, `Close` — all with `context.Context` except `Root`.
 - **`DBProposal`** interface: `Root`, `Commit`, `Drop`, `Get`, `Iter`,
   `Propose` — supports reading from and chaining on uncommitted proposals.
 - **`DBRevision`** interface: `Root`, `Get`, `Iter`, `Drop` — read-only access
@@ -73,7 +73,7 @@ Helper functions:
 
 ### `ffi/db_test.go` — LocalDB tests
 
-7 tests exercising the `ffi.DB`/`ffi.DBProposal`/`ffi.DBRevision`/
+9 tests exercising the `ffi.DB`/`ffi.DBProposal`/`ffi.DBRevision`/
 `ffi.DBIterator` interfaces through `LocalDB`:
 
 - `TestNewLocalDB` — create, update, get, verify root changes, get
@@ -88,10 +88,13 @@ Helper functions:
 - `TestLocalDBPrefixDelete` — prefix delete via Update.
 - `TestLocalDBProposalIter` — iterate from a proposal, verify lexicographic
   order and completeness.
+- `TestLocalDBLatestRevision` — insert data, call `LatestRevision`, verify
+  root matches `db.Root()`, verify `Get` returns correct data.
+- `TestLocalDBLatestRevisionEmpty` — empty DB returns error.
 
 ### `ffi/remote/db_test.go` — RemoteDB tests
 
-22 tests exercising the interfaces through `RemoteDB` over a real gRPC
+25 tests exercising the interfaces through `RemoteDB` over a real gRPC
 server/client:
 
 - `TestNewRemoteDB` — bootstrap, get, update through `ffi.DB`.
@@ -129,6 +132,12 @@ server/client:
   to root2; revision at root1 still works.
 - `TestRemoteDBRevisionDrop` — Drop is no-op; can create another revision
   with same root afterward.
+- `TestRemoteDBLatestRevision` — bootstrap + update, `LatestRevision` returns
+  revision with same root as `db.Root()`, verify `Get` works.
+- `TestRemoteDBLatestRevisionAfterUpdate` — update changes what
+  `LatestRevision` returns.
+- `TestRemoteDBLatestRevisionMatchesRoot` — `LatestRevision().Root()` ==
+  `db.Root()`.
 
 ## Files Modified
 

@@ -11,7 +11,7 @@ implementations:
 
 | Interface | Methods | Description |
 |---|---|---|
-| `DB` | `Get`, `Update`, `Propose`, `Revision`, `Root`, `Close` | Common database operations |
+| `DB` | `Get`, `Update`, `Propose`, `Revision`, `LatestRevision`, `Root`, `Close` | Common database operations |
 | `DBProposal` | `Root`, `Commit`, `Drop`, `Get`, `Iter`, `Propose` | Uncommitted proposal |
 | `DBRevision` | `Root`, `Get`, `Iter`, `Drop` | Read-only committed revision |
 | `DBIterator` | `Next`, `Key`, `Value`, `Err`, `Drop` | Key-value pair iteration |
@@ -27,7 +27,6 @@ Two implementations exist:
 
 | Type | Method | Notes |
 |---|---|---|
-| `Database` | `LatestRevision()` | Obtain the latest revision (no root hash param) |
 | `Database` | `Dump()` | DOT-format trie dump for debugging |
 | `Proposal` | `Dump()` | DOT-format trie dump for debugging |
 | `Revision` | `Dump()` | DOT-format trie dump (Get/Iter/Root/Drop are on `DBRevision`) |
@@ -47,7 +46,7 @@ adapters.
 These tests already run against the remote backend via `RemoteDB` or the
 lower-level `Client`/`Server` types.
 
-### `ffi/remote/db_test.go` — RemoteDB high-level tests (22 tests)
+### `ffi/remote/db_test.go` — RemoteDB high-level tests (25 tests)
 
 All tests use the `ffi.DB` / `ffi.DBProposal` / `ffi.DBRevision` /
 `ffi.DBIterator` interfaces via `RemoteDB`.
@@ -76,6 +75,9 @@ All tests use the `ffi.DB` / `ffi.DBProposal` / `ffi.DBRevision` /
 | `TestRemoteDBRevisionBadRoot` | `Revision`, `Get`, `Iter` | Fabricated root; errors on first read |
 | `TestRemoteDBRevisionAfterUpdate` | `Revision`, `Update`, `Get` | Revision at root1 still works after Update to root2 |
 | `TestRemoteDBRevisionDrop` | `Revision`, `Drop`, `Revision`, `Get` | Drop is no-op; can create another with same root |
+| `TestRemoteDBLatestRevision` | `LatestRevision`, `Root`, `Get` | Bootstrap + update, verify root and data |
+| `TestRemoteDBLatestRevisionAfterUpdate` | `LatestRevision`, `Update` | Update changes what LatestRevision returns |
+| `TestRemoteDBLatestRevisionMatchesRoot` | `LatestRevision`, `Root` | LatestRevision().Root() == db.Root() |
 
 The tampered/missing/corrupted iterator tests use `startServerWithInterceptor`
 — a helper that wraps the gRPC server with a `grpc.UnaryInterceptor` to
@@ -144,7 +146,7 @@ generation, and caching. Not candidates for interface migration.
 
 ## Analysis of `ffi/` Tests
 
-### `ffi/db_test.go` — Interface tests (7 tests)
+### `ffi/db_test.go` — Interface tests (9 tests)
 
 These already use the `DB` / `DBProposal` / `DBRevision` / `DBIterator`
 interfaces via `NewLocalDB`. They are the primary candidates for running
@@ -159,6 +161,8 @@ against both backends.
 | `TestLocalDBRevisionNotFound` | `Revision` with bad root | **Yes** |
 | `TestLocalDBPrefixDelete` | `Update` with `PrefixDelete`, `Get` | **Yes** |
 | `TestLocalDBProposalIter` | `Propose`, `Iter`, `Next`, `Key`, `Err`, `Drop` | **Yes** |
+| `TestLocalDBLatestRevision` | `LatestRevision`, `Root`, `Get` | **Yes** |
+| `TestLocalDBLatestRevisionEmpty` | `LatestRevision` (empty DB) | **Yes** |
 
 **Migration strategy**: Parameterize the `newLocalDB` helper to accept a `DB`
 constructor, then run the same table of tests with both `NewLocalDB` and
@@ -245,6 +249,8 @@ blocked entirely.
 | `db_test.go` | `TestLocalDBRevisionNotFound` | Ready — already uses interface |
 | `db_test.go` | `TestLocalDBPrefixDelete` | Ready — already uses interface |
 | `db_test.go` | `TestLocalDBProposalIter` | Ready — already uses interface |
+| `db_test.go` | `TestLocalDBLatestRevision` | Ready — already uses interface |
+| `db_test.go` | `TestLocalDBLatestRevisionEmpty` | Ready — already uses interface |
 | `firewood_test.go` | `TestUpdateSingleKV` | Needs refactor to use `DB` |
 | `firewood_test.go` | `TestNodeHashAlgorithmValidation` | Needs refactor to use `DB` |
 | `firewood_test.go` | `TestUpdateMultiKV` | Needs refactor to use `DB` |
@@ -265,7 +271,7 @@ blocked entirely.
 | `firewood_test.go` | `TestCommitWithRevisionHeld` | Needs refactor to use `DB.Revision` / `DBRevision` |
 | `firewood_test.go` | `TestInvalidRevision` | Needs refactor to use `DB.Revision` / `DBRevision` |
 
-**Total: 26 tests** (7 ready, 19 need refactoring to use interface)
+**Total: 28 tests** (9 ready, 19 need refactoring to use interface)
 
 ### Partially compatible tests (need interface extensions or test changes)
 
@@ -308,14 +314,14 @@ compatible" sections now that `DBRevision` exists on the `DB` interface.
 
 | File | Total | Compatible | Partial | Not Compatible |
 |---|---|---|---|---|
-| `ffi/db_test.go` | 7 | 7 | 0 | 0 |
+| `ffi/db_test.go` | 9 | 9 | 0 | 0 |
 | `ffi/firewood_test.go` | 31 | 19 | 3 | 9 |
 | `ffi/iterator_test.go` | 8 | 0 | 8 | 0 |
 | `ffi/metrics_test.go` | 2 | 0 | 0 | 2 |
-| **ffi/ total** | **48** | **26** | **11** | **11** |
-| `ffi/remote/db_test.go` | 22 | — | — | — |
+| **ffi/ total** | **50** | **28** | **11** | **11** |
+| `ffi/remote/db_test.go` | 25 | — | — | — |
 | `ffi/remote/remote_test.go` | 6 | — | — | — |
 | `ffi/remote/cache_test.go` | 12 | — | — | — |
 | `ffi/remote/concurrency_test.go` | 4 | — | — | — |
 | `ffi/remote/eviction_test.go` | 15 | — | — | — |
-| **ffi/remote/ total** | **59** | — | — | — |
+| **ffi/remote/ total** | **62** | — | — | — |

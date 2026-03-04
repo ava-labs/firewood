@@ -13,6 +13,7 @@ type DB interface {
 	Update(ctx context.Context, batch []BatchOp) (Hash, error)
 	Propose(ctx context.Context, batch []BatchOp) (DBProposal, error)
 	Revision(ctx context.Context, root Hash) (DBRevision, error)
+	LatestRevision(ctx context.Context) (DBRevision, error)
 	Root() Hash
 	Close(ctx context.Context) error
 }
@@ -84,6 +85,14 @@ func (l *LocalDB) Root() Hash {
 
 func (l *LocalDB) Revision(_ context.Context, root Hash) (DBRevision, error) {
 	rev, err := l.db.Revision(root)
+	if err != nil {
+		return nil, err
+	}
+	return &localRevision{rev: rev}, nil
+}
+
+func (l *LocalDB) LatestRevision(_ context.Context) (DBRevision, error) {
+	rev, err := l.db.LatestRevision()
 	if err != nil {
 		return nil, err
 	}

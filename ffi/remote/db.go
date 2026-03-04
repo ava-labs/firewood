@@ -67,6 +67,10 @@ func (r *RemoteDB) Revision(_ context.Context, root ffi.Hash) (ffi.DBRevision, e
 	return &remoteRevision{root: root, rpc: r.client.rpc}, nil
 }
 
+func (r *RemoteDB) LatestRevision(_ context.Context) (ffi.DBRevision, error) {
+	return r.client.LatestRevision()
+}
+
 func (r *RemoteDB) Root() ffi.Hash {
 	return r.client.Root()
 }
