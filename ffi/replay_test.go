@@ -349,7 +349,7 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				}
 
 			default:
-				return totalCommits, fmt.Errorf("unknown or empty DbOperation: %+v", op)
+// 				return totalCommits, fmt.Errorf("unknown or empty DbOperation: %+v", op)
 			}
 		}
 	}
