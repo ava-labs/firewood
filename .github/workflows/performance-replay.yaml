@@ -4,14 +4,6 @@ on:
   pull_request:
   push:
     branches: [main]
-  issue_comment:
-    types: [created]
-  workflow_dispatch:
-    inputs:
-      extra:
-        description: 'Extra metadata for benchmark (useful for tracking discontinuities)'
-        required: false
-        default: ''
 
 env:
   CARGO_TERM_COLOR: always
@@ -23,120 +15,48 @@ env:
   AWS_REGION: 'us-west-2'
 
 jobs:
-  # Determine if we should run the benchmark and set up context
-  setup:
-    name: Setup benchmark context
-    runs-on: ubuntu-latest
-    outputs:
-      should-run: ${{ steps.check.outputs.should-run }}
-      pr-number: ${{ steps.check.outputs.pr-number }}
-      trigger-type: ${{ steps.check.outputs.trigger-type }}
-      triggered-by: ${{ steps.check.outputs.triggered-by }}
-    steps:
-      - name: Check trigger conditions
-        id: check
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const eventName = context.eventName;
-            let shouldRun = false;
-            let prNumber = '';
-            let triggerType = '';
-            let triggeredBy = '';
-
-            if (eventName === 'pull_request') {
-              shouldRun = true;
-              prNumber = context.payload.pull_request.number;
-              triggerType = 'pr';
-              triggeredBy = context.payload.pull_request.user.login;
-            } else if (eventName === 'push' && context.ref === 'refs/heads/main') {
-              shouldRun = true;
-              triggerType = 'main';
-              triggeredBy = context.payload.pusher?.name || 'unknown';
-            } else if (eventName === 'issue_comment') {
-              const comment = context.payload.comment.body;
-              const isPR = !!context.payload.issue.pull_request;
-              if (isPR && comment.includes('/perf_test')) {
-                shouldRun = true;
-                prNumber = context.payload.issue.number;
-                triggerType = 'comment';
-                triggeredBy = context.payload.comment.user.login;
-              }
-            } else if (eventName === 'workflow_dispatch') {
-              shouldRun = true;
-              triggerType = 'manual';
-              triggeredBy = context.actor;
-            }
-
-            core.setOutput('should-run', shouldRun);
-            core.setOutput('pr-number', prNumber);
-            core.setOutput('trigger-type', triggerType);
-            core.setOutput('triggered-by', triggeredBy);
-
-            console.log(`Event: ${eventName}, Should run: ${shouldRun}, PR: ${prNumber}, Type: ${triggerType}`);
-
-  # React to comment (only for /perf_test trigger)
-  react-to-comment:
-    name: React to comment
-    needs: setup
-    if: needs.setup.outputs.trigger-type == 'comment'
-    runs-on: ubuntu-latest
-    permissions:
-      pull-requests: write
-    steps:
-      - name: Add rocket reaction
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.reactions.createForIssueComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              comment_id: context.payload.comment.id,
-              content: 'rocket'
-            });
-
-  # Run benchmark for PRs (compare with base)
+  # Run benchmark for PR commits and store graph data per PR
   benchmark-pr:
     name: Benchmark (PR)
-    needs: setup
-    if: needs.setup.outputs.should-run == 'true' && (needs.setup.outputs.trigger-type == 'pr' || needs.setup.outputs.trigger-type == 'comment')
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
     permissions:
+      issues: write
       pull-requests: write
+    concurrency:
+      group: performance-replay-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: false
     steps:
       - name: Checkout PR
         uses: actions/checkout@v4
         with:
-          ref: ${{ needs.setup.outputs.trigger-type == 'comment' && format('refs/pull/{0}/head', needs.setup.outputs.pr-number) || '' }}
+          ref: ${{ github.event.pull_request.head.sha }}
 
       - name: Run benchmark
         uses: ./.github/actions/run-benchmark
         id: benchmark
         with:
-          benchmark-name: 'Replay 10K (PR)'
+          benchmark-name: 'Replay 10K (PR Commits)'
           replay-log-url: ${{ env.REPLAY_LOG_URL }}
-          extra: ${{ inputs.extra || '' }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Download previous benchmark data
-        uses: actions/cache@v4
-        with:
-          path: ./benchmark-data-pr
-          key: benchmark-pr-${{ github.event.pull_request.base.sha || github.event.issue.pull_request.base.sha || 'base' }}
-          restore-keys: |
-            benchmark-pr-
+      - name: Determine PR results location
+        id: location
+        run: |
+          echo "data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
 
       - name: Store PR benchmark result
         uses: benchmark-action/github-action-benchmark@v1
         with:
-          name: 'Replay 10K'
+          name: 'Replay 10K PR'
           tool: 'go'
           output-file-path: ${{ steps.benchmark.outputs.output-file }}
-          external-data-json-path: ./benchmark-data-pr/data.json
-          # Don't auto-push for PRs - we just compare
-          auto-push: false
+          github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
+          auto-push: true
+          gh-repository: 'github.com/AminR443/firewood-benchmark-reports'
+          benchmark-data-dir-path: ${{ steps.location.outputs.data-dir }}
           # Show alert but don't fail PR
           alert-threshold: '150%'
           comment-on-alert: false
@@ -146,37 +66,28 @@ jobs:
         uses: actions/github-script@v7
         env:
           BENCHMARK_RESULTS: ${{ steps.benchmark.outputs.results }}
-          TRIGGER_TYPE: ${{ needs.setup.outputs.trigger-type }}
-          TRIGGERED_BY: ${{ needs.setup.outputs.triggered-by }}
-          EXTRA_INFO: ${{ inputs.extra || '' }}
-          PR_NUMBER: ${{ needs.setup.outputs.pr-number }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+          RESULTS_URL: https://aminr443.github.io/firewood-benchmark-reports/${{ steps.location.outputs.data-dir }}/
         with:
           script: |
             const results = process.env.BENCHMARK_RESULTS;
-            const triggerType = process.env.TRIGGER_TYPE;
-            const triggeredBy = process.env.TRIGGERED_BY;
-            const extraInfo = process.env.EXTRA_INFO;
             const prNumber = parseInt(process.env.PR_NUMBER, 10);
-
-            const triggerInfo = triggerType === 'comment'
-              ? `Triggered by @${triggeredBy} via \`/perf_test\``
-              : `Triggered automatically on PR`;
-
-            const extraSection = extraInfo
-              ? `\n**Note:** ${extraInfo}\n`
-              : '';
+            const commitSha = process.env.COMMIT_SHA;
+            const resultsUrl = process.env.RESULTS_URL;
 
             const body = [
               '## Performance Test Results',
               '',
-              triggerInfo,
-              extraSection,
+              'Triggered automatically for this PR commit.',
               '```',
               results,
               '```',
               '',
+              `[Trend graph for this PR](${resultsUrl})`,
+              '',
               '---',
-              `*Commit: \`${context.sha.substring(0, 8)}\`*`
+              `*Commit: \`${commitSha.substring(0, 8)}\`*`
             ].join('\n');
 
             await github.rest.issues.createComment({
@@ -189,11 +100,13 @@ jobs:
   # Run benchmark for main branch (store and graph)
   benchmark-main:
     name: Benchmark (main)
-    needs: setup
-    if: needs.setup.outputs.should-run == 'true' && needs.setup.outputs.trigger-type == 'main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    concurrency:
+      group: performance-replay-main
+      cancel-in-progress: false
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -204,7 +117,6 @@ jobs:
         with:
           benchmark-name: 'Replay 10K'
           replay-log-url: ${{ env.REPLAY_LOG_URL }}
-          extra: ${{ inputs.extra || '' }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
@@ -219,6 +131,7 @@ jobs:
           # For now using external repo for benchmark data
           github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           auto-push: true
+          benchmark-data-dir-path: bench/replay-10k
           alert-threshold: '110%'
           comment-on-alert: true
           fail-on-alert: true
