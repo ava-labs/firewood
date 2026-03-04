@@ -219,13 +219,18 @@ iterator lifecycle management.
 
 ## Running Tests
 
+The Go tests auto-detect the compiled hash algorithm at runtime, so they work
+regardless of whether the FFI library was built with or without `ethhash`.
+
 ```bash
 # Rust: clippy + test
 cargo clippy --workspace --features ethhash,logger --all-targets
 cargo test --workspace --features ethhash,logger --all-targets
 
-# Build FFI library
+# Build FFI library (with ethhash)
 cd ffi/src && cargo build --features ethhash,logger
+# OR build without ethhash (MerkleDB mode) — Go tests handle both:
+cd ffi/src && cargo build --features logger
 
 # Go vet
 cd ffi && go vet ./...
@@ -251,6 +256,7 @@ cd ffi/remote && go test -v -count=1 ./...
 | `ffi/remote/proto/remote.pb.go` | **REGENERATED** |
 | `ffi/remote/proto/remote_grpc.pb.go` | **REGENERATED** |
 | `ffi/src/remote.rs` | **MODIFIED** — `fwd_get_with_proof` uses `get_root` |
+| `ffi/remote/remote_test.go` | **MODIFIED** — runtime hash algorithm detection in `newTestDB` |
 
 ### Pre-existing files (unchanged, for reference)
 
@@ -263,7 +269,57 @@ cd ffi/remote && go test -v -count=1 ./...
 | `ffi/single_key_proof.go` | `GetWithProof`, `VerifySingleKeyProof` |
 | `ffi/truncated_trie.go` | `TruncatedTrie` — `VerifyWitness`, `Root`, `Free`, `GenerateWitness` |
 | `ffi/remote/client.go` | `Client` — `Get`, `Update`, `Bootstrap`, `Root`, `Close` |
-| `ffi/remote/remote_test.go` | Original remote client tests |
+
+### `ffi/remote/remote_test.go` — Runtime hash algorithm detection
+
+**Change**: Added `detectHashAlgorithm()` helper and updated `newTestDB` to use
+it instead of hardcoding `ffi.EthereumNodeHashing`.
+
+**Problem**: The remote tests in `remote_test.go` hardcoded
+`ffi.EthereumNodeHashing` in `newTestDB()`. When the FFI library was built
+without the `ethhash` feature (i.e., MerkleDB/SHA-256 mode), every remote test
+failed immediately at database creation with:
+
+> node store hash algorithm mismatch: want to initialize with Ethereum,
+> but build option is for MerkleDB
+
+**Solution**: Added a `sync.Once`-guarded `detectHashAlgorithm()` function that
+tries creating a database with `EthereumNodeHashing` first — if that fails, it
+falls back to `MerkleDBNodeHashing`. This matches the existing pattern in
+`ffi/firewood_test.go:177-197`. The detection result is cached in a
+package-level variable so it only runs once per test binary execution.
+
+```go
+var (
+    detectedAlgo     ffi.NodeHashAlgorithm
+    detectedAlgoOnce sync.Once
+)
+
+func detectHashAlgorithm() ffi.NodeHashAlgorithm {
+    detectedAlgoOnce.Do(func() { /* try Ethereum, fallback to MerkleDB */ })
+    return detectedAlgo
+}
+```
+
+`newTestDB` was changed from:
+
+```go
+db, err := ffi.New(dbFile, ffi.EthereumNodeHashing)
+```
+
+to:
+
+```go
+db, err := ffi.New(dbFile, detectHashAlgorithm())
+```
+
+Added `os` and `sync` imports.
+
+**Why not reuse `ffi/firewood_test.go`'s helper?** It's in a different package
+(`ffi` vs `ffi/remote`). The `remote` package imports `ffi` as an external
+dependency, so it can't access unexported test helpers. Duplicating the small
+detection snippet (~15 lines) is simpler than creating a shared exported test
+utility.
 
 ## Known Limitations and Future Work
 
@@ -278,15 +334,11 @@ cd ffi/remote && go test -v -count=1 ./...
    impls), chained proposals could generate witnesses directly from the parent
    proposal state instead of using cumulative ops from the committed root.
 
-3. **`PrefixDelete` not supported remotely**: The `batchOpsToProto` helper only
-   handles `Put` and `Delete`. `PrefixDelete` operations are silently skipped
-   in the proto conversion. This matches the existing `Client.Update` behavior.
-
-4. **Thread safety**: `RemoteDB` and `remoteProposal` are not safe for
+3. **Thread safety**: `RemoteDB` and `remoteProposal` are not safe for
    concurrent use. The `parentTrie` pointer-to-pointer pattern used for Commit
    swaps is not synchronized. Add a mutex if concurrent access is needed.
 
-5. **`remoteIterator` uses `context.Background()`**: When fetching subsequent
+4. **`remoteIterator` uses `context.Background()`**: When fetching subsequent
    batches in `Next()`, the iterator uses `context.Background()` because the
    `Next() bool` signature doesn't accept a context. This means pagination
    fetches cannot be cancelled via the original context.
