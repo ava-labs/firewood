@@ -104,6 +104,9 @@ message IterBatchRequest {
   bytes start_key = 2;
   // Maximum number of key-value pairs to return.
   uint32 batch_size = 3;
+  // 32-byte root hash for range proof generation. If provided, the response
+  // will include a serialized range proof covering this batch.
+  bytes root_hash = 4;
 }
 
 message KeyValuePair {
@@ -116,4 +119,7 @@ message IterBatchResponse {
   repeated KeyValuePair pairs = 1;
   // True if there are more pairs beyond this batch.
   bool has_more = 2;
+  // Serialized range proof covering this batch. Present only when root_hash
+  // was provided in the request.
+  bytes range_proof = 3;
 }

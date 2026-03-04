@@ -61,6 +61,76 @@ type RangeProof struct {
 	keepAliveHandle databaseKeepAliveHandle
 }
 
+// KeyValue is a key-value pair extracted from a verified range proof.
+type KeyValue struct {
+	Key   []byte
+	Value []byte
+}
+
+// VerifyAndExtractRangeProof deserializes the range proof bytes, verifies
+// the proof against rootHash for the range [startKey, endKey] with at most
+// maxLength entries, and returns the embedded KV pairs.
+//
+// A nil startKey or endKey means the range is unbounded in that direction.
+// The proof and Rust memory are freed internally; the caller receives only
+// Go-owned data that is garbage-collected normally.
+func VerifyAndExtractRangeProof(
+	proofBytes []byte,
+	rootHash Hash,
+	startKey, endKey []byte,
+	maxLength uint32,
+) ([]KeyValue, error) {
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	// Deserialize the proof from bytes.
+	proof, err := getRangeProofFromRangeProofResult(
+		C.fwd_range_proof_from_bytes(newBorrowedBytes(proofBytes, &pinner)))
+	if err != nil {
+		return nil, fmt.Errorf("deserialize range proof: %w", err)
+	}
+	defer proof.Free()
+
+	// Convert nil → Nothing, non-nil → Something for Maybe types.
+	var startMaybe Maybe[[]byte]
+	if startKey != nil {
+		startMaybe = &bytesPresent{value: startKey}
+	}
+	var endMaybe Maybe[[]byte]
+	if endKey != nil {
+		endMaybe = &bytesPresent{value: endKey}
+	}
+
+	args := C.VerifyRangeProofArgs{
+		proof:      proof.handle,
+		root:       newCHashKey(rootHash),
+		start_key:  newMaybeBorrowedBytes(startMaybe, &pinner),
+		end_key:    newMaybeBorrowedBytes(endMaybe, &pinner),
+		max_length: C.uint32_t(maxLength),
+	}
+
+	batch, err := getKeyValueBatchFromResult(C.fwd_range_proof_verify_and_extract(args))
+	if err != nil {
+		return nil, err
+	}
+	defer batch.free()
+
+	pairs := batch.copy()
+	result := make([]KeyValue, len(pairs))
+	for i, pair := range pairs {
+		k, v := pair.copy()
+		result[i] = KeyValue{Key: k, Value: v}
+	}
+
+	return result, nil
+}
+
+// bytesPresent implements Maybe[[]byte] for a present value.
+type bytesPresent struct{ value []byte }
+
+func (m *bytesPresent) HasValue() bool { return true }
+func (m *bytesPresent) Value() []byte  { return m.value }
+
 // ChangeProof represents a proof of changes between two roots for a range of keys.
 type ChangeProof struct {
 	handle *C.ChangeProofContext

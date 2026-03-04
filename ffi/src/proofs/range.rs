@@ -643,6 +643,49 @@ pub extern "C" fn fwd_range_proof_from_bytes(
     })
 }
 
+/// Verifies the range proof and returns the embedded key-value pairs.
+/// Combines verification + extraction into a single FFI call.
+///
+/// # Arguments
+///
+/// - `args` - The arguments for verifying the range proof, including the proof
+///   context, root hash, start/end keys, and max length.
+///
+/// # Returns
+///
+/// - [`KeyValueBatchResult::NullHandlePointer`] if the caller provided a null pointer.
+/// - [`KeyValueBatchResult::Some`] containing the key-value pairs if successful.
+/// - [`KeyValueBatchResult::Err`] containing an error message if verification failed.
+///
+/// # Thread Safety
+///
+/// It is not safe to call this function concurrently with the same proof context.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_range_proof_verify_and_extract(
+    args: VerifyRangeProofArgs,
+) -> crate::KeyValueBatchResult {
+    let VerifyRangeProofArgs {
+        proof,
+        root,
+        start_key,
+        end_key,
+        max_length,
+    } = args;
+
+    crate::invoke_with_handle(proof, |ctx| {
+        let start_key = start_key.into_option();
+        let end_key = end_key.into_option();
+        ctx.verify(
+            root.into(),
+            start_key.as_deref(),
+            end_key.as_deref(),
+            NonZeroUsize::new(max_length as usize),
+        )?;
+
+        Ok(ctx.proof.key_values().to_vec())
+    })
+}
+
 /// Frees the memory associated with a `RangeProofContext`.
 ///
 /// # Arguments

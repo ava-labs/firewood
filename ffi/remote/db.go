@@ -158,21 +158,30 @@ func (p *remoteProposal) Get(ctx context.Context, key []byte) ([]byte, error) {
 }
 
 func (p *remoteProposal) Iter(ctx context.Context, startKey []byte) (ffi.DBIterator, error) {
+	const batchSize = 256
+
 	resp, err := p.rpc.IterBatch(ctx, &pb.IterBatchRequest{
 		ProposalId: p.proposalID,
 		StartKey:   startKey,
-		BatchSize:  256,
+		BatchSize:  batchSize,
+		RootHash:   p.root[:],
 	})
 	if err != nil {
 		return nil, fmt.Errorf("iter batch: %w", err)
 	}
 
+	verifiedPairs, err := verifyIterBatch(p.root, startKey, batchSize, resp)
+	if err != nil {
+		return nil, fmt.Errorf("iter batch verification: %w", err)
+	}
+
 	return &remoteIterator{
 		proposalID: p.proposalID,
-		pairs:      resp.GetPairs(),
+		pairs:      verifiedPairs,
 		cursor:     -1,
 		hasMore:    resp.GetHasMore(),
 		rpc:        p.rpc,
+		root:       p.root,
 	}, nil
 }
 
@@ -229,7 +238,7 @@ func (p *remoteProposal) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.
 }
 
 // remoteIterator implements [ffi.DBIterator] with lazy batched fetching from
-// the server.
+// the server. Each batch is verified via a range proof before being consumed.
 type remoteIterator struct {
 	proposalID uint64
 	pairs      []*pb.KeyValuePair
@@ -237,6 +246,7 @@ type remoteIterator struct {
 	hasMore    bool
 	rpc        pb.FirewoodRemoteClient
 	err        error
+	root       ffi.Hash // verified proposal root for range proof generation
 }
 
 func (it *remoteIterator) Next() bool {
@@ -248,21 +258,31 @@ func (it *remoteIterator) Next() bool {
 		return false
 	}
 
-	// Fetch next batch. Start key = last key + "\x00".
+	const batchSize = 256
+
+	// Start key = last verified key + "\x00" (derived from previous
+	// batch's verified proof data).
 	lastKey := it.pairs[len(it.pairs)-1].GetKey()
 	startKey := append(append([]byte(nil), lastKey...), 0x00)
 
 	resp, err := it.rpc.IterBatch(context.Background(), &pb.IterBatchRequest{
 		ProposalId: it.proposalID,
 		StartKey:   startKey,
-		BatchSize:  256,
+		BatchSize:  batchSize,
+		RootHash:   it.root[:],
 	})
 	if err != nil {
 		it.err = fmt.Errorf("iter batch: %w", err)
 		return false
 	}
 
-	it.pairs = resp.GetPairs()
+	verifiedPairs, err := verifyIterBatch(it.root, startKey, batchSize, resp)
+	if err != nil {
+		it.err = fmt.Errorf("iter batch verification: %w", err)
+		return false
+	}
+
+	it.pairs = verifiedPairs
 	it.hasMore = resp.GetHasMore()
 	it.cursor = 0
 	return len(it.pairs) > 0
@@ -289,6 +309,45 @@ func (it *remoteIterator) Err() error {
 func (it *remoteIterator) Drop() error {
 	// No server-side iterator state to clean up; batches are fetched per-call.
 	return nil
+}
+
+// verifyIterBatch verifies the range proof in the response and returns the
+// verified KV pairs. The response's pairs field is NOT trusted — only the
+// proof's embedded pairs are used. startKey is the client-controlled start key
+// (nil = beginning of keyspace).
+func verifyIterBatch(
+	root ffi.Hash,
+	startKey []byte,
+	batchSize uint32,
+	resp *pb.IterBatchResponse,
+) ([]*pb.KeyValuePair, error) {
+	proofBytes := resp.GetRangeProof()
+	if len(resp.GetPairs()) == 0 && len(proofBytes) == 0 {
+		// Empty batch with no proof is valid (no entries in range).
+		return nil, nil
+	}
+	if len(proofBytes) == 0 {
+		return nil, fmt.Errorf("missing range proof")
+	}
+
+	// Single FFI call: deserialize, verify, extract.
+	kvs, err := ffi.VerifyAndExtractRangeProof(
+		proofBytes,
+		root,
+		startKey, // client-controlled start key
+		nil,      // unbounded end key
+		batchSize,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("range proof verification failed: %w", err)
+	}
+
+	// Rebuild pairs from verified data.
+	verified := make([]*pb.KeyValuePair, len(kvs))
+	for i, kv := range kvs {
+		verified[i] = &pb.KeyValuePair{Key: kv.Key, Value: kv.Value}
+	}
+	return verified, nil
 }
 
 // batchOpsToProto converts FFI batch ops to proto batch operations.

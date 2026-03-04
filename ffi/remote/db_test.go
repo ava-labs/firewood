@@ -4,12 +4,16 @@
 package remote
 
 import (
+	"context"
+	"fmt"
 	"net"
+	"strings"
 	"testing"
 
 	ffi "github.com/ava-labs/firewood/ffi"
 	pb "github.com/ava-labs/firewood/ffi/remote/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/proto"
 )
 
 // startServerAndGetAddr starts a gRPC server and returns its address.
@@ -473,3 +477,243 @@ func TestNewRemoteDBBadRoot(t *testing.T) {
 		t.Fatal("expected error with wrong trusted root")
 	}
 }
+
+// startServerWithInterceptor starts a gRPC server with a unary response
+// interceptor and returns an addr suitable for NewRemoteDB.
+func startServerWithInterceptor(
+	t *testing.T,
+	db *ffi.Database,
+	interceptor grpc.UnaryServerInterceptor,
+) string {
+	t.Helper()
+
+	srv := NewServer(db)
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(interceptor))
+	pb.RegisterFirewoodRemoteServer(grpcServer, srv)
+
+	go func() { _ = grpcServer.Serve(lis) }()
+	t.Cleanup(grpcServer.Stop)
+
+	return lis.Addr().String()
+}
+
+// TestRemoteDBProposalIterTamperedValue verifies that tampering with a value
+// in the IterBatch response is detected. Since the client uses pairs extracted
+// from the verified proof (not the response's pairs), the tampered data is
+// never consumed and the iterator returns the correct (untampered) values.
+func TestRemoteDBProposalIterTamperedValue(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"a": "1", "b": "2"})
+
+	// Interceptor that tampers with the first pair's value in IterBatch responses.
+	tamper := func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		resp, err := handler(ctx, req)
+		if err != nil {
+			return resp, err
+		}
+		if strings.HasSuffix(info.FullMethod, "/IterBatch") {
+			iterResp := resp.(*pb.IterBatchResponse)
+			if len(iterResp.GetPairs()) > 0 {
+				// Deep-copy and tamper the pairs (not the proof).
+				cloned := proto.Clone(iterResp).(*pb.IterBatchResponse)
+				cloned.Pairs[0].Value = []byte("TAMPERED")
+				return cloned, nil
+			}
+		}
+		return resp, err
+	}
+
+	addr := startServerWithInterceptor(t, db, tamper)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	prop, err := rdb.Propose(ctx, []ffi.BatchOp{ffi.Put([]byte("c"), []byte("3"))})
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	defer prop.Drop()
+
+	it, err := prop.Iter(ctx, nil)
+	if err != nil {
+		t.Fatalf("Iter: %v", err)
+	}
+	defer it.Drop()
+
+	// The iterator should return the correct (untampered) values from the proof.
+	expected := map[string]string{"a": "1", "b": "2", "c": "3"}
+	for it.Next() {
+		key := string(it.Key())
+		want, ok := expected[key]
+		if !ok {
+			t.Fatalf("unexpected key %q", key)
+		}
+		if got := string(it.Value()); got != want {
+			t.Fatalf("Value(%s) = %q, want %q (tampered data was not consumed)", key, got, want)
+		}
+		delete(expected, key)
+	}
+	if err := it.Err(); err != nil {
+		t.Fatalf("Iter.Err: %v", err)
+	}
+	if len(expected) > 0 {
+		t.Fatalf("missing keys: %v", expected)
+	}
+}
+
+// TestRemoteDBProposalIterMissingProof verifies that the client rejects an
+// IterBatch response that has pairs but no range proof.
+func TestRemoteDBProposalIterMissingProof(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"a": "1"})
+
+	// Interceptor that strips the range proof from IterBatch responses.
+	stripProof := func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		resp, err := handler(ctx, req)
+		if err != nil {
+			return resp, err
+		}
+		if strings.HasSuffix(info.FullMethod, "/IterBatch") {
+			iterResp := resp.(*pb.IterBatchResponse)
+			iterResp.RangeProof = nil
+			return iterResp, nil
+		}
+		return resp, err
+	}
+
+	addr := startServerWithInterceptor(t, db, stripProof)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	prop, err := rdb.Propose(ctx, []ffi.BatchOp{ffi.Put([]byte("b"), []byte("2"))})
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	defer prop.Drop()
+
+	_, err = prop.Iter(ctx, nil)
+	if err == nil {
+		t.Fatal("expected error when range proof is missing")
+	}
+	if !strings.Contains(err.Error(), "missing range proof") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestRemoteDBProposalIterTamperedProof verifies that the client rejects an
+// IterBatch response with a corrupted range proof.
+func TestRemoteDBProposalIterTamperedProof(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"a": "1"})
+
+	// Interceptor that corrupts the range proof bytes.
+	corruptProof := func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		resp, err := handler(ctx, req)
+		if err != nil {
+			return resp, err
+		}
+		if strings.HasSuffix(info.FullMethod, "/IterBatch") {
+			iterResp := resp.(*pb.IterBatchResponse)
+			if len(iterResp.RangeProof) > 0 {
+				// Flip some bytes in the proof.
+				corrupted := append([]byte(nil), iterResp.RangeProof...)
+				for i := range min(10, len(corrupted)) {
+					corrupted[i] ^= 0xFF
+				}
+				iterResp.RangeProof = corrupted
+			}
+			return iterResp, nil
+		}
+		return resp, err
+	}
+
+	addr := startServerWithInterceptor(t, db, corruptProof)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	prop, err := rdb.Propose(ctx, []ffi.BatchOp{ffi.Put([]byte("b"), []byte("2"))})
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	defer prop.Drop()
+
+	_, err = prop.Iter(ctx, nil)
+	if err == nil {
+		t.Fatal("expected error when range proof is corrupted")
+	}
+	// The error should mention proof verification failure or deserialization error.
+	if !strings.Contains(err.Error(), "range proof") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestRemoteDBProposalIterMultiBatch verifies that proof checking works across
+// multiple batch boundaries when there are more keys than fit in a single batch.
+func TestRemoteDBProposalIterMultiBatch(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	// Insert enough keys to require multiple batches (batch size is 256).
+	data := make(map[string]string)
+	for i := 0; i < 300; i++ {
+		key := fmt.Sprintf("key-%04d", i)
+		data[key] = fmt.Sprintf("val-%04d", i)
+	}
+	rootHash := insertData(t, db, data)
+
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	// Create a no-op proposal to get an iterable proposal.
+	prop, err := rdb.Propose(ctx, []ffi.BatchOp{ffi.Put([]byte("zzz"), []byte("end"))})
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	defer prop.Drop()
+
+	it, err := prop.Iter(ctx, nil)
+	if err != nil {
+		t.Fatalf("Iter: %v", err)
+	}
+	defer it.Drop()
+
+	count := 0
+	for it.Next() {
+		count++
+	}
+	if err := it.Err(); err != nil {
+		t.Fatalf("Iter.Err: %v", err)
+	}
+
+	// We inserted 300 keys + 1 from the proposal = 301.
+	if count != 301 {
+		t.Fatalf("got %d keys, want 301", count)
+	}
+}
+

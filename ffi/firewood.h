@@ -2541,6 +2541,27 @@ struct ValueResult fwd_range_proof_to_bytes(const struct RangeProofContext *proo
 struct VoidResult fwd_range_proof_verify(struct VerifyRangeProofArgs args);
 
 /**
+ * Verifies the range proof and returns the embedded key-value pairs.
+ * Combines verification + extraction into a single FFI call.
+ *
+ * # Arguments
+ *
+ * - `args` - The arguments for verifying the range proof, including the proof
+ *   context, root hash, start/end keys, and max length.
+ *
+ * # Returns
+ *
+ * - [`KeyValueBatchResult::NullHandlePointer`] if the caller provided a null pointer.
+ * - [`KeyValueBatchResult::Some`] containing the key-value pairs if successful.
+ * - [`KeyValueBatchResult::Err`] containing an error message if verification failed.
+ *
+ * # Thread Safety
+ *
+ * It is not safe to call this function concurrently with the same proof context.
+ */
+struct KeyValueBatchResult fwd_range_proof_verify_and_extract(struct VerifyRangeProofArgs args);
+
+/**
  * Dumps the Trie structure of a revision to a DOT (Graphviz) format string for debugging.
  *
  * # Arguments

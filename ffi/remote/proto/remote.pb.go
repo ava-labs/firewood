@@ -645,7 +645,10 @@ type IterBatchRequest struct {
 	// Start iteration at the first key >= start_key.
 	StartKey []byte `protobuf:"bytes,2,opt,name=start_key,json=startKey,proto3" json:"start_key,omitempty"`
 	// Maximum number of key-value pairs to return.
-	BatchSize     uint32 `protobuf:"varint,3,opt,name=batch_size,json=batchSize,proto3" json:"batch_size,omitempty"`
+	BatchSize uint32 `protobuf:"varint,3,opt,name=batch_size,json=batchSize,proto3" json:"batch_size,omitempty"`
+	// 32-byte root hash for range proof generation. If provided, the response
+	// will include a serialized range proof covering this batch.
+	RootHash      []byte `protobuf:"bytes,4,opt,name=root_hash,json=rootHash,proto3" json:"root_hash,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -699,6 +702,13 @@ func (x *IterBatchRequest) GetBatchSize() uint32 {
 		return x.BatchSize
 	}
 	return 0
+}
+
+func (x *IterBatchRequest) GetRootHash() []byte {
+	if x != nil {
+		return x.RootHash
+	}
+	return nil
 }
 
 type KeyValuePair struct {
@@ -758,7 +768,10 @@ type IterBatchResponse struct {
 	// The key-value pairs in this batch.
 	Pairs []*KeyValuePair `protobuf:"bytes,1,rep,name=pairs,proto3" json:"pairs,omitempty"`
 	// True if there are more pairs beyond this batch.
-	HasMore       bool `protobuf:"varint,2,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
+	HasMore bool `protobuf:"varint,2,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
+	// Serialized range proof covering this batch. Present only when root_hash
+	// was provided in the request.
+	RangeProof    []byte `protobuf:"bytes,3,opt,name=range_proof,json=rangeProof,proto3" json:"range_proof,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -807,6 +820,13 @@ func (x *IterBatchResponse) GetHasMore() bool {
 	return false
 }
 
+func (x *IterBatchResponse) GetRangeProof() []byte {
+	if x != nil {
+		return x.RangeProof
+	}
+	return nil
+}
+
 var File_remote_proto protoreflect.FileDescriptor
 
 const file_remote_proto_rawDesc = "" +
@@ -851,19 +871,22 @@ const file_remote_proto_rawDesc = "" +
 	"\x13DropProposalRequest\x12\x1f\n" +
 	"\vproposal_id\x18\x01 \x01(\x04R\n" +
 	"proposalId\"\x16\n" +
-	"\x14DropProposalResponse\"o\n" +
+	"\x14DropProposalResponse\"\x8c\x01\n" +
 	"\x10IterBatchRequest\x12\x1f\n" +
 	"\vproposal_id\x18\x01 \x01(\x04R\n" +
 	"proposalId\x12\x1b\n" +
 	"\tstart_key\x18\x02 \x01(\fR\bstartKey\x12\x1d\n" +
 	"\n" +
-	"batch_size\x18\x03 \x01(\rR\tbatchSize\"6\n" +
+	"batch_size\x18\x03 \x01(\rR\tbatchSize\x12\x1b\n" +
+	"\troot_hash\x18\x04 \x01(\fR\brootHash\"6\n" +
 	"\fKeyValuePair\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\fR\x05value\"c\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value\"\x84\x01\n" +
 	"\x11IterBatchResponse\x123\n" +
 	"\x05pairs\x18\x01 \x03(\v2\x1d.firewood.remote.KeyValuePairR\x05pairs\x12\x19\n" +
-	"\bhas_more\x18\x02 \x01(\bR\ahasMore2\xc1\x04\n" +
+	"\bhas_more\x18\x02 \x01(\bR\ahasMore\x12\x1f\n" +
+	"\vrange_proof\x18\x03 \x01(\fR\n" +
+	"rangeProof2\xc1\x04\n" +
 	"\x0eFirewoodRemote\x12g\n" +
 	"\x10GetTruncatedTrie\x12(.firewood.remote.GetTruncatedTrieRequest\x1a).firewood.remote.GetTruncatedTrieResponse\x12O\n" +
 	"\bGetValue\x12 .firewood.remote.GetValueRequest\x1a!.firewood.remote.GetValueResponse\x12a\n" +

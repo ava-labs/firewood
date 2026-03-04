@@ -296,10 +296,36 @@ func (s *Server) IterBatch(
 	// Check if there are more items by attempting one more advance.
 	hasMore := it.Next()
 
-	return &pb.IterBatchResponse{
+	resp := &pb.IterBatchResponse{
 		Pairs:   pairs,
 		HasMore: hasMore,
-	}, nil
+	}
+
+	// Generate range proof if root_hash provided.
+	if len(req.GetRootHash()) == ffi.RootLength && len(pairs) > 0 {
+		var root ffi.Hash
+		copy(root[:], req.GetRootHash())
+
+		// Proof covers [startKey, ∞) limited to batchSize entries.
+		rangeProof, err := s.db.RangeProof(
+			root,
+			toMaybe(req.GetStartKey()),
+			nil, // unbounded end
+			uint32(batchSize),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("range proof: %w", err)
+		}
+		defer rangeProof.Free()
+
+		proofBytes, err := rangeProof.MarshalBinary()
+		if err != nil {
+			return nil, fmt.Errorf("marshal range proof: %w", err)
+		}
+		resp.RangeProof = proofBytes
+	}
+
+	return resp, nil
 }
 
 // prefixScan iterates a proposal starting at prefix and collects all keys that
@@ -369,4 +395,22 @@ func expandPrefixDeletes(
 	}
 
 	return expanded, nil
+}
+
+// serverMaybe implements ffi.Maybe[[]byte] for server-side use.
+type serverMaybe struct {
+	value    []byte
+	hasValue bool
+}
+
+func (m *serverMaybe) HasValue() bool { return m.hasValue }
+func (m *serverMaybe) Value() []byte  { return m.value }
+
+// toMaybe converts a byte slice to a Maybe[[]byte]. A nil or empty slice
+// returns nil (None); a non-empty slice returns Something.
+func toMaybe(b []byte) ffi.Maybe[[]byte] {
+	if len(b) == 0 {
+		return nil
+	}
+	return &serverMaybe{value: b, hasValue: true}
 }
