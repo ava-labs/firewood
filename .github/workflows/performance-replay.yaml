@@ -6,29 +6,85 @@ on:
     branches: [main]
   issue_comment:
     types: [created]
+  workflow_dispatch:
+    inputs:
+      extra:
+        description: 'Extra metadata for benchmark (useful for tracking discontinuities)'
+        required: false
+        default: ''
 
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
-
-permissions:
-  contents: write
-  pull-requests: write
+  # Replay log location - supports both HTTPS and S3 URLs
+  # S3 example: s3://your-bucket/replay-files/replay_10k.mp.log
+  # HTTPS example: https://example.com/replay_10k.mp.log
+  REPLAY_LOG_URL: 'https://github.com/AminR443/firewood-benchmark-reports/raw/refs/heads/main/replay-files/replay_10k.mp.log'
+  AWS_REGION: 'us-west-2'
 
 jobs:
-  benchmark:
-    name: Run benchmark
-    if: |
-      (github.event_name == 'pull_request') ||
-      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'issue_comment' &&
-       github.event.issue.pull_request &&
-       contains(github.event.comment.body, '/perf_test'))
+  # Determine if we should run the benchmark and set up context
+  setup:
+    name: Setup benchmark context
     runs-on: ubuntu-latest
+    outputs:
+      should-run: ${{ steps.check.outputs.should-run }}
+      pr-number: ${{ steps.check.outputs.pr-number }}
+      trigger-type: ${{ steps.check.outputs.trigger-type }}
+      triggered-by: ${{ steps.check.outputs.triggered-by }}
     steps:
-      # React to comment (only for /perf_test trigger)
-      - name: Add reaction to comment
-        if: github.event_name == 'issue_comment'
+      - name: Check trigger conditions
+        id: check
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const eventName = context.eventName;
+            let shouldRun = false;
+            let prNumber = '';
+            let triggerType = '';
+            let triggeredBy = '';
+
+            if (eventName === 'pull_request') {
+              shouldRun = true;
+              prNumber = context.payload.pull_request.number;
+              triggerType = 'pr';
+              triggeredBy = context.payload.pull_request.user.login;
+            } else if (eventName === 'push' && context.ref === 'refs/heads/main') {
+              shouldRun = true;
+              triggerType = 'main';
+              triggeredBy = context.payload.pusher?.name || 'unknown';
+            } else if (eventName === 'issue_comment') {
+              const comment = context.payload.comment.body;
+              const isPR = !!context.payload.issue.pull_request;
+              if (isPR && comment.includes('/perf_test')) {
+                shouldRun = true;
+                prNumber = context.payload.issue.number;
+                triggerType = 'comment';
+                triggeredBy = context.payload.comment.user.login;
+              }
+            } else if (eventName === 'workflow_dispatch') {
+              shouldRun = true;
+              triggerType = 'manual';
+              triggeredBy = context.actor;
+            }
+
+            core.setOutput('should-run', shouldRun);
+            core.setOutput('pr-number', prNumber);
+            core.setOutput('trigger-type', triggerType);
+            core.setOutput('triggered-by', triggeredBy);
+
+            console.log(`Event: ${eventName}, Should run: ${shouldRun}, PR: ${prNumber}, Type: ${triggerType}`);
+
+  # React to comment (only for /perf_test trigger)
+  react-to-comment:
+    name: React to comment
+    needs: setup
+    if: needs.setup.outputs.trigger-type == 'comment'
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Add rocket reaction
         uses: actions/github-script@v7
         with:
           script: |
@@ -39,120 +95,132 @@ jobs:
               content: 'rocket'
             });
 
-      # Checkout - different refs for push/PR vs comment
-      - name: Checkout (push/PR)
-        if: github.event_name != 'issue_comment'
+  # Run benchmark for PRs (compare with base)
+  benchmark-pr:
+    name: Benchmark (PR)
+    needs: setup
+    if: needs.setup.outputs.should-run == 'true' && (needs.setup.outputs.trigger-type == 'pr' || needs.setup.outputs.trigger-type == 'comment')
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Checkout PR
         uses: actions/checkout@v4
-
-      - name: Checkout (comment trigger)
-        if: github.event_name == 'issue_comment'
-        uses: actions/checkout@v4
         with:
-          ref: refs/pull/${{ github.event.issue.number }}/head
+          ref: ${{ needs.setup.outputs.trigger-type == 'comment' && format('refs/pull/{0}/head', needs.setup.outputs.pr-number) || '' }}
 
-      - uses: dtolnay/rust-toolchain@stable
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version-file: "ffi/go.mod"
-          cache-dependency-path: "ffi/go.sum"
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          shared-key: "maxperf-ethhash-logger"
-          cache-all-crates: true
-          cache-workspace-crates: true
-
-      - name: Cargo Fetch
-        run: cargo fetch --locked --verbose
-      - name: Build Firewood FFI
-        working-directory: ffi
-        run: cargo build --locked --features ethhash,logger --profile maxperf
-      - name: Fetch replay log
-        working-directory: ffi
-        run: |
-          curl -L -o replay_10k_mp https://github.com/AminR443/firewood-benchmark-reports/raw/refs/heads/main/replay-files/replay_10k.mp.log
-      # - name: Cleanup
-      #   run: |
-      #     echo "=============================================================================="
-      #     echo "Freeing up disk space on CI system"
-      #     echo "=============================================================================="
-
-      #     echo "Listing 100 largest packages"
-      #     dpkg-query -Wf '${Installed-Size}\t${Package}\n' | sort -n | tail -n 100
-      #     df -h
-      #     echo "Removing large packages"
-      #     sudo apt-get remove -y '^ghc-8.*'
-      #     sudo apt-get remove -y '^dotnet-.*'
-      #     sudo apt-get remove -y '^llvm-.*'
-      #     sudo apt-get remove -y 'php.*'
-      #     sudo apt-get remove -y azure-cli google-cloud-sdk hhvm google-chrome-stable firefox powershell mono-devel
-      #     sudo apt-get autoremove -y
-      #     sudo apt-get clean
-      #     df -h
-      #     echo "Removing large directories"
-      #     # deleting 15GB
-      #     rm -rf /usr/share/dotnet/
-      #     df -h
       - name: Run benchmark
-        working-directory: ffi
-        env:
-          TMPDIR: /mnt/tmp
-        run: |
-          sudo mkdir -p $TMPDIR
-          sudo chmod 1777 $TMPDIR
-          REPLAY_LOG=./replay_10k_mp go test -bench=BenchmarkReplayLog -benchtime=3x | tee output.txt
+        uses: ./.github/actions/run-benchmark
+        id: benchmark
+        with:
+          benchmark-name: 'Replay 10K (PR)'
+          replay-log-url: ${{ env.REPLAY_LOG_URL }}
+          extra: ${{ inputs.extra || '' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
 
-      - name: Store benchmark result - separate results repo
-        if: github.event_name == 'push'
+      - name: Download previous benchmark data
+        uses: actions/cache@v4
+        with:
+          path: ./benchmark-data-pr
+          key: benchmark-pr-${{ github.event.pull_request.base.sha || github.event.issue.pull_request.base.sha || 'base' }}
+          restore-keys: |
+            benchmark-pr-
+
+      - name: Store PR benchmark result
         uses: benchmark-action/github-action-benchmark@v1
         with:
-          name: Go Benchmark
+          name: 'Replay 10K'
           tool: 'go'
-          output-file-path: ffi/output.txt
-          github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
-          auto-push: true
-          alert-threshold: '10%'
-          comment-on-alert: true
-          fail-on-alert: true
-          alert-comment-cc-users: '@AminR443'
-          gh-repository: 'github.com/AminR443/firewood-benchmark-reports'
+          output-file-path: ${{ steps.benchmark.outputs.output-file }}
+          external-data-json-path: ./benchmark-data-pr/data.json
+          # Don't auto-push for PRs - we just compare
+          auto-push: false
+          # Show alert but don't fail PR
+          alert-threshold: '150%'
+          comment-on-alert: false
+          fail-on-alert: false
 
-      # Post results to PR (for both pull_request and /perf_test triggers)
       - name: Post results to PR
-        if: github.event_name == 'pull_request' || github.event_name == 'issue_comment'
         uses: actions/github-script@v7
+        env:
+          BENCHMARK_RESULTS: ${{ steps.benchmark.outputs.results }}
+          TRIGGER_TYPE: ${{ needs.setup.outputs.trigger-type }}
+          TRIGGERED_BY: ${{ needs.setup.outputs.triggered-by }}
+          EXTRA_INFO: ${{ inputs.extra || '' }}
+          PR_NUMBER: ${{ needs.setup.outputs.pr-number }}
         with:
           script: |
-            const fs = require('fs');
-            const results = fs.readFileSync('ffi/output.txt', 'utf8');
-            
-            // Get PR number based on event type
-            const prNumber = context.eventName === 'pull_request' 
-              ? context.payload.pull_request.number 
-              : context.payload.issue.number;
-            
-            // Build the trigger info
-            const triggerInfo = context.eventName === 'issue_comment'
-              ? `Triggered by @${{ github.event.comment.user.login }} via \`/perf_test\``
+            const results = process.env.BENCHMARK_RESULTS;
+            const triggerType = process.env.TRIGGER_TYPE;
+            const triggeredBy = process.env.TRIGGERED_BY;
+            const extraInfo = process.env.EXTRA_INFO;
+            const prNumber = parseInt(process.env.PR_NUMBER, 10);
+
+            const triggerInfo = triggerType === 'comment'
+              ? `Triggered by @${triggeredBy} via \`/perf_test\``
               : `Triggered automatically on PR`;
-            
-            const body = `## 🚀 Performance Test Results
-            
-            ${triggerInfo}
-            
-            \`\`\`
-            ${results}
-            \`\`\`
-            
-            ---
-            *Commit: \`${{ github.sha }}\`*
-            `;
-            
+
+            const extraSection = extraInfo
+              ? `\n**Note:** ${extraInfo}\n`
+              : '';
+
+            const body = [
+              '## Performance Test Results',
+              '',
+              triggerInfo,
+              extraSection,
+              '```',
+              results,
+              '```',
+              '',
+              '---',
+              `*Commit: \`${context.sha.substring(0, 8)}\`*`
+            ].join('\n');
+
             await github.rest.issues.createComment({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: prNumber,
               body: body
             });
+
+  # Run benchmark for main branch (store and graph)
+  benchmark-main:
+    name: Benchmark (main)
+    needs: setup
+    if: needs.setup.outputs.should-run == 'true' && needs.setup.outputs.trigger-type == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+
+      - name: Run benchmark
+        uses: ./.github/actions/run-benchmark
+        id: benchmark
+        with:
+          benchmark-name: 'Replay 10K'
+          replay-log-url: ${{ env.REPLAY_LOG_URL }}
+          extra: ${{ inputs.extra || '' }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: 'Go Benchmark'
+          tool: 'go'
+          output-file-path: ${{ steps.benchmark.outputs.output-file }}
+          # TODO: Replace with org repo once gh-pages conflict is resolved
+          # For now using external repo for benchmark data
+          github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
+          auto-push: true
+          alert-threshold: '110%'
+          comment-on-alert: true
+          fail-on-alert: true
+          alert-comment-cc-users: '@AminR443'
+          gh-repository: 'github.com/AminR443/firewood-benchmark-reports'

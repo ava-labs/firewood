@@ -1,0 +1,114 @@
+name: 'Run Firewood Benchmark'
+description: 'Build FFI and run performance benchmark'
+
+inputs:
+  benchmark-name:
+    description: 'Name of the benchmark (used in results and graphs)'
+    required: true
+  replay-log-url:
+    description: 'URL to download the replay log from (supports https:// and s3:// URLs)'
+    required: true
+  benchtime:
+    description: 'Number of benchmark iterations (passed to -benchtime=Nx)'
+    required: false
+    default: '3'
+  extra:
+    description: 'Extra text to include in benchmark metadata (useful for tracking discontinuities like metric changes)'
+    required: false
+    default: ''
+  rust-cache-key:
+    description: 'Rust cache shared key'
+    required: false
+    default: 'maxperf-ethhash-logger'
+  aws-access-key-id:
+    description: 'AWS Access Key ID (required for S3 URLs)'
+    required: false
+    default: ''
+  aws-secret-access-key:
+    description: 'AWS Secret Access Key (required for S3 URLs)'
+    required: false
+    default: ''
+  aws-region:
+    description: 'AWS Region for S3 bucket'
+    required: false
+    default: 'us-east-1'
+
+outputs:
+  output-file:
+    description: 'Path to the benchmark output file'
+    value: ${{ steps.run-benchmark.outputs.output-file }}
+  results:
+    description: 'Raw benchmark results'
+    value: ${{ steps.run-benchmark.outputs.results }}
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version-file: 'ffi/go.mod'
+        cache-dependency-path: 'ffi/go.sum'
+
+    - name: Rust Cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ${{ inputs.rust-cache-key }}
+        cache-all-crates: true
+        cache-workspace-crates: true
+
+    - name: Cargo Fetch
+      shell: bash
+      run: cargo fetch --locked --verbose
+
+    - name: Build Firewood FFI
+      shell: bash
+      working-directory: ffi
+      run: cargo build --locked --features ethhash,logger --profile maxperf
+
+    - name: Configure AWS credentials
+      if: startsWith(inputs.replay-log-url, 's3://')
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: ${{ inputs.aws-region }}
+
+    - name: Fetch replay log
+      shell: bash
+      working-directory: ffi
+      env:
+        REPLAY_LOG_URL: ${{ inputs.replay-log-url }}
+      run: |
+        if [[ "$REPLAY_LOG_URL" == s3://* ]]; then
+          echo "Downloading from S3: $REPLAY_LOG_URL"
+          aws s3 cp "$REPLAY_LOG_URL" replay.log
+        else
+          echo "Downloading from URL: $REPLAY_LOG_URL"
+          curl -L -o replay.log "$REPLAY_LOG_URL"
+        fi
+        ls -lh replay.log
+
+    - name: Run benchmark
+      id: run-benchmark
+      shell: bash
+      working-directory: ffi
+      env:
+        TMPDIR: /mnt/tmp
+        BENCHMARK_EXTRA: ${{ inputs.extra }}
+      run: |
+        sudo mkdir -p $TMPDIR
+        sudo chmod 1777 $TMPDIR
+
+        REPLAY_LOG=./replay.log go test -bench=BenchmarkReplayLog -benchtime=${{ inputs.benchtime }}x | tee output.txt
+
+        echo "output-file=$(pwd)/output.txt" >> $GITHUB_OUTPUT
+
+        # Store results for output (escape newlines for GitHub Actions)
+        RESULTS=$(cat output.txt)
+        echo "results<<EOF" >> $GITHUB_OUTPUT
+        echo "$RESULTS" >> $GITHUB_OUTPUT
+        echo "EOF" >> $GITHUB_OUTPUT
