@@ -245,11 +245,17 @@ cd ffi/remote && go test -v -count=1 ./...
 # Cache tests only
 cd ffi/remote && go test -run TestCache -v -count=1
 
-# Cache tests with race detector
-cd ffi/remote && go test -race -run TestCache -count=1
+# Eviction policy tests
+cd ffi/remote && go test -run "TestEviction|TestLRU|TestClock|TestSampleK|TestRandom" -v -count=1
 
-# Cache benchmark (NoCache vs Cached)
+# Cache + eviction tests with race detector
+cd ffi/remote && go test -race -run "TestCache|TestEviction" -count=1
+
+# Cache benchmark (NoCache vs per-policy Cached)
 cd ffi/remote && go test -bench BenchmarkGetCached -benchtime=5s -count=1
+
+# Eviction throughput benchmark per policy
+cd ffi/remote && go test -bench BenchmarkCacheEviction -benchtime=5s -count=1
 ```
 
 ## File Reference
@@ -260,16 +266,22 @@ cd ffi/remote && go test -bench BenchmarkGetCached -benchtime=5s -count=1
 | `ffi/db_test.go` | **NEW** — LocalDB interface tests |
 | `ffi/remote/db.go` | **NEW** — `RemoteDB`, `remoteProposal`, `remoteIterator` |
 | `ffi/remote/db_test.go` | **NEW** — RemoteDB interface tests |
-| `ffi/remote/cache.go` | **NEW** — `readCache` with `sync.Map` + admission control |
+| `ffi/remote/cache.go` | **NEW** — `readCache` wrapper delegating to `evictionStore` backend |
 | `ffi/remote/cache_test.go` | **NEW** — Cache unit tests + integration tests |
+| `ffi/remote/eviction.go` | **NEW** — `evictionStore` interface, `EvictionPolicy` enum, factory |
+| `ffi/remote/eviction_lru.go` | **NEW** — LRU eviction via doubly-linked list + map |
+| `ffi/remote/eviction_random.go` | **NEW** — Random eviction via dense key slice + map |
+| `ffi/remote/eviction_clock.go` | **NEW** — Clock (second-chance) eviction via circular list |
+| `ffi/remote/eviction_samplek.go` | **NEW** — Sample-K-LRU eviction (Redis-style approximated LRU) |
+| `ffi/remote/eviction_test.go` | **NEW** — Parameterized tests across all 4 eviction policies |
 | `ffi/remote/server.go` | **MODIFIED** — `DropProposal`, `IterBatch` handlers, chained proposal support |
 | `ffi/remote/proto/remote.proto` | **MODIFIED** — new RPCs and messages |
 | `ffi/remote/proto/remote.pb.go` | **REGENERATED** |
 | `ffi/remote/proto/remote_grpc.pb.go` | **REGENERATED** |
 | `ffi/src/remote.rs` | **MODIFIED** — `fwd_get_with_proof` uses `get_root` |
 | `ffi/remote/remote_test.go` | **MODIFIED** — runtime hash algorithm detection in `newTestDB` |
-| `ffi/remote/client.go` | **MODIFIED** — `ClientOption`, `WithCacheSize`, cache integration in `Get`/`Update`/`Bootstrap`/`Close`/`Propose` |
-| `ffi/remote/benchmark_test.go` | **MODIFIED** — `setupRemoteDB` accepts options, `BenchmarkGetCached` added |
+| `ffi/remote/client.go` | **MODIFIED** — `ClientOption`, `WithCacheSize`, `WithCache`, cache integration in `Get`/`Update`/`Bootstrap`/`Close`/`Propose` |
+| `ffi/remote/benchmark_test.go` | **MODIFIED** — `setupRemoteDB` accepts options, `BenchmarkGetCached` per policy, `BenchmarkCacheEviction` |
 
 ### Pre-existing files (unchanged, for reference)
 
@@ -281,7 +293,7 @@ cd ffi/remote && go test -bench BenchmarkGetCached -benchtime=5s -count=1
 | `ffi/batch_op.go` | `BatchOp` type — `Put`, `Delete`, `PrefixDelete` |
 | `ffi/single_key_proof.go` | `GetWithProof`, `VerifySingleKeyProof` |
 | `ffi/truncated_trie.go` | `TruncatedTrie` — `VerifyWitness`, `Root`, `Free`, `GenerateWitness` |
-| `ffi/remote/client.go` | `Client` — `Get`, `Update`, `Bootstrap`, `Propose`, `Root`, `Close`, `ClientOption`, `WithCacheSize` |
+| `ffi/remote/client.go` | `Client` — `Get`, `Update`, `Bootstrap`, `Propose`, `Root`, `Close`, `ClientOption`, `WithCacheSize`, `WithCache` |
 
 ### `ffi/remote/remote_test.go` — Runtime hash algorithm detection
 
@@ -344,13 +356,25 @@ Benchmark results show Remote `Get()` is ~28× slower than Local (~254µs vs
 costs for repeated reads. Blockchain state access is highly skewed (hot accounts,
 popular contracts), so hit rates should be good.
 
-Benchmark results after implementation show a **~4,400× speedup** for cached
-reads:
+Benchmark results show a **~3,400–3,700× speedup** for cached reads across all
+eviction policies:
 
-| Variant | ns/op |
-|---------|------:|
-| NoCache | 261,641 |
-| Cached  | 59 |
+| Variant | ns/op | Speedup vs NoCache |
+|---------|------:|-------------------:|
+| NoCache | 247,716 | — |
+| LRU | 73 | 3,393× |
+| Random | 66 | 3,753× |
+| Clock | 68 | 3,643× |
+| SampleKLRU | 68 | 3,643× |
+
+Eviction throughput (inserting into a full 1,000-entry cache):
+
+| Policy | ns/op |
+|--------|------:|
+| LRU | 182 |
+| Clock | 194 |
+| Random | 210 |
+| SampleKLRU | 388 |
 
 ### Why Not Reuse Firewood's Rust Cache?
 
@@ -390,58 +414,188 @@ The client already knows every `BatchOp` in each write. For each op:
 
 These replace the entire trie state. No batch ops to examine — clear everything.
 
+### Architecture: Pluggable Eviction Policies
+
+The cache uses a pluggable `evictionStore` interface to decouple the caching
+logic (`readCache`) from the eviction strategy. This was introduced to replace
+the original simple admission control (which silently dropped new entries when
+the cache was full) with proper eviction — ensuring the cache can always accept
+new entries by evicting stale ones.
+
+#### `evictionStore` interface (`eviction.go`)
+
+```go
+type evictionStore interface {
+    get(key string) (cacheEntry, bool) // lookup + update access metadata
+    put(key string, entry cacheEntry)  // store + evict if at capacity
+    del(key string) bool               // remove specific key
+    keys(fn func(key string))          // iterate all keys (for prefix scan)
+    clear()
+    len() int
+}
+```
+
+#### `EvictionPolicy` enum (`eviction.go`)
+
+```go
+type EvictionPolicy int
+
+const (
+    LRU            EvictionPolicy = iota // Doubly-linked list, true LRU
+    RandomEviction                       // Uniform random eviction
+    Clock                                // Second-chance / clock algorithm
+    SampleKLRU                           // Sample K random, evict oldest access
+)
+```
+
+Factory function `newEvictionStore(policy, maxSize)` creates the appropriate
+backend.
+
+#### Policy 1: LRU (`eviction_lru.go`)
+
+**Data structures**: `map[string]*lruNode` + doubly-linked list with sentinel
+head/tail nodes.
+
+- `get`: map lookup, move node to front. O(1).
+- `put`: if exists, update + move to front. If new at capacity, evict tail
+  (least recently used), insert at front. O(1).
+- `del`: map lookup, unlink from list. O(1).
+- Sentinels eliminate nil checks in link/unlink operations.
+
+**Best for**: Workloads with strong temporal locality (blockchain state access
+with hot accounts). Recommended default.
+
+#### Policy 2: Random (`eviction_random.go`)
+
+**Data structures**: `map[string]*randomEntry` + dense `[]string` order slice +
+local `*rand.Rand` (seeded from `math/rand/v2`).
+
+- `get`: map lookup only (no metadata to update). O(1).
+- `put`: if exists, update in place. If new at capacity, pick random index,
+  evict that entry, swap-with-last to maintain density. O(1).
+- `del`: swap-with-last in order slice + update swapped entry's index. O(1).
+
+**Best for**: Uniform access patterns or when simplicity matters.
+
+#### Policy 3: Clock (`eviction_clock.go`)
+
+**Data structures**: `map[string]*clockNode` + circular doubly-linked list with
+sentinel + hand pointer.
+
+- `get`: map lookup, set `referenced = true`. O(1).
+- `put`: if exists, update + set referenced. If new at capacity, sweep from
+  hand: if referenced, clear bit and advance; if unreferenced, evict. Insert
+  new node before sentinel. Amortized O(1).
+- `del`: if node == hand, advance hand first. Unlink + map delete. O(1).
+
+**Best for**: Approximating LRU with lower per-access overhead (no list
+reordering on every get).
+
+#### Policy 4: Sample-K-LRU (`eviction_samplek.go`)
+
+**Data structures**: `map[string]*sampleEntry` with monotonic `uint64` access
+counter + dense `[]string` order slice + local `*rand.Rand`. Default K=5
+(following Redis).
+
+- `get`: map lookup, increment counter, set `lastAccess`. O(1).
+- `put`: if exists, update + touch. If new at capacity, sample K random
+  distinct entries, evict the one with smallest `lastAccess`. O(K).
+- `del`: swap-with-last in order slice. O(1).
+
+**Best for**: Large caches where true LRU's linked-list overhead matters.
+Approximates LRU well with K=5.
+
 ### Concurrency Model
 
-The cache uses `sync.Map` to work with the existing `Client.mu` RWMutex:
+Each eviction store uses its own `sync.Mutex` internally. This is necessary
+because `Get()` calls `lookup`/`store` on the cache under the client's `RLock`,
+allowing concurrent cache access from multiple goroutines. The critical sections
+are O(1) (no I/O), so contention is minimal.
 
-- **`Get()` (RLock)**: `sync.Map.Load()` for lookup, `sync.Map.Store()` to
-  cache verified results. Both are lock-free — no additional synchronization.
-- **`Update()` / `Commit()` (write Lock)**: Selective invalidation via
-  `sync.Map.Delete()` and `sync.Map.Range()`. Exclusive access guaranteed.
-- **`Bootstrap()` / `Close()` (write Lock)**: `sync.Map.Clear()` (Go 1.23+).
+- **`Get()` (RLock)**: `backend.get()` for lookup, `backend.put()` to cache
+  verified results. Both acquire the store's internal mutex briefly.
+- **`Update()` / `Commit()` (write Lock)**: Selective invalidation via two-pass
+  `invalidatePrefix` (collect keys, then delete). Exclusive access guaranteed by
+  the client's write lock.
+- **`Bootstrap()` / `Close()` (write Lock)**: `backend.clear()`.
 
-No new mutexes needed. The `sync.Map` was designed for exactly this pattern:
-frequent concurrent reads, infrequent bulk modifications.
-
-### Admission Control
-
-An `atomic.Int64` tracks entry count. When it reaches `maxSize`, new entries
-are silently dropped (not stored). This avoids the complexity of LRU eviction
-for the initial implementation. The counter is decremented on each delete and
-reset on clear.
+The two-pass `invalidatePrefix` pattern (collect matching keys via `keys()`,
+then delete via `del()`) is safe because invalidation only runs under the
+client's write lock, so no concurrent `store`/`lookup` calls add new matching
+keys between passes.
 
 ### API
 
-The cache is opt-in via a functional option:
+The cache is opt-in via functional options:
 
 ```go
 // No cache (default, existing behavior unchanged):
 rdb, err := NewRemoteDB(ctx, addr, root, depth)
 
-// With cache:
+// With cache (LRU default via WithCacheSize):
 rdb, err := NewRemoteDB(ctx, addr, root, depth, WithCacheSize(10_000))
 
+// With explicit eviction policy:
+rdb, err := NewRemoteDB(ctx, addr, root, depth,
+    WithCache(10_000, SampleKLRU))
+
 // Also works with NewClient directly:
-client, err := NewClient(addr, depth, WithCacheSize(10_000))
+client, err := NewClient(addr, depth, WithCache(10_000, Clock))
 ```
+
+`WithCacheSize(n)` delegates to `WithCache(n, LRU)` for backward compatibility.
 
 ### Files Created
 
-#### `ffi/remote/cache.go` — readCache implementation
+#### `ffi/remote/eviction.go` — Interface + enum + factory
+
+- **`evictionStore`** interface: `get`, `put`, `del`, `keys`, `clear`, `len`.
+- **`EvictionPolicy`** enum: `LRU`, `RandomEviction`, `Clock`, `SampleKLRU`.
+- **`newEvictionStore(policy, maxSize)`** — factory returning the concrete store.
+
+#### `ffi/remote/eviction_lru.go` — LRU implementation
+
+- **`lruNode`** struct: `key`, `entry`, `prev`, `next` pointers.
+- **`lruStore`** struct: `mu sync.Mutex`, `items map`, `head`/`tail` sentinels,
+  `maxSize`.
+- All operations O(1) via doubly-linked list with sentinel nodes.
+
+#### `ffi/remote/eviction_random.go` — Random implementation
+
+- **`randomEntry`** struct: `entry`, `index` (position in order slice).
+- **`randomStore`** struct: `mu sync.Mutex`, `items map`, `order []string`,
+  `maxSize`, `rng *rand.Rand`.
+- O(1) eviction via random index selection + swap-with-last deletion.
+
+#### `ffi/remote/eviction_clock.go` — Clock implementation
+
+- **`clockNode`** struct: `key`, `entry`, `referenced bool`, `prev`/`next`.
+- **`clockStore`** struct: `mu sync.Mutex`, `items map`, `ring` sentinel,
+  `hand` pointer, `maxSize`.
+- Amortized O(1) eviction via clock hand sweep.
+
+#### `ffi/remote/eviction_samplek.go` — Sample-K-LRU implementation
+
+- **`sampleEntry`** struct: `entry`, `lastAccess uint64`, `index`.
+- **`sampleKLRUStore`** struct: `mu sync.Mutex`, `items map`, `order []string`,
+  `counter uint64`, `maxSize`, `k`, `rng *rand.Rand`.
+- O(K) eviction by sampling K random entries and evicting the oldest.
+
+#### `ffi/remote/cache.go` — readCache wrapper
 
 - **`cacheEntry`** struct: `value []byte`, `found bool`.
-- **`readCache`** struct: `entries sync.Map`, `size atomic.Int64`,
-  `maxSize int64`.
-- **`newReadCache(maxSize int)`** — constructor.
-- **`lookup(key []byte)`** — returns cached entry if present.
-- **`store(key []byte, entry cacheEntry)`** — stores entry with admission
-  control. Overwrites of existing keys always succeed even at capacity.
-- **`invalidateKey(key []byte)`** — deletes single key.
-- **`invalidatePrefix(prefix []byte)`** — `Range` + delete matching keys.
-  O(cache size) per call, but `PrefixDelete` is rare in practice.
+- **`readCache`** struct: `backend evictionStore`.
+- **`newReadCache(maxSize int, policy EvictionPolicy)`** — constructor.
+- **`lookup(key []byte)`** — delegates to `backend.get()`.
+- **`store(key []byte, entry cacheEntry)`** — delegates to `backend.put()`.
+- **`invalidateKey(key []byte)`** — delegates to `backend.del()`.
+- **`invalidatePrefix(prefix []byte)`** — two-pass: collect matching keys via
+  `backend.keys()`, then delete via `backend.del()`. O(cache size) per call,
+  but `PrefixDelete` is rare in practice.
 - **`invalidateBatch(ops []ffi.BatchOp)`** — iterates ops, dispatches to
   `invalidateKey` or `invalidatePrefix` based on op type.
-- **`clear()`** — `sync.Map.Clear()` + reset counter.
+- **`clear()`** — delegates to `backend.clear()`.
+- **`len()`** — delegates to `backend.len()`.
 
 #### `ffi/remote/cache_test.go` — Unit and integration tests
 
@@ -451,7 +605,7 @@ Unit tests (pure `readCache`, no DB):
 - `TestCacheStoreAndLookup`
 - `TestCacheNilValue` (exclusion proof cached)
 - `TestCacheClear`
-- `TestCacheAdmissionControl`
+- `TestCacheEviction` (verifies new entry survives, len == maxSize)
 - `TestCacheInvalidateKey`
 - `TestCacheInvalidatePrefix`
 - `TestCacheInvalidateBatch`
@@ -463,12 +617,36 @@ Integration tests (with DB + gRPC):
 - `TestCacheInvalidationOnCommit` — selective via proposal ops
 - `TestCacheConcurrentGet` — 20 goroutines × 10 reads each, race-safe
 
+#### `ffi/remote/eviction_test.go` — Eviction policy tests
+
+Parameterized tests via `forEachPolicy` helper (run across all 4 policies):
+
+- `TestEvictionStore_GetMiss`
+- `TestEvictionStore_PutAndGet`
+- `TestEvictionStore_PutOverwrite` — len stays 1
+- `TestEvictionStore_Del` / `TestEvictionStore_DelMissing`
+- `TestEvictionStore_Clear`
+- `TestEvictionStore_Eviction` — put maxSize+2, len ≤ maxSize
+- `TestEvictionStore_EvictionDoesNotLoseNewEntry` — new entry survives eviction
+- `TestEvictionStore_Keys` — visits all entries exactly once
+- `TestEvictionStore_DelThenInsert` — delete + insert doesn't trigger eviction
+
+Policy-specific tests:
+
+- `TestLRUStore_EvictsLeastRecent` — touch changes eviction order
+- `TestLRUStore_EvictsOldestWithoutTouch` — oldest inserted is evicted
+- `TestClockStore_EvictsUnreferenced` — unreferenced entries evicted first
+- `TestSampleKLRU_EvictsOldAccess` — with K>>n, approximates true LRU
+- `TestRandomStore_EvictsOne` — exactly one entry evicted, new entry present
+
 ### Files Modified
 
 #### `ffi/remote/client.go`
 
 - Added **`ClientOption`** type (`func(*Client)`) and **`WithCacheSize`**
-  constructor option.
+  constructor option (delegates to `WithCache` with `LRU`).
+- Added **`WithCache(maxEntries int, policy EvictionPolicy)`** — explicit
+  policy selection.
 - Added `cache *readCache` field to **`Client`** struct (nil when disabled).
 - **`NewClient`** now accepts `...ClientOption`.
 - **`Get()`**: Cache lookup before RPC; cache store after successful proof
@@ -491,7 +669,10 @@ Integration tests (with DB + gRPC):
 #### `ffi/remote/benchmark_test.go`
 
 - **`setupRemoteDB`** accepts `...ClientOption` and forwards to `NewRemoteDB`.
-- Added **`BenchmarkGetCached`** with `NoCache` and `Cached` sub-benchmarks.
+- **`BenchmarkGetCached`**: `Cached` sub-bench now parameterized across all 4
+  eviction policies using `WithCache(10_000, policy)`.
+- Added **`BenchmarkCacheEviction`**: measures eviction throughput per policy
+  at capacity (1,000-entry cache with continuous insertions).
 
 ## Known Limitations and Future Work
 
@@ -540,14 +721,7 @@ Integration tests (with DB + gRPC):
    `Next() bool` signature doesn't accept a context. This means pagination
    fetches cannot be cancelled via the original context.
 
-7. **Cache eviction policy**: The current read cache uses simple admission
-   control (reject new entries when full) rather than LRU eviction. This means
-   once the cache is full, only overwrites of existing keys succeed until
-   invalidation frees slots. A future enhancement could add LRU eviction for
-   better hit rates under memory pressure. The `readCache` abstraction is
-   designed so this can be changed without modifying callers.
-
-8. **Cache does not cover `remoteProposal.Get()`**: Only `Client.Get()` uses
+7. **Cache does not cover `remoteProposal.Get()`**: Only `Client.Get()` uses
    the cache. Reads through `remoteProposal.Get()` always go to the server.
    This is intentional — proposal reads are less frequent and the proposal's
    state may diverge from the committed state that the cache represents.
