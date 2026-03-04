@@ -239,8 +239,17 @@ cd ffi/remote && go vet ./...
 # LocalDB tests
 cd ffi && go test -v -count=1 -run "TestLocalDB|TestNewLocalDB" ./...
 
-# RemoteDB tests
+# RemoteDB tests (all, including cache)
 cd ffi/remote && go test -v -count=1 ./...
+
+# Cache tests only
+cd ffi/remote && go test -run TestCache -v -count=1
+
+# Cache tests with race detector
+cd ffi/remote && go test -race -run TestCache -count=1
+
+# Cache benchmark (NoCache vs Cached)
+cd ffi/remote && go test -bench BenchmarkGetCached -benchtime=5s -count=1
 ```
 
 ## File Reference
@@ -251,12 +260,16 @@ cd ffi/remote && go test -v -count=1 ./...
 | `ffi/db_test.go` | **NEW** — LocalDB interface tests |
 | `ffi/remote/db.go` | **NEW** — `RemoteDB`, `remoteProposal`, `remoteIterator` |
 | `ffi/remote/db_test.go` | **NEW** — RemoteDB interface tests |
+| `ffi/remote/cache.go` | **NEW** — `readCache` with `sync.Map` + admission control |
+| `ffi/remote/cache_test.go` | **NEW** — Cache unit tests + integration tests |
 | `ffi/remote/server.go` | **MODIFIED** — `DropProposal`, `IterBatch` handlers, chained proposal support |
 | `ffi/remote/proto/remote.proto` | **MODIFIED** — new RPCs and messages |
 | `ffi/remote/proto/remote.pb.go` | **REGENERATED** |
 | `ffi/remote/proto/remote_grpc.pb.go` | **REGENERATED** |
 | `ffi/src/remote.rs` | **MODIFIED** — `fwd_get_with_proof` uses `get_root` |
 | `ffi/remote/remote_test.go` | **MODIFIED** — runtime hash algorithm detection in `newTestDB` |
+| `ffi/remote/client.go` | **MODIFIED** — `ClientOption`, `WithCacheSize`, cache integration in `Get`/`Update`/`Bootstrap`/`Close`/`Propose` |
+| `ffi/remote/benchmark_test.go` | **MODIFIED** — `setupRemoteDB` accepts options, `BenchmarkGetCached` added |
 
 ### Pre-existing files (unchanged, for reference)
 
@@ -268,7 +281,7 @@ cd ffi/remote && go test -v -count=1 ./...
 | `ffi/batch_op.go` | `BatchOp` type — `Put`, `Delete`, `PrefixDelete` |
 | `ffi/single_key_proof.go` | `GetWithProof`, `VerifySingleKeyProof` |
 | `ffi/truncated_trie.go` | `TruncatedTrie` — `VerifyWitness`, `Root`, `Free`, `GenerateWitness` |
-| `ffi/remote/client.go` | `Client` — `Get`, `Update`, `Bootstrap`, `Root`, `Close` |
+| `ffi/remote/client.go` | `Client` — `Get`, `Update`, `Bootstrap`, `Propose`, `Root`, `Close`, `ClientOption`, `WithCacheSize` |
 
 ### `ffi/remote/remote_test.go` — Runtime hash algorithm detection
 
@@ -321,6 +334,165 @@ dependency, so it can't access unexported test helpers. Duplicating the small
 detection snippet (~15 lines) is simpler than creating a shared exported test
 utility.
 
+## Client-Side Read Cache
+
+### Motivation
+
+Benchmark results show Remote `Get()` is ~28× slower than Local (~254µs vs
+~9µs). The cost is: gRPC round-trip + server-side proof generation + client-side
+`VerifySingleKeyProof`. A client-side cache eliminates both network and crypto
+costs for repeated reads. Blockchain state access is highly skewed (hot accounts,
+popular contracts), so hit rates should be good.
+
+Benchmark results after implementation show a **~4,400× speedup** for cached
+reads:
+
+| Variant | ns/op |
+|---------|------:|
+| NoCache | 261,641 |
+| Cached  | 59 |
+
+### Why Not Reuse Firewood's Rust Cache?
+
+Firewood's Rust-side cache (`storage/src/linear/filebacked.rs`) caches **trie
+nodes** keyed by disk offset (`LinearAddress → Arc<Node>`). The Go client needs
+**key-value results** (`[]byte → []byte`). These are fundamentally different
+abstraction levels — the Rust cache accelerates node deserialization from disk,
+while the Go cache needs to skip the entire RPC + proof verification path.
+
+### Caching Scheme
+
+Each `Get()` call that results in a verified response (whether the key exists
+or not) produces a cache entry:
+
+```go
+key ([]byte) → cacheEntry { value []byte, found bool }
+```
+
+- `found=true, value=<data>`: Key exists, value is the verified data.
+- `found=true, value=[]byte{}`: Key exists with an empty value.
+- `found=false, value=nil`: Key verified to not exist (exclusion proof was
+  validated). Equally expensive to prove, so worth caching.
+
+### Cache Lifetime and Invalidation
+
+**Selective invalidation** on `Update()` and `Commit()`:
+
+The client already knows every `BatchOp` in each write. For each op:
+
+| Op Type | Invalidation Action |
+|---------|-------------------|
+| `Put(key, val)` | Delete `key` from cache |
+| `Delete(key)` | Delete `key` from cache |
+| `PrefixDelete(prefix)` | Delete all cached keys with that prefix |
+
+**Full invalidation** on `Bootstrap()` and `Close()`:
+
+These replace the entire trie state. No batch ops to examine — clear everything.
+
+### Concurrency Model
+
+The cache uses `sync.Map` to work with the existing `Client.mu` RWMutex:
+
+- **`Get()` (RLock)**: `sync.Map.Load()` for lookup, `sync.Map.Store()` to
+  cache verified results. Both are lock-free — no additional synchronization.
+- **`Update()` / `Commit()` (write Lock)**: Selective invalidation via
+  `sync.Map.Delete()` and `sync.Map.Range()`. Exclusive access guaranteed.
+- **`Bootstrap()` / `Close()` (write Lock)**: `sync.Map.Clear()` (Go 1.23+).
+
+No new mutexes needed. The `sync.Map` was designed for exactly this pattern:
+frequent concurrent reads, infrequent bulk modifications.
+
+### Admission Control
+
+An `atomic.Int64` tracks entry count. When it reaches `maxSize`, new entries
+are silently dropped (not stored). This avoids the complexity of LRU eviction
+for the initial implementation. The counter is decremented on each delete and
+reset on clear.
+
+### API
+
+The cache is opt-in via a functional option:
+
+```go
+// No cache (default, existing behavior unchanged):
+rdb, err := NewRemoteDB(ctx, addr, root, depth)
+
+// With cache:
+rdb, err := NewRemoteDB(ctx, addr, root, depth, WithCacheSize(10_000))
+
+// Also works with NewClient directly:
+client, err := NewClient(addr, depth, WithCacheSize(10_000))
+```
+
+### Files Created
+
+#### `ffi/remote/cache.go` — readCache implementation
+
+- **`cacheEntry`** struct: `value []byte`, `found bool`.
+- **`readCache`** struct: `entries sync.Map`, `size atomic.Int64`,
+  `maxSize int64`.
+- **`newReadCache(maxSize int)`** — constructor.
+- **`lookup(key []byte)`** — returns cached entry if present.
+- **`store(key []byte, entry cacheEntry)`** — stores entry with admission
+  control. Overwrites of existing keys always succeed even at capacity.
+- **`invalidateKey(key []byte)`** — deletes single key.
+- **`invalidatePrefix(prefix []byte)`** — `Range` + delete matching keys.
+  O(cache size) per call, but `PrefixDelete` is rare in practice.
+- **`invalidateBatch(ops []ffi.BatchOp)`** — iterates ops, dispatches to
+  `invalidateKey` or `invalidatePrefix` based on op type.
+- **`clear()`** — `sync.Map.Clear()` + reset counter.
+
+#### `ffi/remote/cache_test.go` — Unit and integration tests
+
+Unit tests (pure `readCache`, no DB):
+
+- `TestCacheLookupMiss`
+- `TestCacheStoreAndLookup`
+- `TestCacheNilValue` (exclusion proof cached)
+- `TestCacheClear`
+- `TestCacheAdmissionControl`
+- `TestCacheInvalidateKey`
+- `TestCacheInvalidatePrefix`
+- `TestCacheInvalidateBatch`
+
+Integration tests (with DB + gRPC):
+
+- `TestCacheInvalidationOnUpdate` — selective: untouched keys survive
+- `TestCacheInvalidationOnBootstrap` — full clear
+- `TestCacheInvalidationOnCommit` — selective via proposal ops
+- `TestCacheConcurrentGet` — 20 goroutines × 10 reads each, race-safe
+
+### Files Modified
+
+#### `ffi/remote/client.go`
+
+- Added **`ClientOption`** type (`func(*Client)`) and **`WithCacheSize`**
+  constructor option.
+- Added `cache *readCache` field to **`Client`** struct (nil when disabled).
+- **`NewClient`** now accepts `...ClientOption`.
+- **`Get()`**: Cache lookup before RPC; cache store after successful proof
+  verification.
+- **`Bootstrap()`**: `cache.clear()` after trie replacement.
+- **`Update()`**: `cache.invalidateBatch(ops)` after trie swap.
+- **`Propose()`**: passes `cache` to `remoteProposal`.
+- **`Close()`**: `cache.clear()` before connection close.
+
+#### `ffi/remote/db.go`
+
+- **`NewRemoteDB`** accepts `...ClientOption` and forwards to `Client`.
+- **`remoteProposal`** has new `cache *readCache` field.
+- **`Commit()`**: `cache.invalidateBatch(p.expectedCumulativeOps)` after trie
+  swap. Uses `expectedCumulativeOps` (already tracked) which includes all ops
+  from the chain root to this proposal — exactly the set of keys that may have
+  changed.
+- **Chained `Propose()`**: propagates `cache` to child `remoteProposal`.
+
+#### `ffi/remote/benchmark_test.go`
+
+- **`setupRemoteDB`** accepts `...ClientOption` and forwards to `NewRemoteDB`.
+- Added **`BenchmarkGetCached`** with `NoCache` and `Cached` sub-benchmarks.
+
 ## Known Limitations and Future Work
 
 1. **Range proof verification for iteration**: Currently, `remoteIterator`
@@ -367,3 +539,15 @@ utility.
    batches in `Next()`, the iterator uses `context.Background()` because the
    `Next() bool` signature doesn't accept a context. This means pagination
    fetches cannot be cancelled via the original context.
+
+7. **Cache eviction policy**: The current read cache uses simple admission
+   control (reject new entries when full) rather than LRU eviction. This means
+   once the cache is full, only overwrites of existing keys succeed until
+   invalidation frees slots. A future enhancement could add LRU eviction for
+   better hit rates under memory pressure. The `readCache` abstraction is
+   designed so this can be changed without modifying callers.
+
+8. **Cache does not cover `remoteProposal.Get()`**: Only `Client.Get()` uses
+   the cache. Reads through `remoteProposal.Get()` always go to the server.
+   This is intentional — proposal reads are less frequent and the proposal's
+   state may diverge from the committed state that the cache represents.
