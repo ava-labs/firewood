@@ -19,13 +19,10 @@ jobs:
   benchmark-pr:
     name: Benchmark (PR)
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: avago-runner-i4i-2xlarge-local-ssd
     permissions:
       issues: write
       pull-requests: write
-    concurrency:
-      group: performance-replay-pr-${{ github.event.pull_request.number }}
-      cancel-in-progress: false
     steps:
       - name: Checkout PR
         uses: actions/checkout@v4
@@ -45,18 +42,37 @@ jobs:
       - name: Determine PR results location
         id: location
         run: |
-          echo "data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          echo "pr-data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          echo "commit-data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}/commits/${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
 
-      - name: Store PR benchmark result
+      - name: Store PR benchmark trend
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: 'Replay 10K PR'
           tool: 'go'
           output-file-path: ${{ steps.benchmark.outputs.output-file }}
+          ref: ${{ github.event.pull_request.head.sha }}
           github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           auto-push: true
           gh-repository: 'github.com/AminR443/firewood-benchmark-reports'
-          benchmark-data-dir-path: ${{ steps.location.outputs.data-dir }}
+          gh-pages-branch: main
+          benchmark-data-dir-path: ${{ steps.location.outputs.pr-data-dir }}
+          # Show alert but don't fail PR
+          alert-threshold: '150%'
+          comment-on-alert: false
+          fail-on-alert: false
+
+      - name: Store PR benchmark for commit
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: 'Replay 10K PR Commit'
+          tool: 'go'
+          output-file-path: ${{ steps.benchmark.outputs.output-file }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
+          auto-push: true
+          gh-repository: 'github.com/AminR443/firewood-benchmark-reports'
+          benchmark-data-dir-path: ${{ steps.location.outputs.commit-data-dir }}
           # Show alert but don't fail PR
           alert-threshold: '150%'
           comment-on-alert: false
@@ -68,13 +84,15 @@ jobs:
           BENCHMARK_RESULTS: ${{ steps.benchmark.outputs.results }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
-          RESULTS_URL: https://aminr443.github.io/firewood-benchmark-reports/${{ steps.location.outputs.data-dir }}/
+          TREND_URL: https://aminr443.github.io/firewood-benchmark-reports/${{ steps.location.outputs.pr-data-dir }}/
+          COMMIT_URL: https://aminr443.github.io/firewood-benchmark-reports/${{ steps.location.outputs.commit-data-dir }}/
         with:
           script: |
             const results = process.env.BENCHMARK_RESULTS;
             const prNumber = parseInt(process.env.PR_NUMBER, 10);
             const commitSha = process.env.COMMIT_SHA;
-            const resultsUrl = process.env.RESULTS_URL;
+            const trendUrl = process.env.TREND_URL;
+            const commitUrl = process.env.COMMIT_URL;
 
             const body = [
               '## Performance Test Results',
@@ -84,7 +102,9 @@ jobs:
               results,
               '```',
               '',
-              `[Trend graph for this PR](${resultsUrl})`,
+              `[PR trend graph](${trendUrl})`,
+              '',
+              `[This commit graph](${commitUrl})`,
               '',
               '---',
               `*Commit: \`${commitSha.substring(0, 8)}\`*`
@@ -101,7 +121,7 @@ jobs:
   benchmark-main:
     name: Benchmark (main)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
+    runs-on: avago-runner-i4i-2xlarge-local-ssd
     permissions:
       contents: write
     concurrency:
@@ -127,6 +147,7 @@ jobs:
           name: 'Go Benchmark'
           tool: 'go'
           output-file-path: ${{ steps.benchmark.outputs.output-file }}
+          ref: ${{ github.sha }}
           # TODO: Replace with org repo once gh-pages conflict is resolved
           # For now using external repo for benchmark data
           github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
