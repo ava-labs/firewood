@@ -5,7 +5,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v7.34.0
-// source: proto/remote.proto
+// source: remote.proto
 
 package proto
 
@@ -27,8 +27,9 @@ const (
 type BatchOperation_OpType int32
 
 const (
-	BatchOperation_PUT    BatchOperation_OpType = 0
-	BatchOperation_DELETE BatchOperation_OpType = 1
+	BatchOperation_PUT           BatchOperation_OpType = 0
+	BatchOperation_DELETE        BatchOperation_OpType = 1
+	BatchOperation_PREFIX_DELETE BatchOperation_OpType = 2
 )
 
 // Enum value maps for BatchOperation_OpType.
@@ -36,10 +37,12 @@ var (
 	BatchOperation_OpType_name = map[int32]string{
 		0: "PUT",
 		1: "DELETE",
+		2: "PREFIX_DELETE",
 	}
 	BatchOperation_OpType_value = map[string]int32{
-		"PUT":    0,
-		"DELETE": 1,
+		"PUT":           0,
+		"DELETE":        1,
+		"PREFIX_DELETE": 2,
 	}
 )
 
@@ -54,11 +57,11 @@ func (x BatchOperation_OpType) String() string {
 }
 
 func (BatchOperation_OpType) Descriptor() protoreflect.EnumDescriptor {
-	return file_proto_remote_proto_enumTypes[0].Descriptor()
+	return file_remote_proto_enumTypes[0].Descriptor()
 }
 
 func (BatchOperation_OpType) Type() protoreflect.EnumType {
-	return &file_proto_remote_proto_enumTypes[0]
+	return &file_remote_proto_enumTypes[0]
 }
 
 func (x BatchOperation_OpType) Number() protoreflect.EnumNumber {
@@ -67,7 +70,7 @@ func (x BatchOperation_OpType) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use BatchOperation_OpType.Descriptor instead.
 func (BatchOperation_OpType) EnumDescriptor() ([]byte, []int) {
-	return file_proto_remote_proto_rawDescGZIP(), []int{4, 0}
+	return file_remote_proto_rawDescGZIP(), []int{4, 0}
 }
 
 type GetTruncatedTrieRequest struct {
@@ -82,7 +85,7 @@ type GetTruncatedTrieRequest struct {
 
 func (x *GetTruncatedTrieRequest) Reset() {
 	*x = GetTruncatedTrieRequest{}
-	mi := &file_proto_remote_proto_msgTypes[0]
+	mi := &file_remote_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -94,7 +97,7 @@ func (x *GetTruncatedTrieRequest) String() string {
 func (*GetTruncatedTrieRequest) ProtoMessage() {}
 
 func (x *GetTruncatedTrieRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_remote_proto_msgTypes[0]
+	mi := &file_remote_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -107,7 +110,7 @@ func (x *GetTruncatedTrieRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTruncatedTrieRequest.ProtoReflect.Descriptor instead.
 func (*GetTruncatedTrieRequest) Descriptor() ([]byte, []int) {
-	return file_proto_remote_proto_rawDescGZIP(), []int{0}
+	return file_remote_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *GetTruncatedTrieRequest) GetRootHash() []byte {
@@ -134,7 +137,7 @@ type GetTruncatedTrieResponse struct {
 
 func (x *GetTruncatedTrieResponse) Reset() {
 	*x = GetTruncatedTrieResponse{}
-	mi := &file_proto_remote_proto_msgTypes[1]
+	mi := &file_remote_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -146,7 +149,7 @@ func (x *GetTruncatedTrieResponse) String() string {
 func (*GetTruncatedTrieResponse) ProtoMessage() {}
 
 func (x *GetTruncatedTrieResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_remote_proto_msgTypes[1]
+	mi := &file_remote_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -159,7 +162,7 @@ func (x *GetTruncatedTrieResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetTruncatedTrieResponse.ProtoReflect.Descriptor instead.
 func (*GetTruncatedTrieResponse) Descriptor() ([]byte, []int) {
-	return file_proto_remote_proto_rawDescGZIP(), []int{1}
+	return file_remote_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *GetTruncatedTrieResponse) GetTrieData() []byte {
@@ -181,7 +184,7 @@ type GetValueRequest struct {
 
 func (x *GetValueRequest) Reset() {
 	*x = GetValueRequest{}
-	mi := &file_proto_remote_proto_msgTypes[2]
+	mi := &file_remote_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -193,7 +196,7 @@ func (x *GetValueRequest) String() string {
 func (*GetValueRequest) ProtoMessage() {}
 
 func (x *GetValueRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_remote_proto_msgTypes[2]
+	mi := &file_remote_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -206,7 +209,7 @@ func (x *GetValueRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetValueRequest.ProtoReflect.Descriptor instead.
 func (*GetValueRequest) Descriptor() ([]byte, []int) {
-	return file_proto_remote_proto_rawDescGZIP(), []int{2}
+	return file_remote_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *GetValueRequest) GetRootHash() []byte {
@@ -235,7 +238,7 @@ type GetValueResponse struct {
 
 func (x *GetValueResponse) Reset() {
 	*x = GetValueResponse{}
-	mi := &file_proto_remote_proto_msgTypes[3]
+	mi := &file_remote_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -247,7 +250,7 @@ func (x *GetValueResponse) String() string {
 func (*GetValueResponse) ProtoMessage() {}
 
 func (x *GetValueResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_remote_proto_msgTypes[3]
+	mi := &file_remote_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -260,7 +263,7 @@ func (x *GetValueResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetValueResponse.ProtoReflect.Descriptor instead.
 func (*GetValueResponse) Descriptor() ([]byte, []int) {
-	return file_proto_remote_proto_rawDescGZIP(), []int{3}
+	return file_remote_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *GetValueResponse) GetValue() []byte {
@@ -289,7 +292,7 @@ type BatchOperation struct {
 
 func (x *BatchOperation) Reset() {
 	*x = BatchOperation{}
-	mi := &file_proto_remote_proto_msgTypes[4]
+	mi := &file_remote_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -301,7 +304,7 @@ func (x *BatchOperation) String() string {
 func (*BatchOperation) ProtoMessage() {}
 
 func (x *BatchOperation) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_remote_proto_msgTypes[4]
+	mi := &file_remote_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -314,7 +317,7 @@ func (x *BatchOperation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BatchOperation.ProtoReflect.Descriptor instead.
 func (*BatchOperation) Descriptor() ([]byte, []int) {
-	return file_proto_remote_proto_rawDescGZIP(), []int{4}
+	return file_remote_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *BatchOperation) GetOpType() BatchOperation_OpType {
@@ -354,7 +357,7 @@ type CreateProposalRequest struct {
 
 func (x *CreateProposalRequest) Reset() {
 	*x = CreateProposalRequest{}
-	mi := &file_proto_remote_proto_msgTypes[5]
+	mi := &file_remote_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -366,7 +369,7 @@ func (x *CreateProposalRequest) String() string {
 func (*CreateProposalRequest) ProtoMessage() {}
 
 func (x *CreateProposalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_remote_proto_msgTypes[5]
+	mi := &file_remote_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -379,7 +382,7 @@ func (x *CreateProposalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateProposalRequest.ProtoReflect.Descriptor instead.
 func (*CreateProposalRequest) Descriptor() ([]byte, []int) {
-	return file_proto_remote_proto_rawDescGZIP(), []int{5}
+	return file_remote_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *CreateProposalRequest) GetRootHash() []byte {
@@ -424,7 +427,7 @@ type CreateProposalResponse struct {
 
 func (x *CreateProposalResponse) Reset() {
 	*x = CreateProposalResponse{}
-	mi := &file_proto_remote_proto_msgTypes[6]
+	mi := &file_remote_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -436,7 +439,7 @@ func (x *CreateProposalResponse) String() string {
 func (*CreateProposalResponse) ProtoMessage() {}
 
 func (x *CreateProposalResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_remote_proto_msgTypes[6]
+	mi := &file_remote_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -449,7 +452,7 @@ func (x *CreateProposalResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateProposalResponse.ProtoReflect.Descriptor instead.
 func (*CreateProposalResponse) Descriptor() ([]byte, []int) {
-	return file_proto_remote_proto_rawDescGZIP(), []int{6}
+	return file_remote_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *CreateProposalResponse) GetProposalId() uint64 {
@@ -483,7 +486,7 @@ type CommitProposalRequest struct {
 
 func (x *CommitProposalRequest) Reset() {
 	*x = CommitProposalRequest{}
-	mi := &file_proto_remote_proto_msgTypes[7]
+	mi := &file_remote_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -495,7 +498,7 @@ func (x *CommitProposalRequest) String() string {
 func (*CommitProposalRequest) ProtoMessage() {}
 
 func (x *CommitProposalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_remote_proto_msgTypes[7]
+	mi := &file_remote_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -508,7 +511,7 @@ func (x *CommitProposalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitProposalRequest.ProtoReflect.Descriptor instead.
 func (*CommitProposalRequest) Descriptor() ([]byte, []int) {
-	return file_proto_remote_proto_rawDescGZIP(), []int{7}
+	return file_remote_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CommitProposalRequest) GetProposalId() uint64 {
@@ -526,7 +529,7 @@ type CommitProposalResponse struct {
 
 func (x *CommitProposalResponse) Reset() {
 	*x = CommitProposalResponse{}
-	mi := &file_proto_remote_proto_msgTypes[8]
+	mi := &file_remote_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -538,7 +541,7 @@ func (x *CommitProposalResponse) String() string {
 func (*CommitProposalResponse) ProtoMessage() {}
 
 func (x *CommitProposalResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_remote_proto_msgTypes[8]
+	mi := &file_remote_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -551,7 +554,7 @@ func (x *CommitProposalResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CommitProposalResponse.ProtoReflect.Descriptor instead.
 func (*CommitProposalResponse) Descriptor() ([]byte, []int) {
-	return file_proto_remote_proto_rawDescGZIP(), []int{8}
+	return file_remote_proto_rawDescGZIP(), []int{8}
 }
 
 type DropProposalRequest struct {
@@ -564,7 +567,7 @@ type DropProposalRequest struct {
 
 func (x *DropProposalRequest) Reset() {
 	*x = DropProposalRequest{}
-	mi := &file_proto_remote_proto_msgTypes[9]
+	mi := &file_remote_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -576,7 +579,7 @@ func (x *DropProposalRequest) String() string {
 func (*DropProposalRequest) ProtoMessage() {}
 
 func (x *DropProposalRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_remote_proto_msgTypes[9]
+	mi := &file_remote_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -589,7 +592,7 @@ func (x *DropProposalRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DropProposalRequest.ProtoReflect.Descriptor instead.
 func (*DropProposalRequest) Descriptor() ([]byte, []int) {
-	return file_proto_remote_proto_rawDescGZIP(), []int{9}
+	return file_remote_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *DropProposalRequest) GetProposalId() uint64 {
@@ -607,7 +610,7 @@ type DropProposalResponse struct {
 
 func (x *DropProposalResponse) Reset() {
 	*x = DropProposalResponse{}
-	mi := &file_proto_remote_proto_msgTypes[10]
+	mi := &file_remote_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -619,7 +622,7 @@ func (x *DropProposalResponse) String() string {
 func (*DropProposalResponse) ProtoMessage() {}
 
 func (x *DropProposalResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_remote_proto_msgTypes[10]
+	mi := &file_remote_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -632,7 +635,7 @@ func (x *DropProposalResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DropProposalResponse.ProtoReflect.Descriptor instead.
 func (*DropProposalResponse) Descriptor() ([]byte, []int) {
-	return file_proto_remote_proto_rawDescGZIP(), []int{10}
+	return file_remote_proto_rawDescGZIP(), []int{10}
 }
 
 type IterBatchRequest struct {
@@ -649,7 +652,7 @@ type IterBatchRequest struct {
 
 func (x *IterBatchRequest) Reset() {
 	*x = IterBatchRequest{}
-	mi := &file_proto_remote_proto_msgTypes[11]
+	mi := &file_remote_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -661,7 +664,7 @@ func (x *IterBatchRequest) String() string {
 func (*IterBatchRequest) ProtoMessage() {}
 
 func (x *IterBatchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_remote_proto_msgTypes[11]
+	mi := &file_remote_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -674,7 +677,7 @@ func (x *IterBatchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IterBatchRequest.ProtoReflect.Descriptor instead.
 func (*IterBatchRequest) Descriptor() ([]byte, []int) {
-	return file_proto_remote_proto_rawDescGZIP(), []int{11}
+	return file_remote_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *IterBatchRequest) GetProposalId() uint64 {
@@ -708,7 +711,7 @@ type KeyValuePair struct {
 
 func (x *KeyValuePair) Reset() {
 	*x = KeyValuePair{}
-	mi := &file_proto_remote_proto_msgTypes[12]
+	mi := &file_remote_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -720,7 +723,7 @@ func (x *KeyValuePair) String() string {
 func (*KeyValuePair) ProtoMessage() {}
 
 func (x *KeyValuePair) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_remote_proto_msgTypes[12]
+	mi := &file_remote_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -733,7 +736,7 @@ func (x *KeyValuePair) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use KeyValuePair.ProtoReflect.Descriptor instead.
 func (*KeyValuePair) Descriptor() ([]byte, []int) {
-	return file_proto_remote_proto_rawDescGZIP(), []int{12}
+	return file_remote_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *KeyValuePair) GetKey() []byte {
@@ -762,7 +765,7 @@ type IterBatchResponse struct {
 
 func (x *IterBatchResponse) Reset() {
 	*x = IterBatchResponse{}
-	mi := &file_proto_remote_proto_msgTypes[13]
+	mi := &file_remote_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -774,7 +777,7 @@ func (x *IterBatchResponse) String() string {
 func (*IterBatchResponse) ProtoMessage() {}
 
 func (x *IterBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_proto_remote_proto_msgTypes[13]
+	mi := &file_remote_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -787,7 +790,7 @@ func (x *IterBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IterBatchResponse.ProtoReflect.Descriptor instead.
 func (*IterBatchResponse) Descriptor() ([]byte, []int) {
-	return file_proto_remote_proto_rawDescGZIP(), []int{13}
+	return file_remote_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *IterBatchResponse) GetPairs() []*KeyValuePair {
@@ -804,11 +807,11 @@ func (x *IterBatchResponse) GetHasMore() bool {
 	return false
 }
 
-var File_proto_remote_proto protoreflect.FileDescriptor
+var File_remote_proto protoreflect.FileDescriptor
 
-const file_proto_remote_proto_rawDesc = "" +
+const file_remote_proto_rawDesc = "" +
 	"\n" +
-	"\x12proto/remote.proto\x12\x0ffirewood.remote\"L\n" +
+	"\fremote.proto\x12\x0ffirewood.remote\"L\n" +
 	"\x17GetTruncatedTrieRequest\x12\x1b\n" +
 	"\troot_hash\x18\x01 \x01(\fR\brootHash\x12\x14\n" +
 	"\x05depth\x18\x02 \x01(\rR\x05depth\"7\n" +
@@ -820,15 +823,16 @@ const file_proto_remote_proto_rawDesc = "" +
 	"\x10GetValueResponse\x12\x19\n" +
 	"\x05value\x18\x01 \x01(\fH\x00R\x05value\x88\x01\x01\x12\x14\n" +
 	"\x05proof\x18\x02 \x01(\fR\x05proofB\b\n" +
-	"\x06_value\"\x98\x01\n" +
+	"\x06_value\"\xab\x01\n" +
 	"\x0eBatchOperation\x12?\n" +
 	"\aop_type\x18\x01 \x01(\x0e2&.firewood.remote.BatchOperation.OpTypeR\x06opType\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\fR\x03key\x12\x14\n" +
-	"\x05value\x18\x03 \x01(\fR\x05value\"\x1d\n" +
+	"\x05value\x18\x03 \x01(\fR\x05value\"0\n" +
 	"\x06OpType\x12\a\n" +
 	"\x03PUT\x10\x00\x12\n" +
 	"\n" +
-	"\x06DELETE\x10\x01\"\xc7\x01\n" +
+	"\x06DELETE\x10\x01\x12\x11\n" +
+	"\rPREFIX_DELETE\x10\x02\"\xc7\x01\n" +
 	"\x15CreateProposalRequest\x12\x1b\n" +
 	"\troot_hash\x18\x01 \x01(\fR\brootHash\x121\n" +
 	"\x03ops\x18\x02 \x03(\v2\x1f.firewood.remote.BatchOperationR\x03ops\x12\x14\n" +
@@ -869,20 +873,20 @@ const file_proto_remote_proto_rawDesc = "" +
 	"\tIterBatch\x12!.firewood.remote.IterBatchRequest\x1a\".firewood.remote.IterBatchResponseB/Z-github.com/ava-labs/firewood/ffi/remote/protob\x06proto3"
 
 var (
-	file_proto_remote_proto_rawDescOnce sync.Once
-	file_proto_remote_proto_rawDescData []byte
+	file_remote_proto_rawDescOnce sync.Once
+	file_remote_proto_rawDescData []byte
 )
 
-func file_proto_remote_proto_rawDescGZIP() []byte {
-	file_proto_remote_proto_rawDescOnce.Do(func() {
-		file_proto_remote_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_proto_remote_proto_rawDesc), len(file_proto_remote_proto_rawDesc)))
+func file_remote_proto_rawDescGZIP() []byte {
+	file_remote_proto_rawDescOnce.Do(func() {
+		file_remote_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_remote_proto_rawDesc), len(file_remote_proto_rawDesc)))
 	})
-	return file_proto_remote_proto_rawDescData
+	return file_remote_proto_rawDescData
 }
 
-var file_proto_remote_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_remote_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
-var file_proto_remote_proto_goTypes = []any{
+var file_remote_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_remote_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_remote_proto_goTypes = []any{
 	(BatchOperation_OpType)(0),       // 0: firewood.remote.BatchOperation.OpType
 	(*GetTruncatedTrieRequest)(nil),  // 1: firewood.remote.GetTruncatedTrieRequest
 	(*GetTruncatedTrieResponse)(nil), // 2: firewood.remote.GetTruncatedTrieResponse
@@ -899,7 +903,7 @@ var file_proto_remote_proto_goTypes = []any{
 	(*KeyValuePair)(nil),             // 13: firewood.remote.KeyValuePair
 	(*IterBatchResponse)(nil),        // 14: firewood.remote.IterBatchResponse
 }
-var file_proto_remote_proto_depIdxs = []int32{
+var file_remote_proto_depIdxs = []int32{
 	0,  // 0: firewood.remote.BatchOperation.op_type:type_name -> firewood.remote.BatchOperation.OpType
 	5,  // 1: firewood.remote.CreateProposalRequest.ops:type_name -> firewood.remote.BatchOperation
 	13, // 2: firewood.remote.IterBatchResponse.pairs:type_name -> firewood.remote.KeyValuePair
@@ -922,29 +926,29 @@ var file_proto_remote_proto_depIdxs = []int32{
 	0,  // [0:3] is the sub-list for field type_name
 }
 
-func init() { file_proto_remote_proto_init() }
-func file_proto_remote_proto_init() {
-	if File_proto_remote_proto != nil {
+func init() { file_remote_proto_init() }
+func file_remote_proto_init() {
+	if File_remote_proto != nil {
 		return
 	}
-	file_proto_remote_proto_msgTypes[3].OneofWrappers = []any{}
-	file_proto_remote_proto_msgTypes[5].OneofWrappers = []any{}
+	file_remote_proto_msgTypes[3].OneofWrappers = []any{}
+	file_remote_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_remote_proto_rawDesc), len(file_proto_remote_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_remote_proto_rawDesc), len(file_remote_proto_rawDesc)),
 			NumEnums:      1,
 			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_proto_remote_proto_goTypes,
-		DependencyIndexes: file_proto_remote_proto_depIdxs,
-		EnumInfos:         file_proto_remote_proto_enumTypes,
-		MessageInfos:      file_proto_remote_proto_msgTypes,
+		GoTypes:           file_remote_proto_goTypes,
+		DependencyIndexes: file_remote_proto_depIdxs,
+		EnumInfos:         file_remote_proto_enumTypes,
+		MessageInfos:      file_remote_proto_msgTypes,
 	}.Build()
-	File_proto_remote_proto = out.File
-	file_proto_remote_proto_goTypes = nil
-	file_proto_remote_proto_depIdxs = nil
+	File_remote_proto = out.File
+	file_remote_proto_goTypes = nil
+	file_remote_proto_depIdxs = nil
 }

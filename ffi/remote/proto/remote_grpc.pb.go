@@ -5,7 +5,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v7.34.0
-// source: proto/remote.proto
+// source: remote.proto
 
 package proto
 
@@ -320,5 +320,5 @@ var FirewoodRemote_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
-	Metadata: "proto/remote.proto",
+	Metadata: "remote.proto",
 }

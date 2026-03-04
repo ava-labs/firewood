@@ -76,6 +76,21 @@ func (w *WitnessProof) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
+// ValidateOps checks that the witness proof's embedded batch_ops match the
+// expected operations. Put and Delete require exact match; PrefixDelete
+// consumes zero or more consecutive Delete ops whose keys start with the prefix.
+func (w *WitnessProof) ValidateOps(expected []BatchOp) error {
+	if w.handle == nil {
+		return fmt.Errorf("witness proof already freed")
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	cOps := newKeyValuePairsFromBatch(expected, &pinner)
+	return getErrorFromVoidResult(C.fwd_validate_witness_ops(w.handle, cOps))
+}
+
 // getWitnessProofFromResult converts a C.WitnessResult to a WitnessProof or
 // error.
 func getWitnessProofFromResult(result C.WitnessResult) (*WitnessProof, error) {

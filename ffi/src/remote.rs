@@ -290,25 +290,25 @@ pub extern "C" fn fwd_generate_witness(
         let revision = db.db().revision(api_hash).map_err(|e| e.to_string())?;
 
         // Convert FFI batch ops to remote BatchOps
-        let remote_ops: Vec<RemoteBatchOp> = batch_ops
-            .as_slice()
-            .iter()
-            .map(|op| match op {
-                crate::BatchOp::Put { key, value } => RemoteBatchOp::Put {
+        let mut remote_ops = Vec::with_capacity(batch_ops.as_slice().len());
+        for op in batch_ops.as_slice() {
+            match op {
+                crate::BatchOp::Put { key, value } => remote_ops.push(RemoteBatchOp::Put {
                     key: key.as_slice().into(),
                     value: value.as_slice().into(),
-                },
-                crate::BatchOp::Delete { key } => RemoteBatchOp::Delete {
+                }),
+                crate::BatchOp::Delete { key } => remote_ops.push(RemoteBatchOp::Delete {
                     key: key.as_slice().into(),
-                },
+                }),
                 crate::BatchOp::DeleteRange { .. } => {
-                    // DeleteRange not supported in witness generation
-                    RemoteBatchOp::Delete {
-                        key: Box::new([]),
-                    }
+                    return Err(
+                        "DeleteRange not supported in witness generation; \
+                         expand to individual Delete ops on the server side"
+                            .to_string(),
+                    );
                 }
-            })
-            .collect();
+            }
+        }
 
         let new_hash: firewood_storage::TrieHash = new_root_hash.into();
 
@@ -593,6 +593,133 @@ pub extern "C" fn fwd_verify_single_key_proof(
             .verify(key.as_slice(), expected_value, &api_hash)
             .map_err(|e| e.to_string())
     })
+}
+
+/// Validates that the witness proof's embedded `batch_ops` match the expected
+/// operations sent by the client.
+///
+/// For `Put` and `Delete` ops, an exact match (type, key, value) is required.
+/// For `DeleteRange` (`PrefixDelete`) ops, the witness should contain zero or
+/// more consecutive Delete ops whose keys start with the given prefix.
+///
+/// # Arguments
+///
+/// * `witness` - The witness proof handle
+/// * `expected_ops` - The batch operations the client sent
+///
+/// # Returns
+///
+/// - [`VoidResult::NullHandlePointer`] if `witness` is null.
+/// - [`VoidResult::Ok`] if the ops match.
+/// - [`VoidResult::Err`] if validation fails.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `witness` is a valid pointer to a [`WitnessProofHandle`].
+/// * ensure that `expected_ops` is valid for [`BorrowedBatchOps`].
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_validate_witness_ops(
+    witness: Option<&WitnessProofHandle>,
+    expected_ops: BorrowedBatchOps<'_>,
+) -> VoidResult {
+    crate::invoke_with_handle(witness, move |w| -> Result<(), String> {
+        let witness_ops = &w.proof.batch_ops;
+        let expected = expected_ops.as_slice();
+
+        let mut wi = 0usize; // index into witness_ops
+
+        for exp in expected {
+            match exp {
+                crate::BatchOp::Put { key, value } => {
+                    let Some(wop) = witness_ops.get(wi) else {
+                        return Err(format!(
+                            "witness ops exhausted; expected Put(key={})",
+                            hex_key(key.as_slice())
+                        ));
+                    };
+                    match wop {
+                        RemoteBatchOp::Put {
+                            key: wk,
+                            value: wv,
+                        } => {
+                            if key.as_slice() != &**wk || value.as_slice() != &**wv {
+                                return Err(format!(
+                                    "Put mismatch at witness index {wi}: expected key={} value_len={}, got key={} value_len={}",
+                                    hex_key(key.as_slice()),
+                                    value.as_slice().len(),
+                                    hex_key(wk),
+                                    wv.len()
+                                ));
+                            }
+                        }
+                        RemoteBatchOp::Delete { .. } => {
+                            return Err(format!(
+                                "expected Put at witness index {wi}, got {wop:?}"
+                            ));
+                        }
+                    }
+                    wi = wi.strict_add(1);
+                }
+                crate::BatchOp::Delete { key } => {
+                    let Some(wop) = witness_ops.get(wi) else {
+                        return Err(format!(
+                            "witness ops exhausted; expected Delete(key={})",
+                            hex_key(key.as_slice())
+                        ));
+                    };
+                    match wop {
+                        RemoteBatchOp::Delete { key: wk } => {
+                            if key.as_slice() != &**wk {
+                                return Err(format!(
+                                    "Delete mismatch at witness index {wi}: expected key={}, got key={}",
+                                    hex_key(key.as_slice()),
+                                    hex_key(wk)
+                                ));
+                            }
+                        }
+                        RemoteBatchOp::Put { .. } => {
+                            return Err(format!(
+                                "expected Delete at witness index {wi}, got {wop:?}"
+                            ));
+                        }
+                    }
+                    wi = wi.strict_add(1);
+                }
+                crate::BatchOp::DeleteRange { prefix } => {
+                    // Consume zero or more consecutive Delete ops whose keys
+                    // start with the prefix.
+                    let pfx = prefix.as_slice();
+                    while let Some(RemoteBatchOp::Delete { key }) = witness_ops.get(wi) {
+                        if !key.starts_with(pfx) {
+                            break;
+                        }
+                        wi = wi.strict_add(1);
+                    }
+                }
+            }
+        }
+
+        if wi != witness_ops.len() {
+            return Err(format!(
+                "witness has {} extra ops after index {wi}",
+                witness_ops.len().strict_sub(wi),
+            ));
+        }
+
+        Ok(())
+    })
+}
+
+/// Formats a byte slice as a hex string for error messages.
+fn hex_key(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+    bytes
+        .iter()
+        .fold(String::with_capacity(bytes.len().strict_mul(2)), |mut s, b| {
+            let _ = write!(s, "{b:02x}");
+            s
+        })
 }
 
 /// Frees a [`TruncatedTrieHandle`].

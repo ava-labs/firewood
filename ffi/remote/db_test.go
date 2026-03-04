@@ -261,6 +261,203 @@ func TestRemoteDBProposeDrop(t *testing.T) {
 	}
 }
 
+func TestRemoteDBPrefixDelete(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{
+		"a/1": "v1",
+		"a/2": "v2",
+		"b/1": "v3",
+	})
+
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	// PrefixDelete "a/" should remove a/1 and a/2 but keep b/1.
+	newRoot, err := rdb.Update(ctx, []ffi.BatchOp{ffi.PrefixDelete([]byte("a/"))})
+	if err != nil {
+		t.Fatalf("Update with PrefixDelete: %v", err)
+	}
+	if newRoot == rootHash {
+		t.Fatal("root should change after PrefixDelete")
+	}
+
+	// a/1 and a/2 should be gone.
+	for _, key := range []string{"a/1", "a/2"} {
+		val, err := rdb.Get(ctx, []byte(key))
+		if err != nil {
+			t.Fatalf("Get(%s): %v", key, err)
+		}
+		if val != nil {
+			t.Fatalf("Get(%s) = %q, want nil", key, val)
+		}
+	}
+
+	// b/1 should still exist.
+	val, err := rdb.Get(ctx, []byte("b/1"))
+	if err != nil {
+		t.Fatalf("Get(b/1): %v", err)
+	}
+	if string(val) != "v3" {
+		t.Fatalf("Get(b/1) = %q, want %q", val, "v3")
+	}
+}
+
+func TestRemoteDBPrefixDeletePropose(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{
+		"a/1": "v1",
+		"a/2": "v2",
+		"b/1": "v3",
+	})
+
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	prop, err := rdb.Propose(ctx, []ffi.BatchOp{ffi.PrefixDelete([]byte("a/"))})
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+
+	// Proposal should see a/1 and a/2 deleted.
+	for _, key := range []string{"a/1", "a/2"} {
+		val, err := prop.Get(ctx, []byte(key))
+		if err != nil {
+			t.Fatalf("Get(%s): %v", key, err)
+		}
+		if val != nil {
+			t.Fatalf("Get(%s) = %q, want nil", key, val)
+		}
+	}
+
+	// b/1 should still be visible.
+	val, err := prop.Get(ctx, []byte("b/1"))
+	if err != nil {
+		t.Fatalf("Get(b/1): %v", err)
+	}
+	if string(val) != "v3" {
+		t.Fatalf("Get(b/1) = %q, want %q", val, "v3")
+	}
+
+	if err := prop.Commit(ctx); err != nil {
+		t.Fatalf("Commit: %v", err)
+	}
+}
+
+func TestRemoteDBPrefixDeleteChained(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"x": "0"})
+
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	// p1 adds keys under "a/".
+	p1, err := rdb.Propose(ctx, []ffi.BatchOp{
+		ffi.Put([]byte("a/1"), []byte("v1")),
+		ffi.Put([]byte("a/2"), []byte("v2")),
+	})
+	if err != nil {
+		t.Fatalf("Propose p1: %v", err)
+	}
+
+	// p2 PrefixDeletes "a/".
+	p2, err := p1.Propose(ctx, []ffi.BatchOp{ffi.PrefixDelete([]byte("a/"))})
+	if err != nil {
+		t.Fatalf("Propose p2: %v", err)
+	}
+
+	// p2 should not see a/1 or a/2.
+	for _, key := range []string{"a/1", "a/2"} {
+		val, err := p2.Get(ctx, []byte(key))
+		if err != nil {
+			t.Fatalf("p2.Get(%s): %v", key, err)
+		}
+		if val != nil {
+			t.Fatalf("p2.Get(%s) = %q, want nil", key, val)
+		}
+	}
+
+	// Commit the chain.
+	if err := p1.Commit(ctx); err != nil {
+		t.Fatalf("p1.Commit: %v", err)
+	}
+	if err := p2.Commit(ctx); err != nil {
+		t.Fatalf("p2.Commit: %v", err)
+	}
+}
+
+func TestRemoteDBPrefixDeleteMixed(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{
+		"a/1": "old1",
+		"b/1": "old2",
+	})
+
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	// Mixed batch: Put a new key under "a/", then PrefixDelete "a/".
+	// The PrefixDelete should remove both the pre-existing a/1 and the
+	// just-added a/3.
+	newRoot, err := rdb.Update(ctx, []ffi.BatchOp{
+		ffi.Put([]byte("a/3"), []byte("new")),
+		ffi.PrefixDelete([]byte("a/")),
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if newRoot == rootHash {
+		t.Fatal("root should change")
+	}
+
+	// All "a/" keys should be gone.
+	for _, key := range []string{"a/1", "a/3"} {
+		val, err := rdb.Get(ctx, []byte(key))
+		if err != nil {
+			t.Fatalf("Get(%s): %v", key, err)
+		}
+		if val != nil {
+			t.Fatalf("Get(%s) = %q, want nil", key, val)
+		}
+	}
+
+	// b/1 should still exist.
+	val, err := rdb.Get(ctx, []byte("b/1"))
+	if err != nil {
+		t.Fatalf("Get(b/1): %v", err)
+	}
+	if string(val) != "old2" {
+		t.Fatalf("Get(b/1) = %q, want %q", val, "old2")
+	}
+}
+
 func TestNewRemoteDBBadRoot(t *testing.T) {
 	db := newTestDB(t)
 	ctx := t.Context()

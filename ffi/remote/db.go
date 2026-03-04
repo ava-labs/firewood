@@ -70,19 +70,21 @@ func (r *RemoteDB) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.DBProp
 
 	// The server generates witnesses from the committed root, so verify
 	// against the client's committed trie.
-	newTrie, err := verifyWitnessFromResponse(r.client.trie, createResp)
+	expectedCumulativeOps := batch
+	newTrie, err := verifyWitnessFromResponse(r.client.trie, createResp, expectedCumulativeOps)
 	if err != nil {
 		return nil, err
 	}
 
 	return &remoteProposal{
-		proposalID:    createResp.GetProposalId(),
-		root:          newTrie.Root(),
-		newTrie:       newTrie,
-		rpc:           r.client.rpc,
-		parentTrie:    &r.client.trie,
-		committedTrie: r.client.trie,
-		depth:         r.client.depth,
+		proposalID:            createResp.GetProposalId(),
+		root:                  newTrie.Root(),
+		newTrie:               newTrie,
+		rpc:                   r.client.rpc,
+		parentTrie:            &r.client.trie,
+		committedTrie:         r.client.trie,
+		depth:                 r.client.depth,
+		expectedCumulativeOps: expectedCumulativeOps,
 	}, nil
 }
 
@@ -108,6 +110,9 @@ type remoteProposal struct {
 	// RemoteDB's trie; for chained proposals it is inherited from the parent.
 	committedTrie *ffi.TruncatedTrie
 	depth         uint
+	// expectedCumulativeOps tracks all ops from the chain root to this proposal,
+	// used for client-side validation of the witness's embedded batch_ops.
+	expectedCumulativeOps []ffi.BatchOp
 }
 
 func (p *remoteProposal) Root() ffi.Hash {
@@ -202,19 +207,24 @@ func (p *remoteProposal) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.
 
 	// The server generates witnesses from the committed root with cumulative
 	// ops, so verify against the committed trie, not this proposal's trie.
-	newTrie, err := verifyWitnessFromResponse(p.committedTrie, createResp)
+	expectedCumulativeOps := make([]ffi.BatchOp, 0, len(p.expectedCumulativeOps)+len(batch))
+	expectedCumulativeOps = append(expectedCumulativeOps, p.expectedCumulativeOps...)
+	expectedCumulativeOps = append(expectedCumulativeOps, batch...)
+
+	newTrie, err := verifyWitnessFromResponse(p.committedTrie, createResp, expectedCumulativeOps)
 	if err != nil {
 		return nil, err
 	}
 
 	return &remoteProposal{
-		proposalID:    createResp.GetProposalId(),
-		root:          newTrie.Root(),
-		newTrie:       newTrie,
-		rpc:           p.rpc,
-		parentTrie:    &p.newTrie,
-		committedTrie: p.committedTrie,
-		depth:         p.depth,
+		proposalID:            createResp.GetProposalId(),
+		root:                  newTrie.Root(),
+		newTrie:               newTrie,
+		rpc:                   p.rpc,
+		parentTrie:            &p.newTrie,
+		committedTrie:         p.committedTrie,
+		depth:                 p.depth,
+		expectedCumulativeOps: expectedCumulativeOps,
 	}, nil
 }
 
@@ -291,6 +301,8 @@ func batchOpsToProto(ops []ffi.BatchOp) []*pb.BatchOperation {
 			pbOp.Value = op.Value()
 		} else if op.IsDelete() {
 			pbOp.OpType = pb.BatchOperation_DELETE
+		} else if op.IsPrefixDelete() {
+			pbOp.OpType = pb.BatchOperation_PREFIX_DELETE
 		}
 		pbOps = append(pbOps, pbOp)
 	}
@@ -298,11 +310,25 @@ func batchOpsToProto(ops []ffi.BatchOp) []*pb.BatchOperation {
 }
 
 // verifyWitnessFromResponse deserializes and verifies the witness proof from a
-// CreateProposalResponse against the given base trie.
-func verifyWitnessFromResponse(baseTrie *ffi.TruncatedTrie, resp *pb.CreateProposalResponse) (*ffi.TruncatedTrie, error) {
+// CreateProposalResponse against the given base trie. If expectedCumulativeOps
+// is non-nil, it also validates that the witness's embedded batch_ops match
+// what the client sent (accounting for PrefixDelete expansion).
+func verifyWitnessFromResponse(
+	baseTrie *ffi.TruncatedTrie,
+	resp *pb.CreateProposalResponse,
+	expectedCumulativeOps []ffi.BatchOp,
+) (*ffi.TruncatedTrie, error) {
 	witness := &ffi.WitnessProof{}
 	if err := witness.UnmarshalBinary(resp.GetWitnessProof()); err != nil {
 		return nil, fmt.Errorf("unmarshal witness: %w", err)
+	}
+
+	// Validate witness ops match cumulative expected ops.
+	if expectedCumulativeOps != nil {
+		if err := witness.ValidateOps(expectedCumulativeOps); err != nil {
+			witness.Free()
+			return nil, fmt.Errorf("witness ops validation: %w", err)
+		}
 	}
 
 	newTrie, err := baseTrie.VerifyWitness(witness)

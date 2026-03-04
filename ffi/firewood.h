@@ -2680,6 +2680,34 @@ struct HashResult fwd_truncated_trie_root_hash(const struct TruncatedTrieHandle 
 struct ValueResult fwd_truncated_trie_to_bytes(const struct TruncatedTrieHandle *handle);
 
 /**
+ * Validates that the witness proof's embedded `batch_ops` match the expected
+ * operations sent by the client.
+ *
+ * For `Put` and `Delete` ops, an exact match (type, key, value) is required.
+ * For `DeleteRange` (`PrefixDelete`) ops, the witness should contain zero or
+ * more consecutive Delete ops whose keys start with the given prefix.
+ *
+ * # Arguments
+ *
+ * * `witness` - The witness proof handle
+ * * `expected_ops` - The batch operations the client sent
+ *
+ * # Returns
+ *
+ * - [`VoidResult::NullHandlePointer`] if `witness` is null.
+ * - [`VoidResult::Ok`] if the ops match.
+ * - [`VoidResult::Err`] if validation fails.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `witness` is a valid pointer to a [`WitnessProofHandle`].
+ * * ensure that `expected_ops` is valid for [`BorrowedBatchOps`].
+ */
+struct VoidResult fwd_validate_witness_ops(const struct WitnessProofHandle *witness,
+                                           BorrowedBatchOps expected_ops);
+
+/**
  * Verify a change proof and return a `VerifiedChangeProofResult`.
  *
  * # Arguments

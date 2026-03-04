@@ -160,6 +160,51 @@ func TestLocalDBProposalChain(t *testing.T) {
 	}
 }
 
+func TestLocalDBPrefixDelete(t *testing.T) {
+	db := newLocalDB(t)
+	ctx := t.Context()
+
+	// Insert keys under "a/" and "b/".
+	_, err := db.Update(ctx, []BatchOp{
+		Put([]byte("a/1"), []byte("v1")),
+		Put([]byte("a/2"), []byte("v2")),
+		Put([]byte("b/1"), []byte("v3")),
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	oldRoot := db.Root()
+
+	// PrefixDelete "a/" should remove a/1 and a/2 but keep b/1.
+	newRoot, err := db.Update(ctx, []BatchOp{PrefixDelete([]byte("a/"))})
+	if err != nil {
+		t.Fatalf("Update with PrefixDelete: %v", err)
+	}
+	if newRoot == oldRoot {
+		t.Fatal("root should change after PrefixDelete")
+	}
+
+	// a/1 and a/2 should be gone.
+	for _, key := range []string{"a/1", "a/2"} {
+		val, err := db.Get(ctx, []byte(key))
+		if err != nil {
+			t.Fatalf("Get(%s): %v", key, err)
+		}
+		if val != nil {
+			t.Fatalf("Get(%s) = %q, want nil", key, val)
+		}
+	}
+
+	// b/1 should still exist.
+	val, err := db.Get(ctx, []byte("b/1"))
+	if err != nil {
+		t.Fatalf("Get(b/1): %v", err)
+	}
+	if string(val) != "v3" {
+		t.Fatalf("Get(b/1) = %q, want %q", val, "v3")
+	}
+}
+
 func TestLocalDBProposalIter(t *testing.T) {
 	db := newLocalDB(t)
 	ctx := t.Context()

@@ -53,6 +53,7 @@ message BatchOperation {
   enum OpType {
     PUT = 0;
     DELETE = 1;
+    PREFIX_DELETE = 2;
   }
   OpType op_type = 1;
   bytes key = 2;

@@ -117,6 +117,8 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 			pbOp.Value = op.Value()
 		} else if op.IsDelete() {
 			pbOp.OpType = pb.BatchOperation_DELETE
+		} else if op.IsPrefixDelete() {
+			pbOp.OpType = pb.BatchOperation_PREFIX_DELETE
 		} else {
 			return ffi.Hash{}, fmt.Errorf("unsupported batch op type for remote update")
 		}
@@ -137,6 +139,12 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 	witness := &ffi.WitnessProof{}
 	if err := witness.UnmarshalBinary(createResp.GetWitnessProof()); err != nil {
 		return ffi.Hash{}, fmt.Errorf("unmarshal witness: %w", err)
+	}
+
+	// Validate witness ops match what the client sent.
+	if err := witness.ValidateOps(ops); err != nil {
+		witness.Free()
+		return ffi.Hash{}, fmt.Errorf("witness ops validation: %w", err)
 	}
 
 	newTrie, err := c.trie.VerifyWitness(witness)
