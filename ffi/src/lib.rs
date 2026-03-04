@@ -735,29 +735,6 @@ pub extern "C" fn fwd_block_replay_flush() -> VoidResult {
     }
 }
 
-/// Flushes buffered block replay operations to disk.
-///
-/// This function is only meaningful when the `block-replay` feature is enabled
-/// and the `FIREWOOD_BLOCK_REPLAY_PATH` environment variable is set. Otherwise,
-/// it is a no-op.
-///
-/// # Returns
-///
-/// - [`VoidResult::Ok`] if the flush succeeded or was a no-op.
-/// - [`VoidResult::Err`] if an I/O error occurred during the flush.
-#[unsafe(no_mangle)]
-pub const extern "C" fn fwd_block_replay_flush() -> VoidResult {
-    #[cfg(feature = "block-replay")]
-    {
-        invoke(replay::flush_to_disk)
-    }
-
-    #[cfg(not(feature = "block-replay"))]
-    {
-        VoidResult::Ok
-    }
-}
-
 /// Consumes the [`OwnedBytes`] and frees the memory associated with it.
 ///
 /// # Arguments
