@@ -117,7 +117,7 @@ func TestReplayLogExecution(t *testing.T) {
 	}
 	r.NotEmpty(logs, "expected at least one replay segment")
 
-	db := newTestDatabase(t, WithTruncate(true))
+	db := newTestDatabase(t, WithTruncate(true), WithDeferredPersistenceCommitCount(50))
 
 	start := time.Now()
 	commits, err := applyReplayLogs(db, logs, replayConfig{MaxCommits: maxCommits, VerifyHashes: true})
