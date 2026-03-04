@@ -27,15 +27,18 @@ Merkle proofs, writes via witness proofs, iteration via server-side batching.
 
 Defines three interfaces and their local (FFI-backed) implementations:
 
-- **`DB`** interface: `Get`, `Update`, `Propose`, `Root`, `Close` — all with
-  `context.Context` except `Root`.
+- **`DB`** interface: `Get`, `Update`, `Propose`, `Revision`, `Root`, `Close`
+  — all with `context.Context` except `Root`.
 - **`DBProposal`** interface: `Root`, `Commit`, `Drop`, `Get`, `Iter`,
   `Propose` — supports reading from and chaining on uncommitted proposals.
+- **`DBRevision`** interface: `Root`, `Get`, `Iter`, `Drop` — read-only access
+  to a committed revision at a specific root hash.
 - **`DBIterator`** interface: `Next`, `Key`, `Value`, `Err`, `Drop` — standard
   forward-only iteration.
 - **`LocalDB`** struct wrapping `*Database`, **`localProposal`** wrapping
-  `*Proposal`, **`localIterator`** wrapping `*Iterator` — thin wrappers that
-  delegate to the underlying FFI types and ignore `context.Context`.
+  `*Proposal`, **`localRevision`** wrapping `*Revision`, **`localIterator`**
+  wrapping `*Iterator` — thin wrappers that delegate to the underlying FFI
+  types and ignore `context.Context`.
 - **`NewLocalDB(db *Database) DB`** — constructor returning the interface type.
 - Compile-time checks: `var _ DB = (*LocalDB)(nil)`, etc.
 
@@ -70,8 +73,8 @@ Helper functions:
 
 ### `ffi/db_test.go` — LocalDB tests
 
-4 tests exercising the `ffi.DB`/`ffi.DBProposal`/`ffi.DBIterator` interfaces
-through `LocalDB`:
+7 tests exercising the `ffi.DB`/`ffi.DBProposal`/`ffi.DBRevision`/
+`ffi.DBIterator` interfaces through `LocalDB`:
 
 - `TestNewLocalDB` — create, update, get, verify root changes, get
   non-existent key.
@@ -79,12 +82,16 @@ through `LocalDB`:
   commit, verify root.
 - `TestLocalDBProposalChain` — chain two proposals (p1 then p2 on p1), read
   all keys from p2, commit chain in order.
+- `TestLocalDBRevision` — insert data, get revision at root, verify Get/Iter/
+  Root/Drop, verify non-existent keys return nil.
+- `TestLocalDBRevisionNotFound` — revision with fabricated root returns error.
+- `TestLocalDBPrefixDelete` — prefix delete via Update.
 - `TestLocalDBProposalIter` — iterate from a proposal, verify lexicographic
   order and completeness.
 
 ### `ffi/remote/db_test.go` — RemoteDB tests
 
-11 tests exercising the interfaces through `RemoteDB` over a real gRPC
+22 tests exercising the interfaces through `RemoteDB` over a real gRPC
 server/client:
 
 - `TestNewRemoteDB` — bootstrap, get, update through `ffi.DB`.
@@ -108,6 +115,20 @@ server/client:
 - `TestRemoteDBProposalIterTamperedProof` — corrupted proof bytes rejected.
 - `TestRemoteDBProposalIterMultiBatch` — 300+ keys verified across batch
   boundaries.
+- `TestRemoteDBRevisionGet` — two commits, revision at root1 sees old data,
+  not data from root2.
+- `TestRemoteDBRevisionIter` — iterate all keys from a committed revision,
+  verify order and values.
+- `TestRemoteDBRevisionIterStartKey` — iterate from a specific start key
+  within a revision.
+- `TestRemoteDBRevisionIterMultiBatch` — insert 300 keys, verify pagination
+  across 256-key batch boundary.
+- `TestRemoteDBRevisionBadRoot` — revision with fabricated root; Get/Iter
+  return server error (creation itself succeeds since it's a no-op).
+- `TestRemoteDBRevisionAfterUpdate` — create revision at root1, then Update
+  to root2; revision at root1 still works.
+- `TestRemoteDBRevisionDrop` — Drop is no-op; can create another revision
+  with same root afterward.
 
 ## Files Modified
 
@@ -275,8 +296,8 @@ cd ffi/remote && go test -bench BenchmarkCacheEviction -benchtime=5s -count=1
 
 | File | Role |
 |------|------|
-| `ffi/db.go` | **NEW** — `DB`, `DBProposal`, `DBIterator` interfaces + `LocalDB` adapter |
-| `ffi/db_test.go` | **NEW** — LocalDB interface tests |
+| `ffi/db.go` | **NEW** — `DB`, `DBProposal`, `DBRevision`, `DBIterator` interfaces + `LocalDB` adapter |
+| `ffi/db_test.go` | **NEW** — LocalDB interface tests (incl. revision) |
 | `ffi/remote/db.go` | **NEW** — `RemoteDB`, `remoteProposal`, `remoteIterator` |
 | `ffi/remote/db_test.go` | **NEW** — RemoteDB interface tests |
 | `ffi/remote/cache.go` | **NEW** — `readCache` wrapper delegating to `evictionStore` backend |
@@ -309,7 +330,7 @@ cd ffi/remote && go test -bench BenchmarkCacheEviction -benchtime=5s -count=1
 | `ffi/batch_op.go` | `BatchOp` type — `Put`, `Delete`, `PrefixDelete` |
 | `ffi/single_key_proof.go` | `GetWithProof`, `VerifySingleKeyProof` |
 | `ffi/truncated_trie.go` | `TruncatedTrie` — `VerifyWitness`, `Root`, `Free`, `GenerateWitness` |
-| `ffi/remote/client.go` | `Client` — `Get`, `Update`, `Bootstrap`, `Propose`, `Root`, `Close`, `ClientOption`, `WithCacheSize`, `WithCache` |
+| `ffi/remote/client.go` | `Client` — `Get`, `Update`, `Bootstrap`, `Propose`, `Revision`, `Root`, `Close`, `ClientOption`, `WithCacheSize`, `WithCache` |
 
 ### `ffi/remote/remote_test.go` — Runtime hash algorithm detection
 
@@ -922,6 +943,166 @@ Existing `TestRemoteDBProposalIter` passes unchanged (honest server).
   because `IterBatch` already existed in the service definition — only message
   fields changed, which only affect `remote.pb.go`.
 
+## Revision Support (Read-Only Historical State)
+
+### Motivation
+
+The `DB` interface provided `Get`, `Update`, `Propose`, `Root`, and `Close` but
+had no way to read historical state at a specific root hash. The local
+`Database` type supports `Revision(root Hash) (*Revision, error)` for
+immutable read-only views, but this was not exposed through the `DB` interface
+or the remote client. Adding `Revision` enables reading historical state from
+committed revisions — important for blockchain applications that need to query
+past state (e.g., answering historical balance queries, replaying transactions).
+
+### Key Insight: No Truncated Trie Needed
+
+A remote revision does **not** need its own truncated trie or cache. The trie
+is only required for **witness-based verification** (proposals/updates). For
+read-only access, all verification is standalone:
+
+- **Get**: `VerifySingleKeyProof(root, key, value, proof)` — needs only root
+  hash.
+- **Iter**: `VerifyAndExtractRangeProof(proofBytes, root, ...)` — needs only
+  root hash.
+
+Both functions are purely cryptographic and take no DB/trie handles. A
+`remoteRevision` is therefore very lightweight: just a root hash + RPC client.
+
+### Safety of Bootstrapping from a Known Root Hash
+
+The caller of `Revision(root)` is responsible for providing a trusted root hash
+(from consensus, from a previously verified commit, etc.) — the same trust
+model as `Bootstrap(trustedRoot)`.
+
+### Changes Made
+
+#### 1. `ffi/db.go` — `DBRevision` Interface + `localRevision`
+
+Added `DBRevision` interface (read-only subset of `DBProposal`):
+
+```go
+type DBRevision interface {
+    Root() Hash
+    Get(ctx context.Context, key []byte) ([]byte, error)
+    Iter(ctx context.Context, key []byte) (DBIterator, error)
+    Drop() error
+}
+```
+
+Extended `DB` interface with:
+
+```go
+Revision(ctx context.Context, root Hash) (DBRevision, error)
+```
+
+Added `localRevision` wrapping `*Revision` — delegates `Root`, `Get`, `Iter`,
+`Drop` directly to the FFI `Revision` type. Added `LocalDB.Revision` method.
+Added compile-time check: `_ DBRevision = (*localRevision)(nil)`.
+
+#### 2. `ffi/remote/server.go` — `IterBatch` Extended for Revision Mode
+
+When `proposal_id == 0` (proto3 default — never a valid proposal ID since
+`nextID.Add(1)` starts at 1), the server uses `root_hash` to iterate a
+committed revision instead of looking up a proposal:
+
+- Creates a `Revision` from the root hash via `s.db.Revision(root)`.
+- Iterates the revision using the same `*ffi.Iterator` type as proposals.
+- The revision is created and dropped within each `IterBatch` call — no
+  server-side state persists between paginated calls.
+- Range proof generation is shared between both paths (unchanged).
+
+#### 3. `ffi/remote/db.go` — `remoteRevision` + `verifiedGet` Helper
+
+**`remoteRevision`** implements `ffi.DBRevision`:
+
+```go
+type remoteRevision struct {
+    root ffi.Hash
+    rpc  pb.FirewoodRemoteClient
+}
+```
+
+- `Root()` — returns the stored root hash.
+- `Get(ctx, key)` — calls `verifiedGet` (shared with `remoteProposal.Get`).
+- `Iter(ctx, startKey)` — sends `IterBatch` with `proposal_id: 0` (revision
+  mode), verifies range proof, returns `remoteIterator`.
+- `Drop()` — no-op (no server-side state to clean up).
+
+**`verifiedGet`** — extracted shared helper that fetches a value from the
+server and verifies its single-key Merkle proof:
+
+```go
+func verifiedGet(
+    ctx context.Context,
+    rpc pb.FirewoodRemoteClient,
+    root ffi.Hash,
+    key []byte,
+) ([]byte, error) { ... }
+```
+
+`remoteProposal.Get` was refactored to call `verifiedGet`, eliminating ~15
+lines of duplicated proof verification logic.
+
+**`RemoteDB.Revision`** — no server round-trip on creation; errors surface on
+first `Get`/`Iter` if the root is invalid or has been pruned.
+
+Added compile-time check: `_ ffi.DBRevision = (*remoteRevision)(nil)`.
+
+#### 4. `ffi/remote/client.go` — `Client.Revision`
+
+Convenience method returning a lightweight `ffi.DBRevision`. Independent of
+client trie state — no lock needed:
+
+```go
+func (c *Client) Revision(root ffi.Hash) ffi.DBRevision {
+    return &remoteRevision{root: root, rpc: c.rpc}
+}
+```
+
+#### 5. Tests
+
+**`ffi/db_test.go`** (2 new tests):
+
+- `TestLocalDBRevision` — insert data, get revision, verify Get/Iter/Root/Drop.
+- `TestLocalDBRevisionNotFound` — revision with non-existent root returns error.
+
+**`ffi/remote/db_test.go`** (7 new tests):
+
+- `TestRemoteDBRevisionGet` — two commits; revision at root1 sees old data.
+- `TestRemoteDBRevisionIter` — iterate all keys, verify order and values.
+- `TestRemoteDBRevisionIterStartKey` — iterate from a specific start key.
+- `TestRemoteDBRevisionIterMultiBatch` — 300 keys, pagination across 256-key
+  batch boundary.
+- `TestRemoteDBRevisionBadRoot` — fabricated root; Get/Iter return error.
+- `TestRemoteDBRevisionAfterUpdate` — revision at root1 still works after
+  Update to root2.
+- `TestRemoteDBRevisionDrop` — Drop is no-op; can create another revision.
+
+### Files Changed (Revision Session)
+
+| File | Change |
+|---|---|
+| `ffi/db.go` | **MODIFIED** — added `DBRevision` interface, extended `DB` with `Revision`, added `localRevision` + `LocalDB.Revision` |
+| `ffi/db_test.go` | **MODIFIED** — added 2 local revision tests |
+| `ffi/remote/server.go` | **MODIFIED** — extended `IterBatch` for `proposal_id == 0` revision mode |
+| `ffi/remote/db.go` | **MODIFIED** — added `remoteRevision`, `verifiedGet`, `RemoteDB.Revision`, refactored `remoteProposal.Get` |
+| `ffi/remote/client.go` | **MODIFIED** — added `Client.Revision` |
+| `ffi/remote/db_test.go` | **MODIFIED** — added 7 remote revision tests |
+
+**No changes to**: proto files (no new RPCs/messages — reuses existing
+`IterBatch` and `GetValue` RPCs), `ffi/revision.go`, `ffi/firewood.go`,
+`ffi/remote/cache.go`, `ffi/proofs.go`, Rust code.
+
+### Verification Results
+
+- `cd ffi && go build ./...` — compiles
+- `cd ffi && go vet ./...` — clean
+- `cd ffi && go test ./...` — all tests pass (including 2 new revision tests)
+- `cd ffi/remote && go test ./...` — all tests pass (including 7 new revision
+  tests)
+- All existing proposal/iterator/tamper/cache tests unchanged and passing
+
 ## Known Limitations and Future Work
 
 1. **Range proof verification is a Rust stub**: The `RangeProofContext::verify()`
@@ -971,7 +1152,15 @@ Existing `TestRemoteDBProposalIter` passes unchanged (honest server).
    `Next() bool` signature doesn't accept a context. This means pagination
    fetches cannot be cancelled via the original context.
 
-7. **Cache does not cover `remoteProposal.Get()`**: Only `Client.Get()` uses
-   the cache. Reads through `remoteProposal.Get()` always go to the server.
-   This is intentional — proposal reads are less frequent and the proposal's
-   state may diverge from the committed state that the cache represents.
+7. **Cache does not cover `remoteProposal.Get()` or `remoteRevision.Get()`**:
+   Only `Client.Get()` uses the cache. Reads through `remoteProposal.Get()`
+   and `remoteRevision.Get()` always go to the server. This is intentional —
+   proposal/revision reads are less frequent and their state may diverge from
+   the committed state that the cache represents.
+
+8. **`remoteRevision` is stateless**: A `remoteRevision` holds only a root
+   hash and RPC client — no server-side state persists. Each `Get` or `Iter`
+   call is independently verified via Merkle proofs. If the server prunes the
+   revision between calls, subsequent calls will fail with a server-side error.
+   This is by design — the lightweight approach avoids server-side lifecycle
+   management.

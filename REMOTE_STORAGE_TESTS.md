@@ -11,8 +11,9 @@ implementations:
 
 | Interface | Methods | Description |
 |---|---|---|
-| `DB` | `Get`, `Update`, `Propose`, `Root`, `Close` | Common database operations |
+| `DB` | `Get`, `Update`, `Propose`, `Revision`, `Root`, `Close` | Common database operations |
 | `DBProposal` | `Root`, `Commit`, `Drop`, `Get`, `Iter`, `Propose` | Uncommitted proposal |
+| `DBRevision` | `Root`, `Get`, `Iter`, `Drop` | Read-only committed revision |
 | `DBIterator` | `Next`, `Key`, `Value`, `Err`, `Drop` | Key-value pair iteration |
 
 Two implementations exist:
@@ -26,26 +27,30 @@ Two implementations exist:
 
 | Type | Method | Notes |
 |---|---|---|
-| `Database` | `Revision(root)` | Obtain a read-only view at a historical root |
-| `Database` | `LatestRevision()` | Obtain the latest revision |
+| `Database` | `LatestRevision()` | Obtain the latest revision (no root hash param) |
 | `Database` | `Dump()` | DOT-format trie dump for debugging |
 | `Proposal` | `Dump()` | DOT-format trie dump for debugging |
-| `Revision` | `Get`, `Iter`, `Root`, `Dump` | Entire `Revision` type has no interface |
+| `Revision` | `Dump()` | DOT-format trie dump (Get/Iter/Root/Drop are on `DBRevision`) |
 | `Iterator` | `SetBatchSize(int)` | Configure batch fetching |
 | `Iterator` | `NextBorrowed()` | Zero-copy iteration mode |
 
-Tests that use any of these operations cannot run against the `DB` interface
-without first extending the interface or adding backend-specific adapters.
+Note: `Database.Revision(root)` was added to the `DB` interface as
+`Revision(ctx, root) (DBRevision, error)`. Tests that previously used
+`*Revision` directly can now use the `DBRevision` interface.
+
+Tests that use any of the remaining operations above cannot run against the
+`DB` interface without further extending it or adding backend-specific
+adapters.
 
 ## Analysis of `ffi/remote/` Tests
 
 These tests already run against the remote backend via `RemoteDB` or the
 lower-level `Client`/`Server` types.
 
-### `ffi/remote/db_test.go` — RemoteDB high-level tests (15 tests)
+### `ffi/remote/db_test.go` — RemoteDB high-level tests (22 tests)
 
-All tests use the `ffi.DB` / `ffi.DBProposal` / `ffi.DBIterator` interfaces
-via `RemoteDB`.
+All tests use the `ffi.DB` / `ffi.DBProposal` / `ffi.DBRevision` /
+`ffi.DBIterator` interfaces via `RemoteDB`.
 
 | Test | Interface Operations | Notes |
 |---|---|---|
@@ -64,14 +69,22 @@ via `RemoteDB`.
 | `TestRemoteDBProposalIterMissingProof` | `Propose`, `Iter`, gRPC interceptor | Missing range proof rejected |
 | `TestRemoteDBProposalIterTamperedProof` | `Propose`, `Iter`, gRPC interceptor | Corrupted range proof rejected |
 | `TestRemoteDBProposalIterMultiBatch` | `Propose`, `Iter` (300+ keys) | Range proof verified across batch boundaries |
+| `TestRemoteDBRevisionGet` | `Revision`, `Get` (revision) | Historical read: root1 sees old data, not root2 |
+| `TestRemoteDBRevisionIter` | `Revision`, `Iter`, `Next`, `Key`, `Value` | Iterate committed revision, verify order + values |
+| `TestRemoteDBRevisionIterStartKey` | `Revision`, `Iter` with start key | Partial iteration from specific key |
+| `TestRemoteDBRevisionIterMultiBatch` | `Revision`, `Iter` (300 keys) | Pagination across 256-key batch boundary |
+| `TestRemoteDBRevisionBadRoot` | `Revision`, `Get`, `Iter` | Fabricated root; errors on first read |
+| `TestRemoteDBRevisionAfterUpdate` | `Revision`, `Update`, `Get` | Revision at root1 still works after Update to root2 |
+| `TestRemoteDBRevisionDrop` | `Revision`, `Drop`, `Revision`, `Get` | Drop is no-op; can create another with same root |
 
-The last 4 tests verify the range-proof-based iterator verification added in
-the `bernard/remote-storage` branch. The tampered/missing/corrupted tests use
-`startServerWithInterceptor` — a helper that wraps the gRPC server with a
-`grpc.UnaryInterceptor` to simulate adversarial behavior (tampering with
-response pairs, stripping the proof, or corrupting the proof bytes). The
-multi-batch test inserts 300 keys (batch size is 256) to force pagination
-across two batches with verified handoff.
+The tampered/missing/corrupted iterator tests use `startServerWithInterceptor`
+— a helper that wraps the gRPC server with a `grpc.UnaryInterceptor` to
+simulate adversarial behavior. The multi-batch tests insert 300+ keys (batch
+size is 256) to force pagination across batch boundaries with verified handoff.
+
+The 7 revision tests verify the `DBRevision` interface through `RemoteDB`.
+Revisions are lightweight (root hash + RPC client only), with no server-side
+state. All reads are independently verified via Merkle proofs.
 
 ### `ffi/remote/remote_test.go` — Client/Server integration (6 tests)
 
@@ -131,16 +144,19 @@ generation, and caching. Not candidates for interface migration.
 
 ## Analysis of `ffi/` Tests
 
-### `ffi/db_test.go` — Interface tests (5 tests)
+### `ffi/db_test.go` — Interface tests (7 tests)
 
-These already use the `DB` / `DBProposal` / `DBIterator` interfaces via
-`NewLocalDB`. They are the primary candidates for running against both backends.
+These already use the `DB` / `DBProposal` / `DBRevision` / `DBIterator`
+interfaces via `NewLocalDB`. They are the primary candidates for running
+against both backends.
 
 | Test | Interface Operations | Remote-compatible? |
 |---|---|---|
 | `TestNewLocalDB` | `Root`, `Update`, `Get` | **Yes** |
 | `TestLocalDBPropose` | `Propose`, `Root`, `Get`, `Commit` | **Yes** |
 | `TestLocalDBProposalChain` | `Propose` (chained), `Get`, `Commit` | **Yes** |
+| `TestLocalDBRevision` | `Revision`, `Root`, `Get`, `Iter`, `Drop` | **Yes** |
+| `TestLocalDBRevisionNotFound` | `Revision` with bad root | **Yes** |
 | `TestLocalDBPrefixDelete` | `Update` with `PrefixDelete`, `Get` | **Yes** |
 | `TestLocalDBProposalIter` | `Propose`, `Iter`, `Next`, `Key`, `Err`, `Drop` | **Yes** |
 
@@ -170,11 +186,11 @@ whether its operations map onto the `DB`/`DBProposal` interfaces.
 | `TestDeepPropose` | `Propose` (5+ levels), `Get` | **Yes** | — |
 | `TestDropProposalAndCommit` | `Propose`, `Drop`, `Commit` error | **Partial** | Tests specific error from dropped parent |
 | `TestProposeSameRoot` | `Propose` (identical ops), `Root` | **Yes** | — |
-| `TestRevision` | `Revision(root)`, `Revision.Get` | **No** | Uses `Revision` (no interface) |
-| `TestRevisionOutlivesProposal` | `Revision`, `Propose`, `Drop` | **No** | Uses `Revision` |
-| `TestCommitWithRevisionHeld` | `Revision`, `Propose`, `Commit` | **No** | Uses `Revision` |
-| `TestRevisionOutlivesReaping` | `Revision`, multiple commits | **No** | Uses `Revision` |
-| `TestInvalidRevision` | `Revision(badRoot)` | **No** | Uses `Revision` |
+| `TestRevision` | `Revision(root)`, `Revision.Get` | **Yes** | Now uses `DB.Revision` / `DBRevision` interface |
+| `TestRevisionOutlivesProposal` | `Revision`, `Propose`, `Drop` | **Yes** | Now uses `DB.Revision` / `DBRevision` interface |
+| `TestCommitWithRevisionHeld` | `Revision`, `Propose`, `Commit` | **Yes** | Now uses `DB.Revision` / `DBRevision` interface |
+| `TestRevisionOutlivesReaping` | `Revision`, multiple commits | **Partial** | Uses `WithRevisions()` config; lifecycle semantics may differ |
+| `TestInvalidRevision` | `Revision(badRoot)` | **Yes** | Now uses `DB.Revision` / `DBRevision` interface |
 | `TestGetNilCases` | `Get` nil key, nil vs empty values | **Yes** | — |
 | `TestEmptyProposals` | `Propose` (empty batch), `Commit` | **Yes** | — |
 | `TestHandlesFreeImplicitly` | GC/finalizer behavior | **No** | Tests FFI handle cleanup internals |
@@ -196,12 +212,12 @@ interface.
 | Test | Key Operations | Remote-compatible? | Blocker |
 |---|---|---|---|
 | `TestIter` | `Iter`, `Next`, `Key`, `Value` | **Partial** | Uses `SetBatchSize`, `NextBorrowed` |
-| `TestIterOnRoot` | `Revision.Iter` | **No** | Uses `Revision` |
+| `TestIterOnRoot` | `Revision.Iter` | **Partial** | Uses `Revision` (now has interface), but also `SetBatchSize`/`NextBorrowed` |
 | `TestIterOnProposal` | `Propose`, `Iter` | **Partial** | Uses `SetBatchSize`, `NextBorrowed` |
 | `TestIterAfterProposalCommit` | `Propose`, `Commit`, `Iter` | **Partial** | Uses `SetBatchSize`, `NextBorrowed` |
-| `TestIterUpdate` | `Iter`, `Update` (iter unchanged) | **Partial** | Uses `Revision.Iter`, `SetBatchSize` |
+| `TestIterUpdate` | `Iter`, `Update` (iter unchanged) | **Partial** | Uses `Revision.Iter` (now has interface), `SetBatchSize` |
 | `TestIterDone` | `Iter` exhaustion safety | **Partial** | Uses `SetBatchSize`, `NextBorrowed` |
-| `TestIterOutlivesRevision` | `Revision.Iter`, `Revision.Drop` | **No** | Uses `Revision` |
+| `TestIterOutlivesRevision` | `Revision.Iter`, `Revision.Drop` | **Partial** | Uses `Revision` (now has interface), but also `SetBatchSize`/`NextBorrowed` |
 | `TestIterOutlivesProposal` | `Propose`, `Iter`, `Drop` | **Partial** | Uses `SetBatchSize`, `NextBorrowed` |
 
 **Migration strategy**: Each test runs in 4 mode combinations. The
@@ -225,6 +241,8 @@ blocked entirely.
 | `db_test.go` | `TestNewLocalDB` | Ready — already uses interface |
 | `db_test.go` | `TestLocalDBPropose` | Ready — already uses interface |
 | `db_test.go` | `TestLocalDBProposalChain` | Ready — already uses interface |
+| `db_test.go` | `TestLocalDBRevision` | Ready — already uses interface |
+| `db_test.go` | `TestLocalDBRevisionNotFound` | Ready — already uses interface |
 | `db_test.go` | `TestLocalDBPrefixDelete` | Ready — already uses interface |
 | `db_test.go` | `TestLocalDBProposalIter` | Ready — already uses interface |
 | `firewood_test.go` | `TestUpdateSingleKV` | Needs refactor to use `DB` |
@@ -242,8 +260,12 @@ blocked entirely.
 | `firewood_test.go` | `TestNilVsEmptyValue` | Needs refactor to use `DB` |
 | `firewood_test.go` | `TestDeleteKeyWithChildren` | Needs refactor to use `DB` |
 | `firewood_test.go` | `TestProposeOnProposalRehash` | Needs refactor to use `DB` |
+| `firewood_test.go` | `TestRevision` | Needs refactor to use `DB.Revision` / `DBRevision` |
+| `firewood_test.go` | `TestRevisionOutlivesProposal` | Needs refactor to use `DB.Revision` / `DBRevision` |
+| `firewood_test.go` | `TestCommitWithRevisionHeld` | Needs refactor to use `DB.Revision` / `DBRevision` |
+| `firewood_test.go` | `TestInvalidRevision` | Needs refactor to use `DB.Revision` / `DBRevision` |
 
-**Total: 20 tests** (5 ready, 15 need refactoring to use interface)
+**Total: 26 tests** (7 ready, 19 need refactoring to use interface)
 
 ### Partially compatible tests (need interface extensions or test changes)
 
@@ -251,13 +273,17 @@ blocked entirely.
 |---|---|---|
 | `firewood_test.go` | `TestConflictingProposals` | Tests commit-conflict error semantics |
 | `firewood_test.go` | `TestDropProposalAndCommit` | Tests specific error from dropped parent |
+| `firewood_test.go` | `TestRevisionOutlivesReaping` | Uses `WithRevisions()` config; lifecycle semantics may differ |
 | `iterator_test.go` | `TestIter` | `SetBatchSize`/`NextBorrowed` modes |
+| `iterator_test.go` | `TestIterOnRoot` | `SetBatchSize`/`NextBorrowed` modes (Revision now has interface) |
 | `iterator_test.go` | `TestIterOnProposal` | `SetBatchSize`/`NextBorrowed` modes |
 | `iterator_test.go` | `TestIterAfterProposalCommit` | `SetBatchSize`/`NextBorrowed` modes |
+| `iterator_test.go` | `TestIterUpdate` | `SetBatchSize` (Revision now has interface) |
 | `iterator_test.go` | `TestIterDone` | `SetBatchSize`/`NextBorrowed` modes |
+| `iterator_test.go` | `TestIterOutlivesRevision` | `SetBatchSize`/`NextBorrowed` modes (Revision now has interface) |
 | `iterator_test.go` | `TestIterOutlivesProposal` | `SetBatchSize`/`NextBorrowed` modes |
 
-**Total: 7 tests** (could be made compatible with limited changes)
+**Total: 11 tests** (could be made compatible with limited changes)
 
 ### Not compatible (concrete-type or implementation-specific)
 
@@ -266,31 +292,30 @@ blocked entirely.
 | `firewood_test.go` | `TestTruncateDatabase` | Backend config option |
 | `firewood_test.go` | `TestClosedDatabase` | Concrete close error behavior |
 | `firewood_test.go` | `TestInvariants` | Uses `Dump()` |
-| `firewood_test.go` | `TestRevision` through `TestInvalidRevision` (5 tests) | Uses `Revision` type |
 | `firewood_test.go` | `TestHandlesFreeImplicitly` | FFI handle GC internals |
 | `firewood_test.go` | `TestFjallStore` | Backend config option |
 | `firewood_test.go` | `TestCloseWith*` (3 tests) | Concrete close behavior |
 | `firewood_test.go` | `TestDump` | Uses `Dump()` |
-| `iterator_test.go` | `TestIterOnRoot` | Uses `Revision` |
-| `iterator_test.go` | `TestIterUpdate` | Uses `Revision.Iter` |
-| `iterator_test.go` | `TestIterOutlivesRevision` | Uses `Revision` |
 | `metrics_test.go` | `TestMetrics`, `TestExpensiveMetrics` | Rust-side metrics |
 
-**Total: 19 tests** (would require new interfaces like `DBRevision` or are
-inherently implementation-specific)
+**Total: 9 tests** (inherently implementation-specific)
+
+Note: The 5 `Revision` tests (`TestRevision` through `TestInvalidRevision`)
+previously listed here have been moved to the "Remote-compatible" or "Partially
+compatible" sections now that `DBRevision` exists on the `DB` interface.
 
 ### Counts by file
 
 | File | Total | Compatible | Partial | Not Compatible |
 |---|---|---|---|---|
-| `ffi/db_test.go` | 5 | 5 | 0 | 0 |
-| `ffi/firewood_test.go` | 31 | 15 | 2 | 14 |
-| `ffi/iterator_test.go` | 8 | 0 | 5 | 3 |
+| `ffi/db_test.go` | 7 | 7 | 0 | 0 |
+| `ffi/firewood_test.go` | 31 | 19 | 3 | 9 |
+| `ffi/iterator_test.go` | 8 | 0 | 8 | 0 |
 | `ffi/metrics_test.go` | 2 | 0 | 0 | 2 |
-| **ffi/ total** | **46** | **20** | **7** | **19** |
-| `ffi/remote/db_test.go` | 15 | — | — | — |
+| **ffi/ total** | **48** | **26** | **11** | **11** |
+| `ffi/remote/db_test.go` | 22 | — | — | — |
 | `ffi/remote/remote_test.go` | 6 | — | — | — |
 | `ffi/remote/cache_test.go` | 12 | — | — | — |
 | `ffi/remote/concurrency_test.go` | 4 | — | — | — |
 | `ffi/remote/eviction_test.go` | 15 | — | — | — |
-| **ffi/remote/ total** | **52** | — | — | — |
+| **ffi/remote/ total** | **59** | — | — | — |
