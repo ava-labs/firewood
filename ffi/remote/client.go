@@ -17,15 +17,22 @@ import (
 // ClientOption configures a [Client].
 type ClientOption func(*Client)
 
-// WithCacheSize enables a client-side read cache for verified Get results.
-// maxEntries is the maximum number of key-value pairs to cache. A value of
-// zero or negative disables the cache.
-func WithCacheSize(maxEntries int) ClientOption {
+// WithCache enables a client-side read cache for verified Get results with
+// the given eviction policy. maxEntries is the maximum number of key-value
+// pairs to cache. A value of zero or negative disables the cache.
+func WithCache(maxEntries int, policy EvictionPolicy) ClientOption {
 	return func(c *Client) {
 		if maxEntries > 0 {
-			c.cache = newReadCache(maxEntries)
+			c.cache = newReadCache(maxEntries, policy)
 		}
 	}
+}
+
+// WithCacheSize enables a client-side read cache using the [LRU] eviction
+// policy. maxEntries is the maximum number of key-value pairs to cache. A
+// value of zero or negative disables the cache.
+func WithCacheSize(maxEntries int) ClientOption {
+	return WithCache(maxEntries, LRU)
 }
 
 // Client is a remote Firewood client that holds a truncated trie and

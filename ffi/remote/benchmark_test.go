@@ -733,22 +733,67 @@ func BenchmarkGetCached(b *testing.B) {
 		}
 	})
 
-	b.Run("Cached", func(b *testing.B) {
-		rdb := setupRemoteDB(b, db, rootHash, 4, WithCacheSize(10_000))
-		ctx := context.Background()
-		// Warm the cache.
-		for _, key := range keys {
-			if _, err := rdb.Get(ctx, []byte(key)); err != nil {
-				b.Fatalf("warm Get: %v", err)
+	policies := []struct {
+		name   string
+		policy EvictionPolicy
+	}{
+		{"LRU", LRU},
+		{"Random", RandomEviction},
+		{"Clock", Clock},
+		{"SampleKLRU", SampleKLRU},
+	}
+
+	for _, p := range policies {
+		p := p
+		b.Run("Cached/"+p.name, func(b *testing.B) {
+			rdb := setupRemoteDB(b, db, rootHash, 4, WithCache(10_000, p.policy))
+			ctx := context.Background()
+			// Warm the cache.
+			for _, key := range keys {
+				if _, err := rdb.Get(ctx, []byte(key)); err != nil {
+					b.Fatalf("warm Get: %v", err)
+				}
 			}
-		}
-		b.ResetTimer()
-		var i int
-		for b.Loop() {
-			if _, err := rdb.Get(ctx, []byte(keys[i%len(keys)])); err != nil {
-				b.Fatalf("Get: %v", err)
+			b.ResetTimer()
+			var i int
+			for b.Loop() {
+				if _, err := rdb.Get(ctx, []byte(keys[i%len(keys)])); err != nil {
+					b.Fatalf("Get: %v", err)
+				}
+				i++
 			}
-			i++
-		}
-	})
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// 13. BenchmarkCacheEviction — Eviction throughput per policy
+// ---------------------------------------------------------------------------
+
+func BenchmarkCacheEviction(b *testing.B) {
+	policies := []struct {
+		name   string
+		policy EvictionPolicy
+	}{
+		{"LRU", LRU},
+		{"Random", RandomEviction},
+		{"Clock", Clock},
+		{"SampleKLRU", SampleKLRU},
+	}
+	for _, p := range policies {
+		p := p
+		b.Run(p.name, func(b *testing.B) {
+			store := newEvictionStore(p.policy, 1000)
+			// Fill to capacity.
+			for i := range 1000 {
+				store.put(fmt.Sprintf("key-%d", i), cacheEntry{value: []byte("v"), found: true})
+			}
+			b.ResetTimer()
+			var i int
+			for b.Loop() {
+				store.put(fmt.Sprintf("evict-%d", i), cacheEntry{value: []byte("v"), found: true})
+				i++
+			}
+		})
+	}
 }

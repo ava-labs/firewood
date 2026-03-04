@@ -16,14 +16,14 @@ import (
 // ---------------------------------------------------------------------------
 
 func TestCacheLookupMiss(t *testing.T) {
-	c := newReadCache(100)
+	c := newReadCache(100, LRU)
 	if _, ok := c.lookup([]byte("missing")); ok {
 		t.Fatal("expected miss on empty cache")
 	}
 }
 
 func TestCacheStoreAndLookup(t *testing.T) {
-	c := newReadCache(100)
+	c := newReadCache(100, LRU)
 
 	c.store([]byte("key"), cacheEntry{value: []byte("val"), found: true})
 
@@ -37,7 +37,7 @@ func TestCacheStoreAndLookup(t *testing.T) {
 }
 
 func TestCacheNilValue(t *testing.T) {
-	c := newReadCache(100)
+	c := newReadCache(100, LRU)
 
 	// Cache an exclusion proof (key verified to not exist).
 	c.store([]byte("absent"), cacheEntry{value: nil, found: false})
@@ -55,7 +55,7 @@ func TestCacheNilValue(t *testing.T) {
 }
 
 func TestCacheClear(t *testing.T) {
-	c := newReadCache(100)
+	c := newReadCache(100, LRU)
 
 	c.store([]byte("a"), cacheEntry{value: []byte("1"), found: true})
 	c.store([]byte("b"), cacheEntry{value: []byte("2"), found: true})
@@ -67,42 +67,43 @@ func TestCacheClear(t *testing.T) {
 	if _, ok := c.lookup([]byte("b")); ok {
 		t.Fatal("expected miss after clear")
 	}
-	if c.size.Load() != 0 {
-		t.Fatalf("size = %d after clear, want 0", c.size.Load())
+	if c.len() != 0 {
+		t.Fatalf("len = %d after clear, want 0", c.len())
 	}
 }
 
-func TestCacheAdmissionControl(t *testing.T) {
-	c := newReadCache(2)
+func TestCacheEviction(t *testing.T) {
+	c := newReadCache(2, LRU)
 
 	c.store([]byte("a"), cacheEntry{value: []byte("1"), found: true})
 	c.store([]byte("b"), cacheEntry{value: []byte("2"), found: true})
-	// Cache is full; this should be silently dropped.
+	// Cache is full; this should evict an existing entry.
 	c.store([]byte("c"), cacheEntry{value: []byte("3"), found: true})
 
-	if _, ok := c.lookup([]byte("c")); ok {
-		t.Fatal("expected miss for entry beyond maxSize")
+	// The new entry must be present.
+	if _, ok := c.lookup([]byte("c")); !ok {
+		t.Fatal("expected hit for newly inserted entry at capacity")
 	}
-	if c.size.Load() != 2 {
-		t.Fatalf("size = %d, want 2", c.size.Load())
+	if c.len() != 2 {
+		t.Fatalf("len = %d, want 2", c.len())
 	}
 
 	// Overwriting an existing key should succeed even at capacity.
-	c.store([]byte("a"), cacheEntry{value: []byte("updated"), found: true})
-	entry, ok := c.lookup([]byte("a"))
+	c.store([]byte("c"), cacheEntry{value: []byte("updated"), found: true})
+	entry, ok := c.lookup([]byte("c"))
 	if !ok {
 		t.Fatal("expected hit for overwritten key")
 	}
 	if string(entry.value) != "updated" {
 		t.Fatalf("got %q, want %q", entry.value, "updated")
 	}
-	if c.size.Load() != 2 {
-		t.Fatalf("size = %d after overwrite, want 2", c.size.Load())
+	if c.len() != 2 {
+		t.Fatalf("len = %d after overwrite, want 2", c.len())
 	}
 }
 
 func TestCacheInvalidateKey(t *testing.T) {
-	c := newReadCache(100)
+	c := newReadCache(100, LRU)
 
 	c.store([]byte("a"), cacheEntry{value: []byte("1"), found: true})
 	c.store([]byte("b"), cacheEntry{value: []byte("2"), found: true})
@@ -115,13 +116,13 @@ func TestCacheInvalidateKey(t *testing.T) {
 	if _, ok := c.lookup([]byte("b")); !ok {
 		t.Fatal("expected hit for non-invalidated key")
 	}
-	if c.size.Load() != 1 {
-		t.Fatalf("size = %d, want 1", c.size.Load())
+	if c.len() != 1 {
+		t.Fatalf("len = %d, want 1", c.len())
 	}
 }
 
 func TestCacheInvalidatePrefix(t *testing.T) {
-	c := newReadCache(100)
+	c := newReadCache(100, LRU)
 
 	c.store([]byte("a/1"), cacheEntry{value: []byte("v1"), found: true})
 	c.store([]byte("a/2"), cacheEntry{value: []byte("v2"), found: true})
@@ -138,13 +139,13 @@ func TestCacheInvalidatePrefix(t *testing.T) {
 	if _, ok := c.lookup([]byte("b/1")); !ok {
 		t.Fatal("expected hit for b/1 after prefix invalidation of a/")
 	}
-	if c.size.Load() != 1 {
-		t.Fatalf("size = %d, want 1", c.size.Load())
+	if c.len() != 1 {
+		t.Fatalf("len = %d, want 1", c.len())
 	}
 }
 
 func TestCacheInvalidateBatch(t *testing.T) {
-	c := newReadCache(100)
+	c := newReadCache(100, LRU)
 
 	c.store([]byte("x"), cacheEntry{value: []byte("1"), found: true})
 	c.store([]byte("y"), cacheEntry{value: []byte("2"), found: true})
@@ -153,9 +154,9 @@ func TestCacheInvalidateBatch(t *testing.T) {
 	c.store([]byte("z"), cacheEntry{value: []byte("5"), found: true})
 
 	ops := []ffi.BatchOp{
-		ffi.Put([]byte("x"), []byte("new")),    // invalidate x
-		ffi.Delete([]byte("y")),                 // invalidate y
-		ffi.PrefixDelete([]byte("p/")),          // invalidate p/a and p/b
+		ffi.Put([]byte("x"), []byte("new")),   // invalidate x
+		ffi.Delete([]byte("y")),                // invalidate y
+		ffi.PrefixDelete([]byte("p/")),         // invalidate p/a and p/b
 	}
 	c.invalidateBatch(ops)
 
@@ -167,8 +168,8 @@ func TestCacheInvalidateBatch(t *testing.T) {
 	if _, ok := c.lookup([]byte("z")); !ok {
 		t.Fatal("expected hit for z after invalidateBatch")
 	}
-	if c.size.Load() != 1 {
-		t.Fatalf("size = %d, want 1", c.size.Load())
+	if c.len() != 1 {
+		t.Fatalf("len = %d, want 1", c.len())
 	}
 }
 
@@ -272,8 +273,8 @@ func TestCacheInvalidationOnBootstrap(t *testing.T) {
 		t.Fatalf("re-Bootstrap: %v", err)
 	}
 
-	if client.cache.size.Load() != 0 {
-		t.Fatalf("cache size = %d after re-bootstrap, want 0", client.cache.size.Load())
+	if client.cache.len() != 0 {
+		t.Fatalf("cache len = %d after re-bootstrap, want 0", client.cache.len())
 	}
 }
 

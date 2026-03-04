@@ -5,8 +5,6 @@ package remote
 
 import (
 	"bytes"
-	"sync"
-	"sync/atomic"
 
 	ffi "github.com/ava-labs/firewood/ffi"
 )
@@ -18,61 +16,50 @@ type cacheEntry struct {
 }
 
 // readCache is a concurrency-safe read cache for verified Get results.
-// It uses sync.Map for lock-free reads and an atomic counter for admission
-// control. When the cache reaches maxSize, new entries are silently dropped.
+// It delegates storage and eviction to a pluggable [evictionStore] backend.
 type readCache struct {
-	entries sync.Map
-	size    atomic.Int64
-	maxSize int64
+	backend evictionStore
 }
 
-// newReadCache creates a new read cache with the given maximum number of entries.
-func newReadCache(maxSize int) *readCache {
+// newReadCache creates a new read cache with the given maximum number of
+// entries and eviction policy.
+func newReadCache(maxSize int, policy EvictionPolicy) *readCache {
 	return &readCache{
-		maxSize: int64(maxSize),
+		backend: newEvictionStore(policy, maxSize),
 	}
 }
 
 // lookup returns the cached entry for key, if present.
 func (rc *readCache) lookup(key []byte) (cacheEntry, bool) {
-	v, ok := rc.entries.Load(string(key))
-	if !ok {
-		return cacheEntry{}, false
-	}
-	return v.(cacheEntry), true
+	return rc.backend.get(string(key))
 }
 
-// store adds or updates a cache entry. If the cache is at capacity and the key
-// is not already present, the entry is silently dropped.
+// store adds or updates a cache entry. If the cache is at capacity, an
+// existing entry is evicted according to the configured eviction policy.
 func (rc *readCache) store(key []byte, entry cacheEntry) {
-	k := string(key)
-	if _, loaded := rc.entries.Swap(k, entry); !loaded {
-		// New entry — check admission.
-		if rc.size.Add(1) > rc.maxSize {
-			// Over capacity — undo.
-			rc.entries.Delete(k)
-			rc.size.Add(-1)
-		}
-	}
+	rc.backend.put(string(key), entry)
 }
 
 // invalidateKey removes a single key from the cache.
 func (rc *readCache) invalidateKey(key []byte) {
-	if _, loaded := rc.entries.LoadAndDelete(string(key)); loaded {
-		rc.size.Add(-1)
-	}
+	rc.backend.del(string(key))
 }
 
 // invalidatePrefix removes all cached keys that start with prefix.
+// This uses a two-pass approach: first collect matching keys, then delete
+// them. Safe because this method is only called under the client's write
+// lock, so no concurrent store/lookup calls can add new matching keys
+// between the two passes.
 func (rc *readCache) invalidatePrefix(prefix []byte) {
-	rc.entries.Range(func(key, _ any) bool {
-		if bytes.HasPrefix([]byte(key.(string)), prefix) {
-			if _, loaded := rc.entries.LoadAndDelete(key); loaded {
-				rc.size.Add(-1)
-			}
+	var toDelete []string
+	rc.backend.keys(func(key string) {
+		if bytes.HasPrefix([]byte(key), prefix) {
+			toDelete = append(toDelete, key)
 		}
-		return true
 	})
+	for _, key := range toDelete {
+		rc.backend.del(key)
+	}
 }
 
 // invalidateBatch processes a slice of batch operations and invalidates
@@ -89,6 +76,10 @@ func (rc *readCache) invalidateBatch(ops []ffi.BatchOp) {
 
 // clear removes all entries from the cache.
 func (rc *readCache) clear() {
-	rc.entries.Clear()
-	rc.size.Store(0)
+	rc.backend.clear()
+}
+
+// len returns the number of entries currently in the cache.
+func (rc *readCache) len() int {
+	return rc.backend.len()
 }
