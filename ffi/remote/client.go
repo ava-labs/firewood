@@ -282,6 +282,13 @@ func (c *Client) Propose(ctx context.Context, ops []ffi.BatchOp) (*remoteProposa
 	}, nil
 }
 
+// Revision returns a lightweight [ffi.DBRevision] for the given root hash.
+// No server round-trip is made; errors surface on first Get or Iter if the
+// root is invalid or has been pruned.
+func (c *Client) Revision(root ffi.Hash) ffi.DBRevision {
+	return &remoteRevision{root: root, rpc: c.rpc}
+}
+
 // Root returns the current root hash, or an empty hash if not bootstrapped.
 func (c *Client) Root() ffi.Hash {
 	c.mu.RLock()

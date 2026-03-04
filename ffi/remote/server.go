@@ -256,31 +256,62 @@ func (s *Server) DropProposal(
 	return &pb.DropProposalResponse{}, nil
 }
 
-// IterBatch returns a batch of key-value pairs from a proposal, starting at
-// the given key. The caller can paginate by setting start_key to the last
-// returned key + "\x00".
+// IterBatch returns a batch of key-value pairs from a proposal or committed
+// revision, starting at the given key. The caller can paginate by setting
+// start_key to the last returned key + "\x00".
+//
+// When proposal_id is 0, the server iterates a committed revision identified
+// by root_hash. Otherwise it iterates the proposal with the given ID.
 func (s *Server) IterBatch(
 	_ context.Context,
 	req *pb.IterBatchRequest,
 ) (*pb.IterBatchResponse, error) {
-	id := req.GetProposalId()
-
-	val, ok := s.proposals.Load(id)
-	if !ok {
-		return nil, fmt.Errorf("proposal %d not found", id)
-	}
-	entry := val.(*proposalEntry)
-
-	it, err := entry.proposal.Iter(req.GetStartKey())
-	if err != nil {
-		return nil, fmt.Errorf("iter: %w", err)
-	}
-	defer it.Drop()
-
 	batchSize := int(req.GetBatchSize())
 	if batchSize <= 0 {
 		batchSize = 100
 	}
+
+	id := req.GetProposalId()
+
+	var it *ffi.Iterator
+	var cleanup func()
+
+	if id == 0 {
+		// Revision mode: iterate committed state.
+		if len(req.GetRootHash()) != ffi.RootLength {
+			return nil, fmt.Errorf("root_hash required when proposal_id is 0")
+		}
+		var root ffi.Hash
+		copy(root[:], req.GetRootHash())
+
+		rev, err := s.db.Revision(root)
+		if err != nil {
+			return nil, fmt.Errorf("revision: %w", err)
+		}
+		cleanup = func() { rev.Drop() }
+
+		it, err = rev.Iter(req.GetStartKey())
+		if err != nil {
+			rev.Drop()
+			return nil, fmt.Errorf("iter: %w", err)
+		}
+	} else {
+		// Proposal mode: iterate proposal state.
+		val, ok := s.proposals.Load(id)
+		if !ok {
+			return nil, fmt.Errorf("proposal %d not found", id)
+		}
+		entry := val.(*proposalEntry)
+
+		var err error
+		it, err = entry.proposal.Iter(req.GetStartKey())
+		if err != nil {
+			return nil, fmt.Errorf("iter: %w", err)
+		}
+		cleanup = func() {} // no-op for proposals
+	}
+	defer it.Drop()
+	defer cleanup()
 
 	pairs := make([]*pb.KeyValuePair, 0, batchSize)
 	for i := 0; i < batchSize && it.Next(); i++ {

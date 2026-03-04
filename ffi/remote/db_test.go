@@ -717,3 +717,313 @@ func TestRemoteDBProposalIterMultiBatch(t *testing.T) {
 	}
 }
 
+func TestRemoteDBRevisionGet(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	// First commit.
+	root1 := insertData(t, db, map[string]string{"a": "1", "b": "2"})
+
+	// Second commit overwrites "a".
+	root2 := insertData(t, db, map[string]string{"a": "updated", "c": "3"})
+
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, root2, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	// Revision at root1 should see old data.
+	rev, err := rdb.Revision(ctx, root1)
+	if err != nil {
+		t.Fatalf("Revision(root1): %v", err)
+	}
+	defer rev.Drop()
+
+	if rev.Root() != root1 {
+		t.Fatalf("root mismatch: got %x, want %x", rev.Root(), root1)
+	}
+
+	val, err := rev.Get(ctx, []byte("a"))
+	if err != nil {
+		t.Fatalf("Get(a): %v", err)
+	}
+	if string(val) != "1" {
+		t.Fatalf("Get(a) = %q, want %q", val, "1")
+	}
+
+	// Key "c" should not exist in root1.
+	val, err = rev.Get(ctx, []byte("c"))
+	if err != nil {
+		t.Fatalf("Get(c): %v", err)
+	}
+	if val != nil {
+		t.Fatalf("Get(c) = %q, want nil", val)
+	}
+}
+
+func TestRemoteDBRevisionIter(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"a": "1", "b": "2", "c": "3"})
+
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	rev, err := rdb.Revision(ctx, rootHash)
+	if err != nil {
+		t.Fatalf("Revision: %v", err)
+	}
+	defer rev.Drop()
+
+	it, err := rev.Iter(ctx, nil)
+	if err != nil {
+		t.Fatalf("Iter: %v", err)
+	}
+	defer it.Drop()
+
+	var keys []string
+	var vals []string
+	for it.Next() {
+		keys = append(keys, string(it.Key()))
+		vals = append(vals, string(it.Value()))
+	}
+	if err := it.Err(); err != nil {
+		t.Fatalf("Iter.Err: %v", err)
+	}
+
+	expectedKeys := []string{"a", "b", "c"}
+	expectedVals := []string{"1", "2", "3"}
+	if len(keys) != len(expectedKeys) {
+		t.Fatalf("got %d keys, want %d: %v", len(keys), len(expectedKeys), keys)
+	}
+	for i := range keys {
+		if keys[i] != expectedKeys[i] {
+			t.Fatalf("key[%d] = %q, want %q", i, keys[i], expectedKeys[i])
+		}
+		if vals[i] != expectedVals[i] {
+			t.Fatalf("val[%d] = %q, want %q", i, vals[i], expectedVals[i])
+		}
+	}
+}
+
+func TestRemoteDBRevisionIterStartKey(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"a": "1", "b": "2", "c": "3"})
+
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	rev, err := rdb.Revision(ctx, rootHash)
+	if err != nil {
+		t.Fatalf("Revision: %v", err)
+	}
+	defer rev.Drop()
+
+	// Start iterating from "b".
+	it, err := rev.Iter(ctx, []byte("b"))
+	if err != nil {
+		t.Fatalf("Iter: %v", err)
+	}
+	defer it.Drop()
+
+	var keys []string
+	for it.Next() {
+		keys = append(keys, string(it.Key()))
+	}
+	if err := it.Err(); err != nil {
+		t.Fatalf("Iter.Err: %v", err)
+	}
+
+	expected := []string{"b", "c"}
+	if len(keys) != len(expected) {
+		t.Fatalf("got %d keys, want %d: %v", len(keys), len(expected), keys)
+	}
+	for i, k := range keys {
+		if k != expected[i] {
+			t.Fatalf("key[%d] = %q, want %q", i, k, expected[i])
+		}
+	}
+}
+
+func TestRemoteDBRevisionIterMultiBatch(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	// Insert enough keys to require multiple batches (batch size is 256).
+	data := make(map[string]string)
+	for i := 0; i < 300; i++ {
+		key := fmt.Sprintf("key-%04d", i)
+		data[key] = fmt.Sprintf("val-%04d", i)
+	}
+	rootHash := insertData(t, db, data)
+
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	rev, err := rdb.Revision(ctx, rootHash)
+	if err != nil {
+		t.Fatalf("Revision: %v", err)
+	}
+	defer rev.Drop()
+
+	it, err := rev.Iter(ctx, nil)
+	if err != nil {
+		t.Fatalf("Iter: %v", err)
+	}
+	defer it.Drop()
+
+	count := 0
+	for it.Next() {
+		count++
+	}
+	if err := it.Err(); err != nil {
+		t.Fatalf("Iter.Err: %v", err)
+	}
+
+	if count != 300 {
+		t.Fatalf("got %d keys, want 300", count)
+	}
+}
+
+func TestRemoteDBRevisionBadRoot(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"a": "1"})
+
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	// Revision creation succeeds (no round-trip).
+	var badRoot ffi.Hash
+	badRoot[0] = 0xFF
+	rev, err := rdb.Revision(ctx, badRoot)
+	if err != nil {
+		t.Fatalf("Revision: %v", err)
+	}
+	defer rev.Drop()
+
+	// Get should fail.
+	_, err = rev.Get(ctx, []byte("a"))
+	if err == nil {
+		t.Fatal("expected error for Get with bad root")
+	}
+
+	// Iter should fail.
+	_, err = rev.Iter(ctx, nil)
+	if err == nil {
+		t.Fatal("expected error for Iter with bad root")
+	}
+}
+
+func TestRemoteDBRevisionAfterUpdate(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	root1 := insertData(t, db, map[string]string{"a": "1"})
+
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, root1, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	// Create revision at root1.
+	rev, err := rdb.Revision(ctx, root1)
+	if err != nil {
+		t.Fatalf("Revision: %v", err)
+	}
+	defer rev.Drop()
+
+	// Update the DB to root2.
+	_, err = rdb.Update(ctx, []ffi.BatchOp{ffi.Put([]byte("b"), []byte("2"))})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	// Revision at root1 should still work.
+	val, err := rev.Get(ctx, []byte("a"))
+	if err != nil {
+		t.Fatalf("Get(a) after update: %v", err)
+	}
+	if string(val) != "1" {
+		t.Fatalf("Get(a) = %q, want %q", val, "1")
+	}
+
+	// Key "b" should not exist in root1.
+	val, err = rev.Get(ctx, []byte("b"))
+	if err != nil {
+		t.Fatalf("Get(b): %v", err)
+	}
+	if val != nil {
+		t.Fatalf("Get(b) = %q, want nil", val)
+	}
+}
+
+func TestRemoteDBRevisionDrop(t *testing.T) {
+	db := newTestDB(t)
+	ctx := t.Context()
+
+	rootHash := insertData(t, db, map[string]string{"a": "1"})
+
+	addr := startServerAndGetAddr(t, db)
+
+	rdb, err := NewRemoteDB(ctx, addr, rootHash, 4)
+	if err != nil {
+		t.Fatalf("NewRemoteDB: %v", err)
+	}
+	defer rdb.Close(ctx)
+
+	// Drop is a no-op.
+	rev1, err := rdb.Revision(ctx, rootHash)
+	if err != nil {
+		t.Fatalf("Revision 1: %v", err)
+	}
+	if err := rev1.Drop(); err != nil {
+		t.Fatalf("Drop: %v", err)
+	}
+
+	// Can create another revision with the same root afterward.
+	rev2, err := rdb.Revision(ctx, rootHash)
+	if err != nil {
+		t.Fatalf("Revision 2: %v", err)
+	}
+	defer rev2.Drop()
+
+	val, err := rev2.Get(ctx, []byte("a"))
+	if err != nil {
+		t.Fatalf("Get(a): %v", err)
+	}
+	if string(val) != "1" {
+		t.Fatalf("Get(a) = %q, want %q", val, "1")
+	}
+}
+

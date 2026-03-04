@@ -18,6 +18,7 @@ import (
 var (
 	_ ffi.DB         = (*RemoteDB)(nil)
 	_ ffi.DBProposal = (*remoteProposal)(nil)
+	_ ffi.DBRevision = (*remoteRevision)(nil)
 	_ ffi.DBIterator = (*remoteIterator)(nil)
 )
 
@@ -60,6 +61,10 @@ func (r *RemoteDB) Update(ctx context.Context, batch []ffi.BatchOp) (ffi.Hash, e
 
 func (r *RemoteDB) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.DBProposal, error) {
 	return r.client.Propose(ctx, batch)
+}
+
+func (r *RemoteDB) Revision(_ context.Context, root ffi.Hash) (ffi.DBRevision, error) {
+	return &remoteRevision{root: root, rpc: r.client.rpc}, nil
 }
 
 func (r *RemoteDB) Root() ffi.Hash {
@@ -138,23 +143,7 @@ func (p *remoteProposal) Drop() error {
 }
 
 func (p *remoteProposal) Get(ctx context.Context, key []byte) ([]byte, error) {
-	resp, err := p.rpc.GetValue(ctx, &pb.GetValueRequest{
-		RootHash: p.root[:],
-		Key:      key,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("get value: %w", err)
-	}
-
-	var value []byte
-	if resp.Value != nil {
-		value = resp.GetValue()
-	}
-	if err := ffi.VerifySingleKeyProof(p.root, key, value, resp.GetProof()); err != nil {
-		return nil, fmt.Errorf("proof verification failed: %w", err)
-	}
-
-	return value, nil
+	return verifiedGet(ctx, p.rpc, p.root, key)
 }
 
 func (p *remoteProposal) Iter(ctx context.Context, startKey []byte) (ffi.DBIterator, error) {
@@ -309,6 +298,76 @@ func (it *remoteIterator) Err() error {
 func (it *remoteIterator) Drop() error {
 	// No server-side iterator state to clean up; batches are fetched per-call.
 	return nil
+}
+
+// remoteRevision implements [ffi.DBRevision] for a committed revision on the
+// remote server. Lightweight: holds only a root hash and RPC client. All reads
+// are verified via standalone Merkle proofs.
+type remoteRevision struct {
+	root ffi.Hash
+	rpc  pb.FirewoodRemoteClient
+}
+
+func (r *remoteRevision) Root() ffi.Hash { return r.root }
+
+func (r *remoteRevision) Get(ctx context.Context, key []byte) ([]byte, error) {
+	return verifiedGet(ctx, r.rpc, r.root, key)
+}
+
+func (r *remoteRevision) Iter(ctx context.Context, startKey []byte) (ffi.DBIterator, error) {
+	const batchSize = 256
+
+	resp, err := r.rpc.IterBatch(ctx, &pb.IterBatchRequest{
+		ProposalId: 0, // revision mode
+		StartKey:   startKey,
+		BatchSize:  batchSize,
+		RootHash:   r.root[:],
+	})
+	if err != nil {
+		return nil, fmt.Errorf("iter batch: %w", err)
+	}
+
+	verifiedPairs, err := verifyIterBatch(r.root, startKey, batchSize, resp)
+	if err != nil {
+		return nil, fmt.Errorf("iter batch verification: %w", err)
+	}
+
+	return &remoteIterator{
+		proposalID: 0, // revision mode for subsequent batches
+		pairs:      verifiedPairs,
+		cursor:     -1,
+		hasMore:    resp.GetHasMore(),
+		rpc:        r.rpc,
+		root:       r.root,
+	}, nil
+}
+
+func (r *remoteRevision) Drop() error { return nil }
+
+// verifiedGet fetches a value from the server and verifies its single-key
+// Merkle proof against the given root hash.
+func verifiedGet(
+	ctx context.Context,
+	rpc pb.FirewoodRemoteClient,
+	root ffi.Hash,
+	key []byte,
+) ([]byte, error) {
+	resp, err := rpc.GetValue(ctx, &pb.GetValueRequest{
+		RootHash: root[:],
+		Key:      key,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("get value: %w", err)
+	}
+
+	var value []byte
+	if resp.Value != nil {
+		value = resp.GetValue()
+	}
+	if err := ffi.VerifySingleKeyProof(root, key, value, resp.GetProof()); err != nil {
+		return nil, fmt.Errorf("proof verification failed: %w", err)
+	}
+	return value, nil
 }
 
 // verifyIterBatch verifies the range proof in the response and returns the

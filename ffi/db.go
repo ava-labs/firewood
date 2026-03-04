@@ -12,6 +12,7 @@ type DB interface {
 	Get(ctx context.Context, key []byte) ([]byte, error)
 	Update(ctx context.Context, batch []BatchOp) (Hash, error)
 	Propose(ctx context.Context, batch []BatchOp) (DBProposal, error)
+	Revision(ctx context.Context, root Hash) (DBRevision, error)
 	Root() Hash
 	Close(ctx context.Context) error
 }
@@ -24,6 +25,14 @@ type DBProposal interface {
 	Get(ctx context.Context, key []byte) ([]byte, error)
 	Iter(ctx context.Context, key []byte) (DBIterator, error)
 	Propose(ctx context.Context, batch []BatchOp) (DBProposal, error)
+}
+
+// DBRevision is the common interface for a read-only committed revision.
+type DBRevision interface {
+	Root() Hash
+	Get(ctx context.Context, key []byte) ([]byte, error)
+	Iter(ctx context.Context, key []byte) (DBIterator, error)
+	Drop() error
 }
 
 // DBIterator is the common interface for iterating key-value pairs.
@@ -39,6 +48,7 @@ type DBIterator interface {
 var (
 	_ DB         = (*LocalDB)(nil)
 	_ DBProposal = (*localProposal)(nil)
+	_ DBRevision = (*localRevision)(nil)
 	_ DBIterator = (*localIterator)(nil)
 )
 
@@ -70,6 +80,14 @@ func (l *LocalDB) Propose(_ context.Context, batch []BatchOp) (DBProposal, error
 
 func (l *LocalDB) Root() Hash {
 	return l.db.Root()
+}
+
+func (l *LocalDB) Revision(_ context.Context, root Hash) (DBRevision, error) {
+	rev, err := l.db.Revision(root)
+	if err != nil {
+		return nil, err
+	}
+	return &localRevision{rev: rev}, nil
 }
 
 func (l *LocalDB) Close(ctx context.Context) error {
@@ -112,6 +130,27 @@ func (lp *localProposal) Propose(_ context.Context, batch []BatchOp) (DBProposal
 	}
 	return &localProposal{p: p}, nil
 }
+
+// localRevision wraps a [Revision] to satisfy the [DBRevision] interface.
+type localRevision struct {
+	rev *Revision
+}
+
+func (lr *localRevision) Root() Hash { return lr.rev.Root() }
+
+func (lr *localRevision) Get(_ context.Context, key []byte) ([]byte, error) {
+	return lr.rev.Get(key)
+}
+
+func (lr *localRevision) Iter(_ context.Context, key []byte) (DBIterator, error) {
+	it, err := lr.rev.Iter(key)
+	if err != nil {
+		return nil, err
+	}
+	return &localIterator{it: it}, nil
+}
+
+func (lr *localRevision) Drop() error { return lr.rev.Drop() }
 
 // localIterator wraps an [Iterator] to satisfy the [DBIterator] interface.
 type localIterator struct {

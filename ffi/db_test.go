@@ -205,6 +205,94 @@ func TestLocalDBPrefixDelete(t *testing.T) {
 	}
 }
 
+func TestLocalDBRevision(t *testing.T) {
+	db := newLocalDB(t)
+	ctx := t.Context()
+
+	// Insert data and commit.
+	root1, err := db.Update(ctx, []BatchOp{
+		Put([]byte("a"), []byte("1")),
+		Put([]byte("b"), []byte("2")),
+	})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	// Get a revision at root1.
+	rev, err := db.Revision(ctx, root1)
+	if err != nil {
+		t.Fatalf("Revision: %v", err)
+	}
+	defer rev.Drop()
+
+	// Root should match.
+	if rev.Root() != root1 {
+		t.Fatalf("root mismatch: got %x, want %x", rev.Root(), root1)
+	}
+
+	// Get existing key.
+	val, err := rev.Get(ctx, []byte("a"))
+	if err != nil {
+		t.Fatalf("Get(a): %v", err)
+	}
+	if string(val) != "1" {
+		t.Fatalf("Get(a) = %q, want %q", val, "1")
+	}
+
+	// Get non-existent key.
+	val, err = rev.Get(ctx, []byte("missing"))
+	if err != nil {
+		t.Fatalf("Get(missing): %v", err)
+	}
+	if val != nil {
+		t.Fatalf("Get(missing) = %q, want nil", val)
+	}
+
+	// Iterate all keys.
+	it, err := rev.Iter(ctx, nil)
+	if err != nil {
+		t.Fatalf("Iter: %v", err)
+	}
+	defer it.Drop()
+
+	var keys []string
+	for it.Next() {
+		keys = append(keys, string(it.Key()))
+	}
+	if err := it.Err(); err != nil {
+		t.Fatalf("Iter.Err: %v", err)
+	}
+
+	expected := []string{"a", "b"}
+	if len(keys) != len(expected) {
+		t.Fatalf("got %d keys, want %d: %v", len(keys), len(expected), keys)
+	}
+	for i, k := range keys {
+		if k != expected[i] {
+			t.Fatalf("key[%d] = %q, want %q", i, k, expected[i])
+		}
+	}
+}
+
+func TestLocalDBRevisionNotFound(t *testing.T) {
+	db := newLocalDB(t)
+	ctx := t.Context()
+
+	// Insert data so the DB is non-empty.
+	_, err := db.Update(ctx, []BatchOp{Put([]byte("a"), []byte("1"))})
+	if err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+
+	// Try to get a revision with a fabricated root.
+	var badRoot Hash
+	badRoot[0] = 0xFF
+	_, err = db.Revision(ctx, badRoot)
+	if err == nil {
+		t.Fatal("expected error for non-existent revision root")
+	}
+}
+
 func TestLocalDBProposalIter(t *testing.T) {
 	db := newLocalDB(t)
 	ctx := t.Context()
