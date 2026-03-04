@@ -6,7 +6,9 @@ package remote
 import (
 	"context"
 	"net"
+	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,11 +18,35 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+var (
+	detectedAlgo     ffi.NodeHashAlgorithm
+	detectedAlgoOnce sync.Once
+)
+
+func detectHashAlgorithm() ffi.NodeHashAlgorithm {
+	detectedAlgoOnce.Do(func() {
+		dir, err := os.MkdirTemp("", "firewood-hash-detect-*")
+		if err != nil {
+			panic(err)
+		}
+		defer os.RemoveAll(dir)
+
+		db, err := ffi.New(dir, ffi.EthereumNodeHashing, ffi.WithTruncate(true))
+		if err == nil {
+			detectedAlgo = ffi.EthereumNodeHashing
+			db.Close(context.Background())
+		} else {
+			detectedAlgo = ffi.MerkleDBNodeHashing
+		}
+	})
+	return detectedAlgo
+}
+
 // newTestDB creates a new Firewood database for testing and registers cleanup.
 func newTestDB(t *testing.T) *ffi.Database {
 	t.Helper()
 	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, err := ffi.New(dbFile, ffi.EthereumNodeHashing)
+	db, err := ffi.New(dbFile, detectHashAlgorithm())
 	if err != nil {
 		t.Fatalf("ffi.New: %v", err)
 	}
