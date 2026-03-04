@@ -49,9 +49,9 @@ impl Parse for MetricsArgs {
 /// A proc macro attribute that automatically adds metrics timing to functions.
 ///
 /// This macro adds timing instrumentation to functions that return `Result<T, E>`.
-/// It generates two counters:
-/// 1. A count counter with the provided prefix that increments by 1
-/// 2. A timing counter with the prefix + "_s" that records elapsed time in seconds
+/// It generates two counters with Prometheus-compliant naming:
+/// 1. A count counter with the provided prefix + "_total"
+/// 2. A timing counter with the prefix + "`_seconds_total`" that records elapsed time in seconds
 ///
 /// Both counters include a "success" label that is "true" for Ok results and "false" for Err results.
 /// The metrics are automatically registered with descriptions for better observability.
@@ -60,15 +60,16 @@ impl Parse for MetricsArgs {
 /// ```rust,ignore
 /// use firewood_macros::metrics;
 ///
-/// // Basic usage with just a metric name
-/// #[metrics("my.operation")]
+/// // Base metric name without suffixes - macro adds _total and _seconds_total
+/// #[metrics("my_operation")]
 /// fn my_function() -> Result<String, &'static str> {
 ///     // function body
 ///     Ok("success".to_string())
 /// }
+/// // This generates: my_operation_total (count) and my_operation_seconds_total (timing)
 ///
 /// // With an optional description
-/// #[metrics("my.operation", "Description of what this operation does")]
+/// #[metrics("my_operation", "Description of what this operation does")]
 /// fn my_function_with_desc() -> Result<String, &'static str> {
 ///     // function body
 ///     Ok("success".to_string())
@@ -168,7 +169,7 @@ fn generate_metrics_wrapper(input_fn: &ItemFn, args: &MetricsArgs) -> proc_macro
             static __METRICS_REGISTERED: std::sync::Once = std::sync::Once::new();
             __METRICS_REGISTERED.call_once(|| {
                 metrics::describe_counter!(#metric_prefix, #count_desc);
-                metrics::describe_counter!(concat!(#metric_prefix, "_s"), #timing_desc);
+                metrics::describe_counter!(concat!(#metric_prefix, "_seconds"), #timing_desc);
             });
         }
     } else {
@@ -176,8 +177,8 @@ fn generate_metrics_wrapper(input_fn: &ItemFn, args: &MetricsArgs) -> proc_macro
             // Register metrics without descriptions (only runs once due to static guard)
             static __METRICS_REGISTERED: std::sync::Once = std::sync::Once::new();
             __METRICS_REGISTERED.call_once(|| {
-                metrics::describe_counter!(#metric_prefix, "Operation counter");
-                metrics::describe_counter!(concat!(#metric_prefix, "_s"), "Operation timing in seconds");
+                metrics::describe_counter!(#metric_prefix, " Operation counter");
+                metrics::describe_counter!(concat!(#metric_prefix, "_seconds"), "Operation timing in seconds");
             });
         }
     };
@@ -200,12 +201,12 @@ fn generate_metrics_wrapper(input_fn: &ItemFn, args: &MetricsArgs) -> proc_macro
                 __METRICS_LABELS_SUCCESS
             };
 
-            // Increment count counter (base name)
-            metrics::counter!(#metric_prefix, __metrics_labels).increment(1);
+            // Increment count counter (base name + "_total")
+            metrics::counter!(concat!(#metric_prefix, "_total"), __metrics_labels).increment(1);
 
-            // Increment timing counter (base name + "_s") using compile-time concatenation
-            metrics::counter!(concat!(#metric_prefix, "_s"), __metrics_labels)
-                .increment((__metrics_start.elapsed().as_millis() as f64 / 1000.0) as u64);
+            // Increment timing counter (base name + "_seconds_total") using compile-time concatenation
+            metrics::counter!(concat!(#metric_prefix, "_seconds_total"), __metrics_labels)
+                .increment(__metrics_start.elapsed().as_nanos());
 
             __metrics_result
         }

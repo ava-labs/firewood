@@ -423,7 +423,7 @@ impl<'db> api::Proposal for Proposal<'db> {
 }
 
 impl Proposal<'_> {
-    #[crate::metrics("proposal.create", "database proposal creation")]
+    #[crate::metrics("proposals", "database proposal creation")]
     fn create_proposal(&self, batch: impl IntoBatchIter) -> Result<Self, api::Error> {
         // Proposal created based on another proposal
         firewood_metrics::firewood_increment!(crate::registry::PROPOSALS_CREATED_TOTAL, 1, "base" => "proposal");
