@@ -284,7 +284,10 @@ impl PersistChannel {
         state.permits_available == state.max_permits.get()
     }
 
-    /// Enqueues `nodestore` for reaping.
+    /// Enqueues `nodestore` for reaping on the next persist cycle.
+    ///
+    /// The reap is not processed immediately; it is buffered until the next
+    /// call to [`pop`](Self::pop) drains it alongside a persist.
     ///
     /// ## Errors
     ///
@@ -295,7 +298,6 @@ impl PersistChannel {
             return Err(PersistError::Shutdown);
         }
         state.pending_reaps.push(nodestore);
-        self.persist_ready.notify_one();
 
         Ok(())
     }
@@ -326,8 +328,9 @@ impl PersistChannel {
         Ok(())
     }
 
-    /// Blocks until there is work to do, then returns a [`PersistDataGuard`]
-    /// containing the pending reaps and/or the latest committed revision.
+    /// Blocks until the persist threshold is reached, then returns a
+    /// [`PersistDataGuard`] containing the latest committed revision and any
+    /// pending reaps that have accumulated since the last cycle.
     ///
     /// ## Errors
     ///
@@ -342,7 +345,7 @@ impl PersistChannel {
                 }
                 // Unblock to persist when permits available <= threshold
                 if state.permits_available <= state.persist_threshold
-                    && state.latest_committed.is_some()
+                    && let Some(latest_committed) = state.latest_committed.take()
                 {
                     break (
                         state
@@ -350,13 +353,8 @@ impl PersistChannel {
                             .get()
                             .wrapping_sub(state.permits_available),
                         std::mem::take(&mut state.pending_reaps),
-                        state.latest_committed.take(),
+                        latest_committed,
                     );
-                }
-                // Unblock even if we haven't met the threshold if there are pending reaps.
-                // Permits to release is set to 0, and committed revision is not taken.
-                if !state.pending_reaps.is_empty() {
-                    break (0, std::mem::take(&mut state.pending_reaps), None);
                 }
                 // Block until it is woken up by the committer thread.
                 self.persist_ready.wait(&mut state);
@@ -417,7 +415,7 @@ struct PersistChannelState {
 }
 
 /// RAII guard returned by [`PersistChannel::pop`] that carries the data for
-/// one persistence cycle (a committed revision and/or pending reaps).
+/// one persistence cycle (a committed revision and any accumulated reaps).
 ///
 /// On drop, it returns consumed permits back to the channel and notifies
 /// blocked committers via [`commit_not_full`](PersistChannel::commit_not_full),
@@ -430,9 +428,8 @@ struct PersistDataGuard<'a> {
     permits_to_release: u64,
     /// Expired node stores whose deleted nodes should be returned to free lists.
     pending_reaps: Vec<NodeStore<Committed, FileBacked>>,
-    /// The latest committed revision to persist, if the threshold was reached.
-    /// `None` when this cycle was triggered solely by pending reaps.
-    latest_committed: Option<CommittedRevision>,
+    /// The latest committed revision to persist.
+    latest_committed: CommittedRevision,
 }
 
 impl Drop for PersistDataGuard<'_> {
@@ -497,15 +494,18 @@ impl PersistLoop {
     }
 
     /// Processes pending work until shutdown or an error occurs.
+    ///
+    /// Reaps are always processed *after* a persist so that the on-disk header
+    /// has been updated past the nodes being freed. This prevents `https://github.com/ava-labs/firewood/issues/1737`
+    /// where a crash between a reap and a persist would leave the header pointing
+    /// to freed nodes.
     fn event_loop(&self) -> Result<(), PersistError> {
         while let Ok(mut persist_data) = self.shared.channel.pop() {
+            self.persist_to_disk(&persist_data.latest_committed)
+                .and_then(|()| self.maybe_save_to_root_store(&persist_data.latest_committed))?;
+
             for nodestore in std::mem::take(&mut persist_data.pending_reaps) {
                 self.reap(nodestore)?;
-            }
-
-            if let Some(revision) = persist_data.latest_committed.take() {
-                self.persist_to_disk(&revision)
-                    .and_then(|()| self.maybe_save_to_root_store(&revision))?;
             }
         }
 
@@ -567,5 +567,106 @@ fn save_to_root_store(
 impl SharedState {
     fn wait_all_released(&self) {
         self.channel.wait_all_released();
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    use firewood_storage::{
+        CacheReadStrategy, Committed, FileBacked, ImmutableProposal, LeafNode, Node,
+        NodeHashAlgorithm, NodeStore, NodeStoreHeader, Parentable, Path,
+    };
+    use nonzero_ext::nonzero;
+
+    /// Creates a committed revision with a single leaf node from the given parent.
+    fn commit_leaf(
+        parent: &NodeStore<impl Parentable, FileBacked>,
+        value: &[u8],
+    ) -> NodeStore<Committed, FileBacked> {
+        let mut proposal = NodeStore::new(parent).unwrap();
+        *proposal.root_mut() = Some(Node::Leaf(LeafNode {
+            partial_path: Path::from(&[1, 2, 3]),
+            value: value.to_vec().into_boxed_slice(),
+        }));
+        let immutable = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal).unwrap();
+        immutable.as_committed()
+    }
+
+    /// Regression test for `https://github.com/ava-labs/firewood/issues/1737`
+    ///
+    /// Tests that reaps are processed *after* a persist moves the header
+    /// forward, so nodes referenced by the header are never freed prematurely.
+    #[test]
+    fn test_reopen_succeeds_after_reap_without_persist() {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let dbfile = tmpdir.path().join("test.db");
+
+        let storage = Arc::new(
+            FileBacked::new(
+                dbfile.clone(),
+                nonzero!(10usize),
+                nonzero!(10usize),
+                false,
+                true,
+                CacheReadStrategy::WritesOnly,
+                NodeHashAlgorithm::compile_option(),
+            )
+            .unwrap(),
+        );
+
+        let header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let empty = NodeStore::new_empty_committed(storage.clone());
+
+        let rev1: CommittedRevision = commit_leaf(&empty, b"value1").into();
+
+        // rev2.deleted = [rev1's root] because NodeStore::new adds the
+        // parent's root to the proposal's deleted list.
+        let rev2 = commit_leaf(&rev1, b"value2");
+
+        // Persist every commit.
+        let worker = PersistWorker::new(nonzero!(1u64), header, None);
+
+        // Persist rev1. The bg thread persists immediately (threshold reached),
+        // so the on-disk header now points to rev1's root.
+        worker.persist(rev1.clone()).unwrap();
+        worker.wait_persisted();
+
+        // Send rev2 for reaping. The reap is buffered (not processed) because
+        // no persist follows to make it safe.
+        worker.reap(rev2).unwrap();
+
+        // Close the worker. No unpersisted commits remain, so close() does NOT
+        // trigger a shutdown persist. The buffered reap is never processed and
+        // rev1's root remains intact on disk.
+        let empty_revision: CommittedRevision =
+            NodeStore::new_empty_committed(storage.clone()).into();
+        worker.close(empty_revision).unwrap();
+
+        // Record rev1's root address before dropping storage.
+        let root_addr = rev1.root_address().unwrap();
+        drop(storage);
+
+        // Reopen: the header still points to rev1's root, which was NOT freed.
+        let storage = Arc::new(
+            FileBacked::new(
+                dbfile,
+                nonzero!(10usize),
+                nonzero!(10usize),
+                false,
+                false,
+                CacheReadStrategy::WritesOnly,
+                NodeHashAlgorithm::compile_option(),
+            )
+            .unwrap(),
+        );
+        let header = NodeStoreHeader::read_from_storage(storage.as_ref()).unwrap();
+        let nodestore = NodeStore::open(&header, storage).unwrap();
+
+        // Reading the root from disk should succeed because the deferred reap
+        // was never processed (no persist followed to make it safe).
+        assert!(nodestore.read_node_from_disk(root_addr, "test").is_ok());
     }
 }
