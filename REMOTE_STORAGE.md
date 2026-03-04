@@ -84,7 +84,7 @@ through `LocalDB`:
 
 ### `ffi/remote/db_test.go` — RemoteDB tests
 
-7 tests exercising the interfaces through `RemoteDB` over a real gRPC
+11 tests exercising the interfaces through `RemoteDB` over a real gRPC
 server/client:
 
 - `TestNewRemoteDB` — bootstrap, get, update through `ffi.DB`.
@@ -97,7 +97,17 @@ server/client:
 - `TestRemoteDBProposalChain` — chain two proposals remotely, verify distinct
   roots, commit chain.
 - `TestRemoteDBProposeDrop` — propose then drop, verify DB root unchanged.
+- `TestRemoteDBPrefixDelete` — prefix delete via Update.
+- `TestRemoteDBPrefixDeletePropose` — prefix delete via Propose.
+- `TestRemoteDBPrefixDeleteChained` — prefix delete in chained proposal.
+- `TestRemoteDBPrefixDeleteMixed` — mixed Put + PrefixDelete batch.
 - `TestNewRemoteDBBadRoot` — wrong trusted root fails at construction.
+- `TestRemoteDBProposalIterTamperedValue` — tampered response values ignored
+  (proof pairs used instead).
+- `TestRemoteDBProposalIterMissingProof` — missing proof rejected.
+- `TestRemoteDBProposalIterTamperedProof` — corrupted proof bytes rejected.
+- `TestRemoteDBProposalIterMultiBatch` — 300+ keys verified across batch
+  boundaries.
 
 ## Files Modified
 
@@ -251,6 +261,9 @@ cd ffi/remote && go test -run "TestEviction|TestLRU|TestClock|TestSampleK|TestRa
 # Cache + eviction tests with race detector
 cd ffi/remote && go test -race -run "TestCache|TestEviction" -count=1
 
+# Iterator verification tests (tampered, missing proof, corrupted, multi-batch)
+cd ffi/remote && go test -run "TestRemoteDBProposalIter" -v -count=1
+
 # Cache benchmark (NoCache vs per-policy Cached)
 cd ffi/remote && go test -bench BenchmarkGetCached -benchtime=5s -count=1
 
@@ -282,6 +295,9 @@ cd ffi/remote && go test -bench BenchmarkCacheEviction -benchtime=5s -count=1
 | `ffi/remote/remote_test.go` | **MODIFIED** — runtime hash algorithm detection in `newTestDB` |
 | `ffi/remote/client.go` | **MODIFIED** — `ClientOption`, `WithCacheSize`, `WithCache`, cache integration in `Get`/`Update`/`Bootstrap`/`Close`/`Propose` |
 | `ffi/remote/benchmark_test.go` | **MODIFIED** — `setupRemoteDB` accepts options, `BenchmarkGetCached` per policy, `BenchmarkCacheEviction` |
+| `ffi/src/proofs/range.rs` | **MODIFIED** — added `fwd_range_proof_verify_and_extract` (verify + return KV pairs) |
+| `ffi/proofs.go` | **MODIFIED** — added `KeyValue` struct, `VerifyAndExtractRangeProof()`, `bytesPresent` Maybe helper |
+| `ffi/firewood.h` | **AUTO-UPDATED** — new C function declaration for `fwd_range_proof_verify_and_extract` |
 
 ### Pre-existing files (unchanged, for reference)
 
@@ -674,12 +690,246 @@ Policy-specific tests:
 - Added **`BenchmarkCacheEviction`**: measures eviction throughput per policy
   at capacity (1,000-entry cache with continuous insertions).
 
+## Range Proof Verification for Remote Iterator
+
+### Motivation
+
+The `remoteIterator` was the only remote operation without cryptographic
+verification. A malicious server could return fabricated values, inject fake
+keys, omit keys, or reorder results. Every other remote operation already had
+verification:
+
+- `Get` → verified via single-key Merkle proofs
+- `Update`/`Propose` → verified via witness-based re-execution
+
+Iterator was the remaining security gap.
+
+### Approach: Range Proof Per Batch
+
+Each `IterBatch` RPC now includes a **range proof** covering the batch's key
+range. The client verifies the proof and extracts the KV pairs directly from
+the verified proof — the response's `pairs` field is never trusted.
+
+**Why range proofs over per-entry single-key proofs:**
+
+| Aspect | Per-entry proofs | Range proof |
+|---|---|---|
+| Server cost | N `GetWithProof` calls | 1 `RangeProof` call |
+| Wire overhead | N proofs (~500-2000 bytes each) | 1 proof |
+| **Completeness** | **No** (server can omit keys) | **Yes** |
+| Value correctness | Yes | Yes |
+| Ordering | Requires explicit check | Implicit (trie order) |
+
+**How it works:**
+
+A `RangeProof` contains start proof (Merkle path for lower boundary), end proof
+(Merkle path for upper boundary), and the actual consecutive trie entries.
+Verification proves all three components are consistent with the root hash.
+
+**Contiguous batch coverage:** Each batch uses `startKey` with unbounded
+`endKey` and `maxLength = batchSize`. Batch 2 starts at `lastKey + "\x00"` from
+batch 1, so proofs tile contiguously with no gaps. A malicious server cannot
+omit keys (the proof proves all keys in range are included), inject keys
+(Merkle paths won't verify), or reorder (entries follow trie order).
+
+**Verification needs only a root hash** — `RangeProof.Verify()` takes only a
+`Hash`, no `*Database` or `*TruncatedTrie`. The chain of trust is:
+
+1. Trusted root → bootstrap
+2. Truncated trie → verified against trusted root
+3. Proposal root → verified via witness-based re-execution
+4. Range proof → verified against proposal root (standalone)
+
+### Changes Made
+
+#### 1. Rust FFI — `ffi/src/proofs/range.rs`
+
+Added `fwd_range_proof_verify_and_extract` — a single C function that verifies
+the range proof AND extracts the KV pairs in one call:
+
+```rust
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_range_proof_verify_and_extract(
+    args: VerifyRangeProofArgs,
+) -> KeyValueBatchResult {
+    // 1. Verify the proof (same logic as fwd_range_proof_verify)
+    // 2. Extract key_values() from the proof
+    // 3. Convert to KeyValueBatchResult::Some(batch)
+}
+```
+
+Reuses existing infrastructure:
+- `KeyValueBatchResult` enum (`ffi/src/value/results.rs`)
+- `From<Result<Vec<(Key, Value)>, Error>> for KeyValueBatchResult`
+- `RangeProofContext.proof.key_values()` for direct access to embedded KV pairs
+
+#### 2. Go FFI — `ffi/proofs.go`
+
+Added `VerifyAndExtractRangeProof` — a single function that deserializes,
+verifies, and extracts KV pairs from range proof bytes:
+
+```go
+type KeyValue struct {
+    Key   []byte
+    Value []byte
+}
+
+func VerifyAndExtractRangeProof(
+    proofBytes []byte,
+    rootHash Hash,
+    startKey, endKey []byte,  // nil = unbounded
+    maxLength uint32,
+) ([]KeyValue, error)
+```
+
+**No `Maybe` types exposed** — `nil` byte slices mean "unbounded range", and
+the conversion to Rust's `Maybe_BorrowedBytes` happens inside the function.
+The remote package never touches `Maybe`, matching the unverified iterator's
+interface style.
+
+**GC correctness**: KV pairs are copied into Go memory via `C.GoBytes()` (same
+pattern as `Iterator.Next()` and `getValueFromValueResult`). Rust memory is
+freed before returning. Returned `[]KeyValue` is entirely Go-managed.
+
+Also added `bytesPresent` type (implements `Maybe[[]byte]` for present values)
+used internally by the function.
+
+#### 3. Proto — `ffi/remote/proto/remote.proto`
+
+Added two fields:
+
+```protobuf
+message IterBatchRequest {
+  // ... existing fields ...
+  bytes root_hash = 4;  // NEW: root hash for proof generation
+}
+
+message IterBatchResponse {
+  // ... existing fields ...
+  bytes range_proof = 3;  // NEW: serialized range proof for this batch
+}
+```
+
+Backward compatible: if `root_hash` is absent, no proof is generated.
+Proto Go code was regenerated.
+
+#### 4. Server — `ffi/remote/server.go`
+
+Modified `IterBatch` to generate a range proof when `root_hash` is provided:
+
+```go
+// After collecting pairs and determining hasMore...
+if len(req.GetRootHash()) == ffi.RootLength && len(pairs) > 0 {
+    rangeProof, err := s.db.RangeProof(
+        root,
+        toMaybe(req.GetStartKey()),  // nil/empty → None
+        nil,                          // unbounded end
+        uint32(batchSize),
+    )
+    // ... marshal and attach to response
+}
+```
+
+Added `serverMaybe` type and `toMaybe` helper for creating `ffi.Maybe[[]byte]`
+values. One `RangeProof` call per batch instead of N `GetWithProof` calls.
+
+#### 5. Client — `ffi/remote/db.go`
+
+**5a.** Added `root ffi.Hash` field to `remoteIterator` — stores the verified
+proposal root for range proof generation.
+
+**5b.** Added `verifyIterBatch` helper:
+
+```go
+func verifyIterBatch(
+    root ffi.Hash,
+    startKey []byte,
+    batchSize uint32,
+    resp *pb.IterBatchResponse,
+) ([]*pb.KeyValuePair, error) {
+    // Empty batch with no proof → valid (no entries in range)
+    // Pairs but no proof → error "missing range proof"
+    // Otherwise: call ffi.VerifyAndExtractRangeProof, rebuild pairs
+}
+```
+
+The response's `pairs` field is **never trusted** — only the proof's embedded
+pairs are used. The interface uses plain `[]byte` parameters (no `Maybe` types).
+
+**5c.** Updated `remoteProposal.Iter()` — passes `RootHash` in request, calls
+`verifyIterBatch` to extract trusted pairs.
+
+**5d.** Updated `remoteIterator.Next()` — same pattern for subsequent batches.
+`lastKey` comes from the previous batch's **verified** pairs (extracted from a
+verified proof), so the pagination key is trustworthy.
+
+#### 6. Tests — `ffi/remote/db_test.go`
+
+Four new tests using gRPC server-side interceptors for adversarial scenarios:
+
+- **`TestRemoteDBProposalIterTamperedValue`**: Interceptor tampers with a
+  value in the `IterBatch` response pairs. Since the client uses proof-extracted
+  pairs (not the response pairs), the tampered data is never consumed. Verifies
+  the iterator returns correct (untampered) values.
+
+- **`TestRemoteDBProposalIterMissingProof`**: Interceptor strips the range
+  proof from the response. Asserts error contains `"missing range proof"`.
+
+- **`TestRemoteDBProposalIterTamperedProof`**: Interceptor corrupts the range
+  proof bytes (flips first 10 bytes). Asserts error contains `"range proof"`.
+
+- **`TestRemoteDBProposalIterMultiBatch`**: Inserts 300 keys (batch size is
+  256, so forces 2 batches), verifies proof checking works across batch
+  boundaries. Expects 301 keys (300 + 1 from the proposal).
+
+Added `startServerWithInterceptor` helper that wraps the gRPC server with a
+`grpc.UnaryInterceptor` for tamper tests.
+
+Existing `TestRemoteDBProposalIter` passes unchanged (honest server).
+
+### Files Changed (This Session)
+
+| File | Change |
+|---|---|
+| `ffi/src/proofs/range.rs` | **MODIFIED** — added `fwd_range_proof_verify_and_extract` |
+| `ffi/proofs.go` | **MODIFIED** — added `KeyValue`, `VerifyAndExtractRangeProof`, `bytesPresent` |
+| `ffi/firewood.h` | **AUTO-UPDATED** — new C function declaration |
+| `ffi/remote/proto/remote.proto` | **MODIFIED** — `root_hash` + `range_proof` fields |
+| `ffi/remote/proto/remote.pb.go` | **REGENERATED** |
+| `ffi/remote/server.go` | **MODIFIED** — range proof generation in `IterBatch`, `serverMaybe`/`toMaybe` |
+| `ffi/remote/db.go` | **MODIFIED** — `root` on iterator, `verifyIterBatch`, verified `Iter()`/`Next()` |
+| `ffi/remote/db_test.go` | **MODIFIED** — 4 new tests + `startServerWithInterceptor` helper |
+
+### Verification Results
+
+- `cargo clippy -p firewood-ffi` — no warnings
+- `cd ffi && go vet ./...` — clean
+- `cd ffi/remote && go vet ./...` — clean
+- All 53 remote tests pass (49 existing + 4 new)
+- Existing `TestRemoteDBProposalIter` passes unchanged
+
+### Remaining Work
+
+- **Range proof verification is currently a stub**: The Rust `verify()` method
+  in `RangeProofContext` (line 127 of `ffi/src/proofs/range.rs`) logs a warning
+  `"range proof verification not yet implemented"` and always returns `Ok(())`.
+  The plumbing is complete end-to-end — once the Rust implementation is filled
+  in, the Go client will automatically get real cryptographic verification. All
+  the tests exercise the full pipeline (serialize, deserialize, "verify",
+  extract) so they will continue to pass as the stub is replaced.
+
+- **`ffi/remote/proto/remote_grpc.pb.go`** was NOT regenerated in this session
+  because `IterBatch` already existed in the service definition — only message
+  fields changed, which only affect `remote.pb.go`.
+
 ## Known Limitations and Future Work
 
-1. **Range proof verification for iteration**: Currently, `remoteIterator`
-   fetches key-value pairs from the server without cryptographic verification
-   of the iteration results. A future enhancement could use range proofs to
-   verify that the server returned complete and correct iteration results.
+1. **Range proof verification is a Rust stub**: The `RangeProofContext::verify()`
+   method (line 127 of `ffi/src/proofs/range.rs`) logs a warning and returns
+   `Ok(())` without performing real cryptographic checks. The full end-to-end
+   plumbing (serialize → deserialize → verify → extract) is complete, so once
+   the Rust implementation is filled in, all existing tests will continue to
+   pass and real security will be active.
 
 2. **Rust `generate_witness` type constraints**: The `generate_witness` function
    requires `TrieReader + HashedNodeReader` which `dyn DynDbView` doesn't

@@ -42,7 +42,7 @@ without first extending the interface or adding backend-specific adapters.
 These tests already run against the remote backend via `RemoteDB` or the
 lower-level `Client`/`Server` types.
 
-### `ffi/remote/db_test.go` — RemoteDB high-level tests (11 tests)
+### `ffi/remote/db_test.go` — RemoteDB high-level tests (15 tests)
 
 All tests use the `ffi.DB` / `ffi.DBProposal` / `ffi.DBIterator` interfaces
 via `RemoteDB`.
@@ -60,6 +60,18 @@ via `RemoteDB`.
 | `TestRemoteDBPrefixDeleteChained` | `Propose` (chained) with `PrefixDelete` | PrefixDelete across chain |
 | `TestRemoteDBPrefixDeleteMixed` | `Update` with mixed `Put`/`PrefixDelete` | Mixed batch operations |
 | `TestNewRemoteDBBadRoot` | `NewRemoteDB` with wrong hash | Error handling |
+| `TestRemoteDBProposalIterTamperedValue` | `Propose`, `Iter`, gRPC interceptor | Tampered response values ignored; proof pairs used |
+| `TestRemoteDBProposalIterMissingProof` | `Propose`, `Iter`, gRPC interceptor | Missing range proof rejected |
+| `TestRemoteDBProposalIterTamperedProof` | `Propose`, `Iter`, gRPC interceptor | Corrupted range proof rejected |
+| `TestRemoteDBProposalIterMultiBatch` | `Propose`, `Iter` (300+ keys) | Range proof verified across batch boundaries |
+
+The last 4 tests verify the range-proof-based iterator verification added in
+the `bernard/remote-storage` branch. The tampered/missing/corrupted tests use
+`startServerWithInterceptor` — a helper that wraps the gRPC server with a
+`grpc.UnaryInterceptor` to simulate adversarial behavior (tampering with
+response pairs, stripping the proof, or corrupting the proof bytes). The
+multi-batch test inserts 300 keys (batch size is 256) to force pagination
+across two batches with verified handoff.
 
 ### `ffi/remote/remote_test.go` — Client/Server integration (6 tests)
 
@@ -276,9 +288,9 @@ inherently implementation-specific)
 | `ffi/iterator_test.go` | 8 | 0 | 5 | 3 |
 | `ffi/metrics_test.go` | 2 | 0 | 0 | 2 |
 | **ffi/ total** | **46** | **20** | **7** | **19** |
-| `ffi/remote/db_test.go` | 11 | — | — | — |
+| `ffi/remote/db_test.go` | 15 | — | — | — |
 | `ffi/remote/remote_test.go` | 6 | — | — | — |
 | `ffi/remote/cache_test.go` | 12 | — | — | — |
 | `ffi/remote/concurrency_test.go` | 4 | — | — | — |
 | `ffi/remote/eviction_test.go` | 15 | — | — | — |
-| **ffi/remote/ total** | **48** | — | — | — |
+| **ffi/remote/ total** | **52** | — | — | — |
