@@ -6,6 +6,7 @@ package remote
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	ffi "github.com/ava-labs/firewood/ffi"
 	pb "github.com/ava-labs/firewood/ffi/remote/proto"
@@ -55,8 +56,14 @@ func (r *RemoteDB) Update(ctx context.Context, batch []ffi.BatchOp) (ffi.Hash, e
 }
 
 func (r *RemoteDB) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.DBProposal, error) {
-	root := r.client.Root()
+	r.client.mu.RLock()
+	defer r.client.mu.RUnlock()
 
+	if r.client.trie == nil {
+		return nil, fmt.Errorf("client not bootstrapped")
+	}
+
+	root := r.client.trie.Root()
 	pbOps := batchOpsToProto(batch)
 
 	createResp, err := r.client.rpc.CreateProposal(ctx, &pb.CreateProposalRequest{
@@ -83,6 +90,7 @@ func (r *RemoteDB) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.DBProp
 		rpc:                   r.client.rpc,
 		parentTrie:            &r.client.trie,
 		committedTrie:         r.client.trie,
+		mu:                    &r.client.mu,
 		depth:                 r.client.depth,
 		expectedCumulativeOps: expectedCumulativeOps,
 	}, nil
@@ -109,7 +117,9 @@ type remoteProposal struct {
 	// verification in this chain). For first-level proposals this is the
 	// RemoteDB's trie; for chained proposals it is inherited from the parent.
 	committedTrie *ffi.TruncatedTrie
-	depth         uint
+	// mu protects parentTrie swap during Commit; points to Client.mu.
+	mu    *sync.RWMutex
+	depth uint
 	// expectedCumulativeOps tracks all ops from the chain root to this proposal,
 	// used for client-side validation of the witness's embedded batch_ops.
 	expectedCumulativeOps []ffi.BatchOp
@@ -128,10 +138,13 @@ func (p *remoteProposal) Commit(ctx context.Context) error {
 	}
 
 	// Replace parent trie with the verified new trie.
+	p.mu.Lock()
 	if *p.parentTrie != nil {
 		(*p.parentTrie).Free()
 	}
 	*p.parentTrie = p.newTrie
+	p.mu.Unlock()
+
 	p.newTrie = nil
 	return nil
 }
@@ -223,6 +236,7 @@ func (p *remoteProposal) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.
 		rpc:                   p.rpc,
 		parentTrie:            &p.newTrie,
 		committedTrie:         p.committedTrie,
+		mu:                    p.mu,
 		depth:                 p.depth,
 		expectedCumulativeOps: expectedCumulativeOps,
 	}, nil

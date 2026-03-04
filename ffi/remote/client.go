@@ -6,6 +6,7 @@ package remote
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	ffi "github.com/ava-labs/firewood/ffi"
 	pb "github.com/ava-labs/firewood/ffi/remote/proto"
@@ -19,6 +20,7 @@ import (
 type Client struct {
 	conn  *grpc.ClientConn
 	rpc   pb.FirewoodRemoteClient
+	mu    sync.RWMutex // protects trie
 	trie  *ffi.TruncatedTrie
 	depth uint
 }
@@ -59,6 +61,9 @@ func (c *Client) Bootstrap(ctx context.Context, trustedRootHash ffi.Hash) error 
 		return fmt.Errorf("verify root hash: %w", err)
 	}
 
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	// Free old trie if any
 	if c.trie != nil {
 		c.trie.Free()
@@ -73,6 +78,9 @@ func (c *Client) Bootstrap(ctx context.Context, trustedRootHash ffi.Hash) error 
 // Returns the value and nil error on success, or (nil, nil) if the key does
 // not exist.
 func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	if c.trie == nil {
 		return nil, fmt.Errorf("client not bootstrapped")
 	}
@@ -102,6 +110,9 @@ func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
 // verifies the resulting state change via witness-based re-execution.
 // Returns the new root hash on success.
 func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.trie == nil {
 		return ffi.Hash{}, fmt.Errorf("client not bootstrapped")
 	}
@@ -171,6 +182,9 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 
 // Root returns the current root hash, or an empty hash if not bootstrapped.
 func (c *Client) Root() ffi.Hash {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
 	if c.trie == nil {
 		return ffi.Hash{}
 	}
@@ -179,10 +193,13 @@ func (c *Client) Root() ffi.Hash {
 
 // Close releases all resources held by the client.
 func (c *Client) Close() error {
+	c.mu.Lock()
 	if c.trie != nil {
 		c.trie.Free()
 		c.trie = nil
 	}
+	c.mu.Unlock()
+
 	if c.conn != nil {
 		return c.conn.Close()
 	}

@@ -334,9 +334,13 @@ utility.
    impls), chained proposals could generate witnesses directly from the parent
    proposal state instead of using cumulative ops from the committed root.
 
-3. **Thread safety**: `RemoteDB` and `remoteProposal` are not safe for
-   concurrent use. The `parentTrie` pointer-to-pointer pattern used for Commit
-   swaps is not synchronized. Add a mutex if concurrent access is needed.
+3. **Concurrency contract**: `Client` uses a `sync.RWMutex` to protect its
+   `trie` field. Concurrent reads (`Get`, `Root`) are safe alongside mutations
+   (`Bootstrap`, `Update`, `Close`, `Commit`). Mutations are serialized by the
+   write lock but callers should not rely on this for correctness — concurrent
+   mutations (e.g., two Updates) are logic errors. `remoteProposal` holds a
+   pointer to the same mutex so `Commit` can write-lock during the parent trie
+   swap. `remoteIterator` is single-goroutine only and is not synchronized.
 
 4. **`remoteIterator` uses `context.Background()`**: When fetching subsequent
    batches in `Next()`, the iterator uses `context.Background()` because the
