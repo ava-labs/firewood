@@ -18,10 +18,13 @@ import (
 // with children below that depth replaced by hash-only proxy nodes.
 //
 // Instances are created via [Database.CreateTruncatedTrie] and must be freed
-// with [TruncatedTrie.Free] when no longer needed.
+// with [TruncatedTrie.Free] when no longer needed. A finalizer safety net
+// will eventually free the handle if forgotten, but explicit Free is preferred
+// for prompt resource release.
 type TruncatedTrie struct {
-	handle *C.TruncatedTrieHandle
-	root   Hash
+	handle  *C.TruncatedTrieHandle
+	root    Hash
+	cleanup runtime.Cleanup
 }
 
 // Root returns the root hash of the truncated trie.
@@ -53,11 +56,15 @@ func (t *TruncatedTrie) VerifyRootHash(expected Hash) error {
 // Free releases the resources associated with this TruncatedTrie.
 //
 // It is safe to call Free more than once; subsequent calls after the first
-// will be no-ops.
+// will be no-ops. Explicit Free is preferred for prompt resource release,
+// though a finalizer safety net will eventually free the handle if forgotten.
 func (t *TruncatedTrie) Free() error {
 	if t.handle == nil {
 		return nil
 	}
+
+	// Cancel the GC-based cleanup since we are freeing explicitly.
+	t.cleanup.Stop()
 
 	if err := getErrorFromVoidResult(C.fwd_free_truncated_trie(t.handle)); err != nil {
 		return err
@@ -117,10 +124,14 @@ func getTruncatedTrieFromResult(result C.TruncatedTrieResult) (*TruncatedTrie, e
 	case C.TruncatedTrieResult_Ok:
 		body := (*C.TruncatedTrieResult_Ok_Body)(unsafe.Pointer(&result.anon0))
 		hashKey := *(*Hash)(unsafe.Pointer(&body.root_hash._0))
-		return &TruncatedTrie{
+		trie := &TruncatedTrie{
 			handle: body.handle,
 			root:   hashKey,
-		}, nil
+		}
+		trie.cleanup = runtime.AddCleanup(trie, func(h *C.TruncatedTrieHandle) {
+			C.fwd_free_truncated_trie(h)
+		}, body.handle)
+		return trie, nil
 	case C.TruncatedTrieResult_Err:
 		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 	default:
@@ -159,7 +170,19 @@ func (t *TruncatedTrie) UnmarshalBinary(data []byte) error {
 	if err != nil {
 		return err
 	}
-	*t = *newTrie
+
+	// Stop the cleanup registered on newTrie since we are transferring
+	// ownership of the handle to the receiver.
+	newTrie.cleanup.Stop()
+
+	t.handle = newTrie.handle
+	t.root = newTrie.root
+
+	// Register a new cleanup on the receiver.
+	t.cleanup = runtime.AddCleanup(t, func(h *C.TruncatedTrieHandle) {
+		C.fwd_free_truncated_trie(h)
+	}, t.handle)
+
 	return nil
 }
 

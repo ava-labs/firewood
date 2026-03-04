@@ -173,6 +173,14 @@ func (s *Server) CreateProposal(
 		cumulativeOps = expandedOps
 	}
 
+	// Drop the proposal if it is not stored in the map before returning.
+	stored := false
+	defer func() {
+		if !stored {
+			proposal.Drop()
+		}
+	}()
+
 	newRoot := proposal.Root()
 
 	// Generate witness proof from the committed root with cumulative ops so
@@ -196,6 +204,7 @@ func (s *Server) CreateProposal(
 		committedRoot: committedRoot,
 		cumulativeOps: cumulativeOps,
 	})
+	stored = true
 
 	return &pb.CreateProposalResponse{
 		ProposalId:   id,

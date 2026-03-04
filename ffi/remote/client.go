@@ -20,9 +20,10 @@ import (
 type Client struct {
 	conn  *grpc.ClientConn
 	rpc   pb.FirewoodRemoteClient
-	mu    sync.RWMutex // protects trie
-	trie  *ffi.TruncatedTrie
 	depth uint
+
+	mu   sync.RWMutex      // protects trie
+	trie *ffi.TruncatedTrie
 }
 
 // NewClient creates a new remote client that will connect to addr.
@@ -118,23 +119,7 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 	}
 
 	root := c.trie.Root()
-
-	// Convert ops to proto
-	pbOps := make([]*pb.BatchOperation, 0, len(ops))
-	for _, op := range ops {
-		pbOp := &pb.BatchOperation{Key: op.Key()}
-		if op.IsPut() {
-			pbOp.OpType = pb.BatchOperation_PUT
-			pbOp.Value = op.Value()
-		} else if op.IsDelete() {
-			pbOp.OpType = pb.BatchOperation_DELETE
-		} else if op.IsPrefixDelete() {
-			pbOp.OpType = pb.BatchOperation_PREFIX_DELETE
-		} else {
-			return ffi.Hash{}, fmt.Errorf("unsupported batch op type for remote update")
-		}
-		pbOps = append(pbOps, pbOp)
-	}
+	pbOps := batchOpsToProto(ops)
 
 	// Create proposal and get witness proof for verification before commit.
 	createResp, err := c.rpc.CreateProposal(ctx, &pb.CreateProposalRequest{
@@ -145,6 +130,17 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 	if err != nil {
 		return ffi.Hash{}, fmt.Errorf("create proposal: %w", err)
 	}
+
+	// Best-effort cleanup of server-side proposal on any subsequent error.
+	proposalID := createResp.GetProposalId()
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = c.rpc.DropProposal(context.Background(), &pb.DropProposalRequest{
+				ProposalId: proposalID,
+			})
+		}
+	}()
 
 	// Deserialize and verify witness before committing.
 	witness := &ffi.WitnessProof{}
@@ -166,18 +162,76 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 
 	// Verification passed — commit the proposal.
 	_, err = c.rpc.CommitProposal(ctx, &pb.CommitProposalRequest{
-		ProposalId: createResp.GetProposalId(),
+		ProposalId: proposalID,
 	})
 	if err != nil {
 		newTrie.Free()
 		return ffi.Hash{}, fmt.Errorf("commit proposal: %w", err)
 	}
+	committed = true
 
 	// Replace old trie.
 	c.trie.Free()
 	c.trie = newTrie
 
 	return c.trie.Root(), nil
+}
+
+// Propose creates a proposal on the server and returns a [remoteProposal]
+// that can be committed or dropped later. The proposal's witness proof is
+// verified against the client's current truncated trie before returning.
+func (c *Client) Propose(ctx context.Context, ops []ffi.BatchOp) (*remoteProposal, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	if c.trie == nil {
+		return nil, fmt.Errorf("client not bootstrapped")
+	}
+
+	root := c.trie.Root()
+	pbOps := batchOpsToProto(ops)
+
+	createResp, err := c.rpc.CreateProposal(ctx, &pb.CreateProposalRequest{
+		RootHash: root[:],
+		Ops:      pbOps,
+		Depth:    uint32(c.depth),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create proposal: %w", err)
+	}
+
+	// Best-effort cleanup of server-side proposal on any subsequent error.
+	proposalID := createResp.GetProposalId()
+	success := false
+	defer func() {
+		if !success {
+			_, _ = c.rpc.DropProposal(context.Background(), &pb.DropProposalRequest{
+				ProposalId: proposalID,
+			})
+		}
+	}()
+
+	// The server generates witnesses from the committed root, so verify
+	// against the client's committed trie.
+	expectedCumulativeOps := ops
+	newTrie, err := verifyWitnessFromResponse(c.trie, createResp, expectedCumulativeOps)
+	if err != nil {
+		return nil, err
+	}
+
+	success = true
+	return &remoteProposal{
+		proposalID:            proposalID,
+		root:                  newTrie.Root(),
+		newTrie:               newTrie,
+		rpc:                   c.rpc,
+		depth:                 c.depth,
+		committedTrie:         c.trie,
+		expectedCumulativeOps: expectedCumulativeOps,
+
+		mu:         &c.mu,
+		parentTrie: &c.trie,
+	}, nil
 }
 
 // Root returns the current root hash, or an empty hash if not bootstrapped.
@@ -194,12 +248,12 @@ func (c *Client) Root() ffi.Hash {
 // Close releases all resources held by the client.
 func (c *Client) Close() error {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+
 	if c.trie != nil {
 		c.trie.Free()
 		c.trie = nil
 	}
-	c.mu.Unlock()
-
 	if c.conn != nil {
 		return c.conn.Close()
 	}

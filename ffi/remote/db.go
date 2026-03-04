@@ -56,44 +56,7 @@ func (r *RemoteDB) Update(ctx context.Context, batch []ffi.BatchOp) (ffi.Hash, e
 }
 
 func (r *RemoteDB) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.DBProposal, error) {
-	r.client.mu.RLock()
-	defer r.client.mu.RUnlock()
-
-	if r.client.trie == nil {
-		return nil, fmt.Errorf("client not bootstrapped")
-	}
-
-	root := r.client.trie.Root()
-	pbOps := batchOpsToProto(batch)
-
-	createResp, err := r.client.rpc.CreateProposal(ctx, &pb.CreateProposalRequest{
-		RootHash: root[:],
-		Ops:      pbOps,
-		Depth:    uint32(r.client.depth),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create proposal: %w", err)
-	}
-
-	// The server generates witnesses from the committed root, so verify
-	// against the client's committed trie.
-	expectedCumulativeOps := batch
-	newTrie, err := verifyWitnessFromResponse(r.client.trie, createResp, expectedCumulativeOps)
-	if err != nil {
-		return nil, err
-	}
-
-	return &remoteProposal{
-		proposalID:            createResp.GetProposalId(),
-		root:                  newTrie.Root(),
-		newTrie:               newTrie,
-		rpc:                   r.client.rpc,
-		parentTrie:            &r.client.trie,
-		committedTrie:         r.client.trie,
-		mu:                    &r.client.mu,
-		depth:                 r.client.depth,
-		expectedCumulativeOps: expectedCumulativeOps,
-	}, nil
+	return r.client.Propose(ctx, batch)
 }
 
 func (r *RemoteDB) Root() ffi.Hash {
@@ -111,18 +74,19 @@ type remoteProposal struct {
 	root       ffi.Hash
 	newTrie    *ffi.TruncatedTrie
 	rpc        pb.FirewoodRemoteClient
-	// parentTrie points to the parent's trie pointer so Commit can swap it.
-	parentTrie *(*ffi.TruncatedTrie)
+	depth      uint
 	// committedTrie is the client's committed trie (the base for all witness
 	// verification in this chain). For first-level proposals this is the
 	// RemoteDB's trie; for chained proposals it is inherited from the parent.
 	committedTrie *ffi.TruncatedTrie
-	// mu protects parentTrie swap during Commit; points to Client.mu.
-	mu    *sync.RWMutex
-	depth uint
 	// expectedCumulativeOps tracks all ops from the chain root to this proposal,
 	// used for client-side validation of the witness's embedded batch_ops.
 	expectedCumulativeOps []ffi.BatchOp
+
+	// mu protects parentTrie swap during Commit; points to Client.mu.
+	mu *sync.RWMutex
+	// parentTrie points to the parent's trie pointer so Commit can swap it.
+	parentTrie *(*ffi.TruncatedTrie)
 }
 
 func (p *remoteProposal) Root() ffi.Hash {
@@ -139,12 +103,12 @@ func (p *remoteProposal) Commit(ctx context.Context) error {
 
 	// Replace parent trie with the verified new trie.
 	p.mu.Lock()
+	defer p.mu.Unlock()
+
 	if *p.parentTrie != nil {
 		(*p.parentTrie).Free()
 	}
 	*p.parentTrie = p.newTrie
-	p.mu.Unlock()
-
 	p.newTrie = nil
 	return nil
 }
@@ -218,6 +182,17 @@ func (p *remoteProposal) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.
 		return nil, fmt.Errorf("create proposal: %w", err)
 	}
 
+	// Best-effort cleanup of server-side proposal on any subsequent error.
+	proposalID := createResp.GetProposalId()
+	success := false
+	defer func() {
+		if !success {
+			_, _ = p.rpc.DropProposal(context.Background(), &pb.DropProposalRequest{
+				ProposalId: proposalID,
+			})
+		}
+	}()
+
 	// The server generates witnesses from the committed root with cumulative
 	// ops, so verify against the committed trie, not this proposal's trie.
 	expectedCumulativeOps := make([]ffi.BatchOp, 0, len(p.expectedCumulativeOps)+len(batch))
@@ -229,16 +204,18 @@ func (p *remoteProposal) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.
 		return nil, err
 	}
 
+	success = true
 	return &remoteProposal{
-		proposalID:            createResp.GetProposalId(),
+		proposalID:            proposalID,
 		root:                  newTrie.Root(),
 		newTrie:               newTrie,
 		rpc:                   p.rpc,
-		parentTrie:            &p.newTrie,
-		committedTrie:         p.committedTrie,
-		mu:                    p.mu,
 		depth:                 p.depth,
+		committedTrie:         p.committedTrie,
 		expectedCumulativeOps: expectedCumulativeOps,
+
+		mu:         p.mu,
+		parentTrie: &p.newTrie,
 	}, nil
 }
 

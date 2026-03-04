@@ -342,7 +342,28 @@ utility.
    pointer to the same mutex so `Commit` can write-lock during the parent trie
    swap. `remoteIterator` is single-goroutine only and is not synchronized.
 
-4. **`remoteIterator` uses `context.Background()`**: When fetching subsequent
+   **`committedTrie` dangling pointer risk**: When a `remoteProposal` is
+   created via `Propose()`, it captures a `committedTrie` reference pointing
+   to the client's current trie. If `Update()` is called on the client while
+   a proposal is outstanding, the old trie is freed and replaced. The
+   proposal's `committedTrie` pointer then dangles. Callers must not
+   interleave `Propose` and `Update` on the same client — proposals should
+   be committed or dropped before calling `Update`.
+
+4. **Server-side proposal cleanup**: When client-side witness verification
+   fails after a successful `CreateProposal` RPC, the client sends a
+   best-effort `DropProposal` RPC to clean up the server-side entry. This
+   prevents permanent leaks in the server's proposal map. Similarly, the
+   server's `CreateProposal` handler drops a newly-created proposal if any
+   error occurs between proposal creation and storage in the map.
+
+5. **`TruncatedTrie` finalizer safety net**: `TruncatedTrie` now has a
+   `runtime.AddCleanup` finalizer that frees the underlying Rust handle if
+   the Go object is garbage collected without an explicit `Free()` call.
+   Callers should still call `Free()` (or `Drop()` for proposals) for prompt
+   resource release — the finalizer is a safety net, not a substitute.
+
+6. **`remoteIterator` uses `context.Background()`**: When fetching subsequent
    batches in `Next()`, the iterator uses `context.Background()` because the
    `Next() bool` signature doesn't accept a context. This means pagination
    fetches cannot be cancelled via the original context.
