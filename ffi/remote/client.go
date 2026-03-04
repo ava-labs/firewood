@@ -14,6 +14,20 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
+// ClientOption configures a [Client].
+type ClientOption func(*Client)
+
+// WithCacheSize enables a client-side read cache for verified Get results.
+// maxEntries is the maximum number of key-value pairs to cache. A value of
+// zero or negative disables the cache.
+func WithCacheSize(maxEntries int) ClientOption {
+	return func(c *Client) {
+		if maxEntries > 0 {
+			c.cache = newReadCache(maxEntries)
+		}
+	}
+}
+
 // Client is a remote Firewood client that holds a truncated trie and
 // communicates with a [Server] via gRPC. Every read is verified against a
 // Merkle proof and every commit is verified via witness-based re-execution.
@@ -22,23 +36,28 @@ type Client struct {
 	rpc   pb.FirewoodRemoteClient
 	depth uint
 
-	mu   sync.RWMutex      // protects trie
-	trie *ffi.TruncatedTrie
+	mu    sync.RWMutex      // protects trie
+	trie  *ffi.TruncatedTrie
+	cache *readCache // nil when disabled
 }
 
 // NewClient creates a new remote client that will connect to addr.
 // It does not bootstrap — call [Client.Bootstrap] with a trusted root hash
 // before performing reads or writes.
-func NewClient(addr string, depth uint) (*Client, error) {
+func NewClient(addr string, depth uint, opts ...ClientOption) (*Client, error) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
-	return &Client{
+	c := &Client{
 		conn:  conn,
 		rpc:   pb.NewFirewoodRemoteClient(conn),
 		depth: depth,
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	return c, nil
 }
 
 // Bootstrap fetches a truncated trie from the server for the given trusted
@@ -70,6 +89,9 @@ func (c *Client) Bootstrap(ctx context.Context, trustedRootHash ffi.Hash) error 
 		c.trie.Free()
 	}
 	c.trie = trie
+	if c.cache != nil {
+		c.cache.clear()
+	}
 	return nil
 }
 
@@ -84,6 +106,16 @@ func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
 
 	if c.trie == nil {
 		return nil, fmt.Errorf("client not bootstrapped")
+	}
+
+	// Cache lookup.
+	if c.cache != nil {
+		if entry, ok := c.cache.lookup(key); ok {
+			if entry.found {
+				return entry.value, nil
+			}
+			return nil, nil
+		}
 	}
 
 	root := c.trie.Root()
@@ -102,6 +134,11 @@ func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
 	}
 	if err := ffi.VerifySingleKeyProof(root, key, value, resp.GetProof()); err != nil {
 		return nil, fmt.Errorf("proof verification failed: %w", err)
+	}
+
+	// Cache the verified result.
+	if c.cache != nil {
+		c.cache.store(key, cacheEntry{value: value, found: value != nil})
 	}
 
 	return value, nil
@@ -173,6 +210,9 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 	// Replace old trie.
 	c.trie.Free()
 	c.trie = newTrie
+	if c.cache != nil {
+		c.cache.invalidateBatch(ops)
+	}
 
 	return c.trie.Root(), nil
 }
@@ -228,6 +268,7 @@ func (c *Client) Propose(ctx context.Context, ops []ffi.BatchOp) (*remoteProposa
 		depth:                 c.depth,
 		committedTrie:         c.trie,
 		expectedCumulativeOps: expectedCumulativeOps,
+		cache:                 c.cache,
 
 		mu:         &c.mu,
 		parentTrie: &c.trie,
@@ -253,6 +294,9 @@ func (c *Client) Close() error {
 	if c.trie != nil {
 		c.trie.Free()
 		c.trie = nil
+	}
+	if c.cache != nil {
+		c.cache.clear()
 	}
 	if c.conn != nil {
 		return c.conn.Close()

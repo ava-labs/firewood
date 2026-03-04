@@ -85,7 +85,7 @@ func populateDB(b *testing.B, db *ffi.Database, n int) (ffi.Hash, []string) {
 }
 
 // setupRemoteDB starts a gRPC server and returns a RemoteDB (ffi.DB) for benchmarks.
-func setupRemoteDB(b *testing.B, db *ffi.Database, rootHash ffi.Hash, depth uint) ffi.DB {
+func setupRemoteDB(b *testing.B, db *ffi.Database, rootHash ffi.Hash, depth uint, opts ...ClientOption) ffi.DB {
 	b.Helper()
 	srv := NewServer(db)
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -99,7 +99,7 @@ func setupRemoteDB(b *testing.B, db *ffi.Database, rootHash ffi.Hash, depth uint
 	b.Cleanup(grpcServer.Stop)
 
 	ctx := context.Background()
-	rdb, err := NewRemoteDB(ctx, lis.Addr().String(), rootHash, depth)
+	rdb, err := NewRemoteDB(ctx, lis.Addr().String(), rootHash, depth, opts...)
 	if err != nil {
 		b.Fatalf("NewRemoteDB: %v", err)
 	}
@@ -709,4 +709,46 @@ func BenchmarkProtoSerialization(b *testing.B) {
 			}
 		})
 	}
+}
+
+// ---------------------------------------------------------------------------
+// 12. BenchmarkGetCached — Cached vs uncached read performance
+// ---------------------------------------------------------------------------
+
+func BenchmarkGetCached(b *testing.B) {
+	skipBench(b, "medium")
+
+	db := newBenchDB(b)
+	rootHash, keys := populateDB(b, db, 1_000)
+
+	b.Run("NoCache", func(b *testing.B) {
+		rdb := setupRemoteDB(b, db, rootHash, 4)
+		ctx := context.Background()
+		var i int
+		for b.Loop() {
+			if _, err := rdb.Get(ctx, []byte(keys[i%len(keys)])); err != nil {
+				b.Fatalf("Get: %v", err)
+			}
+			i++
+		}
+	})
+
+	b.Run("Cached", func(b *testing.B) {
+		rdb := setupRemoteDB(b, db, rootHash, 4, WithCacheSize(10_000))
+		ctx := context.Background()
+		// Warm the cache.
+		for _, key := range keys {
+			if _, err := rdb.Get(ctx, []byte(key)); err != nil {
+				b.Fatalf("warm Get: %v", err)
+			}
+		}
+		b.ResetTimer()
+		var i int
+		for b.Loop() {
+			if _, err := rdb.Get(ctx, []byte(keys[i%len(keys)])); err != nil {
+				b.Fatalf("Get: %v", err)
+			}
+			i++
+		}
+	})
 }

@@ -30,7 +30,7 @@ type RemoteDB struct {
 
 // NewRemoteDB creates a [ffi.DB] that talks to a remote Firewood server.
 // It bootstraps using trustedRoot and returns an error if verification fails.
-func NewRemoteDB(ctx context.Context, addr string, trustedRoot ffi.Hash, depth uint) (ffi.DB, error) {
+func NewRemoteDB(ctx context.Context, addr string, trustedRoot ffi.Hash, depth uint, opts ...ClientOption) (ffi.DB, error) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
@@ -39,6 +39,9 @@ func NewRemoteDB(ctx context.Context, addr string, trustedRoot ffi.Hash, depth u
 		conn:  conn,
 		rpc:   pb.NewFirewoodRemoteClient(conn),
 		depth: depth,
+	}
+	for _, opt := range opts {
+		opt(c)
 	}
 	if err := c.Bootstrap(ctx, trustedRoot); err != nil {
 		c.Close()
@@ -82,6 +85,8 @@ type remoteProposal struct {
 	// expectedCumulativeOps tracks all ops from the chain root to this proposal,
 	// used for client-side validation of the witness's embedded batch_ops.
 	expectedCumulativeOps []ffi.BatchOp
+	// cache is the client's read cache; may be nil.
+	cache *readCache
 
 	// mu protects parentTrie swap during Commit; points to Client.mu.
 	mu *sync.RWMutex
@@ -110,6 +115,9 @@ func (p *remoteProposal) Commit(ctx context.Context) error {
 	}
 	*p.parentTrie = p.newTrie
 	p.newTrie = nil
+	if p.cache != nil {
+		p.cache.invalidateBatch(p.expectedCumulativeOps)
+	}
 	return nil
 }
 
@@ -213,6 +221,7 @@ func (p *remoteProposal) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.
 		depth:                 p.depth,
 		committedTrie:         p.committedTrie,
 		expectedCumulativeOps: expectedCumulativeOps,
+		cache:                 p.cache,
 
 		mu:         p.mu,
 		parentTrie: &p.newTrie,
