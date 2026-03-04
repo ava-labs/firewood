@@ -45,6 +45,9 @@ jobs:
           echo "pr-data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
           echo "commit-data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}/commits/${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
 
+      - name: Clean benchmark action workspace
+        run: rm -rf ./benchmark-data-repository
+
       - name: Store PR benchmark trend
         uses: benchmark-action/github-action-benchmark@v1
         with:
@@ -55,12 +58,14 @@ jobs:
           github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           auto-push: true
           gh-repository: 'github.com/AminR443/firewood-benchmark-reports'
-          gh-pages-branch: main
           benchmark-data-dir-path: ${{ steps.location.outputs.pr-data-dir }}
           # Show alert but don't fail PR
           alert-threshold: '150%'
           comment-on-alert: false
           fail-on-alert: false
+
+      - name: Clean benchmark action workspace (second run)
+        run: rm -rf ./benchmark-data-repository
 
       - name: Store PR benchmark for commit
         uses: benchmark-action/github-action-benchmark@v1
@@ -72,6 +77,7 @@ jobs:
           github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           auto-push: true
           gh-repository: 'github.com/AminR443/firewood-benchmark-reports'
+          gh-pages-branch: main
           benchmark-data-dir-path: ${{ steps.location.outputs.commit-data-dir }}
           # Show alert but don't fail PR
           alert-threshold: '150%'
@@ -140,6 +146,9 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Clean benchmark action workspace
+        run: rm -rf ./benchmark-data-repository
 
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
