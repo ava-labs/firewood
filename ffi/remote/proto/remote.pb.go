@@ -343,7 +343,9 @@ type CreateProposalRequest struct {
 	// 32-byte root hash of the base revision.
 	RootHash []byte `protobuf:"bytes,1,opt,name=root_hash,json=rootHash,proto3" json:"root_hash,omitempty"`
 	// The batch operations to propose.
-	Ops           []*BatchOperation `protobuf:"bytes,2,rep,name=ops,proto3" json:"ops,omitempty"`
+	Ops []*BatchOperation `protobuf:"bytes,2,rep,name=ops,proto3" json:"ops,omitempty"`
+	// Client's truncation depth for witness generation.
+	Depth         uint32 `protobuf:"varint,3,opt,name=depth,proto3" json:"depth,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -392,12 +394,21 @@ func (x *CreateProposalRequest) GetOps() []*BatchOperation {
 	return nil
 }
 
+func (x *CreateProposalRequest) GetDepth() uint32 {
+	if x != nil {
+		return x.Depth
+	}
+	return 0
+}
+
 type CreateProposalResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Server-assigned proposal identifier.
 	ProposalId uint64 `protobuf:"varint,1,opt,name=proposal_id,json=proposalId,proto3" json:"proposal_id,omitempty"`
 	// 32-byte root hash after applying the batch operations.
-	NewRootHash   []byte `protobuf:"bytes,2,opt,name=new_root_hash,json=newRootHash,proto3" json:"new_root_hash,omitempty"`
+	NewRootHash []byte `protobuf:"bytes,2,opt,name=new_root_hash,json=newRootHash,proto3" json:"new_root_hash,omitempty"`
+	// Serialized WitnessProof (produced by WitnessProof.MarshalBinary).
+	WitnessProof  []byte `protobuf:"bytes,3,opt,name=witness_proof,json=witnessProof,proto3" json:"witness_proof,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -446,12 +457,17 @@ func (x *CreateProposalResponse) GetNewRootHash() []byte {
 	return nil
 }
 
+func (x *CreateProposalResponse) GetWitnessProof() []byte {
+	if x != nil {
+		return x.WitnessProof
+	}
+	return nil
+}
+
 type CommitProposalRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The proposal identifier returned by CreateProposal.
-	ProposalId uint64 `protobuf:"varint,1,opt,name=proposal_id,json=proposalId,proto3" json:"proposal_id,omitempty"`
-	// Client's truncation depth for witness generation.
-	Depth         uint32 `protobuf:"varint,2,opt,name=depth,proto3" json:"depth,omitempty"`
+	ProposalId    uint64 `protobuf:"varint,1,opt,name=proposal_id,json=proposalId,proto3" json:"proposal_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -493,17 +509,8 @@ func (x *CommitProposalRequest) GetProposalId() uint64 {
 	return 0
 }
 
-func (x *CommitProposalRequest) GetDepth() uint32 {
-	if x != nil {
-		return x.Depth
-	}
-	return 0
-}
-
 type CommitProposalResponse struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Serialized WitnessProof (produced by WitnessProof.MarshalBinary).
-	WitnessProof  []byte `protobuf:"bytes,1,opt,name=witness_proof,json=witnessProof,proto3" json:"witness_proof,omitempty"`
+	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -538,13 +545,6 @@ func (*CommitProposalResponse) Descriptor() ([]byte, []int) {
 	return file_proto_remote_proto_rawDescGZIP(), []int{8}
 }
 
-func (x *CommitProposalResponse) GetWitnessProof() []byte {
-	if x != nil {
-		return x.WitnessProof
-	}
-	return nil
-}
-
 var File_proto_remote_proto protoreflect.FileDescriptor
 
 const file_proto_remote_proto_rawDesc = "" +
@@ -569,20 +569,20 @@ const file_proto_remote_proto_rawDesc = "" +
 	"\x06OpType\x12\a\n" +
 	"\x03PUT\x10\x00\x12\n" +
 	"\n" +
-	"\x06DELETE\x10\x01\"g\n" +
+	"\x06DELETE\x10\x01\"}\n" +
 	"\x15CreateProposalRequest\x12\x1b\n" +
 	"\troot_hash\x18\x01 \x01(\fR\brootHash\x121\n" +
-	"\x03ops\x18\x02 \x03(\v2\x1f.firewood.remote.BatchOperationR\x03ops\"]\n" +
+	"\x03ops\x18\x02 \x03(\v2\x1f.firewood.remote.BatchOperationR\x03ops\x12\x14\n" +
+	"\x05depth\x18\x03 \x01(\rR\x05depth\"\x82\x01\n" +
 	"\x16CreateProposalResponse\x12\x1f\n" +
 	"\vproposal_id\x18\x01 \x01(\x04R\n" +
 	"proposalId\x12\"\n" +
-	"\rnew_root_hash\x18\x02 \x01(\fR\vnewRootHash\"N\n" +
+	"\rnew_root_hash\x18\x02 \x01(\fR\vnewRootHash\x12#\n" +
+	"\rwitness_proof\x18\x03 \x01(\fR\fwitnessProof\"8\n" +
 	"\x15CommitProposalRequest\x12\x1f\n" +
 	"\vproposal_id\x18\x01 \x01(\x04R\n" +
-	"proposalId\x12\x14\n" +
-	"\x05depth\x18\x02 \x01(\rR\x05depth\"=\n" +
-	"\x16CommitProposalResponse\x12#\n" +
-	"\rwitness_proof\x18\x01 \x01(\fR\fwitnessProof2\x90\x03\n" +
+	"proposalId\"\x18\n" +
+	"\x16CommitProposalResponse2\x90\x03\n" +
 	"\x0eFirewoodRemote\x12g\n" +
 	"\x10GetTruncatedTrie\x12(.firewood.remote.GetTruncatedTrieRequest\x1a).firewood.remote.GetTruncatedTrieResponse\x12O\n" +
 	"\bGetValue\x12 .firewood.remote.GetValueRequest\x1a!.firewood.remote.GetValueResponse\x12a\n" +

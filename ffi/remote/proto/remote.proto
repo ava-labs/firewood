@@ -59,6 +59,8 @@ message CreateProposalRequest {
   bytes root_hash = 1;
   // The batch operations to propose.
   repeated BatchOperation ops = 2;
+  // Client's truncation depth for witness generation.
+  uint32 depth = 3;
 }
 
 message CreateProposalResponse {
@@ -66,16 +68,14 @@ message CreateProposalResponse {
   uint64 proposal_id = 1;
   // 32-byte root hash after applying the batch operations.
   bytes new_root_hash = 2;
+  // Serialized WitnessProof (produced by WitnessProof.MarshalBinary).
+  bytes witness_proof = 3;
 }
 
 message CommitProposalRequest {
   // The proposal identifier returned by CreateProposal.
   uint64 proposal_id = 1;
-  // Client's truncation depth for witness generation.
-  uint32 depth = 2;
 }
 
 message CommitProposalResponse {
-  // Serialized WitnessProof (produced by WitnessProof.MarshalBinary).
-  bytes witness_proof = 1;
 }

@@ -20,7 +20,7 @@ import (
 func newTestDB(t *testing.T) *ffi.Database {
 	t.Helper()
 	dbFile := filepath.Join(t.TempDir(), "test.db")
-	db, err := ffi.New(dbFile, ffi.MerkleDBNodeHashing)
+	db, err := ffi.New(dbFile, ffi.EthereumNodeHashing)
 	if err != nil {
 		t.Fatalf("ffi.New: %v", err)
 	}
@@ -231,6 +231,58 @@ func TestBootstrapWithWrongHash(t *testing.T) {
 	err := client.Bootstrap(ctx, wrongHash)
 	if err == nil {
 		t.Fatal("expected error bootstrapping with wrong hash")
+	}
+}
+
+func TestCreateProposalReturnsWitness(t *testing.T) {
+	db := newTestDB(t)
+
+	data := map[string]string{"apple": "red"}
+	rootHash := insertData(t, db, data)
+
+	// Set up gRPC server without using Client.Update, to directly test the RPCs.
+	srv := NewServer(db)
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	grpcServer := grpc.NewServer()
+	pb.RegisterFirewoodRemoteServer(grpcServer, srv)
+	go func() { _ = grpcServer.Serve(lis) }()
+	t.Cleanup(grpcServer.Stop)
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("grpc.NewClient: %v", err)
+	}
+	defer conn.Close()
+	rpcClient := pb.NewFirewoodRemoteClient(conn)
+	ctx := t.Context()
+
+	// CreateProposal should return a non-empty witness_proof.
+	createResp, err := rpcClient.CreateProposal(ctx, &pb.CreateProposalRequest{
+		RootHash: rootHash[:],
+		Ops: []*pb.BatchOperation{
+			{OpType: pb.BatchOperation_PUT, Key: []byte("banana"), Value: []byte("yellow")},
+		},
+		Depth: 4,
+	})
+	if err != nil {
+		t.Fatalf("CreateProposal: %v", err)
+	}
+	if len(createResp.GetWitnessProof()) == 0 {
+		t.Fatal("expected non-empty witness_proof in CreateProposalResponse")
+	}
+	if len(createResp.GetNewRootHash()) != 32 {
+		t.Fatalf("expected 32-byte new_root_hash, got %d bytes", len(createResp.GetNewRootHash()))
+	}
+
+	// CommitProposal should succeed with only proposal_id.
+	_, err = rpcClient.CommitProposal(ctx, &pb.CommitProposalRequest{
+		ProposalId: createResp.GetProposalId(),
+	})
+	if err != nil {
+		t.Fatalf("CommitProposal: %v", err)
 	}
 }
 

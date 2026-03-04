@@ -123,38 +123,38 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 		pbOps = append(pbOps, pbOp)
 	}
 
-	// Create proposal
+	// Create proposal and get witness proof for verification before commit.
 	createResp, err := c.rpc.CreateProposal(ctx, &pb.CreateProposalRequest{
 		RootHash: root[:],
 		Ops:      pbOps,
+		Depth:    uint32(c.depth),
 	})
 	if err != nil {
 		return ffi.Hash{}, fmt.Errorf("create proposal: %w", err)
 	}
 
-	// Commit and get witness
-	commitResp, err := c.rpc.CommitProposal(ctx, &pb.CommitProposalRequest{
-		ProposalId: createResp.GetProposalId(),
-		Depth:      uint32(c.depth),
-	})
-	if err != nil {
-		return ffi.Hash{}, fmt.Errorf("commit proposal: %w", err)
-	}
-
-	// Deserialize witness
+	// Deserialize and verify witness before committing.
 	witness := &ffi.WitnessProof{}
-	if err := witness.UnmarshalBinary(commitResp.GetWitnessProof()); err != nil {
+	if err := witness.UnmarshalBinary(createResp.GetWitnessProof()); err != nil {
 		return ffi.Hash{}, fmt.Errorf("unmarshal witness: %w", err)
 	}
-	defer witness.Free()
 
-	// Verify witness and get updated trie
 	newTrie, err := c.trie.VerifyWitness(witness)
+	witness.Free()
 	if err != nil {
 		return ffi.Hash{}, fmt.Errorf("verify witness: %w", err)
 	}
 
-	// Replace old trie
+	// Verification passed — commit the proposal.
+	_, err = c.rpc.CommitProposal(ctx, &pb.CommitProposalRequest{
+		ProposalId: createResp.GetProposalId(),
+	})
+	if err != nil {
+		newTrie.Free()
+		return ffi.Hash{}, fmt.Errorf("commit proposal: %w", err)
+	}
+
+	// Replace old trie.
 	c.trie.Free()
 	c.trie = newTrie
 

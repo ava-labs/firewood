@@ -13,12 +13,9 @@ import (
 	pb "github.com/ava-labs/firewood/ffi/remote/proto"
 )
 
-// proposalEntry stores the state needed to commit a proposal and generate
-// a witness proof.
+// proposalEntry stores a pending proposal that can be committed.
 type proposalEntry struct {
 	proposal *ffi.Proposal
-	baseRoot ffi.Hash
-	ops      []ffi.BatchOp
 }
 
 // Server implements the FirewoodRemote gRPC service backed by an FFI Database.
@@ -107,22 +104,33 @@ func (s *Server) CreateProposal(
 	var baseRoot ffi.Hash
 	copy(baseRoot[:], req.GetRootHash())
 
-	id := s.nextID.Add(1)
-	s.proposals.Store(id, &proposalEntry{
-		proposal: proposal,
-		baseRoot: baseRoot,
-		ops:      ops,
-	})
-
 	newRoot := proposal.Root()
+
+	// Generate witness proof before commit so the client can verify first.
+	witness, err := s.db.GenerateWitness(baseRoot, ops, newRoot, uint(req.GetDepth()))
+	if err != nil {
+		return nil, fmt.Errorf("generate witness: %w", err)
+	}
+	defer witness.Free()
+
+	witnessData, err := witness.MarshalBinary()
+	if err != nil {
+		return nil, fmt.Errorf("marshal witness: %w", err)
+	}
+
+	id := s.nextID.Add(1)
+	s.proposals.Store(id, &proposalEntry{proposal: proposal})
+
 	return &pb.CreateProposalResponse{
-		ProposalId:  id,
-		NewRootHash: newRoot[:],
+		ProposalId:   id,
+		NewRootHash:  newRoot[:],
+		WitnessProof: witnessData,
 	}, nil
 }
 
-// CommitProposal commits the proposal identified by proposal_id and returns
-// a serialized witness proof that enables client-side verification.
+// CommitProposal commits the proposal identified by proposal_id.
+// The client should have already verified the witness proof returned by
+// [Server.CreateProposal] before calling this.
 func (s *Server) CommitProposal(
 	_ context.Context,
 	req *pb.CommitProposalRequest,
@@ -135,27 +143,9 @@ func (s *Server) CommitProposal(
 	}
 	entry := val.(*proposalEntry)
 
-	newRoot := entry.proposal.Root()
-
 	if err := entry.proposal.Commit(); err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 
-	witness, err := s.db.GenerateWitness(
-		entry.baseRoot,
-		entry.ops,
-		newRoot,
-		uint(req.GetDepth()),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("generate witness: %w", err)
-	}
-	defer witness.Free()
-
-	data, err := witness.MarshalBinary()
-	if err != nil {
-		return nil, fmt.Errorf("marshal witness: %w", err)
-	}
-
-	return &pb.CommitProposalResponse{WitnessProof: data}, nil
+	return &pb.CommitProposalResponse{}, nil
 }
