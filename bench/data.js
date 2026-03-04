@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1772523676619,
+  "lastUpdate": 1772610126432,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -1033,6 +1033,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 87.86866395480422,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "491695b7ec9796c2a441fb33e9c7ba209faa1808",
+          "message": "refactor(perf): calculate AreaIndex in as_bytes methods (#1675)\n\n## Why this should be merged\n\nRefactored Node::as_bytes and added FreeArea::as_bytes to automatically\ncalculate and return the AreaIndex instead of requiring callers to\nprovide it. This eliminates the previous double-encoding pattern where\ncallers had to encode twice to determine the correct area size.\n\n## How this works\n\n- Node::as_bytes and FreeArea::as_bytes now return a Result<AreaIndex,\nError> and calculates the area index from encoded size automatically\n- Added NodeAllocator::io_error helper method for error conversion\n- Removed double-encoding logic from serialize_node_to_bump\n- Pre-reserves exact buffer size in FreeArea::as_bytes\n- Uses AsRef<[u8]> and IndexMut trait bounds for flexibility\n- Single-pass encoding for all nodes\n\n## How this was tested\n\nTIP == test in production! Let's see if our perf numbers change after\nmerging. The unit test benchmarks won't change, and in fact may be\nslightly worse since each call is doing more work, but we do avoid\ncalling it twice in the happy path.\n\nResolves #1114",
+          "timestamp": "2026-03-03T23:59:12Z",
+          "url": "https://github.com/ava-labs/firewood/commit/491695b7ec9796c2a441fb33e9c7ba209faa1808"
+        },
+        "date": 1772610125934,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 134.49234434874552,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 7435.367454127717,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 124.31665175346791,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 7212.584041827687,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 94.22263817513596,
             "unit": "block_accept_ms/ggas"
           }
         ]
