@@ -1153,12 +1153,19 @@ func (c *Client) Revision(root ffi.Hash) ffi.DBRevision {
    interleave `Propose` and `Update` on the same client — proposals should
    be committed or dropped before calling `Update`.
 
-4. **Server-side proposal cleanup**: When client-side witness verification
-   fails after a successful `CreateProposal` RPC, the client sends a
-   best-effort `DropProposal` RPC to clean up the server-side entry. This
-   prevents permanent leaks in the server's proposal map. Similarly, the
-   server's `CreateProposal` handler drops a newly-created proposal if any
-   error occurs between proposal creation and storage in the map.
+4. **Server-side proposal cleanup**: Multiple layers prevent leaked proposals:
+
+   - **Client-side best-effort cleanup**: When client-side witness verification
+     fails after a successful `CreateProposal` RPC, the client sends a
+     best-effort `DropProposal` RPC to clean up the server-side entry.
+   - **Server-side creation rollback**: The `CreateProposal` handler drops a
+     newly-created proposal if any error occurs between proposal creation and
+     storage in the map.
+   - **TTL-based garbage collection**: `NewServer(db, WithProposalTTL(ttl))`
+     starts a background goroutine that reaps proposals older than `ttl`. This
+     handles the case where a client crashes after `CreateProposal` but before
+     `Commit` or `Drop`. The default TTL is **zero** (GC disabled), so callers
+     must opt in. `Stop()` reaps all remaining proposals on shutdown.
 
 5. **`TruncatedTrie` finalizer safety net**: `TruncatedTrie` now has a
    `runtime.AddCleanup` finalizer that frees the underlying Rust handle if
