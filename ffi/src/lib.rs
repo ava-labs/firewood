@@ -29,6 +29,7 @@ mod logging;
 mod metrics;
 mod proofs;
 mod proposal;
+mod remote;
 mod registry;
 #[cfg(feature = "block-replay")]
 mod replay;
@@ -44,6 +45,7 @@ pub use crate::logging::*;
 use crate::metrics::MetricsContextExt;
 pub use crate::proofs::*;
 pub use crate::proposal::*;
+pub use crate::remote::*;
 pub use crate::revision::*;
 pub use crate::value::*;
 

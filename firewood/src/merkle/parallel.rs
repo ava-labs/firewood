@@ -148,6 +148,16 @@ impl ParallelMerkle {
                     Child::MaybePersisted(maybe_persisted, _) => {
                         nodestore.read_for_update(maybe_persisted.clone())?
                     }
+                    Child::Proxy(_) => {
+                        return Err(FileIoError::new(
+                            std::io::Error::other(
+                                "cannot process Proxy child in parallel merge: requires remote lookup",
+                            ),
+                            None,
+                            0,
+                            Some("postprocess_trie on Proxy child".into()),
+                        ));
+                    }
                 };
 
                 // The child's partial path is the concatenation of its (now removed) parent, which
@@ -249,6 +259,14 @@ impl ParallelMerkle {
                     Child::MaybePersisted(maybe_persisted, _) => {
                         Ok(proposal.read_for_update(maybe_persisted)?)
                     }
+                    Child::Proxy(_) => Err(FileIoError::new(
+                        std::io::Error::other(
+                            "cannot create worker for Proxy child: requires remote lookup",
+                        ),
+                        None,
+                        0,
+                        Some("create_worker on Proxy child".into()),
+                    )),
                 }
             })
             .transpose()?;

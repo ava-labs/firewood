@@ -141,6 +141,16 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
                                             Err(e) => return Some(Err(e)),
                                         }
                                     }
+                                    Child::Proxy(_) => {
+                                        return Some(Err(FileIoError::new(
+                                            std::io::Error::other(
+                                                "cannot iterate through Proxy child: requires remote lookup",
+                                            ),
+                                            None,
+                                            0,
+                                            Some("iterator on Proxy child".into()),
+                                        )));
+                                    }
                                 };
 
                                 let child_partial_path = child.partial_path().iter().copied();
@@ -267,6 +277,7 @@ fn get_iterator_intial_state<T: TrieReader>(
                             // For MaybePersisted, we need to get the node
                             maybe_persisted.as_shared_node(merkle)?
                         }
+                        Some(child @ Child::Proxy(_)) => child.as_shared_node(merkle)?,
                     };
 
                     matched_key_nibbles.push(next_unmatched_key_nibble.as_u8());
@@ -452,22 +463,6 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                             next_nibble: None,
                                         }))
                                     }
-                                    Some(Child::AddressWithHash(child_addr, _)) => {
-                                        let child = match merkle.read_node(*child_addr) {
-                                            Ok(child) => child,
-                                            Err(e) => return Some(Err(e)),
-                                        };
-
-                                        matched_key.push(next_unmatched_key_nibble.as_u8());
-
-                                        *node = child;
-
-                                        Some(Ok(PathIterItem {
-                                            key_nibbles: node_key,
-                                            node: saved_node,
-                                            next_nibble: Some(next_unmatched_key_nibble),
-                                        }))
-                                    }
                                     Some(Child::Node(child)) => {
                                         matched_key.push(next_unmatched_key_nibble.as_u8());
 
@@ -479,14 +474,14 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                             next_nibble: Some(next_unmatched_key_nibble),
                                         }))
                                     }
-                                    Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                                        let child = match maybe_persisted.as_shared_node(merkle) {
+                                    Some(child) => {
+                                        let resolved = match child.as_shared_node(merkle) {
                                             Ok(child) => child,
                                             Err(e) => return Some(Err(e)),
                                         };
 
                                         matched_key.push(next_unmatched_key_nibble.as_u8());
-                                        *node = child;
+                                        *node = resolved;
 
                                         Some(Ok(PathIterItem {
                                             key_nibbles: node_key,

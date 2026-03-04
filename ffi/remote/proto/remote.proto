@@ -1,0 +1,81 @@
+// Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
+// See the file LICENSE.md for licensing terms.
+
+syntax = "proto3";
+package firewood.remote;
+option go_package = "github.com/ava-labs/firewood/ffi/remote/proto";
+
+service FirewoodRemote {
+  // Bootstrap: get a truncated trie for a given root hash.
+  rpc GetTruncatedTrie(GetTruncatedTrieRequest) returns (GetTruncatedTrieResponse);
+
+  // Read: get a value with its Merkle proof.
+  rpc GetValue(GetValueRequest) returns (GetValueResponse);
+
+  // Write: two-phase commit.
+  rpc CreateProposal(CreateProposalRequest) returns (CreateProposalResponse);
+  rpc CommitProposal(CommitProposalRequest) returns (CommitProposalResponse);
+}
+
+message GetTruncatedTrieRequest {
+  // 32-byte root hash identifying the revision.
+  bytes root_hash = 1;
+  // Truncation depth in nibble levels.
+  uint32 depth = 2;
+}
+
+message GetTruncatedTrieResponse {
+  // Serialized TruncatedTrie (produced by TruncatedTrie.MarshalBinary).
+  bytes trie_data = 1;
+}
+
+message GetValueRequest {
+  // 32-byte root hash identifying the revision to read from.
+  bytes root_hash = 1;
+  // The key to look up.
+  bytes key = 2;
+}
+
+message GetValueResponse {
+  // The value associated with the key. Empty if the key was not found.
+  optional bytes value = 1;
+  // Serialized single-key Merkle proof.
+  bytes proof = 2;
+}
+
+message BatchOperation {
+  enum OpType {
+    PUT = 0;
+    DELETE = 1;
+  }
+  OpType op_type = 1;
+  bytes key = 2;
+  // Value payload; empty for DELETE operations.
+  bytes value = 3;
+}
+
+message CreateProposalRequest {
+  // 32-byte root hash of the base revision.
+  bytes root_hash = 1;
+  // The batch operations to propose.
+  repeated BatchOperation ops = 2;
+}
+
+message CreateProposalResponse {
+  // Server-assigned proposal identifier.
+  uint64 proposal_id = 1;
+  // 32-byte root hash after applying the batch operations.
+  bytes new_root_hash = 2;
+}
+
+message CommitProposalRequest {
+  // The proposal identifier returned by CreateProposal.
+  uint64 proposal_id = 1;
+  // Client's truncation depth for witness generation.
+  uint32 depth = 2;
+}
+
+message CommitProposalResponse {
+  // Serialized WitnessProof (produced by WitnessProof.MarshalBinary).
+  bytes witness_proof = 1;
+}

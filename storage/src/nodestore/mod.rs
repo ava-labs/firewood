@@ -334,6 +334,22 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     pub fn into_root(self) -> Option<Node> {
         self.kind.root
     }
+
+    /// Creates a new [`NodeStore`] with the given root node and no parent lineage.
+    ///
+    /// This is used by the remote module's witness verification to create a
+    /// `MutableProposal` from a pre-constructed in-memory trie root.
+    #[must_use]
+    pub fn new_proposal_with_root(storage: Arc<S>, root: Node) -> Self {
+        NodeStore {
+            kind: MutableProposal {
+                root: Some(root),
+                deleted: Vec::default(),
+                parent: NodeStoreParent::Committed(None),
+            },
+            storage,
+        }
+    }
 }
 
 impl<S: WritableStorage> NodeStore<MutableProposal, S> {

@@ -187,6 +187,11 @@ impl DatabaseHandle {
         })
     }
 
+    /// Returns a reference to the underlying `Db`.
+    pub(crate) const fn db(&self) -> &Db {
+        &self.db
+    }
+
     /// Returns the current root hash of the database.
     ///
     /// # Errors

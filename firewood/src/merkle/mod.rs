@@ -107,6 +107,9 @@ fn get_helper<T: TrieReader>(
                         let child = maybe_persisted.as_shared_node(nodestore)?;
                         get_helper(nodestore, &child, remaining_key)
                     }
+                    Some(child @ Child::Proxy(_)) => {
+                        child.as_shared_node(nodestore).map(Some)
+                    }
                 },
             }
         }
@@ -679,6 +682,14 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             Child::Node(node) => Ok(node),
             Child::AddressWithHash(addr, _) => self.nodestore.read_for_update(addr.into()),
             Child::MaybePersisted(node, _) => self.nodestore.read_for_update(node),
+            Child::Proxy(_) => Err(FileIoError::new(
+                std::io::Error::other(
+                    "cannot read Proxy child for update: requires remote lookup",
+                ),
+                None,
+                0,
+                Some("read_for_update on Proxy child".into()),
+            )),
         }
     }
 

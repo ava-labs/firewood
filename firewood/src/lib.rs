@@ -127,6 +127,9 @@ pub mod manager;
 /// Merkle module, containing merkle operations
 pub mod merkle;
 
+/// Remote storage support for truncated tries and client-server mode.
+pub mod remote;
+
 /// Metrics registry for firewood layer metrics
 pub mod registry;
 
