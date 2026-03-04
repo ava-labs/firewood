@@ -60,6 +60,38 @@ runs:
         cache-all-crates: true
         cache-workspace-crates: true
 
+    - name: Ensure C toolchain
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        if command -v cc >/dev/null 2>&1; then
+          cc --version
+          exit 0
+        fi
+
+        SUDO=""
+        if command -v sudo >/dev/null 2>&1; then
+          SUDO="sudo"
+        fi
+
+        if command -v apt-get >/dev/null 2>&1; then
+          $SUDO apt-get update
+          $SUDO apt-get install -y --no-install-recommends build-essential pkg-config
+        elif command -v dnf >/dev/null 2>&1; then
+          $SUDO dnf install -y gcc gcc-c++ make pkgconf-pkg-config
+        elif command -v yum >/dev/null 2>&1; then
+          $SUDO yum install -y gcc gcc-c++ make pkgconfig
+        elif command -v apk >/dev/null 2>&1; then
+          $SUDO apk add --no-cache build-base pkgconf
+        else
+          echo "::error::'cc' is missing and no supported package manager was found."
+          exit 1
+        fi
+
+        command -v cc
+        cc --version
+
     - name: Cargo Fetch
       shell: bash
       run: cargo fetch --locked --verbose
@@ -100,8 +132,13 @@ runs:
         TMPDIR: /mnt/tmp
         BENCHMARK_EXTRA: ${{ inputs.extra }}
       run: |
-        sudo mkdir -p $TMPDIR
-        sudo chmod 1777 $TMPDIR
+        SUDO=""
+        if command -v sudo >/dev/null 2>&1; then
+          SUDO="sudo"
+        fi
+
+        $SUDO mkdir -p "$TMPDIR"
+        $SUDO chmod 1777 "$TMPDIR"
 
         REPLAY_MAX_COMMITS=1000 REPLAY_LOG=./replay.log go test -bench=BenchmarkReplayLog -benchtime=${{ inputs.benchtime }}x | tee output.txt
 
