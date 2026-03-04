@@ -103,7 +103,7 @@ runs:
         sudo mkdir -p $TMPDIR
         sudo chmod 1777 $TMPDIR
 
-        REPLAY_LOG=./replay.log go test -bench=BenchmarkReplayLog -benchtime=${{ inputs.benchtime }}x | tee output.txt
+        REPLAY_MAX_COMMITS=1000 REPLAY_LOG=./replay.log go test -bench=BenchmarkReplayLog -benchtime=${{ inputs.benchtime }}x | tee output.txt
 
         echo "output-file=$(pwd)/output.txt" >> $GITHUB_OUTPUT
 
