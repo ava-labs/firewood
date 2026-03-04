@@ -869,7 +869,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             return Ok(None);
         };
 
-       let (root_node, removed_value) = self.remove_helper(root_node, &key)?;
+        let (root_node, removed_value) = self.remove_helper(root_node, &key)?;
         *self.nodestore.root_mut() = root_node;
         if removed_value.is_some() {
             firewood_increment!(crate::registry::REMOVE_TOTAL, 1, "prefix" => "false", "result" => "success");

@@ -55,10 +55,16 @@ pub fn register() {
         SPACE_REUSED_BYTES_TOTAL,
         "Amount of space reused from free lists (bytes)"
     );
-    describe_counter!(SPACE_FROM_END_BYTES_TOTAL, "Amount of space allocated from end (bytes)");
+    describe_counter!(
+        SPACE_FROM_END_BYTES_TOTAL,
+        "Amount of space allocated from end (bytes)"
+    );
     describe_counter!(SPACE_FREED_BYTES_TOTAL, "Amount of space freed (bytes)");
     describe_counter!(DELETE_NODE_TOTAL, "Count of deleted nodes");
-    describe_counter!(FLUSH_NODES_SECONDS_TOTAL, "Time spent flushing nodes (seconds)");
+    describe_counter!(
+        FLUSH_NODES_SECONDS_TOTAL,
+        "Time spent flushing nodes (seconds)"
+    );
 
     describe_counter!(READ_NODE_TOTAL, "Number of node reads");
     describe_counter!(CACHE_NODE_TOTAL, "Number of node cache operations");
@@ -85,8 +91,14 @@ pub fn register() {
     );
 
     // Ring metrics
-    describe_counter!(ring::EAGAIN_WRITE_RETRY_TOTAL, "Count of EAGAIN write retries");
+    describe_counter!(
+        ring::EAGAIN_WRITE_RETRY_TOTAL,
+        "Count of EAGAIN write retries"
+    );
     describe_counter!(ring::FULL_TOTAL, "Count of ring buffer full events");
     describe_counter!(ring::SQ_WAIT_TOTAL, "Count of submission queue waits");
-    describe_counter!(ring::PARTIAL_WRITE_RETRY_TOTAL, "Count of partial write retries");
+    describe_counter!(
+        ring::PARTIAL_WRITE_RETRY_TOTAL,
+        "Count of partial write retries"
+    );
 }

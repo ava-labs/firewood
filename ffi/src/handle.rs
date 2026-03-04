@@ -224,7 +224,10 @@ impl DatabaseHandle {
             self.create_proposal_handle(values.as_ref())?;
 
         let root_hash = handle.commit_proposal(|commit_time| {
-            firewood_increment!(crate::registry::COMMIT_SECONDS_TOTAL, commit_time.as_nanos() as u64);
+            firewood_increment!(
+                crate::registry::COMMIT_SECONDS_TOTAL,
+                commit_time.as_nanos()
+            );
             firewood_record!(
                 crate::registry::COMMIT_DURATION_SECONDS,
                 commit_time.as_f64(),
@@ -233,7 +236,7 @@ impl DatabaseHandle {
         })?;
 
         let elapsed = start_time.elapsed();
-        firewood_increment!(crate::registry::BATCH_SECONDS_TOTAL, elapsed.as_nanos() as u64);
+        firewood_increment!(crate::registry::BATCH_SECONDS_TOTAL, elapsed.as_nanos());
         firewood_increment!(crate::registry::BATCH_TOTAL, 1);
         firewood_record!(
             crate::registry::BATCH_DURATION_SECONDS,

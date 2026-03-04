@@ -248,7 +248,7 @@ impl<'db> ProposedChangeProofContext<'db> {
         };
 
         let metrics_cb = |commit_time: coarsetime::Duration| {
-            firewood_increment!(crate::registry::COMMIT_SECONDS_TOTAL, commit_time.as_nanos() as u64, "change" => "commit");
+            firewood_increment!(crate::registry::COMMIT_SECONDS_TOTAL, commit_time.as_nanos(), "change" => "commit");
             firewood_increment!(crate::registry::MERGE_TOTAL, 1, "change" => "commit");
         };
 

@@ -256,7 +256,7 @@ impl<'a> PredictiveReader<'a> {
 impl Drop for PredictiveReader<'_> {
     fn drop(&mut self) {
         let elapsed = self.started.elapsed();
-        firewood_increment!(crate::registry::IO_READ_SECONDS_TOTAL, elapsed.as_nanos() as u64);
+        firewood_increment!(crate::registry::IO_READ_SECONDS_TOTAL, elapsed.as_nanos());
         firewood_increment!(crate::registry::IO_READ_TOTAL, 1);
     }
 }

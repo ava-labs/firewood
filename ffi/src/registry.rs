@@ -32,7 +32,10 @@ const FFI_TIMING_BUCKETS: &[f64] = &[
 ///
 /// Histogram bucket configurations are collected into the provided vector.
 pub fn register(histogram_configs: &mut Vec<HistogramBucketConfig>) {
-    describe_counter!(COMMIT_SECONDS_TOTAL, "Time spent committing via FFI (seconds)");
+    describe_counter!(
+        COMMIT_SECONDS_TOTAL,
+        "Time spent committing via FFI (seconds)"
+    );
     describe_counter!(COMMIT_TOTAL, "Count of commit operations via FFI");
     register_histogram_with_buckets(
         histogram_configs,
@@ -41,7 +44,10 @@ pub fn register(histogram_configs: &mut Vec<HistogramBucketConfig>) {
         FFI_TIMING_BUCKETS,
     );
 
-    describe_counter!(PROPOSE_SECONDS_TOTAL, "Time spent proposing via FFI (seconds)");
+    describe_counter!(
+        PROPOSE_SECONDS_TOTAL,
+        "Time spent proposing via FFI (seconds)"
+    );
     describe_counter!(PROPOSE_TOTAL, "Count of proposal operations via FFI");
     register_histogram_with_buckets(
         histogram_configs,
@@ -50,7 +56,10 @@ pub fn register(histogram_configs: &mut Vec<HistogramBucketConfig>) {
         FFI_TIMING_BUCKETS,
     );
 
-    describe_counter!(BATCH_SECONDS_TOTAL, "Time spent processing batches (seconds)");
+    describe_counter!(
+        BATCH_SECONDS_TOTAL,
+        "Time spent processing batches (seconds)"
+    );
     describe_counter!(BATCH_TOTAL, "Count of batch operations completed");
     register_histogram_with_buckets(
         histogram_configs,

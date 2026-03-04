@@ -130,7 +130,10 @@ impl<'db> CreateProposalResult<'db> {
         let start_time = coarsetime::Instant::now();
         let proposal = f()?;
         let propose_time = start_time.elapsed();
-        firewood_increment!(crate::registry::PROPOSE_SECONDS_TOTAL, propose_time.as_nanos() as u64);
+        firewood_increment!(
+            crate::registry::PROPOSE_SECONDS_TOTAL,
+            propose_time.as_nanos()
+        );
         firewood_increment!(crate::registry::PROPOSE_TOTAL, 1);
         firewood_record!(
             crate::registry::PROPOSE_DURATION_SECONDS,

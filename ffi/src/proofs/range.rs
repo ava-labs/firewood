@@ -225,7 +225,10 @@ impl<'db> RangeProofContext<'db> {
         };
 
         let metrics_cb = |commit_time: coarsetime::Duration| {
-            firewood_increment!(crate::registry::COMMIT_SECONDS_TOTAL, commit_time.as_nanos() as u64);
+            firewood_increment!(
+                crate::registry::COMMIT_SECONDS_TOTAL,
+                commit_time.as_nanos()
+            );
             firewood_increment!(crate::registry::MERGE_TOTAL, 1);
         };
 
