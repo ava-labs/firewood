@@ -15,6 +15,12 @@ service FirewoodRemote {
   // Write: two-phase commit.
   rpc CreateProposal(CreateProposalRequest) returns (CreateProposalResponse);
   rpc CommitProposal(CommitProposalRequest) returns (CommitProposalResponse);
+
+  // Drop a pending proposal without committing.
+  rpc DropProposal(DropProposalRequest) returns (DropProposalResponse);
+
+  // Paginated iteration over a proposal's key-value pairs.
+  rpc IterBatch(IterBatchRequest) returns (IterBatchResponse);
 }
 
 message GetTruncatedTrieRequest {
@@ -61,6 +67,8 @@ message CreateProposalRequest {
   repeated BatchOperation ops = 2;
   // Client's truncation depth for witness generation.
   uint32 depth = 3;
+  // Optional parent proposal ID for chained proposals.
+  optional uint64 parent_proposal_id = 4;
 }
 
 message CreateProposalResponse {
@@ -78,4 +86,33 @@ message CommitProposalRequest {
 }
 
 message CommitProposalResponse {
+}
+
+message DropProposalRequest {
+  // The proposal identifier to drop.
+  uint64 proposal_id = 1;
+}
+
+message DropProposalResponse {
+}
+
+message IterBatchRequest {
+  // The proposal to iterate over.
+  uint64 proposal_id = 1;
+  // Start iteration at the first key >= start_key.
+  bytes start_key = 2;
+  // Maximum number of key-value pairs to return.
+  uint32 batch_size = 3;
+}
+
+message KeyValuePair {
+  bytes key = 1;
+  bytes value = 2;
+}
+
+message IterBatchResponse {
+  // The key-value pairs in this batch.
+  repeated KeyValuePair pairs = 1;
+  // True if there are more pairs beyond this batch.
+  bool has_more = 2;
 }

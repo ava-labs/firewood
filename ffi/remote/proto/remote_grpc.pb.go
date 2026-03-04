@@ -26,6 +26,8 @@ const (
 	FirewoodRemote_GetValue_FullMethodName         = "/firewood.remote.FirewoodRemote/GetValue"
 	FirewoodRemote_CreateProposal_FullMethodName   = "/firewood.remote.FirewoodRemote/CreateProposal"
 	FirewoodRemote_CommitProposal_FullMethodName   = "/firewood.remote.FirewoodRemote/CommitProposal"
+	FirewoodRemote_DropProposal_FullMethodName     = "/firewood.remote.FirewoodRemote/DropProposal"
+	FirewoodRemote_IterBatch_FullMethodName        = "/firewood.remote.FirewoodRemote/IterBatch"
 )
 
 // FirewoodRemoteClient is the client API for FirewoodRemote service.
@@ -39,6 +41,10 @@ type FirewoodRemoteClient interface {
 	// Write: two-phase commit.
 	CreateProposal(ctx context.Context, in *CreateProposalRequest, opts ...grpc.CallOption) (*CreateProposalResponse, error)
 	CommitProposal(ctx context.Context, in *CommitProposalRequest, opts ...grpc.CallOption) (*CommitProposalResponse, error)
+	// Drop a pending proposal without committing.
+	DropProposal(ctx context.Context, in *DropProposalRequest, opts ...grpc.CallOption) (*DropProposalResponse, error)
+	// Paginated iteration over a proposal's key-value pairs.
+	IterBatch(ctx context.Context, in *IterBatchRequest, opts ...grpc.CallOption) (*IterBatchResponse, error)
 }
 
 type firewoodRemoteClient struct {
@@ -89,6 +95,26 @@ func (c *firewoodRemoteClient) CommitProposal(ctx context.Context, in *CommitPro
 	return out, nil
 }
 
+func (c *firewoodRemoteClient) DropProposal(ctx context.Context, in *DropProposalRequest, opts ...grpc.CallOption) (*DropProposalResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DropProposalResponse)
+	err := c.cc.Invoke(ctx, FirewoodRemote_DropProposal_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *firewoodRemoteClient) IterBatch(ctx context.Context, in *IterBatchRequest, opts ...grpc.CallOption) (*IterBatchResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IterBatchResponse)
+	err := c.cc.Invoke(ctx, FirewoodRemote_IterBatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FirewoodRemoteServer is the server API for FirewoodRemote service.
 // All implementations must embed UnimplementedFirewoodRemoteServer
 // for forward compatibility.
@@ -100,6 +126,10 @@ type FirewoodRemoteServer interface {
 	// Write: two-phase commit.
 	CreateProposal(context.Context, *CreateProposalRequest) (*CreateProposalResponse, error)
 	CommitProposal(context.Context, *CommitProposalRequest) (*CommitProposalResponse, error)
+	// Drop a pending proposal without committing.
+	DropProposal(context.Context, *DropProposalRequest) (*DropProposalResponse, error)
+	// Paginated iteration over a proposal's key-value pairs.
+	IterBatch(context.Context, *IterBatchRequest) (*IterBatchResponse, error)
 	mustEmbedUnimplementedFirewoodRemoteServer()
 }
 
@@ -121,6 +151,12 @@ func (UnimplementedFirewoodRemoteServer) CreateProposal(context.Context, *Create
 }
 func (UnimplementedFirewoodRemoteServer) CommitProposal(context.Context, *CommitProposalRequest) (*CommitProposalResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CommitProposal not implemented")
+}
+func (UnimplementedFirewoodRemoteServer) DropProposal(context.Context, *DropProposalRequest) (*DropProposalResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DropProposal not implemented")
+}
+func (UnimplementedFirewoodRemoteServer) IterBatch(context.Context, *IterBatchRequest) (*IterBatchResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method IterBatch not implemented")
 }
 func (UnimplementedFirewoodRemoteServer) mustEmbedUnimplementedFirewoodRemoteServer() {}
 func (UnimplementedFirewoodRemoteServer) testEmbeddedByValue()                        {}
@@ -215,6 +251,42 @@ func _FirewoodRemote_CommitProposal_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FirewoodRemote_DropProposal_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DropProposalRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FirewoodRemoteServer).DropProposal(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FirewoodRemote_DropProposal_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FirewoodRemoteServer).DropProposal(ctx, req.(*DropProposalRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FirewoodRemote_IterBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IterBatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FirewoodRemoteServer).IterBatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FirewoodRemote_IterBatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FirewoodRemoteServer).IterBatch(ctx, req.(*IterBatchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FirewoodRemote_ServiceDesc is the grpc.ServiceDesc for FirewoodRemote service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -237,6 +309,14 @@ var FirewoodRemote_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CommitProposal",
 			Handler:    _FirewoodRemote_CommitProposal_Handler,
+		},
+		{
+			MethodName: "DropProposal",
+			Handler:    _FirewoodRemote_DropProposal_Handler,
+		},
+		{
+			MethodName: "IterBatch",
+			Handler:    _FirewoodRemote_IterBatch_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

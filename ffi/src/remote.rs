@@ -14,7 +14,7 @@
 use firewood::remote::client::BatchOp as RemoteBatchOp;
 use firewood::remote::witness::{self, WitnessProof};
 use firewood::remote::TruncatedTrie;
-use firewood::v2::api::{Db as _, DbView as _};
+use firewood::v2::api::Db as _;
 
 use crate::metrics::MetricsContextExt;
 use crate::{
@@ -519,16 +519,15 @@ pub extern "C" fn fwd_get_with_proof(
     key: BorrowedBytes<'_>,
 ) -> GetWithProofResult {
     crate::invoke_with_handle(db, move |db| -> Result<_, String> {
-        let api_hash: firewood::v2::api::HashKey = root_hash.into();
-        let revision = db.db().revision(api_hash).map_err(|e| e.to_string())?;
+        let view = db.get_root(root_hash.into()).map_err(|e| e.to_string())?;
 
         // Generate proof
-        let proof = revision
+        let proof = view
             .single_key_proof(key.as_slice())
             .map_err(|e| e.to_string())?;
 
         // Get value
-        let value = revision
+        let value = view
             .val(key.as_slice())
             .map_err(|e| e.to_string())?;
 

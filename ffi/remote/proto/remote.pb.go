@@ -345,9 +345,11 @@ type CreateProposalRequest struct {
 	// The batch operations to propose.
 	Ops []*BatchOperation `protobuf:"bytes,2,rep,name=ops,proto3" json:"ops,omitempty"`
 	// Client's truncation depth for witness generation.
-	Depth         uint32 `protobuf:"varint,3,opt,name=depth,proto3" json:"depth,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Depth uint32 `protobuf:"varint,3,opt,name=depth,proto3" json:"depth,omitempty"`
+	// Optional parent proposal ID for chained proposals.
+	ParentProposalId *uint64 `protobuf:"varint,4,opt,name=parent_proposal_id,json=parentProposalId,proto3,oneof" json:"parent_proposal_id,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *CreateProposalRequest) Reset() {
@@ -397,6 +399,13 @@ func (x *CreateProposalRequest) GetOps() []*BatchOperation {
 func (x *CreateProposalRequest) GetDepth() uint32 {
 	if x != nil {
 		return x.Depth
+	}
+	return 0
+}
+
+func (x *CreateProposalRequest) GetParentProposalId() uint64 {
+	if x != nil && x.ParentProposalId != nil {
+		return *x.ParentProposalId
 	}
 	return 0
 }
@@ -545,6 +554,256 @@ func (*CommitProposalResponse) Descriptor() ([]byte, []int) {
 	return file_proto_remote_proto_rawDescGZIP(), []int{8}
 }
 
+type DropProposalRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The proposal identifier to drop.
+	ProposalId    uint64 `protobuf:"varint,1,opt,name=proposal_id,json=proposalId,proto3" json:"proposal_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DropProposalRequest) Reset() {
+	*x = DropProposalRequest{}
+	mi := &file_proto_remote_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DropProposalRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DropProposalRequest) ProtoMessage() {}
+
+func (x *DropProposalRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_remote_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DropProposalRequest.ProtoReflect.Descriptor instead.
+func (*DropProposalRequest) Descriptor() ([]byte, []int) {
+	return file_proto_remote_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *DropProposalRequest) GetProposalId() uint64 {
+	if x != nil {
+		return x.ProposalId
+	}
+	return 0
+}
+
+type DropProposalResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DropProposalResponse) Reset() {
+	*x = DropProposalResponse{}
+	mi := &file_proto_remote_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DropProposalResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DropProposalResponse) ProtoMessage() {}
+
+func (x *DropProposalResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_remote_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DropProposalResponse.ProtoReflect.Descriptor instead.
+func (*DropProposalResponse) Descriptor() ([]byte, []int) {
+	return file_proto_remote_proto_rawDescGZIP(), []int{10}
+}
+
+type IterBatchRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The proposal to iterate over.
+	ProposalId uint64 `protobuf:"varint,1,opt,name=proposal_id,json=proposalId,proto3" json:"proposal_id,omitempty"`
+	// Start iteration at the first key >= start_key.
+	StartKey []byte `protobuf:"bytes,2,opt,name=start_key,json=startKey,proto3" json:"start_key,omitempty"`
+	// Maximum number of key-value pairs to return.
+	BatchSize     uint32 `protobuf:"varint,3,opt,name=batch_size,json=batchSize,proto3" json:"batch_size,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IterBatchRequest) Reset() {
+	*x = IterBatchRequest{}
+	mi := &file_proto_remote_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IterBatchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IterBatchRequest) ProtoMessage() {}
+
+func (x *IterBatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_remote_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IterBatchRequest.ProtoReflect.Descriptor instead.
+func (*IterBatchRequest) Descriptor() ([]byte, []int) {
+	return file_proto_remote_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *IterBatchRequest) GetProposalId() uint64 {
+	if x != nil {
+		return x.ProposalId
+	}
+	return 0
+}
+
+func (x *IterBatchRequest) GetStartKey() []byte {
+	if x != nil {
+		return x.StartKey
+	}
+	return nil
+}
+
+func (x *IterBatchRequest) GetBatchSize() uint32 {
+	if x != nil {
+		return x.BatchSize
+	}
+	return 0
+}
+
+type KeyValuePair struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
+	Value         []byte                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *KeyValuePair) Reset() {
+	*x = KeyValuePair{}
+	mi := &file_proto_remote_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *KeyValuePair) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*KeyValuePair) ProtoMessage() {}
+
+func (x *KeyValuePair) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_remote_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use KeyValuePair.ProtoReflect.Descriptor instead.
+func (*KeyValuePair) Descriptor() ([]byte, []int) {
+	return file_proto_remote_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *KeyValuePair) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+func (x *KeyValuePair) GetValue() []byte {
+	if x != nil {
+		return x.Value
+	}
+	return nil
+}
+
+type IterBatchResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The key-value pairs in this batch.
+	Pairs []*KeyValuePair `protobuf:"bytes,1,rep,name=pairs,proto3" json:"pairs,omitempty"`
+	// True if there are more pairs beyond this batch.
+	HasMore       bool `protobuf:"varint,2,opt,name=has_more,json=hasMore,proto3" json:"has_more,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IterBatchResponse) Reset() {
+	*x = IterBatchResponse{}
+	mi := &file_proto_remote_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IterBatchResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IterBatchResponse) ProtoMessage() {}
+
+func (x *IterBatchResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_proto_remote_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IterBatchResponse.ProtoReflect.Descriptor instead.
+func (*IterBatchResponse) Descriptor() ([]byte, []int) {
+	return file_proto_remote_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *IterBatchResponse) GetPairs() []*KeyValuePair {
+	if x != nil {
+		return x.Pairs
+	}
+	return nil
+}
+
+func (x *IterBatchResponse) GetHasMore() bool {
+	if x != nil {
+		return x.HasMore
+	}
+	return false
+}
+
 var File_proto_remote_proto protoreflect.FileDescriptor
 
 const file_proto_remote_proto_rawDesc = "" +
@@ -569,11 +828,13 @@ const file_proto_remote_proto_rawDesc = "" +
 	"\x06OpType\x12\a\n" +
 	"\x03PUT\x10\x00\x12\n" +
 	"\n" +
-	"\x06DELETE\x10\x01\"}\n" +
+	"\x06DELETE\x10\x01\"\xc7\x01\n" +
 	"\x15CreateProposalRequest\x12\x1b\n" +
 	"\troot_hash\x18\x01 \x01(\fR\brootHash\x121\n" +
 	"\x03ops\x18\x02 \x03(\v2\x1f.firewood.remote.BatchOperationR\x03ops\x12\x14\n" +
-	"\x05depth\x18\x03 \x01(\rR\x05depth\"\x82\x01\n" +
+	"\x05depth\x18\x03 \x01(\rR\x05depth\x121\n" +
+	"\x12parent_proposal_id\x18\x04 \x01(\x04H\x00R\x10parentProposalId\x88\x01\x01B\x15\n" +
+	"\x13_parent_proposal_id\"\x82\x01\n" +
 	"\x16CreateProposalResponse\x12\x1f\n" +
 	"\vproposal_id\x18\x01 \x01(\x04R\n" +
 	"proposalId\x12\"\n" +
@@ -582,12 +843,30 @@ const file_proto_remote_proto_rawDesc = "" +
 	"\x15CommitProposalRequest\x12\x1f\n" +
 	"\vproposal_id\x18\x01 \x01(\x04R\n" +
 	"proposalId\"\x18\n" +
-	"\x16CommitProposalResponse2\x90\x03\n" +
+	"\x16CommitProposalResponse\"6\n" +
+	"\x13DropProposalRequest\x12\x1f\n" +
+	"\vproposal_id\x18\x01 \x01(\x04R\n" +
+	"proposalId\"\x16\n" +
+	"\x14DropProposalResponse\"o\n" +
+	"\x10IterBatchRequest\x12\x1f\n" +
+	"\vproposal_id\x18\x01 \x01(\x04R\n" +
+	"proposalId\x12\x1b\n" +
+	"\tstart_key\x18\x02 \x01(\fR\bstartKey\x12\x1d\n" +
+	"\n" +
+	"batch_size\x18\x03 \x01(\rR\tbatchSize\"6\n" +
+	"\fKeyValuePair\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\fR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value\"c\n" +
+	"\x11IterBatchResponse\x123\n" +
+	"\x05pairs\x18\x01 \x03(\v2\x1d.firewood.remote.KeyValuePairR\x05pairs\x12\x19\n" +
+	"\bhas_more\x18\x02 \x01(\bR\ahasMore2\xc1\x04\n" +
 	"\x0eFirewoodRemote\x12g\n" +
 	"\x10GetTruncatedTrie\x12(.firewood.remote.GetTruncatedTrieRequest\x1a).firewood.remote.GetTruncatedTrieResponse\x12O\n" +
 	"\bGetValue\x12 .firewood.remote.GetValueRequest\x1a!.firewood.remote.GetValueResponse\x12a\n" +
 	"\x0eCreateProposal\x12&.firewood.remote.CreateProposalRequest\x1a'.firewood.remote.CreateProposalResponse\x12a\n" +
-	"\x0eCommitProposal\x12&.firewood.remote.CommitProposalRequest\x1a'.firewood.remote.CommitProposalResponseB/Z-github.com/ava-labs/firewood/ffi/remote/protob\x06proto3"
+	"\x0eCommitProposal\x12&.firewood.remote.CommitProposalRequest\x1a'.firewood.remote.CommitProposalResponse\x12[\n" +
+	"\fDropProposal\x12$.firewood.remote.DropProposalRequest\x1a%.firewood.remote.DropProposalResponse\x12R\n" +
+	"\tIterBatch\x12!.firewood.remote.IterBatchRequest\x1a\".firewood.remote.IterBatchResponseB/Z-github.com/ava-labs/firewood/ffi/remote/protob\x06proto3"
 
 var (
 	file_proto_remote_proto_rawDescOnce sync.Once
@@ -602,7 +881,7 @@ func file_proto_remote_proto_rawDescGZIP() []byte {
 }
 
 var file_proto_remote_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_proto_remote_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_proto_remote_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_proto_remote_proto_goTypes = []any{
 	(BatchOperation_OpType)(0),       // 0: firewood.remote.BatchOperation.OpType
 	(*GetTruncatedTrieRequest)(nil),  // 1: firewood.remote.GetTruncatedTrieRequest
@@ -614,23 +893,33 @@ var file_proto_remote_proto_goTypes = []any{
 	(*CreateProposalResponse)(nil),   // 7: firewood.remote.CreateProposalResponse
 	(*CommitProposalRequest)(nil),    // 8: firewood.remote.CommitProposalRequest
 	(*CommitProposalResponse)(nil),   // 9: firewood.remote.CommitProposalResponse
+	(*DropProposalRequest)(nil),      // 10: firewood.remote.DropProposalRequest
+	(*DropProposalResponse)(nil),     // 11: firewood.remote.DropProposalResponse
+	(*IterBatchRequest)(nil),         // 12: firewood.remote.IterBatchRequest
+	(*KeyValuePair)(nil),             // 13: firewood.remote.KeyValuePair
+	(*IterBatchResponse)(nil),        // 14: firewood.remote.IterBatchResponse
 }
 var file_proto_remote_proto_depIdxs = []int32{
-	0, // 0: firewood.remote.BatchOperation.op_type:type_name -> firewood.remote.BatchOperation.OpType
-	5, // 1: firewood.remote.CreateProposalRequest.ops:type_name -> firewood.remote.BatchOperation
-	1, // 2: firewood.remote.FirewoodRemote.GetTruncatedTrie:input_type -> firewood.remote.GetTruncatedTrieRequest
-	3, // 3: firewood.remote.FirewoodRemote.GetValue:input_type -> firewood.remote.GetValueRequest
-	6, // 4: firewood.remote.FirewoodRemote.CreateProposal:input_type -> firewood.remote.CreateProposalRequest
-	8, // 5: firewood.remote.FirewoodRemote.CommitProposal:input_type -> firewood.remote.CommitProposalRequest
-	2, // 6: firewood.remote.FirewoodRemote.GetTruncatedTrie:output_type -> firewood.remote.GetTruncatedTrieResponse
-	4, // 7: firewood.remote.FirewoodRemote.GetValue:output_type -> firewood.remote.GetValueResponse
-	7, // 8: firewood.remote.FirewoodRemote.CreateProposal:output_type -> firewood.remote.CreateProposalResponse
-	9, // 9: firewood.remote.FirewoodRemote.CommitProposal:output_type -> firewood.remote.CommitProposalResponse
-	6, // [6:10] is the sub-list for method output_type
-	2, // [2:6] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	0,  // 0: firewood.remote.BatchOperation.op_type:type_name -> firewood.remote.BatchOperation.OpType
+	5,  // 1: firewood.remote.CreateProposalRequest.ops:type_name -> firewood.remote.BatchOperation
+	13, // 2: firewood.remote.IterBatchResponse.pairs:type_name -> firewood.remote.KeyValuePair
+	1,  // 3: firewood.remote.FirewoodRemote.GetTruncatedTrie:input_type -> firewood.remote.GetTruncatedTrieRequest
+	3,  // 4: firewood.remote.FirewoodRemote.GetValue:input_type -> firewood.remote.GetValueRequest
+	6,  // 5: firewood.remote.FirewoodRemote.CreateProposal:input_type -> firewood.remote.CreateProposalRequest
+	8,  // 6: firewood.remote.FirewoodRemote.CommitProposal:input_type -> firewood.remote.CommitProposalRequest
+	10, // 7: firewood.remote.FirewoodRemote.DropProposal:input_type -> firewood.remote.DropProposalRequest
+	12, // 8: firewood.remote.FirewoodRemote.IterBatch:input_type -> firewood.remote.IterBatchRequest
+	2,  // 9: firewood.remote.FirewoodRemote.GetTruncatedTrie:output_type -> firewood.remote.GetTruncatedTrieResponse
+	4,  // 10: firewood.remote.FirewoodRemote.GetValue:output_type -> firewood.remote.GetValueResponse
+	7,  // 11: firewood.remote.FirewoodRemote.CreateProposal:output_type -> firewood.remote.CreateProposalResponse
+	9,  // 12: firewood.remote.FirewoodRemote.CommitProposal:output_type -> firewood.remote.CommitProposalResponse
+	11, // 13: firewood.remote.FirewoodRemote.DropProposal:output_type -> firewood.remote.DropProposalResponse
+	14, // 14: firewood.remote.FirewoodRemote.IterBatch:output_type -> firewood.remote.IterBatchResponse
+	9,  // [9:15] is the sub-list for method output_type
+	3,  // [3:9] is the sub-list for method input_type
+	3,  // [3:3] is the sub-list for extension type_name
+	3,  // [3:3] is the sub-list for extension extendee
+	0,  // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_proto_remote_proto_init() }
@@ -639,13 +928,14 @@ func file_proto_remote_proto_init() {
 		return
 	}
 	file_proto_remote_proto_msgTypes[3].OneofWrappers = []any{}
+	file_proto_remote_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_proto_remote_proto_rawDesc), len(file_proto_remote_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

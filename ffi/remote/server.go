@@ -16,6 +16,14 @@ import (
 // proposalEntry stores a pending proposal that can be committed.
 type proposalEntry struct {
 	proposal *ffi.Proposal
+	// committedRoot is the committed revision root that this proposal chain
+	// is based on. For first-level proposals this equals root_hash from the
+	// request; for chained proposals it is inherited from the parent.
+	committedRoot ffi.Hash
+	// cumulativeOps accumulates all batch operations from the chain root to
+	// this proposal, so that GenerateWitness (which only works against
+	// committed revisions) can produce a correct witness.
+	cumulativeOps []ffi.BatchOp
 }
 
 // Server implements the FirewoodRemote gRPC service backed by an FFI Database.
@@ -76,9 +84,9 @@ func (s *Server) GetValue(
 	return resp, nil
 }
 
-// CreateProposal creates a proposal from the given batch operations on top
-// of the revision identified by the requested root hash. The proposal is stored
-// server-side and can later be committed via [Server.CommitProposal].
+// CreateProposal creates a proposal from the given batch operations. If
+// parent_proposal_id is set, the proposal is chained on top of the parent
+// proposal; otherwise it is created on top of the database's latest revision.
 func (s *Server) CreateProposal(
 	_ context.Context,
 	req *pb.CreateProposalRequest,
@@ -96,18 +104,47 @@ func (s *Server) CreateProposal(
 		}
 	}
 
-	proposal, err := s.db.Propose(ops)
-	if err != nil {
-		return nil, fmt.Errorf("propose: %w", err)
-	}
+	var proposal *ffi.Proposal
+	var committedRoot ffi.Hash
+	var cumulativeOps []ffi.BatchOp
 
-	var baseRoot ffi.Hash
-	copy(baseRoot[:], req.GetRootHash())
+	if req.ParentProposalId != nil {
+		parentID := req.GetParentProposalId()
+		val, ok := s.proposals.Load(parentID)
+		if !ok {
+			return nil, fmt.Errorf("parent proposal %d not found", parentID)
+		}
+		parent := val.(*proposalEntry)
+
+		var err error
+		proposal, err = parent.proposal.Propose(ops)
+		if err != nil {
+			return nil, fmt.Errorf("propose on parent: %w", err)
+		}
+
+		// Inherit the committed root and accumulate ops.
+		committedRoot = parent.committedRoot
+		cumulativeOps = make([]ffi.BatchOp, 0, len(parent.cumulativeOps)+len(ops))
+		cumulativeOps = append(cumulativeOps, parent.cumulativeOps...)
+		cumulativeOps = append(cumulativeOps, ops...)
+	} else {
+		copy(committedRoot[:], req.GetRootHash())
+		cumulativeOps = ops
+
+		var err error
+		proposal, err = s.db.Propose(ops)
+		if err != nil {
+			return nil, fmt.Errorf("propose: %w", err)
+		}
+	}
 
 	newRoot := proposal.Root()
 
-	// Generate witness proof before commit so the client can verify first.
-	witness, err := s.db.GenerateWitness(baseRoot, ops, newRoot, uint(req.GetDepth()))
+	// Generate witness proof from the committed root with cumulative ops so
+	// the client can verify. GenerateWitness only works against committed
+	// revisions, so for chained proposals we replay all accumulated ops
+	// from the chain's committed base.
+	witness, err := s.db.GenerateWitness(committedRoot, cumulativeOps, newRoot, uint(req.GetDepth()))
 	if err != nil {
 		return nil, fmt.Errorf("generate witness: %w", err)
 	}
@@ -119,7 +156,11 @@ func (s *Server) CreateProposal(
 	}
 
 	id := s.nextID.Add(1)
-	s.proposals.Store(id, &proposalEntry{proposal: proposal})
+	s.proposals.Store(id, &proposalEntry{
+		proposal:      proposal,
+		committedRoot: committedRoot,
+		cumulativeOps: cumulativeOps,
+	})
 
 	return &pb.CreateProposalResponse{
 		ProposalId:   id,
@@ -148,4 +189,71 @@ func (s *Server) CommitProposal(
 	}
 
 	return &pb.CommitProposalResponse{}, nil
+}
+
+// DropProposal drops a pending proposal without committing it, freeing
+// server-side resources.
+func (s *Server) DropProposal(
+	_ context.Context,
+	req *pb.DropProposalRequest,
+) (*pb.DropProposalResponse, error) {
+	id := req.GetProposalId()
+
+	val, ok := s.proposals.LoadAndDelete(id)
+	if !ok {
+		return nil, fmt.Errorf("proposal %d not found", id)
+	}
+	entry := val.(*proposalEntry)
+
+	if err := entry.proposal.Drop(); err != nil {
+		return nil, fmt.Errorf("drop: %w", err)
+	}
+
+	return &pb.DropProposalResponse{}, nil
+}
+
+// IterBatch returns a batch of key-value pairs from a proposal, starting at
+// the given key. The caller can paginate by setting start_key to the last
+// returned key + "\x00".
+func (s *Server) IterBatch(
+	_ context.Context,
+	req *pb.IterBatchRequest,
+) (*pb.IterBatchResponse, error) {
+	id := req.GetProposalId()
+
+	val, ok := s.proposals.Load(id)
+	if !ok {
+		return nil, fmt.Errorf("proposal %d not found", id)
+	}
+	entry := val.(*proposalEntry)
+
+	it, err := entry.proposal.Iter(req.GetStartKey())
+	if err != nil {
+		return nil, fmt.Errorf("iter: %w", err)
+	}
+	defer it.Drop()
+
+	batchSize := int(req.GetBatchSize())
+	if batchSize <= 0 {
+		batchSize = 100
+	}
+
+	pairs := make([]*pb.KeyValuePair, 0, batchSize)
+	for i := 0; i < batchSize && it.Next(); i++ {
+		pairs = append(pairs, &pb.KeyValuePair{
+			Key:   append([]byte(nil), it.Key()...),
+			Value: append([]byte(nil), it.Value()...),
+		})
+	}
+	if err := it.Err(); err != nil {
+		return nil, fmt.Errorf("iter next: %w", err)
+	}
+
+	// Check if there are more items by attempting one more advance.
+	hasMore := it.Next()
+
+	return &pb.IterBatchResponse{
+		Pairs:   pairs,
+		HasMore: hasMore,
+	}, nil
 }
