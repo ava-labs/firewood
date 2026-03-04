@@ -224,20 +224,20 @@ impl DatabaseHandle {
             self.create_proposal_handle(values.as_ref())?;
 
         let root_hash = handle.commit_proposal(|commit_time| {
-            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
+            firewood_increment!(crate::registry::COMMIT_SECONDS_TOTAL, commit_time.as_nanos() as u64);
             firewood_record!(
-                crate::registry::COMMIT_MS_BUCKET,
-                commit_time.as_f64() * 1000.0,
+                crate::registry::COMMIT_DURATION_SECONDS,
+                commit_time.as_f64(),
                 expensive
             );
         })?;
 
         let elapsed = start_time.elapsed();
-        firewood_increment!(crate::registry::BATCH_MS, elapsed.as_millis());
-        firewood_increment!(crate::registry::BATCH_COUNT, 1);
+        firewood_increment!(crate::registry::BATCH_SECONDS_TOTAL, elapsed.as_nanos() as u64);
+        firewood_increment!(crate::registry::BATCH_TOTAL, 1);
         firewood_record!(
-            crate::registry::BATCH_MS_BUCKET,
-            elapsed.as_f64() * 1000.0,
+            crate::registry::BATCH_DURATION_SECONDS,
+            elapsed.as_f64(),
             expensive
         );
 
@@ -267,9 +267,9 @@ impl DatabaseHandle {
         })?;
 
         if cache_miss {
-            firewood_increment!(crate::registry::CACHED_VIEW_MISS, 1);
+            firewood_increment!(crate::registry::CACHED_VIEW_MISS_TOTAL, 1);
         } else {
-            firewood_increment!(crate::registry::CACHED_VIEW_HIT, 1);
+            firewood_increment!(crate::registry::CACHED_VIEW_HIT_TOTAL, 1);
         }
 
         Ok(view)

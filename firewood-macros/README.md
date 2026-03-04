@@ -52,7 +52,7 @@ fn example(user: User) -> Result<(), DatabaseError> {
 For each instrumented function, the macro generates two metrics:
 
 1. **Count Metric** (base name): Tracks the number of function calls
-2. **Timing Metric** (base name + "_ms"): Tracks execution time in milliseconds
+2. **Timing Metric** (base name + "_s"): Tracks execution time in seconds (accumulated as nanoseconds for precision)
 
 Both metrics include a `success` label:
 
@@ -67,8 +67,8 @@ For `#[metrics("query", "data retrieval")]`:
 
 - `query{success="true"}` - Count of successful queries (exported as `firewood.query`)
 - `query{success="false"}` - Count of failed queries (exported as `firewood.query`)
-- `query_ms{success="true"}` - Timing of successful queries (exported as `firewood.query_ms`)
-- `query_ms{success="false"}` - Timing of failed queries (exported as `firewood.query_ms`)
+- `query_s{success="true"}` - Timing of successful queries in seconds (exported as `firewood.query_s`)
+- `query_s{success="false"}` - Timing of failed queries in seconds (exported as `firewood.query_s`)
 
 ## Requirements
 
@@ -88,7 +88,7 @@ static __METRICS_LABELS_SUCCESS: &[(&str, &str)] = &[("success", "true")];
 static __METRICS_LABELS_ERROR: &[(&str, &str)] = &[("success", "false")];
 
 // Compile-time string concatenation (no allocation)
-metrics::counter!(concat!("my.metric", "_ms"), labels)
+metrics::counter!(concat!("my.metric", "_s"), labels)
 ```
 
 ### Minimal Overhead
@@ -118,7 +118,7 @@ fn my_function() -> Result<String, Error> {
     static __METRICS_REGISTERED: std::sync::Once = std::sync::Once::new();
     __METRICS_REGISTERED.call_once(|| {
         metrics::describe_counter!("my.operation", "Operation counter");
-        metrics::describe_counter!(concat!("my.operation", "_ms"), "Operation timing");
+        metrics::describe_counter!(concat!("my.operation", "_s"), "Operation timing in seconds");
     });
 
     // Start timing
@@ -139,8 +139,8 @@ fn my_function() -> Result<String, Error> {
     };
 
     metrics::counter!("my.operation", __metrics_labels).increment(1);
-    metrics::counter!(concat!("my.operation", "_ms"), __metrics_labels)
-        .increment(__metrics_start.elapsed().as_millis());
+    metrics::counter!(concat!("my.operation", "_s"), __metrics_labels)
+        .increment((__metrics_start.elapsed().as_millis() as f64 / 1000.0) as u64);
 
     __metrics_result
 }

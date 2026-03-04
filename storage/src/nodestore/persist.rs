@@ -191,8 +191,8 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         self.process_unpersisted_nodes(&mut bump, &mut node_allocator, super::INITIAL_BUMP_SIZE)?;
 
-        let flush_time = flush_start.elapsed().as_millis();
-        firewood_increment!(crate::registry::FLUSH_NODES, flush_time);
+        let flush_time = flush_start.elapsed().as_nanos() as u64;
+        firewood_increment!(crate::registry::FLUSH_NODES_SECONDS_TOTAL, flush_time);
 
         Ok(())
     }

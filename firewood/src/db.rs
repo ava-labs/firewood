@@ -172,7 +172,7 @@ impl api::Db for Db {
 
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal<'_>, api::Error> {
         // Proposal created from db
-        firewood_metrics::firewood_increment!(crate::registry::PROPOSALS_CREATED, 1, "base" => "db");
+        firewood_metrics::firewood_increment!(crate::registry::PROPOSALS_CREATED_TOTAL, 1, "base" => "db");
 
         self.propose_with_parent(batch, &self.manager.current_revision())
     }
@@ -182,7 +182,7 @@ impl Db {
     /// Create a new database instance.
     pub fn new<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Self, api::Error> {
         let metrics = Arc::new(DbMetrics {
-            proposals: firewood_counter!(crate::registry::PROPOSALS),
+            proposals: firewood_counter!(crate::registry::PROPOSALS_TOTAL),
         });
         let config_manager = ConfigManager::builder()
             .root_dir(db_dir.as_ref().to_path_buf())
@@ -426,7 +426,7 @@ impl Proposal<'_> {
     #[crate::metrics("proposal.create", "database proposal creation")]
     fn create_proposal(&self, batch: impl IntoBatchIter) -> Result<Self, api::Error> {
         // Proposal created based on another proposal
-        firewood_metrics::firewood_increment!(crate::registry::PROPOSALS_CREATED, 1, "base" => "proposal");
+        firewood_metrics::firewood_increment!(crate::registry::PROPOSALS_CREATED_TOTAL, 1, "base" => "proposal");
 
         self.db.propose_with_parent(batch, &self.nodestore)
     }

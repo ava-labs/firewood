@@ -62,7 +62,7 @@ impl ReadableStorage for MemStore {
     }
 
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
-        firewood_increment!(crate::registry::READ_NODE, 1, "from" => "memory");
+        firewood_increment!(crate::registry::READ_NODE_TOTAL, 1, "from" => "memory");
         let bytes = self
             .bytes
             .lock()

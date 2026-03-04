@@ -394,7 +394,7 @@ impl RevisionManager {
             });
 
             if discarded > 0 {
-                firewood_increment!(crate::registry::PROPOSALS_DISCARDED, discarded);
+                firewood_increment!(crate::registry::PROPOSALS_DISCARDED_TOTAL, discarded);
             }
 
             // Update uncommitted proposals gauge after cleanup

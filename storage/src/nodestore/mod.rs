@@ -465,7 +465,7 @@ impl ImmutableProposal {
         {
             *guard = NodeStoreParent::Committed(committing.root_hash());
             // Track reparenting events
-            firewood_increment!(crate::registry::REPARENTED_PROPOSAL_COUNT, 1);
+            firewood_increment!(crate::registry::REPARENTED_PROPOSAL_TOTAL, 1);
         }
     }
 }
