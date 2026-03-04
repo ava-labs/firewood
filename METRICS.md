@@ -132,6 +132,10 @@ See the [FFI README](ffi/README.md) for more details on FFI metrics configuratio
   - Labels: `type=hit|miss`
   - Use: Monitor free list cache efficiency
 
+- **`cache.freelist.size`** (gauge)
+  - Description: Current number of entries in the freelist cache
+  - Use: Track actual cache utilization vs configured capacity; helps diagnose low hit rates by showing if cache is filling up
+
 #### I/O Operations
 
 - **`io.read`** (counter)
@@ -298,3 +302,93 @@ rate(firewood_space_from_end[5m])
 rate(firewood_proposal_commit{success="false"}[5m]) /
 rate(firewood_proposal_commit[5m])
 ```
+
+## Performance Tracking
+
+Firewood tracks its performance over time by running [C-Chain reexecution benchmarks](https://github.com/ava-labs/avalanchego/blob/master/tests/reexecute/c/README.md) in AvalancheGo. These benchmarks re-execute historical mainnet C-Chain blocks against a state snapshot, measuring throughput in mgas/s (million gas per second).
+
+This allows us to:
+
+- Monitor performance across commits and releases
+- Catch performance regressions early
+- Validate optimizations against real-world blockchain workloads
+
+Performance data is collected via the `Track Performance` workflow and published to GitHub Pages.
+
+### Running Benchmarks from GitHub UI
+
+The easiest way to trigger a benchmark is via the GitHub Actions UI:
+
+1. Go to [Actions → Track Performance](https://github.com/ava-labs/firewood/actions/workflows/track-performance.yml)
+2. Click "Run workflow"
+3. Select parameters from the dropdowns (task, runner) or enter custom values
+4. Click "Run workflow"
+
+### Triggering Benchmarks via CLI
+
+Benchmarks run on AvalancheGo's self-hosted runners, not locally. This enables end-to-end integration testing where:
+
+- Firewood team can benchmark changes against the full AvalancheGo stack
+- AvalancheGo team can iterate on their Firewood integration
+
+```mermaid
+sequenceDiagram
+    participant F as Firewood
+    participant A as AvalancheGo
+    participant G as GitHub Pages
+
+    F->>A: 1. trigger workflow
+    A->>A: 2. run benchmark
+    A-->>F: 3. download results
+    F->>G: 4. publish
+```
+
+The CLI commands trigger the remote workflow, wait for completion, and download the results.
+
+```bash
+nix run ./ffi#gh -- auth login
+export GH_TOKEN=$(gh auth token)
+
+# Predefined test
+just bench-cchain test=firewood-101-250k
+
+# With specific Firewood version
+FIREWOOD_REF=v0.1.0 just bench-cchain test=firewood-33m-40m
+
+# Custom block range
+START_BLOCK=101 END_BLOCK=250000 \
+  BLOCK_DIR_SRC=cchain-mainnet-blocks-1m-ldb \
+  CURRENT_STATE_DIR_SRC=cchain-current-state-firewood-100 \
+  just bench-cchain
+```
+
+**Command:**
+
+```bash
+just bench-cchain [test]
+```
+
+Triggers Firewood's `track-performance.yml` workflow, which orchestrates the AvalancheGo benchmark. The command polls for the workflow run and watches progress in terminal.
+
+> **Note:** Changes must be pushed to the remote branch for the workflow to use them. By default, the workflow builds Firewood from the current commit. To benchmark a specific version (e.g., a release tag), set `FIREWOOD_REF` explicitly.
+
+**Environment variables and options:** See [scripts/bench-cchain-reexecution.sh](scripts/bench-cchain-reexecution.sh) or run `./scripts/bench-cchain-reexecution.sh help`.
+
+**Tests and runners** are defined in AvalancheGo:
+
+- [Available tests](https://github.com/ava-labs/avalanchego/blob/master/scripts/benchmark_cchain_range.sh)
+- [C-Chain benchmark docs](https://github.com/ava-labs/avalanchego/blob/master/tests/reexecute/c/README.md)
+
+### Viewing Results
+
+Results are published to GitHub Pages via [github-action-benchmark](https://github.com/benchmark-action/github-action-benchmark).
+
+**Graph location:**
+
+- [Main branch trends](https://ava-labs.github.io/firewood/bench/) — official benchmark history
+- [Feature branch trends](https://ava-labs.github.io/firewood/dev/bench/) — experimental runs
+
+**Downloading raw data:**
+
+- Click "Download data as JSON" at the bottom of any benchmark page
+- Or view raw data directly: [benchmark-data/bench/data.js](https://github.com/ava-labs/firewood/blob/benchmark-data/bench/data.js)

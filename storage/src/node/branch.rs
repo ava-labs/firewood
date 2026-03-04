@@ -9,7 +9,8 @@
 use crate::node::ExtendableBytes;
 use crate::node::children::Children;
 use crate::{
-    HashType, LeafNode, LinearAddress, MaybePersistedNode, Node, Path, PathComponent, SharedNode,
+    FileIoError, HashType, LeafNode, LinearAddress, MaybePersistedNode, Node, NodeReader, Path,
+    PathComponent, SharedNode,
 };
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
@@ -65,6 +66,17 @@ pub enum Child {
 
     /// A `MaybePersisted` child
     MaybePersisted(MaybePersistedNode, HashType),
+}
+
+impl lru_mem::HeapSize for Child {
+    fn heap_size(&self) -> usize {
+        match self {
+            Child::Node(node) => node.heap_size(),
+            Child::AddressWithHash(_, _) => 0,
+            // MaybePersisted contains Arc<Mutex>, we don't count shared data
+            Child::MaybePersisted(_, _) => 0,
+        }
+    }
 }
 
 impl Child {
@@ -141,6 +153,25 @@ impl Child {
             Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.clone(),
         }
     }
+
+    /// Converts this `Child` to a `SharedNode` by reading from a `NodeReader`.
+    ///
+    /// # Arguments
+    ///
+    /// * `storage` - A reference to a `NodeReader` implementation that can read nodes from storage.
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result<SharedNode, FileIoError>` where:
+    /// - `Ok(SharedNode)` contains the node if successfully read
+    /// - `Err(FileIoError)` if there was an error reading from storage
+    pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
+        match self {
+            Child::Node(node) => Ok(node.clone().into()),
+            Child::AddressWithHash(addr, _) => storage.read_node(*addr),
+            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.as_shared_node(storage),
+        }
+    }
 }
 
 #[derive(PartialEq, Eq, Clone)]
@@ -157,6 +188,22 @@ pub struct BranchNode {
     /// Each element is (`child_hash`, `child_address`).
     /// `child_address` is None if we don't know the child's hash.
     pub children: Children<Option<Child>>,
+}
+
+impl lru_mem::HeapSize for BranchNode {
+    fn heap_size(&self) -> usize {
+        let value_size = self.value.as_ref().map_or(0, |v| v.len());
+        let children_size: usize = self
+            .children
+            .iter()
+            .filter_map(|(_, child)| child.as_ref())
+            .map(lru_mem::HeapSize::heap_size)
+            .sum();
+        self.partial_path
+            .heap_size()
+            .wrapping_add(value_size)
+            .wrapping_add(children_size)
+    }
 }
 
 impl Debug for BranchNode {

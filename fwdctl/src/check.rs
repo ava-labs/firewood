@@ -8,7 +8,9 @@ use std::sync::Arc;
 use askama::Template;
 use clap::Args;
 use firewood::v2::api;
-use firewood_storage::{CacheReadStrategy, CheckOpt, DBStats, FileBacked, NodeStore};
+use firewood_storage::{
+    CacheReadStrategy, CheckOpt, DBStats, FileBacked, NodeStore, NodeStoreHeader,
+};
 use indicatif::{ProgressBar, ProgressFinish, ProgressStyle};
 use nonzero_ext::nonzero;
 use num_format::{Locale, ToFormattedString};
@@ -52,6 +54,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         false,
         false,                         // don't create if missing
         CacheReadStrategy::WritesOnly, // we scan the database once - no need to cache anything
+        opts.database.node_hash_algorithm.into(),
     )?;
     let storage = Arc::new(fb);
 
@@ -68,8 +71,9 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         progress_bar: Some(progress_bar),
     };
 
-    let nodestore = NodeStore::open(storage)?;
-    let check_report = nodestore.check(check_ops);
+    let mut header = NodeStoreHeader::read_from_storage(storage.as_ref())?;
+    let nodestore = NodeStore::open(&header, storage)?;
+    let check_report = nodestore.check(&header, check_ops);
 
     println!("Errors ({}): ", check_report.errors.len());
     for error in &check_report.errors {
@@ -78,7 +82,7 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
 
     let mut db_stats = check_report.db_stats.clone();
     if opts.fix {
-        match nodestore.fix(check_report) {
+        match nodestore.fix(&mut header, check_report) {
             Ok(report) => {
                 println!("Fixed Errors ({}):", report.fixed.len());
                 for error in report.fixed {

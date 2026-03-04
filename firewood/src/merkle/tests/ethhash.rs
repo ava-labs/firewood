@@ -149,7 +149,7 @@ fn test_root_hash_random_deletions() {
         items_ordered.sort_unstable();
         items_ordered.shuffle(&mut &rng);
 
-        let mut committed_merkle = init_merkle(&items);
+        let (mut committed_merkle, mut header) = init_merkle_with_header(&items);
 
         for (k, v) in items_ordered {
             let mut merkle = committed_merkle.fork().unwrap();
@@ -166,7 +166,7 @@ fn test_root_hash_random_deletions() {
                 assert_eq!(merkle.get_value(k).unwrap().as_deref(), Some(v.as_ref()));
             }
 
-            committed_merkle = into_committed(merkle.hash(), committed_merkle.nodestore());
+            committed_merkle = into_committed(merkle.hash(), &mut header);
 
             let h: TrieHash = KeccakHasher::trie_root(&items).to_fixed_bytes().into();
 

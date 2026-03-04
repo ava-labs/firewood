@@ -2,18 +2,15 @@
 // See the file LICENSE.md for licensing terms.
 
 #![expect(
-    clippy::cast_precision_loss,
-    reason = "Found 2 occurrences after enabling the lint."
-)]
-#![expect(
     clippy::default_trait_access,
     reason = "Found 3 occurrences after enabling the lint."
 )]
 
-use parking_lot::{Mutex, RwLock};
+use nonzero_ext::nonzero;
+use parking_lot::{Mutex, MutexGuard, RwLock};
 use std::collections::{HashMap, VecDeque};
 use std::io;
-use std::num::NonZero;
+use std::num::{NonZero, NonZeroU64};
 use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 
@@ -22,16 +19,18 @@ use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
+use crate::persist_worker::{PersistError, PersistWorker};
 use crate::root_store::RootStore;
 use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
+use firewood_metrics::{firewood_increment, firewood_set};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeStore,
-    TrieHash, firewood_gauge,
+    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal,
+    NodeHashAlgorithm, NodeStore, NodeStoreHeader, TrieHash,
 };
 
-const DB_FILE_NAME: &str = "firewood.db";
+pub(crate) const DB_FILE_NAME: &str = "firewood.db";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, TypedBuilder)]
 /// Revision manager configuratoin
@@ -40,21 +39,70 @@ pub struct RevisionManagerConfig {
     #[builder(default = 128)]
     max_revisions: usize,
 
-    /// The size of the node cache
-    #[builder(default_code = "NonZero::new(1500000).expect(\"non-zero\")")]
-    node_cache_size: NonZero<usize>,
+    /// The size of the node cache (number of entries).
+    ///
+    /// **Deprecated:** Use `node_cache_memory_limit` instead for memory-based sizing.
+    /// If specified, this value is multiplied by 128 to estimate memory usage.
+    /// Cannot be specified together with `node_cache_memory_limit`.
+    #[deprecated(since = "0.2.0", note = "Use node_cache_memory_limit instead")]
+    #[builder(default, setter(strip_option))]
+    node_cache_size: Option<NonZero<usize>>,
 
-    #[builder(default_code = "NonZero::new(40000).expect(\"non-zero\")")]
+    /// The memory limit for the node cache in bytes.
+    ///
+    /// If neither this nor `node_cache_size` is specified, defaults to 192MB (1,500,000 × 128).
+    /// Cannot be specified together with `node_cache_size`.
+    #[builder(default, setter(strip_option))]
+    node_cache_memory_limit: Option<NonZero<usize>>,
+
+    #[builder(default_code = "NonZero::new(1000000).expect(\"non-zero\")")]
     free_list_cache_size: NonZero<usize>,
 
     #[builder(default = CacheReadStrategy::WritesOnly)]
     cache_read_strategy: CacheReadStrategy,
 }
 
+impl RevisionManagerConfig {
+    /// Compute the actual node cache memory limit from the configuration.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if both `node_cache_size` and `node_cache_memory_limit` are specified.
+    #[expect(deprecated)]
+    pub(crate) fn compute_node_cache_memory_limit(
+        &self,
+    ) -> Result<NonZero<usize>, crate::v2::api::Error> {
+        // Convert entry count to memory: size × 128 bytes per node (estimate)
+        const BYTES_PER_NODE_ESTIMATE: usize = 128;
+        // Default: 192MB (equivalent to 1,500,000 nodes × 128 bytes)
+        const DEFAULT_MEMORY_LIMIT: usize = 192_000_000;
+
+        match (self.node_cache_size, self.node_cache_memory_limit) {
+            (Some(_), Some(_)) => Err(crate::v2::api::Error::ConflictingCacheConfig),
+            (Some(size), None) => {
+                warn!(
+                    "node_cache_size is deprecated as of 0.2.0; use node_cache_memory_limit instead"
+                );
+                Ok(
+                    NonZero::new(size.get().saturating_mul(BYTES_PER_NODE_ESTIMATE))
+                        .expect("non-zero size produces non-zero memory"),
+                )
+            }
+            (None, Some(limit)) => Ok(limit),
+            (None, None) => Ok(NonZero::new(DEFAULT_MEMORY_LIMIT).expect("default is non-zero")),
+        }
+    }
+}
+
 #[derive(Clone, Debug, TypedBuilder)]
 #[non_exhaustive]
 /// Configuration manager that contains both truncate and revision manager config
 pub struct ConfigManager {
+    /// The directory where the database files will be stored (required).
+    pub root_dir: PathBuf,
+    /// The algorithm used for hashing nodes (required).
+    pub node_hash_algorithm: NodeHashAlgorithm,
+
     /// Whether to create the DB if it doesn't exist.
     #[builder(default = true)]
     pub create: bool,
@@ -65,6 +113,9 @@ pub struct ConfigManager {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
+    /// The maximum number of unpersisted revisions that can exist at a given time.
+    #[builder(default = nonzero!(1u64))]
+    pub deferred_persistence_commit_count: NonZeroU64,
     /// Revision manager configuration.
     #[builder(default = RevisionManagerConfig::builder().build())]
     pub manager: RevisionManagerConfig,
@@ -105,7 +156,10 @@ pub(crate) struct RevisionManager {
     /// When present, enables retrieval of revisions beyond `max_revisions` by
     /// persisting root hash to disk address mappings. This allows historical
     /// queries of arbitrarily old revisions without keeping them in memory.
-    root_store: Option<RootStore>,
+    root_store: Option<Arc<RootStore>>,
+
+    /// Worker responsible for persisting revisions to disk.
+    persist_worker: PersistWorker,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -127,22 +181,35 @@ pub(crate) enum RevisionManagerError {
     IOError(#[from] io::Error),
     #[error("A RootStore error occurred: {0}")]
     RootStoreError(#[source] Box<dyn std::error::Error + Send + Sync>),
+    #[error("A deferred persistence error occurred: {0}")]
+    PersistError(#[source] PersistError),
 }
 
 impl RevisionManager {
-    pub fn new(db_dir: PathBuf, config: ConfigManager) -> Result<Self, RevisionManagerError> {
+    pub fn new(config: ConfigManager) -> Result<Self, RevisionManagerError> {
         if config.create {
-            std::fs::create_dir_all(&db_dir).map_err(RevisionManagerError::IOError)?;
+            std::fs::create_dir_all(&config.root_dir).map_err(RevisionManagerError::IOError)?;
         }
 
-        let file = db_dir.join(DB_FILE_NAME);
+        let file = config.root_dir.join(DB_FILE_NAME);
+        let node_cache_memory_limit =
+            config
+                .manager
+                .compute_node_cache_memory_limit()
+                .map_err(|e| {
+                    RevisionManagerError::IOError(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        e,
+                    ))
+                })?;
         let fb = FileBacked::new(
             file,
-            config.manager.node_cache_size,
+            node_cache_memory_limit,
             config.manager.free_list_cache_size,
             config.truncate,
             config.create,
             config.manager.cache_read_strategy,
+            config.node_hash_algorithm,
         )?;
 
         // Acquire an advisory lock on the database file to prevent multiple processes
@@ -150,33 +217,50 @@ impl RevisionManager {
         fb.lock()?;
 
         let storage = Arc::new(fb);
-        let nodestore = Arc::new(NodeStore::open(storage.clone())?);
+        let header = match NodeStoreHeader::read_from_storage(storage.as_ref()) {
+            Ok(header) => header,
+            Err(err) if err.kind() == io::ErrorKind::UnexpectedEof => {
+                // Empty file - create a new header for a fresh database
+                NodeStoreHeader::new(config.node_hash_algorithm)
+            }
+            Err(err) => return Err(err.into()),
+        };
+        let nodestore = Arc::new(NodeStore::open(&header, storage.clone())?);
         let root_store = config
             .root_store
             .then(|| {
-                let root_store_dir = db_dir.join("root_store");
-
+                let root_store_dir = config.root_dir.join("root_store");
                 RootStore::new(root_store_dir, storage.clone(), config.truncate)
                     .map_err(RevisionManagerError::RootStoreError)
             })
-            .transpose()?;
+            .transpose()?
+            .map(Arc::new);
+
+        if config.truncate {
+            header.flush_to(storage.as_ref())?;
+            storage.set_len(NodeStoreHeader::SIZE)?;
+        }
+
+        let mut by_hash = HashMap::new();
+        if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
+            by_hash.insert(hash, nodestore.clone());
+        }
+
+        let persist_worker = PersistWorker::new(
+            config.deferred_persistence_commit_count,
+            header,
+            root_store.clone(),
+        );
 
         let manager = Self {
             max_revisions: config.manager.max_revisions,
             in_memory_revisions: RwLock::new(VecDeque::from([nodestore.clone()])),
-            by_hash: RwLock::new(Default::default()),
+            by_hash: RwLock::new(by_hash),
             proposals: Mutex::new(Default::default()),
             threadpool: OnceLock::new(),
             root_store,
+            persist_worker,
         };
-
-        if let Some(hash) = nodestore.root_hash().or_default_root_hash() {
-            manager.by_hash.write().insert(hash, nodestore.clone());
-        }
-
-        if config.truncate {
-            nodestore.flush_header_with_padding()?;
-        }
 
         // On startup, we always write the latest revision to RootStore
         if let Some(root_hash) = manager.current_revision().root_hash() {
@@ -198,26 +282,46 @@ impl RevisionManager {
 
     /// Commit a proposal
     /// To commit a proposal involves a few steps:
-    /// 1. Commit check.
+    /// 1. Check if the persist worker has failed.
+    ///    If so, return the error as this means we won't be able to make any
+    ///    further progress.
+    /// 2. Commit check.
     ///    The proposal's parent must be the last committed revision, otherwise the commit fails.
     ///    It only contains the address of the nodes that are deleted, which should be very small.
-    /// 2. Revision reaping.
+    /// 3. Revision reaping.
     ///    If more than the maximum number of revisions are kept in memory, the
-    ///    oldest revision is removed from memory. If `RootStore` does not exist,
-    ///    the oldest revision's nodes are added to the free list for space reuse.
-    ///    Otherwise, the oldest revision's nodes are preserved on disk, which
-    ///    is useful for historical queries.
-    /// 3. Persist to disk. This includes flushing everything to disk.
-    /// 4. Persist the revision to `RootStore`.
+    ///    oldest revision is removed from memory and sent to the `PersistWorker`
+    ///    for reaping.
+    /// 4. Signal to the `PersistWorker` to persist this revision.
     /// 5. Set last committed revision.
     ///    Set last committed revision in memory.
     /// 6. Proposal Cleanup.
     ///    Any other proposals that have this proposal as a parent should be reparented to the committed version.
+    ///
+    /// Steps 1 through 5 are executed behind a lock to maintain the invariant
+    /// that only one revision can commit at a time.
     #[fastrace::trace(short_name = true)]
     #[crate::metrics("proposal.commit", "proposal commit to storage")]
     pub fn commit(&self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
-        // 1. Commit check
-        let current_revision = self.current_revision();
+        // Hold a write lock on `in_memory_revisions` for the duration of the
+        // critical section (steps 1-5). This is necessary because:
+        // 1. Without the lock, two proposals with the same parent could pass the
+        //    commit check simultaneously, allowing both to commit.
+        // 2. New proposals rely on the latest committed revision via
+        //    `current_revision()`, which takes a read lock on `in_memory_revisions`.
+        //    The write lock here prevents proposals from being created against
+        //    an older revision while a newer revision is mid-commit.
+        let mut in_memory_revisions = self.in_memory_revisions.write();
+
+        // 1. Check if the persist worker has failed.
+        self.persist_worker
+            .check_error()
+            .map_err(RevisionManagerError::PersistError)?;
+
+        // 2. Commit check
+        let current_revision = in_memory_revisions
+            .back()
+            .expect("there is always one revision");
         if !proposal.parent_hash_is(current_revision.root_hash()) {
             return Err(RevisionManagerError::NotLatest {
                 provided: proposal.root_hash(),
@@ -225,81 +329,77 @@ impl RevisionManager {
             });
         }
 
-        let mut committed = proposal.as_committed(&current_revision);
+        let committed = proposal.as_committed();
 
-        // 2. Revision reaping
-        // When we exceed max_revisions, remove the oldest revision from memory.
-        // If `RootStore` does not exist, add the oldest revision's nodes to the free list.
+        // 3. Revision reaping
+        // When we exceed max_revisions, remove the oldest revision from memory
+        // and send it to the `PersistWorker`.
         // If you crash after freeing some of these, then the free list will point to nodes that are not actually free.
         // TODO: Handle the case where we get something off the free list that is not free
-        while self.in_memory_revisions.read().len() >= self.max_revisions {
-            let oldest = self
-                .in_memory_revisions
-                .write()
-                .pop_front()
-                .expect("must be present");
+        while in_memory_revisions.len() >= self.max_revisions {
+            let oldest = in_memory_revisions.pop_front().expect("must be present");
             let oldest_hash = oldest.root_hash().or_default_root_hash();
             if let Some(ref hash) = oldest_hash {
                 self.by_hash.write().remove(hash);
             }
 
-            // We reap the revision's nodes only if `RootStore` does not exist.
-            if self.root_store.is_none() {
-                // This `try_unwrap` is safe because nobody else will call `try_unwrap` on this Arc
-                // in a different thread, so we don't have to worry about the race condition where
-                // the Arc we get back is not usable as indicated in the docs for `try_unwrap`.
-                // This guarantee is there because we have a `&mut self` reference to the manager, so
-                // the compiler guarantees we are the only one using this manager.
-                match Arc::try_unwrap(oldest) {
-                    Ok(oldest) => oldest.reap_deleted(&mut committed)?,
-                    Err(original) => {
-                        warn!("Oldest revision could not be reaped; still referenced");
-                        self.in_memory_revisions.write().push_front(original);
-                        break;
-                    }
+            // The warning in the docs for `Arc::try_unwrap` does not apply here
+            // because `original` is retained and not immediately dropped.
+            match Arc::try_unwrap(oldest) {
+                Ok(oldest) => self
+                    .persist_worker
+                    .reap(oldest)
+                    .map_err(RevisionManagerError::PersistError)?,
+                Err(original) => {
+                    warn!("Oldest revision could not be reaped; still referenced");
+                    in_memory_revisions.push_front(original);
+                    break;
                 }
             }
-            firewood_gauge!(
-                "active_revisions",
-                "Current number of active revisions in memory"
-            )
-            .set(self.in_memory_revisions.read().len() as f64);
-            firewood_gauge!("max_revisions", "Maximum number of revisions configured")
-                .set(self.max_revisions as f64);
+            firewood_set!(crate::registry::ACTIVE_REVISIONS, in_memory_revisions.len());
+            firewood_set!(crate::registry::MAX_REVISIONS, self.max_revisions);
         }
 
-        // 3. Persist to disk.
-        // TODO: We can probably do this in another thread, but it requires that
-        // we move the header out of NodeStore, which is in a future PR.
-        committed.persist()?;
-
-        // 4. Persist revision to root store
-        if let Some(store) = &self.root_store
-            && let (Some(hash), Some(address)) = (committed.root_hash(), committed.root_address())
-        {
-            store
-                .add_root(&hash, &address)
-                .map_err(RevisionManagerError::RootStoreError)?;
-        }
+        // 4. Signal to the `PersistWorker` to persist this revision.
+        let committed: CommittedRevision = committed.into();
+        self.persist_worker
+            .persist(committed.clone())
+            .map_err(RevisionManagerError::PersistError)?;
 
         // 5. Set last committed revision
         // The revision is added to `by_hash` here while it still exists in `proposals`.
         // The `view()` method relies on this ordering - it checks `proposals` first,
         // then `by_hash`, ensuring the revision is always findable during the transition.
-        let committed: CommittedRevision = committed.into();
-        self.in_memory_revisions
-            .write()
-            .push_back(committed.clone());
+        in_memory_revisions.push_back(committed.clone());
         if let Some(hash) = committed.root_hash().or_default_root_hash() {
             self.by_hash.write().insert(hash, committed.clone());
         }
 
+        // At this point, we can release the lock on the queue of in-memory
+        // revisions as we've now set the new latest committed revision.
+        drop(in_memory_revisions);
+
         // 6. Proposal Cleanup
         // Free proposal that is being committed as well as any proposals no longer
-        // referenced by anyone else.
-        self.proposals
-            .lock()
-            .retain(|p| !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1);
+        // referenced by anyone else. Track how many were discarded (dropped without commit).
+        {
+            let mut lock = self.proposals.lock();
+            let mut discarded = 0u64;
+            lock.retain(|p| {
+                let should_retain = !Arc::ptr_eq(&proposal, p) && Arc::strong_count(p) > 1;
+                if !should_retain {
+                    discarded = discarded.wrapping_add(1);
+                }
+                should_retain
+            });
+
+            if discarded > 0 {
+                firewood_increment!(crate::registry::PROPOSALS_DISCARDED, discarded);
+            }
+
+            // Update uncommitted proposals gauge after cleanup
+            firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len());
+        }
 
         // then reparent any proposals that have this proposal as a parent
         for p in &*self.proposals.lock() {
@@ -338,7 +438,13 @@ impl RevisionManager {
     }
 
     pub fn add_proposal(&self, proposal: ProposedRevision) {
-        self.proposals.lock().push(proposal);
+        let len = {
+            let mut lock = self.proposals.lock();
+            lock.push(proposal);
+            lock.len()
+        };
+        // Update uncommitted proposals gauge after adding
+        firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, len);
     }
 
     /// Retrieve a committed revision by its root hash.
@@ -368,8 +474,8 @@ impl RevisionManager {
         Ok(revision)
     }
 
-    pub fn root_hash(&self) -> Result<Option<HashKey>, RevisionManagerError> {
-        Ok(self.current_revision().root_hash())
+    pub fn root_hash(&self) -> Option<HashKey> {
+        self.current_revision().root_hash()
     }
 
     pub fn current_revision(&self) -> CommittedRevision {
@@ -378,6 +484,11 @@ impl RevisionManager {
             .back()
             .expect("there is always one revision")
             .clone()
+    }
+
+    /// Acquires a lock on the header and returns a guard.
+    pub(crate) fn locked_header(&self) -> MutexGuard<'_, NodeStoreHeader> {
+        self.persist_worker.locked_header()
     }
 
     /// Gets or creates a threadpool associated with the revision manager.
@@ -396,11 +507,31 @@ impl RevisionManager {
                 .expect("Error in creating threadpool")
         })
     }
+
+    /// Checks if the `PersistWorker` has errored.
+    pub fn check_persist_error(&self) -> Result<(), RevisionManagerError> {
+        self.persist_worker
+            .check_error()
+            .map_err(RevisionManagerError::PersistError)
+    }
+
+    /// Closes the revision manager gracefully.
+    ///
+    /// This method shuts down the background persistence worker and persists
+    /// the latest committed revision.
+    pub fn close(self) -> Result<(), RevisionManagerError> {
+        let current_revision = self.current_revision();
+        self.persist_worker
+            .close(current_revision)
+            .map_err(RevisionManagerError::PersistError)
+    }
 }
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
+    use firewood_storage::RootReader;
+
     use super::*;
 
     impl RevisionManager {
@@ -412,6 +543,27 @@ mod tests {
                 .filter_map(|p| p.root_hash().or_default_root_hash())
                 .collect()
         }
+
+        /// Wait until all pending commits have been persisted.
+        pub(crate) fn wait_persisted(&self) {
+            self.persist_worker.wait_persisted();
+        }
+
+        /// Returns true if the root node (if it exists) of this revision is
+        /// persisted. Otherwise, returns false.
+        ///
+        /// ## Errors
+        ///
+        /// Returns an error if the revision does not exist.
+        pub(crate) fn revision_persist_status(
+            &self,
+            root_hash: TrieHash,
+        ) -> Result<bool, RevisionManagerError> {
+            let revision = self.revision(root_hash)?;
+            Ok(revision
+                .root_as_maybe_persisted_node()
+                .is_some_and(|node| node.unpersisted().is_none()))
+        }
     }
 
     #[test]
@@ -420,19 +572,21 @@ mod tests {
         let db_dir = tempfile::tempdir().unwrap();
 
         let config = ConfigManager::builder()
+            .root_dir(db_dir.as_ref().to_path_buf())
+            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .create(true)
             .truncate(false)
             .build();
 
         // First database instance should open successfully
-        let first_manager = RevisionManager::new(db_dir.as_ref().to_path_buf(), config.clone());
+        let first_manager = RevisionManager::new(config.clone());
         assert!(
             first_manager.is_ok(),
             "First database should open successfully"
         );
 
         // Second database instance should fail to open due to file locking
-        let second_manager = RevisionManager::new(db_dir.as_ref().to_path_buf(), config.clone());
+        let second_manager = RevisionManager::new(config.clone());
         assert!(
             second_manager.is_err(),
             "Second database should fail to open"
@@ -452,7 +606,7 @@ mod tests {
         drop(first_manager.unwrap());
 
         // Now the second database should open successfully
-        let third_manager = RevisionManager::new(db_dir.as_ref().to_path_buf(), config);
+        let third_manager = RevisionManager::new(config);
         assert!(
             third_manager.is_ok(),
             "Database should open after first instance is dropped"
@@ -477,6 +631,8 @@ mod tests {
         let db_dir = tempfile::tempdir().unwrap();
 
         let config = ConfigManager::builder()
+            .root_dir(db_dir.as_ref().to_path_buf())
+            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .create(true)
             .manager(
                 RevisionManagerConfig::builder()
@@ -485,8 +641,7 @@ mod tests {
             )
             .build();
 
-        let manager =
-            Arc::new(RevisionManager::new(db_dir.as_ref().to_path_buf(), config).unwrap());
+        let manager = Arc::new(RevisionManager::new(config).unwrap());
 
         // Create an initial proposal and commit it to have a non-empty base
         let base_revision = manager.current_revision();
@@ -650,11 +805,13 @@ mod tests {
 
         // Create a database with root_store disabled (default)
         let config = ConfigManager::builder()
+            .root_dir(db_path.clone())
+            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .create(true)
             .root_store(false)
             .build();
 
-        let _manager = RevisionManager::new(db_path.clone(), config).unwrap();
+        let _manager = RevisionManager::new(config).unwrap();
 
         // Verify that the root_store directory does NOT exist
         let root_store_dir = db_path.join("root_store");
@@ -672,11 +829,13 @@ mod tests {
 
         // Create a database with root_store enabled
         let config = ConfigManager::builder()
+            .root_dir(db_path.clone())
+            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .create(true)
             .root_store(true)
             .build();
 
-        let _manager = RevisionManager::new(db_path.clone(), config).unwrap();
+        let _manager = RevisionManager::new(config).unwrap();
 
         // Verify that the root_store directory DOES exist
         let root_store_dir = db_path.join("root_store");
@@ -684,5 +843,55 @@ mod tests {
             root_store_dir.exists(),
             "root_store directory should be created when root_store is enabled"
         );
+    }
+
+    #[test]
+    fn test_cache_config_both_specified_error() {
+        // Test that specifying both node_cache_size and node_cache_memory_limit returns an error
+        #[expect(deprecated)]
+        let result = RevisionManagerConfig::builder()
+            .node_cache_size(NonZero::new(1000).unwrap())
+            .node_cache_memory_limit(NonZero::new(128_000).unwrap())
+            .build()
+            .compute_node_cache_memory_limit();
+
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            crate::v2::api::Error::ConflictingCacheConfig
+        ));
+    }
+
+    #[test]
+    fn test_cache_config_default_memory_limit() {
+        // Test that when neither field is specified, we get the default memory limit
+        let config = RevisionManagerConfig::builder().build();
+        let memory_limit = config.compute_node_cache_memory_limit().unwrap();
+
+        // Default should be 192MB (1,500,000 × 128 bytes)
+        assert_eq!(memory_limit.get(), 192_000_000);
+    }
+
+    #[test]
+    fn test_cache_config_size_to_memory_conversion() {
+        // Test that node_cache_size is correctly converted to memory (× 128)
+        #[expect(deprecated)]
+        let config = RevisionManagerConfig::builder()
+            .node_cache_size(NonZero::new(1000).unwrap())
+            .build();
+        let memory_limit = config.compute_node_cache_memory_limit().unwrap();
+
+        assert_eq!(memory_limit.get(), 1000 * 128);
+    }
+
+    #[test]
+    fn test_cache_config_memory_limit_used_directly() {
+        // Test that node_cache_memory_limit is used directly when specified
+        let config = RevisionManagerConfig::builder()
+            .node_cache_memory_limit(NonZero::new(256_000_000).unwrap())
+            .build();
+        let memory_limit = config.compute_node_cache_memory_limit().unwrap();
+
+        assert_eq!(memory_limit.get(), 256_000_000);
     }
 }

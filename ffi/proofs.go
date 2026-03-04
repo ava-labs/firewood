@@ -66,12 +66,27 @@ type ChangeProof struct {
 	handle *C.ChangeProofContext
 }
 
+// VerifiedChangeProof is a ChangeProof that has been verified.
+type VerifiedChangeProof struct {
+	handle *C.VerifiedChangeProofContext
+}
+
+// ProposedChangeProof contains a proposal for the ChangeProof.
+type ProposedChangeProof struct {
+	handle *C.ProposedChangeProofContext
+	db     *Database
+}
+
 // NextKeyRange represents a range of keys to fetch from the database. The start
 // key is inclusive while the end key is exclusive. If the end key is Nothing,
 // the range is unbounded in that direction.
 type NextKeyRange struct {
 	startKey *ownedBytes
 	endKey   Maybe[*ownedBytes]
+}
+
+type codeIterator struct {
+	handle *C.CodeIteratorHandle
 }
 
 // RangeProof returns a proof that the values in the range [startKey, endKey] are
@@ -126,7 +141,7 @@ func (p *RangeProof) Verify(
 	return getErrorFromVoidResult(C.fwd_range_proof_verify(args))
 }
 
-// VerifyChangeProof verifies the provided change [proof] proves the changes
+// VerifyRangeProof verifies the provided range [proof] proves the changes
 // between [startRoot] and [endRoot] for keys in the range [startKey, endKey]. If
 // the proof is valid, a proposal containing the changes is prepared. The
 // call to [*Database.VerifyAndCommitRangeProof] will skip verification and commit the
@@ -226,12 +241,40 @@ func (p *RangeProof) FindNextKey() (*NextKeyRange, error) {
 // of this proof. This list may contain duplicates and is not guaranteed to be in any particular order.
 //
 // Note: this method is only relevant for Ethereum tries.
-// This method can only be called after a successful verification of the proof,
-// otherwise an error is returned on the first iteration.
-//
-// TODO(#1157): implement this method to extract code hashes from account nodes.
-func (*RangeProof) CodeHashes() iter.Seq2[Hash, error] {
-	return func(func(Hash, error) bool) {}
+// This method can only be called anytime after the proof is created.
+func (p *RangeProof) CodeHashes() iter.Seq2[Hash, error] {
+	return func(yield func(Hash, error) bool) {
+		iter, err := getCodeHashIteratorFromCodeHashIteratorResult(C.fwd_range_proof_code_hash_iter(p.handle))
+		if err != nil {
+			yield(EmptyRoot, err)
+			return
+		}
+		defer func() {
+			if err := iter.Free(); err != nil {
+				panic(err)
+			}
+		}()
+		for hash, err := iter.Next(); ; hash, err = iter.Next() {
+			if err != nil {
+				yield(EmptyRoot, err)
+				return
+			}
+			if hash == EmptyRoot {
+				return
+			}
+			if !yield(hash, err) {
+				return
+			}
+		}
+	}
+}
+
+func (it *codeIterator) Next() (Hash, error) {
+	return getHashKeyFromHashResult(C.fwd_code_hash_iter_next(it.handle))
+}
+
+func (it *codeIterator) Free() error {
+	return getErrorFromVoidResult(C.fwd_code_hash_iter_free(it.handle))
 }
 
 // MarshalBinary returns a serialized representation of this RangeProof.
@@ -311,22 +354,12 @@ func (db *Database) ChangeProof(
 }
 
 // VerifyChangeProof verifies the provided change [proof] proves the changes
-// between [startRoot] and [endRoot] for keys in the range [startKey, endKey]. If
-// the proof is valid, a proposal containing the changes is prepared. The call
-// to [*Database.VerifyAndCommitChangeProof] will skip verification and commit the
-// prepared proposal.
-func (db *Database) VerifyChangeProof(
-	proof *ChangeProof,
+// between [startRoot] and [endRoot] for keys in the range [startKey, endKey].
+func (proof *ChangeProof) VerifyChangeProof(
 	startRoot, endRoot Hash,
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
-) error {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return errDBClosed
-	}
-
+) (*VerifiedChangeProof, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
@@ -339,9 +372,50 @@ func (db *Database) VerifyChangeProof(
 		max_length: C.uint32_t(maxLength),
 	}
 
-	return getErrorFromVoidResult(C.fwd_db_verify_change_proof(db.handle, args))
+	return getVerifiedChangeProofFromVerifiedChangeProofResult(C.fwd_verify_change_proof(args))
 }
 
+// ProposeChangeProof creates a proposal from a VerifiedChangeProof.
+func (db *Database) ProposeChangeProof(
+	proof *VerifiedChangeProof,
+) (*ProposedChangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	args := C.ProposedChangeProofArgs{
+		proof: proof.handle,
+	}
+	return getProposedChangeProofFromProposedChangeProofResult(db, C.fwd_db_propose_change_proof(db.handle, args))
+}
+
+func (proof *ProposedChangeProof) CommitChangeProof() (Hash, error) {
+	proof.db.handleLock.RLock()
+	defer proof.db.handleLock.RUnlock()
+	if proof.db.handle == nil {
+		return EmptyRoot, errDBClosed
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	args := C.CommittedChangeProofArgs{
+		proof: proof.handle,
+	}
+
+	return getHashKeyFromHashResult(C.fwd_db_commit_change_proof(args))
+}
+
+func (proof *ProposedChangeProof) FindNextKey() (*NextKeyRange, error) {
+	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_change_proof_find_next_key_proposed(proof.handle))
+}
+
+/*
 // VerifyAndCommitChangeProof verifies the provided change [proof] proves the changes
 // between [startRoot] and [endRoot] for keys in the range [startKey, endKey]. If
 // the proof is valid, it is committed to the database and the new root hash is
@@ -374,6 +448,7 @@ func (db *Database) VerifyAndCommitChangeProof(
 	return getHashKeyFromHashResult(C.fwd_db_verify_and_commit_change_proof(db.handle, args))
 }
 
+
 // FindNextKey returns the next key range to fetch for this proof, if any. If the
 // proof has been fully processed, nil is returned. If an error occurs while
 // determining the next key range, that error is returned.
@@ -383,6 +458,7 @@ func (db *Database) VerifyAndCommitChangeProof(
 func (p *ChangeProof) FindNextKey() (*NextKeyRange, error) {
 	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_change_proof_find_next_key(p.handle))
 }
+*/
 
 // CodeHashes returns an iterator for the code hashes contained in the account nodes
 // of this proof. This list may contain duplicates and is not guaranteed to be in any particular order.
@@ -391,7 +467,7 @@ func (p *ChangeProof) FindNextKey() (*NextKeyRange, error) {
 // This method can only be called after a successful verification of the proof,
 // otherwise an error is returned on the first iteration.
 //
-// TODO(#1157): implement this method to extract code hashes from account nodes.
+// TODO(#1598): implement this method to extract code hashes from account nodes.
 func (*ChangeProof) CodeHashes() iter.Seq2[Hash, error] {
 	return func(func(Hash, error) bool) {}
 }
@@ -434,6 +510,42 @@ func (p *ChangeProof) Free() error {
 	}
 
 	if err := getErrorFromVoidResult(C.fwd_free_change_proof(p.handle)); err != nil {
+		return err
+	}
+
+	p.handle = nil
+
+	return nil
+}
+
+// Free releases the resources associated with this VerifiedChangeProof.
+//
+// It is safe to call Free more than once; subsequent calls after the first
+// will be no-ops.
+func (p *VerifiedChangeProof) Free() error {
+	if p.handle == nil {
+		return nil
+	}
+
+	if err := getErrorFromVoidResult(C.fwd_free_verified_change_proof(p.handle)); err != nil {
+		return err
+	}
+
+	p.handle = nil
+
+	return nil
+}
+
+// Free releases the resources associated with this ProposedChangeProof.
+//
+// It is safe to call Free more than once; subsequent calls after the first
+// will be no-ops.
+func (p *ProposedChangeProof) Free() error {
+	if p.handle == nil {
+		return nil
+	}
+
+	if err := getErrorFromVoidResult(C.fwd_free_proposed_change_proof(p.handle)); err != nil {
 		return err
 	}
 
@@ -505,6 +617,21 @@ func getNextKeyRangeFromNextKeyRangeResult(result C.NextKeyRangeResult) (*NextKe
 	}
 }
 
+func getCodeHashIteratorFromCodeHashIteratorResult(result C.CodeIteratorResult) (*codeIterator, error) {
+	switch result.tag {
+	case C.CodeIteratorResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.CodeIteratorResult_Ok:
+		ptr := *(**C.CodeIteratorHandle)(unsafe.Pointer(&result.anon0))
+		return &codeIterator{handle: ptr}, nil
+	case C.CodeIteratorResult_Err:
+		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return nil, err
+	default:
+		return nil, fmt.Errorf("unknown C.CodeIteratorResult tag: %d", result.tag)
+	}
+}
+
 func getRangeProofFromRangeProofResult(result C.RangeProofResult) (*RangeProof, error) {
 	switch result.tag {
 	case C.RangeProofResult_NullHandlePointer:
@@ -532,6 +659,10 @@ func getChangeProofFromChangeProofResult(result C.ChangeProofResult) (*ChangePro
 	switch result.tag {
 	case C.ChangeProofResult_NullHandlePointer:
 		return nil, errDBClosed
+	case C.ChangeProofResult_StartRevisionNotFound:
+		return nil, ErrStartRevisionNotFound
+	case C.ChangeProofResult_EndRevisionNotFound:
+		return nil, ErrEndRevisionNotFound
 	case C.ChangeProofResult_Ok:
 		ptr := *(**C.ChangeProofContext)(unsafe.Pointer(&result.anon0))
 		return &ChangeProof{handle: ptr}, nil
@@ -540,5 +671,35 @@ func getChangeProofFromChangeProofResult(result C.ChangeProofResult) (*ChangePro
 		return nil, err
 	default:
 		return nil, fmt.Errorf("unknown C.ChangeProofResult tag: %d", result.tag)
+	}
+}
+
+func getVerifiedChangeProofFromVerifiedChangeProofResult(result C.VerifiedChangeProofResult) (*VerifiedChangeProof, error) {
+	switch result.tag {
+	case C.VerifiedChangeProofResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.VerifiedChangeProofResult_Ok:
+		ptr := *(**C.VerifiedChangeProofContext)(unsafe.Pointer(&result.anon0))
+		return &VerifiedChangeProof{handle: ptr}, nil
+	case C.VerifiedChangeProofResult_Err:
+		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return nil, err
+	default:
+		return nil, fmt.Errorf("unknown C.VerifiedChangeProofResult tag: %d", result.tag)
+	}
+}
+
+func getProposedChangeProofFromProposedChangeProofResult(db *Database, result C.ProposedChangeProofResult) (*ProposedChangeProof, error) {
+	switch result.tag {
+	case C.ProposedChangeProofResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.ProposedChangeProofResult_Ok:
+		ptr := *(**C.ProposedChangeProofContext)(unsafe.Pointer(&result.anon0))
+		return &ProposedChangeProof{handle: ptr, db: db}, nil
+	case C.ProposedChangeProofResult_Err:
+		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
+		return nil, err
+	default:
+		return nil, fmt.Errorf("unknown C.ProposedChangeProofResult tag: %d", result.tag)
 	}
 }

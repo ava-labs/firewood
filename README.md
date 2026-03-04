@@ -19,13 +19,14 @@ but compaction is not required to maintain the index.
 Firewood was first conceived to provide a very fast storage layer for the EVM,
 but could be used on any blockchain that requires an authenticated state.
 
-Firewood only attempts to store recent revisions on-disk and will actively clean up unused data when revisions expire.
-Firewood keeps some configurable number of previous states in memory and on disk to power state sync and APIs
+By default, Firewood only attempts to store recent revisions on-disk and will actively clean up unused data when revisions expire.
+It keeps some configurable number of previous states in memory and on disk to power state sync and APIs
 which may occur at a few roots behind the current state.
 To do this, a new root is always created for each revision that can reference either new nodes from this revision or nodes from a prior revision.
 When creating a revision,
 a list of nodes that are no longer needed are computed and saved to disk in a future-delete log (FDL) as well as kept in memory.
 When a revision expires, the nodes that were deleted when it was created are returned to the free space.
+Firewood also supports archival mode via `RootStore`, which retains all historical revisions and allows lookup of any past state by its root hash.
 
 Hashes are not used to determine where a node is stored on disk in the database file.
 Instead space for nodes may be allocated from the end of the file,

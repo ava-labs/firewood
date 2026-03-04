@@ -15,6 +15,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use firewood::logger::trace;
+use firewood_storage::NodeHashAlgorithm;
 use log::LevelFilter;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
@@ -226,6 +227,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let prometheus_handle = spawn_prometheus_listener(args.global_opts.prometheus_port)
         .expect("failed to spawn prometheus listener");
 
+    #[expect(deprecated)]
     let mgrcfg = RevisionManagerConfig::builder()
         .node_cache_size(args.global_opts.cache_size)
         .free_list_cache_size(
@@ -235,6 +237,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max_revisions(args.global_opts.revisions)
         .build();
     let cfg = DbConfig::builder()
+        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
         .truncate(matches!(args.test_name, TestName::Create))
         .manager(mgrcfg)
         .build();

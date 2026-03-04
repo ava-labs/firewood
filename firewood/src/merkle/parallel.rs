@@ -4,6 +4,7 @@
 use crate::db::BatchOp;
 use crate::merkle::{Key, Merkle, Value};
 use crate::v2::api::IntoBatchIter;
+use firewood_metrics::{current_metrics_context, set_metrics_context};
 use firewood_storage::logger::error;
 use firewood_storage::{
     BranchNode, Child, Children, FileBacked, FileIoError, ImmutableProposal, LeafNode,
@@ -257,7 +258,9 @@ impl ParallelMerkle {
 
         // Spawn a worker from the threadpool for this nibble. The worker will send messages to the coordinator
         // using `worker_sender`.
+        let metrics_context = current_metrics_context();
         pool.spawn(move || {
+            let _guard = set_metrics_context(metrics_context);
             if let Err(err) = ParallelMerkle::worker_event_loop(
                 Merkle::from(worker_nodestore),
                 first_path_component,

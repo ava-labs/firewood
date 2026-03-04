@@ -4,12 +4,14 @@
 use crate::manager::RevisionManagerError;
 use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
+use crate::persist_worker::PersistError;
 use crate::{Proof, ProofError, ProofNode, RangeProof};
 use firewood_storage::{FileIoError, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+use crate::merkle::changes::ChangeProof;
 pub use crate::v2::batch_op::{BatchIter, BatchOp, IntoBatchIter, KeyValuePair, TryIntoBatch};
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
@@ -83,6 +85,8 @@ impl OptionalHashKeyExt for Option<HashKey> {
 /// A frozen proof is a proof that is stored in immutable memory.
 pub type FrozenRangeProof = RangeProof<Key, Value, Box<[ProofNode]>>;
 
+pub type FrozenChangeProof = ChangeProof<Key, Value, Box<[ProofNode]>>;
+
 /// A frozen proof uses an immutable collection of proof nodes.
 pub type FrozenProof = Proof<Box<[ProofNode]>>;
 
@@ -93,6 +97,20 @@ pub enum Error {
     /// A given hash key is not available in the database
     #[error("Revision for {provided:?} not found")]
     RevisionNotFound {
+        /// the provided hash key
+        provided: Option<HashKey>,
+    },
+
+    /// The start hash key is not available in the database
+    #[error("Start revision for {provided:?} not found")]
+    StartRevisionNotFound {
+        /// the provided hash key
+        provided: Option<HashKey>,
+    },
+
+    /// The end hash key is not available in the database
+    #[error("End revision for {provided:?} not found")]
+    EndRevisionNotFound {
         /// the provided hash key
         provided: Option<HashKey>,
     },
@@ -133,6 +151,9 @@ pub enum Error {
     /// A `RootStore` error occurred
     RootStoreError(#[source] Box<dyn std::error::Error + Send + Sync>),
 
+    #[error("Deferred persistence error: {0}")]
+    DeferredPersistenceError(#[source] PersistError),
+
     /// Cannot commit a committed proposal
     #[error("Cannot commit a committed proposal")]
     AlreadyCommitted,
@@ -172,6 +193,17 @@ pub enum Error {
     // Error converting a u8 index into a path component
     #[error("error converting a u8 index into a path component")]
     InvalidConversionToPathComponent,
+
+    // Feature not supported in this build
+    #[error("feature not supported in this build: {0}")]
+    FeatureNotSupported(String),
+
+    /// Both `node_cache_size` and `node_cache_memory_limit` were specified in configuration
+    #[error("both node_cache_size and node_cache_memory_limit specified; use only one")]
+    ConflictingCacheConfig,
+
+    #[error("commit count must be positive")]
+    ZeroCommitCount,
 }
 
 impl From<std::convert::Infallible> for Error {
@@ -183,8 +215,8 @@ impl From<std::convert::Infallible> for Error {
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
         use RevisionManagerError::{
-            FileIoError, IOError, NotLatest, RevisionNotFound, RevisionWithoutAddress,
-            RootStoreError,
+            FileIoError, IOError, NotLatest, PersistError, RevisionNotFound,
+            RevisionWithoutAddress, RootStoreError,
         };
         match err {
             NotLatest { provided, expected } => Self::ParentNotLatest { provided, expected },
@@ -195,6 +227,7 @@ impl From<RevisionManagerError> for Error {
             FileIoError(io_err) => Self::FileIO(io_err),
             IOError(err) => Self::IO(err),
             RootStoreError(err) => Self::RootStoreError(err),
+            PersistError(err) => Self::DeferredPersistenceError(err),
         }
     }
 }
@@ -246,8 +279,7 @@ pub trait Db {
     ///
     /// If the database is empty, this will return None, unless the ethhash feature is enabled.
     /// In that case, we return the special ethhash compatible empty trie hash.
-    #[expect(clippy::missing_errors_doc)]
-    fn root_hash(&self) -> Result<Option<TrieHash>, Error>;
+    fn root_hash(&self) -> Option<TrieHash>;
 
     /// Propose a change to the database via a batch
     ///
@@ -282,8 +314,7 @@ pub trait DbView {
     ///
     /// If the database is empty, this will return None, unless the ethhash feature is enabled.
     /// In that case, we return the special ethhash compatible empty trie hash.
-    #[expect(clippy::missing_errors_doc)]
-    fn root_hash(&self) -> Result<Option<HashKey>, Error>;
+    fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
     #[expect(clippy::missing_errors_doc)]
@@ -357,8 +388,7 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     ///
     /// If the database is empty, this will return None, unless the ethhash feature is enabled.
     /// In that case, we return the special ethhash compatible empty trie hash.
-    #[expect(clippy::missing_errors_doc)]
-    fn root_hash(&self) -> Result<Option<HashKey>, Error>;
+    fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
     #[expect(clippy::missing_errors_doc)]
@@ -421,7 +451,7 @@ impl<T: Debug + DbView + Send + Sync + 'static> DynDbView for T
 where
     for<'view> T::Iter<'view>: Sized,
 {
-    fn root_hash(&self) -> Result<Option<HashKey>, Error> {
+    fn root_hash(&self) -> Option<HashKey> {
         DbView::root_hash(self)
     }
 

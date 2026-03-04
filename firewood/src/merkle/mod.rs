@@ -4,20 +4,23 @@
 #[cfg(test)]
 pub(crate) mod tests;
 
+pub(crate) mod changes;
 mod merge;
 /// Parallel merkle
 pub mod parallel;
 
 use crate::iter::{MerkleKeyValueIter, PathIterator};
+use crate::merkle::changes::{ChangeProof, DiffMerkleNodeStream};
 use crate::v2::api::{
     self, BatchIter, FrozenProof, FrozenRangeProof, KeyType, KeyValuePair, ValueType,
 };
 use crate::{Proof, ProofCollection, ProofError, ProofNode, RangeProof};
+use firewood_metrics::firewood_increment;
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashedNodeReader, ImmutableProposal,
     IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore,
     Parentable, Path, PathComponent, ReadableStorage, SharedNode, TrieHash, TrieReader,
-    ValueDigest, firewood_counter,
+    ValueDigest,
 };
 use std::collections::HashSet;
 use std::fmt::Debug;
@@ -133,7 +136,8 @@ impl<T: TrieReader> Merkle<T> {
         self.nodestore.root_node()
     }
 
-    pub(crate) const fn nodestore(&self) -> &T {
+    // Must be pub because it is used in FFI calls.
+    pub const fn nodestore(&self) -> &T {
         &self.nodestore
     }
 
@@ -456,6 +460,87 @@ impl<T: TrieReader> Merkle<T> {
 }
 
 impl<T: HashedNodeReader> Merkle<T> {
+    /// Generate a change proof
+    ///
+    /// # Errors
+    ///
+    /// * `api::Error::InvalidRange` - If `start_key` > `end_key` when both are provided.
+    ///   This ensures the range bounds are logically consistent.
+    ///
+    /// * `api::Error` - Various other errors can occur during proof generation, such as:
+    ///   - I/O errors when reading nodes from storage
+    ///   - Corrupted trie structure
+    ///   - Invalid node references
+    pub fn change_proof(
+        &self,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        source_trie: &T,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<api::FrozenChangeProof, api::Error> {
+        if let (Some(k1), Some(k2)) = (&start_key, &end_key)
+            && k1 > k2
+        {
+            return Err(api::Error::InvalidRange {
+                start_key: k1.to_vec().into(),
+                end_key: k2.to_vec().into(),
+            });
+        }
+
+        // If there is a requested lower bound, the start proof must always be
+        // for that key even if (especially if) the key is not present in the
+        // trie so that the requestor can assert no keys exist between the
+        // requested key and the first provided key.
+        let start_proof = start_key
+            .map(|key| self.prove(key))
+            .transpose()?
+            .unwrap_or_default();
+
+        // Create a difference iterator between the two tries with the given start
+        // key and end key.
+        let iter_stop_key: Key = end_key.unwrap_or_default().into();
+        let mut iter = DiffMerkleNodeStream::new(
+            source_trie,
+            self.nodestore(),
+            start_key.unwrap_or_default().into(),
+        )?
+        .map_while(|op| match op {
+            Ok(op) => {
+                if iter_stop_key.is_empty() || op.key() <= &iter_stop_key {
+                    Some(Ok(op))
+                } else {
+                    None
+                }
+            }
+            Err(e) => Some(Err(e)),
+        });
+
+        // Create an array of `BatchOp`s representing the difference between the two
+        // revisions. The size of the array is bounded by `limit`.
+        let batch_ops = iter
+            .by_ref()
+            .take(limit.map_or(usize::MAX, NonZeroUsize::get))
+            .collect::<Result<Box<_>, FileIoError>>()?;
+
+        let end_proof = if let Some(limit) = limit
+            && limit.get() <= batch_ops.len()
+            && iter.next().is_some()
+        {
+            // limit was provided, we hit it, and there is at least one more key
+            // end proof is for the last key provided
+            batch_ops.last().map(|largest_key| &**largest_key.key())
+        } else {
+            // limit was not hit or not provided, end proof is for the requested
+            // end key so that we can prove we have all keys up to that key
+            end_key
+        }
+        .map(|end_key| self.prove(end_key))
+        .transpose()?
+        .unwrap_or_default();
+
+        Ok(ChangeProof::new(start_proof, end_proof, batch_ops))
+    }
+
     /// Dump a node, recursively, to a dot file
     pub(crate) fn dump_node<W: std::io::Write + ?Sized>(
         &self,
@@ -658,7 +743,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             (None, None) => {
                 // 1. The node is at `key`
                 node.update_value(value);
-                firewood_counter!("insert", "Number of merkle insert operations", "merkle" => "update").increment(1);
+                firewood_increment!(crate::registry::INSERT, 1, "merkle" => "update");
                 Ok(node)
             }
             (None, Some((child_index, partial_path))) => {
@@ -679,7 +764,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 // Shorten the node's partial path since it has a new parent.
                 node.update_partial_path(partial_path);
                 branch.children[child_index] = Some(Child::Node(node));
-                firewood_counter!("insert", "Number of merkle insert operations", "merkle"=>"above").increment(1);
+                firewood_increment!(crate::registry::INSERT, 1, "merkle" => "above");
 
                 Ok(Node::Branch(Box::new(branch)))
             }
@@ -701,7 +786,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 partial_path,
                             });
                             branch.children[child_index] = Some(Child::Node(new_leaf));
-                            firewood_counter!("insert", "Number of merkle insert operations", "merkle"=>"below").increment(1);
+                            firewood_increment!(crate::registry::INSERT, 1, "merkle" => "below");
                             return Ok(node);
                         };
                         let child = self.read_for_update(child)?;
@@ -724,7 +809,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
                         branch.children[child_index] = Some(Child::Node(new_leaf));
 
-                        firewood_counter!("insert", "Number of merkle insert operations", "merkle"=>"split").increment(1);
+                        firewood_increment!(crate::registry::INSERT, 1, "merkle" => "split");
                         Ok(Node::Branch(Box::new(branch)))
                     }
                 }
@@ -754,7 +839,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 });
                 branch.children[key_index] = Some(Child::Node(new_leaf));
 
-                firewood_counter!("insert", "Number of merkle insert operations", "merkle" => "split").increment(1);
+                firewood_increment!(crate::registry::INSERT, 1, "merkle" => "split");
                 Ok(Node::Branch(Box::new(branch)))
             }
         }
@@ -780,18 +865,16 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. There is nothing to remove.
-            firewood_counter!("remove", "Number of merkle remove operations", "prefix" => "false", "result" => "nonexistent")
-                .increment(1);
+            firewood_increment!(crate::registry::REMOVE, 1, "prefix" => "false", "result" => "nonexistent");
             return Ok(None);
         };
 
         let (root_node, removed_value) = self.remove_helper(root_node, &key)?;
         *self.nodestore.root_mut() = root_node;
         if removed_value.is_some() {
-            firewood_counter!("remove", "Number of merkle remove operations", "prefix" => "false", "result" => "success").increment(1);
+            firewood_increment!(crate::registry::REMOVE, 1, "prefix" => "false", "result" => "success");
         } else {
-            firewood_counter!("remove", "Number of merkle remove operations", "prefix" => "false", "result" => "nonexistent")
-                .increment(1);
+            firewood_increment!(crate::registry::REMOVE, 1, "prefix" => "false", "result" => "nonexistent");
         }
         Ok(removed_value)
     }
@@ -879,14 +962,13 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. There is nothing to remove.
-            firewood_counter!("remove", "Number of merkle remove operations", "prefix" => "true", "result" => "nonexistent").increment(1);
+            firewood_increment!(crate::registry::REMOVE, 1, "prefix" => "true", "result" => "nonexistent");
             return Ok(0);
         };
 
         let mut deleted = 0;
         let root_node = self.remove_prefix_helper(root_node, &prefix, &mut deleted)?;
-        firewood_counter!("remove", "Number of merkle remove operations", "prefix" => "true", "result" => "success")
-            .increment(deleted as u64);
+        firewood_increment!(crate::registry::REMOVE, deleted as u64, "prefix" => "true", "result" => "success");
         *self.nodestore.root_mut() = root_node;
         Ok(deleted)
     }

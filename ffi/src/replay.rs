@@ -17,12 +17,12 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use firewood_replay::{
-    Batch, Commit, DbOperation, GetFromProposal, GetFromRoot, GetLatest, KeyValueOp, ProposeOnDB,
+    Batch, Commit, DbOperation, GetFromProposal, GetLatest, KeyValueOp, ProposalId, ProposeOnDB,
     ProposeOnProposal, ReplayLog,
 };
 use parking_lot::Mutex;
 
-use crate::value::{BorrowedBytes, BorrowedKeyValuePairs, HashKey as FfiHashKey, KeyValuePair};
+use crate::value::{BatchOp, BorrowedBatchOps, BorrowedBytes};
 
 /// Environment variable that controls the output path for the replay log.
 const REPLAY_PATH_ENV: &str = "FIREWOOD_BLOCK_REPLAY_PATH";
@@ -40,7 +40,7 @@ struct Recorder {
     /// Counter for assigning proposal IDs.
     next_proposal_id: u64,
     /// Map from proposal handle pointer addresses to assigned IDs.
-    proposal_ids: HashMap<usize, u64>,
+    proposal_ids: HashMap<usize, ProposalId>,
     /// Output path for the replay log.
     output_path: PathBuf,
 }
@@ -62,15 +62,6 @@ impl Recorder {
         self.maybe_flush();
     }
 
-    /// Records a `GetFromRoot` operation.
-    fn record_get_from_root(&mut self, root: &[u8], key: &[u8]) {
-        self.operations.push(DbOperation::GetFromRoot(GetFromRoot {
-            root: root.into(),
-            key: key.into(),
-        }));
-        self.maybe_flush();
-    }
-
     /// Records a `GetFromProposal` operation.
     fn record_get_from_proposal(&mut self, handle_ptr: usize, key: &[u8]) {
         let Some(&proposal_id) = self.proposal_ids.get(&handle_ptr) else {
@@ -85,19 +76,19 @@ impl Recorder {
     }
 
     /// Records a `Batch` operation.
-    fn record_batch(&mut self, pairs: &[KeyValuePair<'_>]) {
-        let pairs = convert_pairs(pairs);
+    fn record_batch(&mut self, ops: &[BatchOp<'_>]) {
+        let pairs = convert_ops(ops);
         self.operations.push(DbOperation::Batch(Batch { pairs }));
         self.maybe_flush();
     }
 
     /// Records a `ProposeOnDB` operation.
-    fn record_propose_on_db(&mut self, handle_ptr: usize, pairs: &[KeyValuePair<'_>]) {
-        let proposal_id = self.next_proposal_id;
+    fn record_propose_on_db(&mut self, handle_ptr: usize, ops: &[BatchOp<'_>]) {
+        let proposal_id = ProposalId(self.next_proposal_id);
         self.next_proposal_id = self.next_proposal_id.saturating_add(1);
         self.proposal_ids.insert(handle_ptr, proposal_id);
 
-        let pairs = convert_pairs(pairs);
+        let pairs = convert_ops(ops);
         self.operations.push(DbOperation::ProposeOnDB(ProposeOnDB {
             pairs,
             returned_proposal_id: proposal_id,
@@ -110,17 +101,17 @@ impl Recorder {
         &mut self,
         parent_ptr: usize,
         new_ptr: usize,
-        pairs: &[KeyValuePair<'_>],
+        ops: &[BatchOp<'_>],
     ) {
         let Some(&parent_id) = self.proposal_ids.get(&parent_ptr) else {
             return;
         };
 
-        let new_id = self.next_proposal_id;
+        let new_id = ProposalId(self.next_proposal_id);
         self.next_proposal_id = self.next_proposal_id.saturating_add(1);
         self.proposal_ids.insert(new_ptr, new_id);
 
-        let pairs = convert_pairs(pairs);
+        let pairs = convert_ops(ops);
         self.operations
             .push(DbOperation::ProposeOnProposal(ProposeOnProposal {
                 proposal_id: parent_id,
@@ -186,16 +177,21 @@ impl Recorder {
     }
 }
 
-/// Converts FFI key-value pairs to replay log format.
-fn convert_pairs(pairs: &[KeyValuePair<'_>]) -> Vec<KeyValueOp> {
-    pairs
-        .iter()
-        .map(|kv| KeyValueOp {
-            key: kv.key.as_slice().into(),
-            value: if kv.value.is_null() {
-                None
-            } else {
-                Some(kv.value.as_slice().into())
+/// Converts FFI batch operations to replay log format.
+fn convert_ops(ops: &[BatchOp<'_>]) -> Vec<KeyValueOp> {
+    ops.iter()
+        .map(|op| match op {
+            BatchOp::Put { key, value } => KeyValueOp {
+                key: key.as_slice().into(),
+                value: Some(value.as_slice().into()),
+            },
+            BatchOp::Delete { key } => KeyValueOp {
+                key: key.as_slice().into(),
+                value: None,
+            },
+            BatchOp::DeleteRange { prefix } => KeyValueOp {
+                key: prefix.as_slice().into(),
+                value: None,
             },
         })
         .collect()
@@ -219,15 +215,6 @@ pub(crate) fn record_get_latest(key: BorrowedBytes<'_>) {
     }
 }
 
-/// Records a `fwd_get_from_root` call.
-pub(crate) fn record_get_from_root(root: FfiHashKey, key: BorrowedBytes<'_>) {
-    if let Some(rec) = recorder() {
-        let api_hash: firewood::v2::api::HashKey = root.into();
-        let bytes: [u8; 32] = api_hash.into();
-        rec.lock().record_get_from_root(&bytes, key.as_slice());
-    }
-}
-
 /// Records a `fwd_get_from_proposal` call.
 pub(crate) fn record_get_from_proposal(
     handle: Option<&crate::ProposalHandle<'_>>,
@@ -241,7 +228,7 @@ pub(crate) fn record_get_from_proposal(
 }
 
 /// Records a `fwd_batch` call.
-pub(crate) fn record_batch(values: BorrowedKeyValuePairs<'_>) {
+pub(crate) fn record_batch(values: BorrowedBatchOps<'_>) {
     if let Some(rec) = recorder() {
         rec.lock().record_batch(values.as_slice());
     }
@@ -250,7 +237,7 @@ pub(crate) fn record_batch(values: BorrowedKeyValuePairs<'_>) {
 /// Records a `fwd_propose_on_db` call after the proposal is created.
 pub(crate) fn record_propose_on_db(
     result: &crate::ProposalResult<'_>,
-    values: BorrowedKeyValuePairs<'_>,
+    values: BorrowedBatchOps<'_>,
 ) {
     let Some(rec) = recorder() else { return };
     let crate::ProposalResult::Ok { handle, .. } = result else {
@@ -265,7 +252,7 @@ pub(crate) fn record_propose_on_db(
 pub(crate) fn record_propose_on_proposal<'db>(
     parent: Option<&crate::ProposalHandle<'db>>,
     result: &crate::ProposalResult<'db>,
-    values: BorrowedKeyValuePairs<'_>,
+    values: BorrowedBatchOps<'_>,
 ) {
     let Some(rec) = recorder() else { return };
     let Some(parent) = parent else { return };
@@ -308,7 +295,11 @@ pub(crate) fn record_commit(
 /// Called automatically when the database is closed, but can also be
 /// invoked manually via `fwd_block_replay_flush`.
 pub(crate) fn flush_to_disk() -> io::Result<()> {
-    if let Some(rec) = recorder() {
+    // we don't use recorder() here because flushing should not init
+    // the recorder. TestMain opens and closes a db, that causes
+    // some tests to fail.
+    // TODO[AMIN]: this should change when we make record db-specific.
+    if let Some(Some(rec)) = RECORDER.get() {
         rec.lock().flush_to_disk()
     } else {
         Ok(())

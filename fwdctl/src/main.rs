@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use firewood::v2::api;
 
 pub mod check;
@@ -15,8 +15,37 @@ pub mod dump;
 pub mod get;
 pub mod graph;
 pub mod insert;
+#[cfg(feature = "launch")]
+pub mod launch;
 pub mod replay;
 pub mod root;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
+pub enum NodeHashAlgorithm {
+    #[value(name = "merkle-db")]
+    MerkleDB,
+    #[value(name = "ethereum")]
+    Ethereum,
+}
+
+impl Default for NodeHashAlgorithm {
+    fn default() -> Self {
+        if cfg!(feature = "ethhash") {
+            NodeHashAlgorithm::Ethereum
+        } else {
+            NodeHashAlgorithm::MerkleDB
+        }
+    }
+}
+
+impl From<NodeHashAlgorithm> for firewood_storage::NodeHashAlgorithm {
+    fn from(algorithm: NodeHashAlgorithm) -> Self {
+        match algorithm {
+            NodeHashAlgorithm::MerkleDB => firewood_storage::NodeHashAlgorithm::MerkleDB,
+            NodeHashAlgorithm::Ethereum => firewood_storage::NodeHashAlgorithm::Ethereum,
+        }
+    }
+}
 
 #[derive(Clone, Debug, Parser)]
 pub struct DatabasePath {
@@ -30,6 +59,16 @@ pub struct DatabasePath {
         help = "Name of the database directory"
     )]
     pub dbpath: PathBuf,
+
+    /// The node hash algorithm to use when opening the database.
+    #[arg(
+        long,
+        value_enum,
+        required = false,
+        default_value_t = NodeHashAlgorithm::default(),
+        help = "The node hash algorithm to use when opening the database",
+    )]
+    pub node_hash_algorithm: NodeHashAlgorithm,
 }
 
 #[derive(Parser)]
@@ -72,6 +111,9 @@ enum Commands {
     Check(check::Options),
     /// Replay recorded operations from a log file
     Replay(replay::Options),
+    #[cfg(feature = "launch")]
+    /// Launch AWS instance for benchmarking
+    Launch(launch::Options),
 }
 
 fn main() -> Result<(), api::Error> {
@@ -91,6 +133,8 @@ fn main() -> Result<(), api::Error> {
         Commands::Graph(opts) => graph::run(opts),
         Commands::Check(opts) => check::run(opts),
         Commands::Replay(opts) => replay::run(opts),
+        #[cfg(feature = "launch")]
+        Commands::Launch(opts) => launch::run(opts),
     }
 }
 

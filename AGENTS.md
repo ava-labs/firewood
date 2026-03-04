@@ -98,6 +98,8 @@ cd ..                   # Go to ffi directory
 go tool cgo firewood.go # Generate cgo wrappers
 ```
 
+Any tagged enums added to the FFI api where the union body contains a pointer must be defined as `#[repr(C, usize)]` so that the enum tag forces the C struct to have pointer alignment.
+
 ### Using the CLI
 
 The `fwdctl` tool provides command-line operations on databases. See `fwdctl/README.md`.

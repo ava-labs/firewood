@@ -5,18 +5,23 @@ package firewood
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/ava-labs/firewood-go/ffi"
 	firewood "github.com/ava-labs/firewood-go/ffi"
 
 	"github.com/ava-labs/avalanchego/database"
 	"github.com/ava-labs/avalanchego/database/memdb"
 	"github.com/ava-labs/avalanchego/ids"
 	"github.com/ava-labs/avalanchego/x/merkledb"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,20 +55,40 @@ var stepMap = map[byte]string{
 	commitProposal:           "commitProposal",
 }
 
+// oneSecCtx returns `tb.Context()` with a 1-second timeout added. Any existing
+// cancellation on `tb.Context()` is removed, which allows this function to be
+// used inside a `tb.Cleanup()`
+func oneSecCtx(tb testing.TB) context.Context {
+	ctx := context.WithoutCancel(tb.Context())
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	tb.Cleanup(cancel)
+	return ctx
+}
+
 func newTestFirewoodDatabase(t *testing.T) *firewood.Database {
 	t.Helper()
+	r := require.New(t)
 
 	dbFile := filepath.Join(t.TempDir(), "test.db")
 	db, err := newFirewoodDatabase(dbFile)
-	require.NoError(t, err)
+	r.NoError(err, "firewood.New()")
 	t.Cleanup(func() {
-		require.NoError(t, db.Close(context.Background())) //nolint:usetesting // t.Context() will already be cancelled
+		err := db.Close(oneSecCtx(t))
+		if errors.Is(err, ffi.ErrActiveKeepAliveHandles) {
+			// force a GC to clean up dangling handles that are preventing the
+			// database from closing, then try again. Intentionally not looping
+			// since a subsequent attempt is unlikely to succeed if the first
+			// one didn't.
+			runtime.GC()
+			err = db.Close(oneSecCtx(t))
+		}
+		assert.NoError(t, err, "%T.Close()", db)
 	})
 	return db
 }
 
 func newFirewoodDatabase(dbFile string) (*firewood.Database, error) {
-	f, err := firewood.New(dbFile)
+	f, err := firewood.New(dbFile, firewood.MerkleDBNodeHashing)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create new database at filepath %q: %w", dbFile, err)
 	}
@@ -145,7 +170,7 @@ func (tr *tree) dbUpdate() {
 
 	// Insert the key-value pair into both databases.
 	tr.require.NoError(tr.merkleDB.Put(key, val))
-	_, err := tr.fwdDB.Update([][]byte{key}, [][]byte{val})
+	_, err := tr.fwdDB.Update([]firewood.BatchOp{firewood.Put(key, val)})
 	tr.require.NoError(err)
 
 	tr.dropAllProposals()
@@ -197,7 +222,11 @@ func (tr *tree) dbBatch() {
 	}
 	tr.require.NoError(batch.Write())
 
-	_, err := tr.fwdDB.Update(keys, vals)
+	fwdBatch := make([]firewood.BatchOp, 0, len(keys))
+	for i := range len(keys) {
+		fwdBatch = append(fwdBatch, firewood.Put(keys[i], vals[i]))
+	}
+	_, err := tr.fwdDB.Update(fwdBatch)
 	tr.require.NoError(err)
 
 	tr.dropAllProposals()
@@ -231,10 +260,8 @@ func (tr *tree) checkDBHash() {
 	merkleRoot, err := tr.merkleDB.GetMerkleRoot(context.Background())
 	tr.require.NoError(err)
 
-	fwdRoot, err := tr.fwdDB.Root()
-	tr.require.NoError(err)
-
 	// Compare the root hashes.
+	fwdRoot := tr.fwdDB.Root()
 	tr.require.Equal(merkleRoot, ids.ID(fwdRoot))
 }
 
@@ -251,7 +278,11 @@ func (tr *tree) createProposalOnProposal() {
 	fwdPr := pr.fwdView
 	merkleView := pr.merkleView
 
-	fwdChildPr, err := fwdPr.Propose(keys, vals)
+	fwdBatch := make([]firewood.BatchOp, 0, len(keys))
+	for i := range len(keys) {
+		fwdBatch = append(fwdBatch, firewood.Put(keys[i], vals[i]))
+	}
+	fwdChildPr, err := fwdPr.Propose(fwdBatch)
 	tr.require.NoError(err)
 
 	merkleViewChange := merkledb.ViewChanges{}
@@ -264,10 +295,9 @@ func (tr *tree) createProposalOnProposal() {
 	merkleChildView, err := merkleView.NewView(context.Background(), merkleViewChange)
 	tr.require.NoError(err)
 
-	fwdRoot, err := fwdChildPr.Root()
-	tr.require.NoError(err)
 	merkleRoot, err := merkleChildView.GetMerkleRoot(context.Background())
 	tr.require.NoError(err)
+	fwdRoot := fwdChildPr.Root()
 	tr.require.Equal(merkleRoot, ids.ID(fwdRoot))
 
 	tr.nextID++
@@ -284,7 +314,11 @@ func (tr *tree) createProposalOnProposal() {
 func (tr *tree) createProposalOnDB() {
 	batchSize := tr.rand.Intn(maxBatchSize) + 1 // ensure at least one key-value pair
 	keys, vals := tr.createRandomBatch(batchSize)
-	fwdPr, err := tr.fwdDB.Propose(keys, vals)
+	fwdBatch := make([]firewood.BatchOp, 0, len(keys))
+	for i := range len(keys) {
+		fwdBatch = append(fwdBatch, firewood.Put(keys[i], vals[i]))
+	}
+	fwdPr, err := tr.fwdDB.Propose(fwdBatch)
 	tr.require.NoError(err)
 
 	merkleViewChange := merkledb.ViewChanges{}
@@ -297,10 +331,9 @@ func (tr *tree) createProposalOnDB() {
 	merkleChildView, err := tr.merkleDB.NewView(context.Background(), merkleViewChange)
 	tr.require.NoError(err)
 
-	fwdRoot, err := fwdPr.Root()
-	tr.require.NoError(err)
 	merkleRoot, err := merkleChildView.GetMerkleRoot(context.Background())
 	tr.require.NoError(err)
+	fwdRoot := fwdPr.Root()
 	tr.require.Equal(merkleRoot, ids.ID(fwdRoot))
 
 	tr.nextID++

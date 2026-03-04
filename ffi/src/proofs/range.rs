@@ -8,12 +8,12 @@ use firewood::{
     logger::warn,
     v2::api::{self, DbView, FrozenRangeProof, HashKey},
 };
+use firewood_metrics::{MetricsContext, firewood_increment};
 
 use crate::{
-    BorrowedBytes, DatabaseHandle, HashResult, Maybe, NextKeyRangeResult, RangeProofResult,
-    ValueResult, VoidResult,
+    BorrowedBytes, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle, HashResult, Maybe,
+    NextKeyRangeResult, RangeProofResult, ValueResult, VoidResult,
 };
-use firewood_storage::firewood_counter;
 
 /// A key range represented by a start key and an optional end key.
 pub type KeyRange = (Box<[u8]>, Option<Box<[u8]>>);
@@ -225,9 +225,8 @@ impl<'db> RangeProofContext<'db> {
         };
 
         let metrics_cb = |commit_time: coarsetime::Duration| {
-            firewood_counter!("ffi.commit_ms", "FFI commit timing in milliseconds")
-                .increment(commit_time.as_millis());
-            firewood_counter!("ffi.merge", "Number of FFI merge operations").increment(1);
+            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
+            firewood_increment!(crate::registry::MERGE_COUNT, 1);
         };
 
         let result = proposal_handle.commit_proposal(metrics_cb);
@@ -276,7 +275,7 @@ impl<'db> RangeProofContext<'db> {
 
         let root_hash = match self.proposal_state {
             Some(ProposalState::Committed(ref hash)) => Ok(hash.clone()),
-            Some(ProposalState::Proposed(ref proposal)) => proposal.root_hash(),
+            Some(ProposalState::Proposed(ref proposal)) => Ok(proposal.root_hash()),
             None => Err(api::Error::ProofError(ProofError::Unverified)),
         }?;
         if root_hash.as_ref() == Some(&verification.root) {
@@ -297,6 +296,10 @@ impl<'db> RangeProofContext<'db> {
         }
 
         Ok(Some((last_key.clone(), verification.end_key.clone())))
+    }
+
+    fn code_hash_iter(&self) -> Result<CodeIteratorHandle<'_>, api::Error> {
+        CodeIteratorHandle::new(self.proof.key_values())
     }
 }
 
@@ -524,6 +527,77 @@ pub extern "C" fn fwd_range_proof_find_next_key(
     crate::invoke_with_handle(proof, RangeProofContext::find_next_key)
 }
 
+/// Returns an iterator over the code hashes contained in the range proof.
+/// The iterator must be freed after use.
+///
+/// Can be called at any time after the proof has been created.
+///
+/// # Arguments
+///
+/// - `proof` - A [`RangeProofContext`] previously returned from the create
+///   method.
+///
+/// # Returns
+///
+/// - [`CodeIteratorResult::NullHandlePointer`] if the caller provided a null pointer.
+/// - [`CodeIteratorResult::Ok`] containing a pointer to the `CodeIteratorHandle` if successful.
+/// - [`CodeIteratorResult::Err`] containing an error message if the iterator could not be created.
+///
+/// # Thread Safety
+///
+/// It is not safe to call this function concurrently with the same proof context
+/// nor is it safe to call any other function that accesses the same proof context
+/// concurrently. The caller must ensure exclusive access to the proof context
+/// for the duration of the call.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_range_proof_code_hash_iter<'a>(
+    proof: Option<&'a RangeProofContext>,
+) -> CodeIteratorResult<'a> {
+    crate::invoke_with_handle(proof, RangeProofContext::code_hash_iter)
+}
+
+/// Advances the code hash iterator and returns the next code hash.
+///
+/// # Arguments
+///
+/// - `iter` - A [`CodeIteratorHandle`] previously returned from the
+///   `fwd_range_proof_code_hash_iter` method.
+///
+/// # Returns
+///
+/// - [`HashResult::NullHandlePointer`] if the caller provided a null pointer.
+/// - [`HashResult::Some`] containing the next code hash if successful.
+/// - [`HashResult::None`] if there are no more code hashes to iterate over.
+/// - [`HashResult::Err`] containing an error message if the next code hash could not be retrieved.
+///
+/// # Thread Safety
+///
+/// It is not safe to call this function concurrently with the same iterator
+/// nor is it safe to call any other function that accesses the same iterator
+/// concurrently. The caller must ensure exclusive access to the iterator
+/// for the duration of the call.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_code_hash_iter_next<'a>(
+    iter: Option<&'a mut CodeIteratorHandle<'a>>,
+) -> HashResult {
+    crate::invoke_with_handle(iter, CodeIteratorHandle::next)
+}
+
+/// Frees the memory associated with a `CodeIteratorHandle`.
+///
+/// # Arguments
+///
+/// - `iter` - The `CodeIteratorHandle` to free, previously returned from any Rust function.
+///
+/// # Returns
+///
+/// - [`VoidResult::Ok`] if the memory was successfully freed.
+/// - [`VoidResult::Err`] if the process panics while freeing the memory.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_code_hash_iter_free(iter: Option<Box<CodeIteratorHandle>>) -> VoidResult {
+    crate::invoke_with_handle(iter, drop)
+}
+
 /// Serialize a `RangeProof` to bytes.
 ///
 /// # Arguments
@@ -582,4 +656,16 @@ pub extern "C" fn fwd_range_proof_from_bytes(
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_free_range_proof(proof: Option<Box<RangeProofContext>>) -> VoidResult {
     crate::invoke_with_handle(proof, drop)
+}
+
+impl crate::MetricsContextExt for RangeProofContext<'_> {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        None
+    }
+}
+
+impl<'a> crate::MetricsContextExt for (&'a DatabaseHandle, &mut RangeProofContext<'a>) {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        self.0.metrics_context()
+    }
 }

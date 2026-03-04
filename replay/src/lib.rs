@@ -1,4 +1,4 @@
-// Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
+// Copyright (C) 2026, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
 //! Replay log types and engine for applying them to a Database.
@@ -25,27 +25,13 @@ use std::time::Instant;
 
 use firewood::db::{BatchOp, Db, Proposal};
 use firewood::v2::api::{self, Db as DbApi, DbView as DbViewApi, Proposal as ProposalApi};
-use firewood_storage::{InvalidTrieHashLength, firewood_counter};
+use firewood_metrics::firewood_increment;
+use firewood_storage::InvalidTrieHashLength;
+
+pub mod registry;
 use serde::{Deserialize, Serialize};
+use serde_with::serde_as;
 use thiserror::Error;
-
-/// Serde helper for `Option<Box<[u8]>>` using efficient byte representation.
-mod option_bytes {
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    #[expect(clippy::ref_option, reason = "serde requires &T for serialize")]
-    pub fn serialize<S: Serializer>(value: &Option<Box<[u8]>>, ser: S) -> Result<S::Ok, S::Error> {
-        match value {
-            Some(bytes) => ser.serialize_some(&serde_bytes::Bytes::new(bytes)),
-            None => ser.serialize_none(),
-        }
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<Option<Box<[u8]>>, D::Error> {
-        let opt: Option<serde_bytes::ByteBuf> = Deserialize::deserialize(de)?;
-        Ok(opt.map(|b| b.into_vec().into_boxed_slice()))
-    }
-}
 
 /// Strongly-typed proposal identifier.
 ///
@@ -72,25 +58,15 @@ pub struct GetFromProposal {
     pub key: Box<[u8]>,
 }
 
-/// Operation that reads a key from a specific historical root.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct GetFromRoot {
-    /// The 32-byte root hash.
-    #[serde(with = "serde_bytes")]
-    pub root: Box<[u8]>,
-    /// The key to read.
-    #[serde(with = "serde_bytes")]
-    pub key: Box<[u8]>,
-}
-
 /// A single key/value mutation within a batch or proposal.
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KeyValueOp {
     /// The key being mutated.
     #[serde(with = "serde_bytes")]
     pub key: Box<[u8]>,
     /// The value to set, or `None` for a delete-range operation.
-    #[serde(with = "option_bytes")]
+    #[serde_as(as = "Option<serde_with::Bytes>")]
     pub value: Option<Box<[u8]>>,
 }
 
@@ -122,12 +98,13 @@ pub struct ProposeOnProposal {
 }
 
 /// Commit operation for a proposal.
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Commit {
     /// The proposal ID being committed.
     pub proposal_id: ProposalId,
     /// The root hash returned by the commit, if any.
-    #[serde(with = "option_bytes")]
+    #[serde_as(as = "Option<serde_with::Bytes>")]
     pub returned_hash: Option<Box<[u8]>>,
 }
 
@@ -138,8 +115,6 @@ pub enum DbOperation {
     GetLatest(GetLatest),
     /// Read from an uncommitted proposal.
     GetFromProposal(GetFromProposal),
-    /// Read from a historical root.
-    GetFromRoot(GetFromRoot),
     /// Batch write (immediate commit).
     Batch(Batch),
     /// Create a proposal on the database.
@@ -247,15 +222,10 @@ fn apply_operation<'db>(
 ) -> Result<Option<Box<[u8]>>, ReplayError> {
     match operation {
         DbOperation::GetLatest(GetLatest { key }) => {
-            if let Some(root) = DbApi::root_hash(db)? {
+            if let Some(root) = DbApi::root_hash(db) {
                 let view = DbApi::revision(db, root)?;
                 let _ = DbViewApi::val(&*view, key)?;
             }
-            Ok(None)
-        }
-
-        DbOperation::GetFromRoot(GetFromRoot { root: _, key: _ }) => {
-            // TODO, noop for now.
             Ok(None)
         }
 
@@ -279,9 +249,8 @@ fn apply_operation<'db>(
             let ops = into_batch_ops(pairs);
             let start = Instant::now();
             let proposal = DbApi::propose(db, ops)?;
-            firewood_counter!("replay.propose_ns", "Time spent in propose (ns)")
-                .increment(start.elapsed().as_nanos() as u64);
-            firewood_counter!("replay.propose", "Number of propose calls").increment(1);
+            firewood_increment!(registry::PROPOSE_NS, start.elapsed().as_nanos() as u64);
+            firewood_increment!(registry::PROPOSE_COUNT, 1);
             proposals.insert(returned_proposal_id, proposal);
             Ok(None)
         }
@@ -295,9 +264,8 @@ fn apply_operation<'db>(
             let start = Instant::now();
             let parent = get_proposal(proposals, proposal_id)?;
             let new_proposal = ProposalApi::propose(parent, ops)?;
-            firewood_counter!("replay.propose_ns", "Time spent in propose (ns)")
-                .increment(start.elapsed().as_nanos() as u64);
-            firewood_counter!("replay.propose", "Number of propose calls").increment(1);
+            firewood_increment!(registry::PROPOSE_NS, start.elapsed().as_nanos() as u64);
+            firewood_increment!(registry::PROPOSE_COUNT, 1);
             proposals.insert(returned_proposal_id, new_proposal);
             Ok(None)
         }
@@ -309,9 +277,8 @@ fn apply_operation<'db>(
             let proposal = take_proposal(proposals, proposal_id)?;
             let start = Instant::now();
             proposal.commit()?;
-            firewood_counter!("replay.commit_ns", "Time spent in commit (ns)")
-                .increment(start.elapsed().as_nanos() as u64);
-            firewood_counter!("replay.commit", "Number of commit calls").increment(1);
+            firewood_increment!(registry::COMMIT_NS, start.elapsed().as_nanos() as u64);
+            firewood_increment!(registry::COMMIT_COUNT, 1);
             Ok(returned_hash)
         }
     }
@@ -408,6 +375,7 @@ mod tests {
     use super::*;
     use firewood::db::DbConfig;
     use firewood::manager::RevisionManagerConfig;
+    use firewood_storage::NodeHashAlgorithm;
     use std::io::Cursor;
     use tempfile::tempdir;
 
@@ -415,6 +383,7 @@ mod tests {
         let tmpdir = tempdir().expect("create tempdir");
         let db_path = tmpdir.path().join("test.db");
         let cfg = DbConfig::builder()
+            .node_hash_algorithm(NodeHashAlgorithm::compile_option())
             .truncate(true)
             .manager(RevisionManagerConfig::builder().build())
             .build();
@@ -447,9 +416,7 @@ mod tests {
 
         replay_from_reader(Cursor::new(buf), &db, None).expect("replay");
 
-        let root = DbApi::root_hash(&db)
-            .expect("root_hash")
-            .expect("non-empty");
+        let root = DbApi::root_hash(&db).expect("non-empty");
         let view = DbApi::revision(&db, root).expect("revision");
 
         for i in 0u8..5 {
@@ -487,9 +454,7 @@ mod tests {
 
         replay_from_reader(Cursor::new(buf), &db, None).expect("replay");
 
-        let root = DbApi::root_hash(&db)
-            .expect("root_hash")
-            .expect("non-empty");
+        let root = DbApi::root_hash(&db).expect("non-empty");
         let view = DbApi::revision(&db, root).expect("revision");
 
         for i in 0u8..3 {
@@ -535,9 +500,7 @@ mod tests {
 
         replay_from_reader(Cursor::new(buf), &db, None).expect("replay");
 
-        let root = DbApi::root_hash(&db)
-            .expect("root_hash")
-            .expect("non-empty");
+        let root = DbApi::root_hash(&db).expect("non-empty");
         let view = DbApi::revision(&db, root).expect("revision");
 
         let v1 = DbViewApi::val(&*view, [1]).expect("val").expect("exists");

@@ -56,7 +56,10 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
         opts.database.dbpath.display()
     );
 
-    let cfg = DbConfig::builder().truncate(opts.truncate).build();
+    let cfg = DbConfig::builder()
+        .node_hash_algorithm(opts.database.node_hash_algorithm.into())
+        .truncate(opts.truncate)
+        .build();
     let db = Db::new(opts.database.dbpath.clone(), cfg)?;
 
     let start = Instant::now();
@@ -77,9 +80,9 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     }
 
     // Print the root hash from the database for verification
-    if let Some(root) = DbApi::root_hash(&db)? {
+    if let Some(root) = DbApi::root_hash(&db) {
         println!("Database root: {}", hex::encode(root));
     }
 
-    Ok(())
+    db.close()
 }

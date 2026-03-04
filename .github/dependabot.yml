@@ -16,4 +16,16 @@ updates:
     directory: "/"
     schedule:
       interval: weekly
-    open-pull-requests-limit: 0 # Disable non-security version updates
+    labels:
+      - "dependencies"
+      - "github-actions"
+      - "security"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
+    # Group all GitHub Actions updates into a single PR to reduce noise
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    open-pull-requests-limit: 10 # Enable GitHub Actions updates for security

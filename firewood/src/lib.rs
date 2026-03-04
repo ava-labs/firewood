@@ -127,6 +127,9 @@ pub mod manager;
 /// Merkle module, containing merkle operations
 pub mod merkle;
 
+/// Metrics registry for firewood layer metrics
+pub mod registry;
+
 /// Cryptographic proof system for Merkle tries.
 ///
 /// This module provides types and functionality for creating and verifying proofs
@@ -153,6 +156,9 @@ pub use proofs::{
 // Re-export the proc macro from firewood-macros
 pub use firewood_macros::metrics;
 
+// Persistence worker module
+mod persist_worker;
+
 /// Root store module
 pub mod root_store;
 
@@ -175,7 +181,7 @@ pub use firewood_storage::logger;
 /// In the event of unexpected behavior in testing, disable this first before
 /// looking elsewhere.
 fn init_logger() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace"))
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .is_test(true)
         .try_init()
         .ok();

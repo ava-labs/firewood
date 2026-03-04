@@ -18,12 +18,14 @@ use crate::v2::api::{
 };
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
+use firewood_metrics::firewood_counter;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeStore, Parentable, ReadableStorage, TrieReader, firewood_counter,
+    ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, TrieReader,
 };
+use nonzero_ext::nonzero;
 use std::io::Write;
-use std::num::NonZeroUsize;
+use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
@@ -61,8 +63,8 @@ where
     where
         Self: 'view;
 
-    fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
-        Ok(HashedNodeReader::root_hash(self).or_default_root_hash())
+    fn root_hash(&self) -> Option<HashKey> {
+        HashedNodeReader::root_hash(self).or_default_root_hash()
     }
 
     fn val<K: api::KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
@@ -113,6 +115,9 @@ pub enum UseParallel {
 #[derive(Clone, TypedBuilder, Debug)]
 #[non_exhaustive]
 pub struct DbConfig {
+    /// The algorithm used for hashing nodes (required).
+    #[cfg_attr(test, builder(default = NodeHashAlgorithm::compile_option()))]
+    pub node_hash_algorithm: NodeHashAlgorithm,
     /// Whether to create the DB if it doesn't exist.
     #[builder(default = true)]
     pub create_if_missing: bool,
@@ -131,10 +136,17 @@ pub struct DbConfig {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
+    /// The maximum number of unpersisted revisions that can exist at a given time.
+    #[builder(default = nonzero!(1u64))]
+    pub deferred_persistence_commit_count: NonZeroU64,
 }
 
-#[derive(Debug)]
 /// A database instance.
+///
+/// Callers **must** call `close()` when they are done with the database
+/// to ensure the latest committed revision is persisted to disk. Dropping a
+/// database without calling `close()` may result in committed data being lost.
+#[derive(Debug)]
 pub struct Db {
     metrics: Arc<DbMetrics>,
     manager: RevisionManager,
@@ -154,11 +166,14 @@ impl api::Db for Db {
         Ok(nodestore)
     }
 
-    fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
-        Ok(self.manager.root_hash()?.or_default_root_hash())
+    fn root_hash(&self) -> Option<HashKey> {
+        self.manager.root_hash().or_default_root_hash()
     }
 
     fn propose(&self, batch: impl IntoBatchIter) -> Result<Self::Proposal<'_>, api::Error> {
+        // Proposal created from db
+        firewood_metrics::firewood_increment!(crate::registry::PROPOSALS_CREATED, 1, "base" => "db");
+
         self.propose_with_parent(batch, &self.manager.current_revision())
     }
 }
@@ -167,16 +182,18 @@ impl Db {
     /// Create a new database instance.
     pub fn new<P: AsRef<Path>>(db_dir: P, cfg: DbConfig) -> Result<Self, api::Error> {
         let metrics = Arc::new(DbMetrics {
-            proposals: firewood_counter!("proposals", "Number of proposals created"),
+            proposals: firewood_counter!(crate::registry::PROPOSALS),
         });
         let config_manager = ConfigManager::builder()
+            .root_dir(db_dir.as_ref().to_path_buf())
+            .node_hash_algorithm(cfg.node_hash_algorithm)
             .create(cfg.create_if_missing)
             .truncate(cfg.truncate)
             .root_store(cfg.root_store)
+            .deferred_persistence_commit_count(cfg.deferred_persistence_commit_count)
             .manager(cfg.manager)
             .build();
-
-        let manager = RevisionManager::new(db_dir.as_ref().to_path_buf(), config_manager)?;
+        let manager = RevisionManager::new(config_manager)?;
         let db = Self {
             metrics,
             manager,
@@ -216,7 +233,8 @@ impl Db {
     /// Check the database for consistency
     pub fn check(&self, opt: CheckOpt) -> CheckerReport {
         let latest_rev_nodestore = self.manager.current_revision();
-        latest_rev_nodestore.check(opt)
+        let header = self.manager.locked_header();
+        latest_rev_nodestore.check(&header, opt)
     }
 
     /// Create a proposal with a specified parent. A proposal is created in parallel if `use_parallel`
@@ -231,6 +249,8 @@ impl Db {
         batch: impl IntoBatchIter,
         parent: &NodeStore<F, FileBacked>,
     ) -> Result<Proposal<'_>, api::Error> {
+        // Return immediately if the background thread is no longer running.
+        self.manager.check_persist_error()?;
         // If use_parallel is BatchSize, then perform parallel proposal creation if the batch
         // size is >= BatchSize.
         let batch = batch.into_iter();
@@ -323,6 +343,28 @@ impl Db {
         let merge_ops = merkle.merge_key_value_range(first_key, last_key, key_values);
         self.propose_with_parent(merge_ops, merkle.nodestore())
     }
+
+    pub fn apply_change_proof_to_parent<F: Parentable>(
+        &self,
+        batch_ops: impl IntoBatchIter,
+        parent: &NodeStore<F, FileBacked>,
+    ) -> Result<Proposal<'_>, api::Error>
+    where
+        NodeStore<F, FileBacked>: HashedNodeReader,
+    {
+        // Create a new proposal from the parent
+        let merkle = Merkle::from(parent);
+        self.propose_with_parent(batch_ops, merkle.nodestore())
+    }
+
+    /// Closes the database gracefully.
+    ///
+    /// Shuts down the background persistence worker and persists the latest
+    /// committed revision to disk. This method **must** be called before the
+    /// database is dropped as otherwise, any committed data may be lost.
+    pub fn close(self) -> Result<(), api::Error> {
+        self.manager.close().map_err(Into::into)
+    }
 }
 
 #[derive(Debug)]
@@ -338,7 +380,7 @@ impl api::DbView for Proposal<'_> {
     where
         Self: 'view;
 
-    fn root_hash(&self) -> Result<Option<api::HashKey>, api::Error> {
+    fn root_hash(&self) -> Option<api::HashKey> {
         api::DbView::root_hash(&*self.nodestore)
     }
 
@@ -383,6 +425,9 @@ impl<'db> api::Proposal for Proposal<'db> {
 impl Proposal<'_> {
     #[crate::metrics("proposal.create", "database proposal creation")]
     fn create_proposal(&self, batch: impl IntoBatchIter) -> Result<Self, api::Error> {
+        // Proposal created based on another proposal
+        firewood_metrics::firewood_increment!(crate::registry::PROPOSALS_CREATED, 1, "base" => "proposal");
+
         self.db.propose_with_parent(batch, &self.nodestore)
     }
 
@@ -400,18 +445,19 @@ mod test {
     use core::iter::Take;
     use std::collections::HashMap;
     use std::iter::Peekable;
-    use std::num::NonZeroUsize;
+    use std::num::{NonZeroU64, NonZeroUsize};
     use std::ops::{Deref, DerefMut};
-    use std::path::PathBuf;
+    use std::path::Path;
 
     use firewood_storage::{
         CheckOpt, CheckerError, HashedNodeReader, IntoHashType, LinearAddress, MaybePersistedNode,
         NodeStore, TrieHash,
     };
+    use nonzero_ext::nonzero;
 
     use crate::db::{Db, Proposal, UseParallel};
     use crate::manager::RevisionManagerConfig;
-    use crate::v2::api::{Db as _, DbView, Proposal as _};
+    use crate::v2::api::{Db as _, DbView, HashKeyExt, Proposal as _};
 
     use super::{BatchOp, DbConfig};
 
@@ -451,6 +497,13 @@ mod test {
 
     impl<T: Iterator> IterExt for T {}
 
+    impl Db {
+        /// Wait until all pending commits have been persisted.
+        fn wait_persisted(&self) {
+            self.manager.wait_persisted();
+        }
+    }
+
     #[test]
     fn test_proposal_reads() {
         let db = TestDb::new();
@@ -471,7 +524,7 @@ mod test {
         let proposal = db.propose(batch).unwrap();
         assert_eq!(&*proposal.val(b"k").unwrap().unwrap(), b"v2");
 
-        let committed = db.root_hash().unwrap().unwrap();
+        let committed = db.root_hash().unwrap();
         let historical = db.revision(committed).unwrap();
         assert_eq!(&*historical.val(b"k").unwrap().unwrap(), b"v");
     }
@@ -479,7 +532,7 @@ mod test {
     #[test]
     fn reopen_test() {
         let db = TestDb::new();
-        let initial_root = db.root_hash().unwrap();
+        let initial_root = db.root_hash();
         let batch = vec![
             BatchOp::Put {
                 key: b"a",
@@ -492,18 +545,19 @@ mod test {
         ];
         let proposal = db.propose(batch).unwrap();
         proposal.commit().unwrap();
-        println!("{:?}", db.root_hash().unwrap().unwrap());
+        println!("{:?}", db.root_hash().unwrap());
 
         let db = db.reopen();
-        println!("{:?}", db.root_hash().unwrap().unwrap());
-        let committed = db.root_hash().unwrap().unwrap();
+        println!("{:?}", db.root_hash().unwrap());
+        let committed = db.root_hash().unwrap();
         let historical = db.revision(committed).unwrap();
         assert_eq!(&*historical.val(b"a").unwrap().unwrap(), b"1");
         drop(historical);
 
         let db = db.replace();
-        println!("{:?}", db.root_hash().unwrap());
-        assert!(db.root_hash().unwrap() == initial_root);
+        let final_root = db.root_hash();
+        println!("{final_root:?}");
+        assert!(final_root == initial_root);
     }
 
     #[test]
@@ -537,14 +591,14 @@ mod test {
         // the proposal is dropped here, but the underlying
         // nodestore is still accessible because it's referenced by the revision manager
         // The third proposal remains referenced
-        let p2hash = proposal2.root_hash().unwrap().unwrap();
+        let p2hash = proposal2.root_hash().unwrap();
         assert!(db.manager.proposal_hashes().contains(&p2hash));
         drop(proposal2);
 
         // commit the first proposal
         proposal1.commit().unwrap();
         // Ensure we committed the first proposal's data
-        let committed = db.root_hash().unwrap().unwrap();
+        let committed = db.root_hash().unwrap();
         let historical = db.revision(committed).unwrap();
         assert_eq!(&*historical.val(b"k1").unwrap().unwrap(), b"v1");
 
@@ -553,7 +607,7 @@ mod test {
 
         // the third proposal should still be contained within the all_hashes list
         // would be deleted if another proposal was committed and proposal3 was dropped here
-        let hash3 = proposal3.root_hash().unwrap().unwrap();
+        let hash3 = proposal3.root_hash().unwrap();
         assert!(db.manager.proposal_hashes().contains(&hash3));
     }
 
@@ -589,14 +643,14 @@ mod test {
         // the proposal is dropped here, but the underlying
         // nodestore is still accessible because it's referenced by the revision manager
         // The third proposal remains referenced
-        let p2hash = proposal2.root_hash().unwrap().unwrap();
+        let p2hash = proposal2.root_hash().unwrap();
         assert!(db.manager.proposal_hashes().contains(&p2hash));
         drop(proposal2);
 
         // commit the first proposal
         proposal1.commit().unwrap();
         // Ensure we committed the first proposal's data
-        let committed = db.root_hash().unwrap().unwrap();
+        let committed = db.root_hash().unwrap();
         let historical = db.revision(committed).unwrap();
         assert_eq!(&*historical.val(b"k1").unwrap().unwrap(), b"v1");
 
@@ -604,7 +658,7 @@ mod test {
         assert!(!db.manager.proposal_hashes().contains(&p2hash));
 
         // the third proposal should still be contained within the all_hashes list
-        let hash3 = proposal3.root_hash().unwrap().unwrap();
+        let hash3 = proposal3.root_hash().unwrap();
         assert!(db.manager.proposal_hashes().contains(&hash3));
 
         // moreover, the data from the second and third proposals should still be available
@@ -623,7 +677,7 @@ mod test {
             value: b"historical_value",
         }];
         let proposal = db.propose(batch).unwrap();
-        let historical_hash = proposal.root_hash().unwrap().unwrap();
+        let historical_hash = proposal.root_hash().unwrap();
         proposal.commit().unwrap();
 
         // Create a new proposal (uncommitted)
@@ -632,7 +686,7 @@ mod test {
             value: b"proposal_value",
         }];
         let proposal = db.propose(batch).unwrap();
-        let proposal_hash = proposal.root_hash().unwrap().unwrap();
+        let proposal_hash = proposal.root_hash().unwrap();
 
         // Test that view_sync can find the historical revision
         let historical_view = db.view(historical_hash).unwrap();
@@ -665,7 +719,7 @@ mod test {
         let db = db.reopen();
         insert_commit(&db, 2);
         // Check that the keys are still there after the commits
-        let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+        let committed = db.revision(db.root_hash().unwrap()).unwrap();
         let keys: Vec<[u8; 1]> = vec![[1; 1], [2; 1]];
         let vals: Vec<Box<[u8]>> = vec![Box::new([1; 1]), Box::new([2; 1])];
         let kviter = keys.iter().zip(vals.iter());
@@ -687,8 +741,8 @@ mod test {
                 .build(),
         );
         insert_commit(&db2, 2);
-        let committed1 = db1.revision(db1.root_hash().unwrap().unwrap()).unwrap();
-        let committed2 = db2.revision(db2.root_hash().unwrap().unwrap()).unwrap();
+        let committed1 = db1.revision(db1.root_hash().unwrap()).unwrap();
+        let committed2 = db2.revision(db2.root_hash().unwrap()).unwrap();
         let keys: Vec<[u8; 1]> = vec![[1; 1], [2; 1]];
         let vals: Vec<Box<[u8]>> = vec![Box::new([1; 1]), Box::new([2; 1])];
         let mut kviter = keys.iter().zip(vals.iter());
@@ -732,7 +786,7 @@ mod test {
         proposal.commit().unwrap();
 
         // Check that the key is still there after the commit
-        let committed = db.revision(db.root_hash().unwrap().unwrap()).unwrap();
+        let committed = db.revision(db.root_hash().unwrap()).unwrap();
         let kviter = keys.iter().zip(vals.iter());
         for (k, v) in kviter {
             assert_eq!(&committed.val(k).unwrap().unwrap(), v);
@@ -864,6 +918,11 @@ mod test {
             .propose(update_keys.iter().zip(update_values.iter()))
             .unwrap();
 
+        // Wait for background persistence to complete before creating update proposals
+        // so both DBs are in the same persisted state
+        parallel_db.wait_persisted();
+        single_threaded_db.wait_persisted();
+
         let parallel_deleted = update_parallel_proposal.nodestore.deleted().to_vec();
         let single_deleted = update_single_proposal.nodestore.deleted().to_vec();
 
@@ -933,7 +992,7 @@ mod test {
         proposal2.commit().unwrap();
 
         // all keys are in the database
-        let committed = db.root_hash().unwrap().unwrap();
+        let committed = db.root_hash().unwrap();
         let revision = db.revision(committed).unwrap();
 
         for (k, v) in keys.into_iter().zip(vals.into_iter()) {
@@ -967,6 +1026,9 @@ mod test {
             });
             let proposal = db.propose(batch).unwrap();
             proposal.commit().unwrap();
+
+            // Wait for background persistence to complete before checking consistency
+            db.wait_persisted();
 
             // check the database for consistency, sometimes checking the hashes
             let hash_check = rng.random();
@@ -1013,7 +1075,7 @@ mod test {
             },
         );
 
-        let last_proposal_root_hash = proposals.last().unwrap().root_hash().unwrap().unwrap();
+        let last_proposal_root_hash = proposals.last().unwrap().root_hash().unwrap();
 
         // commit the proposals
         for proposal in proposals {
@@ -1021,7 +1083,7 @@ mod test {
         }
 
         // get the last committed revision
-        let last_root_hash = db.root_hash().unwrap().unwrap();
+        let last_root_hash = db.root_hash().unwrap();
         let committed = db.revision(last_root_hash.clone()).unwrap();
 
         // the last root hash should be the same as the last proposal root hash
@@ -1046,7 +1108,7 @@ mod test {
         const CHANNEL_CAPACITY: usize = 8;
 
         let testdb = TestDb::new();
-        let db = &testdb.db;
+        let db = &*testdb;
 
         let (tx, rx) = std::sync::mpsc::sync_channel::<Proposal<'_>>(CHANNEL_CAPACITY);
         let (result_tx, result_rx) = std::sync::mpsc::sync_channel(CHANNEL_CAPACITY);
@@ -1072,7 +1134,7 @@ mod test {
                         value: [id as u8; 8],
                     }];
                     let proposal = db.propose(batch).unwrap();
-                    let last_hash = proposal.root_hash().unwrap().unwrap();
+                    let last_hash = proposal.root_hash().unwrap();
                     let view = db.view(last_hash).unwrap();
 
                     tx.send(proposal).unwrap();
@@ -1098,8 +1160,11 @@ mod test {
         let batch = vec![BatchOp::Put { key, value }];
 
         let proposal = db.propose(batch).unwrap();
-        let root_hash = proposal.root_hash().unwrap().unwrap();
+        let root_hash = proposal.root_hash().unwrap();
         proposal.commit().unwrap();
+
+        // Wait for background persistence to complete
+        db.wait_persisted();
 
         let root_address = db
             .revision(root_hash.clone())
@@ -1120,7 +1185,7 @@ mod test {
         // Finally, reopen the database and make sure that we can retrieve the first revision
         let db = db.reopen();
 
-        let latest_root_hash = db.root_hash().unwrap().unwrap();
+        let latest_root_hash = db.root_hash().unwrap();
         let latest_revision = db.revision(latest_root_hash).unwrap();
 
         let latest_value = latest_revision.val(key).unwrap().unwrap();
@@ -1147,7 +1212,7 @@ mod test {
         let batch = vec![BatchOp::Put { key, value }];
 
         let proposal = db.propose(batch).unwrap();
-        let root_hash = proposal.root_hash().unwrap().unwrap();
+        let root_hash = proposal.root_hash().unwrap();
         proposal.commit().unwrap();
 
         // Next, overwrite the kv-pair with a new revision
@@ -1193,7 +1258,7 @@ mod test {
                 let value = i.to_be_bytes();
                 let batch = vec![BatchOp::Put { key, value }];
                 let proposal = db.propose(batch).unwrap();
-                let root_hash = proposal.root_hash().unwrap().unwrap();
+                let root_hash = proposal.root_hash().unwrap();
                 proposal.commit().unwrap();
 
                 (root_hash, value)
@@ -1230,7 +1295,7 @@ mod test {
             value: b"bar",
         }];
         let proposal = db.propose(batch).unwrap();
-        let root_hash = proposal.root_hash().unwrap().unwrap();
+        let root_hash = proposal.root_hash().unwrap();
         proposal.commit().unwrap();
 
         let db = db.reopen();
@@ -1245,21 +1310,337 @@ mod test {
         assert!(Db::new(tmpdir, DbConfig::builder().create_if_missing(false).build()).is_err());
     }
 
+    #[test]
+    fn test_backwards_compatible_magic_string() {
+        use std::os::unix::fs::FileExt;
+
+        let testdb = TestDb::new();
+
+        testdb
+            .propose([(b"key", b"value")])
+            .unwrap()
+            .commit()
+            .unwrap();
+
+        // Wait for background persistence to complete before reading the file
+        testdb.wait_persisted();
+
+        let rh = testdb.root_hash().unwrap();
+
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .append(false)
+            .truncate(false)
+            .open(testdb.path().join(crate::manager::DB_FILE_NAME))
+            .unwrap();
+
+        let mut version = [0_u8; 16];
+        file.read_exact_at(&mut version, 0).unwrap();
+        assert_eq!(&version, b"firewood-v1\0\0\0\0\0");
+
+        // overwrite the magic string to simulate an older version
+        file.write_all_at(b"firewood 0.0.18\0", 0).unwrap();
+        drop(file);
+
+        let testdb = testdb.reopen();
+
+        assert_eq!(rh, testdb.root_hash().unwrap());
+    }
+
+    #[test]
+    fn test_deferred_persist_multiple_commits_with_commit_count_one() {
+        const NUM_REVISIONS: usize = 20;
+
+        let dbcfg = DbConfig::builder()
+            .manager(
+                RevisionManagerConfig::builder()
+                    .max_revisions(NUM_REVISIONS)
+                    .build(),
+            )
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        // Create and commit NUM_REVISIONS proposals, storing their root hashes
+        let root_hashes: Vec<TrieHash> = (0..NUM_REVISIONS)
+            .map(|i| {
+                let batch = vec![BatchOp::Put {
+                    key: format!("key{i}").as_bytes().to_vec(),
+                    value: format!("value{i}").as_bytes().to_vec(),
+                }];
+                let proposal = db.propose(batch).unwrap();
+                let root_hash = proposal.root_hash().unwrap();
+                proposal.commit().unwrap();
+                root_hash
+            })
+            .collect();
+
+        // Wait for the background thread to finish persisting
+        db.wait_persisted();
+
+        // Verify that all revisions were persisted
+        for (i, root_hash) in root_hashes.iter().enumerate() {
+            let is_persisted = db
+                .manager
+                .revision_persist_status(root_hash.clone())
+                .unwrap();
+
+            assert!(
+                is_persisted,
+                "Revision {i} with root hash {root_hash:?} should be persisted"
+            );
+        }
+    }
+
+    #[test]
+    fn test_deferred_persist_close_with_commit_count_one() {
+        let dbcfg = DbConfig::builder().build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        // Then, commit once and see what the latest revision is
+        let key = b"foo";
+        let value = b"bar";
+        let batch = vec![BatchOp::Put { key, value }];
+        let proposal = db.propose(batch).unwrap();
+        let root_hash = proposal.root_hash().unwrap();
+
+        proposal.commit().unwrap();
+        let db = db.reopen();
+
+        let revision = db.view(root_hash).unwrap();
+        let new_value = revision.val(b"foo").unwrap().unwrap();
+
+        assert_eq!(value, new_value.as_ref());
+    }
+
+    #[test]
+    fn test_deferred_persist_close_with_high_commit_count() {
+        const HIGH_COMMIT_COUNT: NonZeroU64 = nonzero!(1_000_000u64);
+
+        // Set commit count to an arbitrarily high number so persist happens
+        // only on shutdown
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(HIGH_COMMIT_COUNT)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        // Then, commit once and see what the latest revision is
+        let key = b"foo";
+        let value = b"bar";
+        let batch = vec![BatchOp::Put { key, value }];
+        let proposal = db.propose(batch).unwrap();
+        let root_hash = proposal.root_hash().unwrap();
+
+        proposal.commit().unwrap();
+        let db = db.reopen();
+
+        let revision = db.view(root_hash).unwrap();
+        let new_value = revision.val(b"foo").unwrap().unwrap();
+
+        assert_eq!(value, new_value.as_ref());
+    }
+
+    #[test]
+    fn test_deferred_persist_with_multiple_commit_count() {
+        const COMMIT_COUNT: NonZeroU64 = nonzero!(5u64);
+        const NUM_REVISIONS: u64 = COMMIT_COUNT.get() + 1;
+
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        let mut root_hashes = Vec::new();
+
+        for i in 0..NUM_REVISIONS {
+            let batch = vec![BatchOp::Put {
+                key: format!("key{i}").as_bytes().to_vec(),
+                value: format!("value{i}").as_bytes().to_vec(),
+            }];
+            let proposal = db.propose(batch).unwrap();
+            root_hashes.push(proposal.root_hash().unwrap());
+            proposal.commit().unwrap();
+        }
+
+        // Verify that at least one of the last COMMIT_COUNT revisions is persisted.
+        let commit_count = COMMIT_COUNT.get() as usize;
+        let any_persisted = root_hashes
+            .iter()
+            .rev()
+            .take(commit_count)
+            .any(|hash| db.manager.revision_persist_status(hash.clone()).unwrap());
+
+        assert!(
+            any_persisted,
+            "At least one of the last {COMMIT_COUNT} revisions should be persisted"
+        );
+    }
+
+    /// Verifies that an unpersisted revision which wipes the database is
+    /// persisted when the database closes.
+    #[test]
+    fn test_deferred_persistence_closing_on_empty_trie() {
+        const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
+
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        // Commit COMMIT_COUNT proposals to trigger the first persist
+        for i in 0..COMMIT_COUNT.get() {
+            let batch = vec![BatchOp::Put {
+                key: format!("key{i}").as_bytes().to_vec(),
+                value: format!("value{i}").as_bytes().to_vec(),
+            }];
+            let proposal = db.propose(batch).unwrap();
+            proposal.commit().unwrap();
+        }
+
+        // Empty the trie
+        let batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = vec![BatchOp::DeleteRange { prefix: vec![] }];
+        let proposal = db.propose(batch).unwrap();
+        proposal.commit().unwrap();
+
+        let db = db.reopen();
+
+        // Verify that the latest committed revision is empty.
+        let last_committed_hash = db.root_hash();
+        assert_eq!(last_committed_hash, TrieHash::default_root_hash());
+    }
+
+    #[test]
+    fn test_deferred_persistence_root_store() {
+        const NUM_COMMITS: usize = 20;
+        const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
+        const MAX_IN_MEMORY_REVISIONS: usize = 2;
+
+        let dbcfg = DbConfig::builder()
+            .manager(
+                RevisionManagerConfig::builder()
+                    .max_revisions(MAX_IN_MEMORY_REVISIONS)
+                    .build(),
+            )
+            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .root_store(true)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        let mut root_hashes = Vec::new();
+
+        let key = b"key";
+        for i in 0..NUM_COMMITS {
+            let batch = vec![BatchOp::Put {
+                key,
+                value: format!("{i}").as_bytes().to_vec(),
+            }];
+            let proposal = db.propose(batch).unwrap();
+            root_hashes.push(proposal.root_hash().unwrap());
+            proposal.commit().unwrap();
+        }
+
+        let db = db.reopen();
+
+        // Verify that we never went more than COMMIT_COUNT revisions without
+        // persisting.
+        let commit_count = COMMIT_COUNT.get() as usize;
+        let mut last_persisted: Option<usize> = None;
+
+        for (i, hash) in root_hashes.iter().enumerate() {
+            let is_persisted = db
+                .manager
+                .revision_persist_status(hash.clone())
+                .is_ok_and(|persisted| persisted);
+
+            if is_persisted {
+                let gap = match last_persisted {
+                    Some(prev) => i.wrapping_sub(prev),
+                    None => i.wrapping_add(1),
+                };
+                assert!(
+                    gap <= commit_count,
+                    "Gap of {gap} between persisted revisions exceeds COMMIT_COUNT of {commit_count}"
+                );
+                last_persisted = Some(i);
+            }
+        }
+
+        assert!(
+            last_persisted.is_some(),
+            "At least one revision should be persisted"
+        );
+    }
+
+    /// Verifies that non-persisted revisions are lost after reopening the database.
+    #[test]
+    fn test_deferred_persistence_unpersisted_revisions() {
+        const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
+
+        let dbcfg = DbConfig::builder()
+            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .root_store(true)
+            .build();
+
+        let db = TestDb::new_with_config(dbcfg);
+
+        let mut root_hashes = Vec::new();
+
+        let key = b"key";
+        for i in 0..COMMIT_COUNT.get() {
+            let batch = vec![BatchOp::Put {
+                key,
+                value: format!("{i}").as_bytes().to_vec(),
+            }];
+            let proposal = db.propose(batch).unwrap();
+            root_hashes.push(proposal.root_hash().unwrap());
+            proposal.commit().unwrap();
+        }
+
+        let db = db.reopen();
+
+        let persisted_count = root_hashes
+            .iter()
+            .filter(|&hash| {
+                db.manager
+                    .revision_persist_status(hash.clone())
+                    .is_ok_and(|is_persisted| is_persisted)
+            })
+            .count();
+
+        assert!(
+            persisted_count > 0 && persisted_count <= 2,
+            "Expected at most 2 persisted revisions, but found {persisted_count}"
+        );
+    }
+
     // Testdb is a helper struct for testing the Db. Once it's dropped, the directory and file disappear
     pub(super) struct TestDb {
-        db: Db,
+        db: Option<Db>,
         tmpdir: tempfile::TempDir,
         dbconfig: DbConfig,
+    }
+    impl Drop for TestDb {
+        fn drop(&mut self) {
+            if let Some(db) = self.db.take() {
+                db.close().unwrap();
+            }
+        }
     }
     impl Deref for TestDb {
         type Target = Db;
         fn deref(&self) -> &Self::Target {
-            &self.db
+            self.db.as_ref().unwrap()
         }
     }
     impl DerefMut for TestDb {
         fn deref_mut(&mut self) -> &mut Self::Target {
-            &mut self.db
+            self.db.as_mut().unwrap()
         }
     }
 
@@ -1272,7 +1653,7 @@ mod test {
             let tmpdir = tempfile::tempdir().unwrap();
             let db = Db::new(tmpdir.as_ref(), dbconfig.clone()).unwrap();
             TestDb {
-                db,
+                db: Some(db),
                 tmpdir,
                 dbconfig,
             }
@@ -1282,22 +1663,12 @@ mod test {
         ///
         /// This method closes the current database instance (releasing the advisory lock),
         /// then opens it again at the same path while keeping the same configuration.
-        pub fn reopen(self) -> Self {
-            let path = self.path();
-            let TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            } = self;
+        pub fn reopen(mut self) -> Self {
+            self.db.take().unwrap().close().unwrap();
 
-            drop(db);
-
-            let db = Db::new(path, dbconfig.clone()).unwrap();
-            TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            }
+            let db = Db::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
+            self.db = Some(db);
+            self
         }
 
         /// Replaces the database with a fresh instance at the same path.
@@ -1309,27 +1680,17 @@ mod test {
         ///
         /// This is useful for testing scenarios where you want to start with a clean slate
         /// while maintaining the same temporary directory structure.
-        pub fn replace(self) -> Self {
-            let path = self.path();
-            let TestDb {
-                db,
-                tmpdir,
-                dbconfig: _,
-            } = self;
+        pub fn replace(mut self) -> Self {
+            self.db.take().unwrap().close().unwrap();
 
-            drop(db);
-
-            let dbconfig = DbConfig::builder().truncate(true).build();
-            let db = Db::new(path, dbconfig.clone()).unwrap();
-            TestDb {
-                db,
-                tmpdir,
-                dbconfig,
-            }
+            self.dbconfig = DbConfig::builder().truncate(true).build();
+            let db = Db::new(self.tmpdir.path(), self.dbconfig.clone()).unwrap();
+            self.db = Some(db);
+            self
         }
 
-        pub fn path(&self) -> PathBuf {
-            self.tmpdir.path().to_path_buf()
+        pub fn path(&self) -> &Path {
+            self.tmpdir.path()
         }
     }
 }
