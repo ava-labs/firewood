@@ -1,48 +1,48 @@
-name: 'Run Firewood Benchmark'
-description: 'Build FFI and run performance benchmark'
+name: "Run Firewood Benchmark"
+description: "Build FFI and run performance benchmark"
 
 inputs:
   benchmark-name:
-    description: 'Name of the benchmark (used in results and graphs)'
+    description: "Name of the benchmark (used in results and graphs)"
     required: true
   replay-log-url:
-    description: 'URL to download the replay log from (supports https:// and s3:// URLs)'
+    description: "URL to download the replay log from (supports https:// and s3:// URLs)"
     required: true
   benchtime:
-    description: 'Number of benchmark iterations (passed to -benchtime=Nx)'
+    description: "Number of benchmark iterations (passed to -benchtime=Nx)"
     required: false
-    default: '3'
+    default: "3"
   extra:
-    description: 'Extra text to include in benchmark metadata (useful for tracking discontinuities like metric changes)'
+    description: "Extra text to include in benchmark metadata (useful for tracking discontinuities like metric changes)"
     required: false
-    default: ''
+    default: ""
   rust-cache-key:
-    description: 'Rust cache shared key'
+    description: "Rust cache shared key"
     required: false
-    default: 'maxperf-ethhash-logger'
+    default: "maxperf-ethhash-logger"
   aws-access-key-id:
-    description: 'AWS Access Key ID (required for S3 URLs)'
+    description: "AWS Access Key ID (required for S3 URLs)"
     required: false
-    default: ''
+    default: ""
   aws-secret-access-key:
-    description: 'AWS Secret Access Key (required for S3 URLs)'
+    description: "AWS Secret Access Key (required for S3 URLs)"
     required: false
-    default: ''
+    default: ""
   aws-region:
-    description: 'AWS Region for S3 bucket'
+    description: "AWS Region for S3 bucket"
     required: false
-    default: 'us-east-1'
+    default: "us-east-1"
 
 outputs:
   output-file:
-    description: 'Path to the benchmark output file'
+    description: "Path to the benchmark output file"
     value: ${{ steps.run-benchmark.outputs.output-file }}
   results:
-    description: 'Raw benchmark results'
+    description: "Raw benchmark results"
     value: ${{ steps.run-benchmark.outputs.results }}
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Setup Rust
       uses: dtolnay/rust-toolchain@stable
@@ -50,8 +50,8 @@ runs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version-file: 'ffi/go.mod'
-        cache-dependency-path: 'ffi/go.sum'
+        go-version-file: "ffi/go.mod"
+        cache-dependency-path: "ffi/go.sum"
 
     - name: Rust Cache
       uses: Swatinem/rust-cache@v2
@@ -140,7 +140,7 @@ runs:
         $SUDO mkdir -p "$TMPDIR"
         $SUDO chmod 1777 "$TMPDIR"
 
-        REPLAY_MAX_COMMITS=1000 REPLAY_LOG=./replay.log go test -bench=BenchmarkReplayLog -benchtime=${{ inputs.benchtime }}x | tee output.txt
+        REPLAY_MAX_COMMITS=1000 REPLAY_LOG=./replay.log go test -run=^$ -bench=BenchmarkReplayLog -benchtime=${{ inputs.benchtime }}x | tee output.txt
 
         echo "output-file=$(pwd)/output.txt" >> $GITHUB_OUTPUT
 

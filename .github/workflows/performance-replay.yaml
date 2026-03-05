@@ -58,6 +58,7 @@ jobs:
           github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           auto-push: true
           gh-repository: 'github.com/AminR443/firewood-benchmark-reports'
+          gh-pages-branch: main
           benchmark-data-dir-path: ${{ steps.location.outputs.pr-data-dir }}
           # Show alert but don't fail PR
           alert-threshold: '150%'
@@ -83,6 +84,87 @@ jobs:
           alert-threshold: '150%'
           comment-on-alert: false
           fail-on-alert: false
+
+      - name: Apply dark theme to PR benchmark pages
+        env:
+          BENCHMARK_TOKEN: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
+          PR_DATA_DIR: ${{ steps.location.outputs.pr-data-dir }}
+          COMMIT_DATA_DIR: ${{ steps.location.outputs.commit-data-dir }}
+        run: |
+          set -euo pipefail
+
+          rm -rf ./benchmark-theme-repository
+          git clone --depth 1 --branch main "https://x-access-token:${BENCHMARK_TOKEN}@github.com/AminR443/firewood-benchmark-reports.git" ./benchmark-theme-repository
+
+          cd ./benchmark-theme-repository
+
+          for dir in "$PR_DATA_DIR" "$COMMIT_DATA_DIR"; do
+            if [[ ! -f "$dir/index.html" ]]; then
+              echo "::warning::Skipping ${dir} because index.html is missing"
+              continue
+            fi
+
+            cat > "$dir/theme.css" <<'CSS'
+          @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
+
+          :root {
+            --bg: #0b0f14;
+            --panel: #111823;
+            --text: #e6edf3;
+            --border: #273246;
+            --accent: #7aa2f7;
+          }
+
+          html,
+          body {
+            background: var(--bg) !important;
+            color: var(--text) !important;
+          }
+
+          body,
+          body * {
+            font-family: "JetBrains Mono", monospace !important;
+          }
+
+          a {
+            color: var(--accent) !important;
+          }
+
+          table,
+          th,
+          td {
+            border-color: var(--border) !important;
+            color: var(--text) !important;
+          }
+
+          thead th,
+          tr:nth-child(even),
+          tr:nth-child(odd) {
+            background: var(--panel) !important;
+          }
+
+          code,
+          pre {
+            background: #0f1724 !important;
+            color: var(--text) !important;
+          }
+          CSS
+
+            if ! grep -q 'href="theme.css"' "$dir/index.html"; then
+              sed -i 's#</head>#  <link rel="stylesheet" href="theme.css">\n</head>#' "$dir/index.html"
+            fi
+          done
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A "$PR_DATA_DIR" "$COMMIT_DATA_DIR"
+
+          if ! git diff --cached --quiet; then
+            git commit -m "style: dark theme benchmark pages for PR run"
+            git push origin main
+          else
+            echo "No benchmark theme changes to commit."
+          fi
 
       - name: Post results to PR
         uses: actions/github-script@v7
@@ -161,9 +243,88 @@ jobs:
           # For now using external repo for benchmark data
           github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           auto-push: true
+          gh-pages-branch: main
           benchmark-data-dir-path: bench/replay-10k
           alert-threshold: '110%'
           comment-on-alert: true
           fail-on-alert: true
           alert-comment-cc-users: '@AminR443'
           gh-repository: 'github.com/AminR443/firewood-benchmark-reports'
+
+      - name: Apply dark theme to main benchmark page
+        env:
+          BENCHMARK_TOKEN: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
+          MAIN_DATA_DIR: bench/replay-10k
+        run: |
+          set -euo pipefail
+
+          rm -rf ./benchmark-theme-repository
+          git clone --depth 1 --branch main "https://x-access-token:${BENCHMARK_TOKEN}@github.com/AminR443/firewood-benchmark-reports.git" ./benchmark-theme-repository
+
+          cd ./benchmark-theme-repository
+
+          if [[ ! -f "$MAIN_DATA_DIR/index.html" ]]; then
+            echo "::warning::Skipping ${MAIN_DATA_DIR} because index.html is missing"
+            exit 0
+          fi
+
+          cat > "$MAIN_DATA_DIR/theme.css" <<'CSS'
+          @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
+
+          :root {
+            --bg: #0b0f14;
+            --panel: #111823;
+            --text: #e6edf3;
+            --border: #273246;
+            --accent: #7aa2f7;
+          }
+
+          html,
+          body {
+            background: var(--bg) !important;
+            color: var(--text) !important;
+          }
+
+          body,
+          body * {
+            font-family: "JetBrains Mono", monospace !important;
+          }
+
+          a {
+            color: var(--accent) !important;
+          }
+
+          table,
+          th,
+          td {
+            border-color: var(--border) !important;
+            color: var(--text) !important;
+          }
+
+          thead th,
+          tr:nth-child(even),
+          tr:nth-child(odd) {
+            background: var(--panel) !important;
+          }
+
+          code,
+          pre {
+            background: #0f1724 !important;
+            color: var(--text) !important;
+          }
+          CSS
+
+          if ! grep -q 'href="theme.css"' "$MAIN_DATA_DIR/index.html"; then
+            sed -i 's#</head>#  <link rel="stylesheet" href="theme.css">\n</head>#' "$MAIN_DATA_DIR/index.html"
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A "$MAIN_DATA_DIR"
+
+          if ! git diff --cached --quiet; then
+            git commit -m "style: dark theme benchmark page for main run"
+            git push origin main
+          else
+            echo "No benchmark theme changes to commit."
+          fi

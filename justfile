@@ -185,7 +185,7 @@ run-replay-benchmark replay_log="" benchtime="3":
     fi
 
     cd ffi
-    REPLAY_LOG="${REPLAY_LOG_PATH}" go test -bench=BenchmarkReplayLog -benchtime={{benchtime}}x
+    REPLAY_LOG="${REPLAY_LOG_PATH}" go test -run=^$ -v -bench=BenchmarkReplayLog -benchtime={{benchtime}}x
 
 # RELEASE PREP: refresh changelog
 release-step-refresh-changelog tag:
