@@ -13,6 +13,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
+version = "0.2.0"
 edition = "2024"
 license-file = "LICENSE.md"
 homepage = "https://avalabs.org"
@@ -29,6 +30,13 @@ codegen-units = 1
 lto = "fat"
 debug = false
 inherits = "release"
+
+[profile.profiling]
+inherits = "release"
+debug = true
+strip = false
+lto = "fat"
+panic = "unwind"
 
 [workspace.lints.rust]
 unsafe_code = "deny"
@@ -70,7 +78,6 @@ aquamarine = "0.6.0"
 bytemuck = { version = "1.25.0", features = ["const_zeroed"] }
 bytemuck_derive = "1.10.2"
 clap = { version = "4.5.60", features = ["derive"] }
-coarsetime = "0.1.37"
 env_logger = "0.11.9"
 fastrace = "0.7.17"
 hex = "0.4.3"
