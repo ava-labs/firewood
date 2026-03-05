@@ -66,7 +66,7 @@ impl TruncatedTrie {
     ///
     /// # Errors
     ///
-    /// Returns a [`FileIoError`] if nodes cannot be read from the trie.
+    /// Returns a [`NodeError`] if nodes cannot be read from the trie.
     pub fn from_trie<T: TrieReader>(trie: &T, depth: usize) -> Result<Self, NodeError> {
         let Some(root_node) = trie.root_node() else {
             return Ok(Self {
@@ -131,7 +131,7 @@ impl TruncatedTrie {
     ///
     /// # Errors
     ///
-    /// Returns a [`FileIoError`] if nodes cannot be read from the trie.
+    /// Returns a [`NodeError`] if nodes cannot be read from the trie.
     pub fn update_from_trie<T: TrieReader>(&mut self, trie: &T) -> Result<(), NodeError> {
         let Some(root_node) = trie.root_node() else {
             self.root = None;

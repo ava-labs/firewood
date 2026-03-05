@@ -2551,9 +2551,9 @@ struct VoidResult fwd_range_proof_verify(struct VerifyRangeProofArgs args);
  *
  * # Returns
  *
- * - [`KeyValueBatchResult::NullHandlePointer`] if the caller provided a null pointer.
- * - [`KeyValueBatchResult::Some`] containing the key-value pairs if successful.
- * - [`KeyValueBatchResult::Err`] containing an error message if verification failed.
+ * - [`crate::KeyValueBatchResult::NullHandlePointer`] if the caller provided a null pointer.
+ * - [`crate::KeyValueBatchResult::Some`] containing the key-value pairs if successful.
+ * - [`crate::KeyValueBatchResult::Err`] containing an error message if verification failed.
  *
  * # Thread Safety
  *

@@ -95,6 +95,10 @@ impl FrozenProof {
     ///
     /// # Format
     ///
+    #[expect(
+        rustdoc::private_intra_doc_links,
+        reason = "Header is not exported"
+    )]
     /// - A 32-byte [`Header`] with the proof type set to [`ProofType::Single`].
     /// - The proof nodes, serialized as a _sequence_ of [`ProofNode`]s.
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
