@@ -22,8 +22,8 @@ use crate::remote::client::BatchOp;
 use crate::remote::TruncatedTrie;
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashedNodeReader, ImmutableProposal, LinearAddress,
-    MemStore, Node, NodeHashAlgorithm, NodeReader, NodeStore, PathComponent, SharedNode, TrieHash,
-    TrieReader,
+    MemStore, Node, NodeError, NodeHashAlgorithm, NodeReader, NodeStore, PathComponent, SharedNode,
+    TrieHash, TrieReader,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -75,9 +75,9 @@ pub enum WitnessError {
     #[error("truncated trie has no root node")]
     NoRoot,
 
-    /// An I/O error occurred during trie operations.
+    /// A trie error occurred during witness operations.
     #[error("trie operation failed: {0}")]
-    TrieError(#[from] FileIoError),
+    TrieError(#[from] NodeError),
 }
 
 // -- Server-side witness generation --
@@ -322,7 +322,7 @@ fn collect_siblings_for_flatten<T: TrieReader>(
 fn convert_node_for_witness<T: TrieReader>(
     nodestore: &T,
     node: &SharedNode,
-) -> Result<Node, FileIoError> {
+) -> Result<Node, NodeError> {
     match node.as_ref() {
         Node::Leaf(leaf) => Ok(Node::Leaf(leaf.clone())),
         Node::Branch(branch) => {

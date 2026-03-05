@@ -9,7 +9,7 @@
 //! without holding the full trie.
 
 use firewood_storage::{
-    hash_node, BranchNode, Child, Children, FileIoError, HashType, MaybePersistedNode, Node, Path,
+    hash_node, BranchNode, Child, Children, HashType, MaybePersistedNode, Node, NodeError, Path,
     SharedNode, TrieHash, TrieReader,
 };
 
@@ -67,7 +67,7 @@ impl TruncatedTrie {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if nodes cannot be read from the trie.
-    pub fn from_trie<T: TrieReader>(trie: &T, depth: usize) -> Result<Self, FileIoError> {
+    pub fn from_trie<T: TrieReader>(trie: &T, depth: usize) -> Result<Self, NodeError> {
         let Some(root_node) = trie.root_node() else {
             return Ok(Self {
                 root_hash: None,
@@ -132,7 +132,7 @@ impl TruncatedTrie {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if nodes cannot be read from the trie.
-    pub fn update_from_trie<T: TrieReader>(&mut self, trie: &T) -> Result<(), FileIoError> {
+    pub fn update_from_trie<T: TrieReader>(&mut self, trie: &T) -> Result<(), NodeError> {
         let Some(root_node) = trie.root_node() else {
             self.root = None;
             self.root_hash = None;
@@ -178,7 +178,7 @@ fn truncate_node<T: TrieReader>(
     current_depth: usize,
     max_depth: usize,
     path_prefix: &Path,
-) -> Result<(Node, HashType), FileIoError> {
+) -> Result<(Node, HashType), NodeError> {
     match node.as_ref() {
         Node::Leaf(leaf) => {
             let leaf_node = Node::Leaf(leaf.clone());

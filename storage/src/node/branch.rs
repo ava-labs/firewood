@@ -15,6 +15,50 @@ use crate::{
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
 
+/// Error type for trie node operations.
+///
+/// This distinguishes between storage I/O errors and logical trie errors
+/// (e.g., encountering a [`Child::Proxy`] that requires remote lookup).
+#[derive(Debug)]
+pub enum NodeError {
+    /// An I/O error from the storage layer.
+    Io(FileIoError),
+    /// A Proxy child was encountered that requires remote lookup.
+    Proxy(HashType),
+}
+
+impl From<FileIoError> for NodeError {
+    fn from(e: FileIoError) -> Self {
+        NodeError::Io(e)
+    }
+}
+
+impl From<std::convert::Infallible> for NodeError {
+    fn from(e: std::convert::Infallible) -> Self {
+        match e {}
+    }
+}
+
+impl std::fmt::Display for NodeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NodeError::Io(e) => write!(f, "node I/O error: {e}"),
+            NodeError::Proxy(hash) => {
+                write!(f, "proxy child encountered (hash={hash}): requires remote lookup")
+            }
+        }
+    }
+}
+
+impl std::error::Error for NodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            NodeError::Io(e) => Some(e),
+            NodeError::Proxy(_) => None,
+        }
+    }
+}
+
 pub(crate) trait Serializable {
     fn write_to<W: ExtendableBytes>(&self, vec: &mut W);
 
@@ -152,24 +196,21 @@ impl Child {
         }
     }
 
-    /// Return a `MaybePersistedNode` from a child
+    /// Try to return a `MaybePersistedNode` from a child.
     ///
     /// This is used in the dump utility, but otherwise should be avoided,
-    /// as it may create an unnecessary `MaybePersistedNode`
+    /// as it may create an unnecessary `MaybePersistedNode`.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if called on a [`Child::Proxy`] variant, which has no local
-    /// node data or address.
-    #[must_use]
-    pub fn as_maybe_persisted_node(&self) -> MaybePersistedNode {
+    /// Returns [`NodeError::Proxy`] if called on a [`Child::Proxy`] variant,
+    /// which has no local node data or address.
+    pub fn try_as_maybe_persisted_node(&self) -> Result<MaybePersistedNode, NodeError> {
         match self {
-            Child::Node(node) => MaybePersistedNode::from(SharedNode::from(node.clone())),
-            Child::AddressWithHash(addr, _) => MaybePersistedNode::from(*addr),
-            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.clone(),
-            Child::Proxy(_) => {
-                panic!("cannot convert Proxy child to MaybePersistedNode: no local data")
-            }
+            Child::Node(node) => Ok(MaybePersistedNode::from(SharedNode::from(node.clone()))),
+            Child::AddressWithHash(addr, _) => Ok(MaybePersistedNode::from(*addr)),
+            Child::MaybePersisted(maybe_persisted, _) => Ok(maybe_persisted.clone()),
+            Child::Proxy(hash) => Err(NodeError::Proxy(hash.clone())),
         }
     }
 
@@ -181,27 +222,24 @@ impl Child {
     ///
     /// # Returns
     ///
-    /// Returns a `Result<SharedNode, FileIoError>` where:
+    /// Returns a `Result<SharedNode, NodeError>` where:
     /// - `Ok(SharedNode)` contains the node if successfully read
-    /// - `Err(FileIoError)` if there was an error reading from storage
+    /// - `Err(NodeError::Io)` if there was an error reading from storage
+    /// - `Err(NodeError::Proxy)` for Proxy variants requiring remote lookup
     ///
     /// # Errors
     ///
-    /// Returns an error for [`Child::Proxy`] variants, which have no local
-    /// node data and require remote lookup.
-    pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
+    /// Returns [`NodeError::Proxy`] for [`Child::Proxy`] variants, which have
+    /// no local node data and require remote lookup.
+    /// Returns [`NodeError::Io`] if there was an I/O error reading from storage.
+    pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, NodeError> {
         match self {
             Child::Node(node) => Ok(node.clone().into()),
-            Child::AddressWithHash(addr, _) => storage.read_node(*addr),
-            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.as_shared_node(storage),
-            Child::Proxy(_) => Err(FileIoError::new(
-                std::io::Error::other(
-                    "cannot read Proxy child locally: requires remote lookup",
-                ),
-                None,
-                0,
-                Some("as_shared_node on Proxy child".into()),
-            )),
+            Child::AddressWithHash(addr, _) => Ok(storage.read_node(*addr)?),
+            Child::MaybePersisted(maybe_persisted, _) => {
+                Ok(maybe_persisted.as_shared_node(storage)?)
+            }
+            Child::Proxy(hash) => Err(NodeError::Proxy(hash.clone())),
         }
     }
 }

@@ -562,6 +562,8 @@ mod tests {
             let revision = self.revision(root_hash)?;
             Ok(revision
                 .root_as_maybe_persisted_node()
+                .ok()
+                .flatten()
                 .is_some_and(|node| node.unpersisted().is_none()))
         }
     }

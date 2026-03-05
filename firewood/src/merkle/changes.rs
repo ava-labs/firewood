@@ -6,7 +6,7 @@ use std::{cmp::Ordering, iter::once};
 
 use firewood_metrics::firewood_increment;
 use firewood_storage::{
-    Child, FileIoError, HashedNodeReader, Node, NodeReader, Path, SharedNode, TrieHash,
+    Child, HashedNodeReader, Node, NodeError, NodeReader, Path, SharedNode, TrieHash,
 };
 use lender::{Lender, Lending};
 
@@ -181,7 +181,7 @@ struct ComparableNodeInfo {
 impl ComparableNodeInfo {
     // Creates a `ComparableNodeInfo` from a `Child`, its pre-path, and the trie that the `Child`
     // is from for reading the node from storage.
-    fn new<T: NodeReader>(pre_path: Path, child: &Child, trie: &T) -> Result<Self, FileIoError> {
+    fn new<T: NodeReader>(pre_path: Path, child: &Child, trie: &T) -> Result<Self, NodeError> {
         let node = child.as_shared_node(trie)?;
         // We need the full path as the diff algorithm compares the full paths of the current
         // nodes of the two tries.
@@ -211,7 +211,7 @@ impl<'a, Left: HashedNodeReader, Right: HashedNodeReader> DiffMerkleNodeStream<'
         left_tree: &'a Left,
         right_tree: &'a Right,
         start_key: Key,
-    ) -> Result<Self, FileIoError> {
+    ) -> Result<Self, NodeError> {
         // Create pre-order iterators for the two tries and have them iterate to the start key.
         // If the start key doesn't exist for an iterator, it will set the iterator to the
         // smallest key that is larger than the start key.
@@ -364,7 +364,7 @@ impl<'a, Left: HashedNodeReader, Right: HashedNodeReader> DiffMerkleNodeStream<'
     /// `one_step_compare` to complete the state handling.
     fn next_node_from_both(
         &mut self,
-    ) -> Result<(DiffIterationNodeState, Option<BatchOp<Key, Value>>), FileIoError> {
+    ) -> Result<(DiffIterationNodeState, Option<BatchOp<Key, Value>>), NodeError> {
         // Get the next node from the left trie.
         let Some(left_state) = self.left_tree.next_node_info()? else {
             // No more nodes in the left trie. For this state, the current node from the right trie has already
@@ -388,7 +388,7 @@ impl<'a, Left: HashedNodeReader, Right: HashedNodeReader> DiffMerkleNodeStream<'
 
     /// Only called by `next` to implement the Iterator trait. Separated out into a separate
     /// function mainly to simplify error handling.
-    fn next_internal(&mut self) -> Result<Option<BatchOp<Key, Value>>, FileIoError> {
+    fn next_internal(&mut self) -> Result<Option<BatchOp<Key, Value>>, NodeError> {
         // Loops until there is a value to return or if we have reached the end of the
         // traversal. State processing is based on the value of `state`, which we take at the
         // beginning of the loop and reassign before the next iteration. `state` can only be
@@ -476,7 +476,7 @@ impl<'a, Left: HashedNodeReader, Right: HashedNodeReader> DiffMerkleNodeStream<'
 impl<Left: HashedNodeReader, Right: HashedNodeReader> Iterator
     for DiffMerkleNodeStream<'_, Left, Right>
 {
-    type Item = Result<BatchOp<Key, Value>, FileIoError>;
+    type Item = Result<BatchOp<Key, Value>, NodeError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.next_internal().transpose()
@@ -501,20 +501,20 @@ struct PreOrderIterator<'a, T: HashedNodeReader> {
 /// normal iterator is necessary since we want to return a reference to the current
 /// `ComparableNodeInfo` that is inside `PreOrderIterator`.
 impl<'lend, T: HashedNodeReader> Lending<'lend> for PreOrderIterator<'_, T> {
-    type Lend = Result<&'lend ComparableNodeInfo, FileIoError>;
+    type Lend = Result<&'lend ComparableNodeInfo, NodeError>;
 }
 
 impl<T: HashedNodeReader> Lender for PreOrderIterator<'_, T> {
     lender::check_covariance!();
 
-    fn next(&mut self) -> Option<Result<&'_ ComparableNodeInfo, FileIoError>> {
+    fn next(&mut self) -> Option<Result<&'_ ComparableNodeInfo, NodeError>> {
         self.next_node_info().transpose()
     }
 }
 
 impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
     /// Create a pre-order iterator for the trie that starts at `start_key`.
-    fn new(trie: &'a T, start_key: &Key) -> Result<PreOrderIterator<'a, T>, FileIoError> {
+    fn new(trie: &'a T, start_key: &Key) -> Result<PreOrderIterator<'a, T>, NodeError> {
         // If the root node is not None, then push a `ComparableNodeInfo` for the root onto
         // the traversal stack. It will be used on the first call to `next` or `next_node_info`.
         // Because we already have the root node, we create its `ComparableNodeInfo` directly
@@ -549,7 +549,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
     /// traversal stack until the subseqent call to `next` or `next_node_info`. This is done by saving
     /// the `ComparableNodeInfo` of the current node in `node_info` and keeping that available for the
     /// next call. Skipping traversal of the children then just involves setting `node_info` to None.
-    fn next_node_info(&mut self) -> Result<Option<&ComparableNodeInfo>, FileIoError> {
+    fn next_node_info(&mut self) -> Result<Option<&ComparableNodeInfo>, NodeError> {
         firewood_increment!(crate::registry::CHANGE_PROOF_NEXT, 1);
 
         // Take the info of the current node (which will soon be replaced), and check if it is a
@@ -592,7 +592,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
     }
 
     /// Modify the iterator to skip all keys prior to the specified key.
-    fn iterate_to_key(mut self, key: &Key) -> Result<Self, FileIoError> {
+    fn iterate_to_key(mut self, key: &Key) -> Result<Self, NodeError> {
         // Function is a no-op if the key is empty.
         if key.is_empty() {
             return Ok(self);
@@ -698,7 +698,7 @@ mod tests {
     };
 
     use firewood_storage::{
-        Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, MemStore,
+        Committed, FileBacked, HashedNodeReader, ImmutableProposal, MemStore, NodeError,
         MutableProposal, NodeStore, SeededRng, TestRecorder, TrieReader,
     };
     use lender::Lender;
@@ -735,7 +735,7 @@ mod tests {
         tree_left: &'a Merkle<T>,
         tree_right: &'a Merkle<U>,
         start_key: Key,
-    ) -> Result<DiffMerkleNodeStream<'a, T, U>, FileIoError>
+    ) -> Result<DiffMerkleNodeStream<'a, T, U>, NodeError>
     where
         T: TrieReader + HashedNodeReader,
         U: TrieReader + HashedNodeReader,
