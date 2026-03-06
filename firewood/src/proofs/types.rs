@@ -138,6 +138,14 @@ pub enum ProofError {
     #[error("the end key of the change proof is larger than the end key in the proof array")]
     EndKeyLessThanLastKey,
 
+    /// Range proof: requested start key is greater than the first key in the proof
+    #[error("the requested start key is greater than the first key in the range proof")]
+    RangeProofStartBeyondFirstKey,
+
+    /// Range proof: requested end key is less than the last key in the proof
+    #[error("the requested end key is less than the last key in the range proof")]
+    RangeProofEndBeforeLastKey,
+
     #[error("the proof is None as it has been consumed")]
     ProofIsNone,
 
