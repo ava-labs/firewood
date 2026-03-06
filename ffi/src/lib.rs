@@ -29,8 +29,8 @@ mod logging;
 mod metrics;
 mod proofs;
 mod proposal;
-mod remote;
 mod registry;
+mod remote;
 #[cfg(feature = "block-replay")]
 mod replay;
 mod revision;

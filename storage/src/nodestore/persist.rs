@@ -379,8 +379,9 @@ mod tests {
     fn test_single_leaf_node() {
         let leaf = create_leaf(&[1, 2, 3], &[4, 5, 6]);
         let store = create_test_store_with_root(leaf.clone());
-        let mut iter =
-            UnPersistedNodeIterator::new(&store).unwrap().map(|node| node.as_shared_node(&store).unwrap());
+        let mut iter = UnPersistedNodeIterator::new(&store)
+            .unwrap()
+            .map(|node| node.as_shared_node(&store).unwrap());
 
         // Should return the leaf node
         let node = iter.next().unwrap();
@@ -399,8 +400,9 @@ mod tests {
             vec![(PathComponent::ALL[5], leaf.clone())],
         );
         let store = create_test_store_with_root(branch.clone());
-        let mut iter =
-            UnPersistedNodeIterator::new(&store).unwrap().map(|node| node.as_shared_node(&store).unwrap());
+        let mut iter = UnPersistedNodeIterator::new(&store)
+            .unwrap()
+            .map(|node| node.as_shared_node(&store).unwrap());
 
         // Should return child first (depth-first)
         let node = iter.next().unwrap();

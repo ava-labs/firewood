@@ -94,11 +94,9 @@ fn read_hash_type(reader: &mut ProofReader<'_>) -> Result<HashType, ReadError> {
                 let data = reader.read_item::<&[u8]>()?;
                 Ok(HashType::Rlp(data.into()))
             }
-            found => Err(reader.invalid_item(
-                "hash type discriminant",
-                "0 (hash) or 1 (rlp)",
-                found,
-            )),
+            found => {
+                Err(reader.invalid_item("hash type discriminant", "0 (hash) or 1 (rlp)", found))
+            }
         }
     }
 }
@@ -367,7 +365,7 @@ impl WitnessProof {
                     batch_ops.push(BatchOp::Delete { key });
                 }
                 found => {
-                    return Err(reader.invalid_item("batch op tag", "0 (put) or 1 (delete)", found))
+                    return Err(reader.invalid_item("batch op tag", "0 (put) or 1 (delete)", found));
                 }
             }
         }
@@ -443,11 +441,7 @@ impl TruncatedTrie {
             .read_chunk::<8>()
             .map_err(|err| err.set_item("trie magic"))?;
         if magic != TRIE_MAGIC {
-            return Err(reader.invalid_item(
-                "trie magic",
-                "b\"fwdtrtri\"",
-                format!("{magic:?}"),
-            ));
+            return Err(reader.invalid_item("trie magic", "b\"fwdtrtri\"", format!("{magic:?}")));
         }
 
         // Version
@@ -578,8 +572,7 @@ mod tests {
         );
 
         // Verify the deserialized witness still works for verification
-        let truncated =
-            TruncatedTrie::from_trie(old_trie.nodestore(), 2).unwrap();
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), 2).unwrap();
         let updated = crate::remote::witness::verify_witness(&truncated, &deserialized).unwrap();
         assert_eq!(*updated.root_hash().unwrap(), new_root_hash);
     }
@@ -646,10 +639,7 @@ mod tests {
 
     #[test]
     fn test_frozen_proof_roundtrip() {
-        let trie = create_test_trie(&[
-            (b"apple", b"red"),
-            (b"banana", b"yellow"),
-        ]);
+        let trie = create_test_trie(&[(b"apple", b"red"), (b"banana", b"yellow")]);
         let merkle = Merkle::from(trie.nodestore());
 
         let proof = merkle.prove(b"apple").unwrap();

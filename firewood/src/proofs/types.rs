@@ -48,7 +48,7 @@
 )]
 
 use firewood_storage::{
-    Children, HashType, Hashable, IntoHashType, IntoSplitPath, NodeError, NibblesIterator, Path,
+    Children, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, NodeError, Path,
     PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath, ValueDigest,
 };
 use thiserror::Error;

@@ -107,9 +107,7 @@ fn get_helper<T: TrieReader>(
                         let child = maybe_persisted.as_shared_node(nodestore)?;
                         get_helper(nodestore, &child, remaining_key)
                     }
-                    Some(child @ Child::Proxy(_)) => {
-                        child.as_shared_node(nodestore).map(Some)
-                    }
+                    Some(child @ Child::Proxy(_)) => child.as_shared_node(nodestore).map(Some),
                 },
             }
         }

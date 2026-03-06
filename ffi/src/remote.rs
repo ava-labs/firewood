@@ -11,9 +11,9 @@
 //! - Generating a witness proof for batch operations (server-side)
 //! - Verifying a witness proof and updating the truncated trie (client-side)
 
+use firewood::remote::TruncatedTrie;
 use firewood::remote::client::BatchOp as RemoteBatchOp;
 use firewood::remote::witness::{self, WitnessProof};
-use firewood::remote::TruncatedTrie;
 use firewood::v2::api::Db as _;
 
 use crate::metrics::MetricsContextExt;
@@ -162,8 +162,7 @@ pub extern "C" fn fwd_create_truncated_trie(
     crate::invoke_with_handle(db, move |db| -> Result<_, String> {
         let api_hash: firewood::v2::api::HashKey = root_hash.into();
         let revision = db.db().revision(api_hash).map_err(|e| e.to_string())?;
-        let trie =
-            TruncatedTrie::from_trie(revision.as_ref(), depth).map_err(|e| e.to_string())?;
+        let trie = TruncatedTrie::from_trie(revision.as_ref(), depth).map_err(|e| e.to_string())?;
         let hash = trie
             .root_hash()
             .cloned()
@@ -202,12 +201,8 @@ impl From<Result<(TruncatedTrie, HashKey), String>> for TruncatedTrieResult {
 /// The caller must ensure that `handle` is a valid pointer to a
 /// [`TruncatedTrieHandle`].
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_truncated_trie_root_hash(
-    handle: Option<&TruncatedTrieHandle>,
-) -> HashResult {
-    crate::invoke_with_handle(handle, |h| {
-        h.trie.root_hash().cloned().map(HashKey::from)
-    })
+pub extern "C" fn fwd_truncated_trie_root_hash(handle: Option<&TruncatedTrieHandle>) -> HashResult {
+    crate::invoke_with_handle(handle, |h| h.trie.root_hash().cloned().map(HashKey::from))
 }
 
 impl From<Option<HashKey>> for HashResult {
@@ -301,11 +296,9 @@ pub extern "C" fn fwd_generate_witness(
                     key: key.as_slice().into(),
                 }),
                 crate::BatchOp::DeleteRange { .. } => {
-                    return Err(
-                        "DeleteRange not supported in witness generation; \
+                    return Err("DeleteRange not supported in witness generation; \
                          expand to individual Delete ops on the server side"
-                            .to_string(),
-                    );
+                        .to_string());
                 }
             }
         }
@@ -359,8 +352,8 @@ pub extern "C" fn fwd_verify_witness(
     crate::invoke_with_handle(trie_handle, move |trie_h| -> Result<_, String> {
         let witness_h = witness_handle.ok_or("null witness handle")?;
 
-        let new_trie = witness::verify_witness(&trie_h.trie, &witness_h.proof)
-            .map_err(|e| e.to_string())?;
+        let new_trie =
+            witness::verify_witness(&trie_h.trie, &witness_h.proof).map_err(|e| e.to_string())?;
 
         let hash = new_trie
             .root_hash()
@@ -429,9 +422,7 @@ impl CResult for GetWithProofResult {
 /// * call [`fwd_free_owned_bytes`](crate::fwd_free_owned_bytes) to free the
 ///   returned bytes.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_witness_proof_to_bytes(
-    handle: Option<&WitnessProofHandle>,
-) -> ValueResult {
+pub extern "C" fn fwd_witness_proof_to_bytes(handle: Option<&WitnessProofHandle>) -> ValueResult {
     crate::invoke_with_handle(handle, |h| -> Result<Option<Box<[u8]>>, String> {
         let mut buf = Vec::new();
         h.proof.write_to_vec(&mut buf);
@@ -472,9 +463,7 @@ pub extern "C" fn fwd_witness_proof_from_bytes(bytes: BorrowedBytes<'_>) -> Witn
 /// * call [`fwd_free_owned_bytes`](crate::fwd_free_owned_bytes) to free the
 ///   returned bytes.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_truncated_trie_to_bytes(
-    handle: Option<&TruncatedTrieHandle>,
-) -> ValueResult {
+pub extern "C" fn fwd_truncated_trie_to_bytes(handle: Option<&TruncatedTrieHandle>) -> ValueResult {
     crate::invoke_with_handle(handle, |h| -> Result<Option<Box<[u8]>>, String> {
         let mut buf = Vec::new();
         h.trie.write_to_vec(&mut buf);
@@ -527,9 +516,7 @@ pub extern "C" fn fwd_get_with_proof(
             .map_err(|e| e.to_string())?;
 
         // Get value
-        let value = view
-            .val(key.as_slice())
-            .map_err(|e| e.to_string())?;
+        let value = view.val(key.as_slice()).map_err(|e| e.to_string())?;
 
         // Serialize proof
         let mut proof_bytes = Vec::new();
@@ -639,10 +626,7 @@ pub extern "C" fn fwd_validate_witness_ops(
                         ));
                     };
                     match wop {
-                        RemoteBatchOp::Put {
-                            key: wk,
-                            value: wv,
-                        } => {
+                        RemoteBatchOp::Put { key: wk, value: wv } => {
                             if key.as_slice() != &**wk || value.as_slice() != &**wv {
                                 return Err(format!(
                                     "Put mismatch at witness index {wi}: expected key={} value_len={}, got key={} value_len={}",
@@ -654,9 +638,7 @@ pub extern "C" fn fwd_validate_witness_ops(
                             }
                         }
                         RemoteBatchOp::Delete { .. } => {
-                            return Err(format!(
-                                "expected Put at witness index {wi}, got {wop:?}"
-                            ));
+                            return Err(format!("expected Put at witness index {wi}, got {wop:?}"));
                         }
                     }
                     wi = wi.strict_add(1);
@@ -714,12 +696,13 @@ pub extern "C" fn fwd_validate_witness_ops(
 /// Formats a byte slice as a hex string for error messages.
 fn hex_key(bytes: &[u8]) -> String {
     use std::fmt::Write;
-    bytes
-        .iter()
-        .fold(String::with_capacity(bytes.len().strict_mul(2)), |mut s, b| {
+    bytes.iter().fold(
+        String::with_capacity(bytes.len().strict_mul(2)),
+        |mut s, b| {
             let _ = write!(s, "{b:02x}");
             s
-        })
+        },
+    )
 }
 
 /// Frees a [`TruncatedTrieHandle`].

@@ -55,10 +55,8 @@ where
     I: Iterator<Item: KeyValuePair>,
     K: KeyType,
 {
-    type Item = Result<
-        BatchOp<EitherKey<Key, <I as BatchIter>::Key>, <I as BatchIter>::Value>,
-        NodeError,
-    >;
+    type Item =
+        Result<BatchOp<EitherKey<Key, <I as BatchIter>::Key>, <I as BatchIter>::Value>, NodeError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {

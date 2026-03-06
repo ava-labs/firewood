@@ -393,8 +393,7 @@ pub trait DbView {
 }
 
 /// A boxed iterator over key/value pairs.
-pub type BoxKeyValueIter<'view> =
-    Box<dyn Iterator<Item = Result<(Key, Value), NodeError>> + 'view>;
+pub type BoxKeyValueIter<'view> = Box<dyn Iterator<Item = Result<(Key, Value), NodeError>> + 'view>;
 
 /// A dynamic dyspatch version of [`DbView`] that can be shared.
 pub type ArcDynDbView = Arc<dyn DynDbView>;

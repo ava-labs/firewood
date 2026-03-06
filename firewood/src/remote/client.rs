@@ -30,10 +30,7 @@ pub trait RemoteTransport {
     /// # Errors
     ///
     /// Returns an error if the transport operation fails.
-    fn get_value(
-        &self,
-        key: &[u8],
-    ) -> Result<ValueWithProof, Self::Error>;
+    fn get_value(&self, key: &[u8]) -> Result<ValueWithProof, Self::Error>;
 
     /// Sends a batch of operations to the server to create a proposal.
     ///
@@ -42,10 +39,8 @@ pub trait RemoteTransport {
     /// # Errors
     ///
     /// Returns an error if the transport operation fails.
-    fn create_proposal(
-        &self,
-        batch_ops: &[BatchOp],
-    ) -> Result<(ProposalId, TrieHash), Self::Error>;
+    fn create_proposal(&self, batch_ops: &[BatchOp])
+    -> Result<(ProposalId, TrieHash), Self::Error>;
 
     /// Commits a proposal on the server.
     ///
@@ -54,10 +49,7 @@ pub trait RemoteTransport {
     /// # Errors
     ///
     /// Returns an error if the transport operation fails.
-    fn commit_proposal(
-        &self,
-        proposal_id: ProposalId,
-    ) -> Result<Box<[u8]>, Self::Error>;
+    fn commit_proposal(&self, proposal_id: ProposalId) -> Result<Box<[u8]>, Self::Error>;
 
     /// Fetches a truncated trie from the server for bootstrapping.
     ///
@@ -184,9 +176,7 @@ impl<T: RemoteTransport> RemoteClient<T> {
             .map_err(RemoteClientError::TransportError)?;
 
         if !trie.verify_root_hash(trusted_root_hash) {
-            return Err(RemoteClientError::ProofError(
-                ProofError::UnexpectedHash,
-            ));
+            return Err(RemoteClientError::ProofError(ProofError::UnexpectedHash));
         }
 
         self.trie = trie;
@@ -200,9 +190,7 @@ mod tests {
 
     use super::*;
     use crate::merkle::Merkle;
-    use firewood_storage::{
-        HashedNodeReader, ImmutableProposal, MemStore, NodeStore,
-    };
+    use firewood_storage::{HashedNodeReader, ImmutableProposal, MemStore, NodeStore};
     use std::sync::Arc;
 
     /// A test transport that wraps a real Merkle trie and generates proofs.
@@ -222,10 +210,7 @@ mod tests {
     impl RemoteTransport for TestTransport {
         type Error = TestError;
 
-        fn get_value(
-            &self,
-            key: &[u8],
-        ) -> Result<ValueWithProof, TestError> {
+        fn get_value(&self, key: &[u8]) -> Result<ValueWithProof, TestError> {
             let proof = self
                 .merkle
                 .prove(key)
@@ -247,10 +232,7 @@ mod tests {
             Err(TestError("not implemented".into()))
         }
 
-        fn commit_proposal(
-            &self,
-            _proposal_id: ProposalId,
-        ) -> Result<Box<[u8]>, TestError> {
+        fn commit_proposal(&self, _proposal_id: ProposalId) -> Result<Box<[u8]>, TestError> {
             Err(TestError("not implemented".into()))
         }
 
@@ -264,9 +246,7 @@ mod tests {
         }
     }
 
-    fn create_test_transport(
-        keys: &[(&[u8], &[u8])],
-    ) -> TestTransport {
+    fn create_test_transport(keys: &[(&[u8], &[u8])]) -> TestTransport {
         let memstore = MemStore::default();
         let nodestore = NodeStore::new_empty_proposal(Arc::new(memstore));
         let mut merkle = Merkle::from(nodestore);
@@ -282,10 +262,7 @@ mod tests {
 
     #[test]
     fn test_get_existing_key() {
-        let transport = create_test_transport(&[
-            (b"apple", b"red"),
-            (b"banana", b"yellow"),
-        ]);
+        let transport = create_test_transport(&[(b"apple", b"red"), (b"banana", b"yellow")]);
         let trie = TruncatedTrie::from_trie(transport.merkle.nodestore(), 4).unwrap();
         let client = RemoteClient::new(trie, transport);
 

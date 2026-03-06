@@ -47,7 +47,10 @@ impl std::fmt::Display for NodeError {
         match self {
             NodeError::Io(e) => write!(f, "node I/O error: {e}"),
             NodeError::Proxy(hash) => {
-                write!(f, "proxy child encountered (hash={hash}): requires remote lookup")
+                write!(
+                    f,
+                    "proxy child encountered (hash={hash}): requires remote lookup"
+                )
             }
             NodeError::UnhashedChild => {
                 write!(f, "child node has no hash (expected only in hashed tries)")
@@ -136,9 +139,7 @@ impl Child {
     pub const fn as_mut_node(&mut self) -> Option<&mut Node> {
         match self {
             Child::Node(node) => Some(node),
-            Child::AddressWithHash(..)
-            | Child::MaybePersisted(..)
-            | Child::Proxy(_) => None,
+            Child::AddressWithHash(..) | Child::MaybePersisted(..) | Child::Proxy(_) => None,
         }
     }
 

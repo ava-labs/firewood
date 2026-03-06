@@ -698,8 +698,8 @@ mod tests {
     };
 
     use firewood_storage::{
-        Committed, FileBacked, HashedNodeReader, ImmutableProposal, MemStore, NodeError,
-        MutableProposal, NodeStore, SeededRng, TestRecorder, TrieReader,
+        Committed, FileBacked, HashedNodeReader, ImmutableProposal, MemStore, MutableProposal,
+        NodeError, NodeStore, SeededRng, TestRecorder, TrieReader,
     };
     use lender::Lender;
     use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};

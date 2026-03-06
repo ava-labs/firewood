@@ -644,7 +644,12 @@ impl<S: ReadableStorage> RootReader for NodeStore<MutableProposal, S> {
 
 impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
     fn root_node(&self) -> Option<SharedNode> {
-        let mpn = self.kind.root.as_ref()?.try_as_maybe_persisted_node().ok()?;
+        let mpn = self
+            .kind
+            .root
+            .as_ref()?
+            .try_as_maybe_persisted_node()
+            .ok()?;
         mpn.as_shared_node(self).ok()
     }
     fn root_as_maybe_persisted_node(&self) -> Result<Option<MaybePersistedNode>, NodeError> {
@@ -658,7 +663,12 @@ impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
 
 impl<S: ReadableStorage> RootReader for NodeStore<Arc<ImmutableProposal>, S> {
     fn root_node(&self) -> Option<SharedNode> {
-        let mpn = self.kind.root.as_ref()?.try_as_maybe_persisted_node().ok()?;
+        let mpn = self
+            .kind
+            .root
+            .as_ref()?
+            .try_as_maybe_persisted_node()
+            .ok()?;
         mpn.as_shared_node(self).ok()
     }
     fn root_as_maybe_persisted_node(&self) -> Result<Option<MaybePersistedNode>, NodeError> {
