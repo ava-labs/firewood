@@ -233,7 +233,7 @@ impl From<NodeError> for Error {
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
         use RevisionManagerError::{
-            FileIoError, IOError, NotLatest, PersistError, RevisionNotFound,
+            FileIoError, IOError, NodeError, NotLatest, PersistError, RevisionNotFound,
             RevisionWithoutAddress, RootStoreError,
         };
         match err {
@@ -243,6 +243,7 @@ impl From<RevisionManagerError> for Error {
             },
             RevisionWithoutAddress { provided } => Self::RevisionWithoutAddress { provided },
             FileIoError(io_err) => Self::FileIO(io_err),
+            NodeError(err) => Self::from(err),
             IOError(err) => Self::IO(err),
             RootStoreError(err) => Self::RootStoreError(err),
             PersistError(err) => Self::DeferredPersistenceError(err),
