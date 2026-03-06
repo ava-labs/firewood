@@ -13,6 +13,7 @@ env:
   BENCHMARK_REPORTS_REPOSITORY: 'AminR443/firewood-benchmark-reports'
   BENCHMARK_REPORTS_GH_REPOSITORY: 'github.com/AminR443/firewood-benchmark-reports'
   BENCHMARK_REPORTS_PAGES_URL: 'https://aminr443.github.io/firewood-benchmark-reports'
+  BENCHMARK_REPORTS_BRANCH: 'gh-pages'
   BENCHMARK_THEME_CSS_URL: 'https://raw.githubusercontent.com/AminR443/firewood-benchmark-reports/refs/heads/main/theme.css'
 
 jobs:
@@ -50,7 +51,7 @@ jobs:
           set -euo pipefail
 
           rm -rf ./benchmark-data-check-repository
-          git clone --depth 1 --branch main "https://x-access-token:${BENCHMARK_TOKEN}@github.com/${BENCHMARK_REPORTS_REPOSITORY}.git" ./benchmark-data-check-repository
+          git clone --depth 1 --branch "${BENCHMARK_REPORTS_BRANCH}" "https://x-access-token:${BENCHMARK_TOKEN}@github.com/${BENCHMARK_REPORTS_REPOSITORY}.git" ./benchmark-data-check-repository
           cd ./benchmark-data-check-repository
 
           has_commit() {
@@ -133,6 +134,7 @@ jobs:
           github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           auto-push: true
           gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
+          gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
           benchmark-data-dir-path: ${{ steps.location.outputs.pr-data-dir }}
           alert-threshold: '150%'
           comment-on-alert: false
@@ -154,6 +156,7 @@ jobs:
           github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           auto-push: true
           gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
+          gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
           benchmark-data-dir-path: ${{ steps.location.outputs.comparison-data-dir }}
           alert-threshold: '150%'
           comment-on-alert: false
@@ -191,6 +194,7 @@ jobs:
           github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           auto-push: true
           gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
+          gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
           benchmark-data-dir-path: ${{ steps.location.outputs.pr-data-dir }}
           alert-threshold: '150%'
           comment-on-alert: false
@@ -209,6 +213,7 @@ jobs:
           github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           auto-push: true
           gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
+          gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
           benchmark-data-dir-path: ${{ steps.location.outputs.comparison-data-dir }}
           alert-threshold: '150%'
           comment-on-alert: false
@@ -224,7 +229,7 @@ jobs:
           set -euo pipefail
 
           rm -rf ./benchmark-theme-repository
-          git clone --depth 1 --branch main "https://x-access-token:${BENCHMARK_TOKEN}@github.com/${BENCHMARK_REPORTS_REPOSITORY}.git" ./benchmark-theme-repository
+          git clone --depth 1 --branch "${BENCHMARK_REPORTS_BRANCH}" "https://x-access-token:${BENCHMARK_TOKEN}@github.com/${BENCHMARK_REPORTS_REPOSITORY}.git" ./benchmark-theme-repository
 
           cd ./benchmark-theme-repository
 
@@ -246,11 +251,11 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A "$PR_DATA_DIR" "$COMPARISON_DATA_DIR"
+          git add -A .
 
           if ! git diff --cached --quiet; then
             git commit -m "style: apply shared benchmark theme for PR graphs"
-            git push origin main
+            git push origin "${BENCHMARK_REPORTS_BRANCH}"
           else
             echo "No benchmark theme changes to commit."
           fi
@@ -349,6 +354,7 @@ jobs:
           fail-on-alert: true
           alert-comment-cc-users: '@AminR443'
           gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
+          gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
 
       - name: Apply benchmark theme to main graph
         env:
@@ -359,7 +365,7 @@ jobs:
           set -euo pipefail
 
           rm -rf ./benchmark-theme-repository
-          git clone --depth 1 --branch main "https://x-access-token:${BENCHMARK_TOKEN}@github.com/${BENCHMARK_REPORTS_REPOSITORY}.git" ./benchmark-theme-repository
+          git clone --depth 1 --branch "${BENCHMARK_REPORTS_BRANCH}" "https://x-access-token:${BENCHMARK_TOKEN}@github.com/${BENCHMARK_REPORTS_REPOSITORY}.git" ./benchmark-theme-repository
 
           cd ./benchmark-theme-repository
 
@@ -376,11 +382,11 @@ jobs:
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A "$MAIN_DATA_DIR"
+          git add -A .
 
           if ! git diff --cached --quiet; then
             git commit -m "style: apply shared benchmark theme for main graph"
-            git push origin main
+            git push origin "${BENCHMARK_REPORTS_BRANCH}"
           else
             echo "No benchmark theme changes to commit."
           fi
