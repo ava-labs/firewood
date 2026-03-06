@@ -54,14 +54,7 @@ impl std::fmt::Display for NodeError {
     }
 }
 
-impl std::error::Error for NodeError {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match self {
-            NodeError::Io(e) => Some(e),
-            NodeError::Proxy(_) | NodeError::UnhashedChild => None,
-        }
-    }
-}
+impl std::error::Error for NodeError {}
 
 pub(crate) trait Serializable {
     fn write_to<W: ExtendableBytes>(&self, vec: &mut W);
