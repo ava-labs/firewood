@@ -89,7 +89,9 @@ jobs:
           fi
 
       - name: Prepare base source tree
+        id: prepare_base
         if: steps.base-data.outputs.base-required == 'true'
+        continue-on-error: true
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
@@ -103,7 +105,8 @@ jobs:
           git worktree add --detach ./benchmark-sources/base "$BASE_SHA"
 
       - name: Run benchmark on base commit
-        if: steps.base-data.outputs.base-required == 'true'
+        if: steps.base-data.outputs.base-required == 'true' && steps.prepare_base.outcome == 'success'
+        continue-on-error: true
         uses: ./.github/actions/run-benchmark
         id: benchmark-base
         with:
@@ -115,11 +118,12 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Clean benchmark action workspace
-        if: steps.base-data.outputs.base-in-pr-trend != 'true'
+        if: steps.base-data.outputs.base-in-pr-trend != 'true' && steps.benchmark-base.outcome == 'success'
         run: rm -rf ./benchmark-data-repository
 
       - name: Store base result in PR trend graph
-        if: steps.base-data.outputs.base-in-pr-trend != 'true'
+        if: steps.base-data.outputs.base-in-pr-trend != 'true' && steps.benchmark-base.outcome == 'success'
+        continue-on-error: true
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: 'Replay 10K PR'
@@ -135,11 +139,12 @@ jobs:
           fail-on-alert: false
 
       - name: Clean benchmark action workspace
-        if: steps.base-data.outputs.base-in-comparison != 'true'
+        if: steps.base-data.outputs.base-in-comparison != 'true' && steps.benchmark-base.outcome == 'success'
         run: rm -rf ./benchmark-data-repository
 
       - name: Store base result in commit comparison graph
-        if: steps.base-data.outputs.base-in-comparison != 'true'
+        if: steps.base-data.outputs.base-in-comparison != 'true' && steps.benchmark-base.outcome == 'success'
+        continue-on-error: true
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: 'Replay 10K PR Compare'
@@ -157,6 +162,10 @@ jobs:
       - name: Clean up base source tree
         if: always() && steps.base-data.outputs.base-required == 'true'
         run: git worktree remove --force ./benchmark-sources/base || rm -rf ./benchmark-sources/base
+
+      - name: Warn if base benchmark failed
+        if: steps.base-data.outputs.base-required == 'true' && steps.benchmark-base.outcome != 'success'
+        run: echo "::warning::Base benchmark did not succeed (outcome=${{ steps.benchmark-base.outcome }}); continuing with PR head benchmark."
 
       - name: Run benchmark on PR head commit
         uses: ./.github/actions/run-benchmark
@@ -253,7 +262,8 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_COMMIT_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
-          BASE_BENCHMARK_RAN: ${{ steps.base-data.outputs.base-required }}
+          BASE_BENCHMARK_REQUESTED: ${{ steps.base-data.outputs.base-required }}
+          BASE_BENCHMARK_OUTCOME: ${{ steps.benchmark-base.outcome }}
           TREND_URL: ${{ env.BENCHMARK_REPORTS_PAGES_URL }}/${{ steps.location.outputs.pr-data-dir }}/
           COMPARISON_URL: ${{ env.BENCHMARK_REPORTS_PAGES_URL }}/${{ steps.location.outputs.comparison-data-dir }}/
         with:
@@ -262,7 +272,8 @@ jobs:
             const prNumber = parseInt(process.env.PR_NUMBER, 10);
             const baseCommitSha = process.env.BASE_COMMIT_SHA;
             const headCommitSha = process.env.HEAD_COMMIT_SHA;
-            const baseBenchmarkRan = process.env.BASE_BENCHMARK_RAN === 'true';
+            const baseBenchmarkRequested = process.env.BASE_BENCHMARK_REQUESTED === 'true';
+            const baseBenchmarkOutcome = process.env.BASE_BENCHMARK_OUTCOME || 'skipped';
             const trendUrl = process.env.TREND_URL;
             const comparisonUrl = process.env.COMPARISON_URL;
 
@@ -280,9 +291,11 @@ jobs:
               '',
               `[Base vs head graph](${comparisonUrl})`,
               '',
-              baseBenchmarkRan
-                ? '*Base data was benchmarked in this run.*'
-                : '*Base data was reused from existing graph history.*',
+              !baseBenchmarkRequested
+                ? '*Base data was reused from existing graph history.*'
+                : baseBenchmarkOutcome === 'success'
+                  ? '*Base data was benchmarked in this run.*'
+                  : `*Base benchmark did not succeed (\`${baseBenchmarkOutcome}\`); PR head results were still published.*`,
               '',
               '---',
               '*Includes benchmark data for both base and head commits.*'
