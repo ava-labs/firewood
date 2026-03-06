@@ -25,6 +25,9 @@ pub enum NodeError {
     Io(FileIoError),
     /// A Proxy child was encountered that requires remote lookup.
     Proxy(HashType),
+    /// A child node has no hash. This should not occur in committed or
+    /// immutable tries where all children are hashed before use.
+    UnhashedChild,
 }
 
 impl From<FileIoError> for NodeError {
@@ -46,6 +49,9 @@ impl std::fmt::Display for NodeError {
             NodeError::Proxy(hash) => {
                 write!(f, "proxy child encountered (hash={hash}): requires remote lookup")
             }
+            NodeError::UnhashedChild => {
+                write!(f, "child node has no hash (expected only in hashed tries)")
+            }
         }
     }
 }
@@ -55,6 +61,7 @@ impl std::error::Error for NodeError {
         match self {
             NodeError::Io(e) => Some(e),
             NodeError::Proxy(_) => None,
+            NodeError::UnhashedChild => None,
         }
     }
 }

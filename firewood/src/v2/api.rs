@@ -208,6 +208,10 @@ pub enum Error {
     #[error("Proxy child encountered (hash={0}): requires remote lookup")]
     /// A Proxy child was encountered that requires remote lookup
     ProxyChild(HashType),
+
+    #[error("child node has no hash (expected only in hashed tries)")]
+    /// A child node has no hash
+    UnhashedChild,
 }
 
 impl From<std::convert::Infallible> for Error {
@@ -221,6 +225,7 @@ impl From<NodeError> for Error {
         match e {
             NodeError::Io(io_err) => Error::FileIO(io_err),
             NodeError::Proxy(hash) => Error::ProxyChild(hash),
+            NodeError::UnhashedChild => Error::UnhashedChild,
         }
     }
 }
