@@ -1,11 +1,6 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-#![expect(
-    clippy::match_same_arms,
-    reason = "Found 1 occurrences after enabling the lint."
-)]
-
 use crate::node::ExtendableBytes;
 use crate::node::children::Children;
 use crate::{
@@ -14,6 +9,53 @@ use crate::{
 };
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
+
+/// Error type for trie node operations.
+///
+/// This distinguishes between storage I/O errors and logical trie errors
+/// (e.g., encountering a `Child::Proxy` that requires remote lookup).
+#[derive(Debug)]
+pub enum NodeError {
+    /// An I/O error from the storage layer.
+    Io(FileIoError),
+    /// A Proxy child was encountered that requires remote lookup.
+    Proxy(HashType),
+}
+
+impl From<FileIoError> for NodeError {
+    fn from(e: FileIoError) -> Self {
+        NodeError::Io(e)
+    }
+}
+
+impl From<std::convert::Infallible> for NodeError {
+    fn from(e: std::convert::Infallible) -> Self {
+        match e {}
+    }
+}
+
+impl std::fmt::Display for NodeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NodeError::Io(e) => write!(f, "node I/O error: {e}"),
+            NodeError::Proxy(hash) => {
+                write!(
+                    f,
+                    "proxy child encountered (hash={hash}): requires remote lookup"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for NodeError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            NodeError::Io(e) => Some(e),
+            NodeError::Proxy(_) => None,
+        }
+    }
+}
 
 pub(crate) trait Serializable {
     fn write_to<W: ExtendableBytes>(&self, vec: &mut W);
@@ -72,9 +114,8 @@ impl lru_mem::HeapSize for Child {
     fn heap_size(&self) -> usize {
         match self {
             Child::Node(node) => node.heap_size(),
-            Child::AddressWithHash(_, _) => 0,
-            // MaybePersisted contains Arc<Mutex>, we don't count shared data
-            Child::MaybePersisted(_, _) => 0,
+            // AddressWithHash and MaybePersisted contain Arc<Mutex>, we don't count shared data
+            Child::AddressWithHash(_, _) | Child::MaybePersisted(_, _) => 0,
         }
     }
 }
@@ -86,7 +127,7 @@ impl Child {
     pub const fn as_mut_node(&mut self) -> Option<&mut Node> {
         match self {
             Child::Node(node) => Some(node),
-            _ => None,
+            Child::AddressWithHash(..) | Child::MaybePersisted(..) => None,
         }
     }
 
@@ -104,19 +145,18 @@ impl Child {
     /// variant, otherwise None.
     #[must_use]
     pub fn unpersisted(&self) -> Option<&MaybePersistedNode> {
-        if let Child::MaybePersisted(maybe_persisted, _) = self {
-            maybe_persisted.unpersisted()
-        } else {
-            None
+        match self {
+            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.unpersisted(),
+            Child::Node(_) | Child::AddressWithHash(..) => None,
         }
     }
 
-    /// Return the hash of the child if it is a [`Child::AddressWithHash`] or [`Child::MaybePersisted`] variant, otherwise None.
+    /// Return the hash of the child if it has been hashed. Returns `None` only
+    /// for [`Child::Node`] variants which have not yet been hashed.
     #[must_use]
     pub const fn hash(&self) -> Option<&HashType> {
         match self {
-            Child::AddressWithHash(_, hash) => Some(hash),
-            Child::MaybePersisted(_, hash) => Some(hash),
+            Child::AddressWithHash(_, hash) | Child::MaybePersisted(_, hash) => Some(hash),
             Child::Node(_) => None,
         }
     }
@@ -145,12 +185,15 @@ impl Child {
     ///
     /// This is used in the dump utility, but otherwise should be avoided,
     /// as it may create an unnecessary `MaybePersistedNode`
-    #[must_use]
-    pub fn as_maybe_persisted_node(&self) -> MaybePersistedNode {
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NodeError`] if conversion is not possible.
+    pub fn try_as_maybe_persisted_node(&self) -> Result<MaybePersistedNode, NodeError> {
         match self {
-            Child::Node(node) => MaybePersistedNode::from(SharedNode::from(node.clone())),
-            Child::AddressWithHash(addr, _) => MaybePersistedNode::from(*addr),
-            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.clone(),
+            Child::Node(node) => Ok(MaybePersistedNode::from(SharedNode::from(node.clone()))),
+            Child::AddressWithHash(addr, _) => Ok(MaybePersistedNode::from(*addr)),
+            Child::MaybePersisted(maybe_persisted, _) => Ok(maybe_persisted.clone()),
         }
     }
 
@@ -162,14 +205,20 @@ impl Child {
     ///
     /// # Returns
     ///
-    /// Returns a `Result<SharedNode, FileIoError>` where:
+    /// Returns a `Result<SharedNode, NodeError>` where:
     /// - `Ok(SharedNode)` contains the node if successfully read
-    /// - `Err(FileIoError)` if there was an error reading from storage
-    pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
+    /// - `Err(NodeError::Io)` if there was an error reading from storage
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NodeError::Io`] if there was an error reading from storage.
+    pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, NodeError> {
         match self {
             Child::Node(node) => Ok(node.clone().into()),
-            Child::AddressWithHash(addr, _) => storage.read_node(*addr),
-            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.as_shared_node(storage),
+            Child::AddressWithHash(addr, _) => Ok(storage.read_node(*addr)?),
+            Child::MaybePersisted(maybe_persisted, _) => {
+                Ok(maybe_persisted.as_shared_node(storage)?)
+            }
         }
     }
 }
@@ -213,8 +262,7 @@ impl Debug for BranchNode {
 
         for (i, c) in &self.children {
             match c {
-                None => {}
-                Some(Child::Node(_)) => {} //TODO
+                None | Some(Child::Node(_)) => {} //TODO
                 Some(Child::AddressWithHash(addr, hash)) => {
                     write!(f, "({i:?}: address={addr:?} hash={hash})")?;
                 }

@@ -48,8 +48,9 @@
 )]
 
 use firewood_storage::{
-    Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, Path,
-    PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath, ValueDigest,
+    Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator,
+    NodeError, Path, PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath,
+    ValueDigest,
 };
 use thiserror::Error;
 
@@ -105,7 +106,11 @@ pub enum ProofError {
 
     /// Error from the merkle package
     #[error("{0:?}")]
-    IO(#[from] FileIoError),
+    IO(FileIoError),
+
+    /// Error from node operations
+    #[error("{0:?}")]
+    NodeError(#[from] NodeError),
 
     /// Error deserializing a proof
     #[error("error deserializing a proof: {0}")]
@@ -143,6 +148,12 @@ pub enum ProofError {
 
     #[error("the proposal for a change proof is None as it has been consumed")]
     ProposalIsNone,
+}
+
+impl From<FileIoError> for ProofError {
+    fn from(err: FileIoError) -> Self {
+        ProofError::IO(err)
+    }
 }
 
 #[derive(Clone, PartialEq, Eq)]

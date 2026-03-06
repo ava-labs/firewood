@@ -26,7 +26,7 @@ use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 use firewood_metrics::{firewood_increment, firewood_set};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal,
+    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, NodeError,
     NodeHashAlgorithm, NodeStore, NodeStoreHeader, TrieHash,
 };
 
@@ -176,13 +176,21 @@ pub(crate) enum RevisionManagerError {
         expected: Option<HashKey>,
     },
     #[error("A FileIO error occurred during the commit: {0}")]
-    FileIoError(#[from] FileIoError),
+    FileIoError(FileIoError),
+    #[error("A node error occurred: {0:?}")]
+    NodeError(#[from] NodeError),
     #[error("An IO error occurred while creating the database directory: {0}")]
     IOError(#[from] io::Error),
     #[error("A RootStore error occurred: {0}")]
     RootStoreError(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("A deferred persistence error occurred: {0}")]
     PersistError(#[source] PersistError),
+}
+
+impl From<FileIoError> for RevisionManagerError {
+    fn from(err: FileIoError) -> Self {
+        RevisionManagerError::FileIoError(err)
+    }
 }
 
 impl RevisionManager {
@@ -562,6 +570,8 @@ mod tests {
             let revision = self.revision(root_hash)?;
             Ok(revision
                 .root_as_maybe_persisted_node()
+                .ok()
+                .flatten()
                 .is_some_and(|node| node.unpersisted().is_none()))
         }
     }

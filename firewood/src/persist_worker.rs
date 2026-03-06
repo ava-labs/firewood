@@ -57,7 +57,7 @@ use std::{
 };
 
 use firewood_storage::{
-    Committed, FileBacked, FileIoError, HashedNodeReader, LinearAddress, NodeStore,
+    Committed, FileBacked, FileIoError, HashedNodeReader, LinearAddress, NodeError, NodeStore,
     NodeStoreHeader, TrieHash,
 };
 use parking_lot::{Condvar, Mutex, MutexGuard};
@@ -71,6 +71,8 @@ use firewood_storage::logger::error;
 pub enum PersistError {
     #[error("IO error during persistence: {0}")]
     FileIo(#[from] Arc<FileIoError>),
+    #[error("Node error during persistence: {0:?}")]
+    NodeError(Arc<NodeError>),
     #[error("RootStore error during persistence: {0}")]
     RootStore(#[source] Arc<dyn std::error::Error + Send + Sync>),
     #[error("Persist worker has shut down")]
@@ -495,8 +497,8 @@ impl PersistLoop {
     fn persist_to_disk(&self, revision: &CommittedRevision) -> Result<(), PersistError> {
         let mut header = self.shared.header.lock();
         revision.persist(&mut header).map_err(|e| {
-            error!("Failed to persist revision: {e}");
-            PersistError::FileIo(Arc::new(e))
+            error!("Failed to persist revision: {e:?}");
+            PersistError::NodeError(Arc::new(e))
         })
     }
 

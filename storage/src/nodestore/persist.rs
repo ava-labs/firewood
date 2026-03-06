@@ -30,6 +30,7 @@
 use bumpalo::Bump;
 use std::iter::FusedIterator;
 
+use crate::NodeError;
 use crate::linear::FileIoError;
 use coarsetime::Instant;
 use firewood_metrics::firewood_increment;
@@ -74,8 +75,8 @@ impl<N: NodeReader + RootReader> FusedIterator for UnPersistedNodeIterator<'_, N
 
 impl<'a, N: NodeReader + RootReader> UnPersistedNodeIterator<'a, N> {
     /// Creates a new iterator over unpersisted nodes in depth-first order.
-    fn new(store: &'a N) -> Self {
-        let root = store.root_as_maybe_persisted_node();
+    fn new(store: &'a N) -> Result<Self, NodeError> {
+        let root = store.root_as_maybe_persisted_node()?;
 
         // we must have an unpersisted root node to use this iterator
         // It's hard to tell at compile time if this is the case, so we assert it here
@@ -107,11 +108,11 @@ impl<'a, N: NodeReader + RootReader> UnPersistedNodeIterator<'a, N> {
             (vec![], vec![])
         };
 
-        Self {
+        Ok(Self {
             store,
             stack,
             child_iter_stack,
-        }
+        })
     }
 }
 
@@ -181,9 +182,9 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     ///
     /// # Errors
     ///
-    /// Returns a [`FileIoError`] if any node cannot be written to storage.
+    /// Returns a [`NodeError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
-    pub fn flush_nodes(&self, header: &mut NodeStoreHeader) -> Result<(), FileIoError> {
+    pub fn flush_nodes(&self, header: &mut NodeStoreHeader) -> Result<(), NodeError> {
         let flush_start = Instant::now();
 
         let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), header);
@@ -204,18 +205,18 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     ///
     /// # Errors
     ///
-    /// Returns a [`FileIoError`] if any node cannot be serialized, allocated, or written to storage.
+    /// Returns a [`NodeError`] if any node cannot be serialized, allocated, or written to storage.
     fn process_unpersisted_nodes(
         &self,
         bump: &mut bumpalo::Bump,
         node_allocator: &mut NodeAllocator<'_, S>,
         bump_size_limit: usize,
-    ) -> Result<(), FileIoError> {
+    ) -> Result<(), NodeError> {
         let mut allocated_objects = Vec::new();
         let mut allocated_len = 0_usize;
 
         // Process each unpersisted node directly from the iterator
-        for node in UnPersistedNodeIterator::new(self) {
+        for node in UnPersistedNodeIterator::new(self)? {
             let shared_node = node.as_shared_node(self).expect("in memory, so no IO");
 
             // Serialize the node into the bump allocator
@@ -281,9 +282,9 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     ///
     /// # Errors
     ///
-    /// Returns a [`FileIoError`] if any of the persistence operations fail.
+    /// Returns a [`NodeError`] if any of the persistence operations fail.
     #[fastrace::trace(short_name = true)]
-    pub fn persist(&self, header: &mut NodeStoreHeader) -> Result<(), FileIoError> {
+    pub fn persist(&self, header: &mut NodeStoreHeader) -> Result<(), NodeError> {
         // First persist all the nodes
         self.flush_nodes(header)?;
 
@@ -365,7 +366,7 @@ mod tests {
     fn test_empty_nodestore() {
         let mem_store = MemStore::default().into();
         let store = NodeStore::new_empty_proposal(mem_store);
-        let mut iter = UnPersistedNodeIterator::new(&store);
+        let mut iter = UnPersistedNodeIterator::new(&store).unwrap();
 
         assert!(iter.next().is_none());
     }
@@ -374,8 +375,9 @@ mod tests {
     fn test_single_leaf_node() {
         let leaf = create_leaf(&[1, 2, 3], &[4, 5, 6]);
         let store = create_test_store_with_root(leaf.clone());
-        let mut iter =
-            UnPersistedNodeIterator::new(&store).map(|node| node.as_shared_node(&store).unwrap());
+        let mut iter = UnPersistedNodeIterator::new(&store)
+            .unwrap()
+            .map(|node| node.as_shared_node(&store).unwrap());
 
         // Should return the leaf node
         let node = iter.next().unwrap();
@@ -394,8 +396,9 @@ mod tests {
             vec![(PathComponent::ALL[5], leaf.clone())],
         );
         let store = create_test_store_with_root(branch.clone());
-        let mut iter =
-            UnPersistedNodeIterator::new(&store).map(|node| node.as_shared_node(&store).unwrap());
+        let mut iter = UnPersistedNodeIterator::new(&store)
+            .unwrap()
+            .map(|node| node.as_shared_node(&store).unwrap());
 
         // Should return child first (depth-first)
         let node = iter.next().unwrap();
@@ -431,6 +434,7 @@ mod tests {
 
         // Collect all nodes
         let nodes: Vec<_> = UnPersistedNodeIterator::new(&store)
+            .unwrap()
             .map(|node| node.as_shared_node(&store).unwrap())
             .collect();
 
@@ -503,6 +507,7 @@ mod tests {
 
         // Collect all nodes
         let nodes: Vec<_> = UnPersistedNodeIterator::new(&store)
+            .unwrap()
             .map(|node| node.as_shared_node(&store).unwrap())
             .collect();
 
@@ -556,7 +561,7 @@ mod tests {
 
         // Verify the committed store has the expected values
         let root = committed_store.kind.root.as_ref().unwrap();
-        let root_maybe_persisted = root.as_maybe_persisted_node();
+        let root_maybe_persisted = root.try_as_maybe_persisted_node().unwrap();
         let root_node = root_maybe_persisted
             .as_shared_node(&committed_store)
             .unwrap();
@@ -569,7 +574,7 @@ mod tests {
         let child1 = root_branch.children[PathComponent::ALL[1]]
             .as_ref()
             .unwrap();
-        let child1_maybe_persisted = child1.as_maybe_persisted_node();
+        let child1_maybe_persisted = child1.try_as_maybe_persisted_node().unwrap();
         let child1_node = child1_maybe_persisted
             .as_shared_node(&committed_store)
             .unwrap();
@@ -579,7 +584,7 @@ mod tests {
         let child2 = root_branch.children[PathComponent::ALL[2]]
             .as_ref()
             .unwrap();
-        let child2_maybe_persisted = child2.as_maybe_persisted_node();
+        let child2_maybe_persisted = child2.try_as_maybe_persisted_node().unwrap();
         let child2_node = child2_maybe_persisted
             .as_shared_node(&committed_store)
             .unwrap();
