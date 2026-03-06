@@ -27,21 +27,87 @@ jobs:
       group: performance-replay-pr-${{ github.event.pull_request.number }}
       cancel-in-progress: true
     steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
       - name: Determine PR results locations
         id: location
         run: |
           echo "pr-data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
           echo "comparison-data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}/commits/${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
 
-      - name: Checkout base commit
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.base.sha }}
+      - name: Check existing base benchmark data
+        id: base-data
+        env:
+          BENCHMARK_TOKEN: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
+          PR_DATA_DIR: ${{ steps.location.outputs.pr-data-dir }}
+          COMPARISON_DATA_DIR: ${{ steps.location.outputs.comparison-data-dir }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          rm -rf ./benchmark-data-check-repository
+          git clone --depth 1 --branch main "https://x-access-token:${BENCHMARK_TOKEN}@github.com/${BENCHMARK_REPORTS_REPOSITORY}.git" ./benchmark-data-check-repository
+          cd ./benchmark-data-check-repository
+
+          has_commit() {
+            local dir="$1"
+            local sha="$2"
+            local data_file="${dir}/data.js"
+
+            if [[ ! -f "$data_file" ]]; then
+              echo "false"
+              return
+            fi
+
+            if grep -q "$sha" "$data_file"; then
+              echo "true"
+            else
+              echo "false"
+            fi
+          }
+
+          base_in_pr_trend="$(has_commit "$PR_DATA_DIR" "$BASE_SHA")"
+          base_in_comparison="$(has_commit "$COMPARISON_DATA_DIR" "$BASE_SHA")"
+
+          base_required="false"
+          if [[ "$base_in_pr_trend" != "true" || "$base_in_comparison" != "true" ]]; then
+            base_required="true"
+          fi
+
+          echo "base-required=${base_required}" >> "$GITHUB_OUTPUT"
+          echo "base-in-pr-trend=${base_in_pr_trend}" >> "$GITHUB_OUTPUT"
+          echo "base-in-comparison=${base_in_comparison}" >> "$GITHUB_OUTPUT"
+
+          if [[ "$base_required" == "true" ]]; then
+            echo "::notice::Missing base benchmark data detected. Benchmarking base commit."
+          else
+            echo "::notice::Base benchmark data already exists in both graphs. Skipping base benchmark run."
+          fi
+
+      - name: Prepare base source tree
+        if: steps.base-data.outputs.base-required == 'true'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p ./benchmark-sources
+          if [[ -d ./benchmark-sources/base ]]; then
+            git worktree remove --force ./benchmark-sources/base || rm -rf ./benchmark-sources/base
+          fi
+
+          git worktree add --detach ./benchmark-sources/base "$BASE_SHA"
 
       - name: Run benchmark on base commit
+        if: steps.base-data.outputs.base-required == 'true'
         uses: ./.github/actions/run-benchmark
         id: benchmark-base
         with:
+          source-dir: './benchmark-sources/base'
           benchmark-name: 'Replay 10K (PR Base)'
           replay-log-url: ${{ env.REPLAY_LOG_URL }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -49,9 +115,11 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Clean benchmark action workspace
+        if: steps.base-data.outputs.base-in-pr-trend != 'true'
         run: rm -rf ./benchmark-data-repository
 
       - name: Store base result in PR trend graph
+        if: steps.base-data.outputs.base-in-pr-trend != 'true'
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: 'Replay 10K PR'
@@ -67,9 +135,11 @@ jobs:
           fail-on-alert: false
 
       - name: Clean benchmark action workspace
+        if: steps.base-data.outputs.base-in-comparison != 'true'
         run: rm -rf ./benchmark-data-repository
 
       - name: Store base result in commit comparison graph
+        if: steps.base-data.outputs.base-in-comparison != 'true'
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: 'Replay 10K PR Compare'
@@ -84,18 +154,15 @@ jobs:
           comment-on-alert: false
           fail-on-alert: false
 
-      - name: Clean benchmark action workspace
-        run: rm -rf ./benchmark-data-repository
-
-      - name: Checkout PR head
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Clean up base source tree
+        if: always() && steps.base-data.outputs.base-required == 'true'
+        run: git worktree remove --force ./benchmark-sources/base || rm -rf ./benchmark-sources/base
 
       - name: Run benchmark on PR head commit
         uses: ./.github/actions/run-benchmark
         id: benchmark-head
         with:
+          source-dir: '.'
           benchmark-name: 'Replay 10K (PR Head)'
           replay-log-url: ${{ env.REPLAY_LOG_URL }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
@@ -186,6 +253,7 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_COMMIT_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_BENCHMARK_RAN: ${{ steps.base-data.outputs.base-required }}
           TREND_URL: ${{ env.BENCHMARK_REPORTS_PAGES_URL }}/${{ steps.location.outputs.pr-data-dir }}/
           COMPARISON_URL: ${{ env.BENCHMARK_REPORTS_PAGES_URL }}/${{ steps.location.outputs.comparison-data-dir }}/
         with:
@@ -194,6 +262,7 @@ jobs:
             const prNumber = parseInt(process.env.PR_NUMBER, 10);
             const baseCommitSha = process.env.BASE_COMMIT_SHA;
             const headCommitSha = process.env.HEAD_COMMIT_SHA;
+            const baseBenchmarkRan = process.env.BASE_BENCHMARK_RAN === 'true';
             const trendUrl = process.env.TREND_URL;
             const comparisonUrl = process.env.COMPARISON_URL;
 
@@ -210,6 +279,10 @@ jobs:
               `[PR trend graph](${trendUrl})`,
               '',
               `[Base vs head graph](${comparisonUrl})`,
+              '',
+              baseBenchmarkRan
+                ? '*Base data was benchmarked in this run.*'
+                : '*Base data was reused from existing graph history.*',
               '',
               '---',
               '*Includes benchmark data for both base and head commits.*'

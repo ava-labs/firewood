@@ -2,6 +2,10 @@ name: "Run Firewood Benchmark"
 description: "Build FFI and run performance benchmark"
 
 inputs:
+  source-dir:
+    description: "Source directory containing the Firewood workspace to benchmark"
+    required: false
+    default: "."
   benchmark-name:
     description: "Name of the benchmark (used in results and graphs)"
     required: true
@@ -50,8 +54,8 @@ runs:
     - name: Set up Go
       uses: actions/setup-go@v5
       with:
-        go-version-file: "ffi/go.mod"
-        cache-dependency-path: "ffi/go.sum"
+        go-version-file: "${{ inputs.source-dir }}/ffi/go.mod"
+        cache-dependency-path: "${{ inputs.source-dir }}/ffi/go.sum"
 
     - name: Rust Cache
       uses: Swatinem/rust-cache@v2
@@ -94,11 +98,12 @@ runs:
 
     - name: Cargo Fetch
       shell: bash
+      working-directory: ${{ inputs.source-dir }}
       run: cargo fetch --locked --verbose
 
     - name: Build Firewood FFI
       shell: bash
-      working-directory: ffi
+      working-directory: ${{ inputs.source-dir }}/ffi
       run: cargo build --locked --features ethhash,logger --profile maxperf
 
     - name: Configure AWS credentials
@@ -111,7 +116,7 @@ runs:
 
     - name: Fetch replay log
       shell: bash
-      working-directory: ffi
+      working-directory: ${{ inputs.source-dir }}/ffi
       env:
         REPLAY_LOG_URL: ${{ inputs.replay-log-url }}
       run: |
@@ -127,7 +132,7 @@ runs:
     - name: Run benchmark
       id: run-benchmark
       shell: bash
-      working-directory: ffi
+      working-directory: ${{ inputs.source-dir }}/ffi
       env:
         TMPDIR: /mnt/tmp
         BENCHMARK_EXTRA: ${{ inputs.extra }}
