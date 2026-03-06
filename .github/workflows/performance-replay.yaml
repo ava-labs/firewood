@@ -58,7 +58,6 @@ jobs:
           github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           auto-push: true
           gh-repository: 'github.com/AminR443/firewood-benchmark-reports'
-          gh-pages-branch: main
           benchmark-data-dir-path: ${{ steps.location.outputs.pr-data-dir }}
           # Show alert but don't fail PR
           alert-threshold: '150%'
