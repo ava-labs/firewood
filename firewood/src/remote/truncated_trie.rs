@@ -9,8 +9,8 @@
 //! without holding the full trie.
 
 use firewood_storage::{
-    hash_node, BranchNode, Child, Children, HashType, MaybePersistedNode, Node, NodeError, Path,
-    SharedNode, TrieHash, TrieReader,
+    hash_node, BranchNode, Child, Children, HashedNodeReader, HashType, MaybePersistedNode, Node,
+    NodeError, Path, SharedNode, TrieHash,
 };
 
 /// A truncated in-memory trie containing only the top K levels.
@@ -61,13 +61,13 @@ impl TruncatedTrie {
     ///
     /// # Arguments
     ///
-    /// * `trie` - A `TrieReader` providing access to the full trie
+    /// * `trie` - A `HashedNodeReader` providing access to the full trie
     /// * `depth` - The truncation depth in node levels
     ///
     /// # Errors
     ///
     /// Returns a [`NodeError`] if nodes cannot be read from the trie.
-    pub fn from_trie<T: TrieReader>(trie: &T, depth: usize) -> Result<Self, NodeError> {
+    pub fn from_trie<T: HashedNodeReader>(trie: &T, depth: usize) -> Result<Self, NodeError> {
         let Some(root_node) = trie.root_node() else {
             return Ok(Self {
                 root_hash: None,
@@ -127,12 +127,12 @@ impl TruncatedTrie {
     ///
     /// # Arguments
     ///
-    /// * `trie` - A `TrieReader` providing access to the new full trie state
+    /// * `trie` - A `HashedNodeReader` providing access to the new full trie state
     ///
     /// # Errors
     ///
     /// Returns a [`NodeError`] if nodes cannot be read from the trie.
-    pub fn update_from_trie<T: TrieReader>(&mut self, trie: &T) -> Result<(), NodeError> {
+    pub fn update_from_trie<T: HashedNodeReader>(&mut self, trie: &T) -> Result<(), NodeError> {
         let Some(root_node) = trie.root_node() else {
             self.root = None;
             self.root_hash = None;
@@ -182,7 +182,7 @@ impl TruncatedTrie {
 ///
 /// Note: `path_prefix` tracks the full nibble-level path from the root for
 /// hash computation. It is unrelated to the node-hop depth counter.
-fn truncate_node<T: TrieReader>(
+fn truncate_node<T: HashedNodeReader>(
     trie: &T,
     node: &SharedNode,
     current_depth: usize,
@@ -200,7 +200,7 @@ fn truncate_node<T: TrieReader>(
             if current_depth >= max_depth {
                 // At or beyond the truncation depth: replace all children
                 // with Proxy stubs that carry only the child's hash.
-                let children = proxy_all_children(branch);
+                let children = proxy_all_children(branch)?;
                 let truncated = Node::Branch(Box::new(BranchNode {
                     partial_path: branch.partial_path.clone(),
                     value: branch.value.clone(),
@@ -256,20 +256,23 @@ fn truncate_node<T: TrieReader>(
 }
 
 /// Replace all children with [`Child::Proxy`] stubs using their hashes.
-/// Children without hashes (unhashed `Child::Node`) are skipped (set to None).
-fn proxy_all_children(branch: &BranchNode) -> Children<Option<Child>> {
+///
+/// # Errors
+///
+/// Returns [`NodeError::UnhashedChild`] if any child has no hash. This
+/// cannot happen when the trie is backed by a [`HashedNodeReader`]
+/// (i.e. an immutable or committed nodestore), since all children in
+/// those stores are guaranteed to have hashes.
+fn proxy_all_children(branch: &BranchNode) -> Result<Children<Option<Child>>, NodeError> {
     let mut new_children = Children::new();
     for (idx, child_opt) in &branch.children {
         let Some(child) = child_opt else {
             continue;
         };
-        if let Some(hash) = child.hash() {
-            *new_children.get_mut(idx) = Some(Child::Proxy(hash.clone()));
-        }
-        // If the child has no hash (Child::Node that hasn't been hashed),
-        // we cannot create a proxy. This should not happen in committed tries.
+        let hash = child.hash().ok_or(NodeError::UnhashedChild)?;
+        *new_children.get_mut(idx) = Some(Child::Proxy(hash.clone()));
     }
-    new_children
+    Ok(new_children)
 }
 
 #[cfg(test)]

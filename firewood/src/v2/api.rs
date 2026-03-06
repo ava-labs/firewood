@@ -6,7 +6,7 @@ use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
 use crate::persist_worker::PersistError;
 use crate::{Proof, ProofError, ProofNode, RangeProof};
-use firewood_storage::{FileIoError, NodeError, TrieHash};
+use firewood_storage::{FileIoError, HashType, NodeError, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -204,6 +204,14 @@ pub enum Error {
 
     #[error("commit count must be positive")]
     ZeroCommitCount,
+
+    #[error("proxy child encountered (hash={0}): requires remote lookup")]
+    /// A proxy child was encountered that requires remote lookup
+    ProxyChild(HashType),
+
+    #[error("child node has no hash (expected only in hashed tries)")]
+    /// A child node has no hash
+    UnhashedChild,
 }
 
 impl From<std::convert::Infallible> for Error {
@@ -222,7 +230,8 @@ impl From<NodeError> for Error {
     fn from(err: NodeError) -> Self {
         match err {
             NodeError::Io(io_err) => Error::FileIO(io_err),
-            other @ NodeError::Proxy(_) => Error::InternalError(Box::new(other)),
+            NodeError::Proxy(hash) => Error::ProxyChild(hash),
+            NodeError::UnhashedChild => Error::UnhashedChild,
         }
     }
 }
