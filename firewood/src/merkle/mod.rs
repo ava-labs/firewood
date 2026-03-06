@@ -18,8 +18,8 @@ use crate::{Proof, ProofCollection, ProofError, ProofNode, RangeProof};
 use firewood_metrics::firewood_increment;
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashedNodeReader, ImmutableProposal,
-    IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore,
-    Parentable, Path, PathComponent, ReadableStorage, SharedNode, TrieHash, TrieReader,
+    IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeError,
+    NodeStore, Parentable, Path, PathComponent, ReadableStorage, SharedNode, TrieHash, TrieReader,
     ValueDigest,
 };
 use std::collections::HashSet;
@@ -38,14 +38,16 @@ pub type Value = Box<[u8]>;
 macro_rules! write_attributes {
     ($writer:ident, $node:expr, $value:expr) => {
         if !$node.partial_path.0.is_empty() {
-            write!($writer, " pp={:x}", $node.partial_path)
-                .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
+            write!($writer, " pp={:x}", $node.partial_path).map_err(|e| {
+                NodeError::from(FileIoError::from_generic_no_file(e, "write attributes"))
+            })?;
         }
         if !$value.is_empty() {
             match std::str::from_utf8($value) {
                 Ok(string) if string.chars().all(char::is_alphanumeric) => {
-                    write!($writer, " val={:.6}", string)
-                        .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
+                    write!($writer, " val={:.6}", string).map_err(|e| {
+                        NodeError::from(FileIoError::from_generic_no_file(e, "write attributes"))
+                    })?;
                     if string.len() > 6 {
                         $writer.write_all(b"...").map_err(|e| {
                             FileIoError::from_generic_no_file(e, "write attributes")
@@ -54,8 +56,9 @@ macro_rules! write_attributes {
                 }
                 _ => {
                     let hex = hex::encode($value);
-                    write!($writer, " val={:.6}", hex)
-                        .map_err(|e| FileIoError::from_generic_no_file(e, "write attributes"))?;
+                    write!($writer, " val={:.6}", hex).map_err(|e| {
+                        NodeError::from(FileIoError::from_generic_no_file(e, "write attributes"))
+                    })?;
                     if hex.len() > 6 {
                         $writer.write_all(b"...").map_err(|e| {
                             FileIoError::from_generic_no_file(e, "write attributes")
@@ -72,7 +75,7 @@ fn get_helper<T: TrieReader>(
     nodestore: &T,
     node: &Node,
     key: &[u8],
-) -> Result<Option<SharedNode>, FileIoError> {
+) -> Result<Option<SharedNode>, NodeError> {
     // 4 possibilities for the position of the `key` relative to `node`:
     // 1. The node is at `key`
     // 2. The key is above the node (i.e. its ancestor)
@@ -98,13 +101,8 @@ fn get_helper<T: TrieReader>(
                 Node::Leaf(_) => Ok(None),
                 Node::Branch(node) => match node.children[child_index].as_ref() {
                     None => Ok(None),
-                    Some(Child::Node(child)) => get_helper(nodestore, child, remaining_key),
-                    Some(Child::AddressWithHash(addr, _)) => {
-                        let child = nodestore.read_node(*addr)?;
-                        get_helper(nodestore, &child, remaining_key)
-                    }
-                    Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                        let child = maybe_persisted.as_shared_node(nodestore)?;
+                    Some(child) => {
+                        let child = child.as_shared_node(nodestore)?;
                         get_helper(nodestore, &child, remaining_key)
                     }
                 },
@@ -303,7 +301,7 @@ impl<T: TrieReader> Merkle<T> {
     pub(crate) fn path_iter<'a>(
         &self,
         key: &'a [u8],
-    ) -> Result<PathIterator<'_, 'a, T>, FileIoError> {
+    ) -> Result<PathIterator<'_, 'a, T>, NodeError> {
         PathIterator::new(&self.nodestore, key)
     }
 
@@ -416,7 +414,7 @@ impl<T: TrieReader> Merkle<T> {
         let key_values = iter
             .by_ref()
             .take(limit.map_or(usize::MAX, NonZeroUsize::get))
-            .collect::<Result<Box<_>, FileIoError>>()?;
+            .collect::<Result<Box<_>, NodeError>>()?;
 
         if key_values.is_empty() && start_key.is_none() && end_key.is_none() {
             // unbounded range proof yielded no key-values, so the trie must be empty
@@ -442,14 +440,14 @@ impl<T: TrieReader> Merkle<T> {
         Ok(RangeProof::new(start_proof, end_proof, key_values))
     }
 
-    pub(crate) fn get_value(&self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
+    pub(crate) fn get_value(&self, key: &[u8]) -> Result<Option<Value>, NodeError> {
         let Some(node) = self.get_node(key)? else {
             return Ok(None);
         };
         Ok(node.value().map(|v| v.to_vec().into_boxed_slice()))
     }
 
-    pub(crate) fn get_node(&self, key: &[u8]) -> Result<Option<SharedNode>, FileIoError> {
+    pub(crate) fn get_node(&self, key: &[u8]) -> Result<Option<SharedNode>, NodeError> {
         let Some(root) = self.root() else {
             return Ok(None);
         };
@@ -520,7 +518,7 @@ impl<T: HashedNodeReader> Merkle<T> {
         let batch_ops = iter
             .by_ref()
             .take(limit.map_or(usize::MAX, NonZeroUsize::get))
-            .collect::<Result<Box<_>, FileIoError>>()?;
+            .collect::<Result<Box<_>, NodeError>>()?;
 
         let end_proof = if let Some(limit) = limit
             && limit.get() <= batch_ops.len()
@@ -548,31 +546,41 @@ impl<T: HashedNodeReader> Merkle<T> {
         hash: Option<&HashType>,
         seen: &mut HashSet<String>,
         writer: &mut W,
-    ) -> Result<(), FileIoError> {
+    ) -> Result<(), NodeError> {
         writeln!(writer, "  {node}[label=\"{node}")
             .map_err(Error::other)
-            .map_err(|e| FileIoError::new(e, None, 0, None))?;
+            .map_err(|e| NodeError::from(FileIoError::new(e, None, 0, None)))?;
         if let Some(hash) = hash {
             write!(writer, " H={hash:.6?}")
                 .map_err(Error::other)
-                .map_err(|e| FileIoError::new(e, None, 0, None))?;
+                .map_err(|e| NodeError::from(FileIoError::new(e, None, 0, None)))?;
         }
 
         match &*node.as_shared_node(&self.nodestore)? {
             Node::Branch(b) => {
                 write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
-                writeln!(writer, "\"]")
-                    .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
+                writeln!(writer, "\"]").map_err(|e| {
+                    NodeError::from(FileIoError::from_generic_no_file(e, "write branch"))
+                })?;
                 for (childidx, child) in &b.children {
                     let (child, child_hash) = match child {
                         None => continue,
-                        Some(node) => (node.as_maybe_persisted_node(), node.hash()),
+                        Some(node) => match node.try_as_maybe_persisted_node() {
+                            Ok(mp) => (mp, node.hash()),
+                            Err(_) => continue,
+                        },
                     };
 
                     let inserted = seen.insert(format!("{child}"));
                     if inserted {
-                        writeln!(writer, "  {node} -> {child}[label=\"{childidx:x}\"]")
-                            .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
+                        writeln!(writer, "  {node} -> {child}[label=\"{childidx:x}\"]").map_err(
+                            |e| {
+                                NodeError::from(FileIoError::from_generic_no_file(
+                                    e,
+                                    "write branch",
+                                ))
+                            },
+                        )?;
                         self.dump_node(&child, child_hash, seen, writer)?;
                     } else {
                         // We have already seen this child, which shouldn't happen.
@@ -581,14 +589,17 @@ impl<T: HashedNodeReader> Merkle<T> {
                             writer,
                             "  {node} -> {child}[label=\"{childidx:x} (dup)\" color=red]"
                         )
-                        .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
+                        .map_err(|e| {
+                            NodeError::from(FileIoError::from_generic_no_file(e, "write branch"))
+                        })?;
                     }
                 }
             }
             Node::Leaf(l) => {
                 write_attributes!(writer, l, &l.value);
-                writeln!(writer, "\" shape=rect]")
-                    .map_err(|e| FileIoError::from_generic_no_file(e, "write leaf"))?;
+                writeln!(writer, "\" shape=rect]").map_err(|e| {
+                    NodeError::from(FileIoError::from_generic_no_file(e, "write leaf"))
+                })?;
             }
         }
         Ok(())
@@ -605,7 +616,7 @@ impl<T: HashedNodeReader> Merkle<T> {
     ///
     /// Returns an error if writing to the output writer fails.
     pub(crate) fn dump<W: std::io::Write + ?Sized>(&self, writer: &mut W) -> Result<(), Error> {
-        let root = self.nodestore.root_as_maybe_persisted_node();
+        let root = self.nodestore.root_as_maybe_persisted_node().ok().flatten();
 
         writeln!(writer, "digraph Merkle {{\n  rankdir=LR;").map_err(Error::other)?;
         if let (Some(root), Some(root_hash)) = (root, self.nodestore.root_hash()) {
@@ -652,7 +663,7 @@ impl<F: Parentable, S: ReadableStorage> Merkle<NodeStore<F, S>> {
 impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<MutableProposal, S>>>
     for Merkle<NodeStore<Arc<ImmutableProposal>, S>>
 {
-    type Error = FileIoError;
+    type Error = NodeError;
     fn try_from(m: Merkle<NodeStore<MutableProposal, S>>) -> Result<Self, Self::Error> {
         Ok(Merkle {
             nodestore: m.nodestore.try_into()?,
@@ -674,17 +685,17 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         self.try_into().expect("failed to convert")
     }
 
-    fn read_for_update(&mut self, child: Child) -> Result<Node, FileIoError> {
-        match child {
-            Child::Node(node) => Ok(node),
-            Child::AddressWithHash(addr, _) => self.nodestore.read_for_update(addr.into()),
-            Child::MaybePersisted(node, _) => self.nodestore.read_for_update(node),
-        }
+    fn read_for_update(&mut self, child: Child) -> Result<Node, NodeError> {
+        Ok(match child {
+            Child::Node(node) => node,
+            Child::AddressWithHash(addr, _) => self.nodestore.read_for_update(addr.into())?,
+            Child::MaybePersisted(node, _) => self.nodestore.read_for_update(node)?,
+        })
     }
 
     /// Map `key` to `value` in the trie.
     /// Each element of key is 2 nibbles.
-    pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), FileIoError> {
+    pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), NodeError> {
         self.insert_from_iter(NibblesIterator::new(key), value)
     }
 
@@ -693,7 +704,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         &mut self,
         key: NibblesIterator<'_>,
         value: Value,
-    ) -> Result<(), FileIoError> {
+    ) -> Result<(), NodeError> {
         let key = Path::from_nibbles_iterator(key);
         let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
@@ -721,7 +732,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         mut node: Node,
         key: &[u8],
         value: Value,
-    ) -> Result<Node, FileIoError> {
+    ) -> Result<Node, NodeError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
@@ -849,7 +860,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
     /// Each element of `key` is 2 nibbles.
-    pub fn remove(&mut self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
+    pub fn remove(&mut self, key: &[u8]) -> Result<Option<Value>, NodeError> {
         self.remove_from_iter(NibblesIterator::new(key))
     }
 
@@ -860,7 +871,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     pub fn remove_from_iter(
         &mut self,
         key: NibblesIterator<'_>,
-    ) -> Result<Option<Value>, FileIoError> {
+    ) -> Result<Option<Value>, NodeError> {
         let key = Path::from_nibbles_iterator(key);
         let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
@@ -886,7 +897,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         &mut self,
         node: Node,
         key: &[u8],
-    ) -> Result<(Option<Node>, Option<Value>), FileIoError> {
+    ) -> Result<(Option<Node>, Option<Value>), NodeError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`
         // 2. The key is above the node (i.e. its ancestor)
@@ -948,7 +959,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
     /// Removes any key-value pairs with keys that have the given `prefix`.
     /// Returns the number of key-value pairs removed.
-    pub fn remove_prefix(&mut self, prefix: &[u8]) -> Result<usize, FileIoError> {
+    pub fn remove_prefix(&mut self, prefix: &[u8]) -> Result<usize, NodeError> {
         self.remove_prefix_from_iter(NibblesIterator::new(prefix))
     }
 
@@ -957,7 +968,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     pub fn remove_prefix_from_iter(
         &mut self,
         prefix: NibblesIterator<'_>,
-    ) -> Result<usize, FileIoError> {
+    ) -> Result<usize, NodeError> {
         let prefix = Path::from_nibbles_iterator(prefix);
         let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
@@ -978,7 +989,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         node: Node,
         key: &[u8],
         deleted: &mut usize,
-    ) -> Result<Option<Node>, FileIoError> {
+    ) -> Result<Option<Node>, NodeError> {
         // 4 possibilities for the position of the `key` relative to `node`:
         // 1. The node is at `key`, in which case we need to delete this node and all its children.
         // 2. The key is above the node (i.e. its ancestor), so the parent needs to be restructured (TODO).
@@ -1045,7 +1056,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         &mut self,
         mut branch: Box<BranchNode>,
         deleted: &mut usize,
-    ) -> Result<(), FileIoError> {
+    ) -> Result<(), NodeError> {
         if branch.value.is_some() {
             // a KV pair was in the branch itself
             *deleted = deleted.saturating_add(1);
@@ -1078,7 +1089,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     fn flatten_branch(
         &mut self,
         mut branch_node: Box<BranchNode>,
-    ) -> Result<Option<Node>, FileIoError> {
+    ) -> Result<Option<Node>, NodeError> {
         let mut children_iter = branch_node.children.each_mut().into_iter();
 
         let (child_index, child) = loop {

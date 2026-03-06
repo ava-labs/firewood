@@ -6,7 +6,7 @@ use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
 use crate::persist_worker::PersistError;
 use crate::{Proof, ProofError, ProofNode, RangeProof};
-use firewood_storage::{FileIoError, TrieHash};
+use firewood_storage::{FileIoError, NodeError, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -145,7 +145,7 @@ pub enum Error {
 
     #[error("File IO error: {0}")]
     /// A file I/O error occurred
-    FileIO(#[from] FileIoError),
+    FileIO(FileIoError),
 
     #[error("RootStore error: {0}")]
     /// A `RootStore` error occurred
@@ -212,10 +212,25 @@ impl From<std::convert::Infallible> for Error {
     }
 }
 
+impl From<FileIoError> for Error {
+    fn from(err: FileIoError) -> Self {
+        Error::FileIO(err)
+    }
+}
+
+impl From<NodeError> for Error {
+    fn from(err: NodeError) -> Self {
+        match err {
+            NodeError::Io(io_err) => Error::FileIO(io_err),
+            other @ NodeError::Proxy(_) => Error::InternalError(Box::new(other)),
+        }
+    }
+}
+
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
         use RevisionManagerError::{
-            FileIoError, IOError, NotLatest, PersistError, RevisionNotFound,
+            FileIoError, IOError, NodeError, NotLatest, PersistError, RevisionNotFound,
             RevisionWithoutAddress, RootStoreError,
         };
         match err {
@@ -225,6 +240,7 @@ impl From<RevisionManagerError> for Error {
             },
             RevisionWithoutAddress { provided } => Self::RevisionWithoutAddress { provided },
             FileIoError(io_err) => Self::FileIO(io_err),
+            NodeError(err) => Self::from(err),
             IOError(err) => Self::IO(err),
             RootStoreError(err) => Self::RootStoreError(err),
             PersistError(err) => Self::DeferredPersistenceError(err),
@@ -243,7 +259,7 @@ impl From<crate::db::DbError> for Error {
 impl From<CreateProposalError> for Error {
     fn from(value: CreateProposalError) -> Self {
         match value {
-            CreateProposalError::FileIoError(err) => Error::FileIO(err),
+            CreateProposalError::NodeError(err) => Error::from(err),
             CreateProposalError::SendError => Error::SendErrorToWorker,
             CreateProposalError::InvalidConversionToPathComponent => {
                 Error::InvalidConversionToPathComponent
@@ -304,7 +320,7 @@ pub trait Db {
 /// 3. From [`Proposal::propose`] which is a view on top of another proposal.
 pub trait DbView {
     /// The type of a stream of key/value pairs
-    type Iter<'view>: Iterator<Item = Result<(Key, Value), FileIoError>>
+    type Iter<'view>: Iterator<Item = Result<(Key, Value), NodeError>>
     where
         Self: 'view;
 
@@ -374,8 +390,7 @@ pub trait DbView {
 }
 
 /// A boxed iterator over key/value pairs.
-pub type BoxKeyValueIter<'view> =
-    Box<dyn Iterator<Item = Result<(Key, Value), FileIoError>> + 'view>;
+pub type BoxKeyValueIter<'view> = Box<dyn Iterator<Item = Result<(Key, Value), NodeError>> + 'view>;
 
 /// A dynamic dyspatch version of [`DbView`] that can be shared.
 pub type ArcDynDbView = Arc<dyn DynDbView>;

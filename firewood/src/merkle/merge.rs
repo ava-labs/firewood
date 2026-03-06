@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::{FileIoError, TrieReader};
+use firewood_storage::{NodeError, TrieReader};
 
 use crate::{
     db::BatchOp,
@@ -55,10 +55,8 @@ where
     I: Iterator<Item: KeyValuePair>,
     K: KeyType,
 {
-    type Item = Result<
-        BatchOp<EitherKey<Key, <I as BatchIter>::Key>, <I as BatchIter>::Value>,
-        FileIoError,
-    >;
+    type Item =
+        Result<BatchOp<EitherKey<Key, <I as BatchIter>::Key>, <I as BatchIter>::Value>, NodeError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         loop {

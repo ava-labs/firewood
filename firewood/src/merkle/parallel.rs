@@ -8,8 +8,8 @@ use firewood_metrics::{current_metrics_context, set_metrics_context};
 use firewood_storage::logger::error;
 use firewood_storage::{
     BranchNode, Child, Children, FileBacked, FileIoError, ImmutableProposal, LeafNode,
-    MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore, Parentable, Path,
-    PathComponent,
+    MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeError, NodeStore, Parentable,
+    Path, PathComponent,
 };
 use rayon::ThreadPool;
 use std::iter::once;
@@ -38,14 +38,20 @@ struct Response {
 
 #[derive(Debug)]
 pub enum CreateProposalError {
-    FileIoError(FileIoError),
+    NodeError(NodeError),
     SendError,
     InvalidConversionToPathComponent,
 }
 
+impl From<NodeError> for CreateProposalError {
+    fn from(err: NodeError) -> Self {
+        CreateProposalError::NodeError(err)
+    }
+}
+
 impl From<FileIoError> for CreateProposalError {
     fn from(err: FileIoError) -> Self {
-        CreateProposalError::FileIoError(err)
+        CreateProposalError::NodeError(NodeError::from(err))
     }
 }
 
@@ -116,7 +122,7 @@ impl ParallelMerkle {
         &self,
         nodestore: &mut NodeStore<MutableProposal, FileBacked>,
         mut branch: Box<BranchNode>,
-    ) -> Result<Option<Node>, FileIoError> {
+    ) -> Result<Option<Node>, NodeError> {
         let mut children_iter = branch
             .children
             .iter_mut()
@@ -169,8 +175,8 @@ impl ParallelMerkle {
         mut merkle: Merkle<NodeStore<MutableProposal, FileBacked>>,
         first_path_component: PathComponent,
         child_receiver: Receiver<BatchOp<Key, Value>>,
-        response_sender: Sender<Result<Response, FileIoError>>,
-    ) -> Result<(), Box<SendError<Result<Response, FileIoError>>>> {
+        response_sender: Sender<Result<Response, NodeError>>,
+    ) -> Result<(), Box<SendError<Result<Response, NodeError>>>> {
         // Wait for a message on the receiver child channel. Break out of loop when the sender has
         // closed the child sender.
         while let Ok(request) = child_receiver.recv() {
@@ -230,8 +236,8 @@ impl ParallelMerkle {
         proposal: &mut NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut BranchNode,
         first_path_component: PathComponent,
-        response_sender: Sender<Result<Response, FileIoError>>,
-    ) -> Result<WorkerSender, FileIoError> {
+        response_sender: Sender<Result<Response, NodeError>>,
+    ) -> Result<WorkerSender, NodeError> {
         // Create a channel for the coordinator (main thread) to send messages to this worker.
         let (child_sender, child_receiver) = mpsc::channel();
 
@@ -239,7 +245,7 @@ impl ParallelMerkle {
             .children
             .get_mut(first_path_component)
             .take()
-            .map(|child| -> Result<_, FileIoError> {
+            .map(|child| -> Result<_, NodeError> {
                 match child {
                     Child::Node(node) => Ok(node),
                     Child::AddressWithHash(address, _) => {
@@ -277,10 +283,10 @@ impl ParallelMerkle {
     // root node of the main trie.
     fn merge_children(
         &mut self,
-        response_channel: Receiver<Result<Response, FileIoError>>,
+        response_channel: Receiver<Result<Response, NodeError>>,
         proposal: &mut NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut BranchNode,
-    ) -> Result<(), FileIoError> {
+    ) -> Result<(), NodeError> {
         while let Ok(response) = response_channel.recv() {
             match response {
                 Ok(response) => {
@@ -306,8 +312,8 @@ impl ParallelMerkle {
         proposal: &mut NodeStore<MutableProposal, FileBacked>,
         root_branch: &mut BranchNode,
         first_path_component: PathComponent,
-        response_sender: Sender<Result<Response, FileIoError>>,
-    ) -> Result<&mut WorkerSender, FileIoError> {
+        response_sender: Sender<Result<Response, NodeError>>,
+    ) -> Result<&mut WorkerSender, NodeError> {
         // Find the worker's state corresponding to the first nibble which is stored in an array.
         let worker_option = self.workers.get_mut(first_path_component);
 
@@ -346,17 +352,17 @@ impl ParallelMerkle {
     }
 
     /// The parent thread may receive a `SendError` if the worker that it is sending to has
-    /// returned to the threadpool after encountering a `FileIoError`. This function should
-    /// be called after receiving a `SendError` to find and propagate the `FileIoError`.
-    fn find_fileio_error(
-        response_receiver: &Receiver<Result<Response, FileIoError>>,
-    ) -> Result<(), FileIoError> {
+    /// returned to the threadpool after encountering a `NodeError`. This function should
+    /// be called after receiving a `SendError` to find and propagate the `NodeError`.
+    fn find_node_error(
+        response_receiver: &Receiver<Result<Response, NodeError>>,
+    ) -> Result<(), NodeError> {
         // Go through the messages in the response channel without blocking to see if we can
-        // find the FileIoError that caused the worker to close the channel, resulting in a
-        // send error. If we can find it, then we propagate the FileIoError. Note that
-        // successful responses can be in the response channel ahead of the FileIoError.
+        // find the NodeError that caused the worker to close the channel, resulting in a
+        // send error. If we can find it, then we propagate the NodeError. Note that
+        // successful responses can be in the response channel ahead of the NodeError.
         // These are sent from workers that completed their requests without encountering
-        // a FileIoError.
+        // a NodeError.
         for result in response_receiver.try_iter() {
             let _ = result?; // explicitly ignore the successful Response
         }
@@ -372,7 +378,7 @@ impl ParallelMerkle {
     ///
     /// # Errors
     ///
-    /// Returns a `CreateProposalError::FileIoError` if it encounters an error fetching nodes
+    /// Returns a `CreateProposalError::NodeError` if it encounters an error fetching nodes
     /// from storage, a `CreateProposalError::SendError` if it is unable to send messages to
     /// the workers, and a `CreateProposalError::InvalidConversionToPathComponent` if it is
     /// unable to convert a u8 index into a path component.
@@ -425,7 +431,7 @@ impl ParallelMerkle {
                             // A send error is most likely due to a worker returning to the thread pool
                             // after it encountered a FileIoError. Try to find the FileIoError in the
                             // response channel and return that instead.
-                            ParallelMerkle::find_fileio_error(&response_receiver)?;
+                            ParallelMerkle::find_node_error(&response_receiver)?;
                             return Err(err.into());
                         }
                     }
@@ -467,7 +473,7 @@ impl ParallelMerkle {
                 // A send error is most likely due to a worker returning to the thread pool
                 // after it encountered a FileIoError. Try to find the FileIoError in the
                 // response channel and return that instead.
-                ParallelMerkle::find_fileio_error(&response_receiver)?;
+                ParallelMerkle::find_node_error(&response_receiver)?;
                 return Err(err.into());
             }
         }

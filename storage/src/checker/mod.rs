@@ -199,6 +199,8 @@ where
         }
         let trie_stats = self
             .root_as_maybe_persisted_node()
+            .ok()
+            .flatten()
             .and_then(|node| self.root_hash().map(|root_hash| (node, root_hash)))
             .and_then(|(root, root_hash)| {
                 if let Some(root_address) = root.as_linear_address() {
