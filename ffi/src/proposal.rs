@@ -4,7 +4,7 @@
 use firewood::v2::api::{self, BoxKeyValueIter, DbView, HashKey, IntoBatchIter, Proposal as _};
 
 use crate::{IteratorHandle, iterator::CreateIteratorResult, metrics::MetricsContextExt};
-use firewood_metrics::{firewood_increment, firewood_record};
+use firewood_metrics::{firewood_increment, fwd_expensive_timed_result};
 
 /// An opaque wrapper around a Proposal that also retains a reference to the
 /// database handle it was created from.
@@ -73,10 +73,7 @@ impl ProposalHandle<'_> {
     ///
     /// This function will return an error if committing the proposal fails or if the
     /// proposal is empty.
-    pub fn commit_proposal(
-        self,
-        token: impl FnOnce(coarsetime::Duration),
-    ) -> Result<Option<HashKey>, api::Error> {
+    pub fn commit_proposal(self) -> Result<Option<HashKey>, api::Error> {
         let ProposalHandle {
             hash_key,
             proposal,
@@ -89,14 +86,15 @@ impl ProposalHandle<'_> {
             _ = handle.get_root(hash_key.clone());
         }
 
-        let start_time = coarsetime::Instant::now();
-        proposal.commit()?;
-        let commit_time = start_time.elapsed();
+        let (commit_result, commit_time) =
+            fwd_expensive_timed_result!(crate::registry::COMMIT_MS_BUCKET, proposal.commit());
+        commit_result?;
 
         // clear the cached view so that it does not hold onto the proposal view
         handle.clear_cached_view();
 
-        token(commit_time);
+        firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
+        firewood_increment!(crate::registry::COMMIT_COUNT, 1);
 
         Ok(hash_key)
     }
@@ -119,7 +117,6 @@ impl ProposalHandle<'_> {
 #[derive(Debug)]
 pub struct CreateProposalResult<'db> {
     pub handle: ProposalHandle<'db>,
-    pub start_time: coarsetime::Instant,
 }
 
 impl<'db> CreateProposalResult<'db> {
@@ -127,16 +124,11 @@ impl<'db> CreateProposalResult<'db> {
         handle: &'db crate::DatabaseHandle,
         f: impl FnOnce() -> Result<firewood::db::Proposal<'db>, api::Error>,
     ) -> Result<Self, api::Error> {
-        let start_time = coarsetime::Instant::now();
-        let proposal = f()?;
-        let propose_time = start_time.elapsed();
+        let (proposal_result, propose_time) =
+            fwd_expensive_timed_result!(crate::registry::PROPOSE_MS_BUCKET, f());
+        let proposal = proposal_result?;
         firewood_increment!(crate::registry::PROPOSE_MS, propose_time.as_millis());
         firewood_increment!(crate::registry::PROPOSE_COUNT, 1);
-        firewood_record!(
-            crate::registry::PROPOSE_MS_BUCKET,
-            propose_time.as_f64() * 1000.0,
-            expensive
-        );
 
         let hash_key = proposal.root_hash();
 
@@ -146,7 +138,6 @@ impl<'db> CreateProposalResult<'db> {
                 proposal,
                 handle,
             },
-            start_time,
         })
     }
 }
