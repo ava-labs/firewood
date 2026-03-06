@@ -31,8 +31,8 @@ use bumpalo::Bump;
 use std::iter::FusedIterator;
 
 use crate::linear::FileIoError;
-use std::time::Instant;
 use firewood_metrics::firewood_increment;
+use std::time::Instant;
 
 use crate::{MaybePersistedNode, NodeReader, WritableStorage};
 
