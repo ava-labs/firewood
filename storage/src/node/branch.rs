@@ -108,14 +108,22 @@ pub enum Child {
 
     /// A `MaybePersisted` child
     MaybePersisted(MaybePersistedNode, HashType),
+
+    /// A hash-only stub below truncation depth in a remote/truncated trie.
+    /// Has no local address or in-memory node data. When trie traversal
+    /// hits a `Proxy` child, it signals "need remote lookup" rather than
+    /// doing local I/O.
+    Proxy(HashType),
 }
 
 impl lru_mem::HeapSize for Child {
     fn heap_size(&self) -> usize {
         match self {
             Child::Node(node) => node.heap_size(),
-            // AddressWithHash and MaybePersisted contain Arc<Mutex>, we don't count shared data
-            Child::AddressWithHash(_, _) | Child::MaybePersisted(_, _) => 0,
+            Child::AddressWithHash(_, _) => 0,
+            // MaybePersisted contains Arc<Mutex>, we don't count shared data
+            Child::MaybePersisted(_, _) => 0,
+            Child::Proxy(_) => 0,
         }
     }
 }
@@ -127,7 +135,9 @@ impl Child {
     pub const fn as_mut_node(&mut self) -> Option<&mut Node> {
         match self {
             Child::Node(node) => Some(node),
-            Child::AddressWithHash(..) | Child::MaybePersisted(..) => None,
+            Child::AddressWithHash(..)
+            | Child::MaybePersisted(..)
+            | Child::Proxy(_) => None,
         }
     }
 
@@ -137,7 +147,7 @@ impl Child {
         match self {
             Child::AddressWithHash(addr, _) => Some(*addr),
             Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.as_linear_address(),
-            Child::Node(_) => None,
+            Child::Node(_) | Child::Proxy(_) => None,
         }
     }
 
@@ -147,7 +157,7 @@ impl Child {
     pub fn unpersisted(&self) -> Option<&MaybePersistedNode> {
         match self {
             Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.unpersisted(),
-            Child::Node(_) | Child::AddressWithHash(..) => None,
+            Child::Node(_) | Child::AddressWithHash(..) | Child::Proxy(_) => None,
         }
     }
 
@@ -156,7 +166,9 @@ impl Child {
     #[must_use]
     pub const fn hash(&self) -> Option<&HashType> {
         match self {
-            Child::AddressWithHash(_, hash) | Child::MaybePersisted(_, hash) => Some(hash),
+            Child::AddressWithHash(_, hash)
+            | Child::MaybePersisted(_, hash)
+            | Child::Proxy(hash) => Some(hash),
             Child::Node(_) => None,
         }
     }
@@ -170,6 +182,7 @@ impl Child {
     /// Returns `None` for:
     /// - [`Child::Node`] variants (unpersisted nodes)
     /// - [`Child::MaybePersisted`] variants that are not yet persisted
+    /// - [`Child::Proxy`] variants (no local address)
     #[must_use]
     pub fn persist_info(&self) -> Option<(LinearAddress, &HashType)> {
         match self {
@@ -177,7 +190,7 @@ impl Child {
             Child::MaybePersisted(maybe_persisted, hash) => {
                 maybe_persisted.as_linear_address().map(|addr| (addr, hash))
             }
-            Child::Node(_) => None,
+            Child::Node(_) | Child::Proxy(_) => None,
         }
     }
 
@@ -194,6 +207,7 @@ impl Child {
             Child::Node(node) => Ok(MaybePersistedNode::from(SharedNode::from(node.clone()))),
             Child::AddressWithHash(addr, _) => Ok(MaybePersistedNode::from(*addr)),
             Child::MaybePersisted(maybe_persisted, _) => Ok(maybe_persisted.clone()),
+            Child::Proxy(hash) => Err(NodeError::Proxy(hash.clone())),
         }
     }
 
@@ -208,10 +222,13 @@ impl Child {
     /// Returns a `Result<SharedNode, NodeError>` where:
     /// - `Ok(SharedNode)` contains the node if successfully read
     /// - `Err(NodeError::Io)` if there was an error reading from storage
+    /// - `Err(NodeError::Proxy)` for Proxy variants requiring remote lookup
     ///
     /// # Errors
     ///
-    /// Returns [`NodeError::Io`] if there was an error reading from storage.
+    /// Returns [`NodeError::Proxy`] for [`Child::Proxy`] variants, which have
+    /// no local node data and require remote lookup.
+    /// Returns [`NodeError::Io`] if there was an I/O error reading from storage.
     pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, NodeError> {
         match self {
             Child::Node(node) => Ok(node.clone().into()),
@@ -219,6 +236,7 @@ impl Child {
             Child::MaybePersisted(maybe_persisted, _) => {
                 Ok(maybe_persisted.as_shared_node(storage)?)
             }
+            Child::Proxy(hash) => Err(NodeError::Proxy(hash.clone())),
         }
     }
 }
@@ -262,7 +280,8 @@ impl Debug for BranchNode {
 
         for (i, c) in &self.children {
             match c {
-                None | Some(Child::Node(_)) => {} //TODO
+                None => {}
+                Some(Child::Node(_)) => {} //TODO
                 Some(Child::AddressWithHash(addr, hash)) => {
                     write!(f, "({i:?}: address={addr:?} hash={hash})")?;
                 }
@@ -272,6 +291,9 @@ impl Debug for BranchNode {
                         Some(addr) => write!(f, "({i:?}: address={addr:?} hash={hash})")?,
                         None => write!(f, "({i:?}: unpersisted hash={hash})")?,
                     }
+                }
+                Some(Child::Proxy(hash)) => {
+                    write!(f, "({i:?}: proxy hash={hash})")?;
                 }
             }
         }
