@@ -9,8 +9,8 @@
 //! without holding the full trie.
 
 use firewood_storage::{
-    hash_node, BranchNode, Child, Children, HashedNodeReader, HashType, MaybePersistedNode, Node,
-    NodeError, Path, SharedNode, TrieHash,
+    BranchNode, Child, Children, HashType, HashedNodeReader, MaybePersistedNode, Node, NodeError,
+    Path, SharedNode, TrieHash, hash_node,
 };
 
 /// A truncated in-memory trie containing only the top K levels.
@@ -76,8 +76,7 @@ impl TruncatedTrie {
             });
         };
 
-        let (truncated_root, root_hash) =
-            truncate_node(trie, &root_node, 0, depth, &Path::new())?;
+        let (truncated_root, root_hash) = truncate_node(trie, &root_node, 0, depth, &Path::new())?;
 
         Ok(Self {
             root_hash: Some(root_hash.into_triehash()),
@@ -285,8 +284,7 @@ mod tests {
 
     use crate::merkle::Merkle;
 
-    type ImmutableMerkle =
-        Merkle<NodeStore<Arc<firewood_storage::ImmutableProposal>, MemStore>>;
+    type ImmutableMerkle = Merkle<NodeStore<Arc<firewood_storage::ImmutableProposal>, MemStore>>;
 
     /// Helper to create a test trie and return an immutable merkle.
     fn create_test_trie(keys: &[(&[u8], &[u8])]) -> ImmutableMerkle {

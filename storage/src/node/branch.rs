@@ -58,8 +58,7 @@ impl std::error::Error for NodeError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             NodeError::Io(e) => Some(e),
-            NodeError::Proxy(_) => None,
-            NodeError::UnhashedChild => None,
+            NodeError::Proxy(_) | NodeError::UnhashedChild => None,
         }
     }
 }
@@ -127,10 +126,8 @@ impl lru_mem::HeapSize for Child {
     fn heap_size(&self) -> usize {
         match self {
             Child::Node(node) => node.heap_size(),
-            Child::AddressWithHash(_, _) => 0,
+            Child::AddressWithHash(_, _) | Child::MaybePersisted(_, _) | Child::Proxy(_) => 0,
             // MaybePersisted contains Arc<Mutex>, we don't count shared data
-            Child::MaybePersisted(_, _) => 0,
-            Child::Proxy(_) => 0,
         }
     }
 }
@@ -142,9 +139,7 @@ impl Child {
     pub const fn as_mut_node(&mut self) -> Option<&mut Node> {
         match self {
             Child::Node(node) => Some(node),
-            Child::AddressWithHash(..)
-            | Child::MaybePersisted(..)
-            | Child::Proxy(_) => None,
+            Child::AddressWithHash(..) | Child::MaybePersisted(..) | Child::Proxy(_) => None,
         }
     }
 
@@ -287,8 +282,7 @@ impl Debug for BranchNode {
 
         for (i, c) in &self.children {
             match c {
-                None => {}
-                Some(Child::Node(_)) => {} //TODO
+                None | Some(Child::Node(_)) => {} //TODO
                 Some(Child::AddressWithHash(addr, hash)) => {
                     write!(f, "({i:?}: address={addr:?} hash={hash})")?;
                 }
