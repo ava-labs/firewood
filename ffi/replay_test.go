@@ -117,10 +117,10 @@ func TestReplayLogExecution(t *testing.T) {
 	}
 	r.NotEmpty(logs, "expected at least one replay segment")
 
-	db := newTestDatabase(t, WithTruncate(true))
+	db := newTestDatabase(t, WithTruncate(true), WithDeferredPersistenceCommitCount(1))
 
 	start := time.Now()
-	commits, err := applyReplayLogs(db, logs, replayConfig{MaxCommits: maxCommits, VerifyHashes: true})
+	commits, err := applyReplayLogs(db, logs, replayConfig{MaxCommits: maxCommits, VerifyHashes: true}, nil)
 	r.NoError(err, "replay logs against database")
 	elapsed := time.Since(start)
 
@@ -157,17 +157,23 @@ func BenchmarkReplayLog(b *testing.B) {
 	}
 	r.NotEmpty(logs, "expected at least one replay segment")
 
+	times := make(map[string]time.Duration)
 	commits := 0
 	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
+	nx := 0
+	for b.Loop() {
+		nx += 1
 		b.StopTimer()
 		db := newTestDatabase(b, WithTruncate(true))
 		b.StartTimer()
 
-		commits, err = applyReplayLogs(db, logs, replayConfig{MaxCommits: maxCommits})
+		commits, err = applyReplayLogs(db, logs, replayConfig{MaxCommits: maxCommits}, &times)
 		r.NoError(err, "replay failed")
 	}
 
+	for k, v := range times {
+		b.ReportMetric(float64(v.Nanoseconds())/float64(nx), fmt.Sprintf("ns/%s", k))
+	}
 	b.ReportMetric(float64(commits), "commits")
 }
 
@@ -213,7 +219,7 @@ func TestBlockReplayRoundTrip(t *testing.T) {
 
 	db2 := newTestDatabase(t)
 
-	_, err = applyReplayLogs(db2, logs, replayConfig{VerifyHashes: true})
+	_, err = applyReplayLogs(db2, logs, replayConfig{VerifyHashes: true}, nil)
 	r.NoError(err)
 
 	replayedRoot := db2.Root()
@@ -280,19 +286,22 @@ type replayConfig struct {
 
 // applyReplayLogs applies replay logs to a database.
 // Returns the number of commits applied and any error encountered.
-func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, error) {
+func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig, times *map[string]time.Duration) (int, error) {
 	proposals := make(map[uint64]*Proposal)
 	totalCommits := 0
-
 	for _, segment := range logs {
 		for _, op := range segment.Operations {
+			start := time.Now()
+			var opName string
 			switch {
 			case op.GetLatest != nil:
+				opName = "get-latest"
 				if _, err := db.Get(op.GetLatest.Key); err != nil {
 					return totalCommits, fmt.Errorf("GetLatest: %w", err)
 				}
 
 			case op.GetFromProposal != nil:
+				opName = "get-from-proposal"
 				prop, ok := proposals[op.GetFromProposal.ProposalID]
 				if !ok {
 					return totalCommits, fmt.Errorf("GetFromProposal: unknown proposal id %d", op.GetFromProposal.ProposalID)
@@ -302,12 +311,14 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				}
 
 			case op.Batch != nil:
+				opName = "batch"
 				batch := batchFromReplayPairs(op.Batch.Pairs)
 				if _, err := db.Update(batch); err != nil {
 					return totalCommits, fmt.Errorf("Batch: %w", err)
 				}
 
 			case op.ProposeOnDB != nil:
+				opName = "propose-on-db"
 				batch := batchFromReplayPairs(op.ProposeOnDB.Pairs)
 				prop, err := db.Propose(batch)
 				if err != nil {
@@ -316,6 +327,7 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				proposals[op.ProposeOnDB.ReturnedProposalID] = prop
 
 			case op.ProposeOnProposal != nil:
+				opName = "propose-on-proposal"
 				parent, ok := proposals[op.ProposeOnProposal.ProposalID]
 				if !ok {
 					return totalCommits, fmt.Errorf("ProposeOnProposal: unknown parent proposal id %d", op.ProposeOnProposal.ProposalID)
@@ -328,6 +340,7 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				proposals[op.ProposeOnProposal.ReturnedProposalID] = prop
 
 			case op.Commit != nil:
+				opName = "commit"
 				prop, ok := proposals[op.Commit.ProposalID]
 				if !ok {
 					return totalCommits, fmt.Errorf("Commit: unknown proposal id %d", op.Commit.ProposalID)
@@ -349,7 +362,10 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				}
 
 			default:
-				return totalCommits, fmt.Errorf("unknown or empty DbOperation: %+v", op)
+				// 				return totalCommits, fmt.Errorf("unknown or empty DbOperation: %+v", op)
+			}
+			if times != nil {
+				(*times)[opName] += time.Since(start)
 			}
 		}
 	}

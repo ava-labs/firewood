@@ -159,6 +159,34 @@ release-step-update-rust-dependencies:
     cargo test --workspace --all-targets -F logger
     cargo test --workspace --all-targets -F ethhash,logger
 
+# Build FFI with maxperf profile and ethhash feature for benchmarking
+build-ffi-maxperf:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd ffi
+    cargo build --locked --features ethhash,logger --profile maxperf
+
+# Run replay benchmark (requires REPLAY_LOG env var or argument)
+run-replay-benchmark replay_log="" benchtime="3":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    REPLAY_LOG_PATH="${REPLAY_LOG:-{{replay_log}}}"
+    if [[ -z "${REPLAY_LOG_PATH}" ]]; then
+        echo "Error: REPLAY_LOG environment variable or replay_log argument is required" >&2
+        echo "Usage: just run-replay-benchmark /path/to/replay.log" >&2
+        echo "   or: REPLAY_LOG=/path/to/replay.log just run-replay-benchmark" >&2
+        exit 1
+    fi
+
+    if [[ ! -f "${REPLAY_LOG_PATH}" ]]; then
+        echo "Error: Replay log file not found: ${REPLAY_LOG_PATH}" >&2
+        exit 1
+    fi
+
+    cd ffi
+    REPLAY_LOG="${REPLAY_LOG_PATH}" go test -run=^$ -v -bench=BenchmarkReplayLog -benchtime={{benchtime}}x
+
 # RELEASE PREP: refresh changelog
 release-step-refresh-changelog tag:
     #!/usr/bin/env bash
