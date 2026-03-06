@@ -75,7 +75,7 @@ impl ProposalHandle<'_> {
     /// proposal is empty.
     pub fn commit_proposal(
         self,
-        token: impl FnOnce(coarsetime::Duration),
+        token: impl FnOnce(std::time::Duration),
     ) -> Result<Option<HashKey>, api::Error> {
         let ProposalHandle {
             hash_key,
@@ -89,7 +89,7 @@ impl ProposalHandle<'_> {
             _ = handle.get_root(hash_key.clone());
         }
 
-        let start_time = coarsetime::Instant::now();
+        let start_time = std::time::Instant::now();
         proposal.commit()?;
         let commit_time = start_time.elapsed();
 
@@ -119,7 +119,7 @@ impl ProposalHandle<'_> {
 #[derive(Debug)]
 pub struct CreateProposalResult<'db> {
     pub handle: ProposalHandle<'db>,
-    pub start_time: coarsetime::Instant,
+    pub start_time: std::time::Instant,
 }
 
 impl<'db> CreateProposalResult<'db> {
@@ -127,14 +127,14 @@ impl<'db> CreateProposalResult<'db> {
         handle: &'db crate::DatabaseHandle,
         f: impl FnOnce() -> Result<firewood::db::Proposal<'db>, api::Error>,
     ) -> Result<Self, api::Error> {
-        let start_time = coarsetime::Instant::now();
+        let start_time = std::time::Instant::now();
         let proposal = f()?;
         let propose_time = start_time.elapsed();
-        firewood_increment!(crate::registry::PROPOSE_MS, propose_time.as_millis());
+        firewood_increment!(crate::registry::PROPOSE_MS, propose_time.as_millis() as u64);
         firewood_increment!(crate::registry::PROPOSE_COUNT, 1);
         firewood_record!(
             crate::registry::PROPOSE_MS_BUCKET,
-            propose_time.as_f64() * 1000.0,
+            propose_time.as_secs_f64() * 1000.0,
             expensive
         );
 

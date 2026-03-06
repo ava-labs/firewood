@@ -518,11 +518,11 @@ pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>)
 
     let result = invoke_with_handle(proposal, move |proposal| {
         proposal.commit_proposal(|commit_time| {
-            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
+            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis() as u64);
             firewood_increment!(crate::registry::COMMIT_COUNT, 1);
             firewood_record!(
                 crate::registry::COMMIT_MS_BUCKET,
-                commit_time.as_f64() * 1000.0,
+                commit_time.as_secs_f64() * 1000.0,
                 expensive
             );
         })

@@ -224,8 +224,8 @@ impl<'db> RangeProofContext<'db> {
             }
         };
 
-        let metrics_cb = |commit_time: coarsetime::Duration| {
-            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
+        let metrics_cb = |commit_time: std::time::Duration| {
+            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis() as u64);
             firewood_increment!(crate::registry::MERGE_COUNT, 1);
         };
 

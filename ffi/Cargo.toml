@@ -21,7 +21,6 @@ crate-type = ["staticlib"]
 
 [dependencies]
 # Workspace dependencies
-coarsetime.workspace = true
 firewood.workspace = true
 firewood-metrics.workspace = true
 firewood-storage.workspace = true
