@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1772696174174,
+  "lastUpdate": 1772783083938,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -1127,6 +1127,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 83.12890297924592,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "daf50b307dc6475f6d99d6a8098b5f0cc96753f9",
+          "message": "refactor: replace `PersistSemaphore` with `PersistChannel` (#1710)\n\n## Why this should be merged\n\nQuoting #1694:\n\n> The current solution uses a combination of a modified semaphore and a\nchannel to apply back pressure, with the goal of bounding the staleness\nof the most recent persisted revision. In general, mixing semaphores and\nchannels (or any other synchronization primitive) can result in tricky\nand difficult to reason about solutions. In this case, there is an\nimplicit dependence between the values of the counter inside the\nsemaphore, and a separate counter managed by the event loop to determine\nwhen to \"release permits\" in the modified semaphore. This can lead to a\ndeadlock if the semaphore counter reaches zero before the event loop\ncounter falls below the threshold to reset the semaphore. The current\nsolution may work, but it is fragile since a change to just one of the\ncounter thresholds (max permits or count value before reset) could lead\nto a deadlock that might be difficult to find during standard tests.\n\n## How this works\n\nReplaces the `PersistSemaphore` + `crossbeam::channel` with\n`PersistChannel`, a channel-like abstraction around the locks/condvars\nmentioned in #1694. By using `PersistChannel`, we no longer have the\nissue of the `PersistWorker` and the `PersistLoop` having their own\nnotions of progress as all progress is managed via\n`PersistChannelState`.\n\nThis PR also adds a drop guard to the `PersistLoop`, such that if the\nbackground thread exits for whatever reason, the system is marked as\nshutdown which prevents the `PersistWorker` from hanging.\n\n## How this was tested\n\nCI + existing deferred persistence UTs\n\n---------\n\nCo-authored-by: Ron Kuris <ron.kuris@avalabs.org>\nCo-authored-by: Bernard Wong <bernard@avalabs.org>",
+          "timestamp": "2026-03-05T19:15:29Z",
+          "url": "https://github.com/ava-labs/firewood/commit/daf50b307dc6475f6d99d6a8098b5f0cc96753f9"
+        },
+        "date": 1772783083635,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 132.65026125673896,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 7538.6206595141375,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 128.6484825084654,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 7305.409148973784,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 99.86909525436602,
             "unit": "block_accept_ms/ggas"
           }
         ]
