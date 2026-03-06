@@ -25,7 +25,7 @@ pub struct TruncatedTrie {
     root_hash: Option<TrieHash>,
     /// The in-memory root node (with Proxy leaves at depth K).
     root: Option<Node>,
-    /// The truncation depth in nibble levels.
+    /// The truncation depth in node levels (number of branch-node hops from the root).
     truncation_depth: usize,
 }
 
@@ -62,7 +62,7 @@ impl TruncatedTrie {
     /// # Arguments
     ///
     /// * `trie` - A `TrieReader` providing access to the full trie
-    /// * `depth` - The truncation depth in nibble levels
+    /// * `depth` - The truncation depth in node levels
     ///
     /// # Errors
     ///
@@ -98,7 +98,7 @@ impl TruncatedTrie {
         self.root.as_ref()
     }
 
-    /// Returns the truncation depth in nibble levels.
+    /// Returns the truncation depth in node levels.
     #[must_use]
     pub const fn truncation_depth(&self) -> usize {
         self.truncation_depth
@@ -163,15 +163,25 @@ impl TruncatedTrie {
     }
 }
 
-/// Recursively truncates a node at the given depth, computing hashes bottom-up.
+/// Recursively truncates a trie node at the given depth, computing Merkle
+/// hashes bottom-up.
+///
+/// Depth is measured in **node hops**: each branch node visited counts as one
+/// hop regardless of its partial-path length. When `current_depth >= max_depth`,
+/// the node's children are replaced with [`Child::Proxy`] hash-only stubs.
+/// Otherwise the node is kept in memory and its children are recursively
+/// truncated at `current_depth + 1`.
 ///
 /// Returns `(truncated_node, hash)`. Children in the truncated trie are stored
-/// as [`Child::MaybePersisted`] (above depth K, preserving in-memory node data
-/// with their computed hash) or [`Child::Proxy`] (at depth K, hash-only stubs).
+/// as [`Child::MaybePersisted`] above depth K (preserving in-memory node data
+/// with their computed hash) or [`Child::Proxy`] at depth K (hash-only stubs).
 ///
-/// Using `MaybePersisted` for intermediate children ensures that `hash_node()`
-/// can find child hashes via `children_hashes()` while the truncated trie still
-/// retains the in-memory node data for traversal.
+/// `MaybePersisted` for intermediate children lets `hash_node()` find child
+/// hashes via `children_hashes()` while the truncated trie still retains
+/// in-memory node data for traversal.
+///
+/// Note: `path_prefix` tracks the full nibble-level path from the root for
+/// hash computation. It is unrelated to the node-hop depth counter.
 fn truncate_node<T: TrieReader>(
     trie: &T,
     node: &SharedNode,
@@ -180,19 +190,16 @@ fn truncate_node<T: TrieReader>(
     path_prefix: &Path,
 ) -> Result<(Node, HashType), NodeError> {
     match node.as_ref() {
+        // Leaves have no children to proxy — keep as-is and compute hash.
         Node::Leaf(leaf) => {
             let leaf_node = Node::Leaf(leaf.clone());
             let hash = hash_node(&leaf_node, path_prefix);
             Ok((leaf_node, hash))
         }
         Node::Branch(branch) => {
-            // The effective depth after this node's partial path
-            let depth_after_partial = current_depth
-                .saturating_add(branch.partial_path.len())
-                .saturating_add(1); // +1 for the child index nibble
-
-            if current_depth >= max_depth || depth_after_partial >= max_depth {
-                // At or beyond the truncation depth: proxy all children.
+            if current_depth >= max_depth {
+                // At or beyond the truncation depth: replace all children
+                // with Proxy stubs that carry only the child's hash.
                 let children = proxy_all_children(branch);
                 let truncated = Node::Branch(Box::new(BranchNode {
                     partial_path: branch.partial_path.clone(),
@@ -202,9 +209,8 @@ fn truncate_node<T: TrieReader>(
                 let hash = hash_node(&truncated, path_prefix);
                 Ok((truncated, hash))
             } else {
-                // Above the truncation depth: recursively truncate children.
-                // Store each child as MaybePersisted with the computed hash,
-                // preserving in-memory node data for later traversal.
+                // Above the truncation depth: recurse into each child,
+                // advancing the hop counter by 1.
                 let mut new_children = Children::new();
                 for (idx, child_opt) in &branch.children {
                     let Some(child) = child_opt else {
@@ -212,7 +218,8 @@ fn truncate_node<T: TrieReader>(
                     };
                     let child_node = child.as_shared_node(trie)?;
 
-                    // Build the child's path prefix for hashing
+                    // Build the child's full nibble path for hash computation:
+                    // parent prefix + this branch's partial path + child index.
                     let child_path_prefix = Path::from_nibbles_iterator(
                         path_prefix
                             .iter()
@@ -224,13 +231,13 @@ fn truncate_node<T: TrieReader>(
                     let (truncated_child, child_hash) = truncate_node(
                         trie,
                         &child_node,
-                        depth_after_partial,
+                        current_depth.saturating_add(1),
                         max_depth,
                         &child_path_prefix,
                     )?;
 
-                    // Wrap the truncated child as MaybePersisted so it carries
-                    // both the in-memory node data and its precomputed hash.
+                    // Wrap as MaybePersisted: carries both the in-memory node
+                    // data (for traversal) and precomputed hash (for hashing).
                     let shared = SharedNode::new(truncated_child);
                     let maybe_persisted = MaybePersistedNode::from(shared);
                     *new_children.get_mut(idx) =
@@ -358,17 +365,17 @@ mod tests {
             .collect();
         let trie = create_test_trie(&key_refs);
 
-        let truncated = TruncatedTrie::from_trie(trie.nodestore(), 1).unwrap();
+        let truncated = TruncatedTrie::from_trie(trie.nodestore(), 0).unwrap();
 
         // The root should be a branch node
         let root = truncated.root().unwrap();
         if let Node::Branch(branch) = root {
-            // At depth 1, children should be Proxy nodes
+            // At node depth 0, all children become Proxy nodes
             let has_proxy = branch
                 .children
                 .iter()
                 .any(|(_, child)| matches!(child, Some(Child::Proxy(_))));
-            assert!(has_proxy, "Expected proxy children at depth 1");
+            assert!(has_proxy, "Expected proxy children at node depth 0");
         }
     }
 
