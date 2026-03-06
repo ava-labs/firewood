@@ -132,24 +132,6 @@ fn write_branch(out: &mut Vec<u8>, branch: &BranchNode) {
     }
 }
 
-/// A `NodeReader` that always fails. Used for serializing `MaybePersisted`
-/// children from truncated tries, which are always `Unpersisted`.
-struct NullReader;
-
-impl firewood_storage::NodeReader for NullReader {
-    fn read_node(
-        &self,
-        _addr: firewood_storage::LinearAddress,
-    ) -> Result<SharedNode, firewood_storage::FileIoError> {
-        Err(firewood_storage::FileIoError::new(
-            std::io::Error::other("NullReader: no storage"),
-            None,
-            0,
-            Some("NullReader::read_node".into()),
-        ))
-    }
-}
-
 fn write_child(out: &mut Vec<u8>, child: Option<&Child>) {
     match child {
         None => out.push(CHILD_NONE),
@@ -165,9 +147,9 @@ fn write_child(out: &mut Vec<u8>, child: Option<&Child>) {
             // Serialize as CHILD_MAYBE_PERSISTED: hash + inline node
             out.push(CHILD_MAYBE_PERSISTED);
             write_hash_type(out, hash);
-            // Unwrap the MaybePersisted to get the node
-            // For truncated tries, these are always Unpersisted
-            if let Ok(shared) = maybe.as_shared_node(&NullReader) {
+            // Unwrap the MaybePersisted to get the node.
+            // For truncated tries, these are always Unpersisted.
+            if let Ok(shared) = maybe.as_unpersisted_node() {
                 write_node(out, &shared);
             } else {
                 // Fallback: write an empty leaf if we can't read the node.

@@ -212,6 +212,10 @@ pub enum Error {
     #[error("child node has no hash (expected only in hashed tries)")]
     /// A child node has no hash
     UnhashedChild,
+
+    #[error("no storage backend available for persisted node")]
+    /// No storage backend is available to read persisted nodes
+    NoStorage,
 }
 
 impl From<std::convert::Infallible> for Error {
@@ -226,6 +230,7 @@ impl From<NodeError> for Error {
             NodeError::Io(io_err) => Error::FileIO(io_err),
             NodeError::Proxy(hash) => Error::ProxyChild(hash),
             NodeError::UnhashedChild => Error::UnhashedChild,
+            NodeError::NoStorage => Error::NoStorage,
         }
     }
 }
@@ -233,7 +238,7 @@ impl From<NodeError> for Error {
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
         use RevisionManagerError::{
-            FileIoError, IOError, NodeError, NotLatest, PersistError, RevisionNotFound,
+            FileIoError, IOError, NotLatest, PersistError, RevisionNotFound,
             RevisionWithoutAddress, RootStoreError,
         };
         match err {
@@ -243,7 +248,6 @@ impl From<RevisionManagerError> for Error {
             },
             RevisionWithoutAddress { provided } => Self::RevisionWithoutAddress { provided },
             FileIoError(io_err) => Self::FileIO(io_err),
-            NodeError(err) => Self::from(err),
             IOError(err) => Self::IO(err),
             RootStoreError(err) => Self::RootStoreError(err),
             PersistError(err) => Self::DeferredPersistenceError(err),

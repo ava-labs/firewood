@@ -21,9 +21,8 @@ use crate::merkle::Merkle;
 use crate::remote::TruncatedTrie;
 use crate::remote::client::BatchOp;
 use firewood_storage::{
-    BranchNode, Child, Children, FileIoError, HashedNodeReader, ImmutableProposal, LinearAddress,
-    MemStore, Node, NodeError, NodeHashAlgorithm, NodeReader, NodeStore, PathComponent, SharedNode,
-    TrieHash, TrieReader,
+    BranchNode, Child, Children, HashedNodeReader, ImmutableProposal, MemStore, Node, NodeError,
+    NodeHashAlgorithm, NodeStore, PathComponent, SharedNode, TrieHash, TrieReader,
 };
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -396,27 +395,6 @@ fn convert_node_for_witness(node: &SharedNode) -> Result<Node, NodeError> {
 
 // -- Client-side witness verification --
 
-/// A [`NodeReader`] that always returns an error, used when extracting
-/// in-memory nodes from `MaybePersisted` children.
-///
-/// In a truncated trie, all `MaybePersisted` children are `Unpersisted`
-/// (they exist only in memory). Calling `as_shared_node` on them never
-/// actually reads from storage — the `NullNodeReader` is a compile-time
-/// proof that no real storage backend is needed. If a read is attempted,
-/// it indicates a corrupted truncated trie containing a persisted node.
-struct NullNodeReader;
-
-impl NodeReader for NullNodeReader {
-    fn read_node(&self, _addr: LinearAddress) -> Result<SharedNode, FileIoError> {
-        Err(FileIoError::new(
-            std::io::Error::other("NullNodeReader: no storage available"),
-            None,
-            0,
-            Some("NullNodeReader::read_node".into()),
-        ))
-    }
-}
-
 /// Verifies a witness proof and returns the updated truncated trie.
 ///
 /// This is the core of client-side commit verification. The server sends
@@ -538,10 +516,8 @@ fn to_node_tree(node: &Node) -> Result<Node, WitnessError> {
                     Some(Child::Node(child)) => Some(Child::Node(to_node_tree(child)?)),
                     Some(Child::MaybePersisted(maybe, _)) => {
                         // All MaybePersisted in truncated tries are Unpersisted.
-                        // Use NullNodeReader since storage won't be accessed.
-                        let shared = maybe
-                            .as_shared_node(&NullNodeReader)
-                            .map_err(NodeError::Io)?;
+                        // Use as_unpersisted_node since no storage backend is available.
+                        let shared = maybe.as_unpersisted_node()?;
                         Some(Child::Node(to_node_tree(&shared)?))
                     }
                     // AddressWithHash children (from committed storage) become
