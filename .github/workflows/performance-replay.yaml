@@ -97,7 +97,7 @@ jobs:
 
           cd ./benchmark-theme-repository
 
-          for dir in "$PR_DATA_DIR" "$COMMIT_DATA_DIR"; do
+          for dir in "$PR_DATA_DIR"; do
             if [[ ! -f "$dir/index.html" ]]; then
               echo "::warning::Skipping ${dir} because index.html is missing"
               continue
