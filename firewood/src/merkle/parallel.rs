@@ -154,6 +154,9 @@ impl ParallelMerkle {
                     Child::MaybePersisted(maybe_persisted, _) => {
                         nodestore.read_for_update(maybe_persisted.clone())?
                     }
+                    Child::Proxy(hash) => {
+                        return Err(NodeError::Proxy(hash.clone()));
+                    }
                 };
 
                 // The child's partial path is the concatenation of its (now removed) parent, which
@@ -255,6 +258,7 @@ impl ParallelMerkle {
                     Child::MaybePersisted(maybe_persisted, _) => {
                         Ok(proposal.read_for_update(maybe_persisted)?)
                     }
+                    Child::Proxy(hash) => Err(NodeError::Proxy(hash)),
                 }
             })
             .transpose()?;

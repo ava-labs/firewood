@@ -87,7 +87,9 @@ where
             },
             |mut acc, (idx, child)| {
                 match child {
-                    None => {}
+                    // Proxy children are hash-only stubs from truncated tries
+                    // and should not appear during hashing of a mutable proposal.
+                    None | Some(Child::Proxy(_)) => {}
                     Some(Child::AddressWithHash(a, h)) => {
                         // Convert address to MaybePersistedNode
                         let maybe_persisted_node = MaybePersistedNode::from(*a);

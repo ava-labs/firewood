@@ -101,10 +101,16 @@ fn get_helper<T: TrieReader>(
                 Node::Leaf(_) => Ok(None),
                 Node::Branch(node) => match node.children[child_index].as_ref() {
                     None => Ok(None),
-                    Some(child) => {
-                        let child = child.as_shared_node(nodestore)?;
+                    Some(Child::Node(child)) => get_helper(nodestore, child, remaining_key),
+                    Some(Child::AddressWithHash(addr, _)) => {
+                        let child = nodestore.read_node(*addr)?;
                         get_helper(nodestore, &child, remaining_key)
                     }
+                    Some(Child::MaybePersisted(maybe_persisted, _)) => {
+                        let child = maybe_persisted.as_shared_node(nodestore)?;
+                        get_helper(nodestore, &child, remaining_key)
+                    }
+                    Some(child @ Child::Proxy(_)) => child.as_shared_node(nodestore).map(Some),
                 },
             }
         }
@@ -686,11 +692,12 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
     }
 
     fn read_for_update(&mut self, child: Child) -> Result<Node, NodeError> {
-        Ok(match child {
-            Child::Node(node) => node,
-            Child::AddressWithHash(addr, _) => self.nodestore.read_for_update(addr.into())?,
-            Child::MaybePersisted(node, _) => self.nodestore.read_for_update(node)?,
-        })
+        match child {
+            Child::Node(node) => Ok(node),
+            Child::AddressWithHash(addr, _) => Ok(self.nodestore.read_for_update(addr.into())?),
+            Child::MaybePersisted(node, _) => Ok(self.nodestore.read_for_update(node)?),
+            Child::Proxy(hash) => Err(NodeError::Proxy(hash)),
+        }
     }
 
     /// Map `key` to `value` in the trie.
