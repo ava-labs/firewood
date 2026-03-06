@@ -24,8 +24,9 @@ pub const CACHED_VIEW_HIT: &str = "ffi.cached_view.hit";
 pub const MERGE_COUNT: &str = "firewood.ffi.merge";
 
 const FFI_TIMING_BUCKETS: &[f64] = &[
-    0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0, 12.0, 15.0, 20.0,
-    30.0, 50.0,
+    0.1, 0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 2.5, 5.0, // lowest range, proposals mostly
+    10.0, 15.0, 20.0, 50.0, // mid. and
+    100.0, 200.0, 500.0, // high breakdown for commit buckets
 ];
 
 /// Registers all FFI metric descriptions.
