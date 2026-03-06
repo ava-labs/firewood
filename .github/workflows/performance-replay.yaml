@@ -8,14 +8,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
-  # Replay log location - supports both HTTPS and S3 URLs
-  # S3 example: s3://your-bucket/replay-files/replay_10k.mp.log
-  # HTTPS example: https://example.com/replay_10k.mp.log
   REPLAY_LOG_URL: 'https://github.com/AminR443/firewood-benchmark-reports/raw/refs/heads/main/replay-files/replay_10k.mp.log'
   AWS_REGION: 'us-west-2'
+  BENCHMARK_REPORTS_REPOSITORY: 'AminR443/firewood-benchmark-reports'
+  BENCHMARK_REPORTS_GH_REPOSITORY: 'github.com/AminR443/firewood-benchmark-reports'
+  BENCHMARK_REPORTS_PAGES_URL: 'https://aminr443.github.io/firewood-benchmark-reports'
+  BENCHMARK_THEME_CSS_URL: 'https://raw.githubusercontent.com/AminR443/firewood-benchmark-reports/refs/heads/main/theme.css'
 
 jobs:
-  # Run benchmark for PR commits and store graph data per PR
   benchmark-pr:
     name: Benchmark (PR)
     if: github.event_name == 'pull_request'
@@ -23,142 +23,157 @@ jobs:
     permissions:
       issues: write
       pull-requests: write
+    concurrency:
+      group: performance-replay-pr-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
     steps:
-      - name: Checkout PR
+      - name: Determine PR results locations
+        id: location
+        run: |
+          echo "pr-data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
+          echo "comparison-data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}/commits/${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout base commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.event.pull_request.base.sha }}
 
-      - name: Run benchmark
+      - name: Run benchmark on base commit
         uses: ./.github/actions/run-benchmark
-        id: benchmark
+        id: benchmark-base
         with:
-          benchmark-name: 'Replay 10K (PR Commits)'
+          benchmark-name: 'Replay 10K (PR Base)'
           replay-log-url: ${{ env.REPLAY_LOG_URL }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Determine PR results location
-        id: location
-        run: |
-          echo "pr-data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
-          echo "commit-data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}/commits/${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
-
       - name: Clean benchmark action workspace
         run: rm -rf ./benchmark-data-repository
 
-      - name: Store PR benchmark trend
+      - name: Store base result in PR trend graph
         uses: benchmark-action/github-action-benchmark@v1
         with:
           name: 'Replay 10K PR'
           tool: 'go'
-          output-file-path: ${{ steps.benchmark.outputs.output-file }}
-          ref: ${{ github.event.pull_request.head.sha }}
+          output-file-path: ${{ steps.benchmark-base.outputs.output-file }}
+          ref: ${{ github.event.pull_request.base.sha }}
           github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           auto-push: true
-          gh-repository: 'github.com/AminR443/firewood-benchmark-reports'
+          gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
           benchmark-data-dir-path: ${{ steps.location.outputs.pr-data-dir }}
-          # Show alert but don't fail PR
           alert-threshold: '150%'
           comment-on-alert: false
           fail-on-alert: false
 
-      - name: Clean benchmark action workspace (second run)
+      - name: Clean benchmark action workspace
         run: rm -rf ./benchmark-data-repository
 
-      - name: Store PR benchmark for commit
+      - name: Store base result in commit comparison graph
         uses: benchmark-action/github-action-benchmark@v1
         with:
-          name: 'Replay 10K PR Commit'
+          name: 'Replay 10K PR Compare'
           tool: 'go'
-          output-file-path: ${{ steps.benchmark.outputs.output-file }}
-          ref: ${{ github.event.pull_request.head.sha }}
+          output-file-path: ${{ steps.benchmark-base.outputs.output-file }}
+          ref: ${{ github.event.pull_request.base.sha }}
           github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           auto-push: true
-          gh-repository: 'github.com/AminR443/firewood-benchmark-reports'
-          benchmark-data-dir-path: ${{ steps.location.outputs.commit-data-dir }}
-          # Show alert but don't fail PR
+          gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
+          benchmark-data-dir-path: ${{ steps.location.outputs.comparison-data-dir }}
           alert-threshold: '150%'
           comment-on-alert: false
           fail-on-alert: false
 
-      - name: Apply dark theme to PR benchmark pages
+      - name: Clean benchmark action workspace
+        run: rm -rf ./benchmark-data-repository
+
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Run benchmark on PR head commit
+        uses: ./.github/actions/run-benchmark
+        id: benchmark-head
+        with:
+          benchmark-name: 'Replay 10K (PR Head)'
+          replay-log-url: ${{ env.REPLAY_LOG_URL }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Clean benchmark action workspace
+        run: rm -rf ./benchmark-data-repository
+
+      - name: Store head result in PR trend graph
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: 'Replay 10K PR'
+          tool: 'go'
+          output-file-path: ${{ steps.benchmark-head.outputs.output-file }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
+          auto-push: true
+          gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
+          benchmark-data-dir-path: ${{ steps.location.outputs.pr-data-dir }}
+          alert-threshold: '150%'
+          comment-on-alert: false
+          fail-on-alert: false
+
+      - name: Clean benchmark action workspace
+        run: rm -rf ./benchmark-data-repository
+
+      - name: Store head result in commit comparison graph
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: 'Replay 10K PR Compare'
+          tool: 'go'
+          output-file-path: ${{ steps.benchmark-head.outputs.output-file }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
+          auto-push: true
+          gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
+          benchmark-data-dir-path: ${{ steps.location.outputs.comparison-data-dir }}
+          alert-threshold: '150%'
+          comment-on-alert: false
+          fail-on-alert: false
+
+      - name: Apply benchmark theme to PR graphs
         env:
           BENCHMARK_TOKEN: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           PR_DATA_DIR: ${{ steps.location.outputs.pr-data-dir }}
-          COMMIT_DATA_DIR: ${{ steps.location.outputs.commit-data-dir }}
+          COMPARISON_DATA_DIR: ${{ steps.location.outputs.comparison-data-dir }}
+          THEME_CSS_URL: ${{ env.BENCHMARK_THEME_CSS_URL }}
         run: |
           set -euo pipefail
 
           rm -rf ./benchmark-theme-repository
-          git clone --depth 1 --branch main "https://x-access-token:${BENCHMARK_TOKEN}@github.com/AminR443/firewood-benchmark-reports.git" ./benchmark-theme-repository
+          git clone --depth 1 --branch main "https://x-access-token:${BENCHMARK_TOKEN}@github.com/${BENCHMARK_REPORTS_REPOSITORY}.git" ./benchmark-theme-repository
 
           cd ./benchmark-theme-repository
 
-          for dir in "$PR_DATA_DIR"; do
+          apply_theme() {
+            local dir="$1"
             if [[ ! -f "$dir/index.html" ]]; then
               echo "::warning::Skipping ${dir} because index.html is missing"
-              continue
+              return
             fi
 
-            cat > "$dir/theme.css" <<'CSS'
-          @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
-
-          :root {
-            --bg: #0b0f14;
-            --panel: #111823;
-            --text: #e6edf3;
-            --border: #273246;
-            --accent: #7aa2f7;
-          }
-
-          html,
-          body {
-            background: var(--bg) !important;
-            color: var(--text) !important;
-          }
-
-          body,
-          body * {
-            font-family: "JetBrains Mono", monospace !important;
-          }
-
-          a {
-            color: var(--accent) !important;
-          }
-
-          table,
-          th,
-          td {
-            border-color: var(--border) !important;
-            color: var(--text) !important;
-          }
-
-          thead th,
-          tr:nth-child(even),
-          tr:nth-child(odd) {
-            background: var(--panel) !important;
-          }
-
-          code,
-          pre {
-            background: #0f1724 !important;
-            color: var(--text) !important;
-          }
-          CSS
-
+            curl -fsSL "$THEME_CSS_URL" -o "$dir/theme.css"
             if ! grep -q 'href="theme.css"' "$dir/index.html"; then
               sed -i 's#</head>#  <link rel="stylesheet" href="theme.css">\n</head>#' "$dir/index.html"
             fi
-          done
+          }
+
+          apply_theme "$PR_DATA_DIR"
+          apply_theme "$COMPARISON_DATA_DIR"
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A "$PR_DATA_DIR"
+          git add -A "$PR_DATA_DIR" "$COMPARISON_DATA_DIR"
 
           if ! git diff --cached --quiet; then
-            git commit -m "style: dark theme benchmark pages for PR run"
+            git commit -m "style: apply shared benchmark theme for PR graphs"
             git push origin main
           else
             echo "No benchmark theme changes to commit."
@@ -167,33 +182,37 @@ jobs:
       - name: Post results to PR
         uses: actions/github-script@v7
         env:
-          BENCHMARK_RESULTS: ${{ steps.benchmark.outputs.results }}
+          BENCHMARK_RESULTS: ${{ steps.benchmark-head.outputs.results }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
-          TREND_URL: https://aminr443.github.io/firewood-benchmark-reports/${{ steps.location.outputs.pr-data-dir }}/
-          COMMIT_URL: https://aminr443.github.io/firewood-benchmark-reports/${{ steps.location.outputs.commit-data-dir }}/
+          BASE_COMMIT_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+          TREND_URL: ${{ env.BENCHMARK_REPORTS_PAGES_URL }}/${{ steps.location.outputs.pr-data-dir }}/
+          COMPARISON_URL: ${{ env.BENCHMARK_REPORTS_PAGES_URL }}/${{ steps.location.outputs.comparison-data-dir }}/
         with:
           script: |
             const results = process.env.BENCHMARK_RESULTS;
             const prNumber = parseInt(process.env.PR_NUMBER, 10);
-            const commitSha = process.env.COMMIT_SHA;
+            const baseCommitSha = process.env.BASE_COMMIT_SHA;
+            const headCommitSha = process.env.HEAD_COMMIT_SHA;
             const trendUrl = process.env.TREND_URL;
-            const commitUrl = process.env.COMMIT_URL;
+            const comparisonUrl = process.env.COMPARISON_URL;
 
             const body = [
               '## Performance Test Results',
               '',
-              'Triggered automatically for this PR commit.',
+              `Base commit: \`${baseCommitSha.substring(0, 8)}\``,
+              `PR head commit: \`${headCommitSha.substring(0, 8)}\``,
+              '',
               '```',
               results,
               '```',
               '',
               `[PR trend graph](${trendUrl})`,
               '',
-              `[This commit graph](${commitUrl})`,
+              `[Base vs head graph](${comparisonUrl})`,
               '',
               '---',
-              `*Commit: \`${commitSha.substring(0, 8)}\`*`
+              '*Includes benchmark data for both base and head commits.*'
             ].join('\n');
 
             await github.rest.issues.createComment({
@@ -203,7 +222,6 @@ jobs:
               body: body
             });
 
-  # Run benchmark for main branch (store and graph)
   benchmark-main:
     name: Benchmark (main)
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -237,8 +255,6 @@ jobs:
           tool: 'go'
           output-file-path: ${{ steps.benchmark.outputs.output-file }}
           ref: ${{ github.sha }}
-          # TODO: Replace with org repo once gh-pages conflict is resolved
-          # For now using external repo for benchmark data
           github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           auto-push: true
           benchmark-data-dir-path: bench/replay-10k
@@ -246,17 +262,18 @@ jobs:
           comment-on-alert: true
           fail-on-alert: true
           alert-comment-cc-users: '@AminR443'
-          gh-repository: 'github.com/AminR443/firewood-benchmark-reports'
+          gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
 
-      - name: Apply dark theme to main benchmark page
+      - name: Apply benchmark theme to main graph
         env:
           BENCHMARK_TOKEN: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
           MAIN_DATA_DIR: bench/replay-10k
+          THEME_CSS_URL: ${{ env.BENCHMARK_THEME_CSS_URL }}
         run: |
           set -euo pipefail
 
           rm -rf ./benchmark-theme-repository
-          git clone --depth 1 --branch main "https://x-access-token:${BENCHMARK_TOKEN}@github.com/AminR443/firewood-benchmark-reports.git" ./benchmark-theme-repository
+          git clone --depth 1 --branch main "https://x-access-token:${BENCHMARK_TOKEN}@github.com/${BENCHMARK_REPORTS_REPOSITORY}.git" ./benchmark-theme-repository
 
           cd ./benchmark-theme-repository
 
@@ -265,51 +282,7 @@ jobs:
             exit 0
           fi
 
-          cat > "$MAIN_DATA_DIR/theme.css" <<'CSS'
-          @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&display=swap');
-
-          :root {
-            --bg: #0b0f14;
-            --panel: #111823;
-            --text: #e6edf3;
-            --border: #273246;
-            --accent: #7aa2f7;
-          }
-
-          html,
-          body {
-            background: var(--bg) !important;
-            color: var(--text) !important;
-          }
-
-          body,
-          body * {
-            font-family: "JetBrains Mono", monospace !important;
-          }
-
-          a {
-            color: var(--accent) !important;
-          }
-
-          table,
-          th,
-          td {
-            border-color: var(--border) !important;
-            color: var(--text) !important;
-          }
-
-          thead th,
-          tr:nth-child(even),
-          tr:nth-child(odd) {
-            background: var(--panel) !important;
-          }
-
-          code,
-          pre {
-            background: #0f1724 !important;
-            color: var(--text) !important;
-          }
-          CSS
+          curl -fsSL "$THEME_CSS_URL" -o "$MAIN_DATA_DIR/theme.css"
 
           if ! grep -q 'href="theme.css"' "$MAIN_DATA_DIR/index.html"; then
             sed -i 's#</head>#  <link rel="stylesheet" href="theme.css">\n</head>#' "$MAIN_DATA_DIR/index.html"
@@ -320,7 +293,7 @@ jobs:
           git add -A "$MAIN_DATA_DIR"
 
           if ! git diff --cached --quiet; then
-            git commit -m "style: dark theme benchmark page for main run"
+            git commit -m "style: apply shared benchmark theme for main graph"
             git push origin main
           else
             echo "No benchmark theme changes to commit."
