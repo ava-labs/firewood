@@ -40,6 +40,33 @@ jobs:
           echo "pr-data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
           echo "comparison-data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}/commits/${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
 
+      - name: Capture base and head commit subjects
+        id: commit_subjects
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          base_subject="$(git show -s --format=%s "$BASE_SHA" 2>/dev/null || true)"
+          head_subject="$(git show -s --format=%s "$HEAD_SHA" 2>/dev/null || true)"
+
+          if [[ -z "$base_subject" ]]; then
+            base_subject="$BASE_SHA"
+          fi
+          if [[ -z "$head_subject" ]]; then
+            head_subject="$HEAD_SHA"
+          fi
+
+          {
+            echo "base-subject<<EOF"
+            echo "$base_subject"
+            echo "EOF"
+            echo "head-subject<<EOF"
+            echo "$head_subject"
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Check existing base benchmark data
         id: base-data
         env:
@@ -225,6 +252,10 @@ jobs:
           PR_DATA_DIR: ${{ steps.location.outputs.pr-data-dir }}
           COMPARISON_DATA_DIR: ${{ steps.location.outputs.comparison-data-dir }}
           THEME_CSS_URL: ${{ env.BENCHMARK_THEME_CSS_URL }}
+          BASE_COMMIT_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_COMMIT_SUBJECT: ${{ steps.commit_subjects.outputs.base-subject }}
+          HEAD_COMMIT_SUBJECT: ${{ steps.commit_subjects.outputs.head-subject }}
         run: |
           set -euo pipefail
 
@@ -232,6 +263,49 @@ jobs:
           git clone --depth 1 --branch "${BENCHMARK_REPORTS_BRANCH}" "https://x-access-token:${BENCHMARK_TOKEN}@github.com/${BENCHMARK_REPORTS_REPOSITORY}.git" ./benchmark-theme-repository
 
           cd ./benchmark-theme-repository
+
+          patch_commit_message() {
+            local dir="$1"
+            local sha="$2"
+            local subject="$3"
+            local data_file="${dir}/data.js"
+
+            if [[ ! -f "$data_file" ]]; then
+              return
+            fi
+
+            node - "$data_file" "$sha" "$subject" <<'NODE'
+          const fs = require('fs');
+
+          const [,, filePath, sha, subject] = process.argv;
+          const prefix = 'window.BENCHMARK_DATA = ';
+          const content = fs.readFileSync(filePath, 'utf8');
+
+          if (!content.startsWith(prefix)) {
+            process.exit(0);
+          }
+
+          const data = JSON.parse(content.slice(prefix.length));
+          let changed = false;
+
+          for (const suites of Object.values(data.entries || {})) {
+            if (!Array.isArray(suites)) {
+              continue;
+            }
+
+            for (const suite of suites) {
+              if (suite?.commit?.id === sha && suite.commit.message !== subject) {
+                suite.commit.message = subject;
+                changed = true;
+              }
+            }
+          }
+
+          if (changed) {
+            fs.writeFileSync(filePath, prefix + JSON.stringify(data, null, 2));
+          }
+          NODE
+          }
 
           apply_theme() {
             local dir="$1"
@@ -245,6 +319,11 @@ jobs:
               sed -i 's#</head>#  <link rel="stylesheet" href="theme.css">\n</head>#' "$dir/index.html"
             fi
           }
+
+          patch_commit_message "$PR_DATA_DIR" "$BASE_COMMIT_SHA" "$BASE_COMMIT_SUBJECT"
+          patch_commit_message "$PR_DATA_DIR" "$HEAD_COMMIT_SHA" "$HEAD_COMMIT_SUBJECT"
+          patch_commit_message "$COMPARISON_DATA_DIR" "$BASE_COMMIT_SHA" "$BASE_COMMIT_SUBJECT"
+          patch_commit_message "$COMPARISON_DATA_DIR" "$HEAD_COMMIT_SHA" "$HEAD_COMMIT_SUBJECT"
 
           apply_theme "$PR_DATA_DIR"
           apply_theme "$COMPARISON_DATA_DIR"
