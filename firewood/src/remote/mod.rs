@@ -12,5 +12,6 @@
 
 pub mod client;
 pub mod truncated_trie;
+pub mod witness;
 
 pub use truncated_trie::TruncatedTrie;
