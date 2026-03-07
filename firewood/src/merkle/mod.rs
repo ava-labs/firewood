@@ -16,6 +16,8 @@ use crate::v2::api::{
 };
 use crate::{Proof, ProofCollection, ProofError, ProofNode, RangeProof};
 use firewood_metrics::firewood_increment;
+#[cfg(test)]
+use firewood_storage::MemStore;
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashedNodeReader, ImmutableProposal,
     IntoHashType, LeafNode, MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore,
@@ -262,12 +264,88 @@ impl<T: TrieReader> Merkle<T> {
     ///   incremental range proof verification
     pub fn verify_range_proof(
         &self,
-        _first_key: Option<impl KeyType>,
-        _last_key: Option<impl KeyType>,
-        _root_hash: &TrieHash,
-        _proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
+        first_key: Option<impl KeyType>,
+        last_key: Option<impl KeyType>,
+        root_hash: &TrieHash,
+        proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
     ) -> Result<(), api::Error> {
-        todo!()
+        // check that the keys are in ascending order
+        let key_values = proof.key_values();
+        if !key_values
+            .iter()
+            .map(|(key, _)| key.as_ref())
+            .is_sorted_by(|a, b| a < b)
+        {
+            return Err(api::Error::ProofError(
+                ProofError::NonMonotonicIncreaseRange,
+            ));
+        }
+
+        if key_values.is_empty() && first_key.is_none() && last_key.is_none() {
+            return Err(api::Error::ProofError(ProofError::Empty));
+        }
+
+        let left = key_values.first();
+        let right = key_values.last();
+
+        // Verify that first_key (if provided) is <= the first key in the proof
+        if let (Some(ref requested_first), Some((left_key, _))) = (first_key.as_ref(), left)
+            && requested_first.as_ref() > left_key.as_ref()
+        {
+            return Err(api::Error::InvalidRange {
+                start_key: requested_first.as_ref().to_vec().into(),
+                end_key: left_key.as_ref().to_vec().into(),
+            });
+        }
+
+        // start proof verifies the requested lower bound (if any), not necessarily
+        // the first key-value included in this proof.
+        if let Some(ref requested_first) = first_key {
+            let expected_start_value = left.and_then(|(key, value)| {
+                (requested_first.as_ref() == key.as_ref()).then_some(value.as_ref())
+            });
+
+            proof.start_proof().verify(
+                requested_first.as_ref(),
+                expected_start_value,
+                root_hash,
+            )?;
+        } else if let Some((left_key, left_value)) = left {
+            proof
+                .start_proof()
+                .verify(left_key.as_ref(), Some(left_value.as_ref()), root_hash)?;
+        }
+
+        // Verify that last_key (if provided) is >= the last key in the proof
+        if let (Some(ref requested_last), Some((right_key, _))) = (last_key.as_ref(), right)
+            && requested_last.as_ref() < right_key.as_ref()
+        {
+            return Err(api::Error::InvalidRange {
+                start_key: requested_last.as_ref().to_vec().into(),
+                end_key: right_key.as_ref().to_vec().into(),
+            });
+        }
+
+        // end proof verifies the requested upper bound (if any), not necessarily
+        // the last key-value included in this proof.
+        if let Some(ref requested_last) = last_key {
+            let expected_end_value = right.and_then(|(key, value)| {
+                (requested_last.as_ref() == key.as_ref()).then_some(value.as_ref())
+            });
+
+            proof
+                .end_proof()
+                .verify(requested_last.as_ref(), expected_end_value, root_hash)?;
+        } else if let Some((right_key, right_value)) = right {
+            proof
+                .end_proof()
+                .verify(right_key.as_ref(), Some(right_value.as_ref()), root_hash)?;
+        }
+
+        // TODO: build a merkle and reshape it, filling in hashes from the
+        // provided proofs on the left and right edges, then verify the root hash
+
+        Ok(())
     }
 
     /// Merges a sequence of key-value pairs with the base merkle trie, yielding
@@ -845,6 +923,111 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         }
     }
 
+    /// Ensures a branch exists at `key` in the subtrie rooted at `node`.
+    /// Each element of `key` is 1 nibble.
+    #[cfg(test)]
+    fn insert_branch_helper(&mut self, mut node: Node, key: &[u8]) -> Result<Node, FileIoError> {
+        let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
+
+        let unique_key = path_overlap.unique_a;
+        let unique_node = path_overlap.unique_b;
+
+        match (
+            unique_key
+                .split_first()
+                .map(|(index, path)| (*index, path.into())),
+            unique_node
+                .split_first()
+                .map(|(index, path)| (*index, path.into())),
+        ) {
+            (None, None) => match node {
+                Node::Branch(_) => Ok(node),
+                Node::Leaf(leaf) => {
+                    let branch = BranchNode {
+                        partial_path: leaf.partial_path,
+                        value: Some(leaf.value),
+                        children: Children::new(),
+                    };
+                    Ok(Node::Branch(Box::new(branch)))
+                }
+            },
+            (None, Some((child_index, partial_path))) => {
+                let child_index = PathComponent::try_new(child_index).expect("valid component");
+
+                let mut branch = BranchNode {
+                    partial_path: path_overlap.shared.into(),
+                    value: None,
+                    children: Children::new(),
+                };
+
+                node.update_partial_path(partial_path);
+                branch.children[child_index] = Some(Child::Node(node));
+
+                Ok(Node::Branch(Box::new(branch)))
+            }
+            (Some((child_index, partial_path)), None) => {
+                let child_index = PathComponent::try_new(child_index).expect("valid component");
+
+                match node {
+                    Node::Branch(ref mut branch) => {
+                        let Some(child) = branch.children.take(child_index) else {
+                            let new_branch = Node::Branch(Box::new(BranchNode {
+                                partial_path,
+                                value: None,
+                                children: Children::new(),
+                            }));
+                            branch.children[child_index] = Some(Child::Node(new_branch));
+                            return Ok(node);
+                        };
+
+                        let child = self.read_for_update(child)?;
+                        let child = self.insert_branch_helper(child, partial_path.as_ref())?;
+                        branch.children[child_index] = Some(Child::Node(child));
+                        Ok(node)
+                    }
+                    Node::Leaf(leaf) => {
+                        let mut branch = BranchNode {
+                            partial_path: leaf.partial_path,
+                            value: Some(leaf.value),
+                            children: Children::new(),
+                        };
+
+                        let new_branch = Node::Branch(Box::new(BranchNode {
+                            partial_path,
+                            value: None,
+                            children: Children::new(),
+                        }));
+                        branch.children[child_index] = Some(Child::Node(new_branch));
+
+                        Ok(Node::Branch(Box::new(branch)))
+                    }
+                }
+            }
+            (Some((key_index, key_partial_path)), Some((node_index, node_partial_path))) => {
+                let key_index = PathComponent::try_new(key_index).expect("valid component");
+                let node_index = PathComponent::try_new(node_index).expect("valid component");
+
+                let mut branch = BranchNode {
+                    partial_path: path_overlap.shared.into(),
+                    value: None,
+                    children: Children::new(),
+                };
+
+                node.update_partial_path(node_partial_path);
+                branch.children[node_index] = Some(Child::Node(node));
+
+                let new_branch = Node::Branch(Box::new(BranchNode {
+                    partial_path: key_partial_path,
+                    value: None,
+                    children: Children::new(),
+                }));
+                branch.children[key_index] = Some(Child::Node(new_branch));
+
+                Ok(Node::Branch(Box::new(branch)))
+            }
+        }
+    }
+
     /// Removes the value associated with the given `key`.
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
@@ -1128,6 +1311,47 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         child.update_partial_path(child_partial_path);
 
         Ok(Some(child))
+    }
+}
+
+#[cfg(test)]
+impl Merkle<NodeStore<MutableProposal, MemStore>> {
+    /// Returns the node mapped to by `key_nibbles` where each key element is a
+    /// single nibble.
+    pub(crate) fn get_node_from_nibbles(
+        &self,
+        key_nibbles: &[u8],
+    ) -> Result<Option<SharedNode>, FileIoError> {
+        let Some(root) = self.root() else {
+            return Ok(None);
+        };
+
+        get_helper(&self.nodestore, &root, key_nibbles)
+    }
+
+    /// Ensures a branch exists at `key_nibbles` where each key element is a
+    /// single nibble.
+    ///
+    /// This creates missing branch structure without inserting a value at the
+    /// target key. Existing values and descendants are preserved.
+    pub(crate) fn insert_branch_from_nibbles(
+        &mut self,
+        key_nibbles: &[u8],
+    ) -> Result<(), FileIoError> {
+        let root = self.nodestore.root_mut();
+        let Some(root_node) = std::mem::take(root) else {
+            let branch = BranchNode {
+                partial_path: key_nibbles.into(),
+                value: None,
+                children: Children::new(),
+            };
+            *root = Node::Branch(Box::new(branch)).into();
+            return Ok(());
+        };
+
+        let root_node = self.insert_branch_helper(root_node, key_nibbles)?;
+        *self.nodestore.root_mut() = root_node.into();
+        Ok(())
     }
 }
 
