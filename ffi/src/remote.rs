@@ -14,6 +14,7 @@
 use firewood::remote::TruncatedTrie;
 use firewood::remote::client::BatchOp as RemoteBatchOp;
 use firewood::remote::witness::{self, WitnessProof};
+use firewood::v2::api::BatchOp as CoreBatchOp;
 use firewood::v2::api::Db as _;
 
 use crate::metrics::MetricsContextExt;
@@ -284,24 +285,27 @@ pub extern "C" fn fwd_generate_witness(
         let api_hash: firewood::v2::api::HashKey = root_hash.into();
         let revision = db.db().revision(api_hash).map_err(|e| e.to_string())?;
 
-        // Convert FFI batch ops to remote BatchOps
-        let mut remote_ops = Vec::with_capacity(batch_ops.as_slice().len());
-        for op in batch_ops.as_slice() {
-            match op {
-                crate::BatchOp::Put { key, value } => remote_ops.push(RemoteBatchOp::Put {
+        // Convert FFI batch ops to core BatchOps (including DeleteRange)
+        let core_ops: Vec<witness::OwnedCoreBatchOp> = batch_ops
+            .as_slice()
+            .iter()
+            .map(|op| match op {
+                crate::BatchOp::Put { key, value } => CoreBatchOp::Put {
                     key: key.as_slice().into(),
                     value: value.as_slice().into(),
-                }),
-                crate::BatchOp::Delete { key } => remote_ops.push(RemoteBatchOp::Delete {
+                },
+                crate::BatchOp::Delete { key } => CoreBatchOp::Delete {
                     key: key.as_slice().into(),
-                }),
-                crate::BatchOp::DeleteRange { .. } => {
-                    return Err("DeleteRange not supported in witness generation; \
-                         expand to individual Delete ops on the server side"
-                        .to_string());
-                }
-            }
-        }
+                },
+                crate::BatchOp::DeleteRange { prefix } => CoreBatchOp::DeleteRange {
+                    prefix: prefix.as_slice().into(),
+                },
+            })
+            .collect();
+
+        // Expand DeleteRange ops into individual Delete ops using the revision
+        let remote_ops = witness::expand_delete_ranges(revision.as_ref(), &core_ops)
+            .map_err(|e| e.to_string())?;
 
         let new_hash: firewood_storage::TrieHash = new_root_hash.into();
 

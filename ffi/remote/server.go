@@ -4,7 +4,6 @@
 package remote
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"log"
@@ -183,7 +182,6 @@ func (s *Server) CreateProposal(
 ) (*pb.CreateProposalResponse, error) {
 	// Convert proto batch ops to FFI batch ops
 	ops := make([]ffi.BatchOp, 0, len(req.GetOps()))
-	hasPrefixDelete := false
 	for _, pbOp := range req.GetOps() {
 		switch pbOp.GetOpType() {
 		case pb.BatchOperation_PUT:
@@ -192,7 +190,6 @@ func (s *Server) CreateProposal(
 			ops = append(ops, ffi.Delete(pbOp.GetKey()))
 		case pb.BatchOperation_PREFIX_DELETE:
 			ops = append(ops, ffi.PrefixDelete(pbOp.GetKey()))
-			hasPrefixDelete = true
 		default:
 			return nil, fmt.Errorf("unknown batch operation type: %v", pbOp.GetOpType())
 		}
@@ -217,22 +214,11 @@ func (s *Server) CreateProposal(
 		}
 
 		// Inherit the committed root and accumulate ops.
+		// DeleteRange ops are expanded by the Rust FFI during witness generation.
 		committedRoot = parent.committedRoot
-
-		// If this batch has PrefixDelete ops, expand them for witness generation.
-		expandedOps := ops
-		if hasPrefixDelete {
-			expandedOps, err = expandPrefixDeletes(ops, func(prefix []byte) ([][]byte, error) {
-				return prefixScan(parent.proposal, prefix)
-			})
-			if err != nil {
-				return nil, fmt.Errorf("expand prefix deletes: %w", err)
-			}
-		}
-
-		cumulativeOps = make([]ffi.BatchOp, 0, len(parent.cumulativeOps)+len(expandedOps))
+		cumulativeOps = make([]ffi.BatchOp, 0, len(parent.cumulativeOps)+len(ops))
 		cumulativeOps = append(cumulativeOps, parent.cumulativeOps...)
-		cumulativeOps = append(cumulativeOps, expandedOps...)
+		cumulativeOps = append(cumulativeOps, ops...)
 	} else {
 		copy(committedRoot[:], req.GetRootHash())
 
@@ -242,24 +228,7 @@ func (s *Server) CreateProposal(
 			return nil, fmt.Errorf("propose: %w", err)
 		}
 
-		// If this batch has PrefixDelete ops, expand them for witness generation.
-		expandedOps := ops
-		if hasPrefixDelete {
-			// Create a temporary empty proposal to scan the parent (committed) state.
-			scanProposal, err := s.db.Propose(nil)
-			if err != nil {
-				return nil, fmt.Errorf("create scan proposal: %w", err)
-			}
-			expandedOps, err = expandPrefixDeletes(ops, func(prefix []byte) ([][]byte, error) {
-				return prefixScan(scanProposal, prefix)
-			})
-			scanProposal.Drop()
-			if err != nil {
-				return nil, fmt.Errorf("expand prefix deletes: %w", err)
-			}
-		}
-
-		cumulativeOps = expandedOps
+		cumulativeOps = ops
 	}
 
 	// Drop the proposal if it is not stored in the map before returning.
@@ -447,75 +416,6 @@ func (s *Server) IterBatch(
 	}
 
 	return resp, nil
-}
-
-// prefixScan iterates a proposal starting at prefix and collects all keys that
-// have the given prefix.
-func prefixScan(proposal *ffi.Proposal, prefix []byte) ([][]byte, error) {
-	it, err := proposal.Iter(prefix)
-	if err != nil {
-		return nil, fmt.Errorf("iter: %w", err)
-	}
-	defer it.Drop()
-
-	var keys [][]byte
-	for it.Next() {
-		key := it.Key()
-		if !bytes.HasPrefix(key, prefix) {
-			break
-		}
-		keys = append(keys, append([]byte(nil), key...))
-	}
-	if err := it.Err(); err != nil {
-		return nil, fmt.Errorf("iter next: %w", err)
-	}
-	return keys, nil
-}
-
-// expandPrefixDeletes walks ops sequentially and expands each PrefixDelete into
-// individual Delete ops. parentIter returns the keys matching a prefix in the
-// parent state. Keys added by earlier Puts in the same batch are also expanded.
-func expandPrefixDeletes(
-	ops []ffi.BatchOp,
-	parentIter func(prefix []byte) ([][]byte, error),
-) ([]ffi.BatchOp, error) {
-	expanded := make([]ffi.BatchOp, 0, len(ops))
-	// Track keys added by Puts in this batch (for intra-batch PrefixDelete).
-	addedKeys := make(map[string]struct{})
-
-	for _, op := range ops {
-		switch {
-		case op.IsPut():
-			addedKeys[string(op.Key())] = struct{}{}
-			expanded = append(expanded, op)
-
-		case op.IsDelete():
-			delete(addedKeys, string(op.Key()))
-			expanded = append(expanded, op)
-
-		case op.IsPrefixDelete():
-			prefix := op.Key()
-
-			// Keys matching prefix in parent state.
-			parentKeys, err := parentIter(prefix)
-			if err != nil {
-				return nil, fmt.Errorf("prefix scan for %q: %w", prefix, err)
-			}
-			for _, key := range parentKeys {
-				expanded = append(expanded, ffi.Delete(key))
-			}
-
-			// Keys added by earlier Puts in this batch that match.
-			for key := range addedKeys {
-				if bytes.HasPrefix([]byte(key), prefix) {
-					expanded = append(expanded, ffi.Delete([]byte(key)))
-					delete(addedKeys, key)
-				}
-			}
-		}
-	}
-
-	return expanded, nil
 }
 
 // serverMaybe implements ffi.Maybe[[]byte] for server-side use.

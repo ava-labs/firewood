@@ -20,11 +20,13 @@
 use crate::merkle::Merkle;
 use crate::remote::TruncatedTrie;
 use crate::remote::client::BatchOp;
+use crate::v2::api::BatchOp as CoreBatchOp;
+use crate::v2::api::Error as ApiError;
 use firewood_storage::{
     BranchNode, Child, Children, HashedNodeReader, ImmutableProposal, MemStore, Node, NodeError,
     NodeHashAlgorithm, NodeStore, PathComponent, SharedNode, TrieHash, TrieReader,
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 /// A witness proof for verifying a commit on the client side.
@@ -78,6 +80,10 @@ pub enum WitnessError {
     #[error("trie operation failed: {0}")]
     TrieError(#[from] NodeError),
 
+    /// An API error occurred during witness operations (e.g., iterator creation).
+    #[error("API error: {0}")]
+    ApiError(ApiError),
+
     /// An unexpected child type was encountered during witness processing.
     ///
     /// This indicates a bug in the conversion logic — after `to_node_tree()`,
@@ -99,6 +105,77 @@ pub enum WitnessError {
 }
 
 // -- Server-side witness generation --
+
+/// A core batch operation with owned key and value data.
+pub type OwnedCoreBatchOp = CoreBatchOp<Box<[u8]>, Box<[u8]>>;
+
+/// Expands `DeleteRange` operations into individual `Delete` operations.
+///
+/// Scans the parent revision state for keys matching each prefix and emits
+/// individual deletes. Also expands keys added by earlier `Put` ops in the
+/// same batch (intra-batch semantics).
+///
+/// # Arguments
+///
+/// * `view` - The committed revision to scan for existing keys
+/// * `ops` - Core batch operations that may contain `DeleteRange`
+///
+/// # Errors
+///
+/// Returns a [`WitnessError`] if the view's iterator fails.
+pub fn expand_delete_ranges(
+    view: &dyn crate::v2::api::DynDbView,
+    ops: &[OwnedCoreBatchOp],
+) -> Result<Vec<BatchOp>, WitnessError> {
+    let mut expanded = Vec::with_capacity(ops.len());
+    let mut added_keys: BTreeSet<Box<[u8]>> = BTreeSet::new();
+
+    for op in ops {
+        match op {
+            CoreBatchOp::Put { key, value } => {
+                added_keys.insert(key.clone());
+                expanded.push(BatchOp::Put {
+                    key: key.clone(),
+                    value: value.clone(),
+                });
+            }
+            CoreBatchOp::Delete { key } => {
+                added_keys.remove(key);
+                expanded.push(BatchOp::Delete { key: key.clone() });
+            }
+            CoreBatchOp::DeleteRange { prefix } => {
+                let mut to_delete: BTreeSet<Box<[u8]>> = BTreeSet::new();
+
+                // Scan parent state for keys with this prefix
+                let iter = view.iter_from(prefix).map_err(WitnessError::ApiError)?;
+                for item in iter {
+                    let (key, _) = item?;
+                    if !key.starts_with(prefix.as_ref()) {
+                        break;
+                    }
+                    to_delete.insert(key);
+                }
+
+                // Expand intra-batch puts matching prefix
+                let matching: Vec<_> = added_keys
+                    .range(prefix.clone()..)
+                    .take_while(|k| k.starts_with(prefix.as_ref()))
+                    .cloned()
+                    .collect();
+                for key in &matching {
+                    to_delete.insert(key.clone());
+                    added_keys.remove(key);
+                }
+
+                for key in to_delete {
+                    expanded.push(BatchOp::Delete { key });
+                }
+            }
+        }
+    }
+
+    Ok(expanded)
+}
 
 /// Generates a witness proof for a set of batch operations.
 ///
@@ -604,7 +681,7 @@ fn graft_witness_nodes(
 
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used)]
+    #![expect(clippy::unwrap_used, clippy::indexing_slicing)]
 
     use super::*;
     use firewood_storage::{HashedNodeReader, MemStore, NodeStore};
@@ -904,5 +981,147 @@ mod tests {
 
         let updated_trie = verify_witness(&truncated, &witness).unwrap();
         assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
+    }
+
+    // -- Tests for expand_delete_ranges --
+
+    fn core_put(key: &[u8], value: &[u8]) -> OwnedCoreBatchOp {
+        CoreBatchOp::Put {
+            key: key.into(),
+            value: value.into(),
+        }
+    }
+
+    fn core_delete(key: &[u8]) -> OwnedCoreBatchOp {
+        CoreBatchOp::Delete { key: key.into() }
+    }
+
+    fn core_delete_range(prefix: &[u8]) -> OwnedCoreBatchOp {
+        CoreBatchOp::DeleteRange {
+            prefix: prefix.into(),
+        }
+    }
+
+    #[test]
+    fn test_expand_no_delete_range() {
+        // Without DeleteRange ops, expand should pass through unchanged.
+        let trie = create_test_trie(&[(b"a", b"1"), (b"b", b"2")]);
+        let view: &dyn crate::v2::api::DynDbView = trie.nodestore();
+
+        let ops = vec![core_put(b"c", b"3"), core_delete(b"a")];
+        let expanded = expand_delete_ranges(view, &ops).unwrap();
+
+        assert_eq!(expanded.len(), 2);
+        assert!(matches!(&expanded[0], BatchOp::Put { key, value }
+            if &**key == b"c" && &**value == b"3"));
+        assert!(matches!(&expanded[1], BatchOp::Delete { key }
+            if &**key == b"a"));
+    }
+
+    #[test]
+    fn test_expand_basic_delete_range() {
+        // DeleteRange should expand to individual Delete ops for matching keys.
+        let trie = create_test_trie(&[(b"a/1", b"v1"), (b"a/2", b"v2"), (b"b/1", b"v3")]);
+        let view: &dyn crate::v2::api::DynDbView = trie.nodestore();
+
+        let ops = vec![core_delete_range(b"a/")];
+        let expanded = expand_delete_ranges(view, &ops).unwrap();
+
+        assert_eq!(expanded.len(), 2);
+        // BTreeSet ensures sorted order
+        assert!(matches!(&expanded[0], BatchOp::Delete { key } if &**key == b"a/1"));
+        assert!(matches!(&expanded[1], BatchOp::Delete { key } if &**key == b"a/2"));
+    }
+
+    #[test]
+    fn test_expand_intra_batch_put_then_delete_range() {
+        // A Put before a DeleteRange in the same batch: the put key should
+        // also be expanded into a Delete.
+        let trie = create_test_trie(&[(b"a/1", b"v1")]);
+        let view: &dyn crate::v2::api::DynDbView = trie.nodestore();
+
+        let ops = vec![core_put(b"a/2", b"new"), core_delete_range(b"a/")];
+        let expanded = expand_delete_ranges(view, &ops).unwrap();
+
+        // Should have: Put("a/2", "new"), Delete("a/1"), Delete("a/2")
+        assert_eq!(expanded.len(), 3);
+        assert!(matches!(&expanded[0], BatchOp::Put { key, .. } if &**key == b"a/2"));
+        // Deletes are sorted by BTreeSet
+        assert!(matches!(&expanded[1], BatchOp::Delete { key } if &**key == b"a/1"));
+        assert!(matches!(&expanded[2], BatchOp::Delete { key } if &**key == b"a/2"));
+    }
+
+    #[test]
+    fn test_expand_empty_prefix_match() {
+        // DeleteRange with a prefix that matches no keys should produce no deletes.
+        let trie = create_test_trie(&[(b"a/1", b"v1")]);
+        let view: &dyn crate::v2::api::DynDbView = trie.nodestore();
+
+        let ops = vec![core_delete_range(b"z/")];
+        let expanded = expand_delete_ranges(view, &ops).unwrap();
+
+        assert!(expanded.is_empty());
+    }
+
+    #[test]
+    fn test_expand_empty_trie() {
+        // DeleteRange on an empty trie should produce no deletes.
+        let trie = create_test_trie(&[]);
+        let view: &dyn crate::v2::api::DynDbView = trie.nodestore();
+
+        let ops = vec![core_delete_range(b"a/")];
+        let expanded = expand_delete_ranges(view, &ops).unwrap();
+
+        assert!(expanded.is_empty());
+    }
+
+    #[test]
+    fn test_expand_delete_range_witness_roundtrip() {
+        // End-to-end test: expand DeleteRange, generate witness, verify.
+        let old_trie = create_test_trie(&[(b"a/1", b"v1"), (b"a/2", b"v2"), (b"b/1", b"v3")]);
+        let view: &dyn crate::v2::api::DynDbView = old_trie.nodestore();
+
+        // Expand DeleteRange into individual deletes
+        let core_ops = vec![core_delete_range(b"a/")];
+        let expanded = expand_delete_ranges(view, &core_ops).unwrap();
+
+        // Apply the expanded ops to get the new trie
+        let new_trie = apply_batch(&old_trie, &expanded);
+        let new_root_hash = new_trie.nodestore().root_hash().unwrap();
+
+        // Generate and verify witness
+        let truncation_depth = 2;
+        let witness = generate_witness(
+            old_trie.nodestore(),
+            &expanded,
+            new_root_hash,
+            truncation_depth,
+        )
+        .unwrap();
+
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
+        let updated_trie = verify_witness(&truncated, &witness).unwrap();
+        assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
+    }
+
+    #[test]
+    fn test_expand_mixed_ops_with_delete_range() {
+        // Mix of Put, Delete, and DeleteRange in a single batch.
+        let old_trie = create_test_trie(&[(b"a/1", b"v1"), (b"a/2", b"v2"), (b"b/1", b"v3")]);
+        let view: &dyn crate::v2::api::DynDbView = old_trie.nodestore();
+
+        let core_ops = vec![
+            core_put(b"c/1", b"v4"),
+            core_delete_range(b"a/"),
+            core_put(b"b/2", b"v5"),
+        ];
+        let expanded = expand_delete_ranges(view, &core_ops).unwrap();
+
+        // Expected: Put("c/1"), Delete("a/1"), Delete("a/2"), Put("b/2")
+        assert_eq!(expanded.len(), 4);
+        assert!(matches!(&expanded[0], BatchOp::Put { key, .. } if &**key == b"c/1"));
+        assert!(matches!(&expanded[1], BatchOp::Delete { key } if &**key == b"a/1"));
+        assert!(matches!(&expanded[2], BatchOp::Delete { key } if &**key == b"a/2"));
+        assert!(matches!(&expanded[3], BatchOp::Put { key, .. } if &**key == b"b/2"));
     }
 }

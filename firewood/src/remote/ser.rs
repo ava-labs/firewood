@@ -347,7 +347,11 @@ impl WitnessProof {
                     batch_ops.push(BatchOp::Delete { key });
                 }
                 found => {
-                    return Err(reader.invalid_item("batch op tag", "0 (put) or 1 (delete)", found));
+                    return Err(reader.invalid_item(
+                        "batch op tag",
+                        "0 (put) or 1 (delete)",
+                        found,
+                    ));
                 }
             }
         }
