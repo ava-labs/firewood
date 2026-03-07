@@ -19,8 +19,8 @@
 
 use crate::remote::client::ClientOp;
 use firewood_storage::{
-    BranchNode, Child, Children, HashedNodeReader, NibblesIterator, Node, NodeError,
-    PathComponent, SharedNode, TrieHash, TrieReader,
+    BranchNode, Child, Children, HashedNodeReader, NibblesIterator, Node, NodeError, PathComponent,
+    SharedNode, TrieHash, TrieReader,
 };
 use std::collections::BTreeMap;
 
