@@ -75,12 +75,12 @@ builds the truncated copy bottom-up:
 
 A `WitnessProof` contains three pieces:
 
-| Field            | Description                                               |
-|------------------|-----------------------------------------------------------|
-| `batch_ops`      | The `Put` / `Delete` operations the server applied        |
-| `new_root_hash`  | The root hash the server computed after applying the ops  |
-| `witness_nodes`  | The minimal set of trie nodes below depth K needed for    |
-|                  | independent re-execution                                  |
+| Field            | Description                                                   |
+|------------------|---------------------------------------------------------------|
+| `batch_ops`      | The expanded `Put` / `Delete` operations (see below)          |
+| `new_root_hash`  | The root hash the server computed after applying the ops      |
+| `witness_nodes`  | The minimal set of trie nodes below depth K needed for        |
+|                  | independent re-execution                                      |
 
 Each `WitnessNode` carries a nibble path (its position in the trie) and the
 full `Node` data (partial path, value, children — with non-witness children
@@ -130,6 +130,119 @@ To prevent this, `collect_siblings_for_flatten()` adds the siblings of any
 branch with two or fewer children to the witness. This guarantees the client
 has the data to perform the flatten.
 
+### DeleteRange
+
+The core `BatchOp` type (`v2/batch_op.rs`) supports a third operation variant:
+`DeleteRange { prefix }`, which removes every key-value pair whose key starts
+with the given prefix. Internally the Merkle engine calls `remove_prefix()`.
+
+The witness proof system handles `DeleteRange` by **expanding** it into
+individual `Delete` operations on the server side before generating the
+witness. This means the witness `batch_ops` field only ever contains `Put`
+and `Delete` — never `DeleteRange`. The client re-executes each expanded
+`Delete` individually and arrives at the same root hash.
+
+#### Server-side expansion
+
+When a batch contains `DeleteRange` operations, the Go server layer expands
+them before calling into the Rust witness generator. The expansion happens in
+`expandPrefixDeletes()` (`ffi/remote/server.go`):
+
+1. **Scan the parent state**: for each `DeleteRange { prefix }`, use
+   `prefixScan()` to enumerate every key matching the prefix in the committed
+   (or parent proposal) state.
+2. **Expand to individual Deletes**: each matching key becomes a separate
+   `Delete { key }` in the expanded batch.
+3. **Handle intra-batch keys**: keys added by earlier `Put` operations in the
+   same batch that match the prefix are also expanded to `Delete` operations.
+
+```text
+Original batch:                    Expanded batch (in witness):
+
+Put("ab/1", "v1")                  Put("ab/1", "v1")
+Put("ab/2", "v2")                  Put("ab/2", "v2")
+DeleteRange("ab/")          →      Delete("ab/1")    ← from Put above
+                                   Delete("ab/2")    ← from Put above
+                                   Delete("ab/x")    ← from parent state
+                                   Delete("ab/y")    ← from parent state
+```
+
+The Rust FFI layer enforces this: `fwd_generate_witness()` (`ffi/src/remote.rs`)
+rejects any `DeleteRange` in the batch with an explicit error, requiring the
+Go layer to expand first. The expanded `Delete` operations are then passed to
+`generate_witness()`, which collects witness nodes along each individual key's
+path using the standard single-key algorithm.
+
+#### Why expansion instead of subtree collection
+
+An alternative design would keep `DeleteRange` as-is and include the entire
+subtree under the prefix in the witness. However, expansion has advantages:
+
+- **Reuses the existing single-key witness algorithm** — no special subtree
+  collection logic needed.
+- **Witness contains only the paths actually deleted** — no wasted nodes for
+  empty branches within the prefix range.
+- **The client re-executes simple Delete operations** — no need for
+  `remove_prefix()` on the client side, avoiding the complexity of
+  `delete_children()` needing to `read_for_update()` every subtree node.
+
+The trade-off is that the expanded `batch_ops` list in the witness can be
+large if the prefix matches many keys. However, the witness nodes themselves
+are not significantly larger since the same set of trie paths must be
+traversed regardless.
+
+#### Client-side verification of DeleteRange
+
+The client never sees a `DeleteRange` in the witness `batch_ops` — only the
+expanded `Delete` operations. Verification relies on two checks working
+together to prove the server expanded the `DeleteRange` correctly:
+
+**Check 1 — Batch ops validation (`ValidateOps`)**: the client walks its
+original ops and the witness ops in lockstep. When it encounters a
+`DeleteRange { prefix }` in its original batch, it consumes zero or more
+consecutive `Delete` ops from the witness, verifying that every consumed key
+starts with the prefix. Any `Delete` key that does *not* start with the
+prefix stops the consumption. After all original ops are processed, no
+extra witness ops may remain.
+
+This check guarantees that every expanded `Delete` in the witness falls within
+the prefix range — the server cannot sneak in deletions of unrelated keys.
+
+**Check 2 — Root hash verification (re-execution)**: the client re-executes
+each expanded `Delete` individually using `merkle.remove(key)` against the
+grafted trie, then hashes the result and compares it to `new_root_hash`.
+
+On the server, `new_root_hash` was computed by applying `remove_prefix(prefix)`
+to the full trie, which deletes *every* key matching the prefix. If the server
+omitted any matching key from the expansion, the client's re-execution would
+leave that key in place, producing a different root hash — the check fails.
+Conversely, if the server included a `Delete` for a key that does not exist in
+the trie, `merkle.remove()` is a no-op, so the hash is unaffected.
+
+Together, the two checks prove:
+
+| Server misbehavior                   | Caught by           |
+|--------------------------------------|---------------------|
+| Omitted a key matching the prefix    | Root hash mismatch  |
+| Included a key outside the prefix    | `ValidateOps`       |
+| Included all correct keys            | Both checks pass    |
+
+```text
+Example: client sends DeleteRange("b/"), trie has keys b/x and b/y
+
+Correct expansion:           Witness: Delete("b/x"), Delete("b/y")
+  ValidateOps: ✓  both keys start with "b/"
+  Re-execute:  remove("b/x"), remove("b/y") → same hash as remove_prefix("b/") ✓
+
+Server omits b/y:            Witness: Delete("b/x")
+  ValidateOps: ✓  "b/x" starts with "b/"
+  Re-execute:  remove("b/x") only → "b/y" still in trie → hash mismatch ✗
+
+Server adds Delete("c"):     Witness: Delete("b/x"), Delete("b/y"), Delete("c")
+  ValidateOps: ✗  "c" does not start with "b/", stops consumption
+                   → "c" is an extra op, rejected
+```
+
 ### Node Conversion
 
 `convert_node_for_witness()` prepares nodes for the wire: all children
@@ -172,6 +285,7 @@ checking the result.
 
 5. Re-execute batch operations
    └── for each op: merkle.insert(key, value) or merkle.remove(key)
+       (DeleteRange has already been expanded to individual Deletes)
 
 6. Hash the result
    ├── Convert mutable proposal → immutable (computes all hashes)
@@ -186,6 +300,32 @@ checking the result.
 If the root hash matches, the client has independently confirmed that applying
 `batch_ops` to the old state produces `new_root_hash`. It then adopts the
 re-truncated result as its new state.
+
+### Batch Ops Validation
+
+Before re-execution, the client validates that the witness proof's `batch_ops`
+match the operations the client originally sent to the server. The Go client
+(`ffi/remote/client.go`) calls `witness.ValidateOps(ops)` which invokes the
+Rust `fwd_validate_witness_ops()` function (`ffi/src/remote.rs`).
+
+The validation walks the client's original ops and the witness ops in lockstep:
+
+- **`Put`**: exact match required — same key and same value.
+- **`Delete`**: exact match required — same key.
+- **`DeleteRange`**: consumes zero or more consecutive `Delete` ops in the
+  witness whose keys start with the given prefix. This accounts for the
+  server-side expansion described in the [DeleteRange](#deleterange) section.
+
+After processing all expected ops, the validator checks that no extra witness
+ops remain. If any mismatch is found, the client rejects the witness before
+re-execution.
+
+For `Put` and `Delete`, batch ops validation is a defense-in-depth measure —
+even without it, substituted operations would produce a different root hash
+(step 6) unless the server found a hash collision. For `DeleteRange`, however,
+validation is essential: it is the only check that prevents the server from
+smuggling deletions of keys outside the prefix range into the expanded batch
+(see [Client-side verification of DeleteRange](#client-side-verification-of-deleterange)).
 
 ### Grafting Illustrated
 
@@ -234,11 +374,14 @@ Server                                     Client
    ┌─── Commits ─────────────────────────────────┐
    │                                              │
    │  create_proposal(batch_ops) ───────────────► │
-   │  ◄──────── (proposal_id, new_root_hash) ─── │
-   │                                              │
-   │  commit_proposal(proposal_id) ─────────────► │
+   │    server expands DeleteRange → Deletes      │
    │    server applies ops, generates witness     │
    │  ◄──────── witness_proof_bytes ───────────── │
+   │                                              │
+   │                   validate_ops(original_ops) │
+   │                     (Put/Delete: exact match │
+   │                      DeleteRange: prefix     │
+   │                        match on Deletes)     │
    │                                              │
    │                              verify_witness: │
    │                              1. to_node_tree │
@@ -248,6 +391,8 @@ Server                                     Client
    │                              5. re-truncate  │
    │                                              │
    │                              adopt new state │
+   │                                              │
+   │  commit_proposal(proposal_id) ─────────────► │
    └──────────────────────────────────────────────┘
 ```
 
@@ -267,7 +412,7 @@ integers for compact encoding.
 ├────────────────────────────────────────┤
 │ varint    batch_ops count              │
 │ ┌──────────────────────────────┐       │
-│ │ 1 byte  op tag (PUT=1/DEL=2) │ ×N   │
+│ │ 1 byte  op tag (PUT=0/DEL=1) │ ×N   │
 │ │ varint  key length            │      │
 │ │ bytes   key                   │      │
 │ │ [if PUT]:                     │      │
@@ -368,3 +513,7 @@ ensure the client and server use matching hash functions.
 | `storage/src/node/branch.rs`        | `Child` enum, `NodeError`            |
 | `storage/src/node/persist.rs`       | `MaybePersistedNode`                 |
 | `storage/src/hashednode.rs`         | `hash_node()` function               |
+| `ffi/remote/server.go`             | Server-side DeleteRange expansion    |
+| `ffi/remote/client.go`             | Client-side batch ops validation     |
+| `ffi/src/remote.rs`                | FFI: witness generation, validation  |
+| `ffi/witness_proof.go`             | Go wrapper for `WitnessProof`        |
