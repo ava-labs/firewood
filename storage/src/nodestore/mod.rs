@@ -25,6 +25,7 @@
 //! - [`Committed`] - For a committed revision with no in-memory changes
 //! - [`MutableProposal`] - For a proposal being actively modified with in-memory nodes
 //! - [`ImmutableProposal`] - For a proposal that has been hashed and assigned addresses
+//! - [`Reconstructed`] - For a reconstructed read-only view created by applying a batch linearly
 //!
 //! The nodestore follows a lifecycle pattern:
 //! ```text
@@ -70,6 +71,7 @@ pub use header::NodeStoreHeader;
 /// - Committed: A committed revision of the trie. It has no in-memory changes.
 /// - `MutableProposal`: A proposal that is still being modified. It has some nodes in memory.
 /// - `ImmutableProposal`: A proposal that has been hashed and assigned addresses. It has no in-memory changes.
+/// - `Reconstructed`: A reconstructed view that supports read operations and linear reconstruction.
 ///
 /// The general lifecycle of nodestores is as follows:
 /// ```mermaid
@@ -482,13 +484,23 @@ impl ImmutableProposal {
 /// 3. Create a new mutable proposal from either a [Committed] or [`ImmutableProposal`] [`NodeStore`] using [`NodeStore::new`].
 /// 4. Convert a mutable proposal to an immutable proposal using [`std::convert::TryInto`], which hashes the nodes and assigns addresses
 /// 5. Convert an immutable proposal to a committed revision using [`std::convert::TryInto`], which writes the nodes to disk.
+///
+/// Reconstructed views follow a separate linear flow and are not committed:
+/// `Historical/Committed -> Reconstructed -> Reconstructed`.
 
 #[derive(Debug)]
 pub struct NodeStore<T, S> {
-    /// This is one of [Committed], [`ImmutableProposal`], or [`MutableProposal`].
+    /// This is one of [Committed], [`ImmutableProposal`], [`MutableProposal`], or [`Reconstructed`].
     kind: T,
     /// Persisted storage to read nodes from.
     storage: Arc<S>,
+}
+
+/// Contains state for a reconstructed revision of the trie.
+#[derive(Debug, Clone)]
+pub struct Reconstructed {
+    /// The root of the trie in this reconstructed view.
+    root: Option<Child>,
 }
 
 /// Contains the state of a proposal that is still being modified.
@@ -592,9 +604,27 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
     }
 }
 
+impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>> for NodeStore<Reconstructed, S> {
+    type Error = FileIoError;
+
+    fn try_from(val: NodeStore<MutableProposal, S>) -> Result<Self, Self::Error> {
+        let NodeStore {
+            kind: _kind,
+            storage: _storage,
+        } = val;
+        todo!("convert mutable proposal into reconstructed nodestore")
+    }
+}
+
 impl<S: ReadableStorage> NodeReader for NodeStore<MutableProposal, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
         self.read_node_from_disk(addr, "write")
+    }
+}
+
+impl<S: ReadableStorage> NodeReader for NodeStore<Reconstructed, S> {
+    fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
+        self.read_node_from_disk(addr, "read")
     }
 }
 
@@ -644,6 +674,20 @@ impl<S: ReadableStorage> RootReader for NodeStore<Arc<ImmutableProposal>, S> {
     }
 }
 
+impl<S: ReadableStorage> RootReader for NodeStore<Reconstructed, S> {
+    fn root_node(&self) -> Option<SharedNode> {
+        self.kind
+            .root
+            .as_ref()
+            .map(Child::as_maybe_persisted_node)
+            .and_then(|node| node.as_shared_node(self).ok())
+    }
+
+    fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
+        self.kind.root.as_ref().map(Child::as_maybe_persisted_node)
+    }
+}
+
 impl<T, S> HashedNodeReader for NodeStore<T, S>
 where
     NodeStore<T, S>: TrieReader,
@@ -656,6 +700,22 @@ where
 
     fn root_hash(&self) -> Option<TrieHash> {
         self.kind.root_hash()
+    }
+}
+
+impl<S: ReadableStorage> HashedNodeReader for NodeStore<Reconstructed, S>
+where
+    NodeStore<Reconstructed, S>: TrieReader,
+{
+    fn root_address(&self) -> Option<LinearAddress> {
+        self.kind.root.as_ref().and_then(Child::persisted_address)
+    }
+
+    fn root_hash(&self) -> Option<TrieHash> {
+        self.kind
+            .root
+            .as_ref()
+            .and_then(|root| root.hash().cloned().map(HashType::into_triehash))
     }
 }
 
