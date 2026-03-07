@@ -12,7 +12,7 @@
 //! - Verifying a witness proof and updating the truncated trie (client-side)
 
 use firewood::remote::TruncatedTrie;
-use firewood::remote::client::BatchOp as RemoteBatchOp;
+use firewood::remote::client::ClientOp as RemoteBatchOp;
 use firewood::remote::witness::{self, WitnessProof};
 use firewood::v2::api::BatchOp as CoreBatchOp;
 use firewood::v2::api::Db as _;

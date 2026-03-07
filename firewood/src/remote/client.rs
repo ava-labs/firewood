@@ -39,8 +39,10 @@ pub trait RemoteTransport {
     /// # Errors
     ///
     /// Returns an error if the transport operation fails.
-    fn create_proposal(&self, batch_ops: &[BatchOp])
-    -> Result<(ProposalId, TrieHash), Self::Error>;
+    fn create_proposal(
+        &self,
+        batch_ops: &[ClientOp],
+    ) -> Result<(ProposalId, TrieHash), Self::Error>;
 
     /// Commits a proposal on the server.
     ///
@@ -65,7 +67,7 @@ pub trait RemoteTransport {
 
 /// A batch operation to be applied to the trie.
 #[derive(Debug, Clone)]
-pub enum BatchOp {
+pub enum ClientOp {
     /// Insert or update a key-value pair.
     Put {
         /// The key to insert.
@@ -227,7 +229,7 @@ mod tests {
 
         fn create_proposal(
             &self,
-            _batch_ops: &[BatchOp],
+            _batch_ops: &[ClientOp],
         ) -> Result<(ProposalId, TrieHash), TestError> {
             Err(TestError("not implemented".into()))
         }

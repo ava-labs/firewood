@@ -19,7 +19,7 @@
 
 use crate::merkle::Merkle;
 use crate::remote::TruncatedTrie;
-use crate::remote::client::BatchOp;
+use crate::remote::client::ClientOp;
 use crate::v2::api::BatchOp as CoreBatchOp;
 use crate::v2::api::Error as ApiError;
 use firewood_storage::{
@@ -36,7 +36,7 @@ use std::sync::Arc;
 #[derive(Debug, Clone)]
 pub struct WitnessProof {
     /// The batch operations that were applied.
-    pub batch_ops: Box<[BatchOp]>,
+    pub batch_ops: Box<[ClientOp]>,
     /// The new root hash that re-execution should produce.
     pub new_root_hash: TrieHash,
     /// Trie nodes below the truncation depth needed for re-execution.
@@ -126,7 +126,7 @@ pub type OwnedCoreBatchOp = CoreBatchOp<Box<[u8]>, Box<[u8]>>;
 pub fn expand_delete_ranges(
     view: &dyn crate::v2::api::DynDbView,
     ops: &[OwnedCoreBatchOp],
-) -> Result<Vec<BatchOp>, WitnessError> {
+) -> Result<Vec<ClientOp>, WitnessError> {
     let mut expanded = Vec::with_capacity(ops.len());
     let mut added_keys: BTreeSet<Box<[u8]>> = BTreeSet::new();
     let mut deleted_keys: HashSet<Box<[u8]>> = HashSet::new();
@@ -136,7 +136,7 @@ pub fn expand_delete_ranges(
             CoreBatchOp::Put { key, value } => {
                 added_keys.insert(key.clone());
                 deleted_keys.remove(key);
-                expanded.push(BatchOp::Put {
+                expanded.push(ClientOp::Put {
                     key: key.clone(),
                     value: value.clone(),
                 });
@@ -144,7 +144,7 @@ pub fn expand_delete_ranges(
             CoreBatchOp::Delete { key } => {
                 added_keys.remove(key);
                 deleted_keys.insert(key.clone());
-                expanded.push(BatchOp::Delete { key: key.clone() });
+                expanded.push(ClientOp::Delete { key: key.clone() });
             }
             CoreBatchOp::DeleteRange { prefix } => {
                 let mut to_delete: BTreeSet<Box<[u8]>> = BTreeSet::new();
@@ -177,7 +177,7 @@ pub fn expand_delete_ranges(
                 }
 
                 for key in to_delete {
-                    expanded.push(BatchOp::Delete { key });
+                    expanded.push(ClientOp::Delete { key });
                 }
             }
         }
@@ -203,7 +203,7 @@ pub fn expand_delete_ranges(
 /// Returns a [`WitnessError`] if nodes cannot be read from the trie.
 pub fn generate_witness<T: TrieReader + HashedNodeReader>(
     nodestore: &T,
-    batch_ops: &[BatchOp],
+    batch_ops: &[ClientOp],
     new_root_hash: TrieHash,
     truncation_depth: usize,
 ) -> Result<WitnessProof, WitnessError> {
@@ -223,7 +223,7 @@ pub fn generate_witness<T: TrieReader + HashedNodeReader>(
     // nodes below truncation depth.
     for op in batch_ops {
         let key = match op {
-            BatchOp::Put { key, .. } | BatchOp::Delete { key } => key,
+            ClientOp::Put { key, .. } | ClientOp::Delete { key } => key,
         };
 
         let key_nibbles = key_to_nibbles(key);
@@ -538,8 +538,8 @@ pub fn verify_witness(
     // 4. Apply batch operations
     for op in &*witness.batch_ops {
         let result = match op {
-            BatchOp::Put { key, value } => merkle.insert(key, value.clone()),
-            BatchOp::Delete { key } => merkle.remove(key).map(|_| ()),
+            ClientOp::Put { key, value } => merkle.insert(key, value.clone()),
+            ClientOp::Delete { key } => merkle.remove(key).map(|_| ()),
         };
         if let Err(e) = result {
             return Err(WitnessError::TrieError(e));
@@ -713,16 +713,16 @@ mod tests {
     }
 
     /// Helper to apply batch ops to a trie and return the new immutable merkle.
-    fn apply_batch(merkle: &ImmutableMerkle, ops: &[BatchOp]) -> ImmutableMerkle {
+    fn apply_batch(merkle: &ImmutableMerkle, ops: &[ClientOp]) -> ImmutableMerkle {
         let nodestore = NodeStore::new(merkle.nodestore()).unwrap();
         let mut new_merkle = Merkle::from(nodestore);
 
         for op in ops {
             match op {
-                BatchOp::Put { key, value } => {
+                ClientOp::Put { key, value } => {
                     new_merkle.insert(key, value.clone()).unwrap();
                 }
-                BatchOp::Delete { key } => {
+                ClientOp::Delete { key } => {
                     new_merkle.remove(key).unwrap();
                 }
             }
@@ -742,7 +742,7 @@ mod tests {
     #[test]
     fn test_generate_witness_empty_trie() {
         let trie = create_test_trie(&[]);
-        let ops = vec![BatchOp::Put {
+        let ops = vec![ClientOp::Put {
             key: b"hello".to_vec().into(),
             value: b"world".to_vec().into(),
         }];
@@ -762,11 +762,11 @@ mod tests {
 
         // Define batch operations
         let ops = vec![
-            BatchOp::Put {
+            ClientOp::Put {
                 key: b"date".to_vec().into(),
                 value: b"brown".to_vec().into(),
             },
-            BatchOp::Put {
+            ClientOp::Put {
                 key: b"apple".to_vec().into(),
                 value: b"green".to_vec().into(),
             },
@@ -798,7 +798,7 @@ mod tests {
             (b"cherry", b"dark"),
         ]);
 
-        let ops = vec![BatchOp::Delete {
+        let ops = vec![ClientOp::Delete {
             key: b"banana".to_vec().into(),
         }];
 
@@ -819,7 +819,7 @@ mod tests {
     fn test_witness_wrong_root_hash_fails() {
         let old_trie = create_test_trie(&[(b"apple", b"red"), (b"banana", b"yellow")]);
 
-        let ops = vec![BatchOp::Put {
+        let ops = vec![ClientOp::Put {
             key: b"cherry".to_vec().into(),
             value: b"dark".to_vec().into(),
         }];
@@ -850,14 +850,14 @@ mod tests {
         ]);
 
         let ops = vec![
-            BatchOp::Put {
+            ClientOp::Put {
                 key: b"key1".to_vec().into(),
                 value: b"updated1".to_vec().into(),
             },
-            BatchOp::Delete {
+            ClientOp::Delete {
                 key: b"key3".to_vec().into(),
             },
-            BatchOp::Put {
+            ClientOp::Put {
                 key: b"key6".to_vec().into(),
                 value: b"val6".to_vec().into(),
             },
@@ -890,7 +890,7 @@ mod tests {
         let mut server_trie = initial_trie;
 
         // Commit 1: insert cherry
-        let ops1 = vec![BatchOp::Put {
+        let ops1 = vec![ClientOp::Put {
             key: b"cherry".to_vec().into(),
             value: b"dark".to_vec().into(),
         }];
@@ -909,11 +909,11 @@ mod tests {
 
         // Commit 2: update apple, delete banana
         let ops2 = vec![
-            BatchOp::Put {
+            ClientOp::Put {
                 key: b"apple".to_vec().into(),
                 value: b"green".to_vec().into(),
             },
-            BatchOp::Delete {
+            ClientOp::Delete {
                 key: b"banana".to_vec().into(),
             },
         ];
@@ -932,11 +932,11 @@ mod tests {
 
         // Commit 3: insert date, elderberry
         let ops3 = vec![
-            BatchOp::Put {
+            ClientOp::Put {
                 key: b"date".to_vec().into(),
                 value: b"brown".to_vec().into(),
             },
-            BatchOp::Put {
+            ClientOp::Put {
                 key: b"elderberry".to_vec().into(),
                 value: b"purple".to_vec().into(),
             },
@@ -968,7 +968,7 @@ mod tests {
         let old_trie =
             create_test_trie(&[(b"a", b"1"), (b"ab", b"2"), (b"abc", b"3"), (b"abd", b"4")]);
 
-        let ops = vec![BatchOp::Put {
+        let ops = vec![ClientOp::Put {
             key: b"abe".to_vec().into(),
             value: b"5".to_vec().into(),
         }];
@@ -1021,9 +1021,9 @@ mod tests {
         let expanded = expand_delete_ranges(view, &ops).unwrap();
 
         assert_eq!(expanded.len(), 2);
-        assert!(matches!(&expanded[0], BatchOp::Put { key, value }
+        assert!(matches!(&expanded[0], ClientOp::Put { key, value }
             if &**key == b"c" && &**value == b"3"));
-        assert!(matches!(&expanded[1], BatchOp::Delete { key }
+        assert!(matches!(&expanded[1], ClientOp::Delete { key }
             if &**key == b"a"));
     }
 
@@ -1038,8 +1038,8 @@ mod tests {
 
         assert_eq!(expanded.len(), 2);
         // BTreeSet ensures sorted order
-        assert!(matches!(&expanded[0], BatchOp::Delete { key } if &**key == b"a/1"));
-        assert!(matches!(&expanded[1], BatchOp::Delete { key } if &**key == b"a/2"));
+        assert!(matches!(&expanded[0], ClientOp::Delete { key } if &**key == b"a/1"));
+        assert!(matches!(&expanded[1], ClientOp::Delete { key } if &**key == b"a/2"));
     }
 
     #[test]
@@ -1054,10 +1054,10 @@ mod tests {
 
         // Should have: Put("a/2", "new"), Delete("a/1"), Delete("a/2")
         assert_eq!(expanded.len(), 3);
-        assert!(matches!(&expanded[0], BatchOp::Put { key, .. } if &**key == b"a/2"));
+        assert!(matches!(&expanded[0], ClientOp::Put { key, .. } if &**key == b"a/2"));
         // Deletes are sorted by BTreeSet
-        assert!(matches!(&expanded[1], BatchOp::Delete { key } if &**key == b"a/1"));
-        assert!(matches!(&expanded[2], BatchOp::Delete { key } if &**key == b"a/2"));
+        assert!(matches!(&expanded[1], ClientOp::Delete { key } if &**key == b"a/1"));
+        assert!(matches!(&expanded[2], ClientOp::Delete { key } if &**key == b"a/2"));
     }
 
     #[test]
@@ -1128,10 +1128,10 @@ mod tests {
 
         // Expected: Put("c/1"), Delete("a/1"), Delete("a/2"), Put("b/2")
         assert_eq!(expanded.len(), 4);
-        assert!(matches!(&expanded[0], BatchOp::Put { key, .. } if &**key == b"c/1"));
-        assert!(matches!(&expanded[1], BatchOp::Delete { key } if &**key == b"a/1"));
-        assert!(matches!(&expanded[2], BatchOp::Delete { key } if &**key == b"a/2"));
-        assert!(matches!(&expanded[3], BatchOp::Put { key, .. } if &**key == b"b/2"));
+        assert!(matches!(&expanded[0], ClientOp::Put { key, .. } if &**key == b"c/1"));
+        assert!(matches!(&expanded[1], ClientOp::Delete { key } if &**key == b"a/1"));
+        assert!(matches!(&expanded[2], ClientOp::Delete { key } if &**key == b"a/2"));
+        assert!(matches!(&expanded[3], ClientOp::Put { key, .. } if &**key == b"b/2"));
     }
 
     #[test]
@@ -1146,8 +1146,8 @@ mod tests {
 
         // Expected: Delete("a/1"), Delete("a/2"), Delete("a/3") — no redundant second Delete("a/1")
         assert_eq!(expanded.len(), 3);
-        assert!(matches!(&expanded[0], BatchOp::Delete { key } if &**key == b"a/1"));
-        assert!(matches!(&expanded[1], BatchOp::Delete { key } if &**key == b"a/2"));
-        assert!(matches!(&expanded[2], BatchOp::Delete { key } if &**key == b"a/3"));
+        assert!(matches!(&expanded[0], ClientOp::Delete { key } if &**key == b"a/1"));
+        assert!(matches!(&expanded[1], ClientOp::Delete { key } if &**key == b"a/2"));
+        assert!(matches!(&expanded[2], ClientOp::Delete { key } if &**key == b"a/3"));
     }
 }

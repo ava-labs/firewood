@@ -18,7 +18,7 @@ use super::truncated_trie::TruncatedTrie;
 use super::witness::{WitnessNode, WitnessProof};
 use crate::proofs::magic::{BATCH_DELETE, BATCH_PUT};
 use crate::proofs::reader::{ProofReader, ReadError};
-use crate::remote::client::BatchOp;
+use crate::remote::client::ClientOp;
 
 /// Magic bytes for witness proof: `b"fwdwitns"`
 const WITNESS_MAGIC: &[u8; 8] = b"fwdwitns";
@@ -280,12 +280,12 @@ impl WitnessProof {
         out.push_var_int(self.batch_ops.len());
         for op in &*self.batch_ops {
             match op {
-                BatchOp::Put { key, value } => {
+                ClientOp::Put { key, value } => {
                     out.push(BATCH_PUT);
                     write_bytes(out, key);
                     write_bytes(out, value);
                 }
-                BatchOp::Delete { key } => {
+                ClientOp::Delete { key } => {
                     out.push(BATCH_DELETE);
                     write_bytes(out, key);
                 }
@@ -340,11 +340,11 @@ impl WitnessProof {
                 BATCH_PUT => {
                     let key = reader.read_item::<Box<[u8]>>()?;
                     let value = reader.read_item::<Box<[u8]>>()?;
-                    batch_ops.push(BatchOp::Put { key, value });
+                    batch_ops.push(ClientOp::Put { key, value });
                 }
                 BATCH_DELETE => {
                     let key = reader.read_item::<Box<[u8]>>()?;
-                    batch_ops.push(BatchOp::Delete { key });
+                    batch_ops.push(ClientOp::Delete { key });
                 }
                 found => {
                     return Err(reader.invalid_item(
@@ -501,15 +501,15 @@ mod tests {
         merkle.try_into().unwrap()
     }
 
-    fn apply_batch(merkle: &ImmutableMerkle, ops: &[BatchOp]) -> ImmutableMerkle {
+    fn apply_batch(merkle: &ImmutableMerkle, ops: &[ClientOp]) -> ImmutableMerkle {
         let nodestore = NodeStore::new(merkle.nodestore()).unwrap();
         let mut new_merkle = Merkle::from(nodestore);
         for op in ops {
             match op {
-                BatchOp::Put { key, value } => {
+                ClientOp::Put { key, value } => {
                     new_merkle.insert(key, value.clone()).unwrap();
                 }
-                BatchOp::Delete { key } => {
+                ClientOp::Delete { key } => {
                     new_merkle.remove(key).unwrap();
                 }
             }
@@ -526,11 +526,11 @@ mod tests {
         ]);
 
         let ops = vec![
-            BatchOp::Put {
+            ClientOp::Put {
                 key: b"date".to_vec().into(),
                 value: b"brown".to_vec().into(),
             },
-            BatchOp::Delete {
+            ClientOp::Delete {
                 key: b"banana".to_vec().into(),
             },
         ];
@@ -566,7 +566,7 @@ mod tests {
     #[test]
     fn test_witness_proof_empty_roundtrip() {
         let witness = WitnessProof {
-            batch_ops: Box::new([BatchOp::Put {
+            batch_ops: Box::new([ClientOp::Put {
                 key: b"key".to_vec().into(),
                 value: b"val".to_vec().into(),
             }]),
