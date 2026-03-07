@@ -10,4 +10,7 @@
 //! Every read is verified against an inclusion/exclusion proof. Every commit
 //! is verified via witness-based re-execution.
 
+pub mod client;
 pub mod truncated_trie;
+
+pub use truncated_trie::TruncatedTrie;
