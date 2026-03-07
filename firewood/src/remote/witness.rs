@@ -129,11 +129,13 @@ pub fn expand_delete_ranges(
 ) -> Result<Vec<BatchOp>, WitnessError> {
     let mut expanded = Vec::with_capacity(ops.len());
     let mut added_keys: BTreeSet<Box<[u8]>> = BTreeSet::new();
+    let mut deleted_keys: BTreeSet<Box<[u8]>> = BTreeSet::new();
 
     for op in ops {
         match op {
             CoreBatchOp::Put { key, value } => {
                 added_keys.insert(key.clone());
+                deleted_keys.remove(key);
                 expanded.push(BatchOp::Put {
                     key: key.clone(),
                     value: value.clone(),
@@ -141,6 +143,7 @@ pub fn expand_delete_ranges(
             }
             CoreBatchOp::Delete { key } => {
                 added_keys.remove(key);
+                deleted_keys.insert(key.clone());
                 expanded.push(BatchOp::Delete { key: key.clone() });
             }
             CoreBatchOp::DeleteRange { prefix } => {
@@ -153,7 +156,9 @@ pub fn expand_delete_ranges(
                     if !key.starts_with(prefix.as_ref()) {
                         break;
                     }
-                    to_delete.insert(key);
+                    if !deleted_keys.contains(&key) {
+                        to_delete.insert(key);
+                    }
                 }
 
                 // Expand intra-batch puts matching prefix
@@ -165,6 +170,10 @@ pub fn expand_delete_ranges(
                 for key in &matching {
                     to_delete.insert(key.clone());
                     added_keys.remove(key);
+                }
+
+                for key in &to_delete {
+                    deleted_keys.insert(key.clone());
                 }
 
                 for key in to_delete {
@@ -1123,5 +1132,22 @@ mod tests {
         assert!(matches!(&expanded[1], BatchOp::Delete { key } if &**key == b"a/1"));
         assert!(matches!(&expanded[2], BatchOp::Delete { key } if &**key == b"a/2"));
         assert!(matches!(&expanded[3], BatchOp::Put { key, .. } if &**key == b"b/2"));
+    }
+
+    #[test]
+    fn test_expand_delete_before_delete_range() {
+        // A Delete followed by a DeleteRange with the same prefix should not
+        // produce a redundant delete for the already-deleted key.
+        let old_trie = create_test_trie(&[(b"a/1", b"v1"), (b"a/2", b"v2"), (b"a/3", b"v3")]);
+        let view: &dyn crate::v2::api::DynDbView = old_trie.nodestore();
+
+        let core_ops = vec![core_delete(b"a/1"), core_delete_range(b"a/")];
+        let expanded = expand_delete_ranges(view, &core_ops).unwrap();
+
+        // Expected: Delete("a/1"), Delete("a/2"), Delete("a/3") — no redundant second Delete("a/1")
+        assert_eq!(expanded.len(), 3);
+        assert!(matches!(&expanded[0], BatchOp::Delete { key } if &**key == b"a/1"));
+        assert!(matches!(&expanded[1], BatchOp::Delete { key } if &**key == b"a/2"));
+        assert!(matches!(&expanded[2], BatchOp::Delete { key } if &**key == b"a/3"));
     }
 }
