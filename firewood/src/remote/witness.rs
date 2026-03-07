@@ -26,7 +26,7 @@ use firewood_storage::{
     BranchNode, Child, Children, HashedNodeReader, ImmutableProposal, MemStore, Node, NodeError,
     NodeHashAlgorithm, NodeStore, PathComponent, SharedNode, TrieHash, TrieReader,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
 
 /// A witness proof for verifying a commit on the client side.
@@ -129,7 +129,7 @@ pub fn expand_delete_ranges(
 ) -> Result<Vec<BatchOp>, WitnessError> {
     let mut expanded = Vec::with_capacity(ops.len());
     let mut added_keys: BTreeSet<Box<[u8]>> = BTreeSet::new();
-    let mut deleted_keys: BTreeSet<Box<[u8]>> = BTreeSet::new();
+    let mut deleted_keys: HashSet<Box<[u8]>> = HashSet::new();
 
     for op in ops {
         match op {
