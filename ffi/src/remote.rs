@@ -14,6 +14,9 @@
 use firewood::remote::TruncatedTrie;
 use firewood::remote::client::ClientOp as RemoteBatchOp;
 use firewood::remote::witness::{self, WitnessProof};
+// Aliased to avoid collision with `crate::BatchOp` (the FFI C-compatible enum
+// defined in `value/kvp.rs`). Both types are used in this module: `crate::BatchOp`
+// arrives from C/Go callers and is converted into `CoreBatchOp` for the witness system.
 use firewood::v2::api::BatchOp as CoreBatchOp;
 use firewood::v2::api::Db as _;
 
@@ -286,7 +289,7 @@ pub extern "C" fn fwd_generate_witness(
         let revision = db.db().revision(api_hash).map_err(|e| e.to_string())?;
 
         // Convert FFI batch ops to core BatchOps (including DeleteRange)
-        let core_ops: Vec<witness::OwnedCoreBatchOp> = batch_ops
+        let core_ops: Vec<witness::OwnedBatchOp> = batch_ops
             .as_slice()
             .iter()
             .map(|op| match op {

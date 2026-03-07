@@ -20,7 +20,7 @@
 use crate::merkle::Merkle;
 use crate::remote::TruncatedTrie;
 use crate::remote::client::ClientOp;
-use crate::v2::api::BatchOp as CoreBatchOp;
+use crate::v2::api::BatchOp;
 use crate::v2::api::Error as ApiError;
 use firewood_storage::{
     BranchNode, Child, Children, HashedNodeReader, ImmutableProposal, MemStore, NibblesIterator,
@@ -107,7 +107,7 @@ pub enum WitnessError {
 // -- Server-side witness generation --
 
 /// A core batch operation with owned key and value data.
-pub type OwnedCoreBatchOp = CoreBatchOp<Box<[u8]>, Box<[u8]>>;
+pub type OwnedBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
 
 /// Expands `DeleteRange` operations into individual `Delete` operations.
 ///
@@ -125,7 +125,7 @@ pub type OwnedCoreBatchOp = CoreBatchOp<Box<[u8]>, Box<[u8]>>;
 /// Returns a [`WitnessError`] if the view's iterator fails.
 pub fn expand_delete_ranges(
     view: &dyn crate::v2::api::DynDbView,
-    ops: &[OwnedCoreBatchOp],
+    ops: &[OwnedBatchOp],
 ) -> Result<Vec<ClientOp>, WitnessError> {
     let mut expanded = Vec::with_capacity(ops.len());
     let mut added_keys: BTreeSet<Box<[u8]>> = BTreeSet::new();
@@ -133,7 +133,7 @@ pub fn expand_delete_ranges(
 
     for op in ops {
         match op {
-            CoreBatchOp::Put { key, value } => {
+            BatchOp::Put { key, value } => {
                 added_keys.insert(key.clone());
                 deleted_keys.remove(key);
                 expanded.push(ClientOp::Put {
@@ -141,12 +141,12 @@ pub fn expand_delete_ranges(
                     value: value.clone(),
                 });
             }
-            CoreBatchOp::Delete { key } => {
+            BatchOp::Delete { key } => {
                 added_keys.remove(key);
                 deleted_keys.insert(key.clone());
                 expanded.push(ClientOp::Delete { key: key.clone() });
             }
-            CoreBatchOp::DeleteRange { prefix } => {
+            BatchOp::DeleteRange { prefix } => {
                 let mut to_delete: BTreeSet<Box<[u8]>> = BTreeSet::new();
 
                 // Scan parent state for keys with this prefix
@@ -972,19 +972,19 @@ mod tests {
 
     // -- Tests for expand_delete_ranges --
 
-    fn core_put(key: &[u8], value: &[u8]) -> OwnedCoreBatchOp {
-        CoreBatchOp::Put {
+    fn core_put(key: &[u8], value: &[u8]) -> OwnedBatchOp {
+        BatchOp::Put {
             key: key.into(),
             value: value.into(),
         }
     }
 
-    fn core_delete(key: &[u8]) -> OwnedCoreBatchOp {
-        CoreBatchOp::Delete { key: key.into() }
+    fn core_delete(key: &[u8]) -> OwnedBatchOp {
+        BatchOp::Delete { key: key.into() }
     }
 
-    fn core_delete_range(prefix: &[u8]) -> OwnedCoreBatchOp {
-        CoreBatchOp::DeleteRange {
+    fn core_delete_range(prefix: &[u8]) -> OwnedBatchOp {
+        BatchOp::DeleteRange {
             prefix: prefix.into(),
         }
     }
