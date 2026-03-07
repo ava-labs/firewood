@@ -62,8 +62,8 @@ See the [FFI README](ffi/README.md) for more details on FFI metrics configuratio
   - Labels: `success=true|false`
   - Use: Monitor proposal creation success rate
 
-- **`proposal.create_ms`** (counter with `success` label)
-  - Description: Time spent creating proposals in milliseconds
+- **`proposal.create_s`** (counter with `success` label)
+  - Description: Time spent creating proposals in seconds (accumulated as nanoseconds)
   - Labels: `success=true|false`
   - Use: Track proposal creation latency
 
@@ -72,8 +72,8 @@ See the [FFI README](ffi/README.md) for more details on FFI metrics configuratio
   - Labels: `success=true|false`
   - Use: Monitor commit success rate
 
-- **`proposal.commit_ms`** (counter with `success` label)
-  - Description: Time spent committing proposals in milliseconds
+- **`proposal.commit_s`** (counter with `success` label)
+  - Description: Time spent committing proposals in seconds (accumulated as nanoseconds)
   - Labels: `success=true|false`
   - Use: Track commit latency and identify slow commits
 
@@ -142,14 +142,14 @@ See the [FFI README](ffi/README.md) for more details on FFI metrics configuratio
   - Description: Total number of I/O read operations
   - Use: Track I/O operation count
 
-- **`io.read_ms`** (counter)
-  - Description: Total time spent in I/O reads in milliseconds
+- **`io.read_s`** (counter)
+  - Description: Total time spent in I/O reads in seconds (accumulated as nanoseconds)
   - Use: Identify I/O bottlenecks and disk performance issues
 
 #### Node Persistence
 
 - **`flush_nodes`** (counter)
-  - Description: Cumulative time spent flushing nodes to disk in milliseconds (counter incremented by flush duration)
+  - Description: Cumulative time spent flushing nodes to disk in seconds (accumulated as nanoseconds)
   - Use: Monitor flush performance and identify slow disk writes; calculate average flush time using rate()
 
 ### Memory Management
@@ -202,9 +202,13 @@ These metrics are specific to the Foreign Function Interface (Go) layer:
   - Description: Count of batch operations completed
   - Use: Track FFI batch throughput
 
-- **`ffi.batch_ms`** (counter)
-  - Description: Time spent processing batches in milliseconds
+- **`ffi.batch_s`** (counter)
+  - Description: Time spent processing batches in seconds (accumulated as nanoseconds)
   - Use: Monitor FFI batch latency
+
+- **`ffi.batch_seconds_bucket`** (histogram)
+  - Description: Histogram of batch processing durations in seconds
+  - Use: Analyze batch latency distribution
 
 #### Proposal Operations
 
@@ -212,9 +216,13 @@ These metrics are specific to the Foreign Function Interface (Go) layer:
   - Description: Count of proposal operations via FFI
   - Use: Track FFI proposal throughput
 
-- **`ffi.propose_ms`** (counter)
-  - Description: Time spent creating proposals via FFI in milliseconds
+- **`ffi.propose_s`** (counter)
+  - Description: Time spent creating proposals via FFI in seconds (accumulated as nanoseconds)
   - Use: Monitor FFI proposal latency
+
+- **`ffi.propose_seconds_bucket`** (histogram)
+  - Description: Histogram of proposal creation durations in seconds
+  - Use: Analyze proposal latency distribution
 
 #### Commit Operations
 
@@ -222,9 +230,13 @@ These metrics are specific to the Foreign Function Interface (Go) layer:
   - Description: Count of commit operations via FFI
   - Use: Track FFI commit throughput
 
-- **`ffi.commit_ms`** (counter)
-  - Description: Time spent committing via FFI in milliseconds
+- **`ffi.commit_s`** (counter)
+  - Description: Time spent committing via FFI in seconds (accumulated as nanoseconds)
   - Use: Monitor FFI commit latency
+
+- **`ffi.commit_seconds_bucket`** (histogram)
+  - Description: Histogram of commit durations in seconds
+  - Use: Analyze commit latency distribution
 
 #### View Caching
 
@@ -240,12 +252,12 @@ These metrics are specific to the Foreign Function Interface (Go) layer:
 
 ### Performance Monitoring
 
-1. **Latency Tracking**: The `*_ms` metrics track operation durations. Monitor these for:
+1. **Latency Tracking**: The `*_s` metrics track operation durations in seconds (accumulated as nanoseconds for precision). Monitor these for:
    - Sudden increases indicating performance degradation
    - Baseline establishment for SLA monitoring
    - Correlation with system load
 
-2. **Throughput Monitoring**: Counter metrics without `_ms` suffix track operation counts:
+2. **Throughput Monitoring**: Counter metrics without `_s` suffix track operation counts:
    - Rate of change indicates throughput
    - Compare with expected load patterns
    - Identify anomalies in operation rates
@@ -288,8 +300,9 @@ These metrics are specific to the Foreign Function Interface (Go) layer:
 For Prometheus-based monitoring (note: metric names use underscores in queries):
 
 ```promql
-# Average commit latency over 5 minutes
-rate(firewood_proposal_commit_ms[5m]) / rate(firewood_proposal_commit[5m])
+# Average commit latency over 5 minutes (in seconds)
+# Note: counters store nanoseconds, so divide by 1e9 to get seconds
+rate(firewood_proposal_commit_s[5m]) / 1e9 / rate(firewood_proposal_commit[5m])
 
 # Cache hit rate
 sum(rate(firewood_cache_node{type="hit"}[5m])) /

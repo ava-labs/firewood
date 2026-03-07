@@ -225,8 +225,11 @@ impl<'db> RangeProofContext<'db> {
         };
 
         let metrics_cb = |commit_time: coarsetime::Duration| {
-            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
-            firewood_increment!(crate::registry::MERGE_COUNT, 1);
+            firewood_increment!(
+                crate::registry::COMMIT_SECONDS_TOTAL,
+                commit_time.as_nanos()
+            );
+            firewood_increment!(crate::registry::MERGE_TOTAL, 1);
         };
 
         let result = proposal_handle.commit_proposal(metrics_cb);

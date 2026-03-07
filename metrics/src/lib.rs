@@ -23,7 +23,7 @@
 //! firewood_increment!(registry::COMMIT_COUNT, 1);
 //!
 //! // Expensive histogram (only records if expensive metrics enabled)
-//! firewood_record!(registry::COMMIT_MS_BUCKET, elapsed_ms, expensive);
+//! firewood_record!(registry::COMMIT_SECONDS_BUCKET, elapsed_s, expensive);
 //! ```
 //!
 //! # Histogram Bucket Registration
@@ -39,9 +39,9 @@
 //!     // Register histogram with custom buckets
 //!     register_histogram_with_buckets(
 //!         histogram_configs,
-//!         "my.latency_ms",
-//!         "Latency in milliseconds",
-//!         &[1.0, 5.0, 10.0, 50.0, 100.0],
+//!         "my.latency_s",
+//!         "Latency in seconds",
+//!         &[0.001, 0.005, 0.010, 0.050, 0.100],
 //!     );
 //! }
 //! ```
@@ -128,7 +128,7 @@ pub fn expensive_metrics_enabled() -> bool {
 /// Entry for a registered histogram with custom buckets.
 #[derive(Debug, Clone)]
 pub struct HistogramBucketConfig {
-    /// The metric name (e.g., `ffi.commit_ms_bucket`).
+    /// The metric name (e.g., `ffi.commit_seconds_bucket`).
     pub name: &'static str,
     /// The bucket boundaries.
     pub buckets: &'static [f64],
@@ -246,9 +246,9 @@ macro_rules! firewood_gauge {
 ///
 /// # Usage
 /// ```ignore
-/// firewood_record!(registry::LATENCY_MS, elapsed_ms);
-/// firewood_record!(registry::LATENCY_MS, elapsed_ms, "op" => "read");
-/// firewood_record!(registry::COMMIT_MS_BUCKET, elapsed_ms, expensive);
+/// firewood_record!(registry::LATENCY_S, elapsed_s);
+/// firewood_record!(registry::LATENCY_S, elapsed_s, "op" => "read");
+/// firewood_record!(registry::COMMIT_SECONDS_BUCKET, elapsed_s, expensive);
 /// ```
 #[macro_export]
 macro_rules! firewood_record {
@@ -269,8 +269,8 @@ macro_rules! firewood_record {
 ///
 /// # Usage
 /// ```ignore
-/// let histogram = firewood_histogram!(registry::LATENCY_MS);
-/// histogram.record(elapsed_ms);
+/// let histogram = firewood_histogram!(registry::LATENCY_S);
+/// histogram.record(elapsed_s);
 /// ```
 #[macro_export]
 macro_rules! firewood_histogram {

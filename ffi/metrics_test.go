@@ -22,20 +22,20 @@ import (
 var (
 	metricsPort     = uint16(3000)
 	expectedMetrics = map[string]dto.MetricType{
-		"ffi_batch":          dto.MetricType_COUNTER,
-		"proposal_commit":    dto.MetricType_COUNTER,
-		"proposal_commit_ms": dto.MetricType_COUNTER,
-		"ffi_propose_ms":     dto.MetricType_COUNTER,
-		"ffi_commit_ms":      dto.MetricType_COUNTER,
-		"ffi_batch_ms":       dto.MetricType_COUNTER,
-		"flush_nodes":        dto.MetricType_COUNTER,
-		"insert":             dto.MetricType_COUNTER,
-		"space_from_end":     dto.MetricType_COUNTER,
+		"ffi_batch_total":                dto.MetricType_COUNTER,
+		"proposals_commit_total":         dto.MetricType_COUNTER,
+		"proposals_commit_seconds_total": dto.MetricType_COUNTER,
+		"ffi_propose_seconds_total":      dto.MetricType_COUNTER,
+		"ffi_commit_seconds_total":       dto.MetricType_COUNTER,
+		"ffi_batch_seconds_total":        dto.MetricType_COUNTER,
+		"flush_nodes_seconds_total":      dto.MetricType_COUNTER,
+		"insert_total":                   dto.MetricType_COUNTER,
+		"space_from_end_bytes_total":     dto.MetricType_COUNTER,
 	}
 	expectedExpensiveMetrics = map[string]dto.MetricType{
-		"ffi_commit_ms_bucket":  dto.MetricType_HISTOGRAM,
-		"ffi_propose_ms_bucket": dto.MetricType_HISTOGRAM,
-		"ffi_batch_ms_bucket":   dto.MetricType_HISTOGRAM,
+		"ffi_commit_duration_seconds":  dto.MetricType_HISTOGRAM,
+		"ffi_propose_duration_seconds": dto.MetricType_HISTOGRAM,
+		"ffi_batch_duration_seconds":   dto.MetricType_HISTOGRAM,
 	}
 	initMetrics   sync.Once
 	initLogs      sync.Once
@@ -156,7 +156,7 @@ func assertMetrics(t *testing.T, metricsPort uint16, expected map[string]dto.Met
 				d = m
 			}
 		}
-		r.NotNil(d)
+		r.NotNil(d, "metric %q should exist", k)
 		r.Equal(v, *d.Type)
 	}
 }

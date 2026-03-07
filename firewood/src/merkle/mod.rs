@@ -743,7 +743,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
             (None, None) => {
                 // 1. The node is at `key`
                 node.update_value(value);
-                firewood_increment!(crate::registry::INSERT, 1, "merkle" => "update");
+                firewood_increment!(crate::registry::INSERT_TOTAL, 1, "merkle" => "update");
                 Ok(node)
             }
             (None, Some((child_index, partial_path))) => {
@@ -764,7 +764,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 // Shorten the node's partial path since it has a new parent.
                 node.update_partial_path(partial_path);
                 branch.children[child_index] = Some(Child::Node(node));
-                firewood_increment!(crate::registry::INSERT, 1, "merkle" => "above");
+                firewood_increment!(crate::registry::INSERT_TOTAL, 1, "merkle" => "above");
 
                 Ok(Node::Branch(Box::new(branch)))
             }
@@ -786,7 +786,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                                 partial_path,
                             });
                             branch.children[child_index] = Some(Child::Node(new_leaf));
-                            firewood_increment!(crate::registry::INSERT, 1, "merkle" => "below");
+                            firewood_increment!(crate::registry::INSERT_TOTAL, 1, "merkle" => "below");
                             return Ok(node);
                         };
                         let child = self.read_for_update(child)?;
@@ -809,7 +809,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
 
                         branch.children[child_index] = Some(Child::Node(new_leaf));
 
-                        firewood_increment!(crate::registry::INSERT, 1, "merkle" => "split");
+                        firewood_increment!(crate::registry::INSERT_TOTAL, 1, "merkle" => "split");
                         Ok(Node::Branch(Box::new(branch)))
                     }
                 }
@@ -839,7 +839,7 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
                 });
                 branch.children[key_index] = Some(Child::Node(new_leaf));
 
-                firewood_increment!(crate::registry::INSERT, 1, "merkle" => "split");
+                firewood_increment!(crate::registry::INSERT_TOTAL, 1, "merkle" => "split");
                 Ok(Node::Branch(Box::new(branch)))
             }
         }
@@ -865,16 +865,16 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. There is nothing to remove.
-            firewood_increment!(crate::registry::REMOVE, 1, "prefix" => "false", "result" => "nonexistent");
+            firewood_increment!(crate::registry::REMOVE_TOTAL, 1, "prefix" => "false", "result" => "nonexistent");
             return Ok(None);
         };
 
         let (root_node, removed_value) = self.remove_helper(root_node, &key)?;
         *self.nodestore.root_mut() = root_node;
         if removed_value.is_some() {
-            firewood_increment!(crate::registry::REMOVE, 1, "prefix" => "false", "result" => "success");
+            firewood_increment!(crate::registry::REMOVE_TOTAL, 1, "prefix" => "false", "result" => "success");
         } else {
-            firewood_increment!(crate::registry::REMOVE, 1, "prefix" => "false", "result" => "nonexistent");
+            firewood_increment!(crate::registry::REMOVE_TOTAL, 1, "prefix" => "false", "result" => "nonexistent");
         }
         Ok(removed_value)
     }
@@ -962,13 +962,13 @@ impl<S: ReadableStorage> Merkle<NodeStore<MutableProposal, S>> {
         let root = self.nodestore.root_mut();
         let Some(root_node) = std::mem::take(root) else {
             // The trie is empty. There is nothing to remove.
-            firewood_increment!(crate::registry::REMOVE, 1, "prefix" => "true", "result" => "nonexistent");
+            firewood_increment!(crate::registry::REMOVE_TOTAL, 1, "prefix" => "true", "result" => "nonexistent");
             return Ok(0);
         };
 
         let mut deleted = 0;
         let root_node = self.remove_prefix_helper(root_node, &prefix, &mut deleted)?;
-        firewood_increment!(crate::registry::REMOVE, deleted as u64, "prefix" => "true", "result" => "success");
+        firewood_increment!(crate::registry::REMOVE_TOTAL, deleted as u64, "prefix" => "true", "result" => "success");
         *self.nodestore.root_mut() = root_node;
         Ok(deleted)
     }

@@ -49,26 +49,25 @@ fn example(user: User) -> Result<(), DatabaseError> {
 
 ## Generated Metrics
 
-For each instrumented function, the macro generates two metrics:
+For each instrumented function, the macro generates two Prometheus-compliant metrics:
 
-1. **Count Metric** (base name): Tracks the number of function calls
-2. **Timing Metric** (base name + "_ms"): Tracks execution time in milliseconds
+1. **Count Metric** (base name + "_total"): Tracks the number of function calls
+2. **Timing Metric** (base name + "_seconds_total"): Tracks execution time in seconds (accumulated as nanoseconds for precision)
 
 Both metrics include a `success` label:
 
 - `success="true"` for `Ok(_)` results
 - `success="false"` for `Err(_)` results
 
-**Note**: Metrics are registered without a namespace prefix in code. When exported (via FFI or benchmark tools), the `firewood.` prefix is automatically added by the exporter layer.
-
 ### Example Output
 
 For `#[metrics("query", "data retrieval")]`:
 
-- `query{success="true"}` - Count of successful queries (exported as `firewood.query`)
-- `query{success="false"}` - Count of failed queries (exported as `firewood.query`)
-- `query_ms{success="true"}` - Timing of successful queries (exported as `firewood.query_ms`)
-- `query_ms{success="false"}` - Timing of failed queries (exported as `firewood.query_ms`)
+- `query_total{success="true"}` - Count of successful queries
+- `query_total{success="false"}` - Count of failed queries  
+- `query_seconds_total{success="true"}` - Timing of successful queries in seconds
+- `query_seconds_total{success="false"}` - Timing of failed queries in seconds
+- `query_s{success="false"}` - Timing of failed queries in seconds (exported as `firewood.query_s`)
 
 ## Requirements
 
@@ -88,7 +87,8 @@ static __METRICS_LABELS_SUCCESS: &[(&str, &str)] = &[("success", "true")];
 static __METRICS_LABELS_ERROR: &[(&str, &str)] = &[("success", "false")];
 
 // Compile-time string concatenation (no allocation)
-metrics::counter!(concat!("my.metric", "_ms"), labels)
+metrics::counter!(concat!("my_metric", "_total"), labels)
+metrics::counter!(concat!("my_metric", "_seconds_total"), labels)
 ```
 
 ### Minimal Overhead
@@ -104,7 +104,7 @@ metrics::counter!(concat!("my.metric", "_ms"), labels)
 The macro transforms this:
 
 ```rust
-#[metrics("my.operation")]
+#[metrics("my_operation")]
 fn my_function() -> Result<String, Error> {
     Ok("result".to_string())
 }
@@ -117,8 +117,8 @@ fn my_function() -> Result<String, Error> {
     // Register metrics (once per process)
     static __METRICS_REGISTERED: std::sync::Once = std::sync::Once::new();
     __METRICS_REGISTERED.call_once(|| {
-        metrics::describe_counter!("my.operation", "Operation counter");
-        metrics::describe_counter!(concat!("my.operation", "_ms"), "Operation timing");
+        metrics::describe_counter!(concat!("my_operation", "_total"), "Operation counter");
+        metrics::describe_counter!(concat!("my_operation", "_seconds_total"), "Operation timing in seconds");
     });
 
     // Start timing
@@ -138,9 +138,9 @@ fn my_function() -> Result<String, Error> {
         __METRICS_LABELS_SUCCESS
     };
 
-    metrics::counter!("my.operation", __metrics_labels).increment(1);
-    metrics::counter!(concat!("my.operation", "_ms"), __metrics_labels)
-        .increment(__metrics_start.elapsed().as_millis());
+    metrics::counter!(concat!("my_operation", "_total"), __metrics_labels).increment(1);
+    metrics::counter!(concat!("my_operation", "_seconds_total"), __metrics_labels)
+        .increment(__metrics_start.elapsed().as_nanos());
 
     __metrics_result
 }

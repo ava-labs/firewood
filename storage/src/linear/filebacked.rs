@@ -119,7 +119,7 @@ impl ReadableStorage for FileBacked {
     }
 
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
-        firewood_increment!(crate::registry::READ_NODE, 1, "from" => "file");
+        firewood_increment!(crate::registry::READ_NODE_TOTAL, 1, "from" => "file");
         Ok(PredictiveReader::new(self, addr))
     }
 
@@ -134,14 +134,14 @@ impl ReadableStorage for FileBacked {
     fn read_cached_node(&self, addr: LinearAddress, mode: &'static str) -> Option<SharedNode> {
         let mut guard = self.cache.lock();
         let cached = guard.get(&addr).map(|cached_node| cached_node.0.clone());
-        firewood_increment!(crate::registry::CACHE_NODE, 1, "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" });
+        firewood_increment!(crate::registry::CACHE_NODE_TOTAL, 1, "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" });
         cached
     }
 
     fn free_list_cache(&self, addr: LinearAddress) -> Option<Option<LinearAddress>> {
         let mut guard = self.free_list_cache.lock();
         let cached = guard.pop(&addr);
-        firewood_increment!(crate::registry::CACHE_FREELIST, 1, "type" => if cached.is_some() { "hit" } else { "miss" });
+        firewood_increment!(crate::registry::CACHE_FREELIST_TOTAL, 1, "type" => if cached.is_some() { "hit" } else { "miss" });
         firewood_set!(crate::registry::FREELIST_CACHE_SIZE, guard.len());
         cached
     }
@@ -256,8 +256,8 @@ impl<'a> PredictiveReader<'a> {
 impl Drop for PredictiveReader<'_> {
     fn drop(&mut self) {
         let elapsed = self.started.elapsed();
-        firewood_increment!(crate::registry::IO_READ_MS, elapsed.as_millis());
-        firewood_increment!(crate::registry::IO_READ_COUNT, 1);
+        firewood_increment!(crate::registry::IO_READ_SECONDS_TOTAL, elapsed.as_nanos());
+        firewood_increment!(crate::registry::IO_READ_TOTAL, 1);
     }
 }
 

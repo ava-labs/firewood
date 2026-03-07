@@ -551,7 +551,7 @@ impl PersistLoop {
     }
 }
 
-#[crate::metrics("persist.root_store", "persist revision address to root store")]
+#[crate::metrics("persist_root_store", "persist revision address to root store")]
 fn save_to_root_store(
     store: &RootStore,
     hash: &TrieHash,

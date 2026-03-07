@@ -301,7 +301,7 @@ impl RevisionManager {
     /// Steps 1 through 5 are executed behind a lock to maintain the invariant
     /// that only one revision can commit at a time.
     #[fastrace::trace(short_name = true)]
-    #[crate::metrics("proposal.commit", "proposal commit to storage")]
+    #[crate::metrics("proposals_commit", "proposal commit to storage")]
     pub fn commit(&self, proposal: ProposedRevision) -> Result<(), RevisionManagerError> {
         // Hold a write lock on `in_memory_revisions` for the duration of the
         // critical section (steps 1-5). This is necessary because:
@@ -394,7 +394,7 @@ impl RevisionManager {
             });
 
             if discarded > 0 {
-                firewood_increment!(crate::registry::PROPOSALS_DISCARDED, discarded);
+                firewood_increment!(crate::registry::PROPOSALS_DISCARDED_TOTAL, discarded);
             }
 
             // Update uncommitted proposals gauge after cleanup
