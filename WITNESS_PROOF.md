@@ -144,17 +144,21 @@ and `Delete` — never `DeleteRange`. The client re-executes each expanded
 
 #### Server-side expansion
 
-When a batch contains `DeleteRange` operations, the Go server layer expands
-them before calling into the Rust witness generator. The expansion happens in
-`expandPrefixDeletes()` (`ffi/remote/server.go`):
+When a batch contains `DeleteRange` operations, the Rust layer expands them
+into individual `Delete` operations before generating the witness. The expansion
+happens in `expand_delete_ranges()` (`firewood/src/remote/witness.rs`), called
+from `fwd_generate_witness()` in the Rust FFI layer (`ffi/src/remote.rs`):
 
-1. **Scan the parent state**: for each `DeleteRange { prefix }`, use
-   `prefixScan()` to enumerate every key matching the prefix in the committed
-   (or parent proposal) state.
-2. **Expand to individual Deletes**: each matching key becomes a separate
-   `Delete { key }` in the expanded batch.
+1. **Scan the parent state**: for each `DeleteRange { prefix }`, iterate the
+   committed revision via `view.iter_from(prefix)` to enumerate every key
+   matching the prefix.
+2. **Skip already-deleted keys**: keys already recorded as deleted by earlier
+   operations in the same batch are skipped (tracked in a `HashSet`).
 3. **Handle intra-batch keys**: keys added by earlier `Put` operations in the
-   same batch that match the prefix are also expanded to `Delete` operations.
+   same batch that match the prefix are also expanded to `Delete` operations
+   (using a `BTreeSet` with range queries for efficient prefix matching).
+4. **Deterministic ordering**: expanded `Delete` operations within each
+   `DeleteRange` are emitted in sorted key order (via a `BTreeSet`).
 
 ```text
 Original batch:                    Expanded batch (in witness):
@@ -167,9 +171,10 @@ DeleteRange("ab/")          →      Delete("ab/1")    ← from Put above
                                    Delete("ab/y")    ← from parent state
 ```
 
-The Rust FFI layer enforces this: `fwd_generate_witness()` (`ffi/src/remote.rs`)
-rejects any `DeleteRange` in the batch with an explicit error, requiring the
-Go layer to expand first. The expanded `Delete` operations are then passed to
+The Go server passes `DeleteRange` operations through to the Rust FFI layer
+unchanged. `fwd_generate_witness()` (`ffi/src/remote.rs`) calls
+`expand_delete_ranges()` to expand them into individual `Delete` operations
+using the committed revision, then passes the expanded operations to
 `generate_witness()`, which collects witness nodes along each individual key's
 path using the standard single-key algorithm.
 
@@ -493,27 +498,28 @@ function is collision-resistant:
 
 The hash algorithm is selected at compile time via the `ethhash` feature flag:
 
-| Feature    | Hash algorithm | Hash type                        |
-|------------|----------------|----------------------------------|
-| (default)  | SHA-256        | `TrieHash` (32 bytes)            |
-| `ethhash`  | Keccak-256     | `HashType::Hash` or `HashType::Rlp` |
+| Feature    | Hash algorithm | Hash type                             |
+|------------|----------------|---------------------------------------|
+| (default)  | SHA-256        | `TrieHash` (32 bytes)                 |
+| `ethhash`  | Keccak-256     | `HashType::Hash` or `HashType::Rlp`   |
 
 The witness verification selects the algorithm at runtime using `cfg!()` to
 ensure the client and server use matching hash functions.
 
 ## Source Files
 
-| File                                | Role                                 |
-|-------------------------------------|--------------------------------------|
-| `firewood/src/remote/mod.rs`        | Module root                          |
+| File                                    | Role                                          |
+|-----------------------------------------|-----------------------------------------------|
+| `firewood/src/remote/mod.rs`            | Module root                                   |
 | `firewood/src/remote/truncated_trie.rs` | `TruncatedTrie` construction and verification |
-| `firewood/src/remote/witness.rs`    | Witness generation and verification  |
-| `firewood/src/remote/ser.rs`        | Binary serialization for wire format |
-| `firewood/src/remote/client.rs`     | `RemoteClient` and `RemoteTransport` |
-| `storage/src/node/branch.rs`        | `Child` enum, `NodeError`            |
-| `storage/src/node/persist.rs`       | `MaybePersistedNode`                 |
-| `storage/src/hashednode.rs`         | `hash_node()` function               |
-| `ffi/remote/server.go`             | Server-side DeleteRange expansion    |
-| `ffi/remote/client.go`             | Client-side batch ops validation     |
-| `ffi/src/remote.rs`                | FFI: witness generation, validation  |
-| `ffi/witness_proof.go`             | Go wrapper for `WitnessProof`        |
+| `firewood/src/remote/witness.rs`        | Witness generation, DeleteRange expansion     |
+| `firewood/src/remote/ser.rs`            | Binary serialization for wire format          |
+| `firewood/src/remote/client.rs`         | `RemoteClient` and `RemoteTransport`          |
+| `storage/src/node/branch.rs`            | `Child` enum, `NodeError`                     |
+| `storage/src/node/persist.rs`           | `MaybePersistedNode`                          |
+| `storage/src/hashednode.rs`             | `hash_node()` function                        |
+| `ffi/remote/server.go`                  | gRPC server, proposal management              |
+| `ffi/remote/client.go`                  | gRPC client, witness verification             |
+| `ffi/remote/db.go`                      | `RemoteDB` wrapper, ops validation            |
+| `ffi/src/remote.rs`                     | FFI: witness generation, validation           |
+| `ffi/witness_proof.go`                  | Go wrapper for `WitnessProof`                 |
