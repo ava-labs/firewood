@@ -15,9 +15,10 @@ use std::collections::HashMap;
 use std::fmt::Write;
 
 use super::*;
+use crate::{ProofError, ProofNode};
 use firewood_storage::{
-    Committed, MemStore, MutableProposal, NodeHashAlgorithm, NodeStore, NodeStoreHeader,
-    RootReader, TrieHash,
+    Children, Committed, MemStore, MutableProposal, NodeHashAlgorithm, NodeStore, NodeStoreHeader,
+    PathComponent, RootReader, TrieHash, ValueDigest,
 };
 
 // Returns n random key-value pairs.
@@ -188,6 +189,163 @@ fn create_in_memory_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
     let nodestore = NodeStore::new_empty_proposal(memstore.into());
 
     Merkle { nodestore }
+}
+
+fn test_branch_proof_node(
+    key_nibbles: &[u8],
+    value_digest: Option<ValueDigest<Value>>,
+) -> ProofNode {
+    let key = key_nibbles
+        .iter()
+        .copied()
+        .map(|nibble| PathComponent::try_new(nibble).unwrap())
+        .collect();
+
+    ProofNode {
+        key,
+        partial_len: 0,
+        value_digest,
+        child_hashes: Children::new(),
+    }
+}
+
+#[test]
+fn test_get_node_from_nibbles_matches_byte_lookup() {
+    let mut merkle = create_in_memory_merkle();
+    merkle.insert(&[0xab, 0xcd], Box::from([1u8])).unwrap();
+
+    let from_bytes = merkle.get_node(&[0xab, 0xcd]).unwrap();
+    let from_nibbles = merkle.get_node_from_nibbles(&[0xa, 0xb, 0xc, 0xd]).unwrap();
+
+    assert_eq!(from_bytes, from_nibbles);
+}
+
+#[test]
+fn test_insert_branch_from_nibbles_into_empty_trie() {
+    let mut merkle = create_in_memory_merkle();
+
+    merkle.insert_branch_from_nibbles(&[0xa, 0xb, 0xc]).unwrap();
+
+    let node = merkle
+        .get_node_from_nibbles(&[0xa, 0xb, 0xc])
+        .unwrap()
+        .unwrap();
+    let branch = node.as_branch().expect("expected branch node");
+    assert!(branch.value.is_none());
+}
+
+#[test]
+fn test_insert_branch_from_nibbles_converts_leaf_to_branch() {
+    let mut merkle = create_in_memory_merkle();
+    merkle.insert(&[0xab], Box::from([9u8])).unwrap();
+
+    merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
+
+    let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
+    let branch = node.as_branch().expect("expected branch node");
+    assert_eq!(branch.value.as_deref(), Some([9u8].as_slice()));
+    assert_eq!(
+        merkle.get_value(&[0xab]).unwrap().as_deref(),
+        Some([9u8].as_slice())
+    );
+}
+
+#[test]
+fn test_insert_branch_from_nibbles_inserts_missing_ancestor() {
+    let mut merkle = create_in_memory_merkle();
+    merkle.insert(&[0xab, 0xcd], Box::from([7u8])).unwrap();
+
+    merkle.insert_branch_from_nibbles(&[0xa]).unwrap();
+
+    let ancestor = merkle.get_node_from_nibbles(&[0xa]).unwrap().unwrap();
+    let ancestor_branch = ancestor.as_branch().expect("expected ancestor branch");
+    assert!(ancestor_branch.value.is_none());
+    assert_eq!(
+        merkle.get_value(&[0xab, 0xcd]).unwrap().as_deref(),
+        Some([7u8].as_slice())
+    );
+}
+
+#[test]
+fn test_insert_branch_from_nibbles_inserts_missing_descendant() {
+    let mut merkle = create_in_memory_merkle();
+    merkle.insert(&[0xab], Box::from([5u8])).unwrap();
+
+    merkle.insert_branch_from_nibbles(&[0xa, 0xb, 0xc]).unwrap();
+
+    let descendant = merkle
+        .get_node_from_nibbles(&[0xa, 0xb, 0xc])
+        .unwrap()
+        .unwrap();
+    let descendant_branch = descendant.as_branch().expect("expected descendant branch");
+    assert!(descendant_branch.value.is_none());
+    assert_eq!(
+        merkle.get_value(&[0xab]).unwrap().as_deref(),
+        Some([5u8].as_slice())
+    );
+}
+
+#[test]
+fn test_reconcile_branch_proof_node_creates_missing_branch_without_value() {
+    let mut merkle = create_in_memory_merkle();
+
+    let proof_node = test_branch_proof_node(&[0xa, 0xb, 0xc], None);
+
+    merkle.reconcile_branch_proof_node(&proof_node).unwrap();
+
+    let node = merkle
+        .get_node_from_nibbles(&[0xa, 0xb, 0xc])
+        .unwrap()
+        .unwrap();
+    let branch = node.as_branch().expect("expected branch node");
+    assert!(branch.value.is_none());
+}
+
+#[test]
+fn test_reconcile_branch_proof_node_sets_missing_value() {
+    let mut merkle = create_in_memory_merkle();
+    merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
+
+    let proof_node =
+        test_branch_proof_node(&[0xa, 0xb], Some(ValueDigest::Value(Box::from([7u8]))));
+
+    merkle.reconcile_branch_proof_node(&proof_node).unwrap();
+
+    let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
+    let branch = node.as_branch().expect("expected branch node");
+    assert_eq!(branch.value.as_deref(), Some([7u8].as_slice()));
+}
+
+#[test]
+fn test_reconcile_branch_proof_node_noop_when_proof_has_no_value() {
+    let mut merkle = create_in_memory_merkle();
+    merkle.insert(&[0xab], Box::from([3u8])).unwrap();
+    merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
+
+    let proof_node = test_branch_proof_node(&[0xa, 0xb], None);
+
+    merkle.reconcile_branch_proof_node(&proof_node).unwrap();
+
+    let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
+    let branch = node.as_branch().expect("expected branch node");
+    assert_eq!(branch.value.as_deref(), Some([3u8].as_slice()));
+}
+
+#[test]
+fn test_reconcile_branch_proof_node_fails_on_value_mismatch() {
+    let mut merkle = create_in_memory_merkle();
+    merkle.insert(&[0xab], Box::from([1u8])).unwrap();
+    merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
+
+    let proof_node =
+        test_branch_proof_node(&[0xa, 0xb], Some(ValueDigest::Value(Box::from([2u8]))));
+
+    let err = merkle.reconcile_branch_proof_node(&proof_node).unwrap_err();
+    assert!(matches!(err, ProofError::UnexpectedValue));
+
+    let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
+    let branch = node.as_branch().expect("expected branch node");
+    assert_eq!(branch.value.as_deref(), Some([1u8].as_slice()));
 }
 
 #[test]
