@@ -23,8 +23,8 @@ use crate::remote::client::ClientOp;
 use crate::v2::api::BatchOp as CoreBatchOp;
 use crate::v2::api::Error as ApiError;
 use firewood_storage::{
-    BranchNode, Child, Children, HashedNodeReader, ImmutableProposal, MemStore, Node, NodeError,
-    NodeHashAlgorithm, NodeStore, PathComponent, SharedNode, TrieHash, TrieReader,
+    BranchNode, Child, Children, HashedNodeReader, ImmutableProposal, MemStore, NibblesIterator,
+    Node, NodeError, NodeHashAlgorithm, NodeStore, PathComponent, SharedNode, TrieHash, TrieReader,
 };
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::sync::Arc;
@@ -226,7 +226,7 @@ pub fn generate_witness<T: TrieReader + HashedNodeReader>(
             ClientOp::Put { key, .. } | ClientOp::Delete { key } => key,
         };
 
-        let key_nibbles = key_to_nibbles(key);
+        let key_nibbles: Vec<u8> = NibblesIterator::new(key).collect();
         collect_path_nodes(
             nodestore,
             &root_node,
@@ -252,20 +252,6 @@ pub fn generate_witness<T: TrieReader + HashedNodeReader>(
         new_root_hash,
         witness_nodes: witness_nodes.into(),
     })
-}
-
-/// Converts a byte key to a nibble sequence (each byte → two nibbles).
-///
-/// Trie traversal indexes children by single nibbles (0–15), so byte keys
-/// must be split: the high nibble of each byte comes first, then the low.
-/// For example, `[0xAB]` becomes `[0xA, 0xB]`.
-fn key_to_nibbles(key: &[u8]) -> Vec<u8> {
-    let mut nibbles = Vec::with_capacity(key.len().saturating_mul(2));
-    for byte in key {
-        nibbles.push(byte >> 4);
-        nibbles.push(byte & 0x0f);
-    }
-    nibbles
 }
 
 /// Walks the trie following a key's nibble path, collecting nodes below the
@@ -729,14 +715,6 @@ mod tests {
         }
 
         new_merkle.try_into().unwrap()
-    }
-
-    #[test]
-    fn test_key_to_nibbles() {
-        assert_eq!(key_to_nibbles(&[0xAB, 0xCD]), vec![0xA, 0xB, 0xC, 0xD]);
-        assert_eq!(key_to_nibbles(&[0x00]), vec![0, 0]);
-        assert_eq!(key_to_nibbles(&[0xFF]), vec![0xF, 0xF]);
-        assert!(key_to_nibbles(&[]).is_empty());
     }
 
     #[test]
