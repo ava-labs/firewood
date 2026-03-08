@@ -21,9 +21,11 @@ use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_metrics::firewood_counter;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, TrieReader,
+    ImmutableProposal, MutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage,
+    Reconstructed as StorageReconstructed, TrieReader,
 };
 use nonzero_ext::nonzero;
+use rayon::ThreadPool;
 use std::io::Write;
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::Path;
@@ -54,9 +56,9 @@ impl std::fmt::Debug for DbMetrics {
     }
 }
 
-impl<P: Parentable, S: ReadableStorage> api::DbView for NodeStore<P, S>
+impl<P, S: ReadableStorage> api::DbView for NodeStore<P, S>
 where
-    NodeStore<P, S>: TrieReader,
+    NodeStore<P, S>: TrieReader + HashedNodeReader,
 {
     type Iter<'view>
         = MerkleKeyValueIter<'view, Self>
@@ -357,6 +359,24 @@ impl Db {
         self.propose_with_parent(batch_ops, merkle.nodestore())
     }
 
+    /// Reconstruct a view from a parent view by applying batch operations.
+    /// Uses the database's thread pool for parallel reconstruction.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reconstruction fails.
+    pub fn reconstruct_from_view<P>(
+        &self,
+        parent: &NodeStore<P, FileBacked>,
+        batch: impl IntoBatchIter,
+    ) -> Result<Reconstructed, api::Error>
+    where
+        P: Parentable,
+        NodeStore<P, FileBacked>: TrieReader + HashedNodeReader,
+    {
+        reconstruct_with_parent(parent, batch, self.manager.threadpool())
+    }
+
     /// Closes the database gracefully.
     ///
     /// Shuts down the background persistence worker and persists the latest
@@ -372,6 +392,12 @@ impl Db {
 pub struct Proposal<'db> {
     nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
     db: &'db Db,
+}
+
+#[derive(Debug)]
+/// A user-visible reconstructed view.
+pub struct Reconstructed {
+    nodestore: Arc<NodeStore<StorageReconstructed, FileBacked>>,
 }
 
 impl api::DbView for Proposal<'_> {
@@ -438,6 +464,119 @@ impl Proposal<'_> {
     }
 }
 
+impl api::DbView for Reconstructed {
+    type Iter<'view>
+        = MerkleKeyValueIter<'view, NodeStore<StorageReconstructed, FileBacked>>
+    where
+        Self: 'view;
+
+    fn root_hash(&self) -> Option<api::HashKey> {
+        api::DbView::root_hash(&*self.nodestore)
+    }
+
+    fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
+        api::DbView::val(&*self.nodestore, key)
+    }
+
+    fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
+        api::DbView::single_key_proof(&*self.nodestore, key)
+    }
+
+    fn range_proof<K: KeyType>(
+        &self,
+        first_key: Option<K>,
+        last_key: Option<K>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenRangeProof, api::Error> {
+        api::DbView::range_proof(&*self.nodestore, first_key, last_key, limit)
+    }
+
+    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
+        api::DbView::iter_option(&*self.nodestore, first_key)
+    }
+
+    fn dump_to_string(&self) -> Result<String, api::Error> {
+        api::DbView::dump_to_string(&*self.nodestore)
+    }
+}
+
+impl api::Reconstructible for &NodeStore<Committed, FileBacked> {
+    type Reconstructed = Reconstructed;
+
+    fn reconstruct(
+        self,
+        batch: impl IntoBatchIter,
+        pool: &ThreadPool,
+    ) -> Result<Self::Reconstructed, api::Error>
+    where
+        Self: Sized,
+    {
+        reconstruct_with_parent(self, batch, pool)
+    }
+}
+
+impl api::Reconstructible for Reconstructed {
+    type Reconstructed = Reconstructed;
+
+    fn reconstruct(
+        self,
+        batch: impl IntoBatchIter,
+        pool: &ThreadPool,
+    ) -> Result<Self::Reconstructed, api::Error>
+    where
+        Self: Sized,
+    {
+        reconstruct_with_reconstructed(self.nodestore, batch, pool)
+    }
+}
+
+/// Reconstruction path for a `Reconstructed` view.
+///
+/// Converts `Reconstructed` → `MutableProposal` using the optimized `TryFrom` impl
+/// that moves the root Node when possible and clones otherwise, then applies the batch.
+fn reconstruct_with_reconstructed(
+    nodestore: Arc<NodeStore<StorageReconstructed, FileBacked>>,
+    batch: impl IntoBatchIter,
+    pool: &ThreadPool,
+) -> Result<Reconstructed, api::Error> {
+    // The TryFrom<Arc<NodeStore<Reconstructed>>> impl extracts and moves the root
+    // Node when uniquely owned, or clones when shared.
+    let proposal =
+        NodeStore::<MutableProposal, _>::try_from(nodestore).map_err(api::Error::from)?;
+
+    let mut parallel_merkle = ParallelMerkle::default();
+    let nodestore = parallel_merkle.apply_to_mutable(proposal, batch, pool)?;
+
+    Ok(Reconstructed {
+        nodestore: Arc::new(nodestore.try_into()?),
+    })
+}
+
+/// Reconstruction path for a `DbView` (or other parent-backed view).
+///
+/// Creates a new `NodeStore` from the parent, which requires cloning the root node.
+/// This is significantly slower than the reconstructed path due to the clone.
+fn reconstruct_with_parent<P>(
+    parent: &NodeStore<P, FileBacked>,
+    batch: impl IntoBatchIter,
+    pool: &ThreadPool,
+) -> Result<Reconstructed, api::Error>
+where
+    P: Parentable,
+    NodeStore<P, FileBacked>: TrieReader + HashedNodeReader,
+{
+    // This clones the root node when creating a mutable nodestore from a parent view.
+    let proposal = NodeStore::<MutableProposal, _>::new(parent)?;
+
+    // Apply batch operations in parallel using the provided thread pool
+    let mut parallel_merkle = ParallelMerkle::default();
+    let nodestore = parallel_merkle.apply_to_mutable(proposal, batch, pool)?;
+
+    Ok(Reconstructed {
+        nodestore: Arc::new(nodestore.try_into()?),
+    })
+}
+
 #[cfg(test)]
 mod test {
     #![expect(clippy::unwrap_used)]
@@ -457,7 +596,7 @@ mod test {
 
     use crate::db::{Db, Proposal, UseParallel};
     use crate::manager::RevisionManagerConfig;
-    use crate::v2::api::{Db as _, DbView, HashKeyExt, Proposal as _};
+    use crate::v2::api::{Db as _, DbView, HashKeyExt, Proposal as _, Reconstructible as _};
 
     use super::{BatchOp, DbConfig};
 
@@ -527,6 +666,41 @@ mod test {
         let committed = db.root_hash().unwrap();
         let historical = db.revision(committed).unwrap();
         assert_eq!(&*historical.val(b"k").unwrap().unwrap(), b"v");
+    }
+
+    #[test]
+    fn test_reconstruct_reads_and_chains() {
+        let db = TestDb::new();
+
+        let initial = db
+            .propose(vec![BatchOp::Put {
+                key: b"base",
+                value: b"v0",
+            }])
+            .unwrap();
+        initial.commit().unwrap();
+
+        let historical_hash = db.root_hash().unwrap();
+        let historical = db.revision(historical_hash).unwrap();
+
+        let reconstructed = historical
+            .as_ref()
+            .reconstruct(vec![BatchOp::Put {
+                key: b"base",
+                value: b"v1",
+            }], db.manager.threadpool())
+            .unwrap();
+        assert_eq!(&*reconstructed.val(b"base").unwrap().unwrap(), b"v1");
+
+        let reconstructed = reconstructed
+            .reconstruct(vec![BatchOp::Put {
+                key: b"next",
+                value: b"v2",
+            }], db.manager.threadpool())
+            .unwrap();
+
+        assert_eq!(&*reconstructed.val(b"base").unwrap().unwrap(), b"v1");
+        assert_eq!(&*reconstructed.val(b"next").unwrap().unwrap(), b"v2");
     }
 
     #[test]

@@ -57,7 +57,7 @@ pub use node::{BranchNode, Child, Children, ChildrenSlots, LeafNode, Node, PathI
 pub use nodestore::{
     AreaIndex, Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal,
     NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError, NodeReader, NodeStore, NodeStoreHeader,
-    Parentable, RootReader, TrieReader,
+    Parentable, Reconstructed, RootReader, TrieReader,
 };
 pub use path::{
     ComponentIter, IntoSplitPath, JoinedPath, PackedBytes, PackedPathComponents, PackedPathRef,
