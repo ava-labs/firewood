@@ -64,6 +64,125 @@ pub struct ParallelMerkle {
 }
 
 impl ParallelMerkle {
+    /// Applies a batch of operations to an existing mutable nodestore using the parallel
+    /// proposal pipeline (prepare, split, merge, post-process).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CreateProposalError::FileIoError` if it encounters an error fetching nodes
+    /// from storage, a `CreateProposalError::SendError` if it is unable to send messages to
+    /// the workers, and a `CreateProposalError::InvalidConversionToPathComponent` if it is
+    /// unable to convert a u8 index into a path component.
+    pub fn apply_to_mutable(
+        &mut self,
+        mut mutable_nodestore: NodeStore<MutableProposal, FileBacked>,
+        batch: impl IntoBatchIter,
+        pool: &ThreadPool,
+    ) -> Result<NodeStore<MutableProposal, FileBacked>, CreateProposalError> {
+        // Prepare step: Force the root into a branch with no partial path in preparation for
+        // performing parallel modifications to the trie.
+        let mut root_branch = self.force_root(&mut mutable_nodestore)?;
+
+        // Create a response channel the workers use to send messages back to the coordinator (us)
+        let (response_sender, response_receiver) = mpsc::channel();
+
+        // Split step: for each operation in the batch, send a request to the worker that is
+        // responsible for the sub-trie corresponding to the operation's first nibble.
+        for res in batch.into_batch_iter::<CreateProposalError>() {
+            let op = res?;
+            // Get the first nibble of the key to determine which worker to send the request to.
+            //
+            // Need to handle an empty key. Since the partial_path of the root must be empty, an
+            // empty key should always be for the root node. There are 3 cases to consider.
+            //
+            // Insert: The main thread modifies the value of the root.
+            //
+            // Remove: The main thread removes any value at the root. However, it should not delete
+            //         the root node, which, if necessary later, will be done in post processing.
+            //
+            // Remove Prefix:
+            //         For a remove prefix, we would need to remove everything. We do this by sending
+            //         a remove prefix with an empty prefix to all of the children, then removing the
+            //         value of the root node.
+            let mut key_nibbles = NibblesIterator::new(op.key().as_ref());
+            let Some(first_path_component) = key_nibbles.next() else {
+                match &op {
+                    BatchOp::Put { key: _, value } => {
+                        root_branch.value = Some(value.as_ref().into());
+                    }
+                    BatchOp::Delete { key: _ } => {
+                        root_branch.value = None;
+                    }
+                    BatchOp::DeleteRange { prefix: _ } => {
+                        // Calling remove prefix with an empty prefix is equivalent to a remove all.
+                        if let Err(err) = self.remove_all_entries(&mut root_branch) {
+                            // A send error is most likely due to a worker returning to the thread pool
+                            // after it encountered a FileIoError. Try to find the FileIoError in the
+                            // response channel and return that instead.
+                            ParallelMerkle::find_fileio_error(&response_receiver)?;
+                            return Err(err.into());
+                        }
+                    }
+                }
+                continue; // Done with this empty key operation.
+            };
+
+            // Verify that the worker index taken from the first nibble is valid.
+            let first_path_component = PathComponent::try_new(first_path_component)
+                .ok_or(CreateProposalError::InvalidConversionToPathComponent)?;
+
+            // Get the worker that is responsible for this nibble. The worker will be created if it
+            // doesn't already exist.
+            let worker = self.worker(
+                pool,
+                &mut mutable_nodestore,
+                &mut root_branch,
+                first_path_component,
+                response_sender.clone(),
+            )?;
+
+            // Send the current operation to the worker.
+            // TODO: Currently the key from the BatchOp is copied to a Box<[u8]> before it is sent
+            //       to the worker. It may be possible to send a nibble iterator instead of a
+            //       Box<[u8]> to the worker if we use rayon scoped threads. This change would
+            //       eliminate a memory copy but may require some code refactoring.
+            if let Err(err) = match &op {
+                BatchOp::Put { key: _, value } => worker.send(BatchOp::Put {
+                    key: op.key().as_ref().into(),
+                    value: value.as_ref().into(),
+                }),
+                BatchOp::Delete { key: _ } => worker.send(BatchOp::Delete {
+                    key: op.key().as_ref().into(),
+                }),
+                BatchOp::DeleteRange { prefix: _ } => worker.send(BatchOp::DeleteRange {
+                    prefix: op.key().as_ref().into(),
+                }),
+            } {
+                // A send error is most likely due to a worker returning to the thread pool
+                // after it encountered a FileIoError. Try to find the FileIoError in the
+                // response channel and return that instead.
+                ParallelMerkle::find_fileio_error(&response_receiver)?;
+                return Err(err.into());
+            }
+        }
+
+        // Drop the sender response channel from the parent thread.
+        drop(response_sender);
+
+        // Setting the workers to default will close the senders to the workers. This will cause the
+        // workers to send back their responses.
+        self.workers = Children::default();
+
+        // Merge step: Collect the results from the workers and merge them as children to the root.
+        self.merge_children(response_receiver, &mut mutable_nodestore, &mut root_branch)?;
+
+        // Post-process step: return the trie to its canonical form.
+        *mutable_nodestore.root_mut() =
+            self.postprocess_trie(&mut mutable_nodestore, root_branch)?;
+
+        Ok(mutable_nodestore)
+    }
+
     /// Force the root (if necessary) into a branch with no partial path to allow the clean
     /// separation of the trie into an array of subtries that can be operated on independently
     /// by the worker threads.
@@ -383,108 +502,8 @@ impl ParallelMerkle {
         pool: &ThreadPool,
     ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, CreateProposalError> {
         // Create a mutable nodestore from the parent
-        let mut mutable_nodestore = NodeStore::new(parent)?;
-
-        // Prepare step: Force the root into a branch with no partial path in preparation for
-        // performing parallel modifications to the trie.
-        let mut root_branch = self.force_root(&mut mutable_nodestore)?;
-
-        // Create a response channel the workers use to send messages back to the coordinator (us)
-        let (response_sender, response_receiver) = mpsc::channel();
-
-        // Split step: for each operation in the batch, send a request to the worker that is
-        // responsible for the sub-trie corresponding to the operation's first nibble.
-        for res in batch.into_batch_iter::<CreateProposalError>() {
-            let op = res?;
-            // Get the first nibble of the key to determine which worker to send the request to.
-            //
-            // Need to handle an empty key. Since the partial_path of the root must be empty, an
-            // empty key should always be for the root node. There are 3 cases to consider.
-            //
-            // Insert: The main thread modifies the value of the root.
-            //
-            // Remove: The main thread removes any value at the root. However, it should not delete
-            //         the root node, which, if necessary later, will be done in post processing.
-            //
-            // Remove Prefix:
-            //         For a remove prefix, we would need to remove everything. We do this by sending
-            //         a remove prefix with an empty prefix to all of the children, then removing the
-            //         value of the root node.
-            let mut key_nibbles = NibblesIterator::new(op.key().as_ref());
-            let Some(first_path_component) = key_nibbles.next() else {
-                match &op {
-                    BatchOp::Put { key: _, value } => {
-                        root_branch.value = Some(value.as_ref().into());
-                    }
-                    BatchOp::Delete { key: _ } => {
-                        root_branch.value = None;
-                    }
-                    BatchOp::DeleteRange { prefix: _ } => {
-                        // Calling remove prefix with an empty prefix is equivalent to a remove all.
-                        if let Err(err) = self.remove_all_entries(&mut root_branch) {
-                            // A send error is most likely due to a worker returning to the thread pool
-                            // after it encountered a FileIoError. Try to find the FileIoError in the
-                            // response channel and return that instead.
-                            ParallelMerkle::find_fileio_error(&response_receiver)?;
-                            return Err(err.into());
-                        }
-                    }
-                }
-                continue; // Done with this empty key operation.
-            };
-
-            // Verify that the worker index taken from the first nibble is valid.
-            let first_path_component = PathComponent::try_new(first_path_component)
-                .ok_or(CreateProposalError::InvalidConversionToPathComponent)?;
-
-            // Get the worker that is responsible for this nibble. The worker will be created if it
-            // doesn't already exist.
-            let worker = self.worker(
-                pool,
-                &mut mutable_nodestore,
-                &mut root_branch,
-                first_path_component,
-                response_sender.clone(),
-            )?;
-
-            // Send the current operation to the worker.
-            // TODO: Currently the key from the BatchOp is copied to a Box<[u8]> before it is sent
-            //       to the worker. It may be possible to send a nibble iterator instead of a
-            //       Box<[u8]> to the worker if we use rayon scoped threads. This change would
-            //       eliminate a memory copy but may require some code refactoring.
-            if let Err(err) = match &op {
-                BatchOp::Put { key: _, value } => worker.send(BatchOp::Put {
-                    key: op.key().as_ref().into(),
-                    value: value.as_ref().into(),
-                }),
-                BatchOp::Delete { key: _ } => worker.send(BatchOp::Delete {
-                    key: op.key().as_ref().into(),
-                }),
-                BatchOp::DeleteRange { prefix: _ } => worker.send(BatchOp::DeleteRange {
-                    prefix: op.key().as_ref().into(),
-                }),
-            } {
-                // A send error is most likely due to a worker returning to the thread pool
-                // after it encountered a FileIoError. Try to find the FileIoError in the
-                // response channel and return that instead.
-                ParallelMerkle::find_fileio_error(&response_receiver)?;
-                return Err(err.into());
-            }
-        }
-
-        // Drop the sender response channel from the parent thread.
-        drop(response_sender);
-
-        // Setting the workers to default will close the senders to the workers. This will cause the
-        // workers to send back their responses.
-        self.workers = Children::default();
-
-        // Merge step: Collect the results from the workers and merge them as children to the root.
-        self.merge_children(response_receiver, &mut mutable_nodestore, &mut root_branch)?;
-
-        // Post-process step: return the trie to its canonical form.
-        *mutable_nodestore.root_mut() =
-            self.postprocess_trie(&mut mutable_nodestore, root_branch)?;
+        let mutable_nodestore = NodeStore::new(parent)?;
+        let mutable_nodestore = self.apply_to_mutable(mutable_nodestore, batch, pool)?;
 
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
             Arc::new(mutable_nodestore.try_into()?);

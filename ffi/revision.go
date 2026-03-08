@@ -26,15 +26,16 @@ var (
 // Instances are created via [Database.Revision], provide read-only access to
 // the revision, and must be released with [Revision.Drop] when no longer needed.
 //
-// Revisions must be dropped before the associated database is closed. A finalizer
-// is set on each Revision to ensure that Drop is called when the Revision is
-// garbage collected, but relying on finalizers is not recommended. Failing to
-// drop a revision before the database is closed will cause it to block or fail.
+// Revisions must be released before the associated database is closed by calling
+// [Revision.Drop]. A finalizer is set on each Revision to ensure Drop is called
+// when the Revision is garbage collected, but relying on finalizers is not
+// recommended. Failing to release a revision before the database is closed will
+// cause it to block or fail.
 //
-// Additionally, Revisions should be dropped when no longer needed to allow the
+// Additionally, Revisions should be released when no longer needed to allow the
 // database to free any associated resources. Firewood ensures that the state
 // associated with a Revision is retained until all Revisions based on that state
-// have been dropped.
+// have been released.
 //
 // All operations on a Revision are thread-safe with respect to each other.
 type Revision struct {
@@ -54,7 +55,7 @@ type Revision struct {
 // Get reads the value stored at the provided key within the revision.
 // If the key does not exist, it returns nil.
 //
-// It returns ErrDroppedRevision if Drop has already been called.
+// It returns ErrDroppedRevision if this revision has already been released.
 func (r *Revision) Get(key []byte) ([]byte, error) {
 	r.keepAliveHandle.mu.RLock()
 	defer r.keepAliveHandle.mu.RUnlock()
@@ -77,7 +78,7 @@ func (r *Revision) Get(key []byte) ([]byte, error) {
 //
 // The Iterator must be released with [Iterator.Drop] when no longer needed.
 //
-// It returns [ErrDroppedRevision] if Drop has already been called.
+// It returns [ErrDroppedRevision] if this revision has already been released.
 func (r *Revision) Iter(key []byte) (*Iterator, error) {
 	r.keepAliveHandle.mu.RLock()
 	defer r.keepAliveHandle.mu.RUnlock()
@@ -93,6 +94,35 @@ func (r *Revision) Iter(key []byte) (*Iterator, error) {
 	return getIteratorFromIteratorResult(itResult)
 }
 
+// Reconstruct applies a batch of operations on top of this historical revision,
+// returning a [Reconstructed] view.
+//
+// The returned view is not committed to the database and is not visible via
+// [Database.Revision] or [Database.Root].
+func (r *Revision) Reconstruct(batch []BatchOp) (*Reconstructed, error) {
+	r.keepAliveHandle.mu.RLock()
+	defer r.keepAliveHandle.mu.RUnlock()
+	if r.dropped {
+		return nil, ErrDroppedRevision
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	kvp := newKeyValuePairsFromBatch(batch, &pinner)
+	return getReconstructedFromResult(
+		C.fwd_reconstruct_on_revision(r.ptr, kvp),
+		r.keepAliveHandle.outstandingHandles,
+	)
+}
+
+// Drop releases the resources backed by the revision handle.
+//
+// It is safe to call Drop multiple times; subsequent calls after the first are no-ops.
+func (r *Revision) Drop() error {
+	return r.handle.Drop()
+}
+
 // Root returns the root hash of the revision.
 func (r *Revision) Root() Hash {
 	return r.root
@@ -101,7 +131,7 @@ func (r *Revision) Root() Hash {
 // Dump returns a DOT (Graphviz) format representation of the trie structure
 // of this revision for debugging purposes.
 //
-// Returns ErrDroppedRevision if Drop has already been called.
+// Returns ErrDroppedRevision if this revision has already been released.
 func (r *Revision) Dump() (string, error) {
 	r.keepAliveHandle.mu.RLock()
 	defer r.keepAliveHandle.mu.RUnlock()

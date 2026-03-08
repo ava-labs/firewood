@@ -2,22 +2,32 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::metrics::MetricsContextExt;
+use crate::reconstructed::ReconstructedHandle;
 use crate::{CreateIteratorResult, IteratorHandle};
 use firewood::v2::api;
-use firewood::v2::api::{ArcDynDbView, BoxKeyValueIter, DbView, HashKey};
+use firewood::v2::api::{ArcDynDbView, BoxKeyValueIter, DbView, HashKey, Reconstructible as _};
 use firewood_metrics::MetricsContext;
+use firewood_storage::{BranchNode, Committed, FileBacked, NodeStore};
+use rayon::ThreadPoolBuilder;
+use std::sync::Arc;
 
 #[derive(Debug)]
 pub struct RevisionHandle {
     view: ArcDynDbView,
+    historical: Option<Arc<NodeStore<Committed, FileBacked>>>,
     metrics_context: MetricsContext,
 }
 
 impl RevisionHandle {
     /// Creates a new revision handle for the provided database view.
-    pub(crate) fn new(view: ArcDynDbView, metrics_context: MetricsContext) -> RevisionHandle {
+    pub(crate) fn new(
+        view: ArcDynDbView,
+        historical: Option<Arc<NodeStore<Committed, FileBacked>>>,
+        metrics_context: MetricsContext,
+    ) -> RevisionHandle {
         RevisionHandle {
             view,
+            historical,
             metrics_context,
         }
     }
@@ -34,6 +44,33 @@ impl RevisionHandle {
             self.view.clone(),
             it,
             self.metrics_context(),
+        ))
+    }
+
+    /// Reconstruct this historical revision with a batch of operations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reconstruction fails.
+    pub fn reconstruct(
+        &self,
+        values: impl api::IntoBatchIter,
+    ) -> Result<ReconstructedHandle, api::Error> {
+        let Some(historical) = self.historical.as_ref() else {
+            return Err(api::Error::FeatureNotSupported(
+                "reconstruct requires a historical (committed) revision handle".to_string(),
+            ));
+        };
+
+        let pool = ThreadPoolBuilder::new()
+            .num_threads(BranchNode::MAX_CHILDREN)
+            .build()
+            .map_err(|e| api::Error::IO(std::io::Error::other(e)))?;
+
+        let reconstructed = historical.as_ref().reconstruct(values, &pool)?;
+        Ok(ReconstructedHandle::new(
+            reconstructed,
+            self.metrics_context,
         ))
     }
 }
