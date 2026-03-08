@@ -559,8 +559,10 @@ mod tests {
 
         // Verify the deserialized witness still works for verification
         let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), 2).unwrap();
+        let owned_ops: Vec<crate::remote::witness::OwnedBatchOp> =
+            ops.iter().cloned().map(Into::into).collect();
         let updated =
-            crate::remote::witness::verify_witness(&truncated, &deserialized, &ops).unwrap();
+            crate::remote::witness::verify_witness(&truncated, &deserialized, &owned_ops).unwrap();
         assert_eq!(*updated.root_hash().unwrap(), new_root_hash);
     }
 

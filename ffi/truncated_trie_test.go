@@ -130,7 +130,7 @@ func TestWitnessRoundTrip(t *testing.T) {
 	}()
 
 	// Verify witness - should produce a new truncated trie
-	newTrie, err := trie.VerifyWitness(witness)
+	newTrie, err := trie.VerifyWitness(witness, batch)
 	require.NoError(t, err)
 	require.NotNil(t, newTrie)
 	defer func() {

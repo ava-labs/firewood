@@ -118,6 +118,15 @@ pub enum WitnessError {
 /// A core batch operation with owned key and value data.
 pub type OwnedBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
 
+impl From<ClientOp> for OwnedBatchOp {
+    fn from(op: ClientOp) -> Self {
+        match op {
+            ClientOp::Put { key, value } => BatchOp::Put { key, value },
+            ClientOp::Delete { key } => BatchOp::Delete { key },
+        }
+    }
+}
+
 /// Expands `DeleteRange` operations into individual `Delete` operations.
 ///
 /// Scans the parent revision state for keys matching each prefix and emits
@@ -476,47 +485,124 @@ fn convert_node_for_witness(node: &SharedNode) -> Result<Node, NodeError> {
 
 // -- Client-side witness verification --
 
-/// Verifies a witness proof and returns the updated truncated trie.
+/// Validates that the witness proof's batch operations are consistent with the
+/// expected operations, handling `DeleteRange` expansion.
 ///
-/// Validates that the witness proof's batch operations match the expected
-/// operations sent by the client.
+/// Walks `expected_ops` and `witness.batch_ops` in lockstep:
+/// - `Put`/`Delete`: 1:1 comparison against the witness `ClientOp`
+/// - `DeleteRange { prefix }`: consumes consecutive `Delete` witness ops
+///   whose keys start with the prefix; records the prefix
 ///
-/// Performs a 1:1 element-wise comparison of the witness's `batch_ops` against
-/// `expected_ops`, checking both the operation type and the key/value data.
+/// Returns the collected `delete_range_prefixes` (empty if no `DeleteRange`).
 ///
 /// # Errors
 ///
 /// Returns [`WitnessError::OpsMismatch`] if:
-/// - The lengths differ
-/// - Any element differs in type, key, or value
-pub fn validate_witness_ops(
+/// - A `Put`/`Delete` doesn't match its witness counterpart
+/// - The witness has leftover or missing ops
+fn validate_witness_ops(
     witness: &WitnessProof,
-    expected_ops: &[ClientOp],
-) -> Result<(), WitnessError> {
+    expected_ops: &[OwnedBatchOp],
+) -> Result<Vec<Box<[u8]>>, WitnessError> {
     let witness_ops = &witness.batch_ops;
-    let min_len = witness_ops.len().min(expected_ops.len());
+    let mut wi = 0usize;
+    let mut delete_range_prefixes = Vec::new();
 
-    if witness_ops.len() != expected_ops.len() {
+    for (ei, exp) in expected_ops.iter().enumerate() {
+        match exp {
+            BatchOp::Put { key, value } => {
+                let Some(wop) = witness_ops.get(wi) else {
+                    return Err(WitnessError::OpsMismatch {
+                        index: ei,
+                        detail: format!(
+                            "witness ops exhausted; expected Put(key_len={})",
+                            key.len()
+                        ),
+                    });
+                };
+                match wop {
+                    ClientOp::Put { key: wk, value: wv } => {
+                        if key.as_ref() != wk.as_ref() || value.as_ref() != wv.as_ref() {
+                            return Err(WitnessError::OpsMismatch {
+                                index: ei,
+                                detail: format!(
+                                    "Put mismatch at witness index {wi}: \
+                                     expected key_len={} value_len={}, \
+                                     got key_len={} value_len={}",
+                                    key.len(),
+                                    value.len(),
+                                    wk.len(),
+                                    wv.len()
+                                ),
+                            });
+                        }
+                    }
+                    ClientOp::Delete { .. } => {
+                        return Err(WitnessError::OpsMismatch {
+                            index: ei,
+                            detail: format!("expected Put at witness index {wi}, got Delete"),
+                        });
+                    }
+                }
+                wi = wi.strict_add(1);
+            }
+            BatchOp::Delete { key } => {
+                let Some(wop) = witness_ops.get(wi) else {
+                    return Err(WitnessError::OpsMismatch {
+                        index: ei,
+                        detail: format!(
+                            "witness ops exhausted; expected Delete(key_len={})",
+                            key.len()
+                        ),
+                    });
+                };
+                match wop {
+                    ClientOp::Delete { key: wk } => {
+                        if key.as_ref() != wk.as_ref() {
+                            return Err(WitnessError::OpsMismatch {
+                                index: ei,
+                                detail: format!(
+                                    "Delete mismatch at witness index {wi}: \
+                                     expected key_len={}, got key_len={}",
+                                    key.len(),
+                                    wk.len()
+                                ),
+                            });
+                        }
+                    }
+                    ClientOp::Put { .. } => {
+                        return Err(WitnessError::OpsMismatch {
+                            index: ei,
+                            detail: format!("expected Delete at witness index {wi}, got Put"),
+                        });
+                    }
+                }
+                wi = wi.strict_add(1);
+            }
+            BatchOp::DeleteRange { prefix } => {
+                // Consume consecutive Delete ops whose keys start with prefix
+                while let Some(ClientOp::Delete { key }) = witness_ops.get(wi) {
+                    if !key.starts_with(prefix.as_ref()) {
+                        break;
+                    }
+                    wi = wi.strict_add(1);
+                }
+                delete_range_prefixes.push(prefix.clone());
+            }
+        }
+    }
+
+    if wi != witness_ops.len() {
         return Err(WitnessError::OpsMismatch {
-            index: min_len,
+            index: expected_ops.len(),
             detail: format!(
-                "expected {} ops, witness has {} ops",
-                expected_ops.len(),
-                witness_ops.len()
+                "witness has {} extra ops after index {wi}",
+                witness_ops.len().strict_sub(wi),
             ),
         });
     }
 
-    for (i, (actual, expected)) in witness_ops.iter().zip(expected_ops.iter()).enumerate() {
-        if actual != expected {
-            return Err(WitnessError::OpsMismatch {
-                index: i,
-                detail: format!("expected {expected:?}, got {actual:?}"),
-            });
-        }
-    }
-
-    Ok(())
+    Ok(delete_range_prefixes)
 }
 
 /// Verifies a witness proof and returns the updated truncated trie.
@@ -527,11 +613,13 @@ pub fn validate_witness_ops(
 /// re-execution. The client:
 ///
 /// 1. Validates that the witness's batch ops match `expected_ops`
+///    (handling `DeleteRange` expansion)
 /// 2. Converts its truncated trie root to a plain `Node` tree
 /// 3. Grafts witness nodes onto the tree (replacing `Proxy` stubs)
 /// 4. Creates an in-memory `Merkle` and re-executes the batch operations
 /// 5. Hashes the result and verifies it matches `new_root_hash`
-/// 6. Extracts the updated truncated trie from the re-execution result
+/// 6. Verifies `DeleteRange` completeness (no leftover keys with prefix)
+/// 7. Extracts the updated truncated trie from the re-execution result
 ///
 /// If the root hash matches, the client can trust the commit without
 /// having seen the full trie.
@@ -547,9 +635,9 @@ pub fn validate_witness_ops(
 pub fn verify_witness(
     truncated_trie: &TruncatedTrie,
     witness: &WitnessProof,
-    expected_ops: &[ClientOp],
+    expected_ops: &[OwnedBatchOp],
 ) -> Result<TruncatedTrie, WitnessError> {
-    validate_witness_ops(witness, expected_ops)?;
+    let delete_range_prefixes = validate_witness_ops(witness, expected_ops)?;
 
     // 1. Convert truncated trie root to a plain Node tree
     let root = truncated_trie.root().ok_or(WitnessError::NoRoot)?;
@@ -607,7 +695,26 @@ pub fn verify_witness(
         });
     }
 
-    // 6. Extract new truncated trie
+    // 6. DeleteRange completeness check: verify no keys with the prefix
+    //    remain in the post-state trie. This guards against the server
+    //    omitting deletes from the witness.
+    if !delete_range_prefixes.is_empty() {
+        let view: &dyn crate::v2::api::DynDbView = hashed.nodestore();
+        for prefix in &delete_range_prefixes {
+            let mut iter = view.iter_from(prefix).map_err(WitnessError::ApiError)?;
+            if let Some(item) = iter.next() {
+                let (key, _) = item?;
+                if key.starts_with(prefix.as_ref()) {
+                    return Err(WitnessError::OpsMismatch {
+                        index: 0,
+                        detail: format!("DeleteRange prefix has surviving key (len={})", key.len()),
+                    });
+                }
+            }
+        }
+    }
+
+    // 7. Extract new truncated trie
     let new_trie = TruncatedTrie::from_trie(hashed.nodestore(), truncated_trie.truncation_depth())?;
 
     Ok(new_trie)
@@ -740,6 +847,16 @@ mod tests {
 
     type ImmutableMerkle = Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>;
 
+    /// Helper to convert `&[ClientOp]` → `Vec<OwnedBatchOp>` and call `verify_witness`.
+    fn verify(
+        trie: &TruncatedTrie,
+        w: &WitnessProof,
+        ops: &[ClientOp],
+    ) -> Result<TruncatedTrie, WitnessError> {
+        let owned: Vec<OwnedBatchOp> = ops.iter().cloned().map(Into::into).collect();
+        verify_witness(trie, w, &owned)
+    }
+
     /// Helper to create a test trie and return an immutable merkle.
     fn create_test_trie(keys: &[(&[u8], &[u8])]) -> ImmutableMerkle {
         let memstore = MemStore::default();
@@ -821,7 +938,7 @@ mod tests {
         assert_eq!(*truncated.root_hash().unwrap(), old_root_hash);
 
         // Verify witness on client side
-        let updated_trie = verify_witness(&truncated, &witness, &ops).unwrap();
+        let updated_trie = verify(&truncated, &witness, &ops).unwrap();
         assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
     }
 
@@ -846,7 +963,7 @@ mod tests {
 
         let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
 
-        let updated_trie = verify_witness(&truncated, &witness, &ops).unwrap();
+        let updated_trie = verify(&truncated, &witness, &ops).unwrap();
         assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
     }
 
@@ -870,7 +987,7 @@ mod tests {
 
         let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), 2).unwrap();
 
-        let result = verify_witness(&truncated, &witness, &ops);
+        let result = verify(&truncated, &witness, &ops);
         assert!(matches!(result, Err(WitnessError::RootHashMismatch { .. })));
     }
 
@@ -907,7 +1024,7 @@ mod tests {
 
         let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
 
-        let updated_trie = verify_witness(&truncated, &witness, &ops).unwrap();
+        let updated_trie = verify(&truncated, &witness, &ops).unwrap();
         assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
     }
 
@@ -938,7 +1055,7 @@ mod tests {
             truncation_depth,
         )
         .unwrap();
-        truncated = verify_witness(&truncated, &witness1, &ops1).unwrap();
+        truncated = verify(&truncated, &witness1, &ops1).unwrap();
         assert_eq!(*truncated.root_hash().unwrap(), new_root);
         server_trie = new_server;
 
@@ -961,7 +1078,7 @@ mod tests {
             truncation_depth,
         )
         .unwrap();
-        truncated = verify_witness(&truncated, &witness2, &ops2).unwrap();
+        truncated = verify(&truncated, &witness2, &ops2).unwrap();
         assert_eq!(*truncated.root_hash().unwrap(), new_root);
         server_trie = new_server;
 
@@ -985,7 +1102,7 @@ mod tests {
             truncation_depth,
         )
         .unwrap();
-        truncated = verify_witness(&truncated, &witness3, &ops3).unwrap();
+        truncated = verify(&truncated, &witness3, &ops3).unwrap();
         assert_eq!(*truncated.root_hash().unwrap(), new_root);
 
         // Final truncated trie should match server's current state
@@ -1023,7 +1140,7 @@ mod tests {
 
         let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
 
-        let updated_trie = verify_witness(&truncated, &witness, &ops).unwrap();
+        let updated_trie = verify(&truncated, &witness, &ops).unwrap();
         assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
     }
 
@@ -1144,7 +1261,7 @@ mod tests {
         .unwrap();
 
         let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
-        let updated_trie = verify_witness(&truncated, &witness, &expanded).unwrap();
+        let updated_trie = verify(&truncated, &witness, &expanded).unwrap();
         assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
     }
 
@@ -1208,11 +1325,16 @@ mod tests {
         ClientOp::Delete { key: key.into() }
     }
 
+    /// Convert `ClientOp` slice to `Vec<OwnedBatchOp>` for `validate_witness_ops` tests.
+    fn to_owned_ops(ops: &[ClientOp]) -> Vec<OwnedBatchOp> {
+        ops.iter().cloned().map(Into::into).collect()
+    }
+
     #[test]
     fn test_validate_ops_matching() {
         let ops = vec![put_op(b"a", b"1"), delete_op(b"b")];
         let witness = witness_with_ops(ops.clone());
-        assert!(validate_witness_ops(&witness, &ops).is_ok());
+        assert!(validate_witness_ops(&witness, &to_owned_ops(&ops)).is_ok());
     }
 
     #[test]
@@ -1224,23 +1346,23 @@ mod tests {
     #[test]
     fn test_validate_ops_witness_longer() {
         let witness = witness_with_ops(vec![put_op(b"a", b"1"), put_op(b"b", b"2")]);
-        let expected = vec![put_op(b"a", b"1")];
+        let expected = to_owned_ops(&[put_op(b"a", b"1")]);
         let err = validate_witness_ops(&witness, &expected).unwrap_err();
-        assert!(matches!(err, WitnessError::OpsMismatch { index: 1, .. }));
+        assert!(matches!(err, WitnessError::OpsMismatch { .. }));
     }
 
     #[test]
     fn test_validate_ops_expected_longer() {
         let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
-        let expected = vec![put_op(b"a", b"1"), put_op(b"b", b"2")];
+        let expected = to_owned_ops(&[put_op(b"a", b"1"), put_op(b"b", b"2")]);
         let err = validate_witness_ops(&witness, &expected).unwrap_err();
-        assert!(matches!(err, WitnessError::OpsMismatch { index: 1, .. }));
+        assert!(matches!(err, WitnessError::OpsMismatch { .. }));
     }
 
     #[test]
     fn test_validate_ops_type_mismatch() {
         let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
-        let expected = vec![delete_op(b"a")];
+        let expected = to_owned_ops(&[delete_op(b"a")]);
         let err = validate_witness_ops(&witness, &expected).unwrap_err();
         assert!(matches!(err, WitnessError::OpsMismatch { index: 0, .. }));
     }
@@ -1248,7 +1370,7 @@ mod tests {
     #[test]
     fn test_validate_ops_key_mismatch() {
         let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
-        let expected = vec![put_op(b"b", b"1")];
+        let expected = to_owned_ops(&[put_op(b"b", b"1")]);
         let err = validate_witness_ops(&witness, &expected).unwrap_err();
         assert!(matches!(err, WitnessError::OpsMismatch { index: 0, .. }));
     }
@@ -1256,7 +1378,7 @@ mod tests {
     #[test]
     fn test_validate_ops_value_mismatch() {
         let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
-        let expected = vec![put_op(b"a", b"2")];
+        let expected = to_owned_ops(&[put_op(b"a", b"2")]);
         let err = validate_witness_ops(&witness, &expected).unwrap_err();
         assert!(matches!(err, WitnessError::OpsMismatch { index: 0, .. }));
     }
@@ -1264,9 +1386,32 @@ mod tests {
     #[test]
     fn test_validate_ops_mismatch_at_second_index() {
         let witness = witness_with_ops(vec![put_op(b"a", b"1"), put_op(b"b", b"2")]);
-        let expected = vec![put_op(b"a", b"1"), delete_op(b"b")];
+        let expected = to_owned_ops(&[put_op(b"a", b"1"), delete_op(b"b")]);
         let err = validate_witness_ops(&witness, &expected).unwrap_err();
         assert!(matches!(err, WitnessError::OpsMismatch { index: 1, .. }));
+    }
+
+    #[test]
+    fn test_validate_ops_delete_range_lockstep() {
+        // DeleteRange should consume consecutive Delete ops with matching prefix
+        let witness = witness_with_ops(vec![
+            delete_op(b"a/1"),
+            delete_op(b"a/2"),
+            put_op(b"b", b"1"),
+        ]);
+        let expected: Vec<OwnedBatchOp> = vec![core_delete_range(b"a/"), core_put(b"b", b"1")];
+        let prefixes = validate_witness_ops(&witness, &expected).unwrap();
+        assert_eq!(prefixes.len(), 1);
+        assert_eq!(&*prefixes[0], b"a/");
+    }
+
+    #[test]
+    fn test_validate_ops_delete_range_empty_match() {
+        // DeleteRange with no matching deletes should succeed (zero consumed)
+        let witness = witness_with_ops(vec![put_op(b"b", b"1")]);
+        let expected: Vec<OwnedBatchOp> = vec![core_delete_range(b"a/"), core_put(b"b", b"1")];
+        let prefixes = validate_witness_ops(&witness, &expected).unwrap();
+        assert_eq!(prefixes.len(), 1);
     }
 
     #[test]
@@ -1284,7 +1429,7 @@ mod tests {
 
         // Pass wrong expected ops
         let wrong_ops = vec![put_op(b"cherry", b"red")];
-        let result = verify_witness(&truncated, &witness, &wrong_ops);
+        let result = verify(&truncated, &witness, &wrong_ops);
         assert!(matches!(result, Err(WitnessError::OpsMismatch { .. })));
     }
 
@@ -1301,7 +1446,34 @@ mod tests {
 
         let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), 2).unwrap();
 
-        let updated = verify_witness(&truncated, &witness, &ops).unwrap();
+        let updated = verify(&truncated, &witness, &ops).unwrap();
         assert_eq!(*updated.root_hash().unwrap(), new_root_hash);
+    }
+
+    #[test]
+    fn test_verify_witness_with_delete_range() {
+        // End-to-end: verify_witness with OwnedBatchOp containing DeleteRange
+        let old_trie = create_test_trie(&[(b"a/1", b"v1"), (b"a/2", b"v2"), (b"b/1", b"v3")]);
+        let view: &dyn crate::v2::api::DynDbView = old_trie.nodestore();
+
+        let batch_ops = vec![core_delete_range(b"a/")];
+        let expanded = expand_delete_ranges(view, &batch_ops).unwrap();
+
+        let new_trie = apply_batch(&old_trie, &expanded);
+        let new_root_hash = new_trie.nodestore().root_hash().unwrap();
+
+        let truncation_depth = 2;
+        let witness = generate_witness(
+            old_trie.nodestore(),
+            &expanded,
+            new_root_hash,
+            truncation_depth,
+        )
+        .unwrap();
+
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
+        // Call verify_witness directly with OwnedBatchOp (including DeleteRange)
+        let updated = verify_witness(&truncated, &witness, &batch_ops).unwrap();
+        assert_eq!(*updated.root_hash().unwrap(), witness.new_root_hash);
     }
 }

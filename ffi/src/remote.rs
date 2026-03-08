@@ -12,7 +12,6 @@
 //! - Verifying a witness proof and updating the truncated trie (client-side)
 
 use firewood::remote::TruncatedTrie;
-use firewood::remote::client::ClientOp as RemoteBatchOp;
 use firewood::remote::witness::{self, WitnessProof};
 // Aliased to avoid collision with `crate::BatchOp` (the FFI C-compatible enum
 // defined in `value/kvp.rs`). Both types are used in this module: `crate::BatchOp`
@@ -362,92 +361,26 @@ pub extern "C" fn fwd_verify_witness(
     crate::invoke_with_handle(trie_handle, move |trie_h| -> Result<_, String> {
         let witness_h = witness_handle.ok_or("null witness handle")?;
 
-        // DeleteRange-aware validation: walk expected_ops and witness batch_ops
-        // in parallel, consuming zero or more Delete ops per DeleteRange.
-        let witness_ops = &witness_h.proof.batch_ops;
-        let expected = expected_ops.as_slice();
+        // Convert FFI batch ops to OwnedBatchOp (including DeleteRange)
+        let owned_ops: Vec<witness::OwnedBatchOp> = expected_ops
+            .as_slice()
+            .iter()
+            .map(|op| match op {
+                crate::BatchOp::Put { key, value } => CoreBatchOp::Put {
+                    key: key.as_slice().into(),
+                    value: value.as_slice().into(),
+                },
+                crate::BatchOp::Delete { key } => CoreBatchOp::Delete {
+                    key: key.as_slice().into(),
+                },
+                crate::BatchOp::DeleteRange { prefix } => CoreBatchOp::DeleteRange {
+                    prefix: prefix.as_slice().into(),
+                },
+            })
+            .collect();
 
-        let mut wi = 0usize; // index into witness_ops
-
-        for exp in expected {
-            match exp {
-                crate::BatchOp::Put { key, value } => {
-                    let Some(wop) = witness_ops.get(wi) else {
-                        return Err(format!(
-                            "witness ops exhausted; expected Put(key={})",
-                            hex_key(key.as_slice())
-                        ));
-                    };
-                    match wop {
-                        RemoteBatchOp::Put { key: wk, value: wv } => {
-                            if key.as_slice() != &**wk || value.as_slice() != &**wv {
-                                return Err(format!(
-                                    "Put mismatch at witness index {wi}: expected key={} value_len={}, got key={} value_len={}",
-                                    hex_key(key.as_slice()),
-                                    value.as_slice().len(),
-                                    hex_key(wk),
-                                    wv.len()
-                                ));
-                            }
-                        }
-                        RemoteBatchOp::Delete { .. } => {
-                            return Err(format!("expected Put at witness index {wi}, got {wop:?}"));
-                        }
-                    }
-                    wi = wi.strict_add(1);
-                }
-                crate::BatchOp::Delete { key } => {
-                    let Some(wop) = witness_ops.get(wi) else {
-                        return Err(format!(
-                            "witness ops exhausted; expected Delete(key={})",
-                            hex_key(key.as_slice())
-                        ));
-                    };
-                    match wop {
-                        RemoteBatchOp::Delete { key: wk } => {
-                            if key.as_slice() != &**wk {
-                                return Err(format!(
-                                    "Delete mismatch at witness index {wi}: expected key={}, got key={}",
-                                    hex_key(key.as_slice()),
-                                    hex_key(wk)
-                                ));
-                            }
-                        }
-                        RemoteBatchOp::Put { .. } => {
-                            return Err(format!(
-                                "expected Delete at witness index {wi}, got {wop:?}"
-                            ));
-                        }
-                    }
-                    wi = wi.strict_add(1);
-                }
-                crate::BatchOp::DeleteRange { prefix } => {
-                    // Consume zero or more consecutive Delete ops whose keys
-                    // start with the prefix.
-                    let pfx = prefix.as_slice();
-                    while let Some(RemoteBatchOp::Delete { key }) = witness_ops.get(wi) {
-                        if !key.starts_with(pfx) {
-                            break;
-                        }
-                        wi = wi.strict_add(1);
-                    }
-                }
-            }
-        }
-
-        if wi != witness_ops.len() {
-            return Err(format!(
-                "witness has {} extra ops after index {wi}",
-                witness_ops.len().strict_sub(wi),
-            ));
-        }
-
-        // Validation passed. The witness batch_ops are confirmed consistent with
-        // expected_ops, so pass them directly to verify_witness (trivially passes
-        // the 1:1 check since expected == actual).
-        let new_trie =
-            witness::verify_witness(&trie_h.trie, &witness_h.proof, &witness_h.proof.batch_ops)
-                .map_err(|e| e.to_string())?;
+        let new_trie = witness::verify_witness(&trie_h.trie, &witness_h.proof, &owned_ops)
+            .map_err(|e| e.to_string())?;
 
         let hash = new_trie
             .root_hash()
@@ -674,18 +607,6 @@ pub extern "C" fn fwd_verify_single_key_proof(
             .verify(key.as_slice(), expected_value, &api_hash)
             .map_err(|e| e.to_string())
     })
-}
-
-/// Formats a byte slice as a hex string for error messages.
-fn hex_key(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-    bytes.iter().fold(
-        String::with_capacity(bytes.len().strict_mul(2)),
-        |mut s, b| {
-            let _ = write!(s, "{b:02x}");
-            s
-        },
-    )
 }
 
 /// Frees a [`TruncatedTrieHandle`].

@@ -192,13 +192,7 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 		return ffi.Hash{}, fmt.Errorf("unmarshal witness: %w", err)
 	}
 
-	// Validate witness ops match what the client sent.
-	if err := witness.ValidateOps(ops); err != nil {
-		witness.Free()
-		return ffi.Hash{}, fmt.Errorf("witness ops validation: %w", err)
-	}
-
-	newTrie, err := c.trie.VerifyWitness(witness)
+	newTrie, err := c.trie.VerifyWitness(witness, ops)
 	witness.Free()
 	if err != nil {
 		return ffi.Hash{}, fmt.Errorf("verify witness: %w", err)

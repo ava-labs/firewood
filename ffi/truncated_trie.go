@@ -98,10 +98,11 @@ func (db *Database) CreateTruncatedTrie(root Hash, depth uint) (*TruncatedTrie, 
 // returns a new [TruncatedTrie] reflecting the updated state. The old trie
 // is NOT consumed; the caller must still free it.
 //
-// Re-executes the batch operations from the witness on top of the truncated
-// trie, hashes the result, and verifies it matches the witness's new root
-// hash.
-func (t *TruncatedTrie) VerifyWitness(witness *WitnessProof) (*TruncatedTrie, error) {
+// expectedOps are the batch operations the client originally sent; they are
+// validated against the witness's embedded ops (accounting for PrefixDelete
+// expansion) and then re-executed on the truncated trie. The resulting root
+// hash is verified against the witness's new root hash.
+func (t *TruncatedTrie) VerifyWitness(witness *WitnessProof, expectedOps []BatchOp) (*TruncatedTrie, error) {
 	if t.handle == nil {
 		return nil, fmt.Errorf("truncated trie already freed")
 	}
@@ -109,9 +110,15 @@ func (t *TruncatedTrie) VerifyWitness(witness *WitnessProof) (*TruncatedTrie, er
 		return nil, fmt.Errorf("witness proof is nil or already freed")
 	}
 
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	cOps := newKeyValuePairsFromBatch(expectedOps, &pinner)
+
 	return getTruncatedTrieFromResult(C.fwd_verify_witness(
 		t.handle,
 		witness.handle,
+		cOps,
 	))
 }
 

@@ -445,15 +445,7 @@ func verifyWitnessFromResponse(
 		return nil, fmt.Errorf("unmarshal witness: %w", err)
 	}
 
-	// Validate witness ops match cumulative expected ops.
-	if expectedCumulativeOps != nil {
-		if err := witness.ValidateOps(expectedCumulativeOps); err != nil {
-			witness.Free()
-			return nil, fmt.Errorf("witness ops validation: %w", err)
-		}
-	}
-
-	newTrie, err := baseTrie.VerifyWitness(witness)
+	newTrie, err := baseTrie.VerifyWitness(witness, expectedCumulativeOps)
 	witness.Free()
 	if err != nil {
 		return nil, fmt.Errorf("verify witness: %w", err)
