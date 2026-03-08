@@ -2701,34 +2701,6 @@ struct HashResult fwd_truncated_trie_root_hash(const struct TruncatedTrieHandle 
 struct ValueResult fwd_truncated_trie_to_bytes(const struct TruncatedTrieHandle *handle);
 
 /**
- * Validates that the witness proof's embedded `batch_ops` match the expected
- * operations sent by the client.
- *
- * For `Put` and `Delete` ops, an exact match (type, key, value) is required.
- * For `DeleteRange` (`PrefixDelete`) ops, the witness should contain zero or
- * more consecutive Delete ops whose keys start with the given prefix.
- *
- * # Arguments
- *
- * * `witness` - The witness proof handle
- * * `expected_ops` - The batch operations the client sent
- *
- * # Returns
- *
- * - [`VoidResult::NullHandlePointer`] if `witness` is null.
- * - [`VoidResult::Ok`] if the ops match.
- * - [`VoidResult::Err`] if validation fails.
- *
- * # Safety
- *
- * The caller must:
- * * ensure that `witness` is a valid pointer to a [`WitnessProofHandle`].
- * * ensure that `expected_ops` is valid for [`BorrowedBatchOps`].
- */
-struct VoidResult fwd_validate_witness_ops(const struct WitnessProofHandle *witness,
-                                           BorrowedBatchOps expected_ops);
-
-/**
  * Verify a change proof and return a `VerifiedChangeProofResult`.
  *
  * # Arguments
@@ -2801,15 +2773,16 @@ struct VoidResult fwd_verify_truncated_trie_root_hash(const struct TruncatedTrie
  * Verifies a witness proof against a truncated trie and returns the updated
  * trie.
  *
- * Re-executes the batch operations from the witness on top of the client's
- * truncated trie, hashes the result, and verifies it matches the witness's
- * `new_root_hash`. On success, returns a new [`TruncatedTrieHandle`] with the
- * updated state.
+ * First validates that the witness proof's embedded `batch_ops` are consistent
+ * with `expected_ops` (accounting for `DeleteRange` expansion), then
+ * re-executes the batch operations on top of the client's truncated trie,
+ * hashes the result, and verifies it matches the witness's `new_root_hash`.
  *
  * # Arguments
  *
  * * `trie_handle` - The client's truncated trie handle
  * * `witness_handle` - The witness proof handle
+ * * `expected_ops` - The batch operations the client originally sent
  *
  * # Returns
  *
@@ -2821,11 +2794,13 @@ struct VoidResult fwd_verify_truncated_trie_root_hash(const struct TruncatedTrie
  *
  * The caller must:
  * * ensure that both handles are valid pointers.
+ * * ensure that `expected_ops` is valid for [`BorrowedBatchOps`].
  * * call [`fwd_free_truncated_trie`] to free the returned handle.
  * * The old trie handle is NOT consumed; the caller must still free it.
  */
 struct TruncatedTrieResult fwd_verify_witness(const struct TruncatedTrieHandle *trie_handle,
-                                              const struct WitnessProofHandle *witness_handle);
+                                              const struct WitnessProofHandle *witness_handle,
+                                              BorrowedBatchOps expected_ops);
 
 /**
  * Deserializes bytes into a [`WitnessProofHandle`].

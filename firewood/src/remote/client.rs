@@ -66,7 +66,7 @@ pub trait RemoteTransport {
 }
 
 /// A batch operation to be applied to the trie.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ClientOp {
     /// Insert or update a key-value pair.
     Put {

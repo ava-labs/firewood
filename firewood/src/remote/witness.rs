@@ -102,6 +102,15 @@ pub enum WitnessError {
         /// The depth at which the invalid value was found.
         depth: usize,
     },
+
+    /// The witness proof's batch operations do not match the expected operations.
+    #[error("batch ops mismatch at index {index}: {detail}")]
+    OpsMismatch {
+        /// The index where the first mismatch was detected.
+        index: usize,
+        /// Human-readable description of the mismatch.
+        detail: String,
+    },
 }
 
 // -- Server-side witness generation --
@@ -469,16 +478,60 @@ fn convert_node_for_witness(node: &SharedNode) -> Result<Node, NodeError> {
 
 /// Verifies a witness proof and returns the updated truncated trie.
 ///
+/// Validates that the witness proof's batch operations match the expected
+/// operations sent by the client.
+///
+/// Performs a 1:1 element-wise comparison of the witness's `batch_ops` against
+/// `expected_ops`, checking both the operation type and the key/value data.
+///
+/// # Errors
+///
+/// Returns [`WitnessError::OpsMismatch`] if:
+/// - The lengths differ
+/// - Any element differs in type, key, or value
+pub fn validate_witness_ops(
+    witness: &WitnessProof,
+    expected_ops: &[ClientOp],
+) -> Result<(), WitnessError> {
+    let witness_ops = &witness.batch_ops;
+    let min_len = witness_ops.len().min(expected_ops.len());
+
+    if witness_ops.len() != expected_ops.len() {
+        return Err(WitnessError::OpsMismatch {
+            index: min_len,
+            detail: format!(
+                "expected {} ops, witness has {} ops",
+                expected_ops.len(),
+                witness_ops.len()
+            ),
+        });
+    }
+
+    for (i, (actual, expected)) in witness_ops.iter().zip(expected_ops.iter()).enumerate() {
+        if actual != expected {
+            return Err(WitnessError::OpsMismatch {
+                index: i,
+                detail: format!("expected {expected:?}, got {actual:?}"),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+/// Verifies a witness proof and returns the updated truncated trie.
+///
 /// This is the core of client-side commit verification. The server sends
 /// a [`WitnessProof`] containing the batch operations, the expected new
 /// root hash, and the minimal set of trie nodes needed for independent
 /// re-execution. The client:
 ///
-/// 1. Converts its truncated trie root to a plain `Node` tree
-/// 2. Grafts witness nodes onto the tree (replacing `Proxy` stubs)
-/// 3. Creates an in-memory `Merkle` and re-executes the batch operations
-/// 4. Hashes the result and verifies it matches `new_root_hash`
-/// 5. Extracts the updated truncated trie from the re-execution result
+/// 1. Validates that the witness's batch ops match `expected_ops`
+/// 2. Converts its truncated trie root to a plain `Node` tree
+/// 3. Grafts witness nodes onto the tree (replacing `Proxy` stubs)
+/// 4. Creates an in-memory `Merkle` and re-executes the batch operations
+/// 5. Hashes the result and verifies it matches `new_root_hash`
+/// 6. Extracts the updated truncated trie from the re-execution result
 ///
 /// If the root hash matches, the client can trust the commit without
 /// having seen the full trie.
@@ -486,6 +539,7 @@ fn convert_node_for_witness(node: &SharedNode) -> Result<Node, NodeError> {
 /// # Errors
 ///
 /// Returns a [`WitnessError`] if:
+/// - The batch ops don't match `expected_ops` ([`WitnessError::OpsMismatch`])
 /// - The truncated trie has no root ([`WitnessError::NoRoot`])
 /// - The node tree contains unexpected child types ([`WitnessError::UnexpectedChild`])
 /// - Re-execution fails, e.g. a needed node is missing ([`WitnessError::TrieError`])
@@ -493,7 +547,10 @@ fn convert_node_for_witness(node: &SharedNode) -> Result<Node, NodeError> {
 pub fn verify_witness(
     truncated_trie: &TruncatedTrie,
     witness: &WitnessProof,
+    expected_ops: &[ClientOp],
 ) -> Result<TruncatedTrie, WitnessError> {
+    validate_witness_ops(witness, expected_ops)?;
+
     // 1. Convert truncated trie root to a plain Node tree
     let root = truncated_trie.root().ok_or(WitnessError::NoRoot)?;
     let mut node_tree = to_node_tree(root)?;
@@ -764,7 +821,7 @@ mod tests {
         assert_eq!(*truncated.root_hash().unwrap(), old_root_hash);
 
         // Verify witness on client side
-        let updated_trie = verify_witness(&truncated, &witness).unwrap();
+        let updated_trie = verify_witness(&truncated, &witness, &ops).unwrap();
         assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
     }
 
@@ -789,7 +846,7 @@ mod tests {
 
         let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
 
-        let updated_trie = verify_witness(&truncated, &witness).unwrap();
+        let updated_trie = verify_witness(&truncated, &witness, &ops).unwrap();
         assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
     }
 
@@ -813,7 +870,7 @@ mod tests {
 
         let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), 2).unwrap();
 
-        let result = verify_witness(&truncated, &witness);
+        let result = verify_witness(&truncated, &witness, &ops);
         assert!(matches!(result, Err(WitnessError::RootHashMismatch { .. })));
     }
 
@@ -850,7 +907,7 @@ mod tests {
 
         let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
 
-        let updated_trie = verify_witness(&truncated, &witness).unwrap();
+        let updated_trie = verify_witness(&truncated, &witness, &ops).unwrap();
         assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
     }
 
@@ -881,7 +938,7 @@ mod tests {
             truncation_depth,
         )
         .unwrap();
-        truncated = verify_witness(&truncated, &witness1).unwrap();
+        truncated = verify_witness(&truncated, &witness1, &ops1).unwrap();
         assert_eq!(*truncated.root_hash().unwrap(), new_root);
         server_trie = new_server;
 
@@ -904,7 +961,7 @@ mod tests {
             truncation_depth,
         )
         .unwrap();
-        truncated = verify_witness(&truncated, &witness2).unwrap();
+        truncated = verify_witness(&truncated, &witness2, &ops2).unwrap();
         assert_eq!(*truncated.root_hash().unwrap(), new_root);
         server_trie = new_server;
 
@@ -928,7 +985,7 @@ mod tests {
             truncation_depth,
         )
         .unwrap();
-        truncated = verify_witness(&truncated, &witness3).unwrap();
+        truncated = verify_witness(&truncated, &witness3, &ops3).unwrap();
         assert_eq!(*truncated.root_hash().unwrap(), new_root);
 
         // Final truncated trie should match server's current state
@@ -966,7 +1023,7 @@ mod tests {
 
         let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
 
-        let updated_trie = verify_witness(&truncated, &witness).unwrap();
+        let updated_trie = verify_witness(&truncated, &witness, &ops).unwrap();
         assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
     }
 
@@ -1087,7 +1144,7 @@ mod tests {
         .unwrap();
 
         let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
-        let updated_trie = verify_witness(&truncated, &witness).unwrap();
+        let updated_trie = verify_witness(&truncated, &witness, &expanded).unwrap();
         assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
     }
 
@@ -1127,5 +1184,124 @@ mod tests {
         assert!(matches!(&expanded[0], ClientOp::Delete { key } if &**key == b"a/1"));
         assert!(matches!(&expanded[1], ClientOp::Delete { key } if &**key == b"a/2"));
         assert!(matches!(&expanded[2], ClientOp::Delete { key } if &**key == b"a/3"));
+    }
+
+    // -- Tests for validate_witness_ops --
+
+    /// Helper to build a `WitnessProof` with the given `batch_ops` for validation tests.
+    fn witness_with_ops(ops: Vec<ClientOp>) -> WitnessProof {
+        WitnessProof {
+            batch_ops: ops.into(),
+            new_root_hash: TrieHash::empty(),
+            witness_nodes: Box::new([]),
+        }
+    }
+
+    fn put_op(key: &[u8], value: &[u8]) -> ClientOp {
+        ClientOp::Put {
+            key: key.into(),
+            value: value.into(),
+        }
+    }
+
+    fn delete_op(key: &[u8]) -> ClientOp {
+        ClientOp::Delete { key: key.into() }
+    }
+
+    #[test]
+    fn test_validate_ops_matching() {
+        let ops = vec![put_op(b"a", b"1"), delete_op(b"b")];
+        let witness = witness_with_ops(ops.clone());
+        assert!(validate_witness_ops(&witness, &ops).is_ok());
+    }
+
+    #[test]
+    fn test_validate_ops_both_empty() {
+        let witness = witness_with_ops(vec![]);
+        assert!(validate_witness_ops(&witness, &[]).is_ok());
+    }
+
+    #[test]
+    fn test_validate_ops_witness_longer() {
+        let witness = witness_with_ops(vec![put_op(b"a", b"1"), put_op(b"b", b"2")]);
+        let expected = vec![put_op(b"a", b"1")];
+        let err = validate_witness_ops(&witness, &expected).unwrap_err();
+        assert!(matches!(err, WitnessError::OpsMismatch { index: 1, .. }));
+    }
+
+    #[test]
+    fn test_validate_ops_expected_longer() {
+        let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
+        let expected = vec![put_op(b"a", b"1"), put_op(b"b", b"2")];
+        let err = validate_witness_ops(&witness, &expected).unwrap_err();
+        assert!(matches!(err, WitnessError::OpsMismatch { index: 1, .. }));
+    }
+
+    #[test]
+    fn test_validate_ops_type_mismatch() {
+        let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
+        let expected = vec![delete_op(b"a")];
+        let err = validate_witness_ops(&witness, &expected).unwrap_err();
+        assert!(matches!(err, WitnessError::OpsMismatch { index: 0, .. }));
+    }
+
+    #[test]
+    fn test_validate_ops_key_mismatch() {
+        let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
+        let expected = vec![put_op(b"b", b"1")];
+        let err = validate_witness_ops(&witness, &expected).unwrap_err();
+        assert!(matches!(err, WitnessError::OpsMismatch { index: 0, .. }));
+    }
+
+    #[test]
+    fn test_validate_ops_value_mismatch() {
+        let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
+        let expected = vec![put_op(b"a", b"2")];
+        let err = validate_witness_ops(&witness, &expected).unwrap_err();
+        assert!(matches!(err, WitnessError::OpsMismatch { index: 0, .. }));
+    }
+
+    #[test]
+    fn test_validate_ops_mismatch_at_second_index() {
+        let witness = witness_with_ops(vec![put_op(b"a", b"1"), put_op(b"b", b"2")]);
+        let expected = vec![put_op(b"a", b"1"), delete_op(b"b")];
+        let err = validate_witness_ops(&witness, &expected).unwrap_err();
+        assert!(matches!(err, WitnessError::OpsMismatch { index: 1, .. }));
+    }
+
+    #[test]
+    fn test_verify_witness_wrong_expected_ops() {
+        // verify_witness should return OpsMismatch before even checking root hash.
+        let old_trie = create_test_trie(&[(b"apple", b"red"), (b"banana", b"yellow")]);
+
+        let ops = vec![put_op(b"cherry", b"dark")];
+        let new_trie = apply_batch(&old_trie, &ops);
+        let new_root_hash = new_trie.nodestore().root_hash().unwrap();
+
+        let witness = generate_witness(old_trie.nodestore(), &ops, new_root_hash, 2).unwrap();
+
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), 2).unwrap();
+
+        // Pass wrong expected ops
+        let wrong_ops = vec![put_op(b"cherry", b"red")];
+        let result = verify_witness(&truncated, &witness, &wrong_ops);
+        assert!(matches!(result, Err(WitnessError::OpsMismatch { .. })));
+    }
+
+    #[test]
+    fn test_verify_witness_correct_expected_ops() {
+        let old_trie = create_test_trie(&[(b"apple", b"red"), (b"banana", b"yellow")]);
+
+        let ops = vec![put_op(b"cherry", b"dark")];
+        let new_trie = apply_batch(&old_trie, &ops);
+        let new_root_hash = new_trie.nodestore().root_hash().unwrap();
+
+        let witness =
+            generate_witness(old_trie.nodestore(), &ops, new_root_hash.clone(), 2).unwrap();
+
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), 2).unwrap();
+
+        let updated = verify_witness(&truncated, &witness, &ops).unwrap();
+        assert_eq!(*updated.root_hash().unwrap(), new_root_hash);
     }
 }
