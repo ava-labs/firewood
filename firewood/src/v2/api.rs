@@ -7,6 +7,7 @@ use crate::merkle::{Key, Value};
 use crate::persist_worker::PersistError;
 use crate::{Proof, ProofError, ProofNode, RangeProof};
 use firewood_storage::{FileIoError, TrieHash};
+use rayon::ThreadPool;
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -371,6 +372,63 @@ pub trait DbView {
     ///
     /// Returns an error if the dump operation fails
     fn dump_to_string(&self) -> Result<String, Error>;
+}
+
+impl<T: DbView + ?Sized> DbView for &T {
+    type Iter<'view>
+        = T::Iter<'view>
+    where
+        Self: 'view;
+
+    fn root_hash(&self) -> Option<HashKey> {
+        (*self).root_hash()
+    }
+
+    fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, Error> {
+        (*self).val(key)
+    }
+
+    fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, Error> {
+        (*self).single_key_proof(key)
+    }
+
+    fn range_proof<K: KeyType>(
+        &self,
+        first_key: Option<K>,
+        last_key: Option<K>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenRangeProof, Error> {
+        (*self).range_proof(first_key, last_key, limit)
+    }
+
+    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, Error> {
+        (*self).iter_option(first_key)
+    }
+
+    fn dump_to_string(&self) -> Result<String, Error> {
+        (*self).dump_to_string()
+    }
+}
+
+/// A reconstructable database view.
+///
+/// This trait models linear reconstruction by consuming `self` and returning
+/// a new reconstructed view.
+pub trait Reconstructible: DbView {
+    /// The reconstructed output type.
+    type Reconstructed: DbView + Reconstructible<Reconstructed = Self::Reconstructed>;
+
+    /// Reconstruct a new view from this one by applying `data`.
+    ///
+    /// The caller must provide a thread pool used for parallel reconstruction.
+    #[expect(clippy::missing_errors_doc)]
+    fn reconstruct(
+        self,
+        data: impl IntoBatchIter,
+        pool: &ThreadPool,
+    ) -> Result<Self::Reconstructed, Error>
+    where
+        Self: Sized;
 }
 
 /// A boxed iterator over key/value pairs.
