@@ -56,7 +56,7 @@ benchmark/            # Performance benchmarking suite
 ## Important Terminology
 
 - **Revision**: Historical point-in-time state of the trie
-- **View**: Interface to read from a Revision or Proposal
+- **View**: Interface to read from a Revision, Proposal, or Reconstructed view
 - **Node**: Portion of a trie that can point to other nodes and/or contain Key/Value pairs
 - **Hash/Root Hash**: Merkle hash for a node/root node
 - **Proposal**: Consists of base Root Hash and Batch, not yet committed

@@ -29,6 +29,7 @@ mod logging;
 mod metrics;
 mod proofs;
 mod proposal;
+mod reconstructed;
 mod registry;
 #[cfg(feature = "block-replay")]
 mod replay;
@@ -44,6 +45,7 @@ pub use crate::logging::*;
 use crate::metrics::MetricsContextExt;
 pub use crate::proofs::*;
 pub use crate::proposal::*;
+pub use crate::reconstructed::*;
 pub use crate::revision::*;
 pub use crate::value::*;
 
@@ -175,6 +177,15 @@ pub extern "C" fn fwd_iter_on_proposal<'p>(
     key: BorrowedBytes,
 ) -> IteratorResult<'p> {
     invoke_with_handle(handle, move |p| p.iter_from(Some(key.as_slice())))
+}
+
+/// Returns an iterator on the provided reconstructed view optionally starting from a key.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_iter_on_reconstructed<'p>(
+    handle: Option<&'p ReconstructedHandle>,
+    key: BorrowedBytes,
+) -> IteratorResult<'p> {
+    invoke_with_handle(handle, move |h| h.iter_from(Some(key.as_slice())))
 }
 
 /// Retrieves the next item from the iterator.
@@ -376,6 +387,15 @@ pub extern "C" fn fwd_get_from_proposal(
     invoke_with_handle(handle, move |handle| handle.val(key))
 }
 
+/// Gets the value associated with the given key from the reconstructed view provided.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_get_from_reconstructed(
+    handle: Option<&ReconstructedHandle>,
+    key: BorrowedBytes,
+) -> ValueResult {
+    invoke_with_handle(handle, move |handle| handle.val(key))
+}
+
 /// Puts the given key-value pairs into the database.
 ///
 /// # Arguments
@@ -484,6 +504,26 @@ pub extern "C" fn fwd_propose_on_proposal<'db>(
     result
 }
 
+/// Reconstructs a batch of operations on top of a historical revision.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_reconstruct_on_revision(
+    handle: Option<&RevisionHandle>,
+    values: BorrowedBatchOps<'_>,
+) -> ReconstructedResult {
+    invoke_with_handle(handle, move |h| h.reconstruct(values))
+}
+
+/// Reconstructs a batch of operations on top of an existing reconstructed view.
+///
+/// This function consumes the previous reconstructed handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_reconstruct_on_reconstructed(
+    handle: Option<Box<ReconstructedHandle>>,
+    values: BorrowedBatchOps<'_>,
+) -> ReconstructedResult {
+    invoke_with_handle(handle, move |h| h.reconstruct(values))
+}
+
 /// Commits a proposal to the database.
 ///
 /// This function will consume the proposal regardless of whether the commit
@@ -557,6 +597,39 @@ pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>)
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_free_proposal(proposal: Option<Box<ProposalHandle<'_>>>) -> VoidResult {
     invoke_with_handle(proposal, drop)
+}
+
+/// Consumes the [`ReconstructedHandle`] and frees the memory associated with it.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_free_reconstructed(
+    reconstructed: Option<Box<ReconstructedHandle>>,
+) -> VoidResult {
+    invoke_with_handle(reconstructed, drop)
+}
+
+/// Get the root hash of the reconstructed view.
+///
+/// # Arguments
+///
+/// * `reconstructed` - The reconstructed handle returned by reconstruction APIs.
+///
+/// # Returns
+///
+/// - [`HashResult::NullHandlePointer`] if the provided handle is null.
+/// - [`HashResult::None`] if the reconstructed view is empty.
+/// - [`HashResult::Some`] with the root hash of the reconstructed view.
+///
+/// # Safety
+///
+/// * ensure that `reconstructed` is a valid pointer to a [`ReconstructedHandle`]
+/// * call [`fwd_free_owned_bytes`] to free the memory associated with the
+///   returned error ([`HashKey`] does not need to be freed as it is returned
+///   by value).
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_reconstructed_root_hash(
+    reconstructed: Option<&ReconstructedHandle>,
+) -> HashResult {
+    invoke_with_handle(reconstructed, firewood::v2::api::DbView::root_hash)
 }
 
 /// Get the root hash of the latest version of the database
@@ -872,4 +945,12 @@ pub extern "C" fn fwd_revision_dump(revision: Option<&RevisionHandle>) -> ValueR
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_proposal_dump(proposal: Option<&ProposalHandle>) -> ValueResult {
     invoke_with_handle(proposal, firewood::v2::api::DbView::dump_to_string)
+}
+
+/// Dumps the Trie structure of a reconstructed view to a DOT (Graphviz) format string.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_reconstructed_dump(
+    reconstructed: Option<&ReconstructedHandle>,
+) -> ValueResult {
+    invoke_with_handle(reconstructed, firewood::v2::api::DbView::dump_to_string)
 }
