@@ -17,7 +17,7 @@ pub(crate) use self::results::{CResult, NullHandleResult};
 pub use self::results::{
     ChangeProofResult, CodeIteratorResult, HandleResult, HashResult, IteratorResult,
     KeyValueBatchResult, KeyValueResult, NextKeyRangeResult, ProposalResult,
-    ProposedChangeProofResult, RangeProofResult, RevisionResult, ValueResult,
+    ProposedChangeProofResult, RangeProofResult, ReconstructedResult, RevisionResult, ValueResult,
     VerifiedChangeProofResult, VoidResult,
 };
 

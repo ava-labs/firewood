@@ -21,11 +21,12 @@ var errDroppedProposal = errors.New("proposal already dropped")
 // Proposals are created via [Database.Propose] or [Proposal.Propose], and must be
 // either committed with [Proposal.Commit] or released with [Proposal.Drop].
 //
-// Proposals must be committed or dropped before the associated database is
-// closed. A finalizer is set on each Proposal to ensure that Drop is called
-// when the Proposal is garbage collected, but relying on finalizers is not
-// recommended. Failing to commit or drop a proposal before the database is
-// closed will cause it to block or fail.
+// Proposals must be committed or released before the associated database is
+// closed. Release is done by calling [Proposal.Drop]. A finalizer is set on
+// each Proposal to ensure Drop is called when the Proposal is garbage
+// collected, but relying on finalizers is not recommended. Failing to commit
+// or release a proposal before the database is closed will cause it to block
+// or fail.
 //
 // All read operations on a Proposal are thread-safe with respect to each other,
 // and can be performed regardless of the state of the associated database. However,
@@ -75,7 +76,7 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 // The Iterator must be released with [Iterator.Drop] when no longer needed,
 // otherwise the underlying proposal will never be properly freed.
 //
-// It returns an error if Drop or Commit has already been called on the Proposal.
+// It returns an error if this Proposal has already been committed or released.
 func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 	p.keepAliveHandle.mu.RLock()
 	defer p.keepAliveHandle.mu.RUnlock()
@@ -94,7 +95,7 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 // Propose is equivalent to [Database.Propose] except that the new proposal is
 // based on `p`.
 // The returned proposal cannot be committed until the parent proposal `p` has been
-// committed. Additionally, it must be committed or dropped before the [Database] is closed.
+// committed. Additionally, it must be committed or released before the [Database] is closed.
 //
 // Use [Put], [Delete], and [PrefixDelete] to create batch operations.
 func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
@@ -142,7 +143,7 @@ func (p *Proposal) Commit() error {
 // Dump returns a DOT (Graphviz) format representation of the trie structure
 // of this proposal for debugging purposes.
 //
-// Returns errDroppedProposal if Commit or Drop has already been called.
+// Returns errDroppedProposal if this Proposal has already been committed or released.
 func (p *Proposal) Dump() (string, error) {
 	p.keepAliveHandle.mu.RLock()
 	defer p.keepAliveHandle.mu.RUnlock()

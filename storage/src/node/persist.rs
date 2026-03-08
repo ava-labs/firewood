@@ -2,9 +2,9 @@
 // See the file LICENSE.md for licensing terms.
 
 use parking_lot::Mutex;
-use std::{fmt::Display, sync::Arc};
+use std::{fmt::Display, ops::Deref, sync::Arc};
 
-use crate::{FileIoError, LinearAddress, NodeReader, SharedNode};
+use crate::{FileIoError, LinearAddress, Node, NodeReader, SharedNode};
 
 /// A node that is either in memory or on disk.
 ///
@@ -95,6 +95,40 @@ impl MaybePersistedNode {
         }
     }
 
+    /// Resolve this node into a concrete `Node`, performing I/O when needed.
+    ///
+    /// Attempts to move the in-memory node without cloning when this is the sole
+    /// reference. If multiple references exist, it falls back to cloning the
+    /// node (similar to `reconstruct_with_parent`). If the node is persisted,
+    /// it reads from storage.
+    pub fn try_into_node<S: NodeReader>(self, storage: &S) -> Result<Node, FileIoError> {
+        fn resolve_state<S: NodeReader>(
+            state: MaybePersisted,
+            storage: &S,
+        ) -> Result<Node, FileIoError> {
+            match state {
+                MaybePersisted::Unpersisted(shared_node)
+                | MaybePersisted::Allocated(_, shared_node) => {
+                    match triomphe::Arc::try_unwrap(shared_node) {
+                        Ok(node) => Ok(node),
+                        Err(shared) => Ok(shared.deref().clone()),
+                    }
+                }
+                MaybePersisted::Persisted(address) => {
+                    let shared = storage.read_node(address)?;
+                    Ok(shared.deref().clone())
+                }
+            }
+        }
+
+        match Arc::try_unwrap(self.0) {
+            Ok(mutex) => resolve_state(mutex.into_inner(), storage),
+            Err(arc) => {
+                let shared = Self(arc).as_shared_node(storage)?;
+                Ok(shared.deref().clone())
+            }
+        }
+    }
     /// Returns the linear address of the node if it is persisted on disk.
     ///
     /// # Returns
