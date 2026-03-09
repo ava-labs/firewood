@@ -70,6 +70,11 @@ typedef struct ProposedChangeProofContext ProposedChangeProofContext;
  */
 typedef struct RangeProofContext RangeProofContext;
 
+/**
+ * An opaque wrapper around a reconstructed view.
+ */
+typedef struct ReconstructedHandle ReconstructedHandle;
+
 typedef struct RevisionHandle RevisionHandle;
 
 /**
@@ -1177,6 +1182,45 @@ typedef struct CodeIteratorResult {
 } CodeIteratorResult;
 
 /**
+ * A result type returned from FFI functions that create a reconstructed view.
+ */
+enum ReconstructedResult_Tag {
+  /**
+   * The caller provided a null pointer to an input handle.
+   */
+  ReconstructedResult_NullHandlePointer,
+  /**
+   * Building the reconstructed view was successful and the handle is returned.
+   */
+  ReconstructedResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`].
+   */
+  ReconstructedResult_Err,
+};
+typedef size_t ReconstructedResult_Tag;
+
+typedef struct ReconstructedResult_Ok_Body {
+  /**
+   * An opaque pointer to the [`ReconstructedHandle`].
+   * The value should be freed with [`fwd_free_reconstructed`].
+   *
+   * [`fwd_free_reconstructed`]: crate::fwd_free_reconstructed
+   */
+  struct ReconstructedHandle *handle;
+} ReconstructedResult_Ok_Body;
+
+typedef struct ReconstructedResult {
+  ReconstructedResult_Tag tag;
+  union {
+    ReconstructedResult_Ok_Body ok;
+    struct {
+      OwnedBytes err;
+    };
+  };
+} ReconstructedResult;
+
+/**
  * Arguments for initializing logging for the Firewood FFI.
  */
 typedef struct LogArgs {
@@ -1802,6 +1846,11 @@ struct VoidResult fwd_free_proposed_change_proof(struct ProposedChangeProofConte
 struct VoidResult fwd_free_range_proof(struct RangeProofContext *proof);
 
 /**
+ * Consumes the [`ReconstructedHandle`] and frees the memory associated with it.
+ */
+struct VoidResult fwd_free_reconstructed(struct ReconstructedHandle *reconstructed);
+
+/**
  * Consumes the [`RevisionHandle`] and frees the memory associated with it.
  *
  * # Arguments
@@ -1879,6 +1928,12 @@ struct ValueResult fwd_gather(void);
  *   returned in the result.
  */
 struct ValueResult fwd_get_from_proposal(const struct ProposalHandle *handle, BorrowedBytes key);
+
+/**
+ * Gets the value associated with the given key from the reconstructed view provided.
+ */
+struct ValueResult fwd_get_from_reconstructed(const struct ReconstructedHandle *handle,
+                                              BorrowedBytes key);
 
 /**
  * Gets the value associated with the given key from the provided revision handle.
@@ -2045,6 +2100,12 @@ struct KeyValueBatchResult fwd_iter_next_n(struct IteratorHandle *handle, size_t
  *
  */
 struct IteratorResult fwd_iter_on_proposal(const struct ProposalHandle *handle, BorrowedBytes key);
+
+/**
+ * Returns an iterator on the provided reconstructed view optionally starting from a key.
+ */
+struct IteratorResult fwd_iter_on_reconstructed(const struct ReconstructedHandle *handle,
+                                                BorrowedBytes key);
 
 /**
  * Returns an iterator optionally starting from a key in the provided revision.
@@ -2285,6 +2346,47 @@ struct ValueResult fwd_range_proof_to_bytes(const struct RangeProofContext *proo
  * for the duration of the call.
  */
 struct VoidResult fwd_range_proof_verify(struct VerifyRangeProofArgs args);
+
+/**
+ * Reconstructs a batch of operations on top of an existing reconstructed view.
+ *
+ * This function consumes the previous reconstructed handle.
+ */
+struct ReconstructedResult fwd_reconstruct_on_reconstructed(struct ReconstructedHandle *handle,
+                                                            BorrowedBatchOps values);
+
+/**
+ * Reconstructs a batch of operations on top of a historical revision.
+ */
+struct ReconstructedResult fwd_reconstruct_on_revision(const struct RevisionHandle *handle,
+                                                       BorrowedBatchOps values);
+
+/**
+ * Dumps the Trie structure of a reconstructed view to a DOT (Graphviz) format string.
+ */
+struct ValueResult fwd_reconstructed_dump(const struct ReconstructedHandle *reconstructed);
+
+/**
+ * Get the root hash of the reconstructed view.
+ *
+ * # Arguments
+ *
+ * * `reconstructed` - The reconstructed handle returned by reconstruction APIs.
+ *
+ * # Returns
+ *
+ * - [`HashResult::NullHandlePointer`] if the provided handle is null.
+ * - [`HashResult::None`] if the reconstructed view is empty.
+ * - [`HashResult::Some`] with the root hash of the reconstructed view.
+ *
+ * # Safety
+ *
+ * * ensure that `reconstructed` is a valid pointer to a [`ReconstructedHandle`]
+ * * call [`fwd_free_owned_bytes`] to free the memory associated with the
+ *   returned error ([`HashKey`] does not need to be freed as it is returned
+ *   by value).
+ */
+struct HashResult fwd_reconstructed_root_hash(const struct ReconstructedHandle *reconstructed);
 
 /**
  * Dumps the Trie structure of a revision to a DOT (Graphviz) format string for debugging.

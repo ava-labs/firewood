@@ -12,6 +12,7 @@ use firewood::{
     manager::RevisionManagerConfig,
     merkle::Merkle,
 };
+use firewood_storage::{Committed, FileBacked, NodeStore};
 
 use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult, arc_cache::ArcCache};
 
@@ -251,12 +252,26 @@ impl DatabaseHandle {
     /// Returns an error if could not get the view from underlying database for the specified
     /// root hash, for example when the revision does not exist or an I/O error occurs while
     /// accessing the database.
-    pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult, api::Error> {
+    pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult<'_>, api::Error> {
         let view = self.db.view(root.clone())?;
+        let historical = self.db.revision(root.clone()).ok();
         Ok(GetRevisionResult {
-            handle: RevisionHandle::new(view, self.metrics_context),
+            handle: RevisionHandle::new(view, historical, self.metrics_context, self),
             root_hash: root,
         })
+    }
+
+    /// Reconstructs a view on top of an existing historical node store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reconstruction fails.
+    pub fn reconstruct_from_view<'db>(
+        &'db self,
+        parent: &NodeStore<Committed, FileBacked>,
+        batch: impl IntoBatchIter,
+    ) -> Result<firewood::db::ReconstructedView<'db>, api::Error> {
+        self.db.reconstruct_from_view(parent, batch)
     }
 
     pub(crate) fn get_root(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {
