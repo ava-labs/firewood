@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1772783083938,
+  "lastUpdate": 1773042062657,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -1174,6 +1174,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 99.86909525436602,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "rodrigo",
+            "username": "RodrigoVillar",
+            "email": "77309055+RodrigoVillar@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "c443887dcebbaf46a1f8dcd59b61210e29d797ed",
+          "message": "docs: clarify deferred persistence terminology (#1733)\n\n## Why this should be merged\n\nCloses #1689\n\n## How this works\n\n- Adds documentation which describes the relationship between commits,\npersists, and permits.\n- Moves mermaid diagram to `PersistWorker` documentation, enabling it's\nusage with `aquamarine`.\n\n## How this was tested\n\nCI + generated documentation for the `PersistWorker`:\n\n<img width=\"785\" height=\"1120\" alt=\"Screenshot 2026-03-05 at 14 32 11\"\nsrc=\"https://github.com/user-attachments/assets/1d41cd08-9554-4f25-b98e-557b0f1eb4fc\"\n/>\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-03-06T11:55:15Z",
+          "url": "https://github.com/ava-labs/firewood/commit/c443887dcebbaf46a1f8dcd59b61210e29d797ed"
+        },
+        "date": 1773042062181,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 143.1862469282421,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6983.910965283913,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 112.36409484571145,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6790.114701274697,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 78.564483580528,
             "unit": "block_accept_ms/ggas"
           }
         ]
