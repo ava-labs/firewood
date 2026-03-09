@@ -145,7 +145,8 @@ impl From<ClientOp> for OwnedBatchOp {
 ///
 /// # Arguments
 ///
-/// * `view` - The committed revision to scan for existing keys
+/// * `view` - The parent revision to scan for existing keys (typically the
+///   pre-batch state, e.g. an `ImmutableProposal` or committed revision)
 /// * `ops` - Core batch operations that may contain `DeleteRange`
 ///
 /// # Errors
@@ -626,9 +627,7 @@ fn validate_witness_ops(
 ///
 /// A key survives only if it is `Put` AFTER the `DeleteRange` and not
 /// subsequently deleted by a `Delete` or covered by another `DeleteRange`.
-fn allowed_surviving_keys(
-    expected_ops: &[OwnedBatchOp],
-) -> Vec<(&[u8], HashSet<&[u8]>)> {
+fn allowed_surviving_keys(expected_ops: &[OwnedBatchOp]) -> Vec<(&[u8], HashSet<&[u8]>)> {
     let mut result = Vec::new();
     for (i, op) in expected_ops.iter().enumerate() {
         let BatchOp::DeleteRange { prefix } = op else {
