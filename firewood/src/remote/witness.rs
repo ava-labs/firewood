@@ -611,6 +611,39 @@ fn validate_witness_ops(
     Ok(delete_range_prefixes)
 }
 
+/// For each `DeleteRange(prefix)` in `expected_ops`, computes the keys
+/// allowed to survive in the post-execution trie.
+///
+/// A key survives only if it is `Put` AFTER the `DeleteRange` and not
+/// subsequently deleted by a `Delete` or covered by another `DeleteRange`.
+fn allowed_surviving_keys(
+    expected_ops: &[OwnedBatchOp],
+) -> Vec<(&[u8], HashSet<&[u8]>)> {
+    let mut result = Vec::new();
+    for (i, op) in expected_ops.iter().enumerate() {
+        let BatchOp::DeleteRange { prefix } = op else {
+            continue;
+        };
+        let mut allowed: HashSet<&[u8]> = HashSet::new();
+        for subsequent in expected_ops.get(i.strict_add(1)..).unwrap_or_default() {
+            match subsequent {
+                BatchOp::Put { key, .. } if key.as_ref().starts_with(prefix.as_ref()) => {
+                    allowed.insert(key.as_ref());
+                }
+                BatchOp::Delete { key } => {
+                    allowed.remove(key.as_ref());
+                }
+                BatchOp::DeleteRange { prefix: p2 } => {
+                    allowed.retain(|k| !k.starts_with(p2.as_ref()));
+                }
+                _ => {}
+            }
+        }
+        result.push((prefix.as_ref(), allowed));
+    }
+    result
+}
+
 /// Verifies a witness proof and returns the updated truncated trie.
 ///
 /// This is the core of client-side commit verification. The server sends
@@ -701,16 +734,20 @@ pub fn verify_witness(
         });
     }
 
-    // 6. DeleteRange completeness check: verify no keys with the prefix
-    //    remain in the post-state trie. This guards against the server
-    //    omitting deletes from the witness.
+    // 6. DeleteRange completeness check: for each DeleteRange prefix, verify
+    //    that every surviving key was explicitly Put AFTER the DeleteRange
+    //    and not subsequently deleted or covered by another DeleteRange.
     if !delete_range_prefixes.is_empty() {
+        let surviving = allowed_surviving_keys(expected_ops);
         let view: &dyn crate::v2::api::DynDbView = hashed.nodestore();
-        for prefix in &delete_range_prefixes {
-            let mut iter = view.iter_from(prefix).map_err(WitnessError::ApiError)?;
-            if let Some(item) = iter.next() {
+        for (prefix, allowed) in &surviving {
+            let iter = view.iter_from(prefix).map_err(WitnessError::ApiError)?;
+            for item in iter {
                 let (key, _) = item?;
-                if key.starts_with(prefix.as_ref()) {
+                if !key.starts_with(prefix) {
+                    break;
+                }
+                if !allowed.contains(key.as_ref()) {
                     return Err(WitnessError::OpsMismatch {
                         index: 0,
                         detail: format!("DeleteRange prefix has surviving key (len={})", key.len()),
@@ -1493,6 +1530,153 @@ mod tests {
 
         let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
         // Call verify_witness directly with OwnedBatchOp (including DeleteRange)
+        let updated = verify_witness(&truncated, &witness, &batch_ops).unwrap();
+        assert_eq!(*updated.root_hash().unwrap(), witness.new_root_hash);
+    }
+
+    /// Attack 1: [Put("a/1", "v"), DeleteRange("a/")] — "a/1" was Put
+    /// before the `DeleteRange`, so it must be deleted. A malicious server
+    /// that omits the delete should be caught.
+    #[test]
+    fn test_verify_witness_pre_dr_put_must_not_survive() {
+        // Old trie has b/1 so it's not empty after the ops.
+        let old_trie = create_test_trie(&[(b"b/1", b"v")]);
+        let view: &dyn crate::v2::api::DynDbView = old_trie.nodestore();
+
+        // Batch: Put a/1, then DeleteRange a/ — net effect: a/1 is deleted.
+        let batch_ops = vec![core_put(b"a/1", b"v"), core_delete_range(b"a/")];
+        let expanded = expand_delete_ranges(view, &batch_ops).unwrap();
+
+        // Honest server applies the expanded ops (a/1 is deleted).
+        let new_trie = apply_batch(&old_trie, &expanded);
+        let honest_hash = new_trie.nodestore().root_hash().unwrap();
+
+        // Malicious server: omits the delete of a/1 from the witness.
+        // The witness batch_ops have Put(a/1) but no Delete(a/1).
+        let malicious_witness_ops: Vec<ClientOp> = vec![ClientOp::Put {
+            key: b"a/1".to_vec().into(),
+            value: b"v".to_vec().into(),
+        }];
+
+        // The malicious trie still has a/1.
+        let malicious_trie = apply_batch(&old_trie, &malicious_witness_ops);
+        let malicious_hash = malicious_trie.nodestore().root_hash().unwrap();
+
+        let truncation_depth = 2;
+        let witness = WitnessProof {
+            batch_ops: malicious_witness_ops.into(),
+            new_root_hash: malicious_hash.clone(),
+            witness_nodes: generate_witness(
+                old_trie.nodestore(),
+                &[ClientOp::Put {
+                    key: b"a/1".to_vec().into(),
+                    value: b"v".to_vec().into(),
+                }],
+                malicious_hash.clone(),
+                truncation_depth,
+            )
+            .unwrap()
+            .witness_nodes,
+        };
+
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
+        let err = verify_witness(&truncated, &witness, &batch_ops).unwrap_err();
+        assert!(
+            matches!(err, WitnessError::OpsMismatch { .. }),
+            "expected OpsMismatch, got: {err:?}"
+        );
+        // Honest witness should succeed.
+        assert_ne!(honest_hash, malicious_hash);
+    }
+
+    /// Attack 2: [DR("a/"), Put("a/1", "v"), DR("a/")] — the second
+    /// `DeleteRange` deletes a/1, so it must not survive.
+    #[test]
+    fn test_verify_witness_put_between_two_drs_must_not_survive() {
+        let old_trie = create_test_trie(&[(b"a/0", b"v0"), (b"b/1", b"v")]);
+        let view: &dyn crate::v2::api::DynDbView = old_trie.nodestore();
+
+        // Batch: DR(a/), Put(a/1), DR(a/) — net: a/0 and a/1 both deleted.
+        let batch_ops = vec![
+            core_delete_range(b"a/"),
+            core_put(b"a/1", b"v"),
+            core_delete_range(b"a/"),
+        ];
+        let expanded = expand_delete_ranges(view, &batch_ops).unwrap();
+
+        let new_trie = apply_batch(&old_trie, &expanded);
+        let honest_hash = new_trie.nodestore().root_hash().unwrap();
+
+        // Malicious server: keeps a/1 alive (only deletes a/0).
+        let malicious_ops: Vec<ClientOp> = vec![
+            ClientOp::Delete {
+                key: b"a/0".to_vec().into(),
+            },
+            ClientOp::Put {
+                key: b"a/1".to_vec().into(),
+                value: b"v".to_vec().into(),
+            },
+        ];
+        let malicious_trie = apply_batch(&old_trie, &malicious_ops);
+        let malicious_hash = malicious_trie.nodestore().root_hash().unwrap();
+
+        let truncation_depth = 2;
+        // Witness: Delete(a/0) for first DR, Put(a/1), then nothing for second DR
+        let witness_batch: Vec<ClientOp> = vec![
+            ClientOp::Delete {
+                key: b"a/0".to_vec().into(),
+            },
+            ClientOp::Put {
+                key: b"a/1".to_vec().into(),
+                value: b"v".to_vec().into(),
+            },
+        ];
+
+        let witness = WitnessProof {
+            batch_ops: witness_batch.clone().into(),
+            new_root_hash: malicious_hash.clone(),
+            witness_nodes: generate_witness(
+                old_trie.nodestore(),
+                &witness_batch,
+                malicious_hash.clone(),
+                truncation_depth,
+            )
+            .unwrap()
+            .witness_nodes,
+        };
+
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
+        let err = verify_witness(&truncated, &witness, &batch_ops).unwrap_err();
+        assert!(
+            matches!(err, WitnessError::OpsMismatch { .. }),
+            "expected OpsMismatch, got: {err:?}"
+        );
+        assert_ne!(honest_hash, malicious_hash);
+    }
+
+    /// Positive case: [DR("a/"), Put("a/3", "v3")] — the Put comes after
+    /// the DR, so a/3 legitimately survives.
+    #[test]
+    fn test_verify_witness_post_dr_put_survives() {
+        let old_trie = create_test_trie(&[(b"a/1", b"v1"), (b"a/2", b"v2"), (b"b/1", b"v3")]);
+        let view: &dyn crate::v2::api::DynDbView = old_trie.nodestore();
+
+        let batch_ops = vec![core_delete_range(b"a/"), core_put(b"a/3", b"v3")];
+        let expanded = expand_delete_ranges(view, &batch_ops).unwrap();
+
+        let new_trie = apply_batch(&old_trie, &expanded);
+        let new_root_hash = new_trie.nodestore().root_hash().unwrap();
+
+        let truncation_depth = 2;
+        let witness = generate_witness(
+            old_trie.nodestore(),
+            &expanded,
+            new_root_hash,
+            truncation_depth,
+        )
+        .unwrap();
+
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
         let updated = verify_witness(&truncated, &witness, &batch_ops).unwrap();
         assert_eq!(*updated.root_hash().unwrap(), witness.new_root_hash);
     }
