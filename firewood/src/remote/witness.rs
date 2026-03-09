@@ -146,6 +146,7 @@ pub fn expand_delete_ranges(
     ops: &[OwnedBatchOp],
 ) -> Result<Vec<ClientOp>, WitnessError> {
     let mut expanded = Vec::with_capacity(ops.len());
+    // Track intra-batch state for prefix overlap
     let mut added_keys: BTreeSet<Box<[u8]>> = BTreeSet::new();
     let mut deleted_keys: HashSet<Box<[u8]>> = HashSet::new();
 
@@ -165,6 +166,7 @@ pub fn expand_delete_ranges(
                 expanded.push(ClientOp::Delete { key: key.clone() });
             }
             BatchOp::DeleteRange { prefix } => {
+                // Collect keys to delete from parent state + intra-batch puts
                 let mut to_delete: BTreeSet<Box<[u8]>> = BTreeSet::new();
 
                 // Scan parent state for keys with this prefix
@@ -508,8 +510,10 @@ fn validate_witness_ops(
     let mut wi = 0usize;
     let mut delete_range_prefixes = Vec::new();
 
+    // Walk expected_ops and witness.batch_ops in lockstep using `wi` as the witness cursor.
     for (ei, exp) in expected_ops.iter().enumerate() {
         match exp {
+            // Exact 1:1 match required
             BatchOp::Put { key, value } => {
                 let Some(wop) = witness_ops.get(wi) else {
                     return Err(WitnessError::OpsMismatch {
@@ -546,6 +550,7 @@ fn validate_witness_ops(
                 }
                 wi = wi.strict_add(1);
             }
+            // Exact 1:1 match required
             BatchOp::Delete { key } => {
                 let Some(wop) = witness_ops.get(wi) else {
                     return Err(WitnessError::OpsMismatch {
@@ -579,8 +584,8 @@ fn validate_witness_ops(
                 }
                 wi = wi.strict_add(1);
             }
+            // Consume zero or more consecutive Delete ops matching prefix
             BatchOp::DeleteRange { prefix } => {
-                // Consume consecutive Delete ops whose keys start with prefix
                 while let Some(ClientOp::Delete { key }) = witness_ops.get(wi) {
                     if !key.starts_with(prefix.as_ref()) {
                         break;
@@ -592,6 +597,7 @@ fn validate_witness_ops(
         }
     }
 
+    // Ensure all witness ops were consumed
     if wi != witness_ops.len() {
         return Err(WitnessError::OpsMismatch {
             index: expected_ops.len(),
@@ -891,6 +897,7 @@ mod tests {
         new_merkle.try_into().unwrap()
     }
 
+    /// Witness for an empty trie has no witness nodes.
     #[test]
     fn test_generate_witness_empty_trie() {
         let trie = create_test_trie(&[]);
@@ -902,6 +909,7 @@ mod tests {
         assert!(witness.witness_nodes.is_empty());
     }
 
+    /// Insert ops produce a valid witness that verifies correctly.
     #[test]
     fn test_witness_insert_roundtrip() {
         // Create initial trie with some keys
@@ -942,6 +950,7 @@ mod tests {
         assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
     }
 
+    /// Delete ops produce a valid witness that verifies correctly.
     #[test]
     fn test_witness_delete_roundtrip() {
         let old_trie = create_test_trie(&[
@@ -967,6 +976,7 @@ mod tests {
         assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
     }
 
+    /// Witness with wrong `new_root_hash` is rejected.
     #[test]
     fn test_witness_wrong_root_hash_fails() {
         let old_trie = create_test_trie(&[(b"apple", b"red"), (b"banana", b"yellow")]);
@@ -991,6 +1001,7 @@ mod tests {
         assert!(matches!(result, Err(WitnessError::RootHashMismatch { .. })));
     }
 
+    /// Mixed insert/delete batch verifies correctly.
     #[test]
     fn test_witness_mixed_ops_roundtrip() {
         let old_trie = create_test_trie(&[
@@ -1330,6 +1341,7 @@ mod tests {
         ops.iter().cloned().map(Into::into).collect()
     }
 
+    /// Matching Put/Delete ops validate successfully.
     #[test]
     fn test_validate_ops_matching() {
         let ops = vec![put_op(b"a", b"1"), delete_op(b"b")];
@@ -1337,12 +1349,14 @@ mod tests {
         assert!(validate_witness_ops(&witness, &to_owned_ops(&ops)).is_ok());
     }
 
+    /// Two empty op lists validate successfully.
     #[test]
     fn test_validate_ops_both_empty() {
         let witness = witness_with_ops(vec![]);
         assert!(validate_witness_ops(&witness, &[]).is_ok());
     }
 
+    /// Extra witness ops cause `OpsMismatch`.
     #[test]
     fn test_validate_ops_witness_longer() {
         let witness = witness_with_ops(vec![put_op(b"a", b"1"), put_op(b"b", b"2")]);
@@ -1351,6 +1365,7 @@ mod tests {
         assert!(matches!(err, WitnessError::OpsMismatch { .. }));
     }
 
+    /// Missing witness ops cause `OpsMismatch`.
     #[test]
     fn test_validate_ops_expected_longer() {
         let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
@@ -1359,6 +1374,7 @@ mod tests {
         assert!(matches!(err, WitnessError::OpsMismatch { .. }));
     }
 
+    /// Wrong op type at same index causes `OpsMismatch`.
     #[test]
     fn test_validate_ops_type_mismatch() {
         let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
@@ -1367,6 +1383,7 @@ mod tests {
         assert!(matches!(err, WitnessError::OpsMismatch { index: 0, .. }));
     }
 
+    /// Same op type with different key causes `OpsMismatch`.
     #[test]
     fn test_validate_ops_key_mismatch() {
         let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
@@ -1375,6 +1392,7 @@ mod tests {
         assert!(matches!(err, WitnessError::OpsMismatch { index: 0, .. }));
     }
 
+    /// Same `Put` key with different value causes `OpsMismatch`.
     #[test]
     fn test_validate_ops_value_mismatch() {
         let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
@@ -1383,6 +1401,7 @@ mod tests {
         assert!(matches!(err, WitnessError::OpsMismatch { index: 0, .. }));
     }
 
+    /// Mismatch detected at index 1, not index 0.
     #[test]
     fn test_validate_ops_mismatch_at_second_index() {
         let witness = witness_with_ops(vec![put_op(b"a", b"1"), put_op(b"b", b"2")]);
@@ -1433,6 +1452,7 @@ mod tests {
         assert!(matches!(result, Err(WitnessError::OpsMismatch { .. })));
     }
 
+    /// Correct expected ops pass validation and verify.
     #[test]
     fn test_verify_witness_correct_expected_ops() {
         let old_trie = create_test_trie(&[(b"apple", b"red"), (b"banana", b"yellow")]);
