@@ -51,9 +51,9 @@ impl std::fmt::Debug for DbMetrics {
     }
 }
 
-impl<P: Parentable, S: ReadableStorage> api::DbView for NodeStore<P, S>
+impl<P, S: ReadableStorage> api::DbView for NodeStore<P, S>
 where
-    NodeStore<P, S>: TrieReader,
+    NodeStore<P, S>: TrieReader + HashedNodeReader,
 {
     type Iter<'view>
         = MerkleKeyValueIter<'view, Self>
@@ -321,6 +321,43 @@ impl Db {
         self.propose_with_parent(batch_ops, merkle.nodestore())
     }
 
+    /// Reconstruct a view from a parent view by applying batch operations.
+    ///
+    /// Reconstruction follows the same parallel policy as proposal creation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reconstruction fails.
+    pub fn reconstruct_from_view<P>(
+        &self,
+        parent: &NodeStore<P, FileBacked>,
+        batch: impl IntoBatchIter,
+    ) -> Result<ReconstructedView<'_>, api::Error>
+    where
+        NodeStore<P, FileBacked>: TrieReader,
+    {
+        let _ = (parent, batch);
+        todo!("implemented in next PR")
+    }
+
+    /// Reconstruct a view from an owned reconstructed parent by applying batch operations.
+    ///
+    /// This path consumes the reconstructed parent handle, allowing the internal
+    /// conversion to move state instead of cloning when the underlying `Arc` is unique.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reconstruction fails.
+    #[allow(dead_code)]
+    fn reconstruct_from_reconstructed(
+        &self,
+        parent: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
+        batch: impl IntoBatchIter,
+    ) -> Result<ReconstructedView<'_>, api::Error> {
+        let _ = (parent, batch);
+        todo!("implemented in next PR")
+    }
+
     /// Closes the database gracefully.
     ///
     /// Shuts down the background persistence worker and persists the latest
@@ -336,6 +373,21 @@ impl Db {
 pub struct Proposal<'db> {
     nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
     db: &'db Db,
+}
+
+#[derive(Debug)]
+/// A user-visible reconstructed view.
+pub struct ReconstructedView<'db> {
+    nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
+    db: &'db Db,
+}
+
+impl ReconstructedView<'_> {
+    /// Returns the view backing this reconstructed state.
+    #[must_use]
+    pub fn view(&self) -> ArcDynDbView {
+        self.nodestore.clone()
+    }
 }
 
 impl api::DbView for Proposal<'_> {
@@ -399,6 +451,58 @@ impl Proposal<'_> {
     #[must_use]
     pub fn view(&self) -> ArcDynDbView {
         self.nodestore.clone()
+    }
+}
+
+impl api::DbView for ReconstructedView<'_> {
+    type Iter<'view>
+        = MerkleKeyValueIter<'view, NodeStore<Arc<ImmutableProposal>, FileBacked>>
+    where
+        Self: 'view;
+
+    fn root_hash(&self) -> Option<api::HashKey> {
+        api::DbView::root_hash(&*self.nodestore)
+    }
+
+    fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
+        api::DbView::val(&*self.nodestore, key)
+    }
+
+    fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
+        api::DbView::single_key_proof(&*self.nodestore, key)
+    }
+
+    fn range_proof<K: KeyType>(
+        &self,
+        first_key: Option<K>,
+        last_key: Option<K>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenRangeProof, api::Error> {
+        api::DbView::range_proof(&*self.nodestore, first_key, last_key, limit)
+    }
+
+    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
+        api::DbView::iter_option(&*self.nodestore, first_key)
+    }
+
+    fn dump_to_string(&self) -> Result<String, api::Error> {
+        api::DbView::dump_to_string(&*self.nodestore)
+    }
+}
+
+impl<'a> api::Reconstructible for ReconstructedView<'a> {
+    type Reconstructed = ReconstructedView<'a>;
+
+    fn reconstruct(self, batch: impl IntoBatchIter) -> Result<Self::Reconstructed, api::Error>
+    where
+        Self: Sized,
+    {
+        let _ = batch;
+        todo!("Reconstructible::reconstruct implementation is introduced in reconstruct-3")
+    }
+
+    fn db(&self) -> &crate::db::Db {
+        self.db
     }
 }
 

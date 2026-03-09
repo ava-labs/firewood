@@ -293,6 +293,41 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     }
 }
 
+impl<T, S: ReadableStorage> NodeStore<T, S>
+where
+    NodeStore<T, S>: TrieReader,
+{
+    /// Create a mutable reconstruction child from this read-capable parent.
+    ///
+    /// This constructor is intended for reconstruction flows that should not
+    /// participate in proposal parent/reparent semantics.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the parent root cannot be read.
+    pub fn into_reconstruction_child(&self) -> Result<NodeStore<MutableProposal, S>, FileIoError> {
+        let root = if let Some(root) = self.root_as_maybe_persisted_node() {
+            let root = root.as_shared_node(self)?.deref().clone();
+            Some(root)
+        } else {
+            None
+        };
+
+        let kind = MutableProposal {
+            root,
+            deleted: Vec::default(),
+            // Reconstruction chains never commit/reparent, so parent hash is unused.
+            // Avoid computing root_hash() here because reconstructed parents lazily hash.
+            parent: NodeStoreParent::Committed(None),
+        };
+
+        Ok(NodeStore {
+            kind,
+            storage: self.storage.clone(),
+        })
+    }
+}
+
 impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     /// Creates a new [`NodeStore`] from a root node.
     #[must_use]

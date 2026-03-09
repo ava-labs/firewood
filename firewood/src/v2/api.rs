@@ -201,11 +201,14 @@ pub enum Error {
     #[error("commit count must be positive")]
     ZeroCommitCount,
 
+    /// `max_revisions` must exceed deferred persistence commit count.
     #[error(
         "max_revisions ({max_revisions}) must be > deferred_persistence_commit_count ({commit_count})"
     )]
     InsufficientRevisions {
+        /// Configured max revisions.
         max_revisions: usize,
+        /// Configured deferred persistence commit count.
         commit_count: u64,
     },
 }
@@ -312,7 +315,9 @@ pub trait Db {
 ///    historical revision
 /// 2. From [`Db::propose`] which is a view on top of the most recently
 ///    committed revision with changes applied; or
-/// 3. From [`Proposal::propose`] which is a view on top of another proposal.
+/// 3. From [`Proposal::propose`] which is a view on top of another proposal; or
+/// 4. From [`Reconstructed::reconstruct`] which is a view of a
+///    reconstructed revision.
 pub trait DbView {
     /// The type of a stream of key/value pairs
     type Iter<'view>: Iterator<Item = Result<(Key, Value), FileIoError>>
@@ -382,6 +387,64 @@ pub trait DbView {
     ///
     /// Returns an error if the dump operation fails
     fn dump_to_string(&self) -> Result<String, Error>;
+}
+
+impl<T: DbView + ?Sized> DbView for &T {
+    type Iter<'view>
+        = T::Iter<'view>
+    where
+        Self: 'view;
+
+    fn root_hash(&self) -> Option<HashKey> {
+        (*self).root_hash()
+    }
+
+    fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, Error> {
+        (*self).val(key)
+    }
+
+    fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, Error> {
+        (*self).single_key_proof(key)
+    }
+
+    fn range_proof<K: KeyType>(
+        &self,
+        first_key: Option<K>,
+        last_key: Option<K>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenRangeProof, Error> {
+        (*self).range_proof(first_key, last_key, limit)
+    }
+
+    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, Error> {
+        (*self).iter_option(first_key)
+    }
+
+    fn dump_to_string(&self) -> Result<String, Error> {
+        (*self).dump_to_string()
+    }
+}
+
+/// A reconstructable database view.
+///
+/// This trait models linear reconstruction by consuming `self` and returning
+/// a new reconstructed view.
+pub trait Reconstructible: DbView {
+    /// The reconstructed output type.
+    type Reconstructed: DbView + Reconstructible<Reconstructed = Self::Reconstructed>;
+
+    /// Reconstruct a new view from this one by applying `data`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if applying the batch fails or if the underlying
+    /// storage cannot be read while resolving nodes.
+    fn reconstruct(self, data: impl IntoBatchIter) -> Result<Self::Reconstructed, Error>
+    where
+        Self: Sized;
+
+    /// The underlying database
+    fn db(&self) -> &crate::db::Db;
 }
 
 /// A boxed iterator over key/value pairs.
