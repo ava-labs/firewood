@@ -212,6 +212,10 @@ pub enum Error {
     #[error("child node has no hash (expected only in hashed tries)")]
     /// A child node has no hash
     UnhashedChild,
+
+    #[error("no storage backend available for persisted node")]
+    /// No storage backend is available to read persisted nodes
+    NoStorage,
 }
 
 impl From<std::convert::Infallible> for Error {
@@ -232,6 +236,7 @@ impl From<NodeError> for Error {
             NodeError::Io(io_err) => Error::FileIO(io_err),
             NodeError::Proxy(hash) => Error::ProxyChild(hash),
             NodeError::UnhashedChild => Error::UnhashedChild,
+            NodeError::NoStorage => Error::NoStorage,
         }
     }
 }
