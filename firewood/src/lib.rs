@@ -69,7 +69,7 @@
 //!   There are three states for a nodestore:
 //!    - [`firewood_storage::Committed`] for revisions that are committed
 //!    - [`firewood_storage::ImmutableProposal`] for revisions that are proposals against committed versions
-//!    - [`firewood_storage::Mutable<firewood_storage::Propose>`] for revisions where nodes are still being added.
+//!    - [`firewood_storage::Mutable`]`<`[`firewood_storage::Propose`]`>` for revisions where nodes are still being added.
 //!
 //!  For more information on these node states, see their associated documentation.
 //!
