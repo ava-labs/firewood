@@ -17,12 +17,18 @@
 //! 6. Client hashes the result and verifies it matches `new_root_hash`
 //! 7. Client extracts new truncated trie from the re-execution result
 
+use crate::merkle::Merkle;
+use crate::remote::TruncatedTrie;
 use crate::remote::client::ClientOp;
+use crate::v2::api::BatchOp;
+use crate::v2::api::Error as ApiError;
 use firewood_storage::{
-    BranchNode, Child, Children, HashedNodeReader, NibblesIterator, Node, NodeError, PathComponent,
-    SharedNode, TrieHash, TrieReader,
+    BranchNode, Child, Children, HashType, HashedNodeReader, ImmutableProposal, MemStore,
+    NibblesIterator, Node, NodeError, NodeHashAlgorithm, NodeStore, Path, PathComponent,
+    SharedNode, TrieHash, TrieReader, hash_node,
 };
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 /// A witness proof for verifying a commit on the client side.
 ///
@@ -75,6 +81,10 @@ pub enum WitnessError {
     #[error("trie operation failed: {0}")]
     TrieError(#[from] NodeError),
 
+    /// An API error occurred during witness operations (e.g., iterator creation).
+    #[error("API error: {0}")]
+    ApiError(ApiError),
+
     /// An unexpected child type was encountered during witness processing.
     ///
     /// This indicates a bug in the conversion logic — after `to_node_tree()`,
@@ -93,9 +103,39 @@ pub enum WitnessError {
         /// The depth at which the invalid value was found.
         depth: usize,
     },
+
+    /// The witness proof's batch operations do not match the expected operations.
+    #[error("batch ops mismatch at index {index}: {detail}")]
+    OpsMismatch {
+        /// The index where the first mismatch was detected.
+        index: usize,
+        /// Human-readable description of the mismatch.
+        detail: String,
+    },
+
+    /// The grafted witness tree's root hash doesn't match the trusted old root.
+    #[error("witness nodes invalid: expected root {expected}, got {actual}")]
+    InvalidWitnessNodes {
+        /// The expected root hash (client's trusted old root).
+        expected: TrieHash,
+        /// The actual root hash computed from the grafted tree.
+        actual: TrieHash,
+    },
 }
 
 // -- Server-side witness generation --
+
+/// A core batch operation with owned key and value data.
+pub type OwnedBatchOp = BatchOp<Box<[u8]>, Box<[u8]>>;
+
+impl From<ClientOp> for OwnedBatchOp {
+    fn from(op: ClientOp) -> Self {
+        match op {
+            ClientOp::Put { key, value } => BatchOp::Put { key, value },
+            ClientOp::Delete { key } => BatchOp::Delete { key },
+        }
+    }
+}
 
 /// Generates a witness proof for a set of batch operations.
 ///
@@ -376,16 +416,466 @@ fn convert_node_for_witness(node: &SharedNode) -> Result<Node, NodeError> {
     }
 }
 
+// -- Client-side witness verification --
+
+/// Validates that the witness proof's batch operations are consistent with the
+/// expected operations, handling `DeleteRange` expansion.
+///
+/// Walks `expected_ops` and `witness.batch_ops` in lockstep:
+/// - `Put`/`Delete`: 1:1 comparison against the witness `ClientOp`
+/// - `DeleteRange { prefix }`: consumes consecutive `Delete` witness ops
+///   whose keys start with the prefix; records the prefix
+///
+/// Returns the collected `delete_range_prefixes` (empty if no `DeleteRange`).
+///
+/// # Errors
+///
+/// Returns [`WitnessError::OpsMismatch`] if:
+/// - A `Put`/`Delete` doesn't match its witness counterpart
+/// - The witness has leftover or missing ops
+fn validate_witness_ops(
+    witness: &WitnessProof,
+    expected_ops: &[OwnedBatchOp],
+) -> Result<Vec<Box<[u8]>>, WitnessError> {
+    let witness_ops = &witness.batch_ops;
+    let mut wi = 0usize;
+    let mut delete_range_prefixes = Vec::new();
+
+    // Walk expected_ops and witness.batch_ops in lockstep using `wi` as the witness cursor.
+    for (ei, exp) in expected_ops.iter().enumerate() {
+        match exp {
+            // Exact 1:1 match required
+            BatchOp::Put { key, value } => {
+                let Some(wop) = witness_ops.get(wi) else {
+                    return Err(WitnessError::OpsMismatch {
+                        index: ei,
+                        detail: format!(
+                            "witness ops exhausted; expected Put(key_len={})",
+                            key.len()
+                        ),
+                    });
+                };
+                match wop {
+                    ClientOp::Put { key: wk, value: wv } => {
+                        if key.as_ref() != wk.as_ref() || value.as_ref() != wv.as_ref() {
+                            return Err(WitnessError::OpsMismatch {
+                                index: ei,
+                                detail: format!(
+                                    "Put mismatch at witness index {wi}: \
+                                     expected key_len={} value_len={}, \
+                                     got key_len={} value_len={}",
+                                    key.len(),
+                                    value.len(),
+                                    wk.len(),
+                                    wv.len()
+                                ),
+                            });
+                        }
+                    }
+                    ClientOp::Delete { .. } => {
+                        return Err(WitnessError::OpsMismatch {
+                            index: ei,
+                            detail: format!("expected Put at witness index {wi}, got Delete"),
+                        });
+                    }
+                }
+                wi = wi.strict_add(1);
+            }
+            // Exact 1:1 match required
+            BatchOp::Delete { key } => {
+                let Some(wop) = witness_ops.get(wi) else {
+                    return Err(WitnessError::OpsMismatch {
+                        index: ei,
+                        detail: format!(
+                            "witness ops exhausted; expected Delete(key_len={})",
+                            key.len()
+                        ),
+                    });
+                };
+                match wop {
+                    ClientOp::Delete { key: wk } => {
+                        if key.as_ref() != wk.as_ref() {
+                            return Err(WitnessError::OpsMismatch {
+                                index: ei,
+                                detail: format!(
+                                    "Delete mismatch at witness index {wi}: \
+                                     expected key_len={}, got key_len={}",
+                                    key.len(),
+                                    wk.len()
+                                ),
+                            });
+                        }
+                    }
+                    ClientOp::Put { .. } => {
+                        return Err(WitnessError::OpsMismatch {
+                            index: ei,
+                            detail: format!("expected Delete at witness index {wi}, got Put"),
+                        });
+                    }
+                }
+                wi = wi.strict_add(1);
+            }
+            // Consume zero or more consecutive Delete ops matching prefix
+            BatchOp::DeleteRange { prefix } => {
+                while let Some(ClientOp::Delete { key }) = witness_ops.get(wi) {
+                    if !key.starts_with(prefix.as_ref()) {
+                        break;
+                    }
+                    wi = wi.strict_add(1);
+                }
+                delete_range_prefixes.push(prefix.clone());
+            }
+        }
+    }
+
+    // Ensure all witness ops were consumed
+    if wi != witness_ops.len() {
+        return Err(WitnessError::OpsMismatch {
+            index: expected_ops.len(),
+            detail: format!(
+                "witness has {} extra ops after index {wi}",
+                witness_ops.len().strict_sub(wi),
+            ),
+        });
+    }
+
+    Ok(delete_range_prefixes)
+}
+
+/// Computes the root hash of a grafted node tree for pre-execution validation.
+///
+/// This walks the node tree recursively, computing Merkle hashes bottom-up.
+/// The resulting hash should match the client's trusted old root hash if the
+/// witness nodes are authentic.
+///
+/// Uses `hash_node` from the storage layer so the hash algorithm matches
+/// what the full trie uses (SHA-256 for merkledb, Keccak-256 for ethhash).
+fn compute_grafted_root_hash(node: &Node, path: &Path) -> TrieHash {
+    // Convert to TrieHash only at the root level. Internally, we keep
+    // HashType to preserve RLP-encoded hashes for ethhash compatibility.
+    let hash_type = compute_node_hash(node, path);
+    #[cfg(not(feature = "ethhash"))]
+    {
+        hash_type
+    }
+    #[cfg(feature = "ethhash")]
+    {
+        hash_type.into()
+    }
+}
+
+/// Recursively computes the [`HashType`] of a node, preserving the native
+/// hash encoding (RLP for small nodes under ethhash, SHA-256 otherwise).
+///
+/// For branches with `Child::Node` children, `hash_node` cannot compute
+/// correct hashes since `child.hash()` returns `None`. This function
+/// resolves that by hashing children bottom-up and building a temporary
+/// node with `Proxy(hash)` children before calling `hash_node`.
+fn compute_node_hash(node: &Node, path: &Path) -> HashType {
+    match node {
+        Node::Leaf(_) => {
+            // Leaves have no children, hash_node works directly.
+            hash_node(node, path)
+        }
+        Node::Branch(branch) => {
+            // Build path prefix for this branch (path + partial_path)
+            let mut branch_path = path.clone();
+            branch_path.extend(branch.partial_path.iter().copied());
+
+            // Recursively hash each child, collecting (idx, hash) pairs
+            let mut new_children = Children::new();
+            for (idx, child_opt) in &branch.children {
+                let Some(child) = child_opt else { continue };
+                match child {
+                    Child::Node(child_node) => {
+                        let mut child_path = branch_path.clone();
+                        child_path.extend(std::iter::once(idx.as_u8()));
+                        let child_hash = compute_node_hash(child_node, &child_path);
+                        *new_children.get_mut(idx) = Some(Child::Proxy(child_hash));
+                    }
+                    Child::Proxy(hash) => {
+                        *new_children.get_mut(idx) = Some(Child::Proxy(hash.clone()));
+                    }
+                    _ => {}
+                }
+            }
+
+            // Build a temporary branch with all children as Proxy
+            let temp_node = Node::Branch(Box::new(BranchNode {
+                partial_path: branch.partial_path.clone(),
+                value: branch.value.clone(),
+                children: new_children,
+            }));
+
+            hash_node(&temp_node, path)
+        }
+    }
+}
+
+/// Verifies a witness proof and returns the updated truncated trie.
+///
+/// This is the core of client-side commit verification. The server sends
+/// a [`WitnessProof`] containing the batch operations, the expected new
+/// root hash, and the minimal set of trie nodes needed for independent
+/// re-execution. The client:
+///
+/// 1. Validates that the witness's batch ops match `expected_ops`
+///    (handling `DeleteRange` expansion)
+/// 2. Converts its truncated trie root to a plain `Node` tree
+/// 3. Grafts witness nodes onto the tree (replacing `Proxy` stubs)
+/// 4. Creates an in-memory `Merkle` and re-executes the batch operations
+/// 5. Hashes the result and verifies it matches `new_root_hash`
+/// 6. Verifies `DeleteRange` completeness (no leftover keys with prefix)
+/// 7. Extracts the updated truncated trie from the re-execution result
+///
+/// If the root hash matches, the client can trust the commit without
+/// having seen the full trie.
+///
+/// # Errors
+///
+/// Returns a [`WitnessError`] if:
+/// - The batch ops don't match `expected_ops` ([`WitnessError::OpsMismatch`])
+/// - The truncated trie has no root ([`WitnessError::NoRoot`])
+/// - The node tree contains unexpected child types ([`WitnessError::UnexpectedChild`])
+/// - Re-execution fails, e.g. a needed node is missing ([`WitnessError::TrieError`])
+/// - The root hash doesn't match ([`WitnessError::RootHashMismatch`])
+pub fn verify_witness(
+    truncated_trie: &TruncatedTrie,
+    witness: &WitnessProof,
+    expected_ops: &[OwnedBatchOp],
+) -> Result<TruncatedTrie, WitnessError> {
+    let delete_range_prefixes = validate_witness_ops(witness, expected_ops)?;
+
+    // 1. Convert truncated trie root to a plain Node tree
+    let root = truncated_trie.root().ok_or(WitnessError::NoRoot)?;
+    let mut node_tree = to_node_tree(root)?;
+
+    // 2. Build witness lookup map and graft onto the tree
+    let witness_map: BTreeMap<&[u8], &Node> = witness
+        .witness_nodes
+        .iter()
+        .map(|wn| (wn.path.as_ref(), &wn.node))
+        .collect();
+
+    graft_witness_nodes(&mut node_tree, &witness_map, &mut Vec::new())?;
+
+    // Pre-execution hash check: verify the grafted tree produces the
+    // client's trusted old root hash. This catches tampered witness nodes
+    // before we spend time on re-execution.
+    if let Some(old_root_hash) = truncated_trie.root_hash() {
+        let grafted_hash = compute_grafted_root_hash(&node_tree, &Path::new());
+        if grafted_hash != *old_root_hash {
+            return Err(WitnessError::InvalidWitnessNodes {
+                expected: old_root_hash.clone(),
+                actual: grafted_hash,
+            });
+        }
+    }
+
+    // 3. Create in-memory Merkle for re-execution.
+    // Select the hash algorithm to match the trie's configuration —
+    // Keccak-256 for Ethereum, SHA-256 for MerkleDB.
+    let algo = if cfg!(feature = "ethhash") {
+        NodeHashAlgorithm::Ethereum
+    } else {
+        NodeHashAlgorithm::MerkleDB
+    };
+    // Create an in-memory store with the grafted node tree as its root.
+    // This is a throwaway store used only for re-execution.
+    let memstore = MemStore::new(Vec::new(), algo);
+    let nodestore = NodeStore::new_proposal_with_root(Arc::new(memstore), node_tree);
+    let mut merkle = Merkle::from(nodestore);
+
+    // 4. Apply batch operations
+    for op in &*witness.batch_ops {
+        let result = match op {
+            ClientOp::Put { key, value } => merkle.insert(key, value.clone()),
+            ClientOp::Delete { key } => merkle.remove(key).map(|_| ()),
+        };
+        if let Err(e) = result {
+            return Err(WitnessError::TrieError(e));
+        }
+    }
+
+    // 5. Hash the result (convert MutableProposal → ImmutableProposal)
+    let hashed: Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> =
+        merkle.try_into().map_err(WitnessError::TrieError)?;
+
+    // An empty trie has no root node, so root_hash() returns None.
+    // Use the canonical empty hash for comparison.
+    let computed_hash = hashed
+        .nodestore()
+        .root_hash()
+        .unwrap_or_else(TrieHash::empty);
+
+    if computed_hash != witness.new_root_hash {
+        return Err(WitnessError::RootHashMismatch {
+            expected: witness.new_root_hash.clone(),
+            computed: computed_hash,
+        });
+    }
+
+    // 6. DeleteRange completeness check: verify no keys with the prefix
+    //    remain in the post-state trie. This guards against the server
+    //    omitting deletes from the witness.
+    if !delete_range_prefixes.is_empty() {
+        let view: &dyn crate::v2::api::DynDbView = hashed.nodestore();
+        for prefix in &delete_range_prefixes {
+            let mut iter = view.iter_from(prefix).map_err(WitnessError::ApiError)?;
+            if let Some(item) = iter.next() {
+                let (key, _) = item?;
+                if key.starts_with(prefix.as_ref()) {
+                    return Err(WitnessError::OpsMismatch {
+                        index: 0,
+                        detail: format!("DeleteRange prefix has surviving key (len={})", key.len()),
+                    });
+                }
+            }
+        }
+    }
+
+    // 7. Extract new truncated trie
+    let new_trie = TruncatedTrie::from_trie(hashed.nodestore(), truncated_trie.truncation_depth())?;
+
+    Ok(new_trie)
+}
+
+/// Converts a truncated trie node to a plain `Node` tree suitable for
+/// in-memory Merkle operations.
+///
+/// The truncated trie uses `MaybePersisted` children for above-K nodes
+/// and `Proxy` / `AddressWithHash` for below-K stubs. This function
+/// normalises the tree so that:
+/// - `MaybePersisted` → unwrapped to `Child::Node` (recursive)
+/// - `Child::Node` → recursively converted
+/// - `Proxy` and `AddressWithHash` → `Child::Proxy` (hash only)
+///
+/// The result contains only `Child::Node` and `Child::Proxy` variants,
+/// ready for grafting witness nodes and re-execution.
+///
+/// # Errors
+///
+/// Returns [`WitnessError::TrieError`] if a `MaybePersisted` child
+/// unexpectedly requires storage access (indicates a corrupted truncated
+/// trie).
+fn to_node_tree(node: &Node) -> Result<Node, WitnessError> {
+    match node {
+        Node::Leaf(leaf) => Ok(Node::Leaf(leaf.clone())),
+        Node::Branch(branch) => {
+            let mut new_children = Children::new();
+            // Map each child to its storage-independent form: inline nodes are
+            // recursively converted, proxies are preserved, and MaybePersisted
+            // nodes are unwrapped.
+            for (idx, child_opt) in &branch.children {
+                *new_children.get_mut(idx) = match child_opt {
+                    None => None,
+                    Some(Child::Node(child)) => Some(Child::Node(to_node_tree(child)?)),
+                    Some(Child::MaybePersisted(maybe, _)) => {
+                        // All MaybePersisted in truncated tries are Unpersisted.
+                        // Use as_unpersisted_node since no storage backend is available.
+                        let shared = maybe.as_unpersisted_node()?;
+                        Some(Child::Node(to_node_tree(&shared)?))
+                    }
+                    // AddressWithHash children (from committed storage) become
+                    // Proxy stubs — the client has no use for storage addresses.
+                    Some(Child::Proxy(hash) | Child::AddressWithHash(_, hash)) => {
+                        Some(Child::Proxy(hash.clone()))
+                    }
+                };
+            }
+            Ok(Node::Branch(Box::new(BranchNode {
+                partial_path: branch.partial_path.clone(),
+                value: branch.value.clone(),
+                children: new_children,
+            })))
+        }
+    }
+}
+
+/// Grafts witness nodes onto a node tree by replacing `Proxy` children
+/// with actual nodes from the witness.
+///
+/// Recursively walks the node tree, maintaining a nibble path buffer.
+/// At each `Proxy` child, checks if the witness map contains a node at
+/// that path. If so, replaces the `Proxy` with a `Child::Node` containing
+/// the witness data (which may itself have `Proxy` children that get
+/// further grafted by the recursive call).
+///
+/// The `current_path` buffer is grown and truncated as the recursion
+/// descends and backtracks, avoiding per-child allocations.
+///
+/// # Errors
+///
+/// Returns [`WitnessError::UnexpectedChild`] if a `MaybePersisted` or
+/// `AddressWithHash` child is encountered — these should have been
+/// eliminated by [`to_node_tree`].
+fn graft_witness_nodes(
+    node: &mut Node,
+    witness_map: &BTreeMap<&[u8], &Node>,
+    current_path: &mut Vec<u8>,
+) -> Result<(), WitnessError> {
+    // Leaves have no children to graft — only branches need processing.
+    let Node::Branch(branch) = node else {
+        return Ok(());
+    };
+
+    for (idx, child_opt) in &mut branch.children {
+        let Some(child) = child_opt else { continue };
+
+        // Build the full nibble path to this child by appending the parent's
+        // partial path and the child's index nibble.
+        let path_start = current_path.len();
+        current_path.extend(branch.partial_path.as_ref());
+        current_path.push(idx.as_u8());
+
+        match child {
+            // Proxy children are below-truncation stubs. If the witness
+            // contains a node at this path, expand the proxy into a full node.
+            Child::Proxy(_hash) => {
+                if let Some(witness_node) = witness_map.get(current_path.as_slice()) {
+                    let mut grafted = (*witness_node).clone();
+                    // Recursively graft deeper witness nodes
+                    graft_witness_nodes(&mut grafted, witness_map, current_path)?;
+                    *child = Child::Node(grafted);
+                }
+            }
+            Child::Node(child_node) => {
+                // Already expanded - recursively graft children
+                graft_witness_nodes(child_node, witness_map, current_path)?;
+            }
+            Child::MaybePersisted(..) | Child::AddressWithHash(..) => {
+                return Err(WitnessError::UnexpectedChild {
+                    path: current_path.as_slice().into(),
+                });
+            }
+        }
+
+        // Restore the path buffer to its state before this child, so sibling
+        // children get the correct prefix.
+        current_path.truncate(path_start);
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    #![expect(clippy::unwrap_used)]
+    #![expect(clippy::unwrap_used, clippy::indexing_slicing)]
 
     use super::*;
-    use crate::merkle::Merkle;
-    use firewood_storage::{ImmutableProposal, MemStore, NodeStore};
-    use std::sync::Arc;
+    use firewood_storage::{HashedNodeReader, MemStore, NodeStore};
 
     type ImmutableMerkle = Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>>;
+
+    /// Helper to convert `&[ClientOp]` → `Vec<OwnedBatchOp>` and call `verify_witness`.
+    fn verify(
+        trie: &TruncatedTrie,
+        w: &WitnessProof,
+        ops: &[ClientOp],
+    ) -> Result<TruncatedTrie, WitnessError> {
+        let owned: Vec<OwnedBatchOp> = ops.iter().cloned().map(Into::into).collect();
+        verify_witness(trie, w, &owned)
+    }
 
     /// Helper to create a test trie and return an immutable merkle.
     fn create_test_trie(keys: &[(&[u8], &[u8])]) -> ImmutableMerkle {
@@ -402,6 +892,26 @@ mod tests {
         merkle.try_into().unwrap()
     }
 
+    /// Helper to apply batch ops to a trie and return the new immutable merkle.
+    fn apply_batch(merkle: &ImmutableMerkle, ops: &[ClientOp]) -> ImmutableMerkle {
+        let nodestore = NodeStore::new(merkle.nodestore()).unwrap();
+        let mut new_merkle = Merkle::from(nodestore);
+
+        for op in ops {
+            match op {
+                ClientOp::Put { key, value } => {
+                    new_merkle.insert(key, value.clone()).unwrap();
+                }
+                ClientOp::Delete { key } => {
+                    new_merkle.remove(key).unwrap();
+                }
+            }
+        }
+
+        new_merkle.try_into().unwrap()
+    }
+
+    /// Witness for an empty trie has no witness nodes.
     #[test]
     fn test_generate_witness_empty_trie() {
         let trie = create_test_trie(&[]);
@@ -411,5 +921,555 @@ mod tests {
         }];
         let witness = generate_witness(trie.nodestore(), &ops, TrieHash::empty(), 4).unwrap();
         assert!(witness.witness_nodes.is_empty());
+    }
+
+    /// Insert ops produce a valid witness that verifies correctly.
+    #[test]
+    fn test_witness_insert_roundtrip() {
+        // Create initial trie with some keys
+        let old_trie = create_test_trie(&[
+            (b"apple", b"red"),
+            (b"banana", b"yellow"),
+            (b"cherry", b"dark"),
+        ]);
+        let old_root_hash = old_trie.nodestore().root_hash().unwrap();
+
+        // Define batch operations
+        let ops = vec![
+            ClientOp::Put {
+                key: b"date".to_vec().into(),
+                value: b"brown".to_vec().into(),
+            },
+            ClientOp::Put {
+                key: b"apple".to_vec().into(),
+                value: b"green".to_vec().into(),
+            },
+        ];
+
+        // Apply batch to get new root hash
+        let new_trie = apply_batch(&old_trie, &ops);
+        let new_root_hash = new_trie.nodestore().root_hash().unwrap();
+
+        // Generate witness from old trie
+        let truncation_depth = 2;
+        let witness =
+            generate_witness(old_trie.nodestore(), &ops, new_root_hash, truncation_depth).unwrap();
+
+        // Create client's truncated trie from the old state
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
+        assert_eq!(*truncated.root_hash().unwrap(), old_root_hash);
+
+        // Verify witness on client side
+        let updated_trie = verify(&truncated, &witness, &ops).unwrap();
+        assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
+    }
+
+    /// Delete ops produce a valid witness that verifies correctly.
+    #[test]
+    fn test_witness_delete_roundtrip() {
+        let old_trie = create_test_trie(&[
+            (b"apple", b"red"),
+            (b"banana", b"yellow"),
+            (b"cherry", b"dark"),
+        ]);
+
+        let ops = vec![ClientOp::Delete {
+            key: b"banana".to_vec().into(),
+        }];
+
+        let new_trie = apply_batch(&old_trie, &ops);
+        let new_root_hash = new_trie.nodestore().root_hash().unwrap();
+
+        let truncation_depth = 2;
+        let witness =
+            generate_witness(old_trie.nodestore(), &ops, new_root_hash, truncation_depth).unwrap();
+
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
+
+        let updated_trie = verify(&truncated, &witness, &ops).unwrap();
+        assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
+    }
+
+    /// Witness with wrong `new_root_hash` is rejected.
+    #[test]
+    fn test_witness_wrong_root_hash_fails() {
+        let old_trie = create_test_trie(&[(b"apple", b"red"), (b"banana", b"yellow")]);
+
+        let ops = vec![ClientOp::Put {
+            key: b"cherry".to_vec().into(),
+            value: b"dark".to_vec().into(),
+        }];
+
+        // Use wrong root hash
+        let witness = generate_witness(
+            old_trie.nodestore(),
+            &ops,
+            TrieHash::empty(), // wrong!
+            2,
+        )
+        .unwrap();
+
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), 2).unwrap();
+
+        let result = verify(&truncated, &witness, &ops);
+        assert!(matches!(result, Err(WitnessError::RootHashMismatch { .. })));
+    }
+
+    /// Mixed insert/delete batch verifies correctly.
+    #[test]
+    fn test_witness_mixed_ops_roundtrip() {
+        let old_trie = create_test_trie(&[
+            (b"key1", b"val1"),
+            (b"key2", b"val2"),
+            (b"key3", b"val3"),
+            (b"key4", b"val4"),
+            (b"key5", b"val5"),
+        ]);
+
+        let ops = vec![
+            ClientOp::Put {
+                key: b"key1".to_vec().into(),
+                value: b"updated1".to_vec().into(),
+            },
+            ClientOp::Delete {
+                key: b"key3".to_vec().into(),
+            },
+            ClientOp::Put {
+                key: b"key6".to_vec().into(),
+                value: b"val6".to_vec().into(),
+            },
+        ];
+
+        let new_trie = apply_batch(&old_trie, &ops);
+        let new_root_hash = new_trie.nodestore().root_hash().unwrap();
+
+        let truncation_depth = 2;
+        let witness =
+            generate_witness(old_trie.nodestore(), &ops, new_root_hash, truncation_depth).unwrap();
+
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
+
+        let updated_trie = verify(&truncated, &witness, &ops).unwrap();
+        assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
+    }
+
+    #[test]
+    fn test_multi_commit_sequence() {
+        // Verify that the truncated trie stays consistent across multiple
+        // sequential witness-verified commits.
+        let initial_trie = create_test_trie(&[(b"apple", b"red"), (b"banana", b"yellow")]);
+        let truncation_depth = 2;
+
+        let mut truncated =
+            TruncatedTrie::from_trie(initial_trie.nodestore(), truncation_depth).unwrap();
+
+        // Track the server-side trie through sequential commits
+        let mut server_trie = initial_trie;
+
+        // Commit 1: insert cherry
+        let ops1 = vec![ClientOp::Put {
+            key: b"cherry".to_vec().into(),
+            value: b"dark".to_vec().into(),
+        }];
+        let new_server = apply_batch(&server_trie, &ops1);
+        let new_root = new_server.nodestore().root_hash().unwrap();
+        let witness1 = generate_witness(
+            server_trie.nodestore(),
+            &ops1,
+            new_root.clone(),
+            truncation_depth,
+        )
+        .unwrap();
+        truncated = verify(&truncated, &witness1, &ops1).unwrap();
+        assert_eq!(*truncated.root_hash().unwrap(), new_root);
+        server_trie = new_server;
+
+        // Commit 2: update apple, delete banana
+        let ops2 = vec![
+            ClientOp::Put {
+                key: b"apple".to_vec().into(),
+                value: b"green".to_vec().into(),
+            },
+            ClientOp::Delete {
+                key: b"banana".to_vec().into(),
+            },
+        ];
+        let new_server = apply_batch(&server_trie, &ops2);
+        let new_root = new_server.nodestore().root_hash().unwrap();
+        let witness2 = generate_witness(
+            server_trie.nodestore(),
+            &ops2,
+            new_root.clone(),
+            truncation_depth,
+        )
+        .unwrap();
+        truncated = verify(&truncated, &witness2, &ops2).unwrap();
+        assert_eq!(*truncated.root_hash().unwrap(), new_root);
+        server_trie = new_server;
+
+        // Commit 3: insert date, elderberry
+        let ops3 = vec![
+            ClientOp::Put {
+                key: b"date".to_vec().into(),
+                value: b"brown".to_vec().into(),
+            },
+            ClientOp::Put {
+                key: b"elderberry".to_vec().into(),
+                value: b"purple".to_vec().into(),
+            },
+        ];
+        let new_server = apply_batch(&server_trie, &ops3);
+        let new_root = new_server.nodestore().root_hash().unwrap();
+        let witness3 = generate_witness(
+            server_trie.nodestore(),
+            &ops3,
+            new_root.clone(),
+            truncation_depth,
+        )
+        .unwrap();
+        truncated = verify(&truncated, &witness3, &ops3).unwrap();
+        assert_eq!(*truncated.root_hash().unwrap(), new_root);
+
+        // Final truncated trie should match server's current state
+        let expected_truncated =
+            TruncatedTrie::from_trie(new_server.nodestore(), truncation_depth).unwrap();
+        assert_eq!(
+            *truncated.root_hash().unwrap(),
+            *expected_truncated.root_hash().unwrap()
+        );
+    }
+
+    #[test]
+    fn test_witness_deep_truncation() {
+        // Use deeper truncation to exercise the code with more nodes
+        let old_trie =
+            create_test_trie(&[(b"a", b"1"), (b"ab", b"2"), (b"abc", b"3"), (b"abd", b"4")]);
+
+        let ops = vec![ClientOp::Put {
+            key: b"abe".to_vec().into(),
+            value: b"5".to_vec().into(),
+        }];
+
+        let new_trie = apply_batch(&old_trie, &ops);
+        let new_root_hash = new_trie.nodestore().root_hash().unwrap();
+
+        // Truncation depth 1 means most nodes are below K
+        let truncation_depth = 1;
+        let witness =
+            generate_witness(old_trie.nodestore(), &ops, new_root_hash, truncation_depth).unwrap();
+
+        assert!(
+            !witness.witness_nodes.is_empty(),
+            "should have witness nodes below truncation depth"
+        );
+
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
+
+        let updated_trie = verify(&truncated, &witness, &ops).unwrap();
+        assert_eq!(*updated_trie.root_hash().unwrap(), witness.new_root_hash);
+    }
+
+    // -- Helpers for OwnedBatchOp construction --
+
+    fn core_put(key: &[u8], value: &[u8]) -> OwnedBatchOp {
+        BatchOp::Put {
+            key: key.into(),
+            value: value.into(),
+        }
+    }
+
+    fn core_delete_range(prefix: &[u8]) -> OwnedBatchOp {
+        BatchOp::DeleteRange {
+            prefix: prefix.into(),
+        }
+    }
+
+    // -- Tests for validate_witness_ops --
+
+    /// Helper to build a `WitnessProof` with the given `batch_ops` for validation tests.
+    fn witness_with_ops(ops: Vec<ClientOp>) -> WitnessProof {
+        WitnessProof {
+            batch_ops: ops.into(),
+            new_root_hash: TrieHash::empty(),
+            witness_nodes: Box::new([]),
+        }
+    }
+
+    fn put_op(key: &[u8], value: &[u8]) -> ClientOp {
+        ClientOp::Put {
+            key: key.into(),
+            value: value.into(),
+        }
+    }
+
+    fn delete_op(key: &[u8]) -> ClientOp {
+        ClientOp::Delete { key: key.into() }
+    }
+
+    /// Convert `ClientOp` slice to `Vec<OwnedBatchOp>` for `validate_witness_ops` tests.
+    fn to_owned_ops(ops: &[ClientOp]) -> Vec<OwnedBatchOp> {
+        ops.iter().cloned().map(Into::into).collect()
+    }
+
+    /// Matching Put/Delete ops validate successfully.
+    #[test]
+    fn test_validate_ops_matching() {
+        let ops = vec![put_op(b"a", b"1"), delete_op(b"b")];
+        let witness = witness_with_ops(ops.clone());
+        assert!(validate_witness_ops(&witness, &to_owned_ops(&ops)).is_ok());
+    }
+
+    /// Two empty op lists validate successfully.
+    #[test]
+    fn test_validate_ops_both_empty() {
+        let witness = witness_with_ops(vec![]);
+        assert!(validate_witness_ops(&witness, &[]).is_ok());
+    }
+
+    /// Extra witness ops cause `OpsMismatch`.
+    #[test]
+    fn test_validate_ops_witness_longer() {
+        let witness = witness_with_ops(vec![put_op(b"a", b"1"), put_op(b"b", b"2")]);
+        let expected = to_owned_ops(&[put_op(b"a", b"1")]);
+        let err = validate_witness_ops(&witness, &expected).unwrap_err();
+        assert!(matches!(err, WitnessError::OpsMismatch { .. }));
+    }
+
+    /// Missing witness ops cause `OpsMismatch`.
+    #[test]
+    fn test_validate_ops_expected_longer() {
+        let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
+        let expected = to_owned_ops(&[put_op(b"a", b"1"), put_op(b"b", b"2")]);
+        let err = validate_witness_ops(&witness, &expected).unwrap_err();
+        assert!(matches!(err, WitnessError::OpsMismatch { .. }));
+    }
+
+    /// Wrong op type at same index causes `OpsMismatch`.
+    #[test]
+    fn test_validate_ops_type_mismatch() {
+        let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
+        let expected = to_owned_ops(&[delete_op(b"a")]);
+        let err = validate_witness_ops(&witness, &expected).unwrap_err();
+        assert!(matches!(err, WitnessError::OpsMismatch { index: 0, .. }));
+    }
+
+    /// Same op type with different key causes `OpsMismatch`.
+    #[test]
+    fn test_validate_ops_key_mismatch() {
+        let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
+        let expected = to_owned_ops(&[put_op(b"b", b"1")]);
+        let err = validate_witness_ops(&witness, &expected).unwrap_err();
+        assert!(matches!(err, WitnessError::OpsMismatch { index: 0, .. }));
+    }
+
+    /// Same `Put` key with different value causes `OpsMismatch`.
+    #[test]
+    fn test_validate_ops_value_mismatch() {
+        let witness = witness_with_ops(vec![put_op(b"a", b"1")]);
+        let expected = to_owned_ops(&[put_op(b"a", b"2")]);
+        let err = validate_witness_ops(&witness, &expected).unwrap_err();
+        assert!(matches!(err, WitnessError::OpsMismatch { index: 0, .. }));
+    }
+
+    /// Mismatch detected at index 1, not index 0.
+    #[test]
+    fn test_validate_ops_mismatch_at_second_index() {
+        let witness = witness_with_ops(vec![put_op(b"a", b"1"), put_op(b"b", b"2")]);
+        let expected = to_owned_ops(&[put_op(b"a", b"1"), delete_op(b"b")]);
+        let err = validate_witness_ops(&witness, &expected).unwrap_err();
+        assert!(matches!(err, WitnessError::OpsMismatch { index: 1, .. }));
+    }
+
+    #[test]
+    fn test_validate_ops_delete_range_lockstep() {
+        // DeleteRange should consume consecutive Delete ops with matching prefix
+        let witness = witness_with_ops(vec![
+            delete_op(b"a/1"),
+            delete_op(b"a/2"),
+            put_op(b"b", b"1"),
+        ]);
+        let expected: Vec<OwnedBatchOp> = vec![core_delete_range(b"a/"), core_put(b"b", b"1")];
+        let prefixes = validate_witness_ops(&witness, &expected).unwrap();
+        assert_eq!(prefixes.len(), 1);
+        assert_eq!(&*prefixes[0], b"a/");
+    }
+
+    #[test]
+    fn test_validate_ops_delete_range_empty_match() {
+        // DeleteRange with no matching deletes should succeed (zero consumed)
+        let witness = witness_with_ops(vec![put_op(b"b", b"1")]);
+        let expected: Vec<OwnedBatchOp> = vec![core_delete_range(b"a/"), core_put(b"b", b"1")];
+        let prefixes = validate_witness_ops(&witness, &expected).unwrap();
+        assert_eq!(prefixes.len(), 1);
+    }
+
+    #[test]
+    fn test_verify_witness_wrong_expected_ops() {
+        // verify_witness should return OpsMismatch before even checking root hash.
+        let old_trie = create_test_trie(&[(b"apple", b"red"), (b"banana", b"yellow")]);
+
+        let ops = vec![put_op(b"cherry", b"dark")];
+        let new_trie = apply_batch(&old_trie, &ops);
+        let new_root_hash = new_trie.nodestore().root_hash().unwrap();
+
+        let witness = generate_witness(old_trie.nodestore(), &ops, new_root_hash, 2).unwrap();
+
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), 2).unwrap();
+
+        // Pass wrong expected ops
+        let wrong_ops = vec![put_op(b"cherry", b"red")];
+        let result = verify(&truncated, &witness, &wrong_ops);
+        assert!(matches!(result, Err(WitnessError::OpsMismatch { .. })));
+    }
+
+    /// Correct expected ops pass validation and verify.
+    #[test]
+    fn test_verify_witness_correct_expected_ops() {
+        let old_trie = create_test_trie(&[(b"apple", b"red"), (b"banana", b"yellow")]);
+
+        let ops = vec![put_op(b"cherry", b"dark")];
+        let new_trie = apply_batch(&old_trie, &ops);
+        let new_root_hash = new_trie.nodestore().root_hash().unwrap();
+
+        let witness =
+            generate_witness(old_trie.nodestore(), &ops, new_root_hash.clone(), 2).unwrap();
+
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), 2).unwrap();
+
+        let updated = verify(&truncated, &witness, &ops).unwrap();
+        assert_eq!(*updated.root_hash().unwrap(), new_root_hash);
+    }
+
+    // -- Tests for pre-execution hash check (compute_grafted_root_hash) --
+
+    #[test]
+    fn test_pre_execution_hash_valid_witness_nodes() {
+        let old_trie = create_test_trie(&[
+            (b"apple", b"red"),
+            (b"banana", b"yellow"),
+            (b"cherry", b"dark"),
+        ]);
+        let old_root_hash = old_trie.nodestore().root_hash().unwrap();
+
+        let ops = vec![put_op(b"date", b"brown")];
+        let new_trie = apply_batch(&old_trie, &ops);
+        let new_root_hash = new_trie.nodestore().root_hash().unwrap();
+
+        let witness = generate_witness(old_trie.nodestore(), &ops, new_root_hash, 2).unwrap();
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), 2).unwrap();
+
+        let updated = verify(&truncated, &witness, &ops).unwrap();
+        assert_eq!(*updated.root_hash().unwrap(), witness.new_root_hash);
+
+        // Also explicitly check compute_grafted_root_hash
+        let root = truncated.root().unwrap();
+        let mut node_tree = to_node_tree(root).unwrap();
+        let witness_map: BTreeMap<&[u8], &Node> = witness
+            .witness_nodes
+            .iter()
+            .map(|wn| (wn.path.as_ref(), &wn.node))
+            .collect();
+        graft_witness_nodes(&mut node_tree, &witness_map, &mut Vec::new()).unwrap();
+        let grafted_hash = compute_grafted_root_hash(&node_tree, &Path::new());
+        assert_eq!(grafted_hash, old_root_hash);
+    }
+
+    fn create_deep_trie() -> ImmutableMerkle {
+        let mut keys: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for i in 0u8..20 {
+            keys.push((vec![i, 0, 0, 0], vec![i]));
+        }
+        let key_refs: Vec<(&[u8], &[u8])> = keys
+            .iter()
+            .map(|(k, v)| (k.as_slice(), v.as_slice()))
+            .collect();
+        create_test_trie(&key_refs)
+    }
+
+    #[test]
+    fn test_pre_execution_hash_tampered_witness_value() {
+        let old_trie = create_deep_trie();
+
+        let ops = vec![put_op(&[5, 0, 0, 0], b"updated")];
+        let new_trie = apply_batch(&old_trie, &ops);
+        let new_root_hash = new_trie.nodestore().root_hash().unwrap();
+
+        let truncation_depth = 0;
+        let mut witness =
+            generate_witness(old_trie.nodestore(), &ops, new_root_hash, truncation_depth).unwrap();
+
+        assert!(
+            !witness.witness_nodes.is_empty(),
+            "need witness nodes at truncation depth 0"
+        );
+
+        let mut tampered_nodes: Vec<WitnessNode> = witness.witness_nodes.to_vec();
+        let mut did_tamper = false;
+        for wn in &mut tampered_nodes {
+            if wn.path.is_empty() {
+                continue;
+            }
+            match &mut wn.node {
+                Node::Leaf(leaf) => leaf.value = b"TAMPERED".to_vec().into(),
+                Node::Branch(branch) => {
+                    branch.value = Some(b"TAMPERED".to_vec().into());
+                }
+            }
+            did_tamper = true;
+            break;
+        }
+        assert!(did_tamper, "need a non-root witness node to tamper");
+        witness.witness_nodes = tampered_nodes.into();
+
+        let truncated = TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
+        let result = verify(&truncated, &witness, &ops);
+        assert!(
+            matches!(result, Err(WitnessError::InvalidWitnessNodes { .. })),
+            "expected InvalidWitnessNodes, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn test_pre_execution_hash_tampered_branch_missing_child() {
+        let old_trie = create_deep_trie();
+
+        let ops = vec![put_op(&[5, 0, 0, 0], b"updated")];
+        let new_trie = apply_batch(&old_trie, &ops);
+        let new_root_hash = new_trie.nodestore().root_hash().unwrap();
+
+        let truncation_depth = 0;
+        let mut witness =
+            generate_witness(old_trie.nodestore(), &ops, new_root_hash, truncation_depth).unwrap();
+
+        let mut tampered_nodes: Vec<WitnessNode> = witness.witness_nodes.to_vec();
+        let mut tampered = false;
+        for wn in &mut tampered_nodes {
+            if wn.path.is_empty() {
+                continue;
+            }
+            if let Node::Branch(ref mut branch) = wn.node {
+                for (_, child_opt) in &mut branch.children {
+                    if child_opt.is_some() {
+                        *child_opt = None;
+                        tampered = true;
+                        break;
+                    }
+                }
+                if tampered {
+                    break;
+                }
+            }
+        }
+
+        if tampered {
+            witness.witness_nodes = tampered_nodes.into();
+            let truncated =
+                TruncatedTrie::from_trie(old_trie.nodestore(), truncation_depth).unwrap();
+            let result = verify(&truncated, &witness, &ops);
+            assert!(
+                matches!(result, Err(WitnessError::InvalidWitnessNodes { .. })),
+                "expected InvalidWitnessNodes, got {result:?}"
+            );
+        }
     }
 }

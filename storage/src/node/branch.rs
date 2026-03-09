@@ -23,6 +23,11 @@ pub enum NodeError {
     /// A child node has no hash. This should not occur in committed or
     /// immutable tries where all children are hashed before use.
     UnhashedChild,
+    /// No storage backend is available to read persisted nodes.
+    ///
+    /// Returned when an operation expects only in-memory nodes but encounters
+    /// a persisted node that would require storage access.
+    NoStorage,
 }
 
 impl From<FileIoError> for NodeError {
@@ -49,6 +54,9 @@ impl std::fmt::Display for NodeError {
             }
             NodeError::UnhashedChild => {
                 write!(f, "child node has no hash (expected only in hashed tries)")
+            }
+            NodeError::NoStorage => {
+                write!(f, "no storage backend available for persisted node")
             }
         }
     }
