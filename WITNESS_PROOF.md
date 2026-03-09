@@ -150,7 +150,7 @@ happens in `expand_delete_ranges()` (`firewood/src/remote/witness.rs`), called
 from `fwd_generate_witness()` in the Rust FFI layer (`ffi/src/remote.rs`):
 
 1. **Scan the parent state**: for each `DeleteRange { prefix }`, iterate the
-   committed revision via `view.iter_from(prefix)` to enumerate every key
+   parent revision via `view.iter_from(prefix)` to enumerate every key
    matching the prefix.
 2. **Skip already-deleted keys**: keys already recorded as deleted by earlier
    operations in the same batch are skipped (tracked in a `HashSet`).
@@ -199,7 +199,7 @@ traversed regardless.
 #### Client-side verification of DeleteRange
 
 The client never sees a `DeleteRange` in the witness `batch_ops` — only the
-expanded `Delete` operations. Verification relies on two checks working
+expanded `Delete` operations. Verification relies on three checks working
 together to prove the server expanded the `DeleteRange` correctly:
 
 **Check 1 — Batch ops validation (`ValidateOps`)**: the client walks its
@@ -224,13 +224,23 @@ leave that key in place, producing a different root hash — the check fails.
 Conversely, if the server included a `Delete` for a key that does not exist in
 the trie, `merkle.remove()` is a no-op, so the hash is unaffected.
 
-Together, the two checks prove:
+**Check 3 — Order-aware completeness (`allowed_surviving_keys`)**: after
+re-execution and hash verification, the client iterates the post-state trie
+for each `DeleteRange` prefix and verifies that every surviving key was
+explicitly `Put` *after* the `DeleteRange` and not subsequently deleted by a
+`Delete` or covered by another `DeleteRange`. This check uses
+`allowed_surviving_keys()`, which walks the client's original ops from each
+`DeleteRange` forward to compute the exact set of legitimately surviving keys.
 
-| Server misbehavior                   | Caught by           |
-|--------------------------------------|---------------------|
-| Omitted a key matching the prefix    | Root hash mismatch  |
-| Included a key outside the prefix    | `ValidateOps`       |
-| Included all correct keys            | Both checks pass    |
+Together, the three checks prove:
+
+| Server misbehavior                      | Caught by                     |
+|-----------------------------------------|-------------------------------|
+| Omitted a key matching the prefix       | Root hash mismatch            |
+| Included a key outside the prefix       | `ValidateOps`                 |
+| Omitted delete of a pre-DR Put          | `allowed_surviving_keys`      |
+| Omitted delete from a second DR         | `allowed_surviving_keys`      |
+| Included all correct keys               | All three checks pass         |
 
 ```text
 Example: client sends DeleteRange("b/"), trie has keys b/x and b/y
@@ -247,6 +257,32 @@ Server adds Delete("c"):     Witness: Delete("b/x"), Delete("b/y"), Delete("c")
   ValidateOps: ✗  "c" does not start with "b/", stops consumption
                    → "c" is an extra op, rejected
 ```
+
+#### Ordering attacks on DeleteRange
+
+The naive "no keys may survive" rule for `DeleteRange` completeness is too
+strict — it rejects legitimate `[DeleteRange, Put]` patterns where the `Put`
+comes after the range delete and should survive. Two ordering attacks motivate
+the `allowed_surviving_keys` check:
+
+**Attack 1 — Pre-DR Put**: `[Put("a/1"), DeleteRange("a/")]`. The `Put`
+precedes the `DeleteRange`, so `a/1` must be deleted. A malicious server that
+omits the delete from the witness expansion leaves `a/1` in the post-state
+trie. The root hash may match (the server computed it from the malicious
+state), but `allowed_surviving_keys` sees that `a/1` was Put *before* the
+`DR`, so it is not in the allowed set — the check fails.
+
+**Attack 2 — Sandwiched Put**: `[DeleteRange("a/"), Put("a/1"),
+DeleteRange("a/")]`. The second `DeleteRange` covers `a/1`, so it must be
+deleted. A server that only expands the first `DeleteRange` and keeps `a/1`
+alive would produce a witness that passes the naive check (the first `DR`'s
+prefix has a surviving key, but it was "Put" after). However,
+`allowed_surviving_keys` walks past the second `DR` and removes `a/1` from the
+allowed set — the check catches the omission.
+
+**Positive case**: `[DeleteRange("a/"), Put("a/3")]`. The `Put` comes after
+the `DR`, and no subsequent operation deletes `a/3`. `allowed_surviving_keys`
+includes `a/3` in the allowed set, so verification succeeds.
 
 ### Node Conversion
 
@@ -284,21 +320,32 @@ checking the result.
    │   └── If found: replace Proxy with full Node, recurse into it
    └── After grafting: Proxy stubs remain only for untouched subtrees
 
-4. Create in-memory Merkle for re-execution
+4. Pre-execution hash check
+   ├── compute_grafted_root_hash() on the grafted tree
+   ├── Compare against truncated trie's trusted root hash
+   └── Mismatch → WitnessError::InvalidWitnessNodes
+       (catches tampered witness nodes before re-execution)
+
+5. Create in-memory Merkle for re-execution
    ├── Build a MemStore with the grafted tree as root
    └── Select hash algorithm (Keccak-256 if ethhash, SHA-256 otherwise)
 
-5. Re-execute batch operations
+6. Re-execute batch operations
    └── for each op: merkle.insert(key, value) or merkle.remove(key)
        (DeleteRange has already been expanded to individual Deletes)
 
-6. Hash the result
+7. Hash the result
    ├── Convert mutable proposal → immutable (computes all hashes)
    ├── Extract root hash (or TrieHash::empty() for empty tries)
    └── Compare against witness.new_root_hash
        └── Mismatch → WitnessError::RootHashMismatch
 
-7. Extract new truncated trie
+8. DeleteRange completeness check
+   ├── For each DeleteRange prefix, iterate the post-state trie
+   ├── allowed_surviving_keys() computes which keys may survive
+   └── Any surviving key not in the allowed set → OpsMismatch
+
+9. Extract new truncated trie
    └── TruncatedTrie::from_trie(result, truncation_depth)
 ```
 
@@ -391,9 +438,11 @@ Server                                     Client
    │                              verify_witness: │
    │                              1. to_node_tree │
    │                              2. graft nodes  │
-   │                              3. re-execute   │
-   │                              4. check hash   │
-   │                              5. re-truncate  │
+   │                              3. pre-exec hash│
+   │                              4. re-execute   │
+   │                              5. check hash   │
+   │                              6. DR complete? │
+   │                              7. re-truncate  │
    │                                              │
    │                              adopt new state │
    │                                              │

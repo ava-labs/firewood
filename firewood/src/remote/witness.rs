@@ -135,7 +135,8 @@ impl From<ClientOp> for OwnedBatchOp {
 ///
 /// # Arguments
 ///
-/// * `view` - The committed revision to scan for existing keys
+/// * `view` - The parent revision to scan for existing keys (typically the
+///   pre-batch state, e.g. an `ImmutableProposal` or committed revision)
 /// * `ops` - Core batch operations that may contain `DeleteRange`
 ///
 /// # Errors
