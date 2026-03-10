@@ -23,7 +23,7 @@ use crate::persist_worker::{PersistError, PersistWorker};
 use crate::root_store::RootStore;
 use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
 
-use firewood_metrics::{firewood_increment, firewood_set};
+use firewood_metrics::{firewood_increment, firewood_record, firewood_set};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal,
@@ -298,6 +298,13 @@ impl RevisionManager {
         }
 
         let committed = proposal.as_committed();
+
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "deleted list length will never exceed 2^52"
+        )]
+        let deleted_list_len = committed.deleted_len() as f64;
+        firewood_record!(crate::registry::DELETED_LIST_LEN, deleted_list_len);
 
         // 3. Revision reaping
         // When we exceed max_revisions, remove the oldest revision from memory
