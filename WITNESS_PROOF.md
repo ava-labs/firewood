@@ -75,12 +75,12 @@ builds the truncated copy bottom-up:
 
 A `WitnessProof` contains three pieces:
 
-| Field            | Description                                                   |
-|------------------|---------------------------------------------------------------|
-| `batch_ops`      | The expanded `Put` / `Delete` operations (see below)          |
-| `new_root_hash`  | The root hash the server computed after applying the ops      |
-| `witness_nodes`  | The minimal set of trie nodes below depth K needed for        |
-|                  | independent re-execution                                      |
+| Field           | Description                                              |
+|-----------------|----------------------------------------------------------|
+| `batch_ops`     | The expanded `Put` / `Delete` operations (see below)     |
+| `new_root_hash` | The root hash the server computed after applying the ops |
+| `witness_nodes` | The minimal set of trie nodes below depth K needed for   |
+|                 | independent re-execution                                 |
 
 Each `WitnessNode` carries a nibble path (its position in the trie) and the
 full `Node` data (partial path, value, children — with non-witness children
@@ -202,7 +202,7 @@ The client never sees a `DeleteRange` in the witness `batch_ops` — only the
 expanded `Delete` operations. Verification relies on three checks working
 together to prove the server expanded the `DeleteRange` correctly:
 
-**Check 1 — Batch ops validation (`ValidateOps`)**: the client walks its
+**Check 1 — Batch ops validation (`validate_witness_ops`)**: the client walks its
 original ops and the witness ops in lockstep. When it encounters a
 `DeleteRange { prefix }` in its original batch, it consumes zero or more
 consecutive `Delete` ops from the witness, verifying that every consumed key
@@ -237,7 +237,7 @@ Together, the three checks prove:
 | Server misbehavior                      | Caught by                     |
 |-----------------------------------------|-------------------------------|
 | Omitted a key matching the prefix       | Root hash mismatch            |
-| Included a key outside the prefix       | `ValidateOps`                 |
+| Included a key outside the prefix       | `validate_witness_ops`        |
 | Omitted delete of a pre-DR Put          | `allowed_surviving_keys`      |
 | Omitted delete from a second DR         | `allowed_surviving_keys`      |
 | Included all correct keys               | All three checks pass         |
@@ -246,15 +246,15 @@ Together, the three checks prove:
 Example: client sends DeleteRange("b/"), trie has keys b/x and b/y
 
 Correct expansion:           Witness: Delete("b/x"), Delete("b/y")
-  ValidateOps: ✓  both keys start with "b/"
+  validate_witness_ops: ✓  both keys start with "b/"
   Re-execute:  remove("b/x"), remove("b/y") → same hash as remove_prefix("b/") ✓
 
 Server omits b/y:            Witness: Delete("b/x")
-  ValidateOps: ✓  "b/x" starts with "b/"
+  validate_witness_ops: ✓  "b/x" starts with "b/"
   Re-execute:  remove("b/x") only → "b/y" still in trie → hash mismatch ✗
 
 Server adds Delete("c"):     Witness: Delete("b/x"), Delete("b/y"), Delete("c")
-  ValidateOps: ✗  "c" does not start with "b/", stops consumption
+  validate_witness_ops: ✗  "c" does not start with "b/", stops consumption
                    → "c" is an extra op, rejected
 ```
 
@@ -306,46 +306,41 @@ checking the result.
 ### Step-by-Step
 
 ```text
-1. Convert truncated trie to a plain Node tree
+1. Validate batch ops (validate_witness_ops)
+   ├── Walk client's original ops and witness ops in lockstep
+   ├── Put/Delete: exact match required
+   ├── DeleteRange: consumes consecutive Deletes with matching prefix
+   └── Collect delete_range_prefixes for step 6
+
+2. Convert truncated trie to a plain Node tree (to_node_tree)
    ├── MaybePersisted children → unwrap to Child::Node (recursive)
    ├── Proxy / AddressWithHash → keep as Child::Proxy
    └── Result: tree with only Child::Node and Child::Proxy variants
 
-2. Build witness lookup map
-   └── BTreeMap<nibble_path, &Node> from witness_nodes
-
 3. Graft witness nodes onto the tree
+   ├── Build BTreeMap<nibble_path, &Node> from witness_nodes
    ├── Walk tree recursively, tracking nibble path
    ├── At each Proxy child, check witness map
    │   └── If found: replace Proxy with full Node, recurse into it
    └── After grafting: Proxy stubs remain only for untouched subtrees
 
-4. Pre-execution hash check
-   ├── compute_grafted_root_hash() on the grafted tree
-   ├── Compare against truncated trie's trusted root hash
-   └── Mismatch → WitnessError::InvalidWitnessNodes
-       (catches tampered witness nodes before re-execution)
-
-5. Create in-memory Merkle for re-execution
+4. Create in-memory Merkle and re-execute batch operations
    ├── Build a MemStore with the grafted tree as root
-   └── Select hash algorithm (Keccak-256 if ethhash, SHA-256 otherwise)
-
-6. Re-execute batch operations
+   ├── Select hash algorithm (Keccak-256 if ethhash, SHA-256 otherwise)
    └── for each op: merkle.insert(key, value) or merkle.remove(key)
-       (DeleteRange has already been expanded to individual Deletes)
 
-7. Hash the result
+5. Hash the result and verify
    ├── Convert mutable proposal → immutable (computes all hashes)
    ├── Extract root hash (or TrieHash::empty() for empty tries)
    └── Compare against witness.new_root_hash
        └── Mismatch → WitnessError::RootHashMismatch
 
-8. DeleteRange completeness check
+6. DeleteRange completeness check
    ├── For each DeleteRange prefix, iterate the post-state trie
    ├── allowed_surviving_keys() computes which keys may survive
    └── Any surviving key not in the allowed set → OpsMismatch
 
-9. Extract new truncated trie
+7. Extract new truncated trie
    └── TruncatedTrie::from_trie(result, truncation_depth)
 ```
 
@@ -355,10 +350,9 @@ re-truncated result as its new state.
 
 ### Batch Ops Validation
 
-Before re-execution, the client validates that the witness proof's `batch_ops`
-match the operations the client originally sent to the server. The Go client
-(`ffi/remote/client.go`) calls `witness.ValidateOps(ops)` which invokes the
-Rust `fwd_validate_witness_ops()` function (`ffi/src/remote.rs`).
+Before re-execution, `verify_witness()` calls `validate_witness_ops()` internally
+(step 1) to validate that the witness proof's `batch_ops` match the operations
+the client originally sent to the server.
 
 The validation walks the client's original ops and the witness ops in lockstep:
 
@@ -374,7 +368,7 @@ re-execution.
 
 For `Put` and `Delete`, batch ops validation is a defense-in-depth measure —
 even without it, substituted operations would produce a different root hash
-(step 6) unless the server found a hash collision. For `DeleteRange`, however,
+(step 5) unless the server found a hash collision. For `DeleteRange`, however,
 validation is essential: it is the only check that prevents the server from
 smuggling deletions of keys outside the prefix range into the expanded batch
 (see [Client-side verification of DeleteRange](#client-side-verification-of-deleterange)).
@@ -406,7 +400,7 @@ The full lifecycle of the remote storage protocol:
 Server                                     Client
 ──────                                     ──────
 
-   ┌─── Bootstrap ──────────────────────────────┐
+   ┌─── Bootstrap ───────────────────────────────┐
    │                                             │
    │  get_truncated_trie(root_hash, K) ────────► │
    │                                             │ verify root hash matches
@@ -414,7 +408,7 @@ Server                                     Client
    │                                             │
    └─────────────────────────────────────────────┘
 
-   ┌─── Reads ──────────────────────────────────┐
+   ┌─── Reads ───────────────────────────────────┐
    │                                             │
    │  get_value(key) ──────────────────────────► │
    │                                             │ server generates proof
@@ -423,22 +417,17 @@ Server                                     Client
    │                                             │   trusted root hash
    └─────────────────────────────────────────────┘
 
-   ┌─── Commits ─────────────────────────────────┐
+   ┌─── Commits ──────────────────────────────────┐
    │                                              │
    │  create_proposal(batch_ops) ───────────────► │
    │    server expands DeleteRange → Deletes      │
    │    server applies ops, generates witness     │
    │  ◄──────── witness_proof_bytes ───────────── │
    │                                              │
-   │                   validate_ops(original_ops) │
-   │                     (Put/Delete: exact match │
-   │                      DeleteRange: prefix     │
-   │                        match on Deletes)     │
-   │                                              │
    │                              verify_witness: │
-   │                              1. to_node_tree │
-   │                              2. graft nodes  │
-   │                              3. pre-exec hash│
+   │                              1. validate ops │
+   │                              2. to_node_tree │
+   │                              3. graft nodes  │
    │                              4. re-execute   │
    │                              5. check hash   │
    │                              6. DR complete? │
@@ -466,19 +455,19 @@ integers for compact encoding.
 ├────────────────────────────────────────┤
 │ varint    batch_ops count              │
 │ ┌──────────────────────────────┐       │
-│ │ 1 byte  op tag (PUT=0/DEL=1) │ ×N   │
-│ │ varint  key length            │      │
-│ │ bytes   key                   │      │
-│ │ [if PUT]:                     │      │
-│ │   varint  value length        │      │
-│ │   bytes   value               │      │
+│ │ 1 byte  op tag (PUT=0/DEL=1) │ ×N    │
+│ │ varint  key length           │       │
+│ │ bytes   key                  │       │
+│ │ [if PUT]:                    │       │
+│ │   varint  value length       │       │
+│ │   bytes   value              │       │
 │ └──────────────────────────────┘       │
 ├────────────────────────────────────────┤
 │ varint    witness_nodes count          │
 │ ┌──────────────────────────────┐       │
-│ │ varint  path length           │ ×M   │
-│ │ bytes   nibble path           │      │
-│ │ [serialized Node]             │      │
+│ │ varint  path length          │ ×M    │
+│ │ bytes   nibble path          │       │
+│ │ [serialized Node]            │       │
 │ └──────────────────────────────┘       │
 └────────────────────────────────────────┘
 ```
@@ -504,13 +493,13 @@ Nodes are serialized recursively. Branch nodes include all 16 child slots.
 
 ```text
 Branch:                          Leaf:
-┌─────────────────────┐          ┌─────────────────────┐
-│ 1 byte  tag (0)     │          │ 1 byte  tag (1)     │
+┌──────────────────────┐          ┌──────────────────────┐
+│ 1 byte  tag (0)      │          │ 1 byte  tag (1)      │
 │ varint  path length  │          │ varint  path length  │
 │ bytes   partial_path │          │ bytes   partial_path │
 │ 1 byte  has_value    │          │ varint  value length │
 │ [if has_value]:      │          │ bytes   value        │
-│   varint value length│          └─────────────────────┘
+│   varint value length│          └──────────────────────┘
 │   bytes  value       │
 │ [16 × child slot]:   │
 │   NONE(0)            │
@@ -518,7 +507,7 @@ Branch:                          Leaf:
 │   NODE(2) + node     │
 │   MAYBE_PERSISTED(3) │
 │     + hash + node    │
-└─────────────────────┘
+└──────────────────────┘
 ```
 
 ## Security Properties
@@ -563,12 +552,13 @@ ensure the client and server use matching hash functions.
 | `firewood/src/remote/truncated_trie.rs` | `TruncatedTrie` construction and verification |
 | `firewood/src/remote/witness.rs`        | Witness generation, DeleteRange expansion     |
 | `firewood/src/remote/ser.rs`            | Binary serialization for wire format          |
+| `firewood/src/remote/cache.rs`          | Client-side read cache with eviction policies |
 | `firewood/src/remote/client.rs`         | `RemoteClient` and `RemoteTransport`          |
 | `storage/src/node/branch.rs`            | `Child` enum, `NodeError`                     |
 | `storage/src/node/persist.rs`           | `MaybePersistedNode`                          |
 | `storage/src/hashednode.rs`             | `hash_node()` function                        |
 | `ffi/remote/server.go`                  | gRPC server, proposal management              |
 | `ffi/remote/client.go`                  | gRPC client, witness verification             |
-| `ffi/remote/db.go`                      | `RemoteDB` wrapper, ops validation            |
-| `ffi/src/remote.rs`                     | FFI: witness generation, validation           |
+| `ffi/remote/db.go`                      | `RemoteDB` wrapper                            |
+| `ffi/src/remote.rs`                     | FFI: witness generation and verification      |
 | `ffi/witness_proof.go`                  | Go wrapper for `WitnessProof`                 |
