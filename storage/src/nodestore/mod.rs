@@ -69,7 +69,8 @@ use crate::hashednode::hash_node;
 use crate::node::Node;
 use crate::node::persist::MaybePersistedNode;
 use crate::{
-    CacheReadStrategy, Child, FileIoError, HashType, Path, ReadableStorage, SharedNode, TrieHash,
+    CacheReadStrategy, Child, FileIoError, HashType, NodeError, Path, ReadableStorage, SharedNode,
+    TrieHash,
 };
 
 use super::linear::WritableStorage;
@@ -196,7 +197,9 @@ impl Parentable for Arc<ImmutableProposal> {
             .and_then(|root| root.hash().cloned().map(HashType::into_triehash))
     }
     fn root(&self) -> Option<MaybePersistedNode> {
-        self.root.as_ref().map(Child::as_maybe_persisted_node)
+        self.root
+            .as_ref()
+            .and_then(|c| c.try_as_maybe_persisted_node().ok())
     }
     fn root_address(&self) -> Option<LinearAddress> {
         self.root.as_ref().and_then(Child::persisted_address)
@@ -225,7 +228,9 @@ impl Parentable for Committed {
             .and_then(|root| root.hash().cloned().map(HashType::into_triehash))
     }
     fn root(&self) -> Option<MaybePersistedNode> {
-        self.root.as_ref().map(Child::as_maybe_persisted_node)
+        self.root
+            .as_ref()
+            .and_then(|c| c.try_as_maybe_persisted_node().ok())
     }
     fn root_address(&self) -> Option<LinearAddress> {
         self.root.as_ref().and_then(Child::persisted_address)
@@ -312,6 +317,22 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
     pub fn into_root(self) -> Option<Node> {
         self.kind.root
     }
+
+    /// Creates a new [`NodeStore`] with the given root node and no parent lineage.
+    ///
+    /// This is used by the remote module's witness verification to create a
+    /// `MutableProposal` from a pre-constructed in-memory trie root.
+    #[must_use]
+    pub fn new_proposal_with_root(storage: Arc<S>, root: Node) -> Self {
+        NodeStore {
+            kind: MutableProposal {
+                root: Some(root),
+                deleted: Vec::default(),
+                parent: NodeStoreParent::Committed(None),
+            },
+            storage,
+        }
+    }
 }
 
 impl<S: WritableStorage> NodeStore<MutableProposal, S> {
@@ -371,7 +392,7 @@ where
     fn root_node(&self) -> Option<SharedNode> {
         self.deref().root_node()
     }
-    fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
+    fn root_as_maybe_persisted_node(&self) -> Result<Option<MaybePersistedNode>, NodeError> {
         self.deref().root_as_maybe_persisted_node()
     }
 }
@@ -387,7 +408,11 @@ pub trait RootReader {
     /// Returns the root of the trie as a `MaybePersistedNode`.
     /// Callers that might want to modify the root or know how it is stored
     /// should use this function.
-    fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode>;
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NodeError`] if the root is a Proxy child (requires remote lookup).
+    fn root_as_maybe_persisted_node(&self) -> Result<Option<MaybePersistedNode>, NodeError>;
 }
 
 /// A committed revision of a merkle trie.
@@ -599,39 +624,50 @@ impl<S: ReadableStorage> RootReader for NodeStore<MutableProposal, S> {
     fn root_node(&self) -> Option<SharedNode> {
         self.kind.root.as_ref().map(|node| node.clone().into())
     }
-    fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
-        self.kind
+    fn root_as_maybe_persisted_node(&self) -> Result<Option<MaybePersistedNode>, NodeError> {
+        Ok(self
+            .kind
             .root
             .as_ref()
-            .map(|node| SharedNode::new(node.clone()).into())
+            .map(|node| SharedNode::new(node.clone()).into()))
     }
 }
 
 impl<S: ReadableStorage> RootReader for NodeStore<Committed, S> {
     fn root_node(&self) -> Option<SharedNode> {
-        // TODO: If the read_node fails, we just say there is no root; this is incorrect
+        let mpn = self
+            .kind
+            .root
+            .as_ref()?
+            .try_as_maybe_persisted_node()
+            .ok()?;
+        mpn.as_shared_node(self).ok()
+    }
+    fn root_as_maybe_persisted_node(&self) -> Result<Option<MaybePersistedNode>, NodeError> {
         self.kind
             .root
             .as_ref()
-            .map(Child::as_maybe_persisted_node)
-            .and_then(|node| node.as_shared_node(self).ok())
-    }
-    fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
-        self.kind.root.as_ref().map(Child::as_maybe_persisted_node)
+            .map(Child::try_as_maybe_persisted_node)
+            .transpose()
     }
 }
 
 impl<S: ReadableStorage> RootReader for NodeStore<Arc<ImmutableProposal>, S> {
     fn root_node(&self) -> Option<SharedNode> {
-        // Use the MaybePersistedNode's as_shared_node method to get the root
+        let mpn = self
+            .kind
+            .root
+            .as_ref()?
+            .try_as_maybe_persisted_node()
+            .ok()?;
+        mpn.as_shared_node(self).ok()
+    }
+    fn root_as_maybe_persisted_node(&self) -> Result<Option<MaybePersistedNode>, NodeError> {
         self.kind
             .root
             .as_ref()
-            .map(Child::as_maybe_persisted_node)
-            .and_then(|node| node.as_shared_node(self).ok())
-    }
-    fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
-        self.kind.root.as_ref().map(Child::as_maybe_persisted_node)
+            .map(Child::try_as_maybe_persisted_node)
+            .transpose()
     }
 }
 
@@ -939,10 +975,13 @@ mod tests {
         let node_store = node_store.as_committed();
 
         let err = node_store.persist(&mut header).unwrap_err();
-        let err_ctx = err.context();
+        let crate::NodeError::Io(file_io_err) = err else {
+            panic!("expected NodeError::Io, got {err:?}");
+        };
+        let err_ctx = file_io_err.context();
         assert!(err_ctx == Some("allocate_node"));
 
-        let io_err = err
+        let io_err = file_io_err
             .source()
             .unwrap()
             .downcast_ref::<std::io::Error>()

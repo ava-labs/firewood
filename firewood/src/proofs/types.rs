@@ -48,7 +48,7 @@
 )]
 
 use firewood_storage::{
-    Children, FileIoError, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, Path,
+    Children, HashType, Hashable, IntoHashType, IntoSplitPath, NibblesIterator, NodeError, Path,
     PathBuf, PathComponent, PathIterItem, Preimage, SplitPath, TrieHash, TriePath, ValueDigest,
 };
 use thiserror::Error;
@@ -105,7 +105,7 @@ pub enum ProofError {
 
     /// Error from the merkle package
     #[error("{0:?}")]
-    IO(#[from] FileIoError),
+    IO(#[from] NodeError),
 
     /// Error deserializing a proof
     #[error("error deserializing a proof: {0}")]

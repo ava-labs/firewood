@@ -6,7 +6,7 @@ use crate::merkle::parallel::CreateProposalError;
 use crate::merkle::{Key, Value};
 use crate::persist_worker::PersistError;
 use crate::{Proof, ProofError, ProofNode, RangeProof};
-use firewood_storage::{FileIoError, TrieHash};
+use firewood_storage::{FileIoError, HashType, NodeError, TrieHash};
 use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
@@ -289,11 +289,34 @@ pub enum Error {
         /// The validator ID
         id: ValidatorId,
     },
+
+    #[error("Proxy child encountered (hash={0}): requires remote lookup")]
+    /// A Proxy child was encountered that requires remote lookup
+    ProxyChild(HashType),
+
+    #[error("child node has no hash (expected only in hashed tries)")]
+    /// A child node has no hash
+    UnhashedChild,
+
+    #[error("no storage backend available for persisted node")]
+    /// No storage backend is available to read persisted nodes
+    NoStorage,
 }
 
 impl From<std::convert::Infallible> for Error {
     fn from(value: std::convert::Infallible) -> Self {
         match value {}
+    }
+}
+
+impl From<NodeError> for Error {
+    fn from(e: NodeError) -> Self {
+        match e {
+            NodeError::Io(io_err) => Error::FileIO(io_err),
+            NodeError::Proxy(hash) => Error::ProxyChild(hash),
+            NodeError::UnhashedChild => Error::UnhashedChild,
+            NodeError::NoStorage => Error::NoStorage,
+        }
     }
 }
 
@@ -349,7 +372,7 @@ impl From<crate::db::DbError> for Error {
 impl From<CreateProposalError> for Error {
     fn from(value: CreateProposalError) -> Self {
         match value {
-            CreateProposalError::FileIoError(err) => Error::FileIO(err),
+            CreateProposalError::NodeError(err) => Error::from(err),
             CreateProposalError::SendError => Error::SendErrorToWorker,
             CreateProposalError::InvalidConversionToPathComponent => {
                 Error::InvalidConversionToPathComponent
@@ -410,7 +433,7 @@ pub trait Db {
 /// 3. From [`Proposal::propose`] which is a view on top of another proposal.
 pub trait DbView {
     /// The type of a stream of key/value pairs
-    type Iter<'view>: Iterator<Item = Result<(Key, Value), FileIoError>>
+    type Iter<'view>: Iterator<Item = Result<(Key, Value), NodeError>>
     where
         Self: 'view;
 
@@ -480,8 +503,7 @@ pub trait DbView {
 }
 
 /// A boxed iterator over key/value pairs.
-pub type BoxKeyValueIter<'view> =
-    Box<dyn Iterator<Item = Result<(Key, Value), FileIoError>> + 'view>;
+pub type BoxKeyValueIter<'view> = Box<dyn Iterator<Item = Result<(Key, Value), NodeError>> + 'view>;
 
 /// A dynamic dyspatch version of [`DbView`] that can be shared.
 pub type ArcDynDbView = Arc<dyn DynDbView>;

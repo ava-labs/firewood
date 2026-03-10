@@ -22,7 +22,7 @@ use crate::{
     db::BatchOp,
     merkle::{Key, Value},
     proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
-    v2::api::{FrozenChangeProof, FrozenRangeProof},
+    v2::api::{FrozenChangeProof, FrozenProof, FrozenRangeProof},
 };
 
 impl FrozenRangeProof {
@@ -74,6 +74,46 @@ impl<T: Version0> Version0 for Box<[T]> {
         // An incorrect, or unexpectedly large value could lead to DoS via OOM
         // or panicing
         (0..num_items).map(|_| reader.read_v0_item()).collect()
+    }
+}
+
+impl FrozenProof {
+    /// Parses a `FrozenProof` (single-key proof) from the given byte slice.
+    ///
+    /// Currently only V0 proofs are supported. See [`FrozenProof::write_to_vec`]
+    /// for the serialization format.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`ReadError`] if the data is invalid. See the enum variants for
+    /// the possible reasons.
+    pub fn from_slice(data: &[u8]) -> Result<Self, ReadError> {
+        let mut reader = ProofReader::new(data);
+
+        let header = reader.read_item::<Header>()?;
+        header
+            .validate(Some(ProofType::Single))
+            .map_err(ReadError::InvalidHeader)?;
+
+        if header.version != 0 {
+            return Err(ReadError::InvalidHeader(
+                InvalidHeader::UnsupportedVersion {
+                    found: header.version,
+                },
+            ));
+        }
+
+        let mut reader = V0Reader::new(reader, header);
+        let nodes: Box<[ProofNode]> = reader.read_v0_item()?;
+        if reader.remainder().is_empty() {
+            Ok(Proof::new(nodes))
+        } else {
+            Err(reader.invalid_item(
+                "trailing bytes",
+                "no data after the proof",
+                format!("{} bytes", reader.remainder().len()),
+            ))
+        }
     }
 }
 

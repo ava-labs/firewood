@@ -1,7 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood_storage::FileIoError;
+use firewood_storage::NodeError;
 
 use crate::v2::api::{KeyType, ValueType};
 
@@ -147,7 +147,7 @@ impl<K: KeyType, V: ValueType> KeyValuePair for &(K, V) {
     }
 }
 
-impl<T: KeyValuePair<Error = std::convert::Infallible>, E: Into<FileIoError>> KeyValuePair
+impl<T: KeyValuePair<Error = std::convert::Infallible>, E: Into<NodeError>> KeyValuePair
     for Result<T, E>
 {
     fn try_into_tuple(self) -> Result<(Self::Key, Self::Value), Self::Error> {
@@ -167,13 +167,13 @@ pub trait TryIntoBatch {
     type Value: ValueType;
 
     /// The error type. It is preferable to use an error that is convertible into
-    /// [`FileIoError`] instead of the type directly to allow for better compiler
+    /// [`NodeError`] instead of the type directly to allow for better compiler
     /// optimizations.
     ///
-    /// E.g., [`std::convert::Infallible`] is preferred over [`FileIoError`] when
+    /// E.g., [`std::convert::Infallible`] is preferred over [`NodeError`] when
     /// there is no possibility of error so that the compiler can optimize away
     /// error handling.
-    type Error: Into<FileIoError>;
+    type Error: Into<NodeError>;
 
     /// Convert this key-value pair into a [`BatchOp`].
     ///
@@ -236,7 +236,7 @@ impl<'a, K: KeyType, V: ValueType> TryIntoBatch for &'a BatchOp<K, V> {
 impl<T, E> TryIntoBatch for Result<T, E>
 where
     T: TryIntoBatch<Error = std::convert::Infallible>,
-    E: Into<FileIoError>,
+    E: Into<NodeError>,
 {
     type Key = T::Key;
     type Value = T::Value;
@@ -267,7 +267,7 @@ pub trait BatchIter:
     /// An associated type for the iterator item's error type. This is a convenience
     /// requirement to avoid needing to build up nested generic associated types.
     /// E.g., `<<Self as Iterator>::Item as KeyValuePair>::Error`
-    type Error: Into<FileIoError>;
+    type Error: Into<NodeError>;
 }
 
 impl<I: Iterator<Item: TryIntoBatch>> BatchIter for I {
@@ -292,11 +292,11 @@ pub trait IntoBatchIter: IntoIterator<IntoIter: BatchIter> {
     fn into_batch_iter<E>(self) -> std::iter::Map<Self::IntoIter, MapIntoBatchFn<Self::Item, E>>
     where
         Self: Sized,
-        FileIoError: Into<E>,
+        NodeError: Into<E>,
     {
         self.into_iter().map(|item| {
             item.try_into_batch()
-                .map_err(Into::<FileIoError>::into)
+                .map_err(Into::<NodeError>::into)
                 .map_err(Into::<E>::into)
         })
     }

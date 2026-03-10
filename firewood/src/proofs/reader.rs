@@ -9,7 +9,7 @@
 
 use super::header::{Header, InvalidHeader};
 
-pub(super) trait ReadItem<'a>: Sized {
+pub(crate) trait ReadItem<'a>: Sized {
     /// Reads an item from the given reader, or terrminates with an error.
     fn read_item(data: &mut ProofReader<'a>) -> Result<Self, ReadError>;
 }
@@ -18,7 +18,7 @@ pub(super) trait Version0: Sized {
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError>;
 }
 
-pub(super) struct ProofReader<'a> {
+pub(crate) struct ProofReader<'a> {
     data: &'a [u8],
     offset: usize,
 }
@@ -29,7 +29,7 @@ impl<'a> ProofReader<'a> {
         Self { data, offset: 0 }
     }
 
-    pub fn read_chunk<const N: usize>(&mut self) -> Result<&'a [u8; N], ReadError> {
+    pub(crate) fn read_chunk<const N: usize>(&mut self) -> Result<&'a [u8; N], ReadError> {
         if let Some((chunk, _)) = self.remainder().split_first_chunk::<N>() {
             #[expect(clippy::arithmetic_side_effects)]
             {
@@ -41,7 +41,7 @@ impl<'a> ProofReader<'a> {
         }
     }
 
-    pub fn read_slice(&mut self, n: usize) -> Result<&'a [u8], ReadError> {
+    pub(crate) fn read_slice(&mut self, n: usize) -> Result<&'a [u8], ReadError> {
         if self.remainder().len() >= n {
             let (slice, _) = self.remainder().split_at(n);
             #[expect(clippy::arithmetic_side_effects)]
@@ -54,23 +54,23 @@ impl<'a> ProofReader<'a> {
         }
     }
 
-    pub(super) fn read_item<T: ReadItem<'a>>(&mut self) -> Result<T, ReadError> {
+    pub(crate) fn read_item<T: ReadItem<'a>>(&mut self) -> Result<T, ReadError> {
         T::read_item(self)
     }
 
-    pub fn remainder(&self) -> &'a [u8] {
+    pub(crate) fn remainder(&self) -> &'a [u8] {
         #![expect(clippy::indexing_slicing)]
         &self.data[self.offset..]
     }
 
-    pub fn advance(&mut self, n: usize) {
+    pub(crate) fn advance(&mut self, n: usize) {
         #![expect(clippy::arithmetic_side_effects)]
         debug_assert!(self.offset + n <= self.data.len());
         self.offset += n;
     }
 
     #[must_use]
-    pub const fn incomplete_item(&self, item: &'static str, expected: usize) -> ReadError {
+    pub(crate) const fn incomplete_item(&self, item: &'static str, expected: usize) -> ReadError {
         ReadError::IncompleteItem {
             item,
             offset: self.offset,
@@ -81,7 +81,7 @@ impl<'a> ProofReader<'a> {
     }
 
     #[must_use]
-    pub fn invalid_item(
+    pub(crate) fn invalid_item(
         &self,
         item: &'static str,
         expected: &'static str,
@@ -165,7 +165,7 @@ pub enum ReadError {
 }
 
 impl ReadError {
-    pub(super) const fn set_item(mut self, item: &'static str) -> Self {
+    pub(crate) const fn set_item(mut self, item: &'static str) -> Self {
         match &mut self {
             Self::IncompleteItem { item: e_item, .. } | Self::InvalidItem { item: e_item, .. } => {
                 *e_item = item;

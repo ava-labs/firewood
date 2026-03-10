@@ -1595,6 +1595,7 @@ dependencies = [
  "hex-literal",
  "integer-encoding",
  "lender",
+ "lru-mem",
  "metrics",
  "nonzero_ext",
  "parking_lot",

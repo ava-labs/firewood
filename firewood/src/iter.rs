@@ -5,8 +5,8 @@ use crate::merkle::{Key, Value};
 use crate::v2::api::{KeyType, KeyValuePair};
 
 use firewood_storage::{
-    BranchNode, Child, FileIoError, NibblesIterator, Node, PathBuf, PathComponent, PathIterItem,
-    SharedNode, TriePathFromUnpackedBytes, TrieReader,
+    BranchNode, Child, FileIoError, NibblesIterator, Node, NodeError, PathBuf, PathComponent,
+    PathIterItem, SharedNode, TriePathFromUnpackedBytes, TrieReader,
 };
 use std::cmp::Ordering;
 use std::iter::FusedIterator;
@@ -85,7 +85,7 @@ impl<'a, T: TrieReader> MerkleNodeIter<'a, T> {
 }
 
 impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
-    type Item = Result<(Key, SharedNode), FileIoError>;
+    type Item = Result<(Key, SharedNode), NodeError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         'outer: loop {
@@ -126,21 +126,9 @@ impl<T: TrieReader> Iterator for MerkleNodeIter<'_, T> {
                                     continue;
                                 };
 
-                                let child = match child {
-                                    Child::AddressWithHash(addr, _) => {
-                                        match self.merkle.read_node(addr) {
-                                            Ok(node) => node,
-                                            Err(e) => return Some(Err(e)),
-                                        }
-                                    }
-                                    Child::Node(node) => node.clone().into(),
-                                    Child::MaybePersisted(maybe_persisted, _) => {
-                                        // For MaybePersisted, we need to get the node
-                                        match maybe_persisted.as_shared_node(self.merkle) {
-                                            Ok(node) => node,
-                                            Err(e) => return Some(Err(e)),
-                                        }
-                                    }
+                                let child = match child.as_shared_node(self.merkle) {
+                                    Ok(node) => node,
+                                    Err(e) => return Some(Err(e)),
                                 };
 
                                 let child_partial_path = child.partial_path().iter().copied();
@@ -181,7 +169,7 @@ impl<T: TrieReader> FusedIterator for MerkleNodeIter<'_, T> {}
 fn get_iterator_intial_state<T: TrieReader>(
     merkle: &T,
     key: &[u8],
-) -> Result<NodeIterState, FileIoError> {
+) -> Result<NodeIterState, NodeError> {
     let Some(root) = merkle.root_node() else {
         // This merkle is empty.
         return Ok(NodeIterState::Iterating { iter_stack: vec![] });
@@ -261,12 +249,7 @@ fn get_iterator_intial_state<T: TrieReader>(
                     let child = &branch.children[next_unmatched_key_nibble];
                     node = match child {
                         None => return Ok(NodeIterState::Iterating { iter_stack }),
-                        Some(Child::AddressWithHash(addr, _)) => merkle.read_node(*addr)?,
-                        Some(Child::Node(node)) => (*node).clone().into(), // TODO can we avoid cloning this?
-                        Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                            // For MaybePersisted, we need to get the node
-                            maybe_persisted.as_shared_node(merkle)?
-                        }
+                        Some(child) => child.as_shared_node(merkle)?,
                     };
 
                     matched_key_nibbles.push(next_unmatched_key_nibble.as_u8());
@@ -307,7 +290,7 @@ impl<'a, T: TrieReader> MerkleKeyValueIter<'a, T> {
 }
 
 impl<T: TrieReader> Iterator for MerkleKeyValueIter<'_, T> {
-    type Item = Result<(Key, Value), FileIoError>;
+    type Item = Result<(Key, Value), NodeError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.iter.find_map(|result| {
@@ -380,7 +363,7 @@ impl<'a, 'b, T: TrieReader> PathIterator<'a, 'b, T> {
 }
 
 impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
-    type Item = Result<PathIterItem, FileIoError>;
+    type Item = Result<PathIterItem, NodeError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         // destructuring is necessary here because we need mutable access to `state`
@@ -452,22 +435,6 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                             next_nibble: None,
                                         }))
                                     }
-                                    Some(Child::AddressWithHash(child_addr, _)) => {
-                                        let child = match merkle.read_node(*child_addr) {
-                                            Ok(child) => child,
-                                            Err(e) => return Some(Err(e)),
-                                        };
-
-                                        matched_key.push(next_unmatched_key_nibble.as_u8());
-
-                                        *node = child;
-
-                                        Some(Ok(PathIterItem {
-                                            key_nibbles: node_key,
-                                            node: saved_node,
-                                            next_nibble: Some(next_unmatched_key_nibble),
-                                        }))
-                                    }
                                     Some(Child::Node(child)) => {
                                         matched_key.push(next_unmatched_key_nibble.as_u8());
 
@@ -479,14 +446,14 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                                             next_nibble: Some(next_unmatched_key_nibble),
                                         }))
                                     }
-                                    Some(Child::MaybePersisted(maybe_persisted, _)) => {
-                                        let child = match maybe_persisted.as_shared_node(merkle) {
+                                    Some(child) => {
+                                        let resolved = match child.as_shared_node(merkle) {
                                             Ok(child) => child,
                                             Err(e) => return Some(Err(e)),
                                         };
 
                                         matched_key.push(next_unmatched_key_nibble.as_u8());
-                                        *node = child;
+                                        *node = resolved;
 
                                         Some(Ok(PathIterItem {
                                             key_nibbles: node_key,

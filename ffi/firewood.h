@@ -88,12 +88,26 @@ typedef struct RangeProofContext RangeProofContext;
 typedef struct RevisionHandle RevisionHandle;
 
 /**
+ * An opaque handle to a [`TruncatedTrie`].
+ *
+ * Callers must free this handle with [`fwd_free_truncated_trie`].
+ */
+typedef struct TruncatedTrieHandle TruncatedTrieHandle;
+
+/**
  * FFI context for a verified change proof. It is created from calling `verify`
  * on a `ChangeProofContext` and stores the parameters of that call in `params`.
  * Calling `propose` on it will consume the proof to create a
  * `ProposedChangeProofContext`.
  */
 typedef struct VerifiedChangeProofContext VerifiedChangeProofContext;
+
+/**
+ * An opaque handle to a [`WitnessProof`].
+ *
+ * Callers must free this handle with [`fwd_free_witness_proof`].
+ */
+typedef struct WitnessProofHandle WitnessProofHandle;
 
 /**
  * A database hash key, used in FFI functions that require hashes.
@@ -528,6 +542,51 @@ typedef struct ValueResult {
 } ValueResult;
 
 /**
+ * A result type returned from FFI functions that create a [`TruncatedTrieHandle`].
+ */
+enum TruncatedTrieResult_Tag {
+  /**
+   * The caller provided a null pointer to the input handle.
+   */
+  TruncatedTrieResult_NullHandlePointer,
+  /**
+   * The truncated trie was successfully created.
+   *
+   * The caller must call [`fwd_free_truncated_trie`] to free the handle.
+   */
+  TruncatedTrieResult_Ok,
+  /**
+   * An error occurred.
+   *
+   * The caller must call [`fwd_free_owned_bytes`](crate::fwd_free_owned_bytes)
+   * to free the memory associated with this error.
+   */
+  TruncatedTrieResult_Err,
+};
+typedef size_t TruncatedTrieResult_Tag;
+
+typedef struct TruncatedTrieResult_Ok_Body {
+  /**
+   * The truncated trie handle.
+   */
+  struct TruncatedTrieHandle *handle;
+  /**
+   * The root hash of the truncated trie.
+   */
+  struct HashKey root_hash;
+} TruncatedTrieResult_Ok_Body;
+
+typedef struct TruncatedTrieResult {
+  TruncatedTrieResult_Tag tag;
+  union {
+    TruncatedTrieResult_Ok_Body ok;
+    struct {
+      OwnedBytes err;
+    };
+  };
+} TruncatedTrieResult;
+
+/**
  * Maybe is a C-compatible optional type using a tagged union pattern.
  *
  * FFI methods and types can use this to represent optional values where `Optional<T>`
@@ -791,6 +850,42 @@ typedef struct OwnedSlice_OwnedKeyValuePair {
 typedef struct OwnedSlice_OwnedKeyValuePair OwnedKeyValueBatch;
 
 /**
+ * A result type returned from FFI functions that create a [`WitnessProofHandle`].
+ */
+enum WitnessResult_Tag {
+  /**
+   * The caller provided a null pointer to the input handle.
+   */
+  WitnessResult_NullHandlePointer,
+  /**
+   * The witness proof was successfully generated.
+   *
+   * The caller must call [`fwd_free_witness_proof`] to free the handle.
+   */
+  WitnessResult_Ok,
+  /**
+   * An error occurred.
+   *
+   * The caller must call [`fwd_free_owned_bytes`](crate::fwd_free_owned_bytes)
+   * to free the memory associated with this error.
+   */
+  WitnessResult_Err,
+};
+typedef size_t WitnessResult_Tag;
+
+typedef struct WitnessResult {
+  WitnessResult_Tag tag;
+  union {
+    struct {
+      struct WitnessProofHandle *ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} WitnessResult;
+
+/**
  * A result type returned from FFI functions that get a revision
  */
 enum RevisionResult_Tag {
@@ -846,6 +941,67 @@ typedef struct RevisionResult {
     };
   };
 } RevisionResult;
+
+/**
+ * A result type for `fwd_get_with_proof` containing both value and proof bytes.
+ */
+enum GetWithProofResult_Tag {
+  /**
+   * The caller provided a null pointer to the input handle.
+   */
+  GetWithProofResult_NullHandlePointer,
+  /**
+   * The key was found and value + proof are returned.
+   *
+   * The caller must call [`fwd_free_owned_bytes`](crate::fwd_free_owned_bytes)
+   * to free both the value and proof.
+   */
+  GetWithProofResult_Ok,
+  /**
+   * The key was not found, but a proof of absence is returned.
+   *
+   * The caller must call [`fwd_free_owned_bytes`](crate::fwd_free_owned_bytes)
+   * to free the proof.
+   */
+  GetWithProofResult_NotFound,
+  /**
+   * An error occurred.
+   *
+   * The caller must call [`fwd_free_owned_bytes`](crate::fwd_free_owned_bytes)
+   * to free the error.
+   */
+  GetWithProofResult_Err,
+};
+typedef size_t GetWithProofResult_Tag;
+
+typedef struct GetWithProofResult_Ok_Body {
+  /**
+   * The value associated with the key.
+   */
+  OwnedBytes value;
+  /**
+   * The serialized single-key proof.
+   */
+  OwnedBytes proof;
+} GetWithProofResult_Ok_Body;
+
+typedef struct GetWithProofResult_NotFound_Body {
+  /**
+   * The serialized exclusion proof.
+   */
+  OwnedBytes proof;
+} GetWithProofResult_NotFound_Body;
+
+typedef struct GetWithProofResult {
+  GetWithProofResult_Tag tag;
+  union {
+    GetWithProofResult_Ok_Body ok;
+    GetWithProofResult_NotFound_Body not_found;
+    struct {
+      OwnedBytes err;
+    };
+  };
+} GetWithProofResult;
 
 /**
  * A result type returned from iterator FFI functions
@@ -1587,6 +1743,36 @@ struct HashResult fwd_code_hash_iter_next(struct CodeIteratorHandle *iter);
 struct HashResult fwd_commit_proposal(struct ProposalHandle *proposal);
 
 /**
+ * Creates a [`TruncatedTrieHandle`] from the database revision matching the
+ * given root hash.
+ *
+ * The truncated trie holds the top `depth` nibble levels of the trie with
+ * children below that depth replaced by hash-only proxy nodes.
+ *
+ * # Arguments
+ *
+ * * `db` - The database handle returned by [`fwd_open_db`](crate::fwd_open_db)
+ * * `root_hash` - The root hash of the revision to truncate
+ * * `depth` - The truncation depth in nibble levels
+ *
+ * # Returns
+ *
+ * - [`TruncatedTrieResult::NullHandlePointer`] if `db` is null.
+ * - [`TruncatedTrieResult::Ok`] with the handle and root hash on success.
+ * - [`TruncatedTrieResult::Err`] if the revision was not found or truncation
+ *   failed.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`DatabaseHandle`].
+ * * call [`fwd_free_truncated_trie`] to free the returned handle.
+ */
+struct TruncatedTrieResult fwd_create_truncated_trie(const struct DatabaseHandle *db,
+                                                     struct HashKey root_hash,
+                                                     size_t depth);
+
+/**
  * Create a change proof for the given range of keys between two roots.
  *
  * # Arguments
@@ -1937,6 +2123,17 @@ struct VoidResult fwd_free_range_proof(struct RangeProofContext *proof);
 struct VoidResult fwd_free_revision(struct RevisionHandle *revision);
 
 /**
+ * Frees a [`TruncatedTrieHandle`].
+ *
+ * # Safety
+ *
+ * The caller must ensure that `handle` is a valid pointer returned by a
+ * prior call to [`fwd_create_truncated_trie`] or [`fwd_verify_witness`],
+ * and that it has not already been freed.
+ */
+struct VoidResult fwd_free_truncated_trie(struct TruncatedTrieHandle *handle);
+
+/**
  * Frees the memory associated with a `VerifiedChangeProofContext`.
  *
  * # Arguments
@@ -1949,6 +2146,17 @@ struct VoidResult fwd_free_revision(struct RevisionHandle *revision);
  * - [`VoidResult::Err`] if the process panics while freeing the memory.
  */
 struct VoidResult fwd_free_verified_change_proof(struct VerifiedChangeProofContext *proof);
+
+/**
+ * Frees a [`WitnessProofHandle`].
+ *
+ * # Safety
+ *
+ * The caller must ensure that `handle` is a valid pointer returned by a
+ * prior call to [`fwd_generate_witness`], and that it has not already been
+ * freed.
+ */
+struct VoidResult fwd_free_witness_proof(struct WitnessProofHandle *handle);
 
 /**
  * Gather latest metrics for this process.
@@ -1967,6 +2175,40 @@ struct VoidResult fwd_free_verified_change_proof(struct VerifiedChangeProofConte
  *   returned error or value.
  */
 struct ValueResult fwd_gather(void);
+
+/**
+ * Generates a witness proof for a set of batch operations.
+ *
+ * Walks the old trie (identified by `root_hash`) along each key's path and
+ * collects all nodes below `depth` that the client would need to replay the
+ * operations.
+ *
+ * # Arguments
+ *
+ * * `db` - The database handle
+ * * `root_hash` - The root hash of the old committed revision
+ * * `batch_ops` - The batch operations to generate a witness for
+ * * `new_root_hash` - The root hash after applying the batch ops
+ * * `depth` - The client's truncation depth in nibble levels
+ *
+ * # Returns
+ *
+ * - [`WitnessResult::NullHandlePointer`] if `db` is null.
+ * - [`WitnessResult::Ok`] with the witness proof handle on success.
+ * - [`WitnessResult::Err`] on failure.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`DatabaseHandle`].
+ * * ensure that `batch_ops` is valid for [`BorrowedBatchOps`].
+ * * call [`fwd_free_witness_proof`] to free the returned handle.
+ */
+struct WitnessResult fwd_generate_witness(const struct DatabaseHandle *db,
+                                          struct HashKey root_hash,
+                                          BorrowedBatchOps batch_ops,
+                                          struct HashKey new_root_hash,
+                                          size_t depth);
 
 /**
  * Gets the value associated with the given key from the proposal provided.
@@ -2074,6 +2316,22 @@ struct ValueResult fwd_get_latest(const struct DatabaseHandle *db, BorrowedBytes
  * [`RevisionHandle`]: crate::revision::RevisionHandle
  */
 struct RevisionResult fwd_get_revision(const struct DatabaseHandle *db, struct HashKey root);
+
+/**
+ * Gets a value and its single-key Merkle proof from the revision identified
+ * by `root_hash`.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`DatabaseHandle`].
+ * * ensure that `key` is valid for [`BorrowedBytes`].
+ * * call [`fwd_free_owned_bytes`](crate::fwd_free_owned_bytes) to free
+ *   the returned value and proof bytes.
+ */
+struct GetWithProofResult fwd_get_with_proof(const struct DatabaseHandle *db,
+                                             struct HashKey root_hash,
+                                             BorrowedBytes key);
 
 /**
  * Retrieves the next item from the iterator.
@@ -2608,6 +2866,27 @@ struct ValueResult fwd_range_proof_to_bytes(const struct RangeProofContext *proo
 struct VoidResult fwd_range_proof_verify(struct VerifyRangeProofArgs args);
 
 /**
+ * Verifies the range proof and returns the embedded key-value pairs.
+ * Combines verification + extraction into a single FFI call.
+ *
+ * # Arguments
+ *
+ * - `args` - The arguments for verifying the range proof, including the proof
+ *   context, root hash, start/end keys, and max length.
+ *
+ * # Returns
+ *
+ * - [`crate::KeyValueBatchResult::NullHandlePointer`] if the caller provided a null pointer.
+ * - [`crate::KeyValueBatchResult::Some`] containing the key-value pairs if successful.
+ * - [`crate::KeyValueBatchResult::Err`] containing an error message if verification failed.
+ *
+ * # Thread Safety
+ *
+ * It is not safe to call this function concurrently with the same proof context.
+ */
+struct KeyValueBatchResult fwd_range_proof_verify_and_extract(struct VerifyRangeProofArgs args);
+
+/**
  * Dumps the Trie structure of a revision to a DOT (Graphviz) format string for debugging.
  *
  * # Arguments
@@ -2704,6 +2983,49 @@ struct VoidResult fwd_start_metrics(void);
 struct VoidResult fwd_start_metrics_with_exporter(uint16_t metrics_port);
 
 /**
+ * Deserializes bytes into a [`TruncatedTrieHandle`].
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `bytes` is valid for [`BorrowedBytes`].
+ * * call [`fwd_free_truncated_trie`] to free the returned handle.
+ */
+struct TruncatedTrieResult fwd_truncated_trie_from_bytes(BorrowedBytes bytes);
+
+/**
+ * Returns the root hash of the truncated trie.
+ *
+ * # Arguments
+ *
+ * * `handle` - The truncated trie handle
+ *
+ * # Returns
+ *
+ * - [`HashResult::NullHandlePointer`] if `handle` is null.
+ * - [`HashResult::Some`] with the root hash.
+ * - [`HashResult::None`] if the trie is empty.
+ *
+ * # Safety
+ *
+ * The caller must ensure that `handle` is a valid pointer to a
+ * [`TruncatedTrieHandle`].
+ */
+struct HashResult fwd_truncated_trie_root_hash(const struct TruncatedTrieHandle *handle);
+
+/**
+ * Serializes a [`TruncatedTrieHandle`] to bytes.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `handle` is a valid pointer to a [`TruncatedTrieHandle`].
+ * * call [`fwd_free_owned_bytes`](crate::fwd_free_owned_bytes) to free the
+ *   returned bytes.
+ */
+struct ValueResult fwd_truncated_trie_to_bytes(const struct TruncatedTrieHandle *handle);
+
+/**
  * Verify a change proof and return a `VerifiedChangeProofResult`.
  *
  * # Arguments
@@ -2725,3 +3047,105 @@ struct VoidResult fwd_start_metrics_with_exporter(uint16_t metrics_port);
  * for the duration of the call.
  */
 struct VerifiedChangeProofResult fwd_verify_change_proof(struct VerifyChangeProofArgs args);
+
+/**
+ * Verifies a single-key proof against a known root hash.
+ *
+ * No database handle is needed; verification is purely cryptographic.
+ *
+ * # Arguments
+ *
+ * * `root_hash` - The expected root hash
+ * * `key` - The key that was proven
+ * * `value` - The value (may be empty for exclusion proofs)
+ * * `value_is_present` - `true` if the value is an inclusion proof, `false`
+ *   for exclusion
+ * * `proof` - The serialized single-key proof
+ *
+ * # Safety
+ *
+ * The caller must ensure all borrowed byte slices are valid.
+ */
+struct VoidResult fwd_verify_single_key_proof(struct HashKey root_hash,
+                                              BorrowedBytes key,
+                                              BorrowedBytes value,
+                                              bool value_is_present,
+                                              BorrowedBytes proof_bytes);
+
+/**
+ * Verifies the truncated trie's root hash against an expected value.
+ *
+ * # Arguments
+ *
+ * * `handle` - The truncated trie handle
+ * * `expected_hash` - The expected root hash
+ *
+ * # Returns
+ *
+ * - [`VoidResult::NullHandlePointer`] if `handle` is null.
+ * - [`VoidResult::Ok`] if the hash matches.
+ * - [`VoidResult::Err`] if the hash does not match.
+ *
+ * # Safety
+ *
+ * The caller must ensure that `handle` is a valid pointer to a
+ * [`TruncatedTrieHandle`].
+ */
+struct VoidResult fwd_verify_truncated_trie_root_hash(const struct TruncatedTrieHandle *handle,
+                                                      struct HashKey expected_hash);
+
+/**
+ * Verifies a witness proof against a truncated trie and returns the updated
+ * trie.
+ *
+ * First validates that the witness proof's embedded `batch_ops` are consistent
+ * with `expected_ops` (accounting for `DeleteRange` expansion), then
+ * re-executes the batch operations on top of the client's truncated trie,
+ * hashes the result, and verifies it matches the witness's `new_root_hash`.
+ *
+ * # Arguments
+ *
+ * * `trie_handle` - The client's truncated trie handle
+ * * `witness_handle` - The witness proof handle
+ * * `expected_ops` - The batch operations the client originally sent
+ *
+ * # Returns
+ *
+ * - [`TruncatedTrieResult::NullHandlePointer`] if either handle is null.
+ * - [`TruncatedTrieResult::Ok`] with the updated trie handle on success.
+ * - [`TruncatedTrieResult::Err`] if verification fails.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that both handles are valid pointers.
+ * * ensure that `expected_ops` is valid for [`BorrowedBatchOps`].
+ * * call [`fwd_free_truncated_trie`] to free the returned handle.
+ * * The old trie handle is NOT consumed; the caller must still free it.
+ */
+struct TruncatedTrieResult fwd_verify_witness(const struct TruncatedTrieHandle *trie_handle,
+                                              const struct WitnessProofHandle *witness_handle,
+                                              BorrowedBatchOps expected_ops);
+
+/**
+ * Deserializes bytes into a [`WitnessProofHandle`].
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `bytes` is valid for [`BorrowedBytes`].
+ * * call [`fwd_free_witness_proof`] to free the returned handle.
+ */
+struct WitnessResult fwd_witness_proof_from_bytes(BorrowedBytes bytes);
+
+/**
+ * Serializes a [`WitnessProofHandle`] to bytes.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `handle` is a valid pointer to a [`WitnessProofHandle`].
+ * * call [`fwd_free_owned_bytes`](crate::fwd_free_owned_bytes) to free the
+ *   returned bytes.
+ */
+struct ValueResult fwd_witness_proof_to_bytes(const struct WitnessProofHandle *handle);

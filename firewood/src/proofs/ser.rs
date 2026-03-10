@@ -19,7 +19,7 @@ use crate::{
     db::BatchOp,
     merkle::{Key, Value},
     proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
-    v2::api::{FrozenChangeProof, FrozenRangeProof},
+    v2::api::{FrozenChangeProof, FrozenProof, FrozenRangeProof},
 };
 
 impl FrozenRangeProof {
@@ -87,6 +87,20 @@ impl FrozenChangeProof {
     pub fn write_to_vec(&self, out: &mut Vec<u8>) {
         Header::from(ProofType::Change).write_item(out);
         self.write_item(out);
+    }
+}
+
+impl FrozenProof {
+    /// Serializes this single-key proof into the provided byte vector.
+    ///
+    /// # Format
+    ///
+    #[expect(rustdoc::private_intra_doc_links, reason = "Header is not exported")]
+    /// - A 32-byte [`Header`] with the proof type set to [`ProofType::Single`].
+    /// - The proof nodes, serialized as a _sequence_ of [`ProofNode`]s.
+    pub fn write_to_vec(&self, out: &mut Vec<u8>) {
+        Header::from(ProofType::Single).write_item(out);
+        self.as_ref().write_item(out);
     }
 }
 

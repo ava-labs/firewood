@@ -4,7 +4,7 @@
 use parking_lot::Mutex;
 use std::{fmt::Display, sync::Arc};
 
-use crate::{FileIoError, LinearAddress, NodeReader, SharedNode};
+use crate::{FileIoError, LinearAddress, NodeError, NodeReader, SharedNode};
 
 /// A node that is either in memory or on disk.
 ///
@@ -92,6 +92,23 @@ impl MaybePersistedNode {
                 Ok(node.clone())
             }
             MaybePersisted::Persisted(address) => storage.read_node(*address),
+        }
+    }
+
+    /// Extracts the in-memory node without a storage backend.
+    ///
+    /// This is equivalent to [`as_shared_node`](Self::as_shared_node) for nodes
+    /// that are known to be in-memory (Unpersisted or Allocated). Returns
+    /// [`NodeError::NoStorage`] if the node is persisted on disk.
+    ///
+    /// Used by truncated trie operations where all `MaybePersisted` children
+    /// are guaranteed to be unpersisted and no `NodeReader` is available.
+    pub fn as_unpersisted_node(&self) -> Result<SharedNode, NodeError> {
+        match &*self.0.lock() {
+            MaybePersisted::Allocated(_, node) | MaybePersisted::Unpersisted(node) => {
+                Ok(node.clone())
+            }
+            MaybePersisted::Persisted(_) => Err(NodeError::NoStorage),
         }
     }
 

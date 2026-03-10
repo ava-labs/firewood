@@ -31,6 +31,7 @@ mod multi_handle;
 mod proofs;
 mod proposal;
 mod registry;
+mod remote;
 #[cfg(feature = "block-replay")]
 mod replay;
 mod revision;
@@ -46,6 +47,7 @@ use crate::metrics::MetricsContextExt;
 pub use crate::multi_handle::*;
 pub use crate::proofs::*;
 pub use crate::proposal::*;
+pub use crate::remote::*;
 pub use crate::revision::*;
 pub use crate::value::*;
 

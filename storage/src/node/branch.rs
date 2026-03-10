@@ -15,6 +15,60 @@ use crate::{
 use std::fmt::{Debug, Formatter};
 use std::io::Read;
 
+/// Error type for trie node operations.
+///
+/// This distinguishes between storage I/O errors and logical trie errors
+/// (e.g., encountering a [`Child::Proxy`] that requires remote lookup).
+#[derive(Debug)]
+pub enum NodeError {
+    /// An I/O error from the storage layer.
+    Io(FileIoError),
+    /// A Proxy child was encountered that requires remote lookup.
+    Proxy(HashType),
+    /// A child node has no hash. This should not occur in committed or
+    /// immutable tries where all children are hashed before use.
+    UnhashedChild,
+    /// No storage backend is available to read persisted nodes.
+    ///
+    /// Returned when an operation expects only in-memory nodes but encounters
+    /// a persisted node that would require storage access.
+    NoStorage,
+}
+
+impl From<FileIoError> for NodeError {
+    fn from(e: FileIoError) -> Self {
+        NodeError::Io(e)
+    }
+}
+
+impl From<std::convert::Infallible> for NodeError {
+    fn from(e: std::convert::Infallible) -> Self {
+        match e {}
+    }
+}
+
+impl std::fmt::Display for NodeError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NodeError::Io(e) => write!(f, "node I/O error: {e}"),
+            NodeError::Proxy(hash) => {
+                write!(
+                    f,
+                    "proxy child encountered (hash={hash}): requires remote lookup"
+                )
+            }
+            NodeError::UnhashedChild => {
+                write!(f, "child node has no hash (expected only in hashed tries)")
+            }
+            NodeError::NoStorage => {
+                write!(f, "no storage backend available for persisted node")
+            }
+        }
+    }
+}
+
+impl std::error::Error for NodeError {}
+
 pub(crate) trait Serializable {
     fn write_to<W: ExtendableBytes>(&self, vec: &mut W);
 
@@ -66,6 +120,12 @@ pub enum Child {
 
     /// A `MaybePersisted` child
     MaybePersisted(MaybePersistedNode, HashType),
+
+    /// A hash-only stub below truncation depth in a remote/truncated trie.
+    /// Has no local address or in-memory node data. When trie traversal
+    /// hits a `Proxy` child, it signals "need remote lookup" rather than
+    /// doing local I/O.
+    Proxy(HashType),
 }
 
 impl lru_mem::HeapSize for Child {
@@ -75,6 +135,7 @@ impl lru_mem::HeapSize for Child {
             Child::AddressWithHash(_, _) => 0,
             // MaybePersisted contains Arc<Mutex>, we don't count shared data
             Child::MaybePersisted(_, _) => 0,
+            Child::Proxy(_) => 0,
         }
     }
 }
@@ -86,7 +147,7 @@ impl Child {
     pub const fn as_mut_node(&mut self) -> Option<&mut Node> {
         match self {
             Child::Node(node) => Some(node),
-            _ => None,
+            Child::AddressWithHash(..) | Child::MaybePersisted(..) | Child::Proxy(_) => None,
         }
     }
 
@@ -96,7 +157,7 @@ impl Child {
         match self {
             Child::AddressWithHash(addr, _) => Some(*addr),
             Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.as_linear_address(),
-            Child::Node(_) => None,
+            Child::Node(_) | Child::Proxy(_) => None,
         }
     }
 
@@ -104,19 +165,20 @@ impl Child {
     /// variant, otherwise None.
     #[must_use]
     pub fn unpersisted(&self) -> Option<&MaybePersistedNode> {
-        if let Child::MaybePersisted(maybe_persisted, _) = self {
-            maybe_persisted.unpersisted()
-        } else {
-            None
+        match self {
+            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.unpersisted(),
+            Child::Node(_) | Child::AddressWithHash(..) | Child::Proxy(_) => None,
         }
     }
 
-    /// Return the hash of the child if it is a [`Child::AddressWithHash`] or [`Child::MaybePersisted`] variant, otherwise None.
+    /// Return the hash of the child if it has been hashed. Returns `None` only for
+    /// [`Child::Node`] variants which have not yet been hashed.
     #[must_use]
     pub const fn hash(&self) -> Option<&HashType> {
         match self {
-            Child::AddressWithHash(_, hash) => Some(hash),
-            Child::MaybePersisted(_, hash) => Some(hash),
+            Child::AddressWithHash(_, hash)
+            | Child::MaybePersisted(_, hash)
+            | Child::Proxy(hash) => Some(hash),
             Child::Node(_) => None,
         }
     }
@@ -130,6 +192,7 @@ impl Child {
     /// Returns `None` for:
     /// - [`Child::Node`] variants (unpersisted nodes)
     /// - [`Child::MaybePersisted`] variants that are not yet persisted
+    /// - [`Child::Proxy`] variants (no local address)
     #[must_use]
     pub fn persist_info(&self) -> Option<(LinearAddress, &HashType)> {
         match self {
@@ -137,20 +200,25 @@ impl Child {
             Child::MaybePersisted(maybe_persisted, hash) => {
                 maybe_persisted.as_linear_address().map(|addr| (addr, hash))
             }
-            Child::Node(_) => None,
+            Child::Node(_) | Child::Proxy(_) => None,
         }
     }
 
-    /// Return a `MaybePersistedNode` from a child
+    /// Try to return a `MaybePersistedNode` from a child.
     ///
     /// This is used in the dump utility, but otherwise should be avoided,
-    /// as it may create an unnecessary `MaybePersistedNode`
-    #[must_use]
-    pub fn as_maybe_persisted_node(&self) -> MaybePersistedNode {
+    /// as it may create an unnecessary `MaybePersistedNode`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NodeError::Proxy`] if called on a [`Child::Proxy`] variant,
+    /// which has no local node data or address.
+    pub fn try_as_maybe_persisted_node(&self) -> Result<MaybePersistedNode, NodeError> {
         match self {
-            Child::Node(node) => MaybePersistedNode::from(SharedNode::from(node.clone())),
-            Child::AddressWithHash(addr, _) => MaybePersistedNode::from(*addr),
-            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.clone(),
+            Child::Node(node) => Ok(MaybePersistedNode::from(SharedNode::from(node.clone()))),
+            Child::AddressWithHash(addr, _) => Ok(MaybePersistedNode::from(*addr)),
+            Child::MaybePersisted(maybe_persisted, _) => Ok(maybe_persisted.clone()),
+            Child::Proxy(hash) => Err(NodeError::Proxy(hash.clone())),
         }
     }
 
@@ -162,14 +230,24 @@ impl Child {
     ///
     /// # Returns
     ///
-    /// Returns a `Result<SharedNode, FileIoError>` where:
+    /// Returns a `Result<SharedNode, NodeError>` where:
     /// - `Ok(SharedNode)` contains the node if successfully read
-    /// - `Err(FileIoError)` if there was an error reading from storage
-    pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
+    /// - `Err(NodeError::Io)` if there was an error reading from storage
+    /// - `Err(NodeError::Proxy)` for Proxy variants requiring remote lookup
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NodeError::Proxy`] for [`Child::Proxy`] variants, which have
+    /// no local node data and require remote lookup.
+    /// Returns [`NodeError::Io`] if there was an I/O error reading from storage.
+    pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, NodeError> {
         match self {
             Child::Node(node) => Ok(node.clone().into()),
-            Child::AddressWithHash(addr, _) => storage.read_node(*addr),
-            Child::MaybePersisted(maybe_persisted, _) => maybe_persisted.as_shared_node(storage),
+            Child::AddressWithHash(addr, _) => Ok(storage.read_node(*addr)?),
+            Child::MaybePersisted(maybe_persisted, _) => {
+                Ok(maybe_persisted.as_shared_node(storage)?)
+            }
+            Child::Proxy(hash) => Err(NodeError::Proxy(hash.clone())),
         }
     }
 }
@@ -224,6 +302,9 @@ impl Debug for BranchNode {
                         Some(addr) => write!(f, "({i:?}: address={addr:?} hash={hash})")?,
                         None => write!(f, "({i:?}: unpersisted hash={hash})")?,
                     }
+                }
+                Some(Child::Proxy(hash)) => {
+                    write!(f, "({i:?}: proxy hash={hash})")?;
                 }
             }
         }
