@@ -73,6 +73,8 @@ pub struct DatabaseHandleArgs<'a> {
     pub free_list_cache_size: usize,
 
     /// The maximum number of revisions to keep.
+    ///
+    /// Must be > `deferred_persistence_commit_count`.
     pub revisions: usize,
 
     /// The cache read strategy to use.
