@@ -24,6 +24,7 @@
 //! - Uses C-compatible representation for cross-language access
 //!
 
+use bytemuck::Zeroable as _;
 use bytemuck_derive::{Pod, Zeroable};
 use std::io::{Error, ErrorKind, Read};
 
@@ -31,6 +32,25 @@ use super::alloc::FreeLists;
 use super::primitives::{LinearAddress, area_size_hash};
 use crate::logger::{debug, trace};
 use crate::{NodeHashAlgorithm, TrieHash};
+
+/// Maximum number of validator roots supported in the header.
+/// 16 validators * 48 bytes/root = 768 bytes, fits within header padding.
+pub const MAX_VALIDATORS: usize = 16;
+
+/// A per-validator root entry in the header.
+///
+/// Uses `u64` for `root_address` (not `Option<LinearAddress>`) since `Pod`
+/// doesn't support `Option`. A value of 0 for `root_address` means unused/empty.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Zeroable, Pod)]
+#[repr(C)]
+pub struct ValidatorRoot {
+    /// The external validator identifier (client-assigned, persisted for recovery).
+    validator_id: u64,
+    /// Disk address of this validator's trie root, or 0 for empty/unused.
+    root_address: u64,
+    /// Merkle root hash of this validator's trie.
+    root_hash: [u8; 32],
+}
 
 /// A tuple indicating the address and hash of a node (the root node).
 pub type RootNodeInfo = (LinearAddress, TrieHash);
@@ -295,6 +315,16 @@ pub struct NodeStoreHeader {
     /// equal to `firewood-v1`, this field may contain uninitialized data and
     /// must be ignored.
     git_describe: GitDescribe,
+
+    /// Number of active validator roots. 0 = legacy single-root mode.
+    /// When non-zero, the `validator_roots` array contains per-validator
+    /// root entries.
+    validator_count: u64,
+
+    /// Per-validator root slots. Each slot contains the disk address and
+    /// merkle root hash for one validator's latest committed trie.
+    /// Only the first `validator_count` entries are active.
+    validator_roots: [ValidatorRoot; MAX_VALIDATORS],
 }
 
 // Compile-time assertion that SIZE is large enough for the header. Does not work
@@ -351,6 +381,8 @@ impl NodeStoreHeader {
             root_hash: TrieHash::empty().into(),
             cargo_version: CargoVersion::INSTANCE,
             git_describe: GitDescribe::INSTANCE,
+            validator_count: 0,
+            validator_roots: [ValidatorRoot::zeroed(); MAX_VALIDATORS],
         }
     }
 
@@ -383,6 +415,9 @@ impl NodeStoreHeader {
 
         trace!("Checking if node hash algorithm flag matches storage...");
         self.validate_node_hash_algorithm(expected_node_hash_algorithm)?;
+
+        trace!("Checking validator count...");
+        self.validate_validator_count()?;
 
         if self.version == Version::VALID_V1_VERSIONS[0] {
             debug!(
@@ -488,6 +523,84 @@ impl NodeStoreHeader {
             .or_else(|| self.cargo_version().map(CargoVersion::as_str))
     }
 
+    /// Returns the number of active validator roots.
+    /// A value of 0 means legacy single-root mode.
+    #[must_use]
+    pub const fn validator_count(&self) -> usize {
+        self.validator_count as usize
+    }
+
+    /// Sets the validator count.
+    pub const fn set_validator_count(&mut self, count: usize) {
+        self.validator_count = count as u64;
+    }
+
+    /// Returns the validator ID and root info for a slot, or `None` if the slot
+    /// is unused (`root_address` == 0) or out of range.
+    #[must_use]
+    pub fn validator_root(&self, slot: u8) -> Option<(u64, RootNodeInfo)> {
+        let slot_idx = slot as usize;
+        if slot_idx >= self.validator_count as usize {
+            return None;
+        }
+        let vr = self.validator_roots.get(slot_idx)?;
+        let addr = LinearAddress::new(vr.root_address)?;
+        Some((vr.validator_id, (addr, TrieHash::from(vr.root_hash))))
+    }
+
+    /// Sets the root for a validator slot.
+    ///
+    /// Pass `Some((validator_id, (addr, hash)))` to set, or `None` to clear.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the slot index exceeds `MAX_VALIDATORS`.
+    pub fn set_validator_root(
+        &mut self,
+        slot: u8,
+        root: Option<(u64, RootNodeInfo)>,
+    ) -> Result<(), Error> {
+        let slot_idx = slot as usize;
+        if slot_idx >= MAX_VALIDATORS {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!("validator slot {slot} exceeds maximum {MAX_VALIDATORS}"),
+            ));
+        }
+        let entry = self.validator_roots.get_mut(slot_idx).ok_or_else(|| {
+            Error::new(
+                ErrorKind::InvalidInput,
+                format!("validator slot {slot} out of bounds"),
+            )
+        })?;
+        match root {
+            Some((validator_id, (addr, hash))) => {
+                *entry = ValidatorRoot {
+                    validator_id,
+                    root_address: addr.get(),
+                    root_hash: hash.into(),
+                };
+            }
+            None => {
+                *entry = ValidatorRoot::zeroed();
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_validator_count(&self) -> Result<(), Error> {
+        if (self.validator_count as usize) > MAX_VALIDATORS {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "validator_count {} exceeds maximum {}",
+                    self.validator_count, MAX_VALIDATORS
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn validate_endian_test(&self) -> Result<(), Error> {
         if self.endian_test == 1 {
             Ok(())
@@ -566,5 +679,122 @@ mod tests {
         assert_eq!(header.version, Version::new());
         let empty_free_list: FreeLists = Default::default();
         assert_eq!(*header.free_lists(), empty_free_list);
+    }
+
+    #[test]
+    fn test_header_size_with_validator_roots_fits_in_2048() {
+        assert!(
+            size_of::<NodeStoreHeader>() <= NodeStoreHeader::SIZE as usize,
+            "NodeStoreHeader size {} exceeds SIZE {}",
+            size_of::<NodeStoreHeader>(),
+            NodeStoreHeader::SIZE
+        );
+    }
+
+    #[test]
+    fn test_validator_root_roundtrip() {
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        header.set_validator_count(1);
+
+        let addr = LinearAddress::new(4096).expect("valid address");
+        let hash = TrieHash::from([0xABu8; 32]);
+        let validator_id = 42u64;
+        header
+            .set_validator_root(0, Some((validator_id, (addr, hash.clone()))))
+            .expect("set root");
+
+        let (got_id, (got_addr, got_hash)) = header.validator_root(0).expect("root should exist");
+        assert_eq!(got_id, validator_id);
+        assert_eq!(got_addr, addr);
+        assert_eq!(got_hash, hash);
+    }
+
+    #[test]
+    fn test_validator_root_none_when_slot_unused() {
+        let header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        // validator_count is 0, so all slots are unused
+        assert!(header.validator_root(0).is_none());
+    }
+
+    #[test]
+    fn test_validator_root_out_of_range_returns_none() {
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        header.set_validator_count(2);
+        // Slot 2 is out of range (count is 2, valid slots are 0 and 1)
+        assert!(header.validator_root(2).is_none());
+        assert!(header.validator_root(255).is_none());
+    }
+
+    #[test]
+    fn test_set_validator_root_out_of_range_returns_error() {
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let addr = LinearAddress::new(4096).expect("valid address");
+        let hash = TrieHash::from([0xABu8; 32]);
+        // Slot >= MAX_VALIDATORS should fail
+        let result = header.set_validator_root(MAX_VALIDATORS as u8, Some((1, (addr, hash))));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_validator_count_zero_is_legacy_mode() {
+        let header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        assert_eq!(header.validator_count(), 0);
+        // No validator roots accessible
+        for i in 0..MAX_VALIDATORS as u8 {
+            assert!(header.validator_root(i).is_none());
+        }
+    }
+
+    #[test]
+    fn test_validate_rejects_invalid_validator_count() {
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        // Set an invalid count
+        header.validator_count = (MAX_VALIDATORS as u64) + 1;
+        let result = header.validate(NodeHashAlgorithm::compile_option());
+        assert!(result.is_err());
+        let err = result.expect_err("should fail validation");
+        assert!(err.to_string().contains("validator_count"));
+    }
+
+    #[test]
+    fn test_header_persists_multiple_validator_roots() {
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        header.set_validator_count(4);
+
+        for i in 0..4u8 {
+            let addr = LinearAddress::new(u64::from(i + 1) * 4096).expect("valid address");
+            let mut hash_bytes = [0u8; 32];
+            hash_bytes[0] = i;
+            let hash = TrieHash::from(hash_bytes);
+            header
+                .set_validator_root(i, Some((u64::from(i), (addr, hash))))
+                .expect("set root");
+        }
+
+        for i in 0..4u8 {
+            let (vid, (addr, hash)) = header
+                .validator_root(i)
+                .unwrap_or_else(|| panic!("slot {i} should have a root"));
+            assert_eq!(vid, u64::from(i));
+            assert_eq!(addr.get(), u64::from(i + 1) * 4096);
+            assert_eq!(<TrieHash as Into<[u8; 32]>>::into(hash)[0], i);
+        }
+    }
+
+    #[test]
+    fn test_clear_validator_root() {
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        header.set_validator_count(1);
+
+        let addr = LinearAddress::new(4096).expect("valid address");
+        let hash = TrieHash::from([0xABu8; 32]);
+        header
+            .set_validator_root(0, Some((1, (addr, hash))))
+            .expect("set root");
+        assert!(header.validator_root(0).is_some());
+
+        // Clear the slot
+        header.set_validator_root(0, None).expect("clear root");
+        assert!(header.validator_root(0).is_none());
     }
 }

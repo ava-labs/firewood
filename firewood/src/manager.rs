@@ -21,13 +21,13 @@ use typed_builder::TypedBuilder;
 use crate::merkle::Merkle;
 use crate::persist_worker::{PersistError, PersistWorker};
 use crate::root_store::RootStore;
-use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt};
+use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt, ValidatorId};
 
 use firewood_metrics::{firewood_increment, firewood_set};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal,
-    NodeHashAlgorithm, NodeStore, NodeStoreHeader, TrieHash,
+    IntoHashType, MAX_VALIDATORS, NodeHashAlgorithm, NodeStore, NodeStoreHeader, TrieHash,
 };
 
 pub(crate) const DB_FILE_NAME: &str = "firewood.db";
@@ -87,6 +87,52 @@ pub struct ConfigManager {
 pub type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 type ProposedRevision = Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>;
 
+/// Identifies a chain (lineage of revisions) within the multi-head manager.
+type ChainId = u64;
+
+/// Per-chain revision tracking.
+#[derive(Debug)]
+struct ChainState {
+    /// Revisions on this chain, ordered oldest-to-newest.
+    revisions: VecDeque<CommittedRevision>,
+}
+
+/// Per-validator state within the multi-head revision manager.
+#[derive(Debug)]
+struct ValidatorState {
+    /// This validator's latest committed revision.
+    head: CommittedRevision,
+    /// Slot index in the header (0..`MAX_VALIDATORS`).
+    slot: u8,
+    /// Which chain this validator is on.
+    chain: ChainId,
+}
+
+/// Tracks all validator heads and per-chain revision pools.
+#[derive(Debug)]
+struct MultiHeadState {
+    /// Per-validator state, keyed by [`ValidatorId`].
+    validators: HashMap<ValidatorId, ValidatorState>,
+    /// Per-chain revision deques (replaces the single global pool).
+    chains: HashMap<ChainId, ChainState>,
+    /// O(1) hash-based lookup into any chain's revision pool.
+    by_hash: HashMap<TrieHash, CommittedRevision>,
+    /// Reverse index: hash → chain that contains this revision.
+    hash_to_chain: HashMap<TrieHash, ChainId>,
+    /// Maximum number of validators allowed.
+    max_validators: usize,
+    /// Monotonic counter for allocating new chain IDs.
+    next_chain_id: ChainId,
+}
+
+impl MultiHeadState {
+    fn next_available_slot(&self) -> Option<u8> {
+        let used_slots: std::collections::HashSet<u8> =
+            self.validators.values().map(|v| v.slot).collect();
+        (0..self.max_validators as u8).find(|slot| !used_slots.contains(slot))
+    }
+}
+
 #[derive(Debug)]
 pub(crate) struct RevisionManager {
     /// Maximum number of revisions to keep in memory.
@@ -123,6 +169,13 @@ pub(crate) struct RevisionManager {
 
     /// Worker responsible for persisting revisions to disk.
     persist_worker: PersistWorker,
+
+    /// Multi-head state. When `Some`, the manager supports multiple validator
+    /// heads. When `None`, it operates in legacy single-head mode.
+    multi_head: Option<RwLock<MultiHeadState>>,
+
+    /// Shared reference to the underlying storage backing all nodestores.
+    storage: Arc<FileBacked>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -153,6 +206,23 @@ pub(crate) enum RevisionManagerError {
         max_revisions: usize,
         commit_count: u64,
     },
+    #[error("Validator {id:?} is not registered")]
+    ValidatorNotFound { id: ValidatorId },
+    #[error("Validator {id:?} is already registered")]
+    ValidatorAlreadyRegistered { id: ValidatorId },
+    #[error("Maximum number of validators ({max}) reached; cannot register validator {id:?}")]
+    MaxValidatorsReached { id: ValidatorId, max: usize },
+    #[error(
+        "Proposal parent {provided:?} does not match validator {validator:?} head {expected:?}"
+    )]
+    NotValidatorHead {
+        validator: ValidatorId,
+        provided: Option<HashKey>,
+        expected: Option<HashKey>,
+    },
+    #[expect(dead_code, reason = "Reserved for future deregistration workflow")]
+    #[error("Validator {id:?} has already been deregistered")]
+    ValidatorDeregistered { id: ValidatorId },
 }
 
 impl RevisionManager {
@@ -228,6 +298,8 @@ impl RevisionManager {
             threadpool: OnceLock::new(),
             root_store,
             persist_worker,
+            multi_head: None,
+            storage: storage.clone(),
         };
 
         // On startup, we always write the latest revision to RootStore
@@ -416,12 +488,18 @@ impl RevisionManager {
     }
 
     /// Retrieve a committed revision by its root hash.
-    /// To retrieve a revision involves a few steps:
-    /// 1. Check the in-memory revision manager.
-    /// 2. Check `RootStore` (if it exists).
+    ///
+    /// Checks in-memory revisions (single-head and multi-head), then `RootStore`.
     pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, RevisionManagerError> {
-        // 1. Check the in-memory revision manager.
+        // Check the in-memory revision manager (single-head).
         if let Some(revision) = self.by_hash.read().get(&root_hash).cloned() {
+            return Ok(revision);
+        }
+
+        // Check the multi-head state's `by_hash`.
+        if let Some(multi_head) = &self.multi_head
+            && let Some(revision) = multi_head.read().by_hash.get(&root_hash).cloned()
+        {
             return Ok(revision);
         }
 
@@ -481,6 +559,770 @@ impl RevisionManager {
         self.persist_worker
             .check_error()
             .map_err(RevisionManagerError::PersistError)
+    }
+
+    /// Enable multi-head mode, allowing multiple validator heads.
+    ///
+    /// This transitions the revision manager from single-head to multi-head
+    /// mode. The current revision becomes the base for all future validators.
+    pub fn enable_multi_head(&mut self, max_validators: usize) -> Result<(), RevisionManagerError> {
+        let max_validators = max_validators.min(MAX_VALIDATORS);
+        let current = self.current_revision();
+
+        let mut by_hash = HashMap::new();
+        let mut hash_to_chain = HashMap::new();
+
+        // Create chain 0 with the current revision as its sole entry
+        let chain_revisions = VecDeque::from([current.clone()]);
+        if let Some(hash) = current.root_hash().or_default_root_hash() {
+            by_hash.insert(hash.clone(), current.clone());
+            hash_to_chain.insert(hash, 0);
+        }
+
+        let mut chains = HashMap::new();
+        chains.insert(
+            0,
+            ChainState {
+                revisions: chain_revisions,
+            },
+        );
+
+        self.multi_head = Some(RwLock::new(MultiHeadState {
+            validators: HashMap::new(),
+            chains,
+            by_hash,
+            hash_to_chain,
+            max_validators,
+            next_chain_id: 1,
+        }));
+
+        // Update header with validator count from on-disk state
+        let header = self.persist_worker.locked_header();
+        let count = header.validator_count();
+        drop(header);
+
+        // If the database already had validators on disk, restore them
+        if count > 0 {
+            self.restore_validators_from_header()?;
+        }
+
+        Ok(())
+    }
+
+    /// Restore validator state from the header after opening an existing
+    /// multi-head database.
+    ///
+    /// Validators with the same root hash are assigned to the same chain;
+    /// validators with different root hashes are assigned to different chains.
+    fn restore_validators_from_header(&self) -> Result<(), RevisionManagerError> {
+        // Phase 1: Read all validator data from the header (header lock only)
+        let header = self.persist_worker.locked_header();
+        let count = header.validator_count();
+
+        let mut validators_data = Vec::new();
+        for slot in 0..count {
+            let slot_u8 = u8::try_from(slot).map_err(|_| {
+                RevisionManagerError::IOError(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "slot overflow",
+                ))
+            })?;
+
+            if let Some((validator_id, (addr, hash))) = header.validator_root(slot_u8) {
+                validators_data.push((slot_u8, validator_id, addr, hash));
+            }
+        }
+        drop(header);
+
+        // Phase 2: Update multi-head state (write lock only, no header lock)
+        let mut state = self
+            .multi_head
+            .as_ref()
+            .ok_or(RevisionManagerError::IOError(io::Error::other(
+                "multi-head mode not enabled",
+            )))?
+            .write();
+
+        for (slot_u8, validator_id, addr, hash) in validators_data {
+            let id = ValidatorId::new(validator_id);
+
+            // Check if we already have a revision with this hash (dedup on recovery)
+            let (head, chain_id) = if let Some(existing) = state.by_hash.get(&hash).cloned() {
+                let chain_id = state.hash_to_chain.get(&hash).copied().ok_or_else(|| {
+                    RevisionManagerError::IOError(io::Error::other(
+                        "hash_to_chain inconsistent during recovery",
+                    ))
+                })?;
+                (existing, chain_id)
+            } else {
+                // Reconstruct from the shared storage
+                let committed = Arc::new(NodeStore::with_root(
+                    hash.clone().into_hash_type(),
+                    addr,
+                    self.storage.clone(),
+                ));
+
+                let chain_id = state.next_chain_id;
+                state.next_chain_id = state.next_chain_id.wrapping_add(1);
+
+                state.chains.insert(
+                    chain_id,
+                    ChainState {
+                        revisions: VecDeque::from([committed.clone()]),
+                    },
+                );
+                state.by_hash.insert(hash.clone(), committed.clone());
+                state.hash_to_chain.insert(hash, chain_id);
+
+                (committed, chain_id)
+            };
+
+            state.validators.insert(
+                id,
+                ValidatorState {
+                    head,
+                    slot: slot_u8,
+                    chain: chain_id,
+                },
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Register a new validator. The validator starts at the current latest revision.
+    ///
+    /// The validator is assigned to the chain that the tip revision belongs to.
+    pub fn register_validator(&self, id: ValidatorId) -> Result<(), RevisionManagerError> {
+        let (slot, root_info, validator_count) = {
+            let mut state = self
+                .multi_head
+                .as_ref()
+                .ok_or(RevisionManagerError::ValidatorNotFound { id })?
+                .write();
+
+            if state.validators.contains_key(&id) {
+                return Err(RevisionManagerError::ValidatorAlreadyRegistered { id });
+            }
+
+            let slot =
+                state
+                    .next_available_slot()
+                    .ok_or(RevisionManagerError::MaxValidatorsReached {
+                        id,
+                        max: state.max_validators,
+                    })?;
+
+            // Find the tip chain: the chain with the most validators, or any existing chain.
+            // If all chains have been cleaned up, create a fresh chain from current_revision.
+            let (tip_chain_id, base) = {
+                let mut chain_counts: HashMap<ChainId, usize> = HashMap::new();
+                for v in state.validators.values() {
+                    chain_counts
+                        .entry(v.chain)
+                        .and_modify(|c| *c = c.wrapping_add(1))
+                        .or_insert(1);
+                }
+                let best_chain = chain_counts
+                    .into_iter()
+                    .max_by_key(|&(_, count)| count)
+                    .map(|(cid, _)| cid)
+                    .or_else(|| state.chains.keys().copied().next());
+
+                if let Some(chain_id) = best_chain {
+                    let base = state
+                        .chains
+                        .get(&chain_id)
+                        .and_then(|c| c.revisions.back().cloned())
+                        .unwrap_or_else(|| self.current_revision());
+                    (chain_id, base)
+                } else {
+                    // All chains cleaned up; create a fresh one from the current revision
+                    let base = self.current_revision();
+                    let chain_id = state.next_chain_id;
+                    state.next_chain_id = state.next_chain_id.wrapping_add(1);
+
+                    let mut chain_revisions = VecDeque::new();
+                    chain_revisions.push_back(base.clone());
+                    state.chains.insert(
+                        chain_id,
+                        ChainState {
+                            revisions: chain_revisions,
+                        },
+                    );
+                    if let Some(hash) = base.root_hash().or_default_root_hash() {
+                        state.hash_to_chain.insert(hash.clone(), chain_id);
+                        state.by_hash.insert(hash, base.clone());
+                    }
+                    (chain_id, base)
+                }
+            };
+
+            state.validators.insert(
+                id,
+                ValidatorState {
+                    head: base,
+                    slot,
+                    chain: tip_chain_id,
+                },
+            );
+
+            let validator_count = state.validators.len();
+            let validator = state
+                .validators
+                .get(&id)
+                .ok_or(RevisionManagerError::ValidatorNotFound { id })?;
+            let root_info = self.root_info_for_validator(id, validator);
+
+            (slot, root_info, validator_count)
+        }; // write lock dropped
+
+        // Update header (no multi_head lock held)
+        let mut header = self.persist_worker.locked_header();
+        header.set_validator_count(validator_count);
+        if let Err(e) = header.set_validator_root(slot, root_info) {
+            return Err(RevisionManagerError::IOError(e));
+        }
+
+        Ok(())
+    }
+
+    /// Deregister a validator, freeing its header slot.
+    ///
+    /// If this was the last validator on its chain, the chain is cleaned up
+    /// and its revisions are reaped.
+    pub fn deregister_validator(&self, id: ValidatorId) -> Result<(), RevisionManagerError> {
+        let (removed_slot, validator_count, revisions_to_reap) = {
+            let mut state = self
+                .multi_head
+                .as_ref()
+                .ok_or(RevisionManagerError::ValidatorNotFound { id })?
+                .write();
+
+            let removed = state
+                .validators
+                .remove(&id)
+                .ok_or(RevisionManagerError::ValidatorNotFound { id })?;
+
+            let source_chain = removed.chain;
+            let validator_count = state.validators.len();
+
+            // If source chain has no remaining validators, collect its revisions for reaping
+            let source_has_validators = state.validators.values().any(|v| v.chain == source_chain);
+            let revisions_to_reap = if source_has_validators {
+                Vec::new()
+            } else {
+                self.collect_all_chain_revisions(source_chain, &mut state)
+            };
+
+            (removed.slot, validator_count, revisions_to_reap)
+        }; // write lock dropped
+
+        // Clear this validator's root in the header (no multi_head lock held)
+        let mut header = self.persist_worker.locked_header();
+        if let Err(e) = header.set_validator_root(removed_slot, None) {
+            return Err(RevisionManagerError::IOError(e));
+        }
+        header.set_validator_count(validator_count);
+        drop(header);
+
+        // Reap collected revisions (no locks held, may block)
+        for rev in revisions_to_reap {
+            match Arc::try_unwrap(rev) {
+                Ok(owned) => {
+                    self.persist_worker
+                        .reap(owned)
+                        .map_err(RevisionManagerError::PersistError)?;
+                }
+                Err(_still_held) => {
+                    // External reference (e.g., a view) holds this revision.
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Commit a proposal for a specific validator.
+    ///
+    /// If a revision with the same root hash already exists (committed by
+    /// another validator), the proposal is discarded and the validator's
+    /// head advances to the existing revision (deduplication).
+    ///
+    /// Uses a 3-phase approach to minimize lock contention:
+    /// - Phase 1 (write lock): validate, dedup, update in-memory state
+    /// - Phase 2 (no lock): persist, update header, reap
+    /// - Phase 3 (proposals lock): cleanup
+    #[fastrace::trace(short_name = true)]
+    pub fn commit_for_validator(
+        &self,
+        id: ValidatorId,
+        proposal: ProposedRevision,
+    ) -> Result<(), RevisionManagerError> {
+        // Check persist worker health (no lock needed)
+        self.persist_worker
+            .check_error()
+            .map_err(RevisionManagerError::PersistError)?;
+
+        // Phase 1: Under write lock (fast, in-memory only)
+        let (committed, slot, root_info, revisions_to_reap) = {
+            let mut state = self
+                .multi_head
+                .as_ref()
+                .ok_or(RevisionManagerError::ValidatorNotFound { id })?
+                .write();
+
+            let validator = state
+                .validators
+                .get(&id)
+                .ok_or(RevisionManagerError::ValidatorNotFound { id })?;
+
+            // 1. Parent check: proposal's parent must be this validator's head
+            if !proposal.parent_hash_is(validator.head.root_hash()) {
+                return Err(RevisionManagerError::NotValidatorHead {
+                    validator: id,
+                    provided: proposal.root_hash(),
+                    expected: validator.head.root_hash(),
+                });
+            }
+
+            // 2. Dedup check: does a revision with this hash already exist?
+            let new_hash = proposal.root_hash().or_default_root_hash();
+            if let Some(ref hash) = new_hash
+                && let Some(existing) = state.by_hash.get(hash)
+            {
+                // Another validator already committed this. Reuse it.
+                let existing = existing.clone();
+                let source_chain = state
+                    .validators
+                    .get(&id)
+                    .ok_or(RevisionManagerError::ValidatorNotFound { id })?
+                    .chain;
+
+                // Look up target chain via hash_to_chain
+                let target_chain = state.hash_to_chain.get(hash).copied().ok_or_else(|| {
+                    RevisionManagerError::IOError(io::Error::other(
+                        "hash_to_chain inconsistent: hash in by_hash but not hash_to_chain",
+                    ))
+                })?;
+
+                // Update validator head and chain assignment
+                {
+                    let validator = state
+                        .validators
+                        .get_mut(&id)
+                        .ok_or(RevisionManagerError::ValidatorNotFound { id })?;
+                    validator.head = existing;
+                    if source_chain != target_chain {
+                        validator.chain = target_chain;
+                    }
+                } // mutable borrow of validator dropped
+
+                // Clean up source chain if now empty of validators
+                let revisions_to_reap = if source_chain != target_chain
+                    && !state.validators.values().any(|v| v.chain == source_chain)
+                {
+                    self.collect_all_chain_revisions(source_chain, &mut state)
+                } else {
+                    Vec::new()
+                };
+
+                let validator = state
+                    .validators
+                    .get(&id)
+                    .ok_or(RevisionManagerError::ValidatorNotFound { id })?;
+                let root_info = self.root_info_for_validator(id, validator);
+                let slot = validator.slot;
+                drop(state); // release write lock
+
+                // Phase 2 (dedup path): update header, reap orphaned chain
+                let mut header = self.persist_worker.locked_header();
+                if let Err(e) = header.set_validator_root(slot, root_info) {
+                    return Err(RevisionManagerError::IOError(e));
+                }
+                drop(header);
+
+                for rev in revisions_to_reap {
+                    match Arc::try_unwrap(rev) {
+                        Ok(owned) => {
+                            self.persist_worker
+                                .reap(owned)
+                                .map_err(RevisionManagerError::PersistError)?;
+                        }
+                        Err(_still_held) => {}
+                    }
+                }
+
+                // Phase 3 (dedup path): cleanup proposals
+                self.cleanup_proposals_inner(&proposal);
+
+                return Ok(());
+            }
+
+            // 3. Check for divergence: other validators on same chain have
+            //    a different head than this validator's parent
+            let validator_chain = state
+                .validators
+                .get(&id)
+                .ok_or(RevisionManagerError::ValidatorNotFound { id })?
+                .chain;
+            let parent_hash = state
+                .validators
+                .get(&id)
+                .ok_or(RevisionManagerError::ValidatorNotFound { id })?
+                .head
+                .root_hash();
+
+            let diverged = state.validators.iter().any(|(other_id, other_v)| {
+                *other_id != id
+                    && other_v.chain == validator_chain
+                    && other_v.head.root_hash() != parent_hash
+            });
+
+            // 4. Convert proposal to committed
+            let committed: CommittedRevision = proposal.as_committed().into();
+
+            if diverged {
+                // Fork: create new chain for this validator
+                if let Some(ref new_h) = new_hash {
+                    let other_validators: Vec<_> = state
+                        .validators
+                        .iter()
+                        .filter(|(other_id, other_v)| {
+                            **other_id != id && other_v.chain == validator_chain
+                        })
+                        .map(|(vid, _)| *vid)
+                        .collect();
+                    warn!(
+                        "chain divergence detected: validator {id:?} forked to new chain. \
+                         parent={parent_hash:?}, new_hash={new_h:?}. \
+                         validators on original chain {validator_chain}: {other_validators:?}"
+                    );
+                    firewood_increment!(crate::registry::VALIDATOR_DIVERGENCE_TOTAL, 1);
+                }
+
+                let new_chain_id = state.next_chain_id;
+                state.next_chain_id = state.next_chain_id.wrapping_add(1);
+
+                state.chains.insert(
+                    new_chain_id,
+                    ChainState {
+                        revisions: VecDeque::from([committed.clone()]),
+                    },
+                );
+
+                if let Some(ref hash) = new_hash {
+                    state.by_hash.insert(hash.clone(), committed.clone());
+                    state.hash_to_chain.insert(hash.clone(), new_chain_id);
+                }
+
+                let validator = state
+                    .validators
+                    .get_mut(&id)
+                    .ok_or(RevisionManagerError::ValidatorNotFound { id })?;
+                validator.head = committed.clone();
+                validator.chain = new_chain_id;
+                let root_info = self.root_info_for_validator(id, validator);
+                let slot = validator.slot;
+
+                // No reaping needed for brand-new chain (only 1 revision)
+                (committed, slot, root_info, Vec::new())
+            } else {
+                // Normal case: append new revision to the validator's current chain
+                if let Some(ref hash) = new_hash {
+                    state.by_hash.insert(hash.clone(), committed.clone());
+                    state.hash_to_chain.insert(hash.clone(), validator_chain);
+                }
+
+                let chain = state.chains.get_mut(&validator_chain).ok_or_else(|| {
+                    RevisionManagerError::IOError(io::Error::other(
+                        "validator's chain not found in chains map",
+                    ))
+                })?;
+                chain.revisions.push_back(committed.clone());
+
+                let validator = state
+                    .validators
+                    .get_mut(&id)
+                    .ok_or(RevisionManagerError::ValidatorNotFound { id })?;
+                validator.head = committed.clone();
+                let root_info = self.root_info_for_validator(id, validator);
+                let slot = validator.slot;
+
+                // 5. Collect revisions to reap from this chain (per-chain budget)
+                let revisions_to_reap =
+                    self.collect_reapable_revisions(validator_chain, &mut state);
+
+                (committed, slot, root_info, revisions_to_reap)
+            }
+        }; // write lock dropped
+
+        // Phase 2: No lock held (may block)
+        // Persist the new revision
+        self.persist_worker
+            .persist(committed.clone())
+            .map_err(RevisionManagerError::PersistError)?;
+
+        // Update header
+        let mut header = self.persist_worker.locked_header();
+        if let Err(e) = header.set_validator_root(slot, root_info.clone()) {
+            return Err(RevisionManagerError::IOError(e));
+        }
+        // Also update legacy root for backward compat
+        header.set_root_location(root_info.map(|(_, ri)| ri));
+        drop(header);
+
+        // Reap collected revisions
+        for rev in revisions_to_reap {
+            match Arc::try_unwrap(rev) {
+                Ok(owned) => {
+                    self.persist_worker
+                        .reap(owned)
+                        .map_err(RevisionManagerError::PersistError)?;
+                }
+                Err(_still_held) => {
+                    // External reference (e.g., a view) holds this revision.
+                }
+            }
+        }
+
+        // Phase 3: Under proposals lock (short)
+        self.cleanup_proposals_inner(&proposal);
+
+        // Reparent any proposals that have this proposal as a parent
+        for p in &*self.proposals.lock() {
+            proposal.commit_reparent(p);
+        }
+
+        if crate::logger::trace_enabled() {
+            let merkle = Merkle::from(committed);
+            if let Ok(s) = merkle.dump_to_string() {
+                trace!("{s}");
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Advance a validator's head to an existing revision by hash.
+    ///
+    /// This is the skip-propose optimization: if a validator knows the
+    /// expected root hash (e.g., from a block header), it can advance
+    /// without computing a proposal.
+    ///
+    /// If the target revision is on a different chain, the validator moves
+    /// to that chain. The source chain is cleaned up if it becomes empty.
+    pub fn advance_validator_to_hash(
+        &self,
+        id: ValidatorId,
+        hash: HashKey,
+    ) -> Result<(), RevisionManagerError> {
+        let (slot, root_info, revisions_to_reap) = {
+            let mut state = self
+                .multi_head
+                .as_ref()
+                .ok_or(RevisionManagerError::ValidatorNotFound { id })?
+                .write();
+
+            if !state.validators.contains_key(&id) {
+                return Err(RevisionManagerError::ValidatorNotFound { id });
+            }
+
+            let existing = state
+                .by_hash
+                .get(&hash)
+                .ok_or(RevisionManagerError::RevisionNotFound {
+                    provided: hash.clone(),
+                })?
+                .clone();
+
+            // Look up target chain
+            let target_chain = state.hash_to_chain.get(&hash).copied().ok_or_else(|| {
+                RevisionManagerError::IOError(io::Error::other(
+                    "hash_to_chain inconsistent in advance_validator_to_hash",
+                ))
+            })?;
+
+            let source_chain = state
+                .validators
+                .get(&id)
+                .ok_or(RevisionManagerError::ValidatorNotFound { id })?
+                .chain;
+
+            let validator = state
+                .validators
+                .get_mut(&id)
+                .ok_or(RevisionManagerError::ValidatorNotFound { id })?;
+            validator.head = existing;
+            validator.chain = target_chain;
+            let root_info = self.root_info_for_validator(id, validator);
+            let slot = validator.slot;
+
+            // Clean up source chain if now empty of validators
+            let revisions_to_reap = if source_chain != target_chain
+                && !state.validators.values().any(|v| v.chain == source_chain)
+            {
+                self.collect_all_chain_revisions(source_chain, &mut state)
+            } else {
+                Vec::new()
+            };
+
+            (slot, root_info, revisions_to_reap)
+        }; // write lock dropped
+
+        // Update header (no multi_head lock held)
+        let mut header = self.persist_worker.locked_header();
+        if let Err(e) = header.set_validator_root(slot, root_info) {
+            return Err(RevisionManagerError::IOError(e));
+        }
+        drop(header);
+
+        // Reap collected revisions (no locks held, may block)
+        for rev in revisions_to_reap {
+            match Arc::try_unwrap(rev) {
+                Ok(owned) => {
+                    self.persist_worker
+                        .reap(owned)
+                        .map_err(RevisionManagerError::PersistError)?;
+                }
+                Err(_still_held) => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Return a view at a specific validator's current head.
+    pub fn validator_view(
+        &self,
+        id: ValidatorId,
+    ) -> Result<CommittedRevision, RevisionManagerError> {
+        let state = self
+            .multi_head
+            .as_ref()
+            .ok_or(RevisionManagerError::ValidatorNotFound { id })?
+            .read();
+
+        state
+            .validators
+            .get(&id)
+            .map(|v| v.head.clone())
+            .ok_or(RevisionManagerError::ValidatorNotFound { id })
+    }
+
+    /// Collect revisions to reap from a specific chain (per-chain budget enforcement).
+    ///
+    /// Pops revisions from the front of the chain's deque when:
+    /// - The chain exceeds `max_revisions`
+    /// - The revision is older than all validators' heads on this chain
+    ///
+    /// Returns the collected revisions for reaping outside the lock.
+    fn collect_reapable_revisions(
+        &self,
+        chain_id: ChainId,
+        state: &mut MultiHeadState,
+    ) -> Vec<CommittedRevision> {
+        let mut collected = Vec::new();
+
+        let Some(chain) = state.chains.get_mut(&chain_id) else {
+            return collected; // Chain already cleaned up
+        };
+
+        // Find the min-head position of validators on THIS chain
+        let min_pos = state
+            .validators
+            .values()
+            .filter(|v| v.chain == chain_id)
+            .filter_map(|v| chain.revisions.iter().position(|r| Arc::ptr_eq(r, &v.head)))
+            .min()
+            .unwrap_or(0);
+
+        let mut reaped = 0;
+        while chain.revisions.len() > self.max_revisions && reaped < min_pos {
+            let Some(oldest) = chain.revisions.pop_front() else {
+                break;
+            };
+
+            // Remove from hash indexes if no validator head references this hash
+            if let Some(hash) = oldest.root_hash().or_default_root_hash() {
+                let still_referenced = state
+                    .validators
+                    .values()
+                    .any(|v| v.head.root_hash().or_default_root_hash().as_ref() == Some(&hash));
+                if !still_referenced {
+                    state.by_hash.remove(&hash);
+                    state.hash_to_chain.remove(&hash);
+                }
+            }
+
+            collected.push(oldest);
+            reaped = reaped.wrapping_add(1);
+        }
+
+        collected
+    }
+
+    /// Collect all revisions from an empty chain for cleanup.
+    ///
+    /// Removes the chain from the `chains` map and returns all its revisions
+    /// for reaping outside the lock. Hash indexes are cleaned up for revisions
+    /// that are no longer referenced by any validator head.
+    fn collect_all_chain_revisions(
+        &self,
+        chain_id: ChainId,
+        state: &mut MultiHeadState,
+    ) -> Vec<CommittedRevision> {
+        let Some(mut chain) = state.chains.remove(&chain_id) else {
+            return Vec::new(); // Already removed
+        };
+
+        let mut collected = Vec::new();
+        while let Some(rev) = chain.revisions.pop_front() {
+            if let Some(hash) = rev.root_hash().or_default_root_hash() {
+                let still_referenced = state
+                    .validators
+                    .values()
+                    .any(|v| v.head.root_hash().or_default_root_hash().as_ref() == Some(&hash));
+                if !still_referenced {
+                    state.by_hash.remove(&hash);
+                    state.hash_to_chain.remove(&hash);
+                }
+            }
+            collected.push(rev);
+        }
+
+        collected
+    }
+
+    /// Extract root info (`validator_id`, address, hash) from a validator's head,
+    /// in the format expected by `set_validator_root`.
+    fn root_info_for_validator(
+        &self,
+        id: ValidatorId,
+        validator: &ValidatorState,
+    ) -> Option<(u64, (firewood_storage::LinearAddress, TrieHash))> {
+        let hash = validator.head.root_hash()?;
+        let addr = validator.head.root_address()?;
+        Some((id.id(), (addr, hash)))
+    }
+
+    /// Clean up proposals after a commit (shared helper).
+    fn cleanup_proposals_inner(&self, proposal: &ProposedRevision) {
+        let mut lock = self.proposals.lock();
+        let mut discarded = 0u64;
+        lock.retain(|p| {
+            let should_retain = !Arc::ptr_eq(proposal, p) && Arc::strong_count(p) > 1;
+            if !should_retain {
+                discarded = discarded.wrapping_add(1);
+            }
+            should_retain
+        });
+
+        if discarded > 0 {
+            firewood_increment!(crate::registry::PROPOSALS_DISCARDED, discarded);
+        }
+
+        firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len());
     }
 
     /// Closes the revision manager gracefully.

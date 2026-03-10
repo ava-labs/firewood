@@ -35,6 +35,15 @@ pub const ACTIVE_REVISIONS: &str = "active_revisions";
 /// Maximum number of revisions configured.
 pub const MAX_REVISIONS: &str = "max_revisions";
 
+/// Total divergence events across all validators.
+pub const VALIDATOR_DIVERGENCE_TOTAL: &str = "firewood_validator_divergence_total";
+
+/// Whether a validator is on the shared chain (1) or diverged (0).
+pub const VALIDATOR_CHAIN_SHARED: &str = "firewood_validator_chain_shared";
+
+/// Current head position per validator.
+pub const VALIDATOR_HEAD_BLOCK: &str = "firewood_validator_head_block";
+
 /// Registers all firewood metric descriptions.
 pub fn register() {
     describe_counter!(PROPOSALS, "Number of proposals created");
@@ -59,4 +68,13 @@ pub fn register() {
     describe_counter!(COMMIT_LATENCY_MS, "Commit latency (ms)");
     describe_gauge!(ACTIVE_REVISIONS, "Current number of active revisions");
     describe_gauge!(MAX_REVISIONS, "Maximum number of revisions configured");
+    describe_counter!(
+        VALIDATOR_DIVERGENCE_TOTAL,
+        "Total divergence events across all validators"
+    );
+    describe_gauge!(
+        VALIDATOR_CHAIN_SHARED,
+        "Whether validator is on shared chain (1) or diverged (0)"
+    );
+    describe_gauge!(VALIDATOR_HEAD_BLOCK, "Current head position per validator");
 }

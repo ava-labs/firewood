@@ -81,6 +81,75 @@ impl<E: fmt::Display> From<Result<crate::DatabaseHandle, E>> for HandleResult {
     }
 }
 
+/// The result type returned from the multi-validator open database function.
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum MultiHandleResult {
+    /// The multi-validator database was opened successfully.
+    ///
+    /// The caller must ensure that [`fwd_multi_close_db`] is called to free resources
+    /// associated with this handle when it is no longer needed.
+    ///
+    /// [`fwd_multi_close_db`]: crate::fwd_multi_close_db
+    Ok(Box<crate::MultiDatabaseHandle>),
+
+    /// An error occurred and the message is returned as an [`OwnedBytes`].
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl<E: fmt::Display> From<Result<crate::MultiDatabaseHandle, E>> for MultiHandleResult {
+    fn from(value: Result<crate::MultiDatabaseHandle, E>) -> Self {
+        match value {
+            Ok(handle) => MultiHandleResult::Ok(Box::new(handle)),
+            Err(err) => MultiHandleResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+/// A result type returned from FFI functions that create a multi-validator proposal.
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum MultiProposalResult<'db> {
+    /// The caller provided a null pointer to a database handle.
+    NullHandlePointer,
+    /// The proposal was created successfully.
+    Ok {
+        /// An opaque pointer to the [`MultiProposalHandle`] that can be used to create
+        /// an additional proposal or later commit.
+        ///
+        /// [`MultiProposalHandle`]: crate::MultiProposalHandle
+        handle: Box<crate::MultiProposalHandle<'db>>,
+        /// The root hash of the proposal.
+        root_hash: HashKey,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`].
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl<'db, E: fmt::Display> From<Result<crate::MultiCreateProposalResult<'db>, E>>
+    for MultiProposalResult<'db>
+{
+    fn from(value: Result<crate::MultiCreateProposalResult<'db>, E>) -> Self {
+        match value {
+            Ok(crate::MultiCreateProposalResult { handle, .. }) => MultiProposalResult::Ok {
+                root_hash: handle.hash_key().unwrap_or_default(),
+                handle: Box::new(handle),
+            },
+            Err(err) => MultiProposalResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 /// A result type returned from FFI functions that retrieve a single value.
 #[derive(Debug)]
 #[repr(C, usize)]
@@ -694,6 +763,7 @@ impl_null_handle_result!(
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
+    MultiProposalResult<'_>,
     IteratorResult<'_>,
     RevisionResult,
     KeyValueBatchResult,
@@ -705,6 +775,7 @@ impl_cresult!(
     ValueResult,
     HashResult,
     HandleResult,
+    MultiHandleResult,
     RangeProofResult<'_>,
     ChangeProofResult,
     VerifiedChangeProofResult,
@@ -712,6 +783,7 @@ impl_cresult!(
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
+    MultiProposalResult<'_>,
     IteratorResult<'_>,
     RevisionResult,
     KeyValueBatchResult,

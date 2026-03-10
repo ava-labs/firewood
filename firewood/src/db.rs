@@ -13,8 +13,8 @@ use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
-    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter, KeyType,
-    KeyValuePair, OptionalHashKeyExt,
+    self, ArcDynDbView, DbView, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter, KeyType,
+    KeyValuePair, OptionalHashKeyExt, ValidatorId,
 };
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
@@ -239,7 +239,7 @@ impl Db {
     ///
     /// Panics if the revision manager cannot create a thread pool.
     #[fastrace::trace(name = "propose")]
-    fn propose_with_parent<F: Parentable>(
+    pub(crate) fn propose_with_parent<F: Parentable>(
         &self,
         batch: impl IntoBatchIter,
         parent: &NodeStore<F, FileBacked>,
@@ -365,7 +365,7 @@ impl Db {
 #[derive(Debug)]
 /// A user-visible database proposal
 pub struct Proposal<'db> {
-    nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
+    pub(crate) nodestore: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>,
     db: &'db Db,
 }
 
@@ -430,6 +430,135 @@ impl Proposal<'_> {
     #[must_use]
     pub fn view(&self) -> ArcDynDbView {
         self.nodestore.clone()
+    }
+}
+
+/// Configuration for multi-validator mode.
+#[derive(Clone, Debug, TypedBuilder)]
+pub struct MultiDbConfig {
+    /// Base database configuration.
+    pub db: DbConfig,
+    /// Maximum number of validators (1..=`MAX_VALIDATORS`).
+    #[builder(default = firewood_storage::MAX_VALIDATORS)]
+    pub max_validators: usize,
+}
+
+use crate::manager::CommittedRevision;
+
+/// A multi-validator Firewood database.
+///
+/// Wraps a single `Db` instance and provides per-validator
+/// propose/commit/view operations with automatic deduplication.
+/// Identical revisions (same root hash) are stored once and shared
+/// by all validators that produce them.
+#[derive(Debug)]
+pub struct MultiDb {
+    db: Db,
+}
+
+impl MultiDb {
+    /// Create a new multi-validator database.
+    pub fn new<P: AsRef<Path>>(db_dir: P, cfg: MultiDbConfig) -> Result<Self, api::Error> {
+        let max_validators = cfg.max_validators;
+        let mut db = Db::new(db_dir, cfg.db)?;
+        db.manager
+            .enable_multi_head(max_validators)
+            .map_err(api::Error::from)?;
+        Ok(Self { db })
+    }
+
+    /// Register a new validator.
+    ///
+    /// The validator starts at the latest persisted revision.
+    pub fn register_validator(&self, id: ValidatorId) -> Result<(), api::Error> {
+        self.db.manager.register_validator(id).map_err(Into::into)
+    }
+
+    /// Deregister a validator, freeing its header slot.
+    ///
+    /// Any revisions unique to this validator become candidates for cleanup.
+    pub fn deregister_validator(&self, id: ValidatorId) -> Result<(), api::Error> {
+        self.db.manager.deregister_validator(id).map_err(Into::into)
+    }
+
+    /// Create a proposal for a validator from its current head.
+    pub fn propose(
+        &self,
+        id: ValidatorId,
+        batch: impl IntoBatchIter,
+    ) -> Result<Proposal<'_>, api::Error> {
+        let head = self.db.manager.validator_view(id)?;
+        self.db.propose_with_parent(batch, &head)
+    }
+
+    /// Commit a proposal for a validator.
+    ///
+    /// If a revision with the same root hash already exists (committed by
+    /// another validator), the proposal is discarded and the validator's
+    /// head advances to the existing revision (deduplication).
+    pub fn commit(&self, id: ValidatorId, proposal: Proposal<'_>) -> Result<(), api::Error> {
+        self.db
+            .manager
+            .commit_for_validator(id, proposal.nodestore)
+            .map_err(Into::into)
+    }
+
+    /// Advance a validator's head to an existing revision by hash.
+    ///
+    /// This is the skip-propose optimization: if a validator knows the
+    /// expected root hash (e.g., from a block header), it can advance
+    /// without computing a proposal.
+    pub fn advance_to_hash(&self, id: ValidatorId, hash: HashKey) -> Result<(), api::Error> {
+        self.db
+            .manager
+            .advance_validator_to_hash(id, hash)
+            .map_err(Into::into)
+    }
+
+    /// Get a read-only view at a validator's current head.
+    pub fn validator_view(&self, id: ValidatorId) -> Result<CommittedRevision, api::Error> {
+        self.db.manager.validator_view(id).map_err(Into::into)
+    }
+
+    /// Get a read-only view at any committed revision by hash.
+    pub fn view(&self, hash: HashKey) -> Result<ArcDynDbView, api::Error> {
+        self.db.view(hash)
+    }
+
+    /// Returns the root hash of a validator's current head.
+    pub fn validator_root_hash(&self, id: ValidatorId) -> Result<Option<HashKey>, api::Error> {
+        let head = self.db.manager.validator_view(id)?;
+        Ok(head.root_hash().or_default_root_hash())
+    }
+
+    /// Read a value from a validator's current head.
+    pub fn get(&self, id: ValidatorId, key: &[u8]) -> Result<Option<Value>, api::Error> {
+        let head = self.db.manager.validator_view(id)?;
+        head.val(key)
+    }
+
+    /// Propose and commit in one call (convenience for single-batch workflows).
+    pub fn update(
+        &self,
+        id: ValidatorId,
+        batch: impl IntoBatchIter,
+    ) -> Result<Option<HashKey>, api::Error> {
+        let proposal = self.propose(id, batch)?;
+        let hash = proposal.root_hash();
+        self.commit(id, proposal)?;
+        Ok(hash)
+    }
+
+    /// Dump the trie at a validator's current head.
+    pub fn dump_validator(&self, id: ValidatorId) -> Result<String, api::Error> {
+        let head = self.db.manager.validator_view(id)?;
+        let merkle = Merkle::from(head);
+        merkle.dump_to_string().map_err(api::Error::from)
+    }
+
+    /// Close the database gracefully.
+    pub fn close(self) -> Result<(), api::Error> {
+        self.db.close()
     }
 }
 
@@ -1705,5 +1834,1386 @@ mod test {
         pub fn path(&self) -> &Path {
             self.tmpdir.path()
         }
+    }
+
+    // === MultiDb Integration Tests ===
+
+    use super::{MultiDb, MultiDbConfig, ValidatorId};
+    use std::sync::Arc as StdArc;
+
+    fn create_multi_db() -> (MultiDb, tempfile::TempDir) {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let cfg = MultiDbConfig::builder()
+            .db(DbConfig::builder().build())
+            .build();
+        let db = MultiDb::new(tmpdir.as_ref(), cfg).unwrap();
+        (db, tmpdir)
+    }
+
+    #[test]
+    fn test_multi_db_create_and_close() {
+        let (db, _tmpdir) = create_multi_db();
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_register_single_validator() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_register_multiple_validators() {
+        let (db, _tmpdir) = create_multi_db();
+        for i in 0..4u64 {
+            db.register_validator(ValidatorId::new(i)).unwrap();
+        }
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_register_duplicate_returns_error() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+        let err = db.register_validator(v0);
+        assert!(err.is_err());
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_deregister_validator() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+        db.deregister_validator(v0).unwrap();
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_deregister_nonexistent_returns_error() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        let err = db.deregister_validator(v0);
+        assert!(err.is_err());
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_deregister_then_reregister() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+        db.deregister_validator(v0).unwrap();
+        db.register_validator(v0).unwrap();
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_propose_commit_single_validator() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        let batch = vec![BatchOp::Put {
+            key: b"key1".to_vec(),
+            value: b"value1".to_vec(),
+        }];
+        let proposal = db.propose(v0, batch).unwrap();
+        db.commit(v0, proposal).unwrap();
+
+        // Verify the value is readable
+        let head = db.validator_view(v0).unwrap();
+        assert_eq!(
+            head.val(b"key1" as &[u8]).unwrap(),
+            Some(b"value1".to_vec().into_boxed_slice())
+        );
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_two_validators_same_batch_deduplicates() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        // Both validators propose the same batch
+        let batch = vec![BatchOp::Put {
+            key: b"key1".to_vec(),
+            value: b"value1".to_vec(),
+        }];
+
+        // V0 commits first
+        let proposal0 = db.propose(v0, batch.clone()).unwrap();
+        db.commit(v0, proposal0).unwrap();
+
+        // V1 proposes and commits the same batch
+        let proposal1 = db.propose(v1, batch).unwrap();
+        db.commit(v1, proposal1).unwrap();
+
+        // Both validators should see the same data
+        let hash0 = db.validator_root_hash(v0).unwrap();
+        let hash1 = db.validator_root_hash(v1).unwrap();
+        assert_eq!(hash0, hash1);
+
+        // Both should be able to read the value
+        let head0 = db.validator_view(v0).unwrap();
+        let head1 = db.validator_view(v1).unwrap();
+        assert_eq!(
+            head0.val(b"key1" as &[u8]).unwrap(),
+            Some(b"value1".to_vec().into_boxed_slice())
+        );
+        assert_eq!(
+            head1.val(b"key1" as &[u8]).unwrap(),
+            Some(b"value1".to_vec().into_boxed_slice())
+        );
+
+        // Both heads should be the same Arc (deduplication)
+        assert!(StdArc::ptr_eq(&head0, &head1));
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_advance_to_hash() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        // V0 commits a block
+        let batch = vec![BatchOp::Put {
+            key: b"key1".to_vec(),
+            value: b"value1".to_vec(),
+        }];
+        let proposal = db.propose(v0, batch).unwrap();
+        db.commit(v0, proposal).unwrap();
+
+        // V1 advances to V0's hash without proposing
+        let hash0 = db.validator_root_hash(v0).unwrap().unwrap();
+        db.advance_to_hash(v1, hash0).unwrap();
+
+        // Both should see the same data
+        let head1 = db.validator_view(v1).unwrap();
+        assert_eq!(
+            head1.val(b"key1" as &[u8]).unwrap(),
+            Some(b"value1".to_vec().into_boxed_slice())
+        );
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_advance_to_nonexistent_hash_returns_error() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        let fake_hash = TrieHash::from([0xFFu8; 32]);
+        let err = db.advance_to_hash(v0, fake_hash);
+        assert!(err.is_err());
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_validator_view_returns_correct_head() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        // V0 commits a block with key1
+        let batch = vec![BatchOp::Put {
+            key: b"key1".to_vec(),
+            value: b"value1".to_vec(),
+        }];
+        let proposal = db.propose(v0, batch).unwrap();
+        db.commit(v0, proposal).unwrap();
+
+        // V0 should see key1, V1 should not (V1 is still at the initial empty revision)
+        let head0 = db.validator_view(v0).unwrap();
+        let head1 = db.validator_view(v1).unwrap();
+        assert_eq!(
+            head0.val(b"key1" as &[u8]).unwrap(),
+            Some(b"value1".to_vec().into_boxed_slice())
+        );
+        assert_eq!(head1.val(b"key1" as &[u8]).unwrap(), None);
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_commit_wrong_parent_returns_error() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        // V0 commits a block
+        let batch = vec![BatchOp::Put {
+            key: b"key1".to_vec(),
+            value: b"value1".to_vec(),
+        }];
+        let proposal0 = db.propose(v0, batch.clone()).unwrap();
+        db.commit(v0, proposal0).unwrap();
+
+        // V0 proposes another block from its new head
+        let batch2 = vec![BatchOp::Put {
+            key: b"key2".to_vec(),
+            value: b"value2".to_vec(),
+        }];
+        let proposal_v0_2 = db.propose(v0, batch2).unwrap();
+
+        // Try to commit V0's second proposal under V1 (wrong parent)
+        let err = db.commit(v1, proposal_v0_2);
+        assert!(err.is_err());
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_commit_for_nonexistent_validator() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+
+        let batch = vec![BatchOp::Put {
+            key: b"key1".to_vec(),
+            value: b"value1".to_vec(),
+        }];
+        let proposal = db.propose(v0, batch).unwrap();
+
+        // Try to commit under an unregistered validator
+        let err = db.commit(v1, proposal);
+        assert!(err.is_err());
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_divergent_produces_separate_revision() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        // V0 commits key1=value1
+        let batch0 = vec![BatchOp::Put {
+            key: b"key1".to_vec(),
+            value: b"value1".to_vec(),
+        }];
+        let proposal0 = db.propose(v0, batch0).unwrap();
+        db.commit(v0, proposal0).unwrap();
+
+        // V1 commits different data from the same parent (divergent)
+        let batch1 = vec![BatchOp::Put {
+            key: b"key1".to_vec(),
+            value: b"DIVERGENT".to_vec(),
+        }];
+        let proposal1 = db.propose(v1, batch1).unwrap();
+        db.commit(v1, proposal1).unwrap();
+
+        // Hashes should differ
+        let hash0 = db.validator_root_hash(v0).unwrap();
+        let hash1 = db.validator_root_hash(v1).unwrap();
+        assert_ne!(hash0, hash1);
+
+        // Each validator sees its own data
+        let head0 = db.validator_view(v0).unwrap();
+        let head1 = db.validator_view(v1).unwrap();
+        assert_eq!(
+            head0.val(b"key1" as &[u8]).unwrap(),
+            Some(b"value1".to_vec().into_boxed_slice())
+        );
+        assert_eq!(
+            head1.val(b"key1" as &[u8]).unwrap(),
+            Some(b"DIVERGENT".to_vec().into_boxed_slice())
+        );
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_max_validators_limit() {
+        let (db, _tmpdir) = create_multi_db();
+
+        // Register up to MAX_VALIDATORS
+        for i in 0..firewood_storage::MAX_VALIDATORS as u64 {
+            db.register_validator(ValidatorId::new(i)).unwrap();
+        }
+
+        // One more should fail
+        let err = db.register_validator(ValidatorId::new(firewood_storage::MAX_VALIDATORS as u64));
+        assert!(err.is_err());
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_three_way_dedup() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        let v2 = ValidatorId::new(2);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+        db.register_validator(v2).unwrap();
+
+        let batch = vec![BatchOp::Put {
+            key: b"key1".to_vec(),
+            value: b"value1".to_vec(),
+        }];
+
+        // All three validators commit the same batch
+        let p0 = db.propose(v0, batch.clone()).unwrap();
+        db.commit(v0, p0).unwrap();
+
+        let p1 = db.propose(v1, batch.clone()).unwrap();
+        db.commit(v1, p1).unwrap();
+
+        let p2 = db.propose(v2, batch).unwrap();
+        db.commit(v2, p2).unwrap();
+
+        // All should have the same hash
+        let h0 = db.validator_root_hash(v0).unwrap();
+        let h1 = db.validator_root_hash(v1).unwrap();
+        let h2 = db.validator_root_hash(v2).unwrap();
+        assert_eq!(h0, h1);
+        assert_eq!(h1, h2);
+
+        // All should share the same Arc
+        let head0 = db.validator_view(v0).unwrap();
+        let head1 = db.validator_view(v1).unwrap();
+        let head2 = db.validator_view(v2).unwrap();
+        assert!(StdArc::ptr_eq(&head0, &head1));
+        assert!(StdArc::ptr_eq(&head1, &head2));
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_propose_for_deregistered_validator() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+        db.deregister_validator(v0).unwrap();
+
+        let batch = vec![BatchOp::Put {
+            key: b"key1".to_vec(),
+            value: b"value1".to_vec(),
+        }];
+        let err = db.propose(v0, batch);
+        assert!(err.is_err());
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_multi_db_sequential_commits() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        // Commit multiple blocks sequentially
+        for i in 0..5u8 {
+            let batch = vec![BatchOp::Put {
+                key: format!("key{i}").into_bytes(),
+                value: format!("value{i}").into_bytes(),
+            }];
+            let proposal = db.propose(v0, batch).unwrap();
+            db.commit(v0, proposal).unwrap();
+        }
+
+        // Verify all values are readable
+        let head = db.validator_view(v0).unwrap();
+        for i in 0..5u8 {
+            let key = format!("key{i}");
+            let expected = format!("value{i}").into_bytes().into_boxed_slice();
+            assert_eq!(head.val(key.as_bytes()).unwrap(), Some(expected));
+        }
+
+        db.close().unwrap();
+    }
+
+    // === Per-Chain Revision Budget Tests ===
+
+    fn create_multi_db_with_max_revisions(max_revisions: usize) -> (MultiDb, tempfile::TempDir) {
+        let tmpdir = tempfile::tempdir().unwrap();
+        let cfg = MultiDbConfig::builder()
+            .db(DbConfig::builder()
+                .manager(
+                    crate::manager::RevisionManagerConfig::builder()
+                        .max_revisions(max_revisions)
+                        .build(),
+                )
+                .build())
+            .build();
+        let db = MultiDb::new(tmpdir.as_ref(), cfg).unwrap();
+        (db, tmpdir)
+    }
+
+    #[test]
+    fn test_chain_fork_creates_new_chain() {
+        // Two validators commit different batches from the same parent → fork
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        // Both start at the same base. v0 commits first.
+        let batch_a = vec![BatchOp::Put {
+            key: b"key_a".to_vec(),
+            value: b"value_a".to_vec(),
+        }];
+        let p0 = db.propose(v0, batch_a).unwrap();
+        let hash_a = p0.root_hash();
+        db.commit(v0, p0).unwrap();
+
+        // v1 commits a DIFFERENT batch from the same parent → divergence/fork
+        let batch_b = vec![BatchOp::Put {
+            key: b"key_b".to_vec(),
+            value: b"value_b".to_vec(),
+        }];
+        let p1 = db.propose(v1, batch_b).unwrap();
+        let hash_b = p1.root_hash();
+        db.commit(v1, p1).unwrap();
+
+        // Different hashes → fork happened
+        assert_ne!(hash_a, hash_b);
+
+        // Both views should work independently
+        let head0 = db.validator_view(v0).unwrap();
+        let head1 = db.validator_view(v1).unwrap();
+        assert_eq!(
+            head0.val(b"key_a").unwrap(),
+            Some(b"value_a".to_vec().into_boxed_slice())
+        );
+        assert_eq!(
+            head1.val(b"key_b").unwrap(),
+            Some(b"value_b".to_vec().into_boxed_slice())
+        );
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_chain_dedup_moves_validator_to_existing_chain() {
+        // Two validators commit the same batch → dedup, same chain
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        let batch = vec![BatchOp::Put {
+            key: b"key".to_vec(),
+            value: b"value".to_vec(),
+        }];
+
+        // v0 commits first
+        let p0 = db.propose(v0, batch.clone()).unwrap();
+        let hash0 = p0.root_hash();
+        db.commit(v0, p0).unwrap();
+
+        // v1 commits same batch → dedup
+        let p1 = db.propose(v1, batch).unwrap();
+        let hash1 = p1.root_hash();
+        db.commit(v1, p1).unwrap();
+
+        // Same hashes → dedup happened
+        assert_eq!(hash0, hash1);
+
+        // Both heads point to the same revision (Arc::ptr_eq)
+        let head0 = db.validator_view(v0).unwrap();
+        let head1 = db.validator_view(v1).unwrap();
+        assert!(StdArc::ptr_eq(&head0, &head1));
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_chain_advance_moves_validator_to_target_chain() {
+        // v0 commits, v1 advances to v0's hash → joins v0's chain
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        let batch = vec![BatchOp::Put {
+            key: b"key".to_vec(),
+            value: b"value".to_vec(),
+        }];
+        let p0 = db.propose(v0, batch).unwrap();
+        let hash = p0.root_hash().unwrap();
+        db.commit(v0, p0).unwrap();
+
+        // v1 advances to v0's hash
+        db.advance_to_hash(v1, hash).unwrap();
+
+        // Both heads should be the same Arc
+        let head0 = db.validator_view(v0).unwrap();
+        let head1 = db.validator_view(v1).unwrap();
+        assert!(StdArc::ptr_eq(&head0, &head1));
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_chain_deregister_last_validator_cleans_up_chain() {
+        // Fork, then deregister one validator → its unique chain is cleaned up
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        // v0 commits
+        let batch_a = vec![BatchOp::Put {
+            key: b"key_a".to_vec(),
+            value: b"value_a".to_vec(),
+        }];
+        let p0 = db.propose(v0, batch_a).unwrap();
+        db.commit(v0, p0).unwrap();
+
+        // v1 commits different batch → fork
+        let batch_b = vec![BatchOp::Put {
+            key: b"key_b".to_vec(),
+            value: b"value_b".to_vec(),
+        }];
+        let p1 = db.propose(v1, batch_b).unwrap();
+        db.commit(v1, p1).unwrap();
+
+        // Deregister v1 → its chain should be cleaned up
+        db.deregister_validator(v1).unwrap();
+
+        // v0 should still work
+        let head0 = db.validator_view(v0).unwrap();
+        assert_eq!(
+            head0.val(b"key_a").unwrap(),
+            Some(b"value_a".to_vec().into_boxed_slice())
+        );
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_chain_register_assigns_to_tip_chain() {
+        // After commits, a new validator should join the most popular chain
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        // v0 commits some data
+        let batch = vec![BatchOp::Put {
+            key: b"key".to_vec(),
+            value: b"value".to_vec(),
+        }];
+        let p0 = db.propose(v0, batch).unwrap();
+        let hash = p0.root_hash().unwrap();
+        db.commit(v0, p0).unwrap();
+
+        // Register v1 → should start at v0's chain tip
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v1).unwrap();
+
+        let head1 = db.validator_view(v1).unwrap();
+        assert_eq!(head1.root_hash().unwrap(), hash);
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_per_chain_reaping_independent() {
+        // Two chains: fast chain gets reaped without affecting slow chain
+        let (db, _tmpdir) = create_multi_db_with_max_revisions(5);
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        // v0 commits to create initial state
+        let batch_init = vec![BatchOp::Put {
+            key: b"init".to_vec(),
+            value: b"value".to_vec(),
+        }];
+        let p0 = db.propose(v0, batch_init).unwrap();
+        db.commit(v0, p0).unwrap();
+
+        // v1 forks with different data
+        let batch_fork = vec![BatchOp::Put {
+            key: b"fork".to_vec(),
+            value: b"value".to_vec(),
+        }];
+        let p1 = db.propose(v1, batch_fork).unwrap();
+        db.commit(v1, p1).unwrap();
+
+        // Now v0 commits many revisions (exceeding max_revisions)
+        for i in 0..10u32 {
+            let batch = vec![BatchOp::Put {
+                key: format!("key{i}").into_bytes(),
+                value: format!("val{i}").into_bytes(),
+            }];
+            let p = db.propose(v0, batch).unwrap();
+            db.commit(v0, p).unwrap();
+        }
+
+        // v0's chain should have been reaped, but v0 should still work
+        let head0 = db.validator_view(v0).unwrap();
+        assert_eq!(
+            head0.val(b"key9").unwrap(),
+            Some(b"val9".to_vec().into_boxed_slice())
+        );
+
+        // v1's chain should be unaffected
+        let head1 = db.validator_view(v1).unwrap();
+        assert_eq!(
+            head1.val(b"fork").unwrap(),
+            Some(b"value".to_vec().into_boxed_slice())
+        );
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_per_chain_reaping_stops_at_min_head() {
+        // Single chain with two validators at different positions
+        let (db, _tmpdir) = create_multi_db_with_max_revisions(5);
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        // Both commit the same initial block
+        let batch = vec![BatchOp::Put {
+            key: b"key0".to_vec(),
+            value: b"val0".to_vec(),
+        }];
+        let p0 = db.propose(v0, batch.clone()).unwrap();
+        let hash0 = p0.root_hash().unwrap();
+        db.commit(v0, p0).unwrap();
+        db.advance_to_hash(v1, hash0).unwrap();
+
+        // v0 advances many blocks while v1 stays behind
+        for i in 1..10u32 {
+            let batch = vec![BatchOp::Put {
+                key: format!("key{i}").into_bytes(),
+                value: format!("val{i}").into_bytes(),
+            }];
+            let p = db.propose(v0, batch).unwrap();
+            db.commit(v0, p).unwrap();
+        }
+
+        // v1 should still be able to read its head (reaping shouldn't touch it)
+        let head1 = db.validator_view(v1).unwrap();
+        assert_eq!(
+            head1.val(b"key0").unwrap(),
+            Some(b"val0".to_vec().into_boxed_slice())
+        );
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_advance_to_unknown_hash_returns_revision_not_found() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        let fake_hash = TrieHash::from([0xABu8; 32]);
+        let err = db.advance_to_hash(v0, fake_hash);
+        assert!(err.is_err());
+        let err_msg = format!("{}", err.unwrap_err());
+        assert!(
+            err_msg.contains("not found"),
+            "Expected RevisionNotFound, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_hash_to_chain_cleanup_on_reap() {
+        // After reaping, hash_to_chain entries for reaped revisions are cleaned up
+        let (db, _tmpdir) = create_multi_db_with_max_revisions(3);
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        // Commit enough blocks to trigger reaping
+        for i in 0..10u32 {
+            let batch = vec![BatchOp::Put {
+                key: format!("key{i}").into_bytes(),
+                value: format!("val{i}").into_bytes(),
+            }];
+            let p = db.propose(v0, batch).unwrap();
+            db.commit(v0, p).unwrap();
+        }
+
+        // Latest should still be readable
+        let head = db.validator_view(v0).unwrap();
+        assert_eq!(
+            head.val(b"key9").unwrap(),
+            Some(b"val9".to_vec().into_boxed_slice())
+        );
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_by_hash_preserved_when_validator_head_references() {
+        // If a validator's head references a hash, by_hash should keep it
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        // Both commit same block
+        let batch = vec![BatchOp::Put {
+            key: b"key".to_vec(),
+            value: b"val".to_vec(),
+        }];
+        let p0 = db.propose(v0, batch.clone()).unwrap();
+        let hash = p0.root_hash().unwrap();
+        db.commit(v0, p0).unwrap();
+
+        let p1 = db.propose(v1, batch).unwrap();
+        db.commit(v1, p1).unwrap();
+
+        // v0 advances further
+        let batch2 = vec![BatchOp::Put {
+            key: b"key2".to_vec(),
+            value: b"val2".to_vec(),
+        }];
+        let p = db.propose(v0, batch2).unwrap();
+        db.commit(v0, p).unwrap();
+
+        // v1 still at the old hash — it should still be viewable
+        let view = db.view(hash);
+        assert!(view.is_ok());
+
+        db.close().unwrap();
+    }
+
+    // === Concurrency Tests ===
+
+    #[test]
+    fn test_concurrent_commits_all_succeed() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let (db, _tmpdir) = create_multi_db();
+        let db = StdArc::new(db);
+
+        let n_validators = 4u64;
+        for i in 0..n_validators {
+            db.register_validator(ValidatorId::new(i)).unwrap();
+        }
+
+        let barrier = StdArc::new(Barrier::new(n_validators as usize));
+
+        let mut handles = Vec::new();
+
+        for i in 0..n_validators {
+            let db = StdArc::clone(&db);
+            let barrier = StdArc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                let vid = ValidatorId::new(i);
+                let batch = vec![BatchOp::Put {
+                    key: format!("key_{i}").into_bytes(),
+                    value: format!("val_{i}").into_bytes(),
+                }];
+                let proposal = db.propose(vid, batch).unwrap();
+                barrier.wait();
+                db.commit(vid, proposal).unwrap();
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // All validators should have committed successfully
+        for i in 0..n_validators {
+            let vid = ValidatorId::new(i);
+            let head = db.validator_view(vid).unwrap();
+            let val = head.val(format!("key_{i}").as_bytes()).unwrap();
+            assert_eq!(
+                val,
+                Some(format!("val_{i}").into_bytes().into_boxed_slice())
+            );
+        }
+    }
+
+    #[test]
+    fn test_concurrent_same_batch_deduplicates() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let (db, _tmpdir) = create_multi_db();
+        let db = StdArc::new(db);
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        let barrier = StdArc::new(Barrier::new(2));
+        let batch = vec![BatchOp::Put {
+            key: b"shared_key".to_vec(),
+            value: b"shared_val".to_vec(),
+        }];
+
+        // Extract nodestores before spawning threads (Proposal borrows Db)
+        let ns0 = db.propose(v0, batch.clone()).unwrap().nodestore.clone();
+        let ns1 = db.propose(v1, batch).unwrap().nodestore.clone();
+
+        let db0 = StdArc::clone(&db);
+        let b0 = StdArc::clone(&barrier);
+        let h0 = thread::spawn(move || {
+            b0.wait();
+            db0.db.manager.commit_for_validator(v0, ns0).unwrap();
+        });
+
+        let db1 = StdArc::clone(&db);
+        let b1 = StdArc::clone(&barrier);
+        let h1 = thread::spawn(move || {
+            b1.wait();
+            db1.db.manager.commit_for_validator(v1, ns1).unwrap();
+        });
+
+        h0.join().unwrap();
+        h1.join().unwrap();
+
+        // Both heads should be the same Arc (dedup)
+        let head0 = db.validator_view(v0).unwrap();
+        let head1 = db.validator_view(v1).unwrap();
+        assert!(StdArc::ptr_eq(&head0, &head1));
+    }
+
+    #[test]
+    fn test_concurrent_different_batches_creates_fork() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let (db, _tmpdir) = create_multi_db();
+        let db = StdArc::new(db);
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        let batch_a = vec![BatchOp::Put {
+            key: b"key_a".to_vec(),
+            value: b"val_a".to_vec(),
+        }];
+        let batch_b = vec![BatchOp::Put {
+            key: b"key_b".to_vec(),
+            value: b"val_b".to_vec(),
+        }];
+
+        // Extract nodestores before spawning threads
+        let ns0 = db.propose(v0, batch_a).unwrap().nodestore.clone();
+        let ns1 = db.propose(v1, batch_b).unwrap().nodestore.clone();
+
+        let barrier = StdArc::new(Barrier::new(2));
+
+        let db0 = StdArc::clone(&db);
+        let b0 = StdArc::clone(&barrier);
+        let h0 = thread::spawn(move || {
+            b0.wait();
+            db0.db.manager.commit_for_validator(v0, ns0).unwrap();
+        });
+
+        let db1 = StdArc::clone(&db);
+        let b1 = StdArc::clone(&barrier);
+        let h1 = thread::spawn(move || {
+            b1.wait();
+            db1.db.manager.commit_for_validator(v1, ns1).unwrap();
+        });
+
+        h0.join().unwrap();
+        h1.join().unwrap();
+
+        // Different hashes → fork
+        let head0 = db.validator_view(v0).unwrap();
+        let head1 = db.validator_view(v1).unwrap();
+        assert_ne!(head0.root_hash(), head1.root_hash());
+
+        // Both should read their own data
+        assert_eq!(
+            head0.val(b"key_a").unwrap(),
+            Some(b"val_a".to_vec().into_boxed_slice())
+        );
+        assert_eq!(
+            head1.val(b"key_b").unwrap(),
+            Some(b"val_b".to_vec().into_boxed_slice())
+        );
+    }
+
+    #[test]
+    fn test_read_during_commit_sees_consistent_state() {
+        use std::sync::Barrier;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::thread;
+
+        let (db, _tmpdir) = create_multi_db();
+        let db = StdArc::new(db);
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        let stop = StdArc::new(AtomicBool::new(false));
+        let barrier = StdArc::new(Barrier::new(2));
+
+        // Reader thread: continuously reads v1's view
+        let db_r = StdArc::clone(&db);
+        let stop_r = StdArc::clone(&stop);
+        let barrier_r = StdArc::clone(&barrier);
+        let reader = thread::spawn(move || {
+            barrier_r.wait();
+            while !stop_r.load(Ordering::Relaxed) {
+                let _head = db_r.validator_view(v1).unwrap();
+                thread::yield_now();
+            }
+        });
+
+        // Committer thread: commits for v0
+        let db_w = StdArc::clone(&db);
+        let stop_w = StdArc::clone(&stop);
+        let barrier_w = StdArc::clone(&barrier);
+        let writer = thread::spawn(move || {
+            barrier_w.wait();
+            for i in 0..20u32 {
+                let batch = vec![BatchOp::Put {
+                    key: format!("key{i}").into_bytes(),
+                    value: format!("val{i}").into_bytes(),
+                }];
+                let p = db_w.propose(v0, batch).unwrap();
+                db_w.commit(v0, p).unwrap();
+            }
+            stop_w.store(true, Ordering::Relaxed);
+        });
+
+        writer.join().unwrap();
+        reader.join().unwrap();
+    }
+
+    #[test]
+    fn test_multiple_concurrent_readers() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let (db, _tmpdir) = create_multi_db();
+        let db = StdArc::new(db);
+
+        for i in 0..4u64 {
+            db.register_validator(ValidatorId::new(i)).unwrap();
+            let batch = vec![BatchOp::Put {
+                key: format!("key_{i}").into_bytes(),
+                value: format!("val_{i}").into_bytes(),
+            }];
+            let p = db.propose(ValidatorId::new(i), batch).unwrap();
+            db.commit(ValidatorId::new(i), p).unwrap();
+        }
+
+        let barrier = StdArc::new(Barrier::new(4));
+        let mut handles = Vec::new();
+
+        for i in 0..4u64 {
+            let db = StdArc::clone(&db);
+            let barrier = StdArc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                barrier.wait();
+                for _ in 0..100 {
+                    let head = db.validator_view(ValidatorId::new(i)).unwrap();
+                    let val = head.val(format!("key_{i}").as_bytes()).unwrap();
+                    assert!(val.is_some());
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_reader_holds_view_during_reap() {
+        let (db, _tmpdir) = create_multi_db_with_max_revisions(3);
+        let db = StdArc::new(db);
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        // Commit first block and grab a view
+        let batch = vec![BatchOp::Put {
+            key: b"early_key".to_vec(),
+            value: b"early_val".to_vec(),
+        }];
+        let p = db.propose(v0, batch).unwrap();
+        let early_hash = p.root_hash().unwrap();
+        db.commit(v0, p).unwrap();
+
+        let held_view = db.validator_view(v0).unwrap();
+
+        // Commit more blocks to trigger reaping
+        for i in 0..10u32 {
+            let batch = vec![BatchOp::Put {
+                key: format!("key{i}").into_bytes(),
+                value: format!("val{i}").into_bytes(),
+            }];
+            let p = db.propose(v0, batch).unwrap();
+            db.commit(v0, p).unwrap();
+        }
+
+        // The held view should still be valid (Arc keeps it alive)
+        assert_eq!(held_view.root_hash().unwrap(), early_hash);
+    }
+
+    #[test]
+    fn test_commit_while_advance() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let (db, _tmpdir) = create_multi_db();
+        let db = StdArc::new(db);
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        // v0 commits block 1
+        let batch = vec![BatchOp::Put {
+            key: b"key1".to_vec(),
+            value: b"val1".to_vec(),
+        }];
+        let p = db.propose(v0, batch).unwrap();
+        let hash1 = p.root_hash().unwrap();
+        db.commit(v0, p).unwrap();
+
+        // Concurrently: v0 commits block 2, v1 advances to block 1
+        let barrier = StdArc::new(Barrier::new(2));
+
+        let db0 = StdArc::clone(&db);
+        let b0 = StdArc::clone(&barrier);
+        let committer = thread::spawn(move || {
+            let batch = vec![BatchOp::Put {
+                key: b"key2".to_vec(),
+                value: b"val2".to_vec(),
+            }];
+            let p = db0.propose(v0, batch).unwrap();
+            b0.wait();
+            db0.commit(v0, p).unwrap();
+        });
+
+        let db1 = StdArc::clone(&db);
+        let b1 = StdArc::clone(&barrier);
+        let advancer = thread::spawn(move || {
+            b1.wait();
+            db1.advance_to_hash(v1, hash1).unwrap();
+        });
+
+        committer.join().unwrap();
+        advancer.join().unwrap();
+    }
+
+    #[test]
+    fn test_two_validators_advance_same_hash() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let (db, _tmpdir) = create_multi_db();
+        let db = StdArc::new(db);
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        let v2 = ValidatorId::new(2);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+        db.register_validator(v2).unwrap();
+
+        let batch = vec![BatchOp::Put {
+            key: b"key".to_vec(),
+            value: b"val".to_vec(),
+        }];
+        let p = db.propose(v0, batch).unwrap();
+        let hash = p.root_hash().unwrap();
+        db.commit(v0, p).unwrap();
+
+        let barrier = StdArc::new(Barrier::new(2));
+        let hash1 = hash.clone();
+        let hash2 = hash;
+
+        let db1 = StdArc::clone(&db);
+        let b1 = StdArc::clone(&barrier);
+        let h1 = thread::spawn(move || {
+            b1.wait();
+            db1.advance_to_hash(v1, hash1).unwrap();
+        });
+
+        let db2 = StdArc::clone(&db);
+        let b2 = StdArc::clone(&barrier);
+        let h2 = thread::spawn(move || {
+            b2.wait();
+            db2.advance_to_hash(v2, hash2).unwrap();
+        });
+
+        h1.join().unwrap();
+        h2.join().unwrap();
+
+        // All three should have the same head
+        let head0 = db.validator_view(v0).unwrap();
+        let head1 = db.validator_view(v1).unwrap();
+        let head2 = db.validator_view(v2).unwrap();
+        assert!(StdArc::ptr_eq(&head0, &head1));
+        assert!(StdArc::ptr_eq(&head1, &head2));
+    }
+
+    #[test]
+    fn test_commit_while_propose() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let (db, _tmpdir) = create_multi_db();
+        let db = StdArc::new(db);
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        let barrier = StdArc::new(Barrier::new(2));
+
+        let db0 = StdArc::clone(&db);
+        let b0 = StdArc::clone(&barrier);
+        let committer = thread::spawn(move || {
+            let batch = vec![BatchOp::Put {
+                key: b"key_commit".to_vec(),
+                value: b"val_commit".to_vec(),
+            }];
+            let p = db0.propose(v0, batch).unwrap();
+            b0.wait();
+            db0.commit(v0, p).unwrap();
+        });
+
+        let db1 = StdArc::clone(&db);
+        let b1 = StdArc::clone(&barrier);
+        let proposer = thread::spawn(move || {
+            b1.wait();
+            let batch = vec![BatchOp::Put {
+                key: b"key_propose".to_vec(),
+                value: b"val_propose".to_vec(),
+            }];
+            // propose is lock-free, should succeed concurrently
+            let _p = db1.propose(v1, batch).unwrap();
+        });
+
+        committer.join().unwrap();
+        proposer.join().unwrap();
+    }
+
+    #[test]
+    fn test_register_during_commit() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let (db, _tmpdir) = create_multi_db();
+        let db = StdArc::new(db);
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        let barrier = StdArc::new(Barrier::new(2));
+
+        let db0 = StdArc::clone(&db);
+        let b0 = StdArc::clone(&barrier);
+        let committer = thread::spawn(move || {
+            let batch = vec![BatchOp::Put {
+                key: b"key".to_vec(),
+                value: b"val".to_vec(),
+            }];
+            let p = db0.propose(v0, batch).unwrap();
+            b0.wait();
+            db0.commit(v0, p).unwrap();
+        });
+
+        let db1 = StdArc::clone(&db);
+        let b1 = StdArc::clone(&barrier);
+        let registerer = thread::spawn(move || {
+            b1.wait();
+            db1.register_validator(ValidatorId::new(1)).unwrap();
+        });
+
+        committer.join().unwrap();
+        registerer.join().unwrap();
+    }
+
+    #[test]
+    fn test_deregister_during_commit() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let (db, _tmpdir) = create_multi_db();
+        let db = StdArc::new(db);
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        let barrier = StdArc::new(Barrier::new(2));
+
+        let db0 = StdArc::clone(&db);
+        let b0 = StdArc::clone(&barrier);
+        let committer = thread::spawn(move || {
+            let batch = vec![BatchOp::Put {
+                key: b"key".to_vec(),
+                value: b"val".to_vec(),
+            }];
+            let p = db0.propose(v0, batch).unwrap();
+            b0.wait();
+            db0.commit(v0, p).unwrap();
+        });
+
+        let db1 = StdArc::clone(&db);
+        let b1 = StdArc::clone(&barrier);
+        let deregisterer = thread::spawn(move || {
+            b1.wait();
+            db1.deregister_validator(v1).unwrap();
+        });
+
+        committer.join().unwrap();
+        deregisterer.join().unwrap();
+    }
+
+    #[test]
+    fn test_8_validators_50_cycles_concurrent() {
+        use std::sync::Barrier;
+        use std::thread;
+
+        let (db, _tmpdir) = create_multi_db_with_max_revisions(64);
+        let db = StdArc::new(db);
+
+        let n = 8u64;
+        for i in 0..n {
+            db.register_validator(ValidatorId::new(i)).unwrap();
+        }
+
+        let barrier = StdArc::new(Barrier::new(n as usize));
+        let mut handles = Vec::new();
+
+        for i in 0..n {
+            let db = StdArc::clone(&db);
+            let barrier = StdArc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                let vid = ValidatorId::new(i);
+                barrier.wait();
+
+                for cycle in 0..50u32 {
+                    let batch = vec![BatchOp::Put {
+                        key: format!("v{i}_c{cycle}").into_bytes(),
+                        value: format!("val_{i}_{cycle}").into_bytes(),
+                    }];
+                    let p = db.propose(vid, batch).unwrap();
+                    db.commit(vid, p).unwrap();
+                }
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+
+        // Verify final state: each validator's head is accessible
+        for i in 0..n {
+            let vid = ValidatorId::new(i);
+            let head = db.validator_view(vid).unwrap();
+            let val = head.val(format!("v{i}_c49").as_bytes()).unwrap();
+            assert_eq!(
+                val,
+                Some(format!("val_{i}_49").into_bytes().into_boxed_slice())
+            );
+        }
+    }
+
+    // === Tests for MultiDb convenience methods (get, update, dump_validator) ===
+
+    #[test]
+    fn test_multi_db_get_from_validator_head() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        let batch = vec![BatchOp::Put {
+            key: b"key",
+            value: b"value",
+        }];
+        let proposal = db.propose(v0, batch).unwrap();
+        db.commit(v0, proposal).unwrap();
+
+        let val = db.get(v0, b"key").unwrap();
+        assert_eq!(val, Some(b"value".to_vec().into_boxed_slice()));
+    }
+
+    #[test]
+    fn test_multi_db_get_unknown_validator_returns_error() {
+        let (db, _tmpdir) = create_multi_db();
+        let result = db.get(ValidatorId::new(99), b"key");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_multi_db_update_propose_and_commit() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        let batch = vec![BatchOp::Put {
+            key: b"k",
+            value: b"v",
+        }];
+        let hash = db.update(v0, batch).unwrap();
+        assert!(hash.is_some());
+
+        let val = db.get(v0, b"k").unwrap();
+        assert_eq!(val, Some(b"v".to_vec().into_boxed_slice()));
+    }
+
+    #[test]
+    fn test_multi_db_dump_validator() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        let batch = vec![BatchOp::Put {
+            key: b"k",
+            value: b"v",
+        }];
+        db.update(v0, batch).unwrap();
+
+        let dump = db.dump_validator(v0).unwrap();
+        assert!(!dump.is_empty());
+    }
+
+    #[test]
+    fn test_multi_db_dump_unknown_validator_returns_error() {
+        let (db, _tmpdir) = create_multi_db();
+        let result = db.dump_validator(ValidatorId::new(99));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_multi_db_update_unknown_validator_returns_error() {
+        let (db, _tmpdir) = create_multi_db();
+        let batch = vec![BatchOp::Put {
+            key: b"k",
+            value: b"v",
+        }];
+        let result = db.update(ValidatorId::new(99), batch);
+        assert!(result.is_err());
     }
 }

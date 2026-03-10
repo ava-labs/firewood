@@ -112,7 +112,7 @@ pub struct DatabaseHandleArgs<'a> {
 }
 
 impl DatabaseHandleArgs<'_> {
-    fn as_rev_manager_config(&self) -> Result<RevisionManagerConfig, api::Error> {
+    pub(crate) fn as_rev_manager_config(&self) -> Result<RevisionManagerConfig, api::Error> {
         let cache_read_strategy = match self.strategy {
             0 => firewood::manager::CacheReadStrategy::WritesOnly,
             1 => firewood::manager::CacheReadStrategy::BranchReads,
