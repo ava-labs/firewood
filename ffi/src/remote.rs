@@ -113,6 +113,7 @@ impl NullHandleResult for TruncatedTrieResult {
 }
 
 impl CResult for TruncatedTrieResult {
+    #[cfg(panic = "unwind")]
     fn from_err(err: impl ToString) -> Self {
         Self::Err(err.to_string().into_bytes().into())
     }
@@ -125,6 +126,7 @@ impl NullHandleResult for WitnessResult {
 }
 
 impl CResult for WitnessResult {
+    #[cfg(panic = "unwind")]
     fn from_err(err: impl ToString) -> Self {
         Self::Err(err.to_string().into_bytes().into())
     }
@@ -433,6 +435,7 @@ impl NullHandleResult for GetWithProofResult {
 }
 
 impl CResult for GetWithProofResult {
+    #[cfg(panic = "unwind")]
     fn from_err(err: impl ToString) -> Self {
         Self::Err(err.to_string().into_bytes().into())
     }
