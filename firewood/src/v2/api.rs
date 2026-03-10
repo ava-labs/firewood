@@ -12,20 +12,23 @@ use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 /// Identifies a validator within a multi-head Firewood deployment.
-/// Corresponds to a root slot in the header.
+///
+/// This is a client-assigned 64-bit identifier that is persisted in the header
+/// alongside each validator's root. It is independent of the internal header
+/// slot index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct ValidatorId(u8);
+pub struct ValidatorId(u64);
 
 impl ValidatorId {
-    /// Create a new `ValidatorId` from a `u8`.
+    /// Create a new `ValidatorId`.
     #[must_use]
-    pub const fn new(id: u8) -> Self {
+    pub const fn new(id: u64) -> Self {
         Self(id)
     }
 
-    /// Returns the underlying `u8` value.
+    /// Returns the underlying `u64` value.
     #[must_use]
-    pub const fn as_u8(self) -> u8 {
+    pub const fn id(self) -> u64 {
         self.0
     }
 }

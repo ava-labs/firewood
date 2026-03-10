@@ -34,16 +34,18 @@ use crate::logger::{debug, trace};
 use crate::{NodeHashAlgorithm, TrieHash};
 
 /// Maximum number of validator roots supported in the header.
-/// 16 validators * 40 bytes/root = 640 bytes, fits within header padding.
+/// 16 validators * 48 bytes/root = 768 bytes, fits within header padding.
 pub const MAX_VALIDATORS: usize = 16;
 
 /// A per-validator root entry in the header.
 ///
 /// Uses `u64` for `root_address` (not `Option<LinearAddress>`) since `Pod`
-/// doesn't support `Option`. A value of 0 means unused/empty.
+/// doesn't support `Option`. A value of 0 for `root_address` means unused/empty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Zeroable, Pod)]
 #[repr(C)]
 pub struct ValidatorRoot {
+    /// The external validator identifier (client-assigned, persisted for recovery).
+    validator_id: u64,
     /// Disk address of this validator's trie root, or 0 for empty/unused.
     root_address: u64,
     /// Merkle root hash of this validator's trie.
@@ -533,20 +535,22 @@ impl NodeStoreHeader {
         self.validator_count = count as u64;
     }
 
-    /// Returns the root info for a validator slot, or `None` if the slot is
-    /// unused (`root_address` == 0) or out of range.
+    /// Returns the validator ID and root info for a slot, or `None` if the slot
+    /// is unused (`root_address` == 0) or out of range.
     #[must_use]
-    pub fn validator_root(&self, slot: u8) -> Option<RootNodeInfo> {
+    pub fn validator_root(&self, slot: u8) -> Option<(u64, RootNodeInfo)> {
         let slot_idx = slot as usize;
         if slot_idx >= self.validator_count as usize {
             return None;
         }
         let vr = self.validator_roots.get(slot_idx)?;
         let addr = LinearAddress::new(vr.root_address)?;
-        Some((addr, TrieHash::from(vr.root_hash)))
+        Some((vr.validator_id, (addr, TrieHash::from(vr.root_hash))))
     }
 
     /// Sets the root for a validator slot.
+    ///
+    /// Pass `Some((validator_id, (addr, hash)))` to set, or `None` to clear.
     ///
     /// # Errors
     ///
@@ -554,7 +558,7 @@ impl NodeStoreHeader {
     pub fn set_validator_root(
         &mut self,
         slot: u8,
-        root: Option<RootNodeInfo>,
+        root: Option<(u64, RootNodeInfo)>,
     ) -> Result<(), Error> {
         let slot_idx = slot as usize;
         if slot_idx >= MAX_VALIDATORS {
@@ -570,8 +574,9 @@ impl NodeStoreHeader {
             )
         })?;
         match root {
-            Some((addr, hash)) => {
+            Some((validator_id, (addr, hash))) => {
                 *entry = ValidatorRoot {
+                    validator_id,
                     root_address: addr.get(),
                     root_hash: hash.into(),
                 };
@@ -693,11 +698,13 @@ mod tests {
 
         let addr = LinearAddress::new(4096).expect("valid address");
         let hash = TrieHash::from([0xABu8; 32]);
+        let validator_id = 42u64;
         header
-            .set_validator_root(0, Some((addr, hash.clone())))
+            .set_validator_root(0, Some((validator_id, (addr, hash.clone()))))
             .expect("set root");
 
-        let (got_addr, got_hash) = header.validator_root(0).expect("root should exist");
+        let (got_id, (got_addr, got_hash)) = header.validator_root(0).expect("root should exist");
+        assert_eq!(got_id, validator_id);
         assert_eq!(got_addr, addr);
         assert_eq!(got_hash, hash);
     }
@@ -724,7 +731,7 @@ mod tests {
         let addr = LinearAddress::new(4096).expect("valid address");
         let hash = TrieHash::from([0xABu8; 32]);
         // Slot >= MAX_VALIDATORS should fail
-        let result = header.set_validator_root(MAX_VALIDATORS as u8, Some((addr, hash)));
+        let result = header.set_validator_root(MAX_VALIDATORS as u8, Some((1, (addr, hash))));
         assert!(result.is_err());
     }
 
@@ -760,14 +767,15 @@ mod tests {
             hash_bytes[0] = i;
             let hash = TrieHash::from(hash_bytes);
             header
-                .set_validator_root(i, Some((addr, hash)))
+                .set_validator_root(i, Some((u64::from(i), (addr, hash))))
                 .expect("set root");
         }
 
         for i in 0..4u8 {
-            let (addr, hash) = header
+            let (vid, (addr, hash)) = header
                 .validator_root(i)
                 .unwrap_or_else(|| panic!("slot {i} should have a root"));
+            assert_eq!(vid, u64::from(i));
             assert_eq!(addr.get(), u64::from(i + 1) * 4096);
             assert_eq!(<TrieHash as Into<[u8; 32]>>::into(hash)[0], i);
         }
@@ -781,7 +789,7 @@ mod tests {
         let addr = LinearAddress::new(4096).expect("valid address");
         let hash = TrieHash::from([0xABu8; 32]);
         header
-            .set_validator_root(0, Some((addr, hash)))
+            .set_validator_root(0, Some((1, (addr, hash))))
             .expect("set root");
         assert!(header.validator_root(0).is_some());
 
