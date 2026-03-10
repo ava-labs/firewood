@@ -1,0 +1,584 @@
+# Multi-Head Firewood: Design Document
+
+## 1. Motivation
+
+### Problem
+
+Avalanche validators on the same chain each maintain an independent copy of
+the blockchain state in their own Firewood database. Since honest validators
+process the same blocks in the same order, they produce identical state at
+each block height. Storing N identical copies of the same data wastes
+disk space proportional to N.
+
+### Solution
+
+Allow N validators to share a single Firewood deployment. When two validators
+produce the same revision (same root hash), store it once and point both
+validators to the shared copy. Each validator maintains its own "head" (latest
+revision pointer) but the underlying storage is shared.
+
+### Economic Model
+
+The cost of operating Firewood is a **base cost** equivalent to one
+validator's storage requirements.
+
+- **Honest validators** all produce the same chain. Their data is
+  deduplicated, so the entire group shares a single chain's worth of
+  storage. The base cost is split evenly: each honest validator pays
+  `base_cost / N_honest`.
+- **A malicious validator** produces a divergent chain. Its unique nodes
+  cannot be deduplicated. Firewood **logs** that this validator is on its
+  own chain (not sharing with the majority). This log information is consumed
+  by an external billing/incentive mechanism (outside the scope of this
+  feature) which charges the malicious validator the **full base cost** --
+  the same cost as operating an entire independent Firewood instance.
+- **Result:** Honest validators benefit from cost sharing. A malicious
+  validator pays the same as running its own database, gaining no economic
+  advantage from sharing infrastructure.
+
+### Divergence Logging
+
+When Firewood detects that a validator's committed revision has a root hash
+that differs from the majority at the same parent height, it logs:
+
+- The validator ID
+- The divergent root hash
+- The expected root hash (the one shared by the most validators)
+- A timestamp
+
+This information is exposed via metrics and/or a queryable API so that the
+external billing system can identify divergent validators and charge them
+accordingly.
+
+### Design Philosophy
+
+No consensus logic in Firewood. Every validator's chain is persisted
+independently. Firewood does not determine which validator is "correct" or
+take punitive action. It stores everything efficiently through deduplication,
+logs divergence events, and relies entirely on external economic incentives
+and the Avalanche consensus protocol to handle Byzantine behavior.
+
+---
+
+## 2. Architecture
+
+### 2.1 Multiple Heads
+
+The `RevisionManager` maintains one "head" per registered validator. A head
+is a reference (`Arc<NodeStore<Committed, FileBacked>>`) to that validator's
+latest committed revision.
+
+```text
+    Single firewood.db
+    +-----------------------------------------------------------+
+    |  Header (2048 bytes):                                      |
+    |    root[0] = Block 100 (Validator A)                       |
+    |    root[1] = Block 100 (Validator B) -- same as root[0]    |
+    |    root[2] = Block 99  (Validator C)                       |
+    |    root[3] = Block 100' (Validator D) -- divergent         |
+    |                                                            |
+    |  Nodes on disk:                                            |
+    |    Block 95, 96, 97, 98, 99 nodes (shared)                 |
+    |    Block 100 nodes (shared by A, B)                        |
+    |    Block 100' nodes (unique to D -- billed at full cost)   |
+    +-----------------------------------------------------------+
+```
+
+### 2.2 Deduplication
+
+When a validator commits a revision, the system checks whether a revision
+with the same root hash already exists (via the existing `by_hash` map).
+If it does, the new proposal is discarded and the validator's head is
+pointed to the existing revision. Since `CommittedRevision` is `Arc`-wrapped,
+this is a ref count increment -- zero storage duplication.
+
+```text
+Validator A commits Block 100 -> root hash H
+  Result: New revision created, persisted, added to by_hash[H]
+
+Validator B commits Block 100 -> root hash H
+  Check by_hash[H] -> exists!
+  Result: Proposal discarded. B's head = by_hash[H] (same Arc as A)
+  Log: (nothing -- B is on the shared chain)
+
+Storage impact: 1 revision stored, 2 heads pointing to it.
+```
+
+### 2.3 Divergence Detection and Logging
+
+When a validator commits a revision whose root hash does NOT match any
+existing revision committed from the same parent, Firewood logs the
+divergence:
+
+```text
+Validator D commits Block 100' -> root hash H' (parent = Block 99)
+  Check by_hash[H'] -> not found
+  Check: other validators also committed from parent Block 99 with hash H
+  Result: D is divergent.
+  Log: "validator D diverged at parent Block 99: expected H, got H'"
+  Metric: firewood_validator_divergence_count incremented for D
+  Persist: D's revision is stored normally (D pays full base cost)
+```
+
+### 2.4 Independent Chains
+
+Each validator is assigned to a **chain** (a lineage of revisions) identified
+by a `ChainId`. Chains are created on divergence and merged on deduplication.
+
+```text
+MultiHeadState:
+  validators: HashMap<ValidatorId, ValidatorState>
+  chains:     HashMap<ChainId, ChainState>  // per-chain revision deques
+  by_hash:    HashMap<TrieHash, CommittedRevision>
+  hash_to_chain: HashMap<TrieHash, ChainId> // reverse index
+  next_chain_id: ChainId                    // monotonic counter
+```
+
+`ChainState` holds a `VecDeque<CommittedRevision>` ordered oldest-to-newest.
+Each `ValidatorState` carries a `chain: ChainId` field indicating which chain
+the validator is currently on.
+
+**Fork on divergence:** When a validator commits a root hash that differs from
+every existing revision at that parent, a new `ChainId` is allocated and a
+`ChainState` is inserted for it.
+
+**Merge on deduplication:** When a validator's commit matches an existing
+revision (same root hash), the validator is moved to the chain that owns that
+revision. If the validator's old chain now has no remaining validators, it is
+cleaned up immediately (see Section 5).
+
+**Merge on advance:** `advance_validator_to_hash` similarly moves the validator
+to the chain that owns the target hash, cleaning up the vacated chain.
+
+Each validator proposes from its own head and commits against its own head.
+There is no global "latest" that all validators share. Validators do not
+block each other.
+
+### 2.5 Skip-Propose Optimization
+
+If a validator knows the expected root hash for a block (e.g., from the block
+header received over the network), it can advance its head in O(1) without
+computing a proposal:
+
+```text
+Validator C knows Block 100's hash is H (from block header).
+C calls advance_to_hash(H).
+by_hash[H] exists -> C's head = by_hash[H].
+
+Result: C advanced from Block 99 to Block 100 with zero trie computation.
+```
+
+---
+
+## 3. Storage Model
+
+### 3.1 Header Format
+
+The current `NodeStoreHeader` is 2048 bytes with ~392 bytes used, leaving
+1656 bytes of padding. The multi-head extension adds per-validator root
+slots within this existing space.
+
+```text
+Existing fields (392 bytes):
+  version:              16 bytes
+  endian_test:           8 bytes
+  size:                  8 bytes
+  free_lists:          184 bytes  (23 area sizes x 8 bytes)
+  root_address:          8 bytes
+  area_size_hash:       32 bytes
+  node_hash_algorithm:   8 bytes
+  root_hash:            32 bytes
+  cargo_version:        32 bytes
+  git_describe:         64 bytes
+
+New fields:
+  validator_count:       8 bytes
+  validator_roots:     640 bytes  (16 slots x 40 bytes each)
+
+Total: 1040 bytes (within 2048 limit)
+```
+
+Each `ValidatorRoot` slot contains:
+
+| Field            | Size     | Description                                        |
+|------------------|----------|----------------------------------------------------|
+| `root_address`   | 8 bytes  | Disk offset of validator's trie root (0 = unused)  |
+| `root_hash`      | 32 bytes | Merkle root hash of validator's trie               |
+
+#### Backward Compatibility
+
+When `validator_count == 0`, the database operates in legacy single-root
+mode. The existing `root_address` and `root_hash` fields are the sole root.
+
+### 3.2 Node Storage
+
+No changes to the node storage layer. All validators' nodes are stored in the
+same linear address space within the same `firewood.db` file. Addresses are
+disk offsets (`LinearAddress`), exactly as today.
+
+### 3.3 Free Lists
+
+No changes to the free list structure or allocation logic.
+
+---
+
+## 4. Commit Protocol
+
+### 4.1 Normal Commit (First Validator to Commit a Block)
+
+1. Validate: proposal's parent == this validator's head
+2. Check `by_hash`: does a revision with this root hash exist?
+   No -- this is the first validator to commit this block.
+3. Check: did other validators also commit from the same parent with a
+   different hash? If yes, fork a new chain and log divergence event.
+4. Convert proposal to Committed revision
+5. Persist: write nodes to disk, update header root for this validator
+6. Add to `by_hash` and `hash_to_chain` for future dedup lookups
+7. Append to the validator's chain deque (`ChainState.revisions`)
+8. Update this validator's head and `chain` field
+9. Run `collect_reapable_revisions` on the chain; reap outside lock
+10. Cleanup proposals
+
+### 4.2 Deduplicated Commit (Subsequent Validators)
+
+1. Validate: proposal's parent == this validator's head
+2. Check `by_hash`: does a revision with this root hash exist?
+   Yes -- another validator already committed this block.
+3. Discard proposal (no nodes written, no persistence)
+4. Move validator to the chain that owns the existing revision (via `hash_to_chain`)
+5. If the validator's old chain is now empty of validators, clean it up
+6. Update this validator's head = existing revision from `by_hash`
+7. Update header root for this validator
+
+No divergence logging -- this validator produced the same hash.
+
+### 4.3 Divergent Commit (Malicious Validator)
+
+Same as 4.1, except step 3 detects that other validators committed from the
+same parent with a different hash. The divergence is logged.
+
+### 4.4 Parent Validation
+
+Each validator's commit is validated against its own head:
+
+```text
+if proposal.parent_hash != validator.head.root_hash:
+    return Error::NotValidatorHead
+```
+
+---
+
+## 5. Reaping and Space Management
+
+### 5.1 Per-Chain Revision Budget
+
+Each chain independently enforces `max_revisions`. The global revision pool
+is replaced by per-chain `VecDeque<CommittedRevision>` deques. Reaping is
+triggered after each commit or advance and operates chain-by-chain.
+
+```text
+For each chain C:
+  min_pos = min position of any validator head on C within C.revisions
+  while C.revisions.len() > max_revisions && reaped < min_pos:
+    pop oldest revision from C.revisions
+    remove from by_hash / hash_to_chain (if no validator head still holds it)
+    send to persist_worker.reap()
+```
+
+This means a slow chain (one with a lagging validator) only blocks reaping on
+its own chain, not on other chains. Honest chains with synchronized validators
+reap freely regardless of divergent or lagging chains.
+
+### 5.2 Chain Cleanup
+
+When the last validator leaves a chain (by committing a deduplicated revision,
+advancing to a hash on another chain, or being deregistered), the chain is
+**cleaned up immediately**:
+
+1. Call `collect_all_chain_revisions(chain_id)` under the write lock.
+2. Remove the `ChainState` from `chains`.
+3. Remove all stale entries from `by_hash` / `hash_to_chain`.
+4. Outside the lock, attempt `Arc::try_unwrap` on each revision and reap it.
+
+`collect_reapable_revisions` handles normal per-chain budget enforcement.
+`collect_all_chain_revisions` handles the empty-chain cleanup case.
+
+### 5.3 Safe Deletion Rules
+
+**Shared (deduplicated) revisions:** All validators on a chain produced the
+same revision. When the chain is reaped, the `deleted` list in each revision
+is sent to the persist worker to return space to the free lists.
+
+**Divergent revisions:** Live on their own chain. When the chain is cleaned up
+(all validators have moved away), the revisions' deleted nodes may reference
+nodes still alive in sibling chains. `Arc::try_unwrap` is used as a safety
+gate: if any external consumer (e.g., an open view) still holds the Arc, the
+revision is not reaped and the space is not freed.
+
+### 5.4 Space Leakage
+
+| Scenario                             | Leaked space                              |
+|--------------------------------------|-------------------------------------------|
+| All honest                           | Zero                                      |
+| 1 divergent, D blocks                | ~D blocks of trie modifications (KB-MB)   |
+| After validator eviction + cleanup   | Full recovery                             |
+
+---
+
+## 6. Divergence Logging
+
+### 6.1 Log Events
+
+Firewood emits structured log events when divergence is detected:
+
+```rust
+log::warn!(
+    "validator {id:?} diverged: parent={parent_hash:?}, \
+     expected={expected_hash:?}, got={actual_hash:?}"
+);
+```
+
+### 6.2 Metrics
+
+New Prometheus-style metrics (using the existing `firewood_metrics` macros):
+
+| Metric                                  | Type    | Description                                            |
+|-----------------------------------------|---------|--------------------------------------------------------|
+| `firewood_validator_divergence_total`   | Counter | Total divergence events per validator                  |
+| `firewood_validator_chain_shared`       | Gauge   | 1 if validator is on the shared chain, 0 if diverged   |
+| `firewood_validator_head_block`         | Gauge   | Current head position per validator                    |
+
+### 6.3 Query API
+
+```rust
+impl MultiDb {
+    /// Returns whether a validator is currently on the shared (majority)
+    /// chain or has diverged.
+    pub fn is_validator_diverged(&self, id: ValidatorId) -> Result<bool, Error>;
+
+    /// Returns divergence information for all validators.
+    pub fn validator_statuses(&self) -> Result<Vec<(ValidatorId, ValidatorChainStatus)>, Error>;
+}
+
+pub enum ValidatorChainStatus {
+    /// Validator is on the shared chain (same root hash as majority).
+    Shared,
+    /// Validator has diverged. Contains the block height and hash where
+    /// divergence was first detected.
+    Diverged {
+        diverged_at_parent: HashKey,
+        expected_hash: HashKey,
+        actual_hash: HashKey,
+    },
+}
+```
+
+This information is consumed by the external billing system to charge
+divergent validators the full base cost.
+
+---
+
+## 7. Persistence and Crash Recovery
+
+### 7.1 Persistence
+
+Each validator's root is stored in the header. Updated on every commit or
+advance operation.
+
+### 7.2 Crash Recovery
+
+On startup, read N validator roots from header. Reconstruct each head.
+Dedup across validators with matching hashes. Each validator recovers to
+its last persisted root.
+
+### 7.3 Flush Ordering
+
+1. Nodes written to disk first
+2. Header (with validator roots) written last
+3. Crash between 1 and 2: header has previous valid state
+
+---
+
+## 8. Error Handling
+
+### 8.1 New Error Variants
+
+| Error                                                  | When                                   |
+|--------------------------------------------------------|----------------------------------------|
+| `ValidatorNotFound { id }`                             | Operation on unregistered validator    |
+| `ValidatorAlreadyRegistered { id }`                    | Re-registering active validator        |
+| `MaxValidatorsReached { id, max }`                     | All header slots full                  |
+| `NotValidatorHead { validator, provided, expected }`   | Parent mismatch                        |
+| `ValidatorDeregistered { id }`                         | Operation on removed validator         |
+
+### 8.2 Constraints
+
+- No `unwrap()` / `expect()` / `panic!()` outside of tests
+- Every failure mode has its own error variant
+- All `Result` types propagated correctly
+
+---
+
+## 9. API
+
+### 9.1 Rust API
+
+```rust
+pub struct MultiDb { ... }
+
+impl MultiDb {
+    pub fn new(path: impl AsRef<Path>, cfg: MultiDbConfig) -> Result<Self, Error>;
+    pub fn register_validator(&self, id: ValidatorId) -> Result<(), Error>;
+    pub fn deregister_validator(&self, id: ValidatorId) -> Result<(), Error>;
+    pub fn propose(&self, id: ValidatorId, batch: impl IntoBatchIter) -> Result<Proposal, Error>;
+    pub fn commit(&self, id: ValidatorId, proposal: Proposal) -> Result<(), Error>;
+    pub fn advance_to_hash(&self, id: ValidatorId, hash: HashKey) -> Result<(), Error>;
+    pub fn validator_view(&self, id: ValidatorId) -> Result<impl DbView, Error>;
+    pub fn view(&self, hash: HashKey) -> Result<impl DbView, Error>;
+    pub fn is_validator_diverged(&self, id: ValidatorId) -> Result<bool, Error>;
+    pub fn validator_statuses(&self) -> Result<Vec<(ValidatorId, ValidatorChainStatus)>, Error>;
+    pub fn close(self) -> Result<(), Error>;
+}
+```
+
+### 9.2 FFI API
+
+| Function                           | Returns            |
+|------------------------------------|--------------------|
+| `firewood_multi_db_new`            | `HandleResult`     |
+| `firewood_register_validator`      | `VoidResult`       |
+| `firewood_deregister_validator`    | `VoidResult`       |
+| `firewood_validator_propose`       | `ProposalResult`   |
+| `firewood_validator_commit`        | `VoidResult`       |
+| `firewood_validator_advance`       | `VoidResult`       |
+| `firewood_validator_view`          | `HandleResult`     |
+| `firewood_validator_is_diverged`   | `BoolResult`       |
+
+---
+
+## 10. Concurrency
+
+### 10.1 Lock Inventory
+
+| Lock          | Type                              | Guards                                                              |
+|---------------|-----------------------------------|---------------------------------------------------------------------|
+| `multi_head`  | `RwLock`                          | `MultiHeadState` (validators, chains, by\_hash, hash\_to\_chain)    |
+| `header`      | `Mutex` (inside `persist_worker`) | On-disk header (validator roots)                                    |
+| `proposals`   | `Mutex`                           | Live proposal list                                                  |
+
+### 10.2 Lock Ordering
+
+Locks are **never nested**. The protocol is:
+
+1. Acquire `multi_head` write lock.
+2. Perform in-memory state update. Collect any revisions to reap.
+3. **Release** `multi_head` lock.
+4. Acquire `header` lock. Update validator root slots. Release.
+5. Send collected revisions to the persist worker (no lock held).
+6. Acquire `proposals` lock. Clean up stale proposals. Release.
+
+This ordering eliminates deadlock: no code path holds two locks simultaneously.
+
+### 10.3 Split Critical Section in `commit_for_validator`
+
+`commit_for_validator` uses a **3-phase** approach:
+
+- **Phase 1 (write lock):** Validate parent, dedup check, update in-memory
+  validator head and chain state, collect reapable revisions. Release lock.
+- **Phase 2 (no lock):** Persist revision to disk, update header, reap
+  collected revisions via `Arc::try_unwrap`.
+- **Phase 3 (proposals lock):** Remove committed proposal and discard any
+  proposals that are no longer referenced.
+
+The write lock in Phase 1 is short (in-memory only). The potentially blocking
+disk I/O in Phase 2 runs lock-free.
+
+### 10.4 Read Paths
+
+`validator_view`, `revision()`, and divergence queries take a **read lock**
+on `multi_head`. Multiple readers proceed concurrently. `revision()` now also
+checks `multi_head.by_hash` after checking `in_memory_revisions`, so views
+created from any chain are accessible.
+
+### 10.5 Register and Deregister
+
+`register_validator` and `deregister_validator` take the `multi_head` write
+lock, update in-memory state, release the lock, then update the header under
+the header lock. The same lock ordering (multi\_head → header) applies.
+
+---
+
+## 11. Configuration
+
+| Parameter          | Default | Description                                      |
+|--------------------|---------|--------------------------------------------------|
+| `max_validators`   | 16      | Max validators (header size limit)               |
+| `max_revisions`    | 128     | Max revisions in pool (>= max validator spread)  |
+
+---
+
+## 12. Invariants
+
+1. A validator's head always points to a valid, persisted revision.
+2. `by_hash` contains every committed revision accessible by any validator.
+3. Revisions with the same root hash have identical trie content
+   (guaranteed by deterministic Merkle hashing).
+4. Reaping never frees nodes still referenced by any validator's trie.
+5. The header reflects the latest persisted state for each validator.
+6. `validator_count == 0` means legacy single-root mode.
+7. Divergence events are always logged and reflected in metrics.
+8. Every hash in `by_hash` has a corresponding entry in `hash_to_chain`, and
+   vice versa. These two maps are always mutually consistent.
+9. Every `ValidatorState.chain` refers to a `ChainId` that exists in `chains`.
+   No validator points to a chain that has been removed.
+10. No lock is ever held when acquiring another lock. Locks are acquired and
+    released in strict sequence: `multi_head` → `header` → `proposals`.
+
+---
+
+## 13. Testing Strategy
+
+### Test Categories
+
+| Category        | Tests    | Focus                                                                                                    |
+|-----------------|----------|----------------------------------------------------------------------------------------------------------|
+| Registration    | 7        | Lifecycle, limits, errors                                                                                |
+| Commit          | 7        | Normal, dedup, wrong parent, nonexistent validator                                                       |
+| Deduplication   | 4        | Arc sharing, N-way dedup, isolation                                                                      |
+| Skip-Propose    | 3        | Advance existing/nonexistent, no-compute                                                                 |
+| Reaping         | 5        | Min-head frontier, shared vs divergent, post-deregister                                                  |
+| Divergence      | 5        | Detection, logging, metrics, does not affect honest chains                                               |
+| Views           | 2        | Correct head, cross-validator lookup                                                                     |
+| Concurrency     | 13       | Parallel commits, commit+advance race, dedup race, per-chain reap race, register/deregister under load   |
+| Header          | 8        | Size, roundtrip, backward compat, validation                                                             |
+| Integration     | 6        | Create/close, persist/recover, migration, max validators                                                 |
+| FFI             | 5        | Lifecycle, register, propose/commit, advance, null handle                                                |
+| **Total**       | **~55**  |                                                                                                          |
+
+---
+
+## 14. Scope
+
+### Modified Files
+
+| File                                 | Lines        | Changes                                                            |
+|--------------------------------------|--------------|--------------------------------------------------------------------|
+| `storage/src/nodestore/header.rs`    | ~150         | ValidatorRoot, N root slots, validation                            |
+| `firewood/src/manager.rs`            | ~700         | MultiHeadState, commit/advance/register/reap, divergence detection |
+| `firewood/src/db.rs`                 | ~400         | MultiDb, per-validator API, divergence query                       |
+| `firewood/src/v2/api.rs`             | ~120         | ValidatorId, ValidatorChainStatus, error variants                  |
+| `firewood/src/persist_worker.rs`     | ~100         | Per-validator header root updates                                  |
+| `firewood/src/registry.rs`           | ~30          | New metrics for divergence                                         |
+| `ffi/src/`                           | ~200         | FFI bindings                                                       |
+| **Implementation total**             | **~1,700**   |                                                                    |
+| Tests                                | ~1,300       | 55 tests                                                           |
+| **Grand total**                      | **~3,000**   |                                                                    |
+
+### Unmodified Files
+
+- `storage/src/nodestore/mod.rs` -- NodeStore types unchanged
+- `storage/src/nodestore/alloc.rs` -- Allocator unchanged
+- `storage/src/nodestore/primitives.rs` -- LinearAddress unchanged
+- `storage/src/linear/filebacked.rs` -- Storage layer unchanged
+- `storage/src/node/` -- Node types unchanged
+- `firewood/src/merkle/` -- Trie operations unchanged

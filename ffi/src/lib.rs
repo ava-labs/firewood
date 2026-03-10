@@ -27,6 +27,7 @@ mod handle;
 mod iterator;
 mod logging;
 mod metrics;
+mod multi_handle;
 mod proofs;
 mod proposal;
 mod registry;
@@ -42,6 +43,7 @@ pub use crate::handle::*;
 pub use crate::iterator::*;
 pub use crate::logging::*;
 use crate::metrics::MetricsContextExt;
+pub use crate::multi_handle::*;
 pub use crate::proofs::*;
 pub use crate::proposal::*;
 pub use crate::revision::*;
@@ -861,5 +863,262 @@ pub extern "C" fn fwd_revision_dump(revision: Option<&RevisionHandle>) -> ValueR
 ///   returned value.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_proposal_dump(proposal: Option<&ProposalHandle>) -> ValueResult {
+    invoke_with_handle(proposal, firewood::v2::api::DbView::dump_to_string)
+}
+
+// ========================== Multi-Head FFI Functions ==========================
+
+/// Open a multi-validator database with the given arguments.
+///
+/// # Safety
+///
+/// The caller must:
+/// - ensure that the database is freed with [`fwd_multi_close_db`] when no longer needed.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_open_db(args: MultiDatabaseHandleArgs) -> MultiHandleResult {
+    invoke(move || MultiDatabaseHandle::new(args))
+}
+
+/// Close and free the memory for a multi-validator database handle.
+///
+/// # Safety
+///
+/// Callers must ensure that:
+/// - `db` is a valid pointer to a [`MultiDatabaseHandle`] returned by [`fwd_multi_open_db`].
+/// - There are no handles to any open proposals.
+/// - The database handle is not used after this function is called.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_close_db(db: Option<Box<MultiDatabaseHandle>>) -> VoidResult {
+    invoke_with_handle(db, |db| db.close())
+}
+
+/// Register a validator on a multi-validator database.
+///
+/// # Safety
+///
+/// The caller must ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_register_validator(
+    db: Option<&MultiDatabaseHandle>,
+    id: u64,
+) -> VoidResult {
+    invoke_with_handle(db, move |db| db.register_validator(id))
+}
+
+/// Deregister a validator from a multi-validator database.
+///
+/// # Safety
+///
+/// The caller must ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_deregister_validator(
+    db: Option<&MultiDatabaseHandle>,
+    id: u64,
+) -> VoidResult {
+    invoke_with_handle(db, move |db| db.deregister_validator(id))
+}
+
+/// Gets the value associated with the given key from a validator's current head.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+/// * ensure that `key` is valid for [`BorrowedBytes`].
+/// * call [`fwd_free_owned_bytes`] to free the memory associated with the returned value.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_get(
+    db: Option<&MultiDatabaseHandle>,
+    id: u64,
+    key: BorrowedBytes,
+) -> ValueResult {
+    invoke_with_handle(db, move |db| db.get(id, key))
+}
+
+/// Get the root hash of a validator's current head.
+///
+/// # Safety
+///
+/// The caller must ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_root_hash(db: Option<&MultiDatabaseHandle>, id: u64) -> HashResult {
+    invoke_with_handle(db, move |db| db.validator_root_hash(id))
+}
+
+/// Get a handle to the latest revision for a validator.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+/// * call [`fwd_free_revision`] to free the returned handle when it is no longer needed.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_latest_revision(
+    db: Option<&MultiDatabaseHandle>,
+    id: u64,
+) -> RevisionResult {
+    invoke_with_handle(db, move |db| db.validator_view(id))
+}
+
+/// Dump the trie structure of a validator's current head.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+/// * call [`fwd_free_owned_bytes`] to free the returned value.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_db_dump(db: Option<&MultiDatabaseHandle>, id: u64) -> ValueResult {
+    invoke_with_handle(db, move |db| db.dump(id))
+}
+
+/// Create a proposal for a validator.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+/// * ensure that `values` is valid for [`BorrowedBatchOps`].
+/// * call [`fwd_multi_commit_proposal`] or [`fwd_multi_free_proposal`] to free the proposal.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_propose<'db>(
+    db: Option<&'db MultiDatabaseHandle>,
+    id: u64,
+    values: BorrowedBatchOps<'db>,
+) -> MultiProposalResult<'db> {
+    invoke_with_handle(db, move |db| db.create_proposal(id, values))
+}
+
+/// Propose and commit in one call for a validator.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+/// * ensure that `values` is valid for [`BorrowedBatchOps`].
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_update(
+    db: Option<&MultiDatabaseHandle>,
+    id: u64,
+    values: BorrowedBatchOps<'_>,
+) -> HashResult {
+    invoke_with_handle(db, move |db| db.update(id, values))
+}
+
+/// Advance a validator's head to an existing revision by hash.
+///
+/// # Safety
+///
+/// The caller must ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_advance_to_hash(
+    db: Option<&MultiDatabaseHandle>,
+    id: u64,
+    hash: HashKey,
+) -> VoidResult {
+    invoke_with_handle(db, move |db| db.advance_to_hash(id, hash.into()))
+}
+
+/// Get a handle to a committed revision by hash.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+/// * call [`fwd_free_revision`] to free the returned handle when it is no longer needed.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_revision(
+    db: Option<&MultiDatabaseHandle>,
+    hash: HashKey,
+) -> RevisionResult {
+    invoke_with_handle(db, move |db| db.view(hash.into()))
+}
+
+/// Commit a multi-validator proposal.
+///
+/// This function will consume the proposal regardless of whether the commit is successful.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `proposal` is a valid pointer to a [`MultiProposalHandle`].
+/// * ensure that `proposal` is not used again after this function is called.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_commit_proposal(
+    proposal: Option<Box<MultiProposalHandle<'_>>>,
+) -> HashResult {
+    invoke_with_handle(proposal, move |proposal| proposal.commit_proposal())
+}
+
+/// Create a child proposal on an existing multi-validator proposal.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `handle` is a valid pointer to a [`MultiProposalHandle`].
+/// * ensure that `values` is valid for [`BorrowedBatchOps`].
+/// * call [`fwd_multi_commit_proposal`] or [`fwd_multi_free_proposal`] to free the proposal.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_propose_on_proposal<'db>(
+    handle: Option<&MultiProposalHandle<'db>>,
+    values: BorrowedBatchOps<'_>,
+) -> MultiProposalResult<'db> {
+    invoke_with_handle(handle, move |p| p.create_proposal(values))
+}
+
+/// Gets the value associated with the given key from a multi-validator proposal.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `handle` is a valid pointer to a [`MultiProposalHandle`].
+/// * ensure that `key` is valid for [`BorrowedBytes`].
+/// * call [`fwd_free_owned_bytes`] to free the returned value.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_get_from_proposal(
+    handle: Option<&MultiProposalHandle<'_>>,
+    key: BorrowedBytes,
+) -> ValueResult {
+    invoke_with_handle(handle, move |handle| handle.val(key))
+}
+
+/// Returns an iterator on a multi-validator proposal starting from a key.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `handle` is a valid pointer to a [`MultiProposalHandle`].
+/// * ensure that `key` is valid for [`BorrowedBytes`].
+/// * call [`fwd_free_iterator`] to free the iterator.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_iter_on_proposal<'p>(
+    handle: Option<&'p MultiProposalHandle<'_>>,
+    key: BorrowedBytes,
+) -> IteratorResult<'p> {
+    invoke_with_handle(handle, move |p| p.iter_from(Some(key.as_slice())))
+}
+
+/// Consumes the [`MultiProposalHandle`], cancels the proposal, and frees the memory.
+///
+/// # Safety
+///
+/// The caller must ensure that the `proposal` is not null and that it points to
+/// a valid [`MultiProposalHandle`] previously returned by a function from this library.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_free_proposal(
+    proposal: Option<Box<MultiProposalHandle<'_>>>,
+) -> VoidResult {
+    invoke_with_handle(proposal, drop)
+}
+
+/// Dumps the Trie structure of a multi-validator proposal to a DOT format string.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `proposal` is a valid pointer to a [`MultiProposalHandle`].
+/// * call [`fwd_free_owned_bytes`] to free the returned value.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_proposal_dump(proposal: Option<&MultiProposalHandle>) -> ValueResult {
     invoke_with_handle(proposal, firewood::v2::api::DbView::dump_to_string)
 }

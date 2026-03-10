@@ -13,7 +13,7 @@ use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
-    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter, KeyType,
+    self, ArcDynDbView, DbView, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter, KeyType,
     KeyValuePair, OptionalHashKeyExt, ValidatorId,
 };
 
@@ -529,6 +529,31 @@ impl MultiDb {
     pub fn validator_root_hash(&self, id: ValidatorId) -> Result<Option<HashKey>, api::Error> {
         let head = self.db.manager.validator_view(id)?;
         Ok(head.root_hash().or_default_root_hash())
+    }
+
+    /// Read a value from a validator's current head.
+    pub fn get(&self, id: ValidatorId, key: &[u8]) -> Result<Option<Value>, api::Error> {
+        let head = self.db.manager.validator_view(id)?;
+        head.val(key)
+    }
+
+    /// Propose and commit in one call (convenience for single-batch workflows).
+    pub fn update(
+        &self,
+        id: ValidatorId,
+        batch: impl IntoBatchIter,
+    ) -> Result<Option<HashKey>, api::Error> {
+        let proposal = self.propose(id, batch)?;
+        let hash = proposal.root_hash();
+        self.commit(id, proposal)?;
+        Ok(hash)
+    }
+
+    /// Dump the trie at a validator's current head.
+    pub fn dump_validator(&self, id: ValidatorId) -> Result<String, api::Error> {
+        let head = self.db.manager.validator_view(id)?;
+        let merkle = Merkle::from(head);
+        merkle.dump_to_string().map_err(api::Error::from)
     }
 
     /// Close the database gracefully.
@@ -3113,5 +3138,82 @@ mod test {
                 Some(format!("val_{i}_49").into_bytes().into_boxed_slice())
             );
         }
+    }
+
+    // === Tests for MultiDb convenience methods (get, update, dump_validator) ===
+
+    #[test]
+    fn test_multi_db_get_from_validator_head() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        let batch = vec![BatchOp::Put {
+            key: b"key",
+            value: b"value",
+        }];
+        let proposal = db.propose(v0, batch).unwrap();
+        db.commit(v0, proposal).unwrap();
+
+        let val = db.get(v0, b"key").unwrap();
+        assert_eq!(val, Some(b"value".to_vec().into_boxed_slice()));
+    }
+
+    #[test]
+    fn test_multi_db_get_unknown_validator_returns_error() {
+        let (db, _tmpdir) = create_multi_db();
+        let result = db.get(ValidatorId::new(99), b"key");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_multi_db_update_propose_and_commit() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        let batch = vec![BatchOp::Put {
+            key: b"k",
+            value: b"v",
+        }];
+        let hash = db.update(v0, batch).unwrap();
+        assert!(hash.is_some());
+
+        let val = db.get(v0, b"k").unwrap();
+        assert_eq!(val, Some(b"v".to_vec().into_boxed_slice()));
+    }
+
+    #[test]
+    fn test_multi_db_dump_validator() {
+        let (db, _tmpdir) = create_multi_db();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        let batch = vec![BatchOp::Put {
+            key: b"k",
+            value: b"v",
+        }];
+        db.update(v0, batch).unwrap();
+
+        let dump = db.dump_validator(v0).unwrap();
+        assert!(!dump.is_empty());
+    }
+
+    #[test]
+    fn test_multi_db_dump_unknown_validator_returns_error() {
+        let (db, _tmpdir) = create_multi_db();
+        let result = db.dump_validator(ValidatorId::new(99));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_multi_db_update_unknown_validator_returns_error() {
+        let (db, _tmpdir) = create_multi_db();
+        let batch = vec![BatchOp::Put {
+            key: b"k",
+            value: b"v",
+        }];
+        let result = db.update(ValidatorId::new(99), batch);
+        assert!(result.is_err());
     }
 }

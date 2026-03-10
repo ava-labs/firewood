@@ -52,6 +52,21 @@ typedef struct DatabaseHandle DatabaseHandle;
 typedef struct IteratorHandle IteratorHandle;
 
 /**
+ * A handle to a multi-validator database, returned by [`fwd_multi_open_db`].
+ *
+ * [`fwd_multi_open_db`]: crate::fwd_multi_open_db
+ */
+typedef struct MultiDatabaseHandle MultiDatabaseHandle;
+
+/**
+ * An opaque wrapper around a Proposal for multi-validator mode.
+ *
+ * Stores the validator ID captured at propose time so that `commit_proposal`
+ * can call `MultiDb::commit` without the caller needing to pass it again.
+ */
+typedef struct MultiProposalHandle MultiProposalHandle;
+
+/**
  * An opaque wrapper around a Proposal that also retains a reference to the
  * database handle it was created from.
  */
@@ -960,43 +975,41 @@ typedef struct IteratorResult {
 } IteratorResult;
 
 /**
- * The result type returned from the open or create database functions.
+ * The result type returned from the multi-validator open database function.
  */
-enum HandleResult_Tag {
+enum MultiHandleResult_Tag {
   /**
-   * The database was opened or created successfully and the handle is
-   * returned as an opaque pointer.
+   * The multi-validator database was opened successfully.
    *
-   * The caller must ensure that [`fwd_close_db`] is called to free resources
+   * The caller must ensure that [`fwd_multi_close_db`] is called to free resources
    * associated with this handle when it is no longer needed.
    *
-   * [`fwd_close_db`]: crate::fwd_close_db
+   * [`fwd_multi_close_db`]: crate::fwd_multi_close_db
    */
-  HandleResult_Ok,
+  MultiHandleResult_Ok,
   /**
-   * An error occurred and the message is returned as an [`OwnedBytes`]. If
-   * value is guaranteed to contain only valid UTF-8.
+   * An error occurred and the message is returned as an [`OwnedBytes`].
    *
    * The caller must call [`fwd_free_owned_bytes`] to free the memory
    * associated with this error.
    *
    * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
    */
-  HandleResult_Err,
+  MultiHandleResult_Err,
 };
-typedef size_t HandleResult_Tag;
+typedef size_t MultiHandleResult_Tag;
 
-typedef struct HandleResult {
-  HandleResult_Tag tag;
+typedef struct MultiHandleResult {
+  MultiHandleResult_Tag tag;
   union {
     struct {
-      struct DatabaseHandle *ok;
+      struct MultiDatabaseHandle *ok;
     };
     struct {
       OwnedBytes err;
     };
   };
-} HandleResult;
+} MultiHandleResult;
 
 /**
  * Arguments for creating or opening a database. These are passed to [`fwd_open_db`]
@@ -1078,6 +1091,107 @@ typedef struct DatabaseHandleArgs {
    */
   uint64_t deferred_persistence_commit_count;
 } DatabaseHandleArgs;
+
+/**
+ * Arguments for creating or opening a multi-validator database.
+ */
+typedef struct MultiDatabaseHandleArgs {
+  /**
+   * Base database arguments (reused from single-head).
+   */
+  struct DatabaseHandleArgs db_args;
+  /**
+   * Maximum number of validators.
+   */
+  size_t max_validators;
+} MultiDatabaseHandleArgs;
+
+/**
+ * A result type returned from FFI functions that create a multi-validator proposal.
+ */
+enum MultiProposalResult_Tag {
+  /**
+   * The caller provided a null pointer to a database handle.
+   */
+  MultiProposalResult_NullHandlePointer,
+  /**
+   * The proposal was created successfully.
+   */
+  MultiProposalResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`].
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  MultiProposalResult_Err,
+};
+typedef size_t MultiProposalResult_Tag;
+
+typedef struct MultiProposalResult_Ok_Body {
+  /**
+   * An opaque pointer to the [`MultiProposalHandle`] that can be used to create
+   * an additional proposal or later commit.
+   *
+   * [`MultiProposalHandle`]: crate::MultiProposalHandle
+   */
+  struct MultiProposalHandle *handle;
+  /**
+   * The root hash of the proposal.
+   */
+  struct HashKey root_hash;
+} MultiProposalResult_Ok_Body;
+
+typedef struct MultiProposalResult {
+  MultiProposalResult_Tag tag;
+  union {
+    MultiProposalResult_Ok_Body ok;
+    struct {
+      OwnedBytes err;
+    };
+  };
+} MultiProposalResult;
+
+/**
+ * The result type returned from the open or create database functions.
+ */
+enum HandleResult_Tag {
+  /**
+   * The database was opened or created successfully and the handle is
+   * returned as an opaque pointer.
+   *
+   * The caller must ensure that [`fwd_close_db`] is called to free resources
+   * associated with this handle when it is no longer needed.
+   *
+   * [`fwd_close_db`]: crate::fwd_close_db
+   */
+  HandleResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`]. If
+   * value is guaranteed to contain only valid UTF-8.
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  HandleResult_Err,
+};
+typedef size_t HandleResult_Tag;
+
+typedef struct HandleResult {
+  HandleResult_Tag tag;
+  union {
+    struct {
+      struct DatabaseHandle *ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} HandleResult;
 
 /**
  * A result type returned from FFI functions that create a proposal but do not
@@ -2070,6 +2184,213 @@ struct IteratorResult fwd_iter_on_proposal(const struct ProposalHandle *handle, 
  */
 struct IteratorResult fwd_iter_on_revision(const struct RevisionHandle *revision,
                                            BorrowedBytes key);
+
+/**
+ * Advance a validator's head to an existing revision by hash.
+ *
+ * # Safety
+ *
+ * The caller must ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+ */
+struct VoidResult fwd_multi_advance_to_hash(const struct MultiDatabaseHandle *db,
+                                            uint64_t id,
+                                            struct HashKey hash);
+
+/**
+ * Close and free the memory for a multi-validator database handle.
+ *
+ * # Safety
+ *
+ * Callers must ensure that:
+ * - `db` is a valid pointer to a [`MultiDatabaseHandle`] returned by [`fwd_multi_open_db`].
+ * - There are no handles to any open proposals.
+ * - The database handle is not used after this function is called.
+ */
+struct VoidResult fwd_multi_close_db(struct MultiDatabaseHandle *db);
+
+/**
+ * Commit a multi-validator proposal.
+ *
+ * This function will consume the proposal regardless of whether the commit is successful.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `proposal` is a valid pointer to a [`MultiProposalHandle`].
+ * * ensure that `proposal` is not used again after this function is called.
+ */
+struct HashResult fwd_multi_commit_proposal(struct MultiProposalHandle *proposal);
+
+/**
+ * Dump the trie structure of a validator's current head.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+ * * call [`fwd_free_owned_bytes`] to free the returned value.
+ */
+struct ValueResult fwd_multi_db_dump(const struct MultiDatabaseHandle *db, uint64_t id);
+
+/**
+ * Deregister a validator from a multi-validator database.
+ *
+ * # Safety
+ *
+ * The caller must ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+ */
+struct VoidResult fwd_multi_deregister_validator(const struct MultiDatabaseHandle *db, uint64_t id);
+
+/**
+ * Consumes the [`MultiProposalHandle`], cancels the proposal, and frees the memory.
+ *
+ * # Safety
+ *
+ * The caller must ensure that the `proposal` is not null and that it points to
+ * a valid [`MultiProposalHandle`] previously returned by a function from this library.
+ */
+struct VoidResult fwd_multi_free_proposal(struct MultiProposalHandle *proposal);
+
+/**
+ * Gets the value associated with the given key from a validator's current head.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+ * * ensure that `key` is valid for [`BorrowedBytes`].
+ * * call [`fwd_free_owned_bytes`] to free the memory associated with the returned value.
+ */
+struct ValueResult fwd_multi_get(const struct MultiDatabaseHandle *db,
+                                 uint64_t id,
+                                 BorrowedBytes key);
+
+/**
+ * Gets the value associated with the given key from a multi-validator proposal.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `handle` is a valid pointer to a [`MultiProposalHandle`].
+ * * ensure that `key` is valid for [`BorrowedBytes`].
+ * * call [`fwd_free_owned_bytes`] to free the returned value.
+ */
+struct ValueResult fwd_multi_get_from_proposal(const struct MultiProposalHandle *handle,
+                                               BorrowedBytes key);
+
+/**
+ * Returns an iterator on a multi-validator proposal starting from a key.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `handle` is a valid pointer to a [`MultiProposalHandle`].
+ * * ensure that `key` is valid for [`BorrowedBytes`].
+ * * call [`fwd_free_iterator`] to free the iterator.
+ */
+struct IteratorResult fwd_multi_iter_on_proposal(const struct MultiProposalHandle *handle,
+                                                 BorrowedBytes key);
+
+/**
+ * Get a handle to the latest revision for a validator.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+ * * call [`fwd_free_revision`] to free the returned handle when it is no longer needed.
+ */
+struct RevisionResult fwd_multi_latest_revision(const struct MultiDatabaseHandle *db, uint64_t id);
+
+/**
+ * Open a multi-validator database with the given arguments.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * - ensure that the database is freed with [`fwd_multi_close_db`] when no longer needed.
+ */
+struct MultiHandleResult fwd_multi_open_db(struct MultiDatabaseHandleArgs args);
+
+/**
+ * Dumps the Trie structure of a multi-validator proposal to a DOT format string.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `proposal` is a valid pointer to a [`MultiProposalHandle`].
+ * * call [`fwd_free_owned_bytes`] to free the returned value.
+ */
+struct ValueResult fwd_multi_proposal_dump(const struct MultiProposalHandle *proposal);
+
+/**
+ * Create a proposal for a validator.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+ * * ensure that `values` is valid for [`BorrowedBatchOps`].
+ * * call [`fwd_multi_commit_proposal`] or [`fwd_multi_free_proposal`] to free the proposal.
+ */
+struct MultiProposalResult fwd_multi_propose(const struct MultiDatabaseHandle *db,
+                                             uint64_t id,
+                                             BorrowedBatchOps values);
+
+/**
+ * Create a child proposal on an existing multi-validator proposal.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `handle` is a valid pointer to a [`MultiProposalHandle`].
+ * * ensure that `values` is valid for [`BorrowedBatchOps`].
+ * * call [`fwd_multi_commit_proposal`] or [`fwd_multi_free_proposal`] to free the proposal.
+ */
+struct MultiProposalResult fwd_multi_propose_on_proposal(const struct MultiProposalHandle *handle,
+                                                         BorrowedBatchOps values);
+
+/**
+ * Register a validator on a multi-validator database.
+ *
+ * # Safety
+ *
+ * The caller must ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+ */
+struct VoidResult fwd_multi_register_validator(const struct MultiDatabaseHandle *db, uint64_t id);
+
+/**
+ * Get a handle to a committed revision by hash.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+ * * call [`fwd_free_revision`] to free the returned handle when it is no longer needed.
+ */
+struct RevisionResult fwd_multi_revision(const struct MultiDatabaseHandle *db, struct HashKey hash);
+
+/**
+ * Get the root hash of a validator's current head.
+ *
+ * # Safety
+ *
+ * The caller must ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+ */
+struct HashResult fwd_multi_root_hash(const struct MultiDatabaseHandle *db, uint64_t id);
+
+/**
+ * Propose and commit in one call for a validator.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+ * * ensure that `values` is valid for [`BorrowedBatchOps`].
+ */
+struct HashResult fwd_multi_update(const struct MultiDatabaseHandle *db,
+                                   uint64_t id,
+                                   BorrowedBatchOps values);
 
 /**
  * Open a database with the given arguments.

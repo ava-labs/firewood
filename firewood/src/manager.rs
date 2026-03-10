@@ -1037,7 +1037,19 @@ impl RevisionManager {
             if diverged {
                 // Fork: create new chain for this validator
                 if let Some(ref new_h) = new_hash {
-                    warn!("validator {id:?} diverged: parent={parent_hash:?}, got={new_h:?}");
+                    let other_validators: Vec<_> = state
+                        .validators
+                        .iter()
+                        .filter(|(other_id, other_v)| {
+                            **other_id != id && other_v.chain == validator_chain
+                        })
+                        .map(|(vid, _)| *vid)
+                        .collect();
+                    warn!(
+                        "chain divergence detected: validator {id:?} forked to new chain. \
+                         parent={parent_hash:?}, new_hash={new_h:?}. \
+                         validators on original chain {validator_chain}: {other_validators:?}"
+                    );
                     firewood_increment!(crate::registry::VALIDATOR_DIVERGENCE_TOTAL, 1);
                 }
 

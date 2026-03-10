@@ -16,9 +16,9 @@ pub use self::owned::{OwnedBytes, OwnedSlice};
 pub(crate) use self::results::{CResult, NullHandleResult};
 pub use self::results::{
     ChangeProofResult, CodeIteratorResult, HandleResult, HashResult, IteratorResult,
-    KeyValueBatchResult, KeyValueResult, NextKeyRangeResult, ProposalResult,
-    ProposedChangeProofResult, RangeProofResult, RevisionResult, ValueResult,
-    VerifiedChangeProofResult, VoidResult,
+    KeyValueBatchResult, KeyValueResult, MultiHandleResult, MultiProposalResult,
+    NextKeyRangeResult, ProposalResult, ProposedChangeProofResult, RangeProofResult,
+    RevisionResult, ValueResult, VerifiedChangeProofResult, VoidResult,
 };
 
 /// Maybe is a C-compatible optional type using a tagged union pattern.
