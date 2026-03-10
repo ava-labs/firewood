@@ -3,7 +3,7 @@
 
 //! Firewood layer metric definitions.
 
-use metrics::{describe_counter, describe_gauge};
+use metrics::{describe_counter, describe_gauge, describe_histogram};
 
 /// Number of proposals created.
 pub const PROPOSALS: &str = "proposals";
@@ -35,6 +35,9 @@ pub const ACTIVE_REVISIONS: &str = "active_revisions";
 /// Maximum number of revisions configured.
 pub const MAX_REVISIONS: &str = "max_revisions";
 
+/// Length of the deleted list for committed revisions.
+pub const DELETED_LIST_LEN: &str = "deleted_list_len";
+
 /// Registers all firewood metric descriptions.
 pub fn register() {
     describe_counter!(PROPOSALS, "Number of proposals created");
@@ -59,4 +62,8 @@ pub fn register() {
     describe_counter!(COMMIT_LATENCY_MS, "Commit latency (ms)");
     describe_gauge!(ACTIVE_REVISIONS, "Current number of active revisions");
     describe_gauge!(MAX_REVISIONS, "Maximum number of revisions configured");
+    describe_histogram!(
+        DELETED_LIST_LEN,
+        "Length of deleted list for committed revisions"
+    );
 }

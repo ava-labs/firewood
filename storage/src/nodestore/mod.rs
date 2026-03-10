@@ -180,6 +180,12 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
 
         nodestore
     }
+
+    /// Returns the length of the deleted list for this `NodeStore`.
+    #[must_use]
+    pub fn deleted_len(&self) -> usize {
+        self.kind.deleted.len()
+    }
 }
 
 impl<S: ReadableStorage> NodeStore<Committed, S> {
