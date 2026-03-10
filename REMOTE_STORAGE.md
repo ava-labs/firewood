@@ -67,6 +67,7 @@ Implements the same three interfaces over gRPC with cryptographic verification:
   - `Drop` is a no-op (server creates a fresh iterator per `IterBatch` call).
 
 Helper functions:
+
 - `batchOpsToProto` — converts `[]ffi.BatchOp` to `[]*pb.BatchOperation`.
 - `verifyWitnessFromResponse` — deserializes + verifies witness proof from a
   `CreateProposalResponse` against a given base trie.
@@ -320,7 +321,7 @@ cd ffi/remote && go test -bench BenchmarkCacheEviction -benchtime=5s -count=1
 ## File Reference
 
 | File | Role |
-|------|------|
+| ------ | ------ |
 | `ffi/db.go` | **NEW** — `DB`, `DBProposal`, `DBRevision`, `DBIterator` interfaces + `LocalDB` adapter |
 | `ffi/db_test.go` | **NEW** — LocalDB interface tests (incl. revision) |
 | `ffi/remote/db.go` | **NEW** — `RemoteDB`, `remoteProposal`, `remoteIterator` |
@@ -344,17 +345,20 @@ cd ffi/remote && go test -bench BenchmarkCacheEviction -benchtime=5s -count=1
 | `ffi/src/proofs/range.rs` | **MODIFIED** — added `fwd_range_proof_verify_and_extract` (verify + return KV pairs) |
 | `ffi/proofs.go` | **MODIFIED** — added `KeyValue` struct, `VerifyAndExtractRangeProof()`, `bytesPresent` Maybe helper |
 | `ffi/firewood.h` | **AUTO-UPDATED** — new C function declaration for `fwd_range_proof_verify_and_extract` |
+| `firewood/src/remote/ser.rs` | **NEW** — Binary serialization for `TruncatedTrie` and `WitnessProof` wire format |
+| `firewood/src/remote/cache.rs` | **NEW** — Client-side Rust read cache with eviction policies |
 
 ### Pre-existing files (unchanged, for reference)
 
 | File | Role |
-|------|------|
+| ------ | ------ |
 | `ffi/firewood.go` | `Database` type — `Get`, `Update`, `Propose`, `Root`, `Close` |
 | `ffi/proposal.go` | `Proposal` type — `Get`, `Iter`, `Propose`, `Commit`, `Drop`, `Root` |
 | `ffi/iterator.go` | `Iterator` type — `Next`, `Key`, `Value`, `Err`, `Drop` |
 | `ffi/batch_op.go` | `BatchOp` type — `Put`, `Delete`, `PrefixDelete` |
 | `ffi/single_key_proof.go` | `GetWithProof`, `VerifySingleKeyProof` |
-| `ffi/truncated_trie.go` | `TruncatedTrie` — `VerifyWitness`, `Root`, `Free`, `GenerateWitness` |
+| `ffi/truncated_trie.go` | `TruncatedTrie` — `Root`, `RootHash`, `VerifyRootHash`, `VerifyWitness`, `MarshalBinary`, `UnmarshalBinary`, `Free`; `Database.GenerateWitness`, `Database.CreateTruncatedTrie` |
+| `ffi/witness_proof.go` | `WitnessProof` — `Free`, `MarshalBinary`, `UnmarshalBinary` |
 | `ffi/remote/client.go` | `Client` — `Get`, `Update`, `Bootstrap`, `Propose`, `Revision`, `Root`, `Close`, `ClientOption`, `WithCacheSize`, `WithCache` |
 
 ### `ffi/remote/remote_test.go` — Runtime hash algorithm detection
@@ -422,7 +426,7 @@ Benchmark results show a **~3,400–3,700× speedup** for cached reads across al
 eviction policies:
 
 | Variant | ns/op | Speedup vs NoCache |
-|---------|------:|-------------------:|
+| --------- | ------: | -------------------: |
 | NoCache | 247,716 | — |
 | LRU | 73 | 3,393× |
 | Random | 66 | 3,753× |
@@ -432,7 +436,7 @@ eviction policies:
 Eviction throughput (inserting into a full 1,000-entry cache):
 
 | Policy | ns/op |
-|--------|------:|
+| -------- | ------: |
 | LRU | 182 |
 | Clock | 194 |
 | Random | 210 |
@@ -467,7 +471,7 @@ key ([]byte) → cacheEntry { value []byte, found bool }
 The client already knows every `BatchOp` in each write. For each op:
 
 | Op Type | Invalidation Action |
-|---------|-------------------|
+| --------- | ------------------- |
 | `Put(key, val)` | Delete `key` from cache |
 | `Delete(key)` | Delete `key` from cache |
 | `PrefixDelete(prefix)` | Delete all cached keys with that prefix |
@@ -759,7 +763,7 @@ the verified proof — the response's `pairs` field is never trusted.
 **Why range proofs over per-entry single-key proofs:**
 
 | Aspect | Per-entry proofs | Range proof |
-|---|---|---|
+| --- | --- | --- |
 | Server cost | N `GetWithProof` calls | 1 `RangeProof` call |
 | Wire overhead | N proofs (~500-2000 bytes each) | 1 proof |
 | **Completeness** | **No** (server can omit keys) | **Yes** |
@@ -805,6 +809,7 @@ pub extern "C" fn fwd_range_proof_verify_and_extract(
 ```
 
 Reuses existing infrastructure:
+
 - `KeyValueBatchResult` enum (`ffi/src/value/results.rs`)
 - `From<Result<Vec<(Key, Value)>, Error>> for KeyValueBatchResult`
 - `RangeProofContext.proof.key_values()` for direct access to embedded KV pairs
@@ -936,7 +941,7 @@ Existing `TestRemoteDBProposalIter` passes unchanged (honest server).
 ### Files Changed (This Session)
 
 | File | Change |
-|---|---|
+| --- | --- |
 | `ffi/src/proofs/range.rs` | **MODIFIED** — added `fwd_range_proof_verify_and_extract` |
 | `ffi/proofs.go` | **MODIFIED** — added `KeyValue`, `VerifyAndExtractRangeProof`, `bytesPresent` |
 | `ffi/firewood.h` | **AUTO-UPDATED** — new C function declaration |
@@ -1107,7 +1112,7 @@ func (c *Client) Revision(root ffi.Hash) ffi.DBRevision {
 ### Files Changed (Revision Session)
 
 | File | Change |
-|---|---|
+| --- | --- |
 | `ffi/db.go` | **MODIFIED** — added `DBRevision` interface, extended `DB` with `Revision`, added `localRevision` + `LocalDB.Revision` |
 | `ffi/db_test.go` | **MODIFIED** — added 2 local revision tests |
 | `ffi/remote/server.go` | **MODIFIED** — extended `IterBatch` for `proposal_id == 0` revision mode |

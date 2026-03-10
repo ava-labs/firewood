@@ -10,7 +10,7 @@ The `ffi` package defines three interfaces that abstract over backend
 implementations:
 
 | Interface | Methods | Description |
-|---|---|---|
+| --- | --- | --- |
 | `DB` | `Get`, `Update`, `Propose`, `Revision`, `LatestRevision`, `Root`, `Close` | Common database operations |
 | `DBProposal` | `Root`, `Commit`, `Drop`, `Get`, `Iter`, `Propose` | Uncommitted proposal |
 | `DBRevision` | `Root`, `Get`, `Iter`, `Drop` | Read-only committed revision |
@@ -26,7 +26,7 @@ Two implementations exist:
 ### Operations NOT on the interfaces (concrete-type only)
 
 | Type | Method | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `Database` | `Dump()` | DOT-format trie dump for debugging |
 | `Proposal` | `Dump()` | DOT-format trie dump for debugging |
 | `Revision` | `Dump()` | DOT-format trie dump (Get/Iter/Root/Drop are on `DBRevision`) |
@@ -52,7 +52,7 @@ All tests use the `ffi.DB` / `ffi.DBProposal` / `ffi.DBRevision` /
 `ffi.DBIterator` interfaces via `RemoteDB`.
 
 | Test | Interface Operations | Notes |
-|---|---|---|
+| --- | --- | --- |
 | `TestNewRemoteDB` | `Root`, `Get`, `Update` | Basic CRUD |
 | `TestRemoteDBPropose` | `Propose`, `Root`, `Commit` | Propose-commit cycle |
 | `TestRemoteDBProposalGet` | `Propose`, `Get` (proposal) | Read new + pre-existing keys from proposal |
@@ -101,7 +101,7 @@ These test the lower-level `Client` and `Server` types directly (not the `DB`
 interface).
 
 | Test | Operations | Portable? |
-|---|---|---|
+| --- | --- | --- |
 | `TestBootstrapAndGet` | `Client.Bootstrap`, `Client.Get` | No — `Client`-specific |
 | `TestUpdateAndVerify` | `Client.Update`, `Client.Get` | No — `Client`-specific |
 | `TestMultipleUpdates` | `Client.Update` (sequential) | No — `Client`-specific |
@@ -115,7 +115,7 @@ These test the `readCache` and its integration with `RemoteDB`. They are
 remote-internal implementation details.
 
 | Test | Portable? |
-|---|---|
+| --- | --- |
 | `TestCacheLookupMiss` | No — tests `readCache` directly |
 | `TestCacheStoreAndLookup` | No |
 | `TestCacheNilValue` | No |
@@ -134,7 +134,7 @@ remote-internal implementation details.
 These test concurrency properties of `RemoteDB` specifically.
 
 | Test | Portable? |
-|---|---|
+| --- | --- |
 | `TestConcurrentGets` | No — uses `RemoteDB` internal setup |
 | `TestConcurrentGetDuringUpdate` | No |
 | `TestConcurrentGetDuringClose` | No |
@@ -160,7 +160,7 @@ interfaces via `NewLocalDB`. They are the primary candidates for running
 against both backends.
 
 | Test | Interface Operations | Remote-compatible? |
-|---|---|---|
+| --- | --- | --- |
 | `TestNewLocalDB` | `Root`, `Update`, `Get` | **Yes** |
 | `TestLocalDBPropose` | `Propose`, `Root`, `Get`, `Commit` | **Yes** |
 | `TestLocalDBProposalChain` | `Propose` (chained), `Get`, `Commit` | **Yes** |
@@ -181,7 +181,7 @@ These use the concrete `*Database` type directly. Each test is assessed for
 whether its operations map onto the `DB`/`DBProposal` interfaces.
 
 | Test | Key Operations | Remote-compatible? | Blocker |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `TestUpdateSingleKV` | `Update`, `Root` | **Yes** | — |
 | `TestNodeHashAlgorithmValidation` | `Update`, `Root` | **Yes** | — |
 | `TestUpdateMultiKV` | `Update`, `Root` | **Yes** | — |
@@ -221,7 +221,7 @@ Single/Batched). `SetBatchSize` and `NextBorrowed` are not on the `DBIterator`
 interface.
 
 | Test | Key Operations | Remote-compatible? | Blocker |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `TestIter` | `Iter`, `Next`, `Key`, `Value` | **Partial** | Uses `SetBatchSize`, `NextBorrowed` |
 | `TestIterOnRoot` | `Revision.Iter` | **Partial** | Uses `Revision` (now has interface), but also `SetBatchSize`/`NextBorrowed` |
 | `TestIterOnProposal` | `Propose`, `Iter` | **Partial** | Uses `SetBatchSize`, `NextBorrowed` |
@@ -239,16 +239,52 @@ blocked entirely.
 ### `ffi/metrics_test.go` — Metrics tests (2 tests)
 
 | Test | Remote-compatible? | Blocker |
-|---|---|---|
+| --- | --- | --- |
 | `TestMetrics` | **No** | Tests Rust-side Prometheus metrics via FFI |
 | `TestExpensiveMetrics` | **No** | Tests Rust-side histogram metrics |
+
+### `ffi/proofs_test.go` — Range/change proof tests (21 tests)
+
+- `TestRangeProofEmptyDB` — range proof on empty database
+- `TestRangeProofNonExistentRoot` — range proof with bad root hash
+- `TestRangeProofPartialRange` — partial key range iteration
+- `TestRangeProofDiffersAfterUpdate` — proof changes after mutation
+- `TestRoundTripSerialization` — range proof ser/de roundtrip
+- `TestRangeProofVerify` — range proof cryptographic verification
+- `TestVerifyAndCommitRangeProof` — verify + commit in one call
+- `TestRangeProofFindNextKey` — next-key cursor computation
+- `TestRangeProofCodeHashes` — code hash handling in proofs
+- `TestRangeProofFreeReleasesKeepAlive` — Free releases internal handle
+- `TestRangeProofCommitReleasesKeepAlive` — Commit releases internal handle
+- `TestRangeProofFinalizerCleanup` — GC-triggered cleanup
+- `TestChangeProofEmptyDB` — change proof on empty database
+- `TestChangeProofCreation` — basic change proof generation
+- `TestChangeProofDiffersAfterUpdate` — change proof reflects mutations
+- `TestRoundTripChangeProofSerialization` — change proof ser/de roundtrip
+- `TestVerifyChangeProof` — change proof cryptographic verification
+- `TestVerifyEmptyChangeProofRange` — empty range handling
+- `TestVerifyAndCommitChangeProof` — verify + commit in one call
+- `TestChangeProofFindNextKey` — next-key cursor computation
+- `TestMultiRoundChangeProof` — multi-round change proof generation
+
+### `ffi/truncated_trie_test.go` — Truncated trie FFI tests (3 tests)
+
+- `TestTruncatedTrieCreateAndFree` — create truncated trie via FFI and free it
+- `TestTruncatedTrieFreeTwice` — double-free safety
+- `TestWitnessRoundTrip` — end-to-end witness generation + verification via FFI
+
+### `ffi/replay_test.go` — Block replay tests (2 tests + 1 benchmark)
+
+- `TestReplayLogExecution` — replay a recorded operation log
+- `TestBlockReplayRoundTrip` — block-level replay roundtrip
+- `BenchmarkReplayLog` — replay throughput benchmark
 
 ## Summary
 
 ### Remote-compatible `ffi/` tests (can run against `DB` interface today)
 
 | Source File | Test | Status |
-|---|---|---|
+| --- | --- | --- |
 | `db_test.go` | `TestNewLocalDB` | Ready — already uses interface |
 | `db_test.go` | `TestLocalDBPropose` | Ready — already uses interface |
 | `db_test.go` | `TestLocalDBProposalChain` | Ready — already uses interface |
@@ -283,7 +319,7 @@ blocked entirely.
 ### Partially compatible tests (need interface extensions or test changes)
 
 | Source File | Test | Blocker |
-|---|---|---|
+| --- | --- | --- |
 | `firewood_test.go` | `TestConflictingProposals` | Tests commit-conflict error semantics |
 | `firewood_test.go` | `TestDropProposalAndCommit` | Tests specific error from dropped parent |
 | `firewood_test.go` | `TestRevisionOutlivesReaping` | Uses `WithRevisions()` config; lifecycle semantics may differ |
@@ -301,7 +337,7 @@ blocked entirely.
 ### Not compatible (concrete-type or implementation-specific)
 
 | Source File | Tests | Reason |
-|---|---|---|
+| --- | --- | --- |
 | `firewood_test.go` | `TestTruncateDatabase` | Backend config option |
 | `firewood_test.go` | `TestClosedDatabase` | Concrete close error behavior |
 | `firewood_test.go` | `TestInvariants` | Uses `Dump()` |
@@ -310,8 +346,11 @@ blocked entirely.
 | `firewood_test.go` | `TestCloseWith*` (3 tests) | Concrete close behavior |
 | `firewood_test.go` | `TestDump` | Uses `Dump()` |
 | `metrics_test.go` | `TestMetrics`, `TestExpensiveMetrics` | Rust-side metrics |
+| `proofs_test.go` | 21 tests | Uses concrete `*Database` for proof generation |
+| `truncated_trie_test.go` | 3 tests | Uses `Database.CreateTruncatedTrie` and `Database.GenerateWitness` |
+| `replay_test.go` | 2 tests + 1 bench | Block replay is concrete-type specific |
 
-**Total: 9 tests** (inherently implementation-specific)
+**Total: 35 tests** (inherently implementation-specific)
 
 Note: The 5 `Revision` tests (`TestRevision` through `TestInvalidRevision`)
 previously listed here have been moved to the "Remote-compatible" or "Partially
@@ -320,12 +359,15 @@ compatible" sections now that `DBRevision` exists on the `DB` interface.
 ### Counts by file
 
 | File | Total | Compatible | Partial | Not Compatible |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | `ffi/db_test.go` | 9 | 9 | 0 | 0 |
 | `ffi/firewood_test.go` | 31 | 19 | 3 | 9 |
 | `ffi/iterator_test.go` | 8 | 0 | 8 | 0 |
 | `ffi/metrics_test.go` | 2 | 0 | 0 | 2 |
-| **ffi/ total** | **50** | **28** | **11** | **11** |
+| `ffi/proofs_test.go` | 21 | 0 | 0 | 21 |
+| `ffi/truncated_trie_test.go` | 3 | 0 | 0 | 3 |
+| `ffi/replay_test.go` | 2 | 0 | 0 | 2 |
+| **ffi/ total** | **76** | **28** | **11** | **37** |
 | `ffi/remote/db_test.go` | 32 | — | — | — |
 | `ffi/remote/remote_test.go` | 6 | — | — | — |
 | `ffi/remote/cache_test.go` | 12 | — | — | — |
