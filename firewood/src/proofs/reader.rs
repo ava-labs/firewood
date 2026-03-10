@@ -9,7 +9,7 @@
 
 use super::header::{Header, InvalidHeader};
 
-pub(super) trait ReadItem<'a>: Sized {
+pub(crate) trait ReadItem<'a>: Sized {
     /// Reads an item from the given reader, or terrminates with an error.
     fn read_item(data: &mut ProofReader<'a>) -> Result<Self, ReadError>;
 }
@@ -18,7 +18,7 @@ pub(super) trait Version0: Sized {
     fn read_v0_item(reader: &mut V0Reader<'_>) -> Result<Self, ReadError>;
 }
 
-pub(super) struct ProofReader<'a> {
+pub(crate) struct ProofReader<'a> {
     data: &'a [u8],
     offset: usize,
 }
@@ -54,7 +54,7 @@ impl<'a> ProofReader<'a> {
         }
     }
 
-    pub(super) fn read_item<T: ReadItem<'a>>(&mut self) -> Result<T, ReadError> {
+    pub(crate) fn read_item<T: ReadItem<'a>>(&mut self) -> Result<T, ReadError> {
         T::read_item(self)
     }
 
@@ -165,7 +165,7 @@ pub enum ReadError {
 }
 
 impl ReadError {
-    pub(super) const fn set_item(mut self, item: &'static str) -> Self {
+    pub(crate) const fn set_item(mut self, item: &'static str) -> Self {
         match &mut self {
             Self::IncompleteItem { item: e_item, .. } | Self::InvalidItem { item: e_item, .. } => {
                 *e_item = item;
