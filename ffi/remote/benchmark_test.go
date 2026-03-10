@@ -558,7 +558,7 @@ func BenchmarkWitnessVerification(b *testing.B) {
 				if err := w.UnmarshalBinary(witnessBytes); err != nil {
 					b.Fatalf("UnmarshalBinary: %v", err)
 				}
-				newTrie, err := trie.VerifyWitness(w)
+				newTrie, err := trie.VerifyWitness(w, ops)
 				if err != nil {
 					w.Free()
 					b.Fatalf("VerifyWitness: %v", err)

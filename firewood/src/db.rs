@@ -525,6 +525,18 @@ impl MultiDb {
         self.db.view(hash)
     }
 
+    /// Get a committed revision by hash, returning a concrete typed Arc.
+    ///
+    /// This is needed by FFI proof functions that require `Sized + HashedNodeReader`
+    /// trait bounds (e.g., `TruncatedTrie::from_trie`, `generate_witness`).
+    pub fn revision(
+        &self,
+        root_hash: HashKey,
+    ) -> Result<CommittedRevision, api::Error> {
+        let nodestore = self.db.manager.revision(root_hash)?;
+        Ok(nodestore)
+    }
+
     /// Returns the root hash of a validator's current head.
     pub fn validator_root_hash(&self, id: ValidatorId) -> Result<Option<HashKey>, api::Error> {
         let head = self.db.manager.validator_view(id)?;

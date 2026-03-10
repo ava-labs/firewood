@@ -375,9 +375,21 @@ func TestLocalDBLatestRevisionEmpty(t *testing.T) {
 	db := newLocalDB(t)
 	ctx := t.Context()
 
-	// Empty DB should return an error.
-	_, err := db.LatestRevision(ctx)
-	if err == nil {
-		t.Fatal("expected error for LatestRevision on empty DB")
+	// In ethhash mode, the empty trie has a well-defined root hash
+	// (keccak256 of empty RLP) and the Db considers this a valid revision.
+	// In firewood (merkledb) mode, the empty trie has no root hash and
+	// LatestRevision should return an error.
+	rev, err := db.LatestRevision(ctx)
+	if expectedRoots[emptyKey] == emptyEthhashRoot {
+		if err != nil {
+			t.Fatalf("ethhash: expected LatestRevision to succeed on empty DB, got %v", err)
+		}
+		if err := rev.Drop(); err != nil {
+			t.Fatalf("rev.Drop: %v", err)
+		}
+	} else {
+		if err == nil {
+			t.Fatal("expected error for LatestRevision on empty DB")
+		}
 	}
 }

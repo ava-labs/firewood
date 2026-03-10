@@ -45,6 +45,13 @@ type DBIterator interface {
 	Drop() error
 }
 
+// MultiDB extends [DB] with multi-head operations. Implemented by
+// remote.MultiRemoteDB for distributed validator deployments.
+type MultiDB interface {
+	DB
+	AdvanceToHash(ctx context.Context, hash Hash) error
+}
+
 // Compile-time interface checks.
 var (
 	_ DB         = (*LocalDB)(nil)

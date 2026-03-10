@@ -21,6 +21,13 @@ service FirewoodRemote {
 
   // Paginated iteration over a proposal's key-value pairs.
   rpc IterBatch(IterBatchRequest) returns (IterBatchResponse);
+
+  // Multi-head: register a new validator and get its assigned ID.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+  // Multi-head: deregister a validator.
+  rpc Deregister(DeregisterRequest) returns (DeregisterResponse);
+  // Multi-head: advance a validator's head to an existing revision.
+  rpc AdvanceToHash(AdvanceToHashRequest) returns (AdvanceToHashResponse);
 }
 
 message GetTruncatedTrieRequest {
@@ -70,6 +77,8 @@ message CreateProposalRequest {
   uint32 depth = 3;
   // Optional parent proposal ID for chained proposals.
   optional uint64 parent_proposal_id = 4;
+  // Validator ID for multi-head server. Ignored by single-head servers.
+  optional uint64 validator_id = 5;
 }
 
 message CreateProposalResponse {
@@ -113,6 +122,31 @@ message KeyValuePair {
   bytes key = 1;
   bytes value = 2;
 }
+
+message RegisterRequest {}
+
+message RegisterResponse {
+  // Server-assigned unique validator identifier.
+  uint64 validator_id = 1;
+  // 32-byte root hash of the assigned head.
+  bytes root_hash = 2;
+}
+
+message DeregisterRequest {
+  // The validator identifier to deregister.
+  uint64 validator_id = 1;
+}
+
+message DeregisterResponse {}
+
+message AdvanceToHashRequest {
+  // The validator identifier.
+  uint64 validator_id = 1;
+  // 32-byte root hash to advance to.
+  bytes root_hash = 2;
+}
+
+message AdvanceToHashResponse {}
 
 message IterBatchResponse {
   // The key-value pairs in this batch.

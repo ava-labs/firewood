@@ -206,6 +206,104 @@ func (db *MultiDatabase) Revision(hash Hash) (*Revision, error) {
 	return getRevisionFromResult(C.fwd_multi_revision(db.handle, newCHashKey(hash)), &db.outstandingHandles)
 }
 
+// CreateTruncatedTrie creates a truncated trie from the revision matching
+// the given root hash. The trie holds the top [depth] nibble levels with
+// children below that depth replaced by hash-only proxy nodes.
+//
+// The returned [TruncatedTrie] must be freed with [TruncatedTrie.Free] when
+// no longer needed.
+func (db *MultiDatabase) CreateTruncatedTrie(root Hash, depth uint) (*TruncatedTrie, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
+	return getTruncatedTrieFromResult(C.fwd_multi_create_truncated_trie(
+		db.handle,
+		newCHashKey(root),
+		C.size_t(depth),
+	))
+}
+
+// GenerateWitness generates a witness proof for a set of batch operations
+// against the revision identified by [root]. The witness contains the minimal
+// set of trie nodes needed for a client to independently re-execute the
+// operations and verify the resulting root hash.
+//
+// [newRoot] is the root hash after applying the batch operations.
+// [depth] is the client's truncation depth in nibble levels.
+//
+// The returned [WitnessProof] must be freed with [WitnessProof.Free] when
+// no longer needed.
+func (db *MultiDatabase) GenerateWitness(root Hash, batch []BatchOp, newRoot Hash, depth uint) (*WitnessProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	kvp := newKeyValuePairsFromBatch(batch, &pinner)
+
+	return getWitnessProofFromResult(C.fwd_multi_generate_witness(
+		db.handle,
+		newCHashKey(root),
+		kvp,
+		newCHashKey(newRoot),
+		C.size_t(depth),
+	))
+}
+
+// GetWithProof retrieves a value and its single-key Merkle proof from the
+// revision identified by root.
+func (db *MultiDatabase) GetWithProof(root Hash, key []byte) (*GetWithProofResult, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	result := C.fwd_multi_get_with_proof(
+		db.handle,
+		newCHashKey(root),
+		newBorrowedBytes(key, &pinner),
+	)
+
+	return getGetWithProofFromResult(result)
+}
+
+// RangeProof returns a proof that the values in the range [startKey, endKey]
+// are included in the tree at the given root hash.
+func (db *MultiDatabase) RangeProof(
+	rootHash Hash,
+	startKey, endKey Maybe[[]byte],
+	maxLength uint32,
+) (*RangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	args := C.CreateRangeProofArgs{
+		root:       newCHashKey(rootHash),
+		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
+		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
+		max_length: C.uint32_t(maxLength),
+	}
+
+	return getRangeProofFromRangeProofResult(C.fwd_multi_range_proof(db.handle, args))
+}
+
 // Dump returns a DOT (Graphviz) format representation of the trie structure
 // of a validator's current head for debugging purposes.
 func (db *MultiDatabase) Dump(id ValidatorID) (string, error) {

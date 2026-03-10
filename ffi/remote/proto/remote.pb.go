@@ -351,8 +351,10 @@ type CreateProposalRequest struct {
 	Depth uint32 `protobuf:"varint,3,opt,name=depth,proto3" json:"depth,omitempty"`
 	// Optional parent proposal ID for chained proposals.
 	ParentProposalId *uint64 `protobuf:"varint,4,opt,name=parent_proposal_id,json=parentProposalId,proto3,oneof" json:"parent_proposal_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// Validator ID for multi-head server. Ignored by single-head servers.
+	ValidatorId   *uint64 `protobuf:"varint,5,opt,name=validator_id,json=validatorId,proto3,oneof" json:"validator_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *CreateProposalRequest) Reset() {
@@ -409,6 +411,13 @@ func (x *CreateProposalRequest) GetDepth() uint32 {
 func (x *CreateProposalRequest) GetParentProposalId() uint64 {
 	if x != nil && x.ParentProposalId != nil {
 		return *x.ParentProposalId
+	}
+	return 0
+}
+
+func (x *CreateProposalRequest) GetValidatorId() uint64 {
+	if x != nil && x.ValidatorId != nil {
+		return *x.ValidatorId
 	}
 	return 0
 }
@@ -763,6 +772,267 @@ func (x *KeyValuePair) GetValue() []byte {
 	return nil
 }
 
+type RegisterRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegisterRequest) Reset() {
+	*x = RegisterRequest{}
+	mi := &file_remote_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterRequest) ProtoMessage() {}
+
+func (x *RegisterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_remote_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterRequest.ProtoReflect.Descriptor instead.
+func (*RegisterRequest) Descriptor() ([]byte, []int) {
+	return file_remote_proto_rawDescGZIP(), []int{13}
+}
+
+type RegisterResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Server-assigned unique validator identifier.
+	ValidatorId uint64 `protobuf:"varint,1,opt,name=validator_id,json=validatorId,proto3" json:"validator_id,omitempty"`
+	// 32-byte root hash of the assigned head.
+	RootHash      []byte `protobuf:"bytes,2,opt,name=root_hash,json=rootHash,proto3" json:"root_hash,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RegisterResponse) Reset() {
+	*x = RegisterResponse{}
+	mi := &file_remote_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RegisterResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RegisterResponse) ProtoMessage() {}
+
+func (x *RegisterResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_remote_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RegisterResponse.ProtoReflect.Descriptor instead.
+func (*RegisterResponse) Descriptor() ([]byte, []int) {
+	return file_remote_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *RegisterResponse) GetValidatorId() uint64 {
+	if x != nil {
+		return x.ValidatorId
+	}
+	return 0
+}
+
+func (x *RegisterResponse) GetRootHash() []byte {
+	if x != nil {
+		return x.RootHash
+	}
+	return nil
+}
+
+type DeregisterRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The validator identifier to deregister.
+	ValidatorId   uint64 `protobuf:"varint,1,opt,name=validator_id,json=validatorId,proto3" json:"validator_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeregisterRequest) Reset() {
+	*x = DeregisterRequest{}
+	mi := &file_remote_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeregisterRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeregisterRequest) ProtoMessage() {}
+
+func (x *DeregisterRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_remote_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeregisterRequest.ProtoReflect.Descriptor instead.
+func (*DeregisterRequest) Descriptor() ([]byte, []int) {
+	return file_remote_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *DeregisterRequest) GetValidatorId() uint64 {
+	if x != nil {
+		return x.ValidatorId
+	}
+	return 0
+}
+
+type DeregisterResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DeregisterResponse) Reset() {
+	*x = DeregisterResponse{}
+	mi := &file_remote_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DeregisterResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DeregisterResponse) ProtoMessage() {}
+
+func (x *DeregisterResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_remote_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DeregisterResponse.ProtoReflect.Descriptor instead.
+func (*DeregisterResponse) Descriptor() ([]byte, []int) {
+	return file_remote_proto_rawDescGZIP(), []int{16}
+}
+
+type AdvanceToHashRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The validator identifier.
+	ValidatorId uint64 `protobuf:"varint,1,opt,name=validator_id,json=validatorId,proto3" json:"validator_id,omitempty"`
+	// 32-byte root hash to advance to.
+	RootHash      []byte `protobuf:"bytes,2,opt,name=root_hash,json=rootHash,proto3" json:"root_hash,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdvanceToHashRequest) Reset() {
+	*x = AdvanceToHashRequest{}
+	mi := &file_remote_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdvanceToHashRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdvanceToHashRequest) ProtoMessage() {}
+
+func (x *AdvanceToHashRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_remote_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdvanceToHashRequest.ProtoReflect.Descriptor instead.
+func (*AdvanceToHashRequest) Descriptor() ([]byte, []int) {
+	return file_remote_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *AdvanceToHashRequest) GetValidatorId() uint64 {
+	if x != nil {
+		return x.ValidatorId
+	}
+	return 0
+}
+
+func (x *AdvanceToHashRequest) GetRootHash() []byte {
+	if x != nil {
+		return x.RootHash
+	}
+	return nil
+}
+
+type AdvanceToHashResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AdvanceToHashResponse) Reset() {
+	*x = AdvanceToHashResponse{}
+	mi := &file_remote_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AdvanceToHashResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AdvanceToHashResponse) ProtoMessage() {}
+
+func (x *AdvanceToHashResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_remote_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AdvanceToHashResponse.ProtoReflect.Descriptor instead.
+func (*AdvanceToHashResponse) Descriptor() ([]byte, []int) {
+	return file_remote_proto_rawDescGZIP(), []int{18}
+}
+
 type IterBatchResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The key-value pairs in this batch.
@@ -778,7 +1048,7 @@ type IterBatchResponse struct {
 
 func (x *IterBatchResponse) Reset() {
 	*x = IterBatchResponse{}
-	mi := &file_remote_proto_msgTypes[13]
+	mi := &file_remote_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -790,7 +1060,7 @@ func (x *IterBatchResponse) String() string {
 func (*IterBatchResponse) ProtoMessage() {}
 
 func (x *IterBatchResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_remote_proto_msgTypes[13]
+	mi := &file_remote_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -803,7 +1073,7 @@ func (x *IterBatchResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IterBatchResponse.ProtoReflect.Descriptor instead.
 func (*IterBatchResponse) Descriptor() ([]byte, []int) {
-	return file_remote_proto_rawDescGZIP(), []int{13}
+	return file_remote_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *IterBatchResponse) GetPairs() []*KeyValuePair {
@@ -852,13 +1122,15 @@ const file_remote_proto_rawDesc = "" +
 	"\x03PUT\x10\x00\x12\n" +
 	"\n" +
 	"\x06DELETE\x10\x01\x12\x11\n" +
-	"\rPREFIX_DELETE\x10\x02\"\xc7\x01\n" +
+	"\rPREFIX_DELETE\x10\x02\"\x80\x02\n" +
 	"\x15CreateProposalRequest\x12\x1b\n" +
 	"\troot_hash\x18\x01 \x01(\fR\brootHash\x121\n" +
 	"\x03ops\x18\x02 \x03(\v2\x1f.firewood.remote.BatchOperationR\x03ops\x12\x14\n" +
 	"\x05depth\x18\x03 \x01(\rR\x05depth\x121\n" +
-	"\x12parent_proposal_id\x18\x04 \x01(\x04H\x00R\x10parentProposalId\x88\x01\x01B\x15\n" +
-	"\x13_parent_proposal_id\"\x82\x01\n" +
+	"\x12parent_proposal_id\x18\x04 \x01(\x04H\x00R\x10parentProposalId\x88\x01\x01\x12&\n" +
+	"\fvalidator_id\x18\x05 \x01(\x04H\x01R\vvalidatorId\x88\x01\x01B\x15\n" +
+	"\x13_parent_proposal_idB\x0f\n" +
+	"\r_validator_id\"\x82\x01\n" +
 	"\x16CreateProposalResponse\x12\x1f\n" +
 	"\vproposal_id\x18\x01 \x01(\x04R\n" +
 	"proposalId\x12\"\n" +
@@ -881,19 +1153,34 @@ const file_remote_proto_rawDesc = "" +
 	"\troot_hash\x18\x04 \x01(\fR\brootHash\"6\n" +
 	"\fKeyValuePair\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\fR\x05value\"\x84\x01\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value\"\x11\n" +
+	"\x0fRegisterRequest\"R\n" +
+	"\x10RegisterResponse\x12!\n" +
+	"\fvalidator_id\x18\x01 \x01(\x04R\vvalidatorId\x12\x1b\n" +
+	"\troot_hash\x18\x02 \x01(\fR\brootHash\"6\n" +
+	"\x11DeregisterRequest\x12!\n" +
+	"\fvalidator_id\x18\x01 \x01(\x04R\vvalidatorId\"\x14\n" +
+	"\x12DeregisterResponse\"V\n" +
+	"\x14AdvanceToHashRequest\x12!\n" +
+	"\fvalidator_id\x18\x01 \x01(\x04R\vvalidatorId\x12\x1b\n" +
+	"\troot_hash\x18\x02 \x01(\fR\brootHash\"\x17\n" +
+	"\x15AdvanceToHashResponse\"\x84\x01\n" +
 	"\x11IterBatchResponse\x123\n" +
 	"\x05pairs\x18\x01 \x03(\v2\x1d.firewood.remote.KeyValuePairR\x05pairs\x12\x19\n" +
 	"\bhas_more\x18\x02 \x01(\bR\ahasMore\x12\x1f\n" +
 	"\vrange_proof\x18\x03 \x01(\fR\n" +
-	"rangeProof2\xc1\x04\n" +
+	"rangeProof2\xc9\x06\n" +
 	"\x0eFirewoodRemote\x12g\n" +
 	"\x10GetTruncatedTrie\x12(.firewood.remote.GetTruncatedTrieRequest\x1a).firewood.remote.GetTruncatedTrieResponse\x12O\n" +
 	"\bGetValue\x12 .firewood.remote.GetValueRequest\x1a!.firewood.remote.GetValueResponse\x12a\n" +
 	"\x0eCreateProposal\x12&.firewood.remote.CreateProposalRequest\x1a'.firewood.remote.CreateProposalResponse\x12a\n" +
 	"\x0eCommitProposal\x12&.firewood.remote.CommitProposalRequest\x1a'.firewood.remote.CommitProposalResponse\x12[\n" +
 	"\fDropProposal\x12$.firewood.remote.DropProposalRequest\x1a%.firewood.remote.DropProposalResponse\x12R\n" +
-	"\tIterBatch\x12!.firewood.remote.IterBatchRequest\x1a\".firewood.remote.IterBatchResponseB/Z-github.com/ava-labs/firewood/ffi/remote/protob\x06proto3"
+	"\tIterBatch\x12!.firewood.remote.IterBatchRequest\x1a\".firewood.remote.IterBatchResponse\x12O\n" +
+	"\bRegister\x12 .firewood.remote.RegisterRequest\x1a!.firewood.remote.RegisterResponse\x12U\n" +
+	"\n" +
+	"Deregister\x12\".firewood.remote.DeregisterRequest\x1a#.firewood.remote.DeregisterResponse\x12^\n" +
+	"\rAdvanceToHash\x12%.firewood.remote.AdvanceToHashRequest\x1a&.firewood.remote.AdvanceToHashResponseB/Z-github.com/ava-labs/firewood/ffi/remote/protob\x06proto3"
 
 var (
 	file_remote_proto_rawDescOnce sync.Once
@@ -908,7 +1195,7 @@ func file_remote_proto_rawDescGZIP() []byte {
 }
 
 var file_remote_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_remote_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_remote_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
 var file_remote_proto_goTypes = []any{
 	(BatchOperation_OpType)(0),       // 0: firewood.remote.BatchOperation.OpType
 	(*GetTruncatedTrieRequest)(nil),  // 1: firewood.remote.GetTruncatedTrieRequest
@@ -924,7 +1211,13 @@ var file_remote_proto_goTypes = []any{
 	(*DropProposalResponse)(nil),     // 11: firewood.remote.DropProposalResponse
 	(*IterBatchRequest)(nil),         // 12: firewood.remote.IterBatchRequest
 	(*KeyValuePair)(nil),             // 13: firewood.remote.KeyValuePair
-	(*IterBatchResponse)(nil),        // 14: firewood.remote.IterBatchResponse
+	(*RegisterRequest)(nil),          // 14: firewood.remote.RegisterRequest
+	(*RegisterResponse)(nil),         // 15: firewood.remote.RegisterResponse
+	(*DeregisterRequest)(nil),        // 16: firewood.remote.DeregisterRequest
+	(*DeregisterResponse)(nil),       // 17: firewood.remote.DeregisterResponse
+	(*AdvanceToHashRequest)(nil),     // 18: firewood.remote.AdvanceToHashRequest
+	(*AdvanceToHashResponse)(nil),    // 19: firewood.remote.AdvanceToHashResponse
+	(*IterBatchResponse)(nil),        // 20: firewood.remote.IterBatchResponse
 }
 var file_remote_proto_depIdxs = []int32{
 	0,  // 0: firewood.remote.BatchOperation.op_type:type_name -> firewood.remote.BatchOperation.OpType
@@ -936,14 +1229,20 @@ var file_remote_proto_depIdxs = []int32{
 	8,  // 6: firewood.remote.FirewoodRemote.CommitProposal:input_type -> firewood.remote.CommitProposalRequest
 	10, // 7: firewood.remote.FirewoodRemote.DropProposal:input_type -> firewood.remote.DropProposalRequest
 	12, // 8: firewood.remote.FirewoodRemote.IterBatch:input_type -> firewood.remote.IterBatchRequest
-	2,  // 9: firewood.remote.FirewoodRemote.GetTruncatedTrie:output_type -> firewood.remote.GetTruncatedTrieResponse
-	4,  // 10: firewood.remote.FirewoodRemote.GetValue:output_type -> firewood.remote.GetValueResponse
-	7,  // 11: firewood.remote.FirewoodRemote.CreateProposal:output_type -> firewood.remote.CreateProposalResponse
-	9,  // 12: firewood.remote.FirewoodRemote.CommitProposal:output_type -> firewood.remote.CommitProposalResponse
-	11, // 13: firewood.remote.FirewoodRemote.DropProposal:output_type -> firewood.remote.DropProposalResponse
-	14, // 14: firewood.remote.FirewoodRemote.IterBatch:output_type -> firewood.remote.IterBatchResponse
-	9,  // [9:15] is the sub-list for method output_type
-	3,  // [3:9] is the sub-list for method input_type
+	14, // 9: firewood.remote.FirewoodRemote.Register:input_type -> firewood.remote.RegisterRequest
+	16, // 10: firewood.remote.FirewoodRemote.Deregister:input_type -> firewood.remote.DeregisterRequest
+	18, // 11: firewood.remote.FirewoodRemote.AdvanceToHash:input_type -> firewood.remote.AdvanceToHashRequest
+	2,  // 12: firewood.remote.FirewoodRemote.GetTruncatedTrie:output_type -> firewood.remote.GetTruncatedTrieResponse
+	4,  // 13: firewood.remote.FirewoodRemote.GetValue:output_type -> firewood.remote.GetValueResponse
+	7,  // 14: firewood.remote.FirewoodRemote.CreateProposal:output_type -> firewood.remote.CreateProposalResponse
+	9,  // 15: firewood.remote.FirewoodRemote.CommitProposal:output_type -> firewood.remote.CommitProposalResponse
+	11, // 16: firewood.remote.FirewoodRemote.DropProposal:output_type -> firewood.remote.DropProposalResponse
+	20, // 17: firewood.remote.FirewoodRemote.IterBatch:output_type -> firewood.remote.IterBatchResponse
+	15, // 18: firewood.remote.FirewoodRemote.Register:output_type -> firewood.remote.RegisterResponse
+	17, // 19: firewood.remote.FirewoodRemote.Deregister:output_type -> firewood.remote.DeregisterResponse
+	19, // 20: firewood.remote.FirewoodRemote.AdvanceToHash:output_type -> firewood.remote.AdvanceToHashResponse
+	12, // [12:21] is the sub-list for method output_type
+	3,  // [3:12] is the sub-list for method input_type
 	3,  // [3:3] is the sub-list for extension type_name
 	3,  // [3:3] is the sub-list for extension extendee
 	0,  // [0:3] is the sub-list for field type_name
@@ -962,7 +1261,7 @@ func file_remote_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_remote_proto_rawDesc), len(file_remote_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   14,
+			NumMessages:   20,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

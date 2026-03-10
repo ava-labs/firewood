@@ -21,8 +21,8 @@ use firewood::v2::api::Db as _;
 
 use crate::metrics::MetricsContextExt;
 use crate::{
-    BorrowedBatchOps, BorrowedBytes, DatabaseHandle, HashKey, HashResult, OwnedBytes, ValueResult,
-    VoidResult,
+    BorrowedBatchOps, BorrowedBytes, DatabaseHandle, HashKey, HashResult, MultiDatabaseHandle,
+    OwnedBytes, ValueResult, VoidResult,
 };
 
 use firewood_metrics::MetricsContext;
@@ -606,6 +606,151 @@ pub extern "C" fn fwd_verify_single_key_proof(
         proof
             .verify(key.as_slice(), expected_value, &api_hash)
             .map_err(|e| e.to_string())
+    })
+}
+
+/// Creates a [`TruncatedTrieHandle`] from the multi-database revision matching
+/// the given root hash.
+///
+/// The truncated trie holds the top `depth` nibble levels of the trie with
+/// children below that depth replaced by hash-only proxy nodes.
+///
+/// # Arguments
+///
+/// * `db` - The multi-database handle returned by [`fwd_multi_open_db`](crate::fwd_multi_open_db)
+/// * `root_hash` - The root hash of the revision to truncate
+/// * `depth` - The truncation depth in nibble levels
+///
+/// # Returns
+///
+/// - [`TruncatedTrieResult::NullHandlePointer`] if `db` is null.
+/// - [`TruncatedTrieResult::Ok`] with the handle and root hash on success.
+/// - [`TruncatedTrieResult::Err`] if the revision was not found or truncation
+///   failed.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+/// * call [`fwd_free_truncated_trie`] to free the returned handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_create_truncated_trie(
+    db: Option<&MultiDatabaseHandle>,
+    root_hash: HashKey,
+    depth: usize,
+) -> TruncatedTrieResult {
+    crate::invoke_with_handle(db, move |db| -> Result<_, String> {
+        let revision = db.revision(root_hash.into()).map_err(|e| e.to_string())?;
+        let trie =
+            TruncatedTrie::from_trie(revision.as_ref(), depth).map_err(|e| e.to_string())?;
+        let hash = trie
+            .root_hash()
+            .cloned()
+            .map(HashKey::from)
+            .unwrap_or_default();
+        Ok((trie, hash))
+    })
+}
+
+/// Generates a witness proof for a set of batch operations using a
+/// multi-database handle.
+///
+/// Walks the old trie (identified by `root_hash`) along each key's path and
+/// collects all nodes below `depth` that the client would need to replay the
+/// operations.
+///
+/// # Arguments
+///
+/// * `db` - The multi-database handle
+/// * `root_hash` - The root hash of the old committed revision
+/// * `batch_ops` - The batch operations to generate a witness for
+/// * `new_root_hash` - The root hash after applying the batch ops
+/// * `depth` - The client's truncation depth in nibble levels
+///
+/// # Returns
+///
+/// - [`WitnessResult::NullHandlePointer`] if `db` is null.
+/// - [`WitnessResult::Ok`] with the witness proof handle on success.
+/// - [`WitnessResult::Err`] on failure.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+/// * ensure that `batch_ops` is valid for [`BorrowedBatchOps`].
+/// * call [`fwd_free_witness_proof`] to free the returned handle.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_generate_witness(
+    db: Option<&MultiDatabaseHandle>,
+    root_hash: HashKey,
+    batch_ops: BorrowedBatchOps<'_>,
+    new_root_hash: HashKey,
+    depth: usize,
+) -> WitnessResult {
+    crate::invoke_with_handle(db, move |db| -> Result<WitnessProof, String> {
+        let revision = db.revision(root_hash.into()).map_err(|e| e.to_string())?;
+
+        // Convert FFI batch ops to core BatchOps (including DeleteRange)
+        let core_ops: Vec<witness::OwnedBatchOp> = batch_ops
+            .as_slice()
+            .iter()
+            .map(|op| match op {
+                crate::BatchOp::Put { key, value } => CoreBatchOp::Put {
+                    key: key.as_slice().into(),
+                    value: value.as_slice().into(),
+                },
+                crate::BatchOp::Delete { key } => CoreBatchOp::Delete {
+                    key: key.as_slice().into(),
+                },
+                crate::BatchOp::DeleteRange { prefix } => CoreBatchOp::DeleteRange {
+                    prefix: prefix.as_slice().into(),
+                },
+            })
+            .collect();
+
+        // Expand DeleteRange ops into individual Delete ops using the revision
+        let remote_ops = witness::expand_delete_ranges(revision.as_ref(), &core_ops)
+            .map_err(|e| e.to_string())?;
+
+        let new_hash: firewood_storage::TrieHash = new_root_hash.into();
+
+        witness::generate_witness(revision.as_ref(), &remote_ops, new_hash, depth)
+            .map_err(|e| e.to_string())
+    })
+}
+
+/// Gets a value and its single-key Merkle proof from the multi-database
+/// revision identified by `root_hash`.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+/// * ensure that `key` is valid for [`BorrowedBytes`].
+/// * call [`fwd_free_owned_bytes`](crate::fwd_free_owned_bytes) to free
+///   the returned value and proof bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_get_with_proof(
+    db: Option<&MultiDatabaseHandle>,
+    root_hash: HashKey,
+    key: BorrowedBytes<'_>,
+) -> GetWithProofResult {
+    crate::invoke_with_handle(db, move |db| -> Result<_, String> {
+        let view = db.get_root(root_hash.into()).map_err(|e| e.to_string())?;
+
+        // Generate proof
+        let proof = view
+            .single_key_proof(key.as_slice())
+            .map_err(|e| e.to_string())?;
+
+        // Get value
+        let value = view.val(key.as_slice()).map_err(|e| e.to_string())?;
+
+        // Serialize proof
+        let mut proof_bytes = Vec::new();
+        proof.write_to_vec(&mut proof_bytes);
+
+        Ok((value, proof_bytes))
     })
 }
 

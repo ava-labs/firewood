@@ -46,6 +46,11 @@ type Client struct {
 	mu    sync.RWMutex      // protects trie
 	trie  *ffi.TruncatedTrie
 	cache *readCache // nil when disabled
+
+	// Multi-head fields. When multiHead is true, validatorID is included in
+	// CreateProposalRequests and Register/Deregister are used for lifecycle.
+	validatorID uint64
+	multiHead   bool
 }
 
 // NewClient creates a new remote client that will connect to addr.
@@ -65,6 +70,65 @@ func NewClient(addr string, depth uint, opts ...ClientOption) (*Client, error) {
 		opt(c)
 	}
 	return c, nil
+}
+
+// Register calls the Register RPC on a multi-head server, storing the
+// returned validator ID and bootstrapping the truncated trie using the
+// assigned root hash. Only meaningful when connected to a MultiServer.
+func (c *Client) Register(ctx context.Context) error {
+	resp, err := c.rpc.Register(ctx, &pb.RegisterRequest{})
+	if err != nil {
+		return fmt.Errorf("register: %w", err)
+	}
+
+	c.validatorID = resp.GetValidatorId()
+	c.multiHead = true
+
+	var root ffi.Hash
+	copy(root[:], resp.GetRootHash())
+
+	// An empty root means the validator has no committed state yet.
+	// Skip bootstrap — the client will be bootstrapped on first Update.
+	if root == ffi.EmptyRoot {
+		return nil
+	}
+
+	return c.Bootstrap(ctx, root)
+}
+
+// Deregister calls the Deregister RPC on a multi-head server. After this
+// call the client should not perform further operations.
+func (c *Client) Deregister(ctx context.Context) error {
+	if !c.multiHead {
+		return nil
+	}
+
+	_, err := c.rpc.Deregister(ctx, &pb.DeregisterRequest{
+		ValidatorId: c.validatorID,
+	})
+	if err != nil {
+		return fmt.Errorf("deregister: %w", err)
+	}
+	c.multiHead = false
+	return nil
+}
+
+// AdvanceToHash advances the client's validator head to the given root hash
+// on the server, and re-bootstraps the local truncated trie.
+func (c *Client) AdvanceToHash(ctx context.Context, hash ffi.Hash) error {
+	if !c.multiHead {
+		return fmt.Errorf("client not in multi-head mode")
+	}
+
+	_, err := c.rpc.AdvanceToHash(ctx, &pb.AdvanceToHashRequest{
+		ValidatorId: c.validatorID,
+		RootHash:    hash[:],
+	})
+	if err != nil {
+		return fmt.Errorf("advance to hash: %w", err)
+	}
+
+	return c.Bootstrap(ctx, hash)
 }
 
 // Bootstrap fetches a truncated trie from the server for the given trusted
@@ -111,6 +175,10 @@ func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	if c.trie == nil && c.multiHead {
+		// Empty validator — no data yet.
+		return nil, nil
+	}
 	if c.trie == nil {
 		return nil, fmt.Errorf("client not bootstrapped")
 	}
@@ -158,19 +226,29 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.trie == nil {
+	if c.trie == nil && !c.multiHead {
 		return ffi.Hash{}, fmt.Errorf("client not bootstrapped")
+	}
+
+	// For multi-head clients with an empty validator (no trie yet), commit
+	// on the server then bootstrap with the resulting root.
+	if c.trie == nil {
+		return c.updateEmpty(ctx, ops)
 	}
 
 	root := c.trie.Root()
 	pbOps := batchOpsToProto(ops)
 
 	// Create proposal and get witness proof for verification before commit.
-	createResp, err := c.rpc.CreateProposal(ctx, &pb.CreateProposalRequest{
+	createReq := &pb.CreateProposalRequest{
 		RootHash: root[:],
 		Ops:      pbOps,
 		Depth:    uint32(c.depth),
-	})
+	}
+	if c.multiHead {
+		createReq.ValidatorId = &c.validatorID
+	}
+	createResp, err := c.rpc.CreateProposal(ctx, createReq)
 	if err != nil {
 		return ffi.Hash{}, fmt.Errorf("create proposal: %w", err)
 	}
@@ -218,6 +296,59 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 	return c.trie.Root(), nil
 }
 
+// updateEmpty handles the first Update on a multi-head client whose validator
+// has no committed state yet. It commits the proposal on the server, then
+// bootstraps the local truncated trie with the resulting root.
+// Caller must hold c.mu.
+func (c *Client) updateEmpty(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error) {
+	var emptyRoot ffi.Hash
+	pbOps := batchOpsToProto(ops)
+
+	createReq := &pb.CreateProposalRequest{
+		RootHash:    emptyRoot[:],
+		Ops:         pbOps,
+		Depth:       uint32(c.depth),
+		ValidatorId: &c.validatorID,
+	}
+	createResp, err := c.rpc.CreateProposal(ctx, createReq)
+	if err != nil {
+		return ffi.Hash{}, fmt.Errorf("create proposal: %w", err)
+	}
+
+	proposalID := createResp.GetProposalId()
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = c.rpc.DropProposal(context.Background(), &pb.DropProposalRequest{
+				ProposalId: proposalID,
+			})
+		}
+	}()
+
+	_, err = c.rpc.CommitProposal(ctx, &pb.CommitProposalRequest{
+		ProposalId: proposalID,
+	})
+	if err != nil {
+		return ffi.Hash{}, fmt.Errorf("commit proposal: %w", err)
+	}
+	committed = true
+
+	var newRoot ffi.Hash
+	copy(newRoot[:], createResp.GetNewRootHash())
+
+	// Bootstrap the truncated trie now that there is committed state.
+	// mu is already held by the caller; Bootstrap takes mu itself, so we
+	// must unlock temporarily.
+	c.mu.Unlock()
+	err = c.Bootstrap(ctx, newRoot)
+	c.mu.Lock()
+	if err != nil {
+		return ffi.Hash{}, fmt.Errorf("bootstrap after first update: %w", err)
+	}
+
+	return newRoot, nil
+}
+
 // Propose creates a proposal on the server and returns a [remoteProposal]
 // that can be committed or dropped later. The proposal's witness proof is
 // verified against the client's current truncated trie before returning.
@@ -225,18 +356,25 @@ func (c *Client) Propose(ctx context.Context, ops []ffi.BatchOp) (*remoteProposa
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.trie == nil {
+	if c.trie == nil && !c.multiHead {
 		return nil, fmt.Errorf("client not bootstrapped")
+	}
+	if c.trie == nil {
+		return nil, fmt.Errorf("call Update first on empty validator to bootstrap")
 	}
 
 	root := c.trie.Root()
 	pbOps := batchOpsToProto(ops)
 
-	createResp, err := c.rpc.CreateProposal(ctx, &pb.CreateProposalRequest{
+	createReq := &pb.CreateProposalRequest{
 		RootHash: root[:],
 		Ops:      pbOps,
 		Depth:    uint32(c.depth),
-	})
+	}
+	if c.multiHead {
+		createReq.ValidatorId = &c.validatorID
+	}
+	createResp, err := c.rpc.CreateProposal(ctx, createReq)
 	if err != nil {
 		return nil, fmt.Errorf("create proposal: %w", err)
 	}
@@ -305,8 +443,15 @@ func (c *Client) Root() ffi.Hash {
 	return c.trie.Root()
 }
 
-// Close releases all resources held by the client.
+// Close releases all resources held by the client. If the client was
+// registered with a multi-head server, it will attempt to deregister
+// (best-effort).
 func (c *Client) Close() error {
+	// Best-effort deregister before closing connection.
+	if c.multiHead {
+		_ = c.Deregister(context.Background())
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

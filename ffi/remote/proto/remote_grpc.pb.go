@@ -28,6 +28,9 @@ const (
 	FirewoodRemote_CommitProposal_FullMethodName   = "/firewood.remote.FirewoodRemote/CommitProposal"
 	FirewoodRemote_DropProposal_FullMethodName     = "/firewood.remote.FirewoodRemote/DropProposal"
 	FirewoodRemote_IterBatch_FullMethodName        = "/firewood.remote.FirewoodRemote/IterBatch"
+	FirewoodRemote_Register_FullMethodName         = "/firewood.remote.FirewoodRemote/Register"
+	FirewoodRemote_Deregister_FullMethodName       = "/firewood.remote.FirewoodRemote/Deregister"
+	FirewoodRemote_AdvanceToHash_FullMethodName    = "/firewood.remote.FirewoodRemote/AdvanceToHash"
 )
 
 // FirewoodRemoteClient is the client API for FirewoodRemote service.
@@ -45,6 +48,12 @@ type FirewoodRemoteClient interface {
 	DropProposal(ctx context.Context, in *DropProposalRequest, opts ...grpc.CallOption) (*DropProposalResponse, error)
 	// Paginated iteration over a proposal's key-value pairs.
 	IterBatch(ctx context.Context, in *IterBatchRequest, opts ...grpc.CallOption) (*IterBatchResponse, error)
+	// Multi-head: register a new validator and get its assigned ID.
+	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
+	// Multi-head: deregister a validator.
+	Deregister(ctx context.Context, in *DeregisterRequest, opts ...grpc.CallOption) (*DeregisterResponse, error)
+	// Multi-head: advance a validator's head to an existing revision.
+	AdvanceToHash(ctx context.Context, in *AdvanceToHashRequest, opts ...grpc.CallOption) (*AdvanceToHashResponse, error)
 }
 
 type firewoodRemoteClient struct {
@@ -115,6 +124,36 @@ func (c *firewoodRemoteClient) IterBatch(ctx context.Context, in *IterBatchReque
 	return out, nil
 }
 
+func (c *firewoodRemoteClient) Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(RegisterResponse)
+	err := c.cc.Invoke(ctx, FirewoodRemote_Register_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *firewoodRemoteClient) Deregister(ctx context.Context, in *DeregisterRequest, opts ...grpc.CallOption) (*DeregisterResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeregisterResponse)
+	err := c.cc.Invoke(ctx, FirewoodRemote_Deregister_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *firewoodRemoteClient) AdvanceToHash(ctx context.Context, in *AdvanceToHashRequest, opts ...grpc.CallOption) (*AdvanceToHashResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AdvanceToHashResponse)
+	err := c.cc.Invoke(ctx, FirewoodRemote_AdvanceToHash_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // FirewoodRemoteServer is the server API for FirewoodRemote service.
 // All implementations must embed UnimplementedFirewoodRemoteServer
 // for forward compatibility.
@@ -130,6 +169,12 @@ type FirewoodRemoteServer interface {
 	DropProposal(context.Context, *DropProposalRequest) (*DropProposalResponse, error)
 	// Paginated iteration over a proposal's key-value pairs.
 	IterBatch(context.Context, *IterBatchRequest) (*IterBatchResponse, error)
+	// Multi-head: register a new validator and get its assigned ID.
+	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
+	// Multi-head: deregister a validator.
+	Deregister(context.Context, *DeregisterRequest) (*DeregisterResponse, error)
+	// Multi-head: advance a validator's head to an existing revision.
+	AdvanceToHash(context.Context, *AdvanceToHashRequest) (*AdvanceToHashResponse, error)
 	mustEmbedUnimplementedFirewoodRemoteServer()
 }
 
@@ -157,6 +202,15 @@ func (UnimplementedFirewoodRemoteServer) DropProposal(context.Context, *DropProp
 }
 func (UnimplementedFirewoodRemoteServer) IterBatch(context.Context, *IterBatchRequest) (*IterBatchResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method IterBatch not implemented")
+}
+func (UnimplementedFirewoodRemoteServer) Register(context.Context, *RegisterRequest) (*RegisterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Register not implemented")
+}
+func (UnimplementedFirewoodRemoteServer) Deregister(context.Context, *DeregisterRequest) (*DeregisterResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Deregister not implemented")
+}
+func (UnimplementedFirewoodRemoteServer) AdvanceToHash(context.Context, *AdvanceToHashRequest) (*AdvanceToHashResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method AdvanceToHash not implemented")
 }
 func (UnimplementedFirewoodRemoteServer) mustEmbedUnimplementedFirewoodRemoteServer() {}
 func (UnimplementedFirewoodRemoteServer) testEmbeddedByValue()                        {}
@@ -287,6 +341,60 @@ func _FirewoodRemote_IterBatch_Handler(srv interface{}, ctx context.Context, dec
 	return interceptor(ctx, in, info, handler)
 }
 
+func _FirewoodRemote_Register_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(RegisterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FirewoodRemoteServer).Register(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FirewoodRemote_Register_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FirewoodRemoteServer).Register(ctx, req.(*RegisterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FirewoodRemote_Deregister_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeregisterRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FirewoodRemoteServer).Deregister(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FirewoodRemote_Deregister_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FirewoodRemoteServer).Deregister(ctx, req.(*DeregisterRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FirewoodRemote_AdvanceToHash_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(AdvanceToHashRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FirewoodRemoteServer).AdvanceToHash(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FirewoodRemote_AdvanceToHash_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FirewoodRemoteServer).AdvanceToHash(ctx, req.(*AdvanceToHashRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // FirewoodRemote_ServiceDesc is the grpc.ServiceDesc for FirewoodRemote service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -317,6 +425,18 @@ var FirewoodRemote_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "IterBatch",
 			Handler:    _FirewoodRemote_IterBatch_Handler,
+		},
+		{
+			MethodName: "Register",
+			Handler:    _FirewoodRemote_Register_Handler,
+		},
+		{
+			MethodName: "Deregister",
+			Handler:    _FirewoodRemote_Deregister_Handler,
+		},
+		{
+			MethodName: "AdvanceToHash",
+			Handler:    _FirewoodRemote_AdvanceToHash_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

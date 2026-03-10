@@ -17,6 +17,7 @@ import (
 // Compile-time interface checks.
 var (
 	_ ffi.DB         = (*RemoteDB)(nil)
+	_ ffi.DB         = (*MultiRemoteDB)(nil)
 	_ ffi.DBProposal = (*remoteProposal)(nil)
 	_ ffi.DBRevision = (*remoteRevision)(nil)
 	_ ffi.DBIterator = (*remoteIterator)(nil)
@@ -76,6 +77,71 @@ func (r *RemoteDB) Root() ffi.Hash {
 }
 
 func (r *RemoteDB) Close(_ context.Context) error {
+	return r.client.Close()
+}
+
+// MultiRemoteDB implements [ffi.DB] backed by a gRPC connection to a remote
+// multi-head Firewood server. The client registers as a validator and receives
+// its own independent head.
+type MultiRemoteDB struct {
+	client *Client
+}
+
+// NewMultiRemoteDB creates a [ffi.DB] that talks to a remote multi-head
+// Firewood server. It registers a new validator, bootstraps with the assigned
+// root hash, and returns a DB that transparently uses the assigned validator
+// head.
+func NewMultiRemoteDB(ctx context.Context, addr string, depth uint, opts ...ClientOption) (*MultiRemoteDB, error) {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, fmt.Errorf("dial: %w", err)
+	}
+	c := &Client{
+		conn:  conn,
+		rpc:   pb.NewFirewoodRemoteClient(conn),
+		depth: depth,
+	}
+	for _, opt := range opts {
+		opt(c)
+	}
+	if err := c.Register(ctx); err != nil {
+		c.Close()
+		return nil, fmt.Errorf("register: %w", err)
+	}
+	return &MultiRemoteDB{client: c}, nil
+}
+
+// AdvanceToHash advances the client's validator head to the given root hash
+// and re-bootstraps the local truncated trie.
+func (r *MultiRemoteDB) AdvanceToHash(ctx context.Context, hash ffi.Hash) error {
+	return r.client.AdvanceToHash(ctx, hash)
+}
+
+func (r *MultiRemoteDB) Get(ctx context.Context, key []byte) ([]byte, error) {
+	return r.client.Get(ctx, key)
+}
+
+func (r *MultiRemoteDB) Update(ctx context.Context, batch []ffi.BatchOp) (ffi.Hash, error) {
+	return r.client.Update(ctx, batch)
+}
+
+func (r *MultiRemoteDB) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.DBProposal, error) {
+	return r.client.Propose(ctx, batch)
+}
+
+func (r *MultiRemoteDB) Revision(_ context.Context, root ffi.Hash) (ffi.DBRevision, error) {
+	return &remoteRevision{root: root, rpc: r.client.rpc}, nil
+}
+
+func (r *MultiRemoteDB) LatestRevision(_ context.Context) (ffi.DBRevision, error) {
+	return r.client.LatestRevision()
+}
+
+func (r *MultiRemoteDB) Root() ffi.Hash {
+	return r.client.Root()
+}
+
+func (r *MultiRemoteDB) Close(_ context.Context) error {
 	return r.client.Close()
 }
 

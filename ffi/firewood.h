@@ -2480,6 +2480,36 @@ struct VoidResult fwd_multi_close_db(struct MultiDatabaseHandle *db);
 struct HashResult fwd_multi_commit_proposal(struct MultiProposalHandle *proposal);
 
 /**
+ * Creates a [`TruncatedTrieHandle`] from the multi-database revision matching
+ * the given root hash.
+ *
+ * The truncated trie holds the top `depth` nibble levels of the trie with
+ * children below that depth replaced by hash-only proxy nodes.
+ *
+ * # Arguments
+ *
+ * * `db` - The multi-database handle returned by [`fwd_multi_open_db`](crate::fwd_multi_open_db)
+ * * `root_hash` - The root hash of the revision to truncate
+ * * `depth` - The truncation depth in nibble levels
+ *
+ * # Returns
+ *
+ * - [`TruncatedTrieResult::NullHandlePointer`] if `db` is null.
+ * - [`TruncatedTrieResult::Ok`] with the handle and root hash on success.
+ * - [`TruncatedTrieResult::Err`] if the revision was not found or truncation
+ *   failed.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+ * * call [`fwd_free_truncated_trie`] to free the returned handle.
+ */
+struct TruncatedTrieResult fwd_multi_create_truncated_trie(const struct MultiDatabaseHandle *db,
+                                                           struct HashKey root_hash,
+                                                           size_t depth);
+
+/**
  * Dump the trie structure of a validator's current head.
  *
  * # Safety
@@ -2510,6 +2540,41 @@ struct VoidResult fwd_multi_deregister_validator(const struct MultiDatabaseHandl
 struct VoidResult fwd_multi_free_proposal(struct MultiProposalHandle *proposal);
 
 /**
+ * Generates a witness proof for a set of batch operations using a
+ * multi-database handle.
+ *
+ * Walks the old trie (identified by `root_hash`) along each key's path and
+ * collects all nodes below `depth` that the client would need to replay the
+ * operations.
+ *
+ * # Arguments
+ *
+ * * `db` - The multi-database handle
+ * * `root_hash` - The root hash of the old committed revision
+ * * `batch_ops` - The batch operations to generate a witness for
+ * * `new_root_hash` - The root hash after applying the batch ops
+ * * `depth` - The client's truncation depth in nibble levels
+ *
+ * # Returns
+ *
+ * - [`WitnessResult::NullHandlePointer`] if `db` is null.
+ * - [`WitnessResult::Ok`] with the witness proof handle on success.
+ * - [`WitnessResult::Err`] on failure.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+ * * ensure that `batch_ops` is valid for [`BorrowedBatchOps`].
+ * * call [`fwd_free_witness_proof`] to free the returned handle.
+ */
+struct WitnessResult fwd_multi_generate_witness(const struct MultiDatabaseHandle *db,
+                                                struct HashKey root_hash,
+                                                BorrowedBatchOps batch_ops,
+                                                struct HashKey new_root_hash,
+                                                size_t depth);
+
+/**
  * Gets the value associated with the given key from a validator's current head.
  *
  * # Safety
@@ -2535,6 +2600,22 @@ struct ValueResult fwd_multi_get(const struct MultiDatabaseHandle *db,
  */
 struct ValueResult fwd_multi_get_from_proposal(const struct MultiProposalHandle *handle,
                                                BorrowedBytes key);
+
+/**
+ * Gets a value and its single-key Merkle proof from the multi-database
+ * revision identified by `root_hash`.
+ *
+ * # Safety
+ *
+ * The caller must:
+ * * ensure that `db` is a valid pointer to a [`MultiDatabaseHandle`].
+ * * ensure that `key` is valid for [`BorrowedBytes`].
+ * * call [`fwd_free_owned_bytes`](crate::fwd_free_owned_bytes) to free
+ *   the returned value and proof bytes.
+ */
+struct GetWithProofResult fwd_multi_get_with_proof(const struct MultiDatabaseHandle *db,
+                                                   struct HashKey root_hash,
+                                                   BorrowedBytes key);
 
 /**
  * Returns an iterator on a multi-validator proposal starting from a key.
@@ -2607,6 +2688,27 @@ struct MultiProposalResult fwd_multi_propose(const struct MultiDatabaseHandle *d
  */
 struct MultiProposalResult fwd_multi_propose_on_proposal(const struct MultiProposalHandle *handle,
                                                          BorrowedBatchOps values);
+
+/**
+ * Generate a range proof for the given range of keys using a multi-database
+ * handle.
+ *
+ * # Arguments
+ *
+ * - `db` - The multi-database handle to create the proof from.
+ * - `args` - The arguments for creating the range proof.
+ *
+ * # Returns
+ *
+ * - [`RangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
+ * - [`RangeProofResult::RevisionNotFound`] if the caller provided a root that was
+ *   not found in the database. The missing root hash is included in the result.
+ * - [`RangeProofResult::Ok`] containing a pointer to the `RangeProofContext` if the proof
+ *   was successfully created.
+ * - [`RangeProofResult::Err`] containing an error message if the proof could not be created.
+ */
+struct RangeProofResult fwd_multi_range_proof(const struct MultiDatabaseHandle *db,
+                                              struct CreateRangeProofArgs args);
 
 /**
  * Register a validator on a multi-validator database.

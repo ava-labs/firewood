@@ -12,7 +12,7 @@ use firewood_metrics::{MetricsContext, firewood_increment};
 
 use crate::{
     BorrowedBytes, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle, HashResult, Maybe,
-    NextKeyRangeResult, RangeProofResult, ValueResult, VoidResult,
+    MultiDatabaseHandle, NextKeyRangeResult, RangeProofResult, ValueResult, VoidResult,
 };
 
 /// A key range represented by a start key and an optional end key.
@@ -317,6 +317,46 @@ impl<'db> RangeProofContext<'db> {
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_range_proof(
     db: Option<&DatabaseHandle>,
+    args: CreateRangeProofArgs,
+) -> RangeProofResult<'static> {
+    // static lifetime is safe because the returned `RangeProofResult` does not
+    // retain a reference to the provided database handle.
+
+    crate::invoke_with_handle(db, |db| {
+        let view = db.get_root(args.root.into())?;
+        view.range_proof(
+            args.start_key
+                .as_ref()
+                .map(BorrowedBytes::as_slice)
+                .into_option(),
+            args.end_key
+                .as_ref()
+                .map(BorrowedBytes::as_slice)
+                .into_option(),
+            NonZeroUsize::new(args.max_length as usize),
+        )
+    })
+}
+
+/// Generate a range proof for the given range of keys using a multi-database
+/// handle.
+///
+/// # Arguments
+///
+/// - `db` - The multi-database handle to create the proof from.
+/// - `args` - The arguments for creating the range proof.
+///
+/// # Returns
+///
+/// - [`RangeProofResult::NullHandlePointer`] if the caller provided a null pointer.
+/// - [`RangeProofResult::RevisionNotFound`] if the caller provided a root that was
+///   not found in the database. The missing root hash is included in the result.
+/// - [`RangeProofResult::Ok`] containing a pointer to the `RangeProofContext` if the proof
+///   was successfully created.
+/// - [`RangeProofResult::Err`] containing an error message if the proof could not be created.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_range_proof(
+    db: Option<&MultiDatabaseHandle>,
     args: CreateRangeProofArgs,
 ) -> RangeProofResult<'static> {
     // static lifetime is safe because the returned `RangeProofResult` does not

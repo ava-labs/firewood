@@ -8,6 +8,7 @@
 
 use firewood::{
     db::{MultiDb, MultiDbConfig},
+    manager::CommittedRevision,
     v2::api::{
         self, ArcDynDbView, DbView, HashKey, IntoBatchIter, KeyType, OptionalHashKeyExt,
         Proposal as _, ValidatorId,
@@ -179,6 +180,21 @@ impl MultiDatabaseHandle {
     /// Dump the trie at a validator's current head.
     pub fn dump(&self, id: u64) -> Result<String, api::Error> {
         self.multi_db.dump_validator(ValidatorId::new(id))
+    }
+
+    /// Get a read-only view at any committed revision by hash, returning the view directly.
+    pub(crate) fn get_root(&self, hash: HashKey) -> Result<ArcDynDbView, api::Error> {
+        self.multi_db.view(hash)
+    }
+
+    /// Get a committed revision by hash, returning a concrete typed Arc.
+    ///
+    /// Needed by proof functions that require `Sized + HashedNodeReader` bounds.
+    pub(crate) fn revision(
+        &self,
+        hash: HashKey,
+    ) -> Result<CommittedRevision, api::Error> {
+        self.multi_db.revision(hash)
     }
 
     /// Close the database gracefully.
