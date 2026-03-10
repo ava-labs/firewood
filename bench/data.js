@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1773042062657,
+  "lastUpdate": 1773128350086,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -1221,6 +1221,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 78.564483580528,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "9dad4f16b65ce3baf47c528b3cc4959a98a368f9",
+          "message": "ci(changelog): items labeled 'no-changelog' are omitted from changelog (#1746)\n\n## Why this should be merged\n\nFor some features there are a bunch of PRs. We only really want the last\none to show up in the CHANGELOG. This allows us to add a label to a PR\nwhich removes it from the CHANGELOG.md when generated with cliff.\n\n## How this works\n\nConnects to github to see the PR labels now. It only makes a few\nrequests but could hit ratelimits, so logging in to github (either with\n`gh auth login` or by setting GITHUB_TOKEN) is recommended.\n\nSee\nhttps://git-cliff.org/docs/tips-and-tricks#skip-commits-by-github-pr-label\nfor more details\n\n## How this was tested\n\nThis PR doesn't show up when running `git cliff` :)\n\n## Breaking Changes\n\nNone",
+          "timestamp": "2026-03-09T21:52:00Z",
+          "url": "https://github.com/ava-labs/firewood/commit/9dad4f16b65ce3baf47c528b3cc4959a98a368f9"
+        },
+        "date": 1773128349591,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 139.6061440771589,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 7163.008523803296,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 119.78531646281272,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6951.7146543577355,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 88.06358879932637,
             "unit": "block_accept_ms/ggas"
           }
         ]
