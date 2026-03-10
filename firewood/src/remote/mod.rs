@@ -11,6 +11,7 @@
 //! is verified via witness-based re-execution.
 
 pub mod client;
+mod ser;
 pub mod truncated_trie;
 pub mod witness;
 
