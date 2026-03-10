@@ -4,11 +4,26 @@
 
 ### Problem
 
-Avalanche validators on the same chain each maintain an independent copy of
-the blockchain state in their own Firewood database. Since honest validators
-process the same blocks in the same order, they produce identical state at
-each block height. Storing N identical copies of the same data wastes
-disk space proportional to N.
+In Avalanche-based blockchain networks, each validator on a given chain
+independently executes transactions and maintains a Merkle trie representing
+the current world state. Today, each validator runs its own Firewood database
+instance. Since honest validators process the same blocks in the same order,
+they produce **identical state** at each block height -- the same trie
+structure, the same root hash, the same on-disk nodes.
+
+When N validators run on shared infrastructure (e.g., a single machine or
+cluster), this means N identical copies of the same database. For chains
+with large state (e.g., the C-Chain with hundreds of GB), this duplication
+is the dominant cost:
+
+- **Disk usage** scales linearly with N (N x hundreds of GB)
+- **Write amplification** scales linearly (each validator writes the same
+  nodes independently)
+- **Memory pressure** from N separate page caches and revision pools
+- **Operational complexity** of managing N database lifecycles
+
+For infrastructure operators running many validators, this cost is
+prohibitive and wasteful given the data is identical.
 
 ### Solution
 
@@ -16,6 +31,11 @@ Allow N validators to share a single Firewood deployment. When two validators
 produce the same revision (same root hash), store it once and point both
 validators to the shared copy. Each validator maintains its own "head" (latest
 revision pointer) but the underlying storage is shared.
+
+Key insight: Firewood already deduplicates trie nodes by address within a
+single database. Multi-head extends this deduplication across validators
+by recognizing that identical root hashes imply identical trie content
+(guaranteed by the Merkle property).
 
 ### Economic Model
 
@@ -441,18 +461,96 @@ impl MultiDb {
 }
 ```
 
-### 9.2 FFI API
+### 9.2 FFI API (Rust `extern "C"` Functions)
 
-| Function                           | Returns            |
-|------------------------------------|--------------------|
-| `firewood_multi_db_new`            | `HandleResult`     |
-| `firewood_register_validator`      | `VoidResult`       |
-| `firewood_deregister_validator`    | `VoidResult`       |
-| `firewood_validator_propose`       | `ProposalResult`   |
-| `firewood_validator_commit`        | `VoidResult`       |
-| `firewood_validator_advance`       | `VoidResult`       |
-| `firewood_validator_view`          | `HandleResult`     |
-| `firewood_validator_is_diverged`   | `BoolResult`       |
+**Database lifecycle:**
+
+| Function             | Returns             | Description                          |
+|----------------------|---------------------|--------------------------------------|
+| `fwd_multi_open_db`  | `MultiHandleResult` | Open/create multi-validator database |
+| `fwd_multi_close_db` | `VoidResult`        | Close database, free handle          |
+
+**Validator management:**
+
+| Function                          | Returns      | Description              |
+|-----------------------------------|--------------|--------------------------|
+| `fwd_multi_register_validator`    | `VoidResult` | Register a new validator |
+| `fwd_multi_deregister_validator`  | `VoidResult` | Deregister a validator   |
+
+**Database operations (validator-scoped):**
+
+| Function                      | Returns               | Description                          |
+|-------------------------------|-----------------------|--------------------------------------|
+| `fwd_multi_get`               | `ValueResult`         | Get value from validator's head      |
+| `fwd_multi_root_hash`         | `HashResult`          | Get root hash of validator's head    |
+| `fwd_multi_latest_revision`   | `RevisionResult`      | Get read-only view at validator head |
+| `fwd_multi_revision`          | `RevisionResult`      | Get historical revision by hash      |
+| `fwd_multi_propose`           | `MultiProposalResult` | Create proposal for validator        |
+| `fwd_multi_update`            | `HashResult`          | Propose + commit in one call         |
+| `fwd_multi_advance_to_hash`   | `VoidResult`          | Skip-propose: advance to known hash  |
+| `fwd_multi_db_dump`           | `ValueResult`         | Dump validator's trie (Graphviz DOT) |
+
+**Proposal operations:**
+
+| Function                         | Returns               | Description                          |
+|----------------------------------|-----------------------|--------------------------------------|
+| `fwd_multi_commit_proposal`      | `HashResult`          | Commit and consume proposal          |
+| `fwd_multi_free_proposal`        | `VoidResult`          | Drop proposal without committing     |
+| `fwd_multi_propose_on_proposal`  | `MultiProposalResult` | Create child proposal                |
+| `fwd_multi_get_from_proposal`    | `ValueResult`         | Read from proposal                   |
+| `fwd_multi_iter_on_proposal`     | `IteratorResult`      | Create iterator on proposal          |
+| `fwd_multi_proposal_dump`        | `ValueResult`         | Dump proposal's trie (Graphviz DOT)  |
+
+### 9.3 Go API
+
+The Go wrapper provides two primary types in the `ffi` package:
+
+**`MultiDatabase`** -- wraps `MultiDatabaseHandle`:
+
+```go
+func NewMulti(dbDir string, algo NodeHashAlgorithm, maxValidators uint, opts ...Option) (*MultiDatabase, error)
+func (db *MultiDatabase) Close(ctx context.Context) error
+func (db *MultiDatabase) RegisterValidator(id ValidatorID) error
+func (db *MultiDatabase) DeregisterValidator(id ValidatorID) error
+func (db *MultiDatabase) Get(id ValidatorID, key []byte) ([]byte, error)
+func (db *MultiDatabase) Root(id ValidatorID) (Hash, error)
+func (db *MultiDatabase) LatestRevision(id ValidatorID) (*Revision, error)
+func (db *MultiDatabase) Revision(hash Hash) (*Revision, error)
+func (db *MultiDatabase) Propose(id ValidatorID, batch []BatchOp) (*MultiProposal, error)
+func (db *MultiDatabase) Update(id ValidatorID, batch []BatchOp) (Hash, error)
+func (db *MultiDatabase) AdvanceToHash(id ValidatorID, hash Hash) error
+func (db *MultiDatabase) Dump(id ValidatorID) (string, error)
+```
+
+**`MultiProposal`** -- wraps `MultiProposalHandle`:
+
+```go
+func (p *MultiProposal) Root() Hash
+func (p *MultiProposal) Get(key []byte) ([]byte, error)
+func (p *MultiProposal) Iter(key []byte) (*Iterator, error)
+func (p *MultiProposal) Propose(batch []BatchOp) (*MultiProposal, error)
+func (p *MultiProposal) Commit() error
+func (p *MultiProposal) Drop() error
+func (p *MultiProposal) Dump() (string, error)
+```
+
+### 9.4 FFI Memory Safety
+
+All Rust-allocated objects crossing the FFI boundary are freed exactly once:
+
+| Rust Object                | Go Receives Via                    | Freed By                                              | Finalizer |
+|----------------------------|------------------------------------|-------------------------------------------------------|-----------|
+| `Box<MultiDatabaseHandle>` | `getMultiDatabaseFromHandleResult` | `Close()` via `fwd_multi_close_db`                    | No        |
+| `Box<MultiProposalHandle>` | `getMultiProposalFromResult`       | `Commit()` or finalizer via `fwd_multi_free_proposal` | Yes       |
+| `Box<RevisionHandle>`      | `getRevisionFromResult`            | `Drop()` via `fwd_free_revision` or finalizer         | Yes       |
+| `OwnedBytes` (errors)      | `newOwnedBytes().intoError()`      | Copied to Go heap, then `fwd_free_owned_bytes`        | N/A       |
+| `OwnedBytes` (values)      | `getValueFromValueResult`          | `CopiedBytes()` then `fwd_free_owned_bytes`           | N/A       |
+| `HashKey`                  | `getHashKeyFromHashResult`         | Stack-allocated 32-byte array, no freeing needed      | N/A       |
+
+The `handle[T]` generic wrapper (used by `MultiProposal` and `Revision`)
+registers `runtime.AddCleanup` finalizers to prevent leaks if `Drop()` or
+`Commit()` is not called explicitly. The finalizer checks `dropped` to
+avoid double-frees.
 
 ---
 

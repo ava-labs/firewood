@@ -10,6 +10,20 @@ Firewood deployment. Identical revisions (same root hash) are deduplicated
 No consensus logic in Firewood. Every validator's chain is persisted.
 Economic incentives outside Firewood discourage malicious behavior.
 
+See [MULTI-HEAD-DESIGN.md](./MULTI-HEAD-DESIGN.md) for the full design
+document including motivation, architecture, and API reference.
+
+## Implementation Status
+
+| Phase   | Description                                                       | Status |
+|---------|-------------------------------------------------------------------|--------|
+| Phase 1 | Error types (`RevisionManagerError`, `api::Error`, `ValidatorId`) | Done   |
+| Phase 2 | Header format extension (`ValidatorRoot`, validation)             | Done   |
+| Phase 3 | Multi-head `RevisionManager` (state, commit, reap, chains)        | Done   |
+| Phase 4 | `MultiDb` public API (`db.rs`)                                    | Done   |
+| Phase 5 | FFI bindings (Rust `extern "C"` + Go wrappers)                    | Done   |
+| Phase 6 | Tests (Rust unit/integration + Go FFI tests)                      | Done   |
+
 ## Implementation Constraints
 
 - No `unwrap()`/`expect()`/`panic!()` outside of tests

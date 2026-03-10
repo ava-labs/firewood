@@ -287,7 +287,7 @@ func (p *MultiProposal) Get(key []byte) ([]byte, error) {
 func (p *MultiProposal) Iter(key []byte) (*Iterator, error) {
 	p.keepAliveHandle.mu.RLock()
 	defer p.keepAliveHandle.mu.RUnlock()
-	if p.dropped {
+	if p.ptr == nil {
 		return nil, errDroppedProposal
 	}
 
@@ -337,7 +337,7 @@ func (p *MultiProposal) Commit() error {
 func (p *MultiProposal) Dump() (string, error) {
 	p.keepAliveHandle.mu.RLock()
 	defer p.keepAliveHandle.mu.RUnlock()
-	if p.dropped {
+	if p.ptr == nil {
 		return "", errDroppedProposal
 	}
 
