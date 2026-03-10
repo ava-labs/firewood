@@ -54,6 +54,7 @@ pub use hashtype::{HashType, IntoHashType, InvalidTrieHashLength, TrieHash};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{BranchNode, Child, Children, ChildrenSlots, LeafNode, Node, PathIterItem};
+pub use nodestore::header::MAX_VALIDATORS;
 pub use nodestore::{
     AreaIndex, Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal,
     NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError, NodeReader, NodeStore, NodeStoreHeader,

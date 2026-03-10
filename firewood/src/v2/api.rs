@@ -11,6 +11,41 @@ use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+/// Identifies a validator within a multi-head Firewood deployment.
+/// Corresponds to a root slot in the header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ValidatorId(u8);
+
+impl ValidatorId {
+    /// Create a new `ValidatorId` from a `u8`.
+    #[must_use]
+    pub const fn new(id: u8) -> Self {
+        Self(id)
+    }
+
+    /// Returns the underlying `u8` value.
+    #[must_use]
+    pub const fn as_u8(self) -> u8 {
+        self.0
+    }
+}
+
+/// Status of a validator's chain relative to the majority.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidatorChainStatus {
+    /// Validator is on the shared chain (same root hash as majority).
+    Shared,
+    /// Validator has diverged from the majority chain.
+    Diverged {
+        /// The parent hash at which divergence was detected.
+        diverged_at_parent: HashKey,
+        /// The root hash the majority produced.
+        expected_hash: HashKey,
+        /// The root hash this validator produced.
+        actual_hash: HashKey,
+    },
+}
+
 use crate::merkle::changes::ChangeProof;
 pub use crate::v2::batch_op::{BatchIter, BatchOp, IntoBatchIter, KeyValuePair, TryIntoBatch};
 
@@ -212,6 +247,49 @@ pub enum Error {
         max_revisions: usize,
         commit_count: u64,
     },
+
+    /// Validator not found
+    #[error("Validator {id:?} not found")]
+    ValidatorNotFound {
+        /// The validator ID that was not found
+        id: ValidatorId,
+    },
+
+    /// Validator already registered
+    #[error("Validator {id:?} already registered")]
+    ValidatorAlreadyRegistered {
+        /// The validator ID that was already registered
+        id: ValidatorId,
+    },
+
+    /// Maximum number of validators reached
+    #[error("Maximum validators ({max}) reached; cannot register validator {id:?}")]
+    MaxValidatorsReached {
+        /// The validator ID that could not be registered
+        id: ValidatorId,
+        /// The maximum number of validators
+        max: usize,
+    },
+
+    /// Parent does not match validator head
+    #[error(
+        "Parent does not match validator {validator:?} head: provided {provided:?}, expected {expected:?}"
+    )]
+    NotValidatorHead {
+        /// The validator ID
+        validator: ValidatorId,
+        /// The provided parent hash
+        provided: Option<HashKey>,
+        /// The expected parent hash (validator's current head)
+        expected: Option<HashKey>,
+    },
+
+    /// Validator has been deregistered
+    #[error("Validator {id:?} has been deregistered")]
+    ValidatorDeregistered {
+        /// The validator ID
+        id: ValidatorId,
+    },
 }
 
 impl From<std::convert::Infallible> for Error {
@@ -223,8 +301,9 @@ impl From<std::convert::Infallible> for Error {
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
         use RevisionManagerError::{
-            FileIoError, IOError, InsufficientRevisions, NotLatest, PersistError, RevisionNotFound,
-            RevisionWithoutAddress, RootStoreError,
+            FileIoError, IOError, InsufficientRevisions, MaxValidatorsReached, NotLatest,
+            NotValidatorHead, PersistError, RevisionNotFound, RevisionWithoutAddress,
+            RootStoreError, ValidatorAlreadyRegistered, ValidatorDeregistered, ValidatorNotFound,
         };
         match err {
             NotLatest { provided, expected } => Self::ParentNotLatest { provided, expected },
@@ -243,6 +322,19 @@ impl From<RevisionManagerError> for Error {
                 max_revisions,
                 commit_count,
             },
+            ValidatorNotFound { id } => Self::ValidatorNotFound { id },
+            ValidatorAlreadyRegistered { id } => Self::ValidatorAlreadyRegistered { id },
+            MaxValidatorsReached { id, max } => Self::MaxValidatorsReached { id, max },
+            NotValidatorHead {
+                validator,
+                provided,
+                expected,
+            } => Self::NotValidatorHead {
+                validator,
+                provided,
+                expected,
+            },
+            ValidatorDeregistered { id } => Self::ValidatorDeregistered { id },
         }
     }
 }
