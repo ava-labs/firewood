@@ -259,6 +259,11 @@ Free area:    [AreaIndex:1][0xFF:1][varint next_addr]          — unchanged
 - **Free areas**: Unchanged. The fork_id flag is stripped when writing FreeArea.
 - **Backward compatibility**: Old databases have all AreaIndex values < 23.
   New nodes use AreaIndex values 128-150. Readers handle both transparently.
+- **Limitation**: Bit 7 is borrowed from the AreaIndex byte, so the index
+  portion is limited to values 0-127. Currently there are only 23 area sizes
+  (indices 0-22), so this is not a practical concern. If the number of area
+  sizes ever exceeds 127, the encoding would need to change (e.g., a dedicated
+  format-version byte before the AreaIndex).
 
 #### Space Impact
 

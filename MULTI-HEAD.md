@@ -1405,6 +1405,12 @@ The AreaIndex byte (first byte of every stored area) uses bit 7 as a
 When `fork_id == 0` (single-head or pre-fork), V0 format is used for full
 backward compatibility. Old databases are read transparently.
 
+**Limitation:** Bit 7 is borrowed from the AreaIndex byte, limiting the index
+to values 0-127. There are currently only 23 area sizes (indices 0-22), so
+this is not a practical concern. If the number of area sizes ever exceeded
+127, the encoding would need to change (e.g., a dedicated format-version
+byte before the AreaIndex).
+
 ### Reaping Rules
 
 1. **Own allocation** (`node_fork_id == chain_fork_id`): always freed
