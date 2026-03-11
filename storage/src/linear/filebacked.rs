@@ -205,7 +205,7 @@ impl WritableStorage for FileBacked {
 
             CachedNode(shared_node).insert_into_cache(&mut guard, addr);
             // The node can now be read from the general cache, so we can delete the local copy
-            maybe_persisted_node.persist_at(addr);
+            maybe_persisted_node.persist_at(addr)?;
         }
         Ok(())
     }

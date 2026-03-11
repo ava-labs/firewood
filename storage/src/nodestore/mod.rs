@@ -911,9 +911,27 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
         self.storage
             .invalidate_cached_nodes(self.kind.deleted.iter());
         trace!("There are {} nodes to reap", self.kind.deleted.len());
+
+        // Pre-resolve fork_ids for nodes that defaulted to 0 (loaded from disk).
+        // Done before creating the allocator to avoid borrow conflicts with self.storage.
+        let deleted: Vec<(MaybePersistedNode, crate::node::persist::ForkId)> =
+            take(&mut self.kind.deleted)
+                .into_iter()
+                .map(|node| {
+                    let fork_id = node.fork_id();
+                    if fork_id == 0 {
+                        if let Some(addr) = node.persisted_address() {
+                            let disk_fork_id = self.read_fork_id_from_disk(addr).unwrap_or(0);
+                            return (node, disk_fork_id);
+                        }
+                    }
+                    (node, fork_id)
+                })
+                .collect();
+
         let mut allocator = NodeAllocator::new(self.storage.as_ref(), header);
-        for node in take(&mut self.kind.deleted) {
-            if can_free(node.fork_id()) {
+        for (node, fork_id) in deleted {
+            if can_free(fork_id) {
                 allocator.delete_node(node)?;
             }
             // else: shared ancestor node, skip (leaks safely)

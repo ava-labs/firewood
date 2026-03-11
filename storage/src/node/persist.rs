@@ -133,13 +133,35 @@ impl MaybePersistedNode {
     /// # Arguments
     ///
     /// * `addr` - The `LinearAddress` where the node has been persisted on disk
-    pub fn persist_at(&self, addr: LinearAddress) {
+    pub fn persist_at(&self, addr: LinearAddress) -> Result<(), FileIoError> {
         let mut guard = self.0.lock();
         let fork_id = match &*guard {
             MaybePersisted::Allocated(_, _, fid) => *fid,
-            _ => 0,
+            MaybePersisted::Unpersisted(_) => {
+                return Err(FileIoError::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "persist_at called on Unpersisted node",
+                    ),
+                    None,
+                    0,
+                    Some("persist_at".into()),
+                ));
+            }
+            MaybePersisted::Persisted(_, _) => {
+                return Err(FileIoError::new(
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "persist_at called on already-Persisted node",
+                    ),
+                    None,
+                    0,
+                    Some("persist_at".into()),
+                ));
+            }
         };
         *guard = MaybePersisted::Persisted(addr, fork_id);
+        Ok(())
     }
 
     /// Updates the internal state to indicate this node is allocated at the specified disk address.
@@ -196,6 +218,20 @@ impl MaybePersistedNode {
         match &*self.0.lock() {
             MaybePersisted::Unpersisted(_) => 0,
             MaybePersisted::Allocated(_, _, fid) | MaybePersisted::Persisted(_, fid) => *fid,
+        }
+    }
+
+    /// Returns the persisted disk address if the node is in Allocated or Persisted state.
+    ///
+    /// Used by `reap_deleted` to lazily read fork_ids for nodes loaded from disk
+    /// whose fork_id defaulted to 0.
+    #[must_use]
+    pub fn persisted_address(&self) -> Option<LinearAddress> {
+        match &*self.0.lock() {
+            MaybePersisted::Allocated(addr, _, _) | MaybePersisted::Persisted(addr, _) => {
+                Some(*addr)
+            }
+            MaybePersisted::Unpersisted(_) => None,
         }
     }
 }
@@ -266,7 +302,8 @@ mod test {
         );
 
         let addr = LinearAddress::new(addr.get()).unwrap();
-        maybe_persisted_node.persist_at(addr);
+        maybe_persisted_node.allocate_at(addr);
+        maybe_persisted_node.persist_at(addr).unwrap();
         assert!(maybe_persisted_node.as_shared_node(&store).is_err());
         assert_eq!(Some(addr), Option::from(&maybe_persisted_node));
         Ok(())
@@ -300,9 +337,10 @@ mod test {
         // First reference is 'node', second is shared by original and cloned
         assert_eq!(triomphe::Arc::strong_count(&node), 2);
 
-        // Persist the original
+        // Allocate then persist the original
         let addr = nonzero!(1024u64).into();
-        original.persist_at(addr);
+        original.allocate_at(addr);
+        original.persist_at(addr).unwrap();
 
         // Both original and clone should now be persisted since they share the same
         // mutex-protected pointer
@@ -340,7 +378,7 @@ mod test {
         assert_eq!(retrieved_node, node);
 
         // Persist the node
-        maybe_persisted.persist_at(addr);
+        maybe_persisted.persist_at(addr).unwrap();
 
         // After persisting, allocated_info should return None again
         assert!(maybe_persisted.allocated_info().is_none());

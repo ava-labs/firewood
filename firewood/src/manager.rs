@@ -271,6 +271,10 @@ pub(crate) enum RevisionManagerError {
     #[expect(dead_code, reason = "Reserved for future deregistration workflow")]
     #[error("Validator {id:?} has already been deregistered")]
     ValidatorDeregistered { id: ValidatorId },
+    #[error("fork tree capacity exhausted (max {max} nodes)")]
+    ForkTreeFull { max: usize },
+    #[error("internal error: {0}")]
+    InternalError(String),
 }
 
 impl RevisionManager {
@@ -450,6 +454,10 @@ impl RevisionManager {
                     .map_err(RevisionManagerError::PersistError)?,
                 Err(original) => {
                     warn!("Oldest revision could not be reaped; still referenced");
+                    // Re-insert hash that was removed above
+                    if let Some(ref hash) = oldest_hash {
+                        self.by_hash.write().insert(hash.clone(), original.clone());
+                    }
                     in_memory_revisions.push_front(original);
                     break;
                 }
@@ -772,7 +780,9 @@ impl RevisionManager {
                 ));
 
                 let chain_id = state.next_chain_id;
-                state.next_chain_id = state.next_chain_id.wrapping_add(1);
+                state.next_chain_id = state.next_chain_id.checked_add(1).ok_or(
+                    RevisionManagerError::InternalError("chain ID overflow".into()),
+                )?;
 
                 state.chains.insert(
                     chain_id,
@@ -850,7 +860,9 @@ impl RevisionManager {
                     // All chains cleaned up; create a fresh one from the current revision
                     let base = self.current_revision();
                     let chain_id = state.next_chain_id;
-                    state.next_chain_id = state.next_chain_id.wrapping_add(1);
+                    state.next_chain_id = state.next_chain_id.checked_add(1).ok_or(
+                        RevisionManagerError::InternalError("chain ID overflow".into()),
+                    )?;
 
                     let mut chain_revisions = VecDeque::new();
                     chain_revisions.push_back(base.clone());
@@ -903,7 +915,7 @@ impl RevisionManager {
     /// If this was the last validator on its chain, the chain is cleaned up
     /// and its revisions are reaped.
     pub fn deregister_validator(&self, id: ValidatorId) -> Result<(), RevisionManagerError> {
-        let (removed_slot, validator_count, revisions_to_reap, can_free) = {
+        let (removed_slot, validator_count, revisions_to_reap, can_free, source_chain) = {
             let mut state = self
                 .multi_head
                 .as_ref()
@@ -921,7 +933,13 @@ impl RevisionManager {
             let (revisions_to_reap, can_free) =
                 self.cleanup_empty_chain(source_chain, &mut state);
 
-            (removed.slot, validator_count, revisions_to_reap, can_free)
+            (
+                removed.slot,
+                validator_count,
+                revisions_to_reap,
+                can_free,
+                source_chain,
+            )
         }; // write lock dropped
 
         // Clear this validator's root in the header (no multi_head lock held)
@@ -933,7 +951,8 @@ impl RevisionManager {
         drop(header);
 
         // Reap collected revisions (no locks held, may block)
-        self.reap_revisions(revisions_to_reap, &can_free)?;
+        let failed = self.reap_revisions(revisions_to_reap, &can_free)?;
+        self.reinsert_failed_revisions(source_chain, failed);
 
         Ok(())
     }
@@ -961,7 +980,7 @@ impl RevisionManager {
             .map_err(RevisionManagerError::PersistError)?;
 
         // Phase 1: Under write lock (fast, in-memory only)
-        let (committed, slot, root_info, revisions_to_reap, can_free, fork_tree_changed) = {
+        let (committed, slot, root_info, revisions_to_reap, can_free, fork_tree_changed, reap_chain_id) = {
             let mut state = self
                 .multi_head
                 .as_ref()
@@ -1040,7 +1059,8 @@ impl RevisionManager {
                 }
                 drop(header);
 
-                self.reap_revisions(revisions_to_reap, &dedup_can_free)?;
+                let failed = self.reap_revisions(revisions_to_reap, &dedup_can_free)?;
+                self.reinsert_failed_revisions(source_chain, failed);
 
                 // Phase 3 (dedup path): cleanup proposals
                 self.cleanup_proposals_inner(&proposal);
@@ -1087,10 +1107,19 @@ impl RevisionManager {
 
                 // Update fork tree: fork the parent chain's fork_id
                 let parent_fork_id = state.chains.get(&validator_chain).map_or(0, |c| c.fork_id);
+                let active_fork_ids: HashSet<ForkId> =
+                    state.chains.values().map(|c| c.fork_id).collect();
                 let (continuation_fork_id, new_fork_id) = state
                     .fork_tree
-                    .fork(parent_fork_id)
-                    .unwrap_or((parent_fork_id, parent_fork_id));
+                    .fork(parent_fork_id, &active_fork_ids)
+                    .map_err(|e| match e {
+                        ForkError::CapacityExhausted { max } => {
+                            RevisionManagerError::ForkTreeFull { max }
+                        }
+                        ForkError::ParentNotFound(id) => RevisionManagerError::InternalError(
+                            format!("fork tree parent {id} not found"),
+                        ),
+                    })?;
 
                 // Update the original chain's fork_id to the continuation
                 if let Some(original_chain) = state.chains.get_mut(&validator_chain) {
@@ -1098,7 +1127,9 @@ impl RevisionManager {
                 }
 
                 let new_chain_id = state.next_chain_id;
-                state.next_chain_id = state.next_chain_id.wrapping_add(1);
+                state.next_chain_id = state.next_chain_id.checked_add(1).ok_or(
+                    RevisionManagerError::InternalError("chain ID overflow".into()),
+                )?;
 
                 state.chains.insert(
                     new_chain_id,
@@ -1124,7 +1155,7 @@ impl RevisionManager {
 
                 // No reaping needed for brand-new chain (only 1 revision)
                 let cf = Arc::new(|_| true) as CanFreeFn;
-                (committed, slot, root_info, Vec::new(), cf, true)
+                (committed, slot, root_info, Vec::new(), cf, true, new_chain_id)
             } else {
                 // Normal case: append new revision to the validator's current chain
                 if let Some(ref hash) = new_hash {
@@ -1155,7 +1186,15 @@ impl RevisionManager {
                 let revisions_to_reap =
                     self.collect_reapable_revisions(validator_chain, &mut state);
 
-                (committed, slot, root_info, revisions_to_reap, cf, false)
+                (
+                    committed,
+                    slot,
+                    root_info,
+                    revisions_to_reap,
+                    cf,
+                    false,
+                    validator_chain,
+                )
             }
         };
 
@@ -1181,7 +1220,8 @@ impl RevisionManager {
         drop(header);
 
         // Reap collected revisions
-        self.reap_revisions(revisions_to_reap, &can_free)?;
+        let failed = self.reap_revisions(revisions_to_reap, &can_free)?;
+        self.reinsert_failed_revisions(reap_chain_id, failed);
 
         // Phase 3: Under proposals lock (short)
         self.cleanup_proposals_inner(&proposal);
@@ -1214,7 +1254,7 @@ impl RevisionManager {
         id: ValidatorId,
         hash: HashKey,
     ) -> Result<(), RevisionManagerError> {
-        let (slot, root_info, revisions_to_reap, can_free) = {
+        let (slot, root_info, revisions_to_reap, can_free, source_chain) = {
             let mut state = self
                 .multi_head
                 .as_ref()
@@ -1262,7 +1302,7 @@ impl RevisionManager {
                 (Vec::new(), Arc::new(|_| true) as CanFreeFn)
             };
 
-            (slot, root_info, revisions_to_reap, cf)
+            (slot, root_info, revisions_to_reap, cf, source_chain)
         }; // write lock dropped
 
         // Update header (no multi_head lock held)
@@ -1273,7 +1313,8 @@ impl RevisionManager {
         drop(header);
 
         // Reap collected revisions (no locks held, may block)
-        self.reap_revisions(revisions_to_reap, &can_free)?;
+        let failed = self.reap_revisions(revisions_to_reap, &can_free)?;
+        self.reinsert_failed_revisions(source_chain, failed);
 
         Ok(())
     }
@@ -1441,21 +1482,63 @@ impl RevisionManager {
 
     /// Reap a list of collected revisions, attempting to free each one.
     ///
-    /// Revisions still held by external references (e.g., open views) are
-    /// skipped. This must be called without any locks held.
+    /// Revisions still held by external references (e.g., open views) cannot
+    /// be unwrapped and are returned so the caller can re-insert them into
+    /// tracking structures. This must be called without any locks held.
     fn reap_revisions(
         &self,
         revisions: Vec<CommittedRevision>,
         can_free: &CanFreeFn,
-    ) -> Result<(), RevisionManagerError> {
+    ) -> Result<Vec<CommittedRevision>, RevisionManagerError> {
+        let mut failed = Vec::new();
         for rev in revisions {
-            if let Ok(owned) = Arc::try_unwrap(rev) {
-                self.persist_worker
-                    .reap(owned, can_free.clone())
-                    .map_err(RevisionManagerError::PersistError)?;
+            match Arc::try_unwrap(rev) {
+                Ok(owned) => {
+                    self.persist_worker
+                        .reap(owned, can_free.clone())
+                        .map_err(RevisionManagerError::PersistError)?;
+                }
+                Err(still_held) => {
+                    warn!("revision could not be reaped; still referenced");
+                    failed.push(still_held);
+                }
             }
         }
-        Ok(())
+        Ok(failed)
+    }
+
+    /// Re-insert revisions that could not be reaped (still held by external references)
+    /// back into the tracking structures.
+    ///
+    /// If the chain no longer exists, the revisions are dropped — they will be
+    /// kept alive by the external `Arc` references and cleaned up when those drop.
+    fn reinsert_failed_revisions(&self, chain_id: ChainId, failed: Vec<CommittedRevision>) {
+        if failed.is_empty() {
+            return;
+        }
+        let Some(mh) = &self.multi_head else { return };
+        let mut state = mh.write();
+        if !state.chains.contains_key(&chain_id) {
+            // Chain no longer exists — revisions will be dropped when
+            // the last external view is closed (acceptable leak).
+            return;
+        }
+        // Re-insert hash tracking first (avoids borrow conflict with chains)
+        for rev in failed.iter().rev() {
+            if let Some(hash) = rev.root_hash().or_default_root_hash() {
+                state
+                    .by_hash
+                    .entry(hash.clone())
+                    .or_insert_with(|| rev.clone());
+                state.hash_to_chain.entry(hash).or_insert(chain_id);
+            }
+        }
+        // Then re-insert into chain deque
+        if let Some(chain) = state.chains.get_mut(&chain_id) {
+            for rev in failed.into_iter().rev() {
+                chain.revisions.push_front(rev);
+            }
+        }
     }
 
     /// Collect and clean up an empty chain's revisions and fork tree entry.
@@ -1504,11 +1587,22 @@ struct ForkNode {
     parent: Option<ForkId>,
     /// Direct children of this fork node.
     children: HashSet<ForkId>,
-    /// Fork IDs that were absorbed into this node during compaction.
+    /// Fork IDs absorbed during deferred compaction. NOT persisted to disk.
+    /// After restart, nodes with these fork_ids will not be freed (safe space leak).
+    ///
     /// When a fork is removed and its parent becomes single-child,
     /// the parent is merged into the child, and the parent's fork_id
     /// is added here for future `is_ancestor` lookups.
     absorbed_ids: HashSet<ForkId>,
+}
+
+/// Errors from fork tree operations.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ForkError {
+    #[error("fork tree parent {0} not found")]
+    ParentNotFound(ForkId),
+    #[error("fork tree capacity exhausted (max {max} nodes)")]
+    CapacityExhausted { max: usize },
 }
 
 /// Tracks fork relationships between chains for safe node reaping.
@@ -1548,15 +1642,31 @@ impl ForkTree {
     /// Returns `(new_parent_continuation_id, new_child_id)`.
     /// Both the continuing parent chain and the new child chain get fresh IDs.
     ///
-    /// Returns `None` if the tree would exceed `MAX_FORK_NODES` or the parent
-    /// doesn't exist.
-    pub fn fork(&mut self, parent_fork_id: ForkId) -> Option<(ForkId, ForkId)> {
+    /// If the tree is at capacity, attempts deferred compaction before failing.
+    /// `active_fork_ids` are the fork IDs of all currently active chains —
+    /// these are excluded from compaction to prevent removing live nodes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ForkError::ParentNotFound`] if the parent doesn't exist, or
+    /// [`ForkError::CapacityExhausted`] if the tree is full even after compaction.
+    pub fn fork(
+        &mut self,
+        parent_fork_id: ForkId,
+        active_fork_ids: &HashSet<ForkId>,
+    ) -> Result<(ForkId, ForkId), ForkError> {
         if !self.nodes.contains_key(&parent_fork_id) {
-            return None;
+            return Err(ForkError::ParentNotFound(parent_fork_id));
         }
         // Need 2 new slots; check capacity
         if self.nodes.len().saturating_add(2) > MAX_FORK_NODES {
-            return None;
+            // Attempt deferred compaction before failing
+            self.compact_all(active_fork_ids);
+            if self.nodes.len().saturating_add(2) > MAX_FORK_NODES {
+                return Err(ForkError::CapacityExhausted {
+                    max: MAX_FORK_NODES,
+                });
+            }
         }
 
         let continuation_id = self.next_id;
@@ -1586,7 +1696,7 @@ impl ForkTree {
             },
         );
 
-        Some((continuation_id, child_id))
+        Ok((continuation_id, child_id))
     }
 
     /// Remove a fork node (e.g., when a chain converges or is deregistered).
@@ -1623,19 +1733,32 @@ impl ForkTree {
             }
         }
 
-        // Compact: if the parent now has exactly one child, merge parent into child
-        if let Some(parent_id) = node.parent {
-            self.try_compact(parent_id);
+        // Note: compaction is deferred until the tree is at capacity (compact_all).
+        // This avoids creating absorbed_ids that are not persisted to disk.
+    }
+
+    /// Compact all inactive single-child interior nodes (except root).
+    ///
+    /// Called when the fork tree is at capacity to free up slots.
+    /// Creates absorbed_ids which are NOT persisted — after restart,
+    /// nodes with compacted fork_ids will leak (safe direction).
+    fn compact_all(&mut self, active_fork_ids: &HashSet<ForkId>) {
+        let compactable: Vec<ForkId> = self
+            .nodes
+            .iter()
+            .filter(|&(&id, node)| {
+                id != 0 && node.children.len() == 1 && !active_fork_ids.contains(&id)
+            })
+            .map(|(&id, _)| id)
+            .collect();
+        for id in compactable {
+            self.try_compact_single(id);
         }
     }
 
-    /// Try to compact a node: if it has exactly one child and is not
-    /// referenced by any active chain, absorb it into its child.
-    ///
-    /// `active_fork_ids` are not needed here because compaction only
-    /// happens when a chain is removed — the caller ensures the fork_id
-    /// being removed is no longer active.
-    fn try_compact(&mut self, node_id: ForkId) {
+    /// Try to compact a single node: if it has exactly one child,
+    /// absorb it into its child.
+    fn try_compact_single(&mut self, node_id: ForkId) {
         // Don't compact root
         if node_id == 0 {
             return;
@@ -2241,7 +2364,8 @@ mod tests {
     #[test]
     fn test_fork_tree_fork_creates_two_children() {
         let mut tree = ForkTree::new();
-        let (cont, child) = tree.fork(0).unwrap();
+        let no_active = HashSet::new();
+        let (cont, child) = tree.fork(0, &no_active).unwrap();
         assert_eq!(cont, 1);
         assert_eq!(child, 2);
         assert_eq!(tree.next_id, 3);
@@ -2258,8 +2382,9 @@ mod tests {
     #[test]
     fn test_fork_tree_nested_fork() {
         let mut tree = ForkTree::new();
-        let (cont1, _child1) = tree.fork(0).unwrap();
-        let (cont2, child2) = tree.fork(cont1).unwrap();
+        let no_active = HashSet::new();
+        let (cont1, _child1) = tree.fork(0, &no_active).unwrap();
+        let (cont2, child2) = tree.fork(cont1, &no_active).unwrap();
 
         // Tree: 0 -> {1, 2}, 1 -> {3, 4}
         assert_eq!(cont2, 3);
@@ -2271,7 +2396,8 @@ mod tests {
     #[test]
     fn test_fork_tree_remove_leaf() {
         let mut tree = ForkTree::new();
-        let (_cont, child) = tree.fork(0).unwrap();
+        let no_active = HashSet::new();
+        let (_cont, child) = tree.fork(0, &no_active).unwrap();
         tree.remove(child);
 
         // Child should be gone
@@ -2281,33 +2407,79 @@ mod tests {
     }
 
     #[test]
-    fn test_fork_tree_remove_compacts_single_child_interior() {
+    fn test_fork_tree_remove_does_not_compact() {
+        // Compaction is deferred — remove() no longer auto-compacts.
         let mut tree = ForkTree::new();
+        let no_active = HashSet::new();
         // 0 -> {1, 2}
-        let (cont, child) = tree.fork(0).unwrap();
+        let (cont, child) = tree.fork(0, &no_active).unwrap();
         assert_eq!(cont, 1);
         assert_eq!(child, 2);
 
-        // Remove child=2. Now 0 has only child=1, so 0 should NOT compact (it's root).
+        // Remove child=2. Root keeps only child=1 but is never compacted.
         tree.remove(2);
-        // Root is never compacted
         assert!(tree.nodes.contains_key(&0));
         assert!(tree.nodes.contains_key(&1));
 
         // Now create: 1 -> {3, 4}
-        let (cont2, child2) = tree.fork(1).unwrap();
+        let (cont2, child2) = tree.fork(1, &no_active).unwrap();
         assert_eq!(cont2, 3);
         assert_eq!(child2, 4);
 
-        // Remove child2=4. Now 1 has only child=3, so 1 should be compacted into 3.
-        tree.remove(4);
+        // Remove child2=4. Node 1 now has only child=3 but is NOT compacted.
+        tree.remove(child2);
         assert!(
-            !tree.nodes.contains_key(&1),
-            "interior node 1 should be compacted"
+            tree.nodes.contains_key(&1),
+            "interior node 1 should NOT be compacted on remove (deferred)"
         );
-        // 3 should now have 0 as parent and absorb fork_id 1
-        assert_eq!(tree.nodes[&3].parent, Some(0));
-        assert!(tree.nodes[&3].absorbed_ids.contains(&1));
+        assert_eq!(tree.nodes[&3].parent, Some(1));
+        assert!(tree.nodes[&3].absorbed_ids.is_empty());
+    }
+
+    #[test]
+    fn test_fork_tree_compact_all() {
+        // compact_all merges single-child interior nodes.
+        let mut tree = ForkTree::new();
+        let no_active = HashSet::new();
+        // 0 -> {1, 2}
+        let (cont, _child) = tree.fork(0, &no_active).unwrap();
+        // 1 -> {3, 4}
+        let (cont2, child2) = tree.fork(cont, &no_active).unwrap();
+
+        // Remove child2(4): node 1 becomes single-child (only 3)
+        tree.remove(child2);
+        assert!(tree.nodes.contains_key(&cont)); // still present (deferred)
+
+        // compact_all with no active IDs compacts node 1 into 3
+        tree.compact_all(&no_active);
+        assert!(
+            !tree.nodes.contains_key(&cont),
+            "interior node 1 should be compacted by compact_all"
+        );
+        assert_eq!(tree.nodes[&cont2].parent, Some(0));
+        assert!(tree.nodes[&cont2].absorbed_ids.contains(&cont));
+    }
+
+    #[test]
+    fn test_fork_tree_compact_all_skips_active() {
+        // compact_all must not compact nodes that are active chain fork_ids.
+        let mut tree = ForkTree::new();
+        let no_active = HashSet::new();
+        // 0 -> {1, 2}
+        let (cont, _child) = tree.fork(0, &no_active).unwrap();
+        // 1 -> {3, 4}
+        let (_cont2, child2) = tree.fork(cont, &no_active).unwrap();
+
+        // Remove child2(4): node 1 becomes single-child
+        tree.remove(child2);
+
+        // Mark node 1 (cont) as active — compact_all should skip it
+        let active = HashSet::from([cont]);
+        tree.compact_all(&active);
+        assert!(
+            tree.nodes.contains_key(&cont),
+            "active node 1 should NOT be compacted"
+        );
     }
 
     #[test]
@@ -2319,7 +2491,8 @@ mod tests {
     #[test]
     fn test_fork_tree_can_free_ancestor_sole_descendant() {
         let mut tree = ForkTree::new();
-        let (cont, _child) = tree.fork(0).unwrap();
+        let no_active = HashSet::new();
+        let (cont, _child) = tree.fork(0, &no_active).unwrap();
         // Only cont is active
         assert!(tree.can_free(0, cont, &[cont]));
     }
@@ -2327,7 +2500,8 @@ mod tests {
     #[test]
     fn test_fork_tree_cannot_free_shared_ancestor() {
         let mut tree = ForkTree::new();
-        let (cont, child) = tree.fork(0).unwrap();
+        let no_active = HashSet::new();
+        let (cont, child) = tree.fork(0, &no_active).unwrap();
         // Both active: neither can free ancestor 0
         assert!(!tree.can_free(0, cont, &[cont, child]));
         assert!(!tree.can_free(0, child, &[cont, child]));
@@ -2336,7 +2510,8 @@ mod tests {
     #[test]
     fn test_fork_tree_cannot_free_non_ancestor() {
         let mut tree = ForkTree::new();
-        let (cont, child) = tree.fork(0).unwrap();
+        let no_active = HashSet::new();
+        let (cont, child) = tree.fork(0, &no_active).unwrap();
         // cont(1) is not ancestor of child(2) — they are siblings
         assert!(!tree.can_free(cont, child, &[cont, child]));
         assert!(!tree.can_free(child, cont, &[cont, child]));
@@ -2345,7 +2520,8 @@ mod tests {
     #[test]
     fn test_fork_tree_convergence_enables_cleanup() {
         let mut tree = ForkTree::new();
-        let (cont, child) = tree.fork(0).unwrap();
+        let no_active = HashSet::new();
+        let (cont, child) = tree.fork(0, &no_active).unwrap();
         // Remove child (converged), now cont is sole descendant
         tree.remove(child);
         assert!(tree.can_free(0, cont, &[cont]));
@@ -2354,13 +2530,13 @@ mod tests {
     #[test]
     fn test_fork_tree_three_way_fork() {
         let mut tree = ForkTree::new();
+        let no_active = HashSet::new();
         // 0 -> {1, 2}
-        let (cont, child) = tree.fork(0).unwrap();
+        let (cont, child) = tree.fork(0, &no_active).unwrap();
         // 1 -> {3, 4}  (fork from continuation)
-        let (cont2, child2) = tree.fork(cont).unwrap();
+        let (cont2, child2) = tree.fork(cont, &no_active).unwrap();
 
-        let active = [cont, child, cont2, child2]; // 1,2,3,4 -- but 1 was compacted? No, fork doesn't compact.
-        // Actually after fork(1), 1 still exists with children {3,4}
+        let active = [cont, child, cont2, child2];
 
         // 3 cannot free 0 because 2 also descends from 0
         assert!(!tree.can_free(0, cont2, &active));
@@ -2373,10 +2549,11 @@ mod tests {
     #[test]
     fn test_fork_tree_is_ancestor() {
         let mut tree = ForkTree::new();
+        let no_active = HashSet::new();
         // 0 -> {1, 2}
-        let (cont, child) = tree.fork(0).unwrap();
+        let (cont, child) = tree.fork(0, &no_active).unwrap();
         // 1 -> {3, 4}
-        let (cont2, _child2) = tree.fork(cont).unwrap();
+        let (cont2, _child2) = tree.fork(cont, &no_active).unwrap();
 
         assert!(tree.is_ancestor(0, cont2)); // 0 -> 1 -> 3
         assert!(tree.is_ancestor(cont, cont2)); // 1 -> 3
@@ -2388,8 +2565,9 @@ mod tests {
     #[test]
     fn test_fork_tree_persistence_roundtrip() {
         let mut tree = ForkTree::new();
-        tree.fork(0).unwrap();
-        tree.fork(1).unwrap();
+        let no_active = HashSet::new();
+        tree.fork(0, &no_active).unwrap();
+        tree.fork(1, &no_active).unwrap();
 
         let (next_id, entries) = tree.to_persisted();
         let restored = ForkTree::from_persisted(next_id, &entries);
@@ -2406,13 +2584,18 @@ mod tests {
     #[test]
     fn test_fork_tree_absorbed_ids_ancestry() {
         let mut tree = ForkTree::new();
+        let no_active = HashSet::new();
         // 0 -> {1, 2}
-        let (cont, child) = tree.fork(0).unwrap();
+        let (cont, child) = tree.fork(0, &no_active).unwrap();
         // 1 -> {3, 4}
-        let (cont2, child2) = tree.fork(cont).unwrap();
+        let (cont2, child2) = tree.fork(cont, &no_active).unwrap();
 
-        // Remove child2(4), compacting 1 into 3
+        // Remove child2(4): node 1 becomes single-child, but NOT compacted yet
         tree.remove(child2);
+        assert!(tree.nodes.contains_key(&cont)); // deferred
+
+        // Explicitly compact
+        tree.compact_all(&no_active);
         // Now 1 should be absorbed into 3
         assert!(!tree.nodes.contains_key(&cont));
         assert!(tree.nodes[&cont2].absorbed_ids.contains(&cont));
@@ -2427,16 +2610,59 @@ mod tests {
     }
 
     #[test]
-    fn test_fork_tree_fork_returns_none_at_capacity() {
+    fn test_fork_tree_fork_returns_error_when_full() {
         let mut tree = ForkTree::new();
+        let no_active = HashSet::new();
         // Fill up to near capacity
         // We start with 1 node (root). Each fork adds 2. MAX_FORK_NODES = 32.
         // So we can do (32-1)/2 = 15 forks from root, getting to 31 nodes.
         for _ in 0..15 {
-            assert!(tree.fork(0).is_some());
+            assert!(tree.fork(0, &no_active).is_ok());
         }
         // Now we have 1 + 30 = 31 nodes. One more fork needs 2 slots = 33 > 32.
-        assert!(tree.fork(0).is_none());
+        let err = tree.fork(0, &no_active).unwrap_err();
+        assert!(
+            matches!(err, ForkError::CapacityExhausted { .. }),
+            "expected CapacityExhausted, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_fork_tree_fork_parent_not_found() {
+        let mut tree = ForkTree::new();
+        let no_active = HashSet::new();
+        let err = tree.fork(999, &no_active).unwrap_err();
+        assert!(
+            matches!(err, ForkError::ParentNotFound(999)),
+            "expected ParentNotFound(999), got {err:?}"
+        );
+    }
+
+    #[test]
+    fn test_fork_tree_deferred_compaction_frees_capacity() {
+        // When the tree is full, fork() should attempt compact_all before failing.
+        // We need 2 compactable nodes (each compaction frees 1 slot, fork needs 2).
+        let mut tree = ForkTree::new();
+        let no_active = HashSet::new();
+
+        // Build chain: 0 -> {1,2}, 1 -> {3,4}, 3 -> {5,6}
+        let (cont, _child) = tree.fork(0, &no_active).unwrap();
+        let (cont2, child2) = tree.fork(cont, &no_active).unwrap();
+        let (_cont3, child3) = tree.fork(cont2, &no_active).unwrap();
+        // Remove child2(4) and child3(6): nodes 1 and 3 become single-child
+        tree.remove(child2); // 1 -> {3}
+        tree.remove(child3); // 3 -> {5}
+
+        // Fill remaining capacity from root
+        while tree.nodes.len() + 2 <= MAX_FORK_NODES {
+            tree.fork(0, &no_active).unwrap();
+        }
+        // Tree is now full (31 nodes, need 33 for fork)
+        assert!(tree.nodes.len() + 2 > MAX_FORK_NODES);
+
+        // Next fork triggers deferred compaction which merges nodes 1 and 3,
+        // freeing 2 slots so the fork succeeds
+        assert!(tree.fork(0, &no_active).is_ok());
     }
 
     #[test]
