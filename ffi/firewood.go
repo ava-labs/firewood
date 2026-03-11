@@ -123,7 +123,7 @@ type config struct {
 	// revisions is the maximum number of historical revisions to keep in memory.
 	// If rootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 	// Otherwise, any revisions removed from memory will no longer be kept on disk.
-	// Must be >= 2.
+	// Must be >= 2 and > deferredPersistenceCommitCount.
 	revisions uint
 	// readCacheStrategy is the caching strategy used for the node cache.
 	readCacheStrategy CacheStrategy
@@ -133,6 +133,7 @@ type config struct {
 	expensiveMetricsEnabled bool
 	// deferredPersistenceCommitCount determines the maximum number of unpersisted
 	// revisions that can exist at a given time.
+	// Note: revisions must be > deferredPersistenceCommitCount
 	deferredPersistenceCommitCount uint64
 }
 
@@ -179,7 +180,7 @@ func WithFreeListCacheEntries(entries uint) Option {
 // WithRevisions sets the maximum number of historical revisions to keep in memory.
 // If RootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 // Otherwise, any revisions removed from memory will no longer be kept on disk.
-// Must be >= 2.
+// Must be >= 2 and > WithDeferredPersistenceCommitCount.
 // Default: 100
 func WithRevisions(revisions uint) Option {
 	return func(c *config) {
@@ -215,7 +216,8 @@ func WithExpensiveMetrics() Option {
 }
 
 // WithDeferredPersistenceCommitCount sets the maximum number of unpersisted revisions
-// that can exist at a time. Note: `commitCount` must be greater than 0.
+// that can exist at a time. Note: `commitCount` must be greater than 0 and WithRevisions
+// must be greater than `commitCount`.
 // Default: 1
 func WithDeferredPersistenceCommitCount(commitCount uint64) Option {
 	return func(c *config) {

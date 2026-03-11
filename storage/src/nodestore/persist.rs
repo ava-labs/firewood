@@ -31,9 +31,8 @@ use bumpalo::Bump;
 use std::iter::FusedIterator;
 
 use crate::linear::FileIoError;
-use crate::nodestore::AreaIndex;
-use coarsetime::Instant;
 use firewood_metrics::firewood_increment;
+use std::time::Instant;
 
 use crate::{MaybePersistedNode, NodeReader, WritableStorage};
 
@@ -168,9 +167,10 @@ fn serialize_node_to_bump<'a>(
     node_allocator: &mut NodeAllocator<'_, impl WritableStorage>,
 ) -> Result<(&'a [u8], crate::LinearAddress, usize), FileIoError> {
     let mut bytes = bumpalo::collections::Vec::new_in(bump);
-    shared_node.as_bytes(AreaIndex::MIN, &mut bytes);
-    let (persisted_address, area_size_index) = node_allocator.allocate_node(bytes.as_slice())?;
-    *bytes.get_mut(0).expect("byte was reserved") = area_size_index.get();
+    let area_size_index = shared_node
+        .as_bytes(&mut bytes)
+        .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
+    let (persisted_address, _) = node_allocator.allocate_node(bytes.as_slice())?;
     bytes.shrink_to_fit();
     let slice = bytes.into_bump_slice();
     Ok((slice, persisted_address, area_size_index.size() as usize))
@@ -191,7 +191,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         self.process_unpersisted_nodes(&mut bump, &mut node_allocator, super::INITIAL_BUMP_SIZE)?;
 
-        let flush_time = flush_start.elapsed().as_millis();
+        let flush_time = flush_start.elapsed().as_millis() as u64;
         firewood_increment!(crate::registry::FLUSH_NODES, flush_time);
 
         Ok(())
