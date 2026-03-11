@@ -15,6 +15,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use fastrace_opentelemetry::OpenTelemetryReporter;
 use firewood::logger::trace;
+use firewood_storage::NodeHashAlgorithm;
 use log::LevelFilter;
 use sha2::{Digest, Sha256};
 use std::borrow::Cow;
@@ -54,8 +55,8 @@ struct GlobalOpts {
     batch_size: u64,
     #[arg(short, long, default_value_t = 1000)]
     number_of_batches: u64,
-    #[arg(short, long, default_value_t = NonZeroUsize::new(1500000).expect("is non-zero"))]
-    cache_size: NonZeroUsize,
+    #[arg(short, long, default_value_t = NonZeroUsize::new(192_000_000).expect("is non-zero"))]
+    cache_memory_limit: NonZeroUsize,
     #[arg(short, long, default_value_t = 128)]
     revisions: usize,
     #[cfg(feature = "prometheus")]
@@ -227,7 +228,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .expect("failed to spawn prometheus listener");
 
     let mgrcfg = RevisionManagerConfig::builder()
-        .node_cache_size(args.global_opts.cache_size)
+        .node_cache_memory_limit(args.global_opts.cache_memory_limit)
         .free_list_cache_size(
             NonZeroUsize::new(4 * args.global_opts.batch_size as usize).expect("batch size > 0"),
         )
@@ -235,6 +236,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .max_revisions(args.global_opts.revisions)
         .build();
     let cfg = DbConfig::builder()
+        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
         .truncate(matches!(args.test_name, TestName::Create))
         .manager(mgrcfg)
         .build();
@@ -302,6 +304,7 @@ fn spawn_prometheus_listener(
 
     let handle = recorder.handle();
 
+    // Register the Prometheus recorder directly; prefixing is handled by Grafana/Prometheus relabeling.
     metrics::set_global_recorder(recorder)?;
 
     Ok(handle)

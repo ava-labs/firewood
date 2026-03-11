@@ -22,7 +22,6 @@ Add the dependency to your `Cargo.toml`:
 [dependencies]
 firewood-macros.workspace = true
 metrics = "0.24"
-coarsetime = "0.1"
 ```
 
 ### Basic Usage
@@ -30,7 +29,7 @@ coarsetime = "0.1"
 ```rust
 use firewood_macros::metrics;
 
-#[metrics("firewood.example")]
+#[metrics("example")]
 fn example() -> Result<Vec<Data>, DatabaseError> {
     // Your function implementation
     Ok(vec![])
@@ -40,7 +39,7 @@ fn example() -> Result<Vec<Data>, DatabaseError> {
 ### With Description
 
 ```rust
-#[metrics("firewood.example", "example operation")]
+#[metrics("example", "example operation")]
 fn example(user: User) -> Result<(), DatabaseError> {
     // Your function implementation
     Ok(())
@@ -59,19 +58,21 @@ Both metrics include a `success` label:
 - `success="true"` for `Ok(_)` results
 - `success="false"` for `Err(_)` results
 
+**Note**: Metrics are registered without a namespace prefix in code. When exported (via FFI or benchmark tools), the `firewood.` prefix is automatically added by the exporter layer.
+
 ### Example Output
 
-For `#[metrics("firewood.query", "data retrieval")]`:
+For `#[metrics("query", "data retrieval")]`:
 
-- `firewood.example{success="true"}` - Count of successful queries
-- `firewood.example{success="false"}` - Count of failed queries
-- `firewood.example_ms{success="true"}` - Timing of successful queries
-- `firewood.example_ms{success="false"}` - Timing of failed queries
+- `query{success="true"}` - Count of successful queries (exported as `firewood.query`)
+- `query{success="false"}` - Count of failed queries (exported as `firewood.query`)
+- `query_ms{success="true"}` - Timing of successful queries (exported as `firewood.query_ms`)
+- `query_ms{success="false"}` - Timing of failed queries (exported as `firewood.query_ms`)
 
 ## Requirements
 
 - Functions must return a `Result<T, E>` type
-- The `metrics` and `coarsetime` crates must be available in scope
+- The `metrics` crate must be available in scope
 - Rust 1.70+ (for `is_some_and` method)
 
 ## Performance Characteristics
@@ -91,7 +92,7 @@ metrics::counter!(concat!("my.metric", "_ms"), labels)
 
 ### Minimal Overhead
 
-- Single timestamp capture at function start, using the coarsetime crate, which is known to be extremely fast
+- Single timestamp capture at function start using `std::time::Instant`, which uses vDSO on modern Linux (no syscall overhead)
 - Branch-free label selection based on `Result::is_err()`
 - Direct counter increments without intermediate allocations
 
@@ -120,7 +121,7 @@ fn my_function() -> Result<String, Error> {
     });
 
     // Start timing
-    let __metrics_start = coarsetime::Instant::now();
+    let __metrics_start = ::std::time::Instant::now();
 
     // Execute original function
     let __metrics_result = (|| {

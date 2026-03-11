@@ -26,17 +26,22 @@ mod arc_cache;
 mod handle;
 mod iterator;
 mod logging;
-mod metrics_setup;
+mod metrics;
 mod proofs;
 mod proposal;
+mod registry;
+#[cfg(feature = "block-replay")]
+mod replay;
 mod revision;
 mod value;
 
 use firewood::v2::api::DbView;
+use firewood_metrics::set_metrics_context;
 
 pub use crate::handle::*;
 pub use crate::iterator::*;
 pub use crate::logging::*;
+use crate::metrics::MetricsContextExt;
 pub use crate::proofs::*;
 pub use crate::proposal::*;
 pub use crate::revision::*;
@@ -52,26 +57,29 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 /// information.
 #[inline]
 fn invoke<T: CResult, V: Into<T>>(once: impl FnOnce() -> V) -> T {
+    #[cfg(panic = "unwind")]
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(once)) {
         Ok(result) => result.into(),
         Err(panic) => T::from_panic(panic),
     }
+
+    #[cfg(not(panic = "unwind"))]
+    {
+        once().into()
+    }
 }
 
-/// Invokes a closure that requires a handle and returns the result as a [`NullHandleResult`].
-///
-/// If the provided handle is [`None`], the function will return early with the
-/// [`NullHandleResult::null_handle_pointer_error`] result.
-///
-/// Otherwise, the closure is invoked with the handle. If the closure panics,
-/// it will be caught and returned as a [`CResult::from_panic`].
+/// Invokes a closure with context from the handle.
 #[inline]
-fn invoke_with_handle<H, T: NullHandleResult, V: Into<T>>(
+fn invoke_with_handle<H: MetricsContextExt, T: NullHandleResult, V: Into<T>>(
     handle: Option<H>,
     once: impl FnOnce(H) -> V,
 ) -> T {
     match handle {
-        Some(handle) => invoke(move || once(handle)),
+        Some(handle) => {
+            let _guard = set_metrics_context(handle.metrics_context());
+            invoke(move || once(handle))
+        }
         None => T::null_handle_pointer_error(),
     }
 }
@@ -103,10 +111,12 @@ fn invoke_with_handle<H, T: NullHandleResult, V: Into<T>>(
 ///
 /// [`BorrowedBytes`]: crate::value::BorrowedBytes
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_get_latest(
-    db: Option<&DatabaseHandle>,
-    key: BorrowedBytes,
-) -> ValueResult {
+pub extern "C" fn fwd_get_latest(db: Option<&DatabaseHandle>, key: BorrowedBytes) -> ValueResult {
+    #[cfg(feature = "block-replay")]
+    if db.is_some() {
+        replay::record_get_latest(key);
+    }
+
     invoke_with_handle(db, move |db| db.get_latest(key))
 }
 
@@ -131,7 +141,7 @@ pub unsafe extern "C" fn fwd_get_latest(
 /// * call [`fwd_free_iterator`] to free the memory associated with the iterator.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_iter_on_revision<'view>(
+pub extern "C" fn fwd_iter_on_revision<'view>(
     revision: Option<&'view RevisionHandle>,
     key: BorrowedBytes,
 ) -> IteratorResult<'view> {
@@ -160,7 +170,7 @@ pub unsafe extern "C" fn fwd_iter_on_revision<'view>(
 /// * call [`fwd_free_iterator`] to free the memory associated with the iterator.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_iter_on_proposal<'p>(
+pub extern "C" fn fwd_iter_on_proposal<'p>(
     handle: Option<&'p ProposalHandle<'_>>,
     key: BorrowedBytes,
 ) -> IteratorResult<'p> {
@@ -194,7 +204,7 @@ pub unsafe extern "C" fn fwd_iter_on_proposal<'p>(
 ///   to free the memory associated with the returned value.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) -> KeyValueResult {
+pub extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) -> KeyValueResult {
     invoke_with_handle(handle, Iterator::next)
 }
 
@@ -225,7 +235,7 @@ pub unsafe extern "C" fn fwd_iter_next(handle: Option<&mut IteratorHandle<'_>>) 
 /// * call [`fwd_free_owned_key_value_batch`] on the returned batch to free any allocated memory.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_iter_next_n(
+pub extern "C" fn fwd_iter_next_n(
     handle: Option<&mut IteratorHandle<'_>>,
     n: usize,
 ) -> KeyValueBatchResult {
@@ -251,9 +261,7 @@ pub unsafe extern "C" fn fwd_iter_next_n(
 /// a valid [`IteratorHandle`] previously returned by a function from this library.
 ///
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_iterator(
-    iterator: Option<Box<IteratorHandle<'_>>>,
-) -> VoidResult {
+pub extern "C" fn fwd_free_iterator(iterator: Option<Box<IteratorHandle<'_>>>) -> VoidResult {
     invoke_with_handle(iterator, drop)
 }
 
@@ -280,10 +288,7 @@ pub unsafe extern "C" fn fwd_free_iterator(
 /// [`BorrowedBytes`]: crate::value::BorrowedBytes
 /// [`RevisionHandle`]: crate::revision::RevisionHandle
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_get_revision(
-    db: Option<&DatabaseHandle>,
-    root: HashKey,
-) -> RevisionResult {
+pub extern "C" fn fwd_get_revision(db: Option<&DatabaseHandle>, root: HashKey) -> RevisionResult {
     invoke_with_handle(db, move |db| db.get_revision(root.into()))
 }
 
@@ -309,7 +314,7 @@ pub unsafe extern "C" fn fwd_get_revision(
 /// * call [`fwd_free_owned_bytes`] to free the memory associated with the [`OwnedBytes`]
 ///   returned in the result.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_get_from_revision(
+pub extern "C" fn fwd_get_from_revision(
     revision: Option<&RevisionHandle>,
     key: BorrowedBytes,
 ) -> ValueResult {
@@ -334,7 +339,7 @@ pub unsafe extern "C" fn fwd_get_from_revision(
 /// The caller must ensure that the revision handle is valid and is not used again after
 /// this function is called.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_revision(revision: Option<Box<RevisionHandle>>) -> VoidResult {
+pub extern "C" fn fwd_free_revision(revision: Option<Box<RevisionHandle>>) -> VoidResult {
     invoke_with_handle(revision, drop)
 }
 
@@ -361,46 +366,14 @@ pub unsafe extern "C" fn fwd_free_revision(revision: Option<Box<RevisionHandle>>
 /// * call [`fwd_free_owned_bytes`] to free the memory associated [`OwnedBytes`]
 ///   returned in the result.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_get_from_proposal(
+pub extern "C" fn fwd_get_from_proposal(
     handle: Option<&ProposalHandle<'_>>,
     key: BorrowedBytes,
 ) -> ValueResult {
-    invoke_with_handle(handle, move |handle| handle.val(key))
-}
+    #[cfg(feature = "block-replay")]
+    replay::record_get_from_proposal(handle, key);
 
-/// Gets a value assoicated with the given root hash and key.
-///
-/// The hash may refer to a historical revision or an existing proposal.
-///
-/// # Arguments
-///
-/// * `db` - The database handle returned by [`fwd_open_db`]
-/// * `root` - The root hash to look up as a [`BorrowedBytes`]
-/// * `key` - The key to look up as a [`BorrowedBytes`]
-///
-/// # Returns
-///
-/// - [`ValueResult::NullHandlePointer`] if the provided database handle is null.
-/// - [`ValueResult::RevisionNotFound`] if no revision was found for the specified root.
-/// - [`ValueResult::None`] if the key was not found.
-/// - [`ValueResult::Some`] if the key was found with the associated value.
-/// - [`ValueResult::Err`] if an error occurred while retrieving the value.
-///
-/// # Safety
-///
-/// The caller must:
-/// * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
-/// * ensure that `root` is a valid for [`BorrowedBytes`]
-/// * ensure that `key` is a valid for [`BorrowedBytes`]
-/// * call [`fwd_free_owned_bytes`] to free the memory associated [`OwnedBytes`]
-///   returned in the result.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_get_from_root(
-    db: Option<&DatabaseHandle>,
-    root: HashKey,
-    key: BorrowedBytes,
-) -> ValueResult {
-    invoke_with_handle(db, move |db| db.get_from_root(root.into(), key))
+    invoke_with_handle(handle, move |handle| handle.val(key))
 }
 
 /// Puts the given key-value pairs into the database.
@@ -408,7 +381,7 @@ pub unsafe extern "C" fn fwd_get_from_root(
 /// # Arguments
 ///
 /// * `db` - The database handle returned by [`fwd_open_db`]
-/// * `values` - A [`BorrowedKeyValuePairs`] containing the key-value pairs to put.
+/// * `values` - A [`BorrowedBatchOps`] containing the batch operations to apply.
 ///
 /// # Returns
 ///
@@ -421,15 +394,20 @@ pub unsafe extern "C" fn fwd_get_from_root(
 ///
 /// The caller must:
 /// * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
-/// * ensure that `values` is valid for [`BorrowedKeyValuePairs`]
+/// * ensure that `values` is valid for [`BorrowedBatchOps`]
 /// * call [`fwd_free_owned_bytes`] to free the memory associated with the
 ///   returned error ([`HashKey`] does not need to be freed as it is returned by
 ///   value).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_batch(
+pub extern "C" fn fwd_batch(
     db: Option<&DatabaseHandle>,
-    values: BorrowedKeyValuePairs<'_>,
+    values: BorrowedBatchOps<'_>,
 ) -> HashResult {
+    #[cfg(feature = "block-replay")]
+    if db.is_some() {
+        replay::record_batch(values);
+    }
+
     invoke_with_handle(db, move |db| db.create_batch(values))
 }
 
@@ -438,7 +416,7 @@ pub unsafe extern "C" fn fwd_batch(
 /// # Arguments
 ///
 /// * `db` - The database handle returned by [`fwd_open_db`]
-/// * `values` - A [`BorrowedKeyValuePairs`] containing the key-value pairs to put.
+/// * `values` - A [`BorrowedBatchOps`] containing the batch operations to apply.
 ///
 /// # Returns
 ///
@@ -451,16 +429,23 @@ pub unsafe extern "C" fn fwd_batch(
 ///
 /// The caller must:
 /// * ensure that `db` is a valid pointer to a [`DatabaseHandle`]
-/// * ensure that `values` is valid for [`BorrowedKeyValuePairs`]
+/// * ensure that `values` is valid for [`BorrowedBatchOps`]
 /// * call [`fwd_commit_proposal`] or [`fwd_free_proposal`] to free the memory
 ///   associated with the proposal. And, the caller must ensure this is done
 ///   before calling [`fwd_close_db`] to avoid memory leaks or undefined behavior.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_propose_on_db<'db>(
+pub extern "C" fn fwd_propose_on_db<'db>(
     db: Option<&'db DatabaseHandle>,
-    values: BorrowedKeyValuePairs<'_>,
+    values: BorrowedBatchOps<'_>,
 ) -> ProposalResult<'db> {
-    invoke_with_handle(db, move |db| db.create_proposal_handle(values))
+    let result = invoke_with_handle(db, move |db| db.create_proposal_handle(values));
+
+    #[cfg(feature = "block-replay")]
+    if db.is_some() {
+        replay::record_propose_on_db(&result, values);
+    }
+
+    result
 }
 
 /// Proposes a batch of operations to the database on top of an existing proposal.
@@ -469,7 +454,7 @@ pub unsafe extern "C" fn fwd_propose_on_db<'db>(
 ///
 /// * `handle` - The proposal handle returned by [`fwd_propose_on_db`] or
 ///   [`fwd_propose_on_proposal`].
-/// * `values` - A [`BorrowedKeyValuePairs`] containing the key-value pairs to put.
+/// * `values` - A [`BorrowedBatchOps`] containing the batch operations to apply.
 ///
 /// # Returns
 ///
@@ -482,16 +467,21 @@ pub unsafe extern "C" fn fwd_propose_on_db<'db>(
 ///
 /// The caller must:
 /// * ensure that `handle` is a valid pointer to a [`ProposalHandle`]
-/// * ensure that `values` is valid for [`BorrowedKeyValuePairs`]
+/// * ensure that `values` is valid for [`BorrowedBatchOps`]
 /// * call [`fwd_commit_proposal`] or [`fwd_free_proposal`] to free the memory
 ///   associated with the proposal. And, the caller must ensure this is done
 ///   before calling [`fwd_close_db`] to avoid memory leaks or undefined behavior.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_propose_on_proposal<'db>(
+pub extern "C" fn fwd_propose_on_proposal<'db>(
     handle: Option<&ProposalHandle<'db>>,
-    values: BorrowedKeyValuePairs<'_>,
+    values: BorrowedBatchOps<'_>,
 ) -> ProposalResult<'db> {
-    invoke_with_handle(handle, move |p| p.create_proposal_handle(values))
+    let result = invoke_with_handle(handle, move |p| p.create_proposal_handle(values));
+
+    #[cfg(feature = "block-replay")]
+    replay::record_propose_on_proposal(handle, &result, values);
+
+    result
 }
 
 /// Commits a proposal to the database.
@@ -522,15 +512,16 @@ pub unsafe extern "C" fn fwd_propose_on_proposal<'db>(
 ///   returned error ([`HashKey`] does not need to be freed as it is returned
 ///   by value).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_commit_proposal(
-    proposal: Option<Box<ProposalHandle<'_>>>,
-) -> HashResult {
-    invoke_with_handle(proposal, move |proposal| {
-        proposal.commit_proposal(|commit_time| {
-            metrics::counter!("firewood.ffi.commit_ms").increment(commit_time.as_millis());
-            metrics::counter!("firewood.ffi.commit").increment(1);
-        })
-    })
+pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>) -> HashResult {
+    #[cfg(feature = "block-replay")]
+    let proposal_ptr = proposal.as_ref().map(|h| std::ptr::from_ref(&**h));
+
+    let result = invoke_with_handle(proposal, move |proposal| proposal.commit_proposal());
+
+    #[cfg(feature = "block-replay")]
+    replay::record_commit(proposal_ptr, &result);
+
+    result
 }
 
 /// Consumes the [`ProposalHandle`], cancels the proposal, and frees the memory.
@@ -554,9 +545,7 @@ pub unsafe extern "C" fn fwd_commit_proposal(
 /// The caller must ensure that the proposal was not committed. [`fwd_commit_proposal`]
 /// will consume the proposal automatically.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_proposal(
-    proposal: Option<Box<ProposalHandle<'_>>>,
-) -> VoidResult {
+pub extern "C" fn fwd_free_proposal(proposal: Option<Box<ProposalHandle<'_>>>) -> VoidResult {
     invoke_with_handle(proposal, drop)
 }
 
@@ -571,7 +560,6 @@ pub unsafe extern "C" fn fwd_free_proposal(
 /// - [`HashResult::NullHandlePointer`] if the provided database handle is null.
 /// - [`HashResult::None`] if the database is empty.
 /// - [`HashResult::Some`] with the root hash of the database.
-/// - [`HashResult::Err`] if an error occurred while looking up the root hash.
 ///
 /// # Safety
 ///
@@ -580,7 +568,7 @@ pub unsafe extern "C" fn fwd_free_proposal(
 ///   returned error ([`HashKey`] does not need to be freed as it is returned
 ///   by value).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_root_hash(db: Option<&DatabaseHandle>) -> HashResult {
+pub extern "C" fn fwd_root_hash(db: Option<&DatabaseHandle>) -> HashResult {
     invoke_with_handle(db, DatabaseHandle::current_root_hash)
 }
 
@@ -592,7 +580,7 @@ pub unsafe extern "C" fn fwd_root_hash(db: Option<&DatabaseHandle>) -> HashResul
 /// - [`VoidResult::Err`] if an error occurs during initialization.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_start_metrics() -> VoidResult {
-    invoke(metrics_setup::setup_metrics)
+    invoke(metrics::setup_metrics)
 }
 
 /// Start metrics recorder and exporter for this process.
@@ -613,7 +601,7 @@ pub extern "C" fn fwd_start_metrics() -> VoidResult {
 ///   returned error (if any).
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_start_metrics_with_exporter(metrics_port: u16) -> VoidResult {
-    invoke(move || metrics_setup::setup_metrics_with_exporter(metrics_port))
+    invoke(move || metrics::setup_metrics_with_exporter(metrics_port))
 }
 
 /// Gather latest metrics for this process.
@@ -632,7 +620,7 @@ pub extern "C" fn fwd_start_metrics_with_exporter(metrics_port: u16) -> VoidResu
 ///   returned error or value.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_gather() -> ValueResult {
-    invoke(metrics_setup::gather_metrics)
+    invoke(metrics::gather_metrics)
 }
 
 /// Open a database with the given arguments.
@@ -653,7 +641,7 @@ pub extern "C" fn fwd_gather() -> ValueResult {
 /// - ensure that the database handle is freed only after freeing or committing
 ///   all proposals created on it.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_open_db(args: DatabaseHandleArgs) -> HandleResult {
+pub extern "C" fn fwd_open_db(args: DatabaseHandleArgs) -> HandleResult {
     invoke(move || DatabaseHandle::new(args))
 }
 
@@ -680,6 +668,8 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 
 /// Close and free the memory for a database handle
 ///
+/// This also stops the background persistence thread.
+///
 /// # Arguments
 ///
 /// * `db` - The database handle to close, previously returned from a call to [`fwd_open_db`].
@@ -688,7 +678,9 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 ///
 /// - [`VoidResult::NullHandlePointer`] if the provided database handle is null.
 /// - [`VoidResult::Ok`] if the database handle was successfully closed and freed.
-/// - [`VoidResult::Err`] if the process panics while closing the database handle.
+/// - [`VoidResult::Err`] if the background persistence worker thread panics while
+///   closing the database handle or if the background persistence worker thread
+///   errored.
 ///
 /// # Safety
 ///
@@ -702,8 +694,35 @@ pub extern "C" fn fwd_start_logs(args: LogArgs) -> VoidResult {
 ///   with [`fwd_free_revision`].
 /// - The database handle is not used after this function is called.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidResult {
-    invoke_with_handle(db, drop)
+pub extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidResult {
+    #[cfg(feature = "block-replay")]
+    let _ = replay::flush_to_disk();
+
+    invoke_with_handle(db, |db| db.close())
+}
+
+/// Flushes buffered block replay operations to disk.
+///
+/// This function is only meaningful when the `block-replay` feature is enabled
+/// and the `FIREWOOD_BLOCK_REPLAY_PATH` environment variable is set. Otherwise,
+/// it is a no-op.
+///
+/// # Returns
+///
+/// - [`VoidResult::Ok`] if the flush succeeded or was a no-op.
+/// - [`VoidResult::Err`] if an I/O error occurred during the flush.
+#[unsafe(no_mangle)]
+#[allow(clippy::missing_const_for_fn)] // Can't be const when block-replay is enabled
+pub extern "C" fn fwd_block_replay_flush() -> VoidResult {
+    #[cfg(feature = "block-replay")]
+    {
+        invoke(replay::flush_to_disk)
+    }
+
+    #[cfg(not(feature = "block-replay"))]
+    {
+        VoidResult::Ok
+    }
 }
 
 /// Consumes the [`OwnedBytes`] and frees the memory associated with it.
@@ -724,7 +743,7 @@ pub unsafe extern "C" fn fwd_close_db(db: Option<Box<DatabaseHandle>>) -> VoidRe
 /// it points to is uniquely owned by this object. However, if `bytes.ptr` is null,
 /// this function does nothing.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_owned_bytes(bytes: OwnedBytes) -> VoidResult {
+pub extern "C" fn fwd_free_owned_bytes(bytes: OwnedBytes) -> VoidResult {
     invoke(move || drop(bytes))
 }
 
@@ -746,7 +765,7 @@ pub unsafe extern "C" fn fwd_free_owned_bytes(bytes: OwnedBytes) -> VoidResult {
 /// it points to is uniquely owned by this object. However, if `batch.ptr` is null,
 /// this function does nothing.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_owned_key_value_batch(batch: OwnedKeyValueBatch) -> VoidResult {
+pub extern "C" fn fwd_free_owned_key_value_batch(batch: OwnedKeyValueBatch) -> VoidResult {
     invoke(move || drop(batch))
 }
 
@@ -766,7 +785,7 @@ pub unsafe extern "C" fn fwd_free_owned_key_value_batch(batch: OwnedKeyValueBatc
 ///
 /// The caller must ensure that the `kv` struct is valid.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_free_owned_kv_pair(kv: OwnedKeyValuePair) -> VoidResult {
+pub extern "C" fn fwd_free_owned_kv_pair(kv: OwnedKeyValuePair) -> VoidResult {
     invoke(move || drop(kv))
 }
 
@@ -791,7 +810,7 @@ pub unsafe extern "C" fn fwd_free_owned_kv_pair(kv: OwnedKeyValuePair) -> VoidRe
 /// * call [`fwd_free_owned_bytes`] to free the memory associated with the
 ///   returned value.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_db_dump(db: Option<&DatabaseHandle>) -> ValueResult {
+pub extern "C" fn fwd_db_dump(db: Option<&DatabaseHandle>) -> ValueResult {
     invoke_with_handle(db, handle::DatabaseHandle::dump_to_string)
 }
 
@@ -816,7 +835,7 @@ pub unsafe extern "C" fn fwd_db_dump(db: Option<&DatabaseHandle>) -> ValueResult
 /// * call [`fwd_free_owned_bytes`] to free the memory associated with the
 ///   returned value.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_revision_dump(revision: Option<&RevisionHandle>) -> ValueResult {
+pub extern "C" fn fwd_revision_dump(revision: Option<&RevisionHandle>) -> ValueResult {
     invoke_with_handle(revision, firewood::v2::api::DbView::dump_to_string)
 }
 
@@ -841,6 +860,6 @@ pub unsafe extern "C" fn fwd_revision_dump(revision: Option<&RevisionHandle>) ->
 /// * call [`fwd_free_owned_bytes`] to free the memory associated with the
 ///   returned value.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn fwd_proposal_dump(proposal: Option<&ProposalHandle>) -> ValueResult {
+pub extern "C" fn fwd_proposal_dump(proposal: Option<&ProposalHandle>) -> ValueResult {
     invoke_with_handle(proposal, firewood::v2::api::DbView::dump_to_string)
 }

@@ -1,10 +1,10 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use firewood::v2::api::{self, DbView, HashKey, IntoBatchIter, Proposal as _};
+use firewood::v2::api::{self, BoxKeyValueIter, DbView, HashKey, IntoBatchIter, Proposal as _};
 
-use crate::{IteratorHandle, iterator::CreateIteratorResult};
-use metrics::counter;
+use crate::{IteratorHandle, iterator::CreateIteratorResult, metrics::MetricsContextExt};
+use firewood_metrics::{firewood_increment, firewood_record, fwd_expensive_timed_result};
 
 /// An opaque wrapper around a Proposal that also retains a reference to the
 /// database handle it was created from.
@@ -21,7 +21,7 @@ impl<'db> DbView for ProposalHandle<'db> {
     where
         Self: 'view;
 
-    fn root_hash(&self) -> Result<Option<HashKey>, api::Error> {
+    fn root_hash(&self) -> Option<HashKey> {
         self.proposal.root_hash()
     }
 
@@ -63,20 +63,11 @@ impl ProposalHandle<'_> {
 
     /// Consume and commit a proposal.
     ///
-    /// # Arguments
-    ///
-    /// - `token`: An callback function that will be called with the duration
-    ///   of the commit operation. This will be dropped without being called if
-    ///   the commit fails.
-    ///
     /// # Errors
     ///
     /// This function will return an error if committing the proposal fails or if the
     /// proposal is empty.
-    pub fn commit_proposal(
-        self,
-        token: impl FnOnce(coarsetime::Duration),
-    ) -> Result<Option<HashKey>, api::Error> {
+    pub fn commit_proposal(self) -> Result<Option<HashKey>, api::Error> {
         let ProposalHandle {
             hash_key,
             proposal,
@@ -89,14 +80,15 @@ impl ProposalHandle<'_> {
             _ = handle.get_root(hash_key.clone());
         }
 
-        let start_time = coarsetime::Instant::now();
-        proposal.commit()?;
-        let commit_time = start_time.elapsed();
+        let (commit_result, commit_time) =
+            fwd_expensive_timed_result!(crate::registry::COMMIT_MS_BUCKET, proposal.commit());
+        commit_result?;
 
         // clear the cached view so that it does not hold onto the proposal view
         handle.clear_cached_view();
 
-        token(commit_time);
+        firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis() as u64);
+        firewood_increment!(crate::registry::COMMIT_COUNT, 1);
 
         Ok(hash_key)
     }
@@ -108,13 +100,17 @@ impl ProposalHandle<'_> {
         let it = self
             .iter_option(first_key)
             .expect("infallible; see issue #1329");
-        CreateIteratorResult(IteratorHandle::new(self.proposal.view(), Box::new(it)))
+        CreateIteratorResult(IteratorHandle::new(
+            self.proposal.view(),
+            Box::new(it) as BoxKeyValueIter<'_>,
+            self.handle.metrics_context(),
+        ))
     }
 }
+
 #[derive(Debug)]
 pub struct CreateProposalResult<'db> {
     pub handle: ProposalHandle<'db>,
-    pub start_time: coarsetime::Instant,
 }
 
 impl<'db> CreateProposalResult<'db> {
@@ -122,13 +118,18 @@ impl<'db> CreateProposalResult<'db> {
         handle: &'db crate::DatabaseHandle,
         f: impl FnOnce() -> Result<firewood::db::Proposal<'db>, api::Error>,
     ) -> Result<Self, api::Error> {
-        let start_time = coarsetime::Instant::now();
-        let proposal = f()?;
-        let propose_time = start_time.elapsed();
-        counter!("firewood.ffi.propose_ms").increment(propose_time.as_millis());
-        counter!("firewood.ffi.propose").increment(1);
+        let (proposal_result, propose_time) =
+            fwd_expensive_timed_result!(crate::registry::PROPOSE_MS_BUCKET, f());
+        let proposal = proposal_result?;
+        firewood_increment!(crate::registry::PROPOSE_MS, propose_time.as_millis() as u64);
+        firewood_increment!(crate::registry::PROPOSE_COUNT, 1);
+        firewood_record!(
+            crate::registry::PROPOSE_MS_BUCKET,
+            propose_time.as_secs_f64() * 1000.0,
+            expensive
+        );
 
-        let hash_key = proposal.root_hash()?;
+        let hash_key = proposal.root_hash();
 
         Ok(CreateProposalResult {
             handle: ProposalHandle {
@@ -136,7 +137,6 @@ impl<'db> CreateProposalResult<'db> {
                 proposal,
                 handle,
             },
-            start_time,
         })
     }
 }
@@ -200,5 +200,11 @@ impl<'db> CView<'db> for &ProposalHandle<'db> {
         values: impl IntoBatchIter,
     ) -> Result<firewood::db::Proposal<'db>, api::Error> {
         self.proposal.propose(values)
+    }
+}
+
+impl crate::MetricsContextExt for ProposalHandle<'_> {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
+        self.handle.metrics_context()
     }
 }

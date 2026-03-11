@@ -2,6 +2,127 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-02-26
+
+### 🚀 Features
+
+- Creating change proofs using FFI ([#1637](https://github.com/ava-labs/firewood/pull/1637))
+- *(db)* Add explicit close() method ([#1650](https://github.com/ava-labs/firewood/pull/1650))
+- Defer persist every commit ([#1656](https://github.com/ava-labs/firewood/pull/1656))
+- *(fwdctl/launch)* Add feature-gated fwdctl EC2 deploy workflow for benchmark setup (1/4) ([#1662](https://github.com/ava-labs/firewood/pull/1662))
+- *(fwdctl/launch)* Add SSM-based monitor/follow flow for cloud-init and bootstrap progress (2/4) ([#1663](https://github.com/ava-labs/firewood/pull/1663))
+- Node cache entry-based to memory-based LRU ([#1677](https://github.com/ava-labs/firewood/pull/1677))
+- Change proof serialization/deserialization ([#1638](https://github.com/ava-labs/firewood/pull/1638))
+- Defer persist every `N` commits ([#1657](https://github.com/ava-labs/firewood/pull/1657))
+- *(ffi)* Remove explicit garbage collection call ([#1681](https://github.com/ava-labs/firewood/pull/1681))
+- Change proof verification and proposal creation ([#1641](https://github.com/ava-labs/firewood/pull/1641))
+- *(fwdctl/launch)* Add scenario-driven deploy, list/kill instance management, and dry-run planning (3/4) ([#1664](https://github.com/ava-labs/firewood/pull/1664))
+- [**breaking**] Remove error returned by Hash ([#1671](https://github.com/ava-labs/firewood/pull/1671))
+- *(fwdctl/launch)* Add docs, deprecate aws-launch.sh (4/4) ([#1665](https://github.com/ava-labs/firewood/pull/1665))
+- *(ffi)* [**breaking**] Add optional node cache memory limit to open args ([#1713](https://github.com/ava-labs/firewood/pull/1713))
+- Change proof commit and find next key ([#1646](https://github.com/ava-labs/firewood/pull/1646))
+
+### 🐛 Bug Fixes
+
+- *(flake)* Grab version from correct location ([#1630](https://github.com/ava-labs/firewood/pull/1630))
+- *(storage)* Handle possible short writes ([#1635](https://github.com/ava-labs/firewood/pull/1635))
+- *(ffi)* Force correct alignment on certain c structs ([#1652](https://github.com/ava-labs/firewood/pull/1652))
+- *(db)* Lock in-memory revisions during commit critical section ([#1661](https://github.com/ava-labs/firewood/pull/1661))
+- *(track-performance)* Fail hard on gh errors  ([#1659](https://github.com/ava-labs/firewood/pull/1659))
+- *(track-performance)* Stale cron expression in daily bench ([#1667](https://github.com/ava-labs/firewood/pull/1667))
+- *(ffi)* Prevent potential use-after-free in Go Iterator ([#1688](https://github.com/ava-labs/firewood/pull/1688))
+- Avoid holding the last_committed_revision arc ([#1685](https://github.com/ava-labs/firewood/pull/1685))
+- Acquire lock for displaying MaybePersistedNode ([#1719](https://github.com/ava-labs/firewood/pull/1719))
+
+### 🚜 Refactor
+
+- Decouple header from `NodeStore` ([#1618](https://github.com/ava-labs/firewood/pull/1618))
+- Close consumes itself ([#1701](https://github.com/ava-labs/firewood/pull/1701))
+- Stop keeping around the last committed revision ([#1690](https://github.com/ava-labs/firewood/pull/1690))
+
+### 📚 Documentation
+
+- Update comments on Arc::try_unwrap safety ([#1649](https://github.com/ava-labs/firewood/pull/1649))
+- Update README to include archival support ([#1674](https://github.com/ava-labs/firewood/pull/1674))
+
+### ⚡ Performance
+
+- Increase limits and monitor freelist cache size better ([#1668](https://github.com/ava-labs/firewood/pull/1668))
+- *(ffi)* [**breaking**] Remove Pinner interface ([#1721](https://github.com/ava-labs/firewood/pull/1721))
+
+### ⚙️ Miscellaneous Tasks
+
+- Build and lint with --all-features ([#1636](https://github.com/ava-labs/firewood/pull/1636))
+- *(perf)* Track Firewood Performance via AvalancheGo Benchmarks ([#1493](https://github.com/ava-labs/firewood/pull/1493))
+- Add Bernard as codeowner ([#1647](https://github.com/ava-labs/firewood/pull/1647))
+- Add benchmark workflow ([#1643](https://github.com/ava-labs/firewood/pull/1643))
+- Add scheduled benchmark runs ([#1639](https://github.com/ava-labs/firewood/pull/1639)) ([#1645](https://github.com/ava-labs/firewood/pull/1645))
+- *(track-performance)* Local iteration ([#1642](https://github.com/ava-labs/firewood/pull/1642))
+- Update to go 1.24.12 ([#1658](https://github.com/ava-labs/firewood/pull/1658))
+- Trace->info logging ([#1682](https://github.com/ava-labs/firewood/pull/1682))
+- Add deferred persistence benchmark ([#1670](https://github.com/ava-labs/firewood/pull/1670))
+- *(ffi)* Update CGO LDFLAGS to include -ldl ([#1686](https://github.com/ava-labs/firewood/pull/1686))
+- Github actions security audit ([#1691](https://github.com/ava-labs/firewood/pull/1691))
+- *(deps)* Bump the github-actions group with 14 updates ([#1695](https://github.com/ava-labs/firewood/pull/1695))
+- *(ci)* Update .golangci.yaml ([#1703](https://github.com/ava-labs/firewood/pull/1703))
+- Add RootStore metrics ([#1680](https://github.com/ava-labs/firewood/pull/1680))
+- Bump go to 1.25.7 ([#1707](https://github.com/ava-labs/firewood/pull/1707))
+
+## [0.1.0] - 2026-01-20
+
+### 🚀 Features
+
+- *(metrics)* Switch to `metrics-exporter-prometheus` and histogram support in FFI ([#1490](https://github.com/ava-labs/firewood/pull/1490))
+- [**breaking**] Use AWS profile in launch script ([#1587](https://github.com/ava-labs/firewood/pull/1587))
+- *(metrics)* [**breaking**] Proposal tracking ([#1571](https://github.com/ava-labs/firewood/pull/1571))
+- Add `FlushAndSync()` ([#1595](https://github.com/ava-labs/firewood/pull/1595))
+- Difference iterator for change proofs part 1 ([#1553](https://github.com/ava-labs/firewood/pull/1553))
+- *(replay)* Add `firewood-replay` crate for operation recording and replay (1/5) ([#1590](https://github.com/ava-labs/firewood/pull/1590))
+- Difference iterator for change proofs part 2 ([#1554](https://github.com/ava-labs/firewood/pull/1554))
+- Difference iterator for change proofs part 3 ([#1555](https://github.com/ava-labs/firewood/pull/1555))
+- *(ffi/replay)* Add `block-replay` feature for recording FFI operations (2/5) ([#1591](https://github.com/ava-labs/firewood/pull/1591))
+- *(ffi/replay)* Add Go replay log decoder and execution tests (3/5) ([#1592](https://github.com/ava-labs/firewood/pull/1592))
+- *(fwdctl/replay)* Add command for replaying recorded operations (4/5) ([#1593](https://github.com/ava-labs/firewood/pull/1593))
+- CodeHashes() for range proofs ([#1597](https://github.com/ava-labs/firewood/pull/1597))
+- [**breaking**] Remove `GetFromRoot` API ([#1614](https://github.com/ava-labs/firewood/pull/1614))
+- [**breaking**] Make `NodeHashAlgorithm` a required option on storage ([#1608](https://github.com/ava-labs/firewood/pull/1608))
+- Add cargo_version and git_describe to storage header ([#1611](https://github.com/ava-labs/firewood/pull/1611))
+- [**breaking**] Add the hash of the root node to the header ([#1612](https://github.com/ava-labs/firewood/pull/1612))
+- *(metrics)* Metrics crate, separate registries and expensive metrics (1/2) ([#1619](https://github.com/ava-labs/firewood/pull/1619))
+- *(metrics)* Integrate FFI with expensive metrics and add Go tests (2/2) ([#1620](https://github.com/ava-labs/firewood/pull/1620))
+- *(ffi)* BatchOp in FFI ([#1624](https://github.com/ava-labs/firewood/pull/1624))
+
+### 🐛 Bug Fixes
+
+- Eager evaluation causing fjall store creation when root_store disabled ([#1577](https://github.com/ava-labs/firewood/pull/1577))
+- *(ci)* Update golang-ci patch ([#1584](https://github.com/ava-labs/firewood/pull/1584))
+- *(benchmark)* Align metrics config with new avalanchego task format ([#1580](https://github.com/ava-labs/firewood/pull/1580))
+- *(benchmark/bootstrap)* Update script to use new task ([#1601](https://github.com/ava-labs/firewood/pull/1601))
+
+### 🚜 Refactor
+
+- Replace counter! with firewood_counter! macro ([#1569](https://github.com/ava-labs/firewood/pull/1569))
+- Simplify `into_committed()` ([#1621](https://github.com/ava-labs/firewood/pull/1621))
+- *(checker)* Extract `check_area_aligned()` from `NodeStore` ([#1623](https://github.com/ava-labs/firewood/pull/1623))
+
+### 📚 Documentation
+
+- *(ffi)* Update iterator documentation ([#1585](https://github.com/ava-labs/firewood/pull/1585))
+- *(nodestore)* Expand header documentation ([#1610](https://github.com/ava-labs/firewood/pull/1610))
+
+### ⚡ Performance
+
+- *(ffi)* Elide panic handling if not needed ([#1606](https://github.com/ava-labs/firewood/pull/1606))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(ffi)* Add `io-uring` feature flag ([#1565](https://github.com/ava-labs/firewood/pull/1565))
+- Add Rodrigo as codeowner ([#1573](https://github.com/ava-labs/firewood/pull/1573))
+- Stop fwdctl from rebuilding every time ([#1574](https://github.com/ava-labs/firewood/pull/1574))
+- Remove 'firewood' from metric names ([#1581](https://github.com/ava-labs/firewood/pull/1581))
+- Update to go 1.24.11 ([#1599](https://github.com/ava-labs/firewood/pull/1599))
+- [**breaking**] Remove `FlushAndSyncRoot()` API ([#1617](https://github.com/ava-labs/firewood/pull/1617))
+
 ## [0.0.18] - 2025-12-17
 
 ### 🐛 Bug Fixes

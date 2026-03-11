@@ -188,15 +188,13 @@ impl MaybePersistedNode {
 /// If instead you want the node itself, use [`MaybePersistedNode::as_shared_node`] first.
 impl Display for MaybePersistedNode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.0.try_lock() {
-            Some(guard) => match &*guard {
-                MaybePersisted::Unpersisted(node) => write!(f, "M{:p}", (*node).as_ptr()),
-                MaybePersisted::Allocated(addr, node) => {
-                    write!(f, "A{:p}@{addr}", (*node).as_ptr())
-                }
-                MaybePersisted::Persisted(addr) => write!(f, "{addr}"),
-            },
-            None => write!(f, "<locked>"),
+        let guard = self.0.lock();
+        match &*guard {
+            MaybePersisted::Unpersisted(node) => write!(f, "M{:p}", (*node).as_ptr()),
+            MaybePersisted::Allocated(addr, node) => {
+                write!(f, "A{:p}@{addr}", (*node).as_ptr())
+            }
+            MaybePersisted::Persisted(addr) => write!(f, "{addr}"),
         }
     }
 }
@@ -225,7 +223,7 @@ mod test {
 
     #[test]
     fn test_maybe_persisted_node() -> Result<(), FileIoError> {
-        let mem_store = MemStore::new(vec![]).into();
+        let mem_store = MemStore::default().into();
         let store = NodeStore::new_empty_committed(mem_store);
         let node = SharedNode::new(Node::Leaf(LeafNode {
             partial_path: Path::new(),
@@ -256,7 +254,7 @@ mod test {
 
     #[test]
     fn test_clone_shares_underlying_shared_node() -> Result<(), FileIoError> {
-        let mem_store = MemStore::new(vec![]).into();
+        let mem_store = MemStore::default().into();
         let store = NodeStore::new_empty_committed(mem_store);
         let node = SharedNode::new(Node::Leaf(LeafNode {
             partial_path: Path::new(),

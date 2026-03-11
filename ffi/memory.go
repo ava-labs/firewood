@@ -11,18 +11,11 @@ import "C"
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"unsafe"
 )
 
-var (
-	errKeysAndValues = errors.New("keys and values must have the same length")
-	errFreeingValue  = errors.New("unexpected error while freeing value")
-)
-
-type Pinner interface {
-	Pin(ptr any)
-	Unpin()
-}
+var errFreeingValue = errors.New("unexpected error while freeing value")
 
 // Borrower is an interface for types that can borrow or copy bytes returned
 // from FFI methods.
@@ -59,7 +52,7 @@ var _ Borrower = (*ownedBytes)(nil)
 // newBorrowedBytes creates a new BorrowedBytes from a Go byte slice.
 //
 // Provide a Pinner to ensure the memory is pinned while the BorrowedBytes is in use.
-func newBorrowedBytes(slice []byte, pinner Pinner) C.BorrowedBytes {
+func newBorrowedBytes(slice []byte, pinner *runtime.Pinner) C.BorrowedBytes {
 	// Get the pointer first to distinguish between nil slice and empty slice
 	ptr := unsafe.SliceData(slice)
 	sliceLen := len(slice)
@@ -81,56 +74,66 @@ func newBorrowedBytes(slice []byte, pinner Pinner) C.BorrowedBytes {
 	}
 }
 
-// newKeyValuePair creates a new KeyValuePair from Go byte slices for key and value.
+// newCBatchOp creates a new C.BatchOp from a Go BatchOp.
 //
-// Provide a Pinner to ensure the memory is pinned while the KeyValuePair is in use.
-func newKeyValuePair(key, value []byte, pinner Pinner) C.KeyValuePair {
-	return C.KeyValuePair{
-		key:   newBorrowedBytes(key, pinner),
-		value: newBorrowedBytes(value, pinner),
+// Provide a Pinner to ensure the memory is pinned while the C.BatchOp is in use.
+func newCBatchOp(op BatchOp, pinner *runtime.Pinner) C.BatchOp {
+	var cOp C.BatchOp
+	cOp.tag = op.tag
+	switch op.tag {
+	case C.BatchOp_Put:
+		*(*C.BatchOp_Put_Body)(unsafe.Pointer(&cOp.anon0)) = C.BatchOp_Put_Body{
+			key:   newBorrowedBytes(op.key, pinner),
+			value: newBorrowedBytes(op.value, pinner),
+		}
+	case C.BatchOp_Delete:
+		*(*C.BatchOp_Delete_Body)(unsafe.Pointer(&cOp.anon0)) = C.BatchOp_Delete_Body{
+			key: newBorrowedBytes(op.key, pinner),
+		}
+	case C.BatchOp_DeleteRange:
+		*(*C.BatchOp_DeleteRange_Body)(unsafe.Pointer(&cOp.anon0)) = C.BatchOp_DeleteRange_Body{
+			prefix: newBorrowedBytes(op.key, pinner),
+		}
 	}
+	return cOp
 }
 
-// newBorrowedKeyValuePairs creates a new BorrowedKeyValuePairs from a slice of KeyValuePair.
+// newBorrowedBatchOps creates a new BorrowedBatchOps from a slice of C.BatchOp.
 //
-// Provide a Pinner to ensure the memory is pinned while the BorrowedKeyValuePairs is
+// Provide a Pinner to ensure the memory is pinned while the BorrowedBatchOps is
 // in use.
-func newBorrowedKeyValuePairs(pairs []C.KeyValuePair, pinner Pinner) C.BorrowedKeyValuePairs {
-	sliceLen := len(pairs)
+func newBorrowedBatchOps(ops []C.BatchOp, pinner *runtime.Pinner) C.BorrowedBatchOps {
+	sliceLen := len(ops)
 	if sliceLen == 0 {
-		return C.BorrowedKeyValuePairs{ptr: nil, len: 0}
+		return C.BorrowedBatchOps{ptr: nil, len: 0}
 	}
 
-	ptr := unsafe.SliceData(pairs)
+	ptr := unsafe.SliceData(ops)
 	if ptr == nil {
-		return C.BorrowedKeyValuePairs{ptr: nil, len: 0}
+		return C.BorrowedBatchOps{ptr: nil, len: 0}
 	}
 
 	pinner.Pin(ptr)
 
-	return C.BorrowedKeyValuePairs{
+	return C.BorrowedBatchOps{
 		ptr: ptr,
 		len: C.size_t(sliceLen),
 	}
 }
 
-// newKeyValuePairs creates a new BorrowedKeyValuePairs from slices of keys and values.
+// newKeyValuePairsFromBatch creates a new BorrowedBatchOps from a slice of BatchOp.
 //
-// The keys and values must have the same length.
-//
-// Provide a Pinner to ensure the memory is pinned while the BorrowedKeyValuePairs is
+// Provide a Pinner to ensure the memory is pinned while the BorrowedBatchOps is
 // in use.
-func newKeyValuePairs(keys, vals [][]byte, pinner Pinner) (C.BorrowedKeyValuePairs, error) {
-	if len(keys) != len(vals) {
-		return C.BorrowedKeyValuePairs{}, fmt.Errorf("%w: %d != %d", errKeysAndValues, len(keys), len(vals))
+func newKeyValuePairsFromBatch(batch []BatchOp, pinner *runtime.Pinner) C.BorrowedBatchOps {
+	if len(batch) == 0 {
+		return C.BorrowedBatchOps{ptr: nil, len: 0}
 	}
-
-	pairs := make([]C.KeyValuePair, len(keys))
-	for i := range keys {
-		pairs[i] = newKeyValuePair(keys[i], vals[i], pinner)
+	ops := make([]C.BatchOp, len(batch))
+	for i, op := range batch {
+		ops[i] = newCBatchOp(op, pinner)
 	}
-
-	return newBorrowedKeyValuePairs(pairs, pinner), nil
+	return newBorrowedBatchOps(ops, pinner)
 }
 
 // ownedBytes is a wrapper around C.OwnedBytes that provides a Go interface

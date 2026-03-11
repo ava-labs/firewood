@@ -20,9 +20,9 @@ Before making changes, create a new branch (if not already on one):
 
 ```console
 $ git fetch
-$ git switch -c release/v0.0.19 origin/main
-branch 'release/v0.0.19' set up to track 'origin/main'.
-Switched to a new branch 'release/v0.0.19'
+$ git switch -c release/v0.1.1 origin/main
+branch 'release/v0.1.1' set up to track 'origin/main'.
+Switched to a new branch 'release/v0.1.1'
 ```
 
 If already on a new branch, ensure `HEAD` is the same as the remote's `main`.
@@ -32,7 +32,7 @@ from `git cliff` follow the repository history in the correct linear order.
 On rebase, quickly redo the generative steps with `just`:
 
 ```shell
-just release-step-update-rust-dependencies && just release-step-refresh-changelog v0.0.19
+just release-step-update-rust-dependencies && just release-step-refresh-changelog v0.1.1
 ```
 
 ## Dependency upgrades
@@ -74,25 +74,9 @@ Go dependencies are updated on an as-needed basis, usually for security.
 
 ## Package Version
 
-Next, update the workspace version and ensure all crates within the firewood
-project are using the version of the new release. The root [Cargo.toml](Cargo.toml)
-file uses the [`[workspace.package]`](https://doc.rust-lang.org/cargo/reference/workspaces.html#the-package-table)
-table to define the version for all subpackages.
+Next, update the workspace versions as needed. Only the packages with changes should have their version bumped. Transitive changes do not require a version bump unless the transitive dependency requires a semver upgrade.
 
-```toml
-[workspace.package]
-version = "0.0.19"
-```
-
-Each package inherits this version by setting `package.version.workspace = true`.
-
-```toml
-[package]
-name = "firewood"
-version.workspace = true
-```
-
-Therefore, updating only the version defined in the root config is needed.
+For semver breaking changes, all downstream packages require upgrading to the new version as well.
 
 ## Dependency Version
 
@@ -105,7 +89,7 @@ table. E.g.,:
 ```toml
 [workspace.dependencies]
 # workspace local packages
-firewood = { path = "firewood", version = "0.0.19" }
+firewood = { path = "firewood", version = "0.1.1" }
 ```
 
 This allows packages within the workspace to inherit the dependency,
@@ -136,10 +120,10 @@ is correct and reflects the new package versions.
 To build the changelog, see git-cliff.org. Short version:
 
 ```sh
-just release-step-refresh-changelog v0.0.19
+just release-step-refresh-changelog v0.1.1
 ```
 
-where `v0.0.19` is the newest tag. This is a required paramter to ensure the
+where `v0.1.1` is the newest tag. This is a required paramter to ensure the
 changelog has the correct headers.
 
 ## Commit
@@ -169,11 +153,11 @@ To trigger a release, push a tag to the main branch matching the new version,
 # be sure to switch back to the main branch before tagging
 git checkout main
 git pull --prune
-git tag -s -a v0.0.19 -m 'Release v0.0.19'
-git push origin v0.0.19
+git tag -s -a v0.1.1 -m 'Release v0.1.1'
+git push origin v0.1.1
 ```
 
-for `v0.0.19` for the merged version change. The CI will automatically publish a
+for `v0.1.1` for the merged version change. The CI will automatically publish a
 draft release which consists of release notes and changes (see
 [.github/workflows/release.yaml](.github/workflows/release.yaml)).
 

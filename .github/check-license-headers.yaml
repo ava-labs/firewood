@@ -58,7 +58,7 @@
       "clippy.toml",
       "**/tests/compile_*/**",
       "justfile",
-      "scripts/run-just.sh",
+      "scripts/**",
     ],
   }
 ]

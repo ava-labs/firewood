@@ -548,7 +548,7 @@ fn as_enumerated_children_iter(
         .filter_map(|(pos, child)| child.map(|child| (pos, child)))
 }
 
-fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
+pub(crate) fn key_from_nibble_iter<Iter: Iterator<Item = u8>>(mut nibbles: Iter) -> Key {
     let mut data = Vec::with_capacity(nibbles.size_hint().0 / 2);
 
     while let (Some(hi), Some(lo)) = (nibbles.next(), nibbles.next()) {
@@ -637,7 +637,7 @@ mod tests {
     }
 
     pub(super) fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
-        let memstore = MemStore::new(vec![]);
+        let memstore = MemStore::default();
         let memstore = Arc::new(memstore);
         let nodestore = NodeStore::new_empty_proposal(memstore);
         Merkle::from(nodestore)

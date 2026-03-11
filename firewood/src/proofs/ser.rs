@@ -15,7 +15,12 @@ use super::{
     header::Header,
     types::{ProofNode, ProofType},
 };
-use crate::v2::api::FrozenRangeProof;
+use crate::{
+    db::BatchOp,
+    merkle::{Key, Value},
+    proofs::magic::{BATCH_DELETE, BATCH_DELETE_RANGE, BATCH_PUT},
+    v2::api::{FrozenChangeProof, FrozenRangeProof},
+};
 
 impl FrozenRangeProof {
     /// Serializes this proof into the provided byte vector.
@@ -78,6 +83,13 @@ impl FrozenRangeProof {
     }
 }
 
+impl FrozenChangeProof {
+    pub fn write_to_vec(&self, out: &mut Vec<u8>) {
+        Header::from(ProofType::Change).write_item(out);
+        self.write_item(out);
+    }
+}
+
 trait PushVarInt {
     fn push_var_int<VI: VarInt>(&mut self, v: VI);
 }
@@ -100,6 +112,37 @@ impl WriteItem for FrozenRangeProof {
         self.start_proof().write_item(out);
         self.end_proof().write_item(out);
         self.key_values().write_item(out);
+    }
+}
+
+impl WriteItem for FrozenChangeProof {
+    fn write_item(&self, out: &mut Vec<u8>) {
+        self.start_proof().write_item(out);
+        self.end_proof().write_item(out);
+        self.batch_ops().write_item(out);
+    }
+}
+
+impl WriteItem for [BatchOp<Key, Value>] {
+    fn write_item(&self, out: &mut Vec<u8>) {
+        out.push_var_int(self.len());
+        for item in self {
+            match item {
+                BatchOp::Put { key, value } => {
+                    out.push(BATCH_PUT);
+                    key.write_item(out);
+                    value.write_item(out);
+                }
+                BatchOp::Delete { key } => {
+                    out.push(BATCH_DELETE);
+                    key.write_item(out);
+                }
+                BatchOp::DeleteRange { prefix } => {
+                    out.push(BATCH_DELETE_RANGE);
+                    prefix.write_item(out);
+                }
+            }
+        }
     }
 }
 

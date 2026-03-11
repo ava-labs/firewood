@@ -6,11 +6,14 @@ package eth
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"math/rand"
-	"path"
+	"runtime"
 	"slices"
 	"testing"
+	"time"
 
+	"github.com/ava-labs/firewood-go-ethhash/ffi"
 	firewood "github.com/ava-labs/firewood-go-ethhash/ffi"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/rawdb"
@@ -21,6 +24,7 @@ import (
 	"github.com/ava-labs/libevm/trie/trienode"
 	"github.com/ava-labs/libevm/triedb"
 	"github.com/holiman/uint256"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -35,17 +39,15 @@ const (
 	maxStep
 )
 
-var (
-	stepMap = map[byte]string{
-		commit:        "commit",
-		createAccount: "createAccount",
-		updateAccount: "updateAccount",
-		deleteAccount: "deleteAccount",
-		addStorage:    "addStorage",
-		updateStorage: "updateStorage",
-		deleteStorage: "deleteStorage",
-	}
-)
+var stepMap = map[byte]string{
+	commit:        "commit",
+	createAccount: "createAccount",
+	updateAccount: "updateAccount",
+	deleteAccount: "deleteAccount",
+	addStorage:    "addStorage",
+	updateStorage: "updateStorage",
+	deleteStorage: "deleteStorage",
+}
 
 type merkleTriePair struct {
 	fwdDB       *firewood.Database
@@ -62,24 +64,48 @@ type merkleTriePair struct {
 
 	// pending changes to both firewood and eth database
 	openStorageTries map[common.Address]state.Trie
-	pendingFwdKeys   [][]byte
-	pendingFwdVals   [][]byte
+	pendingFwdBatch  []firewood.BatchOp
+}
+
+// oneSecCtx returns `tb.Context()` with a 1-second timeout added. Any existing
+// cancellation on `tb.Context()` is removed, which allows this function to be
+// used inside a `tb.Cleanup()`
+func oneSecCtx(tb testing.TB) context.Context {
+	ctx := context.WithoutCancel(tb.Context())
+	ctx, cancel := context.WithTimeout(ctx, time.Second)
+	tb.Cleanup(cancel)
+	return ctx
+}
+
+func newFirewoodDB(t *testing.T) *firewood.Database {
+	t.Helper()
+	r := require.New(t)
+
+	db, err := firewood.New(t.TempDir(), firewood.EthereumNodeHashing)
+	r.NoError(err, "firewood.New()")
+	t.Cleanup(func() {
+		err := db.Close(oneSecCtx(t))
+		if errors.Is(err, ffi.ErrActiveKeepAliveHandles) {
+			// force a GC to clean up dangling handles that are preventing the
+			// database from closing, then try again. Intentionally not looping
+			// since a subsequent attempt is unlikely to succeed if the first
+			// one didn't.
+			runtime.GC()
+			err = db.Close(oneSecCtx(t))
+		}
+		assert.NoError(t, err, "%T.Close()", db)
+	})
+	return db
 }
 
 func newMerkleTriePair(t *testing.T) *merkleTriePair {
 	r := require.New(t)
 
-	file := path.Join(t.TempDir(), "test.db")
-	db, err := firewood.New(file)
-	r.NoError(err)
-
+	db := newFirewoodDB(t)
 	tdb := state.NewDatabaseWithConfig(rawdb.NewMemoryDatabase(), triedb.HashDefaults)
 	ethRoot := types.EmptyRootHash
 	tr, err := tdb.OpenTrie(ethRoot)
 	r.NoError(err)
-	t.Cleanup(func() {
-		r.NoError(db.Close(context.Background())) //nolint:usetesting // t.Context() will already be cancelled
-	})
 
 	return &merkleTriePair{
 		fwdDB:                      db,
@@ -114,10 +140,9 @@ func (tr *merkleTriePair) commit() {
 		tr.require.NoError(tr.accountTrie.UpdateAccount(addr, acc))
 
 		accHash := crypto.Keccak256(addr[:])
-		tr.pendingFwdKeys = append(tr.pendingFwdKeys, accHash[:])
 		updatedAccountRLP, err := rlp.EncodeToBytes(acc)
 		tr.require.NoError(err)
-		tr.pendingFwdVals = append(tr.pendingFwdVals, updatedAccountRLP)
+		tr.pendingFwdBatch = append(tr.pendingFwdBatch, firewood.Put(accHash[:], updatedAccountRLP))
 	}
 
 	updatedRoot, set, err := tr.accountTrie.Commit(true)
@@ -131,12 +156,11 @@ func (tr *merkleTriePair) commit() {
 	tr.require.NoError(tr.ethDatabase.TrieDB().Update(updatedRoot, tr.lastRoot, 0, mergedNodeSet, nil))
 	tr.lastRoot = updatedRoot
 
-	fwdRoot, err := tr.fwdDB.Update(tr.pendingFwdKeys, tr.pendingFwdVals)
+	fwdRoot, err := tr.fwdDB.Update(tr.pendingFwdBatch)
 	tr.require.NoError(err)
 	tr.require.Equal(updatedRoot, common.Hash(fwdRoot))
 
-	tr.pendingFwdKeys = nil
-	tr.pendingFwdVals = nil
+	tr.pendingFwdBatch = nil
 	tr.openStorageTries = make(map[common.Address]state.Trie)
 
 	tr.accountTrie, err = tr.ethDatabase.OpenTrie(tr.lastRoot)
@@ -162,8 +186,7 @@ func (tr *merkleTriePair) createAccount() {
 	tr.require.NoError(err)
 	tr.currentAddrs = append(tr.currentAddrs, addr)
 
-	tr.pendingFwdKeys = append(tr.pendingFwdKeys, accHash[:])
-	tr.pendingFwdVals = append(tr.pendingFwdVals, accountRLP)
+	tr.pendingFwdBatch = append(tr.pendingFwdBatch, firewood.Put(accHash[:], accountRLP))
 }
 
 // selectAccount returns a random account and account hash for the provided index
@@ -188,8 +211,7 @@ func (tr *merkleTriePair) updateAccount(addrIndex int) {
 	err = tr.accountTrie.UpdateAccount(addr, acc)
 	tr.require.NoError(err)
 
-	tr.pendingFwdKeys = append(tr.pendingFwdKeys, accHash[:])
-	tr.pendingFwdVals = append(tr.pendingFwdVals, accountRLP)
+	tr.pendingFwdBatch = append(tr.pendingFwdBatch, firewood.Put(accHash[:], accountRLP))
 }
 
 // deleteAccount selects a random account and deletes it from both tries and the tracked
@@ -202,8 +224,8 @@ func (tr *merkleTriePair) deleteAccount(accountIndex int) {
 		return deleteAddr == addr
 	})
 
-	tr.pendingFwdKeys = append(tr.pendingFwdKeys, accHash[:])
-	tr.pendingFwdVals = append(tr.pendingFwdVals, nil)
+	// an account's storage is under the account hash prefix
+	tr.pendingFwdBatch = append(tr.pendingFwdBatch, firewood.PrefixDelete(accHash[:]))
 }
 
 // openStorageTrie opens the storage trie for the provided account address.
@@ -249,10 +271,10 @@ func (tr *merkleTriePair) addStorage(accountIndex int) {
 	tr.require.NoError(err)
 
 	// Update storage key-value pair in firewood
-	tr.pendingFwdKeys = append(tr.pendingFwdKeys, append(accHash[:], keyHash[:]...))
+	fwdKey := append(accHash[:], keyHash[:]...)
 	encodedVal, err := rlp.EncodeToBytes(val[:])
 	tr.require.NoError(err)
-	tr.pendingFwdVals = append(tr.pendingFwdVals, encodedVal)
+	tr.pendingFwdBatch = append(tr.pendingFwdBatch, firewood.Put(fwdKey, encodedVal))
 
 	tr.currentStorageInputIndices[addr]++
 }
@@ -273,10 +295,10 @@ func (tr *merkleTriePair) updateStorage(accountIndex int, storageIndexInput uint
 	str := tr.openStorageTrie(addr)
 	tr.require.NoError(str.UpdateStorage(addr, storageKey[:], updatedVal[:]))
 
-	tr.pendingFwdKeys = append(tr.pendingFwdKeys, append(accHash[:], storageKeyHash[:]...))
+	fwdKey := append(accHash[:], storageKeyHash[:]...)
 	updatedValRLP, err := rlp.EncodeToBytes(updatedVal[:])
 	tr.require.NoError(err)
-	tr.pendingFwdVals = append(tr.pendingFwdVals, updatedValRLP[:])
+	tr.pendingFwdBatch = append(tr.pendingFwdBatch, firewood.Put(fwdKey, updatedValRLP[:]))
 }
 
 // deleteStorage selects an account and deletes an existing storage key-value pair
@@ -291,8 +313,8 @@ func (tr *merkleTriePair) deleteStorage(accountIndex int, storageIndexInput uint
 	str := tr.openStorageTrie(addr)
 	tr.require.NoError(str.DeleteStorage(addr, storageKey[:]))
 
-	tr.pendingFwdKeys = append(tr.pendingFwdKeys, append(accHash[:], storageKeyHash[:]...))
-	tr.pendingFwdVals = append(tr.pendingFwdVals, nil)
+	fwdKey := append(accHash[:], storageKeyHash[:]...)
+	tr.pendingFwdBatch = append(tr.pendingFwdBatch, firewood.Delete(fwdKey))
 }
 
 func FuzzFirewoodTree(f *testing.F) {

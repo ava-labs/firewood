@@ -20,7 +20,7 @@ package ffi
 // #cgo LDFLAGS: -L${SRCDIR}/../target/release
 // #cgo LDFLAGS: -L${SRCDIR}/../target/maxperf
 // // FIREWOOD_CGO_END_LOCAL_LIBS
-// #cgo LDFLAGS: -lfirewood_ffi -lm
+// #cgo LDFLAGS: -lfirewood_ffi -lm -ldl
 // #include <stdlib.h>
 // #include "firewood.h"
 import "C"
@@ -38,6 +38,23 @@ const RootLength = C.sizeof_HashKey
 
 // Hash is the type used for all firewood hashes.
 type Hash [RootLength]byte
+
+// NodeHashAlgorithm represents the node hashing algorithm used by the database;
+// this must match the algorithm previously used to crate the database.
+//
+// Currently, there are only two variants but more may be added in the future.
+// At this time, the node hash algorithm used when opening the database must
+// match the compile-time feature used when building the FFI library. This
+// restriction will be lifted after #1088, which enables runtime selection of
+// the node hashing algorithm.
+type NodeHashAlgorithm C.enum_NodeHashAlgorithm
+
+const (
+	// MerkleDBNodeHashing uses MerkleDB-compatible SHA-256 based hashing
+	MerkleDBNodeHashing NodeHashAlgorithm = C.NodeHashAlgorithm_MerkleDB
+	// EthereumNodeHashing uses Ethereum-compatible Keccak-256 based hashing
+	EthereumNodeHashing NodeHashAlgorithm = C.NodeHashAlgorithm_Ethereum
+)
 
 var (
 	// EmptyRoot is the zero value for [Hash]
@@ -79,29 +96,36 @@ type Database struct {
 type config struct {
 	// truncate indicates whether to clear the database file if it already exists.
 	truncate bool
-	// nodeCacheEntries is the number of entries in the cache.
+	// nodeCacheSizeInBytes is the memory limit for the node cache in bytes.
 	// Must be non-zero.
-	nodeCacheEntries uint
+	nodeCacheSizeInBytes uint
 	// freeListCacheEntries is the number of entries in the freelist cache.
 	// Must be non-zero.
 	freeListCacheEntries uint
 	// revisions is the maximum number of historical revisions to keep in memory.
 	// If rootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 	// Otherwise, any revisions removed from memory will no longer be kept on disk.
-	// Must be >= 2.
+	// Must be >= 2 and > deferredPersistenceCommitCount.
 	revisions uint
 	// readCacheStrategy is the caching strategy used for the node cache.
 	readCacheStrategy CacheStrategy
 	// rootStore defines whether to enable storing all historical revisions on disk.
 	rootStore bool
+	// expensiveMetricsEnabled controls whether expensive metrics recording is enabled.
+	expensiveMetricsEnabled bool
+	// deferredPersistenceCommitCount determines the maximum number of unpersisted
+	// revisions that can exist at a given time.
+	// Note: revisions must be > deferredPersistenceCommitCount
+	deferredPersistenceCommitCount uint64
 }
 
 func defaultConfig() *config {
 	return &config{
-		nodeCacheEntries:     1_000_000,
-		freeListCacheEntries: 40_000,
-		revisions:            100,
-		readCacheStrategy:    OnlyCacheWrites,
+		nodeCacheSizeInBytes:           128_000_000,
+		freeListCacheEntries:           1_000_000,
+		revisions:                      100,
+		readCacheStrategy:              OnlyCacheWrites,
+		deferredPersistenceCommitCount: 1,
 	}
 }
 
@@ -116,20 +140,19 @@ func WithTruncate(truncate bool) Option {
 	}
 }
 
-// WithNodeCacheEntries sets the number of entries in the node cache.
-// The node cache stores frequently accessed trie nodes to improve read performance.
+// WithNodeCacheSizeInBytes sets the node cache memory limit in bytes.
 // Must be non-zero.
-// Default: 1,000,000
-func WithNodeCacheEntries(entries uint) Option {
+// Default: 128 MB
+func WithNodeCacheSizeInBytes(sizeInBytes uint) Option {
 	return func(c *config) {
-		c.nodeCacheEntries = entries
+		c.nodeCacheSizeInBytes = sizeInBytes
 	}
 }
 
 // WithFreeListCacheEntries sets the number of entries in the freelist cache.
 // The freelist cache manages available disk space for reuse.
 // Must be non-zero.
-// Default: 40,000
+// Default: 1,000,000
 func WithFreeListCacheEntries(entries uint) Option {
 	return func(c *config) {
 		c.freeListCacheEntries = entries
@@ -139,7 +162,7 @@ func WithFreeListCacheEntries(entries uint) Option {
 // WithRevisions sets the maximum number of historical revisions to keep in memory.
 // If RootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 // Otherwise, any revisions removed from memory will no longer be kept on disk.
-// Must be >= 2.
+// Must be >= 2 and > WithDeferredPersistenceCommitCount.
 // Default: 100
 func WithRevisions(revisions uint) Option {
 	return func(c *config) {
@@ -165,6 +188,25 @@ func WithRootStore() Option {
 	}
 }
 
+// WithExpensiveMetrics enables expensive metrics recording for this database.
+// Expensive metrics are disabled by default since they can introduce overhead.
+// Default: false
+func WithExpensiveMetrics() Option {
+	return func(c *config) {
+		c.expensiveMetricsEnabled = true
+	}
+}
+
+// WithDeferredPersistenceCommitCount sets the maximum number of unpersisted revisions
+// that can exist at a time. Note: `commitCount` must be greater than 0 and WithRevisions
+// must be greater than `commitCount`.
+// Default: 1
+func WithDeferredPersistenceCommitCount(commitCount uint64) Option {
+	return func(c *config) {
+		c.deferredPersistenceCommitCount = commitCount
+	}
+}
+
 // A CacheStrategy represents the caching strategy used by a [Database].
 type CacheStrategy uint8
 
@@ -181,9 +223,17 @@ const (
 	invalidCacheStrategy
 )
 
-// New opens or creates a new Firewood database with the given options.
-// The database directory will be created at the provided path if it does not
-// already exist.
+// New opens or creates a new Firewood database with the given node hashing
+// algorithm and database options. The database directory will be created at the
+// provided path if it does not already exist.
+//
+// The [nodeHashAlgorithm] is required and must match the compile-time feature:
+//   - NodeHashAlgorithmEthereum if the ethhash feature is enabled
+//   - NodeHashAlgorithmMerkleDB if the ethhash feature is disabled
+//
+// In the future, the node hash algorithm will be configurable at runtime and
+// no longer need to match compile-time features but will instead select the
+// desired hashing mode.
 //
 // If no [Option] is provided, sensible defaults will be used.
 // See the With* functions for details about each configuration parameter and its default value.
@@ -191,7 +241,7 @@ const (
 // It is the caller's responsibility to call [Database.Close] when the database
 // is no longer needed. No other [Database] in this process should be opened with
 // the same file path until the database is closed.
-func New(dbDir string, opts ...Option) (*Database, error) {
+func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Database, error) {
 	conf := defaultConfig()
 	for _, opt := range opts {
 		opt(conf)
@@ -203,8 +253,8 @@ func New(dbDir string, opts ...Option) (*Database, error) {
 	if conf.revisions < 2 {
 		return nil, fmt.Errorf("revisions must be >= 2, got %d", conf.revisions)
 	}
-	if conf.nodeCacheEntries < 1 {
-		return nil, fmt.Errorf("node cache entries must be >= 1, got %d", conf.nodeCacheEntries)
+	if conf.nodeCacheSizeInBytes < 1 {
+		return nil, fmt.Errorf("node cache size in bytes must be >= 1, got %d", conf.nodeCacheSizeInBytes)
 	}
 	if conf.freeListCacheEntries < 1 {
 		return nil, fmt.Errorf("free list cache entries must be >= 1, got %d", conf.freeListCacheEntries)
@@ -214,33 +264,30 @@ func New(dbDir string, opts ...Option) (*Database, error) {
 	defer pinner.Unpin()
 
 	args := C.struct_DatabaseHandleArgs{
-		dir:                  newBorrowedBytes([]byte(dbDir), &pinner),
-		cache_size:           C.size_t(conf.nodeCacheEntries),
-		free_list_cache_size: C.size_t(conf.freeListCacheEntries),
-		revisions:            C.size_t(conf.revisions),
-		strategy:             C.uint8_t(conf.readCacheStrategy),
-		truncate:             C.bool(conf.truncate),
-		root_store:           C.bool(conf.rootStore),
+		dir:                               newBorrowedBytes([]byte(dbDir), &pinner),
+		node_cache_memory_limit:           C.size_t(conf.nodeCacheSizeInBytes),
+		free_list_cache_size:              C.size_t(conf.freeListCacheEntries),
+		revisions:                         C.size_t(conf.revisions),
+		strategy:                          C.uint8_t(conf.readCacheStrategy),
+		truncate:                          C.bool(conf.truncate),
+		root_store:                        C.bool(conf.rootStore),
+		expensive_metrics:                 C.bool(conf.expensiveMetricsEnabled),
+		node_hash_algorithm:               C.enum_NodeHashAlgorithm(nodeHashAlgorithm),
+		deferred_persistence_commit_count: C.uint64_t(conf.deferredPersistenceCommitCount),
 	}
 
 	return getDatabaseFromHandleResult(C.fwd_open_db(args))
 }
 
-// Update applies a batch of updates to the database, returning the hash of the
-// root node after the batch is applied. This is equilalent to creating a proposal
+// Update applies a batch of operations to the database, returning the hash of the
+// root node after the batch is applied. This is equivalent to creating a proposal
 // with [Database.Propose], then committing it with [Proposal.Commit].
 //
-// Value Semantics:
-//   - nil value (vals[i] == nil): Performs a DeleteRange operation using the key as a prefix
-//   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
-//   - non-empty value: Inserts/updates the key with the provided value
-//
-// WARNING: Calling Update with an empty key and nil value will delete the entire database
-// due to prefix deletion semantics.
+// Use [Put], [Delete], and [PrefixDelete] to create batch operations.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
-func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
+func (db *Database) Update(batch []BatchOp) (Hash, error) {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {
@@ -253,26 +300,20 @@ func (db *Database) Update(keys, vals [][]byte) (Hash, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
-	if err != nil {
-		return EmptyRoot, err
-	}
+	kvp := newKeyValuePairsFromBatch(batch, &pinner)
 
 	return getHashKeyFromHashResult(C.fwd_batch(db.handle, kvp))
 }
 
-// Propose creates a new proposal with the given keys and values. The proposal
+// Propose creates a new proposal with the given batch operations. The proposal
 // is not committed until [Proposal.Commit] is called. See [Database.Close] regarding
 // freeing proposals. All proposals should be freed before closing the database.
 //
-// Value Semantics:
-//   - nil value (vals[i] == nil): Performs a DeleteRange operation using the key as a prefix
-//   - empty slice (vals[i] != nil && len(vals[i]) == 0): Inserts/updates the key with an empty value
-//   - non-empty value: Inserts/updates the key with the provided value
+// Use [Put], [Delete], and [PrefixDelete] to create batch operations.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
-func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
+func (db *Database) Propose(batch []BatchOp) (*Proposal, error) {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {
@@ -285,10 +326,7 @@ func (db *Database) Propose(keys, vals [][]byte) (*Proposal, error) {
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	kvp, err := newKeyValuePairs(keys, vals, &pinner)
-	if err != nil {
-		return nil, err
-	}
+	kvp := newKeyValuePairsFromBatch(batch, &pinner)
 	return getProposalFromProposalResult(C.fwd_propose_on_db(db.handle, kvp), &db.outstandingHandles, &db.commitLock)
 }
 
@@ -322,46 +360,17 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 	return val, err
 }
 
-// GetFromRoot retrieves the value for the given key from a specific root hash.
-// If the root is not found, it returns an error.
-// If key is not found, it returns nil.
-//
-// GetFromRoot caches a handle to the revision associated with the provided root hash, allowing
-// subsequent calls with the same root to be more efficient.
-//
-// This function is thread-safe with all other operations.
-func (db *Database) GetFromRoot(root Hash, key []byte) ([]byte, error) {
-	db.handleLock.RLock()
-	defer db.handleLock.RUnlock()
-	if db.handle == nil {
-		return nil, errDBClosed
-	}
-
-	// If the root is empty, the database is empty.
-	if root == EmptyRoot {
-		return nil, nil
-	}
-
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
-	return getValueFromValueResult(C.fwd_get_from_root(
-		db.handle,
-		newCHashKey(root),
-		newBorrowedBytes(key, &pinner),
-	))
-}
-
 // Root returns the current root hash of the trie.
 // With Firewood hashing, the empty trie must return [EmptyRoot].
+// If the database is already closed, it returns [EmptyRoot].
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
-func (db *Database) Root() (Hash, error) {
+func (db *Database) Root() Hash {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {
-		return EmptyRoot, errDBClosed
+		return EmptyRoot
 	}
 
 	db.commitLock.Lock()
@@ -370,8 +379,10 @@ func (db *Database) Root() (Hash, error) {
 }
 
 // root assumes db.stateLock is held and the database is open.
-func (db *Database) root() (Hash, error) {
-	return getHashKeyFromHashResult(C.fwd_root_hash(db.handle))
+func (db *Database) root() Hash {
+	// Since we already guaranteed the database is open, we can ignore the error since the only error is that the handle is nil.
+	hash, _ := getHashKeyFromHashResult(C.fwd_root_hash(db.handle))
+	return hash
 }
 
 // LatestRevision returns a [Revision] representing the latest state of the database.
@@ -389,10 +400,7 @@ func (db *Database) LatestRevision() (*Revision, error) {
 
 	db.commitLock.Lock()
 	defer db.commitLock.Unlock()
-	root, err := db.root()
-	if err != nil {
-		return nil, err
-	}
+	root := db.root()
 	if root == EmptyRoot {
 		return nil, errRevisionNotFound
 	}
@@ -422,7 +430,8 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 	return rev, nil
 }
 
-// Close releases the memory associated with the Database.
+// Close releases the memory associated with the Database and stops the
+// background persistence thread.
 //
 // This blocks until all outstanding keep-alive handles are disowned or the
 // [context.Context] is cancelled. That is, until all Revisions and Proposals
@@ -439,8 +448,6 @@ func (db *Database) Close(ctx context.Context) error {
 	if db.handle == nil {
 		return nil
 	}
-
-	go runtime.GC()
 
 	done := make(chan struct{})
 	go func() {
@@ -483,4 +490,16 @@ func (db *Database) Dump() (string, error) {
 	}
 
 	return string(bytes), nil
+}
+
+// FlushBlockReplay flushes buffered block replay operations to disk.
+//
+// This function is only meaningful when the FFI library was compiled with
+// the `block-replay` feature and the `FIREWOOD_BLOCK_REPLAY_PATH` environment
+// variable is set. Otherwise, it is a no-op.
+//
+// Note: the recording and flushing is not handled per db, and this will flush
+// all logs, if multiple databases are open.
+func FlushBlockReplay() error {
+	return getErrorFromVoidResult(C.fwd_block_replay_flush())
 }

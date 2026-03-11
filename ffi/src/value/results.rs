@@ -3,19 +3,20 @@
 
 use firewood::merkle;
 use firewood::v2::api;
+use firewood_storage::TrieHash;
 use std::fmt;
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
-    ChangeProofContext, CreateIteratorResult, CreateProposalResult, HashKey, IteratorHandle,
-    KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair, ProposalHandle,
-    RangeProofContext,
+    ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult, HashKey,
+    IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair,
+    ProposalHandle, ProposedChangeProofContext, RangeProofContext, VerifiedChangeProofContext,
 };
 
 /// The result type returned from an FFI function that returns no value but may
 /// return an error.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum VoidResult {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
@@ -50,7 +51,7 @@ impl<E: fmt::Display> From<Result<(), E>> for VoidResult {
 
 /// The result type returned from the open or create database functions.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum HandleResult {
     /// The database was opened or created successfully and the handle is
     /// returned as an opaque pointer.
@@ -82,7 +83,7 @@ impl<E: fmt::Display> From<Result<crate::DatabaseHandle, E>> for HandleResult {
 
 /// A result type returned from FFI functions that retrieve a single value.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum ValueResult {
     /// The caller provided a null pointer to a database handle.
     NullHandlePointer,
@@ -150,7 +151,7 @@ impl From<Box<[u8]>> for ValueResult {
 /// A result type returned from FFI functions return the database root hash. This
 /// may or may not be after a mutation.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum HashResult {
     /// The caller provided a null pointer to a database handle.
     NullHandlePointer,
@@ -174,9 +175,29 @@ pub enum HashResult {
 impl<E: fmt::Display> From<Result<Option<api::HashKey>, E>> for HashResult {
     fn from(value: Result<Option<api::HashKey>, E>) -> Self {
         match value {
-            Ok(None) => HashResult::None,
-            Ok(Some(hash)) => HashResult::Some(HashKey::from(hash)),
+            Ok(hash) => hash.into(),
             Err(err) => HashResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+impl From<Option<TrieHash>> for HashResult {
+    fn from(value: Option<TrieHash>) -> Self {
+        match value {
+            Some(hash) => HashResult::Some(hash.into()),
+            None => HashResult::None,
+        }
+    }
+}
+
+impl From<Option<Result<HashKey, api::Error>>> for HashResult {
+    fn from(value: Option<Result<HashKey, api::Error>>) -> Self {
+        match value {
+            Some(value) => match value {
+                Ok(hash) => HashResult::Some(hash),
+                Err(err) => HashResult::Err(err.to_string().into_bytes().into()),
+            },
+            None => HashResult::None,
         }
     }
 }
@@ -189,7 +210,7 @@ impl<E: fmt::Display> From<Result<Option<api::HashKey>, E>> for HashResult {
 ///
 /// [`fwd_free_range_proof`]: crate::fwd_free_range_proof
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum RangeProofResult<'db> {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
@@ -234,12 +255,14 @@ impl From<Result<api::FrozenRangeProof, api::Error>> for RangeProofResult<'_> {
 ///
 /// [`fwd_free_change_proof`]: crate::fwd_free_change_proof
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum ChangeProofResult {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
-    /// The provided root was not found in the database.
-    RevisionNotFound(HashKey),
+    /// The provided start root was not found in the database.
+    StartRevisionNotFound(HashKey),
+    /// The provided end root was not found in the database.
+    EndRevisionNotFound(HashKey),
     /// The proof was successfully created or parsed.
     ///
     /// If the value was parsed from a serialized proof, this does not imply that
@@ -257,7 +280,41 @@ pub enum ChangeProofResult {
 }
 
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
+pub enum VerifiedChangeProofResult {
+    /// The caller provided a null pointer to the input handle.
+    NullHandlePointer,
+    // The proof was successfully verified.
+    Ok(Box<VerifiedChangeProofContext>),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum ProposedChangeProofResult<'db> {
+    /// The caller provided a null pointer to the input handle.
+    NullHandlePointer,
+    /// A proposal was successfully created for this proof.
+    Ok(Box<ProposedChangeProofContext<'db>>),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+#[derive(Debug)]
+#[repr(C, usize)]
 pub enum NextKeyRangeResult {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
@@ -293,10 +350,44 @@ impl From<Result<Option<KeyRange>, api::Error>> for NextKeyRangeResult {
     }
 }
 
+/// A result type returned from FFI functions that create an code hash iterator
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum CodeIteratorResult<'p> {
+    /// The caller provided a null pointer to a proof handle.
+    NullHandlePointer,
+    /// Building the iterator was successful and the iterator handle is returned
+    Ok {
+        /// An opaque pointer to the [`CodeIteratorHandle`].
+        /// The value should be freed with [`fwd_code_hash_iter_free`]
+        ///
+        /// [`fwd_code_hash_iter_free`]: crate::fwd_code_hash_iter_free
+        handle: Box<CodeIteratorHandle<'p>>,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`].
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl<'a> From<Result<CodeIteratorHandle<'a>, api::Error>> for CodeIteratorResult<'a> {
+    fn from(value: Result<CodeIteratorHandle<'a>, api::Error>) -> Self {
+        match value {
+            Ok(res) => CodeIteratorResult::Ok {
+                handle: Box::new(res),
+            },
+            Err(err) => CodeIteratorResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 /// A result type returned from FFI functions that create a proposal but do not
 /// commit it to the database.
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum ProposalResult<'db> {
     /// The caller provided a null pointer to a database handle.
     NullHandlePointer,
@@ -326,7 +417,7 @@ pub enum ProposalResult<'db> {
 
 /// A result type returned from FFI functions that create an iterator
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum IteratorResult<'db> {
     /// The caller provided a null pointer to a revision/proposal handle.
     NullHandlePointer,
@@ -349,7 +440,7 @@ pub enum IteratorResult<'db> {
 
 /// A result type returned from iterator FFI functions
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum KeyValueResult {
     /// The caller provided a null pointer to an iterator handle.
     NullHandlePointer,
@@ -386,7 +477,7 @@ impl From<Option<Result<(merkle::Key, merkle::Value), api::Error>>> for KeyValue
 
 /// A result type returned from iterator FFI functions
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum KeyValueBatchResult {
     /// The caller provided a null pointer to an iterator handle.
     NullHandlePointer,
@@ -433,7 +524,7 @@ impl<'db, E: fmt::Display> From<Result<CreateIteratorResult<'db>, E>> for Iterat
 
 /// A result type returned from FFI functions that get a revision
 #[derive(Debug)]
-#[repr(C)]
+#[repr(C, usize)]
 pub enum RevisionResult {
     /// The caller provided a null pointer to a database handle.
     NullHandlePointer,
@@ -493,6 +584,45 @@ impl<'db, E: fmt::Display> From<Result<CreateProposalResult<'db>, E>> for Propos
     }
 }
 
+impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
+    fn from(value: Result<api::FrozenChangeProof, api::Error>) -> Self {
+        match value {
+            Ok(proof) => ChangeProofResult::Ok(Box::new(proof.into())),
+            Err(api::Error::StartRevisionNotFound { provided }) => {
+                ChangeProofResult::StartRevisionNotFound(HashKey::from(
+                    provided.unwrap_or_else(api::HashKey::empty),
+                ))
+            }
+            Err(api::Error::EndRevisionNotFound { provided }) => {
+                ChangeProofResult::EndRevisionNotFound(HashKey::from(
+                    provided.unwrap_or_else(api::HashKey::empty),
+                ))
+            }
+            Err(err) => ChangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+impl From<Result<VerifiedChangeProofContext, api::Error>> for VerifiedChangeProofResult {
+    fn from(value: Result<VerifiedChangeProofContext, api::Error>) -> Self {
+        match value {
+            Ok(context) => VerifiedChangeProofResult::Ok(Box::new(context)),
+            Err(err) => VerifiedChangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+impl<'db> From<Result<ProposedChangeProofContext<'db>, api::Error>>
+    for ProposedChangeProofResult<'db>
+{
+    fn from(value: Result<ProposedChangeProofContext<'db>, api::Error>) -> Self {
+        match value {
+            Ok(context) => ProposedChangeProofResult::Ok(Box::new(context)),
+            Err(err) => ProposedChangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 /// Helper trait to handle the different result types returned from FFI functions.
 ///
 /// Once Try trait is stable, we can use that instead of this trait:
@@ -516,8 +646,10 @@ pub(crate) trait NullHandleResult: CResult {
 }
 
 pub(crate) trait CResult: Sized {
+    #[cfg(panic = "unwind")]
     fn from_err(err: impl ToString) -> Self;
 
+    #[cfg(panic = "unwind")]
     fn from_panic(panic: Box<dyn std::any::Any + Send>) -> Self
     where
         Self: Sized,
@@ -542,6 +674,7 @@ macro_rules! impl_cresult {
     ($($Enum:ty),* $(,)?) => {
         $(
             impl CResult for $Enum {
+                #[cfg(panic = "unwind")]
                 fn from_err(err: impl ToString) -> Self {
                     Self::Err(err.to_string().into_bytes().into())
                 }
@@ -556,7 +689,10 @@ impl_null_handle_result!(
     HashResult,
     RangeProofResult<'_>,
     ChangeProofResult,
+    VerifiedChangeProofResult,
+    ProposedChangeProofResult<'_>,
     NextKeyRangeResult,
+    CodeIteratorResult<'_>,
     ProposalResult<'_>,
     IteratorResult<'_>,
     RevisionResult,
@@ -571,7 +707,10 @@ impl_cresult!(
     HandleResult,
     RangeProofResult<'_>,
     ChangeProofResult,
+    VerifiedChangeProofResult,
+    ProposedChangeProofResult<'_>,
     NextKeyRangeResult,
+    CodeIteratorResult<'_>,
     ProposalResult<'_>,
     IteratorResult<'_>,
     RevisionResult,
@@ -579,6 +718,7 @@ impl_cresult!(
     KeyValueResult,
 );
 
+#[cfg(panic = "unwind")]
 enum Panic {
     Static(&'static str),
     Formatted(String),
@@ -589,6 +729,7 @@ enum Panic {
     // https://doc.rust-lang.org/stable/std/panic/fn.set_hook.html
 }
 
+#[cfg(panic = "unwind")]
 impl From<Box<dyn std::any::Any + Send>> for Panic {
     fn from(panic: Box<dyn std::any::Any + Send>) -> Self {
         macro_rules! downcast {
@@ -609,6 +750,7 @@ impl From<Box<dyn std::any::Any + Send>> for Panic {
     }
 }
 
+#[cfg(panic = "unwind")]
 impl fmt::Display for Panic {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {

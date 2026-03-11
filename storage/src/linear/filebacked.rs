@@ -26,10 +26,11 @@ use std::num::NonZero;
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
-use lru::LruCache;
-use metrics::counter;
+use firewood_metrics::{firewood_increment, firewood_set};
+use lru::LruCache as EntryLruCache;
+use lru_mem::LruCache as MemLruCache;
 
-use crate::{CacheReadStrategy, LinearAddress, MaybePersistedNode, SharedNode};
+use crate::{CacheReadStrategy, CachedNode, LinearAddress, MaybePersistedNode, SharedNode};
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
 
@@ -37,9 +38,10 @@ use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
 #[derive(Debug)]
 pub struct FileBacked {
     filename: PathBuf,
-    cache: Mutex<LruCache<LinearAddress, SharedNode>>,
-    free_list_cache: Mutex<LruCache<LinearAddress, Option<LinearAddress>>>,
+    cache: Mutex<MemLruCache<LinearAddress, CachedNode>>,
+    free_list_cache: Mutex<EntryLruCache<LinearAddress, Option<LinearAddress>>>,
     cache_read_strategy: CacheReadStrategy,
+    node_hash_algorithm: crate::NodeHashAlgorithm,
     // keep before `fd` so that it is dropped first (fields are dropped in the order they are declared)
     #[cfg(feature = "io-uring")]
     ring: super::io_uring::IoUringProxy,
@@ -63,11 +65,12 @@ impl FileBacked {
     /// Create or open a file at a given path
     pub fn new(
         path: PathBuf,
-        node_cache_size: NonZero<usize>,
+        node_cache_memory_limit: NonZero<usize>,
         free_list_cache_size: NonZero<usize>,
         truncate: bool,
         create: bool,
         cache_read_strategy: CacheReadStrategy,
+        node_hash_algorithm: crate::NodeHashAlgorithm,
     ) -> Result<Self, FileIoError> {
         let fd = OpenOptions::new()
             .read(true)
@@ -91,20 +94,32 @@ impl FileBacked {
         })?;
 
         Ok(Self {
-            cache: Mutex::new(LruCache::new(node_cache_size)),
-            free_list_cache: Mutex::new(LruCache::new(free_list_cache_size)),
+            cache: Mutex::new(MemLruCache::new(node_cache_memory_limit.get())),
+            free_list_cache: Mutex::new(EntryLruCache::new(free_list_cache_size)),
             cache_read_strategy,
             filename: path,
+            node_hash_algorithm,
             #[cfg(feature = "io-uring")]
             ring,
             fd: UnlockOnDrop(fd),
         })
     }
+
+    /// Set the length of this file.
+    pub fn set_len(&self, size: u64) -> Result<(), FileIoError> {
+        self.fd
+            .set_len(size)
+            .map_err(|e| self.file_io_error(e, 0, Some("set_len".to_string())))
+    }
 }
 
 impl ReadableStorage for FileBacked {
+    fn node_hash_algorithm(&self) -> crate::NodeHashAlgorithm {
+        self.node_hash_algorithm
+    }
+
     fn stream_from(&self, addr: u64) -> Result<impl OffsetReader, FileIoError> {
-        counter!("firewood.read_node", "from" => "file").increment(1);
+        firewood_increment!(crate::registry::READ_NODE, 1, "from" => "file");
         Ok(PredictiveReader::new(self, addr))
     }
 
@@ -118,16 +133,16 @@ impl ReadableStorage for FileBacked {
 
     fn read_cached_node(&self, addr: LinearAddress, mode: &'static str) -> Option<SharedNode> {
         let mut guard = self.cache.lock();
-        let cached = guard.get(&addr).cloned();
-        counter!("firewood.cache.node", "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" })
-            .increment(1);
+        let cached = guard.get(&addr).map(|cached_node| cached_node.0.clone());
+        firewood_increment!(crate::registry::CACHE_NODE, 1, "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" });
         cached
     }
 
     fn free_list_cache(&self, addr: LinearAddress) -> Option<Option<LinearAddress>> {
         let mut guard = self.free_list_cache.lock();
         let cached = guard.pop(&addr);
-        counter!("firewood.cache.freelist", "type" => if cached.is_some() { "hit" } else { "miss" }).increment(1);
+        firewood_increment!(crate::registry::CACHE_FREELIST, 1, "type" => if cached.is_some() { "hit" } else { "miss" });
+        firewood_set!(crate::registry::FREELIST_CACHE_SIZE, guard.len());
         cached
     }
 
@@ -142,12 +157,12 @@ impl ReadableStorage for FileBacked {
             }
             CacheReadStrategy::All => {
                 let mut guard = self.cache.lock();
-                guard.put(addr, node);
+                CachedNode(node).insert_into_cache(&mut guard, addr);
             }
             CacheReadStrategy::BranchReads => {
                 if !node.is_leaf() {
                     let mut guard = self.cache.lock();
-                    guard.put(addr, node);
+                    CachedNode(node).insert_into_cache(&mut guard, addr);
                 }
             }
         }
@@ -161,7 +176,8 @@ impl ReadableStorage for FileBacked {
 impl WritableStorage for FileBacked {
     fn write(&self, offset: u64, object: &[u8]) -> Result<usize, FileIoError> {
         self.fd
-            .write_at(object, offset)
+            .write_all_at(object, offset)
+            .map(|()| object.len())
             .map_err(|e| self.file_io_error(e, offset, Some("write".to_string())))
     }
 
@@ -187,7 +203,7 @@ impl WritableStorage for FileBacked {
                 .allocated_info()
                 .expect("node should be allocated");
 
-            guard.put(addr, shared_node);
+            CachedNode(shared_node).insert_into_cache(&mut guard, addr);
             // The node can now be read from the general cache, so we can delete the local copy
             maybe_persisted_node.persist_at(addr);
         }
@@ -197,13 +213,16 @@ impl WritableStorage for FileBacked {
     fn invalidate_cached_nodes<'a>(&self, nodes: impl Iterator<Item = &'a MaybePersistedNode>) {
         let mut guard = self.cache.lock();
         for addr in nodes.filter_map(MaybePersistedNode::as_linear_address) {
-            guard.pop(&addr);
+            guard.remove(&addr);
         }
+        // Update cache metrics after removals
+        CachedNode::update_cache_metrics(&guard);
     }
 
     fn add_to_free_list_cache(&self, addr: LinearAddress, next: Option<LinearAddress>) {
         let mut guard = self.free_list_cache.lock();
         guard.put(addr, next);
+        firewood_set!(crate::registry::FREELIST_CACHE_SIZE, guard.len());
     }
 }
 
@@ -216,7 +235,7 @@ struct PredictiveReader<'a> {
     offset: u64,
     len: usize,
     pos: usize,
-    started: coarsetime::Instant,
+    started: std::time::Instant,
 }
 
 impl<'a> PredictiveReader<'a> {
@@ -229,7 +248,7 @@ impl<'a> PredictiveReader<'a> {
             offset: start,
             len: 0,
             pos: 0,
-            started: coarsetime::Instant::now(),
+            started: std::time::Instant::now(),
         }
     }
 }
@@ -237,8 +256,8 @@ impl<'a> PredictiveReader<'a> {
 impl Drop for PredictiveReader<'_> {
     fn drop(&mut self) {
         let elapsed = self.started.elapsed();
-        counter!("firewood.io.read_ms").increment(elapsed.as_millis());
-        counter!("firewood.io.read").increment(1);
+        firewood_increment!(crate::registry::IO_READ_MS, elapsed.as_millis() as u64);
+        firewood_increment!(crate::registry::IO_READ_COUNT, 1);
     }
 }
 
@@ -295,6 +314,8 @@ impl std::ops::DerefMut for UnlockOnDrop {
 mod test {
     #![expect(clippy::unwrap_used)]
 
+    use crate::NodeHashAlgorithm;
+
     use super::*;
     use nonzero_ext::nonzero;
     use std::io::Write;
@@ -316,6 +337,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
         )
         .unwrap();
 
@@ -358,6 +380,7 @@ mod test {
             false,
             true,
             CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
         )
         .unwrap();
 

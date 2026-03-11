@@ -8,14 +8,15 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use firewood::db::{BatchOp, DbConfig};
 use firewood::merkle::Merkle;
 use firewood::v2::api::{Db as _, Proposal as _};
-use firewood_storage::{MemStore, NodeStore};
+use firewood_storage::{MemStore, NodeHashAlgorithm, NodeStore};
 use pprof::ProfilerGuard;
-use rand::{Rng, distr::Alphanumeric};
+use rand::{RngExt, distr::Alphanumeric};
 use std::fs::File;
 use std::iter::repeat_with;
 use std::os::raw::c_int;
 use std::path::Path;
 use std::sync::Arc;
+use tempfile::TempDir;
 
 // To enable flamegraph output
 // cargo bench --bench hashops -- --profile-time=N
@@ -68,7 +69,7 @@ fn bench_merkle<const NKEYS: usize, const KEYSIZE: usize>(criterion: &mut Criter
         .bench_function("insert", |b| {
             b.iter_batched(
                 || {
-                    let store = Arc::new(MemStore::new(vec![]));
+                    let store = Arc::new(MemStore::default());
                     let nodestore = NodeStore::new_empty_proposal(store);
                     let merkle = Merkle::from(nodestore);
 
@@ -113,12 +114,13 @@ fn bench_db<const N: usize>(criterion: &mut Criterion) {
                     batch_ops
                 },
                 |batch_ops| {
-                    let db_path = std::env::temp_dir();
-                    let db_path = db_path.join("benchmark_db");
-                    let cfg = DbConfig::builder();
-
-                    let db =
-                        firewood::db::Db::new(db_path, cfg.clone().truncate(true).build()).unwrap();
+                    let db_path = TempDir::new().unwrap();
+                    let db_path = db_path.path().join("benchmark_db");
+                    let cfg = DbConfig::builder()
+                        .node_hash_algorithm(NodeHashAlgorithm::compile_option())
+                        .truncate(true)
+                        .build();
+                    let db = firewood::db::Db::new(db_path, cfg).unwrap();
 
                     db.propose(batch_ops).unwrap().commit().unwrap();
                 },

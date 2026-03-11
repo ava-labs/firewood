@@ -15,6 +15,12 @@ pub struct LeafNode {
     pub value: Box<[u8]>,
 }
 
+impl lru_mem::HeapSize for LeafNode {
+    fn heap_size(&self) -> usize {
+        self.partial_path.heap_size().wrapping_add(self.value.len())
+    }
+}
+
 impl Debug for LeafNode {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result<(), FmtError> {
         write!(
