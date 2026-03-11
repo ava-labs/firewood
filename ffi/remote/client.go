@@ -5,6 +5,7 @@ package remote
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 
@@ -43,8 +44,8 @@ type Client struct {
 	rpc   pb.FirewoodRemoteClient
 	depth uint
 
-	mu    sync.RWMutex      // protects trie
-	trie  *ffi.TruncatedTrie
+	mu    sync.RWMutex    // protects trie
+	trie  *refCountedTrie
 	cache *readCache // nil when disabled
 }
 
@@ -91,15 +92,16 @@ func (c *Client) Bootstrap(ctx context.Context, trustedRootHash ffi.Hash) error 
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Free old trie if any
+	// Release old trie if any
+	var releaseErr error
 	if c.trie != nil {
-		c.trie.Free()
+		releaseErr = c.trie.release()
 	}
-	c.trie = trie
+	c.trie = newRefCountedTrie(trie)
 	if c.cache != nil {
 		c.cache.clear()
 	}
-	return nil
+	return releaseErr
 }
 
 // Get fetches a value from the server and verifies the proof against the
@@ -125,7 +127,7 @@ func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
 		}
 	}
 
-	root := c.trie.Root()
+	root := c.trie.trie.Root()
 	resp, err := c.rpc.GetValue(ctx, &pb.GetValueRequest{
 		RootHash: root[:],
 		Key:      key,
@@ -162,7 +164,7 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 		return ffi.Hash{}, fmt.Errorf("client not bootstrapped")
 	}
 
-	root := c.trie.Root()
+	root := c.trie.trie.Root()
 	pbOps := batchOpsToProto(ops)
 
 	// Create proposal and get witness proof for verification before commit.
@@ -192,7 +194,7 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 		return ffi.Hash{}, fmt.Errorf("unmarshal witness: %w", err)
 	}
 
-	newTrie, err := c.trie.VerifyWitness(witness, ops)
+	newTrie, err := c.trie.trie.VerifyWitness(witness, ops)
 	witness.Free()
 	if err != nil {
 		return ffi.Hash{}, fmt.Errorf("verify witness: %w", err)
@@ -209,13 +211,13 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 	committed = true
 
 	// Replace old trie.
-	c.trie.Free()
-	c.trie = newTrie
+	releaseErr := c.trie.release()
+	c.trie = newRefCountedTrie(newTrie)
 	if c.cache != nil {
 		c.cache.invalidateBatch(ops)
 	}
 
-	return c.trie.Root(), nil
+	return c.trie.trie.Root(), releaseErr
 }
 
 // Propose creates a proposal on the server and returns a [remoteProposal]
@@ -229,7 +231,7 @@ func (c *Client) Propose(ctx context.Context, ops []ffi.BatchOp) (*remoteProposa
 		return nil, fmt.Errorf("client not bootstrapped")
 	}
 
-	root := c.trie.Root()
+	root := c.trie.trie.Root()
 	pbOps := batchOpsToProto(ops)
 
 	createResp, err := c.rpc.CreateProposal(ctx, &pb.CreateProposalRequest{
@@ -255,27 +257,22 @@ func (c *Client) Propose(ctx context.Context, ops []ffi.BatchOp) (*remoteProposa
 	// The server generates witnesses from the committed root, so verify
 	// against the client's committed trie.
 	expectedCumulativeOps := ops
-	newTrie, err := verifyWitnessFromResponse(c.trie, createResp, expectedCumulativeOps)
+	verifiedTrie, err := verifyWitnessFromResponse(c.trie.trie, createResp, expectedCumulativeOps)
 	if err != nil {
 		return nil, err
 	}
 
-	// Clone the committed trie so the proposal owns its own copy,
-	// independent of any concurrent Update() replacing c.trie.
-	committedClone, err := c.trie.Clone()
-	if err != nil {
-		newTrie.Free()
-		return nil, fmt.Errorf("clone committed trie: %w", err)
-	}
+	c.trie.acquire()
 
 	success = true
+	newTrie := newRefCountedTrie(verifiedTrie)
 	return &remoteProposal{
 		proposalID:            proposalID,
-		root:                  newTrie.Root(),
+		root:                  verifiedTrie.Root(),
 		newTrie:               newTrie,
 		rpc:                   c.rpc,
 		depth:                 c.depth,
-		committedTrie:         committedClone,
+		committedTrie:         c.trie,
 		expectedCumulativeOps: expectedCumulativeOps,
 		cache:                 c.cache,
 
@@ -310,7 +307,7 @@ func (c *Client) Root() ffi.Hash {
 	if c.trie == nil {
 		return ffi.Hash{}
 	}
-	return c.trie.Root()
+	return c.trie.trie.Root()
 }
 
 // Close releases all resources held by the client.
@@ -318,15 +315,16 @@ func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	var releaseErr error
 	if c.trie != nil {
-		c.trie.Free()
+		releaseErr = c.trie.release()
 		c.trie = nil
 	}
 	if c.cache != nil {
 		c.cache.clear()
 	}
 	if c.conn != nil {
-		return c.conn.Close()
+		return errors.Join(releaseErr, c.conn.Close())
 	}
-	return nil
+	return releaseErr
 }

@@ -146,20 +146,6 @@ func getTruncatedTrieFromResult(result C.TruncatedTrieResult) (*TruncatedTrie, e
 	}
 }
 
-// Clone creates an independent copy of this TruncatedTrie by round-tripping
-// through serialization. The caller must Free the returned trie when done.
-func (t *TruncatedTrie) Clone() (*TruncatedTrie, error) {
-	data, err := t.MarshalBinary()
-	if err != nil {
-		return nil, fmt.Errorf("clone marshal: %w", err)
-	}
-	clone := &TruncatedTrie{}
-	if err := clone.UnmarshalBinary(data); err != nil {
-		return nil, fmt.Errorf("clone unmarshal: %w", err)
-	}
-	return clone, nil
-}
-
 // MarshalBinary serializes the TruncatedTrie into a binary format suitable
 // for wire transport (e.g., gRPC). Implements [encoding.BinaryMarshaler].
 func (t *TruncatedTrie) MarshalBinary() ([]byte, error) {

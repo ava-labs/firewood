@@ -5,8 +5,10 @@ package remote
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 
 	ffi "github.com/ava-labs/firewood/ffi"
 	pb "github.com/ava-labs/firewood/ffi/remote/proto"
@@ -79,19 +81,47 @@ func (r *RemoteDB) Close(_ context.Context) error {
 	return r.client.Close()
 }
 
+// refCountedTrie wraps a *ffi.TruncatedTrie with atomic reference counting.
+// The underlying trie is freed when the last reference is released.
+// All methods are safe for concurrent use.
+type refCountedTrie struct {
+	trie *ffi.TruncatedTrie
+	refs atomic.Int32
+}
+
+// newRefCountedTrie wraps t with an initial reference count of 1.
+func newRefCountedTrie(t *ffi.TruncatedTrie) *refCountedTrie {
+	rc := &refCountedTrie{trie: t}
+	rc.refs.Store(1)
+	return rc
+}
+
+// acquire increments the reference count.
+func (rc *refCountedTrie) acquire() {
+	rc.refs.Add(1)
+}
+
+// release decrements the reference count. If this was the last reference, the
+// underlying trie is freed and any error from Free is returned.
+func (rc *refCountedTrie) release() error {
+	if rc.refs.Add(-1) == 0 {
+		return rc.trie.Free()
+	}
+	return nil
+}
+
 // remoteProposal implements [ffi.DBProposal] for a proposal living on the
 // remote server.
 type remoteProposal struct {
 	proposalID uint64
 	root       ffi.Hash
-	newTrie    *ffi.TruncatedTrie
+	newTrie    *refCountedTrie
 	rpc        pb.FirewoodRemoteClient
 	depth      uint
-	// committedTrie is an owned clone of the committed trie at propose time
-	// (the base for all witness verification in this chain). Each proposal
-	// owns its own clone, independent of the client's trie lifecycle.
-	// Must be freed in Commit() or Drop().
-	committedTrie *ffi.TruncatedTrie
+	// committedTrie holds a reference-counted handle to the committed trie
+	// at propose time (the base for all witness verification in this chain).
+	// Released in Commit() or Drop().
+	committedTrie *refCountedTrie
 	// expectedCumulativeOps tracks all ops from the chain root to this proposal,
 	// used for client-side validation of the witness's embedded batch_ops.
 	expectedCumulativeOps []ffi.BatchOp
@@ -101,7 +131,7 @@ type remoteProposal struct {
 	// mu protects parentTrie swap during Commit; points to Client.mu.
 	mu *sync.RWMutex
 	// parentTrie points to the parent's trie pointer so Commit can swap it.
-	parentTrie *(*ffi.TruncatedTrie)
+	parentTrie *(*refCountedTrie)
 }
 
 func (p *remoteProposal) Root() ffi.Hash {
@@ -121,38 +151,42 @@ func (p *remoteProposal) Commit(ctx context.Context) error {
 	defer p.mu.Unlock()
 
 	if *p.parentTrie != nil {
-		(*p.parentTrie).Free()
+		(*p.parentTrie).release()
 	}
 	*p.parentTrie = p.newTrie
 	p.newTrie = nil
+
+	var releaseErr error
 	if p.committedTrie != nil {
-		p.committedTrie.Free()
+		releaseErr = p.committedTrie.release()
 		p.committedTrie = nil
 	}
 	if p.cache != nil {
 		p.cache.invalidateBatch(p.expectedCumulativeOps)
 	}
-	return nil
+	return releaseErr
 }
 
 func (p *remoteProposal) Drop() error {
+	var freeErr error
 	if p.newTrie != nil {
-		p.newTrie.Free()
+		freeErr = p.newTrie.release()
 		p.newTrie = nil
 	}
+	var releaseErr error
 	if p.committedTrie != nil {
-		p.committedTrie.Free()
+		releaseErr = p.committedTrie.release()
 		p.committedTrie = nil
 	}
 	// Best-effort server-side cleanup; use a background context since
 	// the caller may not provide one.
-	_, err := p.rpc.DropProposal(context.Background(), &pb.DropProposalRequest{
+	_, rpcErr := p.rpc.DropProposal(context.Background(), &pb.DropProposalRequest{
 		ProposalId: p.proposalID,
 	})
-	if err != nil {
-		return fmt.Errorf("drop proposal: %w", err)
+	if rpcErr != nil {
+		rpcErr = fmt.Errorf("drop proposal: %w", rpcErr)
 	}
-	return nil
+	return errors.Join(freeErr, releaseErr, rpcErr)
 }
 
 func (p *remoteProposal) Get(ctx context.Context, key []byte) ([]byte, error) {
@@ -219,26 +253,22 @@ func (p *remoteProposal) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.
 	expectedCumulativeOps = append(expectedCumulativeOps, p.expectedCumulativeOps...)
 	expectedCumulativeOps = append(expectedCumulativeOps, batch...)
 
-	newTrie, err := verifyWitnessFromResponse(p.committedTrie, createResp, expectedCumulativeOps)
+	verifiedTrie, err := verifyWitnessFromResponse(p.committedTrie.trie, createResp, expectedCumulativeOps)
 	if err != nil {
 		return nil, err
 	}
 
-	// Clone the committed trie so the child proposal owns its own copy.
-	committedClone, err := p.committedTrie.Clone()
-	if err != nil {
-		newTrie.Free()
-		return nil, fmt.Errorf("clone committed trie: %w", err)
-	}
+	p.committedTrie.acquire()
 
 	success = true
+	newTrie := newRefCountedTrie(verifiedTrie)
 	return &remoteProposal{
 		proposalID:            proposalID,
-		root:                  newTrie.Root(),
+		root:                  verifiedTrie.Root(),
 		newTrie:               newTrie,
 		rpc:                   p.rpc,
 		depth:                 p.depth,
-		committedTrie:         committedClone,
+		committedTrie:         p.committedTrie,
 		expectedCumulativeOps: expectedCumulativeOps,
 		cache:                 p.cache,
 
