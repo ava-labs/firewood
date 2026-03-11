@@ -12,7 +12,7 @@ use firewood_metrics::{MetricsContext, firewood_increment};
 
 use crate::{
     BorrowedBytes, CodeIteratorHandle, CodeIteratorResult, DatabaseHandle, HashResult, Maybe,
-    NextKeyRangeResult, RangeProofResult, ValueResult, VoidResult,
+    MultiDatabaseHandle, NextKeyRangeResult, RangeProofResult, ValueResult, VoidResult,
 };
 
 /// A key range represented by a start key and an optional end key.
@@ -661,6 +661,332 @@ impl crate::MetricsContextExt for RangeProofContext<'_> {
 }
 
 impl<'a> crate::MetricsContextExt for (&'a DatabaseHandle, &mut RangeProofContext<'a>) {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        self.0.metrics_context()
+    }
+}
+
+// ========================== Multi-Head Range Proof ==========================
+
+/// FFI context for a range proof in multi-validator mode.
+///
+/// Mirrors [`RangeProofContext`] but uses [`MultiDatabaseHandle`] and
+/// [`crate::MultiProposalHandle`] for validator-scoped operations.
+#[derive(Debug)]
+pub struct MultiRangeProofContext<'db> {
+    proof: FrozenRangeProof,
+    verification: Option<VerificationContext>,
+    proposal_state: Option<MultiProposalState<'db>>,
+}
+
+#[derive(Debug)]
+enum MultiProposalState<'db> {
+    Proposed(crate::MultiProposalHandle<'db>),
+    Committed(Option<HashKey>),
+}
+
+impl From<FrozenRangeProof> for MultiRangeProofContext<'_> {
+    fn from(proof: FrozenRangeProof) -> Self {
+        Self {
+            proof,
+            verification: None,
+            proposal_state: None,
+        }
+    }
+}
+
+impl<'db> MultiRangeProofContext<'db> {
+    /// Verify the range proof against the given constraints.
+    ///
+    /// Reuses the same verification logic as single-head; see
+    /// [`RangeProofContext::verify`] for details.
+    fn verify(
+        &mut self,
+        root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<(), api::Error> {
+        if let Some(ref ctx) = self.verification {
+            if ctx.root == root
+                && ctx.start_key.as_deref() == start_key
+                && ctx.end_key.as_deref() == end_key
+                && ctx.max_length == max_length
+            {
+                return Ok(());
+            }
+
+            return Err(api::Error::ProofError(ProofError::ValueMismatch));
+        }
+
+        debug_assert!(self.verification.is_none());
+
+        warn!("range proof verification not yet implemented");
+        self.verification = Some(VerificationContext {
+            root,
+            start_key: start_key.map(Box::from),
+            end_key: end_key.map(Box::from),
+            max_length,
+        });
+        Ok(())
+    }
+
+    /// Verify the range proof and prepare a proposal for a validator.
+    fn verify_and_propose(
+        &mut self,
+        db: &'db MultiDatabaseHandle,
+        validator_id: u64,
+        root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<(), api::Error> {
+        self.verify(root, start_key, end_key, max_length)?;
+
+        if self.proposal_state.is_some() {
+            return Ok(());
+        }
+
+        let proposal =
+            db.merge_key_value_range(validator_id, start_key, end_key, self.proof.key_values())?;
+        self.proposal_state = Some(MultiProposalState::Proposed(proposal.handle));
+
+        Ok(())
+    }
+
+    /// Verify and commit the range proof for a validator.
+    ///
+    /// Includes rebase logic: if the prepared proposal is stale
+    /// (`ParentNotLatest`), a fresh proposal is created and committed.
+    fn verify_and_commit(
+        &mut self,
+        db: &'db MultiDatabaseHandle,
+        validator_id: u64,
+        root: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<Option<HashKey>, api::Error> {
+        self.verify(root, start_key, end_key, max_length)?;
+
+        let mut allow_rebase = true;
+        let proposal_handle = match self.proposal_state.take() {
+            Some(MultiProposalState::Committed(hash)) => {
+                self.proposal_state = Some(MultiProposalState::Committed(hash.clone()));
+                return Ok(hash);
+            }
+            Some(MultiProposalState::Proposed(proposal)) => proposal,
+            None => {
+                allow_rebase = false;
+                db.merge_key_value_range(
+                    validator_id,
+                    start_key,
+                    end_key,
+                    self.proof.key_values(),
+                )?
+                .handle
+            }
+        };
+
+        let result = proposal_handle.commit_proposal();
+        let result = if let Err(api::Error::ParentNotLatest { .. }) = result
+            && allow_rebase
+        {
+            // proposal is stale, try rebasing and committing again
+            let proposal_handle = db
+                .merge_key_value_range(validator_id, start_key, end_key, self.proof.key_values())?
+                .handle;
+            proposal_handle.commit_proposal()
+        } else {
+            result
+        };
+
+        let hash = result?;
+        firewood_increment!(crate::registry::MERGE_COUNT, 1);
+        self.proposal_state = Some(MultiProposalState::Committed(hash.clone()));
+
+        Ok(hash)
+    }
+
+    /// Returns the next key range to fetch, or `None` if sync is complete.
+    fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
+        let verification = self
+            .verification
+            .as_ref()
+            .ok_or(api::Error::ProofError(ProofError::Unverified))?;
+
+        let Some((last_key, _)) = self.proof.key_values().last() else {
+            return Ok(None);
+        };
+
+        let root_hash = match self.proposal_state {
+            Some(MultiProposalState::Committed(ref hash)) => Ok(hash.clone()),
+            Some(MultiProposalState::Proposed(ref proposal)) => Ok(proposal.root_hash()),
+            None => Err(api::Error::ProofError(ProofError::Unverified)),
+        }?;
+        if root_hash.as_ref() == Some(&verification.root) {
+            return Ok(None);
+        }
+
+        if self.proof.end_proof().is_empty() {
+            return Ok(None);
+        }
+
+        if let Some(ref end_key) = verification.end_key
+            && **last_key >= **end_key
+        {
+            return Ok(None);
+        }
+
+        Ok(Some((last_key.clone(), verification.end_key.clone())))
+    }
+
+    fn code_hash_iter(&self) -> Result<CodeIteratorHandle<'_>, api::Error> {
+        CodeIteratorHandle::new(self.proof.key_values())
+    }
+}
+
+/// Arguments for verifying a multi-head range proof.
+#[derive(Debug)]
+#[repr(C)]
+pub struct MultiVerifyRangeProofArgs<'a, 'db> {
+    /// The range proof to verify.
+    pub proof: Option<&'a mut MultiRangeProofContext<'db>>,
+    /// The root hash to verify against.
+    pub root: crate::HashKey,
+    /// The lower bound of the key range.
+    pub start_key: Maybe<BorrowedBytes<'a>>,
+    /// The upper bound of the key range.
+    pub end_key: Maybe<BorrowedBytes<'a>>,
+    /// The maximum number of key/value pairs.
+    pub max_length: u32,
+    /// The validator ID for the commit.
+    pub validator_id: u64,
+}
+
+/// Generate a range proof from a multi-head database at the given root.
+///
+/// This is a read-only operation — no validator ID is needed. The returned
+/// [`MultiRangeProofContext`] can later be verified and committed for a
+/// specific validator via [`fwd_multi_db_verify_and_commit_range_proof`].
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_db_range_proof(
+    db: Option<&MultiDatabaseHandle>,
+    args: CreateRangeProofArgs,
+) -> crate::MultiRangeProofResult<'static> {
+    crate::invoke_with_handle(db, |db| {
+        let view = db.get_root(args.root.into())?;
+        view.range_proof(
+            args.start_key
+                .as_ref()
+                .map(BorrowedBytes::as_slice)
+                .into_option(),
+            args.end_key
+                .as_ref()
+                .map(BorrowedBytes::as_slice)
+                .into_option(),
+            NonZeroUsize::new(args.max_length as usize),
+        )
+    })
+}
+
+/// Verify a range proof and prepare a proposal for a validator without
+/// committing it.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_db_verify_range_proof<'db>(
+    db: Option<&'db MultiDatabaseHandle>,
+    args: MultiVerifyRangeProofArgs<'_, 'db>,
+) -> VoidResult {
+    let MultiVerifyRangeProofArgs {
+        proof,
+        root,
+        start_key,
+        end_key,
+        max_length,
+        validator_id,
+    } = args;
+
+    let handle = db.and_then(|db| proof.map(|p| (db, p)));
+
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        let start_key = start_key.into_option();
+        let end_key = end_key.into_option();
+        ctx.verify_and_propose(
+            db,
+            validator_id,
+            root.into(),
+            start_key.as_deref(),
+            end_key.as_deref(),
+            NonZeroUsize::new(max_length as usize),
+        )
+    })
+}
+
+/// Verify and commit a range proof for a validator.
+///
+/// If a proposal was previously prepared, it will be committed. If the
+/// proposal is stale, a new one is created and committed.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_db_verify_and_commit_range_proof<'db>(
+    db: Option<&'db MultiDatabaseHandle>,
+    args: MultiVerifyRangeProofArgs<'_, 'db>,
+) -> HashResult {
+    let MultiVerifyRangeProofArgs {
+        proof,
+        root,
+        start_key,
+        end_key,
+        max_length,
+        validator_id,
+    } = args;
+
+    let handle = db.and_then(|db| proof.map(|p| (db, p)));
+
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        let start_key = start_key.into_option();
+        let end_key = end_key.into_option();
+        ctx.verify_and_commit(
+            db,
+            validator_id,
+            root.into(),
+            start_key.as_deref(),
+            end_key.as_deref(),
+            NonZeroUsize::new(max_length as usize),
+        )
+    })
+}
+
+/// Returns the next key range to fetch for a multi-head range proof.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_range_proof_find_next_key(
+    proof: Option<&mut MultiRangeProofContext>,
+) -> NextKeyRangeResult {
+    crate::invoke_with_handle(proof, MultiRangeProofContext::find_next_key)
+}
+
+/// Returns an iterator over the code hashes in a multi-head range proof.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_range_proof_code_hash_iter<'a>(
+    proof: Option<&'a MultiRangeProofContext>,
+) -> crate::CodeIteratorResult<'a> {
+    crate::invoke_with_handle(proof, MultiRangeProofContext::code_hash_iter)
+}
+
+/// Frees a `MultiRangeProofContext`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_free_multi_range_proof(
+    proof: Option<Box<MultiRangeProofContext>>,
+) -> VoidResult {
+    crate::invoke_with_handle(proof, drop)
+}
+
+impl crate::MetricsContextExt for MultiRangeProofContext<'_> {
+    fn metrics_context(&self) -> Option<MetricsContext> {
+        None
+    }
+}
+
+impl<'a> crate::MetricsContextExt for (&'a MultiDatabaseHandle, &mut MultiRangeProofContext<'a>) {
     fn metrics_context(&self) -> Option<MetricsContext> {
         self.0.metrics_context()
     }

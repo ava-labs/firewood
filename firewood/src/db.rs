@@ -13,8 +13,8 @@ use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
 pub use crate::v2::api::BatchOp;
 use crate::v2::api::{
-    self, ArcDynDbView, DbView, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter, KeyType,
-    KeyValuePair, OptionalHashKeyExt, ValidatorId,
+    self, ArcDynDbView, DbView, FrozenChangeProof, FrozenProof, FrozenRangeProof, HashKey,
+    IntoBatchIter, KeyType, KeyValuePair, OptionalHashKeyExt, ValidatorId,
 };
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
@@ -554,6 +554,44 @@ impl MultiDb {
         let head = self.db.manager.validator_view(id)?;
         let merkle = Merkle::from(head);
         merkle.dump_to_string().map_err(api::Error::from)
+    }
+
+    /// Get a committed revision by hash, returning the concrete `Arc` type.
+    ///
+    /// Unlike [`MultiDb::view`], this returns the concrete `CommittedRevision`
+    /// instead of a type-erased `ArcDynDbView`, which is needed for operations
+    /// that require access to the underlying `NodeStore` (e.g., proof generation).
+    pub fn revision(&self, root_hash: HashKey) -> Result<CommittedRevision, api::Error> {
+        self.db.manager.revision(root_hash).map_err(Into::into)
+    }
+
+    /// Merge a range of key-values into a new proposal on top of a validator's
+    /// current head.
+    ///
+    /// All items within the range `(first_key..=last_key)` will be replaced with
+    /// the provided key-values. Existing keys within the range that are not in
+    /// the provided set will be deleted.
+    pub fn merge_key_value_range(
+        &self,
+        id: ValidatorId,
+        first_key: Option<impl KeyType>,
+        last_key: Option<impl KeyType>,
+        key_values: impl IntoIterator<Item: KeyValuePair>,
+    ) -> Result<Proposal<'_>, api::Error> {
+        let head = self.db.manager.validator_view(id)?;
+        self.db
+            .merge_key_value_range_with_parent(first_key, last_key, key_values, &head)
+    }
+
+    /// Apply the `BatchOp`s of a change proof to a parent revision for a
+    /// validator.
+    pub fn apply_change_proof_to_parent(
+        &self,
+        change_proof: &FrozenChangeProof,
+        start_hash: HashKey,
+    ) -> Result<Proposal<'_>, api::Error> {
+        let parent = &self.db.manager.revision(start_hash)?;
+        self.db.apply_change_proof_to_parent(change_proof, parent)
     }
 
     /// Close the database gracefully.

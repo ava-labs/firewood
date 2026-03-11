@@ -9,8 +9,9 @@ use std::fmt;
 use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult, HashKey,
-    IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair,
-    ProposalHandle, ProposedChangeProofContext, RangeProofContext, VerifiedChangeProofContext,
+    IteratorHandle, KeyRange, MultiProposedChangeProofContext, MultiRangeProofContext, NextKeyRange,
+    OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair, ProposalHandle, ProposedChangeProofContext,
+    RangeProofContext, VerifiedChangeProofContext,
 };
 
 /// The result type returned from an FFI function that returns no value but may
@@ -316,6 +317,43 @@ impl From<Result<api::FrozenRangeProof, api::Error>> for RangeProofResult<'_> {
     }
 }
 
+/// A result type returned from multi-head FFI functions that create range proofs.
+///
+/// The caller must ensure that [`fwd_free_multi_range_proof`] is called to
+/// free the memory associated with the returned context when it is no longer
+/// needed.
+///
+/// [`fwd_free_multi_range_proof`]: crate::fwd_free_multi_range_proof
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum MultiRangeProofResult<'db> {
+    /// The caller provided a null pointer to the input handle.
+    NullHandlePointer,
+    /// The provided root was not found in the database.
+    RevisionNotFound(HashKey),
+    /// A range proof was requested on an empty trie.
+    EmptyTrie,
+    /// The proof was successfully created.
+    Ok(Box<MultiRangeProofContext<'db>>),
+    /// An error occurred.
+    Err(OwnedBytes),
+}
+
+impl From<Result<api::FrozenRangeProof, api::Error>> for MultiRangeProofResult<'_> {
+    fn from(value: Result<api::FrozenRangeProof, api::Error>) -> Self {
+        match value {
+            Ok(proof) => MultiRangeProofResult::Ok(Box::new(proof.into())),
+            Err(api::Error::RevisionNotFound { provided }) => {
+                MultiRangeProofResult::RevisionNotFound(HashKey::from(
+                    provided.unwrap_or_else(api::HashKey::empty),
+                ))
+            }
+            Err(api::Error::RangeProofOnEmptyTrie) => MultiRangeProofResult::EmptyTrie,
+            Err(err) => MultiRangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
 /// A result type returned from FFI functions that create or parse change proofs.
 ///
 /// The caller must ensure that [`fwd_free_change_proof`] is called to
@@ -380,6 +418,34 @@ pub enum ProposedChangeProofResult<'db> {
     ///
     /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
     Err(OwnedBytes),
+}
+
+/// A result type for multi-head proposed change proof operations.
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum MultiProposedChangeProofResult<'db> {
+    /// The caller provided a null pointer to the input handle.
+    NullHandlePointer,
+    /// A proposal was successfully created for this proof.
+    Ok(Box<MultiProposedChangeProofContext<'db>>),
+    /// An error occurred and the message is returned as an [`OwnedBytes`].
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+impl<'db> From<Result<MultiProposedChangeProofContext<'db>, api::Error>>
+    for MultiProposedChangeProofResult<'db>
+{
+    fn from(value: Result<MultiProposedChangeProofContext<'db>, api::Error>) -> Self {
+        match value {
+            Ok(context) => MultiProposedChangeProofResult::Ok(Box::new(context)),
+            Err(err) => MultiProposedChangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -757,9 +823,11 @@ impl_null_handle_result!(
     ValueResult,
     HashResult,
     RangeProofResult<'_>,
+    MultiRangeProofResult<'_>,
     ChangeProofResult,
     VerifiedChangeProofResult,
     ProposedChangeProofResult<'_>,
+    MultiProposedChangeProofResult<'_>,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
@@ -777,9 +845,11 @@ impl_cresult!(
     HandleResult,
     MultiHandleResult,
     RangeProofResult<'_>,
+    MultiRangeProofResult<'_>,
     ChangeProofResult,
     VerifiedChangeProofResult,
     ProposedChangeProofResult<'_>,
+    MultiProposedChangeProofResult<'_>,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,

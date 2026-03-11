@@ -67,6 +67,22 @@ typedef struct MultiDatabaseHandle MultiDatabaseHandle;
 typedef struct MultiProposalHandle MultiProposalHandle;
 
 /**
+ * FFI context for a proposed change proof in multi-validator mode.
+ *
+ * Mirrors [`ProposedChangeProofContext`] but uses [`MultiDatabaseHandle`] and
+ * [`crate::MultiProposalHandle`] for validator-scoped operations.
+ */
+typedef struct MultiProposedChangeProofContext MultiProposedChangeProofContext;
+
+/**
+ * FFI context for a range proof in multi-validator mode.
+ *
+ * Mirrors [`RangeProofContext`] but uses [`MultiDatabaseHandle`] and
+ * [`crate::MultiProposalHandle`] for validator-scoped operations.
+ */
+typedef struct MultiRangeProofContext MultiRangeProofContext;
+
+/**
  * An opaque wrapper around a Proposal that also retains a reference to the
  * database handle it was created from.
  */
@@ -975,6 +991,144 @@ typedef struct IteratorResult {
 } IteratorResult;
 
 /**
+ * Arguments for committing a multi-head proposed change proof.
+ */
+typedef struct MultiCommittedChangeProofArgs {
+  /**
+   * The proposed change proof context to commit.
+   */
+  struct MultiProposedChangeProofContext *proof;
+} MultiCommittedChangeProofArgs;
+
+/**
+ * A result type for multi-head proposed change proof operations.
+ */
+enum MultiProposedChangeProofResult_Tag {
+  /**
+   * The caller provided a null pointer to the input handle.
+   */
+  MultiProposedChangeProofResult_NullHandlePointer,
+  /**
+   * A proposal was successfully created for this proof.
+   */
+  MultiProposedChangeProofResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`].
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  MultiProposedChangeProofResult_Err,
+};
+typedef size_t MultiProposedChangeProofResult_Tag;
+
+typedef struct MultiProposedChangeProofResult {
+  MultiProposedChangeProofResult_Tag tag;
+  union {
+    struct {
+      struct MultiProposedChangeProofContext *ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} MultiProposedChangeProofResult;
+
+/**
+ * Arguments for proposing a change proof in multi-validator mode.
+ */
+typedef struct MultiProposedChangeProofArgs {
+  /**
+   * The verified change proof context to create a proposal from.
+   */
+  struct VerifiedChangeProofContext *proof;
+  /**
+   * The validator ID for the proposal.
+   */
+  uint64_t validator_id;
+} MultiProposedChangeProofArgs;
+
+/**
+ * A result type returned from multi-head FFI functions that create range proofs.
+ *
+ * The caller must ensure that [`fwd_free_multi_range_proof`] is called to
+ * free the memory associated with the returned context when it is no longer
+ * needed.
+ *
+ * [`fwd_free_multi_range_proof`]: crate::fwd_free_multi_range_proof
+ */
+enum MultiRangeProofResult_Tag {
+  /**
+   * The caller provided a null pointer to the input handle.
+   */
+  MultiRangeProofResult_NullHandlePointer,
+  /**
+   * The provided root was not found in the database.
+   */
+  MultiRangeProofResult_RevisionNotFound,
+  /**
+   * A range proof was requested on an empty trie.
+   */
+  MultiRangeProofResult_EmptyTrie,
+  /**
+   * The proof was successfully created.
+   */
+  MultiRangeProofResult_Ok,
+  /**
+   * An error occurred.
+   */
+  MultiRangeProofResult_Err,
+};
+typedef size_t MultiRangeProofResult_Tag;
+
+typedef struct MultiRangeProofResult {
+  MultiRangeProofResult_Tag tag;
+  union {
+    struct {
+      struct HashKey revision_not_found;
+    };
+    struct {
+      struct MultiRangeProofContext *ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} MultiRangeProofResult;
+
+/**
+ * Arguments for verifying a multi-head range proof.
+ */
+typedef struct MultiVerifyRangeProofArgs {
+  /**
+   * The range proof to verify.
+   */
+  struct MultiRangeProofContext *proof;
+  /**
+   * The root hash to verify against.
+   */
+  struct HashKey root;
+  /**
+   * The lower bound of the key range.
+   */
+  struct Maybe_BorrowedBytes start_key;
+  /**
+   * The upper bound of the key range.
+   */
+  struct Maybe_BorrowedBytes end_key;
+  /**
+   * The maximum number of key/value pairs.
+   */
+  uint32_t max_length;
+  /**
+   * The validator ID for the commit.
+   */
+  uint64_t validator_id;
+} MultiVerifyRangeProofArgs;
+
+/**
  * The result type returned from the multi-validator open database function.
  */
 enum MultiHandleResult_Tag {
@@ -1155,6 +1309,50 @@ typedef struct MultiProposalResult {
 } MultiProposalResult;
 
 /**
+ * A result type returned from FFI functions that create an code hash iterator
+ */
+enum CodeIteratorResult_Tag {
+  /**
+   * The caller provided a null pointer to a proof handle.
+   */
+  CodeIteratorResult_NullHandlePointer,
+  /**
+   * Building the iterator was successful and the iterator handle is returned
+   */
+  CodeIteratorResult_Ok,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`].
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  CodeIteratorResult_Err,
+};
+typedef size_t CodeIteratorResult_Tag;
+
+typedef struct CodeIteratorResult_Ok_Body {
+  /**
+   * An opaque pointer to the [`CodeIteratorHandle`].
+   * The value should be freed with [`fwd_code_hash_iter_free`]
+   *
+   * [`fwd_code_hash_iter_free`]: crate::fwd_code_hash_iter_free
+   */
+  struct CodeIteratorHandle *handle;
+} CodeIteratorResult_Ok_Body;
+
+typedef struct CodeIteratorResult {
+  CodeIteratorResult_Tag tag;
+  union {
+    CodeIteratorResult_Ok_Body ok;
+    struct {
+      OwnedBytes err;
+    };
+  };
+} CodeIteratorResult;
+
+/**
  * The result type returned from the open or create database functions.
  */
 enum HandleResult_Tag {
@@ -1245,50 +1443,6 @@ typedef struct ProposalResult {
     };
   };
 } ProposalResult;
-
-/**
- * A result type returned from FFI functions that create an code hash iterator
- */
-enum CodeIteratorResult_Tag {
-  /**
-   * The caller provided a null pointer to a proof handle.
-   */
-  CodeIteratorResult_NullHandlePointer,
-  /**
-   * Building the iterator was successful and the iterator handle is returned
-   */
-  CodeIteratorResult_Ok,
-  /**
-   * An error occurred and the message is returned as an [`OwnedBytes`].
-   *
-   * The caller must call [`fwd_free_owned_bytes`] to free the memory
-   * associated with this error.
-   *
-   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
-   */
-  CodeIteratorResult_Err,
-};
-typedef size_t CodeIteratorResult_Tag;
-
-typedef struct CodeIteratorResult_Ok_Body {
-  /**
-   * An opaque pointer to the [`CodeIteratorHandle`].
-   * The value should be freed with [`fwd_code_hash_iter_free`]
-   *
-   * [`fwd_code_hash_iter_free`]: crate::fwd_code_hash_iter_free
-   */
-  struct CodeIteratorHandle *handle;
-} CodeIteratorResult_Ok_Body;
-
-typedef struct CodeIteratorResult {
-  CodeIteratorResult_Tag tag;
-  union {
-    CodeIteratorResult_Ok_Body ok;
-    struct {
-      OwnedBytes err;
-    };
-  };
-} CodeIteratorResult;
 
 /**
  * Arguments for initializing logging for the Firewood FFI.
@@ -1803,6 +1957,16 @@ struct VoidResult fwd_free_change_proof(struct ChangeProofContext *proof);
 struct VoidResult fwd_free_iterator(struct IteratorHandle *iterator);
 
 /**
+ * Frees a `MultiProposedChangeProofContext`.
+ */
+struct VoidResult fwd_free_multi_proposed_change_proof(struct MultiProposedChangeProofContext *proof);
+
+/**
+ * Frees a `MultiRangeProofContext`.
+ */
+struct VoidResult fwd_free_multi_range_proof(struct MultiRangeProofContext *proof);
+
+/**
  * Consumes the [`OwnedBytes`] and frees the memory associated with it.
  *
  * # Arguments
@@ -2197,6 +2361,11 @@ struct VoidResult fwd_multi_advance_to_hash(const struct MultiDatabaseHandle *db
                                             struct HashKey hash);
 
 /**
+ * Returns the next key range to fetch for a multi-head proposed change proof.
+ */
+struct NextKeyRangeResult fwd_multi_change_proof_find_next_key_proposed(struct MultiProposedChangeProofContext *proof);
+
+/**
  * Close and free the memory for a multi-validator database handle.
  *
  * # Safety
@@ -2222,6 +2391,19 @@ struct VoidResult fwd_multi_close_db(struct MultiDatabaseHandle *db);
 struct HashResult fwd_multi_commit_proposal(struct MultiProposalHandle *proposal);
 
 /**
+ * Create a change proof between two revisions from a multi-head database.
+ *
+ * This is a read-only operation — no validator ID is needed.
+ */
+struct ChangeProofResult fwd_multi_db_change_proof(const struct MultiDatabaseHandle *db,
+                                                   struct CreateChangeProofArgs args);
+
+/**
+ * Commit a multi-head proposed change proof.
+ */
+struct HashResult fwd_multi_db_commit_change_proof(struct MultiCommittedChangeProofArgs args);
+
+/**
  * Dump the trie structure of a validator's current head.
  *
  * # Safety
@@ -2231,6 +2413,38 @@ struct HashResult fwd_multi_commit_proposal(struct MultiProposalHandle *proposal
  * * call [`fwd_free_owned_bytes`] to free the returned value.
  */
 struct ValueResult fwd_multi_db_dump(const struct MultiDatabaseHandle *db, uint64_t id);
+
+/**
+ * Create a proposal from a verified change proof for a validator.
+ */
+struct MultiProposedChangeProofResult fwd_multi_db_propose_change_proof(const struct MultiDatabaseHandle *db,
+                                                                        struct MultiProposedChangeProofArgs args);
+
+/**
+ * Generate a range proof from a multi-head database at the given root.
+ *
+ * This is a read-only operation — no validator ID is needed. The returned
+ * [`MultiRangeProofContext`] can later be verified and committed for a
+ * specific validator via [`fwd_multi_db_verify_and_commit_range_proof`].
+ */
+struct MultiRangeProofResult fwd_multi_db_range_proof(const struct MultiDatabaseHandle *db,
+                                                      struct CreateRangeProofArgs args);
+
+/**
+ * Verify and commit a range proof for a validator.
+ *
+ * If a proposal was previously prepared, it will be committed. If the
+ * proposal is stale, a new one is created and committed.
+ */
+struct HashResult fwd_multi_db_verify_and_commit_range_proof(const struct MultiDatabaseHandle *db,
+                                                             struct MultiVerifyRangeProofArgs args);
+
+/**
+ * Verify a range proof and prepare a proposal for a validator without
+ * committing it.
+ */
+struct VoidResult fwd_multi_db_verify_range_proof(const struct MultiDatabaseHandle *db,
+                                                  struct MultiVerifyRangeProofArgs args);
 
 /**
  * Deregister a validator from a multi-validator database.
@@ -2349,6 +2563,16 @@ struct MultiProposalResult fwd_multi_propose(const struct MultiDatabaseHandle *d
  */
 struct MultiProposalResult fwd_multi_propose_on_proposal(const struct MultiProposalHandle *handle,
                                                          BorrowedBatchOps values);
+
+/**
+ * Returns an iterator over the code hashes in a multi-head range proof.
+ */
+struct CodeIteratorResult fwd_multi_range_proof_code_hash_iter(const struct MultiRangeProofContext *proof);
+
+/**
+ * Returns the next key range to fetch for a multi-head range proof.
+ */
+struct NextKeyRangeResult fwd_multi_range_proof_find_next_key(struct MultiRangeProofContext *proof);
 
 /**
  * Register a validator on a multi-validator database.

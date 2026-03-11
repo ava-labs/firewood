@@ -20,8 +20,10 @@ use std::cmp::Ordering;
 
 use crate::{
     BorrowedBytes, ChangeProofResult, DatabaseHandle, HashKey, HashResult, KeyRange, Maybe,
-    NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
-    results::{ProposedChangeProofResult, VerifiedChangeProofResult},
+    MultiDatabaseHandle, NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
+    results::{
+        MultiProposedChangeProofResult, ProposedChangeProofResult, VerifiedChangeProofResult,
+    },
 };
 
 #[cfg(feature = "ethhash")]
@@ -650,5 +652,169 @@ impl crate::MetricsContextExt for (&DatabaseHandle, &mut VerifiedChangeProofCont
 impl crate::MetricsContextExt for CodeIteratorHandle<'_> {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         None
+    }
+}
+
+// ========================== Multi-Head Change Proof ==========================
+
+/// Arguments for proposing a change proof in multi-validator mode.
+#[derive(Debug)]
+#[repr(C)]
+pub struct MultiProposedChangeProofArgs<'a> {
+    /// The verified change proof context to create a proposal from.
+    pub proof: Option<&'a mut VerifiedChangeProofContext>,
+    /// The validator ID for the proposal.
+    pub validator_id: u64,
+}
+
+/// Arguments for committing a multi-head proposed change proof.
+#[derive(Debug)]
+#[repr(C)]
+pub struct MultiCommittedChangeProofArgs<'a> {
+    /// The proposed change proof context to commit.
+    pub proof: Option<&'a mut MultiProposedChangeProofContext<'a>>,
+}
+
+/// FFI context for a proposed change proof in multi-validator mode.
+///
+/// Mirrors [`ProposedChangeProofContext`] but uses [`MultiDatabaseHandle`] and
+/// [`crate::MultiProposalHandle`] for validator-scoped operations.
+#[expect(unused)]
+#[derive(Debug)]
+pub struct MultiProposedChangeProofContext<'db> {
+    proof: FrozenChangeProof,
+    db: &'db MultiDatabaseHandle,
+    root_hash: Option<HashKey>,
+    end_root: HashKey,
+    end_key: Option<Box<[u8]>>,
+    validator_id: u64,
+    proposal: Option<crate::MultiProposalHandle<'db>>,
+}
+
+impl<'db> MultiProposedChangeProofContext<'db> {
+    fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
+        let Some(last_op) = self.proof.batch_ops().last() else {
+            return Ok(None);
+        };
+
+        if self.proof.end_proof().is_empty() {
+            return Ok(None);
+        }
+
+        if let Some(ref end_key) = self.end_key
+            && **last_op.key() >= **end_key
+        {
+            return Ok(None);
+        }
+
+        Ok(Some((last_op.key().clone(), self.end_key.clone())))
+    }
+
+    /// Consume the proposal handle and commit it.
+    fn commit(&'db mut self) -> Result<Option<HashKey>, api::Error> {
+        let Some(proposal_handle) = self.proposal.take() else {
+            return Err(api::Error::ProofError(
+                firewood::ProofError::ProposalIsNone,
+            ));
+        };
+
+        let result = proposal_handle.commit_proposal();
+        let hash = result?.map(Into::into);
+        firewood_increment!(crate::registry::MERGE_COUNT, 1, "change" => "commit");
+        Ok(hash)
+    }
+}
+
+/// Create a change proof between two revisions from a multi-head database.
+///
+/// This is a read-only operation — no validator ID is needed.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_db_change_proof(
+    db: Option<&MultiDatabaseHandle>,
+    args: CreateChangeProofArgs,
+) -> ChangeProofResult {
+    crate::invoke_with_handle(db, |db| {
+        db.change_proof(
+            args.start_root.into(),
+            args.end_root.into(),
+            args.start_key
+                .as_ref()
+                .map(BorrowedBytes::as_slice)
+                .into_option(),
+            args.end_key
+                .as_ref()
+                .map(BorrowedBytes::as_slice)
+                .into_option(),
+            NonZeroUsize::new(args.max_length as usize),
+        )
+    })
+}
+
+/// Create a proposal from a verified change proof for a validator.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_db_propose_change_proof<'db>(
+    db: Option<&'db MultiDatabaseHandle>,
+    args: MultiProposedChangeProofArgs<'db>,
+) -> MultiProposedChangeProofResult<'db> {
+    let validator_id = args.validator_id;
+    let handle = db.and_then(|db| args.proof.map(|p| (db, p)));
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        let Some(proof) = ctx.proof.take() else {
+            return Err(api::Error::ProofError(
+                firewood::ProofError::ProofIsNone,
+            ));
+        };
+
+        let proposal =
+            db.apply_change_proof_to_parent(validator_id, ctx.params.start_root.into(), &proof)?;
+        let root_hash = proposal.handle.root_hash().map(Into::into);
+
+        Ok(MultiProposedChangeProofContext {
+            proof,
+            db,
+            root_hash,
+            end_root: ctx.params.end_root,
+            end_key: ctx.params.end_key.clone(),
+            validator_id,
+            proposal: Some(proposal.handle),
+        })
+    })
+}
+
+/// Commit a multi-head proposed change proof.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_db_commit_change_proof(
+    args: MultiCommittedChangeProofArgs<'_>,
+) -> HashResult {
+    crate::invoke_with_handle(args.proof, |ctx| {
+        ctx.commit().map(|hash_key| hash_key.map(Into::into))
+    })
+}
+
+/// Returns the next key range to fetch for a multi-head proposed change proof.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_multi_change_proof_find_next_key_proposed(
+    proof: Option<&mut MultiProposedChangeProofContext>,
+) -> NextKeyRangeResult {
+    crate::invoke_with_handle(proof, MultiProposedChangeProofContext::find_next_key)
+}
+
+/// Frees a `MultiProposedChangeProofContext`.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_free_multi_proposed_change_proof(
+    proof: Option<Box<MultiProposedChangeProofContext>>,
+) -> VoidResult {
+    crate::invoke_with_handle(proof, drop)
+}
+
+impl crate::MetricsContextExt for MultiProposedChangeProofContext<'_> {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
+        None
+    }
+}
+
+impl crate::MetricsContextExt for (&MultiDatabaseHandle, &mut VerifiedChangeProofContext) {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
+        self.0.metrics_context()
     }
 }

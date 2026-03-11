@@ -6,16 +6,20 @@
     reason = "FFI methods follow existing pattern without per-method error docs."
 )]
 
+use std::num::NonZeroUsize;
+
 use firewood::{
     db::{MultiDb, MultiDbConfig},
+    merkle::Merkle,
     v2::api::{
-        self, ArcDynDbView, DbView, HashKey, IntoBatchIter, KeyType, OptionalHashKeyExt,
-        Proposal as _, ValidatorId,
+        self, ArcDynDbView, DbView, FrozenChangeProof, HashKey, IntoBatchIter, KeyType,
+        OptionalHashKeyExt, Proposal as _, ValidatorId,
     },
 };
 
 use crate::{
     BatchOp, IteratorHandle,
+    arc_cache::ArcCache,
     handle::DatabaseHandleArgs,
     iterator::CreateIteratorResult,
     metrics::MetricsContextExt,
@@ -40,6 +44,8 @@ pub struct MultiDatabaseHandleArgs<'a> {
 /// [`fwd_multi_open_db`]: crate::fwd_multi_open_db
 #[derive(Debug)]
 pub struct MultiDatabaseHandle {
+    /// A single cached view to improve performance of repeated reads at the same root.
+    cached_view: ArcCache<HashKey, dyn api::DynDbView>,
     multi_db: MultiDb,
     metrics_context: MetricsContext,
 }
@@ -72,6 +78,7 @@ impl MultiDatabaseHandle {
 
         let multi_db = MultiDb::new(path, cfg)?;
         Ok(Self {
+            cached_view: ArcCache::new(),
             multi_db,
             metrics_context,
         })
@@ -179,6 +186,120 @@ impl MultiDatabaseHandle {
     /// Dump the trie at a validator's current head.
     pub fn dump(&self, id: u64) -> Result<String, api::Error> {
         self.multi_db.dump_validator(ValidatorId::new(id))
+    }
+
+    /// Get a cached view by root hash for proof generation.
+    pub(crate) fn get_root(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {
+        let mut cache_miss = false;
+        let view = self.cached_view.get_or_try_insert_with(root, |key| {
+            cache_miss = true;
+            self.multi_db.view(HashKey::clone(key))
+        })?;
+
+        if cache_miss {
+            firewood_increment!(crate::registry::CACHED_VIEW_MISS, 1);
+        } else {
+            firewood_increment!(crate::registry::CACHED_VIEW_HIT, 1);
+        }
+
+        Ok(view)
+    }
+
+    /// Create a change proof between two revisions.
+    pub(crate) fn change_proof(
+        &self,
+        start_hash: HashKey,
+        end_hash: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenChangeProof, api::Error> {
+        // Get the end revision first so that EndRevisionNotFound is returned
+        // when both revisions are missing, matching single-head behavior.
+        let end_merkle =
+            Merkle::from(self.multi_db.revision(end_hash).map_err(|err| {
+                if let api::Error::RevisionNotFound { provided } = err {
+                    api::Error::EndRevisionNotFound { provided }
+                } else {
+                    err
+                }
+            })?);
+
+        let start_merkle =
+            Merkle::from(self.multi_db.revision(start_hash).map_err(|err| {
+                if let api::Error::RevisionNotFound { provided } = err {
+                    api::Error::StartRevisionNotFound { provided }
+                } else {
+                    err
+                }
+            })?);
+
+        end_merkle.change_proof(start_key, end_key, start_merkle.nodestore(), limit)
+    }
+
+    /// Merge key-value range for a validator (used by range proof commit).
+    pub(crate) fn merge_key_value_range(
+        &self,
+        id: u64,
+        first_key: Option<&[u8]>,
+        last_key: Option<&[u8]>,
+        key_values: impl IntoIterator<Item: api::KeyValuePair>,
+    ) -> Result<MultiCreateProposalResult<'_>, api::Error> {
+        let (proposal_result, propose_time) =
+            fwd_expensive_timed_result!(crate::registry::PROPOSE_MS_BUCKET, {
+                self.multi_db
+                    .merge_key_value_range(ValidatorId::new(id), first_key, last_key, key_values)
+            });
+        let proposal = proposal_result?;
+        firewood_increment!(crate::registry::PROPOSE_MS, propose_time.as_millis());
+        firewood_increment!(crate::registry::PROPOSE_COUNT, 1);
+        firewood_record!(
+            crate::registry::PROPOSE_MS_BUCKET,
+            propose_time.as_f64() * 1000.0,
+            expensive
+        );
+
+        let hash_key = proposal.root_hash();
+        Ok(MultiCreateProposalResult {
+            handle: MultiProposalHandle {
+                hash_key,
+                proposal,
+                handle: self,
+                validator_id: id,
+            },
+        })
+    }
+
+    /// Apply a change proof to a parent revision for a validator.
+    pub(crate) fn apply_change_proof_to_parent(
+        &self,
+        id: u64,
+        start_hash: HashKey,
+        change_proof: &FrozenChangeProof,
+    ) -> Result<MultiCreateProposalResult<'_>, api::Error> {
+        let (proposal_result, propose_time) =
+            fwd_expensive_timed_result!(crate::registry::PROPOSE_MS_BUCKET, {
+                self.multi_db
+                    .apply_change_proof_to_parent(change_proof, start_hash)
+            });
+        let proposal = proposal_result?;
+        firewood_increment!(crate::registry::PROPOSE_MS, propose_time.as_millis());
+        firewood_increment!(crate::registry::PROPOSE_COUNT, 1);
+        firewood_record!(
+            crate::registry::PROPOSE_MS_BUCKET,
+            propose_time.as_f64() * 1000.0,
+            expensive
+        );
+
+        let hash_key = proposal.root_hash();
+        Ok(MultiCreateProposalResult {
+            handle: MultiProposalHandle {
+                hash_key,
+                proposal,
+                handle: self,
+                validator_id: id,
+            },
+        })
     }
 
     /// Close the database gracefully.
