@@ -70,6 +70,23 @@ jobs:
       - name: Build for ${{ matrix.target }}
         run: cargo build-static-ffi --target ${{ matrix.target }}
 
+      # see https://github.com/golang/go/issues/61229#issuecomment-1988965927
+      # the generated archive has a malformed LC_DYSYMTAB which the Apple linker doesn't
+      # like. `ld -r` makes the archive "relocatable" and fixes the malformed LC_DYSYMTAB.
+      - name: Cleanup malformed LC_DYSYMTAB
+        if: matrix.os == 'macos-latest'
+        run: |
+          lib_path="target/${{ matrix.target }}/maxperf/libfirewood_ffi.a"
+          tmp_path="${lib_path}.tmp"
+          if [[ "${{ matrix.target }}" == "aarch64-apple-darwin" ]]; then
+            arch="arm64"
+          else
+            arch="x86_64"
+          fi
+          cp "$lib_path" "$tmp_path"
+          ld -r -arch "${arch}" -o "$lib_path" "$tmp_path"
+          rm "$tmp_path"
+
       - name: Upload binary
         uses: actions/upload-artifact@v7
         with:
