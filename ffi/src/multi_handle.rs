@@ -459,6 +459,4 @@ impl<'db> MultiProposalHandle<'db> {
     }
 }
 
-fn invalid_data(error: impl Into<Box<dyn std::error::Error + Send + Sync>>) -> api::Error {
-    api::Error::IO(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
-}
+use crate::invalid_data;

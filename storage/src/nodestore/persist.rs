@@ -173,20 +173,23 @@ fn serialize_node_to_bump<'a>(
     node_allocator: &mut NodeAllocator<'_, impl WritableStorage>,
     fork_id: crate::node::persist::ForkId,
 ) -> Result<(&'a [u8], crate::LinearAddress, usize), FileIoError> {
-    let mut bytes = bumpalo::collections::Vec::new_in(bump);
-    let _area_size_index = shared_node
-        .as_bytes(&mut bytes)
-        .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
-
     if fork_id != 0 {
-        // V1 format: insert 8 bytes of fork_id after the AreaIndex byte (position 1)
-        let fork_id_bytes = fork_id.to_le_bytes();
-        bytes.splice(1..1, fork_id_bytes);
-
-        // Recompute AreaIndex for the new total size (original + 8 bytes)
-        let new_area_index = crate::nodestore::primitives::AreaIndex::from_size(bytes.len() as u64)
+        // V1 format: write AreaIndex placeholder, fork_id, then node data
+        // Serialize node to a temporary buffer first to measure its size
+        let mut node_bytes = bumpalo::collections::Vec::new_in(bump);
+        let _area_size_index = shared_node
+            .as_bytes(&mut node_bytes)
             .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
-        bytes[0] = new_area_index.with_fork_id_flag();
+
+        // Build final buffer: [AreaIndex:1][ForkId:8][NodeData...] (no splice/memmove)
+        let total_size = node_bytes.len() + 8; // 8 bytes for fork_id inserted after AreaIndex byte
+        let new_area_index = crate::nodestore::primitives::AreaIndex::from_size(total_size as u64)
+            .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
+
+        let mut bytes = bumpalo::collections::Vec::with_capacity_in(total_size, bump);
+        bytes.push(new_area_index.with_fork_id_flag());
+        bytes.extend_from_slice(&fork_id.to_le_bytes());
+        bytes.extend_from_slice(&node_bytes[1..]); // skip original AreaIndex byte
 
         let (persisted_address, _) = node_allocator.allocate_node(bytes.as_slice())?;
         bytes.shrink_to_fit();
@@ -194,6 +197,10 @@ fn serialize_node_to_bump<'a>(
         Ok((slice, persisted_address, new_area_index.size() as usize))
     } else {
         // V0 format: unchanged
+        let mut bytes = bumpalo::collections::Vec::new_in(bump);
+        let _area_size_index = shared_node
+            .as_bytes(&mut bytes)
+            .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
         let area_size_index =
             crate::nodestore::primitives::AreaIndex::from_size(bytes.len() as u64)
                 .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;

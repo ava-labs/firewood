@@ -619,17 +619,23 @@ impl RevisionManager {
             .map_err(RevisionManagerError::PersistError)
     }
 
-    /// Returns the fork ID for a validator in multi-head mode.
-    ///
-    /// Returns 0 if multi-head is not enabled or the validator is not found.
-    pub fn validator_fork_id(&self, id: ValidatorId) -> ForkId {
-        if let Some(multi_head) = &self.multi_head {
-            let state = multi_head.read();
-            if let Some(validator) = state.validators.get(&id) {
-                return state.chains.get(&validator.chain).map_or(0, |c| c.fork_id);
-            }
-        }
-        0
+    /// Returns both the validator's head revision and fork ID in a single lock acquisition.
+    pub fn validator_view_and_fork_id(
+        &self,
+        id: ValidatorId,
+    ) -> Result<(CommittedRevision, ForkId), RevisionManagerError> {
+        let state = self
+            .multi_head
+            .as_ref()
+            .ok_or(RevisionManagerError::ValidatorNotFound { id })?
+            .read();
+
+        let validator = state
+            .validators
+            .get(&id)
+            .ok_or(RevisionManagerError::ValidatorNotFound { id })?;
+        let fork_id = state.chains.get(&validator.chain).map_or(0, |c| c.fork_id);
+        Ok((validator.head.clone(), fork_id))
     }
 
     /// Construct a `can_free` closure from the current fork tree state.
@@ -912,22 +918,8 @@ impl RevisionManager {
             let source_chain = removed.chain;
             let validator_count = state.validators.len();
 
-            // If source chain has no remaining validators, collect its revisions for reaping
-            let source_has_validators = state.validators.values().any(|v| v.chain == source_chain);
-            let (revisions_to_reap, can_free) = if source_has_validators {
-                (Vec::new(), Arc::new(|_| true) as CanFreeFn)
-            } else {
-                // Build can_free BEFORE removing from fork tree so is_ancestor works
-                let chain_fork_id = state.chains.get(&source_chain).map_or(0, |c| c.fork_id);
-                let can_free = self.build_can_free(&state, chain_fork_id);
-
-                // Remove this chain's fork_id from the fork tree
-                if chain_fork_id != 0 {
-                    state.fork_tree.remove(chain_fork_id);
-                }
-                let revisions = self.collect_all_chain_revisions(source_chain, &mut state);
-                (revisions, can_free)
-            };
+            let (revisions_to_reap, can_free) =
+                self.cleanup_empty_chain(source_chain, &mut state);
 
             (removed.slot, validator_count, revisions_to_reap, can_free)
         }; // write lock dropped
@@ -941,18 +933,7 @@ impl RevisionManager {
         drop(header);
 
         // Reap collected revisions (no locks held, may block)
-        for rev in revisions_to_reap {
-            match Arc::try_unwrap(rev) {
-                Ok(owned) => {
-                    self.persist_worker
-                        .reap(owned, can_free.clone())
-                        .map_err(RevisionManagerError::PersistError)?;
-                }
-                Err(_still_held) => {
-                    // External reference (e.g., a view) holds this revision.
-                }
-            }
-        }
+        self.reap_revisions(revisions_to_reap, &can_free)?;
 
         Ok(())
     }
@@ -1034,21 +1015,8 @@ impl RevisionManager {
                 } // mutable borrow of validator dropped
 
                 // Clean up source chain if now empty of validators
-                let (revisions_to_reap, dedup_can_free) = if source_chain != target_chain
-                    && !state.validators.values().any(|v| v.chain == source_chain)
-                {
-                    // Build can_free BEFORE removing from fork tree
-                    let chain_fork_id = state.chains.get(&source_chain).map_or(0, |c| c.fork_id);
-                    let cf = self.build_can_free(&state, chain_fork_id);
-
-                    // Remove this chain's fork_id from the fork tree (convergence)
-                    if chain_fork_id != 0 {
-                        state.fork_tree.remove(chain_fork_id);
-                    }
-                    (
-                        self.collect_all_chain_revisions(source_chain, &mut state),
-                        cf,
-                    )
+                let (revisions_to_reap, dedup_can_free) = if source_chain != target_chain {
+                    self.cleanup_empty_chain(source_chain, &mut state)
                 } else {
                     (Vec::new(), Arc::new(|_| true) as CanFreeFn)
                 };
@@ -1072,16 +1040,7 @@ impl RevisionManager {
                 }
                 drop(header);
 
-                for rev in revisions_to_reap {
-                    match Arc::try_unwrap(rev) {
-                        Ok(owned) => {
-                            self.persist_worker
-                                .reap(owned, dedup_can_free.clone())
-                                .map_err(RevisionManagerError::PersistError)?;
-                        }
-                        Err(_still_held) => {}
-                    }
-                }
+                self.reap_revisions(revisions_to_reap, &dedup_can_free)?;
 
                 // Phase 3 (dedup path): cleanup proposals
                 self.cleanup_proposals_inner(&proposal);
@@ -1091,17 +1050,12 @@ impl RevisionManager {
 
             // 3. Check for divergence: other validators on same chain have
             //    a different head than this validator's parent
-            let validator_chain = state
+            let validator = state
                 .validators
                 .get(&id)
-                .ok_or(RevisionManagerError::ValidatorNotFound { id })?
-                .chain;
-            let parent_hash = state
-                .validators
-                .get(&id)
-                .ok_or(RevisionManagerError::ValidatorNotFound { id })?
-                .head
-                .root_hash();
+                .ok_or(RevisionManagerError::ValidatorNotFound { id })?;
+            let validator_chain = validator.chain;
+            let parent_hash = validator.head.root_hash();
 
             let diverged = state.validators.iter().any(|(other_id, other_v)| {
                 *other_id != id
@@ -1227,18 +1181,7 @@ impl RevisionManager {
         drop(header);
 
         // Reap collected revisions
-        for rev in revisions_to_reap {
-            match Arc::try_unwrap(rev) {
-                Ok(owned) => {
-                    self.persist_worker
-                        .reap(owned, can_free.clone())
-                        .map_err(RevisionManagerError::PersistError)?;
-                }
-                Err(_still_held) => {
-                    // External reference (e.g., a view) holds this revision.
-                }
-            }
-        }
+        self.reap_revisions(revisions_to_reap, &can_free)?;
 
         // Phase 3: Under proposals lock (short)
         self.cleanup_proposals_inner(&proposal);
@@ -1313,21 +1256,8 @@ impl RevisionManager {
             let slot = validator.slot;
 
             // Clean up source chain if now empty of validators
-            let (revisions_to_reap, cf) = if source_chain != target_chain
-                && !state.validators.values().any(|v| v.chain == source_chain)
-            {
-                // Build can_free BEFORE removing from fork tree
-                let chain_fork_id = state.chains.get(&source_chain).map_or(0, |c| c.fork_id);
-                let cf = self.build_can_free(&state, chain_fork_id);
-
-                // Remove this chain's fork_id from the fork tree (convergence)
-                if chain_fork_id != 0 {
-                    state.fork_tree.remove(chain_fork_id);
-                }
-                (
-                    self.collect_all_chain_revisions(source_chain, &mut state),
-                    cf,
-                )
+            let (revisions_to_reap, cf) = if source_chain != target_chain {
+                self.cleanup_empty_chain(source_chain, &mut state)
             } else {
                 (Vec::new(), Arc::new(|_| true) as CanFreeFn)
             };
@@ -1343,16 +1273,7 @@ impl RevisionManager {
         drop(header);
 
         // Reap collected revisions (no locks held, may block)
-        for rev in revisions_to_reap {
-            match Arc::try_unwrap(rev) {
-                Ok(owned) => {
-                    self.persist_worker
-                        .reap(owned, can_free.clone())
-                        .map_err(RevisionManagerError::PersistError)?;
-                }
-                Err(_still_held) => {}
-            }
-        }
+        self.reap_revisions(revisions_to_reap, &can_free)?;
 
         Ok(())
     }
@@ -1373,6 +1294,28 @@ impl RevisionManager {
             .get(&id)
             .map(|v| v.head.clone())
             .ok_or(RevisionManagerError::ValidatorNotFound { id })
+    }
+
+    /// Remove a revision's hash from `by_hash` and `hash_to_chain` if no
+    /// validator head still references it.
+    ///
+    /// Takes individual fields rather than `&mut MultiHeadState` to avoid
+    /// borrow conflicts when the caller also holds a reference to `chains`.
+    fn remove_hash_if_unreferenced(
+        validators: &HashMap<ValidatorId, ValidatorState>,
+        by_hash: &mut HashMap<TrieHash, CommittedRevision>,
+        hash_to_chain: &mut HashMap<TrieHash, ChainId>,
+        rev: &CommittedRevision,
+    ) {
+        if let Some(hash) = rev.root_hash().or_default_root_hash() {
+            let still_referenced = validators
+                .values()
+                .any(|v| v.head.root_hash().or_default_root_hash().as_ref() == Some(&hash));
+            if !still_referenced {
+                by_hash.remove(&hash);
+                hash_to_chain.remove(&hash);
+            }
+        }
     }
 
     /// Collect revisions to reap from a specific chain (per-chain budget enforcement).
@@ -1408,18 +1351,12 @@ impl RevisionManager {
                 break;
             };
 
-            // Remove from hash indexes if no validator head references this hash
-            if let Some(hash) = oldest.root_hash().or_default_root_hash() {
-                let still_referenced = state
-                    .validators
-                    .values()
-                    .any(|v| v.head.root_hash().or_default_root_hash().as_ref() == Some(&hash));
-                if !still_referenced {
-                    state.by_hash.remove(&hash);
-                    state.hash_to_chain.remove(&hash);
-                }
-            }
-
+            Self::remove_hash_if_unreferenced(
+                &state.validators,
+                &mut state.by_hash,
+                &mut state.hash_to_chain,
+                &oldest,
+            );
             collected.push(oldest);
             reaped = reaped.wrapping_add(1);
         }
@@ -1443,16 +1380,12 @@ impl RevisionManager {
 
         let mut collected = Vec::new();
         while let Some(rev) = chain.revisions.pop_front() {
-            if let Some(hash) = rev.root_hash().or_default_root_hash() {
-                let still_referenced = state
-                    .validators
-                    .values()
-                    .any(|v| v.head.root_hash().or_default_root_hash().as_ref() == Some(&hash));
-                if !still_referenced {
-                    state.by_hash.remove(&hash);
-                    state.hash_to_chain.remove(&hash);
-                }
-            }
+            Self::remove_hash_if_unreferenced(
+                &state.validators,
+                &mut state.by_hash,
+                &mut state.hash_to_chain,
+                &rev,
+            );
             collected.push(rev);
         }
 
@@ -1504,6 +1437,52 @@ impl RevisionManager {
         }
 
         firewood_set!(crate::registry::PROPOSALS_UNCOMMITTED, lock.len());
+    }
+
+    /// Reap a list of collected revisions, attempting to free each one.
+    ///
+    /// Revisions still held by external references (e.g., open views) are
+    /// skipped. This must be called without any locks held.
+    fn reap_revisions(
+        &self,
+        revisions: Vec<CommittedRevision>,
+        can_free: &CanFreeFn,
+    ) -> Result<(), RevisionManagerError> {
+        for rev in revisions {
+            if let Ok(owned) = Arc::try_unwrap(rev) {
+                self.persist_worker
+                    .reap(owned, can_free.clone())
+                    .map_err(RevisionManagerError::PersistError)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Collect and clean up an empty chain's revisions and fork tree entry.
+    ///
+    /// Must be called under the write lock. Returns collected revisions and
+    /// a `can_free` closure. The fork_id is removed from the fork tree before
+    /// returning, so `reap_revisions` can be called after releasing the lock.
+    fn cleanup_empty_chain(
+        &self,
+        source_chain: ChainId,
+        state: &mut MultiHeadState,
+    ) -> (Vec<CommittedRevision>, CanFreeFn) {
+        let source_has_validators = state.validators.values().any(|v| v.chain == source_chain);
+        if source_has_validators {
+            return (Vec::new(), Arc::new(|_| true) as CanFreeFn);
+        }
+
+        // Build can_free BEFORE removing from fork tree so is_ancestor works
+        let chain_fork_id = state.chains.get(&source_chain).map_or(0, |c| c.fork_id);
+        let can_free = self.build_can_free(state, chain_fork_id);
+
+        // Remove this chain's fork_id from the fork tree
+        if chain_fork_id != 0 {
+            state.fork_tree.remove(chain_fork_id);
+        }
+        let revisions = self.collect_all_chain_revisions(source_chain, state);
+        (revisions, can_free)
     }
 
     /// Closes the revision manager gracefully.

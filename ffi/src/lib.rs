@@ -36,8 +36,15 @@ mod replay;
 mod revision;
 mod value;
 
-use firewood::v2::api::DbView;
+use firewood::v2::api::{self, DbView};
 use firewood_metrics::set_metrics_context;
+
+/// Create an `api::Error::IO` with `InvalidData` kind.
+pub(crate) fn invalid_data(
+    error: impl Into<Box<dyn std::error::Error + Send + Sync>>,
+) -> api::Error {
+    api::Error::IO(std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+}
 
 pub use crate::handle::*;
 pub use crate::iterator::*;

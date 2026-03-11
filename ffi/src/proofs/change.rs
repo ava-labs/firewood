@@ -221,26 +221,34 @@ pub struct ProposedChangeProofContext<'db> {
     proposal: Option<crate::ProposalHandle<'db>>,
 }
 
+/// Shared logic for `find_next_key` across single-head and multi-head change proof contexts.
+fn change_proof_find_next_key(
+    proof: &FrozenChangeProof,
+    end_key: Option<&Box<[u8]>>,
+) -> Result<Option<KeyRange>, api::Error> {
+    let Some(last_op) = proof.batch_ops().last() else {
+        // no BatchOps in the proof, so we are done
+        return Ok(None);
+    };
+
+    if proof.end_proof().is_empty() {
+        // unbounded, so we are done
+        return Ok(None);
+    }
+
+    if let Some(end_key) = end_key
+        && **last_op.key() >= **end_key
+    {
+        // reached or exceeded the end key, so we are done
+        return Ok(None);
+    }
+
+    Ok(Some((last_op.key().clone(), end_key.cloned())))
+}
+
 impl<'db> ProposedChangeProofContext<'db> {
     fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
-        let Some(last_op) = self.proof.batch_ops().last() else {
-            // no BatchOps in the proof, so we are done
-            return Ok(None);
-        };
-
-        if self.proof.end_proof().is_empty() {
-            // unbounded, so we are done
-            return Ok(None);
-        }
-
-        if let Some(ref end_key) = self.end_key
-            && **last_op.key() >= **end_key
-        {
-            // reached or exceeded the end key, so we are done
-            return Ok(None);
-        }
-
-        Ok(Some((last_op.key().clone(), self.end_key.clone())))
+        change_proof_find_next_key(&self.proof, self.end_key.as_ref())
     }
 
     /// Consumes proposal handle after being called once.
@@ -693,21 +701,7 @@ pub struct MultiProposedChangeProofContext<'db> {
 
 impl<'db> MultiProposedChangeProofContext<'db> {
     fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
-        let Some(last_op) = self.proof.batch_ops().last() else {
-            return Ok(None);
-        };
-
-        if self.proof.end_proof().is_empty() {
-            return Ok(None);
-        }
-
-        if let Some(ref end_key) = self.end_key
-            && **last_op.key() >= **end_key
-        {
-            return Ok(None);
-        }
-
-        Ok(Some((last_op.key().clone(), self.end_key.clone())))
+        change_proof_find_next_key(&self.proof, self.end_key.as_ref())
     }
 
     /// Consume the proposal handle and commit it.

@@ -134,11 +134,12 @@ impl MaybePersistedNode {
     ///
     /// * `addr` - The `LinearAddress` where the node has been persisted on disk
     pub fn persist_at(&self, addr: LinearAddress) {
-        let fork_id = match &*self.0.lock() {
+        let mut guard = self.0.lock();
+        let fork_id = match &*guard {
             MaybePersisted::Allocated(_, _, fid) => *fid,
             _ => 0,
         };
-        *self.0.lock() = MaybePersisted::Persisted(addr, fork_id);
+        *guard = MaybePersisted::Persisted(addr, fork_id);
     }
 
     /// Updates the internal state to indicate this node is allocated at the specified disk address.

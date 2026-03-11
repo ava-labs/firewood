@@ -495,8 +495,7 @@ impl MultiDb {
         id: ValidatorId,
         batch: impl IntoBatchIter,
     ) -> Result<Proposal<'_>, api::Error> {
-        let head = self.db.manager.validator_view(id)?;
-        let fork_id = self.db.manager.validator_fork_id(id);
+        let (head, fork_id) = self.db.manager.validator_view_and_fork_id(id)?;
         self.db.propose_with_parent(batch, &head, fork_id)
     }
 

@@ -103,27 +103,78 @@ impl From<FrozenRangeProof> for RangeProofContext<'_> {
     }
 }
 
+/// Shared range proof verification logic.
+///
+/// If the proof has already been verified with the same constraints, this is a no-op.
+/// If verified with different constraints, an error is returned.
+///
+/// ## ⚠️ Unimplemented ⚠️
+///
+/// Currently a stub that does not perform cryptographic verification.
+fn verify_range_proof(
+    verification: &mut Option<VerificationContext>,
+    root: HashKey,
+    start_key: Option<&[u8]>,
+    end_key: Option<&[u8]>,
+    max_length: Option<NonZeroUsize>,
+) -> Result<(), api::Error> {
+    if let Some(ctx) = verification.as_ref() {
+        if ctx.root == root
+            && ctx.start_key.as_deref() == start_key
+            && ctx.end_key.as_deref() == end_key
+            && ctx.max_length == max_length
+        {
+            return Ok(());
+        }
+
+        return Err(api::Error::ProofError(ProofError::ValueMismatch));
+    }
+
+    warn!("range proof verification not yet implemented");
+    *verification = Some(VerificationContext {
+        root,
+        start_key: start_key.map(Box::from),
+        end_key: end_key.map(Box::from),
+        max_length,
+    });
+    Ok(())
+}
+
+/// Shared logic for `find_next_key` across single-head and multi-head range proof contexts.
+///
+/// Returns the next key range to fetch, or `None` if sync is complete.
+// TODO(#352): proper implementation, this naively returns the last key in
+// the range, which is correct, but not ideal.
+fn range_proof_find_next_key(
+    proof: &FrozenRangeProof,
+    verification: Option<&VerificationContext>,
+    root_hash: Option<HashKey>,
+) -> Result<Option<KeyRange>, api::Error> {
+    let verification = verification
+        .ok_or(api::Error::ProofError(ProofError::Unverified))?;
+
+    let Some((last_key, _)) = proof.key_values().last() else {
+        return Ok(None);
+    };
+
+    if root_hash.as_ref() == Some(&verification.root) {
+        return Ok(None);
+    }
+
+    if proof.end_proof().is_empty() {
+        return Ok(None);
+    }
+
+    if let Some(ref end_key) = verification.end_key
+        && **last_key >= **end_key
+    {
+        return Ok(None);
+    }
+
+    Ok(Some((last_key.clone(), verification.end_key.clone())))
+}
+
 impl<'db> RangeProofContext<'db> {
-    /// Verify the range proof against the given constraints.
-    ///
-    /// If the proof has already been verified with the same constraints, this
-    /// is a no-op.
-    ///
-    /// If the proof has already been verified with different constraints, an
-    /// error is returned.
-    ///
-    /// Otherwise, the proof is verified and the verification context is stored.
-    ///
-    /// This does not require a database handle as it only verifies the proof
-    /// without considering the current database state. Use
-    /// [`RangeProofContext::verify_and_propose`] to prepare a proposal against
-    /// a specific database and [`RangeProofContext::verify_and_commit`] to
-    /// commit the proof to a database.
-    ///
-    /// ## ⚠️ Unimplemented ⚠️
-    ///
-    /// Currently, this is a stub implementation that does not perform any
-    /// verification steps.
     fn verify(
         &mut self,
         root: HashKey,
@@ -131,29 +182,7 @@ impl<'db> RangeProofContext<'db> {
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
     ) -> Result<(), api::Error> {
-        if let Some(ref ctx) = self.verification {
-            if ctx.root == root
-                && ctx.start_key.as_deref() == start_key
-                && ctx.end_key.as_deref() == end_key
-                && ctx.max_length == max_length
-            {
-                // already verified with the same context
-                return Ok(());
-            }
-
-            return Err(api::Error::ProofError(ProofError::ValueMismatch));
-        }
-
-        debug_assert!(self.verification.is_none());
-
-        warn!("range proof verification not yet implemented");
-        self.verification = Some(VerificationContext {
-            root,
-            start_key: start_key.map(Box::from),
-            end_key: end_key.map(Box::from),
-            max_length,
-        });
-        Ok(())
+        verify_range_proof(&mut self.verification, root, start_key, end_key, max_length)
     }
 
     /// Verify the range proof and prepare a proposal against the given database
@@ -244,54 +273,13 @@ impl<'db> RangeProofContext<'db> {
         Ok(hash)
     }
 
-    /// Returns the next key range that should be fetched after processing this
-    /// range proof, or [`None`] if there are no more keys to fetch.
-    ///
-    /// The returned key range represents `(finalKey, endKey]` where finalKey is
-    /// is the last key known to be fully synchronized within the requested
-    /// range. `finalKey` is exclusive, meaning it has already been processed.
-    /// `endKey` is inclusive if provided during proof creation.
-    ///
-    /// Because the proof includes hash information about the state of the
-    /// database outside of the range of key-value pairs included in the proof,
-    /// we are able to inspect the database and provide a more accurate value
-    /// for `finalKey` than simply the last key in the set of key-value pairs.
     fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
-        // TODO(#352): proper implementation, this naively returns the last key in
-        // in the range, which is correct, but not ideal.
-        let verification = self
-            .verification
-            .as_ref()
-            .ok_or(api::Error::ProofError(ProofError::Unverified))?;
-
-        let Some((last_key, _)) = self.proof.key_values().last() else {
-            // no key-values in the proof, so we are done
-            return Ok(None);
-        };
-
         let root_hash = match self.proposal_state {
             Some(ProposalState::Committed(ref hash)) => Ok(hash.clone()),
             Some(ProposalState::Proposed(ref proposal)) => Ok(proposal.root_hash()),
             None => Err(api::Error::ProofError(ProofError::Unverified)),
         }?;
-        if root_hash.as_ref() == Some(&verification.root) {
-            // already at the target root, so we are done
-            return Ok(None);
-        }
-
-        if self.proof.end_proof().is_empty() {
-            // unbounded, so we are done
-            return Ok(None);
-        }
-
-        if let Some(ref end_key) = verification.end_key
-            && **last_key >= **end_key
-        {
-            // reached or exceeded the end key, so we are done
-            return Ok(None);
-        }
-
-        Ok(Some((last_key.clone(), verification.end_key.clone())))
+        range_proof_find_next_key(&self.proof, self.verification.as_ref(), root_hash)
     }
 
     fn code_hash_iter(&self) -> Result<CodeIteratorHandle<'_>, api::Error> {
@@ -696,10 +684,6 @@ impl From<FrozenRangeProof> for MultiRangeProofContext<'_> {
 }
 
 impl<'db> MultiRangeProofContext<'db> {
-    /// Verify the range proof against the given constraints.
-    ///
-    /// Reuses the same verification logic as single-head; see
-    /// [`RangeProofContext::verify`] for details.
     fn verify(
         &mut self,
         root: HashKey,
@@ -707,28 +691,7 @@ impl<'db> MultiRangeProofContext<'db> {
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
     ) -> Result<(), api::Error> {
-        if let Some(ref ctx) = self.verification {
-            if ctx.root == root
-                && ctx.start_key.as_deref() == start_key
-                && ctx.end_key.as_deref() == end_key
-                && ctx.max_length == max_length
-            {
-                return Ok(());
-            }
-
-            return Err(api::Error::ProofError(ProofError::ValueMismatch));
-        }
-
-        debug_assert!(self.verification.is_none());
-
-        warn!("range proof verification not yet implemented");
-        self.verification = Some(VerificationContext {
-            root,
-            start_key: start_key.map(Box::from),
-            end_key: end_key.map(Box::from),
-            max_length,
-        });
-        Ok(())
+        verify_range_proof(&mut self.verification, root, start_key, end_key, max_length)
     }
 
     /// Verify the range proof and prepare a proposal for a validator.
@@ -803,37 +766,13 @@ impl<'db> MultiRangeProofContext<'db> {
         Ok(hash)
     }
 
-    /// Returns the next key range to fetch, or `None` if sync is complete.
     fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
-        let verification = self
-            .verification
-            .as_ref()
-            .ok_or(api::Error::ProofError(ProofError::Unverified))?;
-
-        let Some((last_key, _)) = self.proof.key_values().last() else {
-            return Ok(None);
-        };
-
         let root_hash = match self.proposal_state {
             Some(MultiProposalState::Committed(ref hash)) => Ok(hash.clone()),
             Some(MultiProposalState::Proposed(ref proposal)) => Ok(proposal.root_hash()),
             None => Err(api::Error::ProofError(ProofError::Unverified)),
         }?;
-        if root_hash.as_ref() == Some(&verification.root) {
-            return Ok(None);
-        }
-
-        if self.proof.end_proof().is_empty() {
-            return Ok(None);
-        }
-
-        if let Some(ref end_key) = verification.end_key
-            && **last_key >= **end_key
-        {
-            return Ok(None);
-        }
-
-        Ok(Some((last_key.clone(), verification.end_key.clone())))
+        range_proof_find_next_key(&self.proof, self.verification.as_ref(), root_hash)
     }
 
     fn code_hash_iter(&self) -> Result<CodeIteratorHandle<'_>, api::Error> {
