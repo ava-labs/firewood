@@ -713,12 +713,10 @@ impl<'db> MultiProposedChangeProofContext<'db> {
     /// Consume the proposal handle and commit it.
     fn commit(&'db mut self) -> Result<Option<HashKey>, api::Error> {
         let Some(proposal_handle) = self.proposal.take() else {
-            return Err(api::Error::ProofError(
-                firewood::ProofError::ProposalIsNone,
-            ));
+            return Err(api::Error::ProofError(firewood::ProofError::ProposalIsNone));
         };
 
-        let result = proposal_handle.commit_proposal();
+        let result = proposal_handle.commit_proposal_with_source("proof");
         let hash = result?.map(Into::into);
         firewood_increment!(crate::registry::MERGE_COUNT, 1, "change" => "commit");
         Ok(hash)
@@ -760,9 +758,7 @@ pub extern "C" fn fwd_multi_db_propose_change_proof<'db>(
     let handle = db.and_then(|db| args.proof.map(|p| (db, p)));
     crate::invoke_with_handle(handle, |(db, ctx)| {
         let Some(proof) = ctx.proof.take() else {
-            return Err(api::Error::ProofError(
-                firewood::ProofError::ProofIsNone,
-            ));
+            return Err(api::Error::ProofError(firewood::ProofError::ProofIsNone));
         };
 
         let proposal =

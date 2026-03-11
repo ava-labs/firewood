@@ -23,6 +23,7 @@ document including motivation, architecture, and API reference.
 | Phase 4 | `MultiDb` public API (`db.rs`)                                    | Done   |
 | Phase 5 | FFI bindings (Rust `extern "C"` + Go wrappers)                    | Done   |
 | Phase 6 | Tests (Rust unit/integration + Go FFI tests)                      | Done   |
+| Phase 7 | On-disk fork ID per node (cross-chain reaping safety)             | Done   |
 
 ## Implementation Constraints
 
@@ -1370,13 +1371,79 @@ fn test_ffi_null_handle_returns_error() { ... }
 
 | File                                   | Reason                                                       |
 |----------------------------------------|--------------------------------------------------------------|
-| `storage/src/nodestore/mod.rs`         | NodeStore types unchanged                                    |
-| `storage/src/nodestore/alloc.rs`       | Allocator unchanged; conservative reaping handled in manager |
-| `storage/src/nodestore/primitives.rs`  | LinearAddress unchanged                                      |
+| `storage/src/nodestore/alloc.rs`       | Allocator unchanged; uses updated `area_index_and_size`      |
 | `storage/src/linear/filebacked.rs`     | Storage layer unchanged                                      |
-| `storage/src/node/`                    | Node types unchanged                                         |
-| `firewood/src/merkle/`                 | Trie operations unchanged                                    |
+| `storage/src/checker/mod.rs`           | Delegates to updated read/size functions; no direct changes  |
 
-## Estimated Scope
+---
 
-~1,000-1,500 lines of implementation + ~1,000-1,500 lines of tests.
+## Phase 7: On-Disk Fork ID Per Node
+
+### Problem
+
+When validators diverge, chains share disk addresses for ancestor nodes.
+Reaping one chain's deleted nodes can free addresses still live in another
+chain's trie, causing data corruption.
+
+### Solution
+
+Each node carries a **fork ID** (`u64`) identifying which fork allocated it.
+A **fork tree** tracks parent-child relationships between forks. During
+reaping, the `can_free` predicate consults the fork tree to determine
+whether a deleted node can be safely returned to the free list.
+
+### On-Disk Format
+
+The AreaIndex byte (first byte of every stored area) uses bit 7 as a
+"has fork\_id" flag:
+
+- **V0 (legacy):** `[AreaIndex:1][FirstByte:1][NodeData...]` — AreaIndex 0-22
+- **V1 (new):** `[AreaIndex:1][ForkId:8 LE][FirstByte:1][NodeData...]` —
+  AreaIndex `0x80|0-22`
+- **Free area:** unchanged
+
+When `fork_id == 0` (single-head or pre-fork), V0 format is used for full
+backward compatibility. Old databases are read transparently.
+
+### Reaping Rules
+
+1. **Own allocation** (`node_fork_id == chain_fork_id`): always freed
+2. **Ancestor allocation**: freed only if no other active chain descends
+   from the same ancestor
+3. **Pre-fork nodes** (`fork_id == 0`): not freed while multiple chains
+   are active; freed after convergence
+
+### Divergence Metric Label
+
+When Firewood detects a divergent commit, the divergence counter is
+incremented with a `"source"` label identifying the validator. This
+allows external billing systems to attribute storage costs.
+
+### Cross-Chain Safety Guarantees
+
+- Reaping on one chain never corrupts another chain's trie
+- Shared ancestor nodes are safely leaked until convergence
+- Fork tree is persisted in the header and survives restart
+- `can_free` closure is constructed from a fork tree snapshot before
+  any tree mutations, ensuring consistent `is_ancestor` lookups
+
+### Space Reclamation
+
+| Scenario                           | Behavior                                     |
+|------------------------------------|----------------------------------------------|
+| Single chain (all honest)          | Full reaping, zero leaked space              |
+| Multiple chains (diverged)         | Own allocations freed; shared ancestors leak |
+| After convergence                  | Full reaping resumes                         |
+| After deregistration + cleanup     | Full recovery                                |
+
+### Modified Files (Phase 7)
+
+| File                                  | Changes                                                                          |
+|---------------------------------------|----------------------------------------------------------------------------------|
+| `storage/src/nodestore/primitives.rs` | `from_raw_byte`, `with_fork_id_flag` on AreaIndex                                |
+| `storage/src/nodestore/mod.rs`        | Fork-aware read/write, `read_fork_id_from_disk`, `reap_deleted` with `can_free`  |
+| `storage/src/nodestore/persist.rs`    | `serialize_node_to_bump` fork\_id insertion                                      |
+| `firewood/src/manager.rs`             | `validator_fork_id`, `build_can_free`, fork tree ops                             |
+| `firewood/src/persist_worker.rs`      | `CanFreeFn`, `ReapItem`, pass `can_free` through                                 |
+| `firewood/src/db.rs`                  | Fork\_id propagation in `propose_with_parent`                                    |
+| `firewood/src/merkle/parallel.rs`     | Pass fork\_id through parallel proposal creation                                 |

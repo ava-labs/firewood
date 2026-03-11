@@ -436,3 +436,48 @@ func TestMultiCloseWithActiveHandles(t *testing.T) {
 	defer cancel2()
 	r.NoError(db.Close(ctx2))
 }
+
+// TestMultiDivergentReapingSafety verifies that when two validators diverge,
+// reaping on one chain does not corrupt the other chain's data.
+func TestMultiDivergentReapingSafety(t *testing.T) {
+	r := require.New(t)
+	db := newTestMultiDatabase(t, 4, WithRevisions(5))
+
+	r.NoError(db.RegisterValidator(0))
+	r.NoError(db.RegisterValidator(1))
+
+	// Shared base
+	baseRoot, err := db.Update(0, []BatchOp{Put([]byte("shared"), []byte("base"))})
+	r.NoError(err)
+	r.NoError(db.AdvanceToHash(1, baseRoot))
+
+	// Diverge: v0 and v1 commit different data
+	_, err = db.Update(0, []BatchOp{Put([]byte("v0key"), []byte("v0val"))})
+	r.NoError(err)
+
+	_, err = db.Update(1, []BatchOp{Put([]byte("v1key"), []byte("v1val"))})
+	r.NoError(err)
+
+	// V0 commits many revisions to trigger reaping
+	for i := range 15 {
+		_, err = db.Update(0, []BatchOp{Put(
+			[]byte(fmt.Sprintf("v0extra%d", i)),
+			[]byte(fmt.Sprintf("v0eval%d", i)),
+		)})
+		r.NoError(err)
+	}
+
+	// V1's data should be intact despite V0's reaping
+	val, err := db.Get(1, []byte("shared"))
+	r.NoError(err)
+	r.Equal([]byte("base"), val, "shared ancestor data should survive reaping")
+
+	val, err = db.Get(1, []byte("v1key"))
+	r.NoError(err)
+	r.Equal([]byte("v1val"), val, "v1's own data should survive reaping")
+
+	// V0 should also work
+	val, err = db.Get(0, []byte("v0extra14"))
+	r.NoError(err)
+	r.Equal([]byte("v0eval14"), val)
+}

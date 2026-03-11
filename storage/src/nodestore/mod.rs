@@ -52,7 +52,7 @@ use crate::node::branch::ReadSerializable as _;
 use firewood_metrics::firewood_increment;
 use smallvec::SmallVec;
 use std::fmt::Debug;
-use std::io::{Error, ErrorKind};
+use std::io::{Error, ErrorKind, Read as _};
 
 // Re-export types from alloc module
 pub use alloc::NodeAllocator;
@@ -92,6 +92,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             kind: Committed {
                 deleted: Box::default(),
                 root: None,
+                fork_id: 0,
             },
             storage,
         };
@@ -120,6 +121,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             kind: Committed {
                 deleted: Box::default(),
                 root: None,
+                fork_id: 0,
             },
         }
     }
@@ -140,6 +142,7 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
             kind: Committed {
                 deleted: Box::default(),
                 root: Some(Child::AddressWithHash(root_address, root_hash)),
+                fork_id: 0,
             },
             storage,
         };
@@ -251,6 +254,7 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
             root,
             deleted,
             parent: parent.kind.as_nodestore_parent(),
+            fork_id: 0,
         };
         Ok(NodeStore {
             kind,
@@ -302,6 +306,7 @@ impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
                 root,
                 deleted: Vec::default(),
                 parent: parent.kind.parent.clone(),
+                fork_id: parent.kind.fork_id,
             },
             storage: parent.storage.clone(),
         }
@@ -324,9 +329,26 @@ impl<S: WritableStorage> NodeStore<MutableProposal, S> {
                 root: None,
                 deleted: Vec::default(),
                 parent: NodeStoreParent::Committed(None),
+                fork_id: 0,
             },
             storage,
         }
+    }
+}
+
+impl<S: ReadableStorage> NodeStore<MutableProposal, S> {
+    /// Set the fork ID for this proposal.
+    ///
+    /// Nodes allocated during persist will be tagged with this ID
+    /// for safe cross-chain reaping in multi-head mode.
+    pub fn set_fork_id(&mut self, fork_id: crate::node::persist::ForkId) {
+        self.kind.fork_id = fork_id;
+    }
+
+    /// Get the fork ID for this proposal.
+    #[must_use]
+    pub fn fork_id(&self) -> crate::node::persist::ForkId {
+        self.kind.fork_id
     }
 }
 
@@ -395,6 +417,8 @@ pub trait RootReader {
 pub struct Committed {
     deleted: Box<[MaybePersistedNode]>,
     root: Option<Child>,
+    /// Fork ID for nodes allocated by this revision.
+    fork_id: crate::node::persist::ForkId,
 }
 
 #[derive(Clone, Debug)]
@@ -424,6 +448,8 @@ pub struct ImmutableProposal {
     parent: Arc<parking_lot::Mutex<NodeStoreParent>>,
     /// The root of the trie in this proposal.
     root: Option<Child>,
+    /// Fork ID for nodes allocated by this proposal.
+    fork_id: crate::node::persist::ForkId,
 }
 
 impl ImmutableProposal {
@@ -490,6 +516,9 @@ pub struct MutableProposal {
     /// Nodes that have been deleted in this proposal.
     deleted: Vec<MaybePersistedNode>,
     parent: NodeStoreParent,
+    /// Fork ID for this proposal. Nodes allocated during persist will be
+    /// tagged with this ID for safe cross-chain reaping.
+    pub fork_id: crate::node::persist::ForkId,
 }
 
 impl<T: Into<NodeStoreParent>, S: ReadableStorage> From<NodeStore<T, S>>
@@ -501,6 +530,7 @@ impl<T: Into<NodeStoreParent>, S: ReadableStorage> From<NodeStore<T, S>>
                 root: None,
                 deleted: Vec::default(),
                 parent: val.kind.into(),
+                fork_id: 0,
             },
             storage: val.storage,
         }
@@ -514,6 +544,7 @@ impl<S: WritableStorage> From<NodeStore<ImmutableProposal, S>> for NodeStore<Com
             kind: Committed {
                 deleted: val.kind.deleted.clone(),
                 root: val.kind.root.clone(),
+                fork_id: val.kind.fork_id,
             },
             storage: val.storage,
         }
@@ -537,6 +568,7 @@ impl<S: WritableStorage> NodeStore<Arc<ImmutableProposal>, S> {
             kind: Committed {
                 deleted: self.kind.deleted.clone(),
                 root: self.kind.root.clone(),
+                fork_id: self.kind.fork_id,
             },
             storage: self.storage.clone(),
         }
@@ -550,12 +582,14 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
 
     fn try_from(val: NodeStore<MutableProposal, S>) -> Result<Self, Self::Error> {
         let NodeStore { kind, storage } = val;
+        let fork_id = kind.fork_id;
 
         let mut nodestore = NodeStore {
             kind: Arc::new(ImmutableProposal {
                 deleted: kind.deleted.into(),
                 parent: Arc::new(parking_lot::Mutex::new(kind.parent)),
                 root: None,
+                fork_id,
             }),
             storage,
         };
@@ -577,6 +611,7 @@ impl<S: ReadableStorage> TryFrom<NodeStore<MutableProposal, S>>
             deleted: immutable_proposal.deleted.clone(),
             parent: immutable_proposal.parent.clone(),
             root: Some(Child::MaybePersisted(root, root_hash)),
+            fork_id: immutable_proposal.fork_id,
         });
 
         Ok(nodestore)
@@ -667,14 +702,14 @@ fn area_index_and_size<S: ReadableStorage>(
 ) -> Result<(AreaIndex, u64), FileIoError> {
     let mut area_stream = storage.stream_from(addr.get())?;
 
-    let index: AreaIndex = AreaIndex::new(area_stream.read_byte().map_err(|e| {
+    let raw_byte = area_stream.read_byte().map_err(|e| {
         storage.file_io_error(
             Error::new(ErrorKind::InvalidData, e),
             addr.get(),
             Some("area_index_and_size".to_string()),
         )
-    })?)
-    .ok_or_else(|| {
+    })?;
+    let (index, _has_fork_id) = AreaIndex::from_raw_byte(raw_byte).ok_or_else(|| {
         storage.file_io_error(
             Error::new(ErrorKind::InvalidData, "invalid area index"),
             addr.get(),
@@ -726,31 +761,100 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
     ) -> Result<(SharedNode, u64), FileIoError> {
         debug_assert!(addr.is_aligned());
 
-        // saturating because there is no way we can be reading at u64::MAX
-        // and this will fail very soon afterwards
-        let actual_addr = addr.get().saturating_add(1); // skip the length byte
-
         let _span = fastrace::local::LocalSpan::enter_with_local_parent("read_and_deserialize");
 
-        let mut area_stream = self.storage.stream_from(actual_addr)?;
+        let mut area_stream = self.storage.stream_from(addr.get())?;
+
+        // Read the AreaIndex byte and check for fork_id flag
+        let raw_byte = area_stream.read_byte().map_err(|e| {
+            self.storage.file_io_error(
+                Error::new(ErrorKind::InvalidData, e),
+                addr.get(),
+                Some("read_node_from_disk".to_string()),
+            )
+        })?;
+        let (_area_index, has_fork_id) = AreaIndex::from_raw_byte(raw_byte).ok_or_else(|| {
+            self.storage.file_io_error(
+                Error::new(ErrorKind::InvalidData, "invalid area index"),
+                addr.get(),
+                Some("read_node_from_disk".to_string()),
+            )
+        })?;
+
+        // Skip fork_id bytes if present (v1 format)
+        if has_fork_id {
+            let mut buf = [0u8; 8];
+            area_stream.read_exact(&mut buf).map_err(|e| {
+                self.storage.file_io_error(
+                    e,
+                    addr.get(),
+                    Some("read_node_from_disk fork_id".to_string()),
+                )
+            })?;
+            // fork_id is u64::from_le_bytes(buf), currently unused during read
+        }
+
         let offset_before = area_stream.offset();
         let node: SharedNode = Node::from_reader(&mut area_stream)
             .map_err(|e| {
                 self.storage
-                    .file_io_error(e, actual_addr, Some("read_node_from_disk".to_string()))
+                    .file_io_error(e, addr.get(), Some("read_node_from_disk".to_string()))
             })?
             .into();
-        let length = area_stream
+        let node_bytes = area_stream
             .offset()
             .checked_sub(offset_before)
             .ok_or_else(|| {
                 self.storage.file_io_error(
                     Error::other("Reader offset went backwards"),
-                    actual_addr,
+                    addr.get(),
                     Some("read_node_with_num_bytes_from_disk".to_string()),
                 )
             })?;
-        Ok((node, length.saturating_add(1))) // add 1 for the area size index byte
+        // Total length = 1 (AreaIndex) + 8 (fork_id, if v1) + node_bytes
+        let header_len: u64 = if has_fork_id { 9 } else { 1 };
+        Ok((node, node_bytes.saturating_add(header_len)))
+    }
+
+    /// Read just the fork_id from a node's on-disk representation.
+    ///
+    /// Returns 0 for legacy (v0) nodes without a fork_id.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FileIoError`] if the address cannot be read.
+    pub fn read_fork_id_from_disk(
+        &self,
+        addr: LinearAddress,
+    ) -> Result<crate::node::persist::ForkId, FileIoError> {
+        let mut stream = self.storage.stream_from(addr.get())?;
+        let raw_byte = stream.read_byte().map_err(|e| {
+            self.storage.file_io_error(
+                Error::new(ErrorKind::InvalidData, e),
+                addr.get(),
+                Some("read_fork_id_from_disk".to_string()),
+            )
+        })?;
+        let (_index, has_fork_id) = AreaIndex::from_raw_byte(raw_byte).ok_or_else(|| {
+            self.storage.file_io_error(
+                Error::new(ErrorKind::InvalidData, "invalid area index"),
+                addr.get(),
+                Some("read_fork_id_from_disk".to_string()),
+            )
+        })?;
+        if has_fork_id {
+            let mut buf = [0u8; 8];
+            stream.read_exact(&mut buf).map_err(|e| {
+                self.storage.file_io_error(
+                    e,
+                    addr.get(),
+                    Some("read_fork_id_from_disk".to_string()),
+                )
+            })?;
+            Ok(u64::from_le_bytes(buf))
+        } else {
+            Ok(0)
+        }
     }
 
     /// Returns (index, `area_size`) for the stored area at `addr`.
@@ -792,18 +896,27 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     /// Adjust the freelist to reflect the freed nodes in the oldest revision.
     ///
     /// This method takes ownership of `self` and adds its deleted nodes to the free list
-    /// managed by the given header.
+    /// managed by the given header. The `can_free` predicate is consulted for each
+    /// deleted node: if it returns `false`, the node is skipped (safe leak) to
+    /// prevent cross-chain corruption in multi-head mode.
     ///
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if a node cannot be deleted.
-    pub fn reap_deleted(mut self, header: &mut NodeStoreHeader) -> Result<(), FileIoError> {
+    pub fn reap_deleted(
+        mut self,
+        header: &mut NodeStoreHeader,
+        can_free: impl Fn(crate::node::persist::ForkId) -> bool,
+    ) -> Result<(), FileIoError> {
         self.storage
             .invalidate_cached_nodes(self.kind.deleted.iter());
         trace!("There are {} nodes to reap", self.kind.deleted.len());
         let mut allocator = NodeAllocator::new(self.storage.as_ref(), header);
         for node in take(&mut self.kind.deleted) {
-            allocator.delete_node(node)?;
+            if can_free(node.fork_id()) {
+                allocator.delete_node(node)?;
+            }
+            // else: shared ancestor node, skip (leaks safely)
         }
         Ok(())
     }
@@ -1046,6 +1159,192 @@ mod tests {
             let root = proposal.root_mut();
             assert!(root.is_some());
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn serialize_node_with_fork_id_roundtrip() -> Result<(), Box<dyn Error>> {
+        // Create a nodestore with a non-zero fork_id and persist a node.
+        // Then read it back and verify the node data is intact.
+        let tmpdir = tempfile::tempdir()?;
+        let dbfile = tmpdir.path().join("fork_id_roundtrip.db");
+
+        let storage = Arc::new(FileBacked::new(
+            dbfile,
+            nonzero!(10usize),
+            nonzero!(10usize),
+            false,
+            true,
+            CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
+        )?);
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let base = NodeStore::open(&header, Arc::clone(&storage))?;
+
+        let mut proposal = NodeStore::new(&base)?;
+        proposal.set_fork_id(42);
+
+        {
+            let root = proposal.root_mut();
+            *root = Some(Node::Leaf(LeafNode {
+                partial_path: Path::from([1, 2, 3]),
+                value: b"hello".to_vec().into_boxed_slice(),
+            }));
+        }
+
+        let immutable = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
+        let committed = immutable.as_committed();
+        committed.persist(&mut header)?;
+
+        // Read the root node back from disk
+        let root_addr = header.root_address().unwrap();
+        let reopened = NodeStore::open(&header, storage)?;
+        let (node, num_bytes) = reopened.read_node_with_num_bytes_from_disk(root_addr)?;
+
+        // Verify the node data matches
+        assert!(matches!(node.as_ref(), Node::Leaf(_)));
+        if let Node::Leaf(leaf) = node.as_ref() {
+            assert_eq!(leaf.value.as_ref(), b"hello");
+        }
+        // num_bytes should include 1 (AreaIndex) + 8 (fork_id) + node data
+        assert!(num_bytes > 9, "v1 node should have fork_id overhead");
+
+        // Verify the fork_id can be read
+        let fork_id = reopened.read_fork_id_from_disk(root_addr)?;
+        assert_eq!(fork_id, 42);
+
+        Ok(())
+    }
+
+    #[test]
+    fn read_legacy_node_returns_fork_id_zero() -> Result<(), Box<dyn Error>> {
+        // Create a nodestore with fork_id=0 (legacy format) and verify
+        // read_fork_id_from_disk returns 0.
+        let tmpdir = tempfile::tempdir()?;
+        let dbfile = tmpdir.path().join("legacy_fork_id.db");
+
+        let storage = Arc::new(FileBacked::new(
+            dbfile,
+            nonzero!(10usize),
+            nonzero!(10usize),
+            false,
+            true,
+            CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
+        )?);
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let base = NodeStore::open(&header, Arc::clone(&storage))?;
+
+        let mut proposal = NodeStore::new(&base)?;
+        // fork_id defaults to 0, so this should write v0 format
+
+        {
+            let root = proposal.root_mut();
+            *root = Some(Node::Leaf(LeafNode {
+                partial_path: Path::from([4, 5, 6]),
+                value: b"world".to_vec().into_boxed_slice(),
+            }));
+        }
+
+        let immutable = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
+        let committed = immutable.as_committed();
+        committed.persist(&mut header)?;
+
+        let root_addr = header.root_address().unwrap();
+        let reopened = NodeStore::open(&header, storage)?;
+
+        // Legacy node should have fork_id = 0
+        let fork_id = reopened.read_fork_id_from_disk(root_addr)?;
+        assert_eq!(fork_id, 0);
+
+        // And the node should still be readable
+        let (node, _) = reopened.read_node_with_num_bytes_from_disk(root_addr)?;
+        assert!(matches!(node.as_ref(), Node::Leaf(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn reap_deleted_with_can_free() -> Result<(), Box<dyn Error>> {
+        // Test that reap_deleted respects the can_free predicate.
+        let tmpdir = tempfile::tempdir()?;
+        let dbfile = tmpdir.path().join("reap_can_free.db");
+
+        let storage = Arc::new(FileBacked::new(
+            dbfile,
+            nonzero!(10usize),
+            nonzero!(10usize),
+            false,
+            true,
+            CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
+        )?);
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let base = NodeStore::open(&header, Arc::clone(&storage))?;
+
+        // Create a proposal with fork_id=1 and a node
+        let mut proposal = NodeStore::new(&base)?;
+        proposal.set_fork_id(1);
+        {
+            let root = proposal.root_mut();
+            *root = Some(Node::Leaf(LeafNode {
+                partial_path: Path::from([1, 2]),
+                value: b"test".to_vec().into_boxed_slice(),
+            }));
+        }
+
+        let immutable = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
+        let committed = immutable.as_committed();
+        committed.persist(&mut header)?;
+        let root_addr = header.root_address().unwrap();
+
+        // Now create a second proposal that replaces the root (old root becomes deleted)
+        let committed_ns = NodeStore::open(&header, Arc::clone(&storage))?;
+        let mut proposal2 = NodeStore::new(&committed_ns)?;
+        proposal2.set_fork_id(1);
+        {
+            let root = proposal2.root_mut();
+            *root = Some(Node::Leaf(LeafNode {
+                partial_path: Path::from([3, 4]),
+                value: b"new".to_vec().into_boxed_slice(),
+            }));
+        }
+
+        let immutable2 = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal2)?;
+        let committed2 = immutable2.as_committed();
+        committed2.persist(&mut header)?;
+
+        // Now create a third proposal that replaces the root again
+        let committed_ns2 = NodeStore::open(&header, Arc::clone(&storage))?;
+        let mut proposal3 = NodeStore::new(&committed_ns2)?;
+        proposal3.set_fork_id(1);
+        {
+            let root = proposal3.root_mut();
+            *root = Some(Node::Leaf(LeafNode {
+                partial_path: Path::from([5, 6]),
+                value: b"newer".to_vec().into_boxed_slice(),
+            }));
+        }
+
+        let immutable3 = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal3)?;
+        let committed3 = immutable3.as_committed();
+        committed3.persist(&mut header)?;
+
+        // The committed3 nodestore should have deleted nodes from proposal2's root.
+        // Test that reap_deleted with can_free=|_| true frees nodes.
+        let free_lists_before = *header.free_lists();
+
+        committed3.reap_deleted(&mut header, |_| true)?;
+
+        // Free lists should have changed (nodes were freed)
+        assert_ne!(
+            free_lists_before,
+            *header.free_lists(),
+            "reap with can_free=true should modify free lists"
+        );
+
+        let _ = root_addr;
 
         Ok(())
     }

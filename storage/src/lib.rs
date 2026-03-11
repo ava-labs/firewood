@@ -54,7 +54,7 @@ pub use hashtype::{HashType, IntoHashType, InvalidTrieHashLength, TrieHash};
 pub use linear::{FileIoError, ReadableStorage, WritableStorage};
 pub use node::path::{NibblesIterator, Path};
 pub use node::{BranchNode, Child, Children, ChildrenSlots, LeafNode, Node, PathIterItem};
-pub use nodestore::header::MAX_VALIDATORS;
+pub use nodestore::header::{MAX_FORK_NODES, MAX_VALIDATORS, PersistedForkNode};
 pub use nodestore::{
     AreaIndex, Committed, HashedNodeReader, ImmutableProposal, LinearAddress, MutableProposal,
     NodeHashAlgorithm, NodeHashAlgorithmTryFromIntError, NodeReader, NodeStore, NodeStoreHeader,
@@ -73,7 +73,7 @@ pub use u4::{TryFromIntError, U4};
 
 pub use linear::filebacked::FileBacked;
 pub use linear::memory::MemStore;
-pub use node::persist::MaybePersistedNode;
+pub use node::persist::{ForkId, MaybePersistedNode};
 #[cfg(any(test, feature = "test_utils"))]
 pub use test_utils::SeededRng;
 #[cfg(any(test, feature = "test_utils"))]

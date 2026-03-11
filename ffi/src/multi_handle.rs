@@ -216,23 +216,21 @@ impl MultiDatabaseHandle {
     ) -> Result<FrozenChangeProof, api::Error> {
         // Get the end revision first so that EndRevisionNotFound is returned
         // when both revisions are missing, matching single-head behavior.
-        let end_merkle =
-            Merkle::from(self.multi_db.revision(end_hash).map_err(|err| {
-                if let api::Error::RevisionNotFound { provided } = err {
-                    api::Error::EndRevisionNotFound { provided }
-                } else {
-                    err
-                }
-            })?);
+        let end_merkle = Merkle::from(self.multi_db.revision(end_hash).map_err(|err| {
+            if let api::Error::RevisionNotFound { provided } = err {
+                api::Error::EndRevisionNotFound { provided }
+            } else {
+                err
+            }
+        })?);
 
-        let start_merkle =
-            Merkle::from(self.multi_db.revision(start_hash).map_err(|err| {
-                if let api::Error::RevisionNotFound { provided } = err {
-                    api::Error::StartRevisionNotFound { provided }
-                } else {
-                    err
-                }
-            })?);
+        let start_merkle = Merkle::from(self.multi_db.revision(start_hash).map_err(|err| {
+            if let api::Error::RevisionNotFound { provided } = err {
+                api::Error::StartRevisionNotFound { provided }
+            } else {
+                err
+            }
+        })?);
 
         end_merkle.change_proof(start_key, end_key, start_merkle.nodestore(), limit)
     }
@@ -247,8 +245,12 @@ impl MultiDatabaseHandle {
     ) -> Result<MultiCreateProposalResult<'_>, api::Error> {
         let (proposal_result, propose_time) =
             fwd_expensive_timed_result!(crate::registry::PROPOSE_MS_BUCKET, {
-                self.multi_db
-                    .merge_key_value_range(ValidatorId::new(id), first_key, last_key, key_values)
+                self.multi_db.merge_key_value_range(
+                    ValidatorId::new(id),
+                    first_key,
+                    last_key,
+                    key_values,
+                )
             });
         let proposal = proposal_result?;
         firewood_increment!(crate::registry::PROPOSE_MS, propose_time.as_millis());
@@ -371,6 +373,11 @@ impl MultiProposalHandle<'_> {
 
     /// Consume and commit this proposal using the stored validator ID.
     pub fn commit_proposal(self) -> Result<Option<HashKey>, api::Error> {
+        self.commit_proposal_with_source("consensus")
+    }
+
+    /// Consume and commit this proposal with a specified divergence source label.
+    pub fn commit_proposal_with_source(self, source: &str) -> Result<Option<HashKey>, api::Error> {
         let MultiProposalHandle {
             hash_key,
             proposal,
@@ -382,7 +389,7 @@ impl MultiProposalHandle<'_> {
             crate::registry::COMMIT_MS_BUCKET,
             handle
                 .multi_db
-                .commit(ValidatorId::new(validator_id), proposal)
+                .commit_with_source(ValidatorId::new(validator_id), proposal, source)
         );
         commit_result?;
 

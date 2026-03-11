@@ -232,9 +232,39 @@ mode. The existing `root_address` and `root_hash` fields are the sole root.
 
 ### 3.2 Node Storage
 
-No changes to the node storage layer. All validators' nodes are stored in the
-same linear address space within the same `firewood.db` file. Addresses are
-disk offsets (`LinearAddress`), exactly as today.
+All validators' nodes are stored in the same linear address space within
+the same `firewood.db` file. Addresses are disk offsets (`LinearAddress`).
+
+Each node carries a **fork ID** that identifies which fork of the chain
+allocated it. This is used during reaping to prevent cross-chain corruption
+(see Section 5.5).
+
+#### On-Disk Format
+
+The AreaIndex byte (first byte of every stored area) uses bit 7 as a
+"has fork_id" flag:
+
+```text
+V0 (legacy):  [AreaIndex:1][FirstByte:1][NodeData...]          — AreaIndex 0-22
+V1 (new):     [AreaIndex:1][ForkId:8 LE][FirstByte:1][NodeData...] — AreaIndex 0x80|0-22
+Free area:    [AreaIndex:1][0xFF:1][varint next_addr]          — unchanged
+```
+
+- **Writing new nodes**: When `fork_id != 0`, set `AreaIndex = real_index | 0x80`
+  and write the fork_id as 8 little-endian bytes after the AreaIndex byte.
+  The AreaIndex is recomputed from the new total size (original + 8 bytes).
+  When `fork_id == 0` (single-head or pre-fork), the legacy V0 format is used.
+- **Reading nodes**: Check bit 7 of AreaIndex. If set, read 8 bytes of fork_id,
+  then node data. If clear, no fork_id (legacy node, fork_id defaults to 0).
+- **Free areas**: Unchanged. The fork_id flag is stripped when writing FreeArea.
+- **Backward compatibility**: Old databases have all AreaIndex values < 23.
+  New nodes use AreaIndex values 128-150. Readers handle both transparently.
+
+#### Space Impact
+
+Every new multi-head node allocation adds 8 bytes, which may bump small
+nodes to the next area size class (e.g., 16-byte bucket to 32-byte bucket).
+For larger nodes (>128 bytes), the overhead is negligible.
 
 ### 3.3 Free Lists
 
@@ -335,7 +365,40 @@ nodes still alive in sibling chains. `Arc::try_unwrap` is used as a safety
 gate: if any external consumer (e.g., an open view) still holds the Arc, the
 revision is not reaped and the space is not freed.
 
-### 5.4 Space Leakage
+### 5.4 Fork-Aware Reaping
+
+When validators diverge, chains share disk addresses for ancestor nodes.
+Reaping one chain's deleted nodes could free addresses still live in another
+chain's trie. The **fork tree** and per-node **fork_id** prevent this.
+
+#### Fork Tree
+
+`ForkTree` tracks parent-child relationships between fork IDs. Each chain
+has a fork_id. When a chain diverges, a new fork_id is allocated as a child
+of the parent chain's fork_id. When chains converge (deduplication), the
+interior fork_id is absorbed into the surviving node.
+
+#### `can_free` Predicate
+
+During reaping, each deleted node is checked via `can_free(node_fork_id)`:
+
+1. **Own allocation** (`node_fork_id == chain_fork_id`): always safe to free.
+2. **Ancestor allocation**: safe only if no other active chain descends
+   from the same ancestor fork_id.
+3. **Pre-fork nodes** (`fork_id == 0`): not freed while multiple chains
+   are active. Freed after convergence to a single chain.
+
+The `can_free` closure is constructed from a snapshot of the fork tree
+and active fork IDs at commit time, **before** any fork tree mutations
+(removals) that would invalidate `is_ancestor` lookups.
+
+#### Safe Leak Strategy
+
+Nodes that cannot be safely freed are skipped during reaping. This is a
+conservative approach: space may be temporarily leaked, but data integrity
+is preserved. After chains converge, all leaked space becomes reclaimable.
+
+### 5.5 Space Leakage
 
 | Scenario                             | Leaked space                              |
 |--------------------------------------|-------------------------------------------|
@@ -672,11 +735,17 @@ the header lock. The same lock ordering (multi\_head → header) applies.
 | Tests                                | ~1,300       | 55 tests                                                           |
 | **Grand total**                      | **~3,000**   |                                                                    |
 
+### Fork ID Files (On-Disk Fork ID Per Node)
+
+| File                                  | Changes                                                                           |
+|---------------------------------------|-----------------------------------------------------------------------------------|
+| `storage/src/nodestore/primitives.rs` | `from_raw_byte`, `with_fork_id_flag` on AreaIndex                                 |
+| `storage/src/nodestore/mod.rs`        | `area_index_and_size` update, `read_fork_id_from_disk`, fork-aware `reap_deleted` |
+| `storage/src/nodestore/persist.rs`    | `serialize_node_to_bump` fork\_id insertion                                       |
+| `firewood/src/merkle/parallel.rs`     | Pass fork\_id through parallel proposal creation                                  |
+
 ### Unmodified Files
 
-- `storage/src/nodestore/mod.rs` -- NodeStore types unchanged
-- `storage/src/nodestore/alloc.rs` -- Allocator unchanged
-- `storage/src/nodestore/primitives.rs` -- LinearAddress unchanged
+- `storage/src/nodestore/alloc.rs` -- Allocator unchanged (uses updated `area_index_and_size`)
 - `storage/src/linear/filebacked.rs` -- Storage layer unchanged
-- `storage/src/node/` -- Node types unchanged
-- `firewood/src/merkle/` -- Trie operations unchanged
+- `storage/src/checker/mod.rs` -- Checker unchanged (delegates to updated read/size functions)

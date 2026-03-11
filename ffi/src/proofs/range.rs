@@ -778,17 +778,12 @@ impl<'db> MultiRangeProofContext<'db> {
             Some(MultiProposalState::Proposed(proposal)) => proposal,
             None => {
                 allow_rebase = false;
-                db.merge_key_value_range(
-                    validator_id,
-                    start_key,
-                    end_key,
-                    self.proof.key_values(),
-                )?
-                .handle
+                db.merge_key_value_range(validator_id, start_key, end_key, self.proof.key_values())?
+                    .handle
             }
         };
 
-        let result = proposal_handle.commit_proposal();
+        let result = proposal_handle.commit_proposal_with_source("proof");
         let result = if let Err(api::Error::ParentNotLatest { .. }) = result
             && allow_rebase
         {
@@ -796,7 +791,7 @@ impl<'db> MultiRangeProofContext<'db> {
             let proposal_handle = db
                 .merge_key_value_range(validator_id, start_key, end_key, self.proof.key_values())?
                 .handle;
-            proposal_handle.commit_proposal()
+            proposal_handle.commit_proposal_with_source("proof")
         } else {
             result
         };

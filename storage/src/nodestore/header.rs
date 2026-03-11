@@ -37,6 +37,21 @@ use crate::{NodeHashAlgorithm, TrieHash};
 /// 16 validators * 48 bytes/root = 768 bytes, fits within header padding.
 pub const MAX_VALIDATORS: usize = 16;
 
+/// Maximum number of fork tree nodes that can be persisted in the header.
+pub const MAX_FORK_NODES: usize = 32;
+
+/// A persisted fork tree node, representing a fork ID and its parent.
+///
+/// `parent_fork_id == u64::MAX` means this is the root node (no parent).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Zeroable, Pod)]
+#[repr(C)]
+pub struct PersistedForkNode {
+    /// The fork ID.
+    pub fork_id: u64,
+    /// The parent fork ID, or `u64::MAX` for the root.
+    pub parent_fork_id: u64,
+}
+
 /// A per-validator root entry in the header.
 ///
 /// Uses `u64` for `root_address` (not `Option<LinearAddress>`) since `Pod`
@@ -325,6 +340,18 @@ pub struct NodeStoreHeader {
     /// merkle root hash for one validator's latest committed trie.
     /// Only the first `validator_count` entries are active.
     validator_roots: [ValidatorRoot; MAX_VALIDATORS],
+
+    /// Next fork ID to allocate. Monotonically increasing.
+    fork_tree_next_id: u64,
+
+    /// Number of entries in `fork_tree_entries`. 0 = no fork tree (legacy mode).
+    fork_tree_node_count: u64,
+
+    /// Persisted fork tree entries. Only the first `fork_tree_node_count` are valid.
+    fork_tree_entries: [PersistedForkNode; MAX_FORK_NODES],
+
+    /// Per-validator fork IDs. Index corresponds to the validator slot.
+    validator_fork_ids: [u64; MAX_VALIDATORS],
 }
 
 // Compile-time assertion that SIZE is large enough for the header. Does not work
@@ -383,6 +410,10 @@ impl NodeStoreHeader {
             git_describe: GitDescribe::INSTANCE,
             validator_count: 0,
             validator_roots: [ValidatorRoot::zeroed(); MAX_VALIDATORS],
+            fork_tree_next_id: 0,
+            fork_tree_node_count: 0,
+            fork_tree_entries: [PersistedForkNode::zeroed(); MAX_FORK_NODES],
+            validator_fork_ids: [0u64; MAX_VALIDATORS],
         }
     }
 
@@ -418,6 +449,9 @@ impl NodeStoreHeader {
 
         trace!("Checking validator count...");
         self.validate_validator_count()?;
+
+        trace!("Checking fork tree node count...");
+        self.validate_fork_tree_count()?;
 
         if self.version == Version::VALID_V1_VERSIONS[0] {
             debug!(
@@ -588,6 +622,77 @@ impl NodeStoreHeader {
         Ok(())
     }
 
+    /// Returns the active fork tree entries (first `fork_tree_node_count` entries).
+    #[must_use]
+    pub fn fork_tree_entries(&self) -> &[PersistedForkNode] {
+        let count = (self.fork_tree_node_count as usize).min(MAX_FORK_NODES);
+        &self.fork_tree_entries[..count]
+    }
+
+    /// Sets the fork tree state in the header.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `entries` exceeds `MAX_FORK_NODES`.
+    pub fn set_fork_tree(
+        &mut self,
+        next_id: u64,
+        entries: &[PersistedForkNode],
+    ) -> Result<(), Error> {
+        if entries.len() > MAX_FORK_NODES {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!(
+                    "fork_tree_node_count {} exceeds maximum {}",
+                    entries.len(),
+                    MAX_FORK_NODES
+                ),
+            ));
+        }
+        self.fork_tree_next_id = next_id;
+        self.fork_tree_node_count = entries.len() as u64;
+        self.fork_tree_entries[..entries.len()].copy_from_slice(entries);
+        // Zero out remaining entries
+        for entry in &mut self.fork_tree_entries[entries.len()..] {
+            *entry = PersistedForkNode::zeroed();
+        }
+        Ok(())
+    }
+
+    /// Returns the next fork ID to allocate.
+    #[must_use]
+    pub const fn fork_tree_next_id(&self) -> u64 {
+        self.fork_tree_next_id
+    }
+
+    /// Returns the fork ID for a validator slot.
+    #[must_use]
+    pub fn validator_fork_id(&self, slot: u8) -> u64 {
+        let idx = slot as usize;
+        if idx < MAX_VALIDATORS {
+            self.validator_fork_ids[idx]
+        } else {
+            0
+        }
+    }
+
+    /// Sets the fork ID for a validator slot.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if slot exceeds `MAX_VALIDATORS`.
+    pub fn set_validator_fork_id(&mut self, slot: u8, fork_id: u64) -> Result<(), Error> {
+        let idx = slot as usize;
+        if idx >= MAX_VALIDATORS {
+            return Err(Error::new(
+                ErrorKind::InvalidInput,
+                format!("validator slot {slot} exceeds maximum {MAX_VALIDATORS}"),
+            ));
+        }
+        self.validator_fork_ids[idx] = fork_id;
+        Ok(())
+    }
+
     fn validate_validator_count(&self) -> Result<(), Error> {
         if (self.validator_count as usize) > MAX_VALIDATORS {
             return Err(Error::new(
@@ -595,6 +700,19 @@ impl NodeStoreHeader {
                 format!(
                     "validator_count {} exceeds maximum {}",
                     self.validator_count, MAX_VALIDATORS
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_fork_tree_count(&self) -> Result<(), Error> {
+        if (self.fork_tree_node_count as usize) > MAX_FORK_NODES {
+            return Err(Error::new(
+                ErrorKind::InvalidData,
+                format!(
+                    "fork_tree_node_count {} exceeds maximum {}",
+                    self.fork_tree_node_count, MAX_FORK_NODES
                 ),
             ));
         }

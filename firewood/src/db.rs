@@ -170,7 +170,7 @@ impl api::Db for Db {
         // Proposal created from db
         firewood_metrics::firewood_increment!(crate::registry::PROPOSALS_CREATED, 1, "base" => "db");
 
-        self.propose_with_parent(batch, &self.manager.current_revision())
+        self.propose_with_parent(batch, &self.manager.current_revision(), 0)
     }
 }
 
@@ -235,6 +235,9 @@ impl Db {
     /// Create a proposal with a specified parent. A proposal is created in parallel if `use_parallel`
     /// is `Always` or if `use_parallel` is `BatchSize` and the batch is >= to the `BatchSize` value.
     ///
+    /// The `fork_id` tags all nodes allocated by this proposal for safe cross-chain
+    /// reaping in multi-head mode. Pass 0 for single-head usage.
+    ///
     /// # Panics
     ///
     /// Panics if the revision manager cannot create a thread pool.
@@ -243,6 +246,7 @@ impl Db {
         &self,
         batch: impl IntoBatchIter,
         parent: &NodeStore<F, FileBacked>,
+        fork_id: firewood_storage::ForkId,
     ) -> Result<Proposal<'_>, api::Error> {
         // Return immediately if the background thread is no longer running.
         self.manager.check_persist_error()?;
@@ -257,9 +261,10 @@ impl Db {
         let immutable = if use_parallel {
             let mut parallel_merkle = ParallelMerkle::default();
             let _span = fastrace::Span::enter_with_local_parent("parallel_merkle");
-            parallel_merkle.create_proposal(parent, batch, self.manager.threadpool())?
+            parallel_merkle.create_proposal(parent, batch, self.manager.threadpool(), fork_id)?
         } else {
-            let proposal = NodeStore::new(parent)?;
+            let mut proposal = NodeStore::new(parent)?;
+            proposal.set_fork_id(fork_id);
             let mut merkle = Merkle::from(proposal);
             let span = fastrace::Span::enter_with_local_parent("merkleops");
             for res in batch.into_batch_iter::<api::Error>() {
@@ -336,7 +341,7 @@ impl Db {
     {
         let merkle = Merkle::from(parent);
         let merge_ops = merkle.merge_key_value_range(first_key, last_key, key_values);
-        self.propose_with_parent(merge_ops, merkle.nodestore())
+        self.propose_with_parent(merge_ops, merkle.nodestore(), 0)
     }
 
     pub fn apply_change_proof_to_parent<F: Parentable>(
@@ -349,7 +354,7 @@ impl Db {
     {
         // Create a new proposal from the parent
         let merkle = Merkle::from(parent);
-        self.propose_with_parent(batch_ops, merkle.nodestore())
+        self.propose_with_parent(batch_ops, merkle.nodestore(), 0)
     }
 
     /// Closes the database gracefully.
@@ -423,7 +428,7 @@ impl Proposal<'_> {
         // Proposal created based on another proposal
         firewood_metrics::firewood_increment!(crate::registry::PROPOSALS_CREATED, 1, "base" => "proposal");
 
-        self.db.propose_with_parent(batch, &self.nodestore)
+        self.db.propose_with_parent(batch, &self.nodestore, 0)
     }
 
     /// Returns the view backing this proposal.
@@ -482,13 +487,17 @@ impl MultiDb {
     }
 
     /// Create a proposal for a validator from its current head.
+    ///
+    /// Nodes allocated by this proposal are tagged with the validator's
+    /// fork ID for safe cross-chain reaping in multi-head mode.
     pub fn propose(
         &self,
         id: ValidatorId,
         batch: impl IntoBatchIter,
     ) -> Result<Proposal<'_>, api::Error> {
         let head = self.db.manager.validator_view(id)?;
-        self.db.propose_with_parent(batch, &head)
+        let fork_id = self.db.manager.validator_fork_id(id);
+        self.db.propose_with_parent(batch, &head, fork_id)
     }
 
     /// Commit a proposal for a validator.
@@ -497,9 +506,22 @@ impl MultiDb {
     /// another validator), the proposal is discarded and the validator's
     /// head advances to the existing revision (deduplication).
     pub fn commit(&self, id: ValidatorId, proposal: Proposal<'_>) -> Result<(), api::Error> {
+        self.commit_with_source(id, proposal, "consensus")
+    }
+
+    /// Commit a proposal for a validator with a specified source label.
+    ///
+    /// The `source` label is attached to any divergence metrics emitted during
+    /// this commit (e.g., `"consensus"` or `"proof"`).
+    pub fn commit_with_source(
+        &self,
+        id: ValidatorId,
+        proposal: Proposal<'_>,
+        source: &str,
+    ) -> Result<(), api::Error> {
         self.db
             .manager
-            .commit_for_validator(id, proposal.nodestore)
+            .commit_for_validator(id, proposal.nodestore, source)
             .map_err(Into::into)
     }
 
@@ -663,6 +685,13 @@ mod test {
         /// Wait until all pending commits have been persisted.
         fn wait_persisted(&self) {
             self.manager.wait_persisted();
+        }
+    }
+
+    impl super::MultiDb {
+        /// Wait until all pending commits have been persisted.
+        fn wait_persisted(&self) {
+            self.db.wait_persisted();
         }
     }
 
@@ -2717,14 +2746,20 @@ mod test {
         let b0 = StdArc::clone(&barrier);
         let h0 = thread::spawn(move || {
             b0.wait();
-            db0.db.manager.commit_for_validator(v0, ns0).unwrap();
+            db0.db
+                .manager
+                .commit_for_validator(v0, ns0, "consensus")
+                .unwrap();
         });
 
         let db1 = StdArc::clone(&db);
         let b1 = StdArc::clone(&barrier);
         let h1 = thread::spawn(move || {
             b1.wait();
-            db1.db.manager.commit_for_validator(v1, ns1).unwrap();
+            db1.db
+                .manager
+                .commit_for_validator(v1, ns1, "consensus")
+                .unwrap();
         });
 
         h0.join().unwrap();
@@ -2767,14 +2802,20 @@ mod test {
         let b0 = StdArc::clone(&barrier);
         let h0 = thread::spawn(move || {
             b0.wait();
-            db0.db.manager.commit_for_validator(v0, ns0).unwrap();
+            db0.db
+                .manager
+                .commit_for_validator(v0, ns0, "consensus")
+                .unwrap();
         });
 
         let db1 = StdArc::clone(&db);
         let b1 = StdArc::clone(&barrier);
         let h1 = thread::spawn(move || {
             b1.wait();
-            db1.db.manager.commit_for_validator(v1, ns1).unwrap();
+            db1.db
+                .manager
+                .commit_for_validator(v1, ns1, "consensus")
+                .unwrap();
         });
 
         h0.join().unwrap();
@@ -3253,5 +3294,435 @@ mod test {
         }];
         let result = db.update(ValidatorId::new(99), batch);
         assert!(result.is_err());
+    }
+
+    // ---- Fork ID Integration Tests ----
+
+    #[test]
+    fn test_fork_reaping_does_not_corrupt_other_chain() {
+        // Two validators diverge, one reaps, the other reads safely.
+        let (db, _tmpdir) = create_multi_db_with_max_revisions(5);
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        // Both start with shared state
+        let batch_shared = vec![BatchOp::Put {
+            key: b"shared".to_vec(),
+            value: b"value".to_vec(),
+        }];
+        let p0 = db.propose(v0, batch_shared.clone()).unwrap();
+        let hash0 = p0.root_hash().unwrap();
+        db.commit(v0, p0).unwrap();
+        db.advance_to_hash(v1, hash0).unwrap();
+
+        // V0 and V1 diverge
+        let batch_a = vec![BatchOp::Put {
+            key: b"key_a".to_vec(),
+            value: b"val_a".to_vec(),
+        }];
+        let p0 = db.propose(v0, batch_a).unwrap();
+        db.commit(v0, p0).unwrap();
+
+        let batch_b = vec![BatchOp::Put {
+            key: b"key_b".to_vec(),
+            value: b"val_b".to_vec(),
+        }];
+        let p1 = db.propose(v1, batch_b).unwrap();
+        db.commit(v1, p1).unwrap();
+
+        // V0 commits many more revisions to trigger reaping
+        for i in 0..15u32 {
+            let batch = vec![BatchOp::Put {
+                key: format!("v0key{i}").into_bytes(),
+                value: format!("v0val{i}").into_bytes(),
+            }];
+            let p = db.propose(v0, batch).unwrap();
+            db.commit(v0, p).unwrap();
+        }
+
+        // V1's chain should be unaffected by V0's reaping
+        let head1 = db.validator_view(v1).unwrap();
+        assert_eq!(
+            head1.val(b"shared").unwrap(),
+            Some(b"value".to_vec().into_boxed_slice()),
+            "shared ancestor data should survive reaping"
+        );
+        assert_eq!(
+            head1.val(b"key_b").unwrap(),
+            Some(b"val_b".to_vec().into_boxed_slice()),
+            "v1's own data should survive reaping"
+        );
+
+        // V0 should also work fine
+        let head0 = db.validator_view(v0).unwrap();
+        assert_eq!(
+            head0.val(b"v0key14").unwrap(),
+            Some(b"v0val14".to_vec().into_boxed_slice())
+        );
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_fork_reaping_frees_own_allocations() {
+        // After fork, a chain's reaping frees its own nodes.
+        let (db, _tmpdir) = create_multi_db_with_max_revisions(3);
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        // Commit enough revisions to trigger reaping
+        for i in 0..10u32 {
+            let batch = vec![BatchOp::Put {
+                key: format!("key{i}").into_bytes(),
+                value: format!("val{i}").into_bytes(),
+            }];
+            let p = db.propose(v0, batch).unwrap();
+            db.commit(v0, p).unwrap();
+        }
+
+        // The database should still work (reaping freed old nodes successfully)
+        let head = db.validator_view(v0).unwrap();
+        assert_eq!(
+            head.val(b"key9").unwrap(),
+            Some(b"val9".to_vec().into_boxed_slice())
+        );
+        // Earlier keys should also be present (they were never deleted)
+        assert_eq!(
+            head.val(b"key0").unwrap(),
+            Some(b"val0".to_vec().into_boxed_slice())
+        );
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_shared_ancestor_nodes_not_freed_during_fork() {
+        // When two chains share ancestor nodes, reaping on either chain
+        // does not corrupt the shared state.
+        let (db, _tmpdir) = create_multi_db_with_max_revisions(3);
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        // Build shared base with multiple keys
+        for i in 0..5u32 {
+            let batch = vec![BatchOp::Put {
+                key: format!("base{i}").into_bytes(),
+                value: format!("bval{i}").into_bytes(),
+            }];
+            let p = db.propose(v0, batch).unwrap();
+            let hash = p.root_hash().unwrap();
+            db.commit(v0, p).unwrap();
+            db.advance_to_hash(v1, hash).unwrap();
+        }
+
+        // V0 diverges — modifies base keys
+        let batch_a = vec![BatchOp::Put {
+            key: b"base0".to_vec(),
+            value: b"modified_by_v0".to_vec(),
+        }];
+        let p0 = db.propose(v0, batch_a).unwrap();
+        db.commit(v0, p0).unwrap();
+
+        // V1 diverges — different modification
+        let batch_b = vec![BatchOp::Put {
+            key: b"base1".to_vec(),
+            value: b"modified_by_v1".to_vec(),
+        }];
+        let p1 = db.propose(v1, batch_b).unwrap();
+        db.commit(v1, p1).unwrap();
+
+        // V0 commits more to trigger reaping
+        for i in 0..10u32 {
+            let batch = vec![BatchOp::Put {
+                key: format!("v0extra{i}").into_bytes(),
+                value: format!("v0eval{i}").into_bytes(),
+            }];
+            let p = db.propose(v0, batch).unwrap();
+            db.commit(v0, p).unwrap();
+        }
+
+        // V1's shared ancestor data should still be intact
+        let head1 = db.validator_view(v1).unwrap();
+        assert_eq!(
+            head1.val(b"base2").unwrap(),
+            Some(b"bval2".to_vec().into_boxed_slice()),
+            "shared base keys should survive v0's reaping"
+        );
+        assert_eq!(
+            head1.val(b"base3").unwrap(),
+            Some(b"bval3".to_vec().into_boxed_slice())
+        );
+        assert_eq!(
+            head1.val(b"base1").unwrap(),
+            Some(b"modified_by_v1".to_vec().into_boxed_slice()),
+            "v1's modifications should survive v0's reaping"
+        );
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_convergence_resumes_full_reaping() {
+        // After chains converge (all validators on same chain),
+        // reaping works normally.
+        let (db, _tmpdir) = create_multi_db_with_max_revisions(3);
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        // Diverge
+        let p0 = db
+            .propose(
+                v0,
+                vec![BatchOp::Put {
+                    key: b"k".to_vec(),
+                    value: b"v0".to_vec(),
+                }],
+            )
+            .unwrap();
+        db.commit(v0, p0).unwrap();
+
+        let p1 = db
+            .propose(
+                v1,
+                vec![BatchOp::Put {
+                    key: b"k".to_vec(),
+                    value: b"v1".to_vec(),
+                }],
+            )
+            .unwrap();
+        db.commit(v1, p1).unwrap();
+
+        // Converge: v1 advances to v0's hash
+        let hash0 = db.validator_root_hash(v0).unwrap().unwrap();
+        db.advance_to_hash(v1, hash0).unwrap();
+
+        // Now both are on the same chain. Commit more to trigger reaping.
+        for i in 0..10u32 {
+            let batch = vec![BatchOp::Put {
+                key: format!("post{i}").into_bytes(),
+                value: format!("pval{i}").into_bytes(),
+            }];
+            let p = db.propose(v0, batch.clone()).unwrap();
+            let hash = p.root_hash().unwrap();
+            db.commit(v0, p).unwrap();
+            db.advance_to_hash(v1, hash).unwrap();
+        }
+
+        // Both validators should see the same data
+        let head0 = db.validator_view(v0).unwrap();
+        let head1 = db.validator_view(v1).unwrap();
+        assert_eq!(
+            head0.val(b"post9").unwrap(),
+            Some(b"pval9".to_vec().into_boxed_slice())
+        );
+        assert_eq!(head0.root_hash(), head1.root_hash());
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_fork_of_fork_reaping_safety() {
+        // Three-way fork: reaping on any chain doesn't corrupt others.
+        let (db, _tmpdir) = create_multi_db_with_max_revisions(5);
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        let v2 = ValidatorId::new(2);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+        db.register_validator(v2).unwrap();
+
+        // Shared base
+        let batch = vec![BatchOp::Put {
+            key: b"base".to_vec(),
+            value: b"shared".to_vec(),
+        }];
+        let p0 = db.propose(v0, batch).unwrap();
+        let base_hash = p0.root_hash().unwrap();
+        db.commit(v0, p0).unwrap();
+        db.advance_to_hash(v1, base_hash.clone()).unwrap();
+        db.advance_to_hash(v2, base_hash).unwrap();
+
+        // Three-way divergence
+        for (v, name) in [(v0, "v0"), (v1, "v1"), (v2, "v2")] {
+            let batch = vec![BatchOp::Put {
+                key: format!("{name}_key").into_bytes(),
+                value: format!("{name}_val").into_bytes(),
+            }];
+            let p = db.propose(v, batch).unwrap();
+            db.commit(v, p).unwrap();
+        }
+
+        // V0 commits many to trigger reaping
+        for i in 0..15u32 {
+            let batch = vec![BatchOp::Put {
+                key: format!("v0extra{i}").into_bytes(),
+                value: format!("v0eval{i}").into_bytes(),
+            }];
+            let p = db.propose(v0, batch).unwrap();
+            db.commit(v0, p).unwrap();
+        }
+
+        // V1 and V2 should be unaffected
+        let head1 = db.validator_view(v1).unwrap();
+        assert_eq!(
+            head1.val(b"base").unwrap(),
+            Some(b"shared".to_vec().into_boxed_slice()),
+            "shared base should survive three-way fork reaping"
+        );
+        assert_eq!(
+            head1.val(b"v1_key").unwrap(),
+            Some(b"v1_val".to_vec().into_boxed_slice())
+        );
+
+        let head2 = db.validator_view(v2).unwrap();
+        assert_eq!(
+            head2.val(b"base").unwrap(),
+            Some(b"shared".to_vec().into_boxed_slice())
+        );
+        assert_eq!(
+            head2.val(b"v2_key").unwrap(),
+            Some(b"v2_val".to_vec().into_boxed_slice())
+        );
+
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_fork_tree_survives_reopen() {
+        // Close and reopen the DB. Verify data persists and new commits work.
+        let tmpdir = tempfile::tempdir().unwrap();
+        let cfg = MultiDbConfig::builder()
+            .db(DbConfig::builder()
+                .manager(
+                    crate::manager::RevisionManagerConfig::builder()
+                        .max_revisions(10)
+                        .build(),
+                )
+                .build())
+            .build();
+
+        let shared_hash;
+        {
+            let db = MultiDb::new(tmpdir.as_ref(), cfg.clone()).unwrap();
+            let v0 = ValidatorId::new(0);
+            db.register_validator(v0).unwrap();
+
+            // V0 commits data that will be persisted
+            let batch = vec![BatchOp::Put {
+                key: b"survive".to_vec(),
+                value: b"reopen".to_vec(),
+            }];
+            let p = db.propose(v0, batch).unwrap();
+            shared_hash = p.root_hash().unwrap();
+            db.commit(v0, p).unwrap();
+
+            db.wait_persisted();
+            db.close().unwrap();
+        }
+
+        // Reopen and verify data survives
+        {
+            let db = MultiDb::new(tmpdir.as_ref(), cfg).unwrap();
+            let v0 = ValidatorId::new(0);
+            db.register_validator(v0).unwrap();
+
+            // Advance to the persisted root
+            db.advance_to_hash(v0, shared_hash).unwrap();
+
+            let head0 = db.validator_view(v0).unwrap();
+            assert_eq!(
+                head0.val(b"survive").unwrap(),
+                Some(b"reopen".to_vec().into_boxed_slice()),
+                "data from before close should survive"
+            );
+
+            // Commit new data on top
+            let batch = vec![BatchOp::Put {
+                key: b"after_reopen".to_vec(),
+                value: b"works".to_vec(),
+            }];
+            let p = db.propose(v0, batch).unwrap();
+            db.commit(v0, p).unwrap();
+
+            let head0 = db.validator_view(v0).unwrap();
+            assert_eq!(
+                head0.val(b"survive").unwrap(),
+                Some(b"reopen".to_vec().into_boxed_slice())
+            );
+            assert_eq!(
+                head0.val(b"after_reopen").unwrap(),
+                Some(b"works".to_vec().into_boxed_slice()),
+                "new data after reopen should work"
+            );
+
+            db.wait_persisted();
+            db.close().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_mixed_v0_v1_nodes_read_correctly() {
+        // Open as single-head (v0 format), then reopen as multi-head (v1 format).
+        // Both node formats should coexist and be readable.
+        let tmpdir = tempfile::tempdir().unwrap();
+
+        // Phase 1: Write nodes in single-head mode (v0 format, fork_id=0)
+        {
+            use crate::v2::api::Proposal as _;
+            let cfg = DbConfig::builder().build();
+            let db = Db::new(tmpdir.as_ref(), cfg).unwrap();
+            let batch = vec![BatchOp::Put {
+                key: b"v0node".to_vec(),
+                value: b"legacy".to_vec(),
+            }];
+            let proposal = db.propose(batch).unwrap();
+            proposal.commit().unwrap();
+            db.close().unwrap();
+        }
+
+        // Phase 2: Reopen as multi-head and write more nodes (v1 format with fork_id)
+        {
+            let cfg = MultiDbConfig::builder()
+                .db(DbConfig::builder().build())
+                .build();
+            let db = MultiDb::new(tmpdir.as_ref(), cfg).unwrap();
+            let v0 = ValidatorId::new(0);
+            db.register_validator(v0).unwrap();
+
+            // The v0-format node should be readable
+            let head = db.validator_view(v0).unwrap();
+            assert_eq!(
+                head.val(b"v0node").unwrap(),
+                Some(b"legacy".to_vec().into_boxed_slice()),
+                "v0 format node should be readable in multi-head mode"
+            );
+
+            // Write a new node (v1 format since this is multi-head)
+            let batch = vec![BatchOp::Put {
+                key: b"v1node".to_vec(),
+                value: b"new_format".to_vec(),
+            }];
+            let p = db.propose(v0, batch).unwrap();
+            db.commit(v0, p).unwrap();
+
+            // Both v0 and v1 nodes should be readable
+            let head = db.validator_view(v0).unwrap();
+            assert_eq!(
+                head.val(b"v0node").unwrap(),
+                Some(b"legacy".to_vec().into_boxed_slice())
+            );
+            assert_eq!(
+                head.val(b"v1node").unwrap(),
+                Some(b"new_format".to_vec().into_boxed_slice())
+            );
+
+            db.close().unwrap();
+        }
     }
 }

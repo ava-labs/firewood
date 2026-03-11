@@ -56,7 +56,7 @@ impl From<SharedNode> for MaybePersistedNode {
 
 impl From<LinearAddress> for MaybePersistedNode {
     fn from(address: LinearAddress) -> Self {
-        MaybePersistedNode(Arc::new(Mutex::new(MaybePersisted::Persisted(address))))
+        MaybePersistedNode(Arc::new(Mutex::new(MaybePersisted::Persisted(address, 0))))
     }
 }
 
@@ -64,7 +64,7 @@ impl From<&MaybePersistedNode> for Option<LinearAddress> {
     fn from(node: &MaybePersistedNode) -> Option<LinearAddress> {
         match &*node.0.lock() {
             MaybePersisted::Unpersisted(_) => None,
-            MaybePersisted::Allocated(address, _) | MaybePersisted::Persisted(address) => {
+            MaybePersisted::Allocated(address, _, _) | MaybePersisted::Persisted(address, _) => {
                 Some(*address)
             }
         }
@@ -88,10 +88,10 @@ impl MaybePersistedNode {
     /// - `Err(FileIoError)` if there was an error reading from storage
     pub fn as_shared_node<S: NodeReader>(&self, storage: &S) -> Result<SharedNode, FileIoError> {
         match &*self.0.lock() {
-            MaybePersisted::Allocated(_, node) | MaybePersisted::Unpersisted(node) => {
+            MaybePersisted::Allocated(_, node, _) | MaybePersisted::Unpersisted(node) => {
                 Ok(node.clone())
             }
-            MaybePersisted::Persisted(address) => storage.read_node(*address),
+            MaybePersisted::Persisted(address, _) => storage.read_node(*address),
         }
     }
 
@@ -104,7 +104,7 @@ impl MaybePersistedNode {
     pub fn as_linear_address(&self) -> Option<LinearAddress> {
         match &*self.0.lock() {
             MaybePersisted::Unpersisted(_) => None,
-            MaybePersisted::Allocated(address, _) | MaybePersisted::Persisted(address) => {
+            MaybePersisted::Allocated(address, _, _) | MaybePersisted::Persisted(address, _) => {
                 Some(*address)
             }
         }
@@ -118,8 +118,8 @@ impl MaybePersistedNode {
     #[must_use]
     pub fn unpersisted(&self) -> Option<&Self> {
         match &*self.0.lock() {
-            MaybePersisted::Allocated(_, _) | MaybePersisted::Unpersisted(_) => Some(self),
-            MaybePersisted::Persisted(_) => None,
+            MaybePersisted::Allocated(_, _, _) | MaybePersisted::Unpersisted(_) => Some(self),
+            MaybePersisted::Persisted(_, _) => None,
         }
     }
 
@@ -134,7 +134,11 @@ impl MaybePersistedNode {
     ///
     /// * `addr` - The `LinearAddress` where the node has been persisted on disk
     pub fn persist_at(&self, addr: LinearAddress) {
-        *self.0.lock() = MaybePersisted::Persisted(addr);
+        let fork_id = match &*self.0.lock() {
+            MaybePersisted::Allocated(_, _, fid) => *fid,
+            _ => 0,
+        };
+        *self.0.lock() = MaybePersisted::Persisted(addr, fork_id);
     }
 
     /// Updates the internal state to indicate this node is allocated at the specified disk address.
@@ -148,18 +152,24 @@ impl MaybePersistedNode {
     ///
     /// * `addr` - The `LinearAddress` where the node has been allocated on disk
     pub fn allocate_at(&self, addr: LinearAddress) {
+        self.allocate_at_with_fork_id(addr, 0);
+    }
+
+    /// Updates the internal state to indicate this node is allocated at the specified disk address
+    /// with the given fork ID.
+    pub fn allocate_at_with_fork_id(&self, addr: LinearAddress, fork_id: ForkId) {
         let mut guard = self.0.lock();
         let node = {
             match &*guard {
-                MaybePersisted::Unpersisted(node) | MaybePersisted::Allocated(_, node) => {
+                MaybePersisted::Unpersisted(node) | MaybePersisted::Allocated(_, node, _) => {
                     node.clone()
                 }
-                MaybePersisted::Persisted(_) => {
+                MaybePersisted::Persisted(_, _) => {
                     unreachable!("Cannot allocate a node that is already persisted on disk");
                 }
             }
         };
-        *guard = MaybePersisted::Allocated(addr, node);
+        *guard = MaybePersisted::Allocated(addr, node, fork_id);
     }
 
     /// Returns the address and shared node if this node is in the Allocated state.
@@ -171,8 +181,20 @@ impl MaybePersistedNode {
     #[must_use]
     pub fn allocated_info(&self) -> Option<(LinearAddress, SharedNode)> {
         match &*self.0.lock() {
-            MaybePersisted::Allocated(addr, node) => Some((*addr, node.clone())),
+            MaybePersisted::Allocated(addr, node, _) => Some((*addr, node.clone())),
             _ => None,
+        }
+    }
+
+    /// Returns the fork ID of this node.
+    ///
+    /// Returns 0 for unpersisted nodes (fork_id assigned at allocation time)
+    /// and for pre-fork nodes created from a `LinearAddress`.
+    #[must_use]
+    pub fn fork_id(&self) -> ForkId {
+        match &*self.0.lock() {
+            MaybePersisted::Unpersisted(_) => 0,
+            MaybePersisted::Allocated(_, _, fid) | MaybePersisted::Persisted(_, fid) => *fid,
         }
     }
 }
@@ -191,10 +213,10 @@ impl Display for MaybePersistedNode {
         let guard = self.0.lock();
         match &*guard {
             MaybePersisted::Unpersisted(node) => write!(f, "M{:p}", (*node).as_ptr()),
-            MaybePersisted::Allocated(addr, node) => {
-                write!(f, "A{:p}@{addr}", (*node).as_ptr())
+            MaybePersisted::Allocated(addr, node, fork_id) => {
+                write!(f, "A{:p}@{addr}[f{fork_id}]", (*node).as_ptr())
             }
-            MaybePersisted::Persisted(addr) => write!(f, "{addr}"),
+            MaybePersisted::Persisted(addr, fork_id) => write!(f, "{addr}[f{fork_id}]"),
         }
     }
 }
@@ -205,11 +227,15 @@ impl Display for MaybePersistedNode {
 /// - `Unpersisted(SharedNode)`: The node is currently in memory
 /// - `Allocated(LinearAddress, SharedNode)`: The node is allocated on disk but being flushed to disk
 /// - `Persisted(LinearAddress)`: The node is currently on disk at the specified address
+/// A fork ID that tags allocated nodes to the fork that created them.
+/// Fork ID 0 means pre-fork era or inherited from ancestors.
+pub type ForkId = u64;
+
 #[derive(Debug, PartialEq, Eq)]
 enum MaybePersisted {
     Unpersisted(SharedNode),
-    Allocated(LinearAddress, SharedNode),
-    Persisted(LinearAddress),
+    Allocated(LinearAddress, SharedNode, ForkId),
+    Persisted(LinearAddress, ForkId),
 }
 
 #[cfg(test)]

@@ -8,7 +8,7 @@
 
 use nonzero_ext::nonzero;
 use parking_lot::{Mutex, MutexGuard, RwLock};
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::num::{NonZero, NonZeroU64};
 use std::path::PathBuf;
@@ -19,15 +19,16 @@ use rayon::{ThreadPool, ThreadPoolBuilder};
 use typed_builder::TypedBuilder;
 
 use crate::merkle::Merkle;
-use crate::persist_worker::{PersistError, PersistWorker};
+use crate::persist_worker::{CanFreeFn, PersistError, PersistWorker};
 use crate::root_store::RootStore;
 use crate::v2::api::{ArcDynDbView, HashKey, OptionalHashKeyExt, ValidatorId};
 
 use firewood_metrics::{firewood_increment, firewood_set};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
-    BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal,
-    IntoHashType, MAX_VALIDATORS, NodeHashAlgorithm, NodeStore, NodeStoreHeader, TrieHash,
+    BranchNode, Committed, FileBacked, FileIoError, ForkId, HashedNodeReader, ImmutableProposal,
+    IntoHashType, MAX_FORK_NODES, MAX_VALIDATORS, NodeHashAlgorithm, NodeStore, NodeStoreHeader,
+    PersistedForkNode, TrieHash,
 };
 
 pub(crate) const DB_FILE_NAME: &str = "firewood.db";
@@ -137,6 +138,9 @@ type ChainId = u64;
 struct ChainState {
     /// Revisions on this chain, ordered oldest-to-newest.
     revisions: VecDeque<CommittedRevision>,
+    /// Fork ID assigned to this chain. Nodes allocated by this chain
+    /// are tagged with this ID for safe cross-chain reaping.
+    fork_id: ForkId,
 }
 
 /// Per-validator state within the multi-head revision manager.
@@ -165,6 +169,8 @@ struct MultiHeadState {
     max_validators: usize,
     /// Monotonic counter for allocating new chain IDs.
     next_chain_id: ChainId,
+    /// Fork tree tracking fork relationships for safe node reaping.
+    fork_tree: ForkTree,
 }
 
 impl MultiHeadState {
@@ -440,7 +446,7 @@ impl RevisionManager {
             match Arc::try_unwrap(oldest) {
                 Ok(oldest) => self
                     .persist_worker
-                    .reap(oldest)
+                    .reap(oldest, Arc::new(|_| true))
                     .map_err(RevisionManagerError::PersistError)?,
                 Err(original) => {
                     warn!("Oldest revision could not be reaped; still referenced");
@@ -613,6 +619,31 @@ impl RevisionManager {
             .map_err(RevisionManagerError::PersistError)
     }
 
+    /// Returns the fork ID for a validator in multi-head mode.
+    ///
+    /// Returns 0 if multi-head is not enabled or the validator is not found.
+    pub fn validator_fork_id(&self, id: ValidatorId) -> ForkId {
+        if let Some(multi_head) = &self.multi_head {
+            let state = multi_head.read();
+            if let Some(validator) = state.validators.get(&id) {
+                return state.chains.get(&validator.chain).map_or(0, |c| c.fork_id);
+            }
+        }
+        0
+    }
+
+    /// Construct a `can_free` closure from the current fork tree state.
+    ///
+    /// Captures a snapshot of the fork tree and active fork IDs so that
+    /// the reaper can safely determine which nodes to free.
+    fn build_can_free(&self, state: &MultiHeadState, chain_fork_id: ForkId) -> CanFreeFn {
+        let active_fork_ids: Vec<ForkId> = state.chains.values().map(|c| c.fork_id).collect();
+        let fork_tree_snapshot = state.fork_tree.clone();
+        Arc::new(move |node_fork_id: ForkId| -> bool {
+            fork_tree_snapshot.can_free(node_fork_id, chain_fork_id, &active_fork_ids)
+        })
+    }
+
     /// Enable multi-head mode, allowing multiple validator heads.
     ///
     /// This transitions the revision manager from single-head to multi-head
@@ -631,11 +662,14 @@ impl RevisionManager {
             hash_to_chain.insert(hash, 0);
         }
 
+        let fork_tree = ForkTree::new();
+
         let mut chains = HashMap::new();
         chains.insert(
             0,
             ChainState {
                 revisions: chain_revisions,
+                fork_id: 0, // root fork
             },
         );
 
@@ -646,6 +680,7 @@ impl RevisionManager {
             hash_to_chain,
             max_validators,
             next_chain_id: 1,
+            fork_tree,
         }));
 
         // Update header with validator count from on-disk state
@@ -667,11 +702,12 @@ impl RevisionManager {
     /// Validators with the same root hash are assigned to the same chain;
     /// validators with different root hashes are assigned to different chains.
     fn restore_validators_from_header(&self) -> Result<(), RevisionManagerError> {
-        // Phase 1: Read all validator data from the header (header lock only)
+        // Phase 1: Read all validator data and fork tree from the header (header lock only)
         let header = self.persist_worker.locked_header();
         let count = header.validator_count();
 
         let mut validators_data = Vec::new();
+        let mut validator_fork_ids = Vec::new();
         for slot in 0..count {
             let slot_u8 = u8::try_from(slot).map_err(|_| {
                 RevisionManagerError::IOError(io::Error::new(
@@ -681,9 +717,15 @@ impl RevisionManager {
             })?;
 
             if let Some((validator_id, (addr, hash))) = header.validator_root(slot_u8) {
+                let fork_id = header.validator_fork_id(slot_u8);
                 validators_data.push((slot_u8, validator_id, addr, hash));
+                validator_fork_ids.push((slot_u8, fork_id));
             }
         }
+
+        // Restore fork tree from header
+        let fork_tree_next_id = header.fork_tree_next_id();
+        let fork_tree_entries = header.fork_tree_entries().to_vec();
         drop(header);
 
         // Phase 2: Update multi-head state (write lock only, no header lock)
@@ -695,8 +737,17 @@ impl RevisionManager {
             )))?
             .write();
 
+        // Restore the fork tree
+        if !fork_tree_entries.is_empty() {
+            state.fork_tree = ForkTree::from_persisted(fork_tree_next_id, &fork_tree_entries);
+        }
+
+        // Build a map from slot -> fork_id for chain assignment
+        let slot_fork_map: HashMap<u8, ForkId> = validator_fork_ids.into_iter().collect();
+
         for (slot_u8, validator_id, addr, hash) in validators_data {
             let id = ValidatorId::new(validator_id);
+            let fork_id = slot_fork_map.get(&slot_u8).copied().unwrap_or(0);
 
             // Check if we already have a revision with this hash (dedup on recovery)
             let (head, chain_id) = if let Some(existing) = state.by_hash.get(&hash).cloned() {
@@ -721,6 +772,7 @@ impl RevisionManager {
                     chain_id,
                     ChainState {
                         revisions: VecDeque::from([committed.clone()]),
+                        fork_id,
                     },
                 );
                 state.by_hash.insert(hash.clone(), committed.clone());
@@ -800,6 +852,7 @@ impl RevisionManager {
                         chain_id,
                         ChainState {
                             revisions: chain_revisions,
+                            fork_id: 0, // fresh chain inherits root fork
                         },
                     );
                     if let Some(hash) = base.root_hash().or_default_root_hash() {
@@ -844,7 +897,7 @@ impl RevisionManager {
     /// If this was the last validator on its chain, the chain is cleaned up
     /// and its revisions are reaped.
     pub fn deregister_validator(&self, id: ValidatorId) -> Result<(), RevisionManagerError> {
-        let (removed_slot, validator_count, revisions_to_reap) = {
+        let (removed_slot, validator_count, revisions_to_reap, can_free) = {
             let mut state = self
                 .multi_head
                 .as_ref()
@@ -861,13 +914,22 @@ impl RevisionManager {
 
             // If source chain has no remaining validators, collect its revisions for reaping
             let source_has_validators = state.validators.values().any(|v| v.chain == source_chain);
-            let revisions_to_reap = if source_has_validators {
-                Vec::new()
+            let (revisions_to_reap, can_free) = if source_has_validators {
+                (Vec::new(), Arc::new(|_| true) as CanFreeFn)
             } else {
-                self.collect_all_chain_revisions(source_chain, &mut state)
+                // Build can_free BEFORE removing from fork tree so is_ancestor works
+                let chain_fork_id = state.chains.get(&source_chain).map_or(0, |c| c.fork_id);
+                let can_free = self.build_can_free(&state, chain_fork_id);
+
+                // Remove this chain's fork_id from the fork tree
+                if chain_fork_id != 0 {
+                    state.fork_tree.remove(chain_fork_id);
+                }
+                let revisions = self.collect_all_chain_revisions(source_chain, &mut state);
+                (revisions, can_free)
             };
 
-            (removed.slot, validator_count, revisions_to_reap)
+            (removed.slot, validator_count, revisions_to_reap, can_free)
         }; // write lock dropped
 
         // Clear this validator's root in the header (no multi_head lock held)
@@ -883,7 +945,7 @@ impl RevisionManager {
             match Arc::try_unwrap(rev) {
                 Ok(owned) => {
                     self.persist_worker
-                        .reap(owned)
+                        .reap(owned, can_free.clone())
                         .map_err(RevisionManagerError::PersistError)?;
                 }
                 Err(_still_held) => {
@@ -910,6 +972,7 @@ impl RevisionManager {
         &self,
         id: ValidatorId,
         proposal: ProposedRevision,
+        source: &str,
     ) -> Result<(), RevisionManagerError> {
         // Check persist worker health (no lock needed)
         self.persist_worker
@@ -917,7 +980,7 @@ impl RevisionManager {
             .map_err(RevisionManagerError::PersistError)?;
 
         // Phase 1: Under write lock (fast, in-memory only)
-        let (committed, slot, root_info, revisions_to_reap) = {
+        let (committed, slot, root_info, revisions_to_reap, can_free, fork_tree_changed) = {
             let mut state = self
                 .multi_head
                 .as_ref()
@@ -971,12 +1034,23 @@ impl RevisionManager {
                 } // mutable borrow of validator dropped
 
                 // Clean up source chain if now empty of validators
-                let revisions_to_reap = if source_chain != target_chain
+                let (revisions_to_reap, dedup_can_free) = if source_chain != target_chain
                     && !state.validators.values().any(|v| v.chain == source_chain)
                 {
-                    self.collect_all_chain_revisions(source_chain, &mut state)
+                    // Build can_free BEFORE removing from fork tree
+                    let chain_fork_id = state.chains.get(&source_chain).map_or(0, |c| c.fork_id);
+                    let cf = self.build_can_free(&state, chain_fork_id);
+
+                    // Remove this chain's fork_id from the fork tree (convergence)
+                    if chain_fork_id != 0 {
+                        state.fork_tree.remove(chain_fork_id);
+                    }
+                    (
+                        self.collect_all_chain_revisions(source_chain, &mut state),
+                        cf,
+                    )
                 } else {
-                    Vec::new()
+                    (Vec::new(), Arc::new(|_| true) as CanFreeFn)
                 };
 
                 let validator = state
@@ -985,6 +1059,10 @@ impl RevisionManager {
                     .ok_or(RevisionManagerError::ValidatorNotFound { id })?;
                 let root_info = self.root_info_for_validator(id, validator);
                 let slot = validator.slot;
+
+                // Persist fork tree while we still hold the state lock
+                self.persist_fork_tree(&state);
+
                 drop(state); // release write lock
 
                 // Phase 2 (dedup path): update header, reap orphaned chain
@@ -998,7 +1076,7 @@ impl RevisionManager {
                     match Arc::try_unwrap(rev) {
                         Ok(owned) => {
                             self.persist_worker
-                                .reap(owned)
+                                .reap(owned, dedup_can_free.clone())
                                 .map_err(RevisionManagerError::PersistError)?;
                         }
                         Err(_still_held) => {}
@@ -1050,7 +1128,19 @@ impl RevisionManager {
                          parent={parent_hash:?}, new_hash={new_h:?}. \
                          validators on original chain {validator_chain}: {other_validators:?}"
                     );
-                    firewood_increment!(crate::registry::VALIDATOR_DIVERGENCE_TOTAL, 1);
+                    firewood_increment!(crate::registry::VALIDATOR_DIVERGENCE_TOTAL, 1, "source" => source.to_owned());
+                }
+
+                // Update fork tree: fork the parent chain's fork_id
+                let parent_fork_id = state.chains.get(&validator_chain).map_or(0, |c| c.fork_id);
+                let (continuation_fork_id, new_fork_id) = state
+                    .fork_tree
+                    .fork(parent_fork_id)
+                    .unwrap_or((parent_fork_id, parent_fork_id));
+
+                // Update the original chain's fork_id to the continuation
+                if let Some(original_chain) = state.chains.get_mut(&validator_chain) {
+                    original_chain.fork_id = continuation_fork_id;
                 }
 
                 let new_chain_id = state.next_chain_id;
@@ -1060,6 +1150,7 @@ impl RevisionManager {
                     new_chain_id,
                     ChainState {
                         revisions: VecDeque::from([committed.clone()]),
+                        fork_id: new_fork_id,
                     },
                 );
 
@@ -1078,7 +1169,8 @@ impl RevisionManager {
                 let slot = validator.slot;
 
                 // No reaping needed for brand-new chain (only 1 revision)
-                (committed, slot, root_info, Vec::new())
+                let cf = Arc::new(|_| true) as CanFreeFn;
+                (committed, slot, root_info, Vec::new(), cf, true)
             } else {
                 // Normal case: append new revision to the validator's current chain
                 if let Some(ref hash) = new_hash {
@@ -1101,13 +1193,23 @@ impl RevisionManager {
                 let root_info = self.root_info_for_validator(id, validator);
                 let slot = validator.slot;
 
+                // Build can_free from fork tree for safe reaping
+                let chain_fork_id = state.chains.get(&validator_chain).map_or(0, |c| c.fork_id);
+                let cf = self.build_can_free(&state, chain_fork_id);
+
                 // 5. Collect revisions to reap from this chain (per-chain budget)
                 let revisions_to_reap =
                     self.collect_reapable_revisions(validator_chain, &mut state);
 
-                (committed, slot, root_info, revisions_to_reap)
+                (committed, slot, root_info, revisions_to_reap, cf, false)
             }
-        }; // write lock dropped
+        };
+
+        // Persist fork tree if it was modified (fork path)
+        if fork_tree_changed && let Some(mh) = &self.multi_head {
+            let state = mh.read();
+            self.persist_fork_tree(&state);
+        }
 
         // Phase 2: No lock held (may block)
         // Persist the new revision
@@ -1129,7 +1231,7 @@ impl RevisionManager {
             match Arc::try_unwrap(rev) {
                 Ok(owned) => {
                     self.persist_worker
-                        .reap(owned)
+                        .reap(owned, can_free.clone())
                         .map_err(RevisionManagerError::PersistError)?;
                 }
                 Err(_still_held) => {
@@ -1169,7 +1271,7 @@ impl RevisionManager {
         id: ValidatorId,
         hash: HashKey,
     ) -> Result<(), RevisionManagerError> {
-        let (slot, root_info, revisions_to_reap) = {
+        let (slot, root_info, revisions_to_reap, can_free) = {
             let mut state = self
                 .multi_head
                 .as_ref()
@@ -1211,15 +1313,26 @@ impl RevisionManager {
             let slot = validator.slot;
 
             // Clean up source chain if now empty of validators
-            let revisions_to_reap = if source_chain != target_chain
+            let (revisions_to_reap, cf) = if source_chain != target_chain
                 && !state.validators.values().any(|v| v.chain == source_chain)
             {
-                self.collect_all_chain_revisions(source_chain, &mut state)
+                // Build can_free BEFORE removing from fork tree
+                let chain_fork_id = state.chains.get(&source_chain).map_or(0, |c| c.fork_id);
+                let cf = self.build_can_free(&state, chain_fork_id);
+
+                // Remove this chain's fork_id from the fork tree (convergence)
+                if chain_fork_id != 0 {
+                    state.fork_tree.remove(chain_fork_id);
+                }
+                (
+                    self.collect_all_chain_revisions(source_chain, &mut state),
+                    cf,
+                )
             } else {
-                Vec::new()
+                (Vec::new(), Arc::new(|_| true) as CanFreeFn)
             };
 
-            (slot, root_info, revisions_to_reap)
+            (slot, root_info, revisions_to_reap, cf)
         }; // write lock dropped
 
         // Update header (no multi_head lock held)
@@ -1234,7 +1347,7 @@ impl RevisionManager {
             match Arc::try_unwrap(rev) {
                 Ok(owned) => {
                     self.persist_worker
-                        .reap(owned)
+                        .reap(owned, can_free.clone())
                         .map_err(RevisionManagerError::PersistError)?;
                 }
                 Err(_still_held) => {}
@@ -1358,6 +1471,22 @@ impl RevisionManager {
         Some((id.id(), (addr, hash)))
     }
 
+    /// Persist the fork tree state to the header.
+    ///
+    /// Called after fork tree mutations (fork, remove) to ensure the
+    /// fork tree is recoverable on restart.
+    fn persist_fork_tree(&self, state: &MultiHeadState) {
+        let (next_id, entries) = state.fork_tree.to_persisted();
+        let mut header = self.persist_worker.locked_header();
+        let _ = header.set_fork_tree(next_id, &entries);
+
+        // Also persist per-validator fork_ids
+        for validator in state.validators.values() {
+            let fork_id = state.chains.get(&validator.chain).map_or(0, |c| c.fork_id);
+            let _ = header.set_validator_fork_id(validator.slot, fork_id);
+        }
+    }
+
     /// Clean up proposals after a commit (shared helper).
     fn cleanup_proposals_inner(&self, proposal: &ProposedRevision) {
         let mut lock = self.proposals.lock();
@@ -1386,6 +1515,315 @@ impl RevisionManager {
         self.persist_worker
             .close(current_revision)
             .map_err(RevisionManagerError::PersistError)
+    }
+}
+
+/// A node in the fork tree representing a single fork lineage point.
+#[derive(Debug, Clone)]
+struct ForkNode {
+    /// Parent fork ID, or `None` for the root.
+    parent: Option<ForkId>,
+    /// Direct children of this fork node.
+    children: HashSet<ForkId>,
+    /// Fork IDs that were absorbed into this node during compaction.
+    /// When a fork is removed and its parent becomes single-child,
+    /// the parent is merged into the child, and the parent's fork_id
+    /// is added here for future `is_ancestor` lookups.
+    absorbed_ids: HashSet<ForkId>,
+}
+
+/// Tracks fork relationships between chains for safe node reaping.
+///
+/// Each chain is assigned a fork ID. When chains diverge, both parent and
+/// child get new IDs. The fork tree records these relationships so that
+/// `can_free` can determine if a node allocated by one fork can be safely
+/// freed by another.
+///
+/// Fork ID 0 is the root (pre-fork era). IDs are monotonically increasing
+/// and never reused (u64 space is practically infinite).
+#[derive(Debug, Clone)]
+pub(crate) struct ForkTree {
+    /// Map of fork_id to its node in the tree.
+    nodes: HashMap<ForkId, ForkNode>,
+    /// Next fork ID to allocate.
+    next_id: ForkId,
+}
+
+impl ForkTree {
+    /// Create a new fork tree with a root node at fork_id=0.
+    pub fn new() -> Self {
+        let mut nodes = HashMap::new();
+        nodes.insert(
+            0,
+            ForkNode {
+                parent: None,
+                children: HashSet::new(),
+                absorbed_ids: HashSet::new(),
+            },
+        );
+        Self { nodes, next_id: 1 }
+    }
+
+    /// Create a fork: allocate two new child IDs under `parent_fork_id`.
+    ///
+    /// Returns `(new_parent_continuation_id, new_child_id)`.
+    /// Both the continuing parent chain and the new child chain get fresh IDs.
+    ///
+    /// Returns `None` if the tree would exceed `MAX_FORK_NODES` or the parent
+    /// doesn't exist.
+    pub fn fork(&mut self, parent_fork_id: ForkId) -> Option<(ForkId, ForkId)> {
+        if !self.nodes.contains_key(&parent_fork_id) {
+            return None;
+        }
+        // Need 2 new slots; check capacity
+        if self.nodes.len().saturating_add(2) > MAX_FORK_NODES {
+            return None;
+        }
+
+        let continuation_id = self.next_id;
+        let child_id = self.next_id.wrapping_add(1);
+        self.next_id = self.next_id.wrapping_add(2);
+
+        // Add both as children of the parent
+        if let Some(parent) = self.nodes.get_mut(&parent_fork_id) {
+            parent.children.insert(continuation_id);
+            parent.children.insert(child_id);
+        }
+
+        self.nodes.insert(
+            continuation_id,
+            ForkNode {
+                parent: Some(parent_fork_id),
+                children: HashSet::new(),
+                absorbed_ids: HashSet::new(),
+            },
+        );
+        self.nodes.insert(
+            child_id,
+            ForkNode {
+                parent: Some(parent_fork_id),
+                children: HashSet::new(),
+                absorbed_ids: HashSet::new(),
+            },
+        );
+
+        Some((continuation_id, child_id))
+    }
+
+    /// Remove a fork node (e.g., when a chain converges or is deregistered).
+    ///
+    /// If the removed node's parent becomes a single-child interior node
+    /// (no active chain references it), it is compacted: the parent is
+    /// absorbed into its remaining child.
+    pub fn remove(&mut self, fork_id: ForkId) {
+        // Don't remove root
+        if fork_id == 0 {
+            return;
+        }
+
+        let Some(node) = self.nodes.remove(&fork_id) else {
+            return;
+        };
+
+        // Remove from parent's children
+        if let Some(parent_id) = node.parent
+            && let Some(parent) = self.nodes.get_mut(&parent_id)
+        {
+            parent.children.remove(&fork_id);
+        }
+
+        // Reparent children to the removed node's parent
+        for child_id in &node.children {
+            if let Some(child) = self.nodes.get_mut(child_id) {
+                child.parent = node.parent;
+            }
+            if let Some(parent_id) = node.parent
+                && let Some(parent) = self.nodes.get_mut(&parent_id)
+            {
+                parent.children.insert(*child_id);
+            }
+        }
+
+        // Compact: if the parent now has exactly one child, merge parent into child
+        if let Some(parent_id) = node.parent {
+            self.try_compact(parent_id);
+        }
+    }
+
+    /// Try to compact a node: if it has exactly one child and is not
+    /// referenced by any active chain, absorb it into its child.
+    ///
+    /// `active_fork_ids` are not needed here because compaction only
+    /// happens when a chain is removed — the caller ensures the fork_id
+    /// being removed is no longer active.
+    fn try_compact(&mut self, node_id: ForkId) {
+        // Don't compact root
+        if node_id == 0 {
+            return;
+        }
+
+        let Some(node) = self.nodes.get(&node_id) else {
+            return;
+        };
+
+        if node.children.len() != 1 {
+            return;
+        }
+
+        let child_id = *node.children.iter().next().expect("checked len == 1");
+        let parent_of_node = node.parent;
+        let absorbed = node.absorbed_ids.clone();
+
+        // Remove the interior node
+        self.nodes.remove(&node_id);
+
+        // Update child's parent
+        if let Some(child) = self.nodes.get_mut(&child_id) {
+            child.parent = parent_of_node;
+            // The child absorbs the compacted node's ID and its previously absorbed IDs
+            child.absorbed_ids.insert(node_id);
+            child.absorbed_ids.extend(absorbed);
+        }
+
+        // Update grandparent's children
+        if let Some(parent_id) = parent_of_node
+            && let Some(parent) = self.nodes.get_mut(&parent_id)
+        {
+            parent.children.remove(&node_id);
+            parent.children.insert(child_id);
+        }
+    }
+
+    /// Check if `ancestor` is an ancestor of `descendant` in the fork tree.
+    ///
+    /// Also checks absorbed IDs: if an interior node was compacted into
+    /// a descendant, its fork_id is still considered an ancestor.
+    pub fn is_ancestor(&self, ancestor: ForkId, descendant: ForkId) -> bool {
+        if ancestor == descendant {
+            return true;
+        }
+
+        let mut current = descendant;
+        loop {
+            let Some(node) = self.nodes.get(&current) else {
+                return false;
+            };
+
+            // Check if the ancestor was absorbed into this node
+            if node.absorbed_ids.contains(&ancestor) {
+                return true;
+            }
+
+            match node.parent {
+                Some(parent_id) if parent_id == ancestor => return true,
+                Some(parent_id) => current = parent_id,
+                None => return false,
+            }
+        }
+    }
+
+    /// Determine if a node with `node_fork_id` can be safely freed by
+    /// the chain at `chain_fork_id`, given the set of all active fork IDs.
+    ///
+    /// A node can be freed if:
+    /// 1. It was allocated by this chain (`node_fork_id == chain_fork_id`), OR
+    /// 2. It was allocated by an ancestor, AND no other active chain also
+    ///    descends from that ancestor.
+    pub fn can_free(
+        &self,
+        node_fork_id: ForkId,
+        chain_fork_id: ForkId,
+        active_fork_ids: &[ForkId],
+    ) -> bool {
+        // Own allocation
+        if node_fork_id == chain_fork_id {
+            return true;
+        }
+
+        // Must be an ancestor
+        if !self.is_ancestor(node_fork_id, chain_fork_id) {
+            return false;
+        }
+
+        // No other active chain should also descend from this ancestor
+        !active_fork_ids
+            .iter()
+            .any(|&other| other != chain_fork_id && self.is_ancestor(node_fork_id, other))
+    }
+
+    /// Serialize the fork tree for persistence in the header.
+    pub fn to_persisted(&self) -> (u64, Vec<PersistedForkNode>) {
+        let entries: Vec<PersistedForkNode> = self
+            .nodes
+            .iter()
+            .map(|(&fork_id, node)| PersistedForkNode {
+                fork_id,
+                parent_fork_id: node.parent.unwrap_or(u64::MAX),
+            })
+            .collect();
+        (self.next_id, entries)
+    }
+
+    /// Deserialize the fork tree from persisted header data.
+    pub fn from_persisted(next_id: u64, entries: &[PersistedForkNode]) -> Self {
+        let mut nodes: HashMap<ForkId, ForkNode> = HashMap::new();
+
+        // First pass: create all nodes
+        for entry in entries {
+            let parent = if entry.parent_fork_id == u64::MAX {
+                None
+            } else {
+                Some(entry.parent_fork_id)
+            };
+            nodes.insert(
+                entry.fork_id,
+                ForkNode {
+                    parent,
+                    children: HashSet::new(),
+                    absorbed_ids: HashSet::new(),
+                },
+            );
+        }
+
+        // Second pass: populate children
+        let parent_map: Vec<(ForkId, ForkId)> = nodes
+            .iter()
+            .filter_map(|(&id, node)| node.parent.map(|p| (p, id)))
+            .collect();
+        for (parent_id, child_id) in parent_map {
+            if let Some(parent) = nodes.get_mut(&parent_id) {
+                parent.children.insert(child_id);
+            }
+        }
+
+        // If entries are empty, create a default tree with root
+        if nodes.is_empty() {
+            nodes.insert(
+                0,
+                ForkNode {
+                    parent: None,
+                    children: HashSet::new(),
+                    absorbed_ids: HashSet::new(),
+                },
+            );
+        }
+
+        Self {
+            nodes,
+            next_id: next_id.max(1),
+        }
+    }
+
+    /// Returns the next fork ID that would be allocated.
+    #[cfg(test)]
+    pub const fn next_id(&self) -> ForkId {
+        self.next_id
+    }
+
+    /// Returns all fork IDs currently in the tree.
+    #[cfg(test)]
+    pub fn fork_ids(&self) -> HashSet<ForkId> {
+        self.nodes.keys().copied().collect()
     }
 }
 
@@ -1808,5 +2246,224 @@ mod tests {
 
         let result = RevisionManager::new(config);
         assert!(result.is_ok());
+    }
+
+    // ── ForkTree unit tests ──
+
+    #[test]
+    fn test_fork_tree_new_has_root() {
+        let tree = ForkTree::new();
+        assert!(tree.nodes.contains_key(&0));
+        assert_eq!(tree.next_id, 1);
+        assert!(tree.nodes[&0].parent.is_none());
+        assert!(tree.nodes[&0].children.is_empty());
+    }
+
+    #[test]
+    fn test_fork_tree_fork_creates_two_children() {
+        let mut tree = ForkTree::new();
+        let (cont, child) = tree.fork(0).unwrap();
+        assert_eq!(cont, 1);
+        assert_eq!(child, 2);
+        assert_eq!(tree.next_id, 3);
+
+        // Root should have both as children
+        assert!(tree.nodes[&0].children.contains(&1));
+        assert!(tree.nodes[&0].children.contains(&2));
+
+        // Both should have root as parent
+        assert_eq!(tree.nodes[&1].parent, Some(0));
+        assert_eq!(tree.nodes[&2].parent, Some(0));
+    }
+
+    #[test]
+    fn test_fork_tree_nested_fork() {
+        let mut tree = ForkTree::new();
+        let (cont1, _child1) = tree.fork(0).unwrap();
+        let (cont2, child2) = tree.fork(cont1).unwrap();
+
+        // Tree: 0 -> {1, 2}, 1 -> {3, 4}
+        assert_eq!(cont2, 3);
+        assert_eq!(child2, 4);
+        assert!(tree.nodes[&cont1].children.contains(&3));
+        assert!(tree.nodes[&cont1].children.contains(&4));
+    }
+
+    #[test]
+    fn test_fork_tree_remove_leaf() {
+        let mut tree = ForkTree::new();
+        let (_cont, child) = tree.fork(0).unwrap();
+        tree.remove(child);
+
+        // Child should be gone
+        assert!(!tree.nodes.contains_key(&child));
+        // Root should no longer list it
+        assert!(!tree.nodes[&0].children.contains(&child));
+    }
+
+    #[test]
+    fn test_fork_tree_remove_compacts_single_child_interior() {
+        let mut tree = ForkTree::new();
+        // 0 -> {1, 2}
+        let (cont, child) = tree.fork(0).unwrap();
+        assert_eq!(cont, 1);
+        assert_eq!(child, 2);
+
+        // Remove child=2. Now 0 has only child=1, so 0 should NOT compact (it's root).
+        tree.remove(2);
+        // Root is never compacted
+        assert!(tree.nodes.contains_key(&0));
+        assert!(tree.nodes.contains_key(&1));
+
+        // Now create: 1 -> {3, 4}
+        let (cont2, child2) = tree.fork(1).unwrap();
+        assert_eq!(cont2, 3);
+        assert_eq!(child2, 4);
+
+        // Remove child2=4. Now 1 has only child=3, so 1 should be compacted into 3.
+        tree.remove(4);
+        assert!(
+            !tree.nodes.contains_key(&1),
+            "interior node 1 should be compacted"
+        );
+        // 3 should now have 0 as parent and absorb fork_id 1
+        assert_eq!(tree.nodes[&3].parent, Some(0));
+        assert!(tree.nodes[&3].absorbed_ids.contains(&1));
+    }
+
+    #[test]
+    fn test_fork_tree_can_free_own_fork_id() {
+        let tree = ForkTree::new();
+        assert!(tree.can_free(0, 0, &[0]));
+    }
+
+    #[test]
+    fn test_fork_tree_can_free_ancestor_sole_descendant() {
+        let mut tree = ForkTree::new();
+        let (cont, _child) = tree.fork(0).unwrap();
+        // Only cont is active
+        assert!(tree.can_free(0, cont, &[cont]));
+    }
+
+    #[test]
+    fn test_fork_tree_cannot_free_shared_ancestor() {
+        let mut tree = ForkTree::new();
+        let (cont, child) = tree.fork(0).unwrap();
+        // Both active: neither can free ancestor 0
+        assert!(!tree.can_free(0, cont, &[cont, child]));
+        assert!(!tree.can_free(0, child, &[cont, child]));
+    }
+
+    #[test]
+    fn test_fork_tree_cannot_free_non_ancestor() {
+        let mut tree = ForkTree::new();
+        let (cont, child) = tree.fork(0).unwrap();
+        // cont(1) is not ancestor of child(2) — they are siblings
+        assert!(!tree.can_free(cont, child, &[cont, child]));
+        assert!(!tree.can_free(child, cont, &[cont, child]));
+    }
+
+    #[test]
+    fn test_fork_tree_convergence_enables_cleanup() {
+        let mut tree = ForkTree::new();
+        let (cont, child) = tree.fork(0).unwrap();
+        // Remove child (converged), now cont is sole descendant
+        tree.remove(child);
+        assert!(tree.can_free(0, cont, &[cont]));
+    }
+
+    #[test]
+    fn test_fork_tree_three_way_fork() {
+        let mut tree = ForkTree::new();
+        // 0 -> {1, 2}
+        let (cont, child) = tree.fork(0).unwrap();
+        // 1 -> {3, 4}  (fork from continuation)
+        let (cont2, child2) = tree.fork(cont).unwrap();
+
+        let active = [cont, child, cont2, child2]; // 1,2,3,4 -- but 1 was compacted? No, fork doesn't compact.
+        // Actually after fork(1), 1 still exists with children {3,4}
+
+        // 3 cannot free 0 because 2 also descends from 0
+        assert!(!tree.can_free(0, cont2, &active));
+        // 3 can free 1 only if no other active chain descends from 1 — but 4 does
+        assert!(!tree.can_free(cont, cont2, &[cont2, child2]));
+        // If only cont2 is active under 1:
+        assert!(tree.can_free(cont, cont2, &[cont2]));
+    }
+
+    #[test]
+    fn test_fork_tree_is_ancestor() {
+        let mut tree = ForkTree::new();
+        // 0 -> {1, 2}
+        let (cont, child) = tree.fork(0).unwrap();
+        // 1 -> {3, 4}
+        let (cont2, _child2) = tree.fork(cont).unwrap();
+
+        assert!(tree.is_ancestor(0, cont2)); // 0 -> 1 -> 3
+        assert!(tree.is_ancestor(cont, cont2)); // 1 -> 3
+        assert!(!tree.is_ancestor(child, cont2)); // 2 is not ancestor of 3
+        assert!(!tree.is_ancestor(cont2, 0)); // 3 is not ancestor of 0
+        assert!(tree.is_ancestor(cont2, cont2)); // self
+    }
+
+    #[test]
+    fn test_fork_tree_persistence_roundtrip() {
+        let mut tree = ForkTree::new();
+        tree.fork(0).unwrap();
+        tree.fork(1).unwrap();
+
+        let (next_id, entries) = tree.to_persisted();
+        let restored = ForkTree::from_persisted(next_id, &entries);
+
+        assert_eq!(restored.next_id, tree.next_id);
+        assert_eq!(restored.nodes.len(), tree.nodes.len());
+        for (&id, node) in &tree.nodes {
+            let restored_node = restored.nodes.get(&id).unwrap();
+            assert_eq!(restored_node.parent, node.parent);
+            assert_eq!(restored_node.children, node.children);
+        }
+    }
+
+    #[test]
+    fn test_fork_tree_absorbed_ids_ancestry() {
+        let mut tree = ForkTree::new();
+        // 0 -> {1, 2}
+        let (cont, child) = tree.fork(0).unwrap();
+        // 1 -> {3, 4}
+        let (cont2, child2) = tree.fork(cont).unwrap();
+
+        // Remove child2(4), compacting 1 into 3
+        tree.remove(child2);
+        // Now 1 should be absorbed into 3
+        assert!(!tree.nodes.contains_key(&cont));
+        assert!(tree.nodes[&cont2].absorbed_ids.contains(&cont));
+
+        // is_ancestor should still work through absorbed IDs
+        assert!(tree.is_ancestor(cont, cont2)); // 1 was absorbed into 3
+        assert!(tree.is_ancestor(0, cont2));
+
+        // can_free should work correctly
+        assert!(!tree.can_free(0, cont2, &[cont2, child])); // child(2) still active
+        assert!(tree.can_free(cont, cont2, &[cont2])); // 1 absorbed, sole descendant
+    }
+
+    #[test]
+    fn test_fork_tree_fork_returns_none_at_capacity() {
+        let mut tree = ForkTree::new();
+        // Fill up to near capacity
+        // We start with 1 node (root). Each fork adds 2. MAX_FORK_NODES = 32.
+        // So we can do (32-1)/2 = 15 forks from root, getting to 31 nodes.
+        for _ in 0..15 {
+            assert!(tree.fork(0).is_some());
+        }
+        // Now we have 1 + 30 = 31 nodes. One more fork needs 2 slots = 33 > 32.
+        assert!(tree.fork(0).is_none());
+    }
+
+    #[test]
+    fn test_fork_tree_from_persisted_empty() {
+        let tree = ForkTree::from_persisted(0, &[]);
+        assert!(tree.nodes.contains_key(&0));
+        assert_eq!(tree.next_id, 1);
     }
 }

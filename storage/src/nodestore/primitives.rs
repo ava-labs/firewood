@@ -111,6 +111,10 @@ impl AreaIndex {
     /// The maximum area size available for allocation.
     pub const MAX_AREA_SIZE: u64 = AREA_SIZES[Self::NUM_AREA_SIZES - 1];
 
+    /// Bit flag in the raw AreaIndex byte indicating a fork_id follows.
+    /// V1 nodes store `real_index | HAS_FORK_ID_BIT` as the first byte.
+    const HAS_FORK_ID_BIT: u8 = 0x80;
+
     /// Create a new `AreaIndex` from a u8 value, returns None if value is out of range.
     #[inline]
     #[must_use]
@@ -120,6 +124,28 @@ impl AreaIndex {
         } else {
             None
         }
+    }
+
+    /// Create from a raw byte that may have the fork_id flag set.
+    ///
+    /// Returns `(AreaIndex, has_fork_id)` or `None` if the index portion
+    /// is out of range.
+    #[inline]
+    #[must_use]
+    pub const fn from_raw_byte(byte: u8) -> Option<(Self, bool)> {
+        let has_fork_id = byte & Self::HAS_FORK_ID_BIT != 0;
+        let index = byte & !Self::HAS_FORK_ID_BIT;
+        match Self::new(index) {
+            Some(ai) => Some((ai, has_fork_id)),
+            None => None,
+        }
+    }
+
+    /// Get the byte value with the fork_id flag set.
+    #[inline]
+    #[must_use]
+    pub const fn with_fork_id_flag(self) -> u8 {
+        self.0 | Self::HAS_FORK_ID_BIT
     }
 
     /// Create an `AreaIndex` from a size in bytes.
@@ -354,5 +380,56 @@ impl From<LinearAddress> for u64 {
 impl From<NonZeroU64> for LinearAddress {
     fn from(addr: NonZeroU64) -> Self {
         LinearAddress(addr)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_area_index_from_raw_byte_legacy() {
+        let (index, has_fork_id) = AreaIndex::from_raw_byte(5).unwrap();
+        assert_eq!(index, AreaIndex::new(5).unwrap());
+        assert!(!has_fork_id);
+    }
+
+    #[test]
+    fn test_area_index_from_raw_byte_with_fork_id() {
+        let (index, has_fork_id) = AreaIndex::from_raw_byte(0x85).unwrap();
+        assert_eq!(index, AreaIndex::new(5).unwrap());
+        assert!(has_fork_id);
+    }
+
+    #[test]
+    fn test_area_index_from_raw_byte_invalid() {
+        // 23 is out of range (valid indices are 0-22)
+        assert!(AreaIndex::from_raw_byte(23).is_none());
+        // 0x80 | 23 = 0x97 is also out of range
+        assert!(AreaIndex::from_raw_byte(0x97).is_none());
+    }
+
+    #[test]
+    fn test_area_index_with_fork_id_flag() {
+        let index = AreaIndex::new(5).unwrap();
+        assert_eq!(index.with_fork_id_flag(), 0x85);
+    }
+
+    #[test]
+    fn test_area_index_from_raw_byte_roundtrip() {
+        for i in 0..AreaIndex::NUM_AREA_SIZES as u8 {
+            let index = AreaIndex::new(i).unwrap();
+
+            // Legacy byte roundtrips
+            let (parsed, has_fork) = AreaIndex::from_raw_byte(i).unwrap();
+            assert_eq!(parsed, index);
+            assert!(!has_fork);
+
+            // Fork_id flagged byte roundtrips
+            let flagged = index.with_fork_id_flag();
+            let (parsed, has_fork) = AreaIndex::from_raw_byte(flagged).unwrap();
+            assert_eq!(parsed, index);
+            assert!(has_fork);
+        }
     }
 }

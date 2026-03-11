@@ -44,7 +44,7 @@ use std::{
 };
 
 use firewood_storage::{
-    Committed, FileBacked, FileIoError, HashedNodeReader, LinearAddress, NodeStore,
+    Committed, FileBacked, FileIoError, ForkId, HashedNodeReader, LinearAddress, NodeStore,
     NodeStoreHeader, TrieHash,
 };
 use parking_lot::{Condvar, Mutex, MutexGuard};
@@ -52,6 +52,25 @@ use parking_lot::{Condvar, Mutex, MutexGuard};
 use crate::{manager::CommittedRevision, root_store::RootStore};
 
 use firewood_storage::logger::error;
+
+/// A closure that decides whether a deleted node with a given fork_id can be
+/// safely returned to the free list. In single-head mode this always returns
+/// `true`; in multi-head mode it consults the fork tree.
+pub(crate) type CanFreeFn = Arc<dyn Fn(ForkId) -> bool + Send + Sync>;
+
+/// A nodestore paired with its `can_free` predicate, ready for reaping.
+struct ReapItem {
+    nodestore: NodeStore<Committed, FileBacked>,
+    can_free: CanFreeFn,
+}
+
+impl std::fmt::Debug for ReapItem {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ReapItem")
+            .field("nodestore", &self.nodestore)
+            .finish_non_exhaustive()
+    }
+}
 
 /// Error type for persistence operations.
 #[derive(Clone, Debug, thiserror::Error)]
@@ -170,6 +189,10 @@ impl PersistWorker {
     /// Sends `nodestore` to the background thread for reaping if archival mode
     /// is disabled. Otherwise, the `nodestore` is dropped.
     ///
+    /// The `can_free` predicate is consulted for each deleted node during
+    /// reaping. In single-head mode, pass `|_| true`. In multi-head mode,
+    /// construct from the fork tree to prevent cross-chain corruption.
+    ///
     /// ## Errors
     ///
     /// Returns an error if the background thread has shut down or if it
@@ -181,8 +204,18 @@ impl PersistWorker {
     pub(crate) fn reap(
         &self,
         nodestore: NodeStore<Committed, FileBacked>,
+        can_free: CanFreeFn,
     ) -> Result<(), PersistError> {
-        if self.shared.root_store.is_none() && self.shared.channel.reap(nodestore).is_err() {
+        if self.shared.root_store.is_none()
+            && self
+                .shared
+                .channel
+                .reap(ReapItem {
+                    nodestore,
+                    can_free,
+                })
+                .is_err()
+        {
             self.join_handle();
             self.check_error()?;
         }
@@ -284,17 +317,17 @@ impl PersistChannel {
         state.permits_available == state.max_permits.get()
     }
 
-    /// Enqueues `nodestore` for reaping.
+    /// Enqueues a nodestore and its `can_free` predicate for reaping.
     ///
     /// ## Errors
     ///
     /// Returns an error if the channel has been shut down.
-    fn reap(&self, nodestore: NodeStore<Committed, FileBacked>) -> Result<(), PersistError> {
+    fn reap(&self, item: ReapItem) -> Result<(), PersistError> {
         let mut state = self.state.lock();
         if state.shutdown {
             return Err(PersistError::Shutdown);
         }
-        state.pending_reaps.push(nodestore);
+        state.pending_reaps.push(item);
         self.persist_ready.notify_one();
 
         Ok(())
@@ -411,7 +444,7 @@ struct PersistChannelState {
     /// Set to `true` when the channel has been closed.
     shutdown: bool,
     /// Nodestores awaiting reaping by the background thread.
-    pending_reaps: Vec<NodeStore<Committed, FileBacked>>,
+    pending_reaps: Vec<ReapItem>,
     /// The most recent committed revision, replaced on each push.
     latest_committed: Option<CommittedRevision>,
 }
@@ -429,7 +462,7 @@ struct PersistDataGuard<'a> {
     /// Released back to the channel on drop.
     permits_to_release: u64,
     /// Expired node stores whose deleted nodes should be returned to free lists.
-    pending_reaps: Vec<NodeStore<Committed, FileBacked>>,
+    pending_reaps: Vec<ReapItem>,
     /// The latest committed revision to persist, if the threshold was reached.
     /// `None` when this cycle was triggered solely by pending reaps.
     latest_committed: Option<CommittedRevision>,
@@ -499,8 +532,8 @@ impl PersistLoop {
     /// Processes pending work until shutdown or an error occurs.
     fn event_loop(&self) -> Result<(), PersistError> {
         while let Ok(mut persist_data) = self.shared.channel.pop() {
-            for nodestore in std::mem::take(&mut persist_data.pending_reaps) {
-                self.reap(nodestore)?;
+            for item in std::mem::take(&mut persist_data.pending_reaps) {
+                self.reap(item)?;
             }
 
             if let Some(revision) = persist_data.latest_committed.take() {
@@ -530,9 +563,11 @@ impl PersistLoop {
     }
 
     /// Adds the nodes of this revision to the free lists.
-    fn reap(&self, nodestore: NodeStore<Committed, FileBacked>) -> Result<(), PersistError> {
-        nodestore
-            .reap_deleted(&mut self.shared.header.lock())
+    fn reap(&self, item: ReapItem) -> Result<(), PersistError> {
+        item.nodestore
+            .reap_deleted(&mut self.shared.header.lock(), |fork_id| {
+                (item.can_free)(fork_id)
+            })
             .map_err(|e| {
                 error!("Failed to reap deleted nodes: {e}");
                 PersistError::FileIo(Arc::new(e))

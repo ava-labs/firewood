@@ -9,9 +9,9 @@ use std::fmt;
 use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult, HashKey,
-    IteratorHandle, KeyRange, MultiProposedChangeProofContext, MultiRangeProofContext, NextKeyRange,
-    OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair, ProposalHandle, ProposedChangeProofContext,
-    RangeProofContext, VerifiedChangeProofContext,
+    IteratorHandle, KeyRange, MultiProposedChangeProofContext, MultiRangeProofContext,
+    NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair, ProposalHandle,
+    ProposedChangeProofContext, RangeProofContext, VerifiedChangeProofContext,
 };
 
 /// The result type returned from an FFI function that returns no value but may

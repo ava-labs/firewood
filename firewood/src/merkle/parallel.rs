@@ -381,9 +381,11 @@ impl ParallelMerkle {
         parent: &NodeStore<T, FileBacked>,
         batch: impl IntoBatchIter,
         pool: &ThreadPool,
+        fork_id: firewood_storage::ForkId,
     ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, CreateProposalError> {
         // Create a mutable nodestore from the parent
         let mut mutable_nodestore = NodeStore::new(parent)?;
+        mutable_nodestore.set_fork_id(fork_id);
 
         // Prepare step: Force the root into a branch with no partial path in preparation for
         // performing parallel modifications to the trie.

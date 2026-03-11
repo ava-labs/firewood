@@ -156,7 +156,13 @@ impl<N: NodeReader + RootReader> Iterator for UnPersistedNodeIterator<'_, N> {
     }
 }
 
-/// Helper function to serialize a node into a bump allocator and allocate storage for it
+/// Helper function to serialize a node into a bump allocator and allocate storage for it.
+///
+/// When `fork_id != 0`, the node is written in v1 format with a fork_id field:
+/// `[AreaIndex|0x80 : 1][fork_id : 8 LE][NodeData...]`
+///
+/// When `fork_id == 0`, the legacy v0 format is used:
+/// `[AreaIndex : 1][NodeData...]`
 ///
 /// # Errors
 ///
@@ -165,15 +171,37 @@ fn serialize_node_to_bump<'a>(
     bump: &'a bumpalo::Bump,
     shared_node: &crate::SharedNode,
     node_allocator: &mut NodeAllocator<'_, impl WritableStorage>,
+    fork_id: crate::node::persist::ForkId,
 ) -> Result<(&'a [u8], crate::LinearAddress, usize), FileIoError> {
     let mut bytes = bumpalo::collections::Vec::new_in(bump);
-    let area_size_index = shared_node
+    let _area_size_index = shared_node
         .as_bytes(&mut bytes)
         .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
-    let (persisted_address, _) = node_allocator.allocate_node(bytes.as_slice())?;
-    bytes.shrink_to_fit();
-    let slice = bytes.into_bump_slice();
-    Ok((slice, persisted_address, area_size_index.size() as usize))
+
+    if fork_id != 0 {
+        // V1 format: insert 8 bytes of fork_id after the AreaIndex byte (position 1)
+        let fork_id_bytes = fork_id.to_le_bytes();
+        bytes.splice(1..1, fork_id_bytes);
+
+        // Recompute AreaIndex for the new total size (original + 8 bytes)
+        let new_area_index = crate::nodestore::primitives::AreaIndex::from_size(bytes.len() as u64)
+            .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
+        bytes[0] = new_area_index.with_fork_id_flag();
+
+        let (persisted_address, _) = node_allocator.allocate_node(bytes.as_slice())?;
+        bytes.shrink_to_fit();
+        let slice = bytes.into_bump_slice();
+        Ok((slice, persisted_address, new_area_index.size() as usize))
+    } else {
+        // V0 format: unchanged
+        let area_size_index =
+            crate::nodestore::primitives::AreaIndex::from_size(bytes.len() as u64)
+                .map_err(|e| node_allocator.io_error(e, 0, Some("allocate_node".to_owned())))?;
+        let (persisted_address, _) = node_allocator.allocate_node(bytes.as_slice())?;
+        bytes.shrink_to_fit();
+        let slice = bytes.into_bump_slice();
+        Ok((slice, persisted_address, area_size_index.size() as usize))
+    }
 }
 
 impl<S: WritableStorage> NodeStore<Committed, S> {
@@ -220,11 +248,11 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
             // Serialize the node into the bump allocator
             let (slice, persisted_address, idx_size) =
-                serialize_node_to_bump(bump, &shared_node, node_allocator)?;
+                serialize_node_to_bump(bump, &shared_node, node_allocator, self.kind.fork_id)?;
 
             // NOTE(#1488): we need to set the address so that the parent node can
             // reference it when they are serialized within the same batch.
-            node.allocate_at(persisted_address);
+            node.allocate_at_with_fork_id(persisted_address, self.kind.fork_id);
             allocated_len = allocated_len.saturating_add(idx_size);
             allocated_objects.push((slice, persisted_address, node));
 
