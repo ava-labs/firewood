@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1773128350086,
+  "lastUpdate": 1773214920294,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -1268,6 +1268,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 88.06358879932637,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Elvis",
+            "username": "Elvis339",
+            "email": "43846394+Elvis339@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "92ba1013c747b57aa96ade6bebe37f6f63342d2e",
+          "message": "fix!: clock source miss-match between Rust and Go (#1742)\n\n## Why this should be merged\n\ncoarsetime was introduced to avoid syscall overhead from `std::time`,\nbut @demosdemon confirmed (and we verified empirically) that std::time\nuses `clock_gettime(CLOCK_MONOTONIC)` via vDSO on modern Linux which is\nresolving in userspace with no kernel entry. The two are equivalent in\ncost.\n\nRemoving coarsetime fixes the clock source mismatch between Rust\n`CLOCK_MONOTONIC_COARSE` and Go `CLOCK_MONOTONIC` that was causing the\nFirewood dashboard to show Rust commit time higher than Go commit time,\nwhich is physically impossible since Go wraps Rust synchronously via\nCGO.\n\n## How this works\n\nReplaces all `coarsetime::Instant` / `coarsetime::Duration` usages\nwith`std::time::Instant` / `std::time::Duration`\n\n## How this was tested\n\nFull methodology in #1720.\n\n## Breaking Changes\n\n- [ ] firewood\n- [ ] firewood-storage\n- [x] firewood-ffi (C api) — `commit_proposal` token closure parameter\ntype changes from `coarsetime::Duration` to `std::time::Duration`\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-03-10T19:09:43Z",
+          "url": "https://github.com/ava-labs/firewood/commit/92ba1013c747b57aa96ade6bebe37f6f63342d2e"
+        },
+        "date": 1773214919976,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 137.32145975187245,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 7282.183001891403,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 121.90250589034592,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 7064.670747091683,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 91.55603743741604,
             "unit": "block_accept_ms/ggas"
           }
         ]
