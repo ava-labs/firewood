@@ -24,7 +24,7 @@ use crate::merkle::Merkle;
 use crate::merkle::parallel::ParallelMerkle;
 use crate::persist_worker::{PersistError, PersistWorker};
 use crate::root_store::RootStore;
-use firewood_metrics::{firewood_increment, firewood_record, firewood_set};
+use firewood_metrics::{firewood_increment, firewood_set};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, Mutable,
@@ -300,12 +300,7 @@ impl RevisionManager {
 
         let committed = proposal.as_committed();
 
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "deleted list length will never exceed 2^52"
-        )]
-        let deleted_list_len = committed.deleted_len() as f64;
-        firewood_record!(crate::registry::DELETED_LIST_LEN, deleted_list_len);
+        firewood_set!(crate::registry::DELETED_LIST_LEN, committed.deleted_len());
 
         // 3. Revision reaping
         // When we exceed max_revisions, remove the oldest revision from memory
