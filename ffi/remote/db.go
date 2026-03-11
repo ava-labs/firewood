@@ -87,9 +87,10 @@ type remoteProposal struct {
 	newTrie    *ffi.TruncatedTrie
 	rpc        pb.FirewoodRemoteClient
 	depth      uint
-	// committedTrie is the client's committed trie (the base for all witness
-	// verification in this chain). For first-level proposals this is the
-	// RemoteDB's trie; for chained proposals it is inherited from the parent.
+	// committedTrie is an owned clone of the committed trie at propose time
+	// (the base for all witness verification in this chain). Each proposal
+	// owns its own clone, independent of the client's trie lifecycle.
+	// Must be freed in Commit() or Drop().
 	committedTrie *ffi.TruncatedTrie
 	// expectedCumulativeOps tracks all ops from the chain root to this proposal,
 	// used for client-side validation of the witness's embedded batch_ops.
@@ -124,6 +125,10 @@ func (p *remoteProposal) Commit(ctx context.Context) error {
 	}
 	*p.parentTrie = p.newTrie
 	p.newTrie = nil
+	if p.committedTrie != nil {
+		p.committedTrie.Free()
+		p.committedTrie = nil
+	}
 	if p.cache != nil {
 		p.cache.invalidateBatch(p.expectedCumulativeOps)
 	}
@@ -134,6 +139,10 @@ func (p *remoteProposal) Drop() error {
 	if p.newTrie != nil {
 		p.newTrie.Free()
 		p.newTrie = nil
+	}
+	if p.committedTrie != nil {
+		p.committedTrie.Free()
+		p.committedTrie = nil
 	}
 	// Best-effort server-side cleanup; use a background context since
 	// the caller may not provide one.
@@ -169,6 +178,7 @@ func (p *remoteProposal) Iter(ctx context.Context, startKey []byte) (ffi.DBItera
 	}
 
 	return &remoteIterator{
+		ctx:        ctx,
 		proposalID: p.proposalID,
 		pairs:      verifiedPairs,
 		cursor:     -1,
@@ -214,6 +224,13 @@ func (p *remoteProposal) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.
 		return nil, err
 	}
 
+	// Clone the committed trie so the child proposal owns its own copy.
+	committedClone, err := p.committedTrie.Clone()
+	if err != nil {
+		newTrie.Free()
+		return nil, fmt.Errorf("clone committed trie: %w", err)
+	}
+
 	success = true
 	return &remoteProposal{
 		proposalID:            proposalID,
@@ -221,7 +238,7 @@ func (p *remoteProposal) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.
 		newTrie:               newTrie,
 		rpc:                   p.rpc,
 		depth:                 p.depth,
-		committedTrie:         p.committedTrie,
+		committedTrie:         committedClone,
 		expectedCumulativeOps: expectedCumulativeOps,
 		cache:                 p.cache,
 
@@ -233,6 +250,7 @@ func (p *remoteProposal) Propose(ctx context.Context, batch []ffi.BatchOp) (ffi.
 // remoteIterator implements [ffi.DBIterator] with lazy batched fetching from
 // the server. Each batch is verified via a range proof before being consumed.
 type remoteIterator struct {
+	ctx        context.Context // caller's context for pagination RPCs
 	proposalID uint64
 	pairs      []*pb.KeyValuePair
 	cursor     int
@@ -258,7 +276,7 @@ func (it *remoteIterator) Next() bool {
 	lastKey := it.pairs[len(it.pairs)-1].GetKey()
 	startKey := append(append([]byte(nil), lastKey...), 0x00)
 
-	resp, err := it.rpc.IterBatch(context.Background(), &pb.IterBatchRequest{
+	resp, err := it.rpc.IterBatch(it.ctx, &pb.IterBatchRequest{
 		ProposalId: it.proposalID,
 		StartKey:   startKey,
 		BatchSize:  batchSize,
@@ -337,6 +355,7 @@ func (r *remoteRevision) Iter(ctx context.Context, startKey []byte) (ffi.DBItera
 	}
 
 	return &remoteIterator{
+		ctx:        ctx,
 		proposalID: 0, // revision mode for subsequent batches
 		pairs:      verifiedPairs,
 		cursor:     -1,

@@ -260,6 +260,14 @@ func (c *Client) Propose(ctx context.Context, ops []ffi.BatchOp) (*remoteProposa
 		return nil, err
 	}
 
+	// Clone the committed trie so the proposal owns its own copy,
+	// independent of any concurrent Update() replacing c.trie.
+	committedClone, err := c.trie.Clone()
+	if err != nil {
+		newTrie.Free()
+		return nil, fmt.Errorf("clone committed trie: %w", err)
+	}
+
 	success = true
 	return &remoteProposal{
 		proposalID:            proposalID,
@@ -267,7 +275,7 @@ func (c *Client) Propose(ctx context.Context, ops []ffi.BatchOp) (*remoteProposa
 		newTrie:               newTrie,
 		rpc:                   c.rpc,
 		depth:                 c.depth,
-		committedTrie:         c.trie,
+		committedTrie:         committedClone,
 		expectedCumulativeOps: expectedCumulativeOps,
 		cache:                 c.cache,
 
