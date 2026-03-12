@@ -23,15 +23,12 @@ use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
     ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, TrieReader,
 };
-use nonzero_ext::nonzero;
 use std::io::Write;
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
-
-use crate::merkle::parallel::ParallelMerkle;
 
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -136,9 +133,6 @@ pub struct DbConfig {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
-    /// The maximum number of unpersisted revisions that can exist at a given time.
-    #[builder(default = nonzero!(1u64))]
-    pub deferred_persistence_commit_count: NonZeroU64,
 }
 
 /// A database instance.
@@ -190,7 +184,6 @@ impl Db {
             .create(cfg.create_if_missing)
             .truncate(cfg.truncate)
             .root_store(cfg.root_store)
-            .deferred_persistence_commit_count(cfg.deferred_persistence_commit_count)
             .manager(cfg.manager)
             .build();
         let manager = RevisionManager::new(config_manager)?;
@@ -251,41 +244,12 @@ impl Db {
     ) -> Result<Proposal<'_>, api::Error> {
         // Return immediately if the background thread is no longer running.
         self.manager.check_persist_error()?;
-        // If use_parallel is BatchSize, then perform parallel proposal creation if the batch
-        // size is >= BatchSize.
-        let batch = batch.into_iter();
-        let use_parallel = match self.use_parallel {
-            UseParallel::Never => false,
-            UseParallel::Always => true,
-            UseParallel::BatchSize(required_size) => batch.size_hint().0 >= required_size,
-        };
-        let immutable = if use_parallel {
-            let mut parallel_merkle = ParallelMerkle::default();
-            let _span = fastrace::Span::enter_with_local_parent("parallel_merkle");
-            parallel_merkle.create_proposal(parent, batch, self.manager.threadpool())?
-        } else {
-            let proposal = NodeStore::new(parent)?;
-            let mut merkle = Merkle::from(proposal);
-            let span = fastrace::Span::enter_with_local_parent("merkleops");
-            for res in batch.into_batch_iter::<api::Error>() {
-                match res? {
-                    BatchOp::Put { key, value } => {
-                        merkle.insert(key.as_ref(), value.as_ref().into())?;
-                    }
-                    BatchOp::Delete { key } => {
-                        merkle.remove(key.as_ref())?;
-                    }
-                    BatchOp::DeleteRange { prefix } => {
-                        merkle.remove_prefix(prefix.as_ref())?;
-                    }
-                }
-            }
-
-            drop(span);
-            let _span = fastrace::Span::enter_with_local_parent("freeze");
-            let nodestore = merkle.into_inner();
-            Arc::new(nodestore.try_into()?)
-        };
+        let proposal = NodeStore::new(parent)?;
+        let mutable_nodestore = self
+            .manager
+            .apply_batch(&self.use_parallel, proposal, batch)?;
+        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
+            Arc::new(mutable_nodestore.try_into()?);
         self.manager.add_proposal(immutable.clone());
 
         self.metrics.proposals.increment(1);
@@ -1418,11 +1382,17 @@ mod test {
     #[test]
     fn test_deferred_persist_close_with_high_commit_count() {
         const HIGH_COMMIT_COUNT: NonZeroU64 = nonzero!(1_000_000u64);
+        const MAX_REVISIONS: usize = HIGH_COMMIT_COUNT.get() as usize + 1;
 
         // Set commit count to an arbitrarily high number so persist happens
         // only on shutdown
         let dbcfg = DbConfig::builder()
-            .deferred_persistence_commit_count(HIGH_COMMIT_COUNT)
+            .manager(
+                RevisionManagerConfig::builder()
+                    .max_revisions(MAX_REVISIONS)
+                    .deferred_persistence_commit_count(HIGH_COMMIT_COUNT)
+                    .build(),
+            )
             .build();
 
         let db = TestDb::new_with_config(dbcfg);
@@ -1449,7 +1419,11 @@ mod test {
         const NUM_REVISIONS: u64 = COMMIT_COUNT.get() + 1;
 
         let dbcfg = DbConfig::builder()
-            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .manager(
+                RevisionManagerConfig::builder()
+                    .deferred_persistence_commit_count(COMMIT_COUNT)
+                    .build(),
+            )
             .build();
 
         let db = TestDb::new_with_config(dbcfg);
@@ -1487,7 +1461,11 @@ mod test {
         const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
 
         let dbcfg = DbConfig::builder()
-            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .manager(
+                RevisionManagerConfig::builder()
+                    .deferred_persistence_commit_count(COMMIT_COUNT)
+                    .build(),
+            )
             .build();
 
         let db = TestDb::new_with_config(dbcfg);
@@ -1518,15 +1496,15 @@ mod test {
     fn test_deferred_persistence_root_store() {
         const NUM_COMMITS: usize = 20;
         const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
-        const MAX_IN_MEMORY_REVISIONS: usize = 2;
+        const MAX_REVISIONS: usize = COMMIT_COUNT.get() as usize + 1;
 
         let dbcfg = DbConfig::builder()
             .manager(
                 RevisionManagerConfig::builder()
-                    .max_revisions(MAX_IN_MEMORY_REVISIONS)
+                    .max_revisions(MAX_REVISIONS)
+                    .deferred_persistence_commit_count(COMMIT_COUNT)
                     .build(),
             )
-            .deferred_persistence_commit_count(COMMIT_COUNT)
             .root_store(true)
             .build();
 
@@ -1583,7 +1561,11 @@ mod test {
         const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
 
         let dbcfg = DbConfig::builder()
-            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .manager(
+                RevisionManagerConfig::builder()
+                    .deferred_persistence_commit_count(COMMIT_COUNT)
+                    .build(),
+            )
             .root_store(true)
             .build();
 
