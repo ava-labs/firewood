@@ -306,6 +306,9 @@ struct MultiHeadState {
     max_validators: usize,
     /// Monotonic counter for allocating new chain IDs.
     next_chain_id: ChainId,
+    /// Fork tree tracking fork relationships for safe node reaping.
+    /// Wrapped in Arc for cheap snapshot cloning in `build_can_free`.
+    fork_tree: Arc<ForkTree>,
 }
 ```
 
@@ -674,16 +677,17 @@ fn collect_reapable_revisions(
         return Vec::new(); // Chain already cleaned up
     };
 
-    // Minimum head position among validators on THIS chain
-    let min_pos = state.validators.values()
-        .filter(|v| v.chain == chain_id)
-        .filter_map(|v| chain.revisions.iter().position(|r| Arc::ptr_eq(r, &v.head)))
-        .min()
-        .unwrap_or(0);
-
     let mut collected = Vec::new();
-    let mut reaped = 0;
-    while chain.revisions.len() > self.max_revisions && reaped < min_pos {
+    // Iterate from the front, checking each candidate against all validators
+    // before removing. This is O(V × num_reaped) where num_reaped is typically
+    // 0-2 per commit, avoiding the O(V × n) position scan of the old approach.
+    while chain.revisions.len() > self.max_revisions {
+        let Some(oldest) = chain.revisions.front() else { break };
+        let held_by_validator = state.validators.values()
+            .any(|v| v.chain == chain_id && Arc::ptr_eq(&v.head, oldest));
+        if held_by_validator {
+            break;
+        }
         let Some(oldest) = chain.revisions.pop_front() else { break };
 
         if let Some(hash) = oldest.root_hash().or_default_root_hash() {
@@ -695,7 +699,6 @@ fn collect_reapable_revisions(
             }
         }
         collected.push(oldest);
-        reaped = reaped.wrapping_add(1);
     }
     collected
 }

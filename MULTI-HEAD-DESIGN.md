@@ -333,8 +333,9 @@ triggered after each commit or advance and operates chain-by-chain.
 
 ```text
 For each chain C:
-  min_pos = min position of any validator head on C within C.revisions
-  while C.revisions.len() > max_revisions && reaped < min_pos:
+  while C.revisions.len() > max_revisions:
+    if ANY validator's head == C.revisions.front():
+      break  -- cannot reap past a validator head
     pop oldest revision from C.revisions
     remove from by_hash / hash_to_chain (if no validator head still holds it)
     send to persist_worker.reap()
@@ -395,7 +396,10 @@ During reaping, each deleted node is checked via `can_free(node_fork_id)`:
 
 The `can_free` closure is constructed from a snapshot of the fork tree
 and active fork IDs at commit time, **before** any fork tree mutations
-(removals) that would invalidate `is_ancestor` lookups.
+(removals) that would invalidate `is_ancestor` lookups. The fork tree
+is wrapped in `Arc<ForkTree>`, so snapshots are cheap reference-count
+increments rather than deep clones. Mutations use `Arc::make_mut()` for
+copy-on-write semantics.
 
 #### Safe Leak Strategy
 
@@ -472,6 +476,11 @@ divergent validators the full base cost.
 
 Each validator's root is stored in the header. Updated on every commit or
 advance operation.
+
+When deferred persistence is enabled (`commit_count > 1`), the persist
+worker accumulates committed revisions from all chains in a `Vec` between
+persist cycles. Each cycle persists every accumulated revision, ensuring
+that revisions from different chains are not lost between cycles.
 
 ### 7.2 Crash Recovery
 
