@@ -34,7 +34,7 @@ import (
 	"go/token"
 	"log"
 	"os"
-	"path"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -73,7 +73,7 @@ func main() {
 
 	if dir == "" {
 		if file := os.Getenv("GOFILE"); file != "" {
-			dir = path.Dir(file)
+			dir = filepath.Dir(file)
 			debugf("inferred target directory %s from GOFILE environment variable", dir)
 		}
 	}
