@@ -36,7 +36,6 @@ import (
 	"os"
 	"path"
 	"slices"
-	"sort"
 	"strings"
 
 	"golang.org/x/tools/go/packages"
@@ -108,8 +107,8 @@ func main() {
 
 	for _, pkg := range pkgs {
 		debugf("parsed package %s", pkg.ID)
-		fatalJoinErrors(pkg.Errors, "errors occurred when parsing package %s", pkg.ID)
-		fatalJoinErrors(pkg.TypeErrors, "type errors occured when parsing go source for package %s", pkg.ID)
+		fatalJoinErrorsf(pkg.Errors, "errors occurred when parsing package %s", pkg.ID)
+		fatalJoinErrorsf(pkg.TypeErrors, "type errors occurred when parsing go source for package %s", pkg.ID)
 
 		for _, astFile := range pkg.Syntax {
 			filename := fset.Position(astFile.Pos()).Filename
@@ -133,12 +132,12 @@ func main() {
 	var dupes []string
 	for name, callsites := range cFuncCallSites {
 		if len(callsites) > 1 {
-			sort.Strings(callsites)
+			slices.Sort(callsites)
 			dupes = append(dupes, fmt.Sprintf("  %s called from: %s", name, strings.Join(callsites, ", ")))
 		}
 	}
 	if len(dupes) > 0 {
-		sort.Strings(dupes)
+		slices.Sort(dupes)
 		fatalf("C functions called from multiple Go files:\n%s", strings.Join(dupes, "\n"))
 	}
 
@@ -149,7 +148,7 @@ func main() {
 		}
 
 		filename := fset.Position(r.goFile.Package).Filename
-		if err := r.rewriteFile(fset); err != nil {
+		if err := r.rewriteFile(fset, filename); err != nil {
 			fatalf("failed to rewrite %s: %v", filename, err)
 		}
 
@@ -163,15 +162,15 @@ type fileResult struct {
 	cFuncs []cFunctionCallSite
 }
 
-func (r fileResult) rewriteFile(fset *token.FileSet) error {
-	cDeclPos := fset.Position(r.cDecl.Pos())
-
+func (r fileResult) rewriteFile(fset *token.FileSet, filename string) error {
 	if r.cDecl == nil {
-		debugf("skipping file %s: no cgo declaration found", cDeclPos.Filename)
+		debugf("skipping file %s: no cgo declaration found", filename)
 		return nil
 	}
 
-	originalFile, err := os.ReadFile(cDeclPos.Filename)
+	cDeclPos := fset.Position(r.cDecl.Pos())
+
+	originalFile, err := os.ReadFile(filename)
 	if err != nil {
 		return fmt.Errorf("failed to read original file: %w", err)
 	}
@@ -179,9 +178,9 @@ func (r fileResult) rewriteFile(fset *token.FileSet) error {
 	lines := strings.SplitAfter(string(originalFile), "\n")
 
 	declLine := lines[cDeclPos.Line-1]
-	debugf("processing file %s: found cgo declaration at line %d: %s", cDeclPos.Filename, cDeclPos.Line, declLine)
+	debugf("processing file %s: found cgo declaration at line %d: %s", filename, cDeclPos.Line, declLine)
 	if !strings.Contains(declLine, "import \"C\"") {
-		return fmt.Errorf("unexpectedly did not find import \"C\" in line %d of %s", cDeclPos.Line, cDeclPos.Filename)
+		return fmt.Errorf("unexpectedly did not find import \"C\" in line %d of %s", cDeclPos.Line, filename)
 	}
 
 	nDeleted := 0
@@ -207,7 +206,10 @@ func (r fileResult) rewriteFile(fset *token.FileSet) error {
 
 	lines = slices.Insert(lines, cDeclPos.Line-1-nDeleted, injectedComments...)
 
-	return os.WriteFile(cDeclPos.Filename, []byte(strings.Join(lines, "")), 0o644)
+	// #nosec G306 - permissions is correct for source files
+	// #nosec G703 - path is safe because it is controlled by the build system
+	// and not user input
+	return os.WriteFile(filename, []byte(strings.Join(lines, "")), 0o644)
 }
 
 func isPragmaComment(s string) bool {
@@ -219,7 +221,7 @@ func isPragmaComment(s string) bool {
 	return false
 }
 
-func fatalJoinErrors[T error](errs []T, format string, args ...any) {
+func fatalJoinErrorsf[T error](errs []T, format string, args ...any) {
 	if err := joinErrors(errs); err != nil {
 		fatalf("%s: %v", fmt.Sprintf(format, args...), err)
 	}
@@ -292,10 +294,9 @@ func (v *fileVisitor) Visit(node ast.Node) ast.Visitor {
 		v.cFuncs = append(v.cFuncs, cFunctionCallSite{
 			name:  name,
 			ident: ident,
-			call:  n,
 		})
 	default:
-		break
+		// do nothing
 	}
 
 	return v
@@ -306,7 +307,6 @@ type cFunctionCallSite struct {
 	// ident will have the prefix `_Cfunc_` followed by the name of the C
 	// function being called, e.g., `_Cfunc_fwd_get_from_revision`.
 	ident *ast.Ident
-	call  *ast.CallExpr
 }
 
 func (c *cFunctionCallSite) CallSite(fset *token.FileSet) string {
