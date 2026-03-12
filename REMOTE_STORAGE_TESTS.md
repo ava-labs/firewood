@@ -109,26 +109,6 @@ interface).
 | `TestCreateProposalReturnsWitness` | Raw gRPC `CreateProposal`/`CommitProposal` | No — tests server RPC directly |
 | `TestDeleteOperation` | `Client.Update` with `Delete` | No — `Client`-specific |
 
-### `ffi/remote/cache_test.go` — Read cache (12 tests)
-
-These test the `readCache` and its integration with `RemoteDB`. They are
-remote-internal implementation details.
-
-| Test | Portable? |
-| --- | --- |
-| `TestCacheLookupMiss` | No — tests `readCache` directly |
-| `TestCacheStoreAndLookup` | No |
-| `TestCacheNilValue` | No |
-| `TestCacheClear` | No |
-| `TestCacheEviction` | No |
-| `TestCacheInvalidateKey` | No |
-| `TestCacheInvalidatePrefix` | No |
-| `TestCacheInvalidateBatch` | No |
-| `TestCacheInvalidationOnUpdate` | No — tests cache clearing on `RemoteDB.Update` |
-| `TestCacheInvalidationOnBootstrap` | No — tests cache clearing on bootstrap |
-| `TestCacheInvalidationOnCommit` | No — tests cache invalidation on commit |
-| `TestCacheConcurrentGet` | No |
-
 ### `ffi/remote/concurrency_test.go` — Thread safety (4 tests)
 
 These test concurrency properties of `RemoteDB` specifically.
@@ -140,13 +120,7 @@ These test concurrency properties of `RemoteDB` specifically.
 | `TestConcurrentGetDuringClose` | No |
 | `TestConcurrentGetAndRoot` | No |
 
-### `ffi/remote/eviction_test.go` — Eviction policies (15 tests)
-
-Pure unit tests for the `evictionStore` implementations (LRU, Clock,
-SampleK-LRU, Random). No database involvement; not relevant to interface
-portability.
-
-### `ffi/remote/benchmark_test.go` — Performance benchmarks (13 benchmarks)
+### `ffi/remote/benchmark_test.go` — Performance benchmarks
 
 Remote-specific benchmarks measuring gRPC overhead, proof verification, witness
 generation, and caching. Not candidates for interface migration.
@@ -370,7 +344,5 @@ compatible" sections now that `DBRevision` exists on the `DB` interface.
 | **ffi/ total** | **76** | **28** | **11** | **37** |
 | `ffi/remote/db_test.go` | 32 | — | — | — |
 | `ffi/remote/remote_test.go` | 6 | — | — | — |
-| `ffi/remote/cache_test.go` | 12 | — | — | — |
 | `ffi/remote/concurrency_test.go` | 4 | — | — | — |
-| `ffi/remote/eviction_test.go` | 15 | — | — | — |
-| **ffi/remote/ total** | **69** | — | — | — |
+| **ffi/remote/ total** | **42** | — | — | — |

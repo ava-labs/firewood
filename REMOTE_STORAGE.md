@@ -49,26 +49,25 @@ Implements the same three interfaces over gRPC with cryptographic verification:
 - **`RemoteDB`** wraps a `*Client`. Created via `NewRemoteDB(ctx, addr,
   trustedRoot, depth)` which dials, bootstraps (fetches + verifies truncated
   trie), and returns `ffi.DB`.
-- **`remoteProposal`** holds `proposalID`, `root`, `newTrie` (reference-counted
-  verified truncated trie from witness), gRPC client, `parentTrie` pointer (for
-  Commit to swap), `committedTrie` (reference-counted, for chained witness
-  verification), `depth`, `cache`, `mu` (points to Client's RWMutex), and
-  `expectedCumulativeOps`.
-  - `Commit` sends `CommitProposal` RPC then replaces the parent's trie pointer
-    with the verified `newTrie`. Invalidates affected cache keys via
-    `expectedCumulativeOps`.
-  - `Drop` releases `newTrie` and `committedTrie` references, then sends
-    `DropProposal` RPC. Suppresses gRPC `NotFound` errors since they indicate
-    the server already cleaned up (e.g., via GC or a prior Drop).
+- **`remoteProposal`** holds `proposalID`, `root`, `newTrie`
+  (`*ffi.TruncatedTrie` from witness verification), gRPC client, `parentRoot`
+  pointer (for Commit to propagate the new root up), `witness`
+  (`*ffi.WitnessProof`, kept alive for cache invalidation at commit time),
+  `rc` (`*ffi.RemoteClient`, for `CommitTrie`/`VerifyWitness`), `depth`, `mu`
+  (points to Client's RWMutex), and `expectedCumulativeOps`.
+  - `Commit` sends `CommitProposal` RPC then calls `rc.CommitTrie(newTrie,
+    witness)` which atomically swaps the internal trie, invalidates affected
+    cache entries via the witness's batch ops, and returns the new root hash.
+    Updates `*parentRoot` to propagate the root up the chain.
+  - `Drop` frees `newTrie` and `witness`, then sends `DropProposal` RPC.
+    Suppresses gRPC `NotFound` errors since they indicate the server already
+    cleaned up (e.g., via GC or a prior Drop).
   - `Get` sends `GetValue` RPC with the proposal's root hash, verifies the
     single-key Merkle proof client-side.
   - `Iter` sends `IterBatch` RPC, returns a `remoteIterator`.
   - `Propose` sends `CreateProposal` RPC with `parent_proposal_id` set,
-    verifies witness against `committedTrie`, returns child `remoteProposal`.
-- **`refCountedTrie`** wraps `*ffi.TruncatedTrie` with atomic reference
-  counting. The underlying trie is freed when the last reference is released.
-  Used by both `newTrie` and `committedTrie` to allow safe sharing of trie
-  handles between parent and child proposals without dangling pointers.
+    verifies witness against `rc` (the committed trie inside the
+    `RemoteClient`), returns child `remoteProposal`.
 - **`remoteIterator`** holds current batch of `KeyValuePair` from the server,
   cursor index, `hasMore` flag, gRPC client, caller's `context.Context`, and
   verified proposal root hash.
@@ -292,10 +291,10 @@ For chained proposals (p2 on top of p1), we solve this by:
   revision) to the current proposal. For p2, `cumulativeOps = p1_ops ++
   p2_ops`. The witness is generated as `GenerateWitness(committedRoot,
   cumulativeOps, p2_newRoot, depth)`.
-- **Client side**: verifying all witnesses against the `committedTrie` (the
-  client's trie at the committed revision), not against the parent proposal's
-  trie. Each `remoteProposal` carries a `committedTrie` reference inherited
-  from its parent.
+- **Client side**: verifying all witnesses against the committed trie inside
+  the `RemoteClient` handle, not against the parent proposal's trie. Each
+  `remoteProposal` carries an `rc *ffi.RemoteClient` reference for this
+  purpose.
 
 ### 2. Interface in `ffi`, adapter in `remote`
 
@@ -323,16 +322,17 @@ server at a time. This simplifies several aspects of the design:
 - **Proposal IDs**: The server uses a monotonically incrementing `uint64`
   counter. Multiple clients could create conflicting proposals from the same
   base revision, leading to commit failures or undefined state.
-- **Proposal chain pointer model**: `remoteProposal` uses a pointer-to-pointer
-  chain (`parentTrie *(*refCountedTrie)`) for zero-copy trie propagation on
-  commit. This requires linear chains committed leaf-to-root — a constraint
-  naturally satisfied when one client controls all proposal ordering.
+- **Proposal chain pointer model**: `remoteProposal` uses a `parentRoot
+  *ffi.Hash` pointer so that committing a child proposal propagates the new
+  root hash up to the parent. This requires linear chains committed
+  leaf-to-root — a constraint naturally satisfied when one client controls all
+  proposal ordering.
 - **GC is for crash recovery, not isolation**: `WithProposalTTL` exists to
   reclaim leaked proposals if the single client crashes between `CreateProposal`
   and `Commit`/`Drop`. It is not designed to isolate concurrent clients.
-- **Cache coherence**: The client-side read cache assumes it is the only writer.
-  Multiple clients writing through the same server would cause stale cache
-  entries with no cross-client invalidation.
+- **Cache coherence**: The Rust-side read cache (inside `RemoteClientHandle`)
+  assumes it is the only writer. Multiple clients writing through the same
+  server would cause stale cache entries with no cross-client invalidation.
 - **`Client.mu` serialization**: The client's `RWMutex` serializes mutations
   (`Update`, `Commit`, `Bootstrap`, `Close`) against reads (`Get`, `Root`).
   This works because there is exactly one client; a multi-client system would
@@ -360,26 +360,14 @@ cd ffi/remote && go vet ./...
 # LocalDB tests
 cd ffi && go test -v -count=1 -run "TestLocalDB|TestNewLocalDB" ./...
 
-# RemoteDB tests (all, including cache)
+# RemoteDB tests (all)
 cd ffi/remote && go test -v -count=1 ./...
-
-# Cache tests only
-cd ffi/remote && go test -run TestCache -v -count=1
-
-# Eviction policy tests
-cd ffi/remote && go test -run "TestEviction|TestLRU|TestClock|TestSampleK|TestRandom" -v -count=1
-
-# Cache + eviction tests with race detector
-cd ffi/remote && go test -race -run "TestCache|TestEviction" -count=1
 
 # Iterator verification tests (tampered, missing proof, corrupted, multi-batch)
 cd ffi/remote && go test -run "TestRemoteDBProposalIter" -v -count=1
 
 # Cache benchmark (NoCache vs per-policy Cached)
 cd ffi/remote && go test -bench BenchmarkGetCached -benchtime=5s -count=1
-
-# Eviction throughput benchmark per policy
-cd ffi/remote && go test -bench BenchmarkCacheEviction -benchtime=5s -count=1
 ```
 
 ## File Reference
@@ -388,24 +376,17 @@ cd ffi/remote && go test -bench BenchmarkCacheEviction -benchtime=5s -count=1
 | ------ | ------ |
 | `ffi/db.go` | **NEW** — `DB`, `DBProposal`, `DBRevision`, `DBIterator` interfaces + `LocalDB` adapter |
 | `ffi/db_test.go` | **NEW** — LocalDB interface tests (incl. revision) |
-| `ffi/remote/db.go` | **NEW** — `RemoteDB`, `remoteProposal`, `refCountedTrie`, `remoteIterator` |
+| `ffi/remote/db.go` | **NEW** — `RemoteDB`, `remoteProposal`, `remoteIterator` |
 | `ffi/remote/db_test.go` | **NEW** — RemoteDB interface tests |
-| `ffi/remote/cache.go` | **NEW** — `readCache` wrapper delegating to `evictionStore` backend |
-| `ffi/remote/cache_test.go` | **NEW** — Cache unit tests + integration tests |
-| `ffi/remote/eviction.go` | **NEW** — `evictionStore` interface, `EvictionPolicy` enum, factory |
-| `ffi/remote/eviction_lru.go` | **NEW** — LRU eviction via doubly-linked list + map |
-| `ffi/remote/eviction_random.go` | **NEW** — Random eviction via dense key slice + map |
-| `ffi/remote/eviction_clock.go` | **NEW** — Clock (second-chance) eviction via circular list |
-| `ffi/remote/eviction_samplek.go` | **NEW** — Sample-K-LRU eviction (Redis-style approximated LRU) |
-| `ffi/remote/eviction_test.go` | **NEW** — Parameterized tests across all 4 eviction policies |
+| `ffi/remote_client.go` | **NEW** — Go wrapper for `RemoteClientHandle` (cache + trie in Rust) |
 | `ffi/remote/server.go` | **MODIFIED** — `DropProposal`, `CommitProposal`, `IterBatch` handlers, chained proposal support, per-proposal mutex, gRPC status codes |
 | `ffi/remote/proto/remote.proto` | **MODIFIED** — new RPCs and messages |
 | `ffi/remote/proto/remote.pb.go` | **REGENERATED** |
 | `ffi/remote/proto/remote_grpc.pb.go` | **REGENERATED** |
-| `ffi/src/remote.rs` | **MODIFIED** — `fwd_get_with_proof` uses `get_root` |
+| `ffi/src/remote.rs` | **MODIFIED** — `fwd_get_with_proof` uses `get_root`; added `RemoteClientHandle` + 7 FFI functions |
 | `ffi/remote/remote_test.go` | **MODIFIED** — runtime hash algorithm detection in `newTestDB` |
-| `ffi/remote/client.go` | **MODIFIED** — `ClientOption`, `WithCacheSize`, `WithCache`, cache integration in `Get`/`Update`/`Bootstrap`/`Close`/`Propose` |
-| `ffi/remote/benchmark_test.go` | **MODIFIED** — `setupRemoteDB` accepts options, `BenchmarkGetCached` per policy, `BenchmarkCacheEviction` |
+| `ffi/remote/client.go` | **MODIFIED** — `ClientOption`, `WithCacheSize`, `WithCache`; uses `*ffi.RemoteClient` for cache + trie |
+| `ffi/remote/benchmark_test.go` | **MODIFIED** — `setupRemoteDB` accepts options, `BenchmarkGetCached` per policy |
 | `ffi/src/proofs/range.rs` | **MODIFIED** — added `fwd_range_proof_verify_and_extract` (verify + return KV pairs) |
 | `ffi/proofs.go` | **MODIFIED** — added `KeyValue` struct, `VerifyAndExtractRangeProof()`, `bytesPresent` Maybe helper |
 | `ffi/firewood.h` | **AUTO-UPDATED** — new C function declaration for `fwd_range_proof_verify_and_extract` |
@@ -423,7 +404,7 @@ cd ffi/remote && go test -bench BenchmarkCacheEviction -benchtime=5s -count=1
 | `ffi/single_key_proof.go` | `GetWithProof`, `VerifySingleKeyProof` |
 | `ffi/truncated_trie.go` | `TruncatedTrie` — `Root`, `RootHash`, `VerifyRootHash`, `VerifyWitness`, `MarshalBinary`, `UnmarshalBinary`, `Free`; `Database.GenerateWitness`, `Database.CreateTruncatedTrie` |
 | `ffi/witness_proof.go` | `WitnessProof` — `Free`, `MarshalBinary`, `UnmarshalBinary` |
-| `ffi/remote/client.go` | `Client` — `Get`, `Update`, `Bootstrap`, `Propose`, `Revision`, `Root`, `Close`, `ClientOption`, `WithCacheSize`, `WithCache` |
+| `ffi/remote/client.go` | `Client` — `Get`, `Update`, `Bootstrap`, `Propose`, `Revision`, `Root`, `Close`, `ClientOption`, `WithCacheSize`, `WithCache`; uses `*ffi.RemoteClient` |
 
 ### `ffi/remote/remote_test.go` — Runtime hash algorithm detection
 
@@ -486,173 +467,80 @@ Benchmark results show Remote `Get()` is ~28× slower than Local (~254µs vs
 costs for repeated reads. Blockchain state access is highly skewed (hot accounts,
 popular contracts), so hit rates should be good.
 
-Benchmark results show a **~3,400–3,700× speedup** for cached reads across all
-eviction policies:
+### Architecture: Rust `RemoteClientHandle`
 
-| Variant | ns/op | Speedup vs NoCache |
-| --------- | ------: | -------------------: |
-| NoCache | 247,716 | — |
-| LRU | 73 | 3,393× |
-| Random | 66 | 3,753× |
-| Clock | 68 | 3,643× |
-| SampleKLRU | 68 | 3,643× |
+The read cache lives entirely in Rust, inside a `RemoteClientHandle` that owns
+both the committed `TruncatedTrie` and an optional `ReadCache`. This avoids
+reimplementing cache data structures in Go and keeps all trie + cache state
+behind a single FFI handle.
 
-Eviction throughput (inserting into a full 1,000-entry cache):
-
-| Policy | ns/op |
-| -------- | ------: |
-| LRU | 182 |
-| Clock | 194 |
-| Random | 210 |
-| SampleKLRU | 388 |
-
-### Why Not Reuse Firewood's Rust Cache?
-
-Firewood's Rust-side cache (`storage/src/linear/filebacked.rs`) caches **trie
-nodes** keyed by disk offset (`LinearAddress → Arc<Node>`). The Go client needs
-**key-value results** (`[]byte → []byte`). These are fundamentally different
-abstraction levels — the Rust cache accelerates node deserialization from disk,
-while the Go cache needs to skip the entire RPC + proof verification path.
-
-### Caching Scheme
-
-Each `Get()` call that results in a verified response (whether the key exists
-or not) produces a cache entry:
-
-```go
-key ([]byte) → cacheEntry { value []byte, found bool }
-```
-
-- `found=true, value=<data>`: Key exists, value is the verified data.
-- `found=true, value=[]byte{}`: Key exists with an empty value.
-- `found=false, value=nil`: Key verified to not exist (exclusion proof was
-  validated). Equally expensive to prove, so worth caching.
-
-### Cache Lifetime and Invalidation
-
-**Selective invalidation** on `Update()` and `Commit()`:
-
-The client already knows every `BatchOp` in each write. For each op:
-
-| Op Type | Invalidation Action |
-| --------- | ------------------- |
-| `Put(key, val)` | Delete `key` from cache |
-| `Delete(key)` | Delete `key` from cache |
-| `PrefixDelete(prefix)` | Delete all cached keys with that prefix |
-
-**Full invalidation** on `Bootstrap()` and `Close()`:
-
-These replace the entire trie state. No batch ops to examine — clear everything.
-
-### Architecture: Pluggable Eviction Policies
-
-The cache uses a pluggable `evictionStore` interface to decouple the caching
-logic (`readCache`) from the eviction strategy. This was introduced to replace
-the original simple admission control (which silently dropped new entries when
-the cache was full) with proper eviction — ensuring the cache can always accept
-new entries by evicting stale ones.
-
-#### `evictionStore` interface (`eviction.go`)
-
-```go
-type evictionStore interface {
-    get(key string) (cacheEntry, bool) // lookup + update access metadata
-    put(key string, entry cacheEntry)  // store + evict if at capacity
-    del(key string) bool               // remove specific key
-    keys(fn func(key string))          // iterate all keys (for prefix scan)
-    clear()
-    len() int
+```rust
+// ffi/src/remote.rs
+pub struct RemoteClientHandle {
+    trie: RwLock<TruncatedTrie>,   // committed trie (interior mutability)
+    cache: Option<ReadCache>,       // ReadCache has internal Mutex
 }
 ```
 
-#### `EvictionPolicy` enum (`eviction.go`)
+The `ReadCache` (in `firewood/src/remote/cache.rs`) supports 4 eviction
+policies: LRU, Random, Clock, and Sample-K-LRU. It uses a memory budget
+(bytes) rather than entry count.
+
+#### FFI Functions
+
+7 C-ABI functions expose the handle to Go:
+
+| Function | Description |
+| --- | --- |
+| `fwd_create_remote_client` | Create handle with optional cache (max bytes + policy) |
+| `fwd_free_remote_client` | Drop handle and all owned resources |
+| `fwd_remote_client_bootstrap` | Deserialize trie, verify root hash, clear cache |
+| `fwd_remote_client_cache_lookup` | Cache lookup → Miss / HitPresent / HitAbsent |
+| `fwd_remote_client_verify_get` | Verify single-key proof against committed root, cache result |
+| `fwd_remote_client_verify_witness` | Verify witness against committed trie, return new trie handle |
+| `fwd_remote_client_commit_trie` | Swap committed trie, invalidate cache via witness batch ops |
+
+#### Go Wrapper (`ffi/remote_client.go`)
 
 ```go
-type EvictionPolicy int
+type RemoteClient struct {
+    handle  *C.RemoteClientHandle
+    cleanup runtime.Cleanup
+}
 
+type EvictionPolicy int
 const (
-    LRU            EvictionPolicy = iota // Doubly-linked list, true LRU
-    RandomEviction                       // Uniform random eviction
-    Clock                                // Second-chance / clock algorithm
-    SampleKLRU                           // Sample K random, evict oldest access
+    EvictionLRU     EvictionPolicy = 0
+    EvictionRandom  EvictionPolicy = 1
+    EvictionClock   EvictionPolicy = 2
+    EvictionSampleK EvictionPolicy = 3
 )
 ```
 
-Factory function `newEvictionStore(policy, maxSize)` creates the appropriate
-backend.
+Methods: `NewRemoteClient`, `Bootstrap`, `CacheLookup`, `VerifyGet`,
+`VerifyWitness`, `CommitTrie`, `Free`.
 
-#### Policy 1: LRU (`eviction_lru.go`)
+### Caching Scheme
 
-**Data structures**: `map[string]*lruNode` + doubly-linked list with sentinel
-head/tail nodes.
+Each verified `Get()` call (whether the key exists or not) produces a cache
+entry in the Rust `ReadCache`:
 
-- `get`: map lookup, move node to front. O(1).
-- `put`: if exists, update + move to front. If new at capacity, evict tail
-  (least recently used), insert at front. O(1).
-- `del`: map lookup, unlink from list. O(1).
-- Sentinels eliminate nil checks in link/unlink operations.
+- Key exists → cached with value (positive result)
+- Key does not exist → cached as absent (exclusion proof was validated)
 
-**Best for**: Workloads with strong temporal locality (blockchain state access
-with hot accounts). Recommended default.
+Cache insertion happens inside `fwd_remote_client_verify_get` after successful
+proof verification. Cache invalidation happens inside
+`fwd_remote_client_commit_trie` using the witness's `batch_ops` field
+(`ClientOp::Put` / `ClientOp::Delete`).
 
-#### Policy 2: Random (`eviction_random.go`)
+### Cache Lifetime and Invalidation
 
-**Data structures**: `map[string]*randomEntry` + dense `[]string` order slice +
-local `*rand.Rand` (seeded from `math/rand/v2`).
-
-- `get`: map lookup only (no metadata to update). O(1).
-- `put`: if exists, update in place. If new at capacity, pick random index,
-  evict that entry, swap-with-last to maintain density. O(1).
-- `del`: swap-with-last in order slice + update swapped entry's index. O(1).
-
-**Best for**: Uniform access patterns or when simplicity matters.
-
-#### Policy 3: Clock (`eviction_clock.go`)
-
-**Data structures**: `map[string]*clockNode` + circular doubly-linked list with
-sentinel + hand pointer.
-
-- `get`: map lookup, set `referenced = true`. O(1).
-- `put`: if exists, update + set referenced. If new at capacity, sweep from
-  hand: if referenced, clear bit and advance; if unreferenced, evict. Insert
-  new node before sentinel. Amortized O(1).
-- `del`: if node == hand, advance hand first. Unlink + map delete. O(1).
-
-**Best for**: Approximating LRU with lower per-access overhead (no list
-reordering on every get).
-
-#### Policy 4: Sample-K-LRU (`eviction_samplek.go`)
-
-**Data structures**: `map[string]*sampleEntry` with monotonic `uint64` access
-counter + dense `[]string` order slice + local `*rand.Rand`. Default K=5
-(following Redis).
-
-- `get`: map lookup, increment counter, set `lastAccess`. O(1).
-- `put`: if exists, update + touch. If new at capacity, sample K random
-  distinct entries, evict the one with smallest `lastAccess`. O(K).
-- `del`: swap-with-last in order slice. O(1).
-
-**Best for**: Large caches where true LRU's linked-list overhead matters.
-Approximates LRU well with K=5.
-
-### Concurrency Model
-
-Each eviction store uses its own `sync.Mutex` internally. This is necessary
-because `Get()` calls `lookup`/`store` on the cache under the client's `RLock`,
-allowing concurrent cache access from multiple goroutines. The critical sections
-are O(1) (no I/O), so contention is minimal.
-
-- **`Get()` (RLock)**: `backend.get()` for lookup, `backend.put()` to cache
-  verified results. Both acquire the store's internal mutex briefly.
-- **`Update()` / `Commit()` (write Lock)**: Selective invalidation via two-pass
-  `invalidatePrefix` (collect keys, then delete). Exclusive access guaranteed by
-  the client's write lock.
-- **`Bootstrap()` / `Close()` (write Lock)**: `backend.clear()`.
-
-The two-pass `invalidatePrefix` pattern (collect matching keys via `keys()`,
-then delete via `del()`) is safe because invalidation only runs under the
-client's write lock, so no concurrent `store`/`lookup` calls add new matching
-keys between passes.
+| Event | Cache Action |
+| --- | --- |
+| `Bootstrap()` | Full clear (trie replaced) |
+| `Get()` (verified) | Store result in cache |
+| `CommitTrie()` | Invalidate keys from witness batch ops |
+| `Free()` | Cache dropped with handle |
 
 ### API
 
@@ -663,146 +551,43 @@ The cache is opt-in via functional options:
 rdb, err := NewRemoteDB(ctx, addr, root, depth)
 
 // With cache (LRU default via WithCacheSize):
-rdb, err := NewRemoteDB(ctx, addr, root, depth, WithCacheSize(10_000))
+rdb, err := NewRemoteDB(ctx, addr, root, depth, WithCacheSize(32<<20))
 
 // With explicit eviction policy:
 rdb, err := NewRemoteDB(ctx, addr, root, depth,
-    WithCache(10_000, SampleKLRU))
+    WithCache(32<<20, ffi.EvictionSampleK))
 
 // Also works with NewClient directly:
-client, err := NewClient(addr, depth, WithCache(10_000, Clock))
+client, err := NewClient(addr, depth, WithCache(32<<20, ffi.EvictionClock))
 ```
 
-`WithCacheSize(n)` delegates to `WithCache(n, LRU)` for backward compatibility.
+`WithCacheSize(n)` delegates to `WithCache(n, ffi.EvictionLRU)`.
 
-### Files Created
-
-#### `ffi/remote/eviction.go` — Interface + enum + factory
-
-- **`evictionStore`** interface: `get`, `put`, `del`, `keys`, `clear`, `len`.
-- **`EvictionPolicy`** enum: `LRU`, `RandomEviction`, `Clock`, `SampleKLRU`.
-- **`newEvictionStore(policy, maxSize)`** — factory returning the concrete store.
-
-#### `ffi/remote/eviction_lru.go` — LRU implementation
-
-- **`lruNode`** struct: `key`, `entry`, `prev`, `next` pointers.
-- **`lruStore`** struct: `mu sync.Mutex`, `items map`, `head`/`tail` sentinels,
-  `maxSize`.
-- All operations O(1) via doubly-linked list with sentinel nodes.
-
-#### `ffi/remote/eviction_random.go` — Random implementation
-
-- **`randomEntry`** struct: `entry`, `index` (position in order slice).
-- **`randomStore`** struct: `mu sync.Mutex`, `items map`, `order []string`,
-  `maxSize`, `rng *rand.Rand`.
-- O(1) eviction via random index selection + swap-with-last deletion.
-
-#### `ffi/remote/eviction_clock.go` — Clock implementation
-
-- **`clockNode`** struct: `key`, `entry`, `referenced bool`, `prev`/`next`.
-- **`clockStore`** struct: `mu sync.Mutex`, `items map`, `ring` sentinel,
-  `hand` pointer, `maxSize`.
-- Amortized O(1) eviction via clock hand sweep.
-
-#### `ffi/remote/eviction_samplek.go` — Sample-K-LRU implementation
-
-- **`sampleEntry`** struct: `entry`, `lastAccess uint64`, `index`.
-- **`sampleKLRUStore`** struct: `mu sync.Mutex`, `items map`, `order []string`,
-  `counter uint64`, `maxSize`, `k`, `rng *rand.Rand`.
-- O(K) eviction by sampling K random entries and evicting the oldest.
-
-#### `ffi/remote/cache.go` — readCache wrapper
-
-- **`cacheEntry`** struct: `value []byte`, `found bool`.
-- **`readCache`** struct: `backend evictionStore`.
-- **`newReadCache(maxSize int, policy EvictionPolicy)`** — constructor.
-- **`lookup(key []byte)`** — delegates to `backend.get()`.
-- **`store(key []byte, entry cacheEntry)`** — delegates to `backend.put()`.
-- **`invalidateKey(key []byte)`** — delegates to `backend.del()`.
-- **`invalidatePrefix(prefix []byte)`** — two-pass: collect matching keys via
-  `backend.keys()`, then delete via `backend.del()`. O(cache size) per call,
-  but `PrefixDelete` is rare in practice.
-- **`invalidateBatch(ops []ffi.BatchOp)`** — iterates ops, dispatches to
-  `invalidateKey` or `invalidatePrefix` based on op type.
-- **`clear()`** — delegates to `backend.clear()`.
-- **`len()`** — delegates to `backend.len()`.
-
-#### `ffi/remote/cache_test.go` — Unit and integration tests
-
-Unit tests (pure `readCache`, no DB):
-
-- `TestCacheLookupMiss`
-- `TestCacheStoreAndLookup`
-- `TestCacheNilValue` (exclusion proof cached)
-- `TestCacheClear`
-- `TestCacheEviction` (verifies new entry survives, len == maxSize)
-- `TestCacheInvalidateKey`
-- `TestCacheInvalidatePrefix`
-- `TestCacheInvalidateBatch`
-
-Integration tests (with DB + gRPC):
-
-- `TestCacheInvalidationOnUpdate` — selective: untouched keys survive
-- `TestCacheInvalidationOnBootstrap` — full clear
-- `TestCacheInvalidationOnCommit` — selective via proposal ops
-- `TestCacheConcurrentGet` — 20 goroutines × 10 reads each, race-safe
-
-#### `ffi/remote/eviction_test.go` — Eviction policy tests
-
-Parameterized tests via `forEachPolicy` helper (run across all 4 policies):
-
-- `TestEvictionStore_GetMiss`
-- `TestEvictionStore_PutAndGet`
-- `TestEvictionStore_PutOverwrite` — len stays 1
-- `TestEvictionStore_Del` / `TestEvictionStore_DelMissing`
-- `TestEvictionStore_Clear`
-- `TestEvictionStore_Eviction` — put maxSize+2, len ≤ maxSize
-- `TestEvictionStore_EvictionDoesNotLoseNewEntry` — new entry survives eviction
-- `TestEvictionStore_Keys` — visits all entries exactly once
-- `TestEvictionStore_DelThenInsert` — delete + insert doesn't trigger eviction
-
-Policy-specific tests:
-
-- `TestLRUStore_EvictsLeastRecent` — touch changes eviction order
-- `TestLRUStore_EvictsOldestWithoutTouch` — oldest inserted is evicted
-- `TestClockStore_EvictsUnreferenced` — unreferenced entries evicted first
-- `TestSampleKLRU_EvictsOldAccess` — with K>>n, approximates true LRU
-- `TestRandomStore_EvictsOne` — exactly one entry evicted, new entry present
-
-### Files Modified
+### Files Modified for Cache Integration
 
 #### `ffi/remote/client.go`
 
-- Added **`ClientOption`** type (`func(*Client)`) and **`WithCacheSize`**
-  constructor option (delegates to `WithCache` with `LRU`).
-- Added **`WithCache(maxEntries int, policy EvictionPolicy)`** — explicit
-  policy selection.
-- Added `cache *readCache` field to **`Client`** struct (nil when disabled).
-- **`NewClient`** now accepts `...ClientOption`.
-- **`Get()`**: Cache lookup before RPC; cache store after successful proof
-  verification.
-- **`Bootstrap()`**: `cache.clear()` after trie replacement.
-- **`Update()`**: `cache.invalidateBatch(ops)` after trie swap.
-- **`Propose()`**: passes `cache` to `remoteProposal`.
-- **`Close()`**: `cache.clear()` before connection close.
+- **`Client`** struct uses `*ffi.RemoteClient` (owns trie + cache) + `root
+  ffi.Hash` (cached root set by bootstrap/commit).
+- **`ClientOption`** configures `clientConfig` (max bytes, policy, sample K).
+- **`Get()`**: `rc.CacheLookup(key)` → miss → gRPC → `rc.VerifyGet(key,
+  value, proof)`.
+- **`Update()`**: unmarshal witness → `rc.VerifyWitness` → gRPC commit →
+  `rc.CommitTrie(newTrie, witness)` → `witness.Free()`.
+- **`Bootstrap()`**: `rc.Bootstrap(trieData, hash)` → clears cache internally.
+- **`Close()`**: `rc.Free()`.
 
 #### `ffi/remote/db.go`
 
-- **`NewRemoteDB`** accepts `...ClientOption` and forwards to `Client`.
-- **`remoteProposal`** has new `cache *readCache` field.
-- **`Commit()`**: `cache.invalidateBatch(p.expectedCumulativeOps)` after trie
-  swap. Uses `expectedCumulativeOps` (already tracked) which includes all ops
-  from the chain root to this proposal — exactly the set of keys that may have
-  changed.
-- **Chained `Propose()`**: propagates `cache` to child `remoteProposal`.
+- **`remoteProposal`** stores `witness *ffi.WitnessProof` + `rc
+  *ffi.RemoteClient` (for `CommitTrie`).
+- **`Commit()`**: `rc.CommitTrie(newTrie, witness)` → invalidates cache.
+- **`NewRemoteDB`** creates `ffi.RemoteClient` from options.
 
 #### `ffi/remote/benchmark_test.go`
 
-- **`setupRemoteDB`** accepts `...ClientOption` and forwards to `NewRemoteDB`.
-- **`BenchmarkGetCached`**: `Cached` sub-bench now parameterized across all 4
-  eviction policies using `WithCache(10_000, policy)`.
-- Added **`BenchmarkCacheEviction`**: measures eviction throughput per policy
-  at capacity (1,000-entry cache with continuous insertions).
+- **`BenchmarkGetCached`**: Parameterized across all 4 eviction policies using
+  `WithCache(32<<20, policy)`.
 
 ## Range Proof Verification for Remote Iterator
 
@@ -1186,7 +971,7 @@ func (c *Client) Revision(root ffi.Hash) ffi.DBRevision {
 
 **No changes to**: proto files (no new RPCs/messages — reuses existing
 `IterBatch` and `GetValue` RPCs), `ffi/revision.go`, `ffi/firewood.go`,
-`ffi/remote/cache.go`, `ffi/proofs.go`, Rust code.
+`ffi/proofs.go`, Rust code.
 
 ### Verification Results
 
@@ -1202,18 +987,17 @@ func (c *Client) Revision(root ffi.Hash) ffi.DBRevision {
 This section documents fixes for several concurrency and error-handling issues
 identified during a bug review of the remote storage feature.
 
-### Reference-counted trie handles (Bug 1 fix)
+### Trie ownership moved to Rust (Bug 1 fix)
 
 **Problem**: `Update()` frees the old trie and replaces it, but outstanding
 `remoteProposal` objects hold a raw `committedTrie` pointer to the old trie.
 After `Update()`, the proposal's `committedTrie` dangles.
 
-**Fix**: Introduced `refCountedTrie` (`db.go`) — wraps `*ffi.TruncatedTrie`
-with `atomic.Int32` reference counting. The underlying trie is freed only when
-the last reference is released. Both `newTrie` and `committedTrie` on
-`remoteProposal` use `refCountedTrie`. When a child proposal is created,
-`committedTrie.acquire()` increments the refcount; `Commit()` and `Drop()`
-call `release()`. This eliminates dangling pointers without copying.
+**Fix**: The committed trie is now owned by the Rust `RemoteClientHandle`
+(behind a `parking_lot::RwLock`). Proposals hold only a `*ffi.TruncatedTrie`
+for their verified new state and an `*ffi.RemoteClient` reference for witness
+verification and commit. The `RemoteClientHandle` atomically swaps its internal
+trie during `CommitTrie`, so there are no dangling trie pointers.
 
 ### Iterator uses caller's context (Bug 3 fix)
 
@@ -1300,22 +1084,21 @@ proposal exists in the active proposals cache.
 
 3. **Concurrency contract (single-client)**: The system assumes one client per
    server (see Key Design Decision #5). `Client` uses a `sync.RWMutex` to
-   protect its `trie` field: concurrent reads (`Get`, `Root`) are safe
+   protect its `root` field: concurrent reads (`Get`, `Root`) are safe
    alongside mutations (`Bootstrap`, `Update`, `Close`, `Commit`), but
    concurrent mutations are logic errors. `remoteProposal` holds a pointer to
-   the same mutex so `Commit` can write-lock during the parent trie swap.
-   The proposal pointer chain (`parentTrie *(*refCountedTrie)`) requires
-   linear chains committed leaf-to-root — no forking (at most one child per
-   proposal) and no out-of-order commits. These constraints are naturally
-   enforced by single-client control. `remoteIterator` is single-goroutine
-   only and is not synchronized.
+   the same mutex so `Commit` can write-lock during the parent root update.
+   The proposal chain uses `parentRoot *ffi.Hash` pointers — committing a
+   child writes the new root back to the parent, requiring linear chains
+   committed leaf-to-root. These constraints are naturally enforced by
+   single-client control. `remoteIterator` is single-goroutine only and is not
+   synchronized.
 
-   **`committedTrie` lifetime**: Both `newTrie` and `committedTrie` on
-   `remoteProposal` use `refCountedTrie` (atomic reference counting). When
-   a child proposal inherits the parent's `committedTrie`, it calls `acquire()`
-   to increment the refcount. `Commit()` and `Drop()` call `release()`. The
-   underlying trie is freed only when the last reference is released, so
-   `Update()` on the client while a proposal is outstanding no longer causes
+   **Trie lifetime**: The committed trie is owned by `RemoteClientHandle` in
+   Rust (behind `parking_lot::RwLock`). Proposals hold only their own
+   `*ffi.TruncatedTrie` (verified new state) and an `*ffi.RemoteClient`
+   reference. `CommitTrie` atomically swaps the Rust-side trie, so
+   `Update()` on the client while a proposal is outstanding does not cause
    dangling pointers.
 
 4. **Server-side proposal cleanup**: Multiple layers prevent leaked proposals:
