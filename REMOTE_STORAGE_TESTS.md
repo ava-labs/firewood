@@ -81,7 +81,7 @@ All tests use the `ffi.DB` / `ffi.DBProposal` / `ffi.DBRevision` /
 | `TestServerProposalTTLExpiry` | `CreateProposal`, `CommitProposal` | Proposal reaped after TTL; commit returns "not found" |
 | `TestServerProposalTTLNotExpired` | `CreateProposal`, `CommitProposal` | Commit before TTL succeeds |
 | `TestServerStop` | `CreateProposal`, `Stop()`, `CommitProposal` | Stop() reaps all proposals |
-| `TestRemoteDBProposalExpiredOnServer` | `Propose`, `Commit`, `Iter`, `Propose`, `Drop` | Client surfaces clear errors when server GC reaps proposal |
+| `TestRemoteDBProposalExpiredOnServer` | `Propose`, `Commit`, `Iter`, `Propose`, `Drop` | Client surfaces clear errors when server GC reaps proposal; `Drop` succeeds (not-found suppressed) |
 | `TestRemoteDBProposalIterProposalOnlyKey` | `Propose`, `Iter`, `Next`, `Key`, `Value` | Verifies range proof from proposal state includes proposal-only keys |
 | `TestRemoteDBIterMidPaginationExpiry` | `Propose`, `Iter`, `Next`, `Err` | Iterator returns error when GC reaps proposal between batches |
 | `TestRemoteDBChainedProposalParentReaped` | `Propose` (chained), `Commit` | Chained proposals fail when GC reaps parent |

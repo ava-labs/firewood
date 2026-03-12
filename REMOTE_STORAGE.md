@@ -49,21 +49,32 @@ Implements the same three interfaces over gRPC with cryptographic verification:
 - **`RemoteDB`** wraps a `*Client`. Created via `NewRemoteDB(ctx, addr,
   trustedRoot, depth)` which dials, bootstraps (fetches + verifies truncated
   trie), and returns `ffi.DB`.
-- **`remoteProposal`** holds `proposalID`, `root`, `newTrie` (verified
-  truncated trie from witness), gRPC client, `parentTrie` pointer (for Commit
-  to swap), `committedTrie` (for chained witness verification), and `depth`.
+- **`remoteProposal`** holds `proposalID`, `root`, `newTrie` (reference-counted
+  verified truncated trie from witness), gRPC client, `parentTrie` pointer (for
+  Commit to swap), `committedTrie` (reference-counted, for chained witness
+  verification), `depth`, `cache`, `mu` (points to Client's RWMutex), and
+  `expectedCumulativeOps`.
   - `Commit` sends `CommitProposal` RPC then replaces the parent's trie pointer
-    with the verified `newTrie`.
-  - `Drop` frees local `newTrie` and sends `DropProposal` RPC.
+    with the verified `newTrie`. Invalidates affected cache keys via
+    `expectedCumulativeOps`.
+  - `Drop` releases `newTrie` and `committedTrie` references, then sends
+    `DropProposal` RPC. Suppresses gRPC `NotFound` errors since they indicate
+    the server already cleaned up (e.g., via GC or a prior Drop).
   - `Get` sends `GetValue` RPC with the proposal's root hash, verifies the
     single-key Merkle proof client-side.
   - `Iter` sends `IterBatch` RPC, returns a `remoteIterator`.
   - `Propose` sends `CreateProposal` RPC with `parent_proposal_id` set,
     verifies witness against `committedTrie`, returns child `remoteProposal`.
+- **`refCountedTrie`** wraps `*ffi.TruncatedTrie` with atomic reference
+  counting. The underlying trie is freed when the last reference is released.
+  Used by both `newTrie` and `committedTrie` to allow safe sharing of trie
+  handles between parent and child proposals without dangling pointers.
 - **`remoteIterator`** holds current batch of `KeyValuePair` from the server,
-  cursor index, `hasMore` flag, and gRPC client.
+  cursor index, `hasMore` flag, gRPC client, caller's `context.Context`, and
+  verified proposal root hash.
   - `Next` advances cursor; if batch exhausted and `hasMore`, fetches next batch
-    via `IterBatch` RPC (start_key = last key + `\x00`).
+    via `IterBatch` RPC using the caller's context (start_key = last key +
+    `\x00`). Each batch is verified via range proof before being consumed.
   - `Drop` is a no-op (server creates a fresh iterator per `IterBatch` call).
 
 Helper functions:
@@ -95,7 +106,7 @@ Helper functions:
 
 ### `ffi/remote/db_test.go` — RemoteDB tests
 
-25 tests exercising the interfaces through `RemoteDB` over a real gRPC
+32 tests exercising the interfaces through `RemoteDB` over a real gRPC
 server/client:
 
 - `TestNewRemoteDB` — bootstrap, get, update through `ffi.DB`.
@@ -139,6 +150,19 @@ server/client:
   `LatestRevision` returns.
 - `TestRemoteDBLatestRevisionMatchesRoot` — `LatestRevision().Root()` ==
   `db.Root()`.
+- `TestServerProposalTTLExpiry` — proposal reaped after TTL; commit returns
+  "not found".
+- `TestServerProposalTTLNotExpired` — commit before TTL succeeds.
+- `TestServerStop` — `Stop()` reaps all proposals.
+- `TestRemoteDBProposalExpiredOnServer` — client surfaces clear errors from
+  `Commit`/`Iter`/`Propose` when server GC reaps proposal; `Drop` succeeds
+  since the server already cleaned up.
+- `TestRemoteDBProposalIterProposalOnlyKey` — range proof from proposal state
+  includes keys that exist only in the proposal.
+- `TestRemoteDBIterMidPaginationExpiry` — iterator returns error when GC reaps
+  proposal between batches.
+- `TestRemoteDBChainedProposalParentReaped` — chained proposal operations fail
+  when GC reaps the parent.
 
 ## Files Modified
 
@@ -200,6 +224,11 @@ Go proto code was regenerated after changes (`proto/remote.pb.go` and
 
 **`proposalEntry` struct expanded** with:
 
+- `mu sync.Mutex` — protects the proposal FFI handle against concurrent access
+  from GC reaping and RPC handlers, preventing use-after-free races.
+- `dropped bool` — set under `mu` when the proposal has been dropped or
+  committed. Operations that acquire `mu` check this flag and return an error
+  if set.
 - `committedRoot ffi.Hash` — the committed revision root this proposal chain
   is based on. For first-level proposals, equals `root_hash` from the request;
   for chained proposals, inherited from the parent.
@@ -207,18 +236,30 @@ Go proto code was regenerated after changes (`proto/remote.pb.go` and
   chain root to this proposal.
 
 **`CreateProposal` updated**: If `parent_proposal_id` is set, looks up the
-parent entry and calls `parent.proposal.Propose(ops)`. Inherits
-`committedRoot` from the parent and appends current ops to
-`parent.cumulativeOps`. The witness is always generated from `committedRoot`
-with `cumulativeOps` — this is necessary because `GenerateWitness` only works
-against committed revisions (see the Rust type constraint note above).
+parent entry, acquires the parent's mutex (checking `dropped` to guard against
+GC races), and calls `parent.proposal.Propose(ops)`. Inherits `committedRoot`
+from the parent and appends current ops to `parent.cumulativeOps`. The witness
+is always generated from `committedRoot` with `cumulativeOps` — this is
+necessary because `GenerateWitness` only works against committed revisions
+(see the Rust type constraint note above).
 
-**`DropProposal` (new)**: Loads and deletes the proposal from the map, calls
-`proposal.Drop()` to free the FFI handle.
+**`CommitProposal` updated**: Now acquires the entry's mutex and sets
+`dropped = true` before committing, preventing concurrent GC from dropping
+the proposal mid-commit. Returns `codes.NotFound` (instead of a plain error)
+if the proposal does not exist.
 
-**`IterBatch` (new)**: Looks up proposal by ID, calls `proposal.Iter(startKey)`,
-collects up to `batchSize` pairs, checks for more by attempting one extra
-advance, returns `IterBatchResponse` with `has_more` flag.
+**`DropProposal` (new)**: Loads and deletes the proposal from the map, acquires
+the entry's mutex, sets `dropped = true`, and calls `proposal.Drop()` to free
+the FFI handle. Returns `codes.NotFound` if the proposal does not exist.
+
+**`IterBatch` (new)**: In proposal mode, looks up the proposal entry by ID,
+acquires the entry's mutex (checking `dropped` to guard against GC races),
+creates an iterator via `proposal.Iter(startKey)`, and holds the mutex for the
+entire batch collection to prevent the GC goroutine from dropping the proposal
+while iteration is in progress. In revision mode (`proposal_id == 0`), creates
+a temporary `Revision` from `root_hash`. In both modes, collects up to
+`batchSize` pairs, checks for more by attempting one extra advance, and returns
+`IterBatchResponse` with `has_more` flag.
 
 **`ServerOption` / `WithProposalTTL` (new)**: Functional options for `NewServer`.
 `WithProposalTTL(ttl)` enables a background GC goroutine that reaps proposals
@@ -324,7 +365,7 @@ cd ffi/remote && go test -bench BenchmarkCacheEviction -benchtime=5s -count=1
 | ------ | ------ |
 | `ffi/db.go` | **NEW** — `DB`, `DBProposal`, `DBRevision`, `DBIterator` interfaces + `LocalDB` adapter |
 | `ffi/db_test.go` | **NEW** — LocalDB interface tests (incl. revision) |
-| `ffi/remote/db.go` | **NEW** — `RemoteDB`, `remoteProposal`, `remoteIterator` |
+| `ffi/remote/db.go` | **NEW** — `RemoteDB`, `remoteProposal`, `refCountedTrie`, `remoteIterator` |
 | `ffi/remote/db_test.go` | **NEW** — RemoteDB interface tests |
 | `ffi/remote/cache.go` | **NEW** — `readCache` wrapper delegating to `evictionStore` backend |
 | `ffi/remote/cache_test.go` | **NEW** — Cache unit tests + integration tests |
@@ -334,7 +375,7 @@ cd ffi/remote && go test -bench BenchmarkCacheEviction -benchtime=5s -count=1
 | `ffi/remote/eviction_clock.go` | **NEW** — Clock (second-chance) eviction via circular list |
 | `ffi/remote/eviction_samplek.go` | **NEW** — Sample-K-LRU eviction (Redis-style approximated LRU) |
 | `ffi/remote/eviction_test.go` | **NEW** — Parameterized tests across all 4 eviction policies |
-| `ffi/remote/server.go` | **MODIFIED** — `DropProposal`, `IterBatch` handlers, chained proposal support |
+| `ffi/remote/server.go` | **MODIFIED** — `DropProposal`, `CommitProposal`, `IterBatch` handlers, chained proposal support, per-proposal mutex, gRPC status codes |
 | `ffi/remote/proto/remote.proto` | **MODIFIED** — new RPCs and messages |
 | `ffi/remote/proto/remote.pb.go` | **REGENERATED** |
 | `ffi/remote/proto/remote_grpc.pb.go` | **REGENERATED** |
@@ -956,7 +997,7 @@ Existing `TestRemoteDBProposalIter` passes unchanged (honest server).
 - `cargo clippy -p firewood-ffi` — no warnings
 - `cd ffi && go vet ./...` — clean
 - `cd ffi/remote && go vet ./...` — clean
-- All 53 remote tests pass (49 existing + 4 new)
+- All 69 remote tests pass
 - Existing `TestRemoteDBProposalIter` passes unchanged
 
 ### Remaining Work
@@ -1133,6 +1174,92 @@ func (c *Client) Revision(root ffi.Hash) ffi.DBRevision {
   tests)
 - All existing proposal/iterator/tamper/cache tests unchanged and passing
 
+## Concurrency and Error Handling Fixes
+
+This section documents fixes for several concurrency and error-handling issues
+identified during a bug review of the remote storage feature.
+
+### Reference-counted trie handles (Bug 1 fix)
+
+**Problem**: `Update()` frees the old trie and replaces it, but outstanding
+`remoteProposal` objects hold a raw `committedTrie` pointer to the old trie.
+After `Update()`, the proposal's `committedTrie` dangles.
+
+**Fix**: Introduced `refCountedTrie` (`db.go`) — wraps `*ffi.TruncatedTrie`
+with `atomic.Int32` reference counting. The underlying trie is freed only when
+the last reference is released. Both `newTrie` and `committedTrie` on
+`remoteProposal` use `refCountedTrie`. When a child proposal is created,
+`committedTrie.acquire()` increments the refcount; `Commit()` and `Drop()`
+call `release()`. This eliminates dangling pointers without copying.
+
+### Iterator uses caller's context (Bug 3 fix)
+
+**Problem**: `remoteIterator.Next()` used `context.Background()` for
+pagination RPCs instead of the caller's context, making subsequent batch
+fetches uncancellable.
+
+**Fix**: `remoteIterator` now stores the caller's `context.Context` (passed
+via `Iter()`) and uses it for all subsequent `IterBatch` RPCs in `Next()`.
+
+### Per-proposal mutex for GC race prevention (Bug B fix)
+
+**Problem**: The GC goroutine (`reapExpiredProposals`) can `LoadAndDelete` a
+proposal and call `proposal.Drop()` between the time an RPC handler (`IterBatch`,
+`CreateProposal`) calls `proposals.Load()` and uses the proposal's FFI handle.
+This is a TOCTOU race that can cause use-after-free in native code.
+
+**Fix**: Added `mu sync.Mutex` and `dropped bool` to `proposalEntry`. All
+code paths that access the proposal's FFI handle acquire the mutex first:
+
+- **`reapExpiredProposals`**: Lock, set `dropped = true`, drop, unlock.
+- **`IterBatch`** (proposal mode): Lock, check `dropped`, iterate. The mutex
+  is held for the entire batch collection (released via the `cleanup` function)
+  to prevent GC from dropping the proposal while the iterator is in use.
+- **`CreateProposal`** (parent access): Lock, check `dropped`, call
+  `Propose()`, unlock.
+- **`CommitProposal`**: Lock, set `dropped = true`, commit, unlock.
+- **`DropProposal`**: Lock, set `dropped = true`, drop, unlock.
+
+If `dropped` is true when checked, the operation returns an appropriate error.
+
+### gRPC status codes and NotFound suppression (Bug A fix)
+
+**Problem**: `DropProposal` and `CommitProposal` returned plain `fmt.Errorf`
+for "proposal not found", which maps to gRPC `Unknown`. On the client side,
+`remoteProposal.Drop()` could not distinguish "proposal already cleaned up by
+GC" from real errors, leading to misleading error returns.
+
+**Fix (server)**: Both `CommitProposal` and `DropProposal` now return
+`status.Errorf(codes.NotFound, ...)` for missing proposals.
+
+**Fix (client)**: `remoteProposal.Drop()` suppresses gRPC `NotFound` errors
+from the `DropProposal` RPC, since they indicate the server already cleaned up
+the proposal. Real errors (network failures, etc.) are still returned.
+
+### Range proof with proposal roots (Bug D investigation)
+
+**Investigated**: `IterBatch` generates range proofs using
+`s.db.RangeProof(root, ...)` where `root` may be an uncommitted proposal's
+root hash. Investigation of the Rust implementation confirmed this is **not a
+bug**: `RevisionManager::view()` (`firewood/src/manager.rs`) performs a
+two-phase lookup — first searching active proposals by root hash, then falling
+back to committed revisions. Proposal roots are resolvable as long as the
+proposal exists in the active proposals cache.
+
+### Files Changed
+
+| File | Change |
+| --- | --- |
+| `ffi/remote/server.go` | **MODIFIED** — added `mu`/`dropped` to `proposalEntry`, mutex protection in all proposal operations, gRPC `codes.NotFound` status codes, `google.golang.org/grpc/codes` and `status` imports |
+| `ffi/remote/db.go` | **MODIFIED** — `Drop()` suppresses `codes.NotFound` RPC errors, added `google.golang.org/grpc/codes` and `status` imports |
+| `ffi/remote/db_test.go` | **MODIFIED** — updated `TestRemoteDBProposalExpiredOnServer` to expect `Drop()` to succeed when server has already GC'd the proposal |
+
+### Verification Results
+
+- `cd ffi/remote && go vet ./...` — clean
+- `cd ffi/remote && go test -count=1 -race ./...` — all tests pass with race
+  detector enabled
+
 ## Known Limitations and Future Work
 
 1. **Range proof verification is a Rust stub**: The `RangeProofContext::verify()`
@@ -1156,19 +1283,21 @@ func (c *Client) Revision(root ffi.Hash) ffi.DBRevision {
    pointer to the same mutex so `Commit` can write-lock during the parent trie
    swap. `remoteIterator` is single-goroutine only and is not synchronized.
 
-   **`committedTrie` dangling pointer risk**: When a `remoteProposal` is
-   created via `Propose()`, it captures a `committedTrie` reference pointing
-   to the client's current trie. If `Update()` is called on the client while
-   a proposal is outstanding, the old trie is freed and replaced. The
-   proposal's `committedTrie` pointer then dangles. Callers must not
-   interleave `Propose` and `Update` on the same client — proposals should
-   be committed or dropped before calling `Update`.
+   **`committedTrie` lifetime**: Both `newTrie` and `committedTrie` on
+   `remoteProposal` use `refCountedTrie` (atomic reference counting). When
+   a child proposal inherits the parent's `committedTrie`, it calls `acquire()`
+   to increment the refcount. `Commit()` and `Drop()` call `release()`. The
+   underlying trie is freed only when the last reference is released, so
+   `Update()` on the client while a proposal is outstanding no longer causes
+   dangling pointers.
 
 4. **Server-side proposal cleanup**: Multiple layers prevent leaked proposals:
 
    - **Client-side best-effort cleanup**: When client-side witness verification
      fails after a successful `CreateProposal` RPC, the client sends a
      best-effort `DropProposal` RPC to clean up the server-side entry.
+     `remoteProposal.Drop()` suppresses `codes.NotFound` errors from the RPC
+     since they indicate the server already cleaned up.
    - **Server-side creation rollback**: The `CreateProposal` handler drops a
      newly-created proposal if any error occurs between proposal creation and
      storage in the map.
@@ -1179,6 +1308,12 @@ func (c *Client) Revision(root ffi.Hash) ffi.DBRevision {
      must opt in. The GC goroutine exits when `Stop()` is called or when the
      context passed via `WithContext(ctx)` is cancelled; both paths reap all
      remaining proposals.
+   - **Per-proposal mutex**: Each `proposalEntry` has a `sync.Mutex` that
+     protects its FFI handle. The GC goroutine acquires the mutex and sets
+     `dropped = true` before calling `proposal.Drop()`. RPC handlers
+     (`IterBatch`, `CreateProposal`) acquire the mutex and check `dropped`
+     before using the proposal, preventing use-after-free races between GC
+     and concurrent operations.
 
 5. **`TruncatedTrie` finalizer safety net**: `TruncatedTrie` now has a
    `runtime.AddCleanup` finalizer that frees the underlying Rust handle if
@@ -1186,18 +1321,13 @@ func (c *Client) Revision(root ffi.Hash) ffi.DBRevision {
    Callers should still call `Free()` (or `Drop()` for proposals) for prompt
    resource release — the finalizer is a safety net, not a substitute.
 
-6. **`remoteIterator` uses `context.Background()`**: When fetching subsequent
-   batches in `Next()`, the iterator uses `context.Background()` because the
-   `Next() bool` signature doesn't accept a context. This means pagination
-   fetches cannot be cancelled via the original context.
-
-7. **Cache does not cover `remoteProposal.Get()` or `remoteRevision.Get()`**:
+6. **Cache does not cover `remoteProposal.Get()` or `remoteRevision.Get()`**:
    Only `Client.Get()` uses the cache. Reads through `remoteProposal.Get()`
    and `remoteRevision.Get()` always go to the server. This is intentional —
    proposal/revision reads are less frequent and their state may diverge from
    the committed state that the cache represents.
 
-8. **`remoteRevision` is stateless**: A `remoteRevision` holds only a root
+7. **`remoteRevision` is stateless**: A `remoteRevision` holds only a root
    hash and RPC client — no server-side state persists. Each `Get` or `Iter`
    call is independently verified via Merkle proofs. If the server prunes the
    revision between calls, subsequent calls will fail with a server-side error.
