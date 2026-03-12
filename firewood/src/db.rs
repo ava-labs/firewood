@@ -3606,7 +3606,6 @@ mod test {
                 .build())
             .build();
 
-        let shared_hash;
         {
             let db = MultiDb::new(tmpdir.as_ref(), cfg.clone()).unwrap();
             let v0 = ValidatorId::new(0);
@@ -3618,7 +3617,6 @@ mod test {
                 value: b"reopen".to_vec(),
             }];
             let p = db.propose(v0, batch).unwrap();
-            shared_hash = p.root_hash().unwrap();
             db.commit(v0, p).unwrap();
 
             db.wait_persisted();

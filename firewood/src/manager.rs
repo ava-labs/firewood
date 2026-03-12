@@ -2099,17 +2099,6 @@ impl ForkTree {
         }
     }
 
-    /// Returns the next fork ID that would be allocated.
-    #[cfg(test)]
-    pub const fn next_id(&self) -> ForkId {
-        self.next_id
-    }
-
-    /// Returns all fork IDs currently in the tree.
-    #[cfg(test)]
-    pub fn fork_ids(&self) -> HashSet<ForkId> {
-        self.nodes.keys().copied().collect()
-    }
 }
 
 #[cfg(test)]
