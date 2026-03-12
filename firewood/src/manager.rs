@@ -1719,6 +1719,19 @@ impl RevisionManager {
                 return Ok(());
             }
             let mut header = NodeStoreHeader::read_from_storage(storage.as_ref())?;
+
+            // Persist all unique validator head revisions so their nodes are on
+            // disk and root_address() returns valid addresses. Dedup by Arc
+            // pointer — validators sharing a revision (dedup path) only persist once.
+            // Skip heads that the persist worker already flushed (root_address is Some).
+            let mut seen = HashSet::new();
+            for validator in state.validators.values() {
+                let ptr = Arc::as_ptr(&validator.head) as usize;
+                if seen.insert(ptr) && validator.head.root_address().is_none() {
+                    validator.head.persist(&mut header)?;
+                }
+            }
+
             for (vid, validator) in &state.validators {
                 let root_info = validator.head.root_hash().and_then(|hash| {
                     let addr = validator.head.root_address()?;

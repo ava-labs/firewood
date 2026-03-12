@@ -3959,6 +3959,72 @@ mod test {
     }
 
     #[test]
+    fn test_validators_survive_reopen_without_wait_persisted() {
+        // Same as test_validators_survive_reopen but WITHOUT wait_persisted()
+        // to verify that close() persists all validator heads.
+        let tmpdir = tempfile::tempdir().unwrap();
+        let cfg = MultiDbConfig::builder()
+            .db(DbConfig::builder()
+                .manager(
+                    crate::manager::RevisionManagerConfig::builder()
+                        .max_revisions(10)
+                        .build(),
+                )
+                .build())
+            .build();
+
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        let hash_v0;
+        let hash_v1;
+
+        {
+            let db = MultiDb::new(tmpdir.as_ref(), cfg.clone()).unwrap();
+            db.register_validator(v0).unwrap();
+            db.register_validator(v1).unwrap();
+
+            let batch = vec![BatchOp::Put {
+                key: b"v0key".to_vec(),
+                value: b"v0val".to_vec(),
+            }];
+            let p = db.propose(v0, batch).unwrap();
+            hash_v0 = p.root_hash().unwrap();
+            db.commit(v0, p).unwrap();
+
+            let batch = vec![BatchOp::Put {
+                key: b"v1key".to_vec(),
+                value: b"v1val".to_vec(),
+            }];
+            let p = db.propose(v1, batch).unwrap();
+            hash_v1 = p.root_hash().unwrap();
+            db.commit(v1, p).unwrap();
+
+            // Deliberately NO wait_persisted() — close() must handle it
+            db.close().unwrap();
+        }
+
+        {
+            let db = MultiDb::new(tmpdir.as_ref(), cfg).unwrap();
+
+            let head0 = db.validator_view(v0).unwrap();
+            assert_eq!(head0.root_hash().or_default_root_hash(), Some(hash_v0));
+            assert_eq!(
+                DbView::val(&*head0, b"v0key").unwrap(),
+                Some(b"v0val".to_vec().into_boxed_slice()),
+            );
+
+            let head1 = db.validator_view(v1).unwrap();
+            assert_eq!(head1.root_hash().or_default_root_hash(), Some(hash_v1));
+            assert_eq!(
+                DbView::val(&*head1, b"v1key").unwrap(),
+                Some(b"v1val".to_vec().into_boxed_slice()),
+            );
+
+            db.close().unwrap();
+        }
+    }
+
+    #[test]
     fn test_close_after_commit_no_assertion() {
         // Enable multi-head, register validator, commit, immediately close
         // (no wait_persisted). Verify no assertion failure and clean shutdown.
