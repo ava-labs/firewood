@@ -123,7 +123,7 @@ func changeCgoDirectivesForFile(targetMode string, targetFile string) error {
 		fmt.Printf("[INFO] No changes needed to %s\n", targetFile)
 		return nil
 	}
-	// #nosec G306 - permissions is correct for source files
+	// #nosec G306 - permissions are correct for source files
 	// #nosec G703 - path is safe because it is controlled by the build system
 	// and not user input
 	return os.WriteFile(targetFile, []byte(newContents), 0o644)

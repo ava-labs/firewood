@@ -23,6 +23,12 @@
 // The script also removes any old cgo pragmas that do not match the current set
 // of C functions being called, to ensure that the source files are clean and
 // up-to-date.
+//
+// The pragmas are injected in declaration order, i.e., the first C function
+// call site in the file will have its pragmas injected first. This is
+// deterministic as it relies on the order of AST traversal. Pre-sorting the C
+// functions by name before injection is not necessary; however, refactoring the
+// source would result in a different injection order.
 package main
 
 import (
@@ -47,6 +53,8 @@ var pragmaComments = []string{
 }
 
 var ignoredIdentifiers = []string{
+	// GoBytes is a cgo helper function and not one produced by our headers;
+	// however, it follows the same `_cFunc_...` naming pattern.
 	"GoBytes",
 }
 
@@ -63,6 +71,21 @@ func debugf(format string, args ...any) {
 
 func fatalf(format string, args ...any) {
 	log.Fatalf("FATAL: %s", fmt.Sprintf(format, args...))
+}
+
+func fatalJoinErrorsf[T error](errs []T, format string, args ...any) {
+	if err := joinErrors(errs); err != nil {
+		fatalf("%s: %v", fmt.Sprintf(format, args...), err)
+	}
+}
+
+func joinErrors[T error](errs []T) error {
+	errList := make([]error, len(errs))
+	for i, err := range errs {
+		errList[i] = error(err)
+	}
+
+	return errors.Join(errList...)
 }
 
 func main() {
@@ -105,6 +128,8 @@ func main() {
 	var results []fileResult
 	cFuncCallSites := make(map[string][]string)
 
+	// There is only one package; however, process in a loop in case of multiple
+	// packages in the future.
 	for _, pkg := range pkgs {
 		debugf("parsed package %s", pkg.ID)
 		fatalJoinErrorsf(pkg.Errors, "errors occurred when parsing package %s", pkg.ID)
@@ -182,10 +207,17 @@ func (r fileResult) rewriteFile(fset *token.FileSet) error {
 	nDeleted := 0
 	for i := cDeclPos.Line - 2; i >= 0; i-- {
 		line := lines[i]
+		// Stop processing lines once we reach a non-comment line. The comments
+		// before the `import "C"` declaration are expected to all be
+		// consecutive lines and adjacent to the declaration. Non-comment lines
+		// or blank lines indicate the end of the comment block.
 		if !strings.HasPrefix(line, "//") {
 			break
 		}
 
+		// only delete lines in the comment block that look like cgo pragmas.
+		// This allows for other comments to be included in the block without
+		// being stripped by the script.
 		if isPragmaComment(line) {
 			debugf("removing old pragma comment at line %d: %s", i+1, line)
 			lines = slices.Delete(lines, i, i+1)
@@ -202,7 +234,7 @@ func (r fileResult) rewriteFile(fset *token.FileSet) error {
 
 	lines = slices.Insert(lines, cDeclPos.Line-1-nDeleted, injectedComments...)
 
-	// #nosec G306 - permissions is correct for source files
+	// #nosec G306 - permissions are correct for source files
 	// #nosec G703 - path is safe because it is controlled by the build system
 	// and not user input
 	return os.WriteFile(filename, []byte(strings.Join(lines, "")), 0o644)
@@ -217,23 +249,8 @@ func isPragmaComment(s string) bool {
 	return false
 }
 
-func fatalJoinErrorsf[T error](errs []T, format string, args ...any) {
-	if err := joinErrors(errs); err != nil {
-		fatalf("%s: %v", fmt.Sprintf(format, args...), err)
-	}
-}
-
-func joinErrors[T error](errs []T) error {
-	errList := make([]error, len(errs))
-	for i, err := range errs {
-		errList[i] = error(err)
-	}
-
-	return errors.Join(errList...)
-}
-
 type fileVisitor struct {
-	scope  Scope
+	scope  scope
 	cDecl  *ast.GenDecl
 	cFuncs []cFunctionCallSite
 }
@@ -309,17 +326,17 @@ func (c *cFunctionCallSite) CallSite(fset *token.FileSet) string {
 	return fset.Position(c.ident.NamePos).String()
 }
 
-type Scope []ast.Node
+type scope []ast.Node
 
-func (s *Scope) isEmpty() bool {
+func (s *scope) isEmpty() bool {
 	return len(*s) == 0
 }
 
-func (s *Scope) push(node ast.Node) {
+func (s *scope) push(node ast.Node) {
 	*s = append(*s, node)
 }
 
-func (s *Scope) pop() {
+func (s *scope) pop() {
 	if s.isEmpty() {
 		fatalf("unexpected pop from empty scope stack")
 	}
@@ -327,7 +344,7 @@ func (s *Scope) pop() {
 	*s = (*s)[:len(*s)-1]
 }
 
-func (s *Scope) parent() ast.Node {
+func (s *scope) parent() ast.Node {
 	if len(*s) < 2 {
 		return nil
 	}
