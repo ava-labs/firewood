@@ -1360,3 +1360,35 @@ proposal exists in the active proposals cache.
    revision between calls, subsequent calls will fail with a server-side error.
    This is by design — the lightweight approach avoids server-side lifecycle
    management.
+
+8. **Crash between server commit and client trie swap**: `Commit()` sends the
+   `CommitProposal` RPC before acquiring the client mutex and swapping the
+   local truncated trie. This is intentional — holding the mutex during a
+   network round-trip would block all concurrent reads. However, if the
+   process crashes after the RPC succeeds but before the local swap completes,
+   the server's committed state advances while the client's truncated trie
+   remains stale. **Recovery**: call `Client.Bootstrap` with the server's
+   current root hash (obtained out-of-band or from a trusted source). The
+   server's committed state is always the source of truth; the client's trie
+   is a verifiable cache that can be reconstructed from any trusted root.
+
+9. **O(n) prefix invalidation in cache**: `invalidatePrefix` scans all cache
+   entries to find keys matching a prefix. This is O(n) in cache size and is
+   triggered by every `PrefixDelete` operation. For workloads with frequent
+   PrefixDelete operations and large caches, this could become a bottleneck.
+   Possible improvements (in order of complexity):
+
+   - **Clear-on-prefix-delete**: Call `cache.clear()` on any PrefixDelete.
+     Simplest fix. The cache repopulates on subsequent reads. Cost: temporary
+     cache miss storm after each PrefixDelete.
+   - **Sorted slice index**: Maintain a sorted `[]string` of cached keys in
+     parallel. Prefix lookup becomes O(log n + k) via binary search to find
+     the first matching key, then linear scan of k matches. Cost: O(n)
+     insertion to maintain sorted order.
+   - **Trie index**: A radix tree over cached keys gives O(p + k) prefix
+     lookup where p is prefix length and k is the number of matching keys.
+     Cost: additional memory and insertion overhead.
+   - **Bloom filter guard**: Track which prefixes have cached keys using a
+     Bloom filter. Skip the scan entirely on filter miss. Cost: false
+     positives cause unnecessary scans, but the common case (no matching
+     keys) becomes O(1).

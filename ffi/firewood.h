@@ -12,6 +12,28 @@
 
 
 /**
+ * C-compatible eviction policy selector for [`ReadCache`].
+ */
+typedef enum CEvictionPolicy {
+  /**
+   * Least Recently Used — O(1) ops, best general-purpose choice.
+   */
+  CEvictionPolicy_Lru = 0,
+  /**
+   * Random eviction — O(1) ops, no access-order tracking overhead.
+   */
+  CEvictionPolicy_Random = 1,
+  /**
+   * Clock (second-chance) — approximates LRU with lower per-access cost.
+   */
+  CEvictionPolicy_Clock = 2,
+  /**
+   * Sample K random entries, evict the least recently accessed.
+   */
+  CEvictionPolicy_SampleKLru = 3,
+} CEvictionPolicy;
+
+/**
  * The hashing mode to use for the database.
  *
  * This determines the cryptographic hash function and trie structure used.
@@ -69,6 +91,19 @@ typedef struct ProposedChangeProofContext ProposedChangeProofContext;
  * FFI context for for a parsed or generated range proof.
  */
 typedef struct RangeProofContext RangeProofContext;
+
+/**
+ * An opaque handle that owns a committed [`TruncatedTrie`] and an optional
+ * [`ReadCache`]. The Go remote client holds one of these instead of managing
+ * the trie and cache separately.
+ *
+ * The trie is protected by an [`RwLock`] for interior mutability — reads
+ * take a shared lock, bootstrap/commit take an exclusive lock. The cache
+ * has its own internal `Mutex`, so no external locking is needed for it.
+ *
+ * Callers must free this handle with [`fwd_free_remote_client`].
+ */
+typedef struct RemoteClientHandle RemoteClientHandle;
 
 typedef struct RevisionHandle RevisionHandle;
 
@@ -525,6 +560,42 @@ typedef struct ValueResult {
     };
   };
 } ValueResult;
+
+/**
+ * Result type for [`fwd_create_remote_client`].
+ */
+enum RemoteClientResult_Tag {
+  /**
+   * The caller provided a null pointer to the input handle.
+   */
+  RemoteClientResult_NullHandlePointer,
+  /**
+   * The remote client was successfully created.
+   *
+   * The caller must call [`fwd_free_remote_client`] to free the handle.
+   */
+  RemoteClientResult_Ok,
+  /**
+   * An error occurred.
+   *
+   * The caller must call [`fwd_free_owned_bytes`](crate::fwd_free_owned_bytes)
+   * to free the memory associated with this error.
+   */
+  RemoteClientResult_Err,
+};
+typedef size_t RemoteClientResult_Tag;
+
+typedef struct RemoteClientResult {
+  RemoteClientResult_Tag tag;
+  union {
+    struct {
+      struct RemoteClientHandle *ok;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} RemoteClientResult;
 
 /**
  * A result type returned from FFI functions that create a [`TruncatedTrieHandle`].
@@ -1329,6 +1400,51 @@ typedef struct CodeIteratorResult {
 } CodeIteratorResult;
 
 /**
+ * Result type for [`fwd_remote_client_cache_lookup`].
+ */
+enum CacheLookupResult_Tag {
+  /**
+   * The caller provided a null pointer to the input handle.
+   */
+  CacheLookupResult_NullHandlePointer,
+  /**
+   * The key was not in the cache.
+   */
+  CacheLookupResult_Miss,
+  /**
+   * The key was found with a value.
+   *
+   * The caller must call [`fwd_free_owned_bytes`](crate::fwd_free_owned_bytes)
+   * to free the value.
+   */
+  CacheLookupResult_HitPresent,
+  /**
+   * The key was found but verified absent (exclusion proof was cached).
+   */
+  CacheLookupResult_HitAbsent,
+  /**
+   * An error occurred.
+   *
+   * The caller must call [`fwd_free_owned_bytes`](crate::fwd_free_owned_bytes)
+   * to free the error.
+   */
+  CacheLookupResult_Err,
+};
+typedef size_t CacheLookupResult_Tag;
+
+typedef struct CacheLookupResult {
+  CacheLookupResult_Tag tag;
+  union {
+    struct {
+      OwnedBytes hit_present;
+    };
+    struct {
+      OwnedBytes err;
+    };
+  };
+} CacheLookupResult;
+
+/**
  * Arguments for initializing logging for the Firewood FFI.
  */
 typedef struct LogArgs {
@@ -1623,6 +1739,31 @@ struct HashResult fwd_code_hash_iter_next(struct CodeIteratorHandle *iter);
  *   by value).
  */
 struct HashResult fwd_commit_proposal(struct ProposalHandle *proposal);
+
+/**
+ * Creates a new [`RemoteClientHandle`] with an optional read cache.
+ *
+ * If `max_cache_bytes` is 0, no cache is created. The trie starts
+ * uninitialized (empty); call [`fwd_remote_client_bootstrap`] to set it.
+ *
+ * # Arguments
+ *
+ * * `max_cache_bytes` - Memory budget for the cache in bytes (0 = no cache)
+ * * `policy` - Eviction policy for the cache
+ * * `sample_k` - Sample size for `SampleKLru` policy (ignored for others)
+ *
+ * # Returns
+ *
+ * - [`RemoteClientResult::Ok`] on success.
+ * - [`RemoteClientResult::Err`] if cache creation fails.
+ *
+ * # Safety
+ *
+ * The caller must call [`fwd_free_remote_client`] to free the returned handle.
+ */
+struct RemoteClientResult fwd_create_remote_client(size_t max_cache_bytes,
+                                                   enum CEvictionPolicy policy,
+                                                   size_t sample_k);
 
 /**
  * Creates a [`TruncatedTrieHandle`] from the database revision matching the
@@ -1982,6 +2123,17 @@ struct VoidResult fwd_free_proposed_change_proof(struct ProposedChangeProofConte
  * - [`VoidResult::Err`] if the process panics while freeing the memory.
  */
 struct VoidResult fwd_free_range_proof(struct RangeProofContext *proof);
+
+/**
+ * Frees a [`RemoteClientHandle`].
+ *
+ * # Safety
+ *
+ * The caller must ensure that `client` is a valid pointer returned by a
+ * prior call to [`fwd_create_remote_client`], and that it has not already
+ * been freed.
+ */
+struct VoidResult fwd_free_remote_client(struct RemoteClientHandle *client);
 
 /**
  * Consumes the [`RevisionHandle`] and frees the memory associated with it.
@@ -2560,6 +2712,120 @@ struct VoidResult fwd_range_proof_verify(struct VerifyRangeProofArgs args);
  * It is not safe to call this function concurrently with the same proof context.
  */
 struct KeyValueBatchResult fwd_range_proof_verify_and_extract(struct VerifyRangeProofArgs args);
+
+/**
+ * Bootstraps the remote client with a serialized trie.
+ *
+ * Deserializes `trie_bytes` into a [`TruncatedTrie`], verifies the root
+ * hash matches `expected_hash`, write-locks the internal trie and swaps it
+ * in, then clears the cache.
+ *
+ * # Returns
+ *
+ * - [`HashResult::NullHandlePointer`] if `client` is null.
+ * - [`HashResult::Some`] with the root hash on success.
+ * - [`HashResult::Err`] on deserialization or hash mismatch.
+ *
+ * # Safety
+ *
+ * The caller must ensure that `client` is a valid pointer and that
+ * `trie_bytes` is valid for [`BorrowedBytes`].
+ */
+struct HashResult fwd_remote_client_bootstrap(const struct RemoteClientHandle *client,
+                                              BorrowedBytes trie_bytes,
+                                              struct HashKey expected_hash);
+
+/**
+ * Looks up a key in the remote client's cache.
+ *
+ * # Returns
+ *
+ * - [`CacheLookupResult::NullHandlePointer`] if `client` is null.
+ * - [`CacheLookupResult::Miss`] if the key is not cached or no cache is
+ *   configured.
+ * - [`CacheLookupResult::HitPresent`] with the value if cached as present.
+ * - [`CacheLookupResult::HitAbsent`] if cached as absent.
+ *
+ * # Safety
+ *
+ * The caller must ensure that `client` is a valid pointer and that `key`
+ * is valid for [`BorrowedBytes`].
+ */
+struct CacheLookupResult fwd_remote_client_cache_lookup(const struct RemoteClientHandle *client,
+                                                        BorrowedBytes key);
+
+/**
+ * Commits a new trie into the remote client handle and invalidates cache
+ * entries affected by the witness's batch operations.
+ *
+ * Takes ownership of `new_trie` (it is consumed). The witness handle is
+ * borrowed to extract its `batch_ops` for cache invalidation, then left
+ * alone (Go is responsible for freeing it).
+ *
+ * # Returns
+ *
+ * - [`HashResult::NullHandlePointer`] if `client` or `new_trie` is null.
+ * - [`HashResult::Some`] with the new root hash on success.
+ * - [`HashResult::Err`] on failure.
+ *
+ * # Safety
+ *
+ * The caller must ensure all handles are valid. `new_trie` is consumed
+ * and must not be used after this call.
+ */
+struct HashResult fwd_remote_client_commit_trie(const struct RemoteClientHandle *client,
+                                                struct TruncatedTrieHandle *new_trie,
+                                                const struct WitnessProofHandle *witness);
+
+/**
+ * Verifies a single-key proof against the remote client's committed root
+ * hash and, on success, stores the result in the cache.
+ *
+ * # Arguments
+ *
+ * * `client` - The remote client handle
+ * * `key` - The key that was proven
+ * * `value` - The value (may be empty for exclusion proofs)
+ * * `value_is_present` - `true` for inclusion proof, `false` for exclusion
+ * * `proof_bytes` - The serialized single-key proof
+ *
+ * # Returns
+ *
+ * - [`VoidResult::NullHandlePointer`] if `client` is null.
+ * - [`VoidResult::Ok`] if verification succeeds.
+ * - [`VoidResult::Err`] on verification failure or if not bootstrapped.
+ *
+ * # Safety
+ *
+ * The caller must ensure all pointers and borrowed byte slices are valid.
+ */
+struct VoidResult fwd_remote_client_verify_get(const struct RemoteClientHandle *client,
+                                               BorrowedBytes key,
+                                               BorrowedBytes value,
+                                               bool value_is_present,
+                                               BorrowedBytes proof_bytes);
+
+/**
+ * Verifies a witness proof against the remote client's committed trie and
+ * returns a new [`TruncatedTrieHandle`] for the proposal.
+ *
+ * The witness handle is NOT consumed — Go keeps it alive for
+ * [`fwd_remote_client_commit_trie`].
+ *
+ * # Returns
+ *
+ * - [`TruncatedTrieResult::NullHandlePointer`] if either handle is null.
+ * - [`TruncatedTrieResult::Ok`] with the updated trie handle on success.
+ * - [`TruncatedTrieResult::Err`] if verification fails or not bootstrapped.
+ *
+ * # Safety
+ *
+ * The caller must ensure all handles and borrowed data are valid.
+ * The returned trie handle must be freed with [`fwd_free_truncated_trie`].
+ */
+struct TruncatedTrieResult fwd_remote_client_verify_witness(const struct RemoteClientHandle *client,
+                                                            const struct WitnessProofHandle *witness_handle,
+                                                            BorrowedBatchOps expected_ops);
 
 /**
  * Dumps the Trie structure of a revision to a DOT (Graphviz) format string for debugging.

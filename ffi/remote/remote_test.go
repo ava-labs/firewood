@@ -85,14 +85,9 @@ func startServerAndClient(t *testing.T, db *ffi.Database, depth uint) *Client {
 	t.Cleanup(srv.Stop)
 
 	// Connect client
-	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	client, err := NewClient(lis.Addr().String(), depth)
 	if err != nil {
-		t.Fatalf("grpc.NewClient: %v", err)
-	}
-	client := &Client{
-		conn:  conn,
-		rpc:   pb.NewFirewoodRemoteClient(conn),
-		depth: depth,
+		t.Fatalf("NewClient: %v", err)
 	}
 	t.Cleanup(func() { client.Close() })
 	return client

@@ -735,18 +735,18 @@ func BenchmarkGetCached(b *testing.B) {
 
 	policies := []struct {
 		name   string
-		policy EvictionPolicy
+		policy ffi.EvictionPolicy
 	}{
-		{"LRU", LRU},
-		{"Random", RandomEviction},
-		{"Clock", Clock},
-		{"SampleKLRU", SampleKLRU},
+		{"LRU", ffi.EvictionLRU},
+		{"Random", ffi.EvictionRandom},
+		{"Clock", ffi.EvictionClock},
+		{"SampleKLRU", ffi.EvictionSampleK},
 	}
 
 	for _, p := range policies {
 		p := p
 		b.Run("Cached/"+p.name, func(b *testing.B) {
-			rdb := setupRemoteDB(b, db, rootHash, 4, WithCache(10_000, p.policy))
+			rdb := setupRemoteDB(b, db, rootHash, 4, WithCache(32<<20, p.policy))
 			ctx := context.Background()
 			// Warm the cache.
 			for _, key := range keys {
@@ -766,34 +766,3 @@ func BenchmarkGetCached(b *testing.B) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// 13. BenchmarkCacheEviction — Eviction throughput per policy
-// ---------------------------------------------------------------------------
-
-func BenchmarkCacheEviction(b *testing.B) {
-	policies := []struct {
-		name   string
-		policy EvictionPolicy
-	}{
-		{"LRU", LRU},
-		{"Random", RandomEviction},
-		{"Clock", Clock},
-		{"SampleKLRU", SampleKLRU},
-	}
-	for _, p := range policies {
-		p := p
-		b.Run(p.name, func(b *testing.B) {
-			store := newEvictionStore(p.policy, 1000)
-			// Fill to capacity.
-			for i := range 1000 {
-				store.put(fmt.Sprintf("key-%d", i), cacheEntry{value: []byte("v"), found: true})
-			}
-			b.ResetTimer()
-			var i int
-			for b.Loop() {
-				store.put(fmt.Sprintf("evict-%d", i), cacheEntry{value: []byte("v"), found: true})
-				i++
-			}
-		})
-	}
-}

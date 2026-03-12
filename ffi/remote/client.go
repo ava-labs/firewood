@@ -16,24 +16,30 @@ import (
 )
 
 // ClientOption configures a [Client].
-type ClientOption func(*Client)
+type ClientOption func(*clientConfig)
+
+// clientConfig holds configuration for creating a [Client].
+type clientConfig struct {
+	maxCacheBytes int
+	cachePolicy   ffi.EvictionPolicy
+	sampleK       int
+}
 
 // WithCache enables a client-side read cache for verified Get results with
-// the given eviction policy. maxEntries is the maximum number of key-value
-// pairs to cache. A value of zero or negative disables the cache.
-func WithCache(maxEntries int, policy EvictionPolicy) ClientOption {
-	return func(c *Client) {
-		if maxEntries > 0 {
-			c.cache = newReadCache(maxEntries, policy)
-		}
+// the given eviction policy. maxBytes is the memory budget in bytes.
+// A value of zero or negative disables the cache.
+func WithCache(maxBytes int, policy ffi.EvictionPolicy) ClientOption {
+	return func(cfg *clientConfig) {
+		cfg.maxCacheBytes = maxBytes
+		cfg.cachePolicy = policy
 	}
 }
 
-// WithCacheSize enables a client-side read cache using the [LRU] eviction
-// policy. maxEntries is the maximum number of key-value pairs to cache. A
-// value of zero or negative disables the cache.
-func WithCacheSize(maxEntries int) ClientOption {
-	return WithCache(maxEntries, LRU)
+// WithCacheSize enables a client-side read cache using the [ffi.EvictionLRU]
+// eviction policy. maxBytes is the memory budget in bytes. A value of zero or
+// negative disables the cache.
+func WithCacheSize(maxBytes int) ClientOption {
+	return WithCache(maxBytes, ffi.EvictionLRU)
 }
 
 // Client is a remote Firewood client that holds a truncated trie and
@@ -47,9 +53,9 @@ type Client struct {
 	rpc   pb.FirewoodRemoteClient
 	depth uint
 
-	mu    sync.RWMutex    // protects trie
-	trie  *refCountedTrie
-	cache *readCache // nil when disabled
+	mu   sync.RWMutex       // protects root
+	rc   *ffi.RemoteClient  // owns committed trie + cache
+	root ffi.Hash           // cached root hash (set by bootstrap/commit)
 }
 
 // NewClient creates a new remote client that will connect to addr.
@@ -60,15 +66,24 @@ func NewClient(addr string, depth uint, opts ...ClientOption) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("dial: %w", err)
 	}
-	c := &Client{
+
+	var cfg clientConfig
+	for _, opt := range opts {
+		opt(&cfg)
+	}
+
+	rc, err := ffi.NewRemoteClient(cfg.maxCacheBytes, cfg.cachePolicy, cfg.sampleK)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("create remote client: %w", err)
+	}
+
+	return &Client{
 		conn:  conn,
 		rpc:   pb.NewFirewoodRemoteClient(conn),
 		depth: depth,
-	}
-	for _, opt := range opts {
-		opt(c)
-	}
-	return c, nil
+		rc:    rc,
+	}, nil
 }
 
 // Bootstrap fetches a truncated trie from the server for the given trusted
@@ -82,29 +97,15 @@ func (c *Client) Bootstrap(ctx context.Context, trustedRootHash ffi.Hash) error 
 		return fmt.Errorf("get truncated trie: %w", err)
 	}
 
-	trie := &ffi.TruncatedTrie{}
-	if err := trie.UnmarshalBinary(resp.GetTrieData()); err != nil {
-		return fmt.Errorf("unmarshal truncated trie: %w", err)
-	}
-
-	if err := trie.VerifyRootHash(trustedRootHash); err != nil {
-		trie.Free()
-		return fmt.Errorf("verify root hash: %w", err)
-	}
-
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Release old trie if any
-	var releaseErr error
-	if c.trie != nil {
-		releaseErr = c.trie.release()
+	root, err := c.rc.Bootstrap(resp.GetTrieData(), trustedRootHash)
+	if err != nil {
+		return fmt.Errorf("bootstrap: %w", err)
 	}
-	c.trie = newRefCountedTrie(trie)
-	if c.cache != nil {
-		c.cache.clear()
-	}
-	return releaseErr
+	c.root = root
+	return nil
 }
 
 // Get fetches a value from the server and verifies the proof against the
@@ -116,21 +117,19 @@ func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.trie == nil {
+	if c.root == (ffi.Hash{}) {
 		return nil, fmt.Errorf("client not bootstrapped")
 	}
 
 	// Cache lookup.
-	if c.cache != nil {
-		if entry, ok := c.cache.lookup(key); ok {
-			if entry.found {
-				return entry.value, nil
-			}
-			return nil, nil
+	if result := c.rc.CacheLookup(key); result.Cached {
+		if result.Found {
+			return result.Value, nil
 		}
+		return nil, nil
 	}
 
-	root := c.trie.trie.Root()
+	root := c.root
 	resp, err := c.rpc.GetValue(ctx, &pb.GetValueRequest{
 		RootHash: root[:],
 		Key:      key,
@@ -139,18 +138,13 @@ func (c *Client) Get(ctx context.Context, key []byte) ([]byte, error) {
 		return nil, fmt.Errorf("get value: %w", err)
 	}
 
-	// Verify the proof
+	// Verify the proof and cache the result.
 	var value []byte
 	if resp.Value != nil {
 		value = resp.GetValue()
 	}
-	if err := ffi.VerifySingleKeyProof(root, key, value, resp.GetProof()); err != nil {
+	if err := c.rc.VerifyGet(key, value, resp.GetProof()); err != nil {
 		return nil, fmt.Errorf("proof verification failed: %w", err)
-	}
-
-	// Cache the verified result.
-	if c.cache != nil {
-		c.cache.store(key, cacheEntry{value: value, found: value != nil})
 	}
 
 	return value, nil
@@ -163,11 +157,11 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	if c.trie == nil {
+	if c.root == (ffi.Hash{}) {
 		return ffi.Hash{}, fmt.Errorf("client not bootstrapped")
 	}
 
-	root := c.trie.trie.Root()
+	root := c.root
 	pbOps := batchOpsToProto(ops)
 
 	// Create proposal and get witness proof for verification before commit.
@@ -197,9 +191,9 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 		return ffi.Hash{}, fmt.Errorf("unmarshal witness: %w", err)
 	}
 
-	newTrie, err := c.trie.trie.VerifyWitness(witness, ops)
-	witness.Free()
+	newTrie, err := c.rc.VerifyWitness(witness, ops)
 	if err != nil {
+		witness.Free()
 		return ffi.Hash{}, fmt.Errorf("verify witness: %w", err)
 	}
 
@@ -209,18 +203,20 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 	})
 	if err != nil {
 		newTrie.Free()
+		witness.Free()
 		return ffi.Hash{}, fmt.Errorf("commit proposal: %w", err)
 	}
 	committed = true
 
-	// Replace old trie.
-	releaseErr := c.trie.release()
-	c.trie = newRefCountedTrie(newTrie)
-	if c.cache != nil {
-		c.cache.invalidateBatch(ops)
+	// Commit trie into handle (takes ownership of newTrie, invalidates cache).
+	newRoot, err := c.rc.CommitTrie(newTrie, witness)
+	witness.Free()
+	if err != nil {
+		return ffi.Hash{}, fmt.Errorf("commit trie: %w", err)
 	}
+	c.root = newRoot
 
-	return c.trie.trie.Root(), releaseErr
+	return c.root, nil
 }
 
 // Propose creates a proposal on the server and returns a [remoteProposal]
@@ -230,11 +226,11 @@ func (c *Client) Propose(ctx context.Context, ops []ffi.BatchOp) (*remoteProposa
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
-	if c.trie == nil {
+	if c.root == (ffi.Hash{}) {
 		return nil, fmt.Errorf("client not bootstrapped")
 	}
 
-	root := c.trie.trie.Root()
+	root := c.root
 	pbOps := batchOpsToProto(ops)
 
 	createResp, err := c.rpc.CreateProposal(ctx, &pb.CreateProposalRequest{
@@ -260,27 +256,24 @@ func (c *Client) Propose(ctx context.Context, ops []ffi.BatchOp) (*remoteProposa
 	// The server generates witnesses from the committed root, so verify
 	// against the client's committed trie.
 	expectedCumulativeOps := ops
-	verifiedTrie, err := verifyWitnessFromResponse(c.trie.trie, createResp, expectedCumulativeOps)
+	verifiedTrie, witness, err := verifyWitnessFromResponse(c.rc, createResp, expectedCumulativeOps)
 	if err != nil {
 		return nil, err
 	}
 
-	c.trie.acquire()
-
 	success = true
-	newTrie := newRefCountedTrie(verifiedTrie)
 	return &remoteProposal{
 		proposalID:            proposalID,
 		root:                  verifiedTrie.Root(),
-		newTrie:               newTrie,
+		newTrie:               verifiedTrie,
 		rpc:                   c.rpc,
 		depth:                 c.depth,
-		committedTrie:         c.trie,
 		expectedCumulativeOps: expectedCumulativeOps,
-		cache:                 c.cache,
+		witness:               witness,
+		rc:                    c.rc,
 
 		mu:         &c.mu,
-		parentTrie: &c.trie,
+		parentRoot: &c.root,
 	}, nil
 }
 
@@ -306,11 +299,7 @@ func (c *Client) LatestRevision() (ffi.DBRevision, error) {
 func (c *Client) Root() ffi.Hash {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
-	if c.trie == nil {
-		return ffi.Hash{}
-	}
-	return c.trie.trie.Root()
+	return c.root
 }
 
 // Close releases all resources held by the client.
@@ -318,16 +307,14 @@ func (c *Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	var releaseErr error
-	if c.trie != nil {
-		releaseErr = c.trie.release()
-		c.trie = nil
+	var rcErr error
+	if c.rc != nil {
+		rcErr = c.rc.Free()
+		c.rc = nil
 	}
-	if c.cache != nil {
-		c.cache.clear()
-	}
+	c.root = ffi.Hash{}
 	if c.conn != nil {
-		return errors.Join(releaseErr, c.conn.Close())
+		return errors.Join(rcErr, c.conn.Close())
 	}
-	return releaseErr
+	return rcErr
 }
