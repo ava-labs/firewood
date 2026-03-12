@@ -186,15 +186,9 @@ func (c *Client) Update(ctx context.Context, ops []ffi.BatchOp) (ffi.Hash, error
 	}()
 
 	// Deserialize and verify witness before committing.
-	witness := &ffi.WitnessProof{}
-	if err := witness.UnmarshalBinary(createResp.GetWitnessProof()); err != nil {
-		return ffi.Hash{}, fmt.Errorf("unmarshal witness: %w", err)
-	}
-
-	newTrie, err := c.rc.VerifyWitness(witness, ops)
+	newTrie, witness, err := verifyWitnessFromResponse(c.rc, createResp, ops)
 	if err != nil {
-		witness.Free()
-		return ffi.Hash{}, fmt.Errorf("verify witness: %w", err)
+		return ffi.Hash{}, err
 	}
 
 	// Verification passed — commit the proposal.

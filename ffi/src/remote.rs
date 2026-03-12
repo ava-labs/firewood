@@ -134,6 +134,25 @@ impl CResult for WitnessResult {
     }
 }
 
+/// Converts FFI batch ops ([`BorrowedBatchOps`]) to core [`witness::OwnedBatchOp`]s.
+fn ffi_ops_to_core(ops: &BorrowedBatchOps<'_>) -> Vec<witness::OwnedBatchOp> {
+    ops.as_slice()
+        .iter()
+        .map(|op| match op {
+            crate::BatchOp::Put { key, value } => CoreBatchOp::Put {
+                key: key.as_slice().into(),
+                value: value.as_slice().into(),
+            },
+            crate::BatchOp::Delete { key } => CoreBatchOp::Delete {
+                key: key.as_slice().into(),
+            },
+            crate::BatchOp::DeleteRange { prefix } => CoreBatchOp::DeleteRange {
+                prefix: prefix.as_slice().into(),
+            },
+        })
+        .collect()
+}
+
 // -- FFI functions --
 
 /// Creates a [`TruncatedTrieHandle`] from the database revision matching the
@@ -291,23 +310,7 @@ pub extern "C" fn fwd_generate_witness(
         let api_hash: firewood::v2::api::HashKey = root_hash.into();
         let revision = db.db().revision(api_hash).map_err(|e| e.to_string())?;
 
-        // Convert FFI batch ops to core BatchOps (including DeleteRange)
-        let core_ops: Vec<witness::OwnedBatchOp> = batch_ops
-            .as_slice()
-            .iter()
-            .map(|op| match op {
-                crate::BatchOp::Put { key, value } => CoreBatchOp::Put {
-                    key: key.as_slice().into(),
-                    value: value.as_slice().into(),
-                },
-                crate::BatchOp::Delete { key } => CoreBatchOp::Delete {
-                    key: key.as_slice().into(),
-                },
-                crate::BatchOp::DeleteRange { prefix } => CoreBatchOp::DeleteRange {
-                    prefix: prefix.as_slice().into(),
-                },
-            })
-            .collect();
+        let core_ops = ffi_ops_to_core(&batch_ops);
 
         // Expand DeleteRange ops into individual Delete ops using the revision
         let remote_ops = witness::expand_delete_ranges(revision.as_ref(), &core_ops)
@@ -365,23 +368,7 @@ pub extern "C" fn fwd_verify_witness(
     crate::invoke_with_handle(trie_handle, move |trie_h| -> Result<_, String> {
         let witness_h = witness_handle.ok_or("null witness handle")?;
 
-        // Convert FFI batch ops to OwnedBatchOp (including DeleteRange)
-        let owned_ops: Vec<witness::OwnedBatchOp> = expected_ops
-            .as_slice()
-            .iter()
-            .map(|op| match op {
-                crate::BatchOp::Put { key, value } => CoreBatchOp::Put {
-                    key: key.as_slice().into(),
-                    value: value.as_slice().into(),
-                },
-                crate::BatchOp::Delete { key } => CoreBatchOp::Delete {
-                    key: key.as_slice().into(),
-                },
-                crate::BatchOp::DeleteRange { prefix } => CoreBatchOp::DeleteRange {
-                    prefix: prefix.as_slice().into(),
-                },
-            })
-            .collect();
+        let owned_ops = ffi_ops_to_core(&expected_ops);
 
         let new_trie = witness::verify_witness(&trie_h.trie, &witness_h.proof, &owned_ops)
             .map_err(|e| e.to_string())?;
@@ -1018,23 +1005,7 @@ pub extern "C" fn fwd_remote_client_verify_witness(
             return Err("client not bootstrapped".into());
         }
 
-        // Convert FFI batch ops to OwnedBatchOp (including DeleteRange)
-        let owned_ops: Vec<witness::OwnedBatchOp> = expected_ops
-            .as_slice()
-            .iter()
-            .map(|op| match op {
-                crate::BatchOp::Put { key, value } => CoreBatchOp::Put {
-                    key: key.as_slice().into(),
-                    value: value.as_slice().into(),
-                },
-                crate::BatchOp::Delete { key } => CoreBatchOp::Delete {
-                    key: key.as_slice().into(),
-                },
-                crate::BatchOp::DeleteRange { prefix } => CoreBatchOp::DeleteRange {
-                    prefix: prefix.as_slice().into(),
-                },
-            })
-            .collect();
+        let owned_ops = ffi_ops_to_core(&expected_ops);
 
         let new_trie = witness::verify_witness(&trie_guard, &witness_h.proof, &owned_ops)
             .map_err(|e| e.to_string())?;

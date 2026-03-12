@@ -11,9 +11,7 @@ import (
 
 	ffi "github.com/ava-labs/firewood/ffi"
 	pb "github.com/ava-labs/firewood/ffi/remote/proto"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
 
@@ -35,27 +33,9 @@ type RemoteDB struct {
 // NewRemoteDB creates a [ffi.DB] that talks to a remote Firewood server.
 // It bootstraps using trustedRoot and returns an error if verification fails.
 func NewRemoteDB(ctx context.Context, addr string, trustedRoot ffi.Hash, depth uint, opts ...ClientOption) (ffi.DB, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	c, err := NewClient(addr, depth, opts...)
 	if err != nil {
-		return nil, fmt.Errorf("dial: %w", err)
-	}
-
-	var cfg clientConfig
-	for _, opt := range opts {
-		opt(&cfg)
-	}
-
-	rc, err := ffi.NewRemoteClient(cfg.maxCacheBytes, cfg.cachePolicy, cfg.sampleK)
-	if err != nil {
-		conn.Close()
-		return nil, fmt.Errorf("create remote client: %w", err)
-	}
-
-	c := &Client{
-		conn:  conn,
-		rpc:   pb.NewFirewoodRemoteClient(conn),
-		depth: depth,
-		rc:    rc,
+		return nil, err
 	}
 	if err := c.Bootstrap(ctx, trustedRoot); err != nil {
 		c.Close()
@@ -148,6 +128,11 @@ func (p *remoteProposal) Commit(ctx context.Context) error {
 	// Commit trie into handle (takes ownership of newTrie, invalidates cache).
 	newRoot, commitErr := p.rc.CommitTrie(p.newTrie, p.witness)
 	p.newTrie = nil // ownership transferred
+	// Free witness unconditionally — it's no longer needed after CommitTrie.
+	if p.witness != nil {
+		p.witness.Free()
+		p.witness = nil
+	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -155,13 +140,7 @@ func (p *remoteProposal) Commit(ctx context.Context) error {
 	if commitErr != nil {
 		return fmt.Errorf("commit trie: %w", commitErr)
 	}
-
 	*p.parentRoot = newRoot
-
-	if p.witness != nil {
-		p.witness.Free()
-		p.witness = nil
-	}
 	return nil
 }
 
