@@ -315,6 +315,29 @@ holding a stateful iterator across calls. Pagination is done by the client
 setting `start_key` to the last returned key + `\x00`. This avoids server-side
 iterator lifecycle management.
 
+### 5. Single client per server
+
+The system is designed for exclusive access: one client operates against one
+server at a time. This simplifies several aspects of the design:
+
+- **Proposal IDs**: The server uses a monotonically incrementing `uint64`
+  counter. Multiple clients could create conflicting proposals from the same
+  base revision, leading to commit failures or undefined state.
+- **Proposal chain pointer model**: `remoteProposal` uses a pointer-to-pointer
+  chain (`parentTrie *(*refCountedTrie)`) for zero-copy trie propagation on
+  commit. This requires linear chains committed leaf-to-root — a constraint
+  naturally satisfied when one client controls all proposal ordering.
+- **GC is for crash recovery, not isolation**: `WithProposalTTL` exists to
+  reclaim leaked proposals if the single client crashes between `CreateProposal`
+  and `Commit`/`Drop`. It is not designed to isolate concurrent clients.
+- **Cache coherence**: The client-side read cache assumes it is the only writer.
+  Multiple clients writing through the same server would cause stale cache
+  entries with no cross-client invalidation.
+- **`Client.mu` serialization**: The client's `RWMutex` serializes mutations
+  (`Update`, `Commit`, `Bootstrap`, `Close`) against reads (`Get`, `Root`).
+  This works because there is exactly one client; a multi-client system would
+  need server-side coordination instead.
+
 ## Running Tests
 
 The Go tests auto-detect the compiled hash algorithm at runtime, so they work
@@ -1275,13 +1298,17 @@ proposal exists in the active proposals cache.
    impls), chained proposals could generate witnesses directly from the parent
    proposal state instead of using cumulative ops from the committed root.
 
-3. **Concurrency contract**: `Client` uses a `sync.RWMutex` to protect its
-   `trie` field. Concurrent reads (`Get`, `Root`) are safe alongside mutations
-   (`Bootstrap`, `Update`, `Close`, `Commit`). Mutations are serialized by the
-   write lock but callers should not rely on this for correctness — concurrent
-   mutations (e.g., two Updates) are logic errors. `remoteProposal` holds a
-   pointer to the same mutex so `Commit` can write-lock during the parent trie
-   swap. `remoteIterator` is single-goroutine only and is not synchronized.
+3. **Concurrency contract (single-client)**: The system assumes one client per
+   server (see Key Design Decision #5). `Client` uses a `sync.RWMutex` to
+   protect its `trie` field: concurrent reads (`Get`, `Root`) are safe
+   alongside mutations (`Bootstrap`, `Update`, `Close`, `Commit`), but
+   concurrent mutations are logic errors. `remoteProposal` holds a pointer to
+   the same mutex so `Commit` can write-lock during the parent trie swap.
+   The proposal pointer chain (`parentTrie *(*refCountedTrie)`) requires
+   linear chains committed leaf-to-root — no forking (at most one child per
+   proposal) and no out-of-order commits. These constraints are naturally
+   enforced by single-client control. `remoteIterator` is single-goroutine
+   only and is not synchronized.
 
    **`committedTrie` lifetime**: Both `newTrie` and `committedTrie` on
    `remoteProposal` use `refCountedTrie` (atomic reference counting). When

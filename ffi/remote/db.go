@@ -114,6 +114,17 @@ func (rc *refCountedTrie) release() error {
 
 // remoteProposal implements [ffi.DBProposal] for a proposal living on the
 // remote server.
+//
+// Proposals form a linear chain via parentTrie pointers: each child's
+// parentTrie points to the parent's newTrie field. On Commit, the child
+// writes its verified trie into the parent's newTrie, propagating up the
+// chain to c.trie. This design requires:
+//   - Linear chains only (no forking — a proposal must have at most one child).
+//   - Leaf-to-root commit order (commit the deepest child first).
+//
+// These constraints are naturally satisfied by the single-client design:
+// the server rejects concurrent proposals from the same base, and the
+// client controls commit ordering.
 type remoteProposal struct {
 	proposalID uint64
 	root       ffi.Hash
@@ -132,7 +143,11 @@ type remoteProposal struct {
 
 	// mu protects parentTrie swap during Commit; points to Client.mu.
 	mu *sync.RWMutex
-	// parentTrie points to the parent's trie pointer so Commit can swap it.
+	// parentTrie points to the parent's trie pointer so Commit can swap it
+	// atomically (under mu). For a first-level proposal this is &c.trie;
+	// for a child it is &parent.newTrie. Commit writes p.newTrie into
+	// *p.parentTrie, which either updates the client's current trie or
+	// propagates the verified state up the chain.
 	parentTrie *(*refCountedTrie)
 }
 

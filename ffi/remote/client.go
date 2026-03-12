@@ -39,6 +39,9 @@ func WithCacheSize(maxEntries int) ClientOption {
 // Client is a remote Firewood client that holds a truncated trie and
 // communicates with a [Server] via gRPC. Every read is verified against a
 // Merkle proof and every commit is verified via witness-based re-execution.
+//
+// The client assumes exclusive access to its server — one client per server.
+// Multiple clients against the same server will cause proposal conflicts.
 type Client struct {
 	conn  *grpc.ClientConn
 	rpc   pb.FirewoodRemoteClient

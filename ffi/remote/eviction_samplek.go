@@ -125,26 +125,38 @@ func (s *sampleKLRUStore) evict() {
 		samples = n
 	}
 
-	// Sample distinct random indices.
+	// Find the entry with the oldest access among up to K samples.
 	bestIdx := -1
 	var bestAccess uint64
-	seen := make(map[int]bool, samples)
-	for range samples {
-		idx := s.randIntn(n)
-		// Skip duplicates — try a few more times.
-		for attempts := 0; seen[idx] && attempts < samples; attempts++ {
-			idx = s.randIntn(n)
-		}
-		if seen[idx] {
-			continue
-		}
-		seen[idx] = true
 
-		key := s.order[idx]
-		e := s.items[key]
-		if bestIdx == -1 || e.lastAccess < bestAccess {
-			bestIdx = idx
-			bestAccess = e.lastAccess
+	if samples >= n {
+		// Full scan — guaranteed to find the true LRU entry.
+		for i, key := range s.order {
+			e := s.items[key]
+			if bestIdx == -1 || e.lastAccess < bestAccess {
+				bestIdx = i
+				bestAccess = e.lastAccess
+			}
+		}
+	} else {
+		// Sample K distinct random indices.
+		seen := make(map[int]bool, samples)
+		for range samples {
+			idx := s.randIntn(n)
+			for attempts := 0; seen[idx] && attempts < samples; attempts++ {
+				idx = s.randIntn(n)
+			}
+			if seen[idx] {
+				continue
+			}
+			seen[idx] = true
+
+			key := s.order[idx]
+			e := s.items[key]
+			if bestIdx == -1 || e.lastAccess < bestAccess {
+				bestIdx = idx
+				bestAccess = e.lastAccess
+			}
 		}
 	}
 

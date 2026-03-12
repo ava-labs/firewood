@@ -37,7 +37,9 @@ type proposalEntry struct {
 type ServerOption func(*Server)
 
 // WithProposalTTL enables automatic garbage collection of proposals older
-// than ttl. A zero TTL (the default) disables GC.
+// than ttl. A zero TTL (the default) disables GC. GC exists primarily for
+// crash recovery: if the single client disconnects after CreateProposal but
+// before Commit or Drop, GC reclaims the leaked server-side resources.
 func WithProposalTTL(ttl time.Duration) ServerOption {
 	return func(s *Server) { s.proposalTTL = ttl }
 }
@@ -50,6 +52,11 @@ func WithContext(ctx context.Context) ServerOption {
 }
 
 // Server implements the FirewoodRemote gRPC service backed by an FFI Database.
+//
+// The server is designed for a single client. All proposal IDs, GC, and
+// state management assume one client operates against one server at a time.
+// Running multiple clients against the same server is unsupported and will
+// cause proposal conflicts and undefined behavior.
 type Server struct {
 	pb.UnimplementedFirewoodRemoteServer
 
