@@ -2,6 +2,7 @@
 
 ## 1. Motivation
 
+
 ### Problem
 
 In Avalanche-based blockchain networks, each validator on a given chain
