@@ -1680,6 +1680,83 @@ mod test {
         );
     }
 
+    /// Verifies that deferred persistence with commit_count > 1 persists
+    /// revisions from multiple chains (validators on different forks).
+    /// With commit_count=10 and only 2 commits, the persist threshold is
+    /// never reached — revisions are only persisted at close time. The Vec
+    /// accumulation ensures both are available.
+    #[test]
+    fn test_deferred_persist_multi_chain_all_persisted() {
+        const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
+        const MAX_REVISIONS: usize = COMMIT_COUNT.get() as usize + 1;
+
+        let tmpdir = tempfile::tempdir().unwrap();
+        let cfg = MultiDbConfig::builder()
+            .db(
+                DbConfig::builder()
+                    .manager(
+                        RevisionManagerConfig::builder()
+                            .max_revisions(MAX_REVISIONS)
+                            .deferred_persistence_commit_count(COMMIT_COUNT)
+                            .build(),
+                    )
+                    .build(),
+            )
+            .build();
+
+        let db = MultiDb::new(tmpdir.as_ref(), cfg.clone()).unwrap();
+
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        db.register_validator(v0).unwrap();
+        db.register_validator(v1).unwrap();
+
+        // Commit different batches so the validators diverge onto separate chains
+        let batch_a = vec![BatchOp::Put {
+            key: b"key_a".to_vec(),
+            value: b"val_a".to_vec(),
+        }];
+        let batch_b = vec![BatchOp::Put {
+            key: b"key_b".to_vec(),
+            value: b"val_b".to_vec(),
+        }];
+
+        let proposal_a = db.propose(v0, batch_a).unwrap();
+        db.commit(v0, proposal_a).unwrap();
+
+        let proposal_b = db.propose(v1, batch_b).unwrap();
+        db.commit(v1, proposal_b).unwrap();
+
+        // Record root hashes before close
+        let hash_a = db.validator_root_hash(v0).unwrap().unwrap();
+        let hash_b = db.validator_root_hash(v1).unwrap().unwrap();
+        assert_ne!(hash_a, hash_b, "validators should have diverged");
+
+        // Close — triggers persist of accumulated revisions
+        db.close().unwrap();
+
+        // Reopen — validators are auto-restored from the header
+        let db = MultiDb::new(tmpdir.as_ref(), cfg).unwrap();
+
+        // Verify both chains' data survived
+        assert_eq!(
+            db.get(v0, b"key_a").unwrap(),
+            Some(b"val_a".to_vec().into_boxed_slice()),
+            "validator 0's data should survive close/reopen"
+        );
+        assert_eq!(
+            db.get(v1, b"key_b").unwrap(),
+            Some(b"val_b".to_vec().into_boxed_slice()),
+            "validator 1's data should survive close/reopen"
+        );
+
+        // Verify hashes match
+        assert_eq!(db.validator_root_hash(v0).unwrap().unwrap(), hash_a);
+        assert_eq!(db.validator_root_hash(v1).unwrap().unwrap(), hash_b);
+
+        db.close().unwrap();
+    }
+
     /// Verifies that an unpersisted revision which wipes the database is
     /// persisted when the database closes.
     #[test]
@@ -1821,9 +1898,16 @@ mod test {
             })
             .count();
 
+        // The first persist cycle saves all accumulated revisions to the root
+        // store (ceil(commit_count/2) revisions). The shutdown path saves one
+        // more (the latest). A second persist cycle may or may not complete
+        // before shutdown, so the count is at least threshold+1 but at most all.
+        let persist_interval = COMMIT_COUNT.get().div_ceil(2) as usize;
+        let min_expected = persist_interval + 1;
         assert!(
-            persisted_count > 0 && persisted_count <= 2,
-            "Expected at most 2 persisted revisions, but found {persisted_count}"
+            persisted_count >= min_expected && persisted_count <= root_hashes.len(),
+            "Expected between {min_expected} and {len} persisted revisions, found {persisted_count}",
+            len = root_hashes.len(),
         );
     }
 

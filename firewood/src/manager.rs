@@ -171,7 +171,7 @@ struct MultiHeadState {
     /// Monotonic counter for allocating new chain IDs.
     next_chain_id: ChainId,
     /// Fork tree tracking fork relationships for safe node reaping.
-    fork_tree: ForkTree,
+    fork_tree: Arc<ForkTree>,
 }
 
 impl MultiHeadState {
@@ -675,7 +675,7 @@ impl RevisionManager {
     /// the reaper can safely determine which nodes to free.
     fn build_can_free(&self, state: &MultiHeadState, chain_fork_id: ForkId) -> CanFreeFn {
         let active_fork_ids: Vec<ForkId> = state.chains.values().map(|c| c.fork_id).collect();
-        let fork_tree_snapshot = state.fork_tree.clone();
+        let fork_tree_snapshot = Arc::clone(&state.fork_tree);
         let gen_at_snapshot = self.fork_generation.load(Ordering::Acquire);
         let fork_gen = Arc::clone(&self.fork_generation);
         Arc::new(move |node_fork_id: ForkId| -> bool {
@@ -709,7 +709,7 @@ impl RevisionManager {
             hash_to_chain.insert(hash, 0);
         }
 
-        let fork_tree = ForkTree::new();
+        let fork_tree = Arc::new(ForkTree::new());
 
         let mut chains = HashMap::new();
         chains.insert(
@@ -786,7 +786,7 @@ impl RevisionManager {
 
         // Restore the fork tree
         if !fork_tree_entries.is_empty() {
-            state.fork_tree = ForkTree::from_persisted(fork_tree_next_id, &fork_tree_entries);
+            state.fork_tree = Arc::new(ForkTree::from_persisted(fork_tree_next_id, &fork_tree_entries));
         }
 
         // Build a map from slot -> fork_id for chain assignment
@@ -845,7 +845,7 @@ impl RevisionManager {
         // This cleans up phantom entries from crashes between persist_fork_tree
         // and revision persist.
         let active_fork_ids: HashSet<ForkId> = state.chains.values().map(|c| c.fork_id).collect();
-        state.fork_tree.prune_unreferenced(&active_fork_ids);
+        Arc::make_mut(&mut state.fork_tree).prune_unreferenced(&active_fork_ids);
 
         drop(state);
 
@@ -1175,8 +1175,7 @@ impl RevisionManager {
                     .fork_id;
                 let active_fork_ids: HashSet<ForkId> =
                     state.chains.values().map(|c| c.fork_id).collect();
-                let (continuation_fork_id, new_fork_id) = state
-                    .fork_tree
+                let (continuation_fork_id, new_fork_id) = Arc::make_mut(&mut state.fork_tree)
                     .fork(parent_fork_id, &active_fork_ids)
                     .map_err(|e| match e {
                         ForkError::CapacityExhausted { max } => {
@@ -1455,21 +1454,21 @@ impl RevisionManager {
             return collected; // Chain already cleaned up
         };
 
-        // Find the min-head position of validators on THIS chain
-        let min_pos = state
-            .validators
-            .values()
-            .filter(|v| v.chain == chain_id)
-            .filter_map(|v| chain.revisions.iter().position(|r| Arc::ptr_eq(r, &v.head)))
-            .min()
-            .unwrap_or(0);
-
-        let mut reaped = 0;
-        while chain.revisions.len() > self.max_revisions && reaped < min_pos {
+        while chain.revisions.len() > self.max_revisions {
+            // Stop if ANY validator's head is the oldest revision
+            let Some(oldest) = chain.revisions.front() else {
+                break;
+            };
+            let held_by_validator = state
+                .validators
+                .values()
+                .any(|v| v.chain == chain_id && Arc::ptr_eq(&v.head, oldest));
+            if held_by_validator {
+                break;
+            }
             let Some(oldest) = chain.revisions.pop_front() else {
                 break;
             };
-
             Self::remove_hash_if_unreferenced(
                 &state.validators,
                 &mut state.by_hash,
@@ -1477,7 +1476,6 @@ impl RevisionManager {
                 &oldest,
             );
             collected.push(oldest);
-            reaped = reaped.wrapping_add(1);
         }
 
         collected
@@ -1670,7 +1668,7 @@ impl RevisionManager {
 
         // Remove this chain's fork_id from the fork tree
         if chain_fork_id != 0 {
-            state.fork_tree.remove(chain_fork_id);
+            Arc::make_mut(&mut state.fork_tree).remove(chain_fork_id);
         }
         let revisions = self.collect_all_chain_revisions(source_chain, state);
         Ok((revisions, can_free))

@@ -303,7 +303,7 @@ impl PersistChannel {
                 persist_threshold,
                 shutdown: false,
                 pending_reaps: Vec::new(),
-                latest_committed: None,
+                committed_revisions: Vec::new(),
             }),
             commit_not_full: Condvar::new(),
             persist_ready: Condvar::new(),
@@ -349,7 +349,7 @@ impl PersistChannel {
             return Err(PersistError::Shutdown);
         }
 
-        state.latest_committed = Some(revision);
+        state.committed_revisions.push(revision);
         state.permits_available = state.permits_available.wrapping_sub(1);
 
         // Wake the persister once we reach the threshold.
@@ -366,7 +366,7 @@ impl PersistChannel {
     ///
     /// Returns an error if the channel has been shut down.
     fn pop(&self) -> Result<PersistDataGuard<'_>, PersistError> {
-        let (permits_to_release, pending_reaps, latest_committed) = {
+        let (permits_to_release, pending_reaps, committed_revisions) = {
             let mut state = self.state.lock();
             loop {
                 // Shutdown requested. Return error.
@@ -375,7 +375,7 @@ impl PersistChannel {
                 }
                 // Unblock to persist when permits available <= threshold
                 if state.permits_available <= state.persist_threshold
-                    && state.latest_committed.is_some()
+                    && !state.committed_revisions.is_empty()
                 {
                     break (
                         state
@@ -383,13 +383,13 @@ impl PersistChannel {
                             .get()
                             .wrapping_sub(state.permits_available),
                         std::mem::take(&mut state.pending_reaps),
-                        state.latest_committed.take(),
+                        std::mem::take(&mut state.committed_revisions),
                     );
                 }
                 // Unblock even if we haven't met the threshold if there are pending reaps.
                 // Permits to release is set to 0, and committed revision is not taken.
                 if !state.pending_reaps.is_empty() {
-                    break (0, std::mem::take(&mut state.pending_reaps), None);
+                    break (0, std::mem::take(&mut state.pending_reaps), Vec::new());
                 }
                 // Block until it is woken up by the committer thread.
                 self.persist_ready.wait(&mut state);
@@ -400,7 +400,7 @@ impl PersistChannel {
             channel: self,
             permits_to_release,
             pending_reaps,
-            latest_committed,
+            committed_revisions,
         })
     }
 
@@ -445,8 +445,8 @@ struct PersistChannelState {
     shutdown: bool,
     /// Nodestores awaiting reaping by the background thread.
     pending_reaps: Vec<ReapItem>,
-    /// The most recent committed revision, replaced on each push.
-    latest_committed: Option<CommittedRevision>,
+    /// Committed revisions accumulated since the last persist cycle.
+    committed_revisions: Vec<CommittedRevision>,
 }
 
 /// RAII guard returned by [`PersistChannel::pop`] that carries the data for
@@ -463,9 +463,9 @@ struct PersistDataGuard<'a> {
     permits_to_release: u64,
     /// Expired node stores whose deleted nodes should be returned to free lists.
     pending_reaps: Vec<ReapItem>,
-    /// The latest committed revision to persist, if the threshold was reached.
-    /// `None` when this cycle was triggered solely by pending reaps.
-    latest_committed: Option<CommittedRevision>,
+    /// Committed revisions to persist, accumulated since the last cycle.
+    /// Empty when this cycle was triggered solely by pending reaps.
+    committed_revisions: Vec<CommittedRevision>,
 }
 
 impl Drop for PersistDataGuard<'_> {
@@ -536,9 +536,9 @@ impl PersistLoop {
                 self.reap(item)?;
             }
 
-            if let Some(revision) = persist_data.latest_committed.take() {
-                self.persist_to_disk(&revision)
-                    .and_then(|()| self.maybe_save_to_root_store(&revision))?;
+            for revision in &persist_data.committed_revisions {
+                self.persist_to_disk(revision)
+                    .and_then(|()| self.maybe_save_to_root_store(revision))?;
             }
         }
 
