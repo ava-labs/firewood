@@ -47,7 +47,7 @@ pub(crate) mod primitives;
 
 use crate::IntoHashType;
 use crate::linear::OffsetReader;
-use crate::logger::{debug, trace};
+use crate::logger::{debug, trace, warn};
 use crate::node::branch::ReadSerializable as _;
 use firewood_metrics::firewood_increment;
 use smallvec::SmallVec;
@@ -921,7 +921,13 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
                     let fork_id = node.fork_id();
                     if fork_id == 0 {
                         if let Some(addr) = node.persisted_address() {
-                            let disk_fork_id = self.read_fork_id_from_disk(addr).unwrap_or(0);
+                            let disk_fork_id = match self.read_fork_id_from_disk(addr) {
+                                Ok(fid) => fid,
+                                Err(e) => {
+                                    warn!("failed to read fork_id from disk at {addr}: {e}; defaulting to 0 (safe, won't free)");
+                                    0
+                                }
+                            };
                             return (node, disk_fork_id);
                         }
                     }

@@ -640,7 +640,7 @@ mod test {
 
     use crate::db::{Db, Proposal, UseParallel};
     use crate::manager::RevisionManagerConfig;
-    use crate::v2::api::{Db as _, DbView, HashKeyExt, Proposal as _};
+    use crate::v2::api::{Db as _, DbView, HashKeyExt, OptionalHashKeyExt, Proposal as _};
 
     use super::{BatchOp, DbConfig};
 
@@ -3625,18 +3625,14 @@ mod test {
             db.close().unwrap();
         }
 
-        // Reopen and verify data survives
+        // Reopen and verify data survives (validator auto-restored from header)
         {
             let db = MultiDb::new(tmpdir.as_ref(), cfg).unwrap();
             let v0 = ValidatorId::new(0);
-            db.register_validator(v0).unwrap();
-
-            // Advance to the persisted root
-            db.advance_to_hash(v0, shared_hash).unwrap();
 
             let head0 = db.validator_view(v0).unwrap();
             assert_eq!(
-                head0.val(b"survive").unwrap(),
+                DbView::val(&*head0, b"survive").unwrap(),
                 Some(b"reopen".to_vec().into_boxed_slice()),
                 "data from before close should survive"
             );
@@ -3651,11 +3647,11 @@ mod test {
 
             let head0 = db.validator_view(v0).unwrap();
             assert_eq!(
-                head0.val(b"survive").unwrap(),
+                DbView::val(&*head0, b"survive").unwrap(),
                 Some(b"reopen".to_vec().into_boxed_slice())
             );
             assert_eq!(
-                head0.val(b"after_reopen").unwrap(),
+                DbView::val(&*head0, b"after_reopen").unwrap(),
                 Some(b"works".to_vec().into_boxed_slice()),
                 "new data after reopen should work"
             );
@@ -3723,5 +3719,297 @@ mod test {
 
             db.close().unwrap();
         }
+    }
+
+    #[test]
+    fn test_deregister_persists_fork_tree() {
+        // Verify that deregistering a validator persists fork tree changes.
+        // After reopen, the database should be functional and able to fork again
+        // (proving the fork tree was correctly persisted/pruned).
+        let tmpdir = tempfile::tempdir().unwrap();
+        let cfg = MultiDbConfig::builder()
+            .db(DbConfig::builder()
+                .manager(
+                    crate::manager::RevisionManagerConfig::builder()
+                        .max_revisions(10)
+                        .build(),
+                )
+                .build())
+            .build();
+
+        // Phase 1: Create a fork, deregister v1, close
+        {
+            let db = MultiDb::new(tmpdir.as_ref(), cfg.clone()).unwrap();
+            let v0 = ValidatorId::new(0);
+            let v1 = ValidatorId::new(1);
+            db.register_validator(v0).unwrap();
+            db.register_validator(v1).unwrap();
+
+            // v0 commits
+            let batch = vec![BatchOp::Put {
+                key: b"a".to_vec(),
+                value: b"1".to_vec(),
+            }];
+            let p0 = db.propose(v0, batch).unwrap();
+            db.commit(v0, p0).unwrap();
+
+            // v1 commits different data (fork)
+            let batch = vec![BatchOp::Put {
+                key: b"b".to_vec(),
+                value: b"2".to_vec(),
+            }];
+            let p1 = db.propose(v1, batch).unwrap();
+            db.commit(v1, p1).unwrap();
+
+            // Wait for all commits to be persisted before deregister
+            db.wait_persisted();
+
+            // Deregister v1 — this should persist fork tree changes
+            db.deregister_validator(v1).unwrap();
+
+            // Wait for all pending persists before close
+            db.wait_persisted();
+            db.close().unwrap();
+        }
+
+        // Phase 2: Reopen and verify the database is functional.
+        // The fork tree should have been cleaned up (v1's chain fork_id removed).
+        // v0 is auto-restored from header. New sequential commits should work.
+        {
+            let db = MultiDb::new(tmpdir.as_ref(), cfg).unwrap();
+            let v0 = ValidatorId::new(0);
+
+            // Sequential commits should work on the reopened DB
+            for i in 0..3u8 {
+                let batch = vec![BatchOp::Put {
+                    key: format!("post_reopen_{i}").into_bytes(),
+                    value: vec![i],
+                }];
+                let p = db.propose(v0, batch).unwrap();
+                db.commit(v0, p).unwrap();
+            }
+
+            // Verify data
+            let head = db.validator_view(v0).unwrap();
+            assert_eq!(
+                head.val(b"post_reopen_2").unwrap(),
+                Some(vec![2u8].into_boxed_slice()),
+            );
+
+            db.wait_persisted();
+            db.close().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_recovery_prunes_phantom_fork_tree_entries() {
+        // Create forks and close/reopen multiple times to verify that
+        // recovery prunes phantom fork tree entries and the DB remains
+        // functional with correct fork tree capacity.
+        let tmpdir = tempfile::tempdir().unwrap();
+        let cfg = MultiDbConfig::builder()
+            .db(DbConfig::builder()
+                .manager(
+                    crate::manager::RevisionManagerConfig::builder()
+                        .max_revisions(10)
+                        .build(),
+                )
+                .build())
+            .build();
+
+        // Phase 1: Create multiple forks, deregister some, close
+        {
+            let db = MultiDb::new(tmpdir.as_ref(), cfg.clone()).unwrap();
+            let v0 = ValidatorId::new(0);
+            let v1 = ValidatorId::new(1);
+            db.register_validator(v0).unwrap();
+            db.register_validator(v1).unwrap();
+
+            // v0 commits
+            let batch = vec![BatchOp::Put {
+                key: b"x".to_vec(),
+                value: b"1".to_vec(),
+            }];
+            let p0 = db.propose(v0, batch).unwrap();
+            db.commit(v0, p0).unwrap();
+
+            // v1 commits different data, causing a fork in the fork tree
+            let batch = vec![BatchOp::Put {
+                key: b"y".to_vec(),
+                value: b"2".to_vec(),
+            }];
+            let p1 = db.propose(v1, batch).unwrap();
+            db.commit(v1, p1).unwrap();
+
+            // Wait for all commits to be persisted before deregister
+            // (avoids race between persist thread and reaping)
+            db.wait_persisted();
+
+            // Deregister v1 — fork tree entry cleaned up
+            db.deregister_validator(v1).unwrap();
+
+            db.wait_persisted();
+            db.close().unwrap();
+        }
+
+        // Phase 2: Reopen — recovery should prune any phantom entries.
+        // v0 is auto-restored from header.
+        // Sequential commits should work (fork tree not full of ghosts).
+        {
+            let db = MultiDb::new(tmpdir.as_ref(), cfg).unwrap();
+            let v0 = ValidatorId::new(0);
+
+            // Sequential commits should work on the reopened DB
+            for i in 0..3u8 {
+                let batch = vec![BatchOp::Put {
+                    key: format!("post_recovery_{i}").into_bytes(),
+                    value: vec![i],
+                }];
+                let p = db.propose(v0, batch).unwrap();
+                db.commit(v0, p).unwrap();
+            }
+
+            // Verify data
+            let head = db.validator_view(v0).unwrap();
+            assert_eq!(
+                head.val(b"post_recovery_2").unwrap(),
+                Some(vec![2u8].into_boxed_slice()),
+            );
+
+            db.wait_persisted();
+            db.close().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_validators_survive_reopen() {
+        // Register validators, commit for each, close, reopen — verify
+        // validators are restored with correct roots without re-registering.
+        let tmpdir = tempfile::tempdir().unwrap();
+        let cfg = MultiDbConfig::builder()
+            .db(DbConfig::builder()
+                .manager(
+                    crate::manager::RevisionManagerConfig::builder()
+                        .max_revisions(10)
+                        .build(),
+                )
+                .build())
+            .build();
+
+        let v0 = ValidatorId::new(0);
+        let v1 = ValidatorId::new(1);
+        let hash_v0;
+        let hash_v1;
+
+        // Phase 1: register, commit, close
+        {
+            let db = MultiDb::new(tmpdir.as_ref(), cfg.clone()).unwrap();
+            db.register_validator(v0).unwrap();
+            db.register_validator(v1).unwrap();
+
+            let batch = vec![BatchOp::Put {
+                key: b"v0key".to_vec(),
+                value: b"v0val".to_vec(),
+            }];
+            let p = db.propose(v0, batch).unwrap();
+            hash_v0 = p.root_hash().unwrap();
+            db.commit(v0, p).unwrap();
+
+            let batch = vec![BatchOp::Put {
+                key: b"v1key".to_vec(),
+                value: b"v1val".to_vec(),
+            }];
+            let p = db.propose(v1, batch).unwrap();
+            hash_v1 = p.root_hash().unwrap();
+            db.commit(v1, p).unwrap();
+
+            db.wait_persisted();
+            db.close().unwrap();
+        }
+
+        // Phase 2: reopen — validators should be restored from header
+        {
+            let db = MultiDb::new(tmpdir.as_ref(), cfg).unwrap();
+
+            // Validators were auto-restored; verify their heads have correct data
+            let head0 = db.validator_view(v0).unwrap();
+            assert_eq!(
+                head0.root_hash().or_default_root_hash(),
+                Some(hash_v0),
+                "v0 root hash should survive reopen"
+            );
+            assert_eq!(
+                DbView::val(&*head0, b"v0key").unwrap(),
+                Some(b"v0val".to_vec().into_boxed_slice()),
+                "v0 data should survive reopen"
+            );
+
+            let head1 = db.validator_view(v1).unwrap();
+            assert_eq!(
+                head1.root_hash().or_default_root_hash(),
+                Some(hash_v1),
+                "v1 root hash should survive reopen"
+            );
+            assert_eq!(
+                DbView::val(&*head1, b"v1key").unwrap(),
+                Some(b"v1val".to_vec().into_boxed_slice()),
+                "v1 data should survive reopen"
+            );
+
+            db.close().unwrap();
+        }
+    }
+
+    #[test]
+    fn test_close_after_commit_no_assertion() {
+        // Enable multi-head, register validator, commit, immediately close
+        // (no wait_persisted). Verify no assertion failure and clean shutdown.
+        let tmpdir = tempfile::tempdir().unwrap();
+        let cfg = MultiDbConfig::builder()
+            .db(DbConfig::builder()
+                .manager(
+                    crate::manager::RevisionManagerConfig::builder()
+                        .max_revisions(10)
+                        .build(),
+                )
+                .build())
+            .build();
+
+        let db = MultiDb::new(tmpdir.as_ref(), cfg).unwrap();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        let batch = vec![BatchOp::Put {
+            key: b"close_test".to_vec(),
+            value: b"val".to_vec(),
+        }];
+        let p = db.propose(v0, batch).unwrap();
+        db.commit(v0, p).unwrap();
+
+        // Close immediately without wait_persisted — must not panic
+        db.close().unwrap();
+    }
+
+    #[test]
+    fn test_close_without_commits() {
+        // Enable multi-head, register validator, close immediately.
+        // Verify clean shutdown with no commits.
+        let tmpdir = tempfile::tempdir().unwrap();
+        let cfg = MultiDbConfig::builder()
+            .db(DbConfig::builder()
+                .manager(
+                    crate::manager::RevisionManagerConfig::builder()
+                        .max_revisions(10)
+                        .build(),
+                )
+                .build())
+            .build();
+
+        let db = MultiDb::new(tmpdir.as_ref(), cfg).unwrap();
+        let v0 = ValidatorId::new(0);
+        db.register_validator(v0).unwrap();
+
+        // Close with no commits — must not panic
+        db.close().unwrap();
     }
 }

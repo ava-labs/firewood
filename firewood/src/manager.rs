@@ -12,6 +12,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::io;
 use std::num::{NonZero, NonZeroU64};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use firewood_storage::logger::{trace, warn};
@@ -224,6 +225,17 @@ pub(crate) struct RevisionManager {
 
     /// Shared reference to the underlying storage backing all nodestores.
     storage: Arc<FileBacked>,
+
+    /// Monotonically increasing counter, bumped on each `fork_tree.fork()`.
+    /// Used by `can_free` closures to detect concurrent forks that would
+    /// invalidate ancestor-reaping decisions.
+    fork_generation: Arc<AtomicU64>,
+
+    /// The most recently committed revision that was sent to the persist worker.
+    /// Used by `close()` to pass the correct revision to `persist_on_shutdown`
+    /// in multi-head mode, where `current_revision()` returns the initial
+    /// nodestore rather than the latest validator commit.
+    last_committed: Mutex<Option<CommittedRevision>>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -362,6 +374,8 @@ impl RevisionManager {
             persist_worker,
             multi_head: None,
             storage: storage.clone(),
+            fork_generation: Arc::new(AtomicU64::new(0)),
+            last_committed: Mutex::new(None),
         };
 
         // On startup, we always write the latest revision to RootStore
@@ -642,7 +656,16 @@ impl RevisionManager {
             .validators
             .get(&id)
             .ok_or(RevisionManagerError::ValidatorNotFound { id })?;
-        let fork_id = state.chains.get(&validator.chain).map_or(0, |c| c.fork_id);
+        let fork_id = state
+            .chains
+            .get(&validator.chain)
+            .ok_or_else(|| {
+                RevisionManagerError::InternalError(format!(
+                    "chain {} not found for validator {id:?}",
+                    validator.chain
+                ))
+            })?
+            .fork_id;
         Ok((validator.head.clone(), fork_id))
     }
 
@@ -653,7 +676,17 @@ impl RevisionManager {
     fn build_can_free(&self, state: &MultiHeadState, chain_fork_id: ForkId) -> CanFreeFn {
         let active_fork_ids: Vec<ForkId> = state.chains.values().map(|c| c.fork_id).collect();
         let fork_tree_snapshot = state.fork_tree.clone();
+        let gen_at_snapshot = self.fork_generation.load(Ordering::Acquire);
+        let fork_gen = Arc::clone(&self.fork_generation);
         Arc::new(move |node_fork_id: ForkId| -> bool {
+            // Own allocation: always safe to free regardless of concurrent forks
+            if node_fork_id == chain_fork_id {
+                return true;
+            }
+            // Ancestor node: only safe if no new forks happened since snapshot
+            if fork_gen.load(Ordering::Acquire) != gen_at_snapshot {
+                return false;
+            }
             fork_tree_snapshot.can_free(node_fork_id, chain_fork_id, &active_fork_ids)
         })
     }
@@ -761,6 +794,7 @@ impl RevisionManager {
 
         for (slot_u8, validator_id, addr, hash) in validators_data {
             let id = ValidatorId::new(validator_id);
+            // fork_id=0 is valid for pre-fork validators and legacy databases
             let fork_id = slot_fork_map.get(&slot_u8).copied().unwrap_or(0);
 
             // Check if we already have a revision with this hash (dedup on recovery)
@@ -805,6 +839,20 @@ impl RevisionManager {
                     chain: chain_id,
                 },
             );
+        }
+
+        // Prune fork tree: remove leaf nodes not referenced by any chain.
+        // This cleans up phantom entries from crashes between persist_fork_tree
+        // and revision persist.
+        let active_fork_ids: HashSet<ForkId> = state.chains.values().map(|c| c.fork_id).collect();
+        state.fork_tree.prune_unreferenced(&active_fork_ids);
+
+        drop(state);
+
+        // Re-persist the pruned fork tree
+        if let Some(mh) = &self.multi_head {
+            let state = mh.read();
+            self.persist_fork_tree(&state)?;
         }
 
         Ok(())
@@ -906,6 +954,10 @@ impl RevisionManager {
         if let Err(e) = header.set_validator_root(slot, root_info) {
             return Err(RevisionManagerError::IOError(e));
         }
+        drop(header);
+
+        // Flush header to disk so validator metadata survives restart
+        self.flush_header_to_disk()?;
 
         Ok(())
     }
@@ -931,7 +983,10 @@ impl RevisionManager {
             let validator_count = state.validators.len();
 
             let (revisions_to_reap, can_free) =
-                self.cleanup_empty_chain(source_chain, &mut state);
+                self.cleanup_empty_chain(source_chain, &mut state)?;
+
+            // Persist fork tree changes before releasing lock
+            self.persist_fork_tree(&state)?;
 
             (
                 removed.slot,
@@ -949,6 +1004,9 @@ impl RevisionManager {
         }
         header.set_validator_count(validator_count);
         drop(header);
+
+        // Flush header to disk so deregistration survives restart
+        self.flush_header_to_disk()?;
 
         // Reap collected revisions (no locks held, may block)
         let failed = self.reap_revisions(revisions_to_reap, &can_free)?;
@@ -980,7 +1038,7 @@ impl RevisionManager {
             .map_err(RevisionManagerError::PersistError)?;
 
         // Phase 1: Under write lock (fast, in-memory only)
-        let (committed, slot, root_info, revisions_to_reap, can_free, fork_tree_changed, reap_chain_id) = {
+        let (committed, slot, root_info, revisions_to_reap, can_free, reap_chain_id) = {
             let mut state = self
                 .multi_head
                 .as_ref()
@@ -1035,7 +1093,7 @@ impl RevisionManager {
 
                 // Clean up source chain if now empty of validators
                 let (revisions_to_reap, dedup_can_free) = if source_chain != target_chain {
-                    self.cleanup_empty_chain(source_chain, &mut state)
+                    self.cleanup_empty_chain(source_chain, &mut state)?
                 } else {
                     (Vec::new(), Arc::new(|_| true) as CanFreeFn)
                 };
@@ -1048,7 +1106,7 @@ impl RevisionManager {
                 let slot = validator.slot;
 
                 // Persist fork tree while we still hold the state lock
-                self.persist_fork_tree(&state);
+                self.persist_fork_tree(&state)?;
 
                 drop(state); // release write lock
 
@@ -1058,6 +1116,9 @@ impl RevisionManager {
                     return Err(RevisionManagerError::IOError(e));
                 }
                 drop(header);
+
+                // Flush header to disk so validator root survives restart
+                self.flush_header_to_disk()?;
 
                 let failed = self.reap_revisions(revisions_to_reap, &dedup_can_free)?;
                 self.reinsert_failed_revisions(source_chain, failed);
@@ -1106,7 +1167,15 @@ impl RevisionManager {
                 }
 
                 // Update fork tree: fork the parent chain's fork_id
-                let parent_fork_id = state.chains.get(&validator_chain).map_or(0, |c| c.fork_id);
+                let parent_fork_id = state
+                    .chains
+                    .get(&validator_chain)
+                    .ok_or_else(|| {
+                        RevisionManagerError::InternalError(format!(
+                            "chain {validator_chain} not found during fork"
+                        ))
+                    })?
+                    .fork_id;
                 let active_fork_ids: HashSet<ForkId> =
                     state.chains.values().map(|c| c.fork_id).collect();
                 let (continuation_fork_id, new_fork_id) = state
@@ -1120,6 +1189,7 @@ impl RevisionManager {
                             format!("fork tree parent {id} not found"),
                         ),
                     })?;
+                self.fork_generation.fetch_add(1, Ordering::Release);
 
                 // Update the original chain's fork_id to the continuation
                 if let Some(original_chain) = state.chains.get_mut(&validator_chain) {
@@ -1153,9 +1223,12 @@ impl RevisionManager {
                 let root_info = self.root_info_for_validator(id, validator);
                 let slot = validator.slot;
 
+                // Persist fork tree while we still hold the write lock (matches dedup path)
+                self.persist_fork_tree(&state)?;
+
                 // No reaping needed for brand-new chain (only 1 revision)
                 let cf = Arc::new(|_| true) as CanFreeFn;
-                (committed, slot, root_info, Vec::new(), cf, true, new_chain_id)
+                (committed, slot, root_info, Vec::new(), cf, new_chain_id)
             } else {
                 // Normal case: append new revision to the validator's current chain
                 if let Some(ref hash) = new_hash {
@@ -1179,7 +1252,15 @@ impl RevisionManager {
                 let slot = validator.slot;
 
                 // Build can_free from fork tree for safe reaping
-                let chain_fork_id = state.chains.get(&validator_chain).map_or(0, |c| c.fork_id);
+                let chain_fork_id = state
+                    .chains
+                    .get(&validator_chain)
+                    .ok_or_else(|| {
+                        RevisionManagerError::InternalError(format!(
+                            "chain {validator_chain} not found during append"
+                        ))
+                    })?
+                    .fork_id;
                 let cf = self.build_can_free(&state, chain_fork_id);
 
                 // 5. Collect revisions to reap from this chain (per-chain budget)
@@ -1192,23 +1273,18 @@ impl RevisionManager {
                     root_info,
                     revisions_to_reap,
                     cf,
-                    false,
                     validator_chain,
                 )
             }
         };
-
-        // Persist fork tree if it was modified (fork path)
-        if fork_tree_changed && let Some(mh) = &self.multi_head {
-            let state = mh.read();
-            self.persist_fork_tree(&state);
-        }
 
         // Phase 2: No lock held (may block)
         // Persist the new revision
         self.persist_worker
             .persist(committed.clone())
             .map_err(RevisionManagerError::PersistError)?;
+
+        *self.last_committed.lock() = Some(committed.clone());
 
         // Update header
         let mut header = self.persist_worker.locked_header();
@@ -1218,6 +1294,9 @@ impl RevisionManager {
         // Also update legacy root for backward compat
         header.set_root_location(root_info.map(|(_, ri)| ri));
         drop(header);
+
+        // Flush header to disk so validator root survives restart
+        self.flush_header_to_disk()?;
 
         // Reap collected revisions
         let failed = self.reap_revisions(revisions_to_reap, &can_free)?;
@@ -1297,10 +1376,15 @@ impl RevisionManager {
 
             // Clean up source chain if now empty of validators
             let (revisions_to_reap, cf) = if source_chain != target_chain {
-                self.cleanup_empty_chain(source_chain, &mut state)
+                self.cleanup_empty_chain(source_chain, &mut state)?
             } else {
                 (Vec::new(), Arc::new(|_| true) as CanFreeFn)
             };
+
+            // Persist fork tree if source chain was cleaned up
+            if source_chain != target_chain {
+                self.persist_fork_tree(&state)?;
+            }
 
             (slot, root_info, revisions_to_reap, cf, source_chain)
         }; // write lock dropped
@@ -1449,16 +1533,38 @@ impl RevisionManager {
     ///
     /// Called after fork tree mutations (fork, remove) to ensure the
     /// fork tree is recoverable on restart.
-    fn persist_fork_tree(&self, state: &MultiHeadState) {
+    fn persist_fork_tree(&self, state: &MultiHeadState) -> Result<(), RevisionManagerError> {
         let (next_id, entries) = state.fork_tree.to_persisted();
         let mut header = self.persist_worker.locked_header();
-        let _ = header.set_fork_tree(next_id, &entries);
+        header
+            .set_fork_tree(next_id, &entries)
+            .map_err(RevisionManagerError::IOError)?;
 
         // Also persist per-validator fork_ids
         for validator in state.validators.values() {
-            let fork_id = state.chains.get(&validator.chain).map_or(0, |c| c.fork_id);
-            let _ = header.set_validator_fork_id(validator.slot, fork_id);
+            let fork_id = state
+                .chains
+                .get(&validator.chain)
+                .ok_or_else(|| {
+                    RevisionManagerError::InternalError(format!(
+                        "chain {} not found for validator slot {}",
+                        validator.chain, validator.slot
+                    ))
+                })?
+                .fork_id;
+            header
+                .set_validator_fork_id(validator.slot, fork_id)
+                .map_err(RevisionManagerError::IOError)?;
         }
+        Ok(())
+    }
+
+    /// Flush the in-memory header to disk so validator metadata survives restart.
+    /// Caller must NOT already hold the header lock (this method acquires it).
+    fn flush_header_to_disk(&self) -> Result<(), RevisionManagerError> {
+        let header = self.persist_worker.locked_header();
+        header.flush_to(self.storage.as_ref())?;
+        Ok(())
     }
 
     /// Clean up proposals after a commit (shared helper).
@@ -1550,14 +1656,22 @@ impl RevisionManager {
         &self,
         source_chain: ChainId,
         state: &mut MultiHeadState,
-    ) -> (Vec<CommittedRevision>, CanFreeFn) {
+    ) -> Result<(Vec<CommittedRevision>, CanFreeFn), RevisionManagerError> {
         let source_has_validators = state.validators.values().any(|v| v.chain == source_chain);
         if source_has_validators {
-            return (Vec::new(), Arc::new(|_| true) as CanFreeFn);
+            return Ok((Vec::new(), Arc::new(|_| true) as CanFreeFn));
         }
 
         // Build can_free BEFORE removing from fork tree so is_ancestor works
-        let chain_fork_id = state.chains.get(&source_chain).map_or(0, |c| c.fork_id);
+        let chain_fork_id = state
+            .chains
+            .get(&source_chain)
+            .ok_or_else(|| {
+                RevisionManagerError::InternalError(format!(
+                    "chain {source_chain} not found during cleanup"
+                ))
+            })?
+            .fork_id;
         let can_free = self.build_can_free(state, chain_fork_id);
 
         // Remove this chain's fork_id from the fork tree
@@ -1565,18 +1679,65 @@ impl RevisionManager {
             state.fork_tree.remove(chain_fork_id);
         }
         let revisions = self.collect_all_chain_revisions(source_chain, state);
-        (revisions, can_free)
+        Ok((revisions, can_free))
     }
 
     /// Closes the revision manager gracefully.
     ///
     /// This method shuts down the background persistence worker and persists
-    /// the latest committed revision.
+    /// the latest committed revision, then syncs validator root metadata to
+    /// disk so it survives restart.
     pub fn close(self) -> Result<(), RevisionManagerError> {
-        let current_revision = self.current_revision();
-        self.persist_worker
-            .close(current_revision)
-            .map_err(RevisionManagerError::PersistError)
+        // Destructure to retain access to fields after persist_worker is consumed.
+        let Self {
+            persist_worker,
+            in_memory_revisions,
+            multi_head,
+            storage,
+            last_committed,
+            ..
+        } = self;
+
+        let revision = last_committed
+            .lock()
+            .take()
+            .unwrap_or_else(|| {
+                in_memory_revisions
+                    .read()
+                    .back()
+                    .expect("there is always one revision")
+                    .clone()
+            });
+
+        // Close the persist worker — this joins the background thread,
+        // ensuring all revisions are fully persisted and root addresses are
+        // available on committed revisions.
+        persist_worker
+            .close(revision)
+            .map_err(RevisionManagerError::PersistError)?;
+
+        // After the persist worker has shut down, sync validator roots to the
+        // header on disk. Read the header back from storage, update validator
+        // root entries, and flush.
+        if let Some(ref multi_head) = multi_head {
+            let state = multi_head.read();
+            if state.validators.is_empty() {
+                return Ok(());
+            }
+            let mut header = NodeStoreHeader::read_from_storage(storage.as_ref())?;
+            for (vid, validator) in &state.validators {
+                let root_info = validator.head.root_hash().and_then(|hash| {
+                    let addr = validator.head.root_address()?;
+                    Some((vid.id(), (addr, hash)))
+                });
+                if let Err(e) = header.set_validator_root(validator.slot, root_info) {
+                    return Err(RevisionManagerError::IOError(e));
+                }
+            }
+            header.flush_to(storage.as_ref())?;
+        }
+
+        Ok(())
     }
 }
 
@@ -1913,6 +2074,28 @@ impl ForkTree {
         Self {
             nodes,
             next_id: next_id.max(1),
+        }
+    }
+
+    /// Remove leaf nodes that are not referenced by any active chain.
+    /// Repeats until no more unreferenced leaves exist (handles chains of
+    /// unreferenced nodes from leaf inward).
+    pub fn prune_unreferenced(&mut self, active_fork_ids: &HashSet<ForkId>) {
+        loop {
+            let unreferenced_leaves: Vec<ForkId> = self
+                .nodes
+                .iter()
+                .filter(|&(&id, node)| {
+                    id != 0 && node.children.is_empty() && !active_fork_ids.contains(&id)
+                })
+                .map(|(&id, _)| id)
+                .collect();
+            if unreferenced_leaves.is_empty() {
+                break;
+            }
+            for id in unreferenced_leaves {
+                self.remove(id);
+            }
         }
     }
 
@@ -2670,5 +2853,125 @@ mod tests {
         let tree = ForkTree::from_persisted(0, &[]);
         assert!(tree.nodes.contains_key(&0));
         assert_eq!(tree.next_id, 1);
+    }
+
+    #[test]
+    fn test_can_free_skips_ancestors_after_concurrent_fork() {
+        // Build a fork tree with chains A and B sharing ancestor (root 0)
+        let mut tree = ForkTree::new();
+        let active = HashSet::new();
+        let (chain_a, chain_b) = tree.fork(0, &active).unwrap();
+
+        // Simulate build_can_free: snapshot generation, fork tree, and active fork ids
+        let generation = Arc::new(AtomicU64::new(0));
+        let gen_at_snapshot = generation.load(Ordering::Acquire);
+        let fork_gen = Arc::clone(&generation);
+        let fork_tree_snapshot = tree.clone();
+        let active_fork_ids: Vec<ForkId> = vec![chain_a, chain_b];
+        let chain_fork_id = chain_a;
+
+        let can_free = move |node_fork_id: ForkId| -> bool {
+            if node_fork_id == chain_fork_id {
+                return true;
+            }
+            if fork_gen.load(Ordering::Acquire) != gen_at_snapshot {
+                return false;
+            }
+            fork_tree_snapshot.can_free(node_fork_id, chain_fork_id, &active_fork_ids)
+        };
+
+        // Own allocation: always freed
+        assert!(can_free(chain_a), "own allocation should always be freed");
+
+        // Ancestor (root 0): not freed because chain_b also descends from it
+        assert!(
+            !can_free(0),
+            "ancestor shared with chain_b should not be freed"
+        );
+
+        // Simulate concurrent fork (bump generation)
+        generation.fetch_add(1, Ordering::Release);
+
+        // After generation bump, ancestor freeing is skipped
+        assert!(
+            !can_free(0),
+            "ancestor should not be freed after generation change"
+        );
+        // Own allocation still freed
+        assert!(
+            can_free(chain_a),
+            "own allocation should still be freed after generation change"
+        );
+    }
+
+    #[test]
+    fn test_prune_unreferenced_removes_phantom_entries() {
+        // Create a fork tree and add phantom entries
+        let mut tree = ForkTree::new();
+        let active = HashSet::new();
+
+        // Fork: 0 -> {1, 2}
+        let (chain_a, chain_b) = tree.fork(0, &active).unwrap();
+        // Fork chain_a: 1 -> {3, 4}
+        let (chain_c, chain_d) = tree.fork(chain_a, &active).unwrap();
+
+        // Only chain_b and chain_c are "active" (have validators)
+        let active_ids: HashSet<ForkId> = [chain_b, chain_c].into_iter().collect();
+
+        // chain_d (4) is a phantom leaf
+        assert!(tree.nodes.contains_key(&chain_d));
+
+        tree.prune_unreferenced(&active_ids);
+
+        // chain_d should be removed (unreferenced leaf)
+        assert!(
+            !tree.nodes.contains_key(&chain_d),
+            "phantom leaf should be pruned"
+        );
+        // chain_a (1) was an interior node that became a leaf after chain_d removal,
+        // but it also lost chain_c... Actually chain_a still has chain_c as child.
+        // chain_b and chain_c should survive
+        assert!(
+            tree.nodes.contains_key(&chain_b),
+            "active chain_b should survive"
+        );
+        assert!(
+            tree.nodes.contains_key(&chain_c),
+            "active chain_c should survive"
+        );
+        // Root should always survive
+        assert!(tree.nodes.contains_key(&0), "root should always survive");
+    }
+
+    #[test]
+    fn test_prune_unreferenced_cascading_removal() {
+        // Test that pruning cascades: removing a leaf may expose its parent as
+        // a new unreferenced leaf.
+        let mut tree = ForkTree::new();
+        let active = HashSet::new();
+
+        // 0 -> {1, 2}, 1 -> {3, 4}
+        let (chain_a, chain_b) = tree.fork(0, &active).unwrap();
+        let (_chain_c, chain_d) = tree.fork(chain_a, &active).unwrap();
+
+        // Only chain_b is active; chain_a's subtree is entirely unreferenced
+        let active_ids: HashSet<ForkId> = [chain_b].into_iter().collect();
+
+        tree.prune_unreferenced(&active_ids);
+
+        // chain_d (leaf, unreferenced) is removed first,
+        // then chain_c becomes a leaf and is removed,
+        // then chain_a becomes a leaf and is removed
+        assert!(
+            !tree.nodes.contains_key(&chain_d),
+            "chain_d should be pruned"
+        );
+        assert!(
+            !tree.nodes.contains_key(&chain_a),
+            "chain_a should be pruned after cascade"
+        );
+        // chain_b and root survive
+        assert!(tree.nodes.contains_key(&chain_b));
+        assert!(tree.nodes.contains_key(&0));
     }
 }

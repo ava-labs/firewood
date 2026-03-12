@@ -338,12 +338,10 @@ impl From<RevisionManagerError> for Error {
                 expected,
             },
             ValidatorDeregistered { id } => Self::ValidatorDeregistered { id },
-            RevisionManagerError::ForkTreeFull { max } => {
-                Self::InternalError(format!("fork tree capacity exhausted (max {max} nodes)").into())
-            }
-            RevisionManagerError::InternalError(msg) => {
-                Self::InternalError(msg.into())
-            }
+            RevisionManagerError::ForkTreeFull { max } => Self::InternalError(
+                format!("fork tree capacity exhausted (max {max} nodes)").into(),
+            ),
+            RevisionManagerError::InternalError(msg) => Self::InternalError(msg.into()),
         }
     }
 }

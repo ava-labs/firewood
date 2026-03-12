@@ -150,8 +150,7 @@ fn range_proof_find_next_key(
     verification: Option<&VerificationContext>,
     root_hash: Option<HashKey>,
 ) -> Result<Option<KeyRange>, api::Error> {
-    let verification = verification
-        .ok_or(api::Error::ProofError(ProofError::Unverified))?;
+    let verification = verification.ok_or(api::Error::ProofError(ProofError::Unverified))?;
 
     let Some((last_key, _)) = proof.key_values().last() else {
         return Ok(None);
