@@ -1,8 +1,6 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-//go:build ignore
-
 // go generate script
 //
 // This script fixes up a go file to enable/disable the correct cgo directives,
@@ -39,10 +37,6 @@ import (
 	"log"
 	"os"
 	"strings"
-)
-
-const (
-	defaultMode = "LOCAL_LIBS"
 )
 
 var errGoFileNotSet = errors.New("GOFILE is not set")
@@ -107,7 +101,7 @@ func changeCgoDirectivesForFile(targetMode string, targetFile string) error {
 		// If we are in a block, process the line
 		if currentBlockName != "None" {
 			if !isCGODirective(line) {
-				return fmt.Errorf("[ERROR] %s:%d: invalid CGO directive in %s section:\n===\n%s\n===\n", targetFile, i+1, currentBlockName, line)
+				return fmt.Errorf("[ERROR] %s:%d: invalid CGO directive in %s section:\n===\n%s\n===", targetFile, i+1, currentBlockName, line)
 			}
 			if currentBlockName == targetMode {
 				fileLines[i] = activateCGOLine(fileLines[i])

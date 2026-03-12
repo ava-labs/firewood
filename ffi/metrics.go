@@ -3,8 +3,6 @@
 
 package ffi
 
-//go:generate go run generate_cgo.go
-
 // #include <stdlib.h>
 // #include "firewood.h"
 // #cgo noescape fwd_start_metrics
