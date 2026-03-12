@@ -148,7 +148,7 @@ func main() {
 		}
 
 		filename := fset.Position(r.goFile.Package).Filename
-		if err := r.rewriteFile(fset, filename); err != nil {
+		if err := r.rewriteFile(fset); err != nil {
 			fatalf("failed to rewrite %s: %v", filename, err)
 		}
 
@@ -162,13 +162,9 @@ type fileResult struct {
 	cFuncs []cFunctionCallSite
 }
 
-func (r fileResult) rewriteFile(fset *token.FileSet, filename string) error {
-	if r.cDecl == nil {
-		debugf("skipping file %s: no cgo declaration found", filename)
-		return nil
-	}
-
+func (r fileResult) rewriteFile(fset *token.FileSet) error {
 	cDeclPos := fset.Position(r.cDecl.Pos())
+	filename := cDeclPos.Filename
 
 	originalFile, err := os.ReadFile(filename)
 	if err != nil {
