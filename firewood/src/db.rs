@@ -954,9 +954,7 @@ mod test {
         );
         if let Some(root_hash) = parallel_db.root_hash() {
             let parallel_rev = parallel_db.revision(root_hash).unwrap();
-            let single_rev = single_db
-                .revision(single_db.root_hash().unwrap())
-                .unwrap();
+            let single_rev = single_db.revision(single_db.root_hash().unwrap()).unwrap();
 
             for key in &setup_keys {
                 let parallel_val = parallel_rev.val(key).unwrap();
