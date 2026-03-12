@@ -13,11 +13,15 @@ import (
 
 	ffi "github.com/ava-labs/firewood/ffi"
 	pb "github.com/ava-labs/firewood/ffi/remote/proto"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // proposalEntry stores a pending proposal that can be committed.
 type proposalEntry struct {
+	mu       sync.Mutex
 	proposal *ffi.Proposal
+	dropped  bool // set under mu when the proposal has been dropped or committed
 	// committedRoot is the committed revision root that this proposal chain
 	// is based on. For first-level proposals this equals root_hash from the
 	// request; for chained proposals it is inherited from the parent.
@@ -108,7 +112,11 @@ func (s *Server) reapExpiredProposals(maxAge time.Duration) {
 		entry := value.(*proposalEntry)
 		if maxAge == 0 || now.Sub(entry.createdAt) > maxAge {
 			if _, loaded := s.proposals.LoadAndDelete(key); loaded {
-				if err := entry.proposal.Drop(); err != nil {
+				entry.mu.Lock()
+				entry.dropped = true
+				err := entry.proposal.Drop()
+				entry.mu.Unlock()
+				if err != nil {
 					log.Printf("reapExpiredProposals: dropping proposal %v: %v", key, err)
 				}
 			}
@@ -207,8 +215,14 @@ func (s *Server) CreateProposal(
 		}
 		parent := val.(*proposalEntry)
 
+		parent.mu.Lock()
+		if parent.dropped {
+			parent.mu.Unlock()
+			return nil, fmt.Errorf("parent proposal %d expired", parentID)
+		}
 		var err error
 		proposal, err = parent.proposal.Propose(ops)
+		parent.mu.Unlock()
 		if err != nil {
 			return nil, fmt.Errorf("propose on parent: %w", err)
 		}
@@ -283,11 +297,15 @@ func (s *Server) CommitProposal(
 
 	val, ok := s.proposals.LoadAndDelete(id)
 	if !ok {
-		return nil, fmt.Errorf("proposal %d not found", id)
+		return nil, status.Errorf(codes.NotFound, "proposal %d not found", id)
 	}
 	entry := val.(*proposalEntry)
 
-	if err := entry.proposal.Commit(); err != nil {
+	entry.mu.Lock()
+	entry.dropped = true
+	err := entry.proposal.Commit()
+	entry.mu.Unlock()
+	if err != nil {
 		return nil, fmt.Errorf("commit: %w", err)
 	}
 
@@ -304,11 +322,15 @@ func (s *Server) DropProposal(
 
 	val, ok := s.proposals.LoadAndDelete(id)
 	if !ok {
-		return nil, fmt.Errorf("proposal %d not found", id)
+		return nil, status.Errorf(codes.NotFound, "proposal %d not found", id)
 	}
 	entry := val.(*proposalEntry)
 
-	if err := entry.proposal.Drop(); err != nil {
+	entry.mu.Lock()
+	entry.dropped = true
+	err := entry.proposal.Drop()
+	entry.mu.Unlock()
+	if err != nil {
 		return nil, fmt.Errorf("drop: %w", err)
 	}
 
@@ -362,12 +384,20 @@ func (s *Server) IterBatch(
 		}
 		entry := val.(*proposalEntry)
 
+		entry.mu.Lock()
+		if entry.dropped {
+			entry.mu.Unlock()
+			return nil, fmt.Errorf("proposal %d expired", id)
+		}
 		var err error
 		it, err = entry.proposal.Iter(req.GetStartKey())
 		if err != nil {
+			entry.mu.Unlock()
 			return nil, fmt.Errorf("iter: %w", err)
 		}
-		cleanup = func() {} // no-op for proposals
+		// Hold the mutex until the iterator is done to prevent GC
+		// from dropping the proposal while we're iterating.
+		cleanup = func() { entry.mu.Unlock() }
 	}
 	defer it.Drop()
 	defer cleanup()

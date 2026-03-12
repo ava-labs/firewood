@@ -1302,8 +1302,10 @@ func TestRemoteDBProposalExpiredOnServer(t *testing.T) {
 		t.Fatal("expected error from Propose on expired proposal")
 	}
 
-	if err := prop.Drop(); err == nil {
-		t.Fatal("expected error from Drop on expired proposal")
+	// Drop should succeed even when the server already GC'd the proposal:
+	// local resources are freed and the "not found" RPC error is suppressed.
+	if err := prop.Drop(); err != nil {
+		t.Fatalf("Drop on expired proposal should succeed: %v", err)
 	}
 }
 

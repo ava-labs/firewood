@@ -13,7 +13,9 @@ import (
 	ffi "github.com/ava-labs/firewood/ffi"
 	pb "github.com/ava-labs/firewood/ffi/remote/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 // Compile-time interface checks.
@@ -179,12 +181,15 @@ func (p *remoteProposal) Drop() error {
 		p.committedTrie = nil
 	}
 	// Best-effort server-side cleanup; use a background context since
-	// the caller may not provide one.
+	// the caller may not provide one. Suppress "not found" errors — the
+	// server already cleaned up (e.g., via GC or a prior Drop).
 	_, rpcErr := p.rpc.DropProposal(context.Background(), &pb.DropProposalRequest{
 		ProposalId: p.proposalID,
 	})
-	if rpcErr != nil {
+	if rpcErr != nil && status.Code(rpcErr) != codes.NotFound {
 		rpcErr = fmt.Errorf("drop proposal: %w", rpcErr)
+	} else {
+		rpcErr = nil
 	}
 	return errors.Join(freeErr, releaseErr, rpcErr)
 }
