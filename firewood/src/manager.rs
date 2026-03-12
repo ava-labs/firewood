@@ -1110,15 +1110,12 @@ impl RevisionManager {
 
                 drop(state); // release write lock
 
-                // Phase 2 (dedup path): update header, reap orphaned chain
+                // Phase 2 (dedup path): update header (next persist cycle writes it)
                 let mut header = self.persist_worker.locked_header();
                 if let Err(e) = header.set_validator_root(slot, root_info) {
                     return Err(RevisionManagerError::IOError(e));
                 }
                 drop(header);
-
-                // Flush header to disk so validator root survives restart
-                self.flush_header_to_disk()?;
 
                 let failed = self.reap_revisions(revisions_to_reap, &dedup_can_free)?;
                 self.reinsert_failed_revisions(source_chain, failed);
@@ -1279,14 +1276,8 @@ impl RevisionManager {
         };
 
         // Phase 2: No lock held (may block)
-        // Persist the new revision
-        self.persist_worker
-            .persist(committed.clone())
-            .map_err(RevisionManagerError::PersistError)?;
-
-        *self.last_committed.lock() = Some(committed.clone());
-
-        // Update header
+        // Update header BEFORE persist so the background thread's header write
+        // includes the validator root (persist worker writes the full header).
         let mut header = self.persist_worker.locked_header();
         if let Err(e) = header.set_validator_root(slot, root_info.clone()) {
             return Err(RevisionManagerError::IOError(e));
@@ -1295,8 +1286,11 @@ impl RevisionManager {
         header.set_root_location(root_info.map(|(_, ri)| ri));
         drop(header);
 
-        // Flush header to disk so validator root survives restart
-        self.flush_header_to_disk()?;
+        self.persist_worker
+            .persist(committed.clone())
+            .map_err(RevisionManagerError::PersistError)?;
+
+        *self.last_committed.lock() = Some(committed.clone());
 
         // Reap collected revisions
         let failed = self.reap_revisions(revisions_to_reap, &can_free)?;
