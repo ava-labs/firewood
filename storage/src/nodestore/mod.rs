@@ -53,10 +53,10 @@ use crate::linear::{OffsetReader, ReadableNodeMode};
 use crate::logger::{debug, trace};
 use crate::node::branch::ReadSerializable as _;
 use firewood_metrics::firewood_increment;
-use parking_lot::Mutex;
 use smallvec::SmallVec;
 use std::fmt::Debug;
 use std::io::{Error, ErrorKind};
+use std::sync::OnceLock;
 use std::time::Instant;
 
 // Re-export types from alloc module
@@ -386,17 +386,7 @@ where
     ///
     /// Returns a [`FileIoError`] if the parent root cannot be read.
     pub fn into_reconstruction_child(&self) -> Result<NodeStore<Mutable<Recon>, S>, FileIoError> {
-        let root = if let Some(root) = self.root_as_maybe_persisted_node() {
-            let root = triomphe::Arc::unwrap_or_clone(root.as_shared_node(self)?);
-            Some(root)
-        } else {
-            None
-        };
-
-        Ok(NodeStore {
-            kind: Mutable { root, inner: Recon },
-            storage: self.storage.clone(),
-        })
+        NodeStore::new_for_reconstruction(self)
     }
 }
 
@@ -643,51 +633,16 @@ pub struct NodeStore<T, S> {
 /// Contains state for a reconstructed revision of the trie.
 /// These are unparented, and only contain an in-memory root.
 ///
-/// Reconstructed views typically contain a simple [`Node`] as the
-/// root. However, once you call [`HashedNodeReader::root_hash`] on the reconstructed
-/// nodestore, this becomes a `(`[`SharedNode`]`, `[`TrieHash`]`)`.
-///
-/// This is done inside a [`Mutex`] to allow the `root_hash` function to
-/// alter the root.
+/// The root node is stored as a [`SharedNode`] at construction time.
+/// The root hash is computed lazily on the first call to
+/// [`HashedNodeReader::root_hash`] and cached in a [`OnceLock`] for
+/// lock-free access on subsequent reads.
 #[derive(Debug)]
 pub struct Reconstructed {
-    /// The root of the trie in this reconstructed view.
-    root: Mutex<Option<ReconstructedRoot>>,
-}
-
-/// The root of a reconstructed nodestore is either an unhashed
-/// node or a [`SharedNode`] with a computed hash.
-#[derive(Debug, Clone)]
-enum ReconstructedRoot {
-    Node(Node),
-    HashedNode((SharedNode, TrieHash)),
-}
-
-impl ReconstructedRoot {
-    fn into_node(self) -> Node {
-        match self {
-            ReconstructedRoot::Node(node) => node,
-            ReconstructedRoot::HashedNode((node, _)) => triomphe::Arc::unwrap_or_clone(node),
-        }
-    }
-
-    fn as_shared_node(&self) -> SharedNode {
-        match self {
-            ReconstructedRoot::Node(node) => triomphe::Arc::new(node.clone()),
-            ReconstructedRoot::HashedNode((node, _)) => node.clone(),
-        }
-    }
-
-    #[cfg(test)]
-    // Returns the hash of this root if it has one. Note that the hash is only available if the root is a HashedNode,
-    // which happens after calling `root_hash()` on the reconstructed nodestore. Used in testing to verify whether or
-    // not the root has been hashed.
-    fn hash_if_hashed(&self) -> Option<TrieHash> {
-        match self {
-            ReconstructedRoot::Node(_) => None,
-            ReconstructedRoot::HashedNode((_, hash)) => Some(hash.clone().into_triehash()),
-        }
-    }
+    /// The root node, wrapped in a [`SharedNode`] at construction.
+    node: Option<SharedNode>,
+    /// Lazily computed root hash (write-once, then lock-free reads).
+    hash: OnceLock<TrieHash>,
 }
 
 /// Proposal-specific fields for a mutable nodestore.
@@ -749,7 +704,7 @@ impl<S: ReadableStorage> From<NodeStore<Reconstructed, S>> for NodeStore<Mutable
     fn from(val: NodeStore<Reconstructed, S>) -> Self {
         NodeStore {
             kind: Mutable {
-                root: val.kind.root.into_inner().map(ReconstructedRoot::into_node),
+                root: val.kind.node.map(triomphe::Arc::unwrap_or_clone),
                 inner: Recon,
             },
             storage: val.storage,
@@ -761,7 +716,8 @@ impl<S: ReadableStorage> From<NodeStore<Mutable<Recon>, S>> for NodeStore<Recons
     fn from(val: NodeStore<Mutable<Recon>, S>) -> Self {
         NodeStore {
             kind: Reconstructed {
-                root: Mutex::new(val.kind.root.map(ReconstructedRoot::Node)),
+                node: val.kind.root.map(triomphe::Arc::new),
+                hash: OnceLock::new(),
             },
             storage: val.storage,
         }
@@ -769,12 +725,18 @@ impl<S: ReadableStorage> From<NodeStore<Mutable<Recon>, S>> for NodeStore<Recons
 }
 
 /// Implement a very expensive clone for `NodeStore<Reconstructed, S>` that recursively clones
-/// the entire trie in memory. This is a bit cheaper if the nodestore has been hashed.
+/// the entire trie in memory. This is a bit cheaper if the nodestore has been hashed, since
+/// only the [`SharedNode`] arc is cloned rather than the full node tree.
 impl<S> Clone for NodeStore<Reconstructed, S> {
     fn clone(&self) -> Self {
+        let hash = OnceLock::new();
+        if let Some(h) = self.kind.hash.get() {
+            let _ = hash.set(h.clone());
+        }
         NodeStore {
             kind: Reconstructed {
-                root: Mutex::new(self.kind.root.lock().clone()),
+                node: self.kind.node.clone(),
+                hash,
             },
             storage: self.storage.clone(),
         }
@@ -784,13 +746,12 @@ impl<S> Clone for NodeStore<Reconstructed, S> {
 impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed, S>>> for NodeStore<Mutable<Recon>, S> {
     fn from(val: Arc<NodeStore<Reconstructed, S>>) -> Self {
         // Fast path: if this Arc is uniquely owned, `try_unwrap` is O(1) and lets us move the
-        // reconstructed root out without cloning or locking.
+        // reconstructed root out without cloning.
         // Why this Arc might be shared: a caller could keep another handle alive (e.g. iterating
         // over a reconstructed view while also deriving the next reconstructed state), which makes
         // `try_unwrap` fail even though conversion is still valid.
-        // Fallback cost: when shared, we must keep the Arc alive and convert from `&NodeStore`,
-        // which takes the root lock and clones the root `Child` before resolving nodes; that clone
-        // is recursive for all in-memory children and can be potentially expensive.
+        // Fallback cost: when shared, we must clone the `NodeStore<Reconstructed, S>`, which
+        // clones the root `SharedNode` arc and then `Arc::unwrap_or_clone` extracts the `Node`.
         // This shared-Arc fallback does not match our known reconstruction use cases, where the
         // previous reconstructed handle is typically consumed before building the next one.
         // We do this to avoid forcing callers to guarantee uniqueness while still exploiting the
@@ -939,11 +900,7 @@ impl<S: ReadableStorage> RootReader for NodeStore<Arc<ImmutableProposal>, S> {
 
 impl<S: ReadableStorage> RootReader for NodeStore<Reconstructed, S> {
     fn root_node(&self) -> Option<SharedNode> {
-        self.kind
-            .root
-            .lock()
-            .as_ref()
-            .map(ReconstructedRoot::as_shared_node)
+        self.kind.node.clone()
     }
 
     fn root_as_maybe_persisted_node(&self) -> Option<MaybePersistedNode> {
@@ -967,7 +924,7 @@ where
 }
 
 // This implements HashedNodeReader, can never be persisted,
-// and the root_hash is computed lazily.
+// and the root_hash is computed lazily via OnceLock.
 impl<S: ReadableStorage> HashedNodeReader for NodeStore<Reconstructed, S>
 where
     NodeStore<Reconstructed, S>: TrieReader,
@@ -977,40 +934,24 @@ where
         None
     }
 
-    // lazily compute the hash
-    // We don't use the parallel hash calculations here, again because
-    // reconstructed views don't benefit as much from spinning up multiple
-    // threads.
+    // Lazily compute and cache the hash. We don't use parallel hash
+    // calculations here because reconstructed views don't benefit as much
+    // from spinning up multiple threads.
     fn root_hash(&self) -> Option<TrieHash> {
-        let mut guard = self.kind.root.lock();
-        let root = guard.take();
-
-        let (hash, root) = match root {
-            None => (None, None),
-            Some(ReconstructedRoot::Node(node)) => {
-                #[cfg(feature = "ethhash")]
-                let (hashed_root, hash) = self.hash_helper(node, Path::new()).ok()?;
-                #[cfg(not(feature = "ethhash"))]
-                let (hashed_root, hash) =
-                    NodeStore::<Mutable<Propose>, S>::hash_helper(node, Path::new()).ok()?;
-
-                let hash = hash.into_triehash();
-                (
-                    Some(hash.clone()),
-                    Some(ReconstructedRoot::HashedNode((
-                        hashed_root.as_shared_node(self).expect("never persisted"),
-                        hash,
-                    ))),
-                )
-            }
-
-            Some(ReconstructedRoot::HashedNode((hashed_root, hash))) => (
-                Some(hash.clone().into_triehash()),
-                Some(ReconstructedRoot::HashedNode((hashed_root, hash))),
-            ),
-        };
-        *guard = root;
-        hash
+        let node = self.kind.node.as_ref()?;
+        if let Some(hash) = self.kind.hash.get() {
+            return Some(hash.clone());
+        }
+        let node_val: Node = Node::clone(node);
+        #[cfg(feature = "ethhash")]
+        let (_, hash) = self.hash_helper(node_val, Path::new()).ok()?;
+        #[cfg(not(feature = "ethhash"))]
+        let (_, hash) =
+            NodeStore::<Mutable<Propose>, S>::hash_helper(node_val, Path::new()).ok()?;
+        let hash = hash.into_triehash();
+        // If another thread raced us, discard ours — both computed the same value.
+        let _ = self.kind.hash.set(hash.clone());
+        Some(hash)
     }
 }
 
@@ -1448,16 +1389,7 @@ mod tests {
         let reconstructed: NodeStore<Reconstructed, _> = recon.into();
 
         // Conversion should not eagerly hash reconstructed roots.
-        assert_eq!(
-            reconstructed
-                .kind
-                .root
-                .lock()
-                .as_ref()
-                .unwrap()
-                .hash_if_hashed(),
-            None
-        );
+        assert!(reconstructed.kind.hash.get().is_none());
     }
 
     #[test]
@@ -1472,31 +1404,13 @@ mod tests {
 
         let reconstructed: NodeStore<Reconstructed, _> = recon.into();
 
-        // Before hashing, the root is an unhashed Node
-        assert_eq!(
-            reconstructed
-                .kind
-                .root
-                .lock()
-                .as_ref()
-                .unwrap()
-                .hash_if_hashed(),
-            None
-        );
+        // Before hashing, the OnceLock is empty
+        assert!(reconstructed.kind.hash.get().is_none());
 
         let first_hash = reconstructed.root_hash();
-        // After hashing, the root hash is memoized
+        // After hashing, the root hash is memoized in the OnceLock
         assert!(first_hash.is_some());
-        assert_eq!(
-            reconstructed
-                .kind
-                .root
-                .lock()
-                .as_ref()
-                .unwrap()
-                .hash_if_hashed(),
-            first_hash.clone()
-        );
+        assert_eq!(reconstructed.kind.hash.get().cloned(), first_hash);
         let second_hash = reconstructed.root_hash();
         assert_eq!(first_hash, second_hash);
     }

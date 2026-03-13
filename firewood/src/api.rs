@@ -499,7 +499,7 @@ where
     }
 }
 
-/// A reconstructable database view.
+/// A reconstructible database view.
 ///
 /// This trait models linear reconstruction by consuming `self` and returning
 /// a new reconstructed view.
