@@ -637,7 +637,7 @@ pub struct NodeStore<T, S> {
 /// The root hash is computed lazily on the first call to
 /// [`HashedNodeReader::root_hash`] and cached in a [`OnceLock`] for
 /// lock-free access on subsequent reads.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Reconstructed {
     /// The root node, wrapped in a [`SharedNode`] at construction.
     node: Option<SharedNode>,
@@ -724,20 +724,14 @@ impl<S: ReadableStorage> From<NodeStore<Mutable<Recon>, S>> for NodeStore<Recons
     }
 }
 
-/// Implement a very expensive clone for `NodeStore<Reconstructed, S>` that recursively clones
-/// the entire trie in memory. This is a bit cheaper if the nodestore has been hashed, since
-/// only the [`SharedNode`] arc is cloned rather than the full node tree.
+/// Implement clone for `NodeStore<Reconstructed, S>`.
+///
+/// This clones the [`SharedNode`] arc (cheap ref-count bump) and the
+/// [`OnceLock`] hash (cloned if already computed, empty otherwise).
 impl<S> Clone for NodeStore<Reconstructed, S> {
     fn clone(&self) -> Self {
-        let hash = OnceLock::new();
-        if let Some(h) = self.kind.hash.get() {
-            let _ = hash.set(h.clone());
-        }
         NodeStore {
-            kind: Reconstructed {
-                node: self.kind.node.clone(),
-                hash,
-            },
+            kind: self.kind.clone(),
             storage: self.storage.clone(),
         }
     }
@@ -848,7 +842,7 @@ impl<T, S: ReadableStorage> NodeReader for NodeStore<Mutable<T>, S> {
 
 impl<S: ReadableStorage> NodeReader for NodeStore<Reconstructed, S> {
     fn read_node(&self, addr: LinearAddress) -> Result<SharedNode, FileIoError> {
-        self.read_node_from_disk(addr, "recon-read")
+        self.read_node_from_disk(addr, ReadableNodeMode::ReconRead)
     }
 }
 
