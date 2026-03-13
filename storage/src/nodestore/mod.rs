@@ -568,22 +568,6 @@ impl ImmutableProposal {
 /// The first generic parameter `T` is the state type (see module docs for the full list).
 /// The second generic parameter `S` is the storage backend (in-memory or on-disk).
 ///
-/// # Proposal lifecycle
-///
-/// 1. Create a new, empty, [Committed] [`NodeStore`] using [`NodeStore::new_empty_committed`] or open from disk with [`NodeStore::open`].
-/// 2. Create a [`Mutable<Propose>`] from a [Committed] or [`Arc<ImmutableProposal>`] parent using [`NodeStore::new`].
-/// 3. Apply batch operations to the mutable proposal via `Merkle` insert/remove.
-/// 4. Convert to [`Arc<ImmutableProposal>`] via [`TryFrom`], which hashes nodes and assigns addresses.
-/// 5. Commit to a new [Committed] revision via [`NodeStore::as_committed`] or [`From<ImmutableProposal>`].
-///
-/// # Reconstruction lifecycle
-///
-/// 1. Create a [`Mutable<Recon>`] from a [Committed] or [`Reconstructed`] parent
-///    using [`NodeStore::into_reconstruction_child`].
-/// 2. Apply batch operations to the mutable reconstruction via `Merkle` insert/remove.
-/// 3. Convert to [`Reconstructed`] via [`From`]. The resulting view supports reads and lazy hashing.
-/// 4. Chain further reconstructions: convert back to [`Mutable<Recon>`] via [`From`] and repeat.
-///
 /// The general lifecycle of nodestores is as follows.
 /// Red arrows consume their source; blue arrows borrow it.
 #[cfg_attr(doc, aquamarine::aquamarine)]
@@ -621,7 +605,23 @@ impl ImmutableProposal {
 /// style MR fill:#E3F2FD
 /// style R fill:#E3F2FD
 /// ```
-
+///
+/// # Proposal lifecycle
+///
+/// 1. Create a new, empty, [Committed] [`NodeStore`] using [`NodeStore::new_empty_committed`] or open from disk with [`NodeStore::open`].
+/// 2. Create a [`Mutable<Propose>`] from a [Committed] or [`Arc<ImmutableProposal>`] parent using [`NodeStore::new`].
+/// 3. Apply batch operations to the mutable proposal via `Merkle` insert/remove.
+/// 4. Convert to [`Arc<ImmutableProposal>`] via [`TryFrom`], which hashes nodes and assigns addresses.
+/// 5. Commit to a new [Committed] revision via [`NodeStore::as_committed`] or [`From<ImmutableProposal>`].
+///
+/// # Reconstruction lifecycle
+///
+/// 1. Create a [`Mutable<Recon>`] from a [Committed] or [`Reconstructed`] parent
+///    using [`NodeStore::into_reconstruction_child`].
+/// 2. Apply batch operations to the mutable reconstruction via `Merkle` insert/remove.
+/// 3. Convert to [`Reconstructed`] via [`From`]. The resulting view supports reads and lazy hashing.
+/// 4. Chain further reconstructions: convert back to [`Mutable<Recon>`] via [`From`] and repeat.
+///
 #[derive(Debug)]
 pub struct NodeStore<T, S> {
     /// This is one of [Committed], [`ImmutableProposal`], [`Mutable<Propose>`], [`Mutable<Recon>`], or [`Reconstructed`].
