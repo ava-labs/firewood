@@ -1,6 +1,8 @@
 module github.com/ava-labs/firewood/ffi/tests/eth
 
-go 1.25.8
+go 1.25
+
+toolchain go1.25.8
 
 require (
 	github.com/ava-labs/firewood-go-ethhash/ffi v0.0.0 // this is replaced to use the parent folder
@@ -59,8 +61,8 @@ require (
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/exp v0.0.0-20231110203233-9a3e6036ecaa // indirect
-	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
+	golang.org/x/sync v0.18.0 // indirect
+	golang.org/x/sys v0.38.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 	google.golang.org/protobuf v1.36.5 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
