@@ -94,6 +94,11 @@ func main() {
 	flag.BoolVar(&debug, "debug", false, "enable debug logging")
 	flag.Parse()
 
+	if !debug && os.Getenv("CI") != "" {
+		debug = true
+		debugf("enabling debug logging because CI environment variable is set")
+	}
+
 	if dir == "" {
 		if file := os.Getenv("GOFILE"); file != "" {
 			dir = filepath.Dir(file)
