@@ -83,9 +83,9 @@
           mkdir -p $out/ffi/libs/${pkgs.stdenv.hostPlatform.config}
           cp target/maxperf/libfirewood_ffi.a $out/ffi/libs/${pkgs.stdenv.hostPlatform.config}/
 
-          # Run go generate to switch CGO directives to STATIC_LIBS mode
-          cd $out/ffi
-          HOME=$TMPDIR GOTOOLCHAIN=local FIREWOOD_LD_MODE=STATIC_LIBS ${go}/bin/go generate
+          # The CGO directives are already set to STATIC_LIBS mode in the committed
+          # source, so go generate is not needed here.
+          # HOME=$TMPDIR GOTOOLCHAIN=local FIREWOOD_LD_MODE=STATIC_LIBS ${go}/bin/go generate
         '';
 
         meta = with lib; {

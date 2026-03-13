@@ -37,32 +37,32 @@ check-golang-version: check-nix
 
     cd ffi
 
-    TOOLCHAIN_VERSION=$(nix develop --command bash -c "go mod edit -json | jq -r '.Toolchain'")
-    echo "toolchain version in ffi/go.mod is ${TOOLCHAIN_VERSION}"
+    GO_VERSION=$(nix develop --command bash -c "go mod edit -json | jq -r '.Go'")
+    echo "go version in ffi/go.mod is ${GO_VERSION}"
 
-    ETH_TESTS_VERSION=$(nix develop --command bash -c "cd tests/eth && go mod edit -json | jq -r '.Toolchain'")
-    echo "toolchain version in ffi/tests/eth/go.mod is ${ETH_TESTS_VERSION}"
+    ETH_TESTS_VERSION=$(nix develop --command bash -c "cd tests/eth && go mod edit -json | jq -r '.Go'")
+    echo "go version in ffi/tests/eth/go.mod is ${ETH_TESTS_VERSION}"
 
-    if [[ "${TOOLCHAIN_VERSION}" != "${ETH_TESTS_VERSION}" ]]; then
-        echo "❌ toolchain version in ffi/tests/eth/go.mod should be ${TOOLCHAIN_VERSION}"
+    if [[ "${GO_VERSION}" != "${ETH_TESTS_VERSION}" ]]; then
+        echo "❌ go version in ffi/tests/eth/go.mod should be ${GO_VERSION}"
         FAILED=1
     fi
 
-    FIREWOOD_TESTS_VERSION=$(nix develop --command bash -c "cd tests/firewood && go mod edit -json | jq -r '.Toolchain'")
-    echo "toolchain version in ffi/tests/firewood/go.mod is ${FIREWOOD_TESTS_VERSION}"
+    FIREWOOD_TESTS_VERSION=$(nix develop --command bash -c "cd tests/firewood && go mod edit -json | jq -r '.Go'")
+    echo "go version in ffi/tests/firewood/go.mod is ${FIREWOOD_TESTS_VERSION}"
 
-    if [[ "${TOOLCHAIN_VERSION}" != "${FIREWOOD_TESTS_VERSION}" ]]; then
-        echo "❌ toolchain version in ffi/tests/firewood/go.mod should be ${TOOLCHAIN_VERSION}"
+    if [[ "${GO_VERSION}" != "${FIREWOOD_TESTS_VERSION}" ]]; then
+        echo "❌ go version in ffi/tests/firewood/go.mod should be ${GO_VERSION}"
         FAILED=1
     fi
 
-    NIX_VERSION=$(nix run .#go -- version | awk '{print $3}')
+    NIX_VERSION=$(nix run .#go -- version | awk '{print $3}' | sed 's/^go//')
     echo "golang provided by ffi/flake.nix is ${NIX_VERSION}"
 
-    if [[ "${TOOLCHAIN_VERSION}" != "${NIX_VERSION}" ]]; then
-        echo "❌ golang provided by ffi/flake/nix should be ${TOOLCHAIN_VERSION}"
+    if [[ "${GO_VERSION}" != "${NIX_VERSION}" ]]; then
+        echo "❌ golang provided by ffi/flake/nix should be ${GO_VERSION}"
         echo "It will be necessary to update the golang.url in ffi/flake.nix to point to a SHA of"\
-             "AvalancheGo whose nix/go/flake.nix provides ${TOOLCHAIN_VERSION}."
+             "AvalancheGo whose nix/go/flake.nix provides ${GO_VERSION}."
     fi
 
     if [[ -n "${FAILED}" ]]; then
