@@ -18,7 +18,7 @@
 // would be identified as a call to the C function `fwd_get_from_revision` via
 // the identifier `_Cfunc_fwd_get_from_revision`.
 //
-// The script ensures that each C function has at most once callsite.
+// The script ensures that each C function has at most one callsite.
 //
 // The script also removes any old cgo pragmas that do not match the current set
 // of C functions being called, to ensure that the source files are clean and
