@@ -41,6 +41,7 @@
           (lib.hasSuffix "go.mod" path) ||
           (lib.hasSuffix "go.sum" path) ||
           (lib.hasSuffix "firewood.h" path) ||
+          (lib.hasInfix "/vendor/" path) ||
           (craneLib.filterCargoSources path type);
       };
 
@@ -85,7 +86,7 @@
 
           # Run go generate to switch CGO directives to STATIC_LIBS mode
           cd $out/ffi
-          HOME=$TMPDIR GOTOOLCHAIN=local FIREWOOD_LD_MODE=STATIC_LIBS ${go}/bin/go generate
+          HOME=$TMPDIR GOTOOLCHAIN=local GOFLAGS=-mod=vendor FIREWOOD_LD_MODE=STATIC_LIBS ${go}/bin/go generate
         '';
 
         meta = with lib; {
