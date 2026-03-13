@@ -1,8 +1,6 @@
 module github.com/ava-labs/firewood/ffi/tests/firewood
 
-go 1.25
-
-toolchain go1.25.8
+go 1.25.8
 
 require (
 	github.com/ava-labs/firewood-go/ffi v0.0.0 // this is replaced to use the parent folder
@@ -44,7 +42,7 @@ require (
 	golang.org/x/crypto v0.45.0 // indirect
 	golang.org/x/exp v0.0.0-20241215155358-4a5509556b9e // indirect
 	golang.org/x/net v0.47.0 // indirect
-	golang.org/x/sys v0.40.0 // indirect
+	golang.org/x/sys v0.41.0 // indirect
 	golang.org/x/term v0.37.0 // indirect
 	golang.org/x/text v0.31.0 // indirect
 	gonum.org/v1/gonum v0.11.0 // indirect
