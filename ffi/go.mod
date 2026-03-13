@@ -1,12 +1,10 @@
 module github.com/ava-labs/firewood/ffi
 
-go 1.25
-
-// Changes to the toolchain version should be replicated in:
+// Changes to the go version should be replicated in:
 //   - ffi/go.mod (here)
 //   - ffi/tests/eth/go.mod
 //   - ffi/tests/firewood/go.mod
-toolchain go1.25.8
+go 1.25.8
 
 require (
 	github.com/prometheus/client_golang v1.22.0
