@@ -54,7 +54,7 @@ var pragmaComments = []string{
 
 var ignoredIdentifiers = []string{
 	// GoBytes is a cgo helper function and not one produced by our headers;
-	// however, it follows the same `_cFunc_...` naming pattern.
+	// however, it follows the same `_Cfunc_...` naming pattern.
 	"GoBytes",
 }
 
