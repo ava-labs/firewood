@@ -1,6 +1,6 @@
 # List available recipes
 default:
-    ./scripts/run-just.sh --list
+    @just --list
 
 # Check if the git branch is clean
 check-clean-branch:
