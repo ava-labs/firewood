@@ -19,14 +19,15 @@ body = """
 {% endif %}\
 {% for group, commits in commits | group_by(attribute="group") %}
     ### {{ group | striptags | trim | upper_first }}
+
     {% for commit in commits -%}
         {% if commit.remote.pr_labels is defined and commit.remote.pr_labels is containing("no-changelog") -%}
-            {% continue %}
+            {% continue -%}
         {% endif -%}
         - {% if commit.scope %}*({{ commit.scope }})* {% endif -%}
             {% if commit.breaking %}[**breaking**] {% endif -%}
             {{ commit.message | upper_first }}
-    {% endfor %}
+    {% endfor -%}
 {% endfor %}\n
 """
 # A Tera template to be rendered as the changelog's footer.

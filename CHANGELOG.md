@@ -2,6 +2,51 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.0] - 2026-03-13
+
+### 🚀 Features
+
+- *(ffi)* Automatically generate `cgo` pragma declarations ([#1784](https://github.com/ava-labs/firewood/pull/1784))
+
+### 🐛 Bug Fixes
+
+- Enforce `max_revisions` > `commit_count` ([#1749](https://github.com/ava-labs/firewood/pull/1749))
+- [**breaking**] Clock source miss-match between Rust and Go ([#1742](https://github.com/ava-labs/firewood/pull/1742))
+- Fwdctl vm config ([#1776](https://github.com/ava-labs/firewood/pull/1776))
+- Bug where remove_all_entries may not remove all subtries ([#1778](https://github.com/ava-labs/firewood/pull/1778))
+
+### 🚜 Refactor
+
+- *(perf)* Calculate AreaIndex in as_bytes methods ([#1675](https://github.com/ava-labs/firewood/pull/1675))
+- Replace `PersistSemaphore` with `PersistChannel` ([#1710](https://github.com/ava-labs/firewood/pull/1710))
+- *(metrics)* Migrate ffi histogram recording to macros ([#1712](https://github.com/ava-labs/firewood/pull/1712))
+- Parallel execution helpers ([#1764](https://github.com/ava-labs/firewood/pull/1764))
+- [**breaking**] Remove v2 module ([#1760](https://github.com/ava-labs/firewood/pull/1760))
+- Read node mode ([#1792](https://github.com/ava-labs/firewood/pull/1792))
+
+### 📚 Documentation
+
+- Clarify deferred persistence terminology ([#1733](https://github.com/ava-labs/firewood/pull/1733))
+
+### ⚡ Performance
+
+- Use `runtime.AddCleanup` ([#1705](https://github.com/ava-labs/firewood/pull/1705))
+- *(ffi)* Add cgo pragma declarations ([#1722](https://github.com/ava-labs/firewood/pull/1722))
+- Fix child pruning in iterate_to_key ([#1783](https://github.com/ava-labs/firewood/pull/1783))
+
+### ⚙️ Miscellaneous Tasks
+
+- Update pull request template to include breaking changes ([#1723](https://github.com/ava-labs/firewood/pull/1723))
+- *(deps)* Bump the github-actions group with 3 updates ([#1738](https://github.com/ava-labs/firewood/pull/1738))
+- *(ffi)* Fix lint emitted in maxperf builds ([#1732](https://github.com/ava-labs/firewood/pull/1732))
+- *(docs)* Render mermaid graphs with aquamarine ([#1753](https://github.com/ava-labs/firewood/pull/1753))
+- Remove dead code ([#1755](https://github.com/ava-labs/firewood/pull/1755))
+- [**breaking**] Remove node_cache_size ([#1758](https://github.com/ava-labs/firewood/pull/1758))
+- Bump go to 1.25.8 ([#1775](https://github.com/ava-labs/firewood/pull/1775))
+- Add additional metrics for `v0.3.0` ([#1782](https://github.com/ava-labs/firewood/pull/1782))
+- Remove nix flake and all references to it ([#1788](https://github.com/ava-labs/firewood/pull/1788))
+- Verify go.mod files all have the same declared go version ([#1790](https://github.com/ava-labs/firewood/pull/1790))
+
 ## [0.2.0] - 2026-02-26
 
 ### 🚀 Features
