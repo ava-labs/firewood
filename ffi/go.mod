@@ -1,10 +1,14 @@
 module github.com/ava-labs/firewood/ffi
 
-// Changes to the go version should be replicated in:
+go 1.25
+
+// Changes to the toolchain version should be replicated in:
 //   - ffi/go.mod (here)
+//   - ffi/flake.nix (update golang.url to a version of avalanchego's nix/go/flake.nix that uses the desired version and run `just update-ffi-flake`)
 //   - ffi/tests/eth/go.mod
 //   - ffi/tests/firewood/go.mod
-go 1.25.8
+// `just check-golang-version` validates that these versions are in sync and will run in CI as part of the ffi-nix job.
+toolchain go1.25.8
 
 require (
 	github.com/prometheus/client_golang v1.22.0
