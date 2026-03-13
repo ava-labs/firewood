@@ -177,7 +177,7 @@ release-step-refresh-changelog tag:
 #   START_BLOCK=1 END_BLOCK=100 BLOCK_DIR_SRC=cchain-mainnet-blocks-200-ldb just bench-cchain
 bench-cchain:
     #!/usr/bin/env -S bash -euo pipefail
-    
+
     # Prevent accidental runs from main (would pollute official bench/ data)
     branch=$(git rev-parse --abbrev-ref HEAD)
     if [[ "$branch" == "main" ]]; then
@@ -194,7 +194,7 @@ bench-cchain:
         echo "       Use a branch name (e.g., 'master') or tag instead." >&2
         exit 1
     fi
-    
+
     # Resolve gh CLI
     if command -v gh &>/dev/null; then
         GH=gh
@@ -204,7 +204,7 @@ bench-cchain:
         echo "error: 'gh' CLI not found. Install it or use 'nix develop ./ffi'" >&2
         exit 1
     fi
-    
+
     # Validate: need either test name OR custom block params
     if [[ -z "${TEST:-}" && -z "${START_BLOCK:-}" ]]; then
         echo "error: Provide TEST or set START_BLOCK, END_BLOCK, BLOCK_DIR_SRC" >&2
@@ -217,9 +217,9 @@ bench-cchain:
         echo "  START_BLOCK=1 END_BLOCK=100 BLOCK_DIR_SRC=cchain-mainnet-blocks-200-ldb just bench-cchain" >&2
         exit 1
     fi
-    
+
     : "${RUNNER:=avalanche-avalanchego-runner-2ti}"
-    
+
     # Build workflow args
     args=(-f runner="$RUNNER")
     [[ -n "${TEST:-}" ]] && args+=(-f test="$TEST")
@@ -232,16 +232,16 @@ bench-cchain:
     [[ -n "${BLOCK_DIR_SRC:-}" ]] && args+=(-f block-dir-src="$BLOCK_DIR_SRC")
     [[ -n "${CURRENT_STATE_DIR_SRC:-}" ]] && args+=(-f current-state-dir-src="$CURRENT_STATE_DIR_SRC")
     [[ -n "${TIMEOUT_MINUTES:-}" ]] && args+=(-f timeout-minutes="$TIMEOUT_MINUTES")
-    
+
     [[ -n "${TEST:-}" ]] && echo "==> Test: $TEST"
     [[ -n "${START_BLOCK:-}" ]] && echo "==> Custom: blocks $START_BLOCK-${END_BLOCK:-?}"
     echo "==> Runner: $RUNNER"
-    
+
     # Record time before triggering to find our run (avoid race conditions)
     trigger_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    
+
     $GH workflow run track-performance.yml --ref "$branch" "${args[@]}"
-    
+
     # Poll for workflow registration (runs created after trigger_time)
     echo ""
     echo "Polling for workflow to register..."
@@ -251,13 +251,13 @@ bench-cchain:
             --jq "[.[] | select(.createdAt > \"$trigger_time\")] | .[-1].databaseId // empty")
         [[ -n "$run_id" ]] && break
     done
-    
+
     if [[ -z "$run_id" ]]; then
         echo "warning: Could not find run ID. Check manually at:"
         echo "  https://github.com/ava-labs/firewood/actions/workflows/track-performance.yml"
         exit 0
     fi
-    
+
     echo ""
     echo "Monitor this workflow with cli: $GH run watch $run_id"
     echo " or with this URL: https://github.com/ava-labs/firewood/actions/runs/$run_id"
