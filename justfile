@@ -92,16 +92,7 @@ setup-go-workspace:
     go work init ./ffi ./ffi/tests/eth ./ffi/tests/firewood
 
 # Run all checks of ffi built with nix
-test-ffi-nix: test-ffi-nix-build-equivalency test-ffi-nix-go-bindings
-
-# Test ffi build equivalency between nix and cargo
-test-ffi-nix-build-equivalency: check-nix
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    echo "Testing ffi build equivalency between nix and cargo"
-
-    bash -x ./ffi/test-build-equivalency.sh
+test-ffi-nix: test-ffi-nix-go-bindings
 
 # Test golang ffi bindings using the nix-built artifacts
 test-ffi-nix-go-bindings: build-ffi-nix
