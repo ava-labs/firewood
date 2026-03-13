@@ -1,8 +1,6 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-//go:build ignore
-
 // go generate script
 //
 // This script fixes up a go file to enable/disable the correct cgo directives,
@@ -41,10 +39,6 @@ import (
 	"strings"
 )
 
-const (
-	defaultMode = "LOCAL_LIBS"
-)
-
 var errGoFileNotSet = errors.New("GOFILE is not set")
 
 func main() {
@@ -81,6 +75,8 @@ func getTargetFile() (string, error) {
 }
 
 func changeCgoDirectivesForFile(targetMode string, targetFile string) error {
+	const none = "None"
+
 	originalFileContent, err := os.ReadFile(targetFile)
 	if err != nil {
 		return fmt.Errorf("failed to read %s: %w", targetFile, err)
@@ -89,25 +85,25 @@ func changeCgoDirectivesForFile(targetMode string, targetFile string) error {
 	fileLines := strings.Split(string(originalFileContent), "\n")
 
 	// Initial state is "None" which does not process any lines
-	currentBlockName := "None"
+	currentBlockName := none
 	for i, line := range fileLines {
 		// process state transitions
 		// if the line starts with "// FIREWOOD_CGO_BEGIN_", set the state to the text after the prefix
 		if newBlockName, ok := strings.CutPrefix(line, "// // FIREWOOD_CGO_BEGIN_"); ok {
-			if currentBlockName != "None" {
+			if currentBlockName != none {
 				return fmt.Errorf("[ERROR] %s:%d: nested CGO blocks not allowed (found %s after %s)", targetFile, i+1, newBlockName, currentBlockName)
 			}
 			currentBlockName = newBlockName
 			continue
-		} else if line == fmt.Sprintf("// // FIREWOOD_CGO_END_%s", currentBlockName) {
-			currentBlockName = "None"
+		} else if line == "// // FIREWOOD_CGO_END_"+currentBlockName {
+			currentBlockName = none
 			continue
 		}
 
 		// If we are in a block, process the line
-		if currentBlockName != "None" {
+		if currentBlockName != none {
 			if !isCGODirective(line) {
-				return fmt.Errorf("[ERROR] %s:%d: invalid CGO directive in %s section:\n===\n%s\n===\n", targetFile, i+1, currentBlockName, line)
+				return fmt.Errorf("[ERROR] %s:%d: invalid CGO directive in %s section:\n===\n%s\n===", targetFile, i+1, currentBlockName, line)
 			}
 			if currentBlockName == targetMode {
 				fileLines[i] = activateCGOLine(fileLines[i])
@@ -117,7 +113,7 @@ func changeCgoDirectivesForFile(targetMode string, targetFile string) error {
 		}
 	}
 
-	if currentBlockName != "None" {
+	if currentBlockName != none {
 		return fmt.Errorf("[ERROR] %s: unterminated CGO block ended in %s", targetFile, currentBlockName)
 	}
 
@@ -127,6 +123,9 @@ func changeCgoDirectivesForFile(targetMode string, targetFile string) error {
 		fmt.Printf("[INFO] No changes needed to %s\n", targetFile)
 		return nil
 	}
+	// #nosec G306 - permissions are correct for source files
+	// #nosec G703 - path is safe because it is controlled by the build system
+	// and not user input
 	return os.WriteFile(targetFile, []byte(newContents), 0o644)
 }
 

@@ -224,8 +224,22 @@ jobs:
       - name: doc generation
         run: RUSTDOCFLAGS="-D warnings" cargo doc --locked --document-private-items --no-deps
 
+  ffi-check-go-generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check `go generate` for changes
+        working-directory: ffi
+        run: |
+          go generate
+          if [[ -n $(git status --porcelain) ]]; then
+            echo "go generate resulted in changes to tracked files. Please commit these changes."
+            git --no-pager diff
+            exit 1
+          fi
+
   ffi:
-    needs: build
+    needs: [build, ffi-check-go-generate]
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:

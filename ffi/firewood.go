@@ -6,7 +6,8 @@
 // [Firewood]: https://github.com/ava-labs/firewood
 package ffi
 
-//go:generate go run generate_cgo.go
+//go:generate go run ./gen/update-cgo-ldflags
+//go:generate go run ./gen/update-cgo-pragmas
 
 // // Note that -lm is required on Linux but not on Mac.
 // // FIREWOOD_CGO_BEGIN_STATIC_LIBS
