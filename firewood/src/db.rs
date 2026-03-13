@@ -21,7 +21,8 @@ use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_metrics::firewood_counter;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, TrieReader,
+    ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, Reconstructed,
+    TrieReader,
 };
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -51,9 +52,9 @@ impl std::fmt::Debug for DbMetrics {
     }
 }
 
-impl<P: Parentable, S: ReadableStorage> api::DbView for NodeStore<P, S>
+impl<P, S: ReadableStorage> api::DbView for NodeStore<P, S>
 where
-    NodeStore<P, S>: TrieReader,
+    NodeStore<P, S>: HashedNodeReader,
 {
     type Iter<'view>
         = MerkleKeyValueIter<'view, Self>
@@ -338,6 +339,22 @@ pub struct Proposal<'db> {
     db: &'db Db,
 }
 
+#[derive(Debug)]
+/// A user-visible reconstructed view.
+pub struct ReconstructedView<'db> {
+    nodestore: Arc<NodeStore<Reconstructed, FileBacked>>,
+    #[expect(dead_code, reason = "used by Reconstructible impl in next commit")]
+    db: &'db Db,
+}
+
+impl ReconstructedView<'_> {
+    /// Returns the view backing this reconstructed state.
+    #[must_use]
+    pub fn view(&self) -> ArcDynDbView {
+        self.nodestore.clone()
+    }
+}
+
 impl api::DbView for Proposal<'_> {
     type Iter<'view>
         = MerkleKeyValueIter<'view, NodeStore<Arc<ImmutableProposal>, FileBacked>>
@@ -399,6 +416,42 @@ impl Proposal<'_> {
     #[must_use]
     pub fn view(&self) -> ArcDynDbView {
         self.nodestore.clone()
+    }
+}
+
+impl api::DbView for ReconstructedView<'_> {
+    type Iter<'view>
+        = MerkleKeyValueIter<'view, NodeStore<Reconstructed, FileBacked>>
+    where
+        Self: 'view;
+
+    fn root_hash(&self) -> Option<api::HashKey> {
+        api::DbView::root_hash(&*self.nodestore)
+    }
+
+    fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
+        api::DbView::val(&*self.nodestore, key)
+    }
+
+    fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
+        api::DbView::single_key_proof(&*self.nodestore, key)
+    }
+
+    fn range_proof<K: KeyType>(
+        &self,
+        first_key: Option<K>,
+        last_key: Option<K>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenRangeProof, api::Error> {
+        api::DbView::range_proof(&*self.nodestore, first_key, last_key, limit)
+    }
+
+    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
+        api::DbView::iter_option(&*self.nodestore, first_key)
+    }
+
+    fn dump_to_string(&self) -> Result<String, api::Error> {
+        api::DbView::dump_to_string(&*self.nodestore)
     }
 }
 
