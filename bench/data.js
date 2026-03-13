@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1773301259771,
+  "lastUpdate": 1773387588950,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -1362,6 +1362,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 82.13656745026881,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "857e256870ad95960a4ba8a5288b05303db67cf1",
+          "message": "perf(ffi): add cgo pragma declarations (#1722)\n\n## Why this should be merged\n\nThe cgo pragma hints affect the generated cgo wrappers and slightly\nimprove the overhead of calling into firewood functions from Go.\n\n## How this works\n\n`noescape` changes the generate code from `runtime.cgoUse(param)` to\n`runtime.cgoKeepAlive(param)`. This change keeps the param alive for the\nduration of the cgo call without triggering GC escape. `nocallback`\ninforms the runtime that the cgo call will not make any reentrant calls\nto the go runtime.\n\n## How this was tested\n\nCI and repeated testing during stack analysis.",
+          "timestamp": "2026-03-12T19:03:51Z",
+          "url": "https://github.com/ava-labs/firewood/commit/857e256870ad95960a4ba8a5288b05303db67cf1"
+        },
+        "date": 1773387588122,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 140.90580596678998,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 7096.9396409094015,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 114.11894969983582,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6897.7704815941515,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 81.99601538134611,
             "unit": "block_accept_ms/ggas"
           }
         ]
