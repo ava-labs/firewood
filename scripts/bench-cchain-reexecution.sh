@@ -102,7 +102,7 @@ err() {
 
 require_gh() {
     if ! command -v gh &>/dev/null; then
-        err "gh CLI not found. Install it from https://cli.github.com"; exit 1
+        err "gh CLI not found. Run from nix shell: nix develop ./ffi"; exit 1
     fi
     if [[ -z "${GH_TOKEN:-}" ]]; then
         err "GH_TOKEN is required"; exit 1
