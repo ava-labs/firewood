@@ -83,9 +83,11 @@
           mkdir -p $out/ffi/libs/${pkgs.stdenv.hostPlatform.config}
           cp target/maxperf/libfirewood_ffi.a $out/ffi/libs/${pkgs.stdenv.hostPlatform.config}/
 
-          # The CGO directives are already set to STATIC_LIBS mode in the committed
-          # source, so go generate is not needed here.
-          # HOME=$TMPDIR GOTOOLCHAIN=local FIREWOOD_LD_MODE=STATIC_LIBS ${go}/bin/go generate
+          # Switch CGO LDFLAGS to STATIC_LIBS mode. Uses a file path (not package pattern) so
+          # Go only resolves this file's stdlib imports, avoiding the module-level
+          # golang.org/x/tools dependency that can't be downloaded in the nix sandbox.
+          cd $out/ffi
+          HOME=$TMPDIR GOFILE=firewood.go FIREWOOD_LD_MODE=STATIC_LIBS ${go}/bin/go run ./gen/update-cgo-ldflags/main.go
         '';
 
         meta = with lib; {
@@ -107,7 +109,12 @@
 
       apps.go = {
         type = "app";
-        program = "${go}/bin/go";
+        program = "${pkgs.writeShellScript "go" ''
+          # Ensure a C compiler is available for cgo (e.g. on NixOS
+          # where there is no system gcc).
+          export PATH="${pkgs.stdenv.cc}/bin:$PATH"
+          exec ${go}/bin/go "$@"
+        ''}";
       };
 
       apps.jq = {
