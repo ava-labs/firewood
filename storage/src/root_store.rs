@@ -1,6 +1,12 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+//! The root store is used to store the address of roots by hash
+//! so they can be recreated later.
+//!
+//! It is used only when enabled at database open time.
+
+use firewood_metrics::firewood_counter;
 use fjall::{Config, Keyspace, PartitionCreateOptions, PartitionHandle, PersistMode};
 use parking_lot::Mutex;
 use std::{
@@ -10,12 +16,21 @@ use std::{
 use weak_table::WeakValueHashMap;
 
 use derive_where::derive_where;
-use firewood_storage::{Committed, FileBacked, IntoHashType, LinearAddress, NodeStore, TrieHash};
 
-use crate::manager::CommittedRevision;
+use crate::linear::filebacked::FileBacked;
+use crate::nodestore::{Committed, LinearAddress, NodeStore};
+use crate::{IntoHashType, TrieHash};
 
+use crate::registry;
+
+/// Type alias for a committed revision stored in the root store.
+pub type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
+
+/// fjall uses partitions. We store all firewood-specific data in a
+/// partition named 'firewood'
 const FJALL_PARTITION_NAME: &str = "firewood";
 
+/// This structure hold everything related to an open root store
 #[derive_where(Debug)]
 #[derive_where(skip_inner)]
 pub struct RootStore {
@@ -27,17 +42,17 @@ pub struct RootStore {
 }
 
 impl RootStore {
-    /// Creates or opens an instance of `RootStore`.
+    /// Creates or opens an instance of `RootStore`
     ///
-    /// Args:
-    /// - `path`: the directory where `RootStore` will write to.
-    /// - `storage`: the underlying store to create nodestores from.
-    /// - `node_hash_algorithm`: the hash algorithm used for nodes.
-    /// - `truncate`: whether to truncate existing data.
+    /// # Arguments
+    ///
+    /// - `path` - the directory where `RootStore` will write to
+    /// - `storage` - the underlying store to create nodestores from
+    /// - `truncate` - whether to truncate existing data
     ///
     /// # Errors
     ///
-    /// Will return an error if unable to create or open an instance of `RootStore`.
+    /// Returns the raw underlying database error if any
     pub fn new<P: AsRef<Path>>(
         path: P,
         storage: Arc<FileBacked>,
@@ -63,16 +78,16 @@ impl RootStore {
         })
     }
 
-    /// `add_root` persists a revision's address to `RootStore`.
+    /// `add_root` persists a revision's root address to the rootstore
     ///
-    /// Args:
-    /// - hash: the hash of the revision
-    /// - address: the address of the revision
+    /// # Arguments
+    ///
+    /// - `hash` - the [`TrieHash`] of the revision
+    /// - `address` - the [`LinearAddress`] of the root node for this revision
     ///
     /// # Errors
     ///
-    /// Will return an error if unable to persist the revision address to the
-    /// underlying datastore
+    /// Returns the raw underlying database error if any
     pub fn add_root(
         &self,
         hash: &TrieHash,
@@ -80,45 +95,55 @@ impl RootStore {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.items.insert(**hash, address.get().to_be_bytes())?;
 
+        firewood_counter!(registry::ROOTSTORE_PUT).increment(1);
+
+        // flush the keyspace to protect against application crashes
+        //
+        // note that OS crashes or power failures may result in the loss
+        // of this revision in the root store
         self.keyspace.persist(PersistMode::Buffer)?;
 
         Ok(())
     }
 
-    /// `get` retrieves a committed revision by its hash.
+    /// `get` retrieves a committed revision [`NodeStore`] by its hash
     ///
-    /// To retrieve a committed revision involves a few steps:
-    /// 1. Check if the committed revision is cached.
-    /// 2. If the committed revision is not cached, query the underlying
-    ///    datastore for the revision's root address.
-    /// 3. Construct the committed revision.
+    /// Updates the `rootstore_get` metric with a result label value:
     ///
-    /// Args:
-    /// - hash: the hash of the revision
+    /// - `cached` if the nodestore was found in the cache
+    /// - `fetched` if the nodestore was fetched and constructed
+    /// - `notfound` if the hash could not be found
+    ///
+    /// # Arguments
+    ///
+    /// - `hash` - Identifies the revision to retrieve
+    ///
+    /// # Return Value
+    ///
+    /// - `None` - if the hash is not available from the root store
+    /// - `Some(NodeStore<CommittedRevision>)` - on success
     ///
     /// # Errors
     ///
-    ///  Will return an error if unable to query the underlying datastore or if
-    ///  the stored address is invalid.
-    ///
-    /// # Panics
-    ///
-    ///  Will panic if the latest revision does not exist.
+    /// Returns the raw underlying database error if any
     pub fn get(
         &self,
         hash: &TrieHash,
     ) -> Result<Option<CommittedRevision>, Box<dyn std::error::Error + Send + Sync>> {
-        // Obtain the lock to prevent multiple threads from caching the same result.
+        // 1. Obtain the lock to prevent multiple threads from caching the same result
         let mut revision_cache = self.revision_cache.lock();
 
         // 1. Check if the committed revision is cached.
         if let Some(v) = revision_cache.get(hash) {
+            // found in the cache
+            firewood_counter!(registry::ROOTSTORE_GET, "result" => "cached").increment(1);
             return Ok(Some(v));
         }
 
-        // 2. If the committed revision is not cached, query the underlying
-        //    datastore for the revision's root address.
+        // 2. Not cached, query the datastore
         let Some(v) = self.items.get(**hash)? else {
+            // not in the datastore
+            firewood_counter!(registry::ROOTSTORE_GET, "result" => "notfound").increment(1);
             return Ok(None);
         };
 
@@ -126,15 +151,17 @@ impl RootStore {
         let addr = LinearAddress::new(u64::from_be_bytes(array))
             .ok_or("invalid address: empty address")?;
 
-        // 3. Construct the committed revision.
+        // 3. Construct the committed revision
         let nodestore = Arc::new(NodeStore::with_root(
             hash.clone().into_hash_type(),
             addr,
             self.storage.clone(),
-        ));
+        )?);
 
-        // Cache for future lookups.
+        // 4. Cache for future lookups.
         revision_cache.insert(hash.clone(), nodestore.clone());
+
+        firewood_counter!(registry::ROOTSTORE_GET, "result" => "fetched").increment(1);
 
         Ok(Some(nodestore))
     }
@@ -144,7 +171,9 @@ impl RootStore {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use firewood_storage::{CacheReadStrategy, FileBacked, NodeHashAlgorithm, NodeStore};
+    use crate::CacheReadStrategy;
+    use crate::linear::filebacked::FileBacked;
+    use crate::nodestore::{NodeHashAlgorithm, NodeStore};
     use std::num::NonZero;
     use std::sync::Arc;
 

@@ -159,33 +159,38 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// address and hash, typically when reconstructing a [`NodeStore`] from
     /// a committed state.
     ///
-    /// ## Panics
+    /// ## Errors
     ///
-    /// Panics in debug builds if the hash of the node at `root_address` does
-    /// not equal `root_hash`.
-    #[must_use]
-    pub fn with_root(root_hash: HashType, root_address: LinearAddress, storage: Arc<S>) -> Self {
-        let nodestore = NodeStore {
+    /// This method reads the root node and verifies that it matches the expected
+    /// value. If this read fails or if the hash does not match, an error is
+    /// returned
+    pub(crate) fn with_root(
+        root_hash: HashType,
+        root_address: LinearAddress,
+        storage: Arc<S>,
+    ) -> Result<Self, FileIoError> {
+        // first construct a nodestore without a root
+        let mut nodestore = NodeStore {
             kind: Committed {
                 deleted: Box::default(),
-                root: Some(Child::AddressWithHash(root_address, root_hash)),
+                root: None,
             },
             storage,
         };
 
-        debug_assert_eq!(
-            nodestore
-                .root_hash()
-                .expect("Nodestore should have root hash"),
-            hash_node(
-                &nodestore
-                    .read_node(root_address)
-                    .expect("Root node read should succeed"),
-                &Path(SmallVec::default())
-            )
-        );
+        let node = nodestore.read_node(root_address)?;
 
-        nodestore
+        if hash_node(node.as_ref(), &Path::new()) == root_hash {
+            nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
+            Ok(nodestore)
+        } else {
+            Err(FileIoError::new(
+                std::io::Error::other("hash verification failed"),
+                None,
+                root_address.get(),
+                None,
+            ))
+        }
     }
 
     /// Returns the length of the deleted list for this `NodeStore`.
