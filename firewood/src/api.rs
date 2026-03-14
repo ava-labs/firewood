@@ -312,7 +312,9 @@ pub trait Db {
 ///    historical revision
 /// 2. From [`Db::propose`] which is a view on top of the most recently
 ///    committed revision with changes applied; or
-/// 3. From [`Proposal::propose`] which is a view on top of another proposal.
+/// 3. From [`Proposal::propose`] which is a view on top of another proposal; or
+/// 4. From [`Reconstructible::reconstruct`] which is a view of a
+///    reconstructed revision.
 pub trait DbView {
     /// The type of a stream of key/value pairs
     type Iter<'view>: Iterator<Item = Result<(Key, Value), FileIoError>>
@@ -495,6 +497,28 @@ where
     fn dump_to_string(&self) -> Result<String, Error> {
         DbView::dump_to_string(self)
     }
+}
+
+/// A reconstructible database view.
+///
+/// This trait models linear reconstruction by consuming `self` and returning
+/// a new reconstructed view.
+pub trait Reconstructible: DbView {
+    /// The reconstructed output type.
+    type Reconstructed: DbView + Reconstructible<Reconstructed = Self::Reconstructed>;
+
+    /// Reconstruct a new view from this one by applying `data`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if applying the batch fails or if the underlying
+    /// storage cannot be read while resolving nodes.
+    fn reconstruct(self, data: impl IntoBatchIter) -> Result<Self::Reconstructed, Error>
+    where
+        Self: Sized;
+
+    /// The underlying database
+    fn db(&self) -> &crate::db::Db;
 }
 
 /// A proposal for a new revision of the database.

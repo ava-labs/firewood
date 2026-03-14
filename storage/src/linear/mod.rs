@@ -119,6 +119,7 @@ impl Deref for FileIoError {
 pub enum ReadableNodeMode {
     Open,
     Read,
+    ReconRead,
     Write,
 }
 
@@ -127,6 +128,7 @@ impl ReadableNodeMode {
         match self {
             ReadableNodeMode::Open => "open",
             ReadableNodeMode::Read => "read",
+            ReadableNodeMode::ReconRead => "recon-read",
             ReadableNodeMode::Write => "write",
         }
     }

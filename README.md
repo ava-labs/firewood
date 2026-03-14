@@ -46,7 +46,8 @@ as well as carefully managing the free list during the creation and expiration o
 - `Revision` - A historical point-in-time state/version of the trie. This
   represents the entire trie, including all `Key`/`Value`s at that point
   in time, and all `Node`s.
-- `View` - This is the interface to read from a `Revision` or a `Proposal`.
+- `View` - A read-only interface into a `Revision`, `Proposal`, or
+  `Reconstructed` state.
 - `Node` - A node is a portion of a trie. A trie consists of nodes that are linked
   together. Nodes can point to other nodes and/or contain `Key`/`Value` pairs.
 - `Hash` - In this context, this refers to the merkle hash for a specific node.
@@ -72,6 +73,14 @@ as well as carefully managing the free list during the creation and expiration o
 - `Proposal` - A proposal consists of a base `Root Hash` and a `Batch`, but is not
   yet committed to the trie. In Firewood's most recent API, a `Proposal` is required
   to `Commit`.
+- `Reconstructed` - A reconstructed state consists of a base historical state and a
+  `Batch` applied in-memory.
+  - It is read-only.
+  - It cannot be committed.
+  - It differs from a `Proposal` because reconstructed states are not tracked as
+    uncommitted branches and do not participate in proposal-parent branching.
+- `Reconstructible` - Either a `Historical` or `Reconstructed` state, which supports
+  building new `Reconstructed` states by applying a `Batch`.
 - `Commit` - The operation of applying one or more `Proposal`s to the most recent
   `Revision`.
 
