@@ -274,37 +274,54 @@ jobs:
               return
             fi
 
-            node - "$data_file" "$sha" "$subject" <<'NODE'
-          const fs = require('fs');
+            if ! command -v python3 >/dev/null 2>&1; then
+              echo "::warning::Skipping commit message patch for ${dir}; python3 is not available"
+              return
+            fi
 
-          const [,, filePath, sha, subject] = process.argv;
-          const prefix = 'window.BENCHMARK_DATA = ';
-          const content = fs.readFileSync(filePath, 'utf8');
+            python3 - "$data_file" "$sha" "$subject" <<'PY'
+          import json
+          import sys
 
-          if (!content.startsWith(prefix)) {
-            process.exit(0);
-          }
+          file_path, sha, subject = sys.argv[1:4]
+          prefix = "window.BENCHMARK_DATA = "
 
-          const data = JSON.parse(content.slice(prefix.length));
-          let changed = false;
+          with open(file_path, "r", encoding="utf-8") as f:
+              content = f.read()
 
-          for (const suites of Object.values(data.entries || {})) {
-            if (!Array.isArray(suites)) {
-              continue;
-            }
+          if not content.startswith(prefix):
+              raise SystemExit(0)
 
-            for (const suite of suites) {
-              if (suite?.commit?.id === sha && suite.commit.message !== subject) {
-                suite.commit.message = subject;
-                changed = true;
-              }
-            }
-          }
+          try:
+              data = json.loads(content[len(prefix):])
+          except json.JSONDecodeError:
+              raise SystemExit(0)
 
-          if (changed) {
-            fs.writeFileSync(filePath, prefix + JSON.stringify(data, null, 2));
-          }
-          NODE
+          changed = False
+          entries = data.get("entries", {})
+
+          if isinstance(entries, dict):
+              for suites in entries.values():
+                  if not isinstance(suites, list):
+                      continue
+
+                  for suite in suites:
+                      if not isinstance(suite, dict):
+                          continue
+
+                      commit = suite.get("commit")
+                      if (
+                          isinstance(commit, dict)
+                          and commit.get("id") == sha
+                          and commit.get("message") != subject
+                      ):
+                          commit["message"] = subject
+                          changed = True
+
+          if changed:
+              with open(file_path, "w", encoding="utf-8") as f:
+                  f.write(prefix + json.dumps(data, indent=2))
+          PY
           }
 
           apply_theme() {
