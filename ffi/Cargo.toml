@@ -28,12 +28,12 @@ metrics.workspace = true
 parking_lot.workspace = true
 # Regular dependencies
 oxhttp = "0.3.1"
-tikv-jemallocator = "0.6.1"
 metrics-exporter-prometheus = { version = "0.18.1", default-features = false }
 # Optional dependencies
-rlp = { version = "0.6.1", optional = true }
 env_logger = { workspace = true, optional = true }
 firewood-replay = { workspace = true, optional = true }
+rlp = { version = "0.6.1", optional = true }
+tikv-jemallocator = { version = "0.6.1", optional = true }
 
 [dev-dependencies]
 # Workspace dependencies
@@ -44,6 +44,10 @@ logger = ["dep:env_logger", "firewood/logger"]
 ethhash = ["firewood/ethhash", "rlp"]
 io-uring = ["firewood/io-uring", "firewood-storage/io-uring"]
 block-replay = ["dep:firewood-replay"]
+jemalloc = ["dep:tikv-jemallocator"]
+jemalloc-debug = ["jemalloc", "tikv-jemallocator/debug"]
+jemalloc-profiling = ["jemalloc", "tikv-jemallocator/profiling"]
+jemalloc-stats = ["jemalloc", "tikv-jemallocator/stats"]
 
 [build-dependencies]
 cbindgen = "0.29.2"
