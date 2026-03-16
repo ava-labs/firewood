@@ -164,7 +164,7 @@ func BenchmarkReplayLog(b *testing.B) {
 	for b.Loop() {
 		nx += 1
 		b.StopTimer()
-		db := newTestDatabase(b, WithTruncate(true))
+		db := newTestDatabase(b, WithTruncate(true), WithDeferredPersistenceCommitCount(25))
 		b.StartTimer()
 
 		commits, err = applyReplayLogs(db, logs, replayConfig{MaxCommits: maxCommits}, &times)
