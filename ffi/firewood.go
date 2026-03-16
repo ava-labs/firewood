@@ -6,7 +6,8 @@
 // [Firewood]: https://github.com/ava-labs/firewood
 package ffi
 
-//go:generate go run generate_cgo.go
+//go:generate go run ./gen/update-cgo-ldflags
+//go:generate go run ./gen/update-cgo-pragmas
 
 // // Note that -lm is required on Linux but not on Mac.
 // // FIREWOOD_CGO_BEGIN_STATIC_LIBS
@@ -23,6 +24,24 @@ package ffi
 // #cgo LDFLAGS: -lfirewood_ffi -lm -ldl
 // #include <stdlib.h>
 // #include "firewood.h"
+// #cgo noescape fwd_open_db
+// #cgo nocallback fwd_open_db
+// #cgo noescape fwd_batch
+// #cgo nocallback fwd_batch
+// #cgo noescape fwd_propose_on_db
+// #cgo nocallback fwd_propose_on_db
+// #cgo noescape fwd_get_latest
+// #cgo nocallback fwd_get_latest
+// #cgo noescape fwd_root_hash
+// #cgo nocallback fwd_root_hash
+// #cgo noescape fwd_get_revision
+// #cgo nocallback fwd_get_revision
+// #cgo noescape fwd_close_db
+// #cgo nocallback fwd_close_db
+// #cgo noescape fwd_db_dump
+// #cgo nocallback fwd_db_dump
+// #cgo noescape fwd_block_replay_flush
+// #cgo nocallback fwd_block_replay_flush
 import "C"
 
 import (
@@ -105,7 +124,7 @@ type config struct {
 	// revisions is the maximum number of historical revisions to keep in memory.
 	// If rootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 	// Otherwise, any revisions removed from memory will no longer be kept on disk.
-	// Must be >= 2.
+	// Must be >= 2 and > deferredPersistenceCommitCount.
 	revisions uint
 	// readCacheStrategy is the caching strategy used for the node cache.
 	readCacheStrategy CacheStrategy
@@ -115,6 +134,7 @@ type config struct {
 	expensiveMetricsEnabled bool
 	// deferredPersistenceCommitCount determines the maximum number of unpersisted
 	// revisions that can exist at a given time.
+	// Note: revisions must be > deferredPersistenceCommitCount
 	deferredPersistenceCommitCount uint64
 }
 
@@ -161,7 +181,7 @@ func WithFreeListCacheEntries(entries uint) Option {
 // WithRevisions sets the maximum number of historical revisions to keep in memory.
 // If RootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 // Otherwise, any revisions removed from memory will no longer be kept on disk.
-// Must be >= 2.
+// Must be >= 2 and > WithDeferredPersistenceCommitCount.
 // Default: 100
 func WithRevisions(revisions uint) Option {
 	return func(c *config) {
@@ -197,7 +217,8 @@ func WithExpensiveMetrics() Option {
 }
 
 // WithDeferredPersistenceCommitCount sets the maximum number of unpersisted revisions
-// that can exist at a time. Note: `commitCount` must be greater than 0.
+// that can exist at a time. Note: `commitCount` must be greater than 0 and WithRevisions
+// must be greater than `commitCount`.
 // Default: 1
 func WithDeferredPersistenceCommitCount(commitCount uint64) Option {
 	return func(c *config) {

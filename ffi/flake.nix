@@ -12,7 +12,7 @@
     rust-overlay.url = "github:oxalica/rust-overlay";
     crane.url = "github:ipetkov/crane";
     flake-utils.url = "github:numtide/flake-utils";
-    golang.url = "github:ava-labs/avalanchego?dir=nix/go&ref=4aa7f05e07636567e956d2c0f0d6146bf8b5d144";
+    golang.url = "github:ava-labs/avalanchego?dir=nix/go&ref=50585cbbdfe1af02a2c11bdc9fa77fca26e6b838";
   };
 
   outputs = { self, nixpkgs, rust-overlay, crane, flake-utils, golang }:
@@ -83,9 +83,11 @@
           mkdir -p $out/ffi/libs/${pkgs.stdenv.hostPlatform.config}
           cp target/maxperf/libfirewood_ffi.a $out/ffi/libs/${pkgs.stdenv.hostPlatform.config}/
 
-          # Run go generate to switch CGO directives to STATIC_LIBS mode
+          # Switch CGO LDFLAGS to STATIC_LIBS mode. Uses a file path (not package pattern) so
+          # Go only resolves this file's stdlib imports, avoiding the module-level
+          # golang.org/x/tools dependency that can't be downloaded in the nix sandbox.
           cd $out/ffi
-          HOME=$TMPDIR GOTOOLCHAIN=local FIREWOOD_LD_MODE=STATIC_LIBS ${go}/bin/go generate
+          HOME=$TMPDIR GOFILE=firewood.go FIREWOOD_LD_MODE=STATIC_LIBS ${go}/bin/go run ./gen/update-cgo-ldflags/main.go
         '';
 
         meta = with lib; {
@@ -107,7 +109,12 @@
 
       apps.go = {
         type = "app";
-        program = "${go}/bin/go";
+        program = "${pkgs.writeShellScript "go" ''
+          # Ensure a C compiler is available for cgo (e.g. on NixOS
+          # where there is no system gcc).
+          export PATH="${pkgs.stdenv.cc}/bin:$PATH"
+          exec ${go}/bin/go "$@"
+        ''}";
       };
 
       apps.jq = {

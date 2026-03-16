@@ -1,8 +1,8 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use firewood::api;
 use firewood::merkle;
-use firewood::v2::api;
 use firewood_storage::TrieHash;
 use std::fmt;
 
@@ -646,6 +646,7 @@ pub(crate) trait NullHandleResult: CResult {
 }
 
 pub(crate) trait CResult: Sized {
+    #[cfg(panic = "unwind")]
     fn from_err(err: impl ToString) -> Self;
 
     #[cfg(panic = "unwind")]
@@ -673,6 +674,7 @@ macro_rules! impl_cresult {
     ($($Enum:ty),* $(,)?) => {
         $(
             impl CResult for $Enum {
+                #[cfg(panic = "unwind")]
                 fn from_err(err: impl ToString) -> Self {
                     Self::Err(err.to_string().into_bytes().into())
                 }

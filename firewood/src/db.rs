@@ -9,29 +9,27 @@
 #[cfg(test)]
 mod tests;
 
-use crate::iter::MerkleKeyValueIter;
-use crate::merkle::{Merkle, Value};
-pub use crate::v2::api::BatchOp;
-use crate::v2::api::{
+pub use crate::api::BatchOp;
+use crate::api::{
     self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter, KeyType,
     KeyValuePair, OptionalHashKeyExt,
 };
+use crate::iter::MerkleKeyValueIter;
+use crate::merkle::{Merkle, Value};
 
 use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
 use firewood_metrics::firewood_counter;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
-    ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, TrieReader,
+    ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, Reconstructed,
+    TrieReader,
 };
-use nonzero_ext::nonzero;
 use std::io::Write;
-use std::num::{NonZeroU64, NonZeroUsize};
+use std::num::NonZeroUsize;
 use std::path::Path;
 use std::sync::Arc;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
-
-use crate::merkle::parallel::ParallelMerkle;
 
 #[derive(Error, Debug)]
 #[non_exhaustive]
@@ -54,9 +52,9 @@ impl std::fmt::Debug for DbMetrics {
     }
 }
 
-impl<P: Parentable, S: ReadableStorage> api::DbView for NodeStore<P, S>
+impl<P, S: ReadableStorage> api::DbView for NodeStore<P, S>
 where
-    NodeStore<P, S>: TrieReader,
+    NodeStore<P, S>: HashedNodeReader,
 {
     type Iter<'view>
         = MerkleKeyValueIter<'view, Self>
@@ -136,9 +134,6 @@ pub struct DbConfig {
     /// Whether to enable `RootStore`.
     #[builder(default = false)]
     pub root_store: bool,
-    /// The maximum number of unpersisted revisions that can exist at a given time.
-    #[builder(default = nonzero!(1u64))]
-    pub deferred_persistence_commit_count: NonZeroU64,
 }
 
 /// A database instance.
@@ -190,7 +185,6 @@ impl Db {
             .create(cfg.create_if_missing)
             .truncate(cfg.truncate)
             .root_store(cfg.root_store)
-            .deferred_persistence_commit_count(cfg.deferred_persistence_commit_count)
             .manager(cfg.manager)
             .build();
         let manager = RevisionManager::new(config_manager)?;
@@ -251,41 +245,12 @@ impl Db {
     ) -> Result<Proposal<'_>, api::Error> {
         // Return immediately if the background thread is no longer running.
         self.manager.check_persist_error()?;
-        // If use_parallel is BatchSize, then perform parallel proposal creation if the batch
-        // size is >= BatchSize.
-        let batch = batch.into_iter();
-        let use_parallel = match self.use_parallel {
-            UseParallel::Never => false,
-            UseParallel::Always => true,
-            UseParallel::BatchSize(required_size) => batch.size_hint().0 >= required_size,
-        };
-        let immutable = if use_parallel {
-            let mut parallel_merkle = ParallelMerkle::default();
-            let _span = fastrace::Span::enter_with_local_parent("parallel_merkle");
-            parallel_merkle.create_proposal(parent, batch, self.manager.threadpool())?
-        } else {
-            let proposal = NodeStore::new(parent)?;
-            let mut merkle = Merkle::from(proposal);
-            let span = fastrace::Span::enter_with_local_parent("merkleops");
-            for res in batch.into_batch_iter::<api::Error>() {
-                match res? {
-                    BatchOp::Put { key, value } => {
-                        merkle.insert(key.as_ref(), value.as_ref().into())?;
-                    }
-                    BatchOp::Delete { key } => {
-                        merkle.remove(key.as_ref())?;
-                    }
-                    BatchOp::DeleteRange { prefix } => {
-                        merkle.remove_prefix(prefix.as_ref())?;
-                    }
-                }
-            }
-
-            drop(span);
-            let _span = fastrace::Span::enter_with_local_parent("freeze");
-            let nodestore = merkle.into_inner();
-            Arc::new(nodestore.try_into()?)
-        };
+        let proposal = NodeStore::new(parent)?;
+        let mutable_nodestore = self
+            .manager
+            .apply_batch(&self.use_parallel, proposal, batch)?;
+        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
+            Arc::new(mutable_nodestore.try_into()?);
         self.manager.add_proposal(immutable.clone());
 
         self.metrics.proposals.increment(1);
@@ -374,6 +339,22 @@ pub struct Proposal<'db> {
     db: &'db Db,
 }
 
+#[derive(Debug)]
+/// A user-visible reconstructed view.
+pub struct ReconstructedView<'db> {
+    nodestore: Arc<NodeStore<Reconstructed, FileBacked>>,
+    #[expect(dead_code, reason = "used by Reconstructible impl in next commit")]
+    db: &'db Db,
+}
+
+impl ReconstructedView<'_> {
+    /// Returns the view backing this reconstructed state.
+    #[must_use]
+    pub fn view(&self) -> ArcDynDbView {
+        self.nodestore.clone()
+    }
+}
+
 impl api::DbView for Proposal<'_> {
     type Iter<'view>
         = MerkleKeyValueIter<'view, NodeStore<Arc<ImmutableProposal>, FileBacked>>
@@ -438,6 +419,42 @@ impl Proposal<'_> {
     }
 }
 
+impl api::DbView for ReconstructedView<'_> {
+    type Iter<'view>
+        = MerkleKeyValueIter<'view, NodeStore<Reconstructed, FileBacked>>
+    where
+        Self: 'view;
+
+    fn root_hash(&self) -> Option<api::HashKey> {
+        api::DbView::root_hash(&*self.nodestore)
+    }
+
+    fn val<K: KeyType>(&self, key: K) -> Result<Option<Value>, api::Error> {
+        api::DbView::val(&*self.nodestore, key)
+    }
+
+    fn single_key_proof<K: KeyType>(&self, key: K) -> Result<FrozenProof, api::Error> {
+        api::DbView::single_key_proof(&*self.nodestore, key)
+    }
+
+    fn range_proof<K: KeyType>(
+        &self,
+        first_key: Option<K>,
+        last_key: Option<K>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenRangeProof, api::Error> {
+        api::DbView::range_proof(&*self.nodestore, first_key, last_key, limit)
+    }
+
+    fn iter_option<K: KeyType>(&self, first_key: Option<K>) -> Result<Self::Iter<'_>, api::Error> {
+        api::DbView::iter_option(&*self.nodestore, first_key)
+    }
+
+    fn dump_to_string(&self) -> Result<String, api::Error> {
+        api::DbView::dump_to_string(&*self.nodestore)
+    }
+}
+
 #[cfg(test)]
 mod test {
     #![expect(clippy::unwrap_used)]
@@ -455,9 +472,9 @@ mod test {
     };
     use nonzero_ext::nonzero;
 
+    use crate::api::{Db as _, DbView, HashKeyExt, Proposal as _};
     use crate::db::{Db, Proposal, UseParallel};
     use crate::manager::RevisionManagerConfig;
-    use crate::v2::api::{Db as _, DbView, HashKeyExt, Proposal as _};
 
     use super::{BatchOp, DbConfig};
 
@@ -934,6 +951,74 @@ mod test {
 
         update_parallel_proposal.commit().unwrap();
         update_single_proposal.commit().unwrap();
+    }
+
+    /// Test that `DeleteRange` with an empty prefix correctly clears all subtries
+    /// in the parallel merkle implementation, even those without existing workers.
+    ///
+    /// Workers are created lazily — only when a prior operation in the same batch
+    /// targets a subtrie's first nibble. `remove_all_entries` (triggered by
+    /// `DeleteRange { prefix: &[] }`) only sends the delete to existing workers,
+    /// so children in subtries that were never touched by prior operations in the
+    /// batch may survive incorrectly.
+    #[test]
+    fn test_parallel_delete_range_empty_prefix_with_existing_workers() {
+        let parallel_db = TestDb::new_with_config(
+            DbConfig::builder()
+                .use_parallel(UseParallel::Always)
+                .build(),
+        );
+        let single_db =
+            TestDb::new_with_config(DbConfig::builder().use_parallel(UseParallel::Never).build());
+
+        // Insert keys in different subtries (different first nibbles)
+        let setup_keys: Vec<[u8; 1]> = vec![[0x00], [0x10], [0x20]];
+        let setup_vals: Vec<Box<[u8]>> = vec![Box::new([1]), Box::new([2]), Box::new([3])];
+
+        for db in [&parallel_db, &single_db] {
+            let proposal = db
+                .propose(setup_keys.iter().zip(setup_vals.iter()))
+                .unwrap();
+            proposal.commit().unwrap();
+        }
+
+        // Batch: update a key in the 0x0 subtrie, then DeleteRange with empty prefix.
+        // This ensures only the 0x0 worker exists when remove_all_entries runs.
+        let batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = vec![
+            BatchOp::Put {
+                key: vec![0x00],
+                value: vec![99],
+            },
+            BatchOp::DeleteRange { prefix: vec![] },
+        ];
+
+        for db in [&parallel_db, &single_db] {
+            let proposal = db.propose(batch.iter()).unwrap();
+            proposal.commit().unwrap();
+        }
+
+        // All keys should be deleted in both implementations.
+        // When the trie is completely empty, root_hash() may return None (e.g. without
+        // the ethhash feature). In that case, the trie is empty and all keys are deleted.
+        assert_eq!(
+            parallel_db.root_hash(),
+            single_db.root_hash(),
+            "root hashes should match after delete-all"
+        );
+        if let Some(root_hash) = parallel_db.root_hash() {
+            let parallel_rev = parallel_db.revision(root_hash).unwrap();
+            let single_rev = single_db.revision(single_db.root_hash().unwrap()).unwrap();
+
+            for key in &setup_keys {
+                let parallel_val = parallel_rev.val(key).unwrap();
+                let single_val = single_rev.val(key).unwrap();
+                assert_eq!(
+                    parallel_val, single_val,
+                    "mismatch for key {key:?}: parallel={parallel_val:?}, single={single_val:?}"
+                );
+                assert_eq!(single_val, None, "key {key:?} should be deleted");
+            }
+        }
     }
 
     /// Test that proposing on a proposal works as expected
@@ -1418,11 +1503,17 @@ mod test {
     #[test]
     fn test_deferred_persist_close_with_high_commit_count() {
         const HIGH_COMMIT_COUNT: NonZeroU64 = nonzero!(1_000_000u64);
+        const MAX_REVISIONS: usize = HIGH_COMMIT_COUNT.get() as usize + 1;
 
         // Set commit count to an arbitrarily high number so persist happens
         // only on shutdown
         let dbcfg = DbConfig::builder()
-            .deferred_persistence_commit_count(HIGH_COMMIT_COUNT)
+            .manager(
+                RevisionManagerConfig::builder()
+                    .max_revisions(MAX_REVISIONS)
+                    .deferred_persistence_commit_count(HIGH_COMMIT_COUNT)
+                    .build(),
+            )
             .build();
 
         let db = TestDb::new_with_config(dbcfg);
@@ -1449,7 +1540,11 @@ mod test {
         const NUM_REVISIONS: u64 = COMMIT_COUNT.get() + 1;
 
         let dbcfg = DbConfig::builder()
-            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .manager(
+                RevisionManagerConfig::builder()
+                    .deferred_persistence_commit_count(COMMIT_COUNT)
+                    .build(),
+            )
             .build();
 
         let db = TestDb::new_with_config(dbcfg);
@@ -1487,7 +1582,11 @@ mod test {
         const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
 
         let dbcfg = DbConfig::builder()
-            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .manager(
+                RevisionManagerConfig::builder()
+                    .deferred_persistence_commit_count(COMMIT_COUNT)
+                    .build(),
+            )
             .build();
 
         let db = TestDb::new_with_config(dbcfg);
@@ -1518,15 +1617,15 @@ mod test {
     fn test_deferred_persistence_root_store() {
         const NUM_COMMITS: usize = 20;
         const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
-        const MAX_IN_MEMORY_REVISIONS: usize = 2;
+        const MAX_REVISIONS: usize = COMMIT_COUNT.get() as usize + 1;
 
         let dbcfg = DbConfig::builder()
             .manager(
                 RevisionManagerConfig::builder()
-                    .max_revisions(MAX_IN_MEMORY_REVISIONS)
+                    .max_revisions(MAX_REVISIONS)
+                    .deferred_persistence_commit_count(COMMIT_COUNT)
                     .build(),
             )
-            .deferred_persistence_commit_count(COMMIT_COUNT)
             .root_store(true)
             .build();
 
@@ -1583,7 +1682,11 @@ mod test {
         const COMMIT_COUNT: NonZeroU64 = nonzero!(10u64);
 
         let dbcfg = DbConfig::builder()
-            .deferred_persistence_commit_count(COMMIT_COUNT)
+            .manager(
+                RevisionManagerConfig::builder()
+                    .deferred_persistence_commit_count(COMMIT_COUNT)
+                    .build(),
+            )
             .root_store(true)
             .build();
 

@@ -31,8 +31,8 @@ use bumpalo::Bump;
 use std::iter::FusedIterator;
 
 use crate::linear::FileIoError;
-use coarsetime::Instant;
 use firewood_metrics::firewood_increment;
+use std::time::Instant;
 
 use crate::{MaybePersistedNode, NodeReader, WritableStorage};
 
@@ -191,7 +191,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
 
         self.process_unpersisted_nodes(&mut bump, &mut node_allocator, super::INITIAL_BUMP_SIZE)?;
 
-        let flush_time = flush_start.elapsed().as_millis();
+        let flush_time = flush_start.elapsed().as_millis() as u64;
         firewood_increment!(crate::registry::FLUSH_NODES, flush_time);
 
         Ok(())
@@ -310,7 +310,7 @@ mod tests {
         NodeStoreHeader, Path, PathComponent, SharedNode,
         linear::memory::MemStore,
         node::{BranchNode, LeafNode, Node},
-        nodestore::MutableProposal,
+        nodestore::{Mutable, Propose},
     };
     use std::sync::Arc;
 
@@ -324,7 +324,7 @@ mod tests {
     }
 
     /// Helper to create a test node store with a specific root
-    fn create_test_store_with_root(root: Node) -> NodeStore<MutableProposal, MemStore> {
+    fn create_test_store_with_root(root: Node) -> NodeStore<Mutable<Propose>, MemStore> {
         let mem_store = MemStore::default().into();
         let mut store = NodeStore::new_empty_proposal(mem_store);
         store.root_mut().replace(root);

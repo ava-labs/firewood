@@ -1,18 +1,8 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-//! A `LinearStore` provides a view of a set of bytes at
-//! a given time. A `LinearStore` has three different types,
-//! which refer to another base type, as follows:
-//! ```mermaid
-//! stateDiagram-v2
-//!     R1(Committed) --> R2(Committed)
-//!     R2(Committed) --> R3(FileBacked)
-//!     P1(Proposed) --> R3(FileBacked)
-//!     P2(Proposed) --> P1(Proposed)
-//! ```
-//!
-//! Each type is described in more detail below.
+//! This module provides the [`ReadableStorage`] and [`WritableStorage`] traits,
+//! which define the interface for reading and writing to a linear store.
 
 #![expect(
     clippy::missing_errors_doc,
@@ -125,6 +115,25 @@ impl Deref for FileIoError {
     }
 }
 
+#[derive(Debug)]
+pub enum ReadableNodeMode {
+    Open,
+    Read,
+    ReconRead,
+    Write,
+}
+
+impl ReadableNodeMode {
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            ReadableNodeMode::Open => "open",
+            ReadableNodeMode::Read => "read",
+            ReadableNodeMode::ReconRead => "recon-read",
+            ReadableNodeMode::Write => "write",
+        }
+    }
+}
+
 /// Trait for readable storage.
 pub trait ReadableStorage: Debug + Sync + Send {
     /// The node hash algorithm used by this storage.
@@ -145,7 +154,11 @@ pub trait ReadableStorage: Debug + Sync + Send {
     fn size(&self) -> Result<u64, FileIoError>;
 
     /// Read a node from the cache (if any)
-    fn read_cached_node(&self, _addr: LinearAddress, _mode: &'static str) -> Option<SharedNode> {
+    fn read_cached_node(
+        &self,
+        _addr: LinearAddress,
+        _mode: ReadableNodeMode,
+    ) -> Option<SharedNode> {
         None
     }
 

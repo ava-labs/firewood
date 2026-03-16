@@ -35,8 +35,8 @@ mod replay;
 mod revision;
 mod value;
 
-use firewood::v2::api::DbView;
-use firewood_metrics::{firewood_increment, firewood_record, set_metrics_context};
+use firewood::api::DbView;
+use firewood_metrics::set_metrics_context;
 
 pub use crate::handle::*;
 pub use crate::iterator::*;
@@ -516,17 +516,7 @@ pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>)
     #[cfg(feature = "block-replay")]
     let proposal_ptr = proposal.as_ref().map(|h| std::ptr::from_ref(&**h));
 
-    let result = invoke_with_handle(proposal, move |proposal| {
-        proposal.commit_proposal(|commit_time| {
-            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
-            firewood_increment!(crate::registry::COMMIT_COUNT, 1);
-            firewood_record!(
-                crate::registry::COMMIT_MS_BUCKET,
-                commit_time.as_f64() * 1000.0,
-                expensive
-            );
-        })
-    });
+    let result = invoke_with_handle(proposal, move |proposal| proposal.commit_proposal());
 
     #[cfg(feature = "block-replay")]
     replay::record_commit(proposal_ptr, &result);
@@ -846,7 +836,7 @@ pub extern "C" fn fwd_db_dump(db: Option<&DatabaseHandle>) -> ValueResult {
 ///   returned value.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_revision_dump(revision: Option<&RevisionHandle>) -> ValueResult {
-    invoke_with_handle(revision, firewood::v2::api::DbView::dump_to_string)
+    invoke_with_handle(revision, firewood::api::DbView::dump_to_string)
 }
 
 /// Dumps the Trie structure of a proposal to a DOT (Graphviz) format string for debugging.
@@ -871,5 +861,5 @@ pub extern "C" fn fwd_revision_dump(revision: Option<&RevisionHandle>) -> ValueR
 ///   returned value.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_proposal_dump(proposal: Option<&ProposalHandle>) -> ValueResult {
-    invoke_with_handle(proposal, firewood::v2::api::DbView::dump_to_string)
+    invoke_with_handle(proposal, firewood::api::DbView::dump_to_string)
 }

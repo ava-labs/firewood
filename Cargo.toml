@@ -55,12 +55,12 @@ cast_possible_truncation = "allow"
 
 [workspace.dependencies]
 # workspace local packages
-firewood = { path = "firewood", version = "0.2.0" }
-firewood-macros = { path = "firewood-macros", version = "0.1.0" }
-firewood-storage = { path = "storage", version = "0.2.0" }
-firewood-ffi = { path = "ffi", version = "0.2.0" }
-firewood-metrics = { path = "metrics", version = "0.2.0" }
-firewood-replay = { path = "replay", version = "0.2.0" }
+firewood = { path = "firewood", version = "0.3.0" }
+firewood-macros = { path = "firewood-macros", version = "0.2.0" }
+firewood-storage = { path = "storage", version = "0.3.0" }
+firewood-ffi = { path = "ffi", version = "0.3.0" }
+firewood-metrics = { path = "metrics", version = "0.3.0" }
+firewood-replay = { path = "replay", version = "0.3.0" }
 
 # no longer bumping with workspace
 firewood-triehash = { path = "triehash", version = "0.0.16" }
@@ -69,8 +69,7 @@ firewood-triehash = { path = "triehash", version = "0.0.16" }
 aquamarine = "0.6.0"
 bytemuck = { version = "1.25.0", features = ["const_zeroed"] }
 bytemuck_derive = "1.10.2"
-clap = { version = "4.5.60", features = ["derive"] }
-coarsetime = "0.1.37"
+clap = { version = "4.6.0", features = ["derive"] }
 env_logger = "0.11.9"
 fastrace = "0.7.17"
 hex = "0.4.3"
@@ -92,4 +91,4 @@ ethereum-types = "0.16.0"
 hex-literal = "1.1.0"
 pprof = "0.15.0"
 rand = "0.10.0"
-tempfile = "3.26.0"
+tempfile = "3.27.0"

@@ -37,32 +37,32 @@ check-golang-version: check-nix
 
     cd ffi
 
-    TOOLCHAIN_VERSION=$(nix develop --command bash -c "go mod edit -json | jq -r '.Toolchain'")
-    echo "toolchain version in ffi/go.mod is ${TOOLCHAIN_VERSION}"
+    GO_VERSION=$(nix develop --command bash -c "go mod edit -json | jq -r '.Go'")
+    echo "go version in ffi/go.mod is ${GO_VERSION}"
 
-    ETH_TESTS_VERSION=$(nix develop --command bash -c "cd tests/eth && go mod edit -json | jq -r '.Toolchain'")
-    echo "toolchain version in ffi/tests/eth/go.mod is ${ETH_TESTS_VERSION}"
+    ETH_TESTS_VERSION=$(nix develop --command bash -c "cd tests/eth && go mod edit -json | jq -r '.Go'")
+    echo "go version in ffi/tests/eth/go.mod is ${ETH_TESTS_VERSION}"
 
-    if [[ "${TOOLCHAIN_VERSION}" != "${ETH_TESTS_VERSION}" ]]; then
-        echo "❌ toolchain version in ffi/tests/eth/go.mod should be ${TOOLCHAIN_VERSION}"
+    if [[ "${GO_VERSION}" != "${ETH_TESTS_VERSION}" ]]; then
+        echo "❌ go version in ffi/tests/eth/go.mod should be ${GO_VERSION}"
         FAILED=1
     fi
 
-    FIREWOOD_TESTS_VERSION=$(nix develop --command bash -c "cd tests/firewood && go mod edit -json | jq -r '.Toolchain'")
-    echo "toolchain version in ffi/tests/firewood/go.mod is ${FIREWOOD_TESTS_VERSION}"
+    FIREWOOD_TESTS_VERSION=$(nix develop --command bash -c "cd tests/firewood && go mod edit -json | jq -r '.Go'")
+    echo "go version in ffi/tests/firewood/go.mod is ${FIREWOOD_TESTS_VERSION}"
 
-    if [[ "${TOOLCHAIN_VERSION}" != "${FIREWOOD_TESTS_VERSION}" ]]; then
-        echo "❌ toolchain version in ffi/tests/firewood/go.mod should be ${TOOLCHAIN_VERSION}"
+    if [[ "${GO_VERSION}" != "${FIREWOOD_TESTS_VERSION}" ]]; then
+        echo "❌ go version in ffi/tests/firewood/go.mod should be ${GO_VERSION}"
         FAILED=1
     fi
 
-    NIX_VERSION=$(nix run .#go -- version | awk '{print $3}')
+    NIX_VERSION=$(nix run .#go -- version | awk '{print $3}' | sed 's/^go//')
     echo "golang provided by ffi/flake.nix is ${NIX_VERSION}"
 
-    if [[ "${TOOLCHAIN_VERSION}" != "${NIX_VERSION}" ]]; then
-        echo "❌ golang provided by ffi/flake/nix should be ${TOOLCHAIN_VERSION}"
+    if [[ "${GO_VERSION}" != "${NIX_VERSION}" ]]; then
+        echo "❌ golang provided by ffi/flake/nix should be ${GO_VERSION}"
         echo "It will be necessary to update the golang.url in ffi/flake.nix to point to a SHA of"\
-             "AvalancheGo whose nix/go/flake.nix provides ${TOOLCHAIN_VERSION}."
+             "AvalancheGo whose nix/go/flake.nix provides ${GO_VERSION}."
     fi
 
     if [[ -n "${FAILED}" ]]; then
@@ -92,16 +92,7 @@ setup-go-workspace:
     go work init ./ffi ./ffi/tests/eth ./ffi/tests/firewood
 
 # Run all checks of ffi built with nix
-test-ffi-nix: test-ffi-nix-build-equivalency test-ffi-nix-go-bindings
-
-# Test ffi build equivalency between nix and cargo
-test-ffi-nix-build-equivalency: check-nix
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    echo "Testing ffi build equivalency between nix and cargo"
-
-    bash -x ./ffi/test-build-equivalency.sh
+test-ffi-nix: test-ffi-nix-go-bindings
 
 # Test golang ffi bindings using the nix-built artifacts
 test-ffi-nix-go-bindings: build-ffi-nix
@@ -214,7 +205,7 @@ release-step-refresh-changelog tag:
 #   START_BLOCK=1 END_BLOCK=100 BLOCK_DIR_SRC=cchain-mainnet-blocks-200-ldb just bench-cchain
 bench-cchain:
     #!/usr/bin/env -S bash -euo pipefail
-    
+
     # Prevent accidental runs from main (would pollute official bench/ data)
     branch=$(git rev-parse --abbrev-ref HEAD)
     if [[ "$branch" == "main" ]]; then
@@ -231,7 +222,7 @@ bench-cchain:
         echo "       Use a branch name (e.g., 'master') or tag instead." >&2
         exit 1
     fi
-    
+
     # Resolve gh CLI
     if command -v gh &>/dev/null; then
         GH=gh
@@ -241,7 +232,7 @@ bench-cchain:
         echo "error: 'gh' CLI not found. Install it or use 'nix develop ./ffi'" >&2
         exit 1
     fi
-    
+
     # Validate: need either test name OR custom block params
     if [[ -z "${TEST:-}" && -z "${START_BLOCK:-}" ]]; then
         echo "error: Provide TEST or set START_BLOCK, END_BLOCK, BLOCK_DIR_SRC" >&2
@@ -254,9 +245,9 @@ bench-cchain:
         echo "  START_BLOCK=1 END_BLOCK=100 BLOCK_DIR_SRC=cchain-mainnet-blocks-200-ldb just bench-cchain" >&2
         exit 1
     fi
-    
+
     : "${RUNNER:=avalanche-avalanchego-runner-2ti}"
-    
+
     # Build workflow args
     args=(-f runner="$RUNNER")
     [[ -n "${TEST:-}" ]] && args+=(-f test="$TEST")
@@ -269,16 +260,16 @@ bench-cchain:
     [[ -n "${BLOCK_DIR_SRC:-}" ]] && args+=(-f block-dir-src="$BLOCK_DIR_SRC")
     [[ -n "${CURRENT_STATE_DIR_SRC:-}" ]] && args+=(-f current-state-dir-src="$CURRENT_STATE_DIR_SRC")
     [[ -n "${TIMEOUT_MINUTES:-}" ]] && args+=(-f timeout-minutes="$TIMEOUT_MINUTES")
-    
+
     [[ -n "${TEST:-}" ]] && echo "==> Test: $TEST"
     [[ -n "${START_BLOCK:-}" ]] && echo "==> Custom: blocks $START_BLOCK-${END_BLOCK:-?}"
     echo "==> Runner: $RUNNER"
-    
+
     # Record time before triggering to find our run (avoid race conditions)
     trigger_time=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-    
+
     $GH workflow run track-performance.yml --ref "$branch" "${args[@]}"
-    
+
     # Poll for workflow registration (runs created after trigger_time)
     echo ""
     echo "Polling for workflow to register..."
@@ -288,13 +279,13 @@ bench-cchain:
             --jq "[.[] | select(.createdAt > \"$trigger_time\")] | .[-1].databaseId // empty")
         [[ -n "$run_id" ]] && break
     done
-    
+
     if [[ -z "$run_id" ]]; then
         echo "warning: Could not find run ID. Check manually at:"
         echo "  https://github.com/ava-labs/firewood/actions/workflows/track-performance.yml"
         exit 0
     fi
-    
+
     echo ""
     echo "Monitor this workflow with cli: $GH run watch $run_id"
     echo " or with this URL: https://github.com/ava-labs/firewood/actions/runs/$run_id"

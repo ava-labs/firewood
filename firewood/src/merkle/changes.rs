@@ -6,7 +6,8 @@ use std::{cmp::Ordering, iter::once};
 
 use firewood_metrics::firewood_increment;
 use firewood_storage::{
-    Child, FileIoError, HashedNodeReader, Node, NodeReader, Path, SharedNode, TrieHash,
+    Child, FileIoError, HashedNodeReader, NibblesIterator, Node, NodeReader, Path, SharedNode,
+    TrieHash,
 };
 use lender::{Lender, Lending};
 
@@ -597,6 +598,12 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
         if key.is_empty() {
             return Ok(self);
         }
+
+        // Convert the byte-level key to a nibble-level path once for all comparisons.
+        // This avoids lossy conversions from `key_from_nibble_iter` which drops trailing
+        // nibbles on odd-length paths, defeating child pruning at even-depth branches.
+        let key_path = Path::from_nibbles_iterator(NibblesIterator::new(key));
+
         // Keep iterating until we have reached the start key. Only traverse branches that can
         // contain the start key.
         loop {
@@ -627,10 +634,9 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
                 for (child, child_pre_path) in reversed_children_with_pre_path.by_ref() {
                     // We only need to traverse this child if its pre-path is a prefix of the key (including
                     // being equal to the key) or is lexicographically larger than the key.
-                    let child_key = key_from_nibble_iter(child_pre_path.iter().copied());
-                    let path_overlap = PrefixOverlap::from(key, child_key.as_ref());
-                    let unique_node = path_overlap.unique_b;
-                    if unique_node.is_empty() || child_key > *key {
+                    let path_overlap =
+                        PrefixOverlap::from(key_path.as_ref(), child_pre_path.as_ref());
+                    if path_overlap.unique_b.is_empty() || *child_pre_path > *key_path {
                         self.traversal_stack.push(ComparableNodeInfo::new(
                             child_pre_path,
                             child,
@@ -656,8 +662,7 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
                 // order, we can stop the traversal once we see a node key that is larger than or
                 // equal to the key. We stop the traversal by pushing the current `ComparableNodeInfo`
                 // back to the stack. Calling `next` or `next_node_info` will process this node.
-                let node_key = key_from_nibble_iter(node_info.path.iter().copied());
-                if node_key >= *key {
+                if *node_info.path >= *key_path {
                     self.traversal_stack.push(node_info);
                     return Ok(self);
                 }
@@ -668,9 +673,9 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
                     // Check if this node's path is a prefix of the key. If it is not (`unique_node`
                     // is not empty), then this node's children cannot be larger than or equal to
                     // the key, and we don't need to include them on the traversal stack.
-                    let path_overlap = PrefixOverlap::from(key, node_key.as_ref());
-                    let unique_node = path_overlap.unique_b;
-                    if unique_node.is_empty() {
+                    let path_overlap =
+                        PrefixOverlap::from(key_path.as_ref(), node_info.path.as_ref());
+                    if path_overlap.unique_b.is_empty() {
                         self.node_info = Some(node_info);
                     }
                 }
@@ -688,18 +693,18 @@ impl<'a, T: HashedNodeReader> PreOrderIterator<'a, T> {
 mod tests {
     use crate::{
         Proof,
+        api::{Db as _, DbView, Proposal as _},
         db::{BatchOp, Db, DbConfig},
         iter::{MerkleKeyValueIter, key_from_nibble_iter},
         merkle::{
             Key, Merkle, Value,
             changes::{ChangeProof, DiffMerkleNodeStream, PreOrderIterator},
         },
-        v2::api::{Db as _, DbView, Proposal as _},
     };
 
     use firewood_storage::{
-        Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, MemStore,
-        MutableProposal, NodeStore, SeededRng, TestRecorder, TrieReader,
+        Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, MemStore, Mutable,
+        NodeStore, Propose, SeededRng, TestRecorder, TrieReader,
     };
     use lender::Lender;
     use std::{collections::HashSet, ops::Deref, path::PathBuf, sync::Arc};
@@ -743,14 +748,14 @@ mod tests {
         DiffMerkleNodeStream::new(tree_left.nodestore(), tree_right.nodestore(), start_key)
     }
 
-    fn create_test_merkle() -> Merkle<NodeStore<MutableProposal, MemStore>> {
+    fn create_test_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
         let memstore = MemStore::default();
         let nodestore = NodeStore::new_empty_proposal(Arc::new(memstore));
         Merkle::from(nodestore)
     }
 
     fn populate_merkle(
-        mut merkle: Merkle<NodeStore<MutableProposal, MemStore>>,
+        mut merkle: Merkle<NodeStore<Mutable<Propose>, MemStore>>,
         items: &[(&[u8], &[u8])],
     ) -> Merkle<NodeStore<Arc<ImmutableProposal>, MemStore>> {
         for (key, value) in items {

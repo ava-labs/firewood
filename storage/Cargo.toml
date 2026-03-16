@@ -1,6 +1,6 @@
 [package]
 name = "firewood-storage"
-version = "0.2.0"
+version = "0.3.0"
 edition.workspace = true
 authors = [
      "Aaron Buchwald <aaron.buchwald56@gmail.com>",
@@ -21,7 +21,6 @@ rust-version.workspace = true
 aquamarine.workspace = true
 bytemuck.workspace = true
 bytemuck_derive.workspace = true
-coarsetime.workspace = true
 fastrace.workspace = true
 firewood-metrics.workspace = true
 hex.workspace = true
@@ -36,7 +35,7 @@ thiserror.workspace = true
 # Regular dependencies
 bitfield = "0.19.4"
 bitflags = "2.11.0"
-derive-where = "1.6.0"
+derive-where = "1.6.1"
 enum-as-inner = "0.7.0"
 git-version = "0.3.9"
 indicatif = "0.18.4"
