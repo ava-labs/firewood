@@ -264,10 +264,8 @@ jobs:
 
           cd ./benchmark-theme-repository
 
-          patch_commit_message() {
+          postprocess_data_file() {
             local dir="$1"
-            local sha="$2"
-            local subject="$3"
             local data_file="${dir}/data.js"
 
             if [[ ! -f "$data_file" ]]; then
@@ -275,15 +273,15 @@ jobs:
             fi
 
             if ! command -v python3 >/dev/null 2>&1; then
-              echo "::warning::Skipping commit message patch for ${dir}; python3 is not available"
+              echo "::warning::Skipping benchmark data postprocessing for ${dir}; python3 is not available"
               return
             fi
 
-            python3 - "$data_file" "$sha" "$subject" <<'PY'
+            python3 - "$data_file" "$BASE_COMMIT_SHA" "$BASE_COMMIT_SUBJECT" "$HEAD_COMMIT_SHA" "$HEAD_COMMIT_SUBJECT" <<'PY'
           import json
           import sys
 
-          file_path, sha, subject = sys.argv[1:4]
+          file_path, base_sha, base_subject, head_sha, head_subject = sys.argv[1:6]
           prefix = "window.BENCHMARK_DATA = "
 
           with open(file_path, "r", encoding="utf-8") as f:
@@ -310,13 +308,62 @@ jobs:
                           continue
 
                       commit = suite.get("commit")
-                      if (
-                          isinstance(commit, dict)
-                          and commit.get("id") == sha
-                          and commit.get("message") != subject
-                      ):
-                          commit["message"] = subject
-                          changed = True
+                      if isinstance(commit, dict):
+                          commit_id = commit.get("id")
+                          if commit_id == base_sha and commit.get("message") != base_subject:
+                              commit["message"] = base_subject
+                              changed = True
+                          elif commit_id == head_sha and commit.get("message") != head_subject:
+                              commit["message"] = head_subject
+                              changed = True
+
+                      benches = suite.get("benches")
+                      if not isinstance(benches, list):
+                          continue
+
+                      filtered_benches = []
+                      removed_malformed_bench = False
+
+                      for bench in benches:
+                          if not isinstance(bench, dict):
+                              filtered_benches.append(bench)
+                              continue
+
+                          name = bench.get("name")
+                          unit = bench.get("unit")
+
+                          # Drop the malformed aggregate bench produced by Go parser output.
+                          if name == "BenchmarkReplayLog":
+                              removed_malformed_bench = True
+                              changed = True
+                              continue
+
+                          if isinstance(unit, str):
+                              converted_unit = None
+                              if unit == "ns/op":
+                                  converted_unit = "s/op"
+                              elif unit == "ns":
+                                  converted_unit = "s"
+                              elif unit.startswith("ns/"):
+                                  converted_unit = "s/" + unit[3:]
+
+                              if converted_unit is not None:
+                                  value = bench.get("value")
+                                  if isinstance(value, (int, float)):
+                                      bench["value"] = value / 1_000_000_000
+                                  bench["unit"] = converted_unit
+                                  changed = True
+
+                                  if isinstance(name, str):
+                                      bench["name"] = (
+                                          name.replace(" - ns/op", " - s/op")
+                                          .replace(" - ns/", " - s/")
+                                      )
+
+                          filtered_benches.append(bench)
+
+                      if removed_malformed_bench:
+                          suite["benches"] = filtered_benches
 
           if changed:
               with open(file_path, "w", encoding="utf-8") as f:
@@ -337,10 +384,8 @@ jobs:
             fi
           }
 
-          patch_commit_message "$PR_DATA_DIR" "$BASE_COMMIT_SHA" "$BASE_COMMIT_SUBJECT"
-          patch_commit_message "$PR_DATA_DIR" "$HEAD_COMMIT_SHA" "$HEAD_COMMIT_SUBJECT"
-          patch_commit_message "$COMPARISON_DATA_DIR" "$BASE_COMMIT_SHA" "$BASE_COMMIT_SUBJECT"
-          patch_commit_message "$COMPARISON_DATA_DIR" "$HEAD_COMMIT_SHA" "$HEAD_COMMIT_SUBJECT"
+          postprocess_data_file "$PR_DATA_DIR"
+          postprocess_data_file "$COMPARISON_DATA_DIR"
 
           apply_theme "$PR_DATA_DIR"
           apply_theme "$COMPARISON_DATA_DIR"
@@ -464,6 +509,104 @@ jobs:
           git clone --depth 1 --branch "${BENCHMARK_REPORTS_BRANCH}" "https://x-access-token:${BENCHMARK_TOKEN}@github.com/${BENCHMARK_REPORTS_REPOSITORY}.git" ./benchmark-theme-repository
 
           cd ./benchmark-theme-repository
+
+          postprocess_data_file() {
+            local dir="$1"
+            local data_file="${dir}/data.js"
+
+            if [[ ! -f "$data_file" ]]; then
+              return
+            fi
+
+            if ! command -v python3 >/dev/null 2>&1; then
+              echo "::warning::Skipping benchmark data postprocessing for ${dir}; python3 is not available"
+              return
+            fi
+
+            python3 - "$data_file" <<'PY'
+          import json
+          import sys
+
+          file_path = sys.argv[1]
+          prefix = "window.BENCHMARK_DATA = "
+
+          with open(file_path, "r", encoding="utf-8") as f:
+              content = f.read()
+
+          if not content.startswith(prefix):
+              raise SystemExit(0)
+
+          try:
+              data = json.loads(content[len(prefix):])
+          except json.JSONDecodeError:
+              raise SystemExit(0)
+
+          changed = False
+          entries = data.get("entries", {})
+
+          if isinstance(entries, dict):
+              for suites in entries.values():
+                  if not isinstance(suites, list):
+                      continue
+
+                  for suite in suites:
+                      if not isinstance(suite, dict):
+                          continue
+
+                      benches = suite.get("benches")
+                      if not isinstance(benches, list):
+                          continue
+
+                      filtered_benches = []
+                      removed_malformed_bench = False
+
+                      for bench in benches:
+                          if not isinstance(bench, dict):
+                              filtered_benches.append(bench)
+                              continue
+
+                          name = bench.get("name")
+                          unit = bench.get("unit")
+
+                          if name == "BenchmarkReplayLog":
+                              removed_malformed_bench = True
+                              changed = True
+                              continue
+
+                          if isinstance(unit, str):
+                              converted_unit = None
+                              if unit == "ns/op":
+                                  converted_unit = "s/op"
+                              elif unit == "ns":
+                                  converted_unit = "s"
+                              elif unit.startswith("ns/"):
+                                  converted_unit = "s/" + unit[3:]
+
+                              if converted_unit is not None:
+                                  value = bench.get("value")
+                                  if isinstance(value, (int, float)):
+                                      bench["value"] = value / 1_000_000_000
+                                  bench["unit"] = converted_unit
+                                  changed = True
+
+                                  if isinstance(name, str):
+                                      bench["name"] = (
+                                          name.replace(" - ns/op", " - s/op")
+                                          .replace(" - ns/", " - s/")
+                                      )
+
+                          filtered_benches.append(bench)
+
+                      if removed_malformed_bench:
+                          suite["benches"] = filtered_benches
+
+          if changed:
+              with open(file_path, "w", encoding="utf-8") as f:
+                  f.write(prefix + json.dumps(data, indent=2))
+          PY
+          }
+
+          postprocess_data_file "$MAIN_DATA_DIR"
 
           if [[ ! -f "$MAIN_DATA_DIR/index.html" ]]; then
             echo "::warning::Skipping ${MAIN_DATA_DIR} because index.html is missing"
