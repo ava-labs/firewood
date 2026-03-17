@@ -41,13 +41,13 @@ All env vars and options: `./scripts/bench-cchain-reexecution.sh help`
 ## Scheduled Runs
 
 | Schedule | Test | ~Duration |
-|---|---|---|
+| --- | --- | --- |
 | Weekdays 05:00 UTC | `firewood-40m-41m` (blocks 40M–41M) | <2h |
 
 ## Choosing a Test
 
 | Goal | Use |
-|---|---|
+| --- | --- |
 | A/B test, daily-style run, quick regression check | `firewood-40m-41m` |
 | Quick smoke test | `firewood-101-250k` (~7 min) |
 | Deep regression | `firewood-33m-40m` (~7h, needs >6h path) |
@@ -135,7 +135,7 @@ encodes height: `cchain-current-state-firewood-40m` = state at block 40,000,000.
 
 After triggering, you get a Firewood workflow URL:
 
-```
+```text
 Monitor this workflow with cli: gh run watch 23198191542
  or with this URL: https://github.com/ava-labs/firewood/actions/runs/23198191542
 ```
@@ -143,7 +143,8 @@ Monitor this workflow with cli: gh run watch 23198191542
 1. Open the workflow URL and click the **benchmark** job
 2. Expand the **Trigger C-Chain Reexecution Benchmark** step
 3. The AvalancheGo run URL is printed directly in the output:
-   ```
+
+   ```text
    https://github.com/ava-labs/avalanchego/actions/runs/23198207568
    ```
    The number at the end is your `gh_run_id` — this is what Grafana uses to
