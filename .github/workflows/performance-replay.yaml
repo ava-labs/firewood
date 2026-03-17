@@ -404,55 +404,263 @@ jobs:
       - name: Post results to PR
         uses: actions/github-script@v7
         env:
-          BENCHMARK_RESULTS: ${{ steps.benchmark-head.outputs.results }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           BASE_COMMIT_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_BENCHMARK_REQUESTED: ${{ steps.base-data.outputs.base-required }}
           BASE_BENCHMARK_OUTCOME: ${{ steps.benchmark-base.outcome }}
+          PR_DATA_DIR: ${{ steps.location.outputs.pr-data-dir }}
+          COMPARISON_DATA_DIR: ${{ steps.location.outputs.comparison-data-dir }}
           TREND_URL: ${{ env.BENCHMARK_REPORTS_PAGES_URL }}/${{ steps.location.outputs.pr-data-dir }}/
           COMPARISON_URL: ${{ env.BENCHMARK_REPORTS_PAGES_URL }}/${{ steps.location.outputs.comparison-data-dir }}/
         with:
           script: |
-            const results = process.env.BENCHMARK_RESULTS;
+            const fs = require('fs');
+            const path = require('path');
+
             const prNumber = parseInt(process.env.PR_NUMBER, 10);
             const baseCommitSha = process.env.BASE_COMMIT_SHA;
             const headCommitSha = process.env.HEAD_COMMIT_SHA;
             const baseBenchmarkRequested = process.env.BASE_BENCHMARK_REQUESTED === 'true';
             const baseBenchmarkOutcome = process.env.BASE_BENCHMARK_OUTCOME || 'skipped';
+            const prDataDir = process.env.PR_DATA_DIR;
+            const comparisonDataDir = process.env.COMPARISON_DATA_DIR;
             const trendUrl = process.env.TREND_URL;
             const comparisonUrl = process.env.COMPARISON_URL;
+            const marker = '<!-- replay-10k-performance-summary -->';
+            const repoUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}`;
+            const shortSha = (sha) => (sha || '').substring(0, 8);
 
-            const body = [
-              '## Performance Test Results',
-              '',
-              `Base commit: \`${baseCommitSha.substring(0, 8)}\``,
-              `PR head commit: \`${headCommitSha.substring(0, 8)}\``,
-              '',
-              '```',
-              results,
-              '```',
-              '',
-              `[PR trend graph](${trendUrl})`,
-              '',
-              `[Base vs head graph](${comparisonUrl})`,
-              '',
-              !baseBenchmarkRequested
-                ? '*Base data was reused from existing graph history.*'
-                : baseBenchmarkOutcome === 'success'
-                  ? '*Base data was benchmarked in this run.*'
-                  : `*Base benchmark did not succeed (\`${baseBenchmarkOutcome}\`); PR head results were still published.*`,
-              '',
-              '---',
-              '*Includes benchmark data for both base and head commits.*'
-            ].join('\n');
+            const formatValue = (value, unit) => {
+              if (typeof value !== 'number' || !Number.isFinite(value)) {
+                return '—';
+              }
+              if (value >= 1) {
+                return `${value.toFixed(3)} ${unit}`;
+              }
+              if (value >= 0.01) {
+                return `${value.toFixed(4)} ${unit}`;
+              }
+              if (value >= 0.0001) {
+                return `${value.toFixed(6)} ${unit}`;
+              }
+              return `${value.toExponential(2)} ${unit}`;
+            };
 
-            await github.rest.issues.createComment({
+            const deltaText = (current, baseline) => {
+              if (
+                typeof current !== 'number' ||
+                typeof baseline !== 'number' ||
+                !Number.isFinite(current) ||
+                !Number.isFinite(baseline) ||
+                baseline === 0
+              ) {
+                return '—';
+              }
+              const pct = ((current - baseline) / baseline) * 100;
+              const sign = pct > 0 ? '+' : '';
+              const color = pct <= -1 ? '🟢' : pct >= 1 ? '🔴' : '🟡';
+              return `${color} ${sign}${pct.toFixed(2)}%`;
+            };
+
+            const parseBenchmarkData = (relativeDir) => {
+              const dataPath = path.join(process.env.GITHUB_WORKSPACE, 'benchmark-theme-repository', relativeDir, 'data.js');
+              if (!fs.existsSync(dataPath)) {
+                return null;
+              }
+
+              const prefix = 'window.BENCHMARK_DATA = ';
+              const content = fs.readFileSync(dataPath, 'utf8');
+              if (!content.startsWith(prefix)) {
+                return null;
+              }
+
+              try {
+                return JSON.parse(content.slice(prefix.length));
+              } catch {
+                return null;
+              }
+            };
+
+            const getEntries = (data, suiteName) => {
+              const entries = data?.entries?.[suiteName];
+              return Array.isArray(entries) ? entries : [];
+            };
+
+            const findLastBySha = (entries, sha) => {
+              for (let i = entries.length - 1; i >= 0; i -= 1) {
+                if (entries[i]?.commit?.id === sha) {
+                  return { entry: entries[i], index: i };
+                }
+              }
+              return null;
+            };
+
+            const toMetricMap = (entry) => {
+              const out = new Map();
+              const benches = Array.isArray(entry?.benches) ? entry.benches : [];
+              for (const bench of benches) {
+                if (!bench || typeof bench !== 'object') {
+                  continue;
+                }
+                if (typeof bench.name !== 'string') {
+                  continue;
+                }
+                if (typeof bench.value !== 'number' || !Number.isFinite(bench.value)) {
+                  continue;
+                }
+                out.set(bench.name, {
+                  value: bench.value,
+                  unit: typeof bench.unit === 'string' ? bench.unit : '',
+                });
+              }
+              return out;
+            };
+
+            const prettifyMetricName = (name) => {
+              const raw = name.replace(/^BenchmarkReplayLog - /, '');
+              if (raw === 's/op') return 'Total replay';
+              if (raw === 's/commit') return 'Commit';
+              if (raw === 's/propose-on-db') return 'Propose on DB';
+              if (raw === 's/propose-on-proposal') return 'Propose on proposal';
+              if (raw === 's/batch') return 'Batch update';
+              if (raw === 's/get-latest') return 'Get latest';
+              return raw;
+            };
+
+            const trendData = parseBenchmarkData(prDataDir);
+            const comparisonData = parseBenchmarkData(comparisonDataDir);
+
+            const trendEntries = getEntries(trendData, 'Replay 10K PR');
+            const compareEntries = getEntries(comparisonData, 'Replay 10K PR Compare');
+
+            const headTrend = findLastBySha(trendEntries, headCommitSha) || (trendEntries.length > 0
+              ? { entry: trendEntries[trendEntries.length - 1], index: trendEntries.length - 1 }
+              : null);
+            const headCompare = findLastBySha(compareEntries, headCommitSha);
+            const baseCompare = findLastBySha(compareEntries, baseCommitSha);
+            const baseTrend = findLastBySha(trendEntries, baseCommitSha);
+
+            let previousTrend = null;
+            if (headTrend) {
+              for (let i = headTrend.index - 1; i >= 0; i -= 1) {
+                const candidate = trendEntries[i];
+                const candidateSha = candidate?.commit?.id;
+                if (candidateSha && candidateSha !== headCommitSha && candidateSha !== baseCommitSha) {
+                  previousTrend = candidate;
+                  break;
+                }
+              }
+            }
+
+            const headEntry = headCompare?.entry || headTrend?.entry || null;
+            const baseEntry = baseCompare?.entry || baseTrend?.entry || null;
+            const prevEntry = previousTrend;
+
+            const headMetrics = toMetricMap(headEntry);
+            const baseMetrics = toMetricMap(baseEntry);
+            const prevMetrics = toMetricMap(prevEntry);
+
+            const preferredMetricOrder = [
+              'BenchmarkReplayLog - s/op',
+              'BenchmarkReplayLog - s/commit',
+              'BenchmarkReplayLog - s/propose-on-db',
+              'BenchmarkReplayLog - s/propose-on-proposal',
+              'BenchmarkReplayLog - s/batch',
+              'BenchmarkReplayLog - s/get-latest',
+            ];
+
+            const metricNames = preferredMetricOrder.filter((name) => headMetrics.has(name)).slice(0, 5);
+            if (metricNames.length === 0) {
+              for (const name of headMetrics.keys()) {
+                if (name.startsWith('BenchmarkReplayLog - ') && !name.endsWith('commits')) {
+                  metricNames.push(name);
+                }
+                if (metricNames.length >= 5) break;
+              }
+            }
+
+            const commitLink = (sha) => `[${shortSha(sha)}](${repoUrl}/commit/${sha})`;
+            const commitMessage = (entry) => (entry?.commit?.message || '').replace(/\r?\n/g, ' ');
+
+            const rows = metricNames.map((name) => {
+              const head = headMetrics.get(name);
+              const prev = prevMetrics.get(name);
+              const base = baseMetrics.get(name);
+
+              return `| ${prettifyMetricName(name)} | ${formatValue(head?.value, head?.unit || '')} | ${deltaText(head?.value, prev?.value)} | ${deltaText(head?.value, base?.value)} |`;
+            });
+
+            const baseStatus = !baseBenchmarkRequested
+              ? 'Base data reused from history.'
+              : baseBenchmarkOutcome === 'success'
+                ? 'Base benchmark executed in this run.'
+                : `Base benchmark did not succeed (\`${baseBenchmarkOutcome}\`).`;
+
+            const bodyLines = [
+              marker,
+              '## 🚀 Replay 10K Benchmark Summary',
+              '',
+              `**Head:** ${commitLink(headCommitSha)}${headEntry ? ` — ${commitMessage(headEntry)}` : ''}`,
+              `**Base:** ${commitLink(baseCommitSha)}${baseEntry ? ` — ${commitMessage(baseEntry)}` : ''}`,
+            ];
+
+            if (prevEntry?.commit?.id) {
+              bodyLines.push(`**Previous PR commit:** ${commitLink(prevEntry.commit.id)} — ${commitMessage(prevEntry)}`);
+            } else {
+              bodyLines.push('**Previous PR commit:** _Not available yet_');
+            }
+
+            bodyLines.push(
+              '',
+              '_Lower is better for all timing metrics._',
+              '',
+              '| Metric | Head | vs Previous | vs Base |',
+              '| --- | ---: | ---: | ---: |',
+            );
+
+            if (rows.length > 0) {
+              bodyLines.push(...rows);
+            } else {
+              bodyLines.push('| No parsed timing metrics | — | — | — |');
+            }
+
+            bodyLines.push(
+              '',
+              `**Status:** ${baseStatus}`,
+              '',
+              `📈 [PR trend graph](${trendUrl})`,
+              `🧭 [Base vs head graph](${comparisonUrl})`,
+            );
+
+            const body = bodyLines.join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: prNumber,
-              body: body
+              per_page: 100,
             });
+
+            const existing = comments.find(
+              (comment) => comment.user?.login === 'github-actions[bot]' && comment.body?.includes(marker),
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body,
+              });
+            }
 
   benchmark-main:
     name: Benchmark (main)
