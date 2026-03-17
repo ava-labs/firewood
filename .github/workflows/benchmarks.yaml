@@ -1,8 +1,9 @@
 name: firewood-benchmarks
 
 on:
-  push:
-    branches: [main]
+  schedule:
+    # Weekdays at 05:00 UTC (00:00 ET), same as C-Chain benchmarks
+    - cron: '0 5 * * 1-5'
   workflow_dispatch:
 
 env:
@@ -12,6 +13,8 @@ env:
 jobs:
   bench:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # Required for github-action-benchmark to push to benchmark-data
     steps:
       - uses: actions/checkout@v6
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
@@ -24,14 +27,55 @@ jobs:
         run: cargo fetch --locked --verbose
       - name: Build
         run: cargo build --frozen --profile maxperf --features ethhash,logger --workspace --benches
-      - name: Run firewood crate hashop benchmark
-        run: cargo bench --frozen --profile maxperf --features ethhash,logger -p firewood --bench hashops -- --noplot
-      - name: Run firewood crate defer_persist benchmark
-        run: cargo bench --frozen --profile maxperf --features ethhash,logger -p firewood --bench defer_persist -- --noplot
-      - name: Run storage crate benchmarks
-        run: cargo bench --frozen --profile maxperf --features ethhash,logger -p firewood-storage --bench serializer -- --noplot
-      - name: Upload benchmark results
-        uses: actions/upload-artifact@v7
+      - name: Run benchmarks
+        run: |
+          cargo bench --frozen --profile maxperf --features ethhash,logger \
+            -p firewood --bench hashops -- --noplot 2>&1 | tee benchmark-raw.txt
+          cargo bench --frozen --profile maxperf --features ethhash,logger \
+            -p firewood --bench defer_persist -- --noplot 2>&1 | tee -a benchmark-raw.txt
+          cargo bench --frozen --profile maxperf --features ethhash,logger \
+            -p firewood-storage --bench serializer -- --noplot 2>&1 | tee -a benchmark-raw.txt
+      - name: Convert Criterion output to JSON
+        run: |
+          # Strip ANSI codes and join wrapped lines (name on one line, time: on next)
+          sed 's/\x1b\[[0-9;]*m//g' benchmark-raw.txt \
+            | sed -N '/time:/!{h;d}; /time:/{H;x;s/\n\s*/ /;p}' \
+            | grep 'time:' \
+            | awk '
+              BEGIN { print "[" }
+              match($0, /(.+)\s+time:\s+\[.+ (.+) (ns|µs|us|ms|s) .+\]/, m) {
+                name = m[1]; gsub(/^\s+|\s+$/, "", name)
+                val = m[2] + 0
+                unit = m[3]
+                if (unit == "µs" || unit == "us") val *= 1000
+                else if (unit == "ms") val *= 1000000
+                else if (unit == "s") val *= 1000000000
+                if (n++) printf ",\n"
+                printf "  {\"name\": \"%s\", \"unit\": \"ns\", \"value\": %.2f}", name, val
+              }
+              END { print "\n]" }
+            ' > benchmark-output.json
+          echo "Parsed $(grep -c '"name"' benchmark-output.json) benchmark results"
+          cat benchmark-output.json
+      - name: Determine results location
+        id: location
+        run: |
+          if [[ "${{ github.ref }}" == "refs/heads/main" ]]; then
+            echo "data-dir=bench" >> "$GITHUB_OUTPUT"
+          else
+            echo "data-dir=dev/bench/$(echo '${{ github.ref_name }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Publish benchmark results
+        uses: benchmark-action/github-action-benchmark@a7bc2366eda11037936ea57d811a43b3418d3073 # @v1.21.0
         with:
-          name: benchmark-results
-          path: target/criterion
+          name: Firewood Rust Benchmarks
+          tool: 'customSmallerIsBetter'
+          output-file-path: benchmark-output.json
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          summary-always: true
+          auto-push: true
+          fail-on-alert: true
+          alert-threshold: "150%"
+          comment-on-alert: false
+          gh-pages-branch: benchmark-data
+          benchmark-data-dir-path: ${{ steps.location.outputs.data-dir }}
