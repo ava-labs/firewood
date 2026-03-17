@@ -78,6 +78,8 @@ POLL_TIMEOUT=180
 # https://github.com/ava-labs/avalanchego/blob/master/scripts/benchmark_cchain_range.sh
 # Format: "description|poll_interval_seconds"
 declare -A TESTS=(
+    ["firewood-40m-41m"]="Blocks 40m-41m|60"
+    ["firewood-archive-40m-41m"]="Blocks 40m-41m (archive)|60"
     ["firewood-101-250k"]="Blocks 101-250k|10"
     ["firewood-archive-101-250k"]="Blocks 101-250k (archive)|10"
     ["firewood-33m-33m500k"]="Blocks 33m-33.5m|30"
@@ -318,7 +320,10 @@ wait_for_completion() {
     log "Waiting for run $run_id (updates every ${interval}s)"
     log "https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
     
-    # Retry gh run watch with exponential backoff on transient API errors
+    # gh run watch has a hard 6-hour polling limit. For long-running tests (e.g.
+    # firewood-33m-40m which takes ~7h+), it will exit before the run completes.
+    # We retry on transient API errors, then fall back to polling gh run view.
+    # If that also times out, the run is likely still in progress — check the URL.
     local max_retries=3
     local delay=5
     for ((attempt=1; attempt<=max_retries; attempt++)); do
@@ -326,16 +331,19 @@ wait_for_completion() {
             return 0
         fi
         local exit_code=$?
-        
+
         if ((attempt < max_retries)); then
-            log "gh run watch failed (attempt $attempt/$max_retries), retrying in ${delay}s..."
+            log "gh run watch failed (attempt $attempt/$max_retries, exit $exit_code), retrying in ${delay}s..."
+            log "Note: gh run watch has a 6h polling limit — long-running tests will hit this."
             sleep "$delay"
             delay=$((delay * 2))
         fi
     done
-    
-    # Fallback: poll gh run view for final status
-    log "gh run watch exhausted retries, checking final status..."
+
+    # Fallback: poll gh run view for final status (handles runs that outlast gh run watch)
+    log "gh run watch exhausted retries — falling back to status polling..."
+    log "If the test takes >6h, this is expected. Run may still be in progress:"
+    log "  https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
     local conclusion
     for ((i=0; i<10; i++)); do
         conclusion=$(gh run view "$run_id" --repo "$AVALANCHEGO_REPO" --json status,conclusion \
@@ -343,24 +351,28 @@ wait_for_completion() {
             sleep 5
             continue
         }
-        
+
         case "$conclusion" in
             success)
                 log "Run completed successfully"
                 return 0
                 ;;
             pending)
-                log "Run still in progress, waiting..."
+                log "Run still in progress (poll $((i+1))/10), waiting 30s..."
+                log "  https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
                 sleep 30
                 ;;
             *)
                 err "Run failed with conclusion: $conclusion"
+                err "  https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
                 return 1
                 ;;
         esac
     done
-    
-    err "Could not determine run status after retries"
+
+    err "Monitoring timed out — the run may still be completing. This is expected for tests that take >6h."
+    err "For long tests (e.g. firewood-33m-40m), run directly in AvalancheGo to avoid this limit."
+    err "Check run status: https://github.com/${AVALANCHEGO_REPO}/actions/runs/${run_id}"
     return 1
 }
 
