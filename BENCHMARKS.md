@@ -147,6 +147,7 @@ Monitor this workflow with cli: gh run watch 23198191542
    ```text
    https://github.com/ava-labs/avalanchego/actions/runs/23198207568
    ```
+
    The number at the end is your `gh_run_id` — this is what Grafana uses to
    identify which CI run emitted the metrics. [Example](https://github.com/ava-labs/firewood/actions/runs/23198191542/job/67412514119#step:3:22).
 4. Open the [Firewood Performance dashboard](https://grafana-poc.avax-dev.network/d/avw6fld/firewood-performance).
