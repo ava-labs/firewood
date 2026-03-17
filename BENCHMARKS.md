@@ -58,9 +58,13 @@ same workload used in the daily scheduled run — making it directly comparable
 to historical data. Use it for A/B testing between versions, validating
 optimizations, and quick regression checks.
 
-If your test takes **>6h**, run it directly in AvalancheGo — `just bench-cchain`
-polls via `gh run watch` which has a hard 6-hour limit and will time out before
-the run completes. You lose GitHub Pages publishing but the run completes:
+If your test takes **>6h** (e.g. `firewood-33m-40m`), `just bench-cchain` is
+not the right path. It monitors the run via `gh run watch`, which has a hard
+6-hour limit — the CLI will exit before the benchmark finishes. The run itself
+keeps going in AvalancheGo, but you won't get results published to GitHub Pages.
+
+For long tests, trigger directly in AvalancheGo and download the artifact
+manually:
 [AvalancheGo → Actions → C-Chain Re-Execution Benchmark w/ Container](https://github.com/ava-labs/avalanchego/actions)
 
 ## Choosing a Runner
