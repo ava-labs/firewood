@@ -187,8 +187,7 @@ bench-cchain:
         exit 1
     fi
 
-    # The workflow builds Firewood from the remote branch at the time of trigger.
-    # Unpushed commits are silently ignored — you'd benchmark the wrong code.
+    # This workflow only works with a clean repo — the remote branch must match HEAD.
     if ! git rev-parse --abbrev-ref @{u} &>/dev/null 2>&1; then
         echo "error: Branch '$branch' has no upstream. Push first:" >&2
         echo "       git push -u origin $branch" >&2
@@ -197,10 +196,10 @@ bench-cchain:
     local_sha=$(git rev-parse HEAD)
     remote_sha=$(git rev-parse "@{u}")
     if [[ "$local_sha" != "$remote_sha" ]]; then
-        echo "error: You have unpushed commits. The workflow will benchmark the last pushed commit:" >&2
+        echo "error: Branch '$branch' has unpushed commits — push first." >&2
         echo "       local:  $local_sha" >&2
         echo "       remote: $remote_sha" >&2
-        echo "       Push first, or set FIREWOOD_REF explicitly to benchmark a specific version." >&2
+        echo "       Or set FIREWOOD_REF explicitly to benchmark a specific version." >&2
         exit 1
     fi
 
