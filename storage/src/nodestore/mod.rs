@@ -993,7 +993,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the node cannot be read.
-    pub fn read_node_from_disk(
+    pub(crate) fn read_node_from_disk(
         &self,
         addr: LinearAddress,
         mode: ReadableNodeMode,

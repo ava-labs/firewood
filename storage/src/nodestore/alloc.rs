@@ -153,7 +153,7 @@ impl FreeArea {
         self.next_free_block
     }
 
-    pub fn from_storage<S: ReadableStorage>(
+    pub(crate) fn from_storage<S: ReadableStorage>(
         storage: &S,
         address: LinearAddress,
     ) -> Result<(Self, AreaIndex), FileIoError> {
@@ -219,7 +219,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the area cannot be read.
-    pub fn area_index_and_size(
+    pub(crate) fn area_index_and_size(
         &self,
         addr: LinearAddress,
     ) -> Result<(AreaIndex, u64), FileIoError> {
@@ -281,7 +281,7 @@ impl<'a, S: ReadableStorage> NodeAllocator<'a, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the node cannot be allocated.
-    pub fn allocate_node(
+    pub(crate) fn allocate_node(
         &mut self,
         node: &[u8],
     ) -> Result<(LinearAddress, AreaIndex), FileIoError> {
@@ -311,7 +311,7 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
     ///
     /// Returns a [`FileIoError`] if the area cannot be read or written.
     #[expect(clippy::indexing_slicing)]
-    pub fn delete_node(&mut self, node: MaybePersistedNode) -> Result<(), FileIoError> {
+    pub(crate) fn delete_node(&mut self, node: MaybePersistedNode) -> Result<(), FileIoError> {
         let Some(addr) = node.as_linear_address() else {
             return Ok(());
         };
@@ -338,7 +338,7 @@ impl<S: WritableStorage> NodeAllocator<'_, S> {
         Ok(())
     }
 
-    pub fn flush_freelist(&mut self) -> Result<(), FileIoError> {
+    pub(crate) fn flush_freelist(&mut self) -> Result<(), FileIoError> {
         let free_list_bytes = bytemuck::bytes_of(self.header.free_lists());
         let free_list_offset = NodeStoreHeader::free_lists_offset();
         self.storage.write(free_list_offset, free_list_bytes)?;
