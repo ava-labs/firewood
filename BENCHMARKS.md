@@ -3,7 +3,7 @@
 Firewood measures performance by re-executing historical C-Chain blocks against
 a state snapshot. Results publish to GitHub Pages automatically.
 
-For how this benchmark work, what S3 data exists, and how to create snapshots, see
+For how this benchmark works, what S3 data exists, and how to create snapshots, see
 the source:
 [**AvalancheGo C-Chain Re-Execution Benchmark README**](https://github.com/ava-labs/avalanchego/blob/master/tests/reexecute/c/README.md)
 
@@ -50,7 +50,6 @@ All env vars and options: `./scripts/bench-cchain-reexecution.sh help`
 | --- | --- |
 | A/B test, daily-style run, quick regression check | `firewood-40m-41m` |
 | Quick smoke test | `firewood-101-250k` (~7 min) |
-| Deep regression | `firewood-33m-40m` (~7h, needs >6h path) |
 
 **`firewood-40m-41m` is the right default for most work.** It covers a
 contract-heavy slice of mature mainnet activity, finishes in <2h, and is the
@@ -109,9 +108,9 @@ encodes height: `cchain-current-state-firewood-40m` = state at block 40,000,000.
 1. **Push before triggering.** The workflow builds from the remote branch.
    Unpushed commits benchmark the wrong code — the justfile catches this.
 
-2. **`GH_TOKEN` needs cross-repo access.** Requires a PAT for both
-   `ava-labs/firewood` and `ava-labs/avalanchego`. Default `gh auth login`
-   tokens scoped to one repo will fail silently.
+2. **`GH_TOKEN` needs cross-repo access (CI only).** In CI, the token must have
+   access to both `ava-labs/firewood` and `ava-labs/avalanchego`. For local runs,
+   `gh auth login` is sufficient.
 
 3. **`AVALANCHEGO_REF` cannot be a commit SHA.** GitHub's `workflow_dispatch`
    only accepts branch or tag names. The justfile validates this.
