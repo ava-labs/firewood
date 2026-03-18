@@ -584,7 +584,7 @@ mod test {
     }
 
     #[test]
-    fn test_reconstruct_parallel_vs_serial() {
+    fn test_reconstruct_deterministic() {
         let parallel_db = TestDb::new_with_config(
             DbConfig::builder()
                 .use_parallel(UseParallel::Always)

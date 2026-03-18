@@ -395,7 +395,6 @@ impl<T, S> NodeStore<Mutable<T>, S> {
     pub const fn root_mut(&mut self) -> &mut Option<Node> {
         &mut self.kind.root
     }
-
 }
 
 impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
