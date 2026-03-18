@@ -42,9 +42,6 @@ pub const REPARENTED_PROPOSAL_COUNT: &str = "proposals.reparented";
 /// Fetch attempts from the rootstore
 pub const ROOTSTORE_GET: &str = "rootstore_get";
 
-/// Store operations to the rootstore
-pub const ROOTSTORE_PUT: &str = "rootstore_put";
-
 /// `io_uring` specific metrics.
 pub mod ring {
     /// Count of EAGAIN write retries.
@@ -95,7 +92,6 @@ pub fn register() {
 
     // Root store metrics
     describe_counter!(ROOTSTORE_GET, "Fetch attempts from the rootstore");
-    describe_counter!(ROOTSTORE_PUT, "Store operations to the rootstore");
 
     // Ring metrics
     describe_counter!(ring::EAGAIN_WRITE_RETRY, "Count of EAGAIN write retries");

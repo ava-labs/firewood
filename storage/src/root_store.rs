@@ -95,8 +95,6 @@ impl RootStore {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.items.insert(**hash, address.get().to_be_bytes())?;
 
-        firewood_counter!(registry::ROOTSTORE_PUT).increment(1);
-
         // flush the keyspace to protect against application crashes
         //
         // note that OS crashes or power failures may result in the loss
