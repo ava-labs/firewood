@@ -128,7 +128,7 @@ use-cases. Try running the insert example via the command-line, via `cargo run -
 
 There is a [fwdctl cli](fwdctl) for command-line operations on a database.
 
-There is also a [benchmark](benchmark) that shows some other example uses.
+For performance benchmarking see [benchmark/README.md](benchmark/README.md).
 
 For maximum runtime performance at the cost of compile time,
 use `cargo run --maxperf` instead,
