@@ -18,7 +18,7 @@ Firewood has two categories of benchmarks:
 
 ### C-Chain re-execution — GitHub Actions
 
-_When: tracking performance over time or comparing two versions — runs automatically on a daily schedule and on every trigger, no manual setup needed_
+**When:** tracking performance over time or comparing two versions — runs automatically on a daily schedule and on every trigger, no manual setup needed.
 
 Part of CI — repeatable, versioned, and auditable. Runs on a fixed schedule
 and on demand via
@@ -35,7 +35,7 @@ TEST=firewood-40m-41m just bench-cchain
 
 ### C-Chain re-execution — fwdctl launch
 
-_When: a GitHub Actions run surfaced a signal worth investigating — SSH into the instance, install any tooling, change code and rebuild freely_
+**When:** a GitHub Actions run surfaced a signal worth investigating — SSH into the instance, install any tooling, change code and rebuild freely.
 
 Same workload as GitHub Actions, provisioned on demand on EC2. Full root access
 — install `perf`, flamegraphs, or any tooling, change code and rebuild freely.
@@ -45,7 +45,7 @@ No CI queue, no constraints.
 
 ### Rust criterion
 
-_When: iterating on a specific operation locally — also runs in CI on every push to `main`, catching API breakage and performance regressions before they merge, and enforcing that Firewood stays usable as a standalone Rust library without AvalancheGo_
+**When:** iterating on a specific operation locally — also runs in CI on every push to `main`, catching API breakage and performance regressions before they merge, and enforcing that Firewood stays usable as a standalone Rust library without AvalancheGo.
 
 Criterion benchmarks live in `firewood/benches/` and `storage/benches/`. They
 run in seconds with no external dependencies.
@@ -56,7 +56,7 @@ cargo bench --features ethhash,logger
 
 ### Synthetic workloads
 
-_When: testing Firewood API patterns in isolation_
+**When:** testing Firewood API patterns in isolation.
 
 A standalone Rust binary exercising the Firewood API directly with synthetic
 trie patterns (tenkrandom, zipf, single). No AvalancheGo, no Go, no cloud.
