@@ -355,7 +355,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Recon>, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the parent root cannot be read.
-    pub fn new_for_reconstruction<T>(parent: &NodeStore<T, S>) -> Result<Self, FileIoError>
+    pub(crate) fn new_for_reconstruction<T>(parent: &NodeStore<T, S>) -> Result<Self, FileIoError>
     where
         NodeStore<T, S>: TrieReader,
     {
@@ -385,7 +385,7 @@ where
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the parent root cannot be read.
-    pub fn into_reconstruction_child(&self) -> Result<NodeStore<Mutable<Recon>, S>, FileIoError> {
+    pub fn reconstruction_child(&self) -> Result<NodeStore<Mutable<Recon>, S>, FileIoError> {
         NodeStore::new_for_reconstruction(self)
     }
 }
@@ -394,12 +394,6 @@ impl<T, S> NodeStore<Mutable<T>, S> {
     /// Returns the root of this mutable nodestore.
     pub const fn root_mut(&mut self) -> &mut Option<Node> {
         &mut self.kind.root
-    }
-
-    /// Consumes the `NodeStore` and returns the root of the trie.
-    #[must_use]
-    pub fn into_root(self) -> Option<Node> {
-        self.kind.root
     }
 }
 
@@ -617,7 +611,7 @@ impl ImmutableProposal {
 /// # Reconstruction lifecycle
 ///
 /// 1. Create a [`Mutable<Recon>`] from a [Committed] or [`Reconstructed`] parent
-///    using [`NodeStore::into_reconstruction_child`].
+///    using [`NodeStore::reconstruction_child`].
 /// 2. Apply batch operations to the mutable reconstruction via `Merkle` insert/remove.
 /// 3. Convert to [`Reconstructed`] via [`From`]. The resulting view supports reads and lazy hashing.
 /// 4. Chain further reconstructions: convert back to [`Mutable<Recon>`] via [`From`] and repeat.
@@ -700,6 +694,10 @@ pub struct Mutable<Kind> {
     pub(crate) inner: Kind,
 }
 
+/// Given root from either a Committed or Reconstructed,
+/// create a mutable root node for a new Reconstructed
+/// with this root.
+/// For reconstruct on reconstruct, this avoids cloning
 impl<S: ReadableStorage> From<NodeStore<Reconstructed, S>> for NodeStore<Mutable<Recon>, S> {
     fn from(val: NodeStore<Reconstructed, S>) -> Self {
         NodeStore {
@@ -724,19 +722,6 @@ impl<S: ReadableStorage> From<NodeStore<Mutable<Recon>, S>> for NodeStore<Recons
     }
 }
 
-/// Implement clone for `NodeStore<Reconstructed, S>`.
-///
-/// This clones the [`SharedNode`] arc (cheap ref-count bump) and the
-/// [`OnceLock`] hash (cloned if already computed, empty otherwise).
-impl<S> Clone for NodeStore<Reconstructed, S> {
-    fn clone(&self) -> Self {
-        NodeStore {
-            kind: self.kind.clone(),
-            storage: self.storage.clone(),
-        }
-    }
-}
-
 impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed, S>>> for NodeStore<Mutable<Recon>, S> {
     fn from(val: Arc<NodeStore<Reconstructed, S>>) -> Self {
         // Fast path: if this Arc is uniquely owned, `try_unwrap` is O(1) and lets us move the
@@ -751,6 +736,19 @@ impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed, S>>> for NodeStore<Mu
         // We do this to avoid forcing callers to guarantee uniqueness while still exploiting the
         // cheaper move path whenever possible.
         Self::from(Arc::unwrap_or_clone(val))
+    }
+}
+
+/// Implement clone for `NodeStore<Reconstructed, S>`.
+///
+/// This clones the [`SharedNode`] arc (cheap ref-count bump) and the
+/// [`OnceLock`] hash (cloned if already computed, empty otherwise).
+impl<S> Clone for NodeStore<Reconstructed, S> {
+    fn clone(&self) -> Self {
+        NodeStore {
+            kind: self.kind.clone(),
+            storage: self.storage.clone(),
+        }
     }
 }
 
@@ -924,7 +922,7 @@ where
     NodeStore<Reconstructed, S>: TrieReader,
 {
     fn root_address(&self) -> Option<LinearAddress> {
-        // Reconstructed views are never persisted.
+        // Reconstructed views are read-only overlays and are never persisted.
         None
     }
 

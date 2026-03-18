@@ -28,7 +28,7 @@ use firewood_metrics::{firewood_increment, firewood_set};
 pub use firewood_storage::CacheReadStrategy;
 use firewood_storage::{
     BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, Mutable,
-    MutableKind, NodeHashAlgorithm, NodeStore, NodeStoreHeader, Propose, TrieHash,
+    MutableKind, NodeHashAlgorithm, NodeStore, NodeStoreHeader, Propose, Recon, TrieHash,
 };
 
 pub(crate) const DB_FILE_NAME: &str = "firewood.db";
@@ -529,6 +529,14 @@ impl RevisionManager {
             }
         }
         Ok(merkle.into_inner())
+    }
+
+    /// Serial batch application for reconstruction chains.
+    pub(crate) fn apply_batch_recon(
+        mutable_nodestore: NodeStore<Mutable<Recon>, FileBacked>,
+        batch: impl IntoBatchIter,
+    ) -> Result<NodeStore<Mutable<Recon>, FileBacked>, api::Error> {
+        Self::apply_batch_serial(mutable_nodestore, batch)
     }
 
     /// Checks if the `PersistWorker` has errored.
