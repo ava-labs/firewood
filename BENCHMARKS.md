@@ -7,6 +7,19 @@ For how this benchmark works, what S3 data exists, and how to create snapshots, 
 the source:
 [**AvalancheGo C-Chain Re-Execution Benchmark README**](https://github.com/ava-labs/avalanchego/blob/master/tests/reexecute/c/README.md)
 
+## Table of Contents
+
+- [Quick Start](#quick-start)
+- [Scheduled Runs](#scheduled-runs)
+- [Choosing a Test](#choosing-a-test)
+- [Choosing a Runner](#choosing-a-runner)
+- [Finding S3 Data](#finding-s3-data)
+- [Gotchas](#gotchas)
+- [Monitoring a Run in Grafana](#monitoring-run-in-grafana)
+- [Viewing Historical Results](#viewing-historical-results)
+- [How It Works](#how-it-works)
+- [References](#references)
+
 ## Quick Start
 
 Authenticate once:
@@ -160,9 +173,39 @@ Monitor this workflow with cli: gh run watch 23198191542
 
 ## Viewing Historical Results
 
+Results are published to GitHub Pages via
+[`gh-pages.yaml`](../.github/workflows/gh-pages.yaml), maintained by the
+Firewood team. It serves two purposes:
+
+- **Rust docs** — built from `main` on every push via `cargo doc`
+- **Benchmark history** — triggered after `track-performance.yml` completes;
+  merges the `benchmark-data` branch into the pages deployment so docs and
+  benchmark trends are served from a single GitHub Pages site
+
+Links:
+
 - [Main branch trends](https://ava-labs.github.io/firewood/bench/)
 - [Feature branch trends](https://ava-labs.github.io/firewood/dev/bench/)
 - Raw data: [benchmark-data/bench/data.js](https://github.com/ava-labs/firewood/blob/benchmark-data/bench/data.js)
+
+## How It Works
+
+Benchmarks run on AvalancheGo's self-hosted runners, not locally. `just bench-cchain`
+triggers Firewood's `track-performance.yml`, which triggers the benchmark workflow
+in AvalancheGo. AvalancheGo builds Firewood at `FIREWOOD_REF`, runs the benchmark,
+and returns results. Firewood's workflow then publishes them to GitHub Pages.
+
+```mermaid
+sequenceDiagram
+    participant F as Firewood
+    participant A as AvalancheGo
+    participant G as GitHub Pages
+
+    F->>A: 1. trigger workflow
+    A->>A: 2. run benchmark
+    A-->>F: 3. download results
+    F->>G: 4. publish
+```
 
 ## References
 
