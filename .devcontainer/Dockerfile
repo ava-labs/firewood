@@ -91,8 +91,13 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
   && rustup component add clippy rustfmt rust-src rust-docs llvm-tools --toolchain ${RUST_STABLE_VERSION} \
   && rustup component add clippy rustfmt rust-src rust-docs llvm-tools --toolchain ${RUST_NIGHTLY_VERSION}
 
-# Install sccache first (needed for subsequent cargo installs)
-RUN . "${CARGO_HOME}/env" && cargo install --locked sccache
+# Install cargo-binstall first to download pre-built binaries for some heavy
+# dependencies (like sccache).
+RUN . "${CARGO_HOME}/env" && cargo install --locked cargo-binstall
+
+# Install sccache next (needed for subsequent cargo installs, in case they need
+# to compile from source)
+RUN . "${CARGO_HOME}/env" && cargo binstall --locked sccache
 
 # Configure Cargo to use sccache globally
 RUN mkdir -p "${CARGO_HOME}" \
@@ -108,7 +113,7 @@ RUN mkdir -p "${CARGO_HOME}" \
 
 # Install Cargo tools (using sccache now)
 RUN . "${CARGO_HOME}/env" \
-  && cargo install --locked \
+  && cargo binstall --locked \
     ast-grep \
     cargo-edit \
     cargo-expand \
