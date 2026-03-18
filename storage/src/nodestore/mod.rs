@@ -355,7 +355,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Recon>, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the parent root cannot be read.
-    pub fn new_for_reconstruction<T>(parent: &NodeStore<T, S>) -> Result<Self, FileIoError>
+    pub(crate) fn new_for_reconstruction<T>(parent: &NodeStore<T, S>) -> Result<Self, FileIoError>
     where
         NodeStore<T, S>: TrieReader,
     {
@@ -396,11 +396,6 @@ impl<T, S> NodeStore<Mutable<T>, S> {
         &mut self.kind.root
     }
 
-    /// Consumes the `NodeStore` and returns the root of the trie.
-    #[must_use]
-    pub fn into_root(self) -> Option<Node> {
-        self.kind.root
-    }
 }
 
 impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
