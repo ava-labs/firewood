@@ -30,7 +30,7 @@ pub type CommittedRevision = Arc<NodeStore<Committed, FileBacked>>;
 /// partition named 'firewood'
 const FJALL_PARTITION_NAME: &str = "firewood";
 
-/// This structure hold everything related to an open root store
+/// This structure holds everything related to an open root store
 #[derive_where(Debug)]
 #[derive_where(skip_inner)]
 pub struct RootStore {
@@ -133,14 +133,14 @@ impl RootStore {
         // 1. Obtain the lock to prevent multiple threads from caching the same result
         let mut revision_cache = self.revision_cache.lock();
 
-        // 1. Check if the committed revision is cached.
+        // 2. Check if the committed revision is cached.
         if let Some(v) = revision_cache.get(hash) {
             // found in the cache
             firewood_counter!(registry::ROOTSTORE_GET, "result" => "cached").increment(1);
             return Ok(Some(v));
         }
 
-        // 2. Not cached, query the datastore
+        // 3. Not cached, query the datastore
         let Some(v) = self.items.get(**hash)? else {
             // not in the datastore
             firewood_counter!(registry::ROOTSTORE_GET, "result" => "notfound").increment(1);
@@ -151,14 +151,14 @@ impl RootStore {
         let addr = LinearAddress::new(u64::from_be_bytes(array))
             .ok_or("invalid address: empty address")?;
 
-        // 3. Construct the committed revision
+        // 4. Construct the committed revision
         let nodestore = Arc::new(NodeStore::with_root(
             hash.clone().into_hash_type(),
             addr,
             self.storage.clone(),
         )?);
 
-        // 4. Cache for future lookups.
+        // 5. Cache for future lookups.
         revision_cache.insert(hash.clone(), nodestore.clone());
 
         firewood_counter!(registry::ROOTSTORE_GET, "result" => "fetched").increment(1);

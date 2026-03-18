@@ -1359,6 +1359,89 @@ mod tests {
     }
 
     #[test]
+    fn with_root_success() -> Result<(), Box<dyn Error>> {
+        let tmpdir = tempfile::tempdir()?;
+        let dbfile = tmpdir.path().join("with_root_test.db");
+
+        let storage = Arc::new(FileBacked::new(
+            dbfile,
+            nonzero!(10usize),
+            nonzero!(10usize),
+            false,
+            true,
+            CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
+        )?);
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let base = NodeStore::open(&header, Arc::clone(&storage))?;
+
+        // Create a proposal with a leaf node and persist it
+        let mut proposal = NodeStore::new(&base)?;
+        proposal.root_mut().replace(Node::Leaf(LeafNode {
+            partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"key")),
+            value: b"value".to_vec().into_boxed_slice(),
+        }));
+        let proposal = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
+        let committed = proposal.as_committed();
+        committed.persist(&mut header)?;
+
+        // Retrieve root address and hash from the header
+        let root_address = header.root_address().unwrap();
+        let root_hash = header.root_hash().unwrap().into_hash_type();
+
+        // Reconstruct using with_root
+        let restored = NodeStore::with_root(root_hash.clone(), root_address, storage)?;
+        assert_eq!(restored.root_hash(), Some(root_hash.into_triehash()));
+        assert_eq!(restored.root_address(), Some(root_address));
+
+        Ok(())
+    }
+
+    #[test]
+    fn with_root_wrong_hash() -> Result<(), Box<dyn Error>> {
+        let tmpdir = tempfile::tempdir()?;
+        let dbfile = tmpdir.path().join("with_root_bad_hash_test.db");
+
+        let storage = Arc::new(FileBacked::new(
+            dbfile,
+            nonzero!(10usize),
+            nonzero!(10usize),
+            false,
+            true,
+            CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
+        )?);
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let base = NodeStore::open(&header, Arc::clone(&storage))?;
+
+        // Create a proposal with a leaf node and persist it
+        let mut proposal = NodeStore::new(&base)?;
+        proposal.root_mut().replace(Node::Leaf(LeafNode {
+            partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"key")),
+            value: b"value".to_vec().into_boxed_slice(),
+        }));
+        let proposal = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
+        let committed = proposal.as_committed();
+        committed.persist(&mut header)?;
+
+        let root_address = header.root_address().unwrap();
+
+        // Use a bogus hash
+        let bad_hash = HashType::from([0xAB; 32]);
+        let result = NodeStore::with_root(bad_hash, root_address, storage);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.source()
+                .unwrap()
+                .to_string()
+                .contains("hash verification failed")
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn reconstructed_root_address_is_none() {
         let storage = Arc::new(MemStore::default());
         let mut recon = NodeStore::new_empty_recon(Arc::clone(&storage));
