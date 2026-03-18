@@ -131,6 +131,9 @@ fn bench_reconstructed_chain(criterion: &mut Criterion) {
                 |(initial, batches)| {
                     let db_dir = TempDir::new().unwrap();
                     let db_path = db_dir.path().join("benchmark_db");
+                    // build with UseParallel::Never because we don't want the
+                    // extra threads muddying up any flamegraphs when creating the
+                    // initial proposal
                     let cfg = DbConfig::builder()
                         .node_hash_algorithm(NodeHashAlgorithm::compile_option())
                         .truncate(true)
