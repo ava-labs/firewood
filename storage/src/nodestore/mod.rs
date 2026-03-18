@@ -385,7 +385,7 @@ where
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the parent root cannot be read.
-    pub fn into_reconstruction_child(&self) -> Result<NodeStore<Mutable<Recon>, S>, FileIoError> {
+    pub fn reconstruction_child(&self) -> Result<NodeStore<Mutable<Recon>, S>, FileIoError> {
         NodeStore::new_for_reconstruction(self)
     }
 }
@@ -617,7 +617,7 @@ impl ImmutableProposal {
 /// # Reconstruction lifecycle
 ///
 /// 1. Create a [`Mutable<Recon>`] from a [Committed] or [`Reconstructed`] parent
-///    using [`NodeStore::into_reconstruction_child`].
+///    using [`NodeStore::reconstruction_child`].
 /// 2. Apply batch operations to the mutable reconstruction via `Merkle` insert/remove.
 /// 3. Convert to [`Reconstructed`] via [`From`]. The resulting view supports reads and lazy hashing.
 /// 4. Chain further reconstructions: convert back to [`Mutable<Recon>`] via [`From`] and repeat.
@@ -700,23 +700,6 @@ pub struct Mutable<Kind> {
     pub(crate) inner: Kind,
 }
 
-impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed, S>>> for NodeStore<Mutable<Recon>, S> {
-    fn from(val: Arc<NodeStore<Reconstructed, S>>) -> Self {
-        // Fast path: if this Arc is uniquely owned, `try_unwrap` is O(1) and lets us move the
-        // reconstructed root out without cloning.
-        // Why this Arc might be shared: a caller could keep another handle alive (e.g. iterating
-        // over a reconstructed view while also deriving the next reconstructed state), which makes
-        // `try_unwrap` fail even though conversion is still valid.
-        // Fallback cost: when shared, we must clone the `NodeStore<Reconstructed, S>`, which
-        // clones the root `SharedNode` arc and then `Arc::unwrap_or_clone` extracts the `Node`.
-        // This shared-Arc fallback does not match our known reconstruction use cases, where the
-        // previous reconstructed handle is typically consumed before building the next one.
-        // We do this to avoid forcing callers to guarantee uniqueness while still exploiting the
-        // cheaper move path whenever possible.
-        Self::from(Arc::unwrap_or_clone(val))
-    }
-}
-
 /// Given root from either a Committed or Reconstructed,
 /// create a mutable root node for a new Reconstructed
 /// with this root.
@@ -742,6 +725,23 @@ impl<S: ReadableStorage> From<NodeStore<Mutable<Recon>, S>> for NodeStore<Recons
             },
             storage: val.storage,
         }
+    }
+}
+
+impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed, S>>> for NodeStore<Mutable<Recon>, S> {
+    fn from(val: Arc<NodeStore<Reconstructed, S>>) -> Self {
+        // Fast path: if this Arc is uniquely owned, `try_unwrap` is O(1) and lets us move the
+        // reconstructed root out without cloning.
+        // Why this Arc might be shared: a caller could keep another handle alive (e.g. iterating
+        // over a reconstructed view while also deriving the next reconstructed state), which makes
+        // `try_unwrap` fail even though conversion is still valid.
+        // Fallback cost: when shared, we must clone the `NodeStore<Reconstructed, S>`, which
+        // clones the root `SharedNode` arc and then `Arc::unwrap_or_clone` extracts the `Node`.
+        // This shared-Arc fallback does not match our known reconstruction use cases, where the
+        // previous reconstructed handle is typically consumed before building the next one.
+        // We do this to avoid forcing callers to guarantee uniqueness while still exploiting the
+        // cheaper move path whenever possible.
+        Self::from(Arc::unwrap_or_clone(val))
     }
 }
 
@@ -1358,6 +1358,7 @@ mod tests {
 
         Ok(())
     }
+
     #[test]
     fn reconstructed_root_address_is_none() {
         let storage = Arc::new(MemStore::default());

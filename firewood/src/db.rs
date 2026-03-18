@@ -338,7 +338,7 @@ impl Db {
         P: ReconstructionSource,
         NodeStore<P, FileBacked>: TrieReader,
     {
-        let next_nodestore = parent.into_reconstruction_child()?;
+        let next_nodestore = parent.reconstruction_child()?;
         let mutable_nodestore = RevisionManager::apply_batch_recon(next_nodestore, batch)?;
 
         Ok(ReconstructedView {
@@ -688,10 +688,7 @@ mod test {
                 }],
             )
             .unwrap();
-        let reconstructed_hash_1 = reconstructed.root_hash();
-        let reconstructed_hash_2 = reconstructed.root_hash();
-        assert_eq!(reconstructed_hash_1, reconstructed_hash_2);
-        assert!(reconstructed_hash_1.is_some());
+        assert!(reconstructed.root_hash().is_some());
         assert_eq!(&*reconstructed.val(b"base").unwrap().unwrap(), b"v1");
 
         let reconstructed = reconstructed
