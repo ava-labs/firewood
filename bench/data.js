@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1773733817557,
+  "lastUpdate": 1773819902120,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -1503,6 +1503,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 87.11596498120346,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "dependabot[bot]",
+            "username": "dependabot[bot]",
+            "email": "49699333+dependabot[bot]@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "a53c7e930a81a50355ed6198bdaa921bb0284308",
+          "message": "chore(deps): bump lz4_flex from 0.11.5 to 0.11.6 (#1799)\n\nBumps [lz4_flex](https://github.com/pseitz/lz4_flex) from 0.11.5 to\n0.11.6.\n<details>\n<summary>Changelog</summary>\n<p><em>Sourced from <a\nhref=\"https://github.com/PSeitz/lz4_flex/blob/main/CHANGELOG.md\">lz4_flex's\nchangelog</a>.</em></p>\n<blockquote>\n<h1>0.11.6 (2026-03-14)</h1>\n<h3>Security Fix</h3>\n<ul>\n<li>Fix handling of invalid match offsets during decompression <a\nhref=\"https://github.com/PSeitz/lz4_flex/commit/84cdafb\">#84cdafb</a>\n(thanks <a\nhref=\"https://github.com/Marcono1234\"><code>@​Marcono1234</code></a>)</li>\n</ul>\n<pre><code>Invalid match offsets (offset == 0) during decompression were\nnot properly\nhandled, which could lead to invalid memory reads on untrusted input.\nUsers on 0.11.x should upgrade to 0.11.6.\n</code></pre>\n</blockquote>\n</details>\n<details>\n<summary>Commits</summary>\n<ul>\n<li><a\nhref=\"https://github.com/PSeitz/lz4_flex/commit/6460047c0ba18bf4e3331894c8db220bc724a439\"><code>6460047</code></a>\nbump version to 0.11.6</li>\n<li><a\nhref=\"https://github.com/PSeitz/lz4_flex/commit/84cdafba1fb00313b6da8fd7b3cdeaf8ad07e11a\"><code>84cdafb</code></a>\nfix handling of invalid match offsets during decompression</li>\n<li>See full diff in <a\nhref=\"https://github.com/pseitz/lz4_flex/compare/0.11.5...0.11.6\">compare\nview</a></li>\n</ul>\n</details>\n<br />\n\n\n[![Dependabot compatibility\nscore](https://dependabot-badges.githubapp.com/badges/compatibility_score?dependency-name=lz4_flex&package-manager=cargo&previous-version=0.11.5&new-version=0.11.6)](https://docs.github.com/en/github/managing-security-vulnerabilities/about-dependabot-security-updates#about-compatibility-scores)\n\nDependabot will resolve any conflicts with this PR as long as you don't\nalter it yourself. You can also trigger a rebase manually by commenting\n`@dependabot rebase`.\n\n[//]: # (dependabot-automerge-start)\n[//]: # (dependabot-automerge-end)\n\n---\n\n<details>\n<summary>Dependabot commands and options</summary>\n<br />\n\nYou can trigger Dependabot actions by commenting on this PR:\n- `@dependabot rebase` will rebase this PR\n- `@dependabot recreate` will recreate this PR, overwriting any edits\nthat have been made to it\n- `@dependabot show <dependency name> ignore conditions` will show all\nof the ignore conditions of the specified dependency\n- `@dependabot ignore this major version` will close this PR and stop\nDependabot creating any more for this major version (unless you reopen\nthe PR or upgrade to it yourself)\n- `@dependabot ignore this minor version` will close this PR and stop\nDependabot creating any more for this minor version (unless you reopen\nthe PR or upgrade to it yourself)\n- `@dependabot ignore this dependency` will close this PR and stop\nDependabot creating any more for this dependency (unless you reopen the\nPR or upgrade to it yourself)\nYou can disable automated security fix PRs for this repo from the\n[Security Alerts\npage](https://github.com/ava-labs/firewood/network/alerts).\n\n</details>\n\nSigned-off-by: dependabot[bot] <support@github.com>\nCo-authored-by: dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>",
+          "timestamp": "2026-03-17T21:25:38Z",
+          "url": "https://github.com/ava-labs/firewood/commit/a53c7e930a81a50355ed6198bdaa921bb0284308"
+        },
+        "date": 1773819901511,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 144.96661772994514,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6898.139831494697,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 112.53993425977566,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 6704.937021521259,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 78.08319878161042,
             "unit": "block_accept_ms/ggas"
           }
         ]
