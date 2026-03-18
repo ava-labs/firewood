@@ -583,6 +583,9 @@ mod test {
         }
     }
 
+    /// Reconstruction always uses the serial path (`apply_batch_recon`), but the base
+    /// revision may have been built with parallel or serial proposals. This test confirms
+    /// both produce identical reconstruction results.
     #[test]
     fn test_reconstruct_deterministic() {
         let parallel_db = TestDb::new_with_config(
