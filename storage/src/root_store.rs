@@ -95,10 +95,8 @@ impl RootStore {
     ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         self.items.insert(**hash, address.get().to_be_bytes())?;
 
-        // flush the keyspace to protect against application crashes
-        //
-        // note that OS crashes or power failures may result in the loss
-        // of this revision in the root store
+        // Flush the keyspace to protect against application crashes, but not
+        // OS crashes. Refer to the fjall docs for more details.
         self.keyspace.persist(PersistMode::Buffer)?;
 
         Ok(())
