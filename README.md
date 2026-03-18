@@ -113,7 +113,6 @@ See [`.devcontainer/`](.devcontainer/) for the full configuration.
 
 In order to build firewood, the following dependencies must be installed:
 
-- `protoc` See [installation instructions](https://grpc.io/docs/protoc-installation/).
 - `cargo` See [installation instructions](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 - `make` See [download instructions](https://www.gnu.org/software/make/#download) or run `sudo apt install build-essential` on Linux.
 
