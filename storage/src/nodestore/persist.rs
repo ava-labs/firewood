@@ -183,7 +183,7 @@ impl<S: WritableStorage> NodeStore<Committed, S> {
     ///
     /// Returns a [`FileIoError`] if any node cannot be written to storage.
     #[fastrace::trace(short_name = true)]
-    pub fn flush_nodes(&self, header: &mut NodeStoreHeader) -> Result<(), FileIoError> {
+    fn flush_nodes(&self, header: &mut NodeStoreHeader) -> Result<(), FileIoError> {
         let flush_start = Instant::now();
 
         let mut node_allocator = NodeAllocator::new(self.storage.as_ref(), header);
