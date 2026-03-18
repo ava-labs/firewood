@@ -428,7 +428,7 @@ impl NodeStoreHeader {
     ///
     /// This is None if the database was created before v0.1.0.
     #[must_use]
-    pub fn root_hash(&self) -> Option<TrieHash> {
+    pub(crate) fn root_hash(&self) -> Option<TrieHash> {
         if self.version.is_firewood_v1() && self.root_address.is_some() {
             Some(TrieHash::from(self.root_hash))
         } else {
@@ -482,7 +482,7 @@ impl NodeStoreHeader {
     /// The returned string is either the `git describe` output (from the time
     /// of build) if available, otherwise the cargo package version of the
     /// `firewood-storage` crate.
-    pub fn firewood_version_str(&self) -> Option<std::borrow::Cow<'_, str>> {
+    pub(crate) fn firewood_version_str(&self) -> Option<std::borrow::Cow<'_, str>> {
         self.git_describe()
             .map(GitDescribe::as_str)
             .or_else(|| self.cargo_version().map(CargoVersion::as_str))
