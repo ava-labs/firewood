@@ -2,6 +2,7 @@
 
 ![Github Actions](https://github.com/ava-labs/firewood/actions/workflows/ci.yaml/badge.svg?branch=main)
 [![Ecosystem license](https://img.shields.io/badge/License-Ecosystem-blue.svg)](./LICENSE.md)
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/ava-labs/firewood)
 
 > :warning: Firewood is beta-level software.
 > The Firewood API may change with little to no warning.
@@ -87,6 +88,26 @@ as well as carefully managing the free list during the creation and expiration o
 ## Metrics
 
 Firewood provides comprehensive metrics for monitoring database performance, resource utilization, and operational characteristics. For detailed information about all available metrics, how to enable them, and how to interpret them, see [METRICS.md](METRICS.md).
+
+## Development Environment
+
+The quickest way to get started is with the included devcontainer, which
+provides a fully configured environment with all required tools pre-installed.
+
+**GitHub Codespaces** — click the badge above or go to
+[codespaces.new/ava-labs/firewood](https://codespaces.new/ava-labs/firewood)
+to launch a ready-to-code environment in your browser.
+
+**VS Code Dev Containers** — with the
+[Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+extension installed, open this repository and select
+**Dev Containers: Reopen in Container** from the command palette.
+
+The devcontainer includes Rust (stable + nightly), Go, Nix (with flakes),
+sccache, and all project tooling. Compilation caches are stored in named
+Docker volumes so they persist across container rebuilds.
+
+See [`.devcontainer/`](.devcontainer/) for the full configuration.
 
 ## Build
 
