@@ -2,7 +2,6 @@
 
 ![Github Actions](https://github.com/ava-labs/firewood/actions/workflows/ci.yaml/badge.svg?branch=main)
 [![Ecosystem license](https://img.shields.io/badge/License-Ecosystem-blue.svg)](./LICENSE.md)
-[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/ava-labs/firewood)
 
 > :warning: Firewood is beta-level software.
 > The Firewood API may change with little to no warning.
@@ -90,6 +89,8 @@ as well as carefully managing the free list during the creation and expiration o
 Firewood provides comprehensive metrics for monitoring database performance, resource utilization, and operational characteristics. For detailed information about all available metrics, how to enable them, and how to interpret them, see [METRICS.md](METRICS.md).
 
 ## Development Environment
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/ava-labs/firewood)
 
 The quickest way to get started is with the included devcontainer, which
 provides a fully configured environment with all required tools pre-installed.
