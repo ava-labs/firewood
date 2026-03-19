@@ -27,10 +27,6 @@ is isolated on a dedicated self-hosted runner, keeping variance low enough that
 a meaningful difference reflects code, not infrastructure. Results accumulate
 on GitHub Pages.
 
-```bash
-TEST=firewood-40m-41m just bench-cchain
-```
-
 → [Full guide](docs/cchain-reexecution.md)
 
 ### C-Chain re-execution — fwdctl launch
@@ -45,18 +41,29 @@ No CI queue, no constraints.
 
 ### Rust criterion
 
-**When:** iterating on a specific operation locally — also runs in CI on every push to `main`, catching API breakage and performance regressions before they merge, and enforcing that Firewood stays usable as a standalone Rust library without AvalancheGo.
+**When:** changing a core area of Firewood — these benchmarks cover small critical sections and are the fastest way to detect performance problems before introducing the FFI and Go layers.
 
 Criterion benchmarks live in `firewood/benches/` and `storage/benches/`. They
-run in seconds with no external dependencies.
+run in seconds with no external dependencies and also run in CI on every push to
+`main`.
+
+| Changed area | Benchmark file |
+| --- | --- |
+| Deferred persistence | `firewood/benches/defer_persist.rs` |
+| Hashing | `firewood/benches/hashops.rs` |
+| Node serialization / deserialization | `storage/benches/serializer.rs` |
 
 ```bash
 cargo bench --features ethhash,logger
 ```
 
+Benchmarks can also produce flamegraphs. See the header comment in
+`firewood/benches/hashops.rs` for instructions; `--profile-time=5` is a good
+starting point.
+
 ### Synthetic workloads
 
-**When:** testing Firewood API patterns in isolation.
+**When:** changing any core area of Firewood — these tests can help identify performance problems before introducing the FFI and Go layers.
 
 A standalone Rust binary exercising the Firewood API directly with synthetic
 trie patterns (tenkrandom, zipf, single). No AvalancheGo, no Go, no cloud.

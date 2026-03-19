@@ -25,7 +25,7 @@ dispatches the benchmark workflow in AvalancheGo. AvalancheGo builds Firewood
 at `FIREWOOD_REF` using the Polyrepo toolchain — `ffi/flake.nix` is a hard
 dependency for this build. After the benchmark completes, AvalancheGo uploads
 results as a workflow artifact. Firewood's workflow downloads them and publishes
-to GitHub Pages, keeping all measurements scoped to the Firewood repository – view them [here](https://ava-labs.github.io/firewood/bench/).
+to GitHub Pages, keeping all measurements scoped to the Firewood repository – [view benchmark trends](https://ava-labs.github.io/firewood/bench/).
 
 ```mermaid
 sequenceDiagram
