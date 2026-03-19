@@ -39,9 +39,6 @@ thiserror.workspace = true
 typed-builder = "0.23.2"
 rayon = "1.11.0"
 parking_lot.workspace = true
-fjall = "=2.11.2" # 3.0.0 has breaking changes
-derive-where = "1.6.1"
-weak-table = "0.3.2"
 lender = "0.6.2"
 nonzero_ext = "0.3.0"
 
@@ -78,6 +75,10 @@ harness = false
 
 [[bench]]
 name = "defer_persist"
+harness = false
+
+[[bench]]
+name = "proposal_reconstruct"
 harness = false
 
 [lints]

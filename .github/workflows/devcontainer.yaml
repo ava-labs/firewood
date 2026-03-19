@@ -1,0 +1,32 @@
+name: Devcontainer CI
+
+# ignore prs/commits that don't touch those files
+on:
+  pull_request:
+    paths:
+      - ".devcontainer/**"
+  push:
+    branches: [main]
+    paths:
+      - ".devcontainer/**"
+
+jobs:
+  build:
+    name: Build devcontainer
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build devcontainer
+        uses: devcontainers/ci@8bf61b26e9c3a98f69cb6ce2f88d24ff59b785c6 # v0.3.1900000417
+        with:
+          runCmd: |
+            set -x
+            rustup show
+            go version
+            nix --version
+            sccache --show-stats
+            cargo nextest --version
+            just --version
+            gh --version

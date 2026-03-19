@@ -108,6 +108,35 @@ The `fwdctl` tool provides command-line operations on databases. See `fwdctl/REA
 
 For more information on coding conventions and constraints, please refer to [CONTRIBUTING.md](./CONTRIBUTING.md)
 
+## Commit and PR Title Convention
+
+Commit messages and PR titles **must** follow the
+[Conventional Commits](https://www.conventionalcommits.org/) specification.
+This is enforced by CI on every pull request (see `.github/workflows/pr-title.yaml`).
+
+Allowed types: `build`, `chore`, `ci`, `docs`, `feat`, `fix`, `perf`,
+`refactor`, `style`, `test`.
+
+A scope is optional. Examples:
+
+```text
+feat: add new revision API
+fix(storage): correct off-by-one in free list
+chore(deps): bump lz4_flex from 0.11.5 to 0.11.6
+```
+
+When writing commit message bodies, consider following the structure from the
+PR template (`.github/pull_request_template.md`):
+
+- **Why this should be merged** — motivation and context
+- **How this works** — brief description of the approach
+- **How this was tested** — what you ran to verify correctness
+- **Breaking Changes** — note any breaking changes to `firewood`,
+  `firewood-storage`, `firewood-ffi`, `firewood-go`, or `fwdctl`
+
+Not every commit needs all sections — use your judgement based on the scope
+of the change.
+
 ## PR Strategy
 
 Before submitting/updating a PR, run the following
@@ -170,8 +199,8 @@ Key dependencies are centrally managed in workspace `Cargo.toml`:
 - `README.md` - Main documentation
 - `CONTRIBUTING.md` - Contribution guidelines
 - `RELEASE.md` - Release process
-- `README.docker.md` - Docker setup
 - `CHANGELOG.md` - Version history
+- `.devcontainer/` - Development container configuration
 - `clippy.toml` - Linting configuration
 - `justfile` - Just command runner recipes
 - `cliff.toml` - Changelog generation config

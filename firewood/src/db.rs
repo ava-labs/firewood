@@ -528,10 +528,7 @@ mod test {
     use std::ops::{Deref, DerefMut};
     use std::path::Path;
 
-    use firewood_storage::{
-        CheckOpt, CheckerError, HashedNodeReader, IntoHashType, LinearAddress, MaybePersistedNode,
-        NodeStore, TrieHash,
-    };
+    use firewood_storage::{CheckOpt, CheckerError, LinearAddress, MaybePersistedNode, TrieHash};
     use nonzero_ext::nonzero;
 
     use crate::api::{Db as _, DbView, HashKeyExt, Proposal as _, Reconstructible};
@@ -1394,9 +1391,11 @@ mod test {
         });
     }
 
+    /// Verifies that after reopening the database, an older revision can still
+    /// be retrieved via the root store.
     #[test]
     fn test_resurrect_unpersisted_root() {
-        let db = TestDb::new();
+        let db = TestDb::new_with_config(DbConfig::builder().root_store(true).build());
 
         // First, create a revision to retrieve
         let key = b"key";
@@ -1406,15 +1405,6 @@ mod test {
         let proposal = db.propose(batch).unwrap();
         let root_hash = proposal.root_hash().unwrap();
         proposal.commit().unwrap();
-
-        // Wait for background persistence to complete
-        db.wait_persisted();
-
-        let root_address = db
-            .revision(root_hash.clone())
-            .unwrap()
-            .root_address()
-            .unwrap();
 
         // Next, overwrite the kv-pair with a new revision
         let new_value = b"new_value";
@@ -1426,7 +1416,7 @@ mod test {
         let proposal = db.propose(batch).unwrap();
         proposal.commit().unwrap();
 
-        // Finally, reopen the database and make sure that we can retrieve the first revision
+        // Reopen the database and make sure that we can retrieve the first revision
         let db = db.reopen();
 
         let latest_root_hash = db.root_hash().unwrap();
@@ -1435,13 +1425,9 @@ mod test {
         let latest_value = latest_revision.val(key).unwrap().unwrap();
         assert_eq!(new_value, latest_value.as_ref());
 
-        let node_store = NodeStore::with_root(
-            root_hash.into_hash_type(),
-            root_address,
-            latest_revision.get_storage(),
-        );
-
-        let retrieved_value = node_store.val(key).unwrap().unwrap();
+        // Retrieve the old revision via root store
+        let old_revision = db.revision(root_hash).unwrap();
+        let retrieved_value = old_revision.val(key).unwrap().unwrap();
         assert_eq!(value, retrieved_value.as_ref());
     }
 
