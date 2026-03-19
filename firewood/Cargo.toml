@@ -77,6 +77,10 @@ harness = false
 name = "defer_persist"
 harness = false
 
+[[bench]]
+name = "proposal_reconstruct"
+harness = false
+
 [lints]
 workspace = true
 
