@@ -94,7 +94,8 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 
 # Install cargo-binstall first to download pre-built binaries for some heavy
 # dependencies (like sccache).
-RUN . "${CARGO_HOME}/env" && cargo install --locked cargo-binstall
+RUN . "${CARGO_HOME}/env" \
+  && curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
 
 # Install sccache next (needed for subsequent cargo installs, in case they need
 # to compile from source)
