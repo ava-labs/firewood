@@ -16,8 +16,14 @@ func TestRevisionReconstructReadsAndChains(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals, batch := kvForTest(10)
-	root, err := db.Update(batch[:5])
+	const (
+		numKeys        = 10
+		committedKeys  = 5
+		firstBatchEnd  = 8
+		secondBatchEnd = numKeys
+	)
+	keys, vals, batch := kvForTest(numKeys)
+	root, err := db.Update(batch[:committedKeys])
 	r.NoError(err)
 
 	rev, err := db.Revision(root)
@@ -26,26 +32,26 @@ func TestRevisionReconstructReadsAndChains(t *testing.T) {
 		r.NoError(rev.Drop())
 	})
 
-	reconstructed, err := rev.Reconstruct(batch[5:8])
+	reconstructed, err := rev.Reconstruct(batch[committedKeys:firstBatchEnd])
 	r.NoError(err)
 	t.Cleanup(func() { _ = reconstructed.Drop() })
 
 	r.NotEqual(EmptyRoot, reconstructed.Root())
 
-	for i := range 8 {
+	for i := range firstBatchEnd {
 		got, err := reconstructed.Get(keys[i])
 		r.NoError(err)
 		r.Equal(vals[i], got)
 	}
 
-	for i := 8; i < len(keys); i++ {
+	for i := firstBatchEnd; i < len(keys); i++ {
 		got, err := reconstructed.Get(keys[i])
 		r.NoError(err)
 		r.Nil(got)
 	}
 
 	oldRoot := reconstructed.Root()
-	r.NoError(reconstructed.Reconstruct(batch[8:]))
+	r.NoError(reconstructed.Reconstruct(batch[firstBatchEnd:secondBatchEnd]))
 	r.NotEqual(oldRoot, reconstructed.Root())
 
 	for i := range len(keys) {
