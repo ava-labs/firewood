@@ -64,6 +64,8 @@ type Reconstructed struct {
 }
 
 // Root returns the root hash of the reconstructed view.
+// Unlike other methods, Root remains usable after [Reconstructed.Drop] and
+// returns the last cached root (or [EmptyRoot] if the root was never computed).
 func (r *Reconstructed) Root() Hash {
 	// Lock order: keepAliveHandle.mu before rootMu, matching Reconstruct().
 	r.keepAliveHandle.mu.RLock()

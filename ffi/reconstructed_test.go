@@ -93,16 +93,15 @@ func BenchmarkReconstructFromRevision(b *testing.B) {
 func BenchmarkReconstructChain(b *testing.B) {
 	r := require.New(b)
 	const (
-		initialItems = 100
-		batchCount   = 2_048
+		totalBatches = 2_049 // first batch is committed, rest are reconstructed
 		batchItems   = 100
 		keyLen       = 16
 		valueLen     = 32
 	)
 
-	makeBatch := func(rng *rand.Rand, count int) []BatchOp {
-		batch := make([]BatchOp, 0, count)
-		for range count {
+	makeBatch := func(rng *rand.Rand) []BatchOp {
+		batch := make([]BatchOp, 0, batchItems)
+		for range batchItems {
 			key := make([]byte, keyLen)
 			value := make([]byte, valueLen)
 			// an error is impossible as rng.Read is documented to never fail
@@ -113,19 +112,14 @@ func BenchmarkReconstructChain(b *testing.B) {
 		return batch
 	}
 
-	generateBatches := func(seed int64) ([]BatchOp, [][]BatchOp) {
-		rng := rand.New(rand.NewSource(seed))
-		initial := makeBatch(rng, initialItems)
-		batches := make([][]BatchOp, 0, batchCount)
-		for range batchCount {
-			batches = append(batches, makeBatch(rng, batchItems))
-		}
-		return initial, batches
+	rng := rand.New(rand.NewSource(1234))
+	batches := make([][]BatchOp, 0, totalBatches)
+	for range totalBatches {
+		batches = append(batches, makeBatch(rng))
 	}
 
-	initial, batches := generateBatches(1234)
 	db := newTestDatabase(b)
-	root, err := db.Update(initial)
+	root, err := db.Update(batches[0])
 	r.NoError(err)
 
 	rev, err := db.Revision(root)
@@ -138,9 +132,9 @@ func BenchmarkReconstructChain(b *testing.B) {
 	b.ResetTimer()
 
 	for i := 0; i < b.N; i++ {
-		current, err := rev.Reconstruct(batches[0])
+		current, err := rev.Reconstruct(batches[1])
 		r.NoError(err)
-		for _, batch := range batches[1:] {
+		for _, batch := range batches[2:] {
 			r.NoError(current.Reconstruct(batch))
 		}
 
@@ -190,6 +184,9 @@ func TestReconstructedDropThenUse(t *testing.T) {
 	r.ErrorIs(err, ErrDroppedReconstructed)
 }
 
+// TestReconstructedConcurrentGetAndDrop verifies that concurrent Get and Drop
+// calls do not panic or return unexpected errors. Every goroutine must see
+// either a successful result or ErrDroppedReconstructed.
 func TestReconstructedConcurrentGetAndDrop(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
