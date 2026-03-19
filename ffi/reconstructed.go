@@ -29,6 +29,22 @@ import (
 
 var ErrDroppedReconstructed = errors.New("reconstructed view already dropped")
 
+// Lock ordering for Reconstructed:
+//
+//	keepAliveHandle.mu (A)  before  rootMu (B)
+//
+// Every method that acquires both locks does so in A-then-B order:
+//
+//	Root()        — A.RLock  → B.Lock
+//	Reconstruct() — A.Lock   → B.Lock
+//
+// Methods that acquire only one lock (Get, Iter, Dump take A.RLock;
+// Drop takes A.Lock via disown) cannot participate in an AB/BA cycle.
+//
+// Cross-type: Reconstructed never touches commitLock, so there is no
+// ordering constraint with Proposal.Commit or Database.Close beyond the
+// outstandingHandles WaitGroup.
+
 // Reconstructed is a linear, read-only reconstructed view over a historical
 // revision.
 //
