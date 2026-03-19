@@ -30,6 +30,8 @@ func TestRevisionReconstructReadsAndChains(t *testing.T) {
 	r.NoError(err)
 	t.Cleanup(func() { _ = reconstructed.Drop() })
 
+	r.NotEqual(EmptyRoot, reconstructed.Root())
+
 	for i := range 8 {
 		got, err := reconstructed.Get(keys[i])
 		r.NoError(err)
@@ -156,6 +158,11 @@ func TestReconstructedDropThenUse(t *testing.T) {
 
 	reconstructed, err := rev.Reconstruct(batch[2:4])
 	r.NoError(err)
+
+	// Dump succeeds on a live view.
+	dot, err := reconstructed.Dump()
+	r.NoError(err)
+	r.NotEmpty(dot)
 
 	// First Drop succeeds.
 	r.NoError(reconstructed.Drop())
