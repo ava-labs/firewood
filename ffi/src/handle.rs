@@ -254,7 +254,11 @@ impl DatabaseHandle {
     /// accessing the database.
     pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult<'_>, api::Error> {
         let view = self.db.view(root.clone())?;
-        let historical = self.db.revision(root.clone()).ok();
+        let historical = match self.db.revision(root.clone()) {
+            Ok(rev) => Some(rev),
+            Err(api::Error::RevisionNotFound { .. }) => None,
+            Err(err) => return Err(err),
+        };
         Ok(GetRevisionResult {
             handle: RevisionHandle::new(view, historical, self.metrics_context, self),
             root_hash: root,
