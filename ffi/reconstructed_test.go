@@ -61,8 +61,9 @@ func BenchmarkReconstructFromRevision(b *testing.B) {
 	r := require.New(b)
 	db := newTestDatabase(b)
 
-	_, _, batch := kvForTest(1024)
-	root, err := db.Update(batch[:1023])
+	const numKeys = 1024
+	_, _, batch := kvForTest(numKeys)
+	root, err := db.Update(batch[:numKeys-1])
 	r.NoError(err)
 
 	rev, err := db.Revision(root)
@@ -71,7 +72,7 @@ func BenchmarkReconstructFromRevision(b *testing.B) {
 		r.NoError(rev.Drop())
 	})
 
-	reconstructBatch := batch[1023:1024]
+	reconstructBatch := batch[numKeys-1 : numKeys]
 
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -201,11 +202,12 @@ func TestReconstructedConcurrentGetAndDrop(t *testing.T) {
 	reconstructed, err := rev.Reconstruct(batch[4:6])
 	r.NoError(err)
 
+	const getters = 16
 	start := make(chan struct{})
 	var wg sync.WaitGroup
-	errCh := make(chan error, 32)
+	errCh := make(chan error, getters+1) // +1 for the Drop goroutine
 
-	for range 16 {
+	for range getters {
 		wg.Go(func() {
 			<-start
 			_, err := reconstructed.Get(keys[0])

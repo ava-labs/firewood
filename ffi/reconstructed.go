@@ -58,8 +58,8 @@ var ErrDroppedReconstructed = errors.New("reconstructed view already dropped")
 type Reconstructed struct {
 	*handle[*C.ReconstructedHandle]
 
-	root    Hash
 	rootMu  sync.Mutex
+	root    Hash
 	rootSet bool
 }
 
