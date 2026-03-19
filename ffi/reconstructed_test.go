@@ -4,7 +4,6 @@
 package ffi
 
 import (
-	"errors"
 	"math/rand"
 	"sync"
 	"testing"
@@ -232,12 +231,8 @@ func TestReconstructedConcurrentGetAndDrop(t *testing.T) {
 	close(errCh)
 
 	for err := range errCh {
-		if err == nil {
-			continue
+		if err != nil {
+			r.ErrorIs(err, ErrDroppedReconstructed, "unexpected concurrent error: %v", err)
 		}
-		if errors.Is(err, ErrDroppedReconstructed) {
-			continue
-		}
-		r.FailNowf("unexpected error", "unexpected concurrent error: %v", err)
 	}
 }
