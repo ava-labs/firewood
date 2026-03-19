@@ -137,6 +137,8 @@ pub enum NBlocks {
     OneM = 1_000_000,
     #[value(name = "50m")]
     FiftyM = 50_000_000,
+    #[value(name = "77m")]
+    SeventySevenM = 77_000_000,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, ValueEnum)]
@@ -159,6 +161,7 @@ impl NBlocks {
             Self::TenK => "10k",
             Self::OneM => "1m",
             Self::FiftyM => "50m",
+            Self::SeventySevenM => "77m",
         }
     }
 }
