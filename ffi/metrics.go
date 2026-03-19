@@ -27,8 +27,10 @@ import (
 
 var _ prometheus.Gatherer = (*Gatherer)(nil)
 
+// Gatherer implements [prometheus.Gatherer] by collecting metrics from the Firewood FFI layer.
 type Gatherer struct{}
 
+// Gather returns the current Firewood metrics as Prometheus metric families.
 func (Gatherer) Gather() ([]*dto.MetricFamily, error) {
 	metrics, err := GatherMetrics()
 	if err != nil {

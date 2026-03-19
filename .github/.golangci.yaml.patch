@@ -41,7 +41,7 @@
      - nolintlint
      - perfsprint
      - prealloc
-@@ -97,12 +97,10 @@
+@@ -97,14 +97,16 @@
        rules:
          packages:
            deny:
@@ -53,8 +53,14 @@
              # in lint.sh to produce warnings instead of errors.
              - pkg: io/ioutil
                desc: io/ioutil is deprecated. Use package io or os instead.
++    errcheck:
++      # Disallow assigning errors to blank identifier (e.g. _, _ = fmt.Fprintf(...))
++      # Forces explicit error handling even in test code.
++      check-blank: true
      errorlint:
-@@ -113,33 +111,10 @@
+       # Check for plain type assertions and type switches.
+       asserts: false
+@@ -113,33 +115,10 @@
      forbidigo:
        # Forbid the following identifiers (list of regexp).
        forbid:
@@ -88,7 +94,7 @@
      revive:
        rules:
          # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#bool-literal-in-expr
-@@ -203,17 +178,6 @@
+@@ -203,17 +182,6 @@
          # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#useless-break
          - name: useless-break
            disabled: false

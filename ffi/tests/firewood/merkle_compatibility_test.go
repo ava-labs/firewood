@@ -14,7 +14,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ava-labs/firewood-go/ffi"
 	firewood "github.com/ava-labs/firewood-go/ffi"
 
 	"github.com/ava-labs/avalanchego/database"
@@ -30,6 +29,8 @@ const (
 	valSize      = 4
 	maxBatchSize = 5
 	maxNumKeys   = 10_000
+	maxFuzzSteps = 100
+	numFuzzSeeds = 5
 )
 
 const (
@@ -74,7 +75,7 @@ func newTestFirewoodDatabase(t *testing.T) *firewood.Database {
 	r.NoError(err, "firewood.New()")
 	t.Cleanup(func() {
 		err := db.Close(oneSecCtx(t))
-		if errors.Is(err, ffi.ErrActiveKeepAliveHandles) {
+		if errors.Is(err, firewood.ErrActiveKeepAliveHandles) {
 			// force a GC to clean up dangling handles that are preventing the
 			// database from closing, then try again. Intentionally not looping
 			// since a subsequent attempt is unlikely to succeed if the first
@@ -372,8 +373,8 @@ func (tr *tree) commitProposal() {
 func fuzzTree(t *testing.T, randSource int64, byteSteps []byte) {
 	rand := rand.New(rand.NewSource(randSource))
 
-	if len(byteSteps) > 100 {
-		byteSteps = byteSteps[:100] // limit the number of steps to 100
+	if len(byteSteps) > maxFuzzSteps {
+		byteSteps = byteSteps[:maxFuzzSteps]
 	}
 
 	tr := newTestTree(t, rand)
@@ -407,7 +408,7 @@ func fuzzTree(t *testing.T, randSource int64, byteSteps []byte) {
 
 func FuzzTree(f *testing.F) {
 	// Add interesting sequences to the fuzzer with a few different random seeds.
-	for i := range 5 {
+	for i := range numFuzzSeeds {
 		f.Add(int64(i), []byte{
 			createProposalOnDB,
 			createProposalOnDB,

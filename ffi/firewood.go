@@ -138,11 +138,18 @@ type config struct {
 	deferredPersistenceCommitCount uint64
 }
 
+const (
+	defaultNodeCacheSizeBytes   = 128_000_000
+	defaultFreeListCacheEntries = 1_000_000
+	defaultRevisions            = 100
+	minRevisions                = 2
+)
+
 func defaultConfig() *config {
 	return &config{
-		nodeCacheSizeInBytes:           128_000_000,
-		freeListCacheEntries:           1_000_000,
-		revisions:                      100,
+		nodeCacheSizeInBytes:           defaultNodeCacheSizeBytes,
+		freeListCacheEntries:           defaultFreeListCacheEntries,
+		revisions:                      defaultRevisions,
 		readCacheStrategy:              OnlyCacheWrites,
 		deferredPersistenceCommitCount: 1,
 	}
@@ -269,7 +276,7 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	if conf.readCacheStrategy >= invalidCacheStrategy {
 		return nil, fmt.Errorf("invalid cache strategy (%d)", conf.readCacheStrategy)
 	}
-	if conf.revisions < 2 {
+	if conf.revisions < minRevisions {
 		return nil, fmt.Errorf("revisions must be >= 2, got %d", conf.revisions)
 	}
 	if conf.nodeCacheSizeInBytes < 1 {
@@ -400,7 +407,7 @@ func (db *Database) Root() Hash {
 // root assumes db.stateLock is held and the database is open.
 func (db *Database) root() Hash {
 	// Since we already guaranteed the database is open, we can ignore the error since the only error is that the handle is nil.
-	hash, _ := getHashKeyFromHashResult(C.fwd_root_hash(db.handle))
+	hash, _ := getHashKeyFromHashResult(C.fwd_root_hash(db.handle)) //nolint:errcheck
 	return hash
 }
 

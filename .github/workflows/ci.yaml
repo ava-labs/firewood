@@ -264,6 +264,11 @@ jobs:
         with:
           version: latest
           working-directory: ffi
+      - name: Run revive
+        working-directory: ffi
+        run: |
+          go install github.com/mgechev/revive@latest
+          revive -config .revive.toml -set_exit_status ./...
       - name: Test Go FFI bindings
         working-directory: ffi
         # cgocheck2 is expensive but provides complete pointer checks

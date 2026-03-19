@@ -436,6 +436,7 @@ func (db *Database) ProposeChangeProof(
 	return getProposedChangeProofFromProposedChangeProofResult(db, C.fwd_db_propose_change_proof(db.handle, args))
 }
 
+// CommitChangeProof commits the proposed change proof to the database and returns the new root hash.
 func (proof *ProposedChangeProof) CommitChangeProof() (Hash, error) {
 	proof.db.handleLock.RLock()
 	defer proof.db.handleLock.RUnlock()
@@ -453,6 +454,7 @@ func (proof *ProposedChangeProof) CommitChangeProof() (Hash, error) {
 	return getHashKeyFromHashResult(C.fwd_db_commit_change_proof(args))
 }
 
+// FindNextKey returns the next key range for this proposed change proof.
 func (proof *ProposedChangeProof) FindNextKey() (*NextKeyRange, error) {
 	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_change_proof_find_next_key_proposed(proof.handle))
 }
@@ -497,7 +499,7 @@ func (db *Database) VerifyAndCommitChangeProof(
 //
 // FindNextKey can only be called after a successful call to [*Database.VerifyChangeProof] or
 // [*Database.VerifyAndCommitChangeProof].
-func (p *ChangeProof) FindNextKey() (*NextKeyRange, error) {
+func (proof *ChangeProof) FindNextKey() (*NextKeyRange, error) {
 	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_change_proof_find_next_key(p.handle))
 }
 */
@@ -517,14 +519,14 @@ func (*ChangeProof) CodeHashes() iter.Seq2[Hash, error] {
 // MarshalBinary returns a serialized representation of this ChangeProof.
 //
 // The format is unspecified and opaque to firewood.
-func (p *ChangeProof) MarshalBinary() ([]byte, error) {
-	return getValueFromValueResult(C.fwd_change_proof_to_bytes(p.handle))
+func (proof *ChangeProof) MarshalBinary() ([]byte, error) {
+	return getValueFromValueResult(C.fwd_change_proof_to_bytes(proof.handle))
 }
 
 // UnmarshalBinary sets the contents of this ChangeProof to be the deserialized
 // form of [data] overwriting any existing contents.
-func (p *ChangeProof) UnmarshalBinary(data []byte) error {
-	if err := p.Free(); err != nil {
+func (proof *ChangeProof) UnmarshalBinary(data []byte) error {
+	if err := proof.Free(); err != nil {
 		return err
 	}
 
@@ -535,7 +537,7 @@ func (p *ChangeProof) UnmarshalBinary(data []byte) error {
 		C.fwd_change_proof_from_bytes(newBorrowedBytes(data, &pinner)))
 
 	if err == nil {
-		p.handle = handle.handle
+		proof.handle = handle.handle
 		handle.handle = nil
 	}
 
@@ -546,16 +548,16 @@ func (p *ChangeProof) UnmarshalBinary(data []byte) error {
 //
 // It is safe to call Free more than once; subsequent calls after the first
 // will be no-ops.
-func (p *ChangeProof) Free() error {
-	if p.handle == nil {
+func (proof *ChangeProof) Free() error {
+	if proof.handle == nil {
 		return nil
 	}
 
-	if err := getErrorFromVoidResult(C.fwd_free_change_proof(p.handle)); err != nil {
+	if err := getErrorFromVoidResult(C.fwd_free_change_proof(proof.handle)); err != nil {
 		return err
 	}
 
-	p.handle = nil
+	proof.handle = nil
 
 	return nil
 }
@@ -582,16 +584,16 @@ func (p *VerifiedChangeProof) Free() error {
 //
 // It is safe to call Free more than once; subsequent calls after the first
 // will be no-ops.
-func (p *ProposedChangeProof) Free() error {
-	if p.handle == nil {
+func (proof *ProposedChangeProof) Free() error {
+	if proof.handle == nil {
 		return nil
 	}
 
-	if err := getErrorFromVoidResult(C.fwd_free_proposed_change_proof(p.handle)); err != nil {
+	if err := getErrorFromVoidResult(C.fwd_free_proposed_change_proof(proof.handle)); err != nil {
 		return err
 	}
 
-	p.handle = nil
+	proof.handle = nil
 
 	return nil
 }
@@ -731,7 +733,9 @@ func getVerifiedChangeProofFromVerifiedChangeProofResult(result C.VerifiedChange
 	}
 }
 
-func getProposedChangeProofFromProposedChangeProofResult(db *Database, result C.ProposedChangeProofResult) (*ProposedChangeProof, error) {
+func getProposedChangeProofFromProposedChangeProofResult(
+	db *Database, result C.ProposedChangeProofResult,
+) (*ProposedChangeProof, error) {
 	switch result.tag {
 	case C.ProposedChangeProofResult_NullHandlePointer:
 		return nil, errDBClosed

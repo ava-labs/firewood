@@ -42,7 +42,7 @@ func createHandle[T any](ptr T, wg *sync.WaitGroup, free func(T) C.VoidResult) *
 }
 
 func drop[T any](h *handle[T]) {
-	_ = h.Drop()
+	_ = h.Drop() //nolint:errcheck // called from runtime.AddCleanup; no caller to propagate to
 }
 
 func (h *handle[T]) Drop() error {

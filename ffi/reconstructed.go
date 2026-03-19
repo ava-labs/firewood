@@ -27,6 +27,7 @@ import (
 	"unsafe"
 )
 
+// ErrDroppedReconstructed is returned when operating on a reconstructed view that has already been dropped.
 var ErrDroppedReconstructed = errors.New("reconstructed view already dropped")
 
 // Lock ordering for Reconstructed:

@@ -12,6 +12,14 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+const (
+	reconstructRngSeed         = 1234
+	reconstructChainBatchItems = 2
+	reconstructDumpTestKeys    = 4
+	reconstructDropTestKeys    = 4
+	reconstructConcurrentKeys  = 8
+)
+
 func TestRevisionReconstructReadsAndChains(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
@@ -99,7 +107,7 @@ func BenchmarkReconstructChain(b *testing.B) {
 		valueLen     = 32
 	)
 
-	rng := rand.New(rand.NewSource(1234))
+	rng := rand.New(rand.NewSource(reconstructRngSeed))
 	batches := make([][]BatchOp, 0, totalBatches)
 	for range totalBatches {
 		batches = append(batches, makeRandomBatch(b, rng, batchItems, keyLen, valueLen))
@@ -121,7 +129,7 @@ func BenchmarkReconstructChain(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		current, err := rev.Reconstruct(batches[1])
 		r.NoError(err)
-		for _, batch := range batches[2:] {
+		for _, batch := range batches[reconstructChainBatchItems:] {
 			r.NoError(current.Reconstruct(batch))
 		}
 
@@ -135,7 +143,7 @@ func TestReconstructedDump(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	_, _, batch := kvForTest(4)
+	_, _, batch := kvForTest(reconstructDumpTestKeys)
 	root, err := db.Update(batch[:2])
 	r.NoError(err)
 
@@ -143,7 +151,7 @@ func TestReconstructedDump(t *testing.T) {
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(rev.Drop()) })
 
-	reconstructed, err := rev.Reconstruct(batch[2:4])
+	reconstructed, err := rev.Reconstruct(batch[2:reconstructDumpTestKeys])
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(reconstructed.Drop()) })
 
@@ -156,7 +164,7 @@ func TestReconstructedDropThenUse(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, _, batch := kvForTest(4)
+	keys, _, batch := kvForTest(reconstructDropTestKeys)
 	root, err := db.Update(batch[:2])
 	r.NoError(err)
 
@@ -164,7 +172,7 @@ func TestReconstructedDropThenUse(t *testing.T) {
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(rev.Drop()) })
 
-	reconstructed, err := rev.Reconstruct(batch[2:4])
+	reconstructed, err := rev.Reconstruct(batch[2:reconstructDropTestKeys])
 	r.NoError(err)
 
 	// First Drop succeeds.
@@ -194,7 +202,7 @@ func TestReconstructedConcurrentGetAndDrop(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, _, batch := kvForTest(8)
+	keys, _, batch := kvForTest(reconstructConcurrentKeys)
 	root, err := db.Update(batch[:4])
 	r.NoError(err)
 

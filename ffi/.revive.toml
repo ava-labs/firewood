@@ -1,0 +1,60 @@
+enableAllRules = true
+severity = "error"
+ignoreGeneratedHeader = true
+
+# Code generators have different constraints.
+exclude = ["gen/..."]
+
+[rule.line-length-limit]
+arguments = [132]
+
+[rule.add-constant]
+arguments = [
+  { allow-ints = "0,1", allow-strs = "\"\",\"%w: %w\"" }
+]
+
+[rule.cyclomatic]
+arguments = [25]
+
+[rule.cognitive-complexity]
+# Default threshold of 7 is too restrictive, especially for test helpers
+# and functions with straightforward but verbose switch/case logic.
+arguments = [35]
+
+[rule.function-length]
+# 75 lines is too strict for table-driven tests and test helpers.
+disabled = true
+
+[rule.confusing-results]
+# Flagging unnamed ([]byte, []byte) returns is more noise than value.
+disabled = true
+
+[rule.flag-parameter]
+# Control-flag parameters (e.g. disownEvenOnErr) are sometimes
+# the clearest API; callers see the intent at the call site.
+disabled = true
+
+[rule.call-to-gc]
+# Test code intentionally calls runtime.GC() to exercise finalizers.
+disabled = true
+
+[rule.enforce-switch-style]
+# Exhaustive switches on known enums don't need a default case;
+# the compiler already catches missing cases for typed constants.
+disabled = true
+
+[rule.confusing-naming]
+# Private helpers like root() alongside public Root() are intentional.
+disabled = true
+
+[rule.redundant-test-main-exit]
+# os.Exit(m.Run()) in TestMain is a conventional Go pattern.
+disabled = true
+
+[rule.redundant-import-alias]
+# Aliasing an import to a clearer name (e.g. firewood "…/ffi") is fine.
+disabled = true
+
+[rule.import-shadowing]
+# Shadowing `rand` in fuzz tests with the fuzz-provided *rand.Rand is idiomatic.
+disabled = true

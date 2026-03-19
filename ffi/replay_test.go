@@ -29,8 +29,14 @@ const (
 
 	// replayMaxCommitsEnv is the environment variable for limiting
 	// number of executed commits.
-	// If empty, defaults to 10000. Set to 0 for unlimited.
+	// If empty, defaults to replayDefaultMaxCommits. Set to 0 for unlimited.
 	replayMaxCommitsEnv = "REPLAY_MAX_COMMITS"
+
+	// replayDefaultMaxCommits is the default cap on commits replayed in tests and benchmarks.
+	replayDefaultMaxCommits = 10000
+
+	// replayRoundTripTestKeys is the number of key-value pairs used in the round-trip test.
+	replayRoundTripTestKeys = 20
 )
 
 // replayLog mirrors the Rust ReplayLog type.
@@ -104,7 +110,7 @@ func TestReplayLogExecution(t *testing.T) {
 		t.Skipf("%s not set; skipping replay execution test", replayLogEnv)
 	}
 
-	maxCommits := 10000
+	maxCommits := replayDefaultMaxCommits
 	if v := os.Getenv(replayMaxCommitsEnv); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			maxCommits = n
@@ -144,7 +150,7 @@ func BenchmarkReplayLog(b *testing.B) {
 		b.Skipf("%s not set; skipping replay benchmark", replayLogEnv)
 	}
 
-	maxCommits := 10000
+	maxCommits := replayDefaultMaxCommits
 	if v := os.Getenv(replayMaxCommitsEnv); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			maxCommits = n
@@ -182,7 +188,7 @@ func TestBlockReplayRoundTrip(t *testing.T) {
 	// Phase 1: Record operations
 	db1 := newTestDatabase(t)
 
-	_, _, batch := kvForTest(20)
+	_, _, batch := kvForTest(replayRoundTripTestKeys)
 
 	p1, err := db1.Propose(batch[:10])
 	r.NoError(err)
@@ -280,6 +286,8 @@ type replayConfig struct {
 
 // applyReplayLogs applies replay logs to a database.
 // Returns the number of commits applied and any error encountered.
+//
+//revive:disable:cognitive-complexity // straightforward switch-case dispatch over operation types
 func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, error) {
 	proposals := make(map[uint64]*Proposal)
 	totalCommits := 0
@@ -318,7 +326,8 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 			case op.ProposeOnProposal != nil:
 				parent, ok := proposals[op.ProposeOnProposal.ProposalID]
 				if !ok {
-					return totalCommits, fmt.Errorf("ProposeOnProposal: unknown parent proposal id %d", op.ProposeOnProposal.ProposalID)
+					return totalCommits, fmt.Errorf(
+						"ProposeOnProposal: unknown parent proposal id %d", op.ProposeOnProposal.ProposalID)
 				}
 				batch := batchFromReplayPairs(op.ProposeOnProposal.Pairs)
 				prop, err := parent.Propose(batch)

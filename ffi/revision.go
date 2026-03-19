@@ -26,9 +26,12 @@ import (
 )
 
 var (
-	ErrDroppedRevision       = errors.New("revision already dropped")
-	errRevisionNotFound      = errors.New("revision not found")
-	ErrEndRevisionNotFound   = errors.New("end revision not found")
+	// ErrDroppedRevision is returned when operating on a revision that has already been dropped.
+	ErrDroppedRevision  = errors.New("revision already dropped")
+	errRevisionNotFound = errors.New("revision not found")
+	// ErrEndRevisionNotFound is returned when the end revision of a range cannot be found.
+	ErrEndRevisionNotFound = errors.New("end revision not found")
+	// ErrStartRevisionNotFound is returned when the start revision of a range cannot be found.
 	ErrStartRevisionNotFound = errors.New("start revision not found")
 )
 

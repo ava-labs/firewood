@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ava-labs/firewood-go-ethhash/ffi"
 	firewood "github.com/ava-labs/firewood-go-ethhash/ffi"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/rawdb"
@@ -26,6 +25,13 @@ import (
 	"github.com/holiman/uint256"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+)
+
+const (
+	initialAccountBalance = 100
+	balanceIncrement      = 3
+	numFuzzSeeds          = 5
+	fuzzSeedStepBytes     = 32
 )
 
 const (
@@ -85,7 +91,7 @@ func newFirewoodDB(t *testing.T) *firewood.Database {
 	r.NoError(err, "firewood.New()")
 	t.Cleanup(func() {
 		err := db.Close(oneSecCtx(t))
-		if errors.Is(err, ffi.ErrActiveKeepAliveHandles) {
+		if errors.Is(err, firewood.ErrActiveKeepAliveHandles) {
 			// force a GC to clean up dangling handles that are preventing the
 			// database from closing, then try again. Intentionally not looping
 			// since a subsequent attempt is unlikely to succeed if the first
@@ -175,7 +181,7 @@ func (tr *merkleTriePair) createAccount() {
 	accHash := crypto.Keccak256Hash(addr[:])
 	acc := &types.StateAccount{
 		Nonce:    1,
-		Balance:  uint256.NewInt(100),
+		Balance:  uint256.NewInt(initialAccountBalance),
 		Root:     types.EmptyRootHash,
 		CodeHash: types.EmptyCodeHash[:],
 	}
@@ -204,7 +210,7 @@ func (tr *merkleTriePair) updateAccount(addrIndex int) {
 	tr.require.NoError(err)
 	acc.Nonce++
 	acc.CodeHash = crypto.Keccak256Hash(acc.CodeHash[:]).Bytes()
-	acc.Balance.Add(acc.Balance, uint256.NewInt(3))
+	acc.Balance.Add(acc.Balance, uint256.NewInt(balanceIncrement))
 	accountRLP, err := rlp.EncodeToBytes(acc)
 	tr.require.NoError(err)
 
@@ -318,9 +324,9 @@ func (tr *merkleTriePair) deleteStorage(accountIndex int, storageIndexInput uint
 }
 
 func FuzzFirewoodTree(f *testing.F) {
-	for randSeed := range int64(5) {
+	for randSeed := range int64(numFuzzSeeds) {
 		rand := rand.New(rand.NewSource(randSeed))
-		steps := make([]byte, 32)
+		steps := make([]byte, fuzzSeedStepBytes)
 		_, err := rand.Read(steps)
 		if err != nil {
 			f.Fatal(err)

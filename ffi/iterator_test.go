@@ -10,6 +10,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const (
+	iterBatchedFetchSize      = 100
+	iterBasicTestKeys         = 100
+	iterOnRootTestKeys        = 240
+	iterOnProposalTestKeys    = 240
+	iterAfterCommitTestKeys   = 10
+	iterUpdateTestKeys        = 10
+	iterUpdateSecondBatchKeys = 10
+	iterDoneTestKeys          = 18
+	iterDoneBatchSize         = 5
+	iterOutlivesRevTestKeys   = 30
+	iterOutlivesProposalKeys  = 4
+	errFmtUpdate              = "%T.Update(...)"
+)
+
 type kvIter interface {
 	SetBatchSize(int)
 	Next() bool
@@ -29,7 +44,7 @@ func (b *borrowIter) Drop() error                { return b.it.Drop() }
 
 func assertIteratorYields(r *require.Assertions, it kvIter, keys [][]byte, vals [][]byte) {
 	i := 0
-	for ; it.Next(); i += 1 {
+	for ; it.Next(); i++ {
 		r.Equal(keys[i], it.Key())
 		r.Equal(vals[i], it.Value())
 	}
@@ -47,7 +62,7 @@ var iterConfigs = map[string]iteratorConfigFn{
 		return it
 	},
 	"Batched": func(it kvIter) kvIter {
-		it.SetBatchSize(100)
+		it.SetBatchSize(iterBatchedFetchSize)
 		return it
 	},
 }
@@ -79,7 +94,7 @@ func runIteratorTestForAllModes(parentT *testing.T, fn func(*testing.T, iterator
 func TestIter(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals, batch := kvForTest(100)
+	keys, vals, batch := kvForTest(iterBasicTestKeys)
 	_, err := db.Update(batch)
 	r.NoError(err)
 
@@ -101,7 +116,7 @@ func TestIter(t *testing.T) {
 func TestIterOnRoot(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals, batch := kvForTest(240)
+	keys, vals, batch := kvForTest(iterOnRootTestKeys)
 	firstRoot, err := db.Update(batch[:80])
 	r.NoError(err)
 	secondRoot, err := db.Update(batch[80:160])
@@ -147,7 +162,7 @@ func TestIterOnRoot(t *testing.T) {
 func TestIterOnProposal(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	keys, vals, batch := kvForTest(240)
+	keys, vals, batch := kvForTest(iterOnProposalTestKeys)
 	_, err := db.Update(batch)
 	r.NoError(err)
 
@@ -181,7 +196,7 @@ func TestIterAfterProposalCommit(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals, batch := kvForTest(10)
+	keys, vals, batch := kvForTest(iterAfterCommitTestKeys)
 	p, err := db.Propose(batch)
 	r.NoError(err)
 
@@ -205,7 +220,7 @@ func TestIterUpdate(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals, batch := kvForTest(10)
+	keys, vals, batch := kvForTest(iterUpdateTestKeys)
 	_, err := db.Update(batch)
 	r.NoError(err)
 
@@ -220,7 +235,7 @@ func TestIterUpdate(t *testing.T) {
 	})
 
 	// update the database
-	_, _, batch2 := kvForTest(10)
+	_, _, batch2 := kvForTest(iterUpdateSecondBatchKeys)
 	_, err = db.Update(batch2)
 	r.NoError(err)
 
@@ -234,7 +249,7 @@ func TestIterDone(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals, batch := kvForTest(18)
+	keys, vals, batch := kvForTest(iterDoneTestKeys)
 	_, err := db.Update(batch)
 	r.NoError(err)
 
@@ -260,7 +275,7 @@ func TestIterDone(t *testing.T) {
 	})
 	r.NoError(err)
 	// set batch size to 5
-	it2.SetBatchSize(5)
+	it2.SetBatchSize(iterDoneBatchSize)
 	// consume the iterator
 	assertIteratorYields(r, it2, keys, vals)
 	// calling next again should be safe and return false
@@ -277,9 +292,9 @@ func TestIterOutlivesRevision(t *testing.T) {
 		config.revisions = 2
 	})
 
-	keys, vals, batch := kvForTest(30)
+	keys, vals, batch := kvForTest(iterOutlivesRevTestKeys)
 	_, err := db.Update(batch[:10])
-	r.NoErrorf(err, "%T.Update(...)", db)
+	r.NoErrorf(err, errFmtUpdate, db)
 	rev, err := db.LatestRevision()
 	r.NoErrorf(err, "%T.LatestRevision()", db)
 	it, err := rev.Iter(nil)
@@ -293,9 +308,9 @@ func TestIterOutlivesRevision(t *testing.T) {
 
 	// Commit two more times to force reaping of the first revision
 	_, err = db.Update(batch[10:20])
-	r.NoErrorf(err, "%T.Update(...)", db)
+	r.NoErrorf(err, errFmtUpdate, db)
 	_, err = db.Update(batch[20:])
-	r.NoErrorf(err, "%T.Update(...)", db)
+	r.NoErrorf(err, errFmtUpdate, db)
 
 	// iterate after reaping
 	assertIteratorYields(r, it, keys[:10], vals[:10])
@@ -307,7 +322,7 @@ func TestIterOutlivesProposal(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	keys, vals, batch := kvForTest(4)
+	keys, vals, batch := kvForTest(iterOutlivesProposalKeys)
 	p, err := db.Propose(batch[:2])
 	r.NoErrorf(err, "%T.Propose(...)", db)
 
