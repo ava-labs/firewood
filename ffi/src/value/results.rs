@@ -10,7 +10,8 @@ use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult, HashKey,
     IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair,
-    ProposalHandle, ProposedChangeProofContext, RangeProofContext, VerifiedChangeProofContext,
+    ProposalHandle, ProposedChangeProofContext, RangeProofContext, ReconstructedHandle,
+    VerifiedChangeProofContext,
 };
 
 /// The result type returned from an FFI function that returns no value but may
@@ -525,7 +526,7 @@ impl<'db, E: fmt::Display> From<Result<CreateIteratorResult<'db>, E>> for Iterat
 /// A result type returned from FFI functions that get a revision
 #[derive(Debug)]
 #[repr(C, usize)]
-pub enum RevisionResult {
+pub enum RevisionResult<'db> {
     /// The caller provided a null pointer to a database handle.
     NullHandlePointer,
     /// The provided root was not found in the database.
@@ -537,7 +538,7 @@ pub enum RevisionResult {
         /// The value should be freed with [`fwd_free_revision`]
         ///
         /// [`fwd_free_revision`]: crate::fwd_free_revision
-        handle: Box<RevisionHandle>,
+        handle: Box<RevisionHandle<'db>>,
         /// The root hash of the revision.
         root_hash: HashKey,
     },
@@ -551,8 +552,26 @@ pub enum RevisionResult {
     Err(OwnedBytes),
 }
 
-impl From<GetRevisionResult> for RevisionResult {
-    fn from(value: GetRevisionResult) -> Self {
+/// A result type returned from FFI functions that create a reconstructed view.
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum ReconstructedResult<'db> {
+    /// The caller provided a null pointer to an input handle.
+    NullHandlePointer,
+    /// Building the reconstructed view was successful and the handle is returned.
+    Ok {
+        /// An opaque pointer to the [`ReconstructedHandle`].
+        /// The value should be freed with [`fwd_free_reconstructed`].
+        ///
+        /// [`fwd_free_reconstructed`]: crate::fwd_free_reconstructed
+        handle: Box<ReconstructedHandle<'db>>,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`].
+    Err(OwnedBytes),
+}
+
+impl<'db> From<GetRevisionResult<'db>> for RevisionResult<'db> {
+    fn from(value: GetRevisionResult<'db>) -> Self {
         RevisionResult::Ok {
             handle: Box::new(value.handle),
             root_hash: HashKey::from(value.root_hash),
@@ -560,8 +579,8 @@ impl From<GetRevisionResult> for RevisionResult {
     }
 }
 
-impl From<Result<GetRevisionResult, api::Error>> for RevisionResult {
-    fn from(value: Result<GetRevisionResult, api::Error>) -> Self {
+impl<'db> From<Result<GetRevisionResult<'db>, api::Error>> for RevisionResult<'db> {
+    fn from(value: Result<GetRevisionResult<'db>, api::Error>) -> Self {
         match value {
             Ok(res) => res.into(),
             Err(api::Error::RevisionNotFound { provided }) => RevisionResult::RevisionNotFound(
@@ -580,6 +599,17 @@ impl<'db, E: fmt::Display> From<Result<CreateProposalResult<'db>, E>> for Propos
                 handle: Box::new(handle),
             },
             Err(err) => ProposalResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+impl<'db, E: fmt::Display> From<Result<ReconstructedHandle<'db>, E>> for ReconstructedResult<'db> {
+    fn from(value: Result<ReconstructedHandle<'db>, E>) -> Self {
+        match value {
+            Ok(handle) => ReconstructedResult::Ok {
+                handle: Box::new(handle),
+            },
+            Err(err) => ReconstructedResult::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -694,8 +724,9 @@ impl_null_handle_result!(
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
+    ReconstructedResult<'_>,
     IteratorResult<'_>,
-    RevisionResult,
+    RevisionResult<'_>,
     KeyValueBatchResult,
     KeyValueResult,
 );
@@ -712,8 +743,9 @@ impl_cresult!(
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
+    ReconstructedResult<'_>,
     IteratorResult<'_>,
-    RevisionResult,
+    RevisionResult<'_>,
     KeyValueBatchResult,
     KeyValueResult,
 );
