@@ -103,29 +103,29 @@ RUN . "${CARGO_HOME}/env" && cargo binstall --locked sccache
 # Configure Cargo to use sccache globally
 RUN mkdir -p "${CARGO_HOME}" \
   && printf '%s\n' \
-  '[build]' \
-  "rustc-wrapper = \"${CARGO_HOME}/bin/sccache\"" \
-  '' \
-  '[env]' \
-  "RUSTC_WRAPPER = \"${CARGO_HOME}/bin/sccache\"" \
-  'CMAKE_C_COMPILER_LAUNCHER = "sccache"' \
-  'CMAKE_CXX_COMPILER_LAUNCHER = "sccache"' \
-  >"${CARGO_HOME}/config.toml"
+    '[build]' \
+    "rustc-wrapper = \"${CARGO_HOME}/bin/sccache\"" \
+    '' \
+    '[env]' \
+    "RUSTC_WRAPPER = \"${CARGO_HOME}/bin/sccache\"" \
+    'CMAKE_C_COMPILER_LAUNCHER = "sccache"' \
+    'CMAKE_CXX_COMPILER_LAUNCHER = "sccache"' \
+    >"${CARGO_HOME}/config.toml"
 
 # Install Cargo tools (using sccache now)
 RUN . "${CARGO_HOME}/env" \
   && cargo binstall --locked \
-  ast-grep \
-  cargo-edit \
-  cargo-expand \
-  cargo-machete \
-  cargo-msrv \
-  cargo-nextest \
-  git-cliff \
-  just \
-  ripgrep \
-  rustfilt \
-  starship
+    ast-grep \
+    cargo-edit \
+    cargo-expand \
+    cargo-machete \
+    cargo-msrv \
+    cargo-nextest \
+    git-cliff \
+    just \
+    ripgrep \
+    rustfilt \
+    starship
 
 # Install Go tools
 RUN curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(go env GOPATH)/bin \
