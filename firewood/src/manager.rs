@@ -23,9 +23,9 @@ use crate::db::{BatchOp, UseParallel};
 use crate::merkle::Merkle;
 use crate::merkle::parallel::ParallelMerkle;
 use crate::persist_worker::{PersistError, PersistWorker};
-use crate::root_store::RootStore;
 use firewood_metrics::{firewood_increment, firewood_set};
 pub use firewood_storage::CacheReadStrategy;
+use firewood_storage::RootStore;
 use firewood_storage::{
     BranchNode, Committed, FileBacked, FileIoError, HashedNodeReader, ImmutableProposal, Mutable,
     MutableKind, NodeHashAlgorithm, NodeStore, NodeStoreHeader, Propose, Recon, TrieHash,

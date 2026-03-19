@@ -39,6 +39,9 @@ pub const IO_READ_COUNT: &str = "io.read";
 /// Number of proposals reparented to committed parent.
 pub const REPARENTED_PROPOSAL_COUNT: &str = "proposals.reparented";
 
+/// Fetch attempts from the rootstore
+pub const ROOTSTORE_GET: &str = "rootstore_get";
+
 /// `io_uring` specific metrics.
 pub mod ring {
     /// Count of EAGAIN write retries.
@@ -86,6 +89,9 @@ pub fn register() {
         REPARENTED_PROPOSAL_COUNT,
         "Number of proposals reparented to committed parent"
     );
+
+    // Root store metrics
+    describe_counter!(ROOTSTORE_GET, "Fetch attempts from the rootstore");
 
     // Ring metrics
     describe_counter!(ring::EAGAIN_WRITE_RETRY, "Count of EAGAIN write retries");
