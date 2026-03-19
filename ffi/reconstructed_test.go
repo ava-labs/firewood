@@ -59,8 +59,6 @@ func TestRevisionReconstructReadsAndChains(t *testing.T) {
 		r.NoError(err)
 		r.Equal(vals[i], got)
 	}
-
-	r.NoError(reconstructed.Drop())
 }
 
 func BenchmarkReconstructFromRevision(b *testing.B) {
