@@ -302,7 +302,7 @@ pub struct DeployOptions {
     )]
     pub variable_overrides: Vec<VariableOverride>,
 
-    /// Enable metrics server during execution (`--metrics-server=false` disables)
+    /// Whether to enable the metrics server during execution.
     #[arg(
         long = "metrics-server",
         value_name = "BOOL",

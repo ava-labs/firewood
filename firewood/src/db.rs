@@ -22,7 +22,7 @@ use firewood_metrics::firewood_counter;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
     ImmutableProposal, NodeHashAlgorithm, NodeStore, Parentable, ReadableStorage, Reconstructed,
-    TrieReader,
+    ReconstructionSource, TrieReader,
 };
 use std::io::Write;
 use std::num::NonZeroUsize;
@@ -322,6 +322,53 @@ impl Db {
         self.propose_with_parent(batch_ops, merkle.nodestore())
     }
 
+    /// Reconstruct a view from a parent view by applying batch operations.
+    ///
+    /// Reconstruction is currently always applied serially.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reconstruction fails.
+    pub fn reconstruct_from_view<P>(
+        &self,
+        parent: &NodeStore<P, FileBacked>,
+        batch: impl IntoBatchIter,
+    ) -> Result<ReconstructedView<'_>, api::Error>
+    where
+        P: ReconstructionSource,
+        NodeStore<P, FileBacked>: TrieReader,
+    {
+        let next_nodestore = parent.reconstruction_child()?;
+        let mutable_nodestore = RevisionManager::apply_batch_recon(next_nodestore, batch)?;
+
+        Ok(ReconstructedView {
+            db: self,
+            nodestore: Arc::new(mutable_nodestore.into()),
+        })
+    }
+
+    /// Reconstruct a view from an owned reconstructed parent by applying batch operations.
+    ///
+    /// This path consumes the reconstructed parent handle, allowing the internal
+    /// conversion to move state instead of cloning when the underlying `Arc` is unique.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reconstruction fails.
+    fn reconstruct_from_reconstructed(
+        &self,
+        parent: Arc<NodeStore<Reconstructed, FileBacked>>,
+        batch: impl IntoBatchIter,
+    ) -> Result<ReconstructedView<'_>, api::Error> {
+        let next_nodestore = parent.into();
+        let mutable_nodestore = RevisionManager::apply_batch_recon(next_nodestore, batch)?;
+
+        Ok(ReconstructedView {
+            db: self,
+            nodestore: Arc::new(mutable_nodestore.into()),
+        })
+    }
+
     /// Closes the database gracefully.
     ///
     /// Shuts down the background persistence worker and persists the latest
@@ -343,7 +390,6 @@ pub struct Proposal<'db> {
 /// A user-visible reconstructed view.
 pub struct ReconstructedView<'db> {
     nodestore: Arc<NodeStore<Reconstructed, FileBacked>>,
-    #[expect(dead_code, reason = "used by Reconstructible impl in next commit")]
     db: &'db Db,
 }
 
@@ -455,6 +501,22 @@ impl api::DbView for ReconstructedView<'_> {
     }
 }
 
+impl<'a> api::Reconstructible for ReconstructedView<'a> {
+    type Reconstructed = ReconstructedView<'a>;
+
+    fn reconstruct(self, batch: impl IntoBatchIter) -> Result<Self::Reconstructed, api::Error>
+    where
+        Self: Sized,
+    {
+        self.db
+            .reconstruct_from_reconstructed(self.nodestore, batch)
+    }
+
+    fn db(&self) -> &crate::db::Db {
+        self.db
+    }
+}
+
 #[cfg(test)]
 mod test {
     #![expect(clippy::unwrap_used)]
@@ -472,7 +534,7 @@ mod test {
     };
     use nonzero_ext::nonzero;
 
-    use crate::api::{Db as _, DbView, HashKeyExt, Proposal as _};
+    use crate::api::{Db as _, DbView, HashKeyExt, Proposal as _, Reconstructible};
     use crate::db::{Db, Proposal, UseParallel};
     use crate::manager::RevisionManagerConfig;
 
@@ -521,6 +583,65 @@ mod test {
         }
     }
 
+    /// Reconstruction always uses the serial path (`apply_batch_recon`), but the base
+    /// revision may have been built with parallel or serial proposals. This test confirms
+    /// both produce identical reconstruction results.
+    #[test]
+    fn test_reconstruct_deterministic() {
+        let parallel_db = TestDb::new_with_config(
+            DbConfig::builder()
+                .use_parallel(UseParallel::Always)
+                .build(),
+        );
+        let serial_db =
+            TestDb::new_with_config(DbConfig::builder().use_parallel(UseParallel::Never).build());
+
+        let initial_batch = vec![BatchOp::Put {
+            key: b"base",
+            value: b"v0",
+        }];
+        let parallel_proposal = parallel_db.propose(initial_batch.clone()).unwrap();
+        let serial_proposal = serial_db.propose(initial_batch).unwrap();
+        parallel_proposal.commit().unwrap();
+        serial_proposal.commit().unwrap();
+
+        let parallel_historical = parallel_db
+            .revision(parallel_db.root_hash().unwrap())
+            .unwrap();
+        let serial_historical = serial_db.revision(serial_db.root_hash().unwrap()).unwrap();
+
+        let reconstruct_batch = vec![
+            BatchOp::Put {
+                key: b"base",
+                value: b"v1",
+            },
+            BatchOp::Put {
+                key: b"next",
+                value: b"v2",
+            },
+        ];
+
+        let parallel_reconstructed = parallel_db
+            .reconstruct_from_view(parallel_historical.as_ref(), reconstruct_batch.clone())
+            .unwrap();
+        let serial_reconstructed = serial_db
+            .reconstruct_from_view(serial_historical.as_ref(), reconstruct_batch)
+            .unwrap();
+
+        assert_eq!(
+            parallel_reconstructed.root_hash(),
+            serial_reconstructed.root_hash()
+        );
+        assert_eq!(
+            parallel_reconstructed.val(b"base").unwrap(),
+            serial_reconstructed.val(b"base").unwrap()
+        );
+        assert_eq!(
+            parallel_reconstructed.val(b"next").unwrap(),
+            serial_reconstructed.val(b"next").unwrap()
+        );
+    }
+
     #[test]
     fn test_proposal_reads() {
         let db = TestDb::new();
@@ -544,6 +665,44 @@ mod test {
         let committed = db.root_hash().unwrap();
         let historical = db.revision(committed).unwrap();
         assert_eq!(&*historical.val(b"k").unwrap().unwrap(), b"v");
+    }
+
+    #[test]
+    fn test_reconstruct_reads_and_chains() {
+        let db = TestDb::new();
+
+        let initial = db
+            .propose(vec![BatchOp::Put {
+                key: b"base",
+                value: b"v0",
+            }])
+            .unwrap();
+        initial.commit().unwrap();
+
+        let historical_hash = db.root_hash().unwrap();
+        let historical = db.revision(historical_hash).unwrap();
+
+        let reconstructed = db
+            .reconstruct_from_view(
+                historical.as_ref(),
+                vec![BatchOp::Put {
+                    key: b"base",
+                    value: b"v1",
+                }],
+            )
+            .unwrap();
+        assert!(reconstructed.root_hash().is_some());
+        assert_eq!(&*reconstructed.val(b"base").unwrap().unwrap(), b"v1");
+
+        let reconstructed = reconstructed
+            .reconstruct(vec![BatchOp::Put {
+                key: b"next",
+                value: b"v2",
+            }])
+            .unwrap();
+
+        assert_eq!(&*reconstructed.val(b"base").unwrap().unwrap(), b"v1");
+        assert_eq!(&*reconstructed.val(b"next").unwrap().unwrap(), b"v2");
     }
 
     #[test]
