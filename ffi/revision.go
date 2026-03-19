@@ -126,13 +126,6 @@ func (r *Revision) Reconstruct(batch []BatchOp) (*Reconstructed, error) {
 	)
 }
 
-// Drop releases the resources backed by the revision handle.
-//
-// It is safe to call Drop multiple times; subsequent calls after the first are no-ops.
-func (r *Revision) Drop() error {
-	return r.handle.Drop()
-}
-
 // Root returns the root hash of the revision.
 func (r *Revision) Root() Hash {
 	return r.root

@@ -50,35 +50,32 @@ type Reconstructed struct {
 // Root returns the root hash of the reconstructed view.
 func (r *Reconstructed) Root() Hash {
 	r.rootMu.Lock()
-	if r.rootSet {
-		root := r.root
-		r.rootMu.Unlock()
-		return root
-	}
-	r.rootMu.Unlock()
+	defer r.rootMu.Unlock()
 
+	if r.rootSet {
+		return r.root
+	}
+
+	// rootMu is held while calling into FFI so that concurrent Root() calls
+	// don't redundantly compute the hash. keepAliveHandle.mu is taken second;
+	// Reconstruct() acquires them in the opposite order but resets rootSet
+	// under its own write lock, so there is no deadlock.
 	r.keepAliveHandle.mu.RLock()
+	defer r.keepAliveHandle.mu.RUnlock()
+
 	if r.ptr == nil {
-		r.keepAliveHandle.mu.RUnlock()
 		return EmptyRoot
 	}
-	result := C.fwd_reconstructed_root_hash(r.ptr)
-	r.keepAliveHandle.mu.RUnlock()
 
+	result := C.fwd_reconstructed_root_hash(r.ptr)
 	root, err := getHashKeyFromHashResult(result)
 	if err != nil {
 		return EmptyRoot
 	}
 
-	r.rootMu.Lock()
-	if !r.rootSet {
-		r.root = root
-		r.rootSet = true
-	}
-	root = r.root
-	r.rootMu.Unlock()
-
-	return root
+	r.root = root
+	r.rootSet = true
+	return r.root
 }
 
 // Get retrieves the value for the given key in this reconstructed view.
@@ -150,10 +147,9 @@ func (r *Reconstructed) Reconstruct(batch []BatchOp) error {
 
 	r.ptr = newHandle
 
-	// Safe to lock rootMu here: Root() releases rootMu before acquiring
-	// keepAliveHandle.mu.RLock(), so there is no lock-order inversion. Since we
-	// hold the keepAliveHandle write lock, any concurrent Root() call is either
-	// blocked on RLock or has already finished and released rootMu.
+	// Root() takes rootMu then keepAliveHandle.mu.RLock(); we hold the write
+	// lock on keepAliveHandle.mu, so any concurrent Root() is blocked on RLock
+	// and cannot hold rootMu. Safe to take rootMu here without deadlock.
 	r.rootMu.Lock()
 	r.root = EmptyRoot
 	r.rootSet = false

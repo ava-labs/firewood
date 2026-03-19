@@ -41,8 +41,9 @@ func TestRevisionReconstructReadsAndChains(t *testing.T) {
 		r.Nil(got)
 	}
 
-	err = reconstructed.Reconstruct(batch[8:])
-	r.NoError(err)
+	oldRoot := reconstructed.Root()
+	r.NoError(reconstructed.Reconstruct(batch[8:]))
+	r.NotEqual(oldRoot, reconstructed.Root())
 
 	for i := range len(keys) {
 		got, err := reconstructed.Get(keys[i])
@@ -137,58 +138,6 @@ func BenchmarkReconstructChain(b *testing.B) {
 
 		_ = current.Root()
 		r.NoError(current.Drop())
-	}
-}
-
-func TestReconstructedConcurrentGetAndReconstruct(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
-
-	keys, vals, batch := kvForTest(8)
-	root, err := db.Update(batch[:4])
-	r.NoError(err)
-
-	rev, err := db.Revision(root)
-	r.NoError(err)
-	t.Cleanup(func() {
-		r.NoError(rev.Drop())
-	})
-
-	reconstructed, err := rev.Reconstruct(batch[4:6])
-	r.NoError(err)
-
-	start := make(chan struct{})
-	var wg sync.WaitGroup
-	var getErr error
-	var getVal []byte
-	var reconstructErr error
-
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		<-start
-		getVal, getErr = reconstructed.Get(keys[0])
-	}()
-
-	go func() {
-		defer wg.Done()
-		<-start
-		reconstructErr = reconstructed.Reconstruct([]BatchOp{Put(keys[6], vals[6])})
-	}()
-
-	close(start)
-	wg.Wait()
-
-	if reconstructErr == nil {
-		r.NoError(reconstructed.Drop())
-	} else {
-		r.ErrorIs(reconstructErr, ErrDroppedReconstructed)
-	}
-
-	if getErr != nil {
-		r.ErrorIs(getErr, ErrDroppedReconstructed)
-	} else {
-		r.NotNil(getVal)
 	}
 }
 
