@@ -104,9 +104,10 @@ func BenchmarkReconstructChain(b *testing.B) {
 		for range batchItems {
 			key := make([]byte, keyLen)
 			value := make([]byte, valueLen)
-			// an error is impossible as rng.Read is documented to never fail
-			_, _ = rng.Read(key)
-			_, _ = rng.Read(value)
+			_, err := rng.Read(key)
+			r.NoError(err)
+			_, err = rng.Read(value)
+			r.NoError(err)
 			batch = append(batch, Put(key, value))
 		}
 		return batch
