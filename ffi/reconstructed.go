@@ -49,19 +49,16 @@ type Reconstructed struct {
 
 // Root returns the root hash of the reconstructed view.
 func (r *Reconstructed) Root() Hash {
+	// Lock order: keepAliveHandle.mu before rootMu, matching Reconstruct().
+	r.keepAliveHandle.mu.RLock()
+	defer r.keepAliveHandle.mu.RUnlock()
+
 	r.rootMu.Lock()
 	defer r.rootMu.Unlock()
 
 	if r.rootSet {
 		return r.root
 	}
-
-	// rootMu is held while calling into FFI so that concurrent Root() calls
-	// don't redundantly compute the hash. keepAliveHandle.mu is taken second;
-	// Reconstruct() acquires them in the opposite order but resets rootSet
-	// under its own write lock, so there is no deadlock.
-	r.keepAliveHandle.mu.RLock()
-	defer r.keepAliveHandle.mu.RUnlock()
 
 	if r.ptr == nil {
 		return EmptyRoot
@@ -147,9 +144,7 @@ func (r *Reconstructed) Reconstruct(batch []BatchOp) error {
 
 	r.ptr = newHandle
 
-	// Root() takes rootMu then keepAliveHandle.mu.RLock(); we hold the write
-	// lock on keepAliveHandle.mu, so any concurrent Root() is blocked on RLock
-	// and cannot hold rootMu. Safe to take rootMu here without deadlock.
+	// Lock order matches Root(): keepAliveHandle.mu (already held) before rootMu.
 	r.rootMu.Lock()
 	r.root = EmptyRoot
 	r.rootSet = false
