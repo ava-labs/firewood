@@ -155,7 +155,8 @@ func (it *Iterator) NextBorrowed() bool {
 // If the iterator has not been advanced or is exhausted, it returns nil.
 //
 // If the iterator was advanced with [Iterator.NextBorrowed], the returned slice
-// borrows Rust memory and is only valid until the next advance or release.
+// borrows Rust memory and is only valid until the next call to [Iterator.Next],
+// [Iterator.NextBorrowed], or [Iterator.Drop].
 func (it *Iterator) Key() []byte {
 	if it.currentPair == nil || it.err != nil {
 		return nil
@@ -167,7 +168,8 @@ func (it *Iterator) Key() []byte {
 // If the iterator has not been advanced or is exhausted, it returns nil.
 //
 // If the iterator was advanced with [Iterator.NextBorrowed], the returned slice
-// borrows Rust memory and is only valid until the next advance or release.
+// borrows Rust memory and is only valid until the next call to [Iterator.Next],
+// [Iterator.NextBorrowed], or [Iterator.Drop].
 func (it *Iterator) Value() []byte {
 	if it.currentPair == nil || it.err != nil {
 		return nil

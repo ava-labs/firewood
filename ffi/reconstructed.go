@@ -118,7 +118,8 @@ func (r *Reconstructed) Iter(key []byte) (*Iterator, error) {
 // Reconstruct applies a new batch on top of this reconstructed view.
 //
 // On success, the receiver is updated to point at the newly reconstructed view.
-// On error, the receiver is no longer usable.
+// On error, the receiver is no longer usable and its resources are fully released;
+// calling [Reconstructed.Drop] is not required (but safe as a no-op).
 func (r *Reconstructed) Reconstruct(batch []BatchOp) error {
 	r.keepAliveHandle.mu.Lock()
 	defer r.keepAliveHandle.mu.Unlock()
@@ -137,15 +138,22 @@ func (r *Reconstructed) Reconstruct(batch []BatchOp) error {
 
 	newHandle, err := getReconstructedHandleFromResult(result, nil)
 	if err != nil {
+		// The old handle was consumed by the FFI call, so mark as dropped
+		// and disown the keep-alive lease so Database.Close is not blocked.
 		r.dropped = true
+		if r.keepAliveHandle.outstandingHandles != nil {
+			r.keepAliveHandle.outstandingHandles.Done()
+			r.keepAliveHandle.outstandingHandles = nil
+		}
 		return err
 	}
 
 	r.ptr = newHandle
 
-	// Safe to lock rootMu here: Root() takes rootMu then keepAliveHandle.mu.RLock(),
-	// so it cannot be between rootMu.Unlock() and keepAliveHandle.mu.RLock() while
-	// we hold the write lock.
+	// Safe to lock rootMu here: Root() releases rootMu before acquiring
+	// keepAliveHandle.mu.RLock(), so there is no lock-order inversion. Since we
+	// hold the keepAliveHandle write lock, any concurrent Root() call is either
+	// blocked on RLock or has already finished and released rootMu.
 	r.rootMu.Lock()
 	r.root = EmptyRoot
 	r.rootSet = false
