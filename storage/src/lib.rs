@@ -32,6 +32,7 @@ mod linear;
 mod node;
 mod nodestore;
 mod path;
+mod root_store;
 #[cfg(any(test, feature = "test_utils"))]
 mod test_utils;
 mod tries;
@@ -73,6 +74,7 @@ pub use u4::{TryFromIntError, U4};
 pub use linear::filebacked::FileBacked;
 pub use linear::memory::MemStore;
 pub use node::persist::MaybePersistedNode;
+pub use root_store::RootStore;
 #[cfg(any(test, feature = "test_utils"))]
 pub use test_utils::SeededRng;
 #[cfg(any(test, feature = "test_utils"))]

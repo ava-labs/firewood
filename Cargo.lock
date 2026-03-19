@@ -1592,7 +1592,6 @@ dependencies = [
  "clap",
  "criterion",
  "ctor",
- "derive-where",
  "env_logger",
  "ethereum-types",
  "fastrace",
@@ -1600,7 +1599,6 @@ dependencies = [
  "firewood-metrics",
  "firewood-storage",
  "firewood-triehash",
- "fjall",
  "hash-db",
  "hex",
  "hex-literal",
@@ -1619,7 +1617,6 @@ dependencies = [
  "test-case",
  "thiserror",
  "typed-builder",
- "weak-table",
 ]
 
 [[package]]
@@ -1753,6 +1750,7 @@ dependencies = [
  "enum-as-inner",
  "fastrace",
  "firewood-metrics",
+ "fjall",
  "git-version",
  "hex",
  "indicatif",
@@ -1775,6 +1773,7 @@ dependencies = [
  "test-case",
  "thiserror",
  "triomphe",
+ "weak-table",
 ]
 
 [[package]]

@@ -159,9 +159,6 @@ pub use firewood_macros::metrics;
 // Persistence worker module
 mod persist_worker;
 
-/// Root store module
-pub mod root_store;
-
 /// The public API
 pub mod api;
 
