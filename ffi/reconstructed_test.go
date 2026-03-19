@@ -4,11 +4,12 @@
 package ffi
 
 import (
+	"errors"
 	"math/rand"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sync/errgroup"
 )
 
 func TestRevisionReconstructReadsAndChains(t *testing.T) {
@@ -33,7 +34,7 @@ func TestRevisionReconstructReadsAndChains(t *testing.T) {
 
 	reconstructed, err := rev.Reconstruct(batch[committedKeys:firstBatchEnd])
 	r.NoError(err)
-	t.Cleanup(func() { _ = reconstructed.Drop() })
+	t.Cleanup(func() { r.NoError(reconstructed.Drop()) })
 
 	r.NotEqual(EmptyRoot, reconstructed.Root())
 
@@ -142,10 +143,10 @@ func BenchmarkReconstructChain(b *testing.B) {
 		current, err := rev.Reconstruct(batches[0])
 		r.NoError(err)
 		for _, batch := range batches[1:] {
-			err := current.Reconstruct(batch)
-			r.NoError(err)
+			r.NoError(current.Reconstruct(batch))
 		}
 
+		// Force root hash computation to include it in the benchmark.
 		_ = current.Root()
 		r.NoError(current.Drop())
 	}
@@ -210,29 +211,28 @@ func TestReconstructedConcurrentGetAndDrop(t *testing.T) {
 
 	const getters = 16
 	start := make(chan struct{})
-	var wg sync.WaitGroup
-	errCh := make(chan error, getters+1) // +1 for the Drop goroutine
+	var g errgroup.Group
+
+	acceptDropped := func(err error) error {
+		if err == nil || errors.Is(err, ErrDroppedReconstructed) {
+			return nil
+		}
+		return err
+	}
 
 	for range getters {
-		wg.Go(func() {
+		g.Go(func() error {
 			<-start
 			_, err := reconstructed.Get(keys[0])
-			errCh <- err
+			return acceptDropped(err)
 		})
 	}
 
-	wg.Go(func() {
+	g.Go(func() error {
 		<-start
-		errCh <- reconstructed.Drop()
+		return acceptDropped(reconstructed.Drop())
 	})
 
 	close(start)
-	wg.Wait()
-	close(errCh)
-
-	for err := range errCh {
-		if err != nil {
-			r.ErrorIs(err, ErrDroppedReconstructed, "unexpected concurrent error: %v", err)
-		}
-	}
+	r.NoError(g.Wait())
 }
