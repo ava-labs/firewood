@@ -28,9 +28,10 @@ typedef enum NodeHashAlgorithm {
 } NodeHashAlgorithm;
 
 /**
- * FFI context for a parsed or generated change proof. This change proof has not
- * been verified. Calling `verify` on it will generate a `VerifiedChangeProofContext`
- * and consume the `proof` and replacing it with None.
+ * FFI context for a parsed or generated change proof. Calling `verify` on it
+ * will generate a `VerifiedChangeProofContext` that shares the proof data via
+ * `Arc`. The proof can be verified multiple times. Serialization via
+ * `fwd_change_proof_to_bytes` works at any point in the lifecycle.
  */
 typedef struct ChangeProofContext ChangeProofContext;
 

@@ -842,3 +842,81 @@ func TestMultiRoundChangeProof(t *testing.T) {
 		})
 	}
 }
+
+// TestChangeProofMarshalAfterVerify verifies that MarshalBinary works after
+// VerifyChangeProof. Previously, verify consumed the proof via Option::take(),
+// causing MarshalBinary to silently return empty bytes.
+func TestChangeProofMarshalAfterVerify(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	// Insert some data.
+	_, _, batch := kvForTest(10)
+	rootA, err := dbA.Update(batch[:5])
+	r.NoError(err)
+	_, err = dbB.Update(batch[:5])
+	r.NoError(err)
+
+	// Insert more data into dbA.
+	rootAUpdated, err := dbA.Update(batch[5:])
+	r.NoError(err)
+
+	// Create a change proof.
+	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(changeProof.Free()) })
+
+	// Marshal before verify.
+	marshalledBefore, err := changeProof.MarshalBinary()
+	r.NoError(err)
+	r.NotEmpty(marshalledBefore)
+
+	// Verify the change proof.
+	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
+
+	// Marshal after verify — should produce the same non-empty bytes.
+	marshalledAfter, err := changeProof.MarshalBinary()
+	r.NoError(err)
+	r.Equal(marshalledBefore, marshalledAfter)
+}
+
+// TestChangeProofMultipleVerifies verifies that a ChangeProof can be verified
+// multiple times, producing independent VerifiedChangeProofs.
+func TestChangeProofMultipleVerifies(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	// Insert some data.
+	_, _, batch := kvForTest(10)
+	rootA, err := dbA.Update(batch[:5])
+	r.NoError(err)
+	_, err = dbB.Update(batch[:5])
+	r.NoError(err)
+
+	// Insert more data into dbA.
+	rootAUpdated, err := dbA.Update(batch[5:])
+	r.NoError(err)
+
+	// Create a change proof.
+	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(changeProof.Free()) })
+
+	// Verify the change proof twice — both should succeed.
+	verified1, err := changeProof.VerifyChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(verified1.Free()) })
+
+	verified2, err := changeProof.VerifyChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(verified2.Free()) })
+
+	// Propose from the first verified proof — should work.
+	proposed, err := dbB.ProposeChangeProof(verified1)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(proposed.Free()) })
+}

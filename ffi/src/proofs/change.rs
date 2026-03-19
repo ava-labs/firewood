@@ -3,6 +3,7 @@
 
 use std::convert::Into;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 
 use firewood_metrics::firewood_increment;
 #[cfg(feature = "ethhash")]
@@ -97,24 +98,27 @@ pub struct CommittedChangeProofArgs<'a> {
     pub proof: Option<&'a mut ProposedChangeProofContext<'a>>,
 }
 
-/// FFI context for a parsed or generated change proof. This change proof has not
-/// been verified. Calling `verify` on it will generate a `VerifiedChangeProofContext`
-/// and consume the `proof` and replacing it with None.
+/// FFI context for a parsed or generated change proof. Calling `verify` on it
+/// will generate a `VerifiedChangeProofContext` that shares the proof data via
+/// `Arc`. The proof can be verified multiple times. Serialization via
+/// `fwd_change_proof_to_bytes` works at any point in the lifecycle.
 #[derive(Debug)]
 pub struct ChangeProofContext {
-    proof: Option<FrozenChangeProof>,
+    proof: Arc<FrozenChangeProof>,
 }
 
 impl From<FrozenChangeProof> for ChangeProofContext {
     fn from(proof: FrozenChangeProof) -> Self {
-        Self { proof: Some(proof) }
+        Self {
+            proof: Arc::new(proof),
+        }
     }
 }
 
 impl ChangeProofContext {
     /// Verifies the `ChangeProofContext` and creates a `VerifiedChangeProofContext`
-    /// on success. Calling `verify` consumes the proof, and calling it again will
-    /// return a `ProofIsNone` error.
+    /// on success. The proof data is shared via `Arc`, so this can be called
+    /// multiple times with different parameters.
     ///
     /// Currently only performs a cursory verification, such as whether
     /// the keys in the change proof is sorted.
@@ -122,11 +126,7 @@ impl ChangeProofContext {
         &mut self,
         params: VerificationParams,
     ) -> Result<VerifiedChangeProofContext, api::Error> {
-        let Some(proof) = self.proof.take() else {
-            return Err(api::Error::ProofError(ProofError::ProofIsNone));
-        };
-
-        let batch_ops = proof.batch_ops();
+        let batch_ops = self.proof.batch_ops();
 
         // Check to make sure the BatchOp array size is less than or equal to `max_length`
         if let Some(max_length) = params.max_length
@@ -160,7 +160,7 @@ impl ChangeProofContext {
         {
             warn!("change proof verification not yet implemented");
             Ok(VerifiedChangeProofContext {
-                proof: Some(proof),
+                proof: Some(Arc::clone(&self.proof)),
                 params,
             })
         } else {
@@ -175,7 +175,7 @@ impl ChangeProofContext {
 /// `ProposedChangeProofContext`.
 #[derive(Debug)]
 pub struct VerifiedChangeProofContext {
-    proof: Option<FrozenChangeProof>,
+    proof: Option<Arc<FrozenChangeProof>>,
     params: VerificationParams,
 }
 
@@ -211,7 +211,7 @@ impl VerifiedChangeProofContext {
 #[expect(unused)]
 #[derive(Debug)]
 pub struct ProposedChangeProofContext<'db> {
-    proof: FrozenChangeProof,
+    proof: Arc<FrozenChangeProof>,
     db: &'db DatabaseHandle,
     root_hash: Option<HashKey>,
     end_root: HashKey,
@@ -540,9 +540,7 @@ pub extern "C" fn fwd_change_proof_find_next_key_proposed(
 pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) -> ValueResult {
     crate::invoke_with_handle(proof, |ctx| {
         let mut vec = Vec::new();
-        if let Some(proof) = &ctx.proof {
-            proof.write_to_vec(&mut vec);
-        }
+        ctx.proof.write_to_vec(&mut vec);
         vec
     })
 }
