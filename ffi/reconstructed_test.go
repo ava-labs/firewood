@@ -28,6 +28,7 @@ func TestRevisionReconstructReadsAndChains(t *testing.T) {
 
 	reconstructed, err := rev.Reconstruct(batch[5:8])
 	r.NoError(err)
+	t.Cleanup(func() { _ = reconstructed.Drop() })
 
 	for i := range 8 {
 		got, err := reconstructed.Get(keys[i])
@@ -139,6 +140,41 @@ func BenchmarkReconstructChain(b *testing.B) {
 		_ = current.Root()
 		r.NoError(current.Drop())
 	}
+}
+
+func TestReconstructedDropThenUse(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	keys, _, batch := kvForTest(4)
+	root, err := db.Update(batch[:2])
+	r.NoError(err)
+
+	rev, err := db.Revision(root)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(rev.Drop()) })
+
+	reconstructed, err := rev.Reconstruct(batch[2:4])
+	r.NoError(err)
+
+	// First Drop succeeds.
+	r.NoError(reconstructed.Drop())
+
+	// Second Drop is a no-op.
+	r.NoError(reconstructed.Drop())
+
+	// All operations return ErrDroppedReconstructed after Drop.
+	_, err = reconstructed.Get(keys[0])
+	r.ErrorIs(err, ErrDroppedReconstructed)
+
+	_, err = reconstructed.Iter(keys[0])
+	r.ErrorIs(err, ErrDroppedReconstructed)
+
+	_, err = reconstructed.Dump()
+	r.ErrorIs(err, ErrDroppedReconstructed)
+
+	err = reconstructed.Reconstruct(batch[:1])
+	r.ErrorIs(err, ErrDroppedReconstructed)
 }
 
 func TestReconstructedConcurrentGetAndDrop(t *testing.T) {
