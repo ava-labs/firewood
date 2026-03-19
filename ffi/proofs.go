@@ -225,6 +225,8 @@ func (db *Database) VerifyRangeProof(
 	}
 
 	// keep the database alive while the proof owns the embedded proposal
+	// TODO: use runtime.AddCleanup and shared handle[T] infrastructure
+	// instead of SetFinalizer, for consistency with Proposal and Revision.
 	proof.keepAliveHandle.init(&db.outstandingHandles)
 	runtime.SetFinalizer(proof, (*RangeProof).Free)
 	return nil
@@ -443,6 +445,8 @@ func (db *Database) ProposeChangeProof(
 	}
 
 	// keep the database alive while the proof owns the embedded proposal
+	// TODO: use runtime.AddCleanup and shared handle[T] infrastructure
+	// instead of SetFinalizer, for consistency with Proposal and Revision.
 	proposed.keepAliveHandle.init(&db.outstandingHandles)
 	runtime.SetFinalizer(proposed, (*ProposedChangeProof).Free)
 	return proposed, nil
