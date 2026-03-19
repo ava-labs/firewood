@@ -99,24 +99,10 @@ func BenchmarkReconstructChain(b *testing.B) {
 		valueLen     = 32
 	)
 
-	makeBatch := func(rng *rand.Rand) []BatchOp {
-		batch := make([]BatchOp, 0, batchItems)
-		for range batchItems {
-			key := make([]byte, keyLen)
-			value := make([]byte, valueLen)
-			_, err := rng.Read(key)
-			r.NoError(err)
-			_, err = rng.Read(value)
-			r.NoError(err)
-			batch = append(batch, Put(key, value))
-		}
-		return batch
-	}
-
 	rng := rand.New(rand.NewSource(1234))
 	batches := make([][]BatchOp, 0, totalBatches)
 	for range totalBatches {
-		batches = append(batches, makeBatch(rng))
+		batches = append(batches, makeRandomBatch(b, rng, batchItems, keyLen, valueLen))
 	}
 
 	db := newTestDatabase(b)
@@ -145,6 +131,27 @@ func BenchmarkReconstructChain(b *testing.B) {
 	}
 }
 
+func TestReconstructedDump(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	_, _, batch := kvForTest(4)
+	root, err := db.Update(batch[:2])
+	r.NoError(err)
+
+	rev, err := db.Revision(root)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(rev.Drop()) })
+
+	reconstructed, err := rev.Reconstruct(batch[2:4])
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(reconstructed.Drop()) })
+
+	dot, err := reconstructed.Dump()
+	r.NoError(err)
+	r.Contains(dot, "digraph")
+}
+
 func TestReconstructedDropThenUse(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
@@ -159,11 +166,6 @@ func TestReconstructedDropThenUse(t *testing.T) {
 
 	reconstructed, err := rev.Reconstruct(batch[2:4])
 	r.NoError(err)
-
-	// Dump succeeds on a live view.
-	dot, err := reconstructed.Dump()
-	r.NoError(err)
-	r.NotEmpty(dot)
 
 	// First Drop succeeds.
 	r.NoError(reconstructed.Drop())
