@@ -280,7 +280,9 @@ type replayConfig struct {
 
 // applyReplayLogs applies replay logs to a database.
 // Returns the number of commits applied and any error encountered.
-func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, error) {
+//
+//revive:disable:cognitive-complexity // straightforward switch-case dispatch over operation types
+func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, error) { //revive:enable:cognitive-complexity
 	proposals := make(map[uint64]*Proposal)
 	totalCommits := 0
 
