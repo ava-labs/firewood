@@ -93,6 +93,8 @@ linters:
     - usestdlibvars
     - whitespace
   settings:
+    errcheck:
+      disable-default-exclusions: true
     depguard:
       rules:
         packages:
