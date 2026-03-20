@@ -39,6 +39,8 @@ package ffi
 // #cgo nocallback fwd_change_proof_find_next_key_proposed
 // #cgo noescape fwd_change_proof_to_bytes
 // #cgo nocallback fwd_change_proof_to_bytes
+// #cgo noescape fwd_verified_change_proof_to_bytes
+// #cgo nocallback fwd_verified_change_proof_to_bytes
 // #cgo noescape fwd_change_proof_from_bytes
 // #cgo nocallback fwd_change_proof_from_bytes
 // #cgo noescape fwd_free_change_proof
@@ -579,6 +581,14 @@ func (p *ChangeProof) Free() error {
 	p.handle = nil
 
 	return nil
+}
+
+// MarshalBinary returns a serialized representation of this VerifiedChangeProof.
+//
+// The format is unspecified and opaque to firewood. It is the same format as
+// [ChangeProof.MarshalBinary].
+func (p *VerifiedChangeProof) MarshalBinary() ([]byte, error) {
+	return getValueFromValueResult(C.fwd_verified_change_proof_to_bytes(p.handle))
 }
 
 // Free releases the resources associated with this VerifiedChangeProof.

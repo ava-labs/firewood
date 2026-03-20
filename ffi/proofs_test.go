@@ -843,10 +843,48 @@ func TestMultiRoundChangeProof(t *testing.T) {
 	}
 }
 
-// TestChangeProofMarshalAfterVerify verifies that MarshalBinary works after
-// VerifyChangeProof. Previously, verify consumed the proof via Option::take(),
-// causing MarshalBinary to silently return empty bytes.
-func TestChangeProofMarshalAfterVerify(t *testing.T) {
+// TestChangeProofMarshalFailsAfterVerify verifies that MarshalBinary on a
+// ChangeProof returns an error after the proof has been consumed by
+// VerifyChangeProof. Previously, this silently returned empty bytes.
+func TestChangeProofMarshalFailsAfterVerify(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	// Insert some data.
+	_, _, batch := kvForTest(10)
+	rootA, err := dbA.Update(batch[:5])
+	r.NoError(err)
+	_, err = dbB.Update(batch[:5])
+	r.NoError(err)
+
+	// Insert more data into dbA.
+	rootAUpdated, err := dbA.Update(batch[5:])
+	r.NoError(err)
+
+	// Create a change proof.
+	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(changeProof.Free()) })
+
+	// Marshal before verify — should succeed.
+	marshalledBefore, err := changeProof.MarshalBinary()
+	r.NoError(err)
+	r.NotEmpty(marshalledBefore)
+
+	// Verify the change proof — consumes the inner proof.
+	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
+
+	// Marshal after verify — should return an error, not empty bytes.
+	_, err = changeProof.MarshalBinary()
+	r.Error(err)
+}
+
+// TestVerifiedChangeProofMarshal verifies that MarshalBinary works on a
+// VerifiedChangeProof and produces the same bytes as the original ChangeProof.
+func TestVerifiedChangeProofMarshal(t *testing.T) {
 	r := require.New(t)
 	dbA := newTestDatabase(t)
 	dbB := newTestDatabase(t)
@@ -877,46 +915,8 @@ func TestChangeProofMarshalAfterVerify(t *testing.T) {
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
 
-	// Marshal after verify — should produce the same non-empty bytes.
-	marshalledAfter, err := changeProof.MarshalBinary()
+	// Marshal from the verified proof — should produce the same bytes.
+	marshalledAfterVerify, err := verifiedChangeProof.MarshalBinary()
 	r.NoError(err)
-	r.Equal(marshalledBefore, marshalledAfter)
-}
-
-// TestChangeProofMultipleVerifies verifies that a ChangeProof can be verified
-// multiple times, producing independent VerifiedChangeProofs.
-func TestChangeProofMultipleVerifies(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
-
-	// Insert some data.
-	_, _, batch := kvForTest(10)
-	rootA, err := dbA.Update(batch[:5])
-	r.NoError(err)
-	_, err = dbB.Update(batch[:5])
-	r.NoError(err)
-
-	// Insert more data into dbA.
-	rootAUpdated, err := dbA.Update(batch[5:])
-	r.NoError(err)
-
-	// Create a change proof.
-	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(changeProof.Free()) })
-
-	// Verify the change proof twice — both should succeed.
-	verified1, err := changeProof.VerifyChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verified1.Free()) })
-
-	verified2, err := changeProof.VerifyChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verified2.Free()) })
-
-	// Propose from the first verified proof — should work.
-	proposed, err := dbB.ProposeChangeProof(verified1)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(proposed.Free()) })
+	r.Equal(marshalledBefore, marshalledAfterVerify)
 }

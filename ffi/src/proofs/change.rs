@@ -3,7 +3,6 @@
 
 use std::convert::Into;
 use std::num::NonZeroUsize;
-use std::sync::Arc;
 
 use firewood_metrics::firewood_increment;
 #[cfg(feature = "ethhash")]
@@ -98,27 +97,25 @@ pub struct CommittedChangeProofArgs<'a> {
     pub proof: Option<&'a mut ProposedChangeProofContext<'a>>,
 }
 
-/// FFI context for a parsed or generated change proof. Calling `verify` on it
-/// will generate a `VerifiedChangeProofContext` that shares the proof data via
-/// `Arc`. The proof can be verified multiple times. Serialization via
-/// `fwd_change_proof_to_bytes` works at any point in the lifecycle.
+/// FFI context for a parsed or generated change proof. This change proof has not
+/// been verified. Calling `verify` on it will generate a `VerifiedChangeProofContext`
+/// and consume the `proof`, replacing it with `None`. After verification,
+/// serialization should be done via the `VerifiedChangeProofContext` instead.
 #[derive(Debug)]
 pub struct ChangeProofContext {
-    proof: Arc<FrozenChangeProof>,
+    proof: Option<FrozenChangeProof>,
 }
 
 impl From<FrozenChangeProof> for ChangeProofContext {
     fn from(proof: FrozenChangeProof) -> Self {
-        Self {
-            proof: Arc::new(proof),
-        }
+        Self { proof: Some(proof) }
     }
 }
 
 impl ChangeProofContext {
     /// Verifies the `ChangeProofContext` and creates a `VerifiedChangeProofContext`
-    /// on success. The proof data is shared via `Arc`, so this can be called
-    /// multiple times with different parameters.
+    /// on success. Calling `verify` consumes the proof, and calling it again will
+    /// return a `ProofIsNone` error.
     ///
     /// Currently only performs a cursory verification, such as whether
     /// the keys in the change proof is sorted.
@@ -126,7 +123,11 @@ impl ChangeProofContext {
         &mut self,
         params: VerificationParams,
     ) -> Result<VerifiedChangeProofContext, api::Error> {
-        let batch_ops = self.proof.batch_ops();
+        let Some(proof) = self.proof.take() else {
+            return Err(api::Error::ProofError(ProofError::ProofIsNone));
+        };
+
+        let batch_ops = proof.batch_ops();
 
         // Check to make sure the BatchOp array size is less than or equal to `max_length`
         if let Some(max_length) = params.max_length
@@ -160,7 +161,7 @@ impl ChangeProofContext {
         {
             warn!("change proof verification not yet implemented");
             Ok(VerifiedChangeProofContext {
-                proof: Some(Arc::clone(&self.proof)),
+                proof: Some(proof),
                 params,
             })
         } else {
@@ -175,7 +176,7 @@ impl ChangeProofContext {
 /// `ProposedChangeProofContext`.
 #[derive(Debug)]
 pub struct VerifiedChangeProofContext {
-    proof: Option<Arc<FrozenChangeProof>>,
+    proof: Option<FrozenChangeProof>,
     params: VerificationParams,
 }
 
@@ -211,7 +212,7 @@ impl VerifiedChangeProofContext {
 #[expect(unused)]
 #[derive(Debug)]
 pub struct ProposedChangeProofContext<'db> {
-    proof: Arc<FrozenChangeProof>,
+    proof: FrozenChangeProof,
     db: &'db DatabaseHandle,
     root_hash: Option<HashKey>,
     end_root: HashKey,
@@ -521,28 +522,53 @@ pub extern "C" fn fwd_change_proof_find_next_key_proposed(
     crate::invoke_with_handle(proof, ProposedChangeProofContext::find_next_key)
 }
 
+/// Serialize a `FrozenChangeProof` to bytes, returning an error if the proof
+/// has been consumed (e.g., by verification or proposing).
+fn serialize_change_proof(
+    proof: Option<&FrozenChangeProof>,
+) -> Result<Option<Box<[u8]>>, api::Error> {
+    let proof = proof.ok_or(api::Error::ProofError(ProofError::ProofIsNone))?;
+    let mut vec = Vec::new();
+    proof.write_to_vec(&mut vec);
+    Ok(Some(vec.into_boxed_slice()))
+}
+
 /// Serialize a `ChangeProof` to bytes.
 ///
 /// # Arguments
 ///
 /// - `proof` - A [`ChangeProofContext`] previously returned from the create
-///   method. If from a parsed proof, the proof will not be verified before
-///   serialization.
+///   method. If the proof has been consumed by verification, this will return
+///   an error.
 ///
 /// # Returns
 ///
 /// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`ValueResult::Some`] containing the serialized bytes if successful.
-/// - [`ValueResult::Err`] if the caller provided a null pointer.
-///
-/// The other [`ValueResult`] variants are not used.
+/// - [`ValueResult::Err`] if the proof has been consumed by verification.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) -> ValueResult {
-    crate::invoke_with_handle(proof, |ctx| {
-        let mut vec = Vec::new();
-        ctx.proof.write_to_vec(&mut vec);
-        vec
-    })
+    crate::invoke_with_handle(proof, |ctx| serialize_change_proof(ctx.proof.as_ref()))
+}
+
+/// Serialize a `VerifiedChangeProof` to bytes.
+///
+/// # Arguments
+///
+/// - `proof` - A [`VerifiedChangeProofContext`] previously returned from
+///   verification. If the proof has been consumed by proposing, this will
+///   return an error.
+///
+/// # Returns
+///
+/// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
+/// - [`ValueResult::Some`] containing the serialized bytes if successful.
+/// - [`ValueResult::Err`] if the proof has been consumed by proposing.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_verified_change_proof_to_bytes(
+    proof: Option<&VerifiedChangeProofContext>,
+) -> ValueResult {
+    crate::invoke_with_handle(proof, |ctx| serialize_change_proof(ctx.proof.as_ref()))
 }
 
 /// Deserialize a `ChangeProof` from bytes.
