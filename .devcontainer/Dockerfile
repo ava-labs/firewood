@@ -126,12 +126,14 @@ RUN . "${CARGO_HOME}/env" \
     just \
     ripgrep \
     rustfilt \
-    starship
+    starship \
+  && rm -rf "${CARGO_HOME}/registry" "${CARGO_HOME}/git" "${SCCACHE_DIR}"
 
 # Install Go tools
 RUN curl -sSfL https://golangci-lint.run/install.sh | sh -s -- -b $(go env GOPATH)/bin \
   && go install github.com/reteps/dockerfmt@latest \
-  && go install mvdan.cc/sh/v3/cmd/shfmt@latest
+  && go install mvdan.cc/sh/v3/cmd/shfmt@latest \
+  && go clean -cache -testcache -modcache -fuzzcache
 
 # Install Claude Code CLI
 RUN curl -fsSL https://claude.ai/install.sh | bash
