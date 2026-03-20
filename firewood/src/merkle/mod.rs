@@ -277,7 +277,7 @@ impl<T: TrieReader> Merkle<T> {
         let right = key_values.last();
 
         // Verify that first_key (if provided) is <= the first key in the proof
-        if let (Some(ref requested_first), Some((left_key, _))) = (first_key.as_ref(), left)
+        if let (Some(requested_first), Some((left_key, _))) = (first_key.as_ref(), left)
             && requested_first.as_ref() > left_key.as_ref()
         {
             return Err(api::Error::ProofError(
@@ -287,7 +287,7 @@ impl<T: TrieReader> Merkle<T> {
 
         // start proof verifies the requested lower bound (if any), not necessarily
         // the first key-value included in this proof.
-        if let Some(ref requested_first) = first_key {
+        if let Some(requested_first) = first_key.as_ref() {
             let expected_start_value = left.and_then(|(key, value)| {
                 (requested_first.as_ref() == key.as_ref()).then_some(value.as_ref())
             });
@@ -305,7 +305,7 @@ impl<T: TrieReader> Merkle<T> {
         }
 
         // Verify that last_key (if provided) is >= the last key in the proof
-        if let (Some(ref requested_last), Some((right_key, _))) = (last_key.as_ref(), right)
+        if let (Some(requested_last), Some((right_key, _))) = (last_key.as_ref(), right)
             && requested_last.as_ref() < right_key.as_ref()
         {
             return Err(api::Error::ProofError(
@@ -315,7 +315,7 @@ impl<T: TrieReader> Merkle<T> {
 
         // end proof verifies the requested upper bound (if any), not necessarily
         // the last key-value included in this proof.
-        if let Some(ref requested_last) = last_key {
+        if let Some(requested_last) = last_key.as_ref() {
             let expected_end_value = right.and_then(|(key, value)| {
                 (requested_last.as_ref() == key.as_ref()).then_some(value.as_ref())
             });
