@@ -16,6 +16,21 @@ const (
 	rangeProofLenTruncated  = 10
 	changeProofLenUnbounded = 0
 	changeProofLenTruncated = 10
+
+	// Test entry counts for kvForTest.
+	numEntries       = 100
+	largeNumEntries  = 10000
+	mediumNumEntries = 50
+	smallNumEntries  = 10
+	// Entry count for the empty change proof range test; must be odd so
+	// the split at 5 leaves a non-empty second half.
+	emptyRangeNumEntries = 9
+
+	// Length of a merkle-trie key in bytes.
+	keyLen = 32
+
+	// Proof length limit used in TestVerifyEmptyChangeProofRange.
+	emptyRangeProofLen = 5
 )
 
 type maybe struct {
@@ -165,7 +180,7 @@ func TestRangeProofNonExistentRoot(t *testing.T) {
 	r.NoError(err)
 
 	// create a bogus root
-	root[0] ^= 0xFF
+	root[0] ^= 0xFF //nolint:revive // add-constant: 0xFF is self-documenting as a byte flip
 
 	proof, err := db.RangeProof(root, nothing(), nothing(), rangeProofLenUnbounded)
 	r.ErrorIs(err, errRevisionNotFound)
@@ -255,7 +270,7 @@ func TestRangeProofVerify(t *testing.T) {
 	r.NoError(db.Close(oneSecCtx(t)))
 
 	// Verify with wrong root should fail
-	root[0] ^= 0xFF
+	root[0] ^= 0xFF //nolint:revive // add-constant: 0xFF is self-documenting as a byte flip
 	err = proof.Verify(root, nothing(), nothing(), rangeProofLenTruncated)
 
 	// TODO(#738): re-enable after verification is implemented
