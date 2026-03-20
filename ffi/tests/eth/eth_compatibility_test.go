@@ -167,6 +167,8 @@ func (tr *merkleTriePair) commit() {
 	tr.require.NoError(err)
 }
 
+const initialAccountBalance = 100
+
 // createAccount generates a new, unique account and adds it to both tries and the tracked
 // current state.
 func (tr *merkleTriePair) createAccount() {
@@ -195,6 +197,8 @@ func (tr *merkleTriePair) selectAccount(addrIndex int) (common.Address, common.H
 	addr := tr.currentAddrs[addrIndex]
 	return addr, crypto.Keccak256Hash(addr[:])
 }
+
+const balanceIncrement = 3
 
 // updateAccount selects a random account, increments its nonce, and adds the update
 // to the pending changes for both tries.
@@ -316,6 +320,11 @@ func (tr *merkleTriePair) deleteStorage(accountIndex int, storageIndexInput uint
 	fwdKey := append(accHash[:], storageKeyHash[:]...)
 	tr.pendingFwdBatch = append(tr.pendingFwdBatch, firewood.Delete(fwdKey))
 }
+
+const (
+	numFuzzSeeds      = 5
+	fuzzSeedStepBytes = 32
+)
 
 func FuzzFirewoodTree(f *testing.F) {
 	for randSeed := range int64(5) {
