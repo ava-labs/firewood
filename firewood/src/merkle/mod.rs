@@ -297,7 +297,6 @@ impl<T: TrieReader> Merkle<T> {
                 expected_start_value,
                 root_hash,
             )?;
-
         } else if let Some((left_key, left_value)) = left {
             proof
                 .start_proof()
@@ -323,7 +322,6 @@ impl<T: TrieReader> Merkle<T> {
             proof
                 .end_proof()
                 .verify(requested_last.as_ref(), expected_end_value, root_hash)?;
-
         } else if let Some((right_key, right_value)) = right {
             proof
                 .end_proof()
