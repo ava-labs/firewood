@@ -55,9 +55,6 @@ disabled = true
 # Aliasing an import to a clearer name (e.g. firewood "…/ffi") is fine.
 disabled = true
 
-[rule.receiver-naming]
-arguments = [{ max-length = 2 }]
-
 [rule.import-shadowing]
 # Shadowing `rand` in fuzz tests with the fuzz-provided *rand.Rand is idiomatic.
 disabled = true

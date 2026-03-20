@@ -113,24 +113,92 @@ linters:
     forbidigo:
       # Forbid the following identifiers (list of regexp).
       forbid:
+        - pattern: assert\.Error$(# ErrorIs should be used instead)?
+        - pattern: assert\.ErrorContains$(# ErrorIs should be used instead)?
+        - pattern: assert\.EqualValues$(# Equal should be used instead)?
+        - pattern: assert\.NotEqualValues$(# NotEqual should be used instead)?
+        - pattern: require\.Error$(# ErrorIs should be used instead)?
+        - pattern: require\.ErrorContains$(# ErrorIs should be used instead)?
+        - pattern: require\.EqualValues$(# Equal should be used instead)?
+        - pattern: require\.NotEqualValues$(# NotEqual should be used instead)?
         - pattern: ^(t|b|tb|f)\.(Fatal|Fatalf|Error|Errorf)$(# the assert and require libraries should be used instead)?
         - pattern: ^sort\.(Slice|Strings)$(# the slices package should be used instead)?
       # Exclude godoc examples from forbidigo checks.
       exclude-godoc-examples: false
     revive:
       rules:
+        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#add-constant
+        - name: add-constant
+          disabled: false
+          arguments:
+            - allowInts: "0,1"
+              allowStrs: '"","%w: %w"'
         # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#bool-literal-in-expr
         - name: bool-literal-in-expr
           disabled: false
+        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#call-to-gc
+        - name: call-to-gc
+          # Test code intentionally calls runtime.GC() to exercise finalizers.
+          disabled: true
+        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#cognitive-complexity
+        - name: cognitive-complexity
+          disabled: false
+          # Default threshold of 7 is too restrictive, especially for test helpers
+          # and functions with straightforward but verbose switch/case logic.
+          arguments: [35]
+        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#confusing-naming
+        - name: confusing-naming
+          # Private helpers like root() alongside public Root() are intentional.
+          disabled: true
+        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#confusing-results
+        - name: confusing-results
+          # Flagging unnamed ([]byte, []byte) returns is more noise than value.
+          disabled: true
+        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#cyclomatic
+        - name: cyclomatic
+          disabled: false
+          arguments: [25]
         # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#early-return
         - name: early-return
           disabled: false
         # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#empty-lines
         - name: empty-lines
           disabled: false
+        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#enforce-switch-style
+        - name: enforce-switch-style
+          # Exhaustive switches on known enums don't need a default case;
+          # the compiler already catches missing cases for typed constants.
+          disabled: true
+        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#flag-parameter
+        - name: flag-parameter
+          # Control-flag parameters (e.g. disownEvenOnErr) are sometimes
+          # the clearest API; callers see the intent at the call site.
+          disabled: true
+        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#function-length
+        - name: function-length
+          # 75 lines is too strict for table-driven tests and test helpers.
+          disabled: true
+        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#import-shadowing
+        - name: import-shadowing
+          # Shadowing `rand` in fuzz tests with the fuzz-provided *rand.Rand is idiomatic.
+          disabled: true
+        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#line-length-limit
+        - name: line-length-limit
+          disabled: false
+          arguments: [132]
+        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#receiver-naming
+        - name: receiver-naming
+          disabled: false
+          arguments:
+            - maxLength: 2
         # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#redundant-import-alias
         - name: redundant-import-alias
-          disabled: false
+          # Aliasing an import to a clearer name (e.g. firewood "…/ffi") is fine.
+          disabled: true
+        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#redundant-test-main-exit
+        - name: redundant-test-main-exit
+          # os.Exit(m.Run()) in TestMain is a conventional Go pattern.
+          disabled: true
         # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#string-format
         - name: string-format
           disabled: false
@@ -180,6 +248,10 @@ linters:
         # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#useless-break
         - name: useless-break
           disabled: false
+    spancheck:
+      # https://github.com/jjti/go-spancheck#checks
+      checks:
+        - end
     tagalign:
       align: true
       sort: true
@@ -228,6 +300,10 @@ linters:
       # 2. Exclude any file prefixed with test_ in any directory.
       # 3. Exclude any directory suffixed with test.
       # 4. Exclude any file suffixed with _test.go.
+      # Code generators have different constraints.
+      - path: "^gen/"
+        linters:
+          - revive
       - path: "(^tests/)|(^(.*/)*test_[^/]*\\.go$)|(.*test/.*)|(.*_test\\.go$)"
         linters:
           - gosec

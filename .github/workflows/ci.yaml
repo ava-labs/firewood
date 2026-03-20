@@ -267,7 +267,7 @@ jobs:
       - name: Run revive
         working-directory: ffi
         run: |
-          go install github.com/mgechev/revive@815ffde4de8dcb31a2de91efd6c6795d75e24380 # v1.15.0
+          go install github.com/mgechev/revive@latest
           revive -config .revive.toml -set_exit_status ./...
       - name: Test Go FFI bindings
         working-directory: ffi

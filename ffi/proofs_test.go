@@ -351,6 +351,7 @@ func TestRangeProofCodeHashes(t *testing.T) {
 			r.NoError(err, "%T.CodeHashes()", proof)
 			r.Equal(codeHash, h)
 		} else {
+			//nolint:forbidigo // checking error substring, not identity
 			require.ErrorContains(t, err, "feature not supported in this build: ethhash code hash iterator")
 		}
 	}

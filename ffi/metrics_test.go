@@ -62,7 +62,7 @@ func ensureLogsStarted(t *testing.T, logPath string) {
 		if err := StartLogs(logConfig); err != nil {
 			// "Logging is not available" error occurs when the FFI library was
 			// built without the "logger" feature flag enabled.
-			require.ErrorContains(t, err, "Logging is not available")
+			require.ErrorContains(t, err, "Logging is not available") //nolint:forbidigo // checking error substring, not identity
 			activeLogPath = ""
 			return
 		}
