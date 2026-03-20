@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -356,6 +357,25 @@ func sortKV(keys, vals [][]byte) error {
 		}
 	}
 	return nil
+}
+
+// makeRandomBatch generates a batch of count Put operations with random keys
+// and values of the specified lengths, using the provided rng.
+// makeRandomBatch generates a batch of count Put operations with random keys
+// and values of the specified lengths, using the provided rng.
+func makeRandomBatch(tb testing.TB, rng *rand.Rand, count, keyLen, valueLen int) []BatchOp {
+	tb.Helper()
+	batch := make([]BatchOp, 0, count)
+	for range count {
+		key := make([]byte, keyLen)
+		value := make([]byte, valueLen)
+		_, err := rng.Read(key)
+		require.NoError(tb, err)
+		_, err = rng.Read(value)
+		require.NoError(tb, err)
+		batch = append(batch, Put(key, value))
+	}
+	return batch
 }
 
 func makeBatch(keys, vals [][]byte) []BatchOp {
