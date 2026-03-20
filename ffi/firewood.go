@@ -75,6 +75,17 @@ const (
 	EthereumNodeHashing NodeHashAlgorithm = C.NodeHashAlgorithm_Ethereum
 )
 
+const (
+	// defaultNodeCacheSizeInBytes is the default memory limit for the node cache (128 MB).
+	defaultNodeCacheSizeInBytes = 128_000_000
+	// defaultFreeListCacheEntries is the default number of entries in the freelist cache.
+	defaultFreeListCacheEntries = 1_000_000
+	// defaultRevisions is the default maximum number of historical revisions to keep.
+	defaultRevisions = 100
+	// minRevisions is the minimum allowed number of revisions.
+	minRevisions = 2
+)
+
 var (
 	// EmptyRoot is the zero value for [Hash]
 	EmptyRoot Hash
@@ -140,9 +151,9 @@ type config struct {
 
 func defaultConfig() *config {
 	return &config{
-		nodeCacheSizeInBytes:           128_000_000,
-		freeListCacheEntries:           1_000_000,
-		revisions:                      100,
+		nodeCacheSizeInBytes:           defaultNodeCacheSizeInBytes,
+		freeListCacheEntries:           defaultFreeListCacheEntries,
+		revisions:                      defaultRevisions,
 		readCacheStrategy:              OnlyCacheWrites,
 		deferredPersistenceCommitCount: 1,
 	}
@@ -269,8 +280,8 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	if conf.readCacheStrategy >= invalidCacheStrategy {
 		return nil, fmt.Errorf("invalid cache strategy (%d)", conf.readCacheStrategy)
 	}
-	if conf.revisions < 2 {
-		return nil, fmt.Errorf("revisions must be >= 2, got %d", conf.revisions)
+	if conf.revisions < minRevisions {
+		return nil, fmt.Errorf("revisions must be >= %d, got %d", minRevisions, conf.revisions)
 	}
 	if conf.nodeCacheSizeInBytes < 1 {
 		return nil, fmt.Errorf("node cache size in bytes must be >= 1, got %d", conf.nodeCacheSizeInBytes)

@@ -29,8 +29,16 @@ const (
 
 	// replayMaxCommitsEnv is the environment variable for limiting
 	// number of executed commits.
-	// If empty, defaults to 10000. Set to 0 for unlimited.
+	// If empty, defaults to defaultMaxCommits. Set to 0 for unlimited.
 	replayMaxCommitsEnv = "REPLAY_MAX_COMMITS"
+
+	// defaultMaxCommits is the default maximum number of commits to replay
+	// when REPLAY_MAX_COMMITS is not set.
+	defaultMaxCommits = 10000
+
+	// roundTripKeyCount is the number of key-value pairs generated for
+	// the round-trip replay test.
+	roundTripKeyCount = 20
 )
 
 // replayLog mirrors the Rust ReplayLog type.
@@ -95,7 +103,7 @@ type commit struct {
 //
 // Environment variables:
 //   - REPLAY_LOG: path to the replay log (required)
-//   - REPLAY_MAX_COMMITS: max commits to replay (default: 10000, 0 for unlimited)
+//   - REPLAY_MAX_COMMITS: max commits to replay (default: defaultMaxCommits, 0 for unlimited)
 func TestReplayLogExecution(t *testing.T) {
 	r := require.New(t)
 
@@ -104,7 +112,7 @@ func TestReplayLogExecution(t *testing.T) {
 		t.Skipf("%s not set; skipping replay execution test", replayLogEnv)
 	}
 
-	maxCommits := 10000
+	maxCommits := defaultMaxCommits
 	if v := os.Getenv(replayMaxCommitsEnv); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			maxCommits = n
@@ -134,7 +142,7 @@ func TestReplayLogExecution(t *testing.T) {
 //
 // Environment variables:
 //   - REPLAY_LOG: path to the replay log (required)
-//   - REPLAY_MAX_COMMITS: max commits to replay (default: 10000, 0 for unlimited)
+//   - REPLAY_MAX_COMMITS: max commits to replay (default: defaultMaxCommits, 0 for unlimited)
 //
 // Run with: REPLAY_LOG=/path/to/log go test -bench=BenchmarkReplayLog -benchtime=1x
 func BenchmarkReplayLog(b *testing.B) {
@@ -144,7 +152,7 @@ func BenchmarkReplayLog(b *testing.B) {
 		b.Skipf("%s not set; skipping replay benchmark", replayLogEnv)
 	}
 
-	maxCommits := 10000
+	maxCommits := defaultMaxCommits
 	if v := os.Getenv(replayMaxCommitsEnv); v != "" {
 		if n, err := strconv.Atoi(v); err == nil {
 			maxCommits = n
@@ -182,7 +190,7 @@ func TestBlockReplayRoundTrip(t *testing.T) {
 	// Phase 1: Record operations
 	db1 := newTestDatabase(t)
 
-	_, _, batch := kvForTest(20)
+	_, _, batch := kvForTest(roundTripKeyCount)
 
 	p1, err := db1.Propose(batch[:10])
 	r.NoError(err)

@@ -31,7 +31,12 @@ const (
 
 	// Proof length limit used in TestVerifyEmptyChangeProofRange.
 	emptyRangeProofLen = 5
+
 )
+
+// testKey is the account key used in TestRangeProofCodeHashes.
+//nolint:gochecknoglobals // test-only
+var testKey = [keyLen]byte{0x12, 0x34, 0x56}
 
 type maybe struct {
 	value    []byte
@@ -137,7 +142,7 @@ func newProposedChangeProof(
 	t.Helper()
 	r := require.New(t)
 
-	_, _, batch := kvForTest(100)
+	_, _, batch := kvForTest(numEntries)
 	rootA, err := dbA.Update(batch[:50])
 	r.NoError(err)
 	rootB, err := dbB.Update(batch[:50])
@@ -175,7 +180,7 @@ func TestRangeProofNonExistentRoot(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// insert some data
-	_, _, batch := kvForTest(100)
+	_, _, batch := kvForTest(numEntries)
 	root, err := db.Update(batch)
 	r.NoError(err)
 
@@ -192,7 +197,7 @@ func TestRangeProofPartialRange(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Insert a lot of data.
-	_, _, batch := kvForTest(10000)
+	_, _, batch := kvForTest(largeNumEntries)
 	root, err := db.Update(batch)
 	r.NoError(err)
 
@@ -211,7 +216,7 @@ func TestRangeProofDiffersAfterUpdate(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Insert some data.
-	_, _, batch := kvForTest(100)
+	_, _, batch := kvForTest(numEntries)
 	root1, err := db.Update(batch[:50])
 	r.NoError(err)
 
@@ -235,7 +240,7 @@ func TestRoundTripSerialization(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Insert some data.
-	_, _, batch := kvForTest(10)
+	_, _, batch := kvForTest(smallNumEntries)
 	root, err := db.Update(batch)
 	r.NoError(err)
 
@@ -258,7 +263,7 @@ func TestRangeProofVerify(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	_, _, batch := kvForTest(100)
+	_, _, batch := kvForTest(numEntries)
 	root, err := db.Update(batch)
 	r.NoError(err)
 
@@ -286,7 +291,7 @@ func TestVerifyAndCommitRangeProof(t *testing.T) {
 	dbTarget := newTestDatabase(t)
 
 	// Populate source
-	keys, vals, batch := kvForTest(50)
+	keys, vals, batch := kvForTest(mediumNumEntries)
 	sourceRoot, err := dbSource.Update(batch)
 	r.NoError(err)
 
@@ -309,7 +314,7 @@ func TestRangeProofFindNextKey(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
-	_, _, batch := kvForTest(100)
+	_, _, batch := kvForTest(numEntries)
 	root, err := db.Update(batch)
 	r.NoError(err)
 
@@ -347,8 +352,11 @@ func TestRangeProofCodeHashes(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// RLP encoded account with code hash
-	key := [32]byte{0x12, 0x34, 0x56} // key must be length 32
-	val, err := hex.DecodeString("f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
+	key := testKey
+	val, err := hex.DecodeString(
+		"f8440164a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421" +
+			"a0044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d",
+	)
 	r.NoError(err)
 	codeHash := stringToHash(t, "044852b2a670ade5407e78fb2863c51de9fcb96542a07186fe3aeda6bb8a116d")
 
@@ -377,7 +385,7 @@ func TestRangeProofCodeHashes(t *testing.T) {
 func TestRangeProofFreeReleasesKeepAlive(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	_, _, batch := kvForTest(50)
+	_, _, batch := kvForTest(mediumNumEntries)
 	root, err := db.Update(batch)
 	r.NoError(err)
 
@@ -400,7 +408,7 @@ func TestRangeProofFreeReleasesKeepAlive(t *testing.T) {
 func TestRangeProofCommitReleasesKeepAlive(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	_, _, batch := kvForTest(50)
+	_, _, batch := kvForTest(mediumNumEntries)
 	root, err := db.Update(batch)
 	r.NoError(err)
 
@@ -433,7 +441,7 @@ func TestRangeProofCommitReleasesKeepAlive(t *testing.T) {
 func TestRangeProofFinalizerCleanup(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
-	_, _, batch := kvForTest(50)
+	_, _, batch := kvForTest(mediumNumEntries)
 	root, err := db.Update(batch)
 	r.NoError(err)
 
@@ -471,7 +479,7 @@ func TestChangeProofCreation(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Insert first half of data in the first batch
-	_, _, batch := kvForTest(10000)
+	_, _, batch := kvForTest(largeNumEntries)
 	root1, err := db.Update(batch[:5000])
 	r.NoError(err)
 
@@ -488,7 +496,7 @@ func TestChangeProofDiffersAfterUpdate(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Insert 2500 entries in the first batch
-	_, _, batch := kvForTest(10000)
+	_, _, batch := kvForTest(largeNumEntries)
 	root1, err := db.Update(batch[:2500])
 	r.NoError(err)
 
@@ -517,7 +525,7 @@ func TestRoundTripChangeProofSerialization(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Insert some data.
-	_, _, batch := kvForTest(10)
+	_, _, batch := kvForTest(smallNumEntries)
 	root1, err := db.Update(batch[:5])
 	r.NoError(err)
 
@@ -545,7 +553,7 @@ func TestVerifyChangeProof(t *testing.T) {
 	dbB := newTestDatabase(t)
 
 	// Insert some data.
-	_, _, batch := kvForTest(10)
+	_, _, batch := kvForTest(smallNumEntries)
 	rootA, err := dbA.Update(batch[:5])
 	r.NoError(err)
 	rootB, err := dbB.Update(batch[:5])
@@ -578,7 +586,7 @@ func TestVerifyEmptyChangeProofRange(t *testing.T) {
 	dbB := newTestDatabase(t)
 
 	// Insert some data.
-	_, _, batch := kvForTest(9)
+	_, _, batch := kvForTest(emptyRangeNumEntries)
 	rootA, err := dbA.Update(batch[:5])
 	r.NoError(err)
 	rootB, err := dbB.Update(batch[:5])
@@ -601,12 +609,12 @@ func TestVerifyEmptyChangeProofRange(t *testing.T) {
 
 	// Create a change proof from dbA. This should create an empty changeProof because
 	// the start and end keys are both from the first insert.
-	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, startKey, endKey, 5)
+	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, startKey, endKey, emptyRangeProofLen)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
 	// Verify the change proof.
-	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, startKey, endKey, 5)
+	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, startKey, endKey, emptyRangeProofLen)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
 
@@ -622,7 +630,7 @@ func TestVerifyAndCommitChangeProof(t *testing.T) {
 	dbB := newTestDatabase(t)
 
 	// Insert some data.
-	keys, vals, batch := kvForTest(100)
+	keys, vals, batch := kvForTest(numEntries)
 	root, err := dbA.Update(batch[:50])
 	r.NoError(err)
 	_, err = dbB.Update(batch[:50])
@@ -666,7 +674,7 @@ func TestChangeProofFindNextKey(t *testing.T) {
 	dbB := newTestDatabase(t)
 
 	// Insert first half of data in the first batch
-	_, _, batch := kvForTest(10000)
+	_, _, batch := kvForTest(largeNumEntries)
 	rootA, err := dbA.Update(batch[:5000])
 	r.NoError(err)
 
@@ -777,7 +785,7 @@ func TestMultiRoundChangeProof(t *testing.T) {
 			dbB := newTestDatabase(t)
 
 			// Insert first half of data in the first batch
-			keys, vals, batch := kvForTest(100)
+			keys, vals, batch := kvForTest(numEntries)
 			rootA, err := dbA.Update(batch[:50])
 			r.NoError(err)
 

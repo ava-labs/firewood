@@ -21,7 +21,6 @@ import (
 
 const metricsTestKeys = 10
 
-
 var (
 	metricsPort     = uint16(3000)
 	expectedMetrics = map[string]dto.MetricType{
@@ -85,7 +84,7 @@ func TestMetrics(t *testing.T) {
 
 	db, logPath := newDbWithMetricsAndLogs(t)
 	// batch update
-	_, _, batch := kvForTest(10)
+	_, _, batch := kvForTest(metricsTestKeys)
 	_, err := db.Update(batch)
 	r.NoError(err)
 
@@ -103,7 +102,7 @@ func TestExpensiveMetrics(t *testing.T) {
 	r := require.New(t)
 	db, _ := newDbWithMetricsAndLogs(t, WithExpensiveMetrics())
 	// batch update
-	_, _, batch := kvForTest(10)
+	_, _, batch := kvForTest(metricsTestKeys)
 	_, err := db.Update(batch)
 	r.NoError(err)
 

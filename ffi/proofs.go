@@ -766,7 +766,9 @@ func getVerifiedChangeProofFromVerifiedChangeProofResult(result C.VerifiedChange
 	}
 }
 
-func getProposedChangeProofFromProposedChangeProofResult(db *Database, result C.ProposedChangeProofResult) (*ProposedChangeProof, error) {
+func getProposedChangeProofFromProposedChangeProofResult(
+	db *Database, result C.ProposedChangeProofResult,
+) (*ProposedChangeProof, error) {
 	switch result.tag {
 	case C.ProposedChangeProofResult_NullHandlePointer:
 		return nil, errDBClosed
