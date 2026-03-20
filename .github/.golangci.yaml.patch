@@ -1,5 +1,5 @@
---- .github/.golangci.yaml	2026-02-20 16:14:53.739528860 +0000
-+++ ffi/.golangci.yaml	2026-02-20 16:00:50.182324273 +0000
+--- .github/.golangci.yaml	2026-03-19 15:26:49
++++ ffi/.golangci.yaml	2026-03-19 15:18:18
 @@ -40,7 +40,7 @@
          - standard
          - default
@@ -41,7 +41,13 @@
      - nolintlint
      - perfsprint
      - prealloc
-@@ -97,12 +97,10 @@
+@@ -93,12 +93,12 @@
+     - usestdlibvars
+     - whitespace
+   settings:
++    errcheck:
++      disable-default-exclusions: true
+     depguard:
        rules:
          packages:
            deny:
@@ -50,11 +56,7 @@
              - pkg: github.com/golang/mock/gomock
                desc: go.uber.org/mock/gomock should be used instead.
              # Note: testify/assert is checked separately by test_warn_testify_assert
-             # in lint.sh to produce warnings instead of errors.
-             - pkg: io/ioutil
-               desc: io/ioutil is deprecated. Use package io or os instead.
-     errorlint:
-@@ -113,33 +111,10 @@
+@@ -113,33 +113,10 @@
      forbidigo:
        # Forbid the following identifiers (list of regexp).
        forbid:
@@ -88,7 +90,7 @@
      revive:
        rules:
          # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#bool-literal-in-expr
-@@ -203,17 +178,6 @@
+@@ -203,17 +180,6 @@
          # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#useless-break
          - name: useless-break
            disabled: false
