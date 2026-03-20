@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1773905256092,
+  "lastUpdate": 1773991348167,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -1597,6 +1597,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 76.63201476677136,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "b76315ebf2a0bcbdbd0714bf656ef487476ae858",
+          "message": "feat(reconstruction): Add Go bindings and tests (#1814)\n\n## Why this should be merged\n\nAdds a go layer for reconstructed revisions\n\n## How this works\n\nAdded reconstructed.go with Go wrapper for ReconstructedHandle\n\n## How this was tested\n\nAdded reconstructed_test.go with comprehensive tests\n\n## Breaking Changes\n\nNone, but adds new functionality\n\n---------\n\nSigned-off-by: Ron Kuris <swcafe@gmail.com>\nCo-authored-by: Austin Larson <78000745+alarso16@users.noreply.github.com>",
+          "timestamp": "2026-03-19T22:05:01Z",
+          "url": "https://github.com/ava-labs/firewood/commit/b76315ebf2a0bcbdbd0714bf656ef487476ae858"
+        },
+        "date": 1773991347265,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 168.11924625994365,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5948.1589541141175,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 110.20919282691123,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5758.390971285127,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 77.00834768716531,
             "unit": "block_accept_ms/ggas"
           }
         ]
