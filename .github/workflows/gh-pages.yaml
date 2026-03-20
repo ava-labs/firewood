@@ -3,8 +3,14 @@ name: gh-pages
 on:
   push:
     branches:
-      - "main"
-      - "rkuris/gh-pages"
+      - main
+  pull_request:
+    paths:
+      # trigger if a pr touches the workflow definition to validate it, but not
+      # for other changes to avoid unnecessary builds.
+      - .github/workflows/gh-pages.yaml
+  # allow manual trigger because we cannot "retry" a deploy step
+  workflow_dispatch:
   # Rebuild pages after benchmark workflow completes.
   # Currently only scheduled runs (which run on main) trigger this.
   # If we later add feature branch benchmarks, remove `branches` filter -
@@ -24,23 +30,25 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: main  # Always build docs from main
+          ref: main # Always build docs from main
       - uses: dtolnay/rust-toolchain@631a55b12751854ce901bb631d5902ceb48146f7 # @stable
       # caution: this is the same restore as in ci.yaml
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # @v2 -> v2.9.1
         with:
           save-if: "false"
-      - name: Build
+      - uses: actions/setup-go@v6
+        with:
+          go-version: 1.25
+      - name: Install doc2go
+        run: go install go.abhg.dev/doc2go@latest
+      - name: Build Rust docs
         run: cargo doc --document-private-items --no-deps
-      - name: Set up _site redirect to firewood
-        run: |
-          rm -fr _site
-          mkdir _site
-          echo "<meta http-equiv=\"refresh\" content=\"0; url=firewood\">" > _site/index.html
-      - name: Copy doc files to _site
-        run: |
-          cp -rv target/doc/* ./_site
-          cp -rv docs/assets ./_site
+      - name: Build go docs
+        # `-C` changes the cwd of the process so relative paths resolve from
+        # inside the `ffi` directory. Explicitly using $(pwd) for clarity.
+        run: doc2go -C ffi -home github.com/ava-labs/firewood/ffi -out $(pwd)/target/doc/ffi ./...
+      - name: Copy static assets
+        run: cp -rv docs/assets target/doc/
       # GitHub Pages deploys from a single source (overwrites, doesn't merge).
       # Benchmark history lives on benchmark-data branch (for append-only storage).
       # We merge both into _site/ so a single deployment serves docs + benchmarks.
@@ -56,25 +64,22 @@ jobs:
             echo "No benchmark-data branch yet, skipping"
             exit 0
           fi
-          
-          # Extract benchmark directories from benchmark-data branch into current dir
-          # These may not exist if no benchmarks have been run yet for that category
-          git checkout origin/benchmark-data -- dev 2>/dev/null || echo "No dev/ directory (no feature branch benchmarks yet)"
-          git checkout origin/benchmark-data -- bench 2>/dev/null || echo "No bench/ directory (no main branch benchmarks yet)"
-          
-          # Copy to _site - at least one must exist
-          [[ -d dev ]] && cp -rv dev _site/
-          [[ -d bench ]] && cp -rv bench _site/
-          
-          [[ -d dev || -d bench ]] || { echo "::error::No benchmark data (dev/ or bench/) found"; exit 1; }
+
+          # Extract benchmark directories from benchmark-data branch into target/doc/
+          git archive FETCH_HEAD | tar -vx -C target/doc/
+      - name: Generate landing page
+        run: |
+          echo "<meta http-equiv=\"refresh\" content=\"0; url=firewood\">" > target/doc/index.html
       - uses: actions/upload-artifact@v7
         with:
           name: pages
-          path: _site
+          path: target/doc
           if-no-files-found: error
           overwrite: true
           include-hidden-files: true
   deploy:
+    # Pull requests only validates the build step but does not actually deploy
+    if: github.event_name != 'pull_request'
     needs: build
     permissions:
       pages: write
