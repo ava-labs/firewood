@@ -695,58 +695,52 @@ func TestChangeProofFindNextKey(t *testing.T) {
 	r.NoError(nextRange.Free())
 }
 
-func TestProposedChangeProofFreeReleasesKeepAlive(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
+func TestProposedChangeProofKeepAlive(t *testing.T) {
+	tests := []struct {
+		name    string
+		release func(*require.Assertions, *ProposedChangeProof)
+	}{
+		{
+			// Free the proof (releases keep-alive)
+			"free", func(r *require.Assertions, p *ProposedChangeProof) {
+				r.NoError(p.Free())
+			},
+		},
+		{
+			// Commit the proof (releases keep-alive)
+			"commit", func(r *require.Assertions, p *ProposedChangeProof) {
+				_, err := p.CommitChangeProof()
+				r.NoError(err)
+			},
+		},
+		{
+			// GC finalizer releases keep-alive
+			"gc", func(_ *require.Assertions, p *ProposedChangeProof) {
+				runtime.KeepAlive(p)
+				//nolint:ineffassign // necessary to drop the reference for GC
+				p = nil
+				runtime.GC()
+			},
+		},
+	}
 
-	proposed, _ := newProposedChangeProof(t, dbA, dbB)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			dbA := newTestDatabase(t)
+			dbB := newTestDatabase(t)
 
-	// Database should not be closeable while proof has keep-alive
-	r.ErrorIs(dbB.Close(oneSecCtx(t)), ErrActiveKeepAliveHandles)
+			proposed, _ := newProposedChangeProof(t, dbA, dbB)
 
-	// Free the proof (releases keep-alive)
-	r.NoError(proposed.Free())
+			// Database should not be closeable while proof has keep-alive
+			r.ErrorIs(dbB.Close(oneSecCtx(t)), ErrActiveKeepAliveHandles)
 
-	// Database should now be closeable
-	r.NoError(dbB.Close(oneSecCtx(t)))
-}
+			tt.release(r, proposed)
 
-func TestProposedChangeProofCommitReleasesKeepAlive(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
-
-	proposed, _ := newProposedChangeProof(t, dbA, dbB)
-
-	// Database should not be closeable while proof has keep-alive
-	r.ErrorIs(dbB.Close(oneSecCtx(t)), ErrActiveKeepAliveHandles)
-
-	// Commit the proof (releases keep-alive)
-	_, err := proposed.CommitChangeProof()
-	r.NoError(err)
-
-	// Database should now be closeable
-	r.NoError(dbB.Close(oneSecCtx(t)))
-}
-
-// TestProposedChangeProofFinalizerCleanup verifies that the finalizer properly
-// releases the keep-alive handle when the proof goes out of scope.
-func TestProposedChangeProofFinalizerCleanup(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
-
-	proposed, _ := newProposedChangeProof(t, dbA, dbB)
-
-	// Database should not be closeable while proof has keep-alive
-	r.ErrorIs(dbB.Close(oneSecCtx(t)), ErrActiveKeepAliveHandles)
-
-	runtime.KeepAlive(proposed)
-	proposed = nil //nolint:ineffassign // necessary to drop the reference for GC
-	runtime.GC()
-
-	r.NoError(dbB.Close(t.Context()), "Database should be closeable after proof is garbage collected")
+			// Database should now be closeable
+			r.NoError(dbB.Close(oneSecCtx(t)))
+		})
+	}
 }
 
 func TestMultiRoundChangeProof(t *testing.T) {
