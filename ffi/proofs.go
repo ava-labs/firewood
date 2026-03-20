@@ -39,12 +39,12 @@ package ffi
 // #cgo nocallback fwd_change_proof_find_next_key_proposed
 // #cgo noescape fwd_change_proof_to_bytes
 // #cgo nocallback fwd_change_proof_to_bytes
-// #cgo noescape fwd_verified_change_proof_to_bytes
-// #cgo nocallback fwd_verified_change_proof_to_bytes
 // #cgo noescape fwd_change_proof_from_bytes
 // #cgo nocallback fwd_change_proof_from_bytes
 // #cgo noescape fwd_free_change_proof
 // #cgo nocallback fwd_free_change_proof
+// #cgo noescape fwd_verified_change_proof_to_bytes
+// #cgo nocallback fwd_verified_change_proof_to_bytes
 // #cgo noescape fwd_free_verified_change_proof
 // #cgo nocallback fwd_free_verified_change_proof
 // #cgo noescape fwd_free_proposed_change_proof
