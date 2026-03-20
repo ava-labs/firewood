@@ -46,7 +46,7 @@ jobs:
       - name: Build go docs
         # `-C` changes the cwd of the process so relative paths resolve from
         # inside the `ffi` directory. Explicitly using $(pwd) for clarity.
-        run: doc2go -C ffi -out $(pwd)/target/doc/ffi ./...
+        run: doc2go -C ffi -home github.com/ava-labs/firewood/ffi -out $(pwd)/target/doc/ffi ./...
       - name: Copy static assets
         run: cp -rv docs/assets target/doc/
       # GitHub Pages deploys from a single source (overwrites, doesn't merge).

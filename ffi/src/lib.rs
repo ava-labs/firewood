@@ -6,9 +6,9 @@
 //! This crate provides C bindings for the Firewood database, allowing it to be
 //! used from C and other languages that can interface with C.
 //!
-//! Go users may wish to see the [`firewood-go`] documentation instead.
+//! Go users may wish to see the documentation for the [`Go bindings`].
 //!
-//! [`firewood-go`]: https://ava-labs.github.io/firewood/ffi/index.html
+//! [`Go bindings`]: https://ava-labs.github.io/firewood/ffi/index.html
 
 // HINT WHEN REFERENCING TYPES OUTSIDE THIS LIBRARY:
 // - Anything that is outside the crate must be included as a `type` alias (not just
