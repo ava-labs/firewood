@@ -55,12 +55,12 @@ cast_possible_truncation = "allow"
 
 [workspace.dependencies]
 # workspace local packages
-firewood = { path = "firewood", version = "0.3.0" }
+firewood = { path = "firewood", version = "0.3.1" }
 firewood-macros = { path = "firewood-macros", version = "0.2.0" }
-firewood-storage = { path = "storage", version = "0.3.0" }
-firewood-ffi = { path = "ffi", version = "0.3.0" }
+firewood-storage = { path = "storage", version = "0.3.1" }
+firewood-ffi = { path = "ffi", version = "0.3.1" }
 firewood-metrics = { path = "metrics", version = "0.3.0" }
-firewood-replay = { path = "replay", version = "0.3.0" }
+firewood-replay = { path = "replay", version = "0.3.1" }
 
 # no longer bumping with workspace
 firewood-triehash = { path = "triehash", version = "0.0.16" }
