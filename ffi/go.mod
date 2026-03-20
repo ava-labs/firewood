@@ -12,6 +12,7 @@ require (
 	github.com/prometheus/common v0.62.0
 	github.com/stretchr/testify v1.10.0
 	github.com/vmihailenco/msgpack/v5 v5.4.1
+	golang.org/x/sync v0.19.0
 	golang.org/x/tools v0.42.0
 )
 
@@ -25,7 +26,6 @@ require (
 	github.com/prometheus/procfs v0.15.1 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	golang.org/x/mod v0.33.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.41.0 // indirect
 	google.golang.org/protobuf v1.36.5 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect

@@ -27,12 +27,12 @@ import (
 //
 // An Iterator holds a reference to the underlying view, so it can safely outlive the
 // Revision or Proposal it was created from. The underlying state will not be released
-// until the Iterator is dropped.
+// until the Iterator is released.
 //
 // Iterator supports two modes of accessing key-value pairs. [Iterator.Next] copies
 // the key and value into Go-managed memory. [Iterator.NextBorrowed] returns slices
 // that borrow Rust-owned memory, which is faster but the slices are only valid until
-// the next call to Next, NextBorrowed, or Drop.
+// the next call to Next, NextBorrowed, or [Iterator.Drop].
 type Iterator struct {
 	// handle is an opaque pointer to the iterator within Firewood. It should be
 	// passed to the C FFI functions that operate on iterators
@@ -53,7 +53,7 @@ type Iterator struct {
 	currentPair  *ownedKeyValue
 	currentKey   []byte
 	currentValue []byte
-	// FFI resource for current pair or batch to free on advance or drop
+	// FFI resource for current pair or batch to free on advance or release
 	currentResource interface{ free() error }
 
 	// err is the error from the iterator, if any
@@ -155,7 +155,8 @@ func (it *Iterator) NextBorrowed() bool {
 // If the iterator has not been advanced or is exhausted, it returns nil.
 //
 // If the iterator was advanced with [Iterator.NextBorrowed], the returned slice
-// borrows Rust memory and is only valid until the next advance or drop.
+// borrows Rust memory and is only valid until the next call to [Iterator.Next],
+// [Iterator.NextBorrowed], or [Iterator.Drop].
 func (it *Iterator) Key() []byte {
 	if it.currentPair == nil || it.err != nil {
 		return nil
@@ -167,7 +168,8 @@ func (it *Iterator) Key() []byte {
 // If the iterator has not been advanced or is exhausted, it returns nil.
 //
 // If the iterator was advanced with [Iterator.NextBorrowed], the returned slice
-// borrows Rust memory and is only valid until the next advance or drop.
+// borrows Rust memory and is only valid until the next call to [Iterator.Next],
+// [Iterator.NextBorrowed], or [Iterator.Drop].
 func (it *Iterator) Value() []byte {
 	if it.currentPair == nil || it.err != nil {
 		return nil
@@ -189,7 +191,7 @@ func (it *Iterator) Drop() error {
 	err := it.freeCurrentAllocation()
 	if it.handle != nil {
 		// Always free the iterator even if releasing the current KV/batch failed.
-		// The iterator holds a NodeStore ref that must be dropped.
+		// The iterator holds a NodeStore ref that must be released.
 		err = errors.Join(
 			err,
 			getErrorFromVoidResult(C.fwd_free_iterator(it.handle)))
