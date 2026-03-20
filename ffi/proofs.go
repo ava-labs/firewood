@@ -407,7 +407,7 @@ func (db *Database) ChangeProof(
 
 // VerifyChangeProof verifies the provided change [proof] proves the changes
 // between [startRoot] and [endRoot] for keys in the range [startKey, endKey].
-func (proof *ChangeProof) VerifyChangeProof(
+func (p *ChangeProof) VerifyChangeProof(
 	startRoot, endRoot Hash,
 	startKey, endKey Maybe[[]byte],
 	maxLength uint32,
@@ -416,7 +416,7 @@ func (proof *ChangeProof) VerifyChangeProof(
 	defer pinner.Unpin()
 
 	args := C.VerifyChangeProofArgs{
-		proof:      proof.handle,
+		proof:      p.handle,
 		start_root: newCHashKey(startRoot),
 		end_root:   newCHashKey(endRoot),
 		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
@@ -454,21 +454,22 @@ func (db *Database) ProposeChangeProof(
 	return proposed, nil
 }
 
-func (proof *ProposedChangeProof) CommitChangeProof() (Hash, error) {
-	proof.db.handleLock.RLock()
-	defer proof.db.handleLock.RUnlock()
-	if proof.db.handle == nil {
+// CommitChangeProof commits the proposed change proof to the database and returns the new root hash.
+func (p *ProposedChangeProof) CommitChangeProof() (Hash, error) {
+	p.db.handleLock.RLock()
+	defer p.db.handleLock.RUnlock()
+	if p.db.handle == nil {
 		return EmptyRoot, errDBClosed
 	}
 
 	args := C.CommittedChangeProofArgs{
-		proof: proof.handle,
+		proof: p.handle,
 	}
 
 	var hash Hash
-	err := proof.keepAliveHandle.disown(true /* evenOnError */, func() error {
-		proof.db.commitLock.Lock()
-		defer proof.db.commitLock.Unlock()
+	err := p.keepAliveHandle.disown(true /* evenOnError */, func() error {
+		p.db.commitLock.Lock()
+		defer p.db.commitLock.Unlock()
 		var err error
 		hash, err = getHashKeyFromHashResult(C.fwd_db_commit_change_proof(args))
 		return err
@@ -476,8 +477,9 @@ func (proof *ProposedChangeProof) CommitChangeProof() (Hash, error) {
 	return hash, err
 }
 
-func (proof *ProposedChangeProof) FindNextKey() (*NextKeyRange, error) {
-	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_change_proof_find_next_key_proposed(proof.handle))
+// FindNextKey returns the next key range for this proposed change proof.
+func (p *ProposedChangeProof) FindNextKey() (*NextKeyRange, error) {
+	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_change_proof_find_next_key_proposed(p.handle))
 }
 
 /*
@@ -624,6 +626,7 @@ func (p *ProposedChangeProof) Free() error {
 		}
 
 		p.handle = nil
+
 		return nil
 	})
 }
