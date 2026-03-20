@@ -19,6 +19,9 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
+const metricsTestKeys = 10
+
+
 var (
 	metricsPort     = uint16(3000)
 	expectedMetrics = map[string]dto.MetricType{
@@ -134,7 +137,8 @@ func assertMetrics(t *testing.T, metricsPort uint16, expected map[string]dto.Met
 	)
 	r.NoError(err)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	const metricsClientTimeout = 10 * time.Second
+	client := &http.Client{Timeout: metricsClientTimeout}
 	resp, err := client.Do(req)
 	r.NoError(err)
 
