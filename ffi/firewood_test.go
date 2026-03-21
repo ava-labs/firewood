@@ -35,14 +35,14 @@ const (
 		"direct child of the most recent commit. "
 
 	// Numeric test constants
-	testNumKeys      = 10
+	testNumKeys       = 10
 	testNumKeysDouble = 20
-	testNumKeysQuad  = 40
-	testHalfKeys     = 5
+	testNumKeysQuad   = 40
+	testHalfKeys      = 5
 	testFiveRevisions = 5
-	testTwoRevisions = 2
-	testThreeKeys    = 3
-	expectedParts    = 2
+	testTwoRevisions  = 2
+	testThreeKeys     = 3
+	expectedParts     = 2
 
 	// Format string constants
 	getFmt            = "Get(%d)"
@@ -52,6 +52,7 @@ const (
 	nonExistentKey    = "non-existent"
 	proposeMethodFmt  = "%T.Propose(...)"
 	revisionMethodFmt = "%T.Revision(...)"
+	dotFormatKeyword  = "digraph"
 )
 
 // expectedRoots contains the expected root hashes for different use cases across both default
@@ -1113,7 +1114,7 @@ func TestRevisionOutlivesReaping(t *testing.T) {
 	// commit two times, this would normally reap the first revision
 	secondRoot, err := db.Update(batch[testNumKeys:testNumKeysDouble])
 	r.NoError(err)
-	_, err = db.Update(batch[testNumKeysDouble:testNumKeysDouble+testNumKeys])
+	_, err = db.Update(batch[testNumKeysDouble : testNumKeysDouble+testNumKeys])
 	r.NoError(err)
 
 	// revision should be still accessible, as we're hanging on to it, prevent reaping
@@ -1600,7 +1601,7 @@ func TestDump(t *testing.T) {
 	// Test dump on empty database
 	dump, err := db.Dump()
 	r.NoError(err)
-	r.Contains(dump, "digraph", "dump should be in DOT format")
+	r.Contains(dump, dotFormatKeyword, "dump should be in DOT format")
 
 	// Insert a few keys and values
 	keys := [][]byte{[]byte("key1"), []byte("key2"), []byte("key3")}
@@ -1612,7 +1613,7 @@ func TestDump(t *testing.T) {
 	// Test dump on database with data
 	dump, err = db.Dump()
 	r.NoError(err)
-	r.Contains(dump, "digraph", "dump should be in DOT format")
+	r.Contains(dump, dotFormatKeyword, "dump should be in DOT format")
 	// Verify that the values appear in the dump (keys are encoded/abbreviated in DOT format)
 	for _, val := range vals {
 		r.Contains(dump, string(val), "dump should contain value: %s", string(val))
@@ -1627,7 +1628,7 @@ func TestDump(t *testing.T) {
 
 	revisionDump, err := revision.Dump()
 	r.NoError(err)
-	r.Contains(revisionDump, "digraph", "revision dump should be in DOT format")
+	r.Contains(revisionDump, dotFormatKeyword, "revision dump should be in DOT format")
 	for _, val := range vals {
 		r.Contains(revisionDump, string(val), "revision dump should contain value: %s", string(val))
 	}
@@ -1643,7 +1644,7 @@ func TestDump(t *testing.T) {
 
 	proposalDump, err := proposal.Dump()
 	r.NoError(err)
-	r.Contains(proposalDump, "digraph", "proposal dump should be in DOT format")
+	r.Contains(proposalDump, dotFormatKeyword, "proposal dump should be in DOT format")
 	// Proposal should contain both old and new values
 	for _, val := range append(vals, newVals...) {
 		r.Contains(proposalDump, string(val), "proposal dump should contain value: %s", string(val))

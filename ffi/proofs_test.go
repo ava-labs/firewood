@@ -31,10 +31,10 @@ const (
 
 	// Proof length limit used in TestVerifyEmptyChangeProofRange.
 	emptyRangeProofLen = 5
-
 )
 
 // testKey is the account key used in TestRangeProofCodeHashes.
+//
 //nolint:gochecknoglobals // test-only
 var testKey = [keyLen]byte{0x12, 0x34, 0x56}
 

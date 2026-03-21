@@ -167,17 +167,17 @@ func (tr *merkleTriePair) commit() {
 	tr.require.NoError(err)
 }
 
-const initialAccountBalance = 100
-
 // createAccount generates a new, unique account and adds it to both tries and the tracked
 // current state.
 func (tr *merkleTriePair) createAccount() {
+	const initialAccountBalance = 100
+
 	tr.inputCounter++
 	addr := common.BytesToAddress(crypto.Keccak256Hash(binary.BigEndian.AppendUint64(nil, tr.inputCounter)).Bytes())
 	accHash := crypto.Keccak256Hash(addr[:])
 	acc := &types.StateAccount{
 		Nonce:    1,
-		Balance:  uint256.NewInt(100),
+		Balance:  uint256.NewInt(initialAccountBalance),
 		Root:     types.EmptyRootHash,
 		CodeHash: types.EmptyCodeHash[:],
 	}
@@ -198,17 +198,17 @@ func (tr *merkleTriePair) selectAccount(addrIndex int) (common.Address, common.H
 	return addr, crypto.Keccak256Hash(addr[:])
 }
 
-const balanceIncrement = 3
-
 // updateAccount selects a random account, increments its nonce, and adds the update
 // to the pending changes for both tries.
 func (tr *merkleTriePair) updateAccount(addrIndex int) {
+	const balanceIncrement = 3
+
 	addr, accHash := tr.selectAccount(addrIndex)
 	acc, err := tr.accountTrie.GetAccount(addr)
 	tr.require.NoError(err)
 	acc.Nonce++
 	acc.CodeHash = crypto.Keccak256Hash(acc.CodeHash[:]).Bytes()
-	acc.Balance.Add(acc.Balance, uint256.NewInt(3))
+	acc.Balance.Add(acc.Balance, uint256.NewInt(balanceIncrement))
 	accountRLP, err := rlp.EncodeToBytes(acc)
 	tr.require.NoError(err)
 
@@ -321,15 +321,15 @@ func (tr *merkleTriePair) deleteStorage(accountIndex int, storageIndexInput uint
 	tr.pendingFwdBatch = append(tr.pendingFwdBatch, firewood.Delete(fwdKey))
 }
 
-const (
-	numFuzzSeeds      = 5
-	fuzzSeedStepBytes = 32
-)
-
 func FuzzFirewoodTree(f *testing.F) {
-	for randSeed := range int64(5) {
+	const (
+		numFuzzSeeds      = 5
+		fuzzSeedStepBytes = 32
+	)
+
+	for randSeed := range int64(numFuzzSeeds) {
 		rand := rand.New(rand.NewSource(randSeed))
-		steps := make([]byte, 32)
+		steps := make([]byte, fuzzSeedStepBytes)
 		_, err := rand.Read(steps)
 		if err != nil {
 			f.Fatal(err)
