@@ -11,8 +11,8 @@ use std::fmt::Debug;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 
+pub use crate::batch_op::{BatchIter, BatchOp, IntoBatchIter, KeyValuePair, TryIntoBatch};
 use crate::merkle::changes::ChangeProof;
-pub use crate::v2::batch_op::{BatchIter, BatchOp, IntoBatchIter, KeyValuePair, TryIntoBatch};
 
 /// A `KeyType` is something that can be xcast to a u8 reference,
 /// and can be sent and shared across threads. References with
@@ -198,12 +198,16 @@ pub enum Error {
     #[error("feature not supported in this build: {0}")]
     FeatureNotSupported(String),
 
-    /// Both `node_cache_size` and `node_cache_memory_limit` were specified in configuration
-    #[error("both node_cache_size and node_cache_memory_limit specified; use only one")]
-    ConflictingCacheConfig,
-
     #[error("commit count must be positive")]
     ZeroCommitCount,
+
+    #[error(
+        "max_revisions ({max_revisions}) must be > deferred_persistence_commit_count ({commit_count})"
+    )]
+    InsufficientRevisions {
+        max_revisions: usize,
+        commit_count: u64,
+    },
 }
 
 impl From<std::convert::Infallible> for Error {
@@ -215,7 +219,7 @@ impl From<std::convert::Infallible> for Error {
 impl From<RevisionManagerError> for Error {
     fn from(err: RevisionManagerError) -> Self {
         use RevisionManagerError::{
-            FileIoError, IOError, NotLatest, PersistError, RevisionNotFound,
+            FileIoError, IOError, InsufficientRevisions, NotLatest, PersistError, RevisionNotFound,
             RevisionWithoutAddress, RootStoreError,
         };
         match err {
@@ -228,6 +232,13 @@ impl From<RevisionManagerError> for Error {
             IOError(err) => Self::IO(err),
             RootStoreError(err) => Self::RootStoreError(err),
             PersistError(err) => Self::DeferredPersistenceError(err),
+            InsufficientRevisions {
+                max_revisions,
+                commit_count,
+            } => Self::InsufficientRevisions {
+                max_revisions,
+                commit_count,
+            },
         }
     }
 }
@@ -279,8 +290,7 @@ pub trait Db {
     ///
     /// If the database is empty, this will return None, unless the ethhash feature is enabled.
     /// In that case, we return the special ethhash compatible empty trie hash.
-    #[expect(clippy::missing_errors_doc)]
-    fn root_hash(&self) -> Result<Option<TrieHash>, Error>;
+    fn root_hash(&self) -> Option<TrieHash>;
 
     /// Propose a change to the database via a batch
     ///
@@ -302,7 +312,9 @@ pub trait Db {
 ///    historical revision
 /// 2. From [`Db::propose`] which is a view on top of the most recently
 ///    committed revision with changes applied; or
-/// 3. From [`Proposal::propose`] which is a view on top of another proposal.
+/// 3. From [`Proposal::propose`] which is a view on top of another proposal; or
+/// 4. From [`Reconstructible::reconstruct`] which is a view of a
+///    reconstructed revision.
 pub trait DbView {
     /// The type of a stream of key/value pairs
     type Iter<'view>: Iterator<Item = Result<(Key, Value), FileIoError>>
@@ -315,8 +327,7 @@ pub trait DbView {
     ///
     /// If the database is empty, this will return None, unless the ethhash feature is enabled.
     /// In that case, we return the special ethhash compatible empty trie hash.
-    #[expect(clippy::missing_errors_doc)]
-    fn root_hash(&self) -> Result<Option<HashKey>, Error>;
+    fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
     #[expect(clippy::missing_errors_doc)]
@@ -390,8 +401,7 @@ pub trait DynDbView: Debug + Send + Sync + 'static {
     ///
     /// If the database is empty, this will return None, unless the ethhash feature is enabled.
     /// In that case, we return the special ethhash compatible empty trie hash.
-    #[expect(clippy::missing_errors_doc)]
-    fn root_hash(&self) -> Result<Option<HashKey>, Error>;
+    fn root_hash(&self) -> Option<HashKey>;
 
     /// Get the value of a specific key
     #[expect(clippy::missing_errors_doc)]
@@ -454,7 +464,7 @@ impl<T: Debug + DbView + Send + Sync + 'static> DynDbView for T
 where
     for<'view> T::Iter<'view>: Sized,
 {
-    fn root_hash(&self) -> Result<Option<HashKey>, Error> {
+    fn root_hash(&self) -> Option<HashKey> {
         DbView::root_hash(self)
     }
 
@@ -487,6 +497,28 @@ where
     fn dump_to_string(&self) -> Result<String, Error> {
         DbView::dump_to_string(self)
     }
+}
+
+/// A reconstructible database view.
+///
+/// This trait models linear reconstruction by consuming `self` and returning
+/// a new reconstructed view.
+pub trait Reconstructible: DbView {
+    /// The reconstructed output type.
+    type Reconstructed: DbView + Reconstructible<Reconstructed = Self::Reconstructed>;
+
+    /// Reconstruct a new view from this one by applying `data`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if applying the batch fails or if the underlying
+    /// storage cannot be read while resolving nodes.
+    fn reconstruct(self, data: impl IntoBatchIter) -> Result<Self::Reconstructed, Error>
+    where
+        Self: Sized;
+
+    /// The underlying database
+    fn db(&self) -> &crate::db::Db;
 }
 
 /// A proposal for a new revision of the database.

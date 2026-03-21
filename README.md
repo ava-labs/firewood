@@ -46,7 +46,8 @@ as well as carefully managing the free list during the creation and expiration o
 - `Revision` - A historical point-in-time state/version of the trie. This
   represents the entire trie, including all `Key`/`Value`s at that point
   in time, and all `Node`s.
-- `View` - This is the interface to read from a `Revision` or a `Proposal`.
+- `View` - A read-only interface into a `Revision`, `Proposal`, or
+  `Reconstructed` state.
 - `Node` - A node is a portion of a trie. A trie consists of nodes that are linked
   together. Nodes can point to other nodes and/or contain `Key`/`Value` pairs.
 - `Hash` - In this context, this refers to the merkle hash for a specific node.
@@ -72,6 +73,14 @@ as well as carefully managing the free list during the creation and expiration o
 - `Proposal` - A proposal consists of a base `Root Hash` and a `Batch`, but is not
   yet committed to the trie. In Firewood's most recent API, a `Proposal` is required
   to `Commit`.
+- `Reconstructed` - A reconstructed state consists of a base historical state and a
+  `Batch` applied in-memory.
+  - It is read-only.
+  - It cannot be committed.
+  - It differs from a `Proposal` because reconstructed states are not tracked as
+    uncommitted branches and do not participate in proposal-parent branching.
+- `Reconstructible` - Either a `Historical` or `Reconstructed` state, which supports
+  building new `Reconstructed` states by applying a `Batch`.
 - `Commit` - The operation of applying one or more `Proposal`s to the most recent
   `Revision`.
 
@@ -79,11 +88,32 @@ as well as carefully managing the free list during the creation and expiration o
 
 Firewood provides comprehensive metrics for monitoring database performance, resource utilization, and operational characteristics. For detailed information about all available metrics, how to enable them, and how to interpret them, see [METRICS.md](METRICS.md).
 
+## Development Environment
+
+[![Open in GitHub Codespaces](https://github.com/codespaces/badge.svg)](https://codespaces.new/ava-labs/firewood)
+
+The quickest way to get started is with the included devcontainer, which
+provides a fully configured environment with all required tools pre-installed.
+
+**GitHub Codespaces** — click the badge above or go to
+[codespaces.new/ava-labs/firewood](https://codespaces.new/ava-labs/firewood)
+to launch a ready-to-code environment in your browser.
+
+**VS Code Dev Containers** — with the
+[Dev Containers](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+extension installed, open this repository and select
+**Dev Containers: Reopen in Container** from the command palette.
+
+The devcontainer includes Rust (stable + nightly), Go, Nix (with flakes),
+sccache, and all project tooling. Compilation caches are stored in named
+Docker volumes so they persist across container rebuilds.
+
+See [`.devcontainer/`](.devcontainer/) for the full configuration.
+
 ## Build
 
 In order to build firewood, the following dependencies must be installed:
 
-- `protoc` See [installation instructions](https://grpc.io/docs/protoc-installation/).
 - `cargo` See [installation instructions](https://doc.rust-lang.org/cargo/getting-started/installation.html).
 - `make` See [download instructions](https://www.gnu.org/software/make/#download) or run `sudo apt install build-essential` on Linux.
 
@@ -117,9 +147,7 @@ Example(s) are in the [examples](firewood/examples) directory, that simulate rea
 use-cases. Try running the insert example via the command-line, via `cargo run --release
 --example insert`.
 
-There is a [fwdctl cli](fwdctl) for command-line operations on a database.
-
-There is also a [benchmark](benchmark) that shows some other example uses.
+For performance benchmarking — C-Chain re-execution, Rust criterion, and synthetic workloads — see [benchmark/README.md](benchmark/README.md).
 
 For maximum runtime performance at the cost of compile time,
 use `cargo run --maxperf` instead,

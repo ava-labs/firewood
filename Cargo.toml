@@ -55,24 +55,23 @@ cast_possible_truncation = "allow"
 
 [workspace.dependencies]
 # workspace local packages
-firewood = { path = "firewood", version = "0.1.0" }
-firewood-macros = { path = "firewood-macros", version = "0.1.0" }
-firewood-storage = { path = "storage", version = "0.1.0" }
-firewood-ffi = { path = "ffi", version = "0.1.0" }
-firewood-metrics = { path = "metrics", version = "0.1.0" }
-firewood-replay = { path = "replay", version = "0.1.0" }
+firewood = { path = "firewood", version = "0.3.1" }
+firewood-macros = { path = "firewood-macros", version = "0.2.0" }
+firewood-storage = { path = "storage", version = "0.3.1" }
+firewood-ffi = { path = "ffi", version = "0.3.1" }
+firewood-metrics = { path = "metrics", version = "0.3.0" }
+firewood-replay = { path = "replay", version = "0.3.1" }
 
 # no longer bumping with workspace
 firewood-triehash = { path = "triehash", version = "0.0.16" }
 
 # common dependencies
 aquamarine = "0.6.0"
-bytemuck = { version = "1.24.0", features = ["const_zeroed"] }
+bytemuck = { version = "1.25.0", features = ["const_zeroed"] }
 bytemuck_derive = "1.10.2"
-clap = { version = "4.5.54", features = ["derive"] }
-coarsetime = "0.1.37"
-env_logger = "0.11.8"
-fastrace = "0.7.16"
+clap = { version = "4.6.0", features = ["derive"] }
+env_logger = "0.11.9"
+fastrace = "0.7.17"
 hex = "0.4.3"
 integer-encoding = "4.1.0"
 log = "0.4.29"
@@ -80,16 +79,16 @@ metrics = "0.24.3"
 metrics-util = "0.20.1"
 nonzero_ext = "0.3.0"
 parking_lot = "0.12.5"
-rand_distr = "0.5.1"
+rand_distr = "0.6.0"
 sha2 = "0.10.9"
 smallvec = { version = "1.15.1", features = ["write", "union", "const_new"] }
 test-case = "3.3.1"
 thiserror = "2.0.18"
 
 # common dev dependencies
-criterion = "0.8.1"
+criterion = "0.8.2"
 ethereum-types = "0.16.0"
 hex-literal = "1.1.0"
 pprof = "0.15.0"
-rand = "0.9.2"
-tempfile = "3.24.0"
+rand = "0.10.0"
+tempfile = "3.27.0"

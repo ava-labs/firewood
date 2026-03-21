@@ -23,10 +23,10 @@ use std::collections::HashMap;
 use std::io::{self, Read};
 use std::time::Instant;
 
-use firewood::db::{BatchOp, Db, Proposal};
-use firewood::v2::api::{
+use firewood::api::{
     self, ArcDynDbView, Db as DbApi, DbView as DbViewApi, Proposal as ProposalApi,
 };
+use firewood::db::{BatchOp, Db, Proposal};
 use firewood_metrics::firewood_increment;
 use firewood_storage::InvalidTrieHashLength;
 
@@ -483,7 +483,7 @@ fn apply_operation<'db>(
 ) -> Result<Option<Box<[u8]>>, ReplayError> {
     match operation {
         DbOperation::GetLatest(GetLatest { key, .. }) => {
-            if let Some(root) = DbApi::root_hash(db)? {
+            if let Some(root) = DbApi::root_hash(db) {
                 let view = DbApi::revision(db, root)?;
                 let _ = DbViewApi::val(&*view, key)?;
             }
@@ -507,7 +507,7 @@ fn apply_operation<'db>(
                 return Ok(None);
             };
 
-            let root = firewood::v2::api::HashKey::try_from(root.as_ref())?;
+            let root = api::HashKey::try_from(root.as_ref())?;
             let view: ArcDynDbView = DbApi::revision(db, root)?;
             revisions.insert(revision_id, view);
             Ok(None)
@@ -522,7 +522,7 @@ fn apply_operation<'db>(
         }
 
         DbOperation::RootHash(_) => {
-            let _ = DbApi::root_hash(db)?;
+            let _ = DbApi::root_hash(db);
             Ok(None)
         }
 
@@ -813,9 +813,7 @@ mod tests {
 
         replay_from_reader(Cursor::new(buf), &db, None).expect("replay");
 
-        let root = DbApi::root_hash(&db)
-            .expect("root_hash")
-            .expect("non-empty");
+        let root = DbApi::root_hash(&db).expect("non-empty");
         let view = DbApi::revision(&db, root).expect("revision");
 
         for i in 0u8..5 {
@@ -858,9 +856,7 @@ mod tests {
 
         replay_from_reader(Cursor::new(buf), &db, None).expect("replay");
 
-        let root = DbApi::root_hash(&db)
-            .expect("root_hash")
-            .expect("non-empty");
+        let root = DbApi::root_hash(&db).expect("non-empty");
         let view = DbApi::revision(&db, root).expect("revision");
 
         for i in 0u8..3 {
@@ -916,9 +912,7 @@ mod tests {
 
         replay_from_reader(Cursor::new(buf), &db, None).expect("replay");
 
-        let root = DbApi::root_hash(&db)
-            .expect("root_hash")
-            .expect("non-empty");
+        let root = DbApi::root_hash(&db).expect("non-empty");
         let view = DbApi::revision(&db, root).expect("revision");
 
         let v1 = DbViewApi::val(&*view, [1]).expect("val").expect("exists");

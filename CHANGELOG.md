@@ -2,6 +2,146 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-03-20
+
+### 🚀 Features
+
+- *(c-chain-benchmark)* Add firewood-40m-41m test and harden bench-cchain ([#1800](https://github.com/ava-labs/firewood/pull/1800))
+- *(reconstruct)* Support Reconstructible revisions ([#1786](https://github.com/ava-labs/firewood/pull/1786))
+- *(reconstruct)* Add benchmarks for rust reconstruction ([#1787](https://github.com/ava-labs/firewood/pull/1787))
+- *(reconstruction)* Add FFI Rust layer ([#1813](https://github.com/ava-labs/firewood/pull/1813))
+- *(reconstruction)* Add Go bindings and tests ([#1814](https://github.com/ava-labs/firewood/pull/1814))
+
+### 🐛 Bug Fixes
+
+- *(fwdctl)* Use libevm only when specified ([#1805](https://github.com/ava-labs/firewood/pull/1805))
+- Adding keepAlive to ProposedChangeProof ([#1817](https://github.com/ava-labs/firewood/pull/1817))
+
+### 📚 Documentation
+
+- *(reconstruct)* Diagram move ([#1795](https://github.com/ava-labs/firewood/pull/1795))
+- *(c-chain-benchmark)* Add BENCHMARK.md  ([#1801](https://github.com/ava-labs/firewood/pull/1801))
+- *(benchmark)* Improve and consolidate Firewood's benchmarks ([#1812](https://github.com/ava-labs/firewood/pull/1812))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(revert)* Remove nix flake and all references to it ([#1788](https://github.com/ava-labs/firewood/pull/1788)) ([#1794](https://github.com/ava-labs/firewood/pull/1794))
+- Reduce visibility of flush_nodes() ([#1802](https://github.com/ava-labs/firewood/pull/1802))
+- *(deps)* Bump the github-actions group with 2 updates ([#1809](https://github.com/ava-labs/firewood/pull/1809))
+- Rootstore cleanups ([#1798](https://github.com/ava-labs/firewood/pull/1798))
+- *(fwdctl)* Add block height 77m ([#1816](https://github.com/ava-labs/firewood/pull/1816))
+
+## [0.3.0] - 2026-03-13
+
+### 🚀 Features
+
+- *(ffi)* Automatically generate `cgo` pragma declarations ([#1784](https://github.com/ava-labs/firewood/pull/1784))
+
+### 🐛 Bug Fixes
+
+- Enforce `max_revisions` > `commit_count` ([#1749](https://github.com/ava-labs/firewood/pull/1749))
+- [**breaking**] Clock source miss-match between Rust and Go ([#1742](https://github.com/ava-labs/firewood/pull/1742))
+- Fwdctl vm config ([#1776](https://github.com/ava-labs/firewood/pull/1776))
+- Bug where remove_all_entries may not remove all subtries ([#1778](https://github.com/ava-labs/firewood/pull/1778))
+
+### 🚜 Refactor
+
+- *(perf)* Calculate AreaIndex in as_bytes methods ([#1675](https://github.com/ava-labs/firewood/pull/1675))
+- Replace `PersistSemaphore` with `PersistChannel` ([#1710](https://github.com/ava-labs/firewood/pull/1710))
+- *(metrics)* Migrate ffi histogram recording to macros ([#1712](https://github.com/ava-labs/firewood/pull/1712))
+- Parallel execution helpers ([#1764](https://github.com/ava-labs/firewood/pull/1764))
+- [**breaking**] Remove v2 module ([#1760](https://github.com/ava-labs/firewood/pull/1760))
+- Read node mode ([#1792](https://github.com/ava-labs/firewood/pull/1792))
+
+### 📚 Documentation
+
+- Clarify deferred persistence terminology ([#1733](https://github.com/ava-labs/firewood/pull/1733))
+
+### ⚡ Performance
+
+- Use `runtime.AddCleanup` ([#1705](https://github.com/ava-labs/firewood/pull/1705))
+- *(ffi)* Add cgo pragma declarations ([#1722](https://github.com/ava-labs/firewood/pull/1722))
+- Fix child pruning in iterate_to_key ([#1783](https://github.com/ava-labs/firewood/pull/1783))
+
+### ⚙️ Miscellaneous Tasks
+
+- Update pull request template to include breaking changes ([#1723](https://github.com/ava-labs/firewood/pull/1723))
+- *(deps)* Bump the github-actions group with 3 updates ([#1738](https://github.com/ava-labs/firewood/pull/1738))
+- *(ffi)* Fix lint emitted in maxperf builds ([#1732](https://github.com/ava-labs/firewood/pull/1732))
+- *(docs)* Render mermaid graphs with aquamarine ([#1753](https://github.com/ava-labs/firewood/pull/1753))
+- Remove dead code ([#1755](https://github.com/ava-labs/firewood/pull/1755))
+- [**breaking**] Remove node_cache_size ([#1758](https://github.com/ava-labs/firewood/pull/1758))
+- Bump go to 1.25.8 ([#1775](https://github.com/ava-labs/firewood/pull/1775))
+- Add additional metrics for `v0.3.0` ([#1782](https://github.com/ava-labs/firewood/pull/1782))
+- Remove nix flake and all references to it ([#1788](https://github.com/ava-labs/firewood/pull/1788))
+- Verify go.mod files all have the same declared go version ([#1790](https://github.com/ava-labs/firewood/pull/1790))
+
+## [0.2.0] - 2026-02-26
+
+### 🚀 Features
+
+- Creating change proofs using FFI ([#1637](https://github.com/ava-labs/firewood/pull/1637))
+- *(db)* Add explicit close() method ([#1650](https://github.com/ava-labs/firewood/pull/1650))
+- Defer persist every commit ([#1656](https://github.com/ava-labs/firewood/pull/1656))
+- *(fwdctl/launch)* Add feature-gated fwdctl EC2 deploy workflow for benchmark setup (1/4) ([#1662](https://github.com/ava-labs/firewood/pull/1662))
+- *(fwdctl/launch)* Add SSM-based monitor/follow flow for cloud-init and bootstrap progress (2/4) ([#1663](https://github.com/ava-labs/firewood/pull/1663))
+- Node cache entry-based to memory-based LRU ([#1677](https://github.com/ava-labs/firewood/pull/1677))
+- Change proof serialization/deserialization ([#1638](https://github.com/ava-labs/firewood/pull/1638))
+- Defer persist every `N` commits ([#1657](https://github.com/ava-labs/firewood/pull/1657))
+- *(ffi)* Remove explicit garbage collection call ([#1681](https://github.com/ava-labs/firewood/pull/1681))
+- Change proof verification and proposal creation ([#1641](https://github.com/ava-labs/firewood/pull/1641))
+- *(fwdctl/launch)* Add scenario-driven deploy, list/kill instance management, and dry-run planning (3/4) ([#1664](https://github.com/ava-labs/firewood/pull/1664))
+- [**breaking**] Remove error returned by Hash ([#1671](https://github.com/ava-labs/firewood/pull/1671))
+- *(fwdctl/launch)* Add docs, deprecate aws-launch.sh (4/4) ([#1665](https://github.com/ava-labs/firewood/pull/1665))
+- *(ffi)* [**breaking**] Add optional node cache memory limit to open args ([#1713](https://github.com/ava-labs/firewood/pull/1713))
+- Change proof commit and find next key ([#1646](https://github.com/ava-labs/firewood/pull/1646))
+
+### 🐛 Bug Fixes
+
+- *(flake)* Grab version from correct location ([#1630](https://github.com/ava-labs/firewood/pull/1630))
+- *(storage)* Handle possible short writes ([#1635](https://github.com/ava-labs/firewood/pull/1635))
+- *(ffi)* Force correct alignment on certain c structs ([#1652](https://github.com/ava-labs/firewood/pull/1652))
+- *(db)* Lock in-memory revisions during commit critical section ([#1661](https://github.com/ava-labs/firewood/pull/1661))
+- *(track-performance)* Fail hard on gh errors  ([#1659](https://github.com/ava-labs/firewood/pull/1659))
+- *(track-performance)* Stale cron expression in daily bench ([#1667](https://github.com/ava-labs/firewood/pull/1667))
+- *(ffi)* Prevent potential use-after-free in Go Iterator ([#1688](https://github.com/ava-labs/firewood/pull/1688))
+- Avoid holding the last_committed_revision arc ([#1685](https://github.com/ava-labs/firewood/pull/1685))
+- Acquire lock for displaying MaybePersistedNode ([#1719](https://github.com/ava-labs/firewood/pull/1719))
+
+### 🚜 Refactor
+
+- Decouple header from `NodeStore` ([#1618](https://github.com/ava-labs/firewood/pull/1618))
+- Close consumes itself ([#1701](https://github.com/ava-labs/firewood/pull/1701))
+- Stop keeping around the last committed revision ([#1690](https://github.com/ava-labs/firewood/pull/1690))
+
+### 📚 Documentation
+
+- Update comments on Arc::try_unwrap safety ([#1649](https://github.com/ava-labs/firewood/pull/1649))
+- Update README to include archival support ([#1674](https://github.com/ava-labs/firewood/pull/1674))
+
+### ⚡ Performance
+
+- Increase limits and monitor freelist cache size better ([#1668](https://github.com/ava-labs/firewood/pull/1668))
+- *(ffi)* [**breaking**] Remove Pinner interface ([#1721](https://github.com/ava-labs/firewood/pull/1721))
+
+### ⚙️ Miscellaneous Tasks
+
+- Build and lint with --all-features ([#1636](https://github.com/ava-labs/firewood/pull/1636))
+- *(perf)* Track Firewood Performance via AvalancheGo Benchmarks ([#1493](https://github.com/ava-labs/firewood/pull/1493))
+- Add Bernard as codeowner ([#1647](https://github.com/ava-labs/firewood/pull/1647))
+- Add benchmark workflow ([#1643](https://github.com/ava-labs/firewood/pull/1643))
+- Add scheduled benchmark runs ([#1639](https://github.com/ava-labs/firewood/pull/1639)) ([#1645](https://github.com/ava-labs/firewood/pull/1645))
+- *(track-performance)* Local iteration ([#1642](https://github.com/ava-labs/firewood/pull/1642))
+- Update to go 1.24.12 ([#1658](https://github.com/ava-labs/firewood/pull/1658))
+- Trace->info logging ([#1682](https://github.com/ava-labs/firewood/pull/1682))
+- Add deferred persistence benchmark ([#1670](https://github.com/ava-labs/firewood/pull/1670))
+- *(ffi)* Update CGO LDFLAGS to include -ldl ([#1686](https://github.com/ava-labs/firewood/pull/1686))
+- Github actions security audit ([#1691](https://github.com/ava-labs/firewood/pull/1691))
+- *(deps)* Bump the github-actions group with 14 updates ([#1695](https://github.com/ava-labs/firewood/pull/1695))
+- *(ci)* Update .golangci.yaml ([#1703](https://github.com/ava-labs/firewood/pull/1703))
+- Add RootStore metrics ([#1680](https://github.com/ava-labs/firewood/pull/1680))
+- Bump go to 1.25.7 ([#1707](https://github.com/ava-labs/firewood/pull/1707))
+
 ## [0.1.0] - 2026-01-20
 
 ### 🚀 Features

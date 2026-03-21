@@ -15,6 +15,8 @@ pub const SPACE_FREED: &str = "space.freed";
 pub const DELETE_NODE: &str = "delete_node";
 /// Time spent flushing nodes.
 pub const FLUSH_NODES: &str = "flush_nodes";
+/// Time spent reaping in milliseconds.
+pub const REAP_NODES: &str = "reap_nodes";
 
 /// Number of node reads.
 pub const READ_NODE: &str = "read_node";
@@ -36,6 +38,9 @@ pub const IO_READ_COUNT: &str = "io.read";
 
 /// Number of proposals reparented to committed parent.
 pub const REPARENTED_PROPOSAL_COUNT: &str = "proposals.reparented";
+
+/// Fetch attempts from the rootstore
+pub const ROOTSTORE_GET: &str = "rootstore_get";
 
 /// `io_uring` specific metrics.
 pub mod ring {
@@ -59,6 +64,7 @@ pub fn register() {
     describe_counter!(SPACE_FREED, "Amount of space freed (bytes)");
     describe_counter!(DELETE_NODE, "Count of deleted nodes");
     describe_counter!(FLUSH_NODES, "Time spent flushing nodes (ms)");
+    describe_counter!(REAP_NODES, "Time spent reaping nodes (ms)");
 
     describe_counter!(READ_NODE, "Number of node reads");
     describe_counter!(CACHE_NODE, "Number of node cache operations");
@@ -83,6 +89,9 @@ pub fn register() {
         REPARENTED_PROPOSAL_COUNT,
         "Number of proposals reparented to committed parent"
     );
+
+    // Root store metrics
+    describe_counter!(ROOTSTORE_GET, "Fetch attempts from the rootstore");
 
     // Ring metrics
     describe_counter!(ring::EAGAIN_WRITE_RETRY, "Count of EAGAIN write retries");

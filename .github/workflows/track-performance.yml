@@ -72,18 +72,15 @@ jobs:
               # GitHub's scheduler fires a stale cron ('0 5 * * *') from a previous
               # workflow version instead of the current '0 5 * * 1-5'. When that happens
               # on a weekend, skip the run to avoid wasting runner time.
-              "0 5 * * 1-5"|"0 5 * * *")  # Weekdays at 05:00 UTC: 1M blocks (40M → 41M)
+              "0 5 * * 1-5"|"0 5 * * *")  # Weekdays at 05:00 UTC: firewood-40m-41m
                 DOW=$(date -u +%u)  # 1=Mon ... 6=Sat, 7=Sun
                 if [[ "$DOW" -ge 6 ]]; then
                   echo "::notice::Weekend (DOW=$DOW) skipping"
                   exit 0
                 fi
-                echo "::notice::Schedule: daily-40m-41m (blocks 40000001-41000000)"
+                echo "::notice::Schedule: daily-40m-41m"
                 echo "name=daily-40m-41m" >> "$GITHUB_OUTPUT"
-                echo "start-block=40000001" >> "$GITHUB_OUTPUT"
-                echo "end-block=41000000" >> "$GITHUB_OUTPUT"
-                echo "block-dir-src=cchain-mainnet-blocks-40m-50m-ldb" >> "$GITHUB_OUTPUT"
-                echo "current-state-dir-src=cchain-current-state-firewood-40m" >> "$GITHUB_OUTPUT"
+                echo "test=firewood-40m-41m" >> "$GITHUB_OUTPUT"
                 echo "timeout-minutes=720" >> "$GITHUB_OUTPUT"
                 ;;
               "0 5 * * 6")  # Weekly Saturday at 05:00 UTC: 10M blocks (50M → 60M)
@@ -160,7 +157,7 @@ jobs:
 
       - name: Publish benchmark results
         id: store
-        uses: benchmark-action/github-action-benchmark@4bdcce38c94cec68da58d012ac24b7b1155efe8b # @v1.20.7
+        uses: benchmark-action/github-action-benchmark@a7bc2366eda11037936ea57d811a43b3418d3073 # @v1.21.0
         with:
           name: C-Chain Reexecution with Firewood
           tool: 'customBiggerIsBetter'

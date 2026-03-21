@@ -1,6 +1,6 @@
 [package]
 name = "firewood-ffi"
-version = "0.1.0"
+version = "0.3.1"
 edition.workspace = true
 authors = [
      "Aaron Buchwald <aaron.buchwald56@gmail.com>",
@@ -21,7 +21,6 @@ crate-type = ["staticlib"]
 
 [dependencies]
 # Workspace dependencies
-coarsetime.workspace = true
 firewood.workspace = true
 firewood-metrics.workspace = true
 firewood-storage.workspace = true
@@ -53,4 +52,4 @@ cbindgen = "0.29.2"
 workspace = true
 
 [package.metadata.cargo-machete]
-ignored = ["cbindgen", "metrics"]
+ignored = ["cbindgen"]

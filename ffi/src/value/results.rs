@@ -1,15 +1,17 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use firewood::api;
 use firewood::merkle;
-use firewood::v2::api;
+use firewood_storage::TrieHash;
 use std::fmt;
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult, HashKey,
     IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair,
-    ProposalHandle, RangeProofContext,
+    ProposalHandle, ProposedChangeProofContext, RangeProofContext, ReconstructedHandle,
+    VerifiedChangeProofContext,
 };
 
 /// The result type returned from an FFI function that returns no value but may
@@ -174,9 +176,17 @@ pub enum HashResult {
 impl<E: fmt::Display> From<Result<Option<api::HashKey>, E>> for HashResult {
     fn from(value: Result<Option<api::HashKey>, E>) -> Self {
         match value {
-            Ok(None) => HashResult::None,
-            Ok(Some(hash)) => HashResult::Some(HashKey::from(hash)),
+            Ok(hash) => hash.into(),
             Err(err) => HashResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+impl From<Option<TrieHash>> for HashResult {
+    fn from(value: Option<TrieHash>) -> Self {
+        match value {
+            Some(hash) => HashResult::Some(hash.into()),
+            None => HashResult::None,
         }
     }
 }
@@ -247,7 +257,7 @@ impl From<Result<api::FrozenRangeProof, api::Error>> for RangeProofResult<'_> {
 /// [`fwd_free_change_proof`]: crate::fwd_free_change_proof
 #[derive(Debug)]
 #[repr(C, usize)]
-pub enum ChangeProofResult<'db> {
+pub enum ChangeProofResult {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
     /// The provided start root was not found in the database.
@@ -259,7 +269,41 @@ pub enum ChangeProofResult<'db> {
     /// If the value was parsed from a serialized proof, this does not imply that
     /// the proof is valid, only that it is well-formed. The verify method must
     /// be called to ensure the proof is cryptographically valid.
-    Ok(Box<ChangeProofContext<'db>>),
+    Ok(Box<ChangeProofContext>),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum VerifiedChangeProofResult {
+    /// The caller provided a null pointer to the input handle.
+    NullHandlePointer,
+    // The proof was successfully verified.
+    Ok(Box<VerifiedChangeProofContext>),
+    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
+    /// value is guaranteed to contain only valid UTF-8.
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
+}
+
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum ProposedChangeProofResult<'db> {
+    /// The caller provided a null pointer to the input handle.
+    NullHandlePointer,
+    /// A proposal was successfully created for this proof.
+    Ok(Box<ProposedChangeProofContext<'db>>),
     /// An error occurred and the message is returned as an [`OwnedBytes`]. If
     /// value is guaranteed to contain only valid UTF-8.
     ///
@@ -482,7 +526,7 @@ impl<'db, E: fmt::Display> From<Result<CreateIteratorResult<'db>, E>> for Iterat
 /// A result type returned from FFI functions that get a revision
 #[derive(Debug)]
 #[repr(C, usize)]
-pub enum RevisionResult {
+pub enum RevisionResult<'db> {
     /// The caller provided a null pointer to a database handle.
     NullHandlePointer,
     /// The provided root was not found in the database.
@@ -494,7 +538,7 @@ pub enum RevisionResult {
         /// The value should be freed with [`fwd_free_revision`]
         ///
         /// [`fwd_free_revision`]: crate::fwd_free_revision
-        handle: Box<RevisionHandle>,
+        handle: Box<RevisionHandle<'db>>,
         /// The root hash of the revision.
         root_hash: HashKey,
     },
@@ -508,8 +552,26 @@ pub enum RevisionResult {
     Err(OwnedBytes),
 }
 
-impl From<GetRevisionResult> for RevisionResult {
-    fn from(value: GetRevisionResult) -> Self {
+/// A result type returned from FFI functions that create a reconstructed view.
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum ReconstructedResult<'db> {
+    /// The caller provided a null pointer to an input handle.
+    NullHandlePointer,
+    /// Building the reconstructed view was successful and the handle is returned.
+    Ok {
+        /// An opaque pointer to the [`ReconstructedHandle`].
+        /// The value should be freed with [`fwd_free_reconstructed`].
+        ///
+        /// [`fwd_free_reconstructed`]: crate::fwd_free_reconstructed
+        handle: Box<ReconstructedHandle<'db>>,
+    },
+    /// An error occurred and the message is returned as an [`OwnedBytes`].
+    Err(OwnedBytes),
+}
+
+impl<'db> From<GetRevisionResult<'db>> for RevisionResult<'db> {
+    fn from(value: GetRevisionResult<'db>) -> Self {
         RevisionResult::Ok {
             handle: Box::new(value.handle),
             root_hash: HashKey::from(value.root_hash),
@@ -517,8 +579,8 @@ impl From<GetRevisionResult> for RevisionResult {
     }
 }
 
-impl From<Result<GetRevisionResult, api::Error>> for RevisionResult {
-    fn from(value: Result<GetRevisionResult, api::Error>) -> Self {
+impl<'db> From<Result<GetRevisionResult<'db>, api::Error>> for RevisionResult<'db> {
+    fn from(value: Result<GetRevisionResult<'db>, api::Error>) -> Self {
         match value {
             Ok(res) => res.into(),
             Err(api::Error::RevisionNotFound { provided }) => RevisionResult::RevisionNotFound(
@@ -541,7 +603,18 @@ impl<'db, E: fmt::Display> From<Result<CreateProposalResult<'db>, E>> for Propos
     }
 }
 
-impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult<'_> {
+impl<'db, E: fmt::Display> From<Result<ReconstructedHandle<'db>, E>> for ReconstructedResult<'db> {
+    fn from(value: Result<ReconstructedHandle<'db>, E>) -> Self {
+        match value {
+            Ok(handle) => ReconstructedResult::Ok {
+                handle: Box::new(handle),
+            },
+            Err(err) => ReconstructedResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
     fn from(value: Result<api::FrozenChangeProof, api::Error>) -> Self {
         match value {
             Ok(proof) => ChangeProofResult::Ok(Box::new(proof.into())),
@@ -556,6 +629,26 @@ impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult<'_> 
                 ))
             }
             Err(err) => ChangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+impl From<Result<VerifiedChangeProofContext, api::Error>> for VerifiedChangeProofResult {
+    fn from(value: Result<VerifiedChangeProofContext, api::Error>) -> Self {
+        match value {
+            Ok(context) => VerifiedChangeProofResult::Ok(Box::new(context)),
+            Err(err) => VerifiedChangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+impl<'db> From<Result<ProposedChangeProofContext<'db>, api::Error>>
+    for ProposedChangeProofResult<'db>
+{
+    fn from(value: Result<ProposedChangeProofContext<'db>, api::Error>) -> Self {
+        match value {
+            Ok(context) => ProposedChangeProofResult::Ok(Box::new(context)),
+            Err(err) => ProposedChangeProofResult::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -583,6 +676,7 @@ pub(crate) trait NullHandleResult: CResult {
 }
 
 pub(crate) trait CResult: Sized {
+    #[cfg(panic = "unwind")]
     fn from_err(err: impl ToString) -> Self;
 
     #[cfg(panic = "unwind")]
@@ -610,6 +704,7 @@ macro_rules! impl_cresult {
     ($($Enum:ty),* $(,)?) => {
         $(
             impl CResult for $Enum {
+                #[cfg(panic = "unwind")]
                 fn from_err(err: impl ToString) -> Self {
                     Self::Err(err.to_string().into_bytes().into())
                 }
@@ -623,12 +718,15 @@ impl_null_handle_result!(
     ValueResult,
     HashResult,
     RangeProofResult<'_>,
-    ChangeProofResult<'_>,
+    ChangeProofResult,
+    VerifiedChangeProofResult,
+    ProposedChangeProofResult<'_>,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
+    ReconstructedResult<'_>,
     IteratorResult<'_>,
-    RevisionResult,
+    RevisionResult<'_>,
     KeyValueBatchResult,
     KeyValueResult,
 );
@@ -639,12 +737,15 @@ impl_cresult!(
     HashResult,
     HandleResult,
     RangeProofResult<'_>,
-    ChangeProofResult<'_>,
+    ChangeProofResult,
+    VerifiedChangeProofResult,
+    ProposedChangeProofResult<'_>,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
+    ReconstructedResult<'_>,
     IteratorResult<'_>,
-    RevisionResult,
+    RevisionResult<'_>,
     KeyValueBatchResult,
     KeyValueResult,
 );

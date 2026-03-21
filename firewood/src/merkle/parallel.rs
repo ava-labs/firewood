@@ -1,15 +1,15 @@
 // Copyright (C) 2023, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use crate::api::IntoBatchIter;
 use crate::db::BatchOp;
 use crate::merkle::{Key, Merkle, Value};
-use crate::v2::api::IntoBatchIter;
 use firewood_metrics::{current_metrics_context, set_metrics_context};
 use firewood_storage::logger::error;
 use firewood_storage::{
     BranchNode, Child, Children, FileBacked, FileIoError, ImmutableProposal, LeafNode,
-    MaybePersistedNode, MutableProposal, NibblesIterator, Node, NodeStore, Parentable, Path,
-    PathComponent,
+    MaybePersistedNode, Mutable, NibblesIterator, Node, NodeStore, Parentable, Path, PathComponent,
+    Propose,
 };
 use rayon::ThreadPool;
 use std::iter::once;
@@ -69,7 +69,7 @@ impl ParallelMerkle {
     /// by the worker threads.
     fn force_root(
         &self,
-        proposal: &mut NodeStore<MutableProposal, FileBacked>,
+        proposal: &mut NodeStore<Mutable<Propose>, FileBacked>,
     ) -> Result<Box<BranchNode>, CreateProposalError> {
         // There are 3 different cases to handle depending on the value of the root node.
         //
@@ -114,7 +114,7 @@ impl ParallelMerkle {
     /// In all other cases, the root is already correct.
     fn postprocess_trie(
         &self,
-        nodestore: &mut NodeStore<MutableProposal, FileBacked>,
+        nodestore: &mut NodeStore<Mutable<Propose>, FileBacked>,
         mut branch: Box<BranchNode>,
     ) -> Result<Option<Node>, FileIoError> {
         let mut children_iter = branch
@@ -166,7 +166,7 @@ impl ParallelMerkle {
     /// Call by a worker to processes requests from `child_receiver` and send back a response on
     /// `response_sender` once the main thread closes the child sender.
     fn worker_event_loop(
-        mut merkle: Merkle<NodeStore<MutableProposal, FileBacked>>,
+        mut merkle: Merkle<NodeStore<Mutable<Propose>, FileBacked>>,
         first_path_component: PathComponent,
         child_receiver: Receiver<BatchOp<Key, Value>>,
         response_sender: Sender<Result<Response, FileIoError>>,
@@ -204,10 +204,11 @@ impl ParallelMerkle {
             .take()
             .map(|root| {
                 #[cfg(not(feature = "ethhash"))]
-                let (root_node, root_hash) = NodeStore::<MutableProposal, FileBacked>::hash_helper(
-                    root,
-                    Path::from(&[first_path_component.as_u8()]),
-                )?;
+                let (root_node, root_hash) =
+                    NodeStore::<Mutable<Propose>, FileBacked>::hash_helper(
+                        root,
+                        Path::from(&[first_path_component.as_u8()]),
+                    )?;
                 #[cfg(feature = "ethhash")]
                 let (root_node, root_hash) =
                     nodestore.hash_helper(root, Path::from(&[first_path_component.as_u8()]))?;
@@ -227,7 +228,7 @@ impl ParallelMerkle {
     /// by the value of the `first_path_component`.
     fn create_worker(
         pool: &ThreadPool,
-        proposal: &mut NodeStore<MutableProposal, FileBacked>,
+        proposal: &mut NodeStore<Mutable<Propose>, FileBacked>,
         root_branch: &mut BranchNode,
         first_path_component: PathComponent,
         response_sender: Sender<Result<Response, FileIoError>>,
@@ -278,7 +279,7 @@ impl ParallelMerkle {
     fn merge_children(
         &mut self,
         response_channel: Receiver<Result<Response, FileIoError>>,
-        proposal: &mut NodeStore<MutableProposal, FileBacked>,
+        proposal: &mut NodeStore<Mutable<Propose>, FileBacked>,
         root_branch: &mut BranchNode,
     ) -> Result<(), FileIoError> {
         while let Ok(response) = response_channel.recv() {
@@ -303,7 +304,7 @@ impl ParallelMerkle {
     fn worker(
         &mut self,
         pool: &ThreadPool,
-        proposal: &mut NodeStore<MutableProposal, FileBacked>,
+        proposal: &mut NodeStore<Mutable<Propose>, FileBacked>,
         root_branch: &mut BranchNode,
         first_path_component: PathComponent,
         response_sender: Sender<Result<Response, FileIoError>>,
@@ -328,17 +329,23 @@ impl ParallelMerkle {
     /// Removes all of the entries in the trie. For the root entry, the value is removed but the
     /// root itself will remain. An empty root will only be removed during post processing.
     fn remove_all_entries(
-        &self,
+        &mut self,
+        pool: &ThreadPool,
+        proposal: &mut NodeStore<Mutable<Propose>, FileBacked>,
         root_branch: &mut BranchNode,
-    ) -> Result<(), SendError<BatchOp<Key, Value>>> {
-        for worker in self
-            .workers
-            .iter()
-            .filter_map(|(_, worker)| worker.as_ref())
-        {
-            worker.send(BatchOp::DeleteRange {
-                prefix: Box::default(), // Empty prefix
-            })?;
+        response_sender: &Sender<Result<Response, FileIoError>>,
+    ) -> Result<(), CreateProposalError> {
+        for pc in PathComponent::ALL {
+            // Create workers for children that exist but don't have a worker yet,
+            // and also send to workers that already exist (they may have accumulated
+            // data from prior ops in the batch).
+            if root_branch.children.get(pc).is_some() || self.workers.get(pc).is_some() {
+                let worker =
+                    self.worker(pool, proposal, root_branch, pc, response_sender.clone())?;
+                worker.send(BatchOp::DeleteRange {
+                    prefix: Box::default(),
+                })?;
+            }
         }
         // Also set the root value to None but does not delete the root.
         root_branch.value = None;
@@ -363,12 +370,8 @@ impl ParallelMerkle {
         Ok(())
     }
 
-    /// Creates a parallel proposal in 4 steps: Prepare, Split, Merge, and Post-process. In the
-    /// Prepare step, the trie is modified to ensure that the root is a branch node with no
-    /// partial path. In the split step, entries from the batch are sent to workers that
-    /// independently modify their sub-tries. In the merge step, the sub-tries are merged back
-    /// to the main trie. Finally, in the post-processing step, the trie is returned to its
-    /// canonical form.
+    /// Applies a batch of operations to an existing mutable nodestore using the parallel
+    /// proposal pipeline (prepare, split, merge, post-process).
     ///
     /// # Errors
     ///
@@ -376,15 +379,12 @@ impl ParallelMerkle {
     /// from storage, a `CreateProposalError::SendError` if it is unable to send messages to
     /// the workers, and a `CreateProposalError::InvalidConversionToPathComponent` if it is
     /// unable to convert a u8 index into a path component.
-    pub fn create_proposal<T: Parentable>(
+    pub fn apply(
         &mut self,
-        parent: &NodeStore<T, FileBacked>,
+        mut mutable_nodestore: NodeStore<Mutable<Propose>, FileBacked>,
         batch: impl IntoBatchIter,
         pool: &ThreadPool,
-    ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, CreateProposalError> {
-        // Create a mutable nodestore from the parent
-        let mut mutable_nodestore = NodeStore::new(parent)?;
-
+    ) -> Result<NodeStore<Mutable<Propose>, FileBacked>, CreateProposalError> {
         // Prepare step: Force the root into a branch with no partial path in preparation for
         // performing parallel modifications to the trie.
         let mut root_branch = self.force_root(&mut mutable_nodestore)?;
@@ -421,12 +421,23 @@ impl ParallelMerkle {
                     }
                     BatchOp::DeleteRange { prefix: _ } => {
                         // Calling remove prefix with an empty prefix is equivalent to a remove all.
-                        if let Err(err) = self.remove_all_entries(&mut root_branch) {
-                            // A send error is most likely due to a worker returning to the thread pool
-                            // after it encountered a FileIoError. Try to find the FileIoError in the
-                            // response channel and return that instead.
-                            ParallelMerkle::find_fileio_error(&response_receiver)?;
-                            return Err(err.into());
+                        if let Err(err) = self.remove_all_entries(
+                            pool,
+                            &mut mutable_nodestore,
+                            &mut root_branch,
+                            &response_sender,
+                        ) {
+                            // If the error is a SendError, try to find the underlying
+                            // FileIoError from the response channel first (a SendError
+                            // means a worker died, likely from a FileIoError).
+                            // If it's already a FileIoError (from worker creation), propagate directly.
+                            match err {
+                                CreateProposalError::SendError => {
+                                    ParallelMerkle::find_fileio_error(&response_receiver)?;
+                                    return Err(err);
+                                }
+                                _ => return Err(err),
+                            }
                         }
                     }
                 }
@@ -485,6 +496,32 @@ impl ParallelMerkle {
         // Post-process step: return the trie to its canonical form.
         *mutable_nodestore.root_mut() =
             self.postprocess_trie(&mut mutable_nodestore, root_branch)?;
+
+        Ok(mutable_nodestore)
+    }
+
+    /// Creates a parallel proposal in 4 steps: Prepare, Split, Merge, and Post-process. In the
+    /// Prepare step, the trie is modified to ensure that the root is a branch node with no
+    /// partial path. In the split step, entries from the batch are sent to workers that
+    /// independently modify their sub-tries. In the merge step, the sub-tries are merged back
+    /// to the main trie. Finally, in the post-processing step, the trie is returned to its
+    /// canonical form.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `CreateProposalError::FileIoError` if it encounters an error fetching nodes
+    /// from storage, a `CreateProposalError::SendError` if it is unable to send messages to
+    /// the workers, and a `CreateProposalError::InvalidConversionToPathComponent` if it is
+    /// unable to convert a u8 index into a path component.
+    pub fn create_proposal<T: Parentable>(
+        &mut self,
+        parent: &NodeStore<T, FileBacked>,
+        batch: impl IntoBatchIter,
+        pool: &ThreadPool,
+    ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, CreateProposalError> {
+        // Create a mutable nodestore from the parent
+        let mutable_nodestore = NodeStore::new(parent)?;
+        let mutable_nodestore = self.apply(mutable_nodestore, batch, pool)?;
 
         let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
             Arc::new(mutable_nodestore.try_into()?);

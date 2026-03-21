@@ -12,10 +12,10 @@ use std::num::NonZeroUsize;
 use std::ops::RangeInclusive;
 use std::time::Instant;
 
+use firewood::api::{Db as _, DbView, KeyType, Proposal as _, ValueType};
 use firewood::db::{BatchOp, Db, DbConfig};
 use firewood::manager::RevisionManagerConfig;
-use firewood::v2::api::{Db as _, DbView, KeyType, Proposal as _, ValueType};
-use rand::{Rng, distr::Alphanumeric};
+use rand::{RngExt, distr::Alphanumeric};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -31,8 +31,8 @@ struct Args {
     read_verify_percent: u16,
     #[arg(short, long)]
     seed: Option<u64>,
-    #[arg(short, long, default_value_t = NonZeroUsize::new(20480).expect("is non-zero"))]
-    cache_size: NonZeroUsize,
+    #[arg(short, long, default_value_t = NonZeroUsize::new(192_000_000).expect("is non-zero"))]
+    cache_memory_limit: NonZeroUsize,
     #[arg(short, long, default_value_t = true)]
     truncate: bool,
     #[arg(short, long, default_value_t = 128)]
@@ -54,9 +54,8 @@ fn string_to_range(input: &str) -> Result<RangeInclusive<usize>, Box<dyn Error +
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
 
-    #[expect(deprecated)]
     let mgrcfg = RevisionManagerConfig::builder()
-        .node_cache_size(args.cache_size)
+        .node_cache_memory_limit(args.cache_memory_limit)
         .max_revisions(args.revisions)
         .build();
     let cfg = DbConfig::builder()
@@ -129,11 +128,11 @@ fn get_keys_to_verify<'a, K: KeyType + 'a, V: ValueType + 'a>(
 }
 
 fn verify_keys(
-    db: &impl firewood::v2::api::Db,
+    db: &impl firewood::api::Db,
     verify: HashMap<&[u8], &[u8]>,
-) -> Result<(), firewood::v2::api::Error> {
+) -> Result<(), firewood::api::Error> {
     if !verify.is_empty() {
-        let hash = db.root_hash()?.expect("root hash should exist");
+        let hash = db.root_hash().expect("root hash should exist");
         let revision = db.revision(hash)?;
         for (key, value) in verify {
             assert_eq!(Some(value), revision.val(key)?.as_deref());

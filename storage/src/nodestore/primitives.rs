@@ -44,14 +44,14 @@ const AREA_SIZES: [u64; 23] = [
 
 /// Returns an iterator over all valid area sizes.
 // TODO: return a named iterator
-pub fn area_size_iter() -> impl DoubleEndedIterator<Item = (AreaIndex, u64)> {
+pub(crate) fn area_size_iter() -> impl DoubleEndedIterator<Item = (AreaIndex, u64)> {
     AREA_SIZES
         .iter()
         .enumerate()
         .map(|(i, &size)| (AreaIndex(i as u8), size))
 }
 
-pub fn area_size_hash() -> TrieHash {
+pub(crate) fn area_size_hash() -> TrieHash {
     let mut hasher = Sha256::new();
     for size in AREA_SIZES {
         hasher.update(size.to_ne_bytes());
@@ -128,7 +128,7 @@ impl AreaIndex {
     /// # Errors
     ///
     /// Returns an error if the size is too large.
-    pub fn from_size(n: u64) -> Result<Self, Error> {
+    pub(crate) fn from_size(n: u64) -> Result<Self, Error> {
         if n > Self::MAX_AREA_SIZE {
             return Err(Error::new(ErrorKind::OutOfMemory, AreaSizeError(n)));
         }

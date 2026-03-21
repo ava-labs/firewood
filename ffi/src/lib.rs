@@ -1,6 +1,15 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+//! # Firewood FFI: C Bindings for Firewood Database
+//!
+//! This crate provides C bindings for the Firewood database, allowing it to be
+//! used from C and other languages that can interface with C.
+//!
+//! Go users may wish to see the documentation for the [`Go bindings`].
+//!
+//! [`Go bindings`]: https://ava-labs.github.io/firewood/ffi/index.html
+
 // HINT WHEN REFERENCING TYPES OUTSIDE THIS LIBRARY:
 // - Anything that is outside the crate must be included as a `type` alias (not just
 //   a `use`) in order for cbindgen to generate an opaque forward declaration. The type
@@ -29,14 +38,15 @@ mod logging;
 mod metrics;
 mod proofs;
 mod proposal;
+mod reconstructed;
 mod registry;
 #[cfg(feature = "block-replay")]
 mod replay;
 mod revision;
 mod value;
 
-use firewood::v2::api::DbView;
-use firewood_metrics::{firewood_increment, firewood_record, set_metrics_context};
+use firewood::api::DbView;
+use firewood_metrics::set_metrics_context;
 
 pub use crate::handle::*;
 pub use crate::iterator::*;
@@ -44,6 +54,7 @@ pub use crate::logging::*;
 use crate::metrics::MetricsContextExt;
 pub use crate::proofs::*;
 pub use crate::proposal::*;
+pub use crate::reconstructed::*;
 pub use crate::revision::*;
 pub use crate::value::*;
 
@@ -145,7 +156,7 @@ pub extern "C" fn fwd_get_latest(db: Option<&DatabaseHandle>, key: BorrowedBytes
 ///
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_iter_on_revision<'view>(
-    revision: Option<&'view RevisionHandle>,
+    revision: Option<&'view RevisionHandle<'_>>,
     key: BorrowedBytes,
 ) -> IteratorResult<'view> {
     invoke_with_handle(revision, move |rev| rev.iter_from(Some(key.as_slice())))
@@ -178,6 +189,34 @@ pub extern "C" fn fwd_iter_on_proposal<'p>(
     key: BorrowedBytes,
 ) -> IteratorResult<'p> {
     invoke_with_handle(handle, move |p| p.iter_from(Some(key.as_slice())))
+}
+
+/// Returns an iterator on the provided reconstructed view optionally starting from a key.
+///
+/// # Arguments
+///
+/// * `handle` - The reconstructed handle returned by [`fwd_reconstruct_on_revision`] or
+///   [`fwd_reconstruct_on_reconstructed`].
+/// * `key` - The key to start iterating from as a [`BorrowedBytes`].
+///
+/// # Returns
+///
+/// - [`IteratorResult::NullHandlePointer`] if the provided handle is null.
+/// - [`IteratorResult::Ok`] if the iterator was created, with the iterator handle.
+/// - [`IteratorResult::Err`] if an error occurred while creating the iterator.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `handle` is a valid pointer to a [`ReconstructedHandle`]
+/// * ensure that `key` is a valid [`BorrowedBytes`]
+/// * call [`fwd_free_iterator`] to free the memory associated with the iterator.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_iter_on_reconstructed<'p>(
+    handle: Option<&'p ReconstructedHandle<'_>>,
+    key: BorrowedBytes,
+) -> IteratorResult<'p> {
+    invoke_with_handle(handle, move |h| h.iter_from(Some(key.as_slice())))
 }
 
 /// Retrieves the next item from the iterator.
@@ -287,11 +326,17 @@ pub extern "C" fn fwd_free_iterator(iterator: Option<Box<IteratorHandle<'_>>>) -
 /// * ensure that `db` is a valid pointer to a [`DatabaseHandle`].
 /// * ensure that `root` is valid for [`BorrowedBytes`].
 /// * call [`fwd_free_revision`] to free the returned handle when it is no longer needed.
+/// * ensure that the [`DatabaseHandle`] remains valid (not closed via [`fwd_close_db`])
+///   for as long as the returned [`RevisionHandle`] (and any derived [`ReconstructedHandle`])
+///   is in use.
 ///
 /// [`BorrowedBytes`]: crate::value::BorrowedBytes
 /// [`RevisionHandle`]: crate::revision::RevisionHandle
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_get_revision(db: Option<&DatabaseHandle>, root: HashKey) -> RevisionResult {
+pub extern "C" fn fwd_get_revision(
+    db: Option<&DatabaseHandle>,
+    root: HashKey,
+) -> RevisionResult<'_> {
     #[cfg(feature = "block-replay")]
     let start = std::time::Instant::now();
 
@@ -326,7 +371,7 @@ pub extern "C" fn fwd_get_revision(db: Option<&DatabaseHandle>, root: HashKey) -
 ///   returned in the result.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_get_from_revision(
-    revision: Option<&RevisionHandle>,
+    revision: Option<&RevisionHandle<'_>>,
     key: BorrowedBytes,
 ) -> ValueResult {
     #[cfg(feature = "block-replay")]
@@ -358,7 +403,7 @@ pub extern "C" fn fwd_get_from_revision(
 /// The caller must ensure that the revision handle is valid and is not used again after
 /// this function is called.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_free_revision(revision: Option<Box<RevisionHandle>>) -> VoidResult {
+pub extern "C" fn fwd_free_revision(revision: Option<Box<RevisionHandle<'_>>>) -> VoidResult {
     #[cfg(feature = "block-replay")]
     let revision_id = revision
         .as_ref()
@@ -412,6 +457,36 @@ pub extern "C" fn fwd_get_from_proposal(
     replay::record_get_from_proposal(handle, key, &result, start.elapsed().as_nanos() as u64);
 
     result
+}
+
+/// Gets the value associated with the given key from the reconstructed view provided.
+///
+/// # Arguments
+///
+/// * `handle` - The reconstructed handle returned by [`fwd_reconstruct_on_revision`] or
+///   [`fwd_reconstruct_on_reconstructed`].
+/// * `key` - The key to look up as a [`BorrowedBytes`].
+///
+/// # Returns
+///
+/// - [`ValueResult::NullHandlePointer`] if the provided handle is null.
+/// - [`ValueResult::None`] if the key was not found in the reconstructed view.
+/// - [`ValueResult::Some`] if the key was found with the associated value.
+/// - [`ValueResult::Err`] if an error occurred while retrieving the value.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `handle` is a valid pointer to a [`ReconstructedHandle`].
+/// * ensure that `key` is valid for [`BorrowedBytes`].
+/// * call [`fwd_free_owned_bytes`] to free the memory associated with the [`OwnedBytes`]
+///   returned in the result.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_get_from_reconstructed(
+    handle: Option<&ReconstructedHandle<'_>>,
+    key: BorrowedBytes,
+) -> ValueResult {
+    invoke_with_handle(handle, move |handle| handle.val(key))
 }
 
 /// Puts the given key-value pairs into the database.
@@ -529,6 +604,68 @@ pub extern "C" fn fwd_propose_on_proposal<'db>(
     result
 }
 
+/// Reconstructs a batch of operations on top of a historical revision.
+///
+/// # Arguments
+///
+/// * `handle` - The revision handle returned by [`fwd_get_revision`].
+/// * `values` - A [`BorrowedBatchOps`] containing the batch operations to apply.
+///
+/// # Returns
+///
+/// - [`ReconstructedResult::NullHandlePointer`] if the provided handle is null.
+/// - [`ReconstructedResult::Ok`] if reconstruction succeeded, with a [`ReconstructedHandle`].
+/// - [`ReconstructedResult::Err`] if reconstruction failed (e.g., the revision is not historical).
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `handle` is a valid pointer to a [`RevisionHandle`].
+/// * ensure that `values` is valid for [`BorrowedBatchOps`].
+/// * call [`fwd_free_reconstructed`] to free the returned handle when it is no longer needed.
+/// * ensure that the underlying [`DatabaseHandle`] remains valid (not closed via [`fwd_close_db`])
+///   for as long as the returned [`ReconstructedHandle`] is in use.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_reconstruct_on_revision<'db>(
+    handle: Option<&'db RevisionHandle<'db>>,
+    values: BorrowedBatchOps<'_>,
+) -> ReconstructedResult<'db> {
+    invoke_with_handle(handle, move |h| h.reconstruct(values))
+}
+
+/// Reconstructs a batch of operations on top of an existing reconstructed view.
+///
+/// This function consumes the previous reconstructed handle.
+///
+/// # Arguments
+///
+/// * `handle` - The reconstructed handle returned by a previous call to
+///   [`fwd_reconstruct_on_revision`] or [`fwd_reconstruct_on_reconstructed`].
+/// * `values` - A [`BorrowedBatchOps`] containing the batch operations to apply.
+///
+/// # Returns
+///
+/// - [`ReconstructedResult::NullHandlePointer`] if the provided handle is null.
+/// - [`ReconstructedResult::Ok`] if reconstruction succeeded, with a new [`ReconstructedHandle`].
+/// - [`ReconstructedResult::Err`] if reconstruction failed.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `handle` is a valid pointer to a [`ReconstructedHandle`].
+/// * ensure that `values` is valid for [`BorrowedBatchOps`].
+/// * call [`fwd_free_reconstructed`] to free the returned handle when it is no longer needed.
+/// * ensure that the underlying [`DatabaseHandle`] remains valid (not closed via [`fwd_close_db`])
+///   for as long as the returned [`ReconstructedHandle`] is in use.
+/// * not use the consumed `handle` after this call.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_reconstruct_on_reconstructed<'db>(
+    handle: Option<Box<ReconstructedHandle<'db>>>,
+    values: BorrowedBatchOps<'_>,
+) -> ReconstructedResult<'db> {
+    invoke_with_handle(handle, move |h| h.reconstruct(values))
+}
+
 /// Commits a proposal to the database.
 ///
 /// This function will consume the proposal regardless of whether the commit
@@ -565,17 +702,7 @@ pub extern "C" fn fwd_commit_proposal(proposal: Option<Box<ProposalHandle<'_>>>)
     #[cfg(feature = "block-replay")]
     let start = std::time::Instant::now();
 
-    let result = invoke_with_handle(proposal, move |proposal| {
-        proposal.commit_proposal(|commit_time| {
-            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
-            firewood_increment!(crate::registry::COMMIT_COUNT, 1);
-            firewood_record!(
-                crate::registry::COMMIT_MS_BUCKET,
-                commit_time.as_f64() * 1000.0,
-                expensive
-            );
-        })
-    });
+    let result = invoke_with_handle(proposal, move |proposal| proposal.commit_proposal());
 
     #[cfg(feature = "block-replay")]
     if let Some(proposal_id) = proposal_id {
@@ -624,6 +751,57 @@ pub extern "C" fn fwd_free_proposal(proposal: Option<Box<ProposalHandle<'_>>>) -
     result
 }
 
+/// Consumes the [`ReconstructedHandle`] and frees the memory associated with it.
+///
+/// # Arguments
+///
+/// * `reconstructed` - A pointer to a [`ReconstructedHandle`] previously returned by
+///   [`fwd_reconstruct_on_revision`] or [`fwd_reconstruct_on_reconstructed`].
+///
+/// # Returns
+///
+/// - [`VoidResult::NullHandlePointer`] if the provided handle is null.
+/// - [`VoidResult::Ok`] if the handle was successfully freed.
+/// - [`VoidResult::Err`] if the process panics while freeing the memory.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `reconstructed` is a valid pointer to a [`ReconstructedHandle`].
+/// * not use `reconstructed` after this function is called.
+/// * free all reconstructed handles before closing the database with [`fwd_close_db`].
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_free_reconstructed(
+    reconstructed: Option<Box<ReconstructedHandle<'_>>>,
+) -> VoidResult {
+    invoke_with_handle(reconstructed, drop)
+}
+
+/// Get the root hash of the reconstructed view.
+///
+/// # Arguments
+///
+/// * `reconstructed` - The reconstructed handle returned by reconstruction APIs.
+///
+/// # Returns
+///
+/// - [`HashResult::NullHandlePointer`] if the provided handle is null.
+/// - [`HashResult::None`] if the reconstructed view is empty.
+/// - [`HashResult::Some`] with the root hash of the reconstructed view.
+///
+/// # Safety
+///
+/// * ensure that `reconstructed` is a valid pointer to a [`ReconstructedHandle`]
+/// * call [`fwd_free_owned_bytes`] to free the memory associated with the
+///   returned error ([`HashKey`] does not need to be freed as it is returned
+///   by value).
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_reconstructed_root_hash(
+    reconstructed: Option<&ReconstructedHandle<'_>>,
+) -> HashResult {
+    invoke_with_handle(reconstructed, firewood::api::DbView::root_hash)
+}
+
 /// Get the root hash of the latest version of the database
 ///
 /// # Argument
@@ -635,7 +813,6 @@ pub extern "C" fn fwd_free_proposal(proposal: Option<Box<ProposalHandle<'_>>>) -
 /// - [`HashResult::NullHandlePointer`] if the provided database handle is null.
 /// - [`HashResult::None`] if the database is empty.
 /// - [`HashResult::Some`] with the root hash of the database.
-/// - [`HashResult::Err`] if an error occurred while looking up the root hash.
 ///
 /// # Safety
 ///
@@ -938,8 +1115,8 @@ pub extern "C" fn fwd_db_dump(db: Option<&DatabaseHandle>) -> ValueResult {
 /// * call [`fwd_free_owned_bytes`] to free the memory associated with the
 ///   returned value.
 #[unsafe(no_mangle)]
-pub extern "C" fn fwd_revision_dump(revision: Option<&RevisionHandle>) -> ValueResult {
-    invoke_with_handle(revision, firewood::v2::api::DbView::dump_to_string)
+pub extern "C" fn fwd_revision_dump(revision: Option<&RevisionHandle<'_>>) -> ValueResult {
+    invoke_with_handle(revision, firewood::api::DbView::dump_to_string)
 }
 
 /// Dumps the Trie structure of a proposal to a DOT (Graphviz) format string for debugging.
@@ -964,5 +1141,33 @@ pub extern "C" fn fwd_revision_dump(revision: Option<&RevisionHandle>) -> ValueR
 ///   returned value.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_proposal_dump(proposal: Option<&ProposalHandle>) -> ValueResult {
-    invoke_with_handle(proposal, firewood::v2::api::DbView::dump_to_string)
+    invoke_with_handle(proposal, firewood::api::DbView::dump_to_string)
+}
+
+/// Dumps the Trie structure of a reconstructed view to a DOT (Graphviz) format string
+/// for debugging.
+///
+/// # Arguments
+///
+/// * `reconstructed` - The reconstructed handle returned by [`fwd_reconstruct_on_revision`]
+///   or [`fwd_reconstruct_on_reconstructed`].
+///
+/// # Returns
+///
+/// - [`ValueResult::NullHandlePointer`] if the provided handle is null.
+/// - [`ValueResult::Some`] with the DOT format string if successful (the data is
+///   guaranteed to be utf-8 data, not null terminated).
+/// - [`ValueResult::Err`] if an error occurred while dumping the reconstructed view.
+///
+/// # Safety
+///
+/// The caller must:
+/// * ensure that `reconstructed` is a valid pointer to a [`ReconstructedHandle`].
+/// * call [`fwd_free_owned_bytes`] to free the memory associated with the
+///   returned value.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_reconstructed_dump(
+    reconstructed: Option<&ReconstructedHandle<'_>>,
+) -> ValueResult {
+    invoke_with_handle(reconstructed, firewood::api::DbView::dump_to_string)
 }

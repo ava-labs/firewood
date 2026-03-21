@@ -5,6 +5,18 @@ package ffi
 
 // #include <stdlib.h>
 // #include "firewood.h"
+// #cgo noescape fwd_get_from_proposal
+// #cgo nocallback fwd_get_from_proposal
+// #cgo noescape fwd_iter_on_proposal
+// #cgo nocallback fwd_iter_on_proposal
+// #cgo noescape fwd_propose_on_proposal
+// #cgo nocallback fwd_propose_on_proposal
+// #cgo noescape fwd_commit_proposal
+// #cgo nocallback fwd_commit_proposal
+// #cgo noescape fwd_proposal_dump
+// #cgo nocallback fwd_proposal_dump
+// #cgo noescape fwd_free_proposal
+// #cgo nocallback fwd_free_proposal
 import "C"
 
 import (
@@ -21,11 +33,12 @@ var errDroppedProposal = errors.New("proposal already dropped")
 // Proposals are created via [Database.Propose] or [Proposal.Propose], and must be
 // either committed with [Proposal.Commit] or released with [Proposal.Drop].
 //
-// Proposals must be committed or dropped before the associated database is
-// closed. A finalizer is set on each Proposal to ensure that Drop is called
-// when the Proposal is garbage collected, but relying on finalizers is not
-// recommended. Failing to commit or drop a proposal before the database is
-// closed will cause it to block or fail.
+// Proposals must be committed or released before the associated database is
+// closed. Release is done by calling [Proposal.Drop]. A finalizer is set on
+// each Proposal to ensure Drop is called when the Proposal is garbage
+// collected, but relying on finalizers is not recommended. Failing to commit
+// or release a proposal before the database is closed will cause it to block
+// or fail.
 //
 // All read operations on a Proposal are thread-safe with respect to each other,
 // and can be performed regardless of the state of the associated database. However,
@@ -39,36 +52,33 @@ type Proposal struct {
 	//
 	// Calls to `C.fwd_commit_proposal` and `C.fwd_free_proposal` will invalidate
 	// this handle, so it should not be used after those calls.
-	handle *C.ProposalHandle
+	*handle[*C.ProposalHandle]
 
 	// root is the root hash of the proposal and the expected root hash after commit.
 	root Hash
-
-	// keepAliveHandle is used to keep the database alive while this proposal is
-	// in use. It is initialized when the proposal is created and disowned after
-	// [Proposal.Commit] or [Proposal.Drop] is called.
-	keepAliveHandle databaseKeepAliveHandle
 
 	// commitLock is used to ensure that methods accessing the latest state do not conflict.
 	commitLock *sync.Mutex
 }
 
 // Root retrieves the root hash of the proposal.
-func (p *Proposal) Root() (Hash, error) {
-	return p.root, nil
+func (p *Proposal) Root() Hash {
+	return p.root
 }
 
 // Get retrieves the value for the given key.
 // If the key does not exist, it returns nil.
 func (p *Proposal) Get(key []byte) ([]byte, error) {
-	if p.handle == nil {
+	p.keepAliveHandle.mu.RLock()
+	defer p.keepAliveHandle.mu.RUnlock()
+	if p.ptr == nil {
 		return nil, errDroppedProposal
 	}
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	return getValueFromValueResult(C.fwd_get_from_proposal(p.handle, newBorrowedBytes(key, &pinner)))
+	return getValueFromValueResult(C.fwd_get_from_proposal(p.ptr, newBorrowedBytes(key, &pinner)))
 }
 
 // Iter creates an [Iterator] over the key-value pairs in this proposal,
@@ -78,16 +88,18 @@ func (p *Proposal) Get(key []byte) ([]byte, error) {
 // The Iterator must be released with [Iterator.Drop] when no longer needed,
 // otherwise the underlying proposal will never be properly freed.
 //
-// It returns an error if Drop or Commit has already been called on the Proposal.
+// It returns an error if this Proposal has already been committed or released.
 func (p *Proposal) Iter(key []byte) (*Iterator, error) {
-	if p.handle == nil {
-		return nil, errDBClosed
+	p.keepAliveHandle.mu.RLock()
+	defer p.keepAliveHandle.mu.RUnlock()
+	if p.dropped {
+		return nil, errDroppedProposal
 	}
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	itResult := C.fwd_iter_on_proposal(p.handle, newBorrowedBytes(key, &pinner))
+	itResult := C.fwd_iter_on_proposal(p.ptr, newBorrowedBytes(key, &pinner))
 
 	return getIteratorFromIteratorResult(itResult)
 }
@@ -95,11 +107,13 @@ func (p *Proposal) Iter(key []byte) (*Iterator, error) {
 // Propose is equivalent to [Database.Propose] except that the new proposal is
 // based on `p`.
 // The returned proposal cannot be committed until the parent proposal `p` has been
-// committed. Additionally, it must be committed or dropped before the [Database] is closed.
+// committed. Additionally, it must be committed or released before the [Database] is closed.
 //
 // Use [Put], [Delete], and [PrefixDelete] to create batch operations.
 func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
-	if p.handle == nil {
+	p.keepAliveHandle.mu.RLock()
+	defer p.keepAliveHandle.mu.RUnlock()
+	if p.ptr == nil {
 		return nil, errDroppedProposal
 	}
 
@@ -107,7 +121,7 @@ func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
 	defer pinner.Unpin()
 
 	kvp := newKeyValuePairsFromBatch(batch, &pinner)
-	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.handle, kvp), p.keepAliveHandle.outstandingHandles, p.commitLock)
+	return getProposalFromProposalResult(C.fwd_propose_on_proposal(p.ptr, kvp), p.keepAliveHandle.outstandingHandles, p.commitLock)
 }
 
 // Commit commits the proposal and returns any errors.
@@ -121,54 +135,35 @@ func (p *Proposal) Propose(batch []BatchOp) (*Proposal, error) {
 // block until this function returns.
 func (p *Proposal) Commit() error {
 	return p.keepAliveHandle.disown(true /* evenOnError */, func() error {
-		if p.handle == nil {
+		if p.dropped {
 			return errDroppedProposal
 		}
 
 		p.commitLock.Lock()
-		resp := C.fwd_commit_proposal(p.handle)
+		resp := C.fwd_commit_proposal(p.ptr)
 		p.commitLock.Unlock()
 		_, err := getHashKeyFromHashResult(resp)
 
 		// Prevent double free
-		p.handle = nil
+		p.ptr = nil
+		p.dropped = true
 
 		return err
-	})
-}
-
-// Drop releases the memory associated with the Proposal. All child proposals
-// created from this proposal can no longer be committed.
-//
-// This is safe to call if the memory has already been released, in which case
-// it does nothing.
-func (p *Proposal) Drop() error {
-	return p.keepAliveHandle.disown(false /* evenOnError */, func() error {
-		if p.handle == nil {
-			return nil
-		}
-
-		if err := getErrorFromVoidResult(C.fwd_free_proposal(p.handle)); err != nil {
-			return fmt.Errorf("%w: %w", errFreeingValue, err)
-		}
-
-		// Prevent double free
-		p.handle = nil
-
-		return nil
 	})
 }
 
 // Dump returns a DOT (Graphviz) format representation of the trie structure
 // of this proposal for debugging purposes.
 //
-// Returns errDroppedProposal if Commit or Drop has already been called.
+// Returns errDroppedProposal if this Proposal has already been committed or released.
 func (p *Proposal) Dump() (string, error) {
-	if p.handle == nil {
+	p.keepAliveHandle.mu.RLock()
+	defer p.keepAliveHandle.mu.RUnlock()
+	if p.dropped {
 		return "", errDroppedProposal
 	}
 
-	bytes, err := getValueFromValueResult(C.fwd_proposal_dump(p.handle))
+	bytes, err := getValueFromValueResult(C.fwd_proposal_dump(p.ptr))
 	if err != nil {
 		return "", err
 	}
@@ -185,12 +180,11 @@ func getProposalFromProposalResult(result C.ProposalResult, wg *sync.WaitGroup, 
 		body := (*C.ProposalResult_Ok_Body)(unsafe.Pointer(&result.anon0))
 		hashKey := *(*Hash)(unsafe.Pointer(&body.root_hash._0))
 		proposal := &Proposal{
-			handle:     body.handle,
+			handle:     createHandle(body.handle, wg, func(p *C.ProposalHandle) C.VoidResult { return C.fwd_free_proposal(p) }),
 			root:       hashKey,
 			commitLock: commitLock,
 		}
-		proposal.keepAliveHandle.init(wg)
-		runtime.SetFinalizer(proposal, (*Proposal).Drop)
+		runtime.AddCleanup(proposal, drop[*C.ProposalHandle], proposal.handle)
 		return proposal, nil
 	case C.ProposalResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()

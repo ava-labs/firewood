@@ -7,8 +7,8 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use clap::Args;
+use firewood::api::{self, Db as DbApi};
 use firewood::db::{Db, DbConfig};
-use firewood::v2::api::{self, Db as DbApi};
 use firewood_replay::replay_from_file;
 
 use crate::DatabasePath;
@@ -80,9 +80,9 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     }
 
     // Print the root hash from the database for verification
-    if let Some(root) = DbApi::root_hash(&db)? {
+    if let Some(root) = DbApi::root_hash(&db) {
         println!("Database root: {}", hex::encode(root));
     }
 
-    Ok(())
+    db.close()
 }

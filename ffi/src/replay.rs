@@ -375,7 +375,7 @@ fn convert_ops(ops: &[BatchOp<'_>]) -> Vec<KeyValueOp> {
 }
 
 fn hash_key_to_bytes(hash: crate::HashKey) -> [u8; 32] {
-    let api_hash: firewood::v2::api::HashKey = hash.into();
+    let api_hash: firewood::api::HashKey = hash.into();
     api_hash.into()
 }
 

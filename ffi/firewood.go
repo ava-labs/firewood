@@ -6,7 +6,8 @@
 // [Firewood]: https://github.com/ava-labs/firewood
 package ffi
 
-//go:generate go run generate_cgo.go
+//go:generate go run ./gen/update-cgo-ldflags
+//go:generate go run ./gen/update-cgo-pragmas
 
 // // Note that -lm is required on Linux but not on Mac.
 // // FIREWOOD_CGO_BEGIN_STATIC_LIBS
@@ -23,6 +24,24 @@ package ffi
 // #cgo LDFLAGS: -lfirewood_ffi -lm -ldl
 // #include <stdlib.h>
 // #include "firewood.h"
+// #cgo noescape fwd_open_db
+// #cgo nocallback fwd_open_db
+// #cgo noescape fwd_batch
+// #cgo nocallback fwd_batch
+// #cgo noescape fwd_propose_on_db
+// #cgo nocallback fwd_propose_on_db
+// #cgo noescape fwd_get_latest
+// #cgo nocallback fwd_get_latest
+// #cgo noescape fwd_root_hash
+// #cgo nocallback fwd_root_hash
+// #cgo noescape fwd_get_revision
+// #cgo nocallback fwd_get_revision
+// #cgo noescape fwd_close_db
+// #cgo nocallback fwd_close_db
+// #cgo noescape fwd_db_dump
+// #cgo nocallback fwd_db_dump
+// #cgo noescape fwd_block_replay_flush
+// #cgo nocallback fwd_block_replay_flush
 import "C"
 
 import (
@@ -96,16 +115,16 @@ type Database struct {
 type config struct {
 	// truncate indicates whether to clear the database file if it already exists.
 	truncate bool
-	// nodeCacheEntries is the number of entries in the cache.
+	// nodeCacheSizeInBytes is the memory limit for the node cache in bytes.
 	// Must be non-zero.
-	nodeCacheEntries uint
+	nodeCacheSizeInBytes uint
 	// freeListCacheEntries is the number of entries in the freelist cache.
 	// Must be non-zero.
 	freeListCacheEntries uint
 	// revisions is the maximum number of historical revisions to keep in memory.
 	// If rootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 	// Otherwise, any revisions removed from memory will no longer be kept on disk.
-	// Must be >= 2.
+	// Must be >= 2 and > deferredPersistenceCommitCount.
 	revisions uint
 	// readCacheStrategy is the caching strategy used for the node cache.
 	readCacheStrategy CacheStrategy
@@ -115,12 +134,13 @@ type config struct {
 	expensiveMetricsEnabled bool
 	// deferredPersistenceCommitCount determines the maximum number of unpersisted
 	// revisions that can exist at a given time.
+	// Note: revisions must be > deferredPersistenceCommitCount
 	deferredPersistenceCommitCount uint64
 }
 
 func defaultConfig() *config {
 	return &config{
-		nodeCacheEntries:               1_000_000,
+		nodeCacheSizeInBytes:           128_000_000,
 		freeListCacheEntries:           1_000_000,
 		revisions:                      100,
 		readCacheStrategy:              OnlyCacheWrites,
@@ -139,13 +159,12 @@ func WithTruncate(truncate bool) Option {
 	}
 }
 
-// WithNodeCacheEntries sets the number of entries in the node cache.
-// The node cache stores frequently accessed trie nodes to improve read performance.
+// WithNodeCacheSizeInBytes sets the node cache memory limit in bytes.
 // Must be non-zero.
-// Default: 1,000,000
-func WithNodeCacheEntries(entries uint) Option {
+// Default: 128 MB
+func WithNodeCacheSizeInBytes(sizeInBytes uint) Option {
 	return func(c *config) {
-		c.nodeCacheEntries = entries
+		c.nodeCacheSizeInBytes = sizeInBytes
 	}
 }
 
@@ -162,7 +181,7 @@ func WithFreeListCacheEntries(entries uint) Option {
 // WithRevisions sets the maximum number of historical revisions to keep in memory.
 // If RootStoreDir is set, then any revisions removed from memory will still be kept on disk.
 // Otherwise, any revisions removed from memory will no longer be kept on disk.
-// Must be >= 2.
+// Must be >= 2 and > WithDeferredPersistenceCommitCount.
 // Default: 100
 func WithRevisions(revisions uint) Option {
 	return func(c *config) {
@@ -198,7 +217,8 @@ func WithExpensiveMetrics() Option {
 }
 
 // WithDeferredPersistenceCommitCount sets the maximum number of unpersisted revisions
-// that can exist at a time. Note: `commitCount` must be greater than 0.
+// that can exist at a time. Note: `commitCount` must be greater than 0 and WithRevisions
+// must be greater than `commitCount`.
 // Default: 1
 func WithDeferredPersistenceCommitCount(commitCount uint64) Option {
 	return func(c *config) {
@@ -252,8 +272,8 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 	if conf.revisions < 2 {
 		return nil, fmt.Errorf("revisions must be >= 2, got %d", conf.revisions)
 	}
-	if conf.nodeCacheEntries < 1 {
-		return nil, fmt.Errorf("node cache entries must be >= 1, got %d", conf.nodeCacheEntries)
+	if conf.nodeCacheSizeInBytes < 1 {
+		return nil, fmt.Errorf("node cache size in bytes must be >= 1, got %d", conf.nodeCacheSizeInBytes)
 	}
 	if conf.freeListCacheEntries < 1 {
 		return nil, fmt.Errorf("free list cache entries must be >= 1, got %d", conf.freeListCacheEntries)
@@ -264,7 +284,7 @@ func New(dbDir string, nodeHashAlgorithm NodeHashAlgorithm, opts ...Option) (*Da
 
 	args := C.struct_DatabaseHandleArgs{
 		dir:                               newBorrowedBytes([]byte(dbDir), &pinner),
-		cache_size:                        C.size_t(conf.nodeCacheEntries),
+		node_cache_memory_limit:           C.size_t(conf.nodeCacheSizeInBytes),
 		free_list_cache_size:              C.size_t(conf.freeListCacheEntries),
 		revisions:                         C.size_t(conf.revisions),
 		strategy:                          C.uint8_t(conf.readCacheStrategy),
@@ -361,14 +381,15 @@ func (db *Database) Get(key []byte) ([]byte, error) {
 
 // Root returns the current root hash of the trie.
 // With Firewood hashing, the empty trie must return [EmptyRoot].
+// If the database is already closed, it returns [EmptyRoot].
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
-func (db *Database) Root() (Hash, error) {
+func (db *Database) Root() Hash {
 	db.handleLock.RLock()
 	defer db.handleLock.RUnlock()
 	if db.handle == nil {
-		return EmptyRoot, errDBClosed
+		return EmptyRoot
 	}
 
 	db.commitLock.Lock()
@@ -377,13 +398,15 @@ func (db *Database) Root() (Hash, error) {
 }
 
 // root assumes db.stateLock is held and the database is open.
-func (db *Database) root() (Hash, error) {
-	return getHashKeyFromHashResult(C.fwd_root_hash(db.handle))
+func (db *Database) root() Hash {
+	// Since we already guaranteed the database is open, we can ignore the error since the only error is that the handle is nil.
+	hash, _ := getHashKeyFromHashResult(C.fwd_root_hash(db.handle))
+	return hash
 }
 
 // LatestRevision returns a [Revision] representing the latest state of the database.
-// If the latest revision has root [EmptyRoot], it returns an error. The [Revision] must
-// be dropped prior to closing the database.
+// If the latest revision has root [EmptyRoot], it returns an error. The
+// [Revision] must be released with [Revision.Drop] before closing the database.
 //
 // This function conflicts with all other calls that access the latest state of the database,
 // and will lock for the duration of this function.
@@ -396,10 +419,7 @@ func (db *Database) LatestRevision() (*Revision, error) {
 
 	db.commitLock.Lock()
 	defer db.commitLock.Unlock()
-	root, err := db.root()
-	if err != nil {
-		return nil, err
-	}
+	root := db.root()
 	if root == EmptyRoot {
 		return nil, errRevisionNotFound
 	}
@@ -407,8 +427,9 @@ func (db *Database) LatestRevision() (*Revision, error) {
 }
 
 // Revision returns a historical revision of the database.
-// If the provided root does not exist (or is the [EmptyRoot]), it returns an error.
-// The [Revision] must be dropped prior to closing the database.
+// If the provided root does not exist (or is the [EmptyRoot]), it returns an
+// error. The [Revision] must be released with [Revision.Drop] before closing
+// the database.
 //
 // This function is thread-safe with all other operations.
 func (db *Database) Revision(root Hash) (*Revision, error) {
@@ -436,7 +457,7 @@ func (db *Database) Revision(root Hash) (*Revision, error) {
 // [context.Context] is cancelled. That is, until all Revisions and Proposals
 // created from this Database are either unreachable or one of
 // [Proposal.Commit], [Proposal.Drop], or [Revision.Drop] has been called on
-// them. Unreachable objects will be automatically dropped before Close returns,
+// them. Unreachable objects will be automatically released before Close returns,
 // unless an alternate GC finalizer is set on them.
 //
 // This is safe to call multiple times; subsequent calls after the first will do

@@ -30,6 +30,7 @@ use firewood_metrics::{firewood_increment, firewood_set};
 use lru::LruCache as EntryLruCache;
 use lru_mem::LruCache as MemLruCache;
 
+use crate::linear::ReadableNodeMode;
 use crate::{CacheReadStrategy, CachedNode, LinearAddress, MaybePersistedNode, SharedNode};
 
 use super::{FileIoError, OffsetReader, ReadableStorage, WritableStorage};
@@ -131,10 +132,10 @@ impl ReadableStorage for FileBacked {
             .len())
     }
 
-    fn read_cached_node(&self, addr: LinearAddress, mode: &'static str) -> Option<SharedNode> {
+    fn read_cached_node(&self, addr: LinearAddress, mode: ReadableNodeMode) -> Option<SharedNode> {
         let mut guard = self.cache.lock();
         let cached = guard.get(&addr).map(|cached_node| cached_node.0.clone());
-        firewood_increment!(crate::registry::CACHE_NODE, 1, "mode" => mode, "type" => if cached.is_some() { "hit" } else { "miss" });
+        firewood_increment!(crate::registry::CACHE_NODE, 1, "mode" => mode.as_str(), "type" => if cached.is_some() { "hit" } else { "miss" });
         cached
     }
 
@@ -235,7 +236,7 @@ struct PredictiveReader<'a> {
     offset: u64,
     len: usize,
     pos: usize,
-    started: coarsetime::Instant,
+    started: std::time::Instant,
 }
 
 impl<'a> PredictiveReader<'a> {
@@ -248,7 +249,7 @@ impl<'a> PredictiveReader<'a> {
             offset: start,
             len: 0,
             pos: 0,
-            started: coarsetime::Instant::now(),
+            started: std::time::Instant::now(),
         }
     }
 }
@@ -256,7 +257,7 @@ impl<'a> PredictiveReader<'a> {
 impl Drop for PredictiveReader<'_> {
     fn drop(&mut self) {
         let elapsed = self.started.elapsed();
-        firewood_increment!(crate::registry::IO_READ_MS, elapsed.as_millis());
+        firewood_increment!(crate::registry::IO_READ_MS, elapsed.as_millis() as u64);
         firewood_increment!(crate::registry::IO_READ_COUNT, 1);
     }
 }

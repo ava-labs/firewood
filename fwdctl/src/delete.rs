@@ -2,8 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use clap::Args;
+use firewood::api::{self, Db as _, Proposal as _};
 use firewood::db::{BatchOp, Db, DbConfig};
-use firewood::v2::api::{self, Db as _, Proposal as _};
 
 use crate::DatabasePath;
 
@@ -33,5 +33,5 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
     proposal.commit()?;
 
     println!("key {} deleted successfully", opts.key);
-    Ok(())
+    db.close()
 }

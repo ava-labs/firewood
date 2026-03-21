@@ -3,8 +3,8 @@
 
 use clap::Args;
 
+use firewood::api::{self, Db as _};
 use firewood::db::{Db, DbConfig};
-use firewood::v2::api::{self, Db as _};
 
 use crate::DatabasePath;
 
@@ -22,8 +22,8 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
 
     let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
 
-    let hash = db.root_hash()?;
+    let hash = db.root_hash();
 
     println!("{hash:?}");
-    Ok(())
+    db.close()
 }

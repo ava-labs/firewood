@@ -4,19 +4,22 @@
 use std::num::{NonZeroU64, NonZeroUsize};
 
 use firewood::{
-    db::{Db, DbConfig},
-    manager::RevisionManagerConfig,
-    merkle::Merkle,
-    v2::api::{
+    api::{
         self, ArcDynDbView, Db as _, DbView, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter,
         KeyType,
     },
+    db::{Db, DbConfig},
+    manager::RevisionManagerConfig,
+    merkle::Merkle,
 };
+use firewood_storage::{Committed, FileBacked, NodeStore};
 
 use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult, arc_cache::ArcCache};
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
-use firewood_metrics::{MetricsContext, firewood_increment, firewood_record};
+use firewood_metrics::{
+    MetricsContext, firewood_increment, firewood_record, fwd_expensive_timed_result,
+};
 
 /// The hashing mode to use for the database.
 ///
@@ -59,10 +62,11 @@ pub struct DatabaseHandleArgs<'a> {
     /// enable `root_store`.
     pub root_store: bool,
 
-    /// The size of the node cache.
+    /// The optional memory limit for the node cache in bytes.
     ///
-    /// Opening returns an error if this is zero.
-    pub cache_size: usize,
+    /// Set to `0` to leave this unset and rely on the default configured in
+    /// `RevisionManagerConfig`.
+    pub node_cache_memory_limit: usize,
 
     /// The size of the free list cache.
     ///
@@ -70,6 +74,8 @@ pub struct DatabaseHandleArgs<'a> {
     pub free_list_cache_size: usize,
 
     /// The maximum number of revisions to keep.
+    ///
+    /// Must be > `deferred_persistence_commit_count`.
     pub revisions: usize,
 
     /// The cache read strategy to use.
@@ -101,6 +107,8 @@ pub struct DatabaseHandleArgs<'a> {
     pub node_hash_algorithm: NodeHashAlgorithm,
 
     /// The maximum number of unpersisted revisions that can exist at a given time.
+    ///
+    /// Note: `revisions` must be > `deferred_persistence_commit_count`.
     pub deferred_persistence_commit_count: u64,
 }
 
@@ -112,21 +120,27 @@ impl DatabaseHandleArgs<'_> {
             2 => firewood::manager::CacheReadStrategy::All,
             _ => return Err(invalid_data("invalid cache strategy")),
         };
-        #[expect(deprecated)]
-        let config = RevisionManagerConfig::builder()
-            .node_cache_size(
-                self.cache_size
-                    .try_into()
-                    .map_err(|_| invalid_data("cache size should be non-zero"))?,
-            )
-            .max_revisions(self.revisions)
-            .cache_read_strategy(cache_read_strategy)
-            .free_list_cache_size(
-                self.free_list_cache_size
-                    .try_into()
-                    .map_err(|_| invalid_data("free list cache size should be non-zero"))?,
-            )
-            .build();
+        let free_list_cache_size = NonZeroUsize::new(self.free_list_cache_size)
+            .ok_or_else(|| invalid_data("free list cache size should be non-zero"))?;
+        let commit_count = NonZeroU64::new(self.deferred_persistence_commit_count)
+            .ok_or(api::Error::ZeroCommitCount)?;
+
+        let memory_limit = NonZeroUsize::new(self.node_cache_memory_limit);
+
+        let config = {
+            let builder = RevisionManagerConfig::builder()
+                .max_revisions(self.revisions)
+                .cache_read_strategy(cache_read_strategy)
+                .free_list_cache_size(free_list_cache_size)
+                .deferred_persistence_commit_count(commit_count);
+
+            if let Some(memory_limit) = memory_limit {
+                builder.node_cache_memory_limit(memory_limit).build()
+            } else {
+                builder.build()
+            }
+        };
+
         Ok(config)
     }
 }
@@ -155,15 +169,12 @@ impl DatabaseHandle {
     /// If the path is empty, or if the configuration is invalid, this will return an error.
     pub fn new(args: DatabaseHandleArgs<'_>) -> Result<Self, api::Error> {
         let metrics_context = MetricsContext::new(args.expensive_metrics);
-        let commit_count = NonZeroU64::new(args.deferred_persistence_commit_count)
-            .ok_or(api::Error::ZeroCommitCount)?;
 
         let cfg = DbConfig::builder()
             .node_hash_algorithm(args.node_hash_algorithm.into())
             .truncate(args.truncate)
             .manager(args.as_rev_manager_config()?)
             .root_store(args.root_store)
-            .deferred_persistence_commit_count(commit_count)
             .build();
 
         let path = args
@@ -187,8 +198,8 @@ impl DatabaseHandle {
     ///
     /// # Errors
     ///
-    /// An error is returned if there was an i/o error while reading the root hash.
-    pub fn current_root_hash(&self) -> Result<Option<HashKey>, api::Error> {
+    /// Never errors.
+    pub fn current_root_hash(&self) -> Option<HashKey> {
         self.db.root_hash()
     }
 
@@ -198,7 +209,7 @@ impl DatabaseHandle {
     ///
     /// An error is returned if there was an i/o error while reading the value.
     pub fn get_latest(&self, key: impl KeyType) -> Result<Option<Box<[u8]>>, api::Error> {
-        let Some(root) = self.current_root_hash()? else {
+        let Some(root) = self.current_root_hash() else {
             return Err(api::Error::RevisionNotFound {
                 provided: HashKey::default_root_hash(),
             });
@@ -207,7 +218,7 @@ impl DatabaseHandle {
         self.db.revision(root)?.val(key)
     }
 
-    /// Creates a proposal with the given values and returns the proposal and the start time.
+    /// Creates and commits a proposal with the given values.
     ///
     /// # Errors
     ///
@@ -216,24 +227,18 @@ impl DatabaseHandle {
         &self,
         values: impl AsRef<[BatchOp<'a>]> + 'a,
     ) -> Result<Option<HashKey>, api::Error> {
-        let CreateProposalResult { handle, start_time } =
-            self.create_proposal_handle(values.as_ref())?;
-
-        let root_hash = handle.commit_proposal(|commit_time| {
-            firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis());
-            firewood_record!(
-                crate::registry::COMMIT_MS_BUCKET,
-                commit_time.as_f64() * 1000.0,
-                expensive
-            );
-        })?;
-
-        let elapsed = start_time.elapsed();
-        firewood_increment!(crate::registry::BATCH_MS, elapsed.as_millis());
+        let (root_hash_result, elapsed) =
+            fwd_expensive_timed_result!(crate::registry::BATCH_MS_BUCKET, {
+                let CreateProposalResult { handle } =
+                    self.create_proposal_handle(values.as_ref())?;
+                handle.commit_proposal()
+            });
+        let root_hash = root_hash_result?;
+        firewood_increment!(crate::registry::BATCH_MS, elapsed.as_millis() as u64);
         firewood_increment!(crate::registry::BATCH_COUNT, 1);
         firewood_record!(
             crate::registry::BATCH_MS_BUCKET,
-            elapsed.as_f64() * 1000.0,
+            elapsed.as_secs_f64() * 1000.0,
             expensive
         );
 
@@ -247,12 +252,30 @@ impl DatabaseHandle {
     /// Returns an error if could not get the view from underlying database for the specified
     /// root hash, for example when the revision does not exist or an I/O error occurs while
     /// accessing the database.
-    pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult, api::Error> {
+    pub fn get_revision(&self, root: HashKey) -> Result<GetRevisionResult<'_>, api::Error> {
         let view = self.db.view(root.clone())?;
+        let historical = match self.db.revision(root.clone()) {
+            Ok(rev) => Some(rev),
+            Err(api::Error::RevisionNotFound { .. }) => None,
+            Err(err) => return Err(err),
+        };
         Ok(GetRevisionResult {
-            handle: RevisionHandle::new(view, self.metrics_context),
+            handle: RevisionHandle::new(view, historical, self.metrics_context, self),
             root_hash: root,
         })
+    }
+
+    /// Reconstructs a view on top of an existing historical node store.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reconstruction fails.
+    pub fn reconstruct_from_view<'db>(
+        &'db self,
+        parent: &NodeStore<Committed, FileBacked>,
+        batch: impl IntoBatchIter,
+    ) -> Result<firewood::db::ReconstructedView<'db>, api::Error> {
+        self.db.reconstruct_from_view(parent, batch)
     }
 
     pub(crate) fn get_root(&self, root: HashKey) -> Result<ArcDynDbView, api::Error> {
@@ -335,6 +358,23 @@ impl DatabaseHandle {
         })?);
 
         end_merkle.change_proof(start_key, end_key, start_merkle.nodestore(), limit)
+    }
+
+    /// Applies the `BatchOp`s of a change proof to the parent.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `LatestIsEmpty` error if the trie is empty. A range proof should be used in
+    /// this case.
+    pub fn apply_change_proof_to_parent(
+        &self,
+        start_hash: HashKey,
+        change_proof: &FrozenChangeProof,
+    ) -> Result<CreateProposalResult<'_>, api::Error> {
+        CreateProposalResult::new(self, || {
+            let parent = &self.db.revision(start_hash)?;
+            self.db.apply_change_proof_to_parent(change_proof, parent)
+        })
     }
 
     /// Dumps the Trie structure of the latest revision to a DOT (Graphviz) format string.

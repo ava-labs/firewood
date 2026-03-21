@@ -2,8 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use clap::Args;
+use firewood::api;
 use firewood::db::{Db, DbConfig};
-use firewood::v2::api;
 use std::io::stdout;
 
 use crate::DatabasePath;
@@ -23,5 +23,5 @@ pub(super) fn run(opts: &Options) -> Result<(), api::Error> {
 
     let db = Db::new(opts.database.dbpath.clone(), cfg.build())?;
     db.dump(&mut stdout())?;
-    Ok(())
+    db.close()
 }

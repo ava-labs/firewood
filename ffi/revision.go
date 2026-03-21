@@ -5,6 +5,16 @@ package ffi
 
 // #include <stdlib.h>
 // #include "firewood.h"
+// #cgo noescape fwd_get_from_revision
+// #cgo nocallback fwd_get_from_revision
+// #cgo noescape fwd_iter_on_revision
+// #cgo nocallback fwd_iter_on_revision
+// #cgo noescape fwd_reconstruct_on_revision
+// #cgo nocallback fwd_reconstruct_on_revision
+// #cgo noescape fwd_revision_dump
+// #cgo nocallback fwd_revision_dump
+// #cgo noescape fwd_free_revision
+// #cgo nocallback fwd_free_revision
 import "C"
 
 import (
@@ -26,15 +36,16 @@ var (
 // Instances are created via [Database.Revision], provide read-only access to
 // the revision, and must be released with [Revision.Drop] when no longer needed.
 //
-// Revisions must be dropped before the associated database is closed. A finalizer
-// is set on each Revision to ensure that Drop is called when the Revision is
-// garbage collected, but relying on finalizers is not recommended. Failing to
-// drop a revision before the database is closed will cause it to block or fail.
+// Revisions must be released before the associated database is closed by calling
+// [Revision.Drop]. A finalizer is set on each Revision to ensure Drop is called
+// when the Revision is garbage collected, but relying on finalizers is not
+// recommended. Failing to release a revision before the database is closed will
+// cause it to block or fail.
 //
-// Additionally, Revisions should be dropped when no longer needed to allow the
+// Additionally, Revisions should be released when no longer needed to allow the
 // database to free any associated resources. Firewood ensures that the state
 // associated with a Revision is retained until all Revisions based on that state
-// have been dropped.
+// have been released.
 //
 // All operations on a Revision are thread-safe with respect to each other.
 type Revision struct {
@@ -45,23 +56,20 @@ type Revision struct {
 	//
 	// Calls to `C.fwd_free_revision` will invalidate this handle, so it should
 	// not be used after that call.
-	handle *C.RevisionHandle
+	*handle[*C.RevisionHandle]
 
 	// root is the root hash of the revision.
 	root Hash
-
-	// keepAliveHandle is used to keep the database alive while this revision is
-	// in use. It is initialized when the revision is created and disowned after
-	// [Revision.Drop] is called.
-	keepAliveHandle databaseKeepAliveHandle
 }
 
 // Get reads the value stored at the provided key within the revision.
 // If the key does not exist, it returns nil.
 //
-// It returns ErrDroppedRevision if Drop has already been called.
+// It returns ErrDroppedRevision if this revision has already been released.
 func (r *Revision) Get(key []byte) ([]byte, error) {
-	if r.handle == nil {
+	r.keepAliveHandle.mu.RLock()
+	defer r.keepAliveHandle.mu.RUnlock()
+	if r.dropped {
 		return nil, ErrDroppedRevision
 	}
 
@@ -69,7 +77,7 @@ func (r *Revision) Get(key []byte) ([]byte, error) {
 	defer pinner.Unpin()
 
 	return getValueFromValueResult(C.fwd_get_from_revision(
-		r.handle,
+		r.ptr,
 		newBorrowedBytes(key, &pinner),
 	))
 }
@@ -80,36 +88,42 @@ func (r *Revision) Get(key []byte) ([]byte, error) {
 //
 // The Iterator must be released with [Iterator.Drop] when no longer needed.
 //
-// It returns [ErrDroppedRevision] if Drop has already been called.
+// It returns [ErrDroppedRevision] if this revision has already been released.
 func (r *Revision) Iter(key []byte) (*Iterator, error) {
-	if r.handle == nil {
+	r.keepAliveHandle.mu.RLock()
+	defer r.keepAliveHandle.mu.RUnlock()
+	if r.dropped {
 		return nil, ErrDroppedRevision
 	}
 
 	var pinner runtime.Pinner
 	defer pinner.Unpin()
 
-	itResult := C.fwd_iter_on_revision(r.handle, newBorrowedBytes(key, &pinner))
+	itResult := C.fwd_iter_on_revision(r.ptr, newBorrowedBytes(key, &pinner))
 
 	return getIteratorFromIteratorResult(itResult)
 }
 
-// Drop releases the resources backed by the revision handle.
+// Reconstruct applies a batch of operations on top of this historical revision,
+// returning a [Reconstructed] view.
 //
-// It is safe to call Drop multiple times; subsequent calls after the first are no-ops.
-func (r *Revision) Drop() error {
-	return r.keepAliveHandle.disown(false /* evenOnError */, func() error {
-		if r.handle == nil {
-			return nil
-		}
+// The returned view is not committed to the database and is not visible via
+// [Database.Revision] or [Database.Root].
+func (r *Revision) Reconstruct(batch []BatchOp) (*Reconstructed, error) {
+	r.keepAliveHandle.mu.RLock()
+	defer r.keepAliveHandle.mu.RUnlock()
+	if r.dropped {
+		return nil, ErrDroppedRevision
+	}
 
-		if err := getErrorFromVoidResult(C.fwd_free_revision(r.handle)); err != nil {
-			return fmt.Errorf("%w: %w", errFreeingValue, err)
-		}
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
 
-		r.handle = nil
-		return nil
-	})
+	kvp := newKeyValuePairsFromBatch(batch, &pinner)
+	return getReconstructedFromResult(
+		C.fwd_reconstruct_on_revision(r.ptr, kvp),
+		r.keepAliveHandle.outstandingHandles,
+	)
 }
 
 // Root returns the root hash of the revision.
@@ -120,13 +134,15 @@ func (r *Revision) Root() Hash {
 // Dump returns a DOT (Graphviz) format representation of the trie structure
 // of this revision for debugging purposes.
 //
-// Returns ErrDroppedRevision if Drop has already been called.
+// Returns ErrDroppedRevision if this revision has already been released.
 func (r *Revision) Dump() (string, error) {
-	if r.handle == nil {
+	r.keepAliveHandle.mu.RLock()
+	defer r.keepAliveHandle.mu.RUnlock()
+	if r.dropped {
 		return "", ErrDroppedRevision
 	}
 
-	bytes, err := getValueFromValueResult(C.fwd_revision_dump(r.handle))
+	bytes, err := getValueFromValueResult(C.fwd_revision_dump(r.ptr))
 	if err != nil {
 		return "", err
 	}
@@ -145,11 +161,10 @@ func getRevisionFromResult(result C.RevisionResult, wg *sync.WaitGroup) (*Revisi
 		body := (*C.RevisionResult_Ok_Body)(unsafe.Pointer(&result.anon0))
 		hashKey := *(*Hash)(unsafe.Pointer(&body.root_hash._0))
 		rev := &Revision{
-			handle: body.handle,
+			handle: createHandle(body.handle, wg, func(r *C.RevisionHandle) C.VoidResult { return C.fwd_free_revision(r) }),
 			root:   hashKey,
 		}
-		rev.keepAliveHandle.init(wg)
-		runtime.SetFinalizer(rev, (*Revision).Drop)
+		runtime.AddCleanup(rev, drop, rev.handle)
 		return rev, nil
 	case C.RevisionResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
