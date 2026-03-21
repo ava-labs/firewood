@@ -89,7 +89,8 @@ type keyValueOp struct {
 
 // replayBatch represents a batch operation that commits immediately.
 type replayBatch struct {
-	Pairs []keyValueOp `msgpack:"pairs"`
+	Pairs  []keyValueOp `msgpack:"pairs"`
+	Result any          `msgpack:"result,omitempty"`
 }
 
 // proposeOnDB represents a proposal created on the database.
@@ -109,6 +110,7 @@ type proposeOnProposal struct {
 type commit struct {
 	ProposalID   uint64 `msgpack:"proposal_id"`
 	ReturnedHash []byte `msgpack:"returned_hash"` // nil when absent
+	Result       any    `msgpack:"result,omitempty"`
 }
 
 // freeProposal represents releasing an uncommitted proposal.
@@ -369,6 +371,9 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 				}
 
 			case op.Batch != nil:
+				if isHashResultErrOrNull(op.Batch.Result) {
+					continue
+				}
 				batch := batchFromReplayPairs(op.Batch.Pairs)
 				if _, err := db.Update(batch); err != nil {
 					return totalCommits, fmt.Errorf("Batch: %w", err)
@@ -408,10 +413,26 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig) (int, err
 
 			case op.Commit != nil:
 				prop, ok := proposals[op.Commit.ProposalID]
+				if ok {
+					delete(proposals, op.Commit.ProposalID)
+				}
+
+				if isHashResultErrOrNull(op.Commit.Result) {
+					if ok {
+						if err := prop.Drop(); err != nil {
+							return totalCommits, fmt.Errorf("Commit Drop: %w", err)
+						}
+					}
+					totalCommits++
+					if cfg.MaxCommits > 0 && totalCommits >= cfg.MaxCommits {
+						return totalCommits, nil
+					}
+					continue
+				}
+
 				if !ok {
 					return totalCommits, fmt.Errorf("Commit: unknown proposal id %d", op.Commit.ProposalID)
 				}
-				delete(proposals, op.Commit.ProposalID)
 				if err := prop.Commit(); err != nil {
 					return totalCommits, fmt.Errorf("Commit: %w", err)
 				}
@@ -493,4 +514,23 @@ func hashFromBytes(bytes []byte) (Hash, error) {
 	var out Hash
 	copy(out[:], bytes)
 	return out, nil
+}
+
+func isHashResultErrOrNull(value any) bool {
+	switch v := value.(type) {
+	case nil:
+		return false
+	case string:
+		return v == "Err" || v == "NullHandlePointer"
+	case map[string]interface{}:
+		_, isErr := v["Err"]
+		_, isNull := v["NullHandlePointer"]
+		return isErr || isNull
+	case map[interface{}]interface{}:
+		_, isErr := v["Err"]
+		_, isNull := v["NullHandlePointer"]
+		return isErr || isNull
+	default:
+		return false
+	}
 }
