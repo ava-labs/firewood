@@ -374,7 +374,7 @@ func TestRangeProofCodeHashes(t *testing.T) {
 			r.NoError(err, "%T.CodeHashes()", proof)
 			r.Equal(codeHash, h)
 		} else {
-			//nolint:forbidigo // checking error substring, not identity
+			//nolint:forbidigo // Rust FFI returns a string error without a Go sentinel; substring match is the only option
 			require.ErrorContains(t, err, "feature not supported in this build: ethhash code hash iterator")
 		}
 	}
