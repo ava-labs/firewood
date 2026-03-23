@@ -1,3 +1,6 @@
+# This file is derived from AvalancheGo's .golangci.yaml with a patch applied.
+# If you edit this file manually, regenerate the patch by running:
+#   .github/scripts/verify_golangci_yaml_changes.sh update
 # https://golangci-lint.run/usage/configuration/
 version: "2"
 run:
@@ -136,24 +139,12 @@ linters:
         # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#bool-literal-in-expr
         - name: bool-literal-in-expr
           disabled: false
-        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#call-to-gc
-        - name: call-to-gc
-          # Test code intentionally calls runtime.GC() to exercise finalizers.
-          disabled: true
         # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#cognitive-complexity
         - name: cognitive-complexity
           disabled: false
           # Default threshold of 7 is too restrictive, especially for test helpers
           # and functions with straightforward but verbose switch/case logic.
           arguments: [35]
-        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#confusing-naming
-        - name: confusing-naming
-          # Private helpers like root() alongside public Root() are intentional.
-          disabled: true
-        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#confusing-results
-        - name: confusing-results
-          # Flagging unnamed ([]byte, []byte) returns is more noise than value.
-          disabled: true
         # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#cyclomatic
         - name: cyclomatic
           disabled: false
@@ -164,24 +155,6 @@ linters:
         # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#empty-lines
         - name: empty-lines
           disabled: false
-        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#enforce-switch-style
-        - name: enforce-switch-style
-          # Exhaustive switches on known enums don't need a default case;
-          # the compiler already catches missing cases for typed constants.
-          disabled: true
-        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#flag-parameter
-        - name: flag-parameter
-          # Control-flag parameters (e.g. disownEvenOnErr) are sometimes
-          # the clearest API; callers see the intent at the call site.
-          disabled: true
-        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#function-length
-        - name: function-length
-          # 75 lines is too strict for table-driven tests and test helpers.
-          disabled: true
-        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#import-shadowing
-        - name: import-shadowing
-          # Shadowing `rand` in fuzz tests with the fuzz-provided *rand.Rand is idiomatic.
-          disabled: true
         # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#line-length-limit
         - name: line-length-limit
           disabled: false
@@ -191,14 +164,6 @@ linters:
           disabled: false
           arguments:
             - maxLength: 2
-        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#redundant-import-alias
-        - name: redundant-import-alias
-          # Aliasing an import to a clearer name (e.g. firewood "…/ffi") is fine.
-          disabled: true
-        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#redundant-test-main-exit
-        - name: redundant-test-main-exit
-          # os.Exit(m.Run()) in TestMain is a conventional Go pattern.
-          disabled: true
         # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#string-format
         - name: string-format
           disabled: false
@@ -233,12 +198,6 @@ linters:
         # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#unexported-naming
         - name: unexported-naming
           disabled: false
-        # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#unhandled-error
-        - name: unhandled-error
-          # prefer the errcheck linter since it can be disabled directly with nolint directive
-          # but revive's disable directive (e.g. //revive:disable:unhandled-error) is not
-          # supported when run under golangci_lint
-          disabled: true
         # https://github.com/mgechev/revive/blob/master/RULES_DESCRIPTIONS.md#unused-parameter
         - name: unused-parameter
           disabled: false
