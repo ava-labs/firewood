@@ -9,11 +9,11 @@ mod merge;
 /// Parallel merkle
 pub mod parallel;
 
-use crate::iter::{MerkleKeyValueIter, PathIterator};
-use crate::merkle::changes::{ChangeProof, DiffMerkleNodeStream};
 use crate::api::{
     self, BatchIter, FrozenProof, FrozenRangeProof, KeyType, KeyValuePair, ValueType,
 };
+use crate::iter::{MerkleKeyValueIter, PathIterator};
+use crate::merkle::changes::{ChangeProof, DiffMerkleNodeStream};
 use crate::{Proof, ProofCollection, ProofError, ProofNode, RangeProof};
 use firewood_metrics::firewood_increment;
 #[cfg(test)]
@@ -131,6 +131,44 @@ impl<T> From<T> for Merkle<T> {
     fn from(nodestore: T) -> Self {
         Merkle { nodestore }
     }
+}
+
+/// Verify one edge (left or right) of a range proof.
+///
+/// Checks that the requested bound is consistent with the edge key-value pair,
+/// then verifies the proof against the root hash.
+fn verify_edge<H: ProofCollection + ?Sized>(
+    requested_bound: Option<&[u8]>,
+    edge_kv: Option<(&[u8], &[u8])>,
+    edge_proof: &Proof<H>,
+    root_hash: &TrieHash,
+    bound_is_lower: bool,
+) -> Result<(), api::Error> {
+    // Validate bound vs edge key ordering
+    if let (Some(bound), Some((edge_key, _))) = (requested_bound, edge_kv) {
+        let out_of_order = if bound_is_lower {
+            bound > edge_key
+        } else {
+            bound < edge_key
+        };
+        if out_of_order {
+            return Err(api::Error::InvalidRange {
+                start_key: bound.to_vec().into(),
+                end_key: edge_key.to_vec().into(),
+            });
+        }
+    }
+
+    // Verify the proof for this edge
+    if let Some(bound) = requested_bound {
+        let expected_value: Option<&[u8]> =
+            edge_kv.and_then(|(key, value)| (bound == key).then_some(value));
+        edge_proof.verify(bound, expected_value, root_hash)?;
+    } else if let Some((edge_key, edge_value)) = edge_kv {
+        edge_proof.verify(edge_key, Some(edge_value), root_hash)?;
+    }
+
+    Ok(())
 }
 
 impl<T: TrieReader> Merkle<T> {
@@ -285,62 +323,26 @@ impl<T: TrieReader> Merkle<T> {
             return Err(api::Error::ProofError(ProofError::Empty));
         }
 
-        let left = key_values.first();
-        let right = key_values.last();
+        let left_edge_key = key_values.first();
+        let right_edge_key = key_values.last();
 
-        // Verify that first_key (if provided) is <= the first key in the proof
-        if let (Some(ref requested_first), Some((left_key, _))) = (first_key.as_ref(), left)
-            && requested_first.as_ref() > left_key.as_ref()
-        {
-            return Err(api::Error::InvalidRange {
-                start_key: requested_first.as_ref().to_vec().into(),
-                end_key: left_key.as_ref().to_vec().into(),
-            });
-        }
+        let left_edge = left_edge_key.map(|(k, v)| (k.as_ref(), v.as_ref()));
+        let right_edge = right_edge_key.map(|(k, v)| (k.as_ref(), v.as_ref()));
 
-        // start proof verifies the requested lower bound (if any), not necessarily
-        // the first key-value included in this proof.
-        if let Some(ref requested_first) = first_key {
-            let expected_start_value = left.and_then(|(key, value)| {
-                (requested_first.as_ref() == key.as_ref()).then_some(value.as_ref())
-            });
-
-            proof.start_proof().verify(
-                requested_first.as_ref(),
-                expected_start_value,
-                root_hash,
-            )?;
-        } else if let Some((left_key, left_value)) = left {
-            proof
-                .start_proof()
-                .verify(left_key.as_ref(), Some(left_value.as_ref()), root_hash)?;
-        }
-
-        // Verify that last_key (if provided) is >= the last key in the proof
-        if let (Some(ref requested_last), Some((right_key, _))) = (last_key.as_ref(), right)
-            && requested_last.as_ref() < right_key.as_ref()
-        {
-            return Err(api::Error::InvalidRange {
-                start_key: requested_last.as_ref().to_vec().into(),
-                end_key: right_key.as_ref().to_vec().into(),
-            });
-        }
-
-        // end proof verifies the requested upper bound (if any), not necessarily
-        // the last key-value included in this proof.
-        if let Some(ref requested_last) = last_key {
-            let expected_end_value = right.and_then(|(key, value)| {
-                (requested_last.as_ref() == key.as_ref()).then_some(value.as_ref())
-            });
-
-            proof
-                .end_proof()
-                .verify(requested_last.as_ref(), expected_end_value, root_hash)?;
-        } else if let Some((right_key, right_value)) = right {
-            proof
-                .end_proof()
-                .verify(right_key.as_ref(), Some(right_value.as_ref()), root_hash)?;
-        }
+        verify_edge(
+            first_key.as_ref().map(|k| k.as_ref()),
+            left_edge,
+            proof.start_proof(),
+            root_hash,
+            true,
+        )?;
+        verify_edge(
+            last_key.as_ref().map(|k| k.as_ref()),
+            right_edge,
+            proof.end_proof(),
+            root_hash,
+            false,
+        )?;
 
         // TODO: build a merkle and reshape it, filling in hashes from the
         // provided proofs on the left and right edges, then verify the root hash
