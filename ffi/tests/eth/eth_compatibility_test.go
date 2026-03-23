@@ -13,7 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ava-labs/firewood-go-ethhash/ffi"
 	firewood "github.com/ava-labs/firewood-go-ethhash/ffi"
 	"github.com/ava-labs/libevm/common"
 	"github.com/ava-labs/libevm/core/rawdb"
@@ -85,7 +84,7 @@ func newFirewoodDB(t *testing.T) *firewood.Database {
 	r.NoError(err, "firewood.New()")
 	t.Cleanup(func() {
 		err := db.Close(oneSecCtx(t))
-		if errors.Is(err, ffi.ErrActiveKeepAliveHandles) {
+		if errors.Is(err, firewood.ErrActiveKeepAliveHandles) {
 			// force a GC to clean up dangling handles that are preventing the
 			// database from closing, then try again. Intentionally not looping
 			// since a subsequent attempt is unlikely to succeed if the first

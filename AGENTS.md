@@ -123,7 +123,11 @@ in Go code (especially to satisfy `revive` linter rules like `add-constant`):
    rather than at package level. Package-level constants should be reserved
    for values shared across multiple functions.
 
-3. **Run `gofumpt`** after modifying `const` blocks — alignment changes and
+3. **Avoid duplicate imports.** Never import the same package twice (e.g.
+   once bare and once with an alias). Use a single import with the alias
+   that the file actually needs, and update all references to match.
+
+4. **Run `gofumpt`** after modifying `const` blocks — alignment changes and
    trailing blank lines inside `const ( ... )` will cause `gofmt`/`gofumpt`
    lint failures.
 
