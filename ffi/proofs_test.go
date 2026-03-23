@@ -869,7 +869,7 @@ func TestChangeProofMarshalFailsAfterVerify(t *testing.T) {
 	dbB := newTestDatabase(t)
 
 	// Insert some data.
-	_, _, batch := kvForTest(10)
+	_, _, batch := kvForTest(smallNumEntries)
 	rootA, err := dbA.Update(batch[:5])
 	r.NoError(err)
 	_, err = dbB.Update(batch[:5])
@@ -907,7 +907,7 @@ func TestVerifiedChangeProofMarshal(t *testing.T) {
 	dbB := newTestDatabase(t)
 
 	// Insert some data.
-	_, _, batch := kvForTest(10)
+	_, _, batch := kvForTest(smallNumEntries)
 	rootA, err := dbA.Update(batch[:5])
 	r.NoError(err)
 	_, err = dbB.Update(batch[:5])
