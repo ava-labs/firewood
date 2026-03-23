@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1773991348167,
+  "lastUpdate": 1774251261367,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -1644,6 +1644,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 77.00834768716531,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "3da98c89bbd5912b22538f7a5ff6dbc488913f0e",
+          "message": "chore(ci): Pedantically check all golang errors (#1820)\n\n## Why this should be merged\n\nLots of churn in https://github.com/ava-labs/firewood/pull/1814 over\nchecking the return value of a function that cannot error.\n\nThis was flagged by:\n- github copilot's review\nhttps://github.com/ava-labs/firewood/pull/1814#discussion_r2961404379\n- @maru-ava\nhttps://github.com/ava-labs/firewood/pull/1814#discussion_r2961496332\n- @RodrigoVillar\nhttps://github.com/ava-labs/firewood/pull/1814#discussion_r2962086982\n\nand required 3 changes to meet all reviewers concerns.\n\n## How this works\n\nThis catches the error at lint time, and prohibits check-ins that don't\ncheck errors on everything in the exclude list. For the list of\nexclusions, that are no longer allowed, check out the source for\nerrcheck here\nhttps://github.com/kisielk/errcheck/blob/master/errcheck/excludes.go or\nopen the thingy below:\n\n<details><summary>errcheck excludes</summary>\n<code>\n\t// bytes\n\t\"(*bytes.Buffer).Write\",\n\t\"(*bytes.Buffer).WriteByte\",\n\t\"(*bytes.Buffer).WriteRune\",\n\t\"(*bytes.Buffer).WriteString\",\n\n\t// crypto\n\t\"crypto/rand.Read\", // https://github.com/golang/go/issues/66821\n\n\t// fmt\n\t\"fmt.Print\",\n\t\"fmt.Printf\",\n\t\"fmt.Println\",\n\t\"fmt.Fprint(*bytes.Buffer)\",\n\t\"fmt.Fprintf(*bytes.Buffer)\",\n\t\"fmt.Fprintln(*bytes.Buffer)\",\n\t\"fmt.Fprint(*strings.Builder)\",\n\t\"fmt.Fprintf(*strings.Builder)\",\n\t\"fmt.Fprintln(*strings.Builder)\",\n\t\"fmt.Fprint(os.Stderr)\",\n\t\"fmt.Fprintf(os.Stderr)\",\n\t\"fmt.Fprintln(os.Stderr)\",\n\n\t// io\n\t\"(*io.PipeReader).CloseWithError\",\n\t\"(*io.PipeWriter).CloseWithError\",\n\n\t// math/rand\n\t\"math/rand.Read\",\n\t\"(*math/rand.Rand).Read\",\n\n\t// strings\n\t\"(*strings.Builder).Write\",\n\t\"(*strings.Builder).WriteByte\",\n\t\"(*strings.Builder).WriteRune\",\n\t\"(*strings.Builder).WriteString\",\n\n\t// hash\n\t\"(hash.Hash).Write\",\n\n\t// hash/maphash\n\t\"(*hash/maphash.Hash).Write\",\n\t\"(*hash/maphash.Hash).WriteByte\",\n\t\"(*hash/maphash.Hash).WriteString\",\n</code>\n</details> \n\n## How this was tested\n\nChanged the code to just call rng.Read and the linter failed\n\n## Breaking Changes\n\nNone",
+          "timestamp": "2026-03-20T20:06:43Z",
+          "url": "https://github.com/ava-labs/firewood/commit/3da98c89bbd5912b22538f7a5ff6dbc488913f0e"
+        },
+        "date": 1774251260602,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 161.45131249984837,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6193.8177182730515,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 119.82697407047031,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5980.294530146512,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 89.78313451924166,
             "unit": "block_accept_ms/ggas"
           }
         ]
