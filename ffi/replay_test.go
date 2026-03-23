@@ -172,7 +172,7 @@ func BenchmarkReplayLog(b *testing.B) {
 	}
 
 	for k, v := range times {
-		b.ReportMetric(float64(v.Nanoseconds())/float64(nx), fmt.Sprintf("ns/%s", k))
+		b.ReportMetric(float64(v.Nanoseconds())/float64(nx), "ns/"+k)
 	}
 	b.ReportMetric(float64(commits), "commits")
 }
@@ -362,9 +362,9 @@ func applyReplayLogs(db *Database, logs []replayLog, cfg replayConfig, times *ma
 				}
 
 			default:
-				// 				return totalCommits, fmt.Errorf("unknown or empty DbOperation: %+v", op)
+				// ignore unknown or empty DbOperation
 			}
-			if times != nil {
+			if times != nil && opName != "" {
 				(*times)[opName] += time.Since(start)
 			}
 		}
