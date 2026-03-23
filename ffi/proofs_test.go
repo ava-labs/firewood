@@ -989,4 +989,3 @@ func TestMultiRoundChangeProof(t *testing.T) {
 		})
 	}
 }
-

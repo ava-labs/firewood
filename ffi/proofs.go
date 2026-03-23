@@ -442,12 +442,11 @@ func (db *Database) VerifyAndProposeChangeProof(
 	proposed, err := getProposedChangeProofFromResult(
 		C.fwd_db_verify_and_propose_change_proof(db.handle, args),
 		proof,
+		db,
 	)
 	if err != nil {
 		return nil, err
 	}
-
-	proposed.db = db
 
 	// keep the database alive while the proof owns the embedded proposal
 	// TODO: use runtime.AddCleanup and shared handle[T] infrastructure
@@ -755,13 +754,14 @@ func getChangeProofFromChangeProofResult(result C.ChangeProofResult) (*ChangePro
 func getProposedChangeProofFromResult(
 	result C.ProposedChangeProofResult,
 	proof *ChangeProof,
+	db *Database,
 ) (*ProposedChangeProof, error) {
 	switch result.tag {
 	case C.ProposedChangeProofResult_NullHandlePointer:
 		return nil, errDBClosed
 	case C.ProposedChangeProofResult_Ok:
 		ptr := *(**C.ProposedChangeProofContext)(unsafe.Pointer(&result.anon0))
-		return &ProposedChangeProof{handle: ptr}, nil
+		return &ProposedChangeProof{handle: ptr, db: db}, nil
 	case C.ProposedChangeProofResult_VerificationFailed:
 		body := (*C.ProposedChangeProofResult_VerificationFailed_Body)(unsafe.Pointer(&result.anon0))
 		// Return the original handle to the caller so the proof can be freed or reused.

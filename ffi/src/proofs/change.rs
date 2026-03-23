@@ -121,7 +121,6 @@ pub struct ProposedChangeProofContext<'db> {
 
 #[derive(Debug)]
 struct VerificationContext {
-    start_root: HashKey,
     end_root: HashKey,
     start_key: Option<Box<[u8]>>,
     end_key: Option<Box<[u8]>>,
@@ -150,7 +149,6 @@ impl From<FrozenChangeProof> for ChangeProofContext {
 /// parameters so that downstream logic can avoid re-verifying.
 fn verify_proof(
     proof: &FrozenChangeProof,
-    start_root: HashKey,
     end_root: HashKey,
     start_key: Option<&[u8]>,
     end_key: Option<&[u8]>,
@@ -196,7 +194,6 @@ fn verify_proof(
     verify_end_proof(proof, end_key, &end_root, max_length)?;
 
     Ok(VerificationContext {
-        start_root,
         end_root,
         start_key: start_key.map(Box::from),
         end_key: end_key.map(Box::from),
@@ -402,7 +399,6 @@ impl ChangeProofContext {
 
         let verification = match verify_proof(
             &proof,
-            start_root.clone(),
             end_root.clone(),
             start_key,
             end_key,
@@ -464,7 +460,6 @@ impl ChangeProofContext {
     ) -> Result<Option<HashKey>, api::Error> {
         let verification = verify_proof(
             &self.proof,
-            start_root.clone(),
             end_root.clone(),
             start_key,
             end_key,
