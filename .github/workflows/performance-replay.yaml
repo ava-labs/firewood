@@ -8,14 +8,14 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: full
-  REPLAY_LOG_URL: 'https://github.com/AminR443/firewood-benchmark-reports/raw/refs/heads/main/replay-files/replay_10k.mp.log'
-  AWS_REGION: 'us-west-2'
-  BENCHMARK_REPORTS_DIR: 'benchmark-reports-repository'
-  BENCHMARK_REPORTS_REPOSITORY: 'AminR443/firewood-benchmark-reports'
-  BENCHMARK_REPORTS_GH_REPOSITORY: 'github.com/AminR443/firewood-benchmark-reports'
-  BENCHMARK_REPORTS_PAGES_URL: 'https://aminr443.github.io/firewood-benchmark-reports'
-  BENCHMARK_REPORTS_BRANCH: 'gh-pages'
-  BENCHMARK_THEME_CSS_URL: 'https://raw.githubusercontent.com/AminR443/firewood-benchmark-reports/refs/heads/main/theme.css'
+  REPLAY_LOG_URL: "https://github.com/AminR443/firewood-benchmark-reports/raw/refs/heads/main/replay-files/replay_10k.log"
+  AWS_REGION: "us-west-2"
+  BENCHMARK_REPORTS_DIR: "benchmark-reports-repository"
+  BENCHMARK_REPORTS_REPOSITORY: "AminR443/firewood-benchmark-reports"
+  BENCHMARK_REPORTS_GH_REPOSITORY: "github.com/AminR443/firewood-benchmark-reports"
+  BENCHMARK_REPORTS_PAGES_URL: "https://aminr443.github.io/firewood-benchmark-reports"
+  BENCHMARK_REPORTS_BRANCH: "gh-pages"
+  BENCHMARK_THEME_CSS_URL: "https://raw.githubusercontent.com/AminR443/firewood-benchmark-reports/refs/heads/main/theme.css"
 
 jobs:
   benchmark-pr:
@@ -140,9 +140,9 @@ jobs:
           ref: ${{ env.BASE_SHA }}
           github-token: ${{ env.BENCHMARK_TOKEN }}
           benchmark-data-dir-path: ${{ env.PR_DATA_DIR }}
-          alert-threshold: '150%'
-          comment-on-alert: 'false'
-          fail-on-alert: 'false'
+          alert-threshold: "150%"
+          comment-on-alert: "false"
+          fail-on-alert: "false"
           gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
           gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
 
@@ -156,9 +156,9 @@ jobs:
           ref: ${{ env.BASE_SHA }}
           github-token: ${{ env.BENCHMARK_TOKEN }}
           benchmark-data-dir-path: ${{ env.COMPARISON_DATA_DIR }}
-          alert-threshold: '150%'
-          comment-on-alert: 'false'
-          fail-on-alert: 'false'
+          alert-threshold: "150%"
+          comment-on-alert: "false"
+          fail-on-alert: "false"
           gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
           gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
 
@@ -187,9 +187,9 @@ jobs:
           ref: ${{ env.HEAD_SHA }}
           github-token: ${{ env.BENCHMARK_TOKEN }}
           benchmark-data-dir-path: ${{ env.PR_DATA_DIR }}
-          alert-threshold: '150%'
-          comment-on-alert: 'false'
-          fail-on-alert: 'false'
+          alert-threshold: "150%"
+          comment-on-alert: "false"
+          fail-on-alert: "false"
           gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
           gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
 
@@ -201,9 +201,9 @@ jobs:
           ref: ${{ env.HEAD_SHA }}
           github-token: ${{ env.BENCHMARK_TOKEN }}
           benchmark-data-dir-path: ${{ env.COMPARISON_DATA_DIR }}
-          alert-threshold: '150%'
-          comment-on-alert: 'false'
-          fail-on-alert: 'false'
+          alert-threshold: "150%"
+          comment-on-alert: "false"
+          fail-on-alert: "false"
           gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
           gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
 
@@ -267,10 +267,10 @@ jobs:
           ref: ${{ github.sha }}
           github-token: ${{ env.BENCHMARK_TOKEN }}
           benchmark-data-dir-path: ${{ env.MAIN_DATA_DIR }}
-          alert-threshold: '110%'
-          comment-on-alert: 'true'
-          fail-on-alert: 'true'
-          alert-comment-cc-users: '@AminR443'
+          alert-threshold: "110%"
+          comment-on-alert: "true"
+          fail-on-alert: "true"
+          alert-comment-cc-users: "@AminR443"
           gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
           gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
 
