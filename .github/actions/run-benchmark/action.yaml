@@ -6,9 +6,6 @@ inputs:
     description: "Source directory containing the Firewood workspace to benchmark"
     required: false
     default: "."
-  benchmark-name:
-    description: "Name of the benchmark (used in results and graphs)"
-    required: true
   replay-log-url:
     description: "URL to download the replay log from (supports https:// and s3:// URLs)"
     required: true
@@ -16,10 +13,6 @@ inputs:
     description: "Number of benchmark iterations (passed to -benchtime=Nx)"
     required: false
     default: "3"
-  extra:
-    description: "Extra text to include in benchmark metadata (useful for tracking discontinuities like metric changes)"
-    required: false
-    default: ""
   rust-cache-key:
     description: "Rust cache shared key"
     required: false
@@ -41,9 +34,6 @@ outputs:
   output-file:
     description: "Path to the benchmark output file"
     value: ${{ steps.run-benchmark.outputs.output-file }}
-  results:
-    description: "Raw benchmark results"
-    value: ${{ steps.run-benchmark.outputs.results }}
 
 runs:
   using: "composite"
@@ -135,7 +125,6 @@ runs:
       working-directory: ${{ inputs.source-dir }}/ffi
       env:
         TMPDIR: /mnt/tmp
-        BENCHMARK_EXTRA: ${{ inputs.extra }}
       run: |
         SUDO=""
         if command -v sudo >/dev/null 2>&1; then
@@ -148,9 +137,3 @@ runs:
         REPLAY_MAX_COMMITS=1000 REPLAY_LOG=./replay.log go test -run=^$ -bench=BenchmarkReplayLog -benchtime=${{ inputs.benchtime }}x | tee output.txt
 
         echo "output-file=$(pwd)/output.txt" >> $GITHUB_OUTPUT
-
-        # Store results for output (escape newlines for GitHub Actions)
-        RESULTS=$(cat output.txt)
-        echo "results<<EOF" >> $GITHUB_OUTPUT
-        echo "$RESULTS" >> $GITHUB_OUTPUT
-        echo "EOF" >> $GITHUB_OUTPUT

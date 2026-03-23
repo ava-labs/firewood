@@ -10,6 +10,7 @@ env:
   RUST_BACKTRACE: full
   REPLAY_LOG_URL: 'https://github.com/AminR443/firewood-benchmark-reports/raw/refs/heads/main/replay-files/replay_10k.mp.log'
   AWS_REGION: 'us-west-2'
+  BENCHMARK_REPORTS_DIR: 'benchmark-reports-repository'
   BENCHMARK_REPORTS_REPOSITORY: 'AminR443/firewood-benchmark-reports'
   BENCHMARK_REPORTS_GH_REPOSITORY: 'github.com/AminR443/firewood-benchmark-reports'
   BENCHMARK_REPORTS_PAGES_URL: 'https://aminr443.github.io/firewood-benchmark-reports'
@@ -50,13 +51,8 @@ jobs:
 
           base_subject="$(git show -s --format=%s "$BASE_SHA" 2>/dev/null || true)"
           head_subject="$(git show -s --format=%s "$HEAD_SHA" 2>/dev/null || true)"
-
-          if [[ -z "$base_subject" ]]; then
-            base_subject="$BASE_SHA"
-          fi
-          if [[ -z "$head_subject" ]]; then
-            head_subject="$HEAD_SHA"
-          fi
+          : "${base_subject:=$BASE_SHA}"
+          : "${head_subject:=$HEAD_SHA}"
 
           {
             echo "base-subject<<EOF"
@@ -77,9 +73,9 @@ jobs:
         run: |
           set -euo pipefail
 
-          rm -rf ./benchmark-data-check-repository
-          git clone --depth 1 --branch "${BENCHMARK_REPORTS_BRANCH}" "https://x-access-token:${BENCHMARK_TOKEN}@github.com/${BENCHMARK_REPORTS_REPOSITORY}.git" ./benchmark-data-check-repository
-          cd ./benchmark-data-check-repository
+          rm -rf "./${BENCHMARK_REPORTS_DIR}"
+          git clone --depth 1 --branch "${BENCHMARK_REPORTS_BRANCH}" "https://x-access-token:${BENCHMARK_TOKEN}@github.com/${BENCHMARK_REPORTS_REPOSITORY}.git" "./${BENCHMARK_REPORTS_DIR}"
+          cd "./${BENCHMARK_REPORTS_DIR}"
 
           has_commit() {
             local dir="$1"
@@ -139,7 +135,6 @@ jobs:
         id: benchmark-base
         with:
           source-dir: './benchmark-sources/base'
-          benchmark-name: 'Replay 10K (PR Base)'
           replay-log-url: ${{ env.REPLAY_LOG_URL }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -202,7 +197,6 @@ jobs:
         id: benchmark-head
         with:
           source-dir: '.'
-          benchmark-name: 'Replay 10K (PR Head)'
           replay-log-url: ${{ env.REPLAY_LOG_URL }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -257,149 +251,17 @@ jobs:
           BASE_COMMIT_SUBJECT: ${{ steps.commit_subjects.outputs.base-subject }}
           HEAD_COMMIT_SUBJECT: ${{ steps.commit_subjects.outputs.head-subject }}
         run: |
-          set -euo pipefail
-
-          rm -rf ./benchmark-theme-repository
-          git clone --depth 1 --branch "${BENCHMARK_REPORTS_BRANCH}" "https://x-access-token:${BENCHMARK_TOKEN}@github.com/${BENCHMARK_REPORTS_REPOSITORY}.git" ./benchmark-theme-repository
-
-          cd ./benchmark-theme-repository
-
-          postprocess_data_file() {
-            local dir="$1"
-            local data_file="${dir}/data.js"
-
-            if [[ ! -f "$data_file" ]]; then
-              return
-            fi
-
-            if ! command -v python3 >/dev/null 2>&1; then
-              echo "::warning::Skipping benchmark data postprocessing for ${dir}; python3 is not available"
-              return
-            fi
-
-            python3 - "$data_file" "$BASE_COMMIT_SHA" "$BASE_COMMIT_SUBJECT" "$HEAD_COMMIT_SHA" "$HEAD_COMMIT_SUBJECT" <<'PY'
-          import json
-          import sys
-
-          file_path, base_sha, base_subject, head_sha, head_subject = sys.argv[1:6]
-          prefix = "window.BENCHMARK_DATA = "
-
-          with open(file_path, "r", encoding="utf-8") as f:
-              content = f.read()
-
-          if not content.startswith(prefix):
-              raise SystemExit(0)
-
-          try:
-              data = json.loads(content[len(prefix):])
-          except json.JSONDecodeError:
-              raise SystemExit(0)
-
-          changed = False
-          entries = data.get("entries", {})
-
-          if isinstance(entries, dict):
-              for suites in entries.values():
-                  if not isinstance(suites, list):
-                      continue
-
-                  for suite in suites:
-                      if not isinstance(suite, dict):
-                          continue
-
-                      commit = suite.get("commit")
-                      if isinstance(commit, dict):
-                          commit_id = commit.get("id")
-                          if commit_id == base_sha and commit.get("message") != base_subject:
-                              commit["message"] = base_subject
-                              changed = True
-                          elif commit_id == head_sha and commit.get("message") != head_subject:
-                              commit["message"] = head_subject
-                              changed = True
-
-                      benches = suite.get("benches")
-                      if not isinstance(benches, list):
-                          continue
-
-                      filtered_benches = []
-                      removed_malformed_bench = False
-
-                      for bench in benches:
-                          if not isinstance(bench, dict):
-                              filtered_benches.append(bench)
-                              continue
-
-                          name = bench.get("name")
-                          unit = bench.get("unit")
-
-                          # Drop the malformed aggregate bench produced by Go parser output.
-                          if name == "BenchmarkReplayLog":
-                              removed_malformed_bench = True
-                              changed = True
-                              continue
-
-                          if isinstance(unit, str):
-                              converted_unit = None
-                              if unit == "ns/op":
-                                  converted_unit = "s/op"
-                              elif unit == "ns":
-                                  converted_unit = "s"
-                              elif unit.startswith("ns/"):
-                                  converted_unit = "s/" + unit[3:]
-
-                              if converted_unit is not None:
-                                  value = bench.get("value")
-                                  if isinstance(value, (int, float)):
-                                      bench["value"] = value / 1_000_000_000
-                                  bench["unit"] = converted_unit
-                                  changed = True
-
-                                  if isinstance(name, str):
-                                      bench["name"] = (
-                                          name.replace(" - ns/op", " - s/op")
-                                          .replace(" - ns/", " - s/")
-                                      )
-
-                          filtered_benches.append(bench)
-
-                      if removed_malformed_bench:
-                          suite["benches"] = filtered_benches
-
-          if changed:
-              with open(file_path, "w", encoding="utf-8") as f:
-                  f.write(prefix + json.dumps(data, indent=2))
-          PY
-          }
-
-          apply_theme() {
-            local dir="$1"
-            if [[ ! -f "$dir/index.html" ]]; then
-              echo "::warning::Skipping ${dir} because index.html is missing"
-              return
-            fi
-
-            curl -fsSL "$THEME_CSS_URL" -o "$dir/theme.css"
-            if ! grep -q 'href="theme.css"' "$dir/index.html"; then
-              sed -i 's#</head>#  <link rel="stylesheet" href="theme.css">\n</head>#' "$dir/index.html"
-            fi
-          }
-
-          postprocess_data_file "$PR_DATA_DIR"
-          postprocess_data_file "$COMPARISON_DATA_DIR"
-
-          apply_theme "$PR_DATA_DIR"
-          apply_theme "$COMPARISON_DATA_DIR"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A .
-
-          if ! git diff --cached --quiet; then
-            git commit -m "style: apply shared benchmark theme for PR graphs"
-            git push origin "${BENCHMARK_REPORTS_BRANCH}"
-          else
-            echo "No benchmark theme changes to commit."
-          fi
+          python3 .github/scripts/update_benchmark_reports.py \
+            --repository "${BENCHMARK_REPORTS_REPOSITORY}" \
+            --branch "${BENCHMARK_REPORTS_BRANCH}" \
+            --token "${BENCHMARK_TOKEN}" \
+            --theme-css-url "${THEME_CSS_URL}" \
+            --workdir "${BENCHMARK_REPORTS_DIR}" \
+            --data-dir "${PR_DATA_DIR}" \
+            --data-dir "${COMPARISON_DATA_DIR}" \
+            --commit-subject "${BASE_COMMIT_SHA}" "${BASE_COMMIT_SUBJECT}" \
+            --commit-subject "${HEAD_COMMIT_SHA}" "${HEAD_COMMIT_SUBJECT}" \
+            --commit-message "style: apply shared benchmark theme for PR graphs"
 
       - name: Post results to PR
         uses: actions/github-script@v7
@@ -415,252 +277,8 @@ jobs:
           COMPARISON_URL: ${{ env.BENCHMARK_REPORTS_PAGES_URL }}/${{ steps.location.outputs.comparison-data-dir }}/
         with:
           script: |
-            const fs = require('fs');
-            const path = require('path');
-
-            const prNumber = parseInt(process.env.PR_NUMBER, 10);
-            const baseCommitSha = process.env.BASE_COMMIT_SHA;
-            const headCommitSha = process.env.HEAD_COMMIT_SHA;
-            const baseBenchmarkRequested = process.env.BASE_BENCHMARK_REQUESTED === 'true';
-            const baseBenchmarkOutcome = process.env.BASE_BENCHMARK_OUTCOME || 'skipped';
-            const prDataDir = process.env.PR_DATA_DIR;
-            const comparisonDataDir = process.env.COMPARISON_DATA_DIR;
-            const trendUrl = process.env.TREND_URL;
-            const comparisonUrl = process.env.COMPARISON_URL;
-            const marker = '<!-- replay-10k-performance-summary -->';
-            const repoUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}`;
-            const shortSha = (sha) => (sha || '').substring(0, 8);
-
-            const formatValue = (value, unit) => {
-              if (typeof value !== 'number' || !Number.isFinite(value)) {
-                return '—';
-              }
-              if (value >= 1) {
-                return `${value.toFixed(3)} ${unit}`;
-              }
-              if (value >= 0.01) {
-                return `${value.toFixed(4)} ${unit}`;
-              }
-              if (value >= 0.0001) {
-                return `${value.toFixed(6)} ${unit}`;
-              }
-              return `${value.toExponential(2)} ${unit}`;
-            };
-
-            const deltaText = (current, baseline) => {
-              if (
-                typeof current !== 'number' ||
-                typeof baseline !== 'number' ||
-                !Number.isFinite(current) ||
-                !Number.isFinite(baseline) ||
-                baseline === 0
-              ) {
-                return '—';
-              }
-              const pct = ((current - baseline) / baseline) * 100;
-              const sign = pct > 0 ? '+' : '';
-              const color = pct <= -1 ? '🟢' : pct >= 1 ? '🔴' : '🟡';
-              return `${color} ${sign}${pct.toFixed(2)}%`;
-            };
-
-            const parseBenchmarkData = (relativeDir) => {
-              const dataPath = path.join(process.env.GITHUB_WORKSPACE, 'benchmark-theme-repository', relativeDir, 'data.js');
-              if (!fs.existsSync(dataPath)) {
-                return null;
-              }
-
-              const prefix = 'window.BENCHMARK_DATA = ';
-              const content = fs.readFileSync(dataPath, 'utf8');
-              if (!content.startsWith(prefix)) {
-                return null;
-              }
-
-              try {
-                return JSON.parse(content.slice(prefix.length));
-              } catch {
-                return null;
-              }
-            };
-
-            const getEntries = (data, suiteName) => {
-              const entries = data?.entries?.[suiteName];
-              return Array.isArray(entries) ? entries : [];
-            };
-
-            const findLastBySha = (entries, sha) => {
-              for (let i = entries.length - 1; i >= 0; i -= 1) {
-                if (entries[i]?.commit?.id === sha) {
-                  return { entry: entries[i], index: i };
-                }
-              }
-              return null;
-            };
-
-            const toMetricMap = (entry) => {
-              const out = new Map();
-              const benches = Array.isArray(entry?.benches) ? entry.benches : [];
-              for (const bench of benches) {
-                if (!bench || typeof bench !== 'object') {
-                  continue;
-                }
-                if (typeof bench.name !== 'string') {
-                  continue;
-                }
-                if (typeof bench.value !== 'number' || !Number.isFinite(bench.value)) {
-                  continue;
-                }
-                out.set(bench.name, {
-                  value: bench.value,
-                  unit: typeof bench.unit === 'string' ? bench.unit : '',
-                });
-              }
-              return out;
-            };
-
-            const prettifyMetricName = (name) => {
-              const raw = name.replace(/^BenchmarkReplayLog - /, '');
-              if (raw === 's/op') return 'Total replay';
-              if (raw === 's/commit') return 'Commit';
-              if (raw === 's/propose-on-db') return 'Propose on DB';
-              if (raw === 's/propose-on-proposal') return 'Propose on proposal';
-              if (raw === 's/batch') return 'Batch update';
-              if (raw === 's/get-latest') return 'Get latest';
-              return raw;
-            };
-
-            const trendData = parseBenchmarkData(prDataDir);
-            const comparisonData = parseBenchmarkData(comparisonDataDir);
-
-            const trendEntries = getEntries(trendData, 'Replay 10K PR');
-            const compareEntries = getEntries(comparisonData, 'Replay 10K PR Compare');
-
-            const headTrend = findLastBySha(trendEntries, headCommitSha) || (trendEntries.length > 0
-              ? { entry: trendEntries[trendEntries.length - 1], index: trendEntries.length - 1 }
-              : null);
-            const headCompare = findLastBySha(compareEntries, headCommitSha);
-            const baseCompare = findLastBySha(compareEntries, baseCommitSha);
-            const baseTrend = findLastBySha(trendEntries, baseCommitSha);
-
-            let previousTrend = null;
-            if (headTrend) {
-              for (let i = headTrend.index - 1; i >= 0; i -= 1) {
-                const candidate = trendEntries[i];
-                const candidateSha = candidate?.commit?.id;
-                if (candidateSha && candidateSha !== headCommitSha && candidateSha !== baseCommitSha) {
-                  previousTrend = candidate;
-                  break;
-                }
-              }
-            }
-
-            const headEntry = headCompare?.entry || headTrend?.entry || null;
-            const baseEntry = baseCompare?.entry || baseTrend?.entry || null;
-            const prevEntry = previousTrend;
-
-            const headMetrics = toMetricMap(headEntry);
-            const baseMetrics = toMetricMap(baseEntry);
-            const prevMetrics = toMetricMap(prevEntry);
-
-            const preferredMetricOrder = [
-              'BenchmarkReplayLog - s/op',
-              'BenchmarkReplayLog - s/commit',
-              'BenchmarkReplayLog - s/propose-on-db',
-              'BenchmarkReplayLog - s/propose-on-proposal',
-              'BenchmarkReplayLog - s/batch',
-              'BenchmarkReplayLog - s/get-latest',
-            ];
-
-            const metricNames = preferredMetricOrder.filter((name) => headMetrics.has(name)).slice(0, 5);
-            if (metricNames.length === 0) {
-              for (const name of headMetrics.keys()) {
-                if (name.startsWith('BenchmarkReplayLog - ') && !name.endsWith('commits')) {
-                  metricNames.push(name);
-                }
-                if (metricNames.length >= 5) break;
-              }
-            }
-
-            const commitLink = (sha) => `[${shortSha(sha)}](${repoUrl}/commit/${sha})`;
-            const commitMessage = (entry) => (entry?.commit?.message || '').replace(/\r?\n/g, ' ');
-
-            const rows = metricNames.map((name) => {
-              const head = headMetrics.get(name);
-              const prev = prevMetrics.get(name);
-              const base = baseMetrics.get(name);
-
-              return `| ${prettifyMetricName(name)} | ${formatValue(head?.value, head?.unit || '')} | ${deltaText(head?.value, prev?.value)} | ${deltaText(head?.value, base?.value)} |`;
-            });
-
-            const baseStatus = !baseBenchmarkRequested
-              ? 'Base data reused from history.'
-              : baseBenchmarkOutcome === 'success'
-                ? 'Base benchmark executed in this run.'
-                : `Base benchmark did not succeed (\`${baseBenchmarkOutcome}\`).`;
-
-            const bodyLines = [
-              marker,
-              '## 🚀 Replay 10K Benchmark Summary',
-              '',
-              `**Head:** ${commitLink(headCommitSha)}${headEntry ? ` — ${commitMessage(headEntry)}` : ''}`,
-              `**Base:** ${commitLink(baseCommitSha)}${baseEntry ? ` — ${commitMessage(baseEntry)}` : ''}`,
-            ];
-
-            if (prevEntry?.commit?.id) {
-              bodyLines.push(`**Previous PR commit:** ${commitLink(prevEntry.commit.id)} — ${commitMessage(prevEntry)}`);
-            } else {
-              bodyLines.push('**Previous PR commit:** _Not available yet_');
-            }
-
-            bodyLines.push(
-              '',
-              '_Lower is better for all timing metrics._',
-              '',
-              '| Metric | Head | vs Previous | vs Base |',
-              '| --- | ---: | ---: | ---: |',
-            );
-
-            if (rows.length > 0) {
-              bodyLines.push(...rows);
-            } else {
-              bodyLines.push('| No parsed timing metrics | — | — | — |');
-            }
-
-            bodyLines.push(
-              '',
-              `**Status:** ${baseStatus}`,
-              '',
-              `📈 [PR trend graph](${trendUrl})`,
-              `🧭 [Base vs head graph](${comparisonUrl})`,
-            );
-
-            const body = bodyLines.join('\n');
-
-            const { data: comments } = await github.rest.issues.listComments({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: prNumber,
-              per_page: 100,
-            });
-
-            const existing = comments.find(
-              (comment) => comment.user?.login === 'github-actions[bot]' && comment.body?.includes(marker),
-            );
-
-            if (existing) {
-              await github.rest.issues.updateComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                comment_id: existing.id,
-                body,
-              });
-            } else {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: prNumber,
-                body,
-              });
-            }
+            const postComment = require(process.env.GITHUB_WORKSPACE + '/.github/scripts/post_replay_benchmark_comment.js');
+            await postComment({ github, context });
 
   benchmark-main:
     name: Benchmark (main)
@@ -679,7 +297,6 @@ jobs:
         uses: ./.github/actions/run-benchmark
         id: benchmark
         with:
-          benchmark-name: 'Replay 10K'
           replay-log-url: ${{ env.REPLAY_LOG_URL }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
@@ -711,129 +328,11 @@ jobs:
           MAIN_DATA_DIR: bench/replay-10k
           THEME_CSS_URL: ${{ env.BENCHMARK_THEME_CSS_URL }}
         run: |
-          set -euo pipefail
-
-          rm -rf ./benchmark-theme-repository
-          git clone --depth 1 --branch "${BENCHMARK_REPORTS_BRANCH}" "https://x-access-token:${BENCHMARK_TOKEN}@github.com/${BENCHMARK_REPORTS_REPOSITORY}.git" ./benchmark-theme-repository
-
-          cd ./benchmark-theme-repository
-
-          postprocess_data_file() {
-            local dir="$1"
-            local data_file="${dir}/data.js"
-
-            if [[ ! -f "$data_file" ]]; then
-              return
-            fi
-
-            if ! command -v python3 >/dev/null 2>&1; then
-              echo "::warning::Skipping benchmark data postprocessing for ${dir}; python3 is not available"
-              return
-            fi
-
-            python3 - "$data_file" <<'PY'
-          import json
-          import sys
-
-          file_path = sys.argv[1]
-          prefix = "window.BENCHMARK_DATA = "
-
-          with open(file_path, "r", encoding="utf-8") as f:
-              content = f.read()
-
-          if not content.startswith(prefix):
-              raise SystemExit(0)
-
-          try:
-              data = json.loads(content[len(prefix):])
-          except json.JSONDecodeError:
-              raise SystemExit(0)
-
-          changed = False
-          entries = data.get("entries", {})
-
-          if isinstance(entries, dict):
-              for suites in entries.values():
-                  if not isinstance(suites, list):
-                      continue
-
-                  for suite in suites:
-                      if not isinstance(suite, dict):
-                          continue
-
-                      benches = suite.get("benches")
-                      if not isinstance(benches, list):
-                          continue
-
-                      filtered_benches = []
-                      removed_malformed_bench = False
-
-                      for bench in benches:
-                          if not isinstance(bench, dict):
-                              filtered_benches.append(bench)
-                              continue
-
-                          name = bench.get("name")
-                          unit = bench.get("unit")
-
-                          if name == "BenchmarkReplayLog":
-                              removed_malformed_bench = True
-                              changed = True
-                              continue
-
-                          if isinstance(unit, str):
-                              converted_unit = None
-                              if unit == "ns/op":
-                                  converted_unit = "s/op"
-                              elif unit == "ns":
-                                  converted_unit = "s"
-                              elif unit.startswith("ns/"):
-                                  converted_unit = "s/" + unit[3:]
-
-                              if converted_unit is not None:
-                                  value = bench.get("value")
-                                  if isinstance(value, (int, float)):
-                                      bench["value"] = value / 1_000_000_000
-                                  bench["unit"] = converted_unit
-                                  changed = True
-
-                                  if isinstance(name, str):
-                                      bench["name"] = (
-                                          name.replace(" - ns/op", " - s/op")
-                                          .replace(" - ns/", " - s/")
-                                      )
-
-                          filtered_benches.append(bench)
-
-                      if removed_malformed_bench:
-                          suite["benches"] = filtered_benches
-
-          if changed:
-              with open(file_path, "w", encoding="utf-8") as f:
-                  f.write(prefix + json.dumps(data, indent=2))
-          PY
-          }
-
-          postprocess_data_file "$MAIN_DATA_DIR"
-
-          if [[ ! -f "$MAIN_DATA_DIR/index.html" ]]; then
-            echo "::warning::Skipping ${MAIN_DATA_DIR} because index.html is missing"
-            exit 0
-          fi
-
-          curl -fsSL "$THEME_CSS_URL" -o "$MAIN_DATA_DIR/theme.css"
-
-          if ! grep -q 'href="theme.css"' "$MAIN_DATA_DIR/index.html"; then
-            sed -i 's#</head>#  <link rel="stylesheet" href="theme.css">\n</head>#' "$MAIN_DATA_DIR/index.html"
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -A .
-
-          if ! git diff --cached --quiet; then
-            git commit -m "style: apply shared benchmark theme for main graph"
-            git push origin "${BENCHMARK_REPORTS_BRANCH}"
-          else
-            echo "No benchmark theme changes to commit."
-          fi
+          python3 .github/scripts/update_benchmark_reports.py \
+            --repository "${BENCHMARK_REPORTS_REPOSITORY}" \
+            --branch "${BENCHMARK_REPORTS_BRANCH}" \
+            --token "${BENCHMARK_TOKEN}" \
+            --theme-css-url "${THEME_CSS_URL}" \
+            --workdir "${BENCHMARK_REPORTS_DIR}" \
+            --data-dir "${MAIN_DATA_DIR}" \
+            --commit-message "style: apply shared benchmark theme for main graph"
