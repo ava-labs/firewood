@@ -330,14 +330,14 @@ impl<T: TrieReader> Merkle<T> {
         let right_edge = right_edge_key.map(|(k, v)| (k.as_ref(), v.as_ref()));
 
         verify_edge(
-            first_key.as_ref().map(|k| k.as_ref()),
+            first_key.as_ref().map(AsRef::as_ref),
             left_edge,
             proof.start_proof(),
             root_hash,
             true,
         )?;
         verify_edge(
-            last_key.as_ref().map(|k| k.as_ref()),
+            last_key.as_ref().map(AsRef::as_ref),
             right_edge,
             proof.end_proof(),
             root_hash,
