@@ -213,61 +213,125 @@ impl<T: TrieReader> Merkle<T> {
     ///
     /// # Returns
     ///
-    /// Returns the constructed [`Merkle<Arc<ImmutableProposal>, _>`] that was built and
-    /// verified from the proof data, if the proof is valid.
+    /// Returns `Ok(())` if the partial verification passes.
     ///
-    /// # Verification Process
+    /// # Partial Verification
     ///
-    /// The verification follows these steps:
-    /// 1. **Structural validation**: Verify the proof structure is well-formed
-    ///    - Check that start/end proofs are consistent with the key range
-    ///    - Ensure key-value pairs are in the correct order
-    ///    - Validate that boundary proofs correctly bound the key-value pairs
+    /// This method currently performs **partial** range proof verification:
     ///
-    /// 2. **Proposal construction**: Build a proposal trie containing the proof data
-    ///    - Insert all key-value pairs from the proof
-    ///    - Incorporate nodes from the start and end proofs
-    ///    - Handle edge cases for empty ranges or partial proofs
+    /// 1. **Structural validation**: Checks that key-value pairs are strictly ordered
+    ///    and the proof boundaries are consistent with the requested range.
     ///
-    /// 3. **Hash verification**: Compute the root hash of the constructed proposal
-    ///    - The computed hash must match the provided `root_hash` exactly
-    ///    - Any mismatch indicates an invalid or tampered proof
+    /// 2. **Boundary proof verification**: Cryptographically verifies the start and
+    ///    end proofs against the provided `root_hash`.
+    ///
+    /// **Not yet implemented** (tracked in issue #738):
+    /// - Full trie reconstruction from the proof data
+    /// - Verification that no keys are missing within the proven range
+    /// - Root hash comparison against a reconstructed trie
     ///
     /// # Errors
     ///
     /// * [`api::Error::ProofError`] - The proof structure is malformed or inconsistent
-    /// * [`api::Error::InvalidRange`] - The proof boundaries don't match the requested range
-    /// * [`api::Error::ParentNotLatest`] - The computed root hash doesn't match the expected hash
-    /// * [`api::Error`] - Other errors during proposal construction or verification
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// // Verify a range proof received from a peer
-    /// let verified_proposal = merkle.verify_range_proof(
+    /// merkle.verify_range_proof(
     ///     Some(b"alice"),
     ///     Some(b"charlie"),
     ///     &expected_root_hash,
     ///     &range_proof
     /// )?;
     /// ```
-    ///
-    /// # Implementation Notes
-    ///
-    /// - Structural validation is performed first to avoid expensive proposal construction
-    ///   for obviously invalid proofs
-    /// - The method is designed to handle partial proofs where the peer provides less
-    ///   data than requested, which is common for large ranges
-    /// - Future optimization: Consider caching partial verification results for
-    ///   incremental range proof verification
     pub fn verify_range_proof(
         &self,
-        _first_key: Option<impl KeyType>,
-        _last_key: Option<impl KeyType>,
-        _root_hash: &TrieHash,
-        _proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
+        first_key: Option<impl KeyType>,
+        last_key: Option<impl KeyType>,
+        root_hash: &TrieHash,
+        proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
     ) -> Result<(), api::Error> {
-        todo!()
+        // check that the keys are in strictly increasing order (no duplicates)
+        let key_values = proof.key_values();
+        if !key_values
+            .iter()
+            .is_sorted_by(|a, b| a.0.as_ref() < b.0.as_ref())
+        {
+            return Err(api::Error::ProofError(
+                ProofError::NonMonotonicIncreaseRange,
+            ));
+        }
+
+        // An empty proof with no key bounds is invalid. However, an empty set
+        // of key-values with bounded range is valid (proves no keys in range).
+        if key_values.is_empty()
+            && first_key.is_none()
+            && last_key.is_none()
+            && proof.start_proof().is_empty()
+            && proof.end_proof().is_empty()
+        {
+            return Err(api::Error::ProofError(ProofError::Empty));
+        }
+
+        let left = key_values.first();
+        let right = key_values.last();
+
+        // Verify that first_key (if provided) is <= the first key in the proof
+        if let (Some(requested_first), Some((left_key, _))) = (first_key.as_ref(), left)
+            && requested_first.as_ref() > left_key.as_ref()
+        {
+            return Err(api::Error::ProofError(
+                ProofError::RangeProofStartBeyondFirstKey,
+            ));
+        }
+
+        // start proof verifies the requested lower bound (if any), not necessarily
+        // the first key-value included in this proof.
+        if let Some(requested_first) = first_key.as_ref() {
+            let expected_start_value = left.and_then(|(key, value)| {
+                (requested_first.as_ref() == key.as_ref()).then_some(value.as_ref())
+            });
+
+            proof.start_proof().verify(
+                requested_first.as_ref(),
+                expected_start_value,
+                root_hash,
+            )?;
+        } else if let Some((left_key, left_value)) = left {
+            proof
+                .start_proof()
+                .verify(left_key.as_ref(), Some(left_value.as_ref()), root_hash)?;
+        }
+
+        // Verify that last_key (if provided) is >= the last key in the proof
+        if let (Some(requested_last), Some((right_key, _))) = (last_key.as_ref(), right)
+            && requested_last.as_ref() < right_key.as_ref()
+        {
+            return Err(api::Error::ProofError(
+                ProofError::RangeProofEndBeforeLastKey,
+            ));
+        }
+
+        // end proof verifies the requested upper bound (if any), not necessarily
+        // the last key-value included in this proof.
+        if let Some(requested_last) = last_key.as_ref() {
+            let expected_end_value = right.and_then(|(key, value)| {
+                (requested_last.as_ref() == key.as_ref()).then_some(value.as_ref())
+            });
+
+            proof
+                .end_proof()
+                .verify(requested_last.as_ref(), expected_end_value, root_hash)?;
+        } else if let Some((right_key, right_value)) = right {
+            proof
+                .end_proof()
+                .verify(right_key.as_ref(), Some(right_value.as_ref()), root_hash)?;
+        }
+
+        // TODO: build a merkle and reshape it, filling in hashes from the
+        // provided proofs on the left and right edges, then verify the root hash
+
+        Ok(())
     }
 
     /// Merges a sequence of key-value pairs with the base merkle trie, yielding
