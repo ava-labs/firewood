@@ -70,7 +70,7 @@ aquamarine = "0.6.0"
 bytemuck = { version = "1.25.0", features = ["const_zeroed"] }
 bytemuck_derive = "1.10.2"
 clap = { version = "4.6.0", features = ["derive"] }
-env_logger = "0.11.9"
+env_logger = "0.11.10"
 fastrace = "0.7.17"
 hex = "0.4.3"
 integer-encoding = "4.1.0"
