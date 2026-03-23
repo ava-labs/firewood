@@ -57,31 +57,11 @@ pub struct CreateChangeProofArgs<'a> {
     pub max_length: u32,
 }
 
-/// Arguments for verifying and proposing a change proof.
+/// Arguments for verifying a change proof (used by both propose and commit).
 #[derive(Debug)]
 #[repr(C)]
-pub struct VerifyAndProposeChangeProofArgs<'a> {
-    /// The change proof to verify and propose. If null, the function will return
-    /// [`ProposedChangeProofResult::NullHandlePointer`].
-    pub proof: Option<Box<ChangeProofContext>>,
-    /// The root hash of the starting revision.
-    pub start_root: crate::HashKey,
-    /// The root hash of the ending revision.
-    pub end_root: crate::HashKey,
-    /// The lower bound of the key range that the proof is expected to cover.
-    pub start_key: Maybe<BorrowedBytes<'a>>,
-    /// The upper bound of the key range that the proof is expected to cover.
-    pub end_key: Maybe<BorrowedBytes<'a>>,
-    /// The maximum number of key/value pairs that the proof is expected to cover.
-    pub max_length: u32,
-}
-
-/// Arguments for verifying and committing a change proof.
-#[derive(Debug)]
-#[repr(C)]
-pub struct VerifyAndCommitChangeProofArgs<'a> {
-    /// The change proof to verify and commit. If null, the function will return
-    /// [`HashResult::NullHandlePointer`].
+pub struct VerifyChangeProofArgs<'a> {
+    /// The change proof to verify. Ownership is transferred to the callee.
     pub proof: Option<Box<ChangeProofContext>>,
     /// The root hash of the starting revision.
     pub start_root: crate::HashKey,
@@ -458,35 +438,10 @@ impl ChangeProofContext {
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
     ) -> Result<Option<HashKey>, api::Error> {
-        let verification = verify_proof(
-            &self.proof,
-            end_root.clone(),
-            start_key,
-            end_key,
-            max_length,
-        )?;
-
-        let proposal = db.apply_change_proof_to_parent(start_root, &self.proof)?;
-
-        if is_complete_proof(&verification, &self.proof) {
-            let computed: crate::HashKey = proposal
-                .handle
-                .root_hash()
-                .map(crate::HashKey::from)
-                .unwrap_or_default();
-            if computed != crate::HashKey::from(end_root.clone()) {
-                return Err(api::Error::ProofError(ProofError::EndRootMismatch));
-            }
-        }
-
-        // Post-application sub-trie hash and boundary value checks
-        verify_subtrie_hashes(&self.proof, &verification, &proposal.handle)?;
-        verify_boundary_values(&self.proof, &verification, &proposal.handle, &end_root)?;
-
-        let hash = proposal.handle.commit_proposal()?;
-        firewood_increment!(crate::registry::MERGE_COUNT, 1, "change" => "commit");
-
-        Ok(hash)
+        let mut proposed = self
+            .verify_and_propose(db, start_root, end_root, start_key, end_key, max_length)
+            .map_err(|(_proof, err)| err)?;
+        proposed.commit()
     }
 }
 
@@ -922,7 +877,7 @@ pub extern "C" fn fwd_db_change_proof(
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_verify_and_propose_change_proof<'db>(
     db: Option<&'db DatabaseHandle>,
-    args: VerifyAndProposeChangeProofArgs,
+    args: VerifyChangeProofArgs,
 ) -> ProposedChangeProofResult<'db> {
     let (Some(db), Some(proof)) = (db, args.proof) else {
         return ProposedChangeProofResult::NullHandlePointer;
@@ -971,7 +926,7 @@ pub extern "C" fn fwd_db_verify_and_propose_change_proof<'db>(
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_db_verify_and_commit_change_proof(
     db: Option<&DatabaseHandle>,
-    args: VerifyAndCommitChangeProofArgs,
+    args: VerifyChangeProofArgs,
 ) -> HashResult {
     let (Some(db), Some(proof)) = (db, args.proof) else {
         return HashResult::NullHandlePointer;
@@ -1064,11 +1019,7 @@ pub extern "C" fn fwd_change_proof_find_next_key_proposed(
 /// The other [`ValueResult`] variants are not used.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) -> ValueResult {
-    crate::invoke_with_handle(proof, |ctx| {
-        let mut vec = Vec::new();
-        ctx.proof.write_to_vec(&mut vec);
-        vec
-    })
+    crate::invoke_with_handle(proof, |ctx| serialize_proof(&ctx.proof))
 }
 
 /// Serialize a proposed `ChangeProof` to bytes.
@@ -1089,11 +1040,13 @@ pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) 
 pub extern "C" fn fwd_proposed_change_proof_to_bytes(
     proof: Option<&ProposedChangeProofContext>,
 ) -> ValueResult {
-    crate::invoke_with_handle(proof, |ctx| {
-        let mut vec = Vec::new();
-        ctx.proof.write_to_vec(&mut vec);
-        vec
-    })
+    crate::invoke_with_handle(proof, |ctx| serialize_proof(&ctx.proof))
+}
+
+fn serialize_proof(proof: &FrozenChangeProof) -> Vec<u8> {
+    let mut vec = Vec::new();
+    proof.write_to_vec(&mut vec);
+    vec
 }
 
 /// Deserialize a `ChangeProof` from bytes.

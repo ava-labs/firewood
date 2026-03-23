@@ -733,14 +733,15 @@ func TestProposedChangeProofMarshalBinary(t *testing.T) {
 	r.NotEmpty(bytes)
 }
 
-// TestSubTrieHashCheckWithMismatchedSource creates a change proof on dbA, then
-// attempts to apply it on dbB which has DIFFERENT initial data (same keys,
-// different values). The proposal's sub-trie hashes won't match the boundary
-// proof's claims, so we expect an error.
-func TestSubTrieHashCheckWithMismatchedSource(t *testing.T) {
+// newMismatchedChangeProof creates two databases with the same keys but
+// different values, adds extra data to dbA, and returns a change proof from
+// dbA that will fail verification on dbB (because the initial states differ).
+func newMismatchedChangeProof(
+	t *testing.T,
+	dbA, dbB *Database,
+) (changeProof *ChangeProof, rootB Hash, rootAUpdated Hash) {
+	t.Helper()
 	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
 
 	// Populate dbA and dbB with the SAME keys but DIFFERENT values
 	keysA := make([]BatchOp, 50)
@@ -752,7 +753,7 @@ func TestSubTrieHashCheckWithMismatchedSource(t *testing.T) {
 	}
 	rootA, err := dbA.Update(keysA)
 	r.NoError(err)
-	rootB, err := dbB.Update(keysB)
+	rootB, err = dbB.Update(keysB)
 	r.NoError(err)
 	r.NotEqual(rootA, rootB, "roots should differ because values differ")
 
@@ -762,17 +763,31 @@ func TestSubTrieHashCheckWithMismatchedSource(t *testing.T) {
 		key := keyForTest(50 + i)
 		moreKeys[i] = Put(key, valForTest(50+i))
 	}
-	rootAUpdated, err := dbA.Update(moreKeys)
+	rootAUpdated, err = dbA.Update(moreKeys)
 	r.NoError(err)
 
 	// Create a change proof from dbA
-	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	changeProof, err = dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
+	return changeProof, rootB, rootAUpdated
+}
+
+// TestSubTrieHashCheckWithMismatchedSource creates a change proof on dbA, then
+// attempts to apply it on dbB which has DIFFERENT initial data (same keys,
+// different values). The proposal's sub-trie hashes won't match the boundary
+// proof's claims, so we expect an error.
+func TestSubTrieHashCheckWithMismatchedSource(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	changeProof, rootB, rootAUpdated := newMismatchedChangeProof(t, dbA, dbB)
+
 	// Attempt to verify and propose on dbB — should fail because dbB's
 	// initial state differs from dbA's
-	_, err = dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	_, err := dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.Error(err, "should fail: dbB has different initial data than dbA")
 }
 
@@ -854,33 +869,7 @@ func TestVerifyAndProposeFailureKeepsChangeProof(t *testing.T) {
 	dbA := newTestDatabase(t)
 	dbB := newTestDatabase(t)
 
-	// Populate dbA and dbB with the SAME keys but DIFFERENT values
-	keysA := make([]BatchOp, 50)
-	keysB := make([]BatchOp, 50)
-	for i := range 50 {
-		key := keyForTest(i)
-		keysA[i] = Put(key, []byte("valueA"+string(key)))
-		keysB[i] = Put(key, []byte("valueB"+string(key)))
-	}
-	rootA, err := dbA.Update(keysA)
-	r.NoError(err)
-	rootB, err := dbB.Update(keysB)
-	r.NoError(err)
-	r.NotEqual(rootA, rootB, "roots should differ because values differ")
-
-	// Add more data to dbA
-	moreKeys := make([]BatchOp, 50)
-	for i := range 50 {
-		key := keyForTest(50 + i)
-		moreKeys[i] = Put(key, valForTest(50+i))
-	}
-	rootAUpdated, err := dbA.Update(moreKeys)
-	r.NoError(err)
-
-	// Create a change proof from dbA
-	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(changeProof.Free()) })
+	changeProof, rootB, rootAUpdated := newMismatchedChangeProof(t, dbA, dbB)
 
 	// Marshal before failed propose — should succeed
 	bytesBefore, err := changeProof.MarshalBinary()

@@ -664,12 +664,11 @@ typedef struct CreateRangeProofArgs {
 } CreateRangeProofArgs;
 
 /**
- * Arguments for verifying and committing a change proof.
+ * Arguments for verifying a change proof (used by both propose and commit).
  */
-typedef struct VerifyAndCommitChangeProofArgs {
+typedef struct VerifyChangeProofArgs {
   /**
-   * The change proof to verify and commit. If null, the function will return
-   * [`HashResult::NullHandlePointer`].
+   * The change proof to verify. Ownership is transferred to the callee.
    */
   struct ChangeProofContext *proof;
   /**
@@ -692,7 +691,7 @@ typedef struct VerifyAndCommitChangeProofArgs {
    * The maximum number of key/value pairs that the proof is expected to cover.
    */
   uint32_t max_length;
-} VerifyAndCommitChangeProofArgs;
+} VerifyChangeProofArgs;
 
 /**
  * Arguments for verifying a range proof.
@@ -782,37 +781,6 @@ typedef struct ProposedChangeProofResult {
     ProposedChangeProofResult_VerificationFailed_Body verification_failed;
   };
 } ProposedChangeProofResult;
-
-/**
- * Arguments for verifying and proposing a change proof.
- */
-typedef struct VerifyAndProposeChangeProofArgs {
-  /**
-   * The change proof to verify and propose. If null, the function will return
-   * [`ProposedChangeProofResult::NullHandlePointer`].
-   */
-  struct ChangeProofContext *proof;
-  /**
-   * The root hash of the starting revision.
-   */
-  struct HashKey start_root;
-  /**
-   * The root hash of the ending revision.
-   */
-  struct HashKey end_root;
-  /**
-   * The lower bound of the key range that the proof is expected to cover.
-   */
-  struct Maybe_BorrowedBytes start_key;
-  /**
-   * The upper bound of the key range that the proof is expected to cover.
-   */
-  struct Maybe_BorrowedBytes end_key;
-  /**
-   * The maximum number of key/value pairs that the proof is expected to cover.
-   */
-  uint32_t max_length;
-} VerifyAndProposeChangeProofArgs;
 
 /**
  * Owned version of `KeyValuePair`, returned to ffi callers.
@@ -1624,7 +1592,7 @@ struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
  * for the duration of the call.
  */
 struct HashResult fwd_db_verify_and_commit_change_proof(const struct DatabaseHandle *db,
-                                                        struct VerifyAndCommitChangeProofArgs args);
+                                                        struct VerifyChangeProofArgs args);
 
 /**
  * Verify and commit a range proof to the database.
@@ -1689,7 +1657,7 @@ struct HashResult fwd_db_verify_and_commit_range_proof(const struct DatabaseHand
  * for the duration of the call.
  */
 struct ProposedChangeProofResult fwd_db_verify_and_propose_change_proof(const struct DatabaseHandle *db,
-                                                                        struct VerifyAndProposeChangeProofArgs args);
+                                                                        struct VerifyChangeProofArgs args);
 
 /**
  * Verify a range proof and prepare a proposal to later commit or drop. If the

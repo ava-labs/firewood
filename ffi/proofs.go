@@ -429,7 +429,7 @@ func (db *Database) VerifyAndProposeChangeProof(
 	// that on success, only the returned ProposedChangeProofContext owns
 	// the data. On failure, the Rust side returns the original handle
 	// back to us via the VerificationFailed variant.
-	args := C.VerifyAndProposeChangeProofArgs{
+	args := C.VerifyChangeProofArgs{
 		proof:      proof.handle,
 		start_root: newCHashKey(startRoot),
 		end_root:   newCHashKey(endRoot),
@@ -480,7 +480,7 @@ func (db *Database) VerifyAndCommitChangeProof(
 	defer pinner.Unpin()
 
 	// The Rust side takes ownership and always consumes the proof.
-	args := C.VerifyAndCommitChangeProofArgs{
+	args := C.VerifyChangeProofArgs{
 		proof:      proof.handle,
 		start_root: newCHashKey(startRoot),
 		end_root:   newCHashKey(endRoot),
