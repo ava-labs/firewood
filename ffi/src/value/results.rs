@@ -10,7 +10,7 @@ use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult, HashKey,
     IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair,
-    ProposalHandle, RangeProofContext, ReconstructedHandle,
+    ProposalHandle, ProposedChangeProofContext, RangeProofContext, ReconstructedHandle,
 };
 
 /// The result type returned from an FFI function that returns no value but may
@@ -256,7 +256,7 @@ impl From<Result<api::FrozenRangeProof, api::Error>> for RangeProofResult<'_> {
 /// [`fwd_free_change_proof`]: crate::fwd_free_change_proof
 #[derive(Debug)]
 #[repr(C, usize)]
-pub enum ChangeProofResult<'db> {
+pub enum ChangeProofResult {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
     /// The provided start root was not found in the database.
@@ -268,7 +268,7 @@ pub enum ChangeProofResult<'db> {
     /// If the value was parsed from a serialized proof, this does not imply that
     /// the proof is valid, only that it is well-formed. The verify method must
     /// be called to ensure the proof is cryptographically valid.
-    Ok(Box<ChangeProofContext<'db>>),
+    Ok(Box<ChangeProofContext>),
     /// An error occurred and the message is returned as an [`OwnedBytes`]. If
     /// value is guaranteed to contain only valid UTF-8.
     ///
@@ -277,6 +277,33 @@ pub enum ChangeProofResult<'db> {
     ///
     /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
     Err(OwnedBytes),
+}
+
+/// A result type returned from FFI functions that verify and propose change proofs.
+///
+/// On success, the proof is consumed and a [`ProposedChangeProofContext`] is returned.
+/// On verification failure, the original [`ChangeProofContext`] is returned so the
+/// caller can retry or free it.
+///
+/// The caller must ensure that [`fwd_free_proposed_change_proof`] is called to
+/// free the memory associated with the returned context when it is no longer needed.
+///
+/// [`fwd_free_proposed_change_proof`]: crate::fwd_free_proposed_change_proof
+#[derive(Debug)]
+#[repr(C, usize)]
+pub enum ProposedChangeProofResult<'db> {
+    /// The caller provided a null pointer to the database or proof handle.
+    NullHandlePointer,
+    /// The proof was successfully verified and proposed.
+    Ok(Box<ProposedChangeProofContext<'db>>),
+    /// Verification failed; the original [`ChangeProofContext`] is returned to the
+    /// caller so it can be freed or reused.
+    VerificationFailed {
+        /// The original unverified proof, returned to the caller.
+        original: Box<ChangeProofContext>,
+        /// The error message describing why verification failed.
+        error: OwnedBytes,
+    },
 }
 
 #[derive(Debug)]
@@ -579,7 +606,7 @@ impl<'db, E: fmt::Display> From<Result<ReconstructedHandle<'db>, E>> for Reconst
     }
 }
 
-impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult<'_> {
+impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
     fn from(value: Result<api::FrozenChangeProof, api::Error>) -> Self {
         match value {
             Ok(proof) => ChangeProofResult::Ok(Box::new(proof.into())),
@@ -663,7 +690,8 @@ impl_null_handle_result!(
     ValueResult,
     HashResult,
     RangeProofResult<'_>,
-    ChangeProofResult<'_>,
+    ChangeProofResult,
+    ProposedChangeProofResult<'_>,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
@@ -680,7 +708,7 @@ impl_cresult!(
     HashResult,
     HandleResult,
     RangeProofResult<'_>,
-    ChangeProofResult<'_>,
+    ChangeProofResult,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
@@ -690,6 +718,41 @@ impl_cresult!(
     KeyValueBatchResult,
     KeyValueResult,
 );
+
+// ProposedChangeProofResult has a custom CResult implementation because the
+// error variant carries extra data (the original proof) rather than a simple
+// error string. On panic we cannot return the original proof, so we fall back
+// to NullHandlePointer.
+impl CResult for ProposedChangeProofResult<'_> {
+    #[cfg(panic = "unwind")]
+    fn from_err(_err: impl ToString) -> Self {
+        Self::NullHandlePointer
+    }
+}
+
+impl<'db>
+    From<
+        Result<
+            ProposedChangeProofContext<'db>,
+            (ChangeProofContext, api::Error),
+        >,
+    > for ProposedChangeProofResult<'db>
+{
+    fn from(
+        value: Result<
+            ProposedChangeProofContext<'db>,
+            (ChangeProofContext, api::Error),
+        >,
+    ) -> Self {
+        match value {
+            Ok(proposed) => Self::Ok(Box::new(proposed)),
+            Err((original, err)) => Self::VerificationFailed {
+                original: Box::new(original),
+                error: err.to_string().into_bytes().into(),
+            },
+        }
+    }
+}
 
 #[cfg(panic = "unwind")]
 enum Panic {

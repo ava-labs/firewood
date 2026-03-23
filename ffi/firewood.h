@@ -28,11 +28,8 @@ typedef enum NodeHashAlgorithm {
 } NodeHashAlgorithm;
 
 /**
- * FFI context for a parsed or generated change proof. Mirrors
- * [`RangeProofContext`] — a single type that transitions through
- * unverified → verified → proposed → committed states.
- *
- * [`RangeProofContext`]: crate::RangeProofContext
+ * FFI context for a parsed or generated change proof that has not yet been
+ * verified or proposed.
  */
 typedef struct ChangeProofContext ChangeProofContext;
 
@@ -58,6 +55,13 @@ typedef struct IteratorHandle IteratorHandle;
  * database handle it was created from.
  */
 typedef struct ProposalHandle ProposalHandle;
+
+/**
+ * FFI context for a change proof that has been verified and proposed against
+ * a database. The verification context and proposal state are non-optional,
+ * meaning this type can only be constructed after successful verification.
+ */
+typedef struct ProposedChangeProofContext ProposedChangeProofContext;
 
 /**
  * FFI context for for a parsed or generated range proof.
@@ -566,7 +570,7 @@ typedef struct CreateChangeProofArgs {
 } CreateChangeProofArgs;
 
 typedef struct CommittedChangeProofArgs {
-  struct ChangeProofContext *proof;
+  struct ProposedChangeProofContext *proof;
 } CommittedChangeProofArgs;
 
 /**
@@ -660,42 +664,35 @@ typedef struct CreateRangeProofArgs {
 } CreateRangeProofArgs;
 
 /**
- * Arguments for verifying a change proof.
+ * Arguments for verifying and committing a change proof.
  */
-typedef struct VerifyChangeProofArgs {
+typedef struct VerifyAndCommitChangeProofArgs {
   /**
-   * The change proof to verify. If null, the function will return
-   * [`VoidResult::NullHandlePointer`]. We need a mutable reference to
-   * update the validation context.
+   * The change proof to verify and commit. If null, the function will return
+   * [`HashResult::NullHandlePointer`].
    */
   struct ChangeProofContext *proof;
   /**
-   * The root hash of the starting revision. This must match the starting
-   * root of the proof.
+   * The root hash of the starting revision.
    */
   struct HashKey start_root;
   /**
-   * The root hash of the ending revision. This must match the ending root of
-   * the proof.
+   * The root hash of the ending revision.
    */
   struct HashKey end_root;
   /**
-   * The lower bound of the key range that the proof is expected to cover. If
-   * `None`, the proof is expected to cover from the start of the keyspace.
+   * The lower bound of the key range that the proof is expected to cover.
    */
   struct Maybe_BorrowedBytes start_key;
   /**
-   * The upper bound of the key range that the proof is expected to cover. If
-   * `None`, the proof is expected to cover to the end of the keyspace.
+   * The upper bound of the key range that the proof is expected to cover.
    */
   struct Maybe_BorrowedBytes end_key;
   /**
    * The maximum number of key/value pairs that the proof is expected to cover.
-   * If the proof contains more items than this, it is considered invalid. If
-   * `0`, there is no limit.
    */
   uint32_t max_length;
-} VerifyChangeProofArgs;
+} VerifyAndCommitChangeProofArgs;
 
 /**
  * Arguments for verifying a range proof.
@@ -735,6 +732,87 @@ typedef struct VerifyRangeProofArgs {
    */
   uint32_t max_length;
 } VerifyRangeProofArgs;
+
+/**
+ * A result type returned from FFI functions that verify and propose change proofs.
+ *
+ * On success, the proof is consumed and a [`ProposedChangeProofContext`] is returned.
+ * On verification failure, the original [`ChangeProofContext`] is returned so the
+ * caller can retry or free it.
+ *
+ * The caller must ensure that [`fwd_free_proposed_change_proof`] is called to
+ * free the memory associated with the returned context when it is no longer needed.
+ *
+ * [`fwd_free_proposed_change_proof`]: crate::fwd_free_proposed_change_proof
+ */
+enum ProposedChangeProofResult_Tag {
+  /**
+   * The caller provided a null pointer to the database or proof handle.
+   */
+  ProposedChangeProofResult_NullHandlePointer,
+  /**
+   * The proof was successfully verified and proposed.
+   */
+  ProposedChangeProofResult_Ok,
+  /**
+   * Verification failed; the original [`ChangeProofContext`] is returned to the
+   * caller so it can be freed or reused.
+   */
+  ProposedChangeProofResult_VerificationFailed,
+};
+typedef size_t ProposedChangeProofResult_Tag;
+
+typedef struct ProposedChangeProofResult_VerificationFailed_Body {
+  /**
+   * The original unverified proof, returned to the caller.
+   */
+  struct ChangeProofContext *original;
+  /**
+   * The error message describing why verification failed.
+   */
+  OwnedBytes error;
+} ProposedChangeProofResult_VerificationFailed_Body;
+
+typedef struct ProposedChangeProofResult {
+  ProposedChangeProofResult_Tag tag;
+  union {
+    struct {
+      struct ProposedChangeProofContext *ok;
+    };
+    ProposedChangeProofResult_VerificationFailed_Body verification_failed;
+  };
+} ProposedChangeProofResult;
+
+/**
+ * Arguments for verifying and proposing a change proof.
+ */
+typedef struct VerifyAndProposeChangeProofArgs {
+  /**
+   * The change proof to verify and propose. If null, the function will return
+   * [`ProposedChangeProofResult::NullHandlePointer`].
+   */
+  struct ChangeProofContext *proof;
+  /**
+   * The root hash of the starting revision.
+   */
+  struct HashKey start_root;
+  /**
+   * The root hash of the ending revision.
+   */
+  struct HashKey end_root;
+  /**
+   * The lower bound of the key range that the proof is expected to cover.
+   */
+  struct Maybe_BorrowedBytes start_key;
+  /**
+   * The upper bound of the key range that the proof is expected to cover.
+   */
+  struct Maybe_BorrowedBytes end_key;
+  /**
+   * The maximum number of key/value pairs that the proof is expected to cover.
+   */
+  uint32_t max_length;
+} VerifyAndProposeChangeProofArgs;
 
 /**
  * Owned version of `KeyValuePair`, returned to ffi callers.
@@ -1271,13 +1349,11 @@ struct VoidResult fwd_block_replay_flush(void);
  *
  * # Arguments
  *
- * - `proof` - A [`ChangeProofContext`] that has been verified and proposed.
+ * - `proof` - A [`ProposedChangeProofContext`] that has been verified and proposed.
  *
  * # Returns
  *
  * - [`NextKeyRangeResult::NullHandlePointer`] if the caller provided a null pointer.
- * - [`NextKeyRangeResult::NotPrepared`] if the proof has not been prepared into
- *   a proposal nor committed to the database.
  * - [`NextKeyRangeResult::None`] if there are no more keys to fetch.
  * - [`NextKeyRangeResult::Some`] containing the next key range to fetch.
  * - [`NextKeyRangeResult::Err`] containing an error message if the next key range
@@ -1290,7 +1366,7 @@ struct VoidResult fwd_block_replay_flush(void);
  * concurrently. The caller must ensure exclusive access to the proof context
  * for the duration of the call.
  */
-struct NextKeyRangeResult fwd_change_proof_find_next_key_proposed(struct ChangeProofContext *proof);
+struct NextKeyRangeResult fwd_change_proof_find_next_key_proposed(struct ProposedChangeProofContext *proof);
 
 /**
  * Deserialize a `ChangeProof` from bytes.
@@ -1459,7 +1535,8 @@ struct ChangeProofResult fwd_db_change_proof(const struct DatabaseHandle *db,
  *
  * # Arguments
  *
- * - `args` - The arguments for committing the change proof, which is just a `ChangeProofContext`.
+ * - `args` - The arguments for committing the change proof, which is just a
+ *   `ProposedChangeProofContext`.
  *
  * # Returns
  *
@@ -1524,17 +1601,12 @@ struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
 /**
  * Verify and commit a change proof to the database.
  *
- * If a proposal was previously prepared by a call to
- * [`fwd_db_verify_and_propose_change_proof`], it will be committed instead
- * of re-verifying the proof. If the proof has not yet been verified, it will
- * be verified now. If the prepared proposal is no longer valid (e.g., the
- * database has changed since it was prepared), a new proposal will be created
- * and committed.
+ * The proof is consumed regardless of success or failure.
  *
  * # Arguments
  *
  * - `db` - The database to commit the changes to.
- * - `args` - The arguments for verifying the change proof.
+ * - `args` - The arguments for verifying and committing the change proof.
  *
  * # Returns
  *
@@ -1552,7 +1624,7 @@ struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
  * for the duration of the call.
  */
 struct HashResult fwd_db_verify_and_commit_change_proof(const struct DatabaseHandle *db,
-                                                        struct VerifyChangeProofArgs args);
+                                                        struct VerifyAndCommitChangeProofArgs args);
 
 /**
  * Verify and commit a range proof to the database.
@@ -1590,21 +1662,24 @@ struct HashResult fwd_db_verify_and_commit_range_proof(const struct DatabaseHand
                                                        struct VerifyRangeProofArgs args);
 
 /**
- * Verify a change proof and prepare a proposal to later commit or drop. If the
- * proof has already been verified, the cached validation context will be used
- * to avoid re-verifying the proof.
+ * Verify a change proof and prepare a proposal to later commit or drop.
+ *
+ * On success, the proof is consumed and a [`ProposedChangeProofContext`] is
+ * returned. On failure, the original [`ChangeProofContext`] is returned to
+ * the caller so it can be retried or freed.
  *
  * # Arguments
  *
  * - `db` - The database to verify the proof against.
- * - `args` - The arguments for verifying the change proof.
+ * - `args` - The arguments for verifying and proposing the change proof.
  *
  * # Returns
  *
- * - [`VoidResult::NullHandlePointer`] if the caller provided a null pointer to either
- *   the database or the proof.
- * - [`VoidResult::Ok`] if the proof was successfully verified.
- * - [`VoidResult::Err`] containing an error message if the proof could not be verified
+ * - [`ProposedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer
+ *   to either the database or the proof.
+ * - [`ProposedChangeProofResult::Ok`] containing the proposed context on success.
+ * - [`ProposedChangeProofResult::VerificationFailed`] containing the original proof and
+ *   error message on verification failure.
  *
  * # Thread Safety
  *
@@ -1613,8 +1688,8 @@ struct HashResult fwd_db_verify_and_commit_range_proof(const struct DatabaseHand
  * concurrently. The caller must ensure exclusive access to the proof context
  * for the duration of the call.
  */
-struct VoidResult fwd_db_verify_and_propose_change_proof(const struct DatabaseHandle *db,
-                                                         struct VerifyChangeProofArgs args);
+struct ProposedChangeProofResult fwd_db_verify_and_propose_change_proof(const struct DatabaseHandle *db,
+                                                                        struct VerifyAndProposeChangeProofArgs args);
 
 /**
  * Verify a range proof and prepare a proposal to later commit or drop. If the
@@ -1763,6 +1838,21 @@ struct VoidResult fwd_free_owned_kv_pair(struct OwnedKeyValuePair kv);
  * will consume the proposal automatically.
  */
 struct VoidResult fwd_free_proposal(struct ProposalHandle *proposal);
+
+/**
+ * Frees the memory associated with a `ProposedChangeProofContext`.
+ *
+ * # Arguments
+ *
+ * * `proof` - The `ProposedChangeProofContext` to free, previously returned
+ *   from the verify and propose function.
+ *
+ * # Returns
+ *
+ * - [`VoidResult::Ok`] if the memory was successfully freed.
+ * - [`VoidResult::Err`] if the process panics while freeing the memory.
+ */
+struct VoidResult fwd_free_proposed_change_proof(struct ProposedChangeProofContext *proof);
 
 /**
  * Frees the memory associated with a `RangeProofContext`.
@@ -2210,6 +2300,24 @@ struct ProposalResult fwd_propose_on_db(const struct DatabaseHandle *db, Borrowe
  */
 struct ProposalResult fwd_propose_on_proposal(const struct ProposalHandle *handle,
                                               BorrowedBatchOps values);
+
+/**
+ * Serialize a proposed `ChangeProof` to bytes.
+ *
+ * # Arguments
+ *
+ * - `proof` - A [`ProposedChangeProofContext`] previously returned from the
+ *   verify and propose method.
+ *
+ * # Returns
+ *
+ * - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
+ * - [`ValueResult::Some`] containing the serialized bytes if successful.
+ * - [`ValueResult::Err`] if the caller provided a null pointer.
+ *
+ * The other [`ValueResult`] variants are not used.
+ */
+struct ValueResult fwd_proposed_change_proof_to_bytes(const struct ProposedChangeProofContext *proof);
 
 /**
  * Returns an iterator over the code hashes contained in the range proof.
