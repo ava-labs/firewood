@@ -115,6 +115,29 @@ We generally follow the same rules that `cargo fmt` and `cargo clippy` will repo
 
 By default, we prohibit bare `unwrap` calls and index dereferencing, as there are usually better ways to write this code. In the case where you can't, please use `expect` with a message explaining why it would be a bug, which we currently allow. For more information on our motivation, please read this great article on unwrap: [Using unwrap() in Rust is Okay](https://blog.burntsushi.net/unwrap) by [Andrew Gallant](https://blog.burntsushi.net).
 
+### Go (FFI) Constants and Magic Numbers
+
+When extracting magic numbers or repeated string literals into named constants
+in Go code (especially to satisfy `revive` linter rules like `add-constant`):
+
+1. **Always replace the literal with the constant.** Defining a constant but
+   leaving the original magic number in place creates an unused-constant error
+   and defeats the purpose. After adding a constant, grep for every occurrence
+   of the literal value and replace them all.
+
+2. **Scope constants as narrowly as possible.** If a constant is only used
+   inside a single function, declare it as a `const` inside that function
+   rather than at package level. Package-level constants should be reserved
+   for values shared across multiple functions.
+
+3. **Avoid duplicate imports.** Never import the same package twice (e.g.
+   once bare and once with an alias). Use a single import with the alias
+   that the file actually needs, and update all references to match.
+
+4. **Run `gofumpt`** after modifying `const` blocks — alignment changes and
+   trailing blank lines inside `const ( ... )` will cause `gofmt`/`gofumpt`
+   lint failures.
+
 ## [Where can I ask for help]?
 
 If you have questions or need help, please post them as issues in the [issue tracker](https://github.com/ava-labs/firewood/issues). This allows the community to benefit from the discussion and helps us maintain a searchable knowledge base.
