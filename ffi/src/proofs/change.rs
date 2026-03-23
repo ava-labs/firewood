@@ -254,7 +254,13 @@ fn is_complete_proof(verification: &VerificationContext, proof: &FrozenChangePro
 }
 
 /// Determine which key the end proof was generated for.
-/// Replicates the try-both logic from `verify_end_proof`.
+///
+/// When a proof is potentially truncated (batch ops count >= max_length),
+/// the generator may have used the last batch op's key instead of the
+/// requested end key. The verifier cannot distinguish which was used, so
+/// it tries validating with the last batch op key first, then falls back
+/// to the requested end key. Replicates the try-both logic from
+/// [`verify_end_proof`].
 fn resolve_end_proof_key(
     verification: &VerificationContext,
     proof: &FrozenChangeProof,
@@ -294,6 +300,12 @@ fn resolve_end_proof_key(
 
 /// Verify sub-trie hashes: compare child hashes at branch points in the
 /// boundary proofs against the proposal's trie after applying batch_ops.
+///
+/// This check requires both boundary proofs to be non-empty — with only one
+/// proof there is no divergence point and therefore no "in-range" nibbles
+/// to verify. The check runs in two phases: first for the start side
+/// (nibbles after the path at each depth), then for the end side (nibbles
+/// before the path at each depth).
 fn verify_subtrie_hashes(
     proof: &FrozenChangeProof,
     verification: &VerificationContext,
@@ -302,6 +314,8 @@ fn verify_subtrie_hashes(
     let start_proof = proof.start_proof();
     let end_proof = proof.end_proof();
 
+    // Both boundary proofs must be present; with only one there is no
+    // divergence point and no in-range nibbles to verify.
     if start_proof.is_empty() || end_proof.is_empty() {
         return Ok(());
     }
@@ -311,13 +325,13 @@ fn verify_subtrie_hashes(
         None => return Ok(()),
     };
 
-    // Verify start side: children > path nibble below divergence
+    // Phase 1: start side — children after the path nibble below divergence
     if let Some(ref start_key) = verification.start_key {
         let proposal_path = proposal.path_to_key(start_key)?;
         verify_proof_path_children(start_proof, &proposal_path, &divergence, Side::Start)?;
     }
 
-    // Verify end side: children < path nibble below divergence
+    // Phase 2: end side — children before the path nibble below divergence
     if let Some(end_key) = resolve_end_proof_key(verification, proof) {
         let proposal_path = proposal.path_to_key(&end_key)?;
         verify_proof_path_children(end_proof, &proposal_path, &divergence, Side::End)?;
@@ -328,6 +342,11 @@ fn verify_subtrie_hashes(
 
 /// Verify that values at boundary keys in the proposal match the boundary
 /// proofs' claims.
+///
+/// Complementary to [`verify_subtrie_hashes`]: subtrie checks verify child
+/// hashes at branch points along the boundary paths, while this function
+/// verifies the actual key/value (or absence) at the boundary keys
+/// themselves.
 fn verify_boundary_values(
     proof: &FrozenChangeProof,
     verification: &VerificationContext,
@@ -505,12 +524,24 @@ impl ProposedChangeProofContext<'_> {
 // Helper types and functions (unchanged)
 // ---------------------------------------------------------------------------
 
+/// Identifies which boundary proof (start or end) is being checked during
+/// sub-trie hash verification.
+///
+/// The side determines which direction "in-range" nibbles extend from the
+/// proof's path nibble at each branch node:
+/// - [`Start`](Side::Start): nibbles *after* the path nibble are in range
+///   (they lead to sub-tries entirely within the proven range).
+/// - [`End`](Side::End): nibbles *before* the path nibble are in range.
 #[derive(Debug, Clone, Copy)]
 enum Side {
     Start,
     End,
 }
 
+/// The point where the start and end boundary proofs take different children
+/// in the trie. At and below this point, nibbles between the two paths lead
+/// to sub-tries that are entirely covered by the change proof and must have
+/// their hashes preserved after applying batch operations.
 struct DivergenceInfo {
     /// Index into the proof nodes where the proofs diverge.
     node_index: usize,
@@ -521,6 +552,12 @@ struct DivergenceInfo {
 }
 
 /// Find where two boundary proofs (from the same end trie) diverge.
+///
+/// We need the divergence point because nibbles between the start and end
+/// paths at that node are fully "in range" of the change proof — their
+/// entire sub-tries must have been included in the batch operations. The
+/// returned [`DivergenceInfo`] drives the per-node in-range nibble
+/// calculations in [`verify_proof_path_children`].
 fn find_divergence(
     start_proof: &firewood::Proof<Box<[ProofNode]>>,
     end_proof: &firewood::Proof<Box<[ProofNode]>>,
@@ -588,8 +625,14 @@ fn find_divergence(
     None
 }
 
-/// Compare child hashes at branch points for one boundary proof side
-/// against the proposal's trie path nodes.
+/// Core sub-trie integrity check for one boundary proof side.
+///
+/// Walks the boundary proof nodes from the divergence point downward and, at
+/// each branch node, determines which child nibbles are "in range" (between
+/// the two boundary paths). For those nibbles, the child hash recorded in
+/// the boundary proof must match the child hash in the proposal's trie after
+/// applying batch operations. A mismatch means the change proof was
+/// generated against a different base state than the verifier's.
 fn verify_proof_path_children(
     boundary_proof: &firewood::Proof<Box<[ProofNode]>>,
     proposal_path: &[PathIterItem],
@@ -670,6 +713,11 @@ fn verify_proof_path_children(
 
 /// Verify that a single boundary key's value in the proposal matches the
 /// boundary proof's claim.
+///
+/// The boundary proof asserts a specific value (or absence of value) at a
+/// boundary key in the end trie. After applying the change proof's batch
+/// operations, the proposal trie must agree — otherwise the proof is
+/// invalid for this base state.
 fn verify_single_boundary_value(
     proposal: &crate::ProposalHandle<'_>,
     proof: &firewood::Proof<Box<[ProofNode]>>,
@@ -687,6 +735,11 @@ fn verify_single_boundary_value(
 }
 
 /// Nibbles strictly between `start_nibble` and `end_nibble` at divergence.
+///
+/// "Strictly between" because the start and end nibbles themselves are the
+/// paths the boundary proofs follow — they are verified separately. Only
+/// the nibbles between them lead to sub-tries that are entirely covered by
+/// the change proof's key range.
 fn in_range_at_divergence(d: &DivergenceInfo) -> Vec<PathComponent> {
     PathComponent::ALL
         .into_iter()
@@ -694,7 +747,13 @@ fn in_range_at_divergence(d: &DivergenceInfo) -> Vec<PathComponent> {
         .collect()
 }
 
-/// Nibbles strictly after the given path nibble (for start side below divergence).
+/// Nibbles strictly after the given path nibble (for the start side below
+/// divergence).
+///
+/// Below the divergence point on the start side, the path nibble is the
+/// child the start proof follows deeper. All nibbles after it lead into
+/// sub-tries whose keys are greater than the start boundary but still
+/// within the change proof's range.
 fn in_range_after(path_nibble: PathComponent) -> Vec<PathComponent> {
     PathComponent::ALL
         .into_iter()
@@ -702,7 +761,13 @@ fn in_range_after(path_nibble: PathComponent) -> Vec<PathComponent> {
         .collect()
 }
 
-/// Nibbles strictly before the given path nibble (for end side below divergence).
+/// Nibbles strictly before the given path nibble (for the end side below
+/// divergence).
+///
+/// Below the divergence point on the end side, the path nibble is the child
+/// the end proof follows deeper. All nibbles before it lead into sub-tries
+/// whose keys are less than the end boundary but still within the change
+/// proof's range.
 fn in_range_before(path_nibble: PathComponent) -> Vec<PathComponent> {
     PathComponent::ALL
         .into_iter()
@@ -1043,6 +1108,7 @@ pub extern "C" fn fwd_proposed_change_proof_to_bytes(
     crate::invoke_with_handle(proof, |ctx| serialize_proof(&ctx.proof))
 }
 
+/// Serialize a [`FrozenChangeProof`] into a byte vector.
 fn serialize_proof(proof: &FrozenChangeProof) -> Vec<u8> {
     let mut vec = Vec::new();
     proof.write_to_vec(&mut vec);
