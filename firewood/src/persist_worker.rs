@@ -50,7 +50,8 @@ use firewood_storage::{
 };
 use parking_lot::{Condvar, Mutex, MutexGuard};
 
-use crate::{manager::CommittedRevision, root_store::RootStore};
+use crate::manager::CommittedRevision;
+use firewood_storage::RootStore;
 
 use firewood_storage::logger::error;
 

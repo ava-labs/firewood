@@ -114,9 +114,15 @@ type VerifiedChangeProof struct {
 }
 
 // ProposedChangeProof contains a proposal for the ChangeProof.
+//
+// Because this type holds a reference to the database, the database must be
+// kept alive until the proof is committed or freed. This is managed by the
+// keepAliveHandle, which prevents [Database.Close] from completing while this
+// proof is still alive.
 type ProposedChangeProof struct {
-	handle *C.ProposedChangeProofContext
-	db     *Database
+	handle          *C.ProposedChangeProofContext
+	db              *Database
+	keepAliveHandle databaseKeepAliveHandle
 }
 
 // NextKeyRange represents a range of keys to fetch from the database. The start
@@ -219,6 +225,8 @@ func (db *Database) VerifyRangeProof(
 	}
 
 	// keep the database alive while the proof owns the embedded proposal
+	// TODO: use runtime.AddCleanup and shared handle[T] infrastructure
+	// instead of SetFinalizer, for consistency with Proposal and Revision.
 	proof.keepAliveHandle.init(&db.outstandingHandles)
 	runtime.SetFinalizer(proof, (*RangeProof).Free)
 	return nil
@@ -427,13 +435,21 @@ func (db *Database) ProposeChangeProof(
 		return nil, errDBClosed
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
 	args := C.ProposedChangeProofArgs{
 		proof: proof.handle,
 	}
-	return getProposedChangeProofFromProposedChangeProofResult(db, C.fwd_db_propose_change_proof(db.handle, args))
+
+	proposed, err := getProposedChangeProofFromProposedChangeProofResult(db, C.fwd_db_propose_change_proof(db.handle, args))
+	if err != nil {
+		return nil, err
+	}
+
+	// keep the database alive while the proof owns the embedded proposal
+	// TODO: use runtime.AddCleanup and shared handle[T] infrastructure
+	// instead of SetFinalizer, for consistency with Proposal and Revision.
+	proposed.keepAliveHandle.init(&db.outstandingHandles)
+	runtime.SetFinalizer(proposed, (*ProposedChangeProof).Free)
+	return proposed, nil
 }
 
 func (proof *ProposedChangeProof) CommitChangeProof() (Hash, error) {
@@ -443,14 +459,19 @@ func (proof *ProposedChangeProof) CommitChangeProof() (Hash, error) {
 		return EmptyRoot, errDBClosed
 	}
 
-	var pinner runtime.Pinner
-	defer pinner.Unpin()
-
 	args := C.CommittedChangeProofArgs{
 		proof: proof.handle,
 	}
 
-	return getHashKeyFromHashResult(C.fwd_db_commit_change_proof(args))
+	var hash Hash
+	err := proof.keepAliveHandle.disown(true /* evenOnError */, func() error {
+		proof.db.commitLock.Lock()
+		defer proof.db.commitLock.Unlock()
+		var err error
+		hash, err = getHashKeyFromHashResult(C.fwd_db_commit_change_proof(args))
+		return err
+	})
+	return hash, err
 }
 
 func (proof *ProposedChangeProof) FindNextKey() (*NextKeyRange, error) {
@@ -583,17 +604,18 @@ func (p *VerifiedChangeProof) Free() error {
 // It is safe to call Free more than once; subsequent calls after the first
 // will be no-ops.
 func (p *ProposedChangeProof) Free() error {
-	if p.handle == nil {
+	return p.keepAliveHandle.disown(false /* evenOnError */, func() error {
+		if p.handle == nil {
+			return nil
+		}
+
+		if err := getErrorFromVoidResult(C.fwd_free_proposed_change_proof(p.handle)); err != nil {
+			return err
+		}
+
+		p.handle = nil
 		return nil
-	}
-
-	if err := getErrorFromVoidResult(C.fwd_free_proposed_change_proof(p.handle)); err != nil {
-		return err
-	}
-
-	p.handle = nil
-
-	return nil
+	})
 }
 
 // StartKey returns the inclusive start key of this key range.

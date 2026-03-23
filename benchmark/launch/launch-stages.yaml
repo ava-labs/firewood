@@ -115,17 +115,26 @@ stages:
     commands:
       - "snap install task --classic"
       - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu git clone --depth 100 {{ branches.avalanchego }} {{ variables.avalanchego_repo }}"
-      - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu git clone --depth 100 {{ branches.libevm }} {{ variables.libevm_repo }}"
+      - |
+        if [ -n "{{ branches.libevm }}" ]; then
+          sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu git clone --depth 100 {{ branches.libevm }} {{ variables.libevm_repo }}
+        fi
   # aws-launch.sh: go mod replace/tidy wiring (runcmd lines 443-468)
   configure-go-modules:
     name: "Configuring Go modules"
     commands:
-      # Configure graft/coreth to use local firewood and libevm
+      # Configure graft/coreth to use local firewood and local libevm when requested
       - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego/graft/coreth /usr/local/go/bin/go mod edit -replace github.com/ava-labs/firewood-go-ethhash/ffi=../../../firewood/ffi"
-      - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego/graft/coreth /usr/local/go/bin/go mod edit -replace github.com/ava-labs/libevm=../../../libevm"
-      # Configure avalanchego to use local firewood and libevm
+      - |
+        if [ -n "{{ branches.libevm }}" ]; then
+          sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego/graft/coreth /usr/local/go/bin/go mod edit -replace github.com/ava-labs/libevm=../../../libevm
+        fi
+      # Configure avalanchego to use local firewood and local libevm when requested
       - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego /usr/local/go/bin/go mod edit -replace github.com/ava-labs/firewood-go-ethhash/ffi=../firewood/ffi"
-      - "sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego /usr/local/go/bin/go mod edit -replace github.com/ava-labs/libevm=../libevm"
+      - |
+        if [ -n "{{ branches.libevm }}" ]; then
+          sudo -u ubuntu -D {{ variables.nvme_base }}/ubuntu/avalanchego /usr/local/go/bin/go mod edit -replace github.com/ava-labs/libevm=../libevm
+        fi
       # Run go mod tidy for coreth and avalanchego
       - "sudo -u ubuntu --login -D {{ variables.nvme_base }}/ubuntu/avalanchego/graft/coreth go mod tidy"
   # aws-launch.sh: build firewood ffi (runcmd lines 460-465)

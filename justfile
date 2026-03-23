@@ -215,6 +215,22 @@ bench-cchain:
         exit 1
     fi
 
+    # This workflow only works with a clean repo — the remote branch must match HEAD.
+    if ! git rev-parse --abbrev-ref @{u} &>/dev/null 2>&1; then
+        echo "error: Branch '$branch' has no upstream. Push first:" >&2
+        echo "       git push -u origin $branch" >&2
+        exit 1
+    fi
+    local_sha=$(git rev-parse HEAD)
+    remote_sha=$(git rev-parse "@{u}")
+    if [[ "$local_sha" != "$remote_sha" ]]; then
+        echo "error: Branch '$branch' has unpushed commits — push first." >&2
+        echo "       local:  $local_sha" >&2
+        echo "       remote: $remote_sha" >&2
+        echo "       Or set FIREWOOD_REF explicitly to benchmark a specific version." >&2
+        exit 1
+    fi
+
     # AVALANCHEGO_REF must be a branch/tag name, not a commit SHA (GitHub API limitation)
     if [[ "${AVALANCHEGO_REF:-}" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
         echo "error: AVALANCHEGO_REF looks like a commit SHA: $AVALANCHEGO_REF" >&2
@@ -246,7 +262,11 @@ bench-cchain:
         exit 1
     fi
 
-    : "${RUNNER:=avalanche-avalanchego-runner-2ti}"
+    # avago-runner-i4i-2xlarge-local-ssd is the dedicated Firewood runner with local SSD.
+    # It has 10 replicas and each run is isolated to one replica, which keeps
+    # infrastructure variance low (<1 mGAS/s for parallel runs vs 19 mGAS/s on shared infra).
+    # Do not change this default without understanding the variance implications.
+    : "${RUNNER:=avago-runner-i4i-2xlarge-local-ssd}"
 
     # Build workflow args
     args=(-f runner="$RUNNER")
@@ -259,7 +279,10 @@ bench-cchain:
     [[ -n "${END_BLOCK:-}" ]] && args+=(-f end-block="$END_BLOCK")
     [[ -n "${BLOCK_DIR_SRC:-}" ]] && args+=(-f block-dir-src="$BLOCK_DIR_SRC")
     [[ -n "${CURRENT_STATE_DIR_SRC:-}" ]] && args+=(-f current-state-dir-src="$CURRENT_STATE_DIR_SRC")
-    [[ -n "${TIMEOUT_MINUTES:-}" ]] && args+=(-f timeout-minutes="$TIMEOUT_MINUTES")
+    # Default timeout covers firewood-40m-41m with buffer.
+    # Override for longer tests: e.g., TIMEOUT_MINUTES=600 just bench-cchain
+    : "${TIMEOUT_MINUTES:=240}"
+    args+=(-f timeout-minutes="$TIMEOUT_MINUTES")
 
     [[ -n "${TEST:-}" ]] && echo "==> Test: $TEST"
     [[ -n "${START_BLOCK:-}" ]] && echo "==> Custom: blocks $START_BLOCK-${END_BLOCK:-?}"
@@ -281,9 +304,9 @@ bench-cchain:
     done
 
     if [[ -z "$run_id" ]]; then
-        echo "warning: Could not find run ID. Check manually at:"
-        echo "  https://github.com/ava-labs/firewood/actions/workflows/track-performance.yml"
-        exit 0
+        echo "error: Could not find workflow run after 30s. The trigger may have failed." >&2
+        echo "       Check: https://github.com/ava-labs/firewood/actions/workflows/track-performance.yml" >&2
+        exit 1
     fi
 
     echo ""

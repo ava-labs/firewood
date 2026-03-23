@@ -159,33 +159,38 @@ impl<S: ReadableStorage> NodeStore<Committed, S> {
     /// address and hash, typically when reconstructing a [`NodeStore`] from
     /// a committed state.
     ///
-    /// ## Panics
+    /// ## Errors
     ///
-    /// Panics in debug builds if the hash of the node at `root_address` does
-    /// not equal `root_hash`.
-    #[must_use]
-    pub fn with_root(root_hash: HashType, root_address: LinearAddress, storage: Arc<S>) -> Self {
-        let nodestore = NodeStore {
+    /// This method reads the root node and verifies that it matches the expected
+    /// value. If this read fails or if the hash does not match, an error is
+    /// returned
+    pub(crate) fn with_root(
+        root_hash: HashType,
+        root_address: LinearAddress,
+        storage: Arc<S>,
+    ) -> Result<Self, FileIoError> {
+        // first construct a nodestore without a root
+        let mut nodestore = NodeStore {
             kind: Committed {
                 deleted: Box::default(),
-                root: Some(Child::AddressWithHash(root_address, root_hash)),
+                root: None,
             },
             storage,
         };
 
-        debug_assert_eq!(
-            nodestore
-                .root_hash()
-                .expect("Nodestore should have root hash"),
-            hash_node(
-                &nodestore
-                    .read_node(root_address)
-                    .expect("Root node read should succeed"),
-                &Path(SmallVec::default())
-            )
-        );
+        let node = nodestore.read_node(root_address)?;
 
-        nodestore
+        if hash_node(node.as_ref(), &Path::new()) == root_hash {
+            nodestore.kind.root = Some(Child::AddressWithHash(root_address, root_hash));
+            Ok(nodestore)
+        } else {
+            Err(FileIoError::new(
+                std::io::Error::other("hash verification failed"),
+                None,
+                root_address.get(),
+                None,
+            ))
+        }
     }
 
     /// Returns the length of the deleted list for this `NodeStore`.
@@ -355,7 +360,7 @@ impl<S: ReadableStorage> NodeStore<Mutable<Recon>, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the parent root cannot be read.
-    pub fn new_for_reconstruction<T>(parent: &NodeStore<T, S>) -> Result<Self, FileIoError>
+    pub(crate) fn new_for_reconstruction<T>(parent: &NodeStore<T, S>) -> Result<Self, FileIoError>
     where
         NodeStore<T, S>: TrieReader,
     {
@@ -385,7 +390,7 @@ where
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the parent root cannot be read.
-    pub fn into_reconstruction_child(&self) -> Result<NodeStore<Mutable<Recon>, S>, FileIoError> {
+    pub fn reconstruction_child(&self) -> Result<NodeStore<Mutable<Recon>, S>, FileIoError> {
         NodeStore::new_for_reconstruction(self)
     }
 }
@@ -394,12 +399,6 @@ impl<T, S> NodeStore<Mutable<T>, S> {
     /// Returns the root of this mutable nodestore.
     pub const fn root_mut(&mut self) -> &mut Option<Node> {
         &mut self.kind.root
-    }
-
-    /// Consumes the `NodeStore` and returns the root of the trie.
-    #[must_use]
-    pub fn into_root(self) -> Option<Node> {
-        self.kind.root
     }
 }
 
@@ -617,7 +616,7 @@ impl ImmutableProposal {
 /// # Reconstruction lifecycle
 ///
 /// 1. Create a [`Mutable<Recon>`] from a [Committed] or [`Reconstructed`] parent
-///    using [`NodeStore::into_reconstruction_child`].
+///    using [`NodeStore::reconstruction_child`].
 /// 2. Apply batch operations to the mutable reconstruction via `Merkle` insert/remove.
 /// 3. Convert to [`Reconstructed`] via [`From`]. The resulting view supports reads and lazy hashing.
 /// 4. Chain further reconstructions: convert back to [`Mutable<Recon>`] via [`From`] and repeat.
@@ -700,6 +699,10 @@ pub struct Mutable<Kind> {
     pub(crate) inner: Kind,
 }
 
+/// Given root from either a Committed or Reconstructed,
+/// create a mutable root node for a new Reconstructed
+/// with this root.
+/// For reconstruct on reconstruct, this avoids cloning
 impl<S: ReadableStorage> From<NodeStore<Reconstructed, S>> for NodeStore<Mutable<Recon>, S> {
     fn from(val: NodeStore<Reconstructed, S>) -> Self {
         NodeStore {
@@ -724,19 +727,6 @@ impl<S: ReadableStorage> From<NodeStore<Mutable<Recon>, S>> for NodeStore<Recons
     }
 }
 
-/// Implement clone for `NodeStore<Reconstructed, S>`.
-///
-/// This clones the [`SharedNode`] arc (cheap ref-count bump) and the
-/// [`OnceLock`] hash (cloned if already computed, empty otherwise).
-impl<S> Clone for NodeStore<Reconstructed, S> {
-    fn clone(&self) -> Self {
-        NodeStore {
-            kind: self.kind.clone(),
-            storage: self.storage.clone(),
-        }
-    }
-}
-
 impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed, S>>> for NodeStore<Mutable<Recon>, S> {
     fn from(val: Arc<NodeStore<Reconstructed, S>>) -> Self {
         // Fast path: if this Arc is uniquely owned, `try_unwrap` is O(1) and lets us move the
@@ -751,6 +741,19 @@ impl<S: ReadableStorage> From<Arc<NodeStore<Reconstructed, S>>> for NodeStore<Mu
         // We do this to avoid forcing callers to guarantee uniqueness while still exploiting the
         // cheaper move path whenever possible.
         Self::from(Arc::unwrap_or_clone(val))
+    }
+}
+
+/// Implement clone for `NodeStore<Reconstructed, S>`.
+///
+/// This clones the [`SharedNode`] arc (cheap ref-count bump) and the
+/// [`OnceLock`] hash (cloned if already computed, empty otherwise).
+impl<S> Clone for NodeStore<Reconstructed, S> {
+    fn clone(&self) -> Self {
+        NodeStore {
+            kind: self.kind.clone(),
+            storage: self.storage.clone(),
+        }
     }
 }
 
@@ -924,7 +927,7 @@ where
     NodeStore<Reconstructed, S>: TrieReader,
 {
     fn root_address(&self) -> Option<LinearAddress> {
-        // Reconstructed views are never persisted.
+        // Reconstructed views are read-only overlays and are never persisted.
         None
     }
 
@@ -993,7 +996,7 @@ impl<T, S: ReadableStorage> NodeStore<T, S> {
     /// # Errors
     ///
     /// Returns a [`FileIoError`] if the node cannot be read.
-    pub fn read_node_from_disk(
+    pub(crate) fn read_node_from_disk(
         &self,
         addr: LinearAddress,
         mode: ReadableNodeMode,
@@ -1351,6 +1354,89 @@ mod tests {
             let root = proposal.root_mut();
             assert!(root.is_some());
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn with_root_success() -> Result<(), Box<dyn Error>> {
+        let tmpdir = tempfile::tempdir()?;
+        let dbfile = tmpdir.path().join("with_root_test.db");
+
+        let storage = Arc::new(FileBacked::new(
+            dbfile,
+            nonzero!(10usize),
+            nonzero!(10usize),
+            false,
+            true,
+            CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
+        )?);
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let base = NodeStore::open(&header, Arc::clone(&storage))?;
+
+        // Create a proposal with a leaf node and persist it
+        let mut proposal = NodeStore::new(&base)?;
+        proposal.root_mut().replace(Node::Leaf(LeafNode {
+            partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"key")),
+            value: b"value".to_vec().into_boxed_slice(),
+        }));
+        let proposal = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
+        let committed = proposal.as_committed();
+        committed.persist(&mut header)?;
+
+        // Retrieve root address and hash from the header
+        let root_address = header.root_address().unwrap();
+        let root_hash = header.root_hash().unwrap().into_hash_type();
+
+        // Reconstruct using with_root
+        let restored = NodeStore::with_root(root_hash.clone(), root_address, storage)?;
+        assert_eq!(restored.root_hash(), Some(root_hash.into_triehash()));
+        assert_eq!(restored.root_address(), Some(root_address));
+
+        Ok(())
+    }
+
+    #[test]
+    fn with_root_wrong_hash() -> Result<(), Box<dyn Error>> {
+        let tmpdir = tempfile::tempdir()?;
+        let dbfile = tmpdir.path().join("with_root_bad_hash_test.db");
+
+        let storage = Arc::new(FileBacked::new(
+            dbfile,
+            nonzero!(10usize),
+            nonzero!(10usize),
+            false,
+            true,
+            CacheReadStrategy::WritesOnly,
+            NodeHashAlgorithm::compile_option(),
+        )?);
+        let mut header = NodeStoreHeader::new(NodeHashAlgorithm::compile_option());
+        let base = NodeStore::open(&header, Arc::clone(&storage))?;
+
+        // Create a proposal with a leaf node and persist it
+        let mut proposal = NodeStore::new(&base)?;
+        proposal.root_mut().replace(Node::Leaf(LeafNode {
+            partial_path: Path::from_nibbles_iterator(NibblesIterator::new(b"key")),
+            value: b"value".to_vec().into_boxed_slice(),
+        }));
+        let proposal = NodeStore::<Arc<ImmutableProposal>, _>::try_from(proposal)?;
+        let committed = proposal.as_committed();
+        committed.persist(&mut header)?;
+
+        let root_address = header.root_address().unwrap();
+
+        // Use a bogus hash
+        let bad_hash = HashType::from([0xAB; 32]);
+        let result = NodeStore::with_root(bad_hash, root_address, storage);
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.source()
+                .unwrap()
+                .to_string()
+                .contains("hash verification failed")
+        );
 
         Ok(())
     }

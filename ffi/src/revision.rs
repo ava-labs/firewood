@@ -2,23 +2,35 @@
 // See the file LICENSE.md for licensing terms.
 
 use crate::metrics::MetricsContextExt;
-use crate::{CreateIteratorResult, IteratorHandle};
+use crate::reconstructed::ReconstructedHandle;
+use crate::{CreateIteratorResult, DatabaseHandle, IteratorHandle};
 use firewood::api;
 use firewood::api::{ArcDynDbView, BoxKeyValueIter, DbView, HashKey};
 use firewood_metrics::MetricsContext;
+use firewood_storage::{Committed, FileBacked, NodeStore};
+use std::sync::Arc;
 
 #[derive(Debug)]
-pub struct RevisionHandle {
+pub struct RevisionHandle<'db> {
     view: ArcDynDbView,
+    historical: Option<Arc<NodeStore<Committed, FileBacked>>>,
     metrics_context: MetricsContext,
+    handle: &'db DatabaseHandle,
 }
 
-impl RevisionHandle {
+impl<'db> RevisionHandle<'db> {
     /// Creates a new revision handle for the provided database view.
-    pub(crate) fn new(view: ArcDynDbView, metrics_context: MetricsContext) -> RevisionHandle {
+    pub(crate) fn new(
+        view: ArcDynDbView,
+        historical: Option<Arc<NodeStore<Committed, FileBacked>>>,
+        metrics_context: MetricsContext,
+        handle: &'db DatabaseHandle,
+    ) -> RevisionHandle<'db> {
         RevisionHandle {
             view,
+            historical,
             metrics_context,
+            handle,
         }
     }
 
@@ -36,9 +48,29 @@ impl RevisionHandle {
             self.metrics_context(),
         ))
     }
+
+    /// Reconstruct this historical revision with a batch of operations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if reconstruction fails.
+    pub fn reconstruct(
+        &self,
+        values: impl api::IntoBatchIter,
+    ) -> Result<ReconstructedHandle<'db>, api::Error> {
+        let Some(historical) = self.historical.as_ref() else {
+            return Err(api::Error::FeatureNotSupported(
+                "reconstruct requires a historical (committed) revision handle".to_string(),
+            ));
+        };
+        let reconstructed = self
+            .handle
+            .reconstruct_from_view(historical.as_ref(), values)?;
+        Ok(ReconstructedHandle::new(reconstructed, self.handle))
+    }
 }
 
-impl DbView for RevisionHandle {
+impl DbView for RevisionHandle<'_> {
     type Iter<'view>
         = BoxKeyValueIter<'view>
     where
@@ -82,12 +114,12 @@ impl DbView for RevisionHandle {
 }
 
 #[derive(Debug)]
-pub struct GetRevisionResult {
-    pub handle: RevisionHandle,
+pub struct GetRevisionResult<'db> {
+    pub handle: RevisionHandle<'db>,
     pub root_hash: HashKey,
 }
 
-impl crate::MetricsContextExt for RevisionHandle {
+impl crate::MetricsContextExt for RevisionHandle<'_> {
     fn metrics_context(&self) -> Option<MetricsContext> {
         Some(self.metrics_context)
     }

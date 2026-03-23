@@ -10,7 +10,7 @@
     clippy::match_same_arms,
     reason = "Found 1 occurrences after enabling the lint."
 )]
-#![doc = include_str!("../README.md")]
+#![doc = include_str!("../docs/synthetic-workloads.md")]
 
 use clap::{Parser, Subcommand, ValueEnum};
 use fastrace_opentelemetry::OpenTelemetryReporter;

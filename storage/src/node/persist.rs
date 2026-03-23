@@ -2,9 +2,9 @@
 // See the file LICENSE.md for licensing terms.
 
 use parking_lot::Mutex;
-use std::{fmt::Display, sync::Arc};
+use std::{fmt::Display, ops::Deref, sync::Arc};
 
-use crate::{FileIoError, LinearAddress, NodeReader, SharedNode};
+use crate::{FileIoError, LinearAddress, Node, NodeReader, SharedNode};
 
 /// A node that is either in memory or on disk.
 ///
@@ -95,6 +95,40 @@ impl MaybePersistedNode {
         }
     }
 
+    /// Resolve this node into a concrete `Node`, performing I/O when needed.
+    ///
+    /// Attempts to move the in-memory node without cloning when this is the sole
+    /// reference. If multiple references exist, it falls back to cloning the
+    /// node (similar to `reconstruct_with_parent`). If the node is persisted,
+    /// it reads from storage.
+    ///
+    /// A clone here could be expensive, particularly if the trie contains many
+    /// materialized Unpersisted nodes, which can happen when reconstructing from
+    /// an already reconstructed root. We avoid the clone unless the reconstructed
+    /// revision is referenced elsewhere at the time of this call, which is
+    /// unlikely in our typical use cases.
+    pub fn try_into_node<S: NodeReader>(self, storage: &S) -> Result<Node, FileIoError> {
+        match Arc::try_unwrap(self.0) {
+            Ok(mutex) => match mutex.into_inner() {
+                MaybePersisted::Unpersisted(shared_node)
+                | MaybePersisted::Allocated(_, shared_node) => {
+                    Ok(triomphe::Arc::unwrap_or_clone(shared_node))
+                }
+                MaybePersisted::Persisted(address) => {
+                    let shared = storage.read_node(address)?;
+                    Ok(shared.deref().clone())
+                }
+            },
+            Err(arc) => match &*arc.lock() {
+                MaybePersisted::Unpersisted(shared_node)
+                | MaybePersisted::Allocated(_, shared_node) => Ok(shared_node.deref().clone()),
+                MaybePersisted::Persisted(address) => {
+                    let shared = storage.read_node(*address)?;
+                    Ok(shared.deref().clone())
+                }
+            },
+        }
+    }
     /// Returns the linear address of the node if it is persisted on disk.
     ///
     /// # Returns

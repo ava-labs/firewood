@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.3.1] - 2026-03-20
+
+### 🚀 Features
+
+- *(c-chain-benchmark)* Add firewood-40m-41m test and harden bench-cchain ([#1800](https://github.com/ava-labs/firewood/pull/1800))
+- *(reconstruct)* Support Reconstructible revisions ([#1786](https://github.com/ava-labs/firewood/pull/1786))
+- *(reconstruct)* Add benchmarks for rust reconstruction ([#1787](https://github.com/ava-labs/firewood/pull/1787))
+- *(reconstruction)* Add FFI Rust layer ([#1813](https://github.com/ava-labs/firewood/pull/1813))
+- *(reconstruction)* Add Go bindings and tests ([#1814](https://github.com/ava-labs/firewood/pull/1814))
+
+### 🐛 Bug Fixes
+
+- *(fwdctl)* Use libevm only when specified ([#1805](https://github.com/ava-labs/firewood/pull/1805))
+- Adding keepAlive to ProposedChangeProof ([#1817](https://github.com/ava-labs/firewood/pull/1817))
+
+### 📚 Documentation
+
+- *(reconstruct)* Diagram move ([#1795](https://github.com/ava-labs/firewood/pull/1795))
+- *(c-chain-benchmark)* Add BENCHMARK.md  ([#1801](https://github.com/ava-labs/firewood/pull/1801))
+- *(benchmark)* Improve and consolidate Firewood's benchmarks ([#1812](https://github.com/ava-labs/firewood/pull/1812))
+
+### ⚙️ Miscellaneous Tasks
+
+- *(revert)* Remove nix flake and all references to it ([#1788](https://github.com/ava-labs/firewood/pull/1788)) ([#1794](https://github.com/ava-labs/firewood/pull/1794))
+- Reduce visibility of flush_nodes() ([#1802](https://github.com/ava-labs/firewood/pull/1802))
+- *(deps)* Bump the github-actions group with 2 updates ([#1809](https://github.com/ava-labs/firewood/pull/1809))
+- Rootstore cleanups ([#1798](https://github.com/ava-labs/firewood/pull/1798))
+- *(fwdctl)* Add block height 77m ([#1816](https://github.com/ava-labs/firewood/pull/1816))
+
 ## [0.3.0] - 2026-03-13
 
 ### 🚀 Features
