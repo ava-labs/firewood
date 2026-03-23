@@ -463,6 +463,20 @@ impl Proposal<'_> {
     pub fn view(&self) -> ArcDynDbView {
         self.nodestore.clone()
     }
+
+    /// Walk the trie path from root to the given key, returning each node
+    /// along the path with its child hashes. Used for sub-trie hash
+    /// verification after applying change proof batch_ops.
+    pub fn path_to_key(
+        &self,
+        key: &[u8],
+    ) -> Result<Vec<firewood_storage::PathIterItem>, api::Error> {
+        let merkle = Merkle::from(&*self.nodestore);
+        merkle
+            .path_iter(key)?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(api::Error::from)
+    }
 }
 
 impl api::DbView for ReconstructedView<'_> {
@@ -1940,5 +1954,47 @@ mod test {
         pub fn path(&self) -> &Path {
             self.tmpdir.path()
         }
+    }
+
+    #[test]
+    fn test_path_to_key_returns_nodes() {
+        let db = TestDb::new();
+        let batch: Vec<BatchOp<Vec<u8>, Vec<u8>>> = vec![
+            BatchOp::Put {
+                key: b"apple".to_vec(),
+                value: b"red".to_vec(),
+            },
+            BatchOp::Put {
+                key: b"banana".to_vec(),
+                value: b"yellow".to_vec(),
+            },
+        ];
+        let proposal = db.propose(batch).unwrap();
+
+        let path = proposal.path_to_key(b"apple").unwrap();
+        assert!(!path.is_empty(), "path_to_key should return non-empty path");
+
+        // The last node's key_nibbles should match the key's nibble representation
+        let last = path.last().unwrap();
+        assert!(
+            last.node.value().is_some(),
+            "last node on path to existing key should have a value"
+        );
+    }
+
+    #[test]
+    fn test_path_to_key_empty_proposal() {
+        let db = TestDb::new();
+        // Create a proposal with some data, then query for a different key
+        let batch = vec![BatchOp::Put {
+            key: b"apple",
+            value: b"red",
+        }];
+        let proposal = db.propose(batch).unwrap();
+
+        // path_to_key for a non-existent key returns whatever path exists
+        // (may be empty if there's no root, or partial)
+        let result = proposal.path_to_key(b"missing");
+        assert!(result.is_ok(), "path_to_key should not error");
     }
 }

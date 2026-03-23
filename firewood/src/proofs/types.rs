@@ -151,6 +151,20 @@ pub enum ProofError {
 
     #[error("the proposal for a change proof is None as it has been consumed")]
     ProposalIsNone,
+
+    /// Computed root hash after applying `batch_ops` doesn't match expected end root
+    #[error("computed root hash after applying batch_ops doesn't match the expected end root")]
+    EndRootMismatch,
+
+    /// Sub-trie hash mismatch: after applying `batch_ops`, a sub-trie
+    /// between the boundary proof paths has a different hash than expected.
+    #[error("sub-trie hash does not match boundary proof after applying batch_ops")]
+    SubTrieHashMismatch,
+
+    /// Boundary value mismatch: after applying `batch_ops`, the value at a
+    /// boundary key does not match the value claimed by the boundary proof.
+    #[error("boundary value at key does not match proof claim after applying batch_ops")]
+    BoundaryValueMismatch,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -472,7 +486,7 @@ impl ProofCollection for EmptyProofCollection {
 
 /// Returns the next nibble in `c` after `b`.
 /// Returns None if `b` is not a strict prefix of `c`.
-fn next_nibble(b: impl IntoSplitPath, c: impl IntoSplitPath) -> Option<PathComponent> {
+pub fn next_nibble(b: impl IntoSplitPath, c: impl IntoSplitPath) -> Option<PathComponent> {
     let b = b.into_split_path();
     let c = c.into_split_path();
     match b.longest_common_prefix(c).split_first_parts() {

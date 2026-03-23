@@ -10,8 +10,7 @@ use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult, HashKey,
     IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair,
-    ProposalHandle, ProposedChangeProofContext, RangeProofContext, ReconstructedHandle,
-    VerifiedChangeProofContext,
+    ProposalHandle, RangeProofContext, ReconstructedHandle,
 };
 
 /// The result type returned from an FFI function that returns no value but may
@@ -257,7 +256,7 @@ impl From<Result<api::FrozenRangeProof, api::Error>> for RangeProofResult<'_> {
 /// [`fwd_free_change_proof`]: crate::fwd_free_change_proof
 #[derive(Debug)]
 #[repr(C, usize)]
-pub enum ChangeProofResult {
+pub enum ChangeProofResult<'db> {
     /// The caller provided a null pointer to the input handle.
     NullHandlePointer,
     /// The provided start root was not found in the database.
@@ -269,41 +268,7 @@ pub enum ChangeProofResult {
     /// If the value was parsed from a serialized proof, this does not imply that
     /// the proof is valid, only that it is well-formed. The verify method must
     /// be called to ensure the proof is cryptographically valid.
-    Ok(Box<ChangeProofContext>),
-    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
-    /// value is guaranteed to contain only valid UTF-8.
-    ///
-    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
-    /// associated with this error.
-    ///
-    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
-    Err(OwnedBytes),
-}
-
-#[derive(Debug)]
-#[repr(C, usize)]
-pub enum VerifiedChangeProofResult {
-    /// The caller provided a null pointer to the input handle.
-    NullHandlePointer,
-    // The proof was successfully verified.
-    Ok(Box<VerifiedChangeProofContext>),
-    /// An error occurred and the message is returned as an [`OwnedBytes`]. If
-    /// value is guaranteed to contain only valid UTF-8.
-    ///
-    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
-    /// associated with this error.
-    ///
-    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
-    Err(OwnedBytes),
-}
-
-#[derive(Debug)]
-#[repr(C, usize)]
-pub enum ProposedChangeProofResult<'db> {
-    /// The caller provided a null pointer to the input handle.
-    NullHandlePointer,
-    /// A proposal was successfully created for this proof.
-    Ok(Box<ProposedChangeProofContext<'db>>),
+    Ok(Box<ChangeProofContext<'db>>),
     /// An error occurred and the message is returned as an [`OwnedBytes`]. If
     /// value is guaranteed to contain only valid UTF-8.
     ///
@@ -614,7 +579,7 @@ impl<'db, E: fmt::Display> From<Result<ReconstructedHandle<'db>, E>> for Reconst
     }
 }
 
-impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
+impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult<'_> {
     fn from(value: Result<api::FrozenChangeProof, api::Error>) -> Self {
         match value {
             Ok(proof) => ChangeProofResult::Ok(Box::new(proof.into())),
@@ -629,26 +594,6 @@ impl From<Result<api::FrozenChangeProof, api::Error>> for ChangeProofResult {
                 ))
             }
             Err(err) => ChangeProofResult::Err(err.to_string().into_bytes().into()),
-        }
-    }
-}
-
-impl From<Result<VerifiedChangeProofContext, api::Error>> for VerifiedChangeProofResult {
-    fn from(value: Result<VerifiedChangeProofContext, api::Error>) -> Self {
-        match value {
-            Ok(context) => VerifiedChangeProofResult::Ok(Box::new(context)),
-            Err(err) => VerifiedChangeProofResult::Err(err.to_string().into_bytes().into()),
-        }
-    }
-}
-
-impl<'db> From<Result<ProposedChangeProofContext<'db>, api::Error>>
-    for ProposedChangeProofResult<'db>
-{
-    fn from(value: Result<ProposedChangeProofContext<'db>, api::Error>) -> Self {
-        match value {
-            Ok(context) => ProposedChangeProofResult::Ok(Box::new(context)),
-            Err(err) => ProposedChangeProofResult::Err(err.to_string().into_bytes().into()),
         }
     }
 }
@@ -718,9 +663,7 @@ impl_null_handle_result!(
     ValueResult,
     HashResult,
     RangeProofResult<'_>,
-    ChangeProofResult,
-    VerifiedChangeProofResult,
-    ProposedChangeProofResult<'_>,
+    ChangeProofResult<'_>,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
@@ -737,9 +680,7 @@ impl_cresult!(
     HashResult,
     HandleResult,
     RangeProofResult<'_>,
-    ChangeProofResult,
-    VerifiedChangeProofResult,
-    ProposedChangeProofResult<'_>,
+    ChangeProofResult<'_>,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
