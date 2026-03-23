@@ -43,7 +43,9 @@ use std::{
     thread::{self, JoinHandle},
 };
 
-use firewood_metrics::{firewood_increment, firewood_set};
+use firewood_metrics::{
+    current_metrics_context, firewood_increment, firewood_set, set_metrics_context,
+};
 use firewood_storage::{
     Committed, FileBacked, FileIoError, HashedNodeReader, LinearAddress, NodeStore,
     NodeStoreHeader, TrieHash,
@@ -141,7 +143,11 @@ impl PersistWorker {
         });
 
         let bg_shared = shared.clone();
-        let handle = thread::spawn(move || PersistLoop { shared: bg_shared }.run());
+        let metrics_context = current_metrics_context();
+        let handle = thread::spawn(move || {
+            let _guard = set_metrics_context(metrics_context);
+            PersistLoop { shared: bg_shared }.run()
+        });
 
         Self {
             handle: Mutex::new(Some(handle)),
