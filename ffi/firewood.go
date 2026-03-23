@@ -75,16 +75,8 @@ const (
 	EthereumNodeHashing NodeHashAlgorithm = C.NodeHashAlgorithm_Ethereum
 )
 
-const (
-	// defaultNodeCacheSizeInBytes is the default memory limit for the node cache (128 MB).
-	defaultNodeCacheSizeInBytes = 128_000_000
-	// defaultFreeListCacheEntries is the default number of entries in the freelist cache.
-	defaultFreeListCacheEntries = 1_000_000
-	// defaultRevisions is the default maximum number of historical revisions to keep.
-	defaultRevisions = 100
-	// minRevisions is the minimum allowed number of revisions.
-	minRevisions = 2
-)
+// minRevisions is the minimum allowed number of revisions.
+const minRevisions = 2
 
 var (
 	// EmptyRoot is the zero value for [Hash]
@@ -150,6 +142,12 @@ type config struct {
 }
 
 func defaultConfig() *config {
+	const (
+		defaultNodeCacheSizeInBytes = 128_000_000
+		defaultFreeListCacheEntries = 1_000_000
+		defaultRevisions            = 100
+	)
+
 	return &config{
 		nodeCacheSizeInBytes:           defaultNodeCacheSizeInBytes,
 		freeListCacheEntries:           defaultFreeListCacheEntries,

@@ -12,23 +12,9 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const (
-	// randSeedReconstructChain is the deterministic seed for the
-	// BenchmarkReconstructChain pseudo-random number generator.
-	randSeedReconstructChain = 1234
-
-	// firstReconstructedBatch is the index where reconstructed (uncommitted)
-	// batches begin in BenchmarkReconstructChain's batch slice.
-	firstReconstructedBatch = 2
-
-	// kvCountDump is the number of key-value pairs generated for the dump
-	// and drop-then-use tests.
-	kvCountDump = 4
-
-	// kvCountConcurrent is the number of key-value pairs generated for the
-	// concurrent get-and-drop test.
-	kvCountConcurrent = 8
-)
+// kvCountDump is the number of key-value pairs generated for the dump
+// and drop-then-use tests.
+const kvCountDump = 4
 
 func TestRevisionReconstructReadsAndChains(t *testing.T) {
 	r := require.New(t)
@@ -111,10 +97,12 @@ func BenchmarkReconstructFromRevision(b *testing.B) {
 func BenchmarkReconstructChain(b *testing.B) {
 	r := require.New(b)
 	const (
-		totalBatches = 2_049 // first batch is committed, rest are reconstructed
-		batchItems   = 100
-		keyLen       = 16
-		valueLen     = 32
+		totalBatches             = 2_049 // first batch is committed, rest are reconstructed
+		batchItems               = 100
+		keyLen                   = 16
+		valueLen                 = 32
+		randSeedReconstructChain = 1234
+		firstReconstructedBatch  = 2
 	)
 
 	rng := rand.New(rand.NewSource(randSeedReconstructChain))
@@ -212,6 +200,7 @@ func TestReconstructedConcurrentGetAndDrop(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
 
+	const kvCountConcurrent = 8
 	keys, _, batch := kvForTest(kvCountConcurrent)
 	root, err := db.Update(batch[:4])
 	r.NoError(err)

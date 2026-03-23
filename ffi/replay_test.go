@@ -35,10 +35,6 @@ const (
 	// defaultMaxCommits is the default maximum number of commits to replay
 	// when REPLAY_MAX_COMMITS is not set.
 	defaultMaxCommits = 10000
-
-	// roundTripKeyCount is the number of key-value pairs generated for
-	// the round-trip replay test.
-	roundTripKeyCount = 20
 )
 
 // replayLog mirrors the Rust ReplayLog type.
@@ -190,6 +186,7 @@ func TestBlockReplayRoundTrip(t *testing.T) {
 	// Phase 1: Record operations
 	db1 := newTestDatabase(t)
 
+	const roundTripKeyCount = 20
 	_, _, batch := kvForTest(roundTripKeyCount)
 
 	p1, err := db1.Propose(batch[:10])

@@ -29,7 +29,6 @@ const (
 	keySize      = 4
 	valSize      = 4
 	maxBatchSize = 5
-	maxNumKeys   = 10_000
 )
 
 const (
@@ -133,7 +132,7 @@ func newTestTree(t *testing.T, rand *rand.Rand) *tree {
 		children:  make([]*proposal, 0),
 		require:   r,
 		rand:      rand,
-		keys:      createRandomByteSlices(min(1, rand.Intn(maxNumKeys)), keySize, rand),
+		keys:      createRandomByteSlices(min(1, rand.Intn(10_000)), keySize, rand),
 	}
 	return tr
 }

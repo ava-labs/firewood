@@ -22,15 +22,9 @@ const (
 	largeNumEntries  = 10000
 	mediumNumEntries = 50
 	smallNumEntries  = 10
-	// Entry count for the empty change proof range test; must be odd so
-	// the split at 5 leaves a non-empty second half.
-	emptyRangeNumEntries = 9
 
 	// Length of a merkle-trie key in bytes.
 	keyLen = 32
-
-	// Proof length limit used in TestVerifyEmptyChangeProofRange.
-	emptyRangeProofLen = 5
 )
 
 // testKey is the account key used in TestRangeProofCodeHashes.
@@ -584,6 +578,11 @@ func TestVerifyEmptyChangeProofRange(t *testing.T) {
 	r := require.New(t)
 	dbA := newTestDatabase(t)
 	dbB := newTestDatabase(t)
+
+	const (
+		emptyRangeNumEntries = 9
+		emptyRangeProofLen   = 5
+	)
 
 	// Insert some data.
 	_, _, batch := kvForTest(emptyRangeNumEntries)

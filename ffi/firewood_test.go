@@ -38,11 +38,9 @@ const (
 	testNumKeys       = 10
 	testNumKeysDouble = 20
 	testNumKeysQuad   = 40
-	testHalfKeys      = 5
 	testFiveRevisions = 5
 	testTwoRevisions  = 2
 	testThreeKeys     = 3
-	expectedParts     = 2
 
 	// Format string constants
 	getFmt            = "Get(%d)"
@@ -914,6 +912,7 @@ func TestProposeSameRoot(t *testing.T) {
 	db := newTestDatabase(t)
 
 	// Create two chains of proposals, resulting in the same root.
+	const testHalfKeys = 5
 	keys, vals, batch := kvForTest(testNumKeys)
 
 	// Create the first proposal chain.
@@ -1725,6 +1724,7 @@ func TestProposeOnProposalRehash(t *testing.T) {
 }
 
 func parseKVFromDumpFormat(dumpstr string) ([][]byte, [][]byte, error) {
+	const expectedParts = 2
 	// TODO: make this same as dump format outputted by firewood (slightly different, this is a debug one from my replay stuff)
 	keys := make([][]byte, 0)
 	values := make([][]byte, 0)
