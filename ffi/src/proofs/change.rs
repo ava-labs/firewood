@@ -99,7 +99,8 @@ pub struct CommittedChangeProofArgs<'a> {
 
 /// FFI context for a parsed or generated change proof. This change proof has not
 /// been verified. Calling `verify` on it will generate a `VerifiedChangeProofContext`
-/// and consume the `proof` and replacing it with None.
+/// and consume the `proof`, replacing it with `None`. After verification,
+/// serialization should be done via the `VerifiedChangeProofContext` instead.
 #[derive(Debug)]
 pub struct ChangeProofContext {
     proof: Option<FrozenChangeProof>,
@@ -521,30 +522,53 @@ pub extern "C" fn fwd_change_proof_find_next_key_proposed(
     crate::invoke_with_handle(proof, ProposedChangeProofContext::find_next_key)
 }
 
+/// Serialize a `FrozenChangeProof` to bytes, returning an error if the proof
+/// has been consumed (e.g., by verification or proposing).
+fn serialize_change_proof(
+    proof: Option<&FrozenChangeProof>,
+) -> Result<Option<Box<[u8]>>, api::Error> {
+    let proof = proof.ok_or(api::Error::ProofError(ProofError::ProofIsNone))?;
+    let mut vec = Vec::new();
+    proof.write_to_vec(&mut vec);
+    Ok(Some(vec.into_boxed_slice()))
+}
+
 /// Serialize a `ChangeProof` to bytes.
 ///
 /// # Arguments
 ///
 /// - `proof` - A [`ChangeProofContext`] previously returned from the create
-///   method. If from a parsed proof, the proof will not be verified before
-///   serialization.
+///   method. If the proof has been consumed by verification, this will return
+///   an error.
 ///
 /// # Returns
 ///
 /// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`ValueResult::Some`] containing the serialized bytes if successful.
-/// - [`ValueResult::Err`] if the caller provided a null pointer.
-///
-/// The other [`ValueResult`] variants are not used.
+/// - [`ValueResult::Err`] if the proof has been consumed by verification.
 #[unsafe(no_mangle)]
 pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) -> ValueResult {
-    crate::invoke_with_handle(proof, |ctx| {
-        let mut vec = Vec::new();
-        if let Some(proof) = &ctx.proof {
-            proof.write_to_vec(&mut vec);
-        }
-        vec
-    })
+    crate::invoke_with_handle(proof, |ctx| serialize_change_proof(ctx.proof.as_ref()))
+}
+
+/// Serialize a `VerifiedChangeProof` to bytes.
+///
+/// # Arguments
+///
+/// - `proof` - A [`VerifiedChangeProofContext`] previously returned from
+///   verification. If the proof has been consumed by proposing, this will
+///   return an error.
+///
+/// # Returns
+///
+/// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
+/// - [`ValueResult::Some`] containing the serialized bytes if successful.
+/// - [`ValueResult::Err`] if the proof has been consumed by proposing.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_verified_change_proof_to_bytes(
+    proof: Option<&VerifiedChangeProofContext>,
+) -> ValueResult {
+    crate::invoke_with_handle(proof, |ctx| serialize_change_proof(ctx.proof.as_ref()))
 }
 
 /// Deserialize a `ChangeProof` from bytes.

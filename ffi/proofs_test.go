@@ -111,6 +111,41 @@ func newSerializedChangeProof(
 	return proofBytes
 }
 
+// newProposedChangeProof creates a ProposedChangeProof from two databases that
+// share the same initial state. It inserts additional data into dbA, creates a
+// change proof, verifies it, and proposes it on dbB. No cleanup is registered
+// so callers can control when the proof is freed (important for keep-alive tests).
+func newProposedChangeProof(
+	t *testing.T,
+	dbA, dbB *Database,
+) (*ProposedChangeProof, Hash) {
+	t.Helper()
+	r := require.New(t)
+
+	_, _, batch := kvForTest(100)
+	rootA, err := dbA.Update(batch[:50])
+	r.NoError(err)
+	rootB, err := dbB.Update(batch[:50])
+	r.NoError(err)
+	r.Equal(rootA, rootB)
+
+	rootAUpdated, err := dbA.Update(batch[50:])
+	r.NoError(err)
+
+	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(changeProof.Free()) })
+
+	verifiedProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(verifiedProof.Free()) })
+
+	proposed, err := dbB.ProposeChangeProof(verifiedProof)
+	r.NoError(err)
+
+	return proposed, rootAUpdated
+}
+
 func TestRangeProofEmptyDB(t *testing.T) {
 	r := require.New(t)
 	db := newTestDatabase(t)
@@ -660,6 +695,54 @@ func TestChangeProofFindNextKey(t *testing.T) {
 	r.NoError(nextRange.Free())
 }
 
+func TestProposedChangeProofKeepAlive(t *testing.T) {
+	tests := []struct {
+		name    string
+		release func(*require.Assertions, *ProposedChangeProof)
+	}{
+		{
+			// Free the proof (releases keep-alive)
+			"free", func(r *require.Assertions, p *ProposedChangeProof) {
+				r.NoError(p.Free())
+			},
+		},
+		{
+			// Commit the proof (releases keep-alive)
+			"commit", func(r *require.Assertions, p *ProposedChangeProof) {
+				_, err := p.CommitChangeProof()
+				r.NoError(err)
+			},
+		},
+		{
+			// GC finalizer releases keep-alive
+			"gc", func(_ *require.Assertions, p *ProposedChangeProof) {
+				runtime.KeepAlive(p)
+				//nolint:ineffassign // necessary to drop the reference for GC
+				p = nil
+				runtime.GC()
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			dbA := newTestDatabase(t)
+			dbB := newTestDatabase(t)
+
+			proposed, _ := newProposedChangeProof(t, dbA, dbB)
+
+			// Database should not be closeable while proof has keep-alive
+			r.ErrorIs(dbB.Close(oneSecCtx(t)), ErrActiveKeepAliveHandles)
+
+			tt.release(r, proposed)
+
+			// Database should now be closeable
+			r.NoError(dbB.Close(oneSecCtx(t)))
+		})
+	}
+}
+
 func TestMultiRoundChangeProof(t *testing.T) {
 	type TestStruct struct {
 		name       string
@@ -752,4 +835,82 @@ func TestMultiRoundChangeProof(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestChangeProofMarshalFailsAfterVerify verifies that MarshalBinary on a
+// ChangeProof returns an error after the proof has been consumed by
+// VerifyChangeProof. Previously, this silently returned empty bytes.
+func TestChangeProofMarshalFailsAfterVerify(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	// Insert some data.
+	_, _, batch := kvForTest(10)
+	rootA, err := dbA.Update(batch[:5])
+	r.NoError(err)
+	_, err = dbB.Update(batch[:5])
+	r.NoError(err)
+
+	// Insert more data into dbA.
+	rootAUpdated, err := dbA.Update(batch[5:])
+	r.NoError(err)
+
+	// Create a change proof.
+	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(changeProof.Free()) })
+
+	// Marshal before verify — should succeed.
+	marshalledBefore, err := changeProof.MarshalBinary()
+	r.NoError(err)
+	r.NotEmpty(marshalledBefore)
+
+	// Verify the change proof — consumes the inner proof.
+	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
+
+	// Marshal after verify — should return an error, not empty bytes.
+	_, err = changeProof.MarshalBinary()
+	r.Error(err)
+}
+
+// TestVerifiedChangeProofMarshal verifies that MarshalBinary works on a
+// VerifiedChangeProof and produces the same bytes as the original ChangeProof.
+func TestVerifiedChangeProofMarshal(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	// Insert some data.
+	_, _, batch := kvForTest(10)
+	rootA, err := dbA.Update(batch[:5])
+	r.NoError(err)
+	_, err = dbB.Update(batch[:5])
+	r.NoError(err)
+
+	// Insert more data into dbA.
+	rootAUpdated, err := dbA.Update(batch[5:])
+	r.NoError(err)
+
+	// Create a change proof.
+	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(changeProof.Free()) })
+
+	// Marshal before verify.
+	marshalledBefore, err := changeProof.MarshalBinary()
+	r.NoError(err)
+	r.NotEmpty(marshalledBefore)
+
+	// Verify the change proof.
+	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
+
+	// Marshal from the verified proof — should produce the same bytes.
+	marshalledAfterVerify, err := verifiedChangeProof.MarshalBinary()
+	r.NoError(err)
+	r.Equal(marshalledBefore, marshalledAfterVerify)
 }

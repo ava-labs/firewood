@@ -1,6 +1,15 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+//! # Firewood FFI: C Bindings for Firewood Database
+//!
+//! This crate provides C bindings for the Firewood database, allowing it to be
+//! used from C and other languages that can interface with C.
+//!
+//! Go users may wish to see the documentation for the [`Go bindings`].
+//!
+//! [`Go bindings`]: https://ava-labs.github.io/firewood/ffi/index.html
+
 // HINT WHEN REFERENCING TYPES OUTSIDE THIS LIBRARY:
 // - Anything that is outside the crate must be included as a `type` alias (not just
 //   a `use`) in order for cbindgen to generate an opaque forward declaration. The type
