@@ -333,6 +333,8 @@ macro_rules! firewood_histogram {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::unwrap_used)]
+
     use super::*;
 
     fn isolated<F, R>(f: F) -> R
@@ -376,9 +378,7 @@ mod tests {
             let _guard = set_metrics_context(Some(ctx));
             assert_eq!(current_metrics_context(), Some(ctx));
 
-            let child_ctx = std::thread::spawn(|| current_metrics_context())
-                .join()
-                .unwrap();
+            let child_ctx = std::thread::spawn(current_metrics_context).join().unwrap();
 
             assert_eq!(
                 child_ctx, None,
