@@ -28,24 +28,21 @@ jobs:
     concurrency:
       group: performance-replay-pr-${{ github.event.pull_request.number }}
       cancel-in-progress: true
+    env:
+      BENCHMARK_TOKEN: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
+      BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_DATA_DIR: dev/replay-10k/pr-${{ github.event.pull_request.number }}
+      COMPARISON_DATA_DIR: dev/replay-10k/pr-${{ github.event.pull_request.number }}/commits/${{ github.event.pull_request.head.sha }}
     steps:
       - name: Checkout PR head
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ env.HEAD_SHA }}
           fetch-depth: 0
-
-      - name: Determine PR results locations
-        id: location
-        run: |
-          echo "pr-data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}" >> "$GITHUB_OUTPUT"
-          echo "comparison-data-dir=dev/replay-10k/pr-${{ github.event.pull_request.number }}/commits/${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Capture base and head commit subjects
         id: commit_subjects
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
 
@@ -65,11 +62,6 @@ jobs:
 
       - name: Check existing base benchmark data
         id: base-data
-        env:
-          BENCHMARK_TOKEN: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
-          PR_DATA_DIR: ${{ steps.location.outputs.pr-data-dir }}
-          COMPARISON_DATA_DIR: ${{ steps.location.outputs.comparison-data-dir }}
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
 
@@ -116,8 +108,6 @@ jobs:
         id: prepare_base
         if: steps.base-data.outputs.base-required == 'true'
         continue-on-error: true
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
           set -euo pipefail
 
@@ -131,58 +121,46 @@ jobs:
       - name: Run benchmark on base commit
         if: steps.base-data.outputs.base-required == 'true' && steps.prepare_base.outcome == 'success'
         continue-on-error: true
-        uses: ./.github/actions/run-benchmark
         id: benchmark-base
+        uses: ./.github/actions/run-benchmark
         with:
-          source-dir: './benchmark-sources/base'
+          source-dir: ./benchmark-sources/base
           replay-log-url: ${{ env.REPLAY_LOG_URL }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Clean benchmark action workspace
-        if: steps.base-data.outputs.base-in-pr-trend != 'true' && steps.benchmark-base.outcome == 'success'
-        run: rm -rf ./benchmark-data-repository
-
       - name: Store base result in PR trend graph
         if: steps.base-data.outputs.base-in-pr-trend != 'true' && steps.benchmark-base.outcome == 'success'
         continue-on-error: true
-        uses: benchmark-action/github-action-benchmark@v1
+        uses: ./.github/actions/publish-benchmark
         with:
-          name: 'Replay 10K PR'
-          tool: 'go'
-          output-file-path: ${{ steps.benchmark-base.outputs.output-file }}
-          ref: ${{ github.event.pull_request.base.sha }}
-          github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
-          auto-push: true
+          name: Replay 10K PR
+          output-file: ${{ steps.benchmark-base.outputs.output-file }}
+          ref: ${{ env.BASE_SHA }}
+          github-token: ${{ env.BENCHMARK_TOKEN }}
+          benchmark-data-dir-path: ${{ env.PR_DATA_DIR }}
+          alert-threshold: '150%'
+          comment-on-alert: 'false'
+          fail-on-alert: 'false'
           gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
           gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
-          benchmark-data-dir-path: ${{ steps.location.outputs.pr-data-dir }}
-          alert-threshold: '150%'
-          comment-on-alert: false
-          fail-on-alert: false
-
-      - name: Clean benchmark action workspace
-        if: steps.base-data.outputs.base-in-comparison != 'true' && steps.benchmark-base.outcome == 'success'
-        run: rm -rf ./benchmark-data-repository
 
       - name: Store base result in commit comparison graph
         if: steps.base-data.outputs.base-in-comparison != 'true' && steps.benchmark-base.outcome == 'success'
         continue-on-error: true
-        uses: benchmark-action/github-action-benchmark@v1
+        uses: ./.github/actions/publish-benchmark
         with:
-          name: 'Replay 10K PR Compare'
-          tool: 'go'
-          output-file-path: ${{ steps.benchmark-base.outputs.output-file }}
-          ref: ${{ github.event.pull_request.base.sha }}
-          github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
-          auto-push: true
+          name: Replay 10K PR Compare
+          output-file: ${{ steps.benchmark-base.outputs.output-file }}
+          ref: ${{ env.BASE_SHA }}
+          github-token: ${{ env.BENCHMARK_TOKEN }}
+          benchmark-data-dir-path: ${{ env.COMPARISON_DATA_DIR }}
+          alert-threshold: '150%'
+          comment-on-alert: 'false'
+          fail-on-alert: 'false'
           gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
           gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
-          benchmark-data-dir-path: ${{ steps.location.outputs.comparison-data-dir }}
-          alert-threshold: '150%'
-          comment-on-alert: false
-          fail-on-alert: false
 
       - name: Clean up base source tree
         if: always() && steps.base-data.outputs.base-required == 'true'
@@ -193,61 +171,44 @@ jobs:
         run: echo "::warning::Base benchmark did not succeed (outcome=${{ steps.benchmark-base.outcome }}); continuing with PR head benchmark."
 
       - name: Run benchmark on PR head commit
-        uses: ./.github/actions/run-benchmark
         id: benchmark-head
+        uses: ./.github/actions/run-benchmark
         with:
-          source-dir: '.'
           replay-log-url: ${{ env.REPLAY_LOG_URL }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Clean benchmark action workspace
-        run: rm -rf ./benchmark-data-repository
-
       - name: Store head result in PR trend graph
-        uses: benchmark-action/github-action-benchmark@v1
+        uses: ./.github/actions/publish-benchmark
         with:
-          name: 'Replay 10K PR'
-          tool: 'go'
-          output-file-path: ${{ steps.benchmark-head.outputs.output-file }}
-          ref: ${{ github.event.pull_request.head.sha }}
-          github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
-          auto-push: true
+          name: Replay 10K PR
+          output-file: ${{ steps.benchmark-head.outputs.output-file }}
+          ref: ${{ env.HEAD_SHA }}
+          github-token: ${{ env.BENCHMARK_TOKEN }}
+          benchmark-data-dir-path: ${{ env.PR_DATA_DIR }}
+          alert-threshold: '150%'
+          comment-on-alert: 'false'
+          fail-on-alert: 'false'
           gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
           gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
-          benchmark-data-dir-path: ${{ steps.location.outputs.pr-data-dir }}
-          alert-threshold: '150%'
-          comment-on-alert: false
-          fail-on-alert: false
-
-      - name: Clean benchmark action workspace
-        run: rm -rf ./benchmark-data-repository
 
       - name: Store head result in commit comparison graph
-        uses: benchmark-action/github-action-benchmark@v1
+        uses: ./.github/actions/publish-benchmark
         with:
-          name: 'Replay 10K PR Compare'
-          tool: 'go'
-          output-file-path: ${{ steps.benchmark-head.outputs.output-file }}
-          ref: ${{ github.event.pull_request.head.sha }}
-          github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
-          auto-push: true
+          name: Replay 10K PR Compare
+          output-file: ${{ steps.benchmark-head.outputs.output-file }}
+          ref: ${{ env.HEAD_SHA }}
+          github-token: ${{ env.BENCHMARK_TOKEN }}
+          benchmark-data-dir-path: ${{ env.COMPARISON_DATA_DIR }}
+          alert-threshold: '150%'
+          comment-on-alert: 'false'
+          fail-on-alert: 'false'
           gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
           gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
-          benchmark-data-dir-path: ${{ steps.location.outputs.comparison-data-dir }}
-          alert-threshold: '150%'
-          comment-on-alert: false
-          fail-on-alert: false
 
       - name: Apply benchmark theme to PR graphs
         env:
-          BENCHMARK_TOKEN: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
-          PR_DATA_DIR: ${{ steps.location.outputs.pr-data-dir }}
-          COMPARISON_DATA_DIR: ${{ steps.location.outputs.comparison-data-dir }}
-          THEME_CSS_URL: ${{ env.BENCHMARK_THEME_CSS_URL }}
-          BASE_COMMIT_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_COMMIT_SUBJECT: ${{ steps.commit_subjects.outputs.base-subject }}
           HEAD_COMMIT_SUBJECT: ${{ steps.commit_subjects.outputs.head-subject }}
         run: |
@@ -255,30 +216,23 @@ jobs:
             --repository "${BENCHMARK_REPORTS_REPOSITORY}" \
             --branch "${BENCHMARK_REPORTS_BRANCH}" \
             --token "${BENCHMARK_TOKEN}" \
-            --theme-css-url "${THEME_CSS_URL}" \
+            --theme-css-url "${BENCHMARK_THEME_CSS_URL}" \
             --workdir "${BENCHMARK_REPORTS_DIR}" \
             --data-dir "${PR_DATA_DIR}" \
             --data-dir "${COMPARISON_DATA_DIR}" \
-            --commit-subject "${BASE_COMMIT_SHA}" "${BASE_COMMIT_SUBJECT}" \
-            --commit-subject "${HEAD_COMMIT_SHA}" "${HEAD_COMMIT_SUBJECT}" \
+            --commit-subject "${BASE_SHA}" "${BASE_COMMIT_SUBJECT}" \
+            --commit-subject "${HEAD_SHA}" "${HEAD_COMMIT_SUBJECT}" \
             --commit-message "style: apply shared benchmark theme for PR graphs"
 
       - name: Post results to PR
-        uses: actions/github-script@v7
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
-          BASE_COMMIT_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_COMMIT_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_BENCHMARK_REQUESTED: ${{ steps.base-data.outputs.base-required }}
           BASE_BENCHMARK_OUTCOME: ${{ steps.benchmark-base.outcome }}
-          PR_DATA_DIR: ${{ steps.location.outputs.pr-data-dir }}
-          COMPARISON_DATA_DIR: ${{ steps.location.outputs.comparison-data-dir }}
-          TREND_URL: ${{ env.BENCHMARK_REPORTS_PAGES_URL }}/${{ steps.location.outputs.pr-data-dir }}/
-          COMPARISON_URL: ${{ env.BENCHMARK_REPORTS_PAGES_URL }}/${{ steps.location.outputs.comparison-data-dir }}/
-        with:
-          script: |
-            const postComment = require(process.env.GITHUB_WORKSPACE + '/.github/scripts/post_replay_benchmark_comment.js');
-            await postComment({ github, context });
+          TREND_URL: ${{ env.BENCHMARK_REPORTS_PAGES_URL }}/${{ env.PR_DATA_DIR }}/
+          COMPARISON_URL: ${{ env.BENCHMARK_REPORTS_PAGES_URL }}/${{ env.COMPARISON_DATA_DIR }}/
+        run: python3 .github/scripts/post_replay_benchmark_comment.py
 
   benchmark-main:
     name: Benchmark (main)
@@ -289,6 +243,9 @@ jobs:
     concurrency:
       group: performance-replay-main
       cancel-in-progress: false
+    env:
+      BENCHMARK_TOKEN: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
+      MAIN_DATA_DIR: bench/replay-10k
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
@@ -302,37 +259,28 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      - name: Clean benchmark action workspace
-        run: rm -rf ./benchmark-data-repository
-
       - name: Store benchmark result
-        uses: benchmark-action/github-action-benchmark@v1
+        uses: ./.github/actions/publish-benchmark
         with:
-          name: 'Go Benchmark'
-          tool: 'go'
-          output-file-path: ${{ steps.benchmark.outputs.output-file }}
+          name: Go Benchmark
+          output-file: ${{ steps.benchmark.outputs.output-file }}
           ref: ${{ github.sha }}
-          github-token: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
-          auto-push: true
-          benchmark-data-dir-path: bench/replay-10k
+          github-token: ${{ env.BENCHMARK_TOKEN }}
+          benchmark-data-dir-path: ${{ env.MAIN_DATA_DIR }}
           alert-threshold: '110%'
-          comment-on-alert: true
-          fail-on-alert: true
+          comment-on-alert: 'true'
+          fail-on-alert: 'true'
           alert-comment-cc-users: '@AminR443'
           gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
           gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
 
       - name: Apply benchmark theme to main graph
-        env:
-          BENCHMARK_TOKEN: ${{ secrets.BENCHMARK_ACTION_BOT_TOKEN }}
-          MAIN_DATA_DIR: bench/replay-10k
-          THEME_CSS_URL: ${{ env.BENCHMARK_THEME_CSS_URL }}
         run: |
           python3 .github/scripts/update_benchmark_reports.py \
             --repository "${BENCHMARK_REPORTS_REPOSITORY}" \
             --branch "${BENCHMARK_REPORTS_BRANCH}" \
             --token "${BENCHMARK_TOKEN}" \
-            --theme-css-url "${THEME_CSS_URL}" \
+            --theme-css-url "${BENCHMARK_THEME_CSS_URL}" \
             --workdir "${BENCHMARK_REPORTS_DIR}" \
             --data-dir "${MAIN_DATA_DIR}" \
             --commit-message "style: apply shared benchmark theme for main graph"

@@ -2,86 +2,72 @@
 
 import argparse
 import json
+import math
 import shutil
 import subprocess
 import sys
 import urllib.request
 from pathlib import Path
-from typing import Dict, Optional
 
 PREFIX = "window.BENCHMARK_DATA = "
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--repository", required=True)
-    parser.add_argument("--branch", required=True)
-    parser.add_argument("--token", required=True)
-    parser.add_argument("--theme-css-url", required=True)
-    parser.add_argument("--commit-message", required=True)
+    for name in ("repository", "branch", "token", "theme-css-url", "commit-message"):
+        parser.add_argument(f"--{name}", required=True)
     parser.add_argument("--workdir", default="benchmark-reports-repository")
     parser.add_argument("--data-dir", action="append", default=[])
-    parser.add_argument(
-        "--commit-subject",
-        action="append",
-        nargs=2,
-        metavar=("SHA", "SUBJECT"),
-        default=[],
-    )
+    parser.add_argument("--commit-subject", action="append", nargs=2, metavar=("SHA", "SUBJECT"), default=[])
     return parser.parse_args()
 
 
-def git(*args: str, cwd: Optional[Path] = None) -> None:
+def git(*args: str, cwd: Path | None = None) -> None:
     subprocess.run(["git", *args], check=True, cwd=cwd)
 
 
-def load_benchmark_data(path: Path) -> Optional[dict]:
+def load_benchmark_data(path: Path) -> dict | None:
     if not path.is_file():
         return None
 
-    content = path.read_text(encoding="utf-8")
-    if not content.startswith(PREFIX):
+    text = path.read_text(encoding="utf-8")
+    if not text.startswith(PREFIX):
         return None
 
     try:
-        return json.loads(content[len(PREFIX) :])
+        return json.loads(text[len(PREFIX) :])
     except json.JSONDecodeError:
         return None
 
 
-def convert_unit(unit: object) -> Optional[str]:
-    if unit == "ns/op":
-        return "s/op"
+def convert_unit(unit: object) -> str | None:
     if unit == "ns":
         return "s"
     if isinstance(unit, str) and unit.startswith("ns/"):
         return "s/" + unit[3:]
-    return None
+    return "s/op" if unit == "ns/op" else None
 
 
-def normalize_benchmark_data(path: Path, commit_subjects: Dict[str, str]) -> None:
+def normalize_benchmark_data(path: Path, commit_subjects: dict[str, str]) -> None:
     data = load_benchmark_data(path)
     if data is None:
         return
-
-    changed = False
 
     entries = data.get("entries")
     if not isinstance(entries, dict):
         return
 
+    changed = False
     for suites in entries.values():
         if not isinstance(suites, list):
             continue
-
         for suite in suites:
             if not isinstance(suite, dict):
                 continue
 
             commit = suite.get("commit")
             if isinstance(commit, dict):
-                commit_id = commit.get("id")
-                subject = commit_subjects.get(commit_id)
+                subject = commit_subjects.get(commit.get("id"))
                 if subject and commit.get("message") != subject:
                     commit["message"] = subject
                     changed = True
@@ -91,32 +77,29 @@ def normalize_benchmark_data(path: Path, commit_subjects: Dict[str, str]) -> Non
                 continue
 
             filtered = []
-            removed_aggregate = False
             for bench in benches:
                 if not isinstance(bench, dict):
                     filtered.append(bench)
                     continue
-
                 if bench.get("name") == "BenchmarkReplayLog":
-                    removed_aggregate = True
                     changed = True
                     continue
 
                 converted_unit = convert_unit(bench.get("unit"))
                 if converted_unit:
-                    value = bench.get("value")
-                    if isinstance(value, (int, float)):
+                    if isinstance(value := bench.get("value"), (int, float)) and math.isfinite(value):
                         bench["value"] = value / 1_000_000_000
                     bench["unit"] = converted_unit
 
-                    name = bench.get("name")
-                    if isinstance(name, str):
-                        bench["name"] = name.replace(" - ns/op", " - s/op").replace(" - ns/", " - s/")
+                    if isinstance(name := bench.get("name"), str):
+                        bench["name"] = (
+                            name.replace(" - ns/op", " - s/op").replace(" - ns/", " - s/").replace(" - ns", " - s")
+                        )
                     changed = True
 
                 filtered.append(bench)
 
-            if removed_aggregate:
+            if len(filtered) != len(benches):
                 suite["benches"] = filtered
 
     if changed:

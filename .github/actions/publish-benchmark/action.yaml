@@ -1,0 +1,60 @@
+name: "Publish Benchmark Result"
+description: "Clean benchmark-action workspace and publish a Go benchmark result"
+
+inputs:
+  name:
+    description: "Benchmark series name"
+    required: true
+  output-file:
+    description: "Path to the benchmark output file"
+    required: true
+  ref:
+    description: "Commit SHA to associate with the result"
+    required: true
+  github-token:
+    description: "GitHub token used by github-action-benchmark"
+    required: true
+  benchmark-data-dir-path:
+    description: "Directory inside the benchmark reports repository"
+    required: true
+  alert-threshold:
+    description: "Regression alert threshold"
+    required: true
+  comment-on-alert:
+    description: "Whether benchmark-action should comment on alerts"
+    required: true
+  fail-on-alert:
+    description: "Whether benchmark-action should fail on alerts"
+    required: true
+  alert-comment-cc-users:
+    description: "Users to mention on alert comments"
+    required: false
+    default: ""
+  gh-repository:
+    description: "Benchmark reports repository"
+    required: true
+  gh-pages-branch:
+    description: "Benchmark reports branch"
+    required: true
+
+runs:
+  using: "composite"
+  steps:
+    - shell: bash
+      run: rm -rf ./benchmark-data-repository
+
+    - uses: benchmark-action/github-action-benchmark@v1
+      with:
+        name: ${{ inputs.name }}
+        tool: go
+        output-file-path: ${{ inputs.output-file }}
+        ref: ${{ inputs.ref }}
+        github-token: ${{ inputs.github-token }}
+        auto-push: true
+        benchmark-data-dir-path: ${{ inputs.benchmark-data-dir-path }}
+        alert-threshold: ${{ inputs.alert-threshold }}
+        comment-on-alert: ${{ inputs.comment-on-alert }}
+        fail-on-alert: ${{ inputs.fail-on-alert }}
+        alert-comment-cc-users: ${{ inputs.alert-comment-cc-users }}
+        gh-repository: ${{ inputs.gh-repository }}
+        gh-pages-branch: ${{ inputs.gh-pages-branch }}
