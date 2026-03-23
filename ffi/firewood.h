@@ -30,7 +30,8 @@ typedef enum NodeHashAlgorithm {
 /**
  * FFI context for a parsed or generated change proof. This change proof has not
  * been verified. Calling `verify` on it will generate a `VerifiedChangeProofContext`
- * and consume the `proof` and replacing it with None.
+ * and consume the `proof`, replacing it with `None`. After verification,
+ * serialization should be done via the `VerifiedChangeProofContext` instead.
  */
 typedef struct ChangeProofContext ChangeProofContext;
 
@@ -1403,16 +1404,14 @@ struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes bytes);
  * # Arguments
  *
  * - `proof` - A [`ChangeProofContext`] previously returned from the create
- *   method. If from a parsed proof, the proof will not be verified before
- *   serialization.
+ *   method. If the proof has been consumed by verification, this will return
+ *   an error.
  *
  * # Returns
  *
  * - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
  * - [`ValueResult::Some`] containing the serialized bytes if successful.
- * - [`ValueResult::Err`] if the caller provided a null pointer.
- *
- * The other [`ValueResult`] variants are not used.
+ * - [`ValueResult::Err`] if the proof has been consumed by verification.
  */
 struct ValueResult fwd_change_proof_to_bytes(const struct ChangeProofContext *proof);
 
@@ -2606,6 +2605,23 @@ struct VoidResult fwd_start_metrics(void);
  *   returned error (if any).
  */
 struct VoidResult fwd_start_metrics_with_exporter(uint16_t metrics_port);
+
+/**
+ * Serialize a `VerifiedChangeProof` to bytes.
+ *
+ * # Arguments
+ *
+ * - `proof` - A [`VerifiedChangeProofContext`] previously returned from
+ *   verification. If the proof has been consumed by proposing, this will
+ *   return an error.
+ *
+ * # Returns
+ *
+ * - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
+ * - [`ValueResult::Some`] containing the serialized bytes if successful.
+ * - [`ValueResult::Err`] if the proof has been consumed by proposing.
+ */
+struct ValueResult fwd_verified_change_proof_to_bytes(const struct VerifiedChangeProofContext *proof);
 
 /**
  * Verify a change proof and return a `VerifiedChangeProofResult`.
