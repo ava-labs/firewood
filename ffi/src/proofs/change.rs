@@ -708,7 +708,7 @@ fn walk_proof_tail(
         let Some(path_nibble) = i
             .checked_add(1)
             .and_then(|j| nodes.get(j))
-            .and_then(|next| next_nibble(proof_node.key.as_ref(), next.key.as_ref()))
+            .and_then(|next| next_nibble(proof_node.full_path(), next.full_path()))
         else {
             continue;
         };
