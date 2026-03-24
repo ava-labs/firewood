@@ -267,6 +267,25 @@ fn test_insert_branch_from_nibbles_inserts_missing_descendant() {
 }
 
 #[test]
+fn test_insert_branch_from_nibbles_splits_divergent_paths() {
+    let mut merkle = create_in_memory_merkle();
+    // Leaf at [0xab] has nibble path [a, b]
+    merkle.insert(&[0xab], Box::from([3u8])).unwrap();
+
+    // Branch at [0xa, 0xc] shares prefix [a] then diverges: key goes 'c', node goes 'b'
+    // This exercises the (Some, Some) arm of insert_branch_helper
+    merkle.insert_branch_from_nibbles(&[0xa, 0xc]).unwrap();
+
+    let branch = merkle.get_node_from_nibbles(&[0xa, 0xc]).unwrap().unwrap();
+    let branch_node = branch.as_branch().expect("expected branch node");
+    assert!(branch_node.value.is_none());
+    assert_eq!(
+        merkle.get_value(&[0xab]).unwrap().as_deref(),
+        Some([3u8].as_slice())
+    );
+}
+
+#[test]
 fn test_insert_and_get() {
     let mut merkle = create_in_memory_merkle();
 
