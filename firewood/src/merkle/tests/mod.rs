@@ -191,6 +191,101 @@ fn create_in_memory_merkle() -> Merkle<NodeStore<Mutable<Propose>, MemStore>> {
 }
 
 #[test]
+fn test_get_node_from_nibbles_matches_byte_lookup() {
+    let mut merkle = create_in_memory_merkle();
+    merkle.insert(&[0xab, 0xcd], Box::from([1u8])).unwrap();
+
+    let from_bytes = merkle.get_node(&[0xab, 0xcd]).unwrap();
+    let from_nibbles = merkle.get_node_from_nibbles(&[0xa, 0xb, 0xc, 0xd]).unwrap();
+
+    assert_eq!(from_bytes, from_nibbles);
+}
+
+#[test]
+fn test_insert_branch_from_nibbles_into_empty_trie() {
+    let mut merkle = create_in_memory_merkle();
+
+    merkle.insert_branch_from_nibbles(&[0xa, 0xb, 0xc]).unwrap();
+
+    let node = merkle
+        .get_node_from_nibbles(&[0xa, 0xb, 0xc])
+        .unwrap()
+        .unwrap();
+    let branch = node.as_branch().expect("expected branch node");
+    assert!(branch.value.is_none());
+}
+
+#[test]
+fn test_insert_branch_from_nibbles_converts_leaf_to_branch() {
+    let mut merkle = create_in_memory_merkle();
+    merkle.insert(&[0xab], Box::from([9u8])).unwrap();
+
+    merkle.insert_branch_from_nibbles(&[0xa, 0xb]).unwrap();
+
+    let node = merkle.get_node_from_nibbles(&[0xa, 0xb]).unwrap().unwrap();
+    let branch = node.as_branch().expect("expected branch node");
+    assert_eq!(branch.value.as_deref(), Some([9u8].as_slice()));
+    assert_eq!(
+        merkle.get_value(&[0xab]).unwrap().as_deref(),
+        Some([9u8].as_slice())
+    );
+}
+
+#[test]
+fn test_insert_branch_from_nibbles_inserts_missing_ancestor() {
+    let mut merkle = create_in_memory_merkle();
+    merkle.insert(&[0xab, 0xcd], Box::from([7u8])).unwrap();
+
+    merkle.insert_branch_from_nibbles(&[0xa]).unwrap();
+
+    let ancestor = merkle.get_node_from_nibbles(&[0xa]).unwrap().unwrap();
+    let ancestor_branch = ancestor.as_branch().expect("expected ancestor branch");
+    assert!(ancestor_branch.value.is_none());
+    assert_eq!(
+        merkle.get_value(&[0xab, 0xcd]).unwrap().as_deref(),
+        Some([7u8].as_slice())
+    );
+}
+
+#[test]
+fn test_insert_branch_from_nibbles_inserts_missing_descendant() {
+    let mut merkle = create_in_memory_merkle();
+    merkle.insert(&[0xab], Box::from([5u8])).unwrap();
+
+    merkle.insert_branch_from_nibbles(&[0xa, 0xb, 0xc]).unwrap();
+
+    let descendant = merkle
+        .get_node_from_nibbles(&[0xa, 0xb, 0xc])
+        .unwrap()
+        .unwrap();
+    let descendant_branch = descendant.as_branch().expect("expected descendant branch");
+    assert!(descendant_branch.value.is_none());
+    assert_eq!(
+        merkle.get_value(&[0xab]).unwrap().as_deref(),
+        Some([5u8].as_slice())
+    );
+}
+
+#[test]
+fn test_insert_branch_from_nibbles_splits_divergent_paths() {
+    let mut merkle = create_in_memory_merkle();
+    // Leaf at [0xab] has nibble path [a, b]
+    merkle.insert(&[0xab], Box::from([3u8])).unwrap();
+
+    // Branch at [0xa, 0xc] shares prefix [a] then diverges: key goes 'c', node goes 'b'
+    // This exercises the (Some, Some) arm of insert_branch_helper
+    merkle.insert_branch_from_nibbles(&[0xa, 0xc]).unwrap();
+
+    let branch = merkle.get_node_from_nibbles(&[0xa, 0xc]).unwrap().unwrap();
+    let branch_node = branch.as_branch().expect("expected branch node");
+    assert!(branch_node.value.is_none());
+    assert_eq!(
+        merkle.get_value(&[0xab]).unwrap().as_deref(),
+        Some([3u8].as_slice())
+    );
+}
+
+#[test]
 fn test_insert_and_get() {
     let mut merkle = create_in_memory_merkle();
 
