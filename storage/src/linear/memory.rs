@@ -23,7 +23,6 @@ pub struct MemStore {
     node_hash_algorithm: NodeHashAlgorithm,
 }
 
-#[cfg(any(test, feature = "test_utils"))]
 impl Default for MemStore {
     fn default() -> Self {
         Self {

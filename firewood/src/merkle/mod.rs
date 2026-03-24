@@ -16,15 +16,14 @@ use crate::iter::{MerkleKeyValueIter, PathIterator};
 use crate::merkle::changes::{ChangeProof, DiffMerkleNodeStream};
 use crate::{Proof, ProofCollection, ProofError, ProofNode, RangeProof};
 use firewood_metrics::firewood_increment;
-#[cfg(test)]
 use firewood_storage::MemStore;
 use firewood_storage::{
-    BranchNode, Child, Children, FileIoError, HashType, HashedNodeReader, ImmutableProposal,
-    IntoHashType, LeafNode, MaybePersistedNode, Mutable, MutableKind, NibblesIterator, Node,
-    NodeStore, Parentable, Path, PathComponent, Propose, ReadableStorage, SharedNode, TrieHash,
-    TrieReader, ValueDigest,
+    BranchNode, Child, Children, FileIoError, HashType, HashableShunt, HashedNodeReader,
+    ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, Mutable, MutableKind,
+    NibblesIterator, Node, NodeStore, Parentable, Path, PathBuf, PathComponent, Propose,
+    ReadableStorage, SharedNode, TrieHash, TrieReader, ValueDigest,
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::io::Error;
 use std::iter::once;
@@ -173,6 +172,182 @@ fn verify_edge<H: ProofCollection + ?Sized>(
     Ok(())
 }
 
+/// For a proof edge path, computes which child indices at each proof node are
+/// "outside" the proven range and should use the proof's child hashes.
+///
+/// For the left edge: children with index < the on-path child are outside.
+/// For the right edge: children with index > the on-path child are outside.
+///
+/// The `boundary_key` (in bytes, not nibbles) is used to determine the on-path
+/// nibble at the terminal proof node, since there is no subsequent proof node
+/// to derive it from.
+#[expect(clippy::indexing_slicing)]
+fn compute_outside_children(
+    proof_nodes: &[ProofNode],
+    boundary_key: Option<&[u8]>,
+    is_left_edge: bool,
+) -> HashMap<PathBuf, [bool; 16]> {
+    let mut result: HashMap<PathBuf, [bool; 16]> = HashMap::new();
+
+    // Non-terminal nodes: derive the on-path nibble from the next proof node
+    for window in proof_nodes.windows(2) {
+        let (parent, child) = (&window[0], &window[1]);
+        let Some(on_path_nibble) = child.key.get(parent.key.len()) else {
+            continue;
+        };
+        mark_outside(
+            &mut result,
+            parent.key.clone(),
+            on_path_nibble.as_u8(),
+            is_left_edge,
+        );
+    }
+
+    // Terminal node: derive the on-path nibble from the boundary key.
+    // If the boundary key diverges within the terminal node's partial path,
+    // either all or none of the children are outside the range.
+    if let (Some(terminal), Some(boundary)) = (proof_nodes.last(), boundary_key) {
+        let boundary_nibbles: Vec<u8> = NibblesIterator::new(boundary).collect();
+
+        // Check if boundary nibbles match the terminal's key up to terminal.key.len().
+        // Find the first position where they diverge.
+        let divergence = terminal
+            .key
+            .iter()
+            .zip(boundary_nibbles.iter())
+            .position(|(tk, &bn)| tk.as_u8() != bn);
+
+        match divergence {
+            None if boundary_nibbles.len() > terminal.key.len() => {
+                // Boundary extends beyond terminal key and matches it fully.
+                // Use the next nibble from the boundary as the on-path nibble.
+                let on_path_nibble = boundary_nibbles[terminal.key.len()];
+                mark_outside(
+                    &mut result,
+                    terminal.key.clone(),
+                    on_path_nibble,
+                    is_left_edge,
+                );
+                // The on-path child itself also needs the proof hash because
+                // the proving trie only contains keys within the range, but
+                // the original subtree under this child may contain keys
+                // outside the range that contribute to its hash.
+                let entry = result.entry(terminal.key.clone()).or_insert([false; 16]);
+                entry[on_path_nibble as usize] = true;
+            }
+            Some(d) => {
+                // Boundary diverges within the terminal's key at position d.
+                // If boundary is "past" the terminal (left edge: B > terminal,
+                // right edge: B < terminal), all children are outside.
+                let all_outside = if is_left_edge {
+                    boundary_nibbles[d] > terminal.key[d].as_u8()
+                } else {
+                    boundary_nibbles[d] < terminal.key[d].as_u8()
+                };
+                if all_outside {
+                    let entry = result.entry(terminal.key.clone()).or_insert([false; 16]);
+                    *entry = [true; 16];
+                }
+                // Otherwise (boundary is "before" terminal), no children are outside.
+            }
+            _ => {
+                // Boundary is same length as or shorter than terminal key and
+                // matches fully — terminal is the boundary node itself. No
+                // children need marking.
+            }
+        }
+    }
+
+    result
+}
+
+/// Marks children at the given node as "outside" the proven range.
+#[expect(clippy::indexing_slicing)]
+fn mark_outside(
+    map: &mut HashMap<PathBuf, [bool; 16]>,
+    key: PathBuf,
+    on_path_nibble: u8,
+    is_left_edge: bool,
+) {
+    let entry = map.entry(key).or_insert([false; 16]);
+    if is_left_edge {
+        for nibble in 0..on_path_nibble {
+            entry[nibble as usize] = true;
+        }
+    } else {
+        #[expect(clippy::arithmetic_side_effects)]
+        for nibble in (on_path_nibble + 1)..16 {
+            entry[nibble as usize] = true;
+        }
+    }
+}
+
+/// Recursively computes the hash of a node in the proving trie, merging
+/// child hashes from proof nodes for subtrees outside the proven range.
+///
+/// For branch nodes, children present in the in-memory trie get their hash
+/// computed recursively. Children not in the trie that are **outside** the
+/// proven range (as indicated by `outside_children`) get their hash from the
+/// corresponding proof node. Children not in the trie that are **inside** the
+/// range are left as `None`, causing a hash mismatch if they should exist.
+#[expect(clippy::indexing_slicing)]
+fn compute_root_hash_with_proofs(
+    node: &Node,
+    path_prefix: &[PathComponent],
+    proof_nodes: &HashMap<PathBuf, &ProofNode>,
+    outside_children: &HashMap<PathBuf, [bool; 16]>,
+) -> HashType {
+    let branch = match node {
+        Node::Leaf(_) => return HashableShunt::from_node(path_prefix, node).to_hash(),
+        Node::Branch(branch) => branch,
+    };
+
+    // Build full key for this node: path_prefix ++ partial_path
+    let full_key: PathBuf = path_prefix
+        .iter()
+        .chain(branch.partial_path.as_components().iter())
+        .copied()
+        .collect();
+
+    let mut child_hashes: Children<Option<HashType>> = Children::new();
+
+    // For children outside the proven range, use proof node hashes
+    if let (Some(proof_node), Some(outside)) =
+        (proof_nodes.get(&full_key), outside_children.get(&full_key))
+    {
+        for (nibble, hash) in proof_node.child_hashes.iter_present() {
+            if outside[nibble.as_u8() as usize] {
+                child_hashes[nibble] = Some(hash.clone());
+            }
+        }
+    }
+
+    // For children in the in-memory trie, compute hashes recursively
+    for (nibble, child_opt) in &branch.children {
+        if let Some(Child::Node(child_node)) = child_opt {
+            let mut child_prefix: PathBuf = full_key.iter().copied().collect();
+            child_prefix.push(nibble);
+
+            let child_hash = compute_root_hash_with_proofs(
+                child_node,
+                &child_prefix,
+                proof_nodes,
+                outside_children,
+            );
+            child_hashes[nibble] = Some(child_hash);
+        }
+    }
+
+    let value = branch.value.as_deref().map(ValueDigest::Value);
+    HashableShunt::new(
+        path_prefix,
+        branch.partial_path.as_components(),
+        value,
+        child_hashes,
+    )
+    .to_hash()
+}
+
 impl<T: TrieReader> Merkle<T> {
     pub(crate) fn root(&self) -> Option<SharedNode> {
         self.nodestore.root_node()
@@ -284,14 +459,17 @@ impl<T: TrieReader> Merkle<T> {
     ///     &range_proof
     /// )?;
     /// ```
-    pub fn verify_range_proof(
+    pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         &self,
         first_key: Option<impl KeyType>,
         last_key: Option<impl KeyType>,
         root_hash: &TrieHash,
-        proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
+        proof: &RangeProof<impl KeyType, impl ValueType, H>,
     ) -> Result<(), api::Error> {
-        // check that the keys are in strictly increasing order (no duplicates)
+        let first_key_bytes: Option<&[u8]> = first_key.as_ref().map(AsRef::as_ref);
+        let last_key_bytes: Option<&[u8]> = last_key.as_ref().map(AsRef::as_ref);
+
+        // check that the keys are in ascending order
         let key_values = proof.key_values();
         if !key_values
             .iter()
@@ -303,7 +481,7 @@ impl<T: TrieReader> Merkle<T> {
             ));
         }
 
-        if key_values.is_empty() && first_key.is_none() && last_key.is_none() {
+        if key_values.is_empty() && first_key_bytes.is_none() && last_key_bytes.is_none() {
             return Err(api::Error::ProofError(ProofError::Empty));
         }
 
@@ -313,23 +491,75 @@ impl<T: TrieReader> Merkle<T> {
         let left_edge = left_edge_key.map(|(k, v)| (k.as_ref(), v.as_ref()));
         let right_edge = right_edge_key.map(|(k, v)| (k.as_ref(), v.as_ref()));
 
-        verify_edge(
-            first_key.as_ref().map(AsRef::as_ref),
-            left_edge,
-            proof.start_proof(),
-            root_hash,
-            true,
-        )?;
-        verify_edge(
-            last_key.as_ref().map(AsRef::as_ref),
-            right_edge,
-            proof.end_proof(),
-            root_hash,
-            false,
-        )?;
+        // When edge proofs are empty, skip edge verification — the caller is
+        // claiming all elements are present and the hash check at the end is
+        // sufficient to validate that claim.
+        if !proof.start_proof().is_empty() {
+            verify_edge(
+                first_key_bytes,
+                left_edge,
+                proof.start_proof(),
+                root_hash,
+                true,
+            )?;
+        }
+        if !proof.end_proof().is_empty() {
+            verify_edge(
+                last_key_bytes,
+                right_edge,
+                proof.end_proof(),
+                root_hash,
+                false,
+            )?;
+        }
 
-        // TODO: build a merkle and reshape it, filling in hashes from the
-        // provided proofs on the left and right edges, then verify the root hash
+        // Build in-memory merkle from key-value pairs
+        let memstore = MemStore::default();
+        let nodestore = NodeStore::new_empty_proposal(memstore.into());
+        let mut proving_merkle: Merkle<NodeStore<Mutable<Propose>, MemStore>> =
+            Merkle::from(nodestore);
+
+        for (key, value) in key_values {
+            proving_merkle.insert(key.as_ref(), value.as_ref().into())?;
+        }
+
+        // Reconcile all proof nodes and build lookup map
+        let all_proof_nodes: Vec<&ProofNode> = proof
+            .start_proof()
+            .as_ref()
+            .iter()
+            .chain(proof.end_proof().as_ref())
+            .collect();
+
+        let mut proof_node_map: HashMap<PathBuf, &ProofNode> = HashMap::new();
+        for proof_node in &all_proof_nodes {
+            proving_merkle.reconcile_branch_proof_node(proof_node)?;
+            proof_node_map.insert(proof_node.key.clone(), proof_node);
+        }
+
+        // Compute which children at each edge node are outside the proven range
+        let mut outside_children =
+            compute_outside_children(proof.start_proof().as_ref(), first_key_bytes, true);
+        for (key, flags) in
+            compute_outside_children(proof.end_proof().as_ref(), last_key_bytes, false)
+        {
+            let entry = outside_children.entry(key).or_insert([false; 16]);
+            for (e, flag) in entry.iter_mut().zip(flags.iter()) {
+                *e |= flag;
+            }
+        }
+
+        // Compute root hash of the proving trie with proof sibling hashes
+        let Some(root_node) = proving_merkle.root() else {
+            return Err(api::Error::ProofError(ProofError::Empty));
+        };
+
+        let computed =
+            compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
+
+        if computed != root_hash.clone().into_hash_type() {
+            return Err(api::Error::ProofError(ProofError::UnexpectedHash));
+        }
 
         Ok(())
     }
@@ -521,6 +751,106 @@ impl<T: TrieReader> Merkle<T> {
         let key = Path::from_nibbles_iterator(NibblesIterator::new(key));
         get_helper(&self.nodestore, &root, &key)
     }
+
+    /// Dump a node, recursively, to a dot file.
+    ///
+    /// The `keep_alive` vec holds references to all `MaybePersistedNode`s
+    /// created during the dump so their addresses remain stable for dup
+    /// detection in `seen`.
+    pub(crate) fn dump_node<W: std::io::Write + ?Sized>(
+        &self,
+        node: &MaybePersistedNode,
+        hash: Option<&HashType>,
+        seen: &mut HashSet<String>,
+        keep_alive: &mut Vec<MaybePersistedNode>,
+        writer: &mut W,
+    ) -> Result<(), FileIoError> {
+        writeln!(writer, "  {node}[label=\"{node}")
+            .map_err(Error::other)
+            .map_err(|e| FileIoError::new(e, None, 0, None))?;
+        if let Some(hash) = hash {
+            write!(writer, " H={hash:.6?}")
+                .map_err(Error::other)
+                .map_err(|e| FileIoError::new(e, None, 0, None))?;
+        }
+
+        match &*node.as_shared_node(&self.nodestore)? {
+            Node::Branch(b) => {
+                write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
+                writeln!(writer, "\"]")
+                    .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
+                for (childidx, child) in &b.children {
+                    let (child, child_hash) = match child {
+                        None => continue,
+                        Some(node) => (node.as_maybe_persisted_node(), node.hash()),
+                    };
+
+                    let inserted = seen.insert(format!("{child}"));
+                    keep_alive.push(child.clone());
+                    if inserted {
+                        writeln!(writer, "  {node} -> {child}[label=\"{childidx:x}\"]")
+                            .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
+                        self.dump_node(&child, child_hash, seen, keep_alive, writer)?;
+                    } else {
+                        // We have already seen this child, which shouldn't happen.
+                        // Indicate this with a red edge.
+                        writeln!(
+                            writer,
+                            "  {node} -> {child}[label=\"{childidx:x} (dup)\" color=red]"
+                        )
+                        .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
+                    }
+                }
+            }
+            Node::Leaf(l) => {
+                write_attributes!(writer, l, &l.value);
+                writeln!(writer, "\" shape=rect]")
+                    .map_err(|e| FileIoError::from_generic_no_file(e, "write leaf"))?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Dump the trie to a dot file without requiring hashed nodes.
+    ///
+    /// This works on any `TrieReader` including mutable proposals that
+    /// haven't been frozen yet. The root hash will be omitted from the output.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing to the output writer fails.
+    pub(crate) fn dump<W: std::io::Write + ?Sized>(&self, writer: &mut W) -> Result<(), Error> {
+        let root = self.nodestore.root_as_maybe_persisted_node();
+
+        writeln!(writer, "digraph Merkle {{\n  rankdir=LR;").map_err(Error::other)?;
+        if let Some(root) = root {
+            writeln!(writer, " root -> {root}")
+                .map_err(Error::other)
+                .map_err(|e| FileIoError::new(e, None, 0, None))
+                .map_err(Error::other)?;
+            let mut seen = HashSet::new();
+            let mut keep_alive = Vec::new();
+            self.dump_node(&root, None, &mut seen, &mut keep_alive, writer)
+                .map_err(Error::other)?;
+        }
+        writeln!(writer, "}}")
+            .map_err(Error::other)
+            .map_err(|e| FileIoError::new(e, None, 0, None))
+            .map_err(Error::other)?;
+
+        Ok(())
+    }
+
+    /// Dump the trie to a string (for testing or logging).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if writing to the string fails.
+    pub(crate) fn dump_to_string(&self) -> Result<String, Error> {
+        let mut buffer = Vec::new();
+        self.dump(&mut buffer)?;
+        String::from_utf8(buffer).map_err(Error::other)
+    }
 }
 
 impl<T: HashedNodeReader> Merkle<T> {
@@ -603,115 +933,6 @@ impl<T: HashedNodeReader> Merkle<T> {
         .unwrap_or_default();
 
         Ok(ChangeProof::new(start_proof, end_proof, batch_ops))
-    }
-
-    /// Dump a node, recursively, to a dot file.
-    ///
-    /// The `keep_alive` vec holds references to all `MaybePersistedNode`s
-    /// created during the dump so their addresses remain stable for dup
-    /// detection in `seen`.
-    pub(crate) fn dump_node<W: std::io::Write + ?Sized>(
-        &self,
-        node: &MaybePersistedNode,
-        hash: Option<&HashType>,
-        seen: &mut HashSet<String>,
-        keep_alive: &mut Vec<MaybePersistedNode>,
-        writer: &mut W,
-    ) -> Result<(), FileIoError> {
-        writeln!(writer, "  {node}[label=\"{node}")
-            .map_err(Error::other)
-            .map_err(|e| FileIoError::new(e, None, 0, None))?;
-        if let Some(hash) = hash {
-            write!(writer, " H={hash:.6?}")
-                .map_err(Error::other)
-                .map_err(|e| FileIoError::new(e, None, 0, None))?;
-        }
-
-        match &*node.as_shared_node(&self.nodestore)? {
-            Node::Branch(b) => {
-                write_attributes!(writer, b, &b.value.clone().unwrap_or(Box::from([])));
-                writeln!(writer, "\"]")
-                    .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
-                for (childidx, child) in &b.children {
-                    let (child, child_hash) = match child {
-                        None => continue,
-                        Some(node) => (node.as_maybe_persisted_node(), node.hash()),
-                    };
-
-                    let inserted = seen.insert(format!("{child}"));
-                    keep_alive.push(child.clone());
-                    if inserted {
-                        writeln!(writer, "  {node} -> {child}[label=\"{childidx:x}\"]")
-                            .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
-                        self.dump_node(&child, child_hash, seen, keep_alive, writer)?;
-                    } else {
-                        // We have already seen this child, which shouldn't happen.
-                        // Indicate this with a red edge.
-                        writeln!(
-                            writer,
-                            "  {node} -> {child}[label=\"{childidx:x} (dup)\" color=red]"
-                        )
-                        .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
-                    }
-                }
-            }
-            Node::Leaf(l) => {
-                write_attributes!(writer, l, &l.value);
-                writeln!(writer, "\" shape=rect]")
-                    .map_err(|e| FileIoError::from_generic_no_file(e, "write leaf"))?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Dump the trie to a dot file.
-    ///
-    /// This function is primarily used in testing, but also has an API implementation
-    ///
-    /// Dot files can be rendered using `dot -Tpng -o output.png input.dot`
-    /// or online at <https://dreampuf.github.io/GraphvizOnline>
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if writing to the output writer fails.
-    pub(crate) fn dump<W: std::io::Write + ?Sized>(&self, writer: &mut W) -> Result<(), Error> {
-        let root = self.nodestore.root_as_maybe_persisted_node();
-
-        writeln!(writer, "digraph Merkle {{\n  rankdir=LR;").map_err(Error::other)?;
-        if let (Some(root), Some(root_hash)) = (root, self.nodestore.root_hash()) {
-            writeln!(writer, " root -> {root}")
-                .map_err(Error::other)
-                .map_err(|e| FileIoError::new(e, None, 0, None))
-                .map_err(Error::other)?;
-            let mut seen = HashSet::new();
-            let mut keep_alive = Vec::new();
-            self.dump_node(
-                &root,
-                Some(&root_hash.into_hash_type()),
-                &mut seen,
-                &mut keep_alive,
-                writer,
-            )
-            .map_err(Error::other)?;
-        }
-        writeln!(writer, "}}")
-            .map_err(Error::other)
-            .map_err(|e| FileIoError::new(e, None, 0, None))
-            .map_err(Error::other)?;
-
-        Ok(())
-    }
-    /// Dump the trie to a string (for testing or logging).
-    ///
-    /// This is a convenience function for tests that need the dot output as a string.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if writing to the string fails.
-    pub(crate) fn dump_to_string(&self) -> Result<String, Error> {
-        let mut buffer = Vec::new();
-        self.dump(&mut buffer)?;
-        String::from_utf8(buffer).map_err(Error::other)
     }
 }
 
@@ -926,7 +1147,6 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
 
     /// Ensures a branch exists at `key` in the subtrie rooted at `node`.
     /// Each element of `key` is 1 nibble.
-    #[cfg(test)]
     fn insert_branch_helper(&mut self, mut node: Node, key: &[u8]) -> Result<Node, FileIoError> {
         let path_overlap = PrefixOverlap::from(key, node.partial_path().as_ref());
 
@@ -941,7 +1161,6 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
                 .split_first()
                 .map(|(index, path)| (*index, path.into())),
         ) {
-            // Key fully consumed, node path fully consumed: convert leaf to branch if needed
             (None, None) => match node {
                 Node::Branch(_) => Ok(node),
                 Node::Leaf(leaf) => {
@@ -953,7 +1172,6 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
                     Ok(Node::Branch(Box::new(branch)))
                 }
             },
-            // Key consumed, node has remaining path: split node under new branch
             (None, Some((child_index, partial_path))) => {
                 let child_index = PathComponent::try_new(child_index).expect("valid component");
 
@@ -968,7 +1186,6 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
 
                 Ok(Node::Branch(Box::new(branch)))
             }
-            // Node path consumed, key continues: recurse into child (branch) or split (leaf)
             (Some((child_index, partial_path)), None) => {
                 let child_index = PathComponent::try_new(child_index).expect("valid component");
 
@@ -1007,7 +1224,6 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
                     }
                 }
             }
-            // Paths diverge: create new branch with both as children
             (Some((key_index, key_partial_path)), Some((node_index, node_partial_path))) => {
                 let key_index = PathComponent::try_new(key_index).expect("valid component");
                 let node_index = PathComponent::try_new(node_index).expect("valid component");
@@ -1320,7 +1536,6 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
 }
 
 /// The outcome of reconciling a branch proof node against the in-memory trie.
-#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ReconcileResult {
     /// The proof node had no value to reconcile (hash-only or absent).
@@ -1331,7 +1546,6 @@ pub(crate) enum ReconcileResult {
     ValueInserted,
 }
 
-#[cfg(test)]
 impl Merkle<NodeStore<Mutable<Propose>, MemStore>> {
     /// Returns the node mapped to by `key_nibbles` where each key element is a
     /// single nibble.

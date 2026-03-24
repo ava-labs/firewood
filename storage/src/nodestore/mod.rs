@@ -405,7 +405,6 @@ impl<T, S> NodeStore<Mutable<T>, S> {
 impl<S: WritableStorage> NodeStore<Mutable<Propose>, S> {
     /// Creates a new, empty, [`NodeStore`].
     /// This is used during testing and during the creation of an in-memory merkle for proofs.
-    #[cfg(any(test, feature = "test_utils"))]
     pub fn new_empty_proposal(storage: Arc<S>) -> Self {
         NodeStore {
             kind: Mutable {
