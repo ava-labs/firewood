@@ -185,6 +185,15 @@ pub enum ProofError {
     /// the correct sub-trie hashes.
     #[error("non-empty batch operations require at least one boundary proof for verification")]
     MissingBoundaryProof,
+
+    /// Start boundary proof path exceeds end boundary proof path at divergence.
+    ///
+    /// At the first trie depth where the two boundary proofs take different
+    /// children, the start path's nibble must be less than the end path's
+    /// nibble (consistent with `start_key` < `end_key`). A reversal indicates a
+    /// proof whose path structure contradicts the claimed key range.
+    #[error("boundary proof paths are inverted: start nibble exceeds end nibble at divergence")]
+    BoundaryPathsInverted,
 }
 
 #[derive(Clone, PartialEq, Eq)]
