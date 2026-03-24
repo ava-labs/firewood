@@ -1130,3 +1130,101 @@ fn test_bad_range_proof_unexpected_start_proof() {
         "expected UnexpectedStartProof, got {result:?}"
     );
 }
+#[test]
+// Fuzz-style test that generates random data, creates range proofs for random
+// subranges, and verifies them standalone using only the root hash.
+// Covers: both-existent edges, left-nonexistent, right-nonexistent,
+// both-nonexistent, single-element, and full-range scenarios.
+fn test_range_proof_fuzz() {
+    let rng = firewood_storage::SeededRng::from_env_or_random();
+
+    // 64 is big enough to provide a signal; 2048 starts to slow things down
+    let num_keys = rng.random_range(64..=2048u32);
+    let set = fixed_and_pseudorandom_data(&rng, num_keys);
+    let mut items = set.iter().collect::<Vec<_>>();
+    items.sort_unstable();
+    let merkle = init_merkle(items.clone());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    for _ in 0..50 {
+        let scenario = rng.random_range(0..5u8);
+        match scenario {
+            // Both edges are existing keys
+            0 => {
+                let start = rng.random_range(0..items.len() - 1);
+                let end = rng.random_range((start + 1)..items.len());
+                let range_proof = merkle
+                    .range_proof(Some(items[start].0), Some(items[end].0), None)
+                    .unwrap();
+                verify_range_proof(
+                    Some(items[start].0),
+                    Some(items[end].0),
+                    &root_hash,
+                    &range_proof,
+                )
+                .unwrap();
+            }
+            // Left edge is non-existent
+            1 => {
+                let start = rng.random_range(1..items.len() - 1);
+                let end = rng.random_range((start + 1)..items.len());
+                let first = decrease_key(items[start].0);
+                if &first >= items[start].0 || (start > 0 && first.as_ref() == items[start - 1].0) {
+                    continue;
+                }
+                let range_proof = merkle
+                    .range_proof(Some(&first), Some(items[end].0), None)
+                    .unwrap();
+                verify_range_proof(Some(&first), Some(items[end].0), &root_hash, &range_proof)
+                    .unwrap();
+            }
+            // Right edge is non-existent
+            2 => {
+                let start = rng.random_range(0..items.len() - 1);
+                let end = rng.random_range(start..items.len() - 1);
+                let last = increase_key(items[end].0);
+                if &last <= items[end].0
+                    || (end + 1 < items.len() && last.as_ref() == items[end + 1].0)
+                {
+                    continue;
+                }
+                let range_proof = merkle
+                    .range_proof(Some(items[start].0), Some(&last), None)
+                    .unwrap();
+                verify_range_proof(Some(items[start].0), Some(&last), &root_hash, &range_proof)
+                    .unwrap();
+            }
+            // Both edges are non-existent
+            3 => {
+                let start = rng.random_range(1..items.len() - 1);
+                let end = rng.random_range(start..items.len() - 1);
+                let first = decrease_key(items[start].0);
+                let last = increase_key(items[end].0);
+                if &first >= items[start].0
+                    || &last <= items[end].0
+                    || (start > 0 && first.as_ref() == items[start - 1].0)
+                    || (end + 1 < items.len() && last.as_ref() == items[end + 1].0)
+                {
+                    continue;
+                }
+                let range_proof = merkle.range_proof(Some(&first), Some(&last), None).unwrap();
+                verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof).unwrap();
+            }
+            // Single element
+            4 => {
+                let idx = rng.random_range(0..items.len());
+                let range_proof = merkle
+                    .range_proof(Some(items[idx].0), Some(items[idx].0), None)
+                    .unwrap();
+                verify_range_proof(
+                    Some(items[idx].0),
+                    Some(items[idx].0),
+                    &root_hash,
+                    &range_proof,
+                )
+                .unwrap();
+            }
+            _ => unreachable!(),
+        }
+    }
+}
