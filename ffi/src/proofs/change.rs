@@ -174,6 +174,17 @@ fn verify_proof(
         ));
     }
 
+    // Verify keys are sorted and unique — must run before boundary
+    // checks (start_key ≤ first_key, end_key ≥ last_key) because
+    // those checks compare against first/last elements, which are
+    // only meaningful if the keys are actually sorted.
+    if !batch_ops
+        .iter()
+        .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
+    {
+        return Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted));
+    }
+
     // Check start key not greater than first batch op key
     if let (Some(start_key), Some(first_key)) = (start_key, batch_ops.first())
         && start_key.cmp(first_key.key()) == Ordering::Greater
@@ -188,14 +199,6 @@ fn verify_proof(
         && end_key.cmp(last_key.key()) == Ordering::Less
     {
         return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
-    }
-
-    // Verify keys are sorted and unique
-    if !batch_ops
-        .iter()
-        .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
-    {
-        return Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted));
     }
 
     // Fix 9: Reject proofs with batch_ops but no boundary proofs, UNLESS
