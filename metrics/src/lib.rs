@@ -333,6 +333,8 @@ macro_rules! firewood_histogram {
 
 #[cfg(test)]
 mod tests {
+    #![expect(clippy::unwrap_used)]
+
     use super::*;
 
     fn isolated<F, R>(f: F) -> R
@@ -366,6 +368,54 @@ mod tests {
 
             drop(guard1);
             assert_eq!(current_metrics_context(), None);
+        });
+    }
+
+    #[test]
+    fn spawned_thread_does_not_inherit_context() {
+        isolated(|| {
+            let ctx = MetricsContext::new(true);
+            let _guard = set_metrics_context(Some(ctx));
+            assert_eq!(current_metrics_context(), Some(ctx));
+
+            let child_ctx = std::thread::spawn(current_metrics_context).join().unwrap();
+
+            assert_eq!(
+                child_ctx, None,
+                "thread-local context must not leak to child threads"
+            );
+        });
+    }
+
+    #[test]
+    fn capture_and_set_propagates_context_to_spawned_thread() {
+        isolated(|| {
+            let ctx = MetricsContext::new(true);
+            let _guard = set_metrics_context(Some(ctx));
+
+            // Capture on the parent thread, just like persist_worker.rs does.
+            let captured = current_metrics_context();
+
+            let child_ctx = std::thread::spawn(move || {
+                // Before setting, the child has no context.
+                assert_eq!(current_metrics_context(), None);
+
+                let _inner_guard = set_metrics_context(captured);
+
+                // After setting, the child sees the propagated context.
+                current_metrics_context()
+            })
+            .join()
+            .unwrap();
+
+            assert_eq!(
+                child_ctx,
+                Some(ctx),
+                "captured context must be available in child thread after set_metrics_context"
+            );
+
+            // Parent context is unaffected.
+            assert_eq!(current_metrics_context(), Some(ctx));
         });
     }
 }
