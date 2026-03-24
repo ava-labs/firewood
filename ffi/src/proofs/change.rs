@@ -255,7 +255,7 @@ fn is_complete_proof(verification: &VerificationContext, proof: &FrozenChangePro
 
 /// Determine which key the end proof was generated for.
 ///
-/// When a proof is potentially truncated (batch ops count >= max_length),
+/// When a proof is potentially truncated (batch ops count >= `max_length`),
 /// the generator may have used the last batch op's key instead of the
 /// requested end key. The verifier cannot distinguish which was used, so
 /// it tries validating with the last batch op key first, then falls back
@@ -270,27 +270,24 @@ fn resolve_end_proof_key(
         .max_length
         .is_some_and(|max| batch_ops.len() >= max.get());
 
-    if potentially_truncated {
-        if let Some(last_op) = batch_ops.last() {
-            let key: &[u8] = last_op.key().as_ref();
-            if proof
-                .end_proof()
-                .value_digest(key, &verification.end_root)
-                .is_ok()
-            {
-                return Some(key.into());
-            }
+    if potentially_truncated && let Some(last_op) = batch_ops.last() {
+        let key: &[u8] = last_op.key().as_ref();
+        if proof
+            .end_proof()
+            .value_digest(key, &verification.end_root)
+            .is_ok()
+        {
+            return Some(key.into());
         }
     }
 
-    if let Some(ref end_key) = verification.end_key {
-        if proof
+    if let Some(ref end_key) = verification.end_key
+        && proof
             .end_proof()
             .value_digest(end_key.as_ref(), &verification.end_root)
             .is_ok()
-        {
-            return Some(end_key.clone());
-        }
+    {
+        return Some(end_key.clone());
     }
 
     batch_ops
@@ -299,7 +296,7 @@ fn resolve_end_proof_key(
 }
 
 /// Verify sub-trie hashes: compare child hashes at branch points in the
-/// boundary proofs against the proposal's trie after applying batch_ops.
+/// boundary proofs against the proposal's trie after applying `batch_ops`.
 ///
 /// This check requires both boundary proofs to be non-empty — with only one
 /// proof there is no divergence point and therefore no "in-range" nibbles
@@ -320,9 +317,8 @@ fn verify_subtrie_hashes(
         return Ok(());
     }
 
-    let divergence = match find_divergence(start_proof, end_proof) {
-        Some(d) => d,
-        None => return Ok(()),
+    let Some(divergence) = find_divergence(start_proof, end_proof) else {
+        return Ok(());
     };
 
     // Phase 1: start side — children after the path nibble below divergence
@@ -354,17 +350,17 @@ fn verify_boundary_values(
     end_root: &HashKey,
 ) -> Result<(), api::Error> {
     // Check start boundary
-    if !proof.start_proof().is_empty() {
-        if let Some(ref start_key) = verification.start_key {
-            verify_single_boundary_value(proposal, proof.start_proof(), start_key, end_root)?;
-        }
+    if !proof.start_proof().is_empty()
+        && let Some(ref start_key) = verification.start_key
+    {
+        verify_single_boundary_value(proposal, proof.start_proof(), start_key, end_root)?;
     }
 
     // Check end boundary
-    if !proof.end_proof().is_empty() {
-        if let Some(end_key) = resolve_end_proof_key(verification, proof) {
-            verify_single_boundary_value(proposal, proof.end_proof(), &end_key, end_root)?;
-        }
+    if !proof.end_proof().is_empty()
+        && let Some(end_key) = resolve_end_proof_key(verification, proof)
+    {
+        verify_single_boundary_value(proposal, proof.end_proof(), &end_key, end_root)?;
     }
 
     Ok(())
@@ -391,25 +387,20 @@ impl ChangeProofContext {
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
-    ) -> Result<ProposedChangeProofContext<'db>, (Self, api::Error)> {
+    ) -> Result<ProposedChangeProofContext<'db>, Box<(Self, api::Error)>> {
         // Destructure self so we can move `proof` into either the Ok or Err
         // result without cloning.
         let proof = self.proof;
 
-        let verification = match verify_proof(
-            &proof,
-            end_root.clone(),
-            start_key,
-            end_key,
-            max_length,
-        ) {
-            Ok(v) => v,
-            Err(e) => return Err((Self { proof }, e)),
-        };
+        let verification =
+            match verify_proof(&proof, end_root.clone(), start_key, end_key, max_length) {
+                Ok(v) => v,
+                Err(e) => return Err(Box::new((Self { proof }, e))),
+            };
 
         let proposal = match db.apply_change_proof_to_parent(start_root, &proof) {
             Ok(p) => p,
-            Err(e) => return Err((Self { proof }, e)),
+            Err(e) => return Err(Box::new((Self { proof }, e))),
         };
 
         // Only verify the root hash when the proof covers the full range.
@@ -422,20 +413,19 @@ impl ChangeProofContext {
                 .map(crate::HashKey::from)
                 .unwrap_or_default();
             if computed != crate::HashKey::from(end_root.clone()) {
-                return Err((
+                return Err(Box::new((
                     Self { proof },
                     api::Error::ProofError(ProofError::EndRootMismatch),
-                ));
+                )));
             }
         }
 
         // Post-application sub-trie hash and boundary value checks
         if let Err(e) = verify_subtrie_hashes(&proof, &verification, &proposal.handle) {
-            return Err((Self { proof }, e));
+            return Err(Box::new((Self { proof }, e)));
         }
-        if let Err(e) = verify_boundary_values(&proof, &verification, &proposal.handle, &end_root)
-        {
-            return Err((Self { proof }, e));
+        if let Err(e) = verify_boundary_values(&proof, &verification, &proposal.handle, &end_root) {
+            return Err(Box::new((Self { proof }, e)));
         }
 
         Ok(ProposedChangeProofContext {
@@ -459,7 +449,10 @@ impl ChangeProofContext {
     ) -> Result<Option<HashKey>, api::Error> {
         let mut proposed = self
             .verify_and_propose(db, start_root, end_root, start_key, end_key, max_length)
-            .map_err(|(_proof, err)| err)?;
+            .map_err(|boxed| {
+                let (_proof, err) = *boxed;
+                err
+            })?;
         proposed.commit()
     }
 }
@@ -471,31 +464,20 @@ impl ChangeProofContext {
 impl ProposedChangeProofContext<'_> {
     /// Commit a previously proposed change proof. Consumes the proposal handle.
     fn commit(&mut self) -> Result<Option<HashKey>, api::Error> {
-        match self.proposal_state {
-            ProposalState::Committed(ref hash) => Ok(hash.clone()),
-            ProposalState::Proposed(_) => {
-                // Take the Proposed variant out, replacing with a temporary.
-                // We need to move the handle out to call commit_proposal.
-                let old_state =
-                    std::mem::replace(&mut self.proposal_state, ProposalState::Committed(None));
-                let ProposalState::Proposed(handle) = old_state else {
-                    // We just matched Proposed above, so this is unreachable in
-                    // practice. Return an error rather than panicking.
-                    return Err(api::Error::ProofError(ProofError::ProposalIsNone));
-                };
-                match handle.commit_proposal() {
-                    Ok(hash) => {
-                        firewood_increment!(crate::registry::MERGE_COUNT, 1, "change" => "commit");
-                        self.proposal_state = ProposalState::Committed(hash.clone());
-                        Ok(hash)
-                    }
-                    Err(err) => {
-                        // Commit failed; we've already consumed the handle so
-                        // leave state as Committed(None).
-                        Err(err)
-                    }
-                }
+        let state = std::mem::replace(&mut self.proposal_state, ProposalState::Committed(None));
+        match state {
+            ProposalState::Committed(hash) => {
+                self.proposal_state = ProposalState::Committed(hash.clone());
+                Ok(hash)
             }
+            ProposalState::Proposed(handle) => match handle.commit_proposal() {
+                Ok(hash) => {
+                    firewood_increment!(crate::registry::MERGE_COUNT, 1, "change" => "commit");
+                    self.proposal_state = ProposalState::Committed(hash.clone());
+                    Ok(hash)
+                }
+                Err(err) => Err(err),
+            },
         }
     }
 
@@ -516,7 +498,10 @@ impl ProposedChangeProofContext<'_> {
             return Ok(None);
         }
 
-        Ok(Some((last_op.key().clone(), self.verification.end_key.clone())))
+        Ok(Some((
+            last_op.key().clone(),
+            self.verification.end_key.clone(),
+        )))
     }
 }
 
@@ -566,8 +551,8 @@ fn find_divergence(
     let end_nodes: &[ProofNode] = end_proof;
 
     for (i, (s_node, e_node)) in start_nodes.iter().zip(end_nodes.iter()).enumerate() {
-        let s_next = start_nodes.get(i + 1);
-        let e_next = end_nodes.get(i + 1);
+        let s_next = i.checked_add(1).and_then(|j| start_nodes.get(j));
+        let e_next = i.checked_add(1).and_then(|j| end_nodes.get(j));
 
         let s_nibble = s_next.and_then(|n| next_nibble(s_node.full_path(), n.full_path()));
         let e_nibble = e_next.and_then(|n| next_nibble(e_node.full_path(), n.full_path()));
@@ -591,14 +576,14 @@ fn find_divergence(
                         .last()
                         .map_or_else(|| e_node.full_path(), |n| n.full_path()),
                 );
-                if let Some(en) = en {
-                    if sn != en {
-                        return Some(DivergenceInfo {
-                            node_index: i,
-                            start_nibble: sn,
-                            end_nibble: en,
-                        });
-                    }
+                if let Some(en) = en
+                    && sn != en
+                {
+                    return Some(DivergenceInfo {
+                        node_index: i,
+                        start_nibble: sn,
+                        end_nibble: en,
+                    });
                 }
             }
             (None, Some(en)) => {
@@ -608,14 +593,14 @@ fn find_divergence(
                         .last()
                         .map_or_else(|| s_node.full_path(), |n| n.full_path()),
                 );
-                if let Some(sn) = sn {
-                    if sn != en {
-                        return Some(DivergenceInfo {
-                            node_index: i,
-                            start_nibble: sn,
-                            end_nibble: en,
-                        });
-                    }
+                if let Some(sn) = sn
+                    && sn != en
+                {
+                    return Some(DivergenceInfo {
+                        node_index: i,
+                        start_nibble: sn,
+                        end_nibble: en,
+                    });
                 }
             }
             _ => {}
@@ -661,8 +646,9 @@ fn verify_proof_path_children(
             in_range_at_divergence(divergence)
         } else {
             // Below divergence: need the nibble going forward from this node
-            let forward_nibble = proof_nodes
-                .get(depth + 1)
+            let forward_nibble = depth
+                .checked_add(1)
+                .and_then(|j| proof_nodes.get(j))
                 .and_then(|next| next_nibble(proof_node.key.as_ref(), next.key.as_ref()));
 
             let Some(path_nibble) = forward_nibble else {

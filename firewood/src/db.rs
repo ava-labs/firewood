@@ -466,7 +466,7 @@ impl Proposal<'_> {
 
     /// Walk the trie path from root to the given key, returning each node
     /// along the path with its child hashes. Used for sub-trie hash
-    /// verification after applying change proof batch_ops.
+    /// verification after applying change proof `batch_ops`.
     pub fn path_to_key(
         &self,
         key: &[u8],

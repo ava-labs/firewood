@@ -149,9 +149,6 @@ pub enum ProofError {
     #[error("the proof is None as it has been consumed")]
     ProofIsNone,
 
-    #[error("the proposal for a change proof is None as it has been consumed")]
-    ProposalIsNone,
-
     /// Computed root hash after applying `batch_ops` doesn't match expected end root
     #[error("computed root hash after applying batch_ops doesn't match the expected end root")]
     EndRootMismatch,

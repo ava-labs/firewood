@@ -730,26 +730,21 @@ impl CResult for ProposedChangeProofResult<'_> {
     }
 }
 
-impl<'db>
-    From<
-        Result<
-            ProposedChangeProofContext<'db>,
-            (ChangeProofContext, api::Error),
-        >,
-    > for ProposedChangeProofResult<'db>
+impl<'db> From<Result<ProposedChangeProofContext<'db>, Box<(ChangeProofContext, api::Error)>>>
+    for ProposedChangeProofResult<'db>
 {
     fn from(
-        value: Result<
-            ProposedChangeProofContext<'db>,
-            (ChangeProofContext, api::Error),
-        >,
+        value: Result<ProposedChangeProofContext<'db>, Box<(ChangeProofContext, api::Error)>>,
     ) -> Self {
         match value {
             Ok(proposed) => Self::Ok(Box::new(proposed)),
-            Err((original, err)) => Self::VerificationFailed {
-                original: Box::new(original),
-                error: err.to_string().into_bytes().into(),
-            },
+            Err(boxed) => {
+                let (original, err) = *boxed;
+                Self::VerificationFailed {
+                    original: Box::new(original),
+                    error: err.to_string().into_bytes().into(),
+                }
+            }
         }
     }
 }
