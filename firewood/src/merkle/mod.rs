@@ -291,7 +291,7 @@ impl<T: TrieReader> Merkle<T> {
         root_hash: &TrieHash,
         proof: &RangeProof<impl KeyType, impl ValueType, impl ProofCollection>,
     ) -> Result<(), api::Error> {
-        // check that the keys are in ascending order
+        // check that the keys are in strictly increasing order (no duplicates)
         let key_values = proof.key_values();
         if !key_values
             .iter()
@@ -928,6 +928,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
                 .split_first()
                 .map(|(index, path)| (*index, path.into())),
         ) {
+            // Key fully consumed, node path fully consumed: convert leaf to branch if needed
             (None, None) => match node {
                 Node::Branch(_) => Ok(node),
                 Node::Leaf(leaf) => {
@@ -939,6 +940,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
                     Ok(Node::Branch(Box::new(branch)))
                 }
             },
+            // Key consumed, node has remaining path: split node under new branch
             (None, Some((child_index, partial_path))) => {
                 let child_index = PathComponent::try_new(child_index).expect("valid component");
 
@@ -953,6 +955,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
 
                 Ok(Node::Branch(Box::new(branch)))
             }
+            // Node path consumed, key continues: recurse into child (branch) or split (leaf)
             (Some((child_index, partial_path)), None) => {
                 let child_index = PathComponent::try_new(child_index).expect("valid component");
 
@@ -991,6 +994,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
                     }
                 }
             }
+            // Paths diverge: create new branch with both as children
             (Some((key_index, key_partial_path)), Some((node_index, node_partial_path))) => {
                 let key_index = PathComponent::try_new(key_index).expect("valid component");
                 let node_index = PathComponent::try_new(node_index).expect("valid component");
