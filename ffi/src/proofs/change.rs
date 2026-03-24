@@ -7,13 +7,15 @@ use std::num::NonZeroUsize;
 use firewood_metrics::firewood_increment;
 #[cfg(feature = "ethhash")]
 use firewood_storage::TrieHash;
-use firewood_storage::{Children, HashType, Hashable, PathComponent, PathIterItem};
+use firewood_storage::{
+    Children, HashType, Hashable, PathBuf, PathComponent, PathIterItem, TriePathFromUnpackedBytes,
+};
 #[cfg(feature = "ethhash")]
 use rlp::Rlp;
 
 use firewood::{
     ProofError, ProofNode,
-    api::{self, DbView as _, FrozenChangeProof, HashKey},
+    api::{self, BatchOp, DbView as _, FrozenChangeProof, HashKey},
     next_nibble,
 };
 
@@ -104,7 +106,10 @@ struct VerificationContext {
     end_root: HashKey,
     start_key: Option<Box<[u8]>>,
     end_key: Option<Box<[u8]>>,
-    max_length: Option<NonZeroUsize>,
+    /// The key that the end proof was actually validated against.
+    /// Computed during `verify_end_proof` and cached to avoid
+    /// redundant `value_digest` calls in downstream checks.
+    resolved_end_key: Option<Box<[u8]>>,
 }
 
 #[derive(Debug)]
@@ -135,6 +140,29 @@ fn verify_proof(
     max_length: Option<NonZeroUsize>,
 ) -> Result<VerificationContext, api::Error> {
     let batch_ops = proof.batch_ops();
+
+    // Fix 3: Reject inverted ranges early. The generator enforces this
+    // (merkle/mod.rs:545-552), but the verifier must independently
+    // validate because start_key/end_key come from the caller, not
+    // the proof.
+    if let (Some(start), Some(end)) = (start_key, end_key)
+        && start.cmp(end) == Ordering::Greater
+    {
+        return Err(api::Error::InvalidRange {
+            start_key: start.to_vec().into(),
+            end_key: end.to_vec().into(),
+        });
+    }
+
+    // Fix 2: The honest diff algorithm only produces Put and Delete ops,
+    // never DeleteRange. A crafted proof could use DeleteRange to delete
+    // keys outside the proven range.
+    if batch_ops
+        .iter()
+        .any(|op| matches!(op, BatchOp::DeleteRange { .. }))
+    {
+        return Err(api::Error::ProofError(ProofError::UnsupportedDeleteRange));
+    }
 
     // Check batch_ops length <= max_length
     if let Some(max_length) = max_length
@@ -169,15 +197,24 @@ fn verify_proof(
         return Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted));
     }
 
+    // Fix 9: Reject proofs with batch_ops but no boundary proofs. Without
+    // at least one Merkle path, there is no way to verify that the
+    // batch_ops produce the correct sub-trie hashes.
+    if !batch_ops.is_empty() && proof.start_proof().is_empty() && proof.end_proof().is_empty() {
+        return Err(api::Error::ProofError(ProofError::MissingBoundaryProof));
+    }
+
     // Verify boundary proofs against end_root
     verify_start_proof(proof, start_key, &end_root)?;
-    verify_end_proof(proof, end_key, &end_root, max_length)?;
+    // Fix 8: verify_end_proof now returns the resolved key it validated
+    // against, cached to avoid redundant value_digest calls downstream.
+    let resolved_end_key = verify_end_proof(proof, end_key, &end_root, max_length)?;
 
     Ok(VerificationContext {
         end_root,
         start_key: start_key.map(Box::from),
         end_key: end_key.map(Box::from),
-        max_length,
+        resolved_end_key,
     })
 }
 
@@ -187,35 +224,50 @@ fn verify_start_proof(
     start_key: Option<&[u8]>,
     end_root: &HashKey,
 ) -> Result<(), api::Error> {
+    // An empty start_proof is valid: it means the range starts from the
+    // beginning of the keyspace (start_key=None in the first sync round).
     if proof.start_proof().is_empty() {
         return Ok(());
     }
+
+    // Fix 1: If start_proof is non-empty, we MUST have a key to validate
+    // it against. The honest generator only produces a non-empty
+    // start_proof when start_key is Some (merkle/mod.rs:558-561).
     let Some(start_key) = start_key else {
-        return Ok(());
+        return Err(api::Error::ProofError(
+            ProofError::BoundaryProofUnverifiable,
+        ));
     };
+
     proof.start_proof().value_digest(start_key, end_root)?;
     Ok(())
 }
 
-/// Verify the end boundary proof against the end root hash.
+/// Verify the end boundary proof against the end root hash and return the
+/// key it was validated against.
 ///
 /// When `batch_ops.len() >= max_length`, the proof may have been truncated.
 /// The generator uses the last batch op key when truncated but `end_key`
 /// otherwise. Since the verifier cannot distinguish the two cases, we try
 /// the last batch op key first and fall back to `end_key`.
+///
+/// Returns `Ok(Some(key))` with the validated key, or `Ok(None)` if the
+/// end proof is empty (range reaches end of keyspace).
 fn verify_end_proof(
     proof: &FrozenChangeProof,
     end_key: Option<&[u8]>,
     end_root: &HashKey,
     max_length: Option<NonZeroUsize>,
-) -> Result<(), api::Error> {
+) -> Result<Option<Box<[u8]>>, api::Error> {
+    // Empty end_proof = range reaches end of keyspace. No key to resolve.
     if proof.end_proof().is_empty() {
-        return Ok(());
+        return Ok(None);
     }
 
     let batch_ops = proof.batch_ops();
     let potentially_truncated = max_length.is_some_and(|max| batch_ops.len() >= max.get());
 
+    // Try 1: truncated proof — validate against the last batch op key.
     if potentially_truncated
         && let Some(last_op) = batch_ops.last()
         && proof
@@ -223,22 +275,29 @@ fn verify_end_proof(
             .value_digest(last_op.key().as_ref(), end_root)
             .is_ok()
     {
-        return Ok(());
+        return Ok(Some(last_op.key().as_ref().into()));
     }
 
+    // Try 2: non-truncated proof — validate against the requested end_key.
     if let Some(end_key) = end_key {
         proof.end_proof().value_digest(end_key, end_root)?;
-        return Ok(());
+        return Ok(Some(end_key.into()));
     }
 
+    // Try 3: no end_key — fall back to last batch op key.
     if let Some(last_op) = batch_ops.last() {
         proof
             .end_proof()
             .value_digest(last_op.key().as_ref(), end_root)?;
-        return Ok(());
+        return Ok(Some(last_op.key().as_ref().into()));
     }
 
-    Ok(())
+    // Fix 1: All validation paths exhausted. end_proof is non-empty but
+    // no key could validate it. The honest generator always provides a
+    // key for a non-empty end_proof (merkle/mod.rs:589-603).
+    Err(api::Error::ProofError(
+        ProofError::BoundaryProofUnverifiable,
+    ))
 }
 
 /// Returns true if this proof covers the full range (not truncated, not
@@ -253,56 +312,13 @@ fn is_complete_proof(verification: &VerificationContext, proof: &FrozenChangePro
         && proof.end_proof().is_empty()
 }
 
-/// Determine which key the end proof was generated for.
-///
-/// When a proof is potentially truncated (batch ops count >= `max_length`),
-/// the generator may have used the last batch op's key instead of the
-/// requested end key. The verifier cannot distinguish which was used, so
-/// it tries validating with the last batch op key first, then falls back
-/// to the requested end key. Replicates the try-both logic from
-/// [`verify_end_proof`].
-fn resolve_end_proof_key(
-    verification: &VerificationContext,
-    proof: &FrozenChangeProof,
-) -> Option<Box<[u8]>> {
-    let batch_ops = proof.batch_ops();
-    let potentially_truncated = verification
-        .max_length
-        .is_some_and(|max| batch_ops.len() >= max.get());
-
-    if potentially_truncated && let Some(last_op) = batch_ops.last() {
-        let key: &[u8] = last_op.key().as_ref();
-        if proof
-            .end_proof()
-            .value_digest(key, &verification.end_root)
-            .is_ok()
-        {
-            return Some(key.into());
-        }
-    }
-
-    if let Some(ref end_key) = verification.end_key
-        && proof
-            .end_proof()
-            .value_digest(end_key.as_ref(), &verification.end_root)
-            .is_ok()
-    {
-        return Some(end_key.clone());
-    }
-
-    batch_ops
-        .last()
-        .map(|op| -> Box<[u8]> { op.key().as_ref().into() })
-}
-
 /// Verify sub-trie hashes: compare child hashes at branch points in the
 /// boundary proofs against the proposal's trie after applying `batch_ops`.
 ///
-/// This check requires both boundary proofs to be non-empty — with only one
-/// proof there is no divergence point and therefore no "in-range" nibbles
-/// to verify. The check runs in two phases: first for the start side
-/// (nibbles after the path at each depth), then for the end side (nibbles
-/// before the path at each depth).
+/// When both boundary proofs are present, finds a divergence point and
+/// checks in-range children on both sides. When only one boundary proof
+/// is present, performs single-proof subtrie verification for the
+/// available side.
 fn verify_subtrie_hashes(
     proof: &FrozenChangeProof,
     verification: &VerificationContext,
@@ -311,13 +327,25 @@ fn verify_subtrie_hashes(
     let start_proof = proof.start_proof();
     let end_proof = proof.end_proof();
 
-    // Both boundary proofs must be present; with only one there is no
-    // divergence point and no in-range nibbles to verify.
-    if start_proof.is_empty() || end_proof.is_empty() {
+    if start_proof.is_empty() && end_proof.is_empty() {
         return Ok(());
     }
 
-    let Some(divergence) = find_divergence(start_proof, end_proof) else {
+    // Fix 7: Single-proof verification when only one boundary is present
+    if start_proof.is_empty() {
+        return verify_end_only_subtrie_hashes(proof, verification, proposal);
+    }
+    if end_proof.is_empty() {
+        return verify_start_only_subtrie_hashes(proof, verification, proposal);
+    }
+
+    // Two-proof verification (existing logic)
+    let Some(divergence) = find_divergence(
+        start_proof,
+        end_proof,
+        verification.start_key.as_deref(),
+        verification.resolved_end_key.as_deref(),
+    ) else {
         return Ok(());
     };
 
@@ -328,8 +356,8 @@ fn verify_subtrie_hashes(
     }
 
     // Phase 2: end side — children before the path nibble below divergence
-    if let Some(end_key) = resolve_end_proof_key(verification, proof) {
-        let proposal_path = proposal.path_to_key(&end_key)?;
+    if let Some(ref end_key) = verification.resolved_end_key {
+        let proposal_path = proposal.path_to_key(end_key)?;
         verify_proof_path_children(end_proof, &proposal_path, &divergence, Side::End)?;
     }
 
@@ -347,20 +375,24 @@ fn verify_boundary_values(
     proof: &FrozenChangeProof,
     verification: &VerificationContext,
     proposal: &crate::ProposalHandle<'_>,
-    end_root: &HashKey,
 ) -> Result<(), api::Error> {
     // Check start boundary
     if !proof.start_proof().is_empty()
         && let Some(ref start_key) = verification.start_key
     {
-        verify_single_boundary_value(proposal, proof.start_proof(), start_key, end_root)?;
+        verify_single_boundary_value(
+            proposal,
+            proof.start_proof(),
+            start_key,
+            &verification.end_root,
+        )?;
     }
 
-    // Check end boundary
+    // Check end boundary — uses the cached resolved key from verify_end_proof
     if !proof.end_proof().is_empty()
-        && let Some(end_key) = resolve_end_proof_key(verification, proof)
+        && let Some(ref end_key) = verification.resolved_end_key
     {
-        verify_single_boundary_value(proposal, proof.end_proof(), &end_key, end_root)?;
+        verify_single_boundary_value(proposal, proof.end_proof(), end_key, &verification.end_root)?;
     }
 
     Ok(())
@@ -424,7 +456,7 @@ impl ChangeProofContext {
         if let Err(e) = verify_subtrie_hashes(&proof, &verification, &proposal.handle) {
             return Err(Box::new((Self { proof }, e)));
         }
-        if let Err(e) = verify_boundary_values(&proof, &verification, &proposal.handle, &end_root) {
+        if let Err(e) = verify_boundary_values(&proof, &verification, &proposal.handle) {
             return Err(Box::new((Self { proof }, e)));
         }
 
@@ -543,9 +575,16 @@ struct DivergenceInfo {
 /// entire sub-tries must have been included in the batch operations. The
 /// returned [`DivergenceInfo`] drives the per-node in-range nibble
 /// calculations in [`verify_proof_path_children`].
+///
+/// `start_key` and `end_key` are the boundary keys used to generate the
+/// proofs. They are used as a fallback when one proof is shorter than the
+/// other and the last proof node's path cannot determine the nibble
+/// (Fix 5: single-node proof edge case).
 fn find_divergence(
     start_proof: &firewood::Proof<Box<[ProofNode]>>,
     end_proof: &firewood::Proof<Box<[ProofNode]>>,
+    start_key: Option<&[u8]>,
+    end_key: Option<&[u8]>,
 ) -> Option<DivergenceInfo> {
     let start_nodes: &[ProofNode] = start_proof;
     let end_nodes: &[ProofNode] = end_proof;
@@ -566,6 +605,12 @@ fn find_divergence(
 
         match (s_nibble, e_nibble) {
             (Some(sn), Some(en)) if sn != en => {
+                // Fix 6: sn > en implies start_key > end_key at this depth,
+                // which should not occur with valid inputs. Return None as a
+                // safe default (skips subtrie check).
+                if sn > en {
+                    return None;
+                }
                 return Some(DivergenceInfo {
                     node_index: i,
                     start_nibble: sn,
@@ -575,17 +620,29 @@ fn find_divergence(
             // One proof continues deeper but the other stops — the key of the
             // shorter proof *is* the divergence point.
             (Some(sn), None) => {
-                // end proof stops here; use next_nibble from start to the end
-                // proof's last node key to determine end side.
+                // Fix 5: When end_nodes has only one node past this point,
+                // last() == e_node and next_nibble(path, path) returns None.
+                // Use the actual boundary key as a fallback.
                 let en = next_nibble(
                     e_node.full_path(),
                     end_nodes
                         .last()
+                        .filter(|n| !std::ptr::eq(*n, e_node))
                         .map_or_else(|| e_node.full_path(), |n| n.full_path()),
-                );
+                )
+                .or_else(|| {
+                    let nibbles: Vec<u8> =
+                        firewood_storage::NibblesIterator::new(end_key?).collect();
+                    let key_path: PathBuf =
+                        TriePathFromUnpackedBytes::path_from_unpacked_bytes(&nibbles).ok()?;
+                    next_nibble(e_node.full_path(), key_path.as_ref())
+                });
                 if let Some(en) = en
                     && sn != en
                 {
+                    if sn > en {
+                        return None;
+                    }
                     return Some(DivergenceInfo {
                         node_index: i,
                         start_nibble: sn,
@@ -594,15 +651,28 @@ fn find_divergence(
                 }
             }
             (None, Some(en)) => {
+                // Symmetric case: start proof stops here. Use boundary key
+                // as fallback when last() == s_node.
                 let sn = next_nibble(
                     s_node.full_path(),
                     start_nodes
                         .last()
+                        .filter(|n| !std::ptr::eq(*n, s_node))
                         .map_or_else(|| s_node.full_path(), |n| n.full_path()),
-                );
+                )
+                .or_else(|| {
+                    let nibbles: Vec<u8> =
+                        firewood_storage::NibblesIterator::new(start_key?).collect();
+                    let key_path: PathBuf =
+                        TriePathFromUnpackedBytes::path_from_unpacked_bytes(&nibbles).ok()?;
+                    next_nibble(s_node.full_path(), key_path.as_ref())
+                });
                 if let Some(sn) = sn
                     && sn != en
                 {
+                    if sn > en {
+                        return None;
+                    }
                     return Some(DivergenceInfo {
                         node_index: i,
                         start_nibble: sn,
@@ -615,6 +685,149 @@ fn find_divergence(
     }
 
     None
+}
+
+/// Verify sub-trie hashes using only the end boundary proof.
+///
+/// When `start_proof` is absent (first round of multi-round sync), all
+/// children before the end proof's path at each depth are "in range" —
+/// their sub-tries should be fully covered by `batch_ops`.
+fn verify_end_only_subtrie_hashes(
+    proof: &FrozenChangeProof,
+    verification: &VerificationContext,
+    proposal: &crate::ProposalHandle<'_>,
+) -> Result<(), api::Error> {
+    let end_proof = proof.end_proof();
+    if end_proof.is_empty() {
+        return Ok(());
+    }
+
+    let Some(ref end_key) = verification.resolved_end_key else {
+        return Ok(());
+    };
+
+    let proposal_path = proposal.path_to_key(end_key)?;
+    let proof_nodes: &[ProofNode] = end_proof.as_ref();
+
+    let proposal_lookup: HashMap<&[firewood_storage::PathComponent], &PathIterItem> = proposal_path
+        .iter()
+        .map(|item| (item.key_nibbles.as_ref(), item))
+        .collect();
+
+    for (depth, proof_node) in proof_nodes.iter().enumerate() {
+        let forward_nibble = depth
+            .checked_add(1)
+            .and_then(|j| proof_nodes.get(j))
+            .and_then(|next| next_nibble(proof_node.key.as_ref(), next.key.as_ref()));
+
+        let Some(path_nibble) = forward_nibble else {
+            continue;
+        };
+
+        // With no start proof, all children before the end path are
+        // "in range" because the range extends from the beginning of
+        // the keyspace.
+        let in_range = in_range_before(path_nibble);
+
+        if in_range.is_empty() {
+            continue;
+        }
+
+        let proof_key: &[firewood_storage::PathComponent] = proof_node.key.as_ref();
+        let proposal_children: Children<Option<HashType>> =
+            if let Some(item) = proposal_lookup.get(proof_key) {
+                item.node
+                    .as_branch()
+                    .map(|b| b.children_hashes())
+                    .unwrap_or_default()
+            } else {
+                for nibble in &in_range {
+                    if proof_node.child_hashes[*nibble].is_some() {
+                        return Err(api::Error::ProofError(ProofError::SubTrieHashMismatch));
+                    }
+                }
+                continue;
+            };
+
+        for nibble in &in_range {
+            if proof_node.child_hashes[*nibble] != proposal_children[*nibble] {
+                return Err(api::Error::ProofError(ProofError::SubTrieHashMismatch));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Verify sub-trie hashes using only the start boundary proof.
+///
+/// When `end_proof` is absent (last round reaching end of keyspace), all
+/// children after the start proof's path at each depth are "in range".
+fn verify_start_only_subtrie_hashes(
+    proof: &FrozenChangeProof,
+    verification: &VerificationContext,
+    proposal: &crate::ProposalHandle<'_>,
+) -> Result<(), api::Error> {
+    let start_proof = proof.start_proof();
+    if start_proof.is_empty() {
+        return Ok(());
+    }
+
+    let Some(ref start_key) = verification.start_key else {
+        return Ok(());
+    };
+
+    let proposal_path = proposal.path_to_key(start_key)?;
+    let proof_nodes: &[ProofNode] = start_proof.as_ref();
+
+    let proposal_lookup: HashMap<&[firewood_storage::PathComponent], &PathIterItem> = proposal_path
+        .iter()
+        .map(|item| (item.key_nibbles.as_ref(), item))
+        .collect();
+
+    for (depth, proof_node) in proof_nodes.iter().enumerate() {
+        let forward_nibble = depth
+            .checked_add(1)
+            .and_then(|j| proof_nodes.get(j))
+            .and_then(|next| next_nibble(proof_node.key.as_ref(), next.key.as_ref()));
+
+        let Some(path_nibble) = forward_nibble else {
+            continue;
+        };
+
+        // With no end proof, all children after the start path are
+        // "in range" because the range extends to the end of the
+        // keyspace.
+        let in_range = in_range_after(path_nibble);
+
+        if in_range.is_empty() {
+            continue;
+        }
+
+        let proof_key: &[firewood_storage::PathComponent] = proof_node.key.as_ref();
+        let proposal_children: Children<Option<HashType>> =
+            if let Some(item) = proposal_lookup.get(proof_key) {
+                item.node
+                    .as_branch()
+                    .map(|b| b.children_hashes())
+                    .unwrap_or_default()
+            } else {
+                for nibble in &in_range {
+                    if proof_node.child_hashes[*nibble].is_some() {
+                        return Err(api::Error::ProofError(ProofError::SubTrieHashMismatch));
+                    }
+                }
+                continue;
+            };
+
+        for nibble in &in_range {
+            if proof_node.child_hashes[*nibble] != proposal_children[*nibble] {
+                return Err(api::Error::ProofError(ProofError::SubTrieHashMismatch));
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Core sub-trie integrity check for one boundary proof side.
