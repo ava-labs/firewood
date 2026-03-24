@@ -551,11 +551,18 @@ fn find_divergence(
     let end_nodes: &[ProofNode] = end_proof;
 
     for (i, (s_node, e_node)) in start_nodes.iter().zip(end_nodes.iter()).enumerate() {
-        let s_next = i.checked_add(1).and_then(|j| start_nodes.get(j));
-        let e_next = i.checked_add(1).and_then(|j| end_nodes.get(j));
-
-        let s_nibble = s_next.and_then(|n| next_nibble(s_node.full_path(), n.full_path()));
-        let e_nibble = e_next.and_then(|n| next_nibble(e_node.full_path(), n.full_path()));
+        // The nibble the start proof takes to reach the next node (if any).
+        // Computed by peeking at the next node in the start proof and
+        // extracting the first path component that diverges from this node.
+        let s_nibble = i
+            .checked_add(1)
+            .and_then(|j| start_nodes.get(j))
+            .and_then(|n| next_nibble(s_node.full_path(), n.full_path()));
+        // Same for the end proof: the nibble leading to its next node.
+        let e_nibble = i
+            .checked_add(1)
+            .and_then(|j| end_nodes.get(j))
+            .and_then(|n| next_nibble(e_node.full_path(), n.full_path()));
 
         match (s_nibble, e_nibble) {
             (Some(sn), Some(en)) if sn != en => {
