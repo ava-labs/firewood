@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774251261367,
+  "lastUpdate": 1774337254939,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -1691,6 +1691,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 89.78313451924166,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Joachim Brandon LeBlanc",
+            "username": "demosdemon",
+            "email": "brandon.leblanc@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "21cf4ec1bdb1f4b4a3395a8463f2991877280295",
+          "message": "fix(deferred-persistence): carry metrics context into worker (#1829)\n\n## Why this should be merged\n\nWhen discussing the metrics context, I had an urge to check if the\ndeferred persistence worker was carrying the metrics contexts into its\nthread and discovered that it wasn't.\n\n## How this works\n\nSimilar to the parallel hash workers, the thread context is applied\nafter spawning the thread.\n\n\nhttps://github.com/ava-labs/firewood/blob/b45305cc14ccb79f509fb735d7e8bb70af39c0c1/firewood/src/merkle/parallel.rs#L262-L265\n\n## How this was tested\n\nThe added tests verifies that carrying a context into the thread\nactually does something, but doesn't explicitly test that this thread\ndoes something. Testing that is a little more complicated and I'll\nfigure that out as needed if this becomes a pattern.\n\n## Breaking Changes\n\nn/a",
+          "timestamp": "2026-03-24T00:03:35Z",
+          "url": "https://github.com/ava-labs/firewood/commit/21cf4ec1bdb1f4b4a3395a8463f2991877280295"
+        },
+        "date": 1774337254134,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 168.27616150914926,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5942.61237617801,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 111.68664637452076,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5749.285857732777,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 78.85624418444576,
             "unit": "block_accept_ms/ggas"
           }
         ]
