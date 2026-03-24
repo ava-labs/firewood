@@ -27,7 +27,7 @@ def git(*args, cwd=None):
 def load_data(path):
     if not path.is_file():
         return None
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     return json.loads(text[len(PREFIX) :]) if text.startswith(PREFIX) else None
 
 
@@ -84,20 +84,21 @@ def normalize(path, subjects):
             if len(filtered) != len(benches):
                 suite["benches"] = filtered
     if changed:
-        path.write_text(PREFIX + json.dumps(data, indent=2))
+        path.write_text(PREFIX + json.dumps(data, indent=2), encoding="utf-8")
 
 
 def apply_theme(report_dir, css):
     idx = report_dir / "index.html"
     if not idx.is_file():
         return
-    (report_dir / "theme.css").write_text(css)
-    html = idx.read_text()
+    (report_dir / "theme.css").write_text(css, encoding="utf-8")
+    html = idx.read_text(encoding="utf-8")
     if 'href="theme.css"' not in html and "</head>" in html:
         idx.write_text(
             html.replace(
                 "</head>", '  <link rel="stylesheet" href="theme.css">\n</head>', 1
-            )
+            ),
+            encoding="utf-8",
         )
 
 

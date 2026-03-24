@@ -4,6 +4,8 @@
 import json
 import math
 import os
+import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -26,10 +28,14 @@ def load_data(rel_dir):
         rel_dir,
         "data.js",
     )
+    print(f"  Loading: {p} (exists={p.is_file()})")
     if not p.is_file():
         return None
-    text = p.read_text()
-    return json.loads(text[len(PREFIX) :]) if text.startswith(PREFIX) else None
+    text = p.read_text(encoding="utf-8")
+    if not text.startswith(PREFIX):
+        print(f"  WARNING: data.js missing expected prefix")
+        return None
+    return json.loads(text[len(PREFIX) :])
 
 
 def entries(data, suite):
@@ -72,8 +78,9 @@ def fmt_delta(cur, base):
 
 
 def gh(method, path, data=None):
+    url = f"{os.getenv('GITHUB_API_URL', 'https://api.github.com')}{path}"
     req = urllib.request.Request(
-        f"{os.getenv('GITHUB_API_URL', 'https://api.github.com')}{path}",
+        url,
         data=json.dumps(data).encode() if data else None,
         headers={
             "Accept": "application/vnd.github+json",
@@ -82,11 +89,21 @@ def gh(method, path, data=None):
         },
         method=method,
     )
-    with urllib.request.urlopen(req) as r:
-        return json.loads(r.read() or "null")
+    try:
+        with urllib.request.urlopen(req) as r:
+            body = r.read()
+            print(f"  API {method} {path} -> {r.status}")
+            return json.loads(body or "null")
+    except urllib.error.HTTPError as e:
+        print(
+            f"  API {method} {path} -> {e.code}: {e.read().decode(errors='replace')}",
+            file=sys.stderr,
+        )
+        raise
 
 
 def main():
+    print("=== Post replay benchmark comment ===")
     owner, repo = os.environ["GITHUB_REPOSITORY"].split("/", 1)
     repo_url = f"{os.getenv('GITHUB_SERVER_URL', 'https://github.com')}/{owner}/{repo}"
     pr, base_sha, head_sha = (
@@ -94,11 +111,16 @@ def main():
         os.environ["BASE_SHA"],
         os.environ["HEAD_SHA"],
     )
+    print(f"PR #{pr}, base={base_sha[:8]}, head={head_sha[:8]}")
 
+    print("Loading trend data...")
     trend = entries(load_data(os.environ["PR_DATA_DIR"]), "Replay 10K PR")
+    print(f"  Found {len(trend)} trend entries")
+    print("Loading comparison data...")
     compare = entries(
         load_data(os.environ["COMPARISON_DATA_DIR"]), "Replay 10K PR Compare"
     )
+    print(f"  Found {len(compare)} comparison entries")
 
     head_t, head_idx = find_by_sha(trend, head_sha)
     if head_t is None and trend:
@@ -106,6 +128,9 @@ def main():
     head_c, _ = find_by_sha(compare, head_sha)
     base_t, _ = find_by_sha(trend, base_sha)
     base_c, _ = find_by_sha(compare, base_sha)
+    print(
+        f"  head_trend={'found' if head_t else 'missing'}, head_cmp={'found' if head_c else 'missing'}, base_trend={'found' if base_t else 'missing'}, base_cmp={'found' if base_c else 'missing'}"
+    )
 
     prev = None
     if head_idx is not None:
@@ -119,6 +144,9 @@ def main():
         get_metrics(head_c or head_t),
         get_metrics(base_c or base_t),
         get_metrics(prev),
+    )
+    print(
+        f"  head metrics: {len(hm)}, base metrics: {len(bm)}, prev metrics: {len(pm)}"
     )
     names = [n for n in LABELS if n in hm][:5] or [
         n
@@ -172,6 +200,7 @@ _Lower is better for all timing metrics._
 - [PR trend graph]({os.environ["TREND_URL"]})
 - [Base vs head graph]({os.environ["COMPARISON_URL"]})"""
 
+    print("Fetching existing comments...")
     comments = (
         gh("GET", f"/repos/{owner}/{repo}/issues/{pr}/comments?per_page=100") or []
     )
@@ -185,13 +214,16 @@ _Lower is better for all timing metrics._
         None,
     )
     if existing:
+        print(f"Updating existing comment {existing['id']}...")
         gh(
             "PATCH",
             f"/repos/{owner}/{repo}/issues/comments/{existing['id']}",
             {"body": body},
         )
     else:
+        print(f"Creating new comment on PR #{pr}...")
         gh("POST", f"/repos/{owner}/{repo}/issues/{pr}/comments", {"body": body})
+    print("Done.")
 
 
 if __name__ == "__main__":

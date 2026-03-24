@@ -55,10 +55,9 @@ jobs:
             "./$BENCHMARK_REPORTS_DIR"
 
           has_sha() { [[ -f "$1/data.js" ]] && grep -q "$2" "$1/data.js" && echo true || echo false; }
-          base_in_trend=$(has_sha "$BENCHMARK_REPORTS_DIR/$pr_dir" "$base_sha")
           base_in_cmp=$(has_sha "$BENCHMARK_REPORTS_DIR/$cmp_dir" "$base_sha")
           base_required=false
-          [[ "$base_in_trend" == true && "$base_in_cmp" == true ]] || base_required=true
+          [[ "$base_in_cmp" == true ]] || base_required=true
 
           base_subject="$(git show -s --format=%s "$base_sha" 2>/dev/null || echo "$base_sha")"
           head_subject="$(git show -s --format=%s "$HEAD_SHA" 2>/dev/null || echo "$HEAD_SHA")"
@@ -69,7 +68,6 @@ jobs:
             echo "pr-data-dir=$pr_dir"
             echo "comparison-data-dir=$cmp_dir"
             echo "base-required=$base_required"
-            echo "base-in-pr-trend=$base_in_trend"
             echo "base-in-comparison=$base_in_cmp"
             echo "base-subject<<EOF"
             echo "$base_subject"
@@ -80,8 +78,8 @@ jobs:
           } >> "$GITHUB_OUTPUT"
 
           [[ "$base_required" == true ]] \
-            && echo "::notice::Base data missing - will benchmark base commit." \
-            || echo "::notice::Base data exists in both graphs."
+            && echo "::notice::Base data missing in comparison - will benchmark base commit." \
+            || echo "::notice::Base data exists in comparison graph."
 
       - name: Prepare base source tree
         id: prepare-base
@@ -103,22 +101,6 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-
-      - name: Publish base to PR trend
-        if: steps.meta.outputs.base-in-pr-trend != 'true' && steps.benchmark-base.outcome == 'success'
-        continue-on-error: true
-        uses: ./.github/actions/publish-benchmark
-        with:
-          name: Replay 10K PR
-          output-file: ${{ steps.benchmark-base.outputs.output-file }}
-          ref: ${{ steps.meta.outputs.base-sha }}
-          github-token: ${{ env.BENCHMARK_TOKEN }}
-          benchmark-data-dir-path: ${{ steps.meta.outputs.pr-data-dir }}
-          alert-threshold: "150%"
-          comment-on-alert: "false"
-          fail-on-alert: "false"
-          gh-repository: ${{ env.BENCHMARK_REPORTS_GH_REPOSITORY }}
-          gh-pages-branch: ${{ env.BENCHMARK_REPORTS_BRANCH }}
 
       - name: Publish base to comparison
         if: steps.meta.outputs.base-in-comparison != 'true' && steps.benchmark-base.outcome == 'success'
