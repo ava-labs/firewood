@@ -605,12 +605,17 @@ impl<T: HashedNodeReader> Merkle<T> {
         Ok(ChangeProof::new(start_proof, end_proof, batch_ops))
     }
 
-    /// Dump a node, recursively, to a dot file
+    /// Dump a node, recursively, to a dot file.
+    ///
+    /// The `keep_alive` vec holds references to all `MaybePersistedNode`s
+    /// created during the dump so their addresses remain stable for dup
+    /// detection in `seen`.
     pub(crate) fn dump_node<W: std::io::Write + ?Sized>(
         &self,
         node: &MaybePersistedNode,
         hash: Option<&HashType>,
         seen: &mut HashSet<String>,
+        keep_alive: &mut Vec<MaybePersistedNode>,
         writer: &mut W,
     ) -> Result<(), FileIoError> {
         writeln!(writer, "  {node}[label=\"{node}")
@@ -634,10 +639,11 @@ impl<T: HashedNodeReader> Merkle<T> {
                     };
 
                     let inserted = seen.insert(format!("{child}"));
+                    keep_alive.push(child.clone());
                     if inserted {
                         writeln!(writer, "  {node} -> {child}[label=\"{childidx:x}\"]")
                             .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
-                        self.dump_node(&child, child_hash, seen, writer)?;
+                        self.dump_node(&child, child_hash, seen, keep_alive, writer)?;
                     } else {
                         // We have already seen this child, which shouldn't happen.
                         // Indicate this with a red edge.
@@ -678,8 +684,15 @@ impl<T: HashedNodeReader> Merkle<T> {
                 .map_err(|e| FileIoError::new(e, None, 0, None))
                 .map_err(Error::other)?;
             let mut seen = HashSet::new();
-            self.dump_node(&root, Some(&root_hash.into_hash_type()), &mut seen, writer)
-                .map_err(Error::other)?;
+            let mut keep_alive = Vec::new();
+            self.dump_node(
+                &root,
+                Some(&root_hash.into_hash_type()),
+                &mut seen,
+                &mut keep_alive,
+                writer,
+            )
+            .map_err(Error::other)?;
         }
         writeln!(writer, "}}")
             .map_err(Error::other)
