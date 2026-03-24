@@ -1,48 +1,25 @@
-name: "Publish Benchmark Result"
-description: "Clean benchmark-action workspace and publish a Go benchmark result"
+name: Publish Benchmark Result
+description: Publish a Go benchmark result via github-action-benchmark
 
 inputs:
-  name:
-    description: "Benchmark series name"
-    required: true
-  output-file:
-    description: "Path to the benchmark output file"
-    required: true
-  ref:
-    description: "Commit SHA to associate with the result"
-    required: true
-  github-token:
-    description: "GitHub token used by github-action-benchmark"
-    required: true
+  name: { description: "Series name", required: true }
+  output-file: { description: "Benchmark output file", required: true }
+  ref: { description: "Commit SHA", required: true }
+  github-token: { description: "GitHub token", required: true }
   benchmark-data-dir-path:
-    description: "Directory inside the benchmark reports repository"
-    required: true
-  alert-threshold:
-    description: "Regression alert threshold"
-    required: true
-  comment-on-alert:
-    description: "Whether benchmark-action should comment on alerts"
-    required: true
-  fail-on-alert:
-    description: "Whether benchmark-action should fail on alerts"
-    required: true
-  alert-comment-cc-users:
-    description: "Users to mention on alert comments"
-    required: false
-    default: ""
-  gh-repository:
-    description: "Benchmark reports repository"
-    required: true
-  gh-pages-branch:
-    description: "Benchmark reports branch"
-    required: true
+    { description: "Data dir in reports repo", required: true }
+  alert-threshold: { description: "Regression alert threshold", required: true }
+  comment-on-alert: { description: "Comment on alerts", required: true }
+  fail-on-alert: { description: "Fail on alerts", required: true }
+  alert-comment-cc-users: { description: "CC on alert comments", default: "" }
+  gh-repository: { description: "Reports repository", required: true }
+  gh-pages-branch: { description: "Reports branch", required: true }
 
 runs:
-  using: "composite"
+  using: composite
   steps:
     - shell: bash
       run: rm -rf ./benchmark-data-repository
-
     - uses: benchmark-action/github-action-benchmark@v1
       with:
         name: ${{ inputs.name }}

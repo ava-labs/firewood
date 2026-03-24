@@ -1,139 +1,61 @@
-name: "Run Firewood Benchmark"
-description: "Build FFI and run performance benchmark"
+name: Run Firewood Benchmark
+description: Build FFI and run replay benchmark
 
 inputs:
-  source-dir:
-    description: "Source directory containing the Firewood workspace to benchmark"
-    required: false
-    default: "."
+  source-dir: { description: "Firewood workspace dir", default: "." }
   replay-log-url:
-    description: "URL to download the replay log from (supports https:// and s3:// URLs)"
-    required: true
-  benchtime:
-    description: "Number of benchmark iterations (passed to -benchtime=Nx)"
-    required: false
-    default: "3"
+    { description: "Replay log URL (https or s3)", required: true }
+  benchtime: { description: "Benchmark iterations", default: "3" }
   rust-cache-key:
-    description: "Rust cache shared key"
-    required: false
-    default: "maxperf-ethhash-logger"
-  aws-access-key-id:
-    description: "AWS Access Key ID (required for S3 URLs)"
-    required: false
-    default: ""
-  aws-secret-access-key:
-    description: "AWS Secret Access Key (required for S3 URLs)"
-    required: false
-    default: ""
-  aws-region:
-    description: "AWS Region for S3 bucket"
-    required: false
-    default: "us-east-1"
+    { description: "Rust cache key", default: "maxperf-ethhash-logger" }
+  aws-access-key-id: { description: "AWS Access Key ID", default: "" }
+  aws-secret-access-key: { description: "AWS Secret Access Key", default: "" }
+  aws-region: { description: "AWS Region", default: "us-east-1" }
 
 outputs:
   output-file:
-    description: "Path to the benchmark output file"
-    value: ${{ steps.run-benchmark.outputs.output-file }}
+    description: Benchmark output file path
+    value: ${{ steps.bench.outputs.output-file }}
 
 runs:
-  using: "composite"
+  using: composite
   steps:
-    - name: Setup Rust
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
+    - uses: dtolnay/rust-toolchain@stable
+    - uses: actions/setup-go@v5
       with:
-        go-version-file: "${{ inputs.source-dir }}/ffi/go.mod"
-        cache-dependency-path: "${{ inputs.source-dir }}/ffi/go.sum"
-
-    - name: Rust Cache
-      uses: Swatinem/rust-cache@v2
+        go-version-file: ${{ inputs.source-dir }}/ffi/go.mod
+        cache-dependency-path: ${{ inputs.source-dir }}/ffi/go.sum
+    - uses: Swatinem/rust-cache@v2
       with:
         shared-key: ${{ inputs.rust-cache-key }}
         cache-all-crates: true
         cache-workspace-crates: true
-
-    - name: Ensure C toolchain
-      shell: bash
-      run: |
-        set -euo pipefail
-
-        if command -v cc >/dev/null 2>&1; then
-          cc --version
-          exit 0
-        fi
-
-        SUDO=""
-        if command -v sudo >/dev/null 2>&1; then
-          SUDO="sudo"
-        fi
-
-        if command -v apt-get >/dev/null 2>&1; then
-          $SUDO apt-get update
-          $SUDO apt-get install -y --no-install-recommends build-essential pkg-config
-        elif command -v dnf >/dev/null 2>&1; then
-          $SUDO dnf install -y gcc gcc-c++ make pkgconf-pkg-config
-        elif command -v yum >/dev/null 2>&1; then
-          $SUDO yum install -y gcc gcc-c++ make pkgconfig
-        elif command -v apk >/dev/null 2>&1; then
-          $SUDO apk add --no-cache build-base pkgconf
-        else
-          echo "::error::'cc' is missing and no supported package manager was found."
-          exit 1
-        fi
-
-        command -v cc
-        cc --version
-
-    - name: Cargo Fetch
-      shell: bash
+    - shell: bash
+      run: command -v cc >/dev/null || { sudo apt-get update && sudo apt-get install -y --no-install-recommends build-essential pkg-config; }
+    - shell: bash
       working-directory: ${{ inputs.source-dir }}
       run: cargo fetch --locked --verbose
-
-    - name: Build Firewood FFI
-      shell: bash
+    - shell: bash
       working-directory: ${{ inputs.source-dir }}/ffi
       run: cargo build --locked --features ethhash,logger --profile maxperf
-
-    - name: Configure AWS credentials
-      if: startsWith(inputs.replay-log-url, 's3://')
+    - if: startsWith(inputs.replay-log-url, 's3://')
       uses: aws-actions/configure-aws-credentials@v4
       with:
         aws-access-key-id: ${{ inputs.aws-access-key-id }}
         aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
         aws-region: ${{ inputs.aws-region }}
-
-    - name: Fetch replay log
+    - shell: bash
+      working-directory: ${{ inputs.source-dir }}/ffi
+      env: { REPLAY_LOG_URL: "${{ inputs.replay-log-url }}" }
+      run: |
+        if [[ "$REPLAY_LOG_URL" == s3://* ]]; then aws s3 cp "$REPLAY_LOG_URL" replay.log
+        else curl -fsSL -o replay.log "$REPLAY_LOG_URL"; fi
+    - id: bench
       shell: bash
       working-directory: ${{ inputs.source-dir }}/ffi
-      env:
-        REPLAY_LOG_URL: ${{ inputs.replay-log-url }}
       run: |
-        if [[ "$REPLAY_LOG_URL" == s3://* ]]; then
-          echo "Downloading from S3: $REPLAY_LOG_URL"
-          aws s3 cp "$REPLAY_LOG_URL" replay.log
-        else
-          echo "Downloading from URL: $REPLAY_LOG_URL"
-          curl -L -o replay.log "$REPLAY_LOG_URL"
-        fi
-        ls -lh replay.log
-
-    - name: Run benchmark
-      id: run-benchmark
-      shell: bash
-      working-directory: ${{ inputs.source-dir }}/ffi
-      env:
-        TMPDIR: /mnt/tmp
-      run: |
-        SUDO=""
-        if command -v sudo >/dev/null 2>&1; then
-          SUDO="sudo"
-        fi
-
-        $SUDO mkdir -p "$TMPDIR"
-        $SUDO chmod 1777 "$TMPDIR"
-
-        REPLAY_MAX_COMMITS=1000 REPLAY_LOG=./replay.log go test -run=^$ -bench=BenchmarkReplayLog -benchtime=${{ inputs.benchtime }}x | tee output.txt
-
-        echo "output-file=$(pwd)/output.txt" >> $GITHUB_OUTPUT
+        export TMPDIR=/mnt/tmp
+        sudo mkdir -p "$TMPDIR" && sudo chmod 1777 "$TMPDIR"
+        REPLAY_MAX_COMMITS=1000 REPLAY_LOG=./replay.log \
+          go test -run=^$ -bench=BenchmarkReplayLog -benchtime=${{ inputs.benchtime }}x | tee output.txt
+        echo "output-file=$(pwd)/output.txt" >> "$GITHUB_OUTPUT"

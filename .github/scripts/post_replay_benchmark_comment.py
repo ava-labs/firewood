@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+"""Post replay benchmark comparison comment on a PR."""
 
 import json
 import math
@@ -18,109 +19,62 @@ LABELS = {
 }
 
 
-def read_data(relative_dir: str) -> dict | None:
-    path = Path(
+def load_data(rel_dir):
+    p = Path(
         os.environ["GITHUB_WORKSPACE"],
         os.getenv("BENCHMARK_REPORTS_DIR", "benchmark-reports-repository"),
-        relative_dir,
+        rel_dir,
         "data.js",
     )
-    if not path.is_file():
+    if not p.is_file():
         return None
-    text = path.read_text(encoding="utf-8")
-    if not text.startswith(PREFIX):
-        return None
-    try:
-        return json.loads(text[len(PREFIX) :])
-    except json.JSONDecodeError:
-        return None
+    text = p.read_text()
+    return json.loads(text[len(PREFIX) :]) if text.startswith(PREFIX) else None
 
 
-def suite_entries(data: dict | None, suite: str) -> list[dict]:
-    entries_root = (data or {}).get("entries")
-    entries = entries_root.get(suite) if isinstance(entries_root, dict) else None
-    return entries if isinstance(entries, list) else []
+def entries(data, suite):
+    return (data or {}).get("entries", {}).get(suite) or []
 
 
-def commit_info(entry: dict | None) -> dict:
-    commit = entry.get("commit") if isinstance(entry, dict) else None
-    return commit if isinstance(commit, dict) else {}
-
-
-def find_last(entries: list[dict], sha: str) -> tuple[dict, int] | tuple[None, None]:
-    for index in range(len(entries) - 1, -1, -1):
-        entry = entries[index]
-        if isinstance(entry, dict) and commit_info(entry).get("id") == sha:
-            return entry, index
+def find_by_sha(ents, sha):
+    for i in range(len(ents) - 1, -1, -1):
+        if isinstance(ents[i], dict) and ents[i].get("commit", {}).get("id") == sha:
+            return ents[i], i
     return None, None
 
 
-def find_previous(entries: list[dict], start: int | None, excluded: set[str]) -> dict | None:
-    if start is None:
-        return None
-    for index in range(start - 1, -1, -1):
-        entry = entries[index]
-        sha = commit_info(entry).get("id")
-        if sha and sha not in excluded:
-            return entry
-    return None
+def get_metrics(entry):
+    return {
+        b["name"]: (b["value"], b.get("unit", ""))
+        for b in (entry or {}).get("benches", [])
+        if isinstance(b.get("value"), (int, float)) and math.isfinite(b["value"])
+    }
 
 
-def metrics(entry: dict | None) -> dict[str, tuple[float, str]]:
-    result = {}
-    for bench in (entry or {}).get("benches", []):
-        if not isinstance(bench, dict):
-            continue
-        name, value = bench.get("name"), bench.get("value")
-        if isinstance(name, str) and isinstance(value, (int, float)) and math.isfinite(value):
-            result[name] = (value, bench.get("unit") if isinstance(bench.get("unit"), str) else "")
-    return result
+def fmt_val(v, u):
+    if not isinstance(v, (int, float)) or not math.isfinite(v):
+        return "\u2014"
+    for threshold, places in [(1, 3), (0.01, 4), (1e-4, 6)]:
+        if v >= threshold:
+            return f"{v:.{places}f} {u}"
+    return f"{v:.2e} {u}"
 
 
-def format_value(value: float | None, unit: str) -> str:
-    if not isinstance(value, (int, float)) or not math.isfinite(value):
-        return "—"
-    if value >= 1:
-        return f"{value:.3f} {unit}"
-    if value >= 0.01:
-        return f"{value:.4f} {unit}"
-    if value >= 0.0001:
-        return f"{value:.6f} {unit}"
-    return f"{value:.2e} {unit}"
-
-
-def format_delta(current: float | None, baseline: float | None) -> str:
+def fmt_delta(cur, base):
     if (
-        not isinstance(current, (int, float))
-        or not math.isfinite(current)
-        or not isinstance(baseline, (int, float))
-        or not math.isfinite(baseline)
-        or baseline == 0
+        not all(isinstance(x, (int, float)) and math.isfinite(x) for x in (cur, base))
+        or base == 0
     ):
-        return "—"
-    percent = (current - baseline) / baseline * 100
-    return f"{'🟢' if percent <= -1 else '🔴' if percent >= 1 else '🟡'} {percent:+.2f}%"
+        return "\u2014"
+    p = (cur - base) / base * 100
+    icon = "\U0001f7e2" if p <= -1 else "\U0001f534" if p >= 1 else "\U0001f7e1"
+    return f"{icon} {p:+.2f}%"
 
 
-def metric_names(head_metrics: dict[str, tuple[float, str]]) -> list[str]:
-    preferred = [name for name in LABELS if name in head_metrics][:5]
-    if preferred:
-        return preferred
-    return [
-        name
-        for name in head_metrics
-        if name.startswith("BenchmarkReplayLog - ") and not name.endswith("commits")
-    ][:5]
-
-
-def message(entry: dict | None) -> str:
-    return str(commit_info(entry).get("message", "")).replace("\r", " ").replace("\n", " ")
-
-
-def gh(method: str, path: str, data: dict | None = None) -> list[dict] | dict | None:
+def gh(method, path, data=None):
     req = urllib.request.Request(
         f"{os.getenv('GITHUB_API_URL', 'https://api.github.com')}{path}",
-        data=None if data is None else json.dumps(data).encode(),
+        data=json.dumps(data).encode() if data else None,
         headers={
             "Accept": "application/vnd.github+json",
             "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
@@ -128,94 +82,116 @@ def gh(method: str, path: str, data: dict | None = None) -> list[dict] | dict | 
         },
         method=method,
     )
-    with urllib.request.urlopen(req) as response:
-        body = response.read()
-    return json.loads(body) if body else None
+    with urllib.request.urlopen(req) as r:
+        return json.loads(r.read() or "null")
 
 
-def main() -> None:
+def main():
     owner, repo = os.environ["GITHUB_REPOSITORY"].split("/", 1)
     repo_url = f"{os.getenv('GITHUB_SERVER_URL', 'https://github.com')}/{owner}/{repo}"
-    pr_number = int(os.environ["PR_NUMBER"])
-    base_sha, head_sha = os.environ["BASE_SHA"], os.environ["HEAD_SHA"]
-    base_requested = os.getenv("BASE_BENCHMARK_REQUESTED") == "true"
-    base_outcome = os.getenv("BASE_BENCHMARK_OUTCOME") or "skipped"
+    pr, base_sha, head_sha = (
+        int(os.environ["PR_NUMBER"]),
+        os.environ["BASE_SHA"],
+        os.environ["HEAD_SHA"],
+    )
 
-    trend_entries = suite_entries(read_data(os.environ["PR_DATA_DIR"]), "Replay 10K PR")
-    compare_entries = suite_entries(read_data(os.environ["COMPARISON_DATA_DIR"]), "Replay 10K PR Compare")
-    head_trend, head_index = find_last(trend_entries, head_sha)
-    if head_trend is None and trend_entries:
-        head_trend, head_index = trend_entries[-1], len(trend_entries) - 1
-    head_compare, _ = find_last(compare_entries, head_sha)
-    base_trend, _ = find_last(trend_entries, base_sha)
-    base_compare, _ = find_last(compare_entries, base_sha)
-    previous = find_previous(trend_entries, head_index, {head_sha, base_sha})
+    trend = entries(load_data(os.environ["PR_DATA_DIR"]), "Replay 10K PR")
+    compare = entries(
+        load_data(os.environ["COMPARISON_DATA_DIR"]), "Replay 10K PR Compare"
+    )
 
-    head_entry = head_compare or head_trend
-    base_entry = base_compare or base_trend
-    head_metrics = metrics(head_entry)
-    previous_metrics = metrics(previous)
-    base_metrics = metrics(base_entry)
-    rows = [
-        "| {} | {} | {} | {} |".format(
-            LABELS.get(name, name.removeprefix("BenchmarkReplayLog - ")),
-            format_value(*head_metrics[name]),
-            format_delta(head_metrics[name][0], previous_metrics.get(name, (None, ""))[0]),
-            format_delta(head_metrics[name][0], base_metrics.get(name, (None, ""))[0]),
+    head_t, head_idx = find_by_sha(trend, head_sha)
+    if head_t is None and trend:
+        head_t, head_idx = trend[-1], len(trend) - 1
+    head_c, _ = find_by_sha(compare, head_sha)
+    base_t, _ = find_by_sha(trend, base_sha)
+    base_c, _ = find_by_sha(compare, base_sha)
+
+    prev = None
+    if head_idx is not None:
+        for i in range(head_idx - 1, -1, -1):
+            s = trend[i].get("commit", {}).get("id")
+            if s and s not in {head_sha, base_sha}:
+                prev = trend[i]
+                break
+
+    hm, bm, pm = (
+        get_metrics(head_c or head_t),
+        get_metrics(base_c or base_t),
+        get_metrics(prev),
+    )
+    names = [n for n in LABELS if n in hm][:5] or [
+        n
+        for n in hm
+        if n.startswith("BenchmarkReplayLog - ") and not n.endswith("commits")
+    ][:5]
+
+    link = lambda s: f"[{s[:8]}]({repo_url}/commit/{s})"
+    msg = lambda e: str((e or {}).get("commit", {}).get("message", "")).replace(
+        "\n", " "
+    )
+
+    rows = (
+        "\n".join(
+            f"| {LABELS.get(n, n.removeprefix('BenchmarkReplayLog - '))} "
+            f"| {fmt_val(*hm[n])} "
+            f"| {fmt_delta(hm[n][0], pm.get(n, (None,))[0])} "
+            f"| {fmt_delta(hm[n][0], bm.get(n, (None,))[0])} |"
+            for n in names
         )
-        for name in metric_names(head_metrics)
-    ]
-
-    def link(sha: str) -> str:
-        return f"[{sha[:8]}]({repo_url}/commit/{sha})"
-
-    previous_sha = commit_info(previous).get("id")
-    base_status = (
-        "Base data reused from history."
-        if not base_requested
-        else "Base benchmark executed in this run."
-        if base_outcome == "success"
-        else f"Base benchmark did not succeed (`{base_outcome}`)."
-    )
-    body = "\n".join(
-        [
-            MARKER,
-            "## Replay 10K Benchmark Summary",
-            "",
-            f"**Head:** {link(head_sha)}{f' - {message(head_entry)}' if head_entry else ''}",
-            f"**Base:** {link(base_sha)}{f' - {message(base_entry)}' if base_entry else ''}",
-            (
-                f"**Previous PR commit:** {link(previous_sha)} - {message(previous)}"
-                if previous_sha
-                else "**Previous PR commit:** _Not available yet_"
-            ),
-            "",
-            "_Lower is better for all timing metrics._",
-            "",
-            "| Metric | Head | vs Previous | vs Base |",
-            "| --- | ---: | ---: | ---: |",
-            *(rows or ["| No parsed timing metrics | — | — | — |"]),
-            "",
-            f"**Status:** {base_status}",
-            "",
-            f"- [PR trend graph]({os.environ['TREND_URL']})",
-            f"- [Base vs head graph]({os.environ['COMPARISON_URL']})",
-        ]
+        or "| No parsed timing metrics | \u2014 | \u2014 | \u2014 |"
     )
 
-    comments = gh("GET", f"/repos/{owner}/{repo}/issues/{pr_number}/comments?per_page=100") or []
+    prev_sha = (prev or {}).get("commit", {}).get("id")
+    base_req = os.getenv("BASE_BENCHMARK_REQUESTED") == "true"
+    base_out = os.getenv("BASE_BENCHMARK_OUTCOME") or "skipped"
+    status = (
+        "Base benchmark executed."
+        if base_req and base_out == "success"
+        else f"Base benchmark: `{base_out}`."
+        if base_req
+        else "Base data reused from history."
+    )
+
+    he, be = head_c or head_t, base_c or base_t
+    body = f"""{MARKER}
+## Replay 10K Benchmark Summary
+
+**Head:** {link(head_sha)}{f" - {msg(he)}" if he else ""}
+**Base:** {link(base_sha)}{f" - {msg(be)}" if be else ""}
+**Previous PR commit:** {f"{link(prev_sha)} - {msg(prev)}" if prev_sha else "_Not available yet_"}
+
+_Lower is better for all timing metrics._
+
+| Metric | Head | vs Previous | vs Base |
+| --- | ---: | ---: | ---: |
+{rows}
+
+**Status:** {status}
+
+- [PR trend graph]({os.environ["TREND_URL"]})
+- [Base vs head graph]({os.environ["COMPARISON_URL"]})"""
+
+    comments = (
+        gh("GET", f"/repos/{owner}/{repo}/issues/{pr}/comments?per_page=100") or []
+    )
     existing = next(
         (
-            comment
-            for comment in comments
-            if comment.get("user", {}).get("login") == "github-actions[bot]" and MARKER in comment.get("body", "")
+            c
+            for c in comments
+            if c.get("user", {}).get("login") == "github-actions[bot]"
+            and MARKER in c.get("body", "")
         ),
         None,
     )
     if existing:
-        gh("PATCH", f"/repos/{owner}/{repo}/issues/comments/{existing['id']}", {"body": body})
-        return
-    gh("POST", f"/repos/{owner}/{repo}/issues/{pr_number}/comments", {"body": body})
+        gh(
+            "PATCH",
+            f"/repos/{owner}/{repo}/issues/comments/{existing['id']}",
+            {"body": body},
+        )
+    else:
+        gh("POST", f"/repos/{owner}/{repo}/issues/{pr}/comments", {"body": body})
 
 
 if __name__ == "__main__":

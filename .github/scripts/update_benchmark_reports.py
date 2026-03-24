@@ -1,165 +1,159 @@
 #!/usr/bin/env python3
+"""Normalize benchmark data and apply theme to reports."""
 
-import argparse
 import json
 import math
+import os
 import shutil
 import subprocess
-import sys
 import urllib.request
 from pathlib import Path
 
 PREFIX = "window.BENCHMARK_DATA = "
+WORKDIR = Path(os.getenv("BENCHMARK_REPORTS_DIR", "benchmark-reports-repository"))
 
 
-def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser()
-    for name in ("repository", "branch", "token", "theme-css-url", "commit-message"):
-        parser.add_argument(f"--{name}", required=True)
-    parser.add_argument("--workdir", default="benchmark-reports-repository")
-    parser.add_argument("--data-dir", action="append", default=[])
-    parser.add_argument("--commit-subject", action="append", nargs=2, metavar=("SHA", "SUBJECT"), default=[])
-    return parser.parse_args()
+def env(name, default=""):
+    v = os.getenv(name, default)
+    if not v:
+        raise SystemExit(f"Missing required env: {name}")
+    return v
 
 
-def git(*args: str, cwd: Path | None = None) -> None:
+def git(*args, cwd=None):
     subprocess.run(["git", *args], check=True, cwd=cwd)
 
 
-def load_benchmark_data(path: Path) -> dict | None:
+def load_data(path):
     if not path.is_file():
         return None
-
-    text = path.read_text(encoding="utf-8")
-    if not text.startswith(PREFIX):
-        return None
-
-    try:
-        return json.loads(text[len(PREFIX) :])
-    except json.JSONDecodeError:
-        return None
+    text = path.read_text()
+    return json.loads(text[len(PREFIX) :]) if text.startswith(PREFIX) else None
 
 
-def convert_unit(unit: object) -> str | None:
-    if unit == "ns":
-        return "s"
-    if isinstance(unit, str) and unit.startswith("ns/"):
-        return "s/" + unit[3:]
-    return "s/op" if unit == "ns/op" else None
-
-
-def normalize_benchmark_data(path: Path, commit_subjects: dict[str, str]) -> None:
-    data = load_benchmark_data(path)
-    if data is None:
+def normalize(path, subjects):
+    data = load_data(path)
+    if not data or not isinstance(data.get("entries"), dict):
         return
-
-    entries = data.get("entries")
-    if not isinstance(entries, dict):
-        return
-
     changed = False
-    for suites in entries.values():
+    for suites in data["entries"].values():
         if not isinstance(suites, list):
             continue
         for suite in suites:
             if not isinstance(suite, dict):
                 continue
-
-            commit = suite.get("commit")
-            if isinstance(commit, dict):
-                subject = commit_subjects.get(commit.get("id"))
-                if subject and commit.get("message") != subject:
-                    commit["message"] = subject
+            commit = suite.get("commit") or {}
+            if isinstance(commit, dict) and (subj := subjects.get(commit.get("id"))):
+                if commit.get("message") != subj:
+                    commit["message"] = subj
                     changed = True
-
             benches = suite.get("benches")
             if not isinstance(benches, list):
                 continue
-
             filtered = []
-            for bench in benches:
-                if not isinstance(bench, dict):
-                    filtered.append(bench)
+            for b in benches:
+                if not isinstance(b, dict):
+                    filtered.append(b)
                     continue
-                if bench.get("name") == "BenchmarkReplayLog":
+                if b.get("name") == "BenchmarkReplayLog":
                     changed = True
                     continue
-
-                converted_unit = convert_unit(bench.get("unit"))
-                if converted_unit:
-                    if isinstance(value := bench.get("value"), (int, float)) and math.isfinite(value):
-                        bench["value"] = value / 1_000_000_000
-                    bench["unit"] = converted_unit
-
-                    if isinstance(name := bench.get("name"), str):
-                        bench["name"] = (
-                            name.replace(" - ns/op", " - s/op").replace(" - ns/", " - s/").replace(" - ns", " - s")
+                unit = b.get("unit")
+                new_unit = (
+                    "s"
+                    if unit == "ns"
+                    else f"s/{unit[3:]}"
+                    if isinstance(unit, str) and unit.startswith("ns/")
+                    else "s/op"
+                    if unit == "ns/op"
+                    else None
+                )
+                if new_unit:
+                    v = b.get("value")
+                    if isinstance(v, (int, float)) and math.isfinite(v):
+                        b["value"] = v / 1_000_000_000
+                    b["unit"] = new_unit
+                    if isinstance(n := b.get("name"), str):
+                        b["name"] = (
+                            n.replace(" - ns/op", " - s/op")
+                            .replace(" - ns/", " - s/")
+                            .replace(" - ns", " - s")
                         )
                     changed = True
-
-                filtered.append(bench)
-
+                filtered.append(b)
             if len(filtered) != len(benches):
                 suite["benches"] = filtered
-
     if changed:
-        path.write_text(PREFIX + json.dumps(data, indent=2), encoding="utf-8")
+        path.write_text(PREFIX + json.dumps(data, indent=2))
 
 
-def apply_theme(report_dir: Path, theme_css: str) -> None:
-    index_path = report_dir / "index.html"
-    if not index_path.is_file():
-        print(f"::warning::Skipping {report_dir} because index.html is missing")
+def apply_theme(report_dir, css):
+    idx = report_dir / "index.html"
+    if not idx.is_file():
         return
+    (report_dir / "theme.css").write_text(css)
+    html = idx.read_text()
+    if 'href="theme.css"' not in html and "</head>" in html:
+        idx.write_text(
+            html.replace(
+                "</head>", '  <link rel="stylesheet" href="theme.css">\n</head>', 1
+            )
+        )
 
-    (report_dir / "theme.css").write_text(theme_css, encoding="utf-8")
 
-    html = index_path.read_text(encoding="utf-8")
-    if 'href="theme.css"' in html:
-        return
+def main():
+    subjects = {
+        sha: subj
+        for sha, subj in (
+            (os.getenv("BASE_SHA"), os.getenv("BASE_SUBJECT")),
+            (os.getenv("HEAD_SHA"), os.getenv("HEAD_SUBJECT")),
+        )
+        if sha and subj
+    }
+    dirs = [
+        d.strip()
+        for d in os.getenv("BENCHMARK_DATA_DIRS", "").splitlines()
+        if d.strip()
+    ]
 
-    if "</head>" not in html:
-        print(f"::warning::Skipping {index_path} because </head> is missing")
-        return
-
-    index_path.write_text(
-        html.replace("</head>", '  <link rel="stylesheet" href="theme.css">\n</head>', 1),
-        encoding="utf-8",
+    shutil.rmtree(WORKDIR, ignore_errors=True)
+    git(
+        "clone",
+        "--depth",
+        "1",
+        "-b",
+        env("BENCHMARK_REPORTS_BRANCH"),
+        f"https://x-access-token:{env('BENCHMARK_TOKEN')}@github.com/{env('BENCHMARK_REPORTS_REPOSITORY')}.git",
+        str(WORKDIR),
     )
 
+    with urllib.request.urlopen(env("BENCHMARK_THEME_CSS_URL")) as r:
+        css = r.read().decode()
 
-def main() -> int:
-    args = parse_args()
-    workdir = Path(args.workdir)
-    commit_subjects = dict(args.commit_subject)
+    for d in dirs:
+        rd = WORKDIR / d
+        normalize(rd / "data.js", subjects)
+        apply_theme(rd, css)
 
-    shutil.rmtree(workdir, ignore_errors=True)
-    clone_url = f"https://x-access-token:{args.token}@github.com/{args.repository}.git"
-    git("clone", "--depth", "1", "--branch", args.branch, clone_url, str(workdir))
+    git("config", "user.name", "github-actions[bot]", cwd=WORKDIR)
+    git(
+        "config",
+        "user.email",
+        "github-actions[bot]@users.noreply.github.com",
+        cwd=WORKDIR,
+    )
+    git("add", "-A", ".", cwd=WORKDIR)
 
-    with urllib.request.urlopen(args.theme_css_url) as response:
-        theme_css = response.read().decode("utf-8")
-
-    for data_dir in args.data_dir:
-        report_dir = workdir / data_dir
-        normalize_benchmark_data(report_dir / "data.js", commit_subjects)
-        apply_theme(report_dir, theme_css)
-
-    git("config", "user.name", "github-actions[bot]", cwd=workdir)
-    git("config", "user.email", "github-actions[bot]@users.noreply.github.com", cwd=workdir)
-    git("add", "-A", ".", cwd=workdir)
-
-    diff = subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=workdir, check=False)
-    if diff.returncode == 0:
+    if (
+        subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=WORKDIR).returncode
+        == 0
+    ):
         print("No benchmark report changes to commit.")
         return 0
-    if diff.returncode != 1:
-        return diff.returncode
-
-    git("commit", "-m", args.commit_message, cwd=workdir)
-    git("push", "origin", args.branch, cwd=workdir)
+    git("commit", "-m", env("BENCHMARK_COMMIT_MESSAGE"), cwd=WORKDIR)
+    git("push", "origin", env("BENCHMARK_REPORTS_BRANCH"), cwd=WORKDIR)
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    raise SystemExit(main())
