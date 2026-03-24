@@ -152,10 +152,12 @@ fn verify_edge<H: ProofCollection + ?Sized>(
             bound < edge_key
         };
         if out_of_order {
-            return Err(api::Error::InvalidRange {
-                start_key: bound.to_vec().into(),
-                end_key: edge_key.to_vec().into(),
-            });
+            let proof_error = if bound_is_lower {
+                ProofError::RangeProofStartBeyondFirstKey
+            } else {
+                ProofError::RangeProofEndBeforeLastKey
+            };
+            return Err(api::Error::ProofError(proof_error));
         }
     }
 
@@ -253,53 +255,35 @@ impl<T: TrieReader> Merkle<T> {
     ///
     /// # Returns
     ///
-    /// Returns the constructed [`Merkle<Arc<ImmutableProposal>, _>`] that was built and
-    /// verified from the proof data, if the proof is valid.
+    /// Returns `Ok(())` if the proof is valid. Returns `Err(api::Error)` if
+    /// structural validation or proof verification fails.
     ///
     /// # Verification Process
     ///
     /// The verification follows these steps:
     /// 1. **Structural validation**: Verify the proof structure is well-formed
-    ///    - Check that start/end proofs are consistent with the key range
-    ///    - Ensure key-value pairs are in the correct order
+    ///    - Ensure key-value pairs are in strictly ascending order
     ///    - Validate that boundary proofs correctly bound the key-value pairs
     ///
-    /// 2. **Proposal construction**: Build a proposal trie containing the proof data
-    ///    - Insert all key-value pairs from the proof
-    ///    - Incorporate nodes from the start and end proofs
-    ///    - Handle edge cases for empty ranges or partial proofs
-    ///
-    /// 3. **Hash verification**: Compute the root hash of the constructed proposal
-    ///    - The computed hash must match the provided `root_hash` exactly
-    ///    - Any mismatch indicates an invalid or tampered proof
+    /// 2. **Boundary proof verification**: Cryptographically verify the start and end proofs
+    ///    against the provided root hash
     ///
     /// # Errors
     ///
-    /// * [`api::Error::ProofError`] - The proof structure is malformed or inconsistent
-    /// * [`api::Error::InvalidRange`] - The proof boundaries don't match the requested range
-    /// * [`api::Error::ParentNotLatest`] - The computed root hash doesn't match the expected hash
-    /// * [`api::Error`] - Other errors during proposal construction or verification
+    /// * [`api::Error::ProofError`] - The proof structure is malformed, inconsistent,
+    ///   or boundary proofs don't match the requested range
     ///
     /// # Examples
     ///
     /// ```ignore
     /// // Verify a range proof received from a peer
-    /// let verified_proposal = merkle.verify_range_proof(
+    /// merkle.verify_range_proof(
     ///     Some(b"alice"),
     ///     Some(b"charlie"),
     ///     &expected_root_hash,
     ///     &range_proof
     /// )?;
     /// ```
-    ///
-    /// # Implementation Notes
-    ///
-    /// - Structural validation is performed first to avoid expensive proposal construction
-    ///   for obviously invalid proofs
-    /// - The method is designed to handle partial proofs where the peer provides less
-    ///   data than requested, which is common for large ranges
-    /// - Future optimization: Consider caching partial verification results for
-    ///   incremental range proof verification
     pub fn verify_range_proof(
         &self,
         first_key: Option<impl KeyType>,
