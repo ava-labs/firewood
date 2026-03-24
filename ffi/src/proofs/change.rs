@@ -197,10 +197,14 @@ fn verify_proof(
         return Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted));
     }
 
-    // Fix 9: Reject proofs with batch_ops but no boundary proofs. Without
-    // at least one Merkle path, there is no way to verify that the
-    // batch_ops produce the correct sub-trie hashes.
-    if !batch_ops.is_empty() && proof.start_proof().is_empty() && proof.end_proof().is_empty() {
+    // Fix 9: Reject proofs with batch_ops but no boundary proofs, UNLESS
+    // this is a complete proof (no key bounds). Complete proofs are validated
+    // by root hash comparison in is_complete_proof() instead.
+    if !batch_ops.is_empty()
+        && proof.start_proof().is_empty()
+        && proof.end_proof().is_empty()
+        && (start_key.is_some() || end_key.is_some())
+    {
         return Err(api::Error::ProofError(ProofError::MissingBoundaryProof));
     }
 
