@@ -304,13 +304,21 @@ fn verify_end_proof(
 /// Returns true if this proof covers the full range (not truncated, not
 /// bounded by start/end keys). Only complete proofs should have their
 /// computed root hash compared against the expected end root.
-fn is_complete_proof(verification: &VerificationContext, proof: &FrozenChangeProof) -> bool {
-    // A complete proof has no start/end key bounds, and the end_proof is
-    // empty (meaning we reached the end of the keyspace rather than being
-    // truncated or bounded).
+fn is_complete_proof(
+    verification: &VerificationContext,
+    proof: &FrozenChangeProof,
+    max_length: Option<NonZeroUsize>,
+) -> bool {
+    // A complete proof has no start/end key bounds, and either:
+    // - max_length is None (unbounded request → truncation impossible), or
+    // - end_proof is empty (bounded but reached end of keyspace)
+    //
+    // Without the max_length check, an attacker could attach a valid
+    // end_proof to an unbounded proof that omits later changes, causing
+    // this to return false and skipping the root hash comparison.
     verification.start_key.is_none()
         && verification.end_key.is_none()
-        && proof.end_proof().is_empty()
+        && (max_length.is_none() || proof.end_proof().is_empty())
 }
 
 /// Verify that values at boundary keys in the proposal match the boundary
@@ -389,7 +397,7 @@ impl ChangeProofContext {
         // Only verify the root hash when the proof covers the full range.
         // Truncated proofs (partial changes) will naturally produce a different
         // root hash until all rounds have been applied.
-        if is_complete_proof(&verification, &proof) {
+        if is_complete_proof(&verification, &proof, max_length) {
             let computed: crate::HashKey = proposal
                 .handle
                 .root_hash()
