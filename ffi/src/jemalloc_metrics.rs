@@ -8,6 +8,7 @@
 //! exposes: active, allocated, metadata, mapped, resident, retained.
 
 use firewood_metrics::firewood_set;
+use firewood_storage::logger;
 use metrics::describe_gauge;
 use tikv_jemalloc_ctl::{epoch, stats};
 
@@ -64,13 +65,17 @@ pub fn register() {
 /// individual stats are silently ignored (the gauge simply won't update).
 pub fn refresh() {
     // Advance the epoch so jemalloc refreshes its cached stats.
-    if epoch::advance().is_err() {
+    if let Err(e) = epoch::advance() {
+        logger::warn!("jemalloc epoch advance failed: {e}");
         return;
     }
 
     for stat in JEMALLOC_STATS {
-        if let Ok(v) = (stat.read)() {
-            firewood_set!(stat.name, v);
+        match (stat.read)() {
+            Ok(v) => firewood_set!(stat.name, v),
+            Err(e) => {
+                logger::warn!("failed to read jemalloc stat {}: {e}", stat.name);
+            }
         }
     }
 }
