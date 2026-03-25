@@ -87,6 +87,7 @@ pub fn setup_metrics_with_exporter(metrics_port: u16) -> Result<(), Box<dyn Erro
     let recorder = RECORDER.get().ok_or("recorder not initialized")?;
     Server::new(move |request| {
         if request.method() == "GET" {
+            jemalloc_metrics::refresh();
             Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "text/plain")
