@@ -1352,14 +1352,21 @@ impl Merkle<NodeStore<Mutable<Propose>, MemStore>> {
 /// The `unique_*` properties, [`unique_a`][`PrefixOverlap::unique_a`] and [`unique_b`][`PrefixOverlap::unique_b`]
 /// are set based on the argument order passed into the [`from`][`PrefixOverlap::from`] constructor.
 #[derive(Debug)]
-struct PrefixOverlap<'a, T> {
-    shared: &'a [T],
-    unique_a: &'a [T],
-    unique_b: &'a [T],
+pub struct PrefixOverlap<'a, T> {
+    pub shared: &'a [T],
+    pub unique_a: &'a [T],
+    pub unique_b: &'a [T],
 }
 
 impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
-    fn from(a: &'a [T], b: &'a [T]) -> Self {
+    /// Computes the prefix overlap between slices `a` and `b`.
+    ///
+    /// # Panics
+    ///
+    /// Uses `get().expect()` internally, which panics if the split index
+    /// exceeds the slice length. This cannot happen because the index is
+    /// derived from `zip`, which stops at `min(a.len(), b.len())`.
+    pub fn from(a: &'a [T], b: &'a [T]) -> Self {
         let split_index = a
             .iter()
             .zip(b)
@@ -1367,7 +1374,7 @@ impl<'a, T: PartialEq> PrefixOverlap<'a, T> {
             .unwrap_or_else(|| std::cmp::min(a.len(), b.len()));
 
         let (shared, unique_a) = a.split_at(split_index);
-        let unique_b = b.get(split_index..).expect("");
+        let unique_b = b.get(split_index..).expect("split_index <= b.len()");
 
         Self {
             shared,

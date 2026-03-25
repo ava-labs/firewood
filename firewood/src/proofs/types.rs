@@ -149,8 +149,37 @@ pub enum ProofError {
     #[error("the proof is None as it has been consumed")]
     ProofIsNone,
 
-    #[error("the proposal for a change proof is None as it has been consumed")]
-    ProposalIsNone,
+    /// Computed root hash after applying `batch_ops` doesn't match expected end root
+    #[error("computed root hash after applying batch_ops doesn't match the expected end root")]
+    EndRootMismatch,
+
+    /// Boundary value mismatch: after applying `batch_ops`, the value at a
+    /// boundary key does not match the value claimed by the boundary proof.
+    #[error("boundary value at key does not match proof claim after applying batch_ops")]
+    BoundaryValueMismatch,
+
+    /// Non-empty boundary proof cannot be validated against any key.
+    ///
+    /// The honest generator only produces a non-empty boundary proof when a
+    /// corresponding key is available. A non-empty proof with no key to
+    /// validate against indicates a maliciously crafted proof.
+    #[error("non-empty boundary proof has no key to validate against")]
+    BoundaryProofUnverifiable,
+
+    /// Change proof contains an unsupported `DeleteRange` operation.
+    ///
+    /// The honest diff algorithm only produces `Put` and `Delete` operations.
+    /// A `DeleteRange` could delete keys outside the proven range.
+    #[error("change proof contains unsupported DeleteRange operation")]
+    UnsupportedDeleteRange,
+
+    /// Non-empty batch operations require at least one boundary proof for
+    /// verification.
+    ///
+    /// Without a Merkle path there is no way to verify that `batch_ops` produce
+    /// the correct sub-trie hashes.
+    #[error("non-empty batch operations require at least one boundary proof for verification")]
+    MissingBoundaryProof,
 }
 
 #[derive(Clone, PartialEq, Eq)]
