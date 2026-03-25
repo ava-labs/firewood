@@ -149,8 +149,59 @@ pub enum ProofError {
     #[error("the proof is None as it has been consumed")]
     ProofIsNone,
 
-    #[error("the proposal for a change proof is None as it has been consumed")]
-    ProposalIsNone,
+    /// Computed root hash after applying `batch_ops` doesn't match expected end root
+    #[error("computed root hash after applying batch_ops doesn't match the expected end root")]
+    EndRootMismatch,
+
+    /// Sub-trie hash mismatch: after applying `batch_ops`, a sub-trie
+    /// between the boundary proof paths has a different hash than expected.
+    #[error("sub-trie hash does not match boundary proof after applying batch_ops")]
+    SubTrieHashMismatch,
+
+    /// Boundary value mismatch: after applying `batch_ops`, the value at a
+    /// boundary key does not match the value claimed by the boundary proof.
+    #[error("boundary value at key does not match proof claim after applying batch_ops")]
+    BoundaryValueMismatch,
+
+    /// Non-empty boundary proof cannot be validated against any key.
+    ///
+    /// The honest generator only produces a non-empty boundary proof when a
+    /// corresponding key is available. A non-empty proof with no key to
+    /// validate against indicates a maliciously crafted proof.
+    #[error("non-empty boundary proof has no key to validate against")]
+    BoundaryProofUnverifiable,
+
+    /// Change proof contains an unsupported `DeleteRange` operation.
+    ///
+    /// The honest diff algorithm only produces `Put` and `Delete` operations.
+    /// A `DeleteRange` could delete keys outside the proven range.
+    #[error("change proof contains unsupported DeleteRange operation")]
+    UnsupportedDeleteRange,
+
+    /// Non-empty batch operations require at least one boundary proof for
+    /// verification.
+    ///
+    /// Without a Merkle path there is no way to verify that `batch_ops` produce
+    /// the correct sub-trie hashes.
+    #[error("non-empty batch operations require at least one boundary proof for verification")]
+    MissingBoundaryProof,
+
+    /// Start boundary proof path exceeds end boundary proof path at divergence.
+    ///
+    /// At the first trie depth where the two boundary proofs take different
+    /// children, the start path's nibble must be less than the end path's
+    /// nibble (consistent with `start_key` < `end_key`). A reversal indicates a
+    /// proof whose path structure contradicts the claimed key range.
+    #[error("boundary proof paths are inverted: start nibble exceeds end nibble at divergence")]
+    BoundaryPathsInverted,
+
+    /// The end boundary proof terminates before the start boundary proof
+    /// without diverging. This implies `end_key` is a prefix of `start_key`
+    /// (`end_key` < `start_key`), which should have been caught by the range
+    /// validation in `verify_proof_structure`. A crafted proof could reach
+    /// this state if the range check is bypassed or reordered.
+    #[error("end boundary proof terminates before start proof, implying inverted range")]
+    EndProofTerminatedEarly,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -472,7 +523,7 @@ impl ProofCollection for EmptyProofCollection {
 
 /// Returns the next nibble in `c` after `b`.
 /// Returns None if `b` is not a strict prefix of `c`.
-fn next_nibble(b: impl IntoSplitPath, c: impl IntoSplitPath) -> Option<PathComponent> {
+pub fn next_nibble(b: impl IntoSplitPath, c: impl IntoSplitPath) -> Option<PathComponent> {
     let b = b.into_split_path();
     let c = c.into_split_path();
     match b.longest_common_prefix(c).split_first_parts() {
