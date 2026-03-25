@@ -150,7 +150,7 @@ pub mod proofs;
 // Re-export commonly used proof types at the crate root for ergonomic access
 pub use proofs::{
     EmptyProofCollection, InvalidHeader, Proof, ProofCollection, ProofError, ProofNode, ProofType,
-    RangeProof, ReadError,
+    RangeProof, ReadError, next_nibble,
 };
 
 // Re-export the proc macro from firewood-macros
