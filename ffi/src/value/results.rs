@@ -304,6 +304,13 @@ pub enum ProposedChangeProofResult<'db> {
         /// The error message describing why verification failed.
         error: OwnedBytes,
     },
+    /// An error occurred and the message is returned as an [`OwnedBytes`].
+    ///
+    /// The caller must call [`fwd_free_owned_bytes`] to free the memory
+    /// associated with this error.
+    ///
+    /// [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+    Err(OwnedBytes),
 }
 
 #[derive(Debug)]
@@ -709,6 +716,7 @@ impl_cresult!(
     HandleResult,
     RangeProofResult<'_>,
     ChangeProofResult,
+    ProposedChangeProofResult<'_>,
     NextKeyRangeResult,
     CodeIteratorResult<'_>,
     ProposalResult<'_>,
@@ -718,17 +726,6 @@ impl_cresult!(
     KeyValueBatchResult,
     KeyValueResult,
 );
-
-// ProposedChangeProofResult has a custom CResult implementation because the
-// error variant carries extra data (the original proof) rather than a simple
-// error string. On panic we cannot return the original proof, so we fall back
-// to NullHandlePointer.
-impl CResult for ProposedChangeProofResult<'_> {
-    #[cfg(panic = "unwind")]
-    fn from_err(_err: impl ToString) -> Self {
-        Self::NullHandlePointer
-    }
-}
 
 impl<'db> From<Result<ProposedChangeProofContext<'db>, Box<(ChangeProofContext, api::Error)>>>
     for ProposedChangeProofResult<'db>

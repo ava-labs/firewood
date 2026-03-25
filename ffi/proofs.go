@@ -767,6 +767,8 @@ func getProposedChangeProofFromResult(
 		// Return the original handle to the caller so the proof can be freed or reused.
 		proof.handle = body.original
 		return nil, newOwnedBytes(body.error).intoError()
+	case C.ProposedChangeProofResult_Err:
+		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 	default:
 		return nil, fmt.Errorf("unknown C.ProposedChangeProofResult tag: %d", result.tag)
 	}
