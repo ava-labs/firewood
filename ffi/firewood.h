@@ -758,6 +758,15 @@ enum ProposedChangeProofResult_Tag {
    * caller so it can be freed or reused.
    */
   ProposedChangeProofResult_VerificationFailed,
+  /**
+   * An error occurred and the message is returned as an [`OwnedBytes`].
+   *
+   * The caller must call [`fwd_free_owned_bytes`] to free the memory
+   * associated with this error.
+   *
+   * [`fwd_free_owned_bytes`]: crate::fwd_free_owned_bytes
+   */
+  ProposedChangeProofResult_Err,
 };
 typedef size_t ProposedChangeProofResult_Tag;
 
@@ -779,6 +788,9 @@ typedef struct ProposedChangeProofResult {
       struct ProposedChangeProofContext *ok;
     };
     ProposedChangeProofResult_VerificationFailed_Body verification_failed;
+    struct {
+      OwnedBytes err;
+    };
   };
 } ProposedChangeProofResult;
 
