@@ -119,12 +119,129 @@ fn test_bad_range_proof_out_of_order() {
 }
 
 #[test]
-// Tests malformed proof scenarios that require full trie reconstruction to detect:
-// modified keys, modified values, gapped entries, empty keys, and nil values.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
-fn test_bad_range_proof_malformed() {
-    // TODO: Re-enable once full range proof verification (trie reconstruction
-    // and root hash comparison) is implemented.
+// Detects a modified key via trie reconstruction and root hash mismatch.
+fn test_bad_range_proof_modified_key() {
+    let rng = firewood_storage::SeededRng::from_env_or_random();
+
+    let set = fixed_and_pseudorandom_data(&rng, 4096);
+    let mut items = set.iter().collect::<Vec<_>>();
+    items.sort_unstable();
+    let merkle = init_merkle(items.clone());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start = 100;
+    let end = 200;
+
+    let start_proof = merkle.prove(items[start].0).unwrap();
+    let end_proof = merkle.prove(items[end - 1].0).unwrap();
+
+    let mut kvs: KeyValuePairs = items[start..end]
+        .iter()
+        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+        .collect();
+
+    let mid = kvs.len() / 2;
+    let mut key = kvs[mid].0.to_vec();
+    key[0] ^= 0x01;
+    kvs[mid].0 = key.into_boxed_slice();
+    kvs.sort_by(|(a, _), (b, _)| a.cmp(b));
+
+    let range_proof = RangeProof::new(start_proof, end_proof, kvs.into_boxed_slice());
+    assert!(
+        verify_range_proof(
+            Some(items[start].0),
+            Some(items[end - 1].0),
+            &root_hash,
+            &range_proof,
+        )
+        .is_err(),
+        "modified key should be detected"
+    );
+}
+
+#[test]
+// Detects a modified value via trie reconstruction and root hash mismatch.
+// In ethhash mode, account values at depth 32 have their storageRoot field
+// replaced with a computed hash during hashing. A blind XOR on the raw value
+// may only affect the storageRoot (or the RLP header that wraps it), making
+// the modification invisible to the hash. This test is not meaningful under
+// ethhash because the hashing intentionally ignores part of the value.
+#[cfg(not(feature = "ethhash"))]
+fn test_bad_range_proof_modified_value() {
+    let rng = firewood_storage::SeededRng::from_env_or_random();
+
+    let set = fixed_and_pseudorandom_data(&rng, 4096);
+    let mut items = set.iter().collect::<Vec<_>>();
+    items.sort_unstable();
+    let merkle = init_merkle(items.clone());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start = 100;
+    let end = 200;
+
+    let start_proof = merkle.prove(items[start].0).unwrap();
+    let end_proof = merkle.prove(items[end - 1].0).unwrap();
+
+    let mut kvs: KeyValuePairs = items[start..end]
+        .iter()
+        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+        .collect();
+
+    let mid = kvs.len() / 2;
+    let mut val = kvs[mid].1.to_vec();
+    val[0] ^= 0x01;
+    kvs[mid].1 = val.into_boxed_slice();
+
+    let range_proof = RangeProof::new(start_proof, end_proof, kvs.into_boxed_slice());
+    assert!(
+        verify_range_proof(
+            Some(items[start].0),
+            Some(items[end - 1].0),
+            &root_hash,
+            &range_proof,
+        )
+        .is_err(),
+        "modified value should be detected"
+    );
+}
+
+#[test]
+// Detects gapped entries (missing middle element) via trie reconstruction
+// and root hash mismatch.
+fn test_bad_range_proof_gapped_entries() {
+    let rng = firewood_storage::SeededRng::from_env_or_random();
+
+    let set = fixed_and_pseudorandom_data(&rng, 4096);
+    let mut items = set.iter().collect::<Vec<_>>();
+    items.sort_unstable();
+    let merkle = init_merkle(items.clone());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start = 100;
+    let end = 200;
+
+    let start_proof = merkle.prove(items[start].0).unwrap();
+    let end_proof = merkle.prove(items[end - 1].0).unwrap();
+
+    let mut kvs: KeyValuePairs = items[start..end]
+        .iter()
+        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+        .collect();
+
+    let mid = kvs.len() / 2;
+    kvs.remove(mid);
+
+    let range_proof = RangeProof::new(start_proof, end_proof, kvs.into_boxed_slice());
+    assert!(
+        verify_range_proof(
+            Some(items[start].0),
+            Some(items[end - 1].0),
+            &root_hash,
+            &range_proof,
+        )
+        .is_err(),
+        "gapped entries should be detected"
+    );
 }
 
 #[test]
@@ -204,7 +321,6 @@ fn test_range_proof_with_non_existent_proof() {
 // - There exists a gap between the first element and the left edge proof
 // - There exists a gap between the last element and the right edge proof
 // Detecting gaps requires full trie reconstruction, not yet implemented.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_range_proof_with_invalid_non_existent_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -274,7 +390,6 @@ fn test_range_proof_with_invalid_non_existent_proof() {
 #[test]
 // Tests the proof with only one element. The first edge proof can be existent one or
 // non-existent one.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_one_element_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -391,7 +506,6 @@ fn test_one_element_range_proof() {
 #[test]
 // Tests the range proof with all elements.
 // The edge proofs can be nil.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_all_elements_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -444,7 +558,6 @@ fn test_all_elements_proof() {
 #[test]
 // Tests the range proof with "no" element. The first edge proof must
 // be a non-existent proof.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_empty_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -479,7 +592,6 @@ fn test_empty_range_proof() {
 #[test]
 // Focuses on the small trie with embedded nodes. If the gapped
 // node is embedded in the trie, it should be detected too.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_gapped_range_proof() {
     let mut items = Vec::new();
     // Sorted entries
@@ -527,7 +639,6 @@ fn test_gapped_range_proof() {
 
 #[test]
 // Tests the element is not in the range covered by proofs.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_same_side_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -575,7 +686,6 @@ fn test_same_side_proof() {
 
 #[test]
 // Tests the range starts from zero.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_single_side_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -614,7 +724,6 @@ fn test_single_side_range_proof() {
 
 #[test]
 // Tests the range ends with 0xffff...fff.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_reverse_single_side_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -654,7 +763,6 @@ fn test_reverse_single_side_range_proof() {
 
 #[test]
 // Tests the range starts with zero and ends with 0xffff...fff.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_both_sides_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -691,7 +799,6 @@ fn test_both_sides_range_proof() {
 // Tests normal range proof with both edge proofs
 // as the existent proof, but with an extra empty value included, which is a
 // noop technically, but practically should be rejected.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_empty_value_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -738,7 +845,6 @@ fn test_empty_value_range_proof() {
 // Tests the range proof with all elements,
 // but with an extra empty value included, which is a noop technically, but
 // practically should be rejected.
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_all_elements_empty_value_range_proof() {
     let rng = firewood_storage::SeededRng::from_env_or_random();
 
@@ -780,7 +886,6 @@ fn test_all_elements_empty_value_range_proof() {
 }
 
 #[test]
-#[ignore = "https://github.com/ava-labs/firewood/issues/738"]
 fn test_range_proof_keys_with_shared_prefix() {
     let items = vec![
         (
