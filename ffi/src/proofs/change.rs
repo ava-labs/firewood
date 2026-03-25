@@ -321,10 +321,7 @@ fn is_complete_proof(
 /// proofs' claims.
 ///
 /// Requires that `verification` was produced by [`verify_proof_structure`],
-/// which populates `resolved_end_key` via [`verify_end_proof`]. If the end
-/// proof is non-empty but `resolved_end_key` is `None`, the end boundary
-/// check is silently skipped. This is safe because `VerificationContext` is
-/// private and only constructible through `verify_proof_structure`.
+/// which populates `resolved_end_key` via [`verify_end_proof`].
 fn verify_boundary_values(
     proof: &FrozenChangeProof,
     verification: &VerificationContext,
@@ -343,9 +340,12 @@ fn verify_boundary_values(
     }
 
     // Check end boundary — uses the cached resolved key from verify_end_proof
-    if !proof.end_proof().is_empty()
-        && let Some(ref end_key) = verification.resolved_end_key
-    {
+    if !proof.end_proof().is_empty() {
+        let Some(ref end_key) = verification.resolved_end_key else {
+            return Err(api::Error::ProofError(
+                ProofError::BoundaryProofUnverifiable,
+            ));
+        };
         verify_single_boundary_value(proposal, proof.end_proof(), end_key, &verification.end_root)?;
     }
 
