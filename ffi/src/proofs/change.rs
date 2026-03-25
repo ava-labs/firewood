@@ -315,6 +315,12 @@ fn is_complete_proof(verification: &VerificationContext, proof: &FrozenChangePro
 
 /// Verify that values at boundary keys in the proposal match the boundary
 /// proofs' claims.
+///
+/// Requires that `verification` was produced by [`verify_proof_structure`],
+/// which populates `resolved_end_key` via [`verify_end_proof`]. If the end
+/// proof is non-empty but `resolved_end_key` is `None`, the end boundary
+/// check is silently skipped. This is safe because `VerificationContext` is
+/// private and only constructible through `verify_proof_structure`.
 fn verify_boundary_values(
     proof: &FrozenChangeProof,
     verification: &VerificationContext,
