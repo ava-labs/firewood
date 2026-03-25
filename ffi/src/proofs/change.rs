@@ -136,10 +136,9 @@ fn verify_proof_structure(
 ) -> Result<VerificationContext, api::Error> {
     let batch_ops = proof.batch_ops();
 
-    // Fix 3: Reject inverted ranges early. The generator enforces this
-    // (merkle/mod.rs:545-552), but the verifier must independently
-    // validate because start_key/end_key come from the caller, not
-    // the proof.
+    // Reject inverted ranges early. The generator enforces this, but the
+    // verifier must independently validate because start_key/end_key come
+    // from the caller, not the proof.
     if let (Some(start), Some(end)) = (start_key, end_key)
         && start.cmp(end) == Ordering::Greater
     {
@@ -149,9 +148,9 @@ fn verify_proof_structure(
         });
     }
 
-    // Fix 2: The honest diff algorithm only produces Put and Delete ops,
-    // never DeleteRange. A crafted proof could use DeleteRange to delete
-    // keys outside the proven range.
+    // The honest diff algorithm only produces Put and Delete ops, never
+    // DeleteRange. A crafted proof could use DeleteRange to delete keys
+    // outside the proven range.
     if batch_ops
         .iter()
         .any(|op| matches!(op, BatchOp::DeleteRange { .. }))
@@ -195,9 +194,9 @@ fn verify_proof_structure(
         return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
     }
 
-    // Fix 9: Reject proofs with batch_ops but no boundary proofs, UNLESS
-    // this is a complete proof (no key bounds). Complete proofs are validated
-    // by root hash comparison in is_complete_proof() instead.
+    // Reject proofs with batch_ops but no boundary proofs, UNLESS this is a
+    // complete proof (no key bounds). Complete proofs are validated by root
+    // hash comparison in is_complete_proof() instead.
     if !batch_ops.is_empty()
         && proof.start_proof().is_empty()
         && proof.end_proof().is_empty()
@@ -208,8 +207,8 @@ fn verify_proof_structure(
 
     // Verify boundary proofs against end_root
     verify_start_proof(proof, start_key, &end_root)?;
-    // Fix 8: verify_end_proof now returns the resolved key it validated
-    // against, cached to avoid redundant value_digest calls downstream.
+    // verify_end_proof now returns the resolved key it validated against,
+    // cached to avoid redundant value_digest calls downstream.
     let resolved_end_key = verify_end_proof(proof, end_key, &end_root, max_length)?;
 
     Ok(VerificationContext {
@@ -232,9 +231,9 @@ fn verify_start_proof(
         return Ok(());
     }
 
-    // Fix 1: If start_proof is non-empty, we MUST have a key to validate
-    // it against. The honest generator only produces a non-empty
-    // start_proof when start_key is Some (merkle/mod.rs:558-561).
+    // If start_proof is non-empty, we MUST have a key to validate it
+    // against. The honest generator only produces a non-empty
+    // start_proof when start_key is Some.
     let Some(start_key) = start_key else {
         return Err(api::Error::ProofError(
             ProofError::BoundaryProofUnverifiable,
@@ -294,9 +293,9 @@ fn verify_end_proof(
         return Ok(Some(last_op.key().as_ref().into()));
     }
 
-    // Fix 1: All validation paths exhausted. end_proof is non-empty but
-    // no key could validate it. The honest generator always provides a
-    // key for a non-empty end_proof (merkle/mod.rs:589-603).
+    // All validation paths exhausted. end_proof is non-empty but no key
+    // could validate it. The honest generator always provides a key for
+    // a non-empty end_proof.
     Err(api::Error::ProofError(
         ProofError::BoundaryProofUnverifiable,
     ))
@@ -342,10 +341,6 @@ fn verify_boundary_values(
 
     Ok(())
 }
-
-// ---------------------------------------------------------------------------
-// Methods on ChangeProofContext
-// ---------------------------------------------------------------------------
 
 impl ChangeProofContext {
     /// Verify the change proof and prepare a proposal against the given database
@@ -435,10 +430,6 @@ impl ChangeProofContext {
         proposed.commit()
     }
 }
-
-// ---------------------------------------------------------------------------
-// Methods on ProposedChangeProofContext
-// ---------------------------------------------------------------------------
 
 impl ProposedChangeProofContext<'_> {
     /// Commit a previously proposed change proof. Consumes the proposal handle.
@@ -598,10 +589,6 @@ impl<'a> CodeIteratorHandle<'a> {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// FFI extern functions
-// ---------------------------------------------------------------------------
 
 /// Create a change proof for the given range of keys between two roots.
 ///
@@ -900,10 +887,6 @@ pub extern "C" fn fwd_free_proposed_change_proof(
 ) -> VoidResult {
     crate::invoke_with_handle(proof, drop)
 }
-
-// ---------------------------------------------------------------------------
-// MetricsContextExt impls
-// ---------------------------------------------------------------------------
 
 impl crate::MetricsContextExt for ChangeProofContext {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
