@@ -17,7 +17,7 @@ use rlp::Rlp;
 use firewood::{
     ProofError, ProofNode,
     api::{self, BatchOp, DbView as _, FrozenChangeProof, HashKey},
-    next_nibble,
+    merkle::PrefixOverlap,
 };
 
 use std::cmp::Ordering;
@@ -133,7 +133,7 @@ impl From<FrozenChangeProof> for ChangeProofContext {
 ///
 /// On success, returns a `VerificationContext` capturing the verification
 /// parameters so that downstream logic can avoid re-verifying.
-fn verify_proof(
+fn verify_proof_structure(
     proof: &FrozenChangeProof,
     end_root: HashKey,
     start_key: Option<&[u8]>,
@@ -397,35 +397,25 @@ fn verify_subtrie_hashes(
                 return Ok(());
             }
 
-            // One proof ends before the other. The shorter proof's boundary
-            // key serves as the divergence point via key_nibble_at fallback.
-            (Some(s), None) => {
-                if let Some(e) = key_nibble_at(e_node, verification.resolved_end_key.as_deref())
-                    && s != e
-                {
-                    if s > e {
-                        return Err(api::Error::ProofError(ProofError::BoundaryPathsInverted));
-                    }
-                    let between = in_range_between(s, e);
-                    check_in_range_children(s_node, &start_lookup, &between)?;
-                    let start_tail = next_idx.and_then(|j| start_nodes.get(j..)).unwrap_or(&[]);
-                    walk_proof_tail(start_tail, &start_lookup, in_range_after)?;
-                    return Ok(());
-                }
+            // Both proofs follow the same path above divergence (divergence
+            // triggers an early return). For en to be None, end_key must
+            // terminate at or before this depth, making it a prefix of
+            // start_key → end_key < start_key. The range check in
+            // verify_proof_structure should have caught this, but the
+            // proof structure itself implies it.
+            (Some(_), None) => {
+                return Err(api::Error::ProofError(ProofError::EndProofTerminatedEarly));
             }
+            // Start proof ended: start_key terminates at or above this
+            // depth, so all children before the end nibble are in-range.
+            // Use end_lookup because start_lookup may not include this
+            // depth (start_key terminated earlier).
             (None, Some(e)) => {
-                if let Some(s) = key_nibble_at(s_node, verification.start_key.as_deref())
-                    && s != e
-                {
-                    if s > e {
-                        return Err(api::Error::ProofError(ProofError::BoundaryPathsInverted));
-                    }
-                    let between = in_range_between(s, e);
-                    check_in_range_children(s_node, &start_lookup, &between)?;
-                    let end_tail = next_idx.and_then(|j| end_nodes.get(j..)).unwrap_or(&[]);
-                    walk_proof_tail(end_tail, &end_lookup, in_range_before)?;
-                    return Ok(());
-                }
+                let in_range = in_range_before(e);
+                check_in_range_children(s_node, &end_lookup, &in_range)?;
+                let end_tail = next_idx.and_then(|j| end_nodes.get(j..)).unwrap_or(&[]);
+                walk_proof_tail(end_tail, &end_lookup, in_range_before)?;
+                return Ok(());
             }
 
             // Both nibbles are None: both proofs end at the same depth
@@ -499,11 +489,16 @@ impl ChangeProofContext {
         // result without cloning.
         let proof = self.proof;
 
-        let verification =
-            match verify_proof(&proof, end_root.clone(), start_key, end_key, max_length) {
-                Ok(v) => v,
-                Err(e) => return Err(Box::new((Self { proof }, e))),
-            };
+        let verification = match verify_proof_structure(
+            &proof,
+            end_root.clone(),
+            start_key,
+            end_key,
+            max_length,
+        ) {
+            Ok(v) => v,
+            Err(e) => return Err(Box::new((Self { proof }, e))),
+        };
 
         let proposal = match db.apply_change_proof_to_parent(start_root, &proof) {
             Ok(p) => p,
@@ -658,25 +653,31 @@ fn verify_single_proof_subtrie(
 
 /// Compute the child nibble for a proof node at a given depth.
 ///
-/// Uses the next proof node to determine which child the proof follows.
-/// Falls back to deriving the nibble from the boundary key when the proof
-/// has no next node (reached the end of the proof path).
+/// Tries the next proof node first; falls back to deriving the nibble
+/// from the boundary key via `PrefixOverlap`. Unlike `next_nibble` (strict
+/// prefix only), `PrefixOverlap` also returns the key's nibble when the
+/// node path and key path diverge (extension node overshoot).
 fn nibble_at(
     node: &ProofNode,
     next: Option<&ProofNode>,
     key: Option<&[u8]>,
 ) -> Option<PathComponent> {
-    next.and_then(|n| next_nibble(node.full_path(), n.full_path()))
-        .or_else(|| key_nibble_at(node, key))
-}
-
-/// Derive the child nibble from the boundary key when the proof has no next
-/// node. Unpacks the key to nibbles and finds the first diverging component
-/// from the current proof node's path.
-fn key_nibble_at(node: &ProofNode, key: Option<&[u8]>) -> Option<PathComponent> {
+    // Try the next proof node: the nibble is the first component of
+    // the next node's path after the shared prefix with this node.
+    if let Some(n) = next {
+        let overlap = PrefixOverlap::from(node.full_path(), n.full_path());
+        if let Some(&nibble) = overlap.unique_b.first() {
+            return Some(nibble);
+        }
+    }
+    // Fall back to the boundary key: convert to nibbles and find the
+    // first key nibble after the shared prefix with this node's path.
+    // PrefixOverlap handles both strict-prefix (key extends past node)
+    // and divergence (extension node overshoots key).
     let nibbles: Vec<u8> = NibblesIterator::new(key?).collect();
     let key_path: PathBuf = TriePathFromUnpackedBytes::path_from_unpacked_bytes(&nibbles).ok()?;
-    next_nibble(node.full_path(), key_path.as_ref())
+    let overlap = PrefixOverlap::from(node.full_path(), &key_path);
+    overlap.unique_b.first().copied()
 }
 
 /// Build a `HashMap` from `key_nibbles` to `PathIterItem` for fast lookup of
@@ -711,7 +712,10 @@ fn walk_proof_tail(
         let Some(path_nibble) = i
             .checked_add(1)
             .and_then(|j| nodes.get(j))
-            .and_then(|next| next_nibble(proof_node.full_path(), next.full_path()))
+            .and_then(|next| {
+                let overlap = PrefixOverlap::from(proof_node.full_path(), next.full_path());
+                overlap.unique_b.first().copied()
+            })
         else {
             continue;
         };

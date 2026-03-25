@@ -194,6 +194,14 @@ pub enum ProofError {
     /// proof whose path structure contradicts the claimed key range.
     #[error("boundary proof paths are inverted: start nibble exceeds end nibble at divergence")]
     BoundaryPathsInverted,
+
+    /// The end boundary proof terminates before the start boundary proof
+    /// without diverging. This implies `end_key` is a prefix of `start_key`
+    /// (`end_key` < `start_key`), which should have been caught by the range
+    /// validation in `verify_proof_structure`. A crafted proof could reach
+    /// this state if the range check is bypassed or reordered.
+    #[error("end boundary proof terminates before start proof, implying inverted range")]
+    EndProofTerminatedEarly,
 }
 
 #[derive(Clone, PartialEq, Eq)]
