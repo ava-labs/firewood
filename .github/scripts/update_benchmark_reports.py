@@ -102,12 +102,42 @@ def apply_theme(report_dir, css):
         )
 
 
+def fix_base_commit_ids(path, base_sha, base_subject, head_sha):
+    """Fix commit IDs in comparison data where benchmark-action recorded the
+    base benchmark under the HEAD SHA (it ignores the ref input in PR context)."""
+    data = load_data(path)
+    if not data or not base_sha or not head_sha or base_sha == head_sha:
+        return
+    changed = False
+    for suites in (data.get("entries") or {}).values():
+        if not isinstance(suites, list) or len(suites) < 2:
+            continue
+        # Sort by date to find the earliest entry — that's the base benchmark
+        dated = [(s.get("date", 0), s) for s in suites if isinstance(s, dict)]
+        dated.sort(key=lambda x: x[0])
+        for _, suite in dated:
+            commit = suite.get("commit") or {}
+            if commit.get("id") == head_sha:
+                commit["id"] = base_sha
+                if base_subject:
+                    commit["message"] = base_subject
+                changed = True
+                break  # only fix the first (oldest) entry per suite
+    if changed:
+        path.write_text(PREFIX + json.dumps(data, indent=2), encoding="utf-8")
+        print(f"Fixed base commit ID in {path}")
+
+
 def main():
+    base_sha = os.getenv("BASE_SHA")
+    head_sha = os.getenv("HEAD_SHA")
+    base_subject = os.getenv("BASE_SUBJECT")
+    head_subject = os.getenv("HEAD_SUBJECT")
     subjects = {
         sha: subj
         for sha, subj in (
-            (os.getenv("BASE_SHA"), os.getenv("BASE_SUBJECT")),
-            (os.getenv("HEAD_SHA"), os.getenv("HEAD_SUBJECT")),
+            (base_sha, base_subject),
+            (head_sha, head_subject),
         )
         if sha and subj
     }
@@ -116,6 +146,7 @@ def main():
         for d in os.getenv("BENCHMARK_DATA_DIRS", "").splitlines()
         if d.strip()
     ]
+    cmp_dir = os.getenv("COMPARISON_DATA_DIR", "")
 
     shutil.rmtree(WORKDIR, ignore_errors=True)
     git(
@@ -130,6 +161,12 @@ def main():
 
     with urllib.request.urlopen(env("BENCHMARK_THEME_CSS_URL")) as r:
         css = r.read().decode()
+
+    # Fix base commit IDs in comparison data before normalizing
+    if cmp_dir:
+        fix_base_commit_ids(
+            WORKDIR / cmp_dir / "data.js", base_sha, base_subject, head_sha
+        )
 
     for d in dirs:
         rd = WORKDIR / d
