@@ -1360,10 +1360,18 @@ impl Merkle<NodeStore<Mutable<Propose>, MemStore>> {
 
     /// Reconciles a branch proof node against the in-memory proving merkle.
     ///
-    /// This helper never overwrites an existing branch value. It only:
-    /// - creates missing branch structure,
-    /// - inserts a value when the branch exists without one, and
-    /// - errors if an existing value conflicts with the proof.
+    /// This helper never overwrites an existing branch value. It only
+    /// creates missing branch structure and inserts a value when the
+    /// branch exists without one.
+    ///
+    /// ## Arguments
+    ///
+    /// * `proof_node` - A branch proof node containing the key (as nibble
+    ///   path components) and an optional value digest to reconcile.
+    ///
+    /// ## Errors
+    ///
+    /// Returns an error if an existing value conflicts with the proof.
     pub(crate) fn reconcile_branch_proof_node(
         &mut self,
         proof_node: &ProofNode,
