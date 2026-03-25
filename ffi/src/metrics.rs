@@ -5,6 +5,7 @@ use std::error::Error;
 use std::net::Ipv6Addr;
 use std::sync::OnceLock;
 
+use crate::jemalloc_metrics;
 use firewood_metrics::{HistogramBucketConfig, MetricsContext};
 use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
 use oxhttp::Server;
@@ -53,6 +54,7 @@ pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
     firewood_storage::registry::register();
     #[cfg(feature = "block-replay")]
     firewood_replay::registry::register();
+    jemalloc_metrics::register();
 
     // Build the Prometheus exporter with bucket configurations from the registry
     // TODO: Switch to Prometheus's native histograms
@@ -106,9 +108,12 @@ pub fn setup_metrics_with_exporter(metrics_port: u16) -> Result<(), Box<dyn Erro
 }
 
 /// Returns the latest metrics for this process.
+///
+/// Refreshes jemalloc stats before rendering so the returned snapshot is current.
 pub fn gather_metrics() -> Result<String, String> {
     let Some(recorder) = RECORDER.get() else {
         return Err(String::from("recorder not initialized"));
     };
+    jemalloc_metrics::refresh();
     Ok(recorder.render())
 }
