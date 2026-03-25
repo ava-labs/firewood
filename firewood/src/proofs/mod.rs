@@ -79,7 +79,7 @@ pub use self::header::InvalidHeader;
 pub use self::range::RangeProof;
 pub use self::reader::ReadError;
 pub use self::types::{
-    EmptyProofCollection, Proof, ProofCollection, ProofError, ProofNode, ProofType, next_nibble,
+    EmptyProofCollection, Proof, ProofCollection, ProofError, ProofNode, ProofType,
 };
 
 pub(super) mod magic {

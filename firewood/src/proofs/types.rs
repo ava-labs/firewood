@@ -523,7 +523,7 @@ impl ProofCollection for EmptyProofCollection {
 
 /// Returns the next nibble in `c` after `b`.
 /// Returns None if `b` is not a strict prefix of `c`.
-pub fn next_nibble(b: impl IntoSplitPath, c: impl IntoSplitPath) -> Option<PathComponent> {
+fn next_nibble(b: impl IntoSplitPath, c: impl IntoSplitPath) -> Option<PathComponent> {
     let b = b.into_split_path();
     let c = c.into_split_path();
     match b.longest_common_prefix(c).split_first_parts() {
