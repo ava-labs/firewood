@@ -119,10 +119,6 @@ impl From<FrozenChangeProof> for ChangeProofContext {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Free functions for shared verification logic
-// ---------------------------------------------------------------------------
-
 /// Verify structural properties and boundary proofs of the change proof.
 ///
 /// On success, returns a `VerificationContext` capturing the verification
