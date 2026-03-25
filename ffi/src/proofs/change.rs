@@ -465,17 +465,60 @@ impl ProposedChangeProofContext<'_> {
         }
     }
 
+    /// Compare the proposal's computed root hash against the expected
+    /// `end_root`. Called when `find_next_key` determines that sync has
+    /// reached the end of the keyspace (empty `end_proof` or no `batch_ops`).
+    /// This is the final cryptographic check that the accumulated state
+    /// matches the target revision.
+    fn check_root_hash(&self) -> Result<(), api::Error> {
+        // Retrieve the root hash from whichever state we're in.
+        // Before commit: read from the live proposal handle.
+        // After commit: use the cached hash from the commit result.
+        // None means the trie is empty; unwrap_or_default gives the
+        // canonical empty-trie hash, matching the pattern in
+        // verify_and_propose (line ~526).
+        let computed: crate::HashKey = match &self.proposal_state {
+            ProposalState::Proposed(handle) => handle
+                .root_hash()
+                .map(crate::HashKey::from)
+                .unwrap_or_default(),
+            ProposalState::Committed(hash) => {
+                hash.clone().map(crate::HashKey::from).unwrap_or_default()
+            }
+        };
+        if computed != crate::HashKey::from(self.verification.end_root.clone()) {
+            return Err(api::Error::ProofError(ProofError::EndRootMismatch));
+        }
+        Ok(())
+    }
+
     /// Returns the next key range that should be fetched after processing this
     /// change proof, or `None` if there are no more keys to fetch.
     fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
         let Some(last_op) = self.proof.batch_ops().last() else {
+            // No batch_ops means the proof claims no changes exist.
+            // Verify that the accumulated state matches end_root;
+            // otherwise a malicious sender could send an empty proof
+            // to make the receiver stop with incomplete state.
+            self.check_root_hash()?;
             return Ok(None);
         };
 
         if self.proof.end_proof().is_empty() {
+            // Empty end_proof signals the end of the keyspace — there
+            // are no more keys to fetch. Verify the root hash to
+            // confirm the accumulated state is complete; a malicious
+            // sender could craft partial changes with an empty
+            // end_proof to trigger premature completion.
+            self.check_root_hash()?;
             return Ok(None);
         }
 
+        // Range-bounded completion: last_op >= end_key. No root hash
+        // check here because end_key is controlled by the receiver,
+        // so the attacker cannot force this path. The proposal's root
+        // hash may legitimately differ from end_root when the proof
+        // covers only a sub-range of the full keyspace.
         if let Some(ref end_key) = self.verification.end_key
             && **last_op.key() >= **end_key
         {
