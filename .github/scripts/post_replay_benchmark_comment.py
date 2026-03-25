@@ -200,29 +200,8 @@ _Lower is better for all timing metrics._
 - [PR trend graph]({os.environ["TREND_URL"]})
 - [Base vs head graph]({os.environ["COMPARISON_URL"]})"""
 
-    print("Fetching existing comments...")
-    comments = (
-        gh("GET", f"/repos/{owner}/{repo}/issues/{pr}/comments?per_page=100") or []
-    )
-    existing = next(
-        (
-            c
-            for c in comments
-            if c.get("user", {}).get("login") == "github-actions[bot]"
-            and MARKER in c.get("body", "")
-        ),
-        None,
-    )
-    if existing:
-        print(f"Updating existing comment {existing['id']}...")
-        gh(
-            "PATCH",
-            f"/repos/{owner}/{repo}/issues/comments/{existing['id']}",
-            {"body": body},
-        )
-    else:
-        print(f"Creating new comment on PR #{pr}...")
-        gh("POST", f"/repos/{owner}/{repo}/issues/{pr}/comments", {"body": body})
+    print(f"Posting new comment on PR #{pr}...")
+    gh("POST", f"/repos/{owner}/{repo}/issues/{pr}/comments", {"body": body})
     print("Done.")
 
 
