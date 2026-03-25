@@ -1636,7 +1636,6 @@ dependencies = [
  "oxhttp",
  "parking_lot",
  "rlp",
- "tempfile",
  "test-case",
  "tikv-jemallocator",
 ]
