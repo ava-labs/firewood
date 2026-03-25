@@ -31,6 +31,14 @@ var (
 		"flush_nodes":        dto.MetricType_COUNTER,
 		"insert":             dto.MetricType_COUNTER,
 		"space_from_end":     dto.MetricType_COUNTER,
+		// jemalloc memory allocator gauges (bytes).
+		// jemalloc_retained_bytes is omitted because it can legitimately be zero
+		// on some platforms, and we assert that gauge values are positive below.
+		"jemalloc_active_bytes":    dto.MetricType_GAUGE,
+		"jemalloc_allocated_bytes": dto.MetricType_GAUGE,
+		"jemalloc_metadata_bytes":  dto.MetricType_GAUGE,
+		"jemalloc_mapped_bytes":    dto.MetricType_GAUGE,
+		"jemalloc_resident_bytes":  dto.MetricType_GAUGE,
 	}
 	expectedExpensiveMetrics = map[string]dto.MetricType{
 		"ffi_commit_ms_bucket":  dto.MetricType_HISTOGRAM,
@@ -156,7 +164,13 @@ func assertMetrics(t *testing.T, metricsPort uint16, expected map[string]dto.Met
 				d = m
 			}
 		}
-		r.NotNil(d)
-		r.Equal(v, *d.Type)
+		r.NotNil(d, "metric %q not found", k)
+		r.Equal(v, *d.Type, "metric %q has wrong type", k)
+
+		// Jemalloc gauges must report positive byte counts in a running process.
+		if v == dto.MetricType_GAUGE && len(d.Metric) > 0 && d.Metric[0].Gauge != nil {
+			r.Greater(*d.Metric[0].Gauge.Value, 0.0,
+				"metric %q should be positive", k)
+		}
 	}
 }
