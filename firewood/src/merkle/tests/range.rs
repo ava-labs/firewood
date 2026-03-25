@@ -419,31 +419,9 @@ fn test_all_elements_proof() {
     items.sort_unstable();
     let merkle = init_merkle(items.clone());
 
-    let item_iter = items.clone().into_iter();
-    let _keys: Vec<&[u8]> = item_iter.clone().map(|item| item.0.as_ref()).collect();
-    let _vals: Vec<&[u8; 20]> = item_iter.map(|item| item.1).collect();
-
-    let empty_proof = Proof::empty();
-    let empty_key: [u8; 32] = [0; 32];
-
-    let key_values: KeyValuePairs = items
-        .iter()
-        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-        .collect();
-
-    let range_proof = RangeProof::new(
-        empty_proof.clone(),
-        empty_proof,
-        key_values.into_boxed_slice(),
-    );
-
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    merkle
-        .verify_range_proof(Some(&empty_key), Some(&empty_key), &root_hash, &range_proof)
-        .unwrap();
-
-    // With edge proofs, it should still work.
+    // With edge proofs, all elements proof should work.
     let start = 0;
     let end = &items.len() - 1;
     let start_proof_2 = merkle.prove(items[start].0).unwrap();
@@ -939,4 +917,157 @@ fn test_bloadted_range_proof() {
             &range_proof,
         )
         .unwrap();
+}
+
+#[test]
+// Rejects a range proof containing keys below the requested start key.
+fn test_bad_range_proof_key_below_start() {
+    let items = [("bb", "v1"), ("cc", "v2"), ("dd", "v3")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start_proof = merkle.prove(b"cc").unwrap();
+    let end_proof = merkle.prove(b"dd").unwrap();
+
+    // Include "bb" which is below the claimed start key "cc"
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_bytes().to_vec().into_boxed_slice(),
+                v.as_bytes().to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    let result = merkle.verify_range_proof(
+        Some(b"cc".as_slice()),
+        Some(b"dd".as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(crate::api::Error::ProofError(ProofError::KeyOutsideRange))
+        ),
+        "expected KeyOutsideRange, got {result:?}"
+    );
+}
+
+#[test]
+// Rejects a range proof containing keys above the requested end key.
+fn test_bad_range_proof_key_above_end() {
+    let items = [("bb", "v1"), ("cc", "v2"), ("dd", "v3")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start_proof = merkle.prove(b"bb").unwrap();
+    let end_proof = merkle.prove(b"cc").unwrap();
+
+    // Include "dd" which is above the claimed end key "cc"
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_bytes().to_vec().into_boxed_slice(),
+                v.as_bytes().to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    let result = merkle.verify_range_proof(
+        Some(b"bb".as_slice()),
+        Some(b"cc".as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(crate::api::Error::ProofError(ProofError::KeyOutsideRange))
+        ),
+        "expected KeyOutsideRange, got {result:?}"
+    );
+}
+
+#[test]
+// Rejects a range proof with key-value pairs but no end proof.
+fn test_bad_range_proof_missing_end_proof() {
+    let items = [("bb", "v1"), ("cc", "v2")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start_proof = merkle.prove(b"bb").unwrap();
+
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_bytes().to_vec().into_boxed_slice(),
+                v.as_bytes().to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let empty_end: Proof<Box<[ProofNode]>> = Proof::new(Vec::new().into_boxed_slice());
+    let range_proof = RangeProof::new(start_proof, empty_end, key_values.into_boxed_slice());
+
+    let result = merkle.verify_range_proof(
+        Some(b"bb".as_slice()),
+        Some(b"cc".as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(crate::api::Error::ProofError(ProofError::NoEndProof))
+        ),
+        "expected NoEndProof, got {result:?}"
+    );
+}
+
+#[test]
+// Rejects a start proof when no start key is specified.
+fn test_bad_range_proof_unexpected_start_proof() {
+    let items = [("bb", "v1"), ("cc", "v2")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start_proof = merkle.prove(b"bb").unwrap();
+    let end_proof = merkle.prove(b"cc").unwrap();
+
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_bytes().to_vec().into_boxed_slice(),
+                v.as_bytes().to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    // Pass None as start key but provide a start proof — should be rejected
+    let result = merkle.verify_range_proof(
+        None::<&[u8]>,
+        Some(b"cc".as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(crate::api::Error::ProofError(
+                ProofError::UnexpectedStartProof
+            ))
+        ),
+        "expected UnexpectedStartProof, got {result:?}"
+    );
 }

@@ -469,7 +469,7 @@ impl<T: TrieReader> Merkle<T> {
         let first_key_bytes: Option<&[u8]> = first_key.as_ref().map(AsRef::as_ref);
         let last_key_bytes: Option<&[u8]> = last_key.as_ref().map(AsRef::as_ref);
 
-        // check that the keys are in ascending order
+        // check that the keys are in ascending order and within the requested range
         let key_values = proof.key_values();
         if !key_values
             .iter()
@@ -481,8 +481,28 @@ impl<T: TrieReader> Merkle<T> {
             ));
         }
 
+        // Validate all keys are within the requested [first_key, last_key] range
+        for (key, _) in key_values {
+            let k = key.as_ref();
+            if first_key_bytes.is_some_and(|start| k < start)
+                || last_key_bytes.is_some_and(|end| k > end)
+            {
+                return Err(api::Error::ProofError(ProofError::KeyOutsideRange));
+            }
+        }
+
         if key_values.is_empty() && first_key_bytes.is_none() && last_key_bytes.is_none() {
             return Err(api::Error::ProofError(ProofError::Empty));
+        }
+
+        // Reject start proof when no start key is specified (non-canonical proof)
+        if first_key_bytes.is_none() && !proof.start_proof().is_empty() {
+            return Err(api::Error::ProofError(ProofError::UnexpectedStartProof));
+        }
+
+        // Require end proof when there are key-value pairs or an end key is specified
+        if proof.end_proof().is_empty() && (last_key_bytes.is_some() || !key_values.is_empty()) {
+            return Err(api::Error::ProofError(ProofError::NoEndProof));
         }
 
         let left_edge_key = key_values.first();
@@ -491,9 +511,6 @@ impl<T: TrieReader> Merkle<T> {
         let left_edge = left_edge_key.map(|(k, v)| (k.as_ref(), v.as_ref()));
         let right_edge = right_edge_key.map(|(k, v)| (k.as_ref(), v.as_ref()));
 
-        // When edge proofs are empty, skip edge verification — the caller is
-        // claiming all elements are present and the hash check at the end is
-        // sufficient to validate that claim.
         if !proof.start_proof().is_empty() {
             verify_edge(
                 first_key_bytes,
