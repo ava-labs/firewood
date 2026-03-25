@@ -790,6 +790,7 @@ func TestSubTrieHashCheckWithMismatchedSource(t *testing.T) {
 	// initial state differs from dbA's
 	_, err := dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.Error(err, "should fail: dbB has different initial data than dbA")
+	r.ErrorContains(err, "proof error:")
 }
 
 // TestSubTrieHashCheckTruncatedProof creates a valid truncated change proof
@@ -987,32 +988,92 @@ func TestMultiRoundChangeProof(t *testing.T) {
 // asserts that the verifier rejects it with the expected error.
 // ---------------------------------------------------------------------------
 
-// TestChangeProofInvertedRange verifies that passing start_key > end_key is
-// rejected as an invalid range before any other validation runs.
-func TestChangeProofInvertedRange(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
+// TestChangeProofVerificationRejection is a table-driven test covering seven
+// adversarial scenarios that share the same two-DB setup with a complete
+// change proof but vary the verification parameters and expected error.
+func TestChangeProofVerificationRejection(t *testing.T) {
+	tests := []struct {
+		name           string
+		createStartKey maybe  // proof creation start_key (default: nothing)
+		startKey       maybe  // verification start_key
+		endKey         maybe  // verification end_key
+		maxLength      uint32 // verification max_length (0 = unbounded)
+		flipEndRoot    bool   // XOR byte 0 of end_root before verify
+		errContains    string // expected error substring
+	}{
+		{
+			name:        "inverted range",
+			startKey:    something([]byte("z")),
+			endKey:      something([]byte("a")),
+			errContains: "Invalid range",
+		},
+		{
+			name:        "exceeds max length",
+			maxLength:   1,
+			errContains: "larger than max length",
+		},
+		{
+			name:        "start key out of bounds",
+			startKey:    something([]byte("zzz")),
+			errContains: "start key of the change proof is larger",
+		},
+		{
+			name:        "end key out of bounds",
+			endKey:      something([]byte("a")),
+			errContains: "end key of the change proof is larger",
+		},
+		{
+			name:        "missing boundary proof",
+			startKey:    something([]byte("a")),
+			endKey:      something([]byte("z")),
+			errContains: "at least one boundary proof",
+		},
+		{
+			name:        "end root mismatch",
+			flipEndRoot: true,
+			errContains: "doesn't match the expected end root",
+		},
+		{
+			name:           "boundary proof unverifiable",
+			createStartKey: something([]byte("key1")),
+			errContains:    "no key to validate against",
+		},
+	}
 
-	_, _, batch := kvForTest(20)
-	rootA, err := dbA.Update(batch[:10])
-	r.NoError(err)
-	rootB, err := dbB.Update(batch[:10])
-	r.NoError(err)
-	r.Equal(rootA, rootB)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			dbA := newTestDatabase(t)
+			dbB := newTestDatabase(t)
 
-	rootAUpdated, err := dbA.Update(batch[10:])
-	r.NoError(err)
+			_, _, batch := kvForTest(100)
+			rootA, err := dbA.Update(batch[:50])
+			r.NoError(err)
+			rootB, err := dbB.Update(batch[:50])
+			r.NoError(err)
+			r.Equal(rootA, rootB)
 
-	proof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(proof.Free()) })
+			rootAUpdated, err := dbA.Update(batch[50:])
+			r.NoError(err)
 
-	// start_key "z" > end_key "a" → InvalidRange
-	_, err = dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated,
-		something([]byte("z")), something([]byte("a")), changeProofLenUnbounded)
-	r.Error(err)
-	r.ErrorContains(err, "Invalid range")
+			// Create the proof — bounded if createStartKey is set,
+			// complete (nothing/nothing) otherwise.
+			proof, err := dbA.ChangeProof(rootA, rootAUpdated,
+				tt.createStartKey, nothing(), changeProofLenUnbounded)
+			r.NoError(err)
+			t.Cleanup(func() { r.NoError(proof.Free()) })
+
+			endRoot := rootAUpdated
+			if tt.flipEndRoot {
+				endRoot[0] ^= 0xFF
+			}
+
+			_, err = dbB.VerifyAndProposeChangeProof(proof, rootB, endRoot,
+				tt.startKey, tt.endKey, tt.maxLength)
+			r.Error(err)
+			r.ErrorContains(err, tt.errContains)
+		})
+	}
 }
 
 // TestChangeProofDeleteRangeRejected injects a DeleteRange operation into a
@@ -1059,36 +1120,7 @@ func TestChangeProofDeleteRangeRejected(t *testing.T) {
 	_, err = db.VerifyAndProposeChangeProof(mutatedProof, root1, root2,
 		nothing(), nothing(), changeProofLenUnbounded)
 	r.Error(err)
-	r.ErrorContains(err, "proof error")
-}
-
-// TestChangeProofExceedsMaxLength verifies that a proof with more batch ops
-// than the specified max_length is rejected.
-func TestChangeProofExceedsMaxLength(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
-
-	_, _, batch := kvForTest(100)
-	rootA, err := dbA.Update(batch[:50])
-	r.NoError(err)
-	rootB, err := dbB.Update(batch[:50])
-	r.NoError(err)
-	r.Equal(rootA, rootB)
-
-	rootAUpdated, err := dbA.Update(batch[50:])
-	r.NoError(err)
-
-	// Create a proof with ~50 batch ops
-	proof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(proof.Free()) })
-
-	// Verify with max_length=1, which is less than the number of ops
-	_, err = dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated,
-		nothing(), nothing(), 1)
-	r.Error(err)
-	r.ErrorContains(err, "proof error")
+	r.ErrorContains(err, "unsupported DeleteRange")
 }
 
 // TestChangeProofKeysNotSorted swaps two key values in a serialized proof to
@@ -1135,130 +1167,7 @@ func TestChangeProofKeysNotSorted(t *testing.T) {
 	_, err = db.VerifyAndProposeChangeProof(mutatedProof, root1, root2,
 		nothing(), nothing(), changeProofLenUnbounded)
 	r.Error(err)
-	r.ErrorContains(err, "proof error")
-}
-
-// TestChangeProofStartKeyOutOfBounds verifies that a start_key greater than
-// the first batch op key is rejected.
-func TestChangeProofStartKeyOutOfBounds(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
-
-	_, _, batch := kvForTest(100)
-	rootA, err := dbA.Update(batch[:50])
-	r.NoError(err)
-	rootB, err := dbB.Update(batch[:50])
-	r.NoError(err)
-	r.Equal(rootA, rootB)
-
-	rootAUpdated, err := dbA.Update(batch[50:])
-	r.NoError(err)
-
-	proof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(proof.Free()) })
-
-	// The proof's first key is the smallest added key (a "key*" value).
-	// "zzz" is lexicographically greater than any "key*" key.
-	_, err = dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated,
-		something([]byte("zzz")), nothing(), changeProofLenUnbounded)
-	r.Error(err)
-	r.ErrorContains(err, "proof error")
-}
-
-// TestChangeProofEndKeyOutOfBounds verifies that an end_key less than the
-// last batch op key is rejected.
-func TestChangeProofEndKeyOutOfBounds(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
-
-	_, _, batch := kvForTest(100)
-	rootA, err := dbA.Update(batch[:50])
-	r.NoError(err)
-	rootB, err := dbB.Update(batch[:50])
-	r.NoError(err)
-	r.Equal(rootA, rootB)
-
-	rootAUpdated, err := dbA.Update(batch[50:])
-	r.NoError(err)
-
-	proof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(proof.Free()) })
-
-	// The proof's last key is the largest added key (a "key*" value).
-	// "a" is lexicographically less than any "key*" key.
-	_, err = dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated,
-		nothing(), something([]byte("a")), changeProofLenUnbounded)
-	r.Error(err)
-	r.ErrorContains(err, "proof error")
-}
-
-// TestChangeProofMissingBoundaryProof creates a complete proof (no key
-// bounds, so boundary proofs are empty) and then verifies it with bounds.
-// The verifier should reject it because non-empty batch ops require at
-// least one boundary proof when key bounds are specified.
-func TestChangeProofMissingBoundaryProof(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
-
-	_, _, batch := kvForTest(100)
-	rootA, err := dbA.Update(batch[:50])
-	r.NoError(err)
-	rootB, err := dbB.Update(batch[:50])
-	r.NoError(err)
-	r.Equal(rootA, rootB)
-
-	rootAUpdated, err := dbA.Update(batch[50:])
-	r.NoError(err)
-
-	// Complete proof: no key bounds → empty boundary proofs
-	proof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(proof.Free()) })
-
-	// Verify with bounds — triggers MissingBoundaryProof because the proof
-	// has non-empty batch ops but no start/end proofs.
-	_, err = dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated,
-		something([]byte("a")), something([]byte("z")), changeProofLenUnbounded)
-	r.Error(err)
-	r.ErrorContains(err, "proof error")
-}
-
-// TestChangeProofEndRootMismatch creates a valid complete proof and verifies
-// it with a wrong end_root hash, so the computed root after applying the
-// batch ops doesn't match the expected end root.
-func TestChangeProofEndRootMismatch(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
-
-	_, _, batch := kvForTest(100)
-	rootA, err := dbA.Update(batch[:50])
-	r.NoError(err)
-	rootB, err := dbB.Update(batch[:50])
-	r.NoError(err)
-	r.Equal(rootA, rootB)
-
-	rootAUpdated, err := dbA.Update(batch[50:])
-	r.NoError(err)
-
-	// Complete proof (no bounds)
-	proof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(proof.Free()) })
-
-	// Flip a byte in end_root to make it wrong
-	wrongEndRoot := rootAUpdated
-	wrongEndRoot[0] ^= 0xFF
-
-	_, err = dbB.VerifyAndProposeChangeProof(proof, rootB, wrongEndRoot,
-		nothing(), nothing(), changeProofLenUnbounded)
-	r.Error(err)
-	r.ErrorContains(err, "proof error")
+	r.ErrorContains(err, "keys are not sorted")
 }
 
 // TestChangeProofAsymmetricDepth exercises the (None, Some(e)) code path in
@@ -1355,4 +1264,51 @@ func TestChangeProofAsymmetricDepthMismatch(t *testing.T) {
 	// Should fail because dbB's initial state differs from dbA's
 	_, err = dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated, startKey, endKey, changeProofLenUnbounded)
 	r.Error(err, "should fail: dbB has different initial data than dbA")
+}
+
+// TestChangeProofBoundaryValueMismatch creates two databases with the same
+// keys but different values at a boundary key, then creates a bounded change
+// proof from dbA and tries to verify it on dbB. The boundary proof's value
+// claim won't match the proposal trie, so verification should fail.
+func TestChangeProofBoundaryValueMismatch(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	// Same keys, different values at boundary key "\x01"
+	initialBatchA := []BatchOp{
+		Put([]byte("\x00"), []byte("shared0")),
+		Put([]byte("\x01"), []byte("valA")),
+		Put([]byte("\x02"), []byte("shared2")),
+	}
+	initialBatchB := []BatchOp{
+		Put([]byte("\x00"), []byte("shared0")),
+		Put([]byte("\x01"), []byte("valB")),
+		Put([]byte("\x02"), []byte("shared2")),
+	}
+	rootA, err := dbA.Update(initialBatchA)
+	r.NoError(err)
+	rootB, err := dbB.Update(initialBatchB)
+	r.NoError(err)
+	r.NotEqual(rootA, rootB, "roots should differ because values at key 0x01 differ")
+
+	// Add data to dbA in the bounded range
+	extraBatch := []BatchOp{
+		Put([]byte("\x00\x01"), []byte("extra")),
+	}
+	rootAUpdated, err := dbA.Update(extraBatch)
+	r.NoError(err)
+
+	// Create a bounded proof where \x01 is the end boundary
+	startKey := something([]byte("\x00"))
+	endKey := something([]byte("\x01"))
+	proof, err := dbA.ChangeProof(rootA, rootAUpdated, startKey, endKey, changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(proof.Free()) })
+
+	// Should fail — proof's boundary claims don't match dbB's trie
+	_, err = dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated,
+		startKey, endKey, changeProofLenUnbounded)
+	r.Error(err, "should fail: boundary values differ between dbA and dbB")
+	r.ErrorContains(err, "proof error:")
 }
