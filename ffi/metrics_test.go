@@ -6,7 +6,6 @@ package ffi
 import (
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -22,12 +21,8 @@ import (
 var (
 	metricsPort     = uint16(3000)
 	expectedMetrics = map[string]dto.MetricType{
-		"ffi_batch":          dto.MetricType_COUNTER,
 		"proposal_commit":    dto.MetricType_COUNTER,
 		"proposal_commit_ms": dto.MetricType_COUNTER,
-		"ffi_propose_ms":     dto.MetricType_COUNTER,
-		"ffi_commit_ms":      dto.MetricType_COUNTER,
-		"ffi_batch_ms":       dto.MetricType_COUNTER,
 		"flush_nodes":        dto.MetricType_COUNTER,
 		"insert":             dto.MetricType_COUNTER,
 		"space_from_end":     dto.MetricType_COUNTER,
@@ -39,11 +34,6 @@ var (
 		"jemalloc_metadata_bytes":  dto.MetricType_GAUGE,
 		"jemalloc_mapped_bytes":    dto.MetricType_GAUGE,
 		"jemalloc_resident_bytes":  dto.MetricType_GAUGE,
-	}
-	expectedExpensiveMetrics = map[string]dto.MetricType{
-		"ffi_commit_ms_bucket":  dto.MetricType_HISTOGRAM,
-		"ffi_propose_ms_bucket": dto.MetricType_HISTOGRAM,
-		"ffi_batch_ms_bucket":   dto.MetricType_HISTOGRAM,
 	}
 	initMetrics   sync.Once
 	initLogs      sync.Once
@@ -104,24 +94,6 @@ func TestMetrics(t *testing.T) {
 	}
 }
 
-func TestExpensiveMetrics(t *testing.T) {
-	r := require.New(t)
-	db, _ := newDbWithMetricsAndLogs(t, WithExpensiveMetrics())
-	// batch update
-	_, _, batch := kvForTest(10)
-	_, err := db.Update(batch)
-	r.NoError(err)
-
-	// Close database to ensure background persistence completes before checking metrics.
-	// The flush_nodes metric is recorded during persistence, which happens asynchronously.
-	r.NoError(db.Close(t.Context()))
-
-	merged := make(map[string]dto.MetricType, len(expectedMetrics)+len(expectedExpensiveMetrics))
-	maps.Copy(merged, expectedMetrics)
-	maps.Copy(merged, expectedExpensiveMetrics)
-	assertMetrics(t, metricsPort, merged)
-}
-
 func assertNonEmptyFile(t *testing.T, path string) bool {
 	t.Helper()
 	f, err := os.ReadFile(path)
@@ -146,12 +118,9 @@ func assertMetrics(t *testing.T, metricsPort uint16, expected map[string]dto.Met
 	resp, err := client.Do(req)
 	r.NoError(err)
 
-	body, err := io.ReadAll(resp.Body)
+	_, err = io.ReadAll(resp.Body)
 	r.NoError(err)
 	r.NoError(resp.Body.Close())
-
-	// Check that batch op was recorded (no prefix)
-	r.NotContains(string(body), "ffi_batch 0")
 
 	g := Gatherer{}
 	metricsFamily, err := g.Gather()

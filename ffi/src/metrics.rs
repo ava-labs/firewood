@@ -6,8 +6,8 @@ use std::net::Ipv6Addr;
 use std::sync::OnceLock;
 
 use crate::jemalloc_metrics;
-use firewood_metrics::{HistogramBucketConfig, MetricsContext};
-use metrics_exporter_prometheus::{Matcher, PrometheusBuilder, PrometheusHandle};
+use firewood_metrics::MetricsContext;
+use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use oxhttp::Server;
 use oxhttp::model::{Body, Response, StatusCode};
 use std::net::Ipv4Addr;
@@ -47,28 +47,14 @@ impl<T: MetricsContextExt + ?Sized> MetricsContextExt for &mut T {
 /// This happens on a per-process basis, meaning that the metrics system cannot
 /// be initialized if it has already been set up in the same process.
 pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
-    // Collect histogram bucket configurations from all crates
-    let mut histogram_configs: Vec<HistogramBucketConfig> = Vec::new();
-    crate::registry::register(&mut histogram_configs);
+    crate::registry::register();
     firewood::registry::register();
     firewood_storage::registry::register();
     #[cfg(feature = "block-replay")]
     firewood_replay::registry::register();
     jemalloc_metrics::register();
 
-    // Build the Prometheus exporter with bucket configurations from the registry
-    // TODO: Switch to Prometheus's native histograms
-    // they are cheaper, more efficient, and easier to configure (no predefined buckets)
-    // proper default support will start in prometheus v3.9 and v4.0; once our infra switches,
-    // we should switch too.
-    let mut builder = PrometheusBuilder::new();
-
-    // Apply bucket configurations from the global registry
-    for config in histogram_configs {
-        builder = builder
-            .set_buckets_for_metric(Matcher::Full(config.name.to_string()), config.buckets)?;
-    }
-
+    let builder = PrometheusBuilder::new();
     let handle = builder.install_recorder()?;
 
     RECORDER
