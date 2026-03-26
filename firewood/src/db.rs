@@ -1974,6 +1974,7 @@ mod test {
         let path = proposal.path_to_key(b"apple").unwrap();
         assert!(!path.is_empty(), "path_to_key should return non-empty path");
 
+        // The last node's key_nibbles should match the key's nibble representation
         let last = path.last().unwrap();
         assert!(
             last.node.value().is_some(),
@@ -1984,12 +1985,15 @@ mod test {
     #[test]
     fn test_path_to_key_empty_proposal() {
         let db = TestDb::new();
+        // Create a proposal with some data, then query for a different key
         let batch = vec![BatchOp::Put {
             key: b"apple",
             value: b"red",
         }];
         let proposal = db.propose(batch).unwrap();
 
+        // path_to_key for a non-existent key returns whatever path exists
+        // (may be empty if there's no root, or partial)
         let result = proposal.path_to_key(b"missing");
         assert!(result.is_ok(), "path_to_key should not error");
     }
