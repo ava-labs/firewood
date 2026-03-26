@@ -459,7 +459,11 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         proving_merkle.insert(key.as_ref(), value.as_ref().into())?;
     }
 
-    // Reconcile all proof nodes and build lookup map; reject conflicting nodes
+    // Reconcile proof nodes into the proving trie and build a lookup map.
+    // "Reconcile" means adjusting the proving trie's branch structure
+    // (partial paths and child layout) to match the proof, so that hash
+    // computation produces the same trie shape as the original.
+    // Conflicting proof nodes (same key, different data) are rejected.
     let all_proof_nodes: Vec<&ProofNode> = proof
         .start_proof()
         .as_ref()
