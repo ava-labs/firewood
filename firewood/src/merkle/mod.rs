@@ -225,8 +225,10 @@ fn compute_outside_children(
 
         match divergence {
             None if boundary_nibbles.len() > terminal.key.len() => {
-                // Boundary extends beyond terminal key and matches it fully.
-                // Use the next nibble from the boundary as the on-path nibble.
+                // No divergence found and the boundary key is longer than the
+                // terminal's key, so the terminal node is an ancestor of the
+                // boundary key in the trie. The next nibble of the boundary
+                // tells us which child branch leads toward the boundary.
                 let on_path_nibble = boundary_nibbles[terminal.key.len()];
                 mark_outside(
                     &mut result,
