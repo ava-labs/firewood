@@ -20,7 +20,7 @@ use std::cmp::Ordering;
 
 use crate::{
     BorrowedBytes, ChangeProofResult, DatabaseHandle, HashKey, HashResult, KeyRange, Maybe,
-    NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
+    MetricsContextExt, NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
     results::{ProposedChangeProofResult, VerifiedChangeProofResult},
 };
 
@@ -95,6 +95,24 @@ pub struct ProposedChangeProofArgs<'a> {
 pub struct CommittedChangeProofArgs<'a> {
     // The proposed change proof context that will be used to commit a proposal
     pub proof: Option<&'a mut ProposedChangeProofContext<'a>>,
+}
+
+/// Arguments for the combined verify-and-propose/commit API.
+#[derive(Debug)]
+#[repr(C)]
+pub struct VerifyAndProposeArgs<'a> {
+    /// The change proof to verify. Ownership is transferred to the callee.
+    pub proof: Option<Box<ChangeProofContext>>,
+    /// The root hash of the starting revision.
+    pub start_root: crate::HashKey,
+    /// The root hash of the ending revision.
+    pub end_root: crate::HashKey,
+    /// The lower bound of the key range.
+    pub start_key: Maybe<BorrowedBytes<'a>>,
+    /// The upper bound of the key range.
+    pub end_key: Maybe<BorrowedBytes<'a>>,
+    /// Maximum number of key/value pairs.
+    pub max_length: u32,
 }
 
 /// FFI context for a parsed or generated change proof. This change proof has not
@@ -175,7 +193,6 @@ impl ChangeProofContext {
     /// On success, consumes `self` and returns a [`ProposedChangeProofContext`].
     /// On failure, returns `self` back to the caller (along with the error) so
     /// that the caller retains ownership of the unverified proof.
-    #[allow(dead_code, reason = "wired to FFI in a follow-up PR")]
     fn verify_and_propose<'db>(
         self,
         db: &'db DatabaseHandle,
@@ -250,7 +267,6 @@ impl ChangeProofContext {
     /// Verify and commit the change proof to the given database.
     ///
     /// Consumes `self`. The proof is consumed regardless of success or failure.
-    #[allow(dead_code, reason = "wired to FFI in a follow-up PR")]
     fn verify_and_commit(
         self,
         db: &DatabaseHandle,
@@ -620,6 +636,74 @@ pub extern "C" fn fwd_change_proof_find_next_key_proposed(
     proof: Option<&mut ProposedChangeProofContext>,
 ) -> NextKeyRangeResult {
     crate::invoke_with_handle(proof, ProposedChangeProofContext::find_next_key)
+}
+
+/// Verify a change proof and prepare a proposal to later commit or drop.
+///
+/// On success, the proof is consumed and a [`ProposedChangeProofContext`] is
+/// returned. On failure, the original [`ChangeProofContext`] is returned to
+/// the caller so it can be retried or freed.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_db_verify_and_propose_change_proof<'db>(
+    db: Option<&'db DatabaseHandle>,
+    args: VerifyAndProposeArgs,
+) -> ProposedChangeProofResult<'db> {
+    let (Some(db), Some(proof)) = (db, args.proof) else {
+        return ProposedChangeProofResult::NullHandlePointer;
+    };
+    let start_key = args.start_key.into_option();
+    let end_key = args.end_key.into_option();
+    let _guard = firewood_metrics::set_metrics_context(db.metrics_context());
+    crate::invoke(move || {
+        (*proof).verify_and_propose(
+            db,
+            args.start_root.into(),
+            args.end_root.into(),
+            start_key.as_deref(),
+            end_key.as_deref(),
+            NonZeroUsize::new(args.max_length as usize),
+        )
+    })
+}
+
+/// Verify and commit a change proof to the database.
+///
+/// The proof is consumed regardless of success or failure.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_db_verify_and_commit_change_proof(
+    db: Option<&DatabaseHandle>,
+    args: VerifyAndProposeArgs,
+) -> crate::HashResult {
+    let (Some(db), Some(proof)) = (db, args.proof) else {
+        return crate::HashResult::NullHandlePointer;
+    };
+    let start_key = args.start_key.into_option();
+    let end_key = args.end_key.into_option();
+    let _guard = firewood_metrics::set_metrics_context(db.metrics_context());
+    crate::invoke(move || {
+        (*proof)
+            .verify_and_commit(
+                db,
+                args.start_root.into(),
+                args.end_root.into(),
+                start_key.as_deref(),
+                end_key.as_deref(),
+                NonZeroUsize::new(args.max_length as usize),
+            )
+            .map(|hash_key| hash_key.map(Into::into))
+    })
+}
+
+/// Serialize a proposed `ChangeProof` to bytes.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_proposed_change_proof_to_bytes(
+    proof: Option<&ProposedChangeProofContext>,
+) -> ValueResult {
+    crate::invoke_with_handle(proof, |ctx| {
+        let mut vec = Vec::new();
+        ctx.proof.write_to_vec(&mut vec);
+        Ok::<_, api::Error>(Some(vec.into_boxed_slice()))
+    })
 }
 
 /// Serialize a `FrozenChangeProof` to bytes, returning an error if the proof

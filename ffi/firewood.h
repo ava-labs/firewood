@@ -594,6 +594,11 @@ enum ProposedChangeProofResult_Tag {
    */
   ProposedChangeProofResult_Ok,
   /**
+   * Verification failed; the original [`ChangeProofContext`] is returned to
+   * the caller so it can be freed or reused.
+   */
+  ProposedChangeProofResult_VerificationFailed,
+  /**
    * An error occurred and the message is returned as an [`OwnedBytes`]. If
    * value is guaranteed to contain only valid UTF-8.
    *
@@ -606,12 +611,18 @@ enum ProposedChangeProofResult_Tag {
 };
 typedef size_t ProposedChangeProofResult_Tag;
 
+typedef struct ProposedChangeProofResult_VerificationFailed_Body {
+  struct ChangeProofContext *original;
+  OwnedBytes error;
+} ProposedChangeProofResult_VerificationFailed_Body;
+
 typedef struct ProposedChangeProofResult {
   ProposedChangeProofResult_Tag tag;
   union {
     struct {
       struct ProposedChangeProofContext *ok;
     };
+    ProposedChangeProofResult_VerificationFailed_Body verification_failed;
     struct {
       OwnedBytes err;
     };
@@ -714,6 +725,36 @@ typedef struct CreateRangeProofArgs {
    */
   uint32_t max_length;
 } CreateRangeProofArgs;
+
+/**
+ * Arguments for the combined verify-and-propose/commit API.
+ */
+typedef struct VerifyAndProposeArgs {
+  /**
+   * The change proof to verify. Ownership is transferred to the callee.
+   */
+  struct ChangeProofContext *proof;
+  /**
+   * The root hash of the starting revision.
+   */
+  struct HashKey start_root;
+  /**
+   * The root hash of the ending revision.
+   */
+  struct HashKey end_root;
+  /**
+   * The lower bound of the key range.
+   */
+  struct Maybe_BorrowedBytes start_key;
+  /**
+   * The upper bound of the key range.
+   */
+  struct Maybe_BorrowedBytes end_key;
+  /**
+   * Maximum number of key/value pairs.
+   */
+  uint32_t max_length;
+} VerifyAndProposeArgs;
 
 /**
  * Arguments for verifying a range proof.
@@ -1634,6 +1675,14 @@ struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
                                            struct CreateRangeProofArgs args);
 
 /**
+ * Verify and commit a change proof to the database.
+ *
+ * The proof is consumed regardless of success or failure.
+ */
+struct HashResult fwd_db_verify_and_commit_change_proof(const struct DatabaseHandle *db,
+                                                        struct VerifyAndProposeArgs args);
+
+/**
  * Verify and commit a range proof to the database.
  *
  * If a proposal was previously prepared by a call to [`fwd_db_verify_range_proof`],
@@ -1667,6 +1716,16 @@ struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
  */
 struct HashResult fwd_db_verify_and_commit_range_proof(const struct DatabaseHandle *db,
                                                        struct VerifyRangeProofArgs args);
+
+/**
+ * Verify a change proof and prepare a proposal to later commit or drop.
+ *
+ * On success, the proof is consumed and a [`ProposedChangeProofContext`] is
+ * returned. On failure, the original [`ChangeProofContext`] is returned to
+ * the caller so it can be retried or freed.
+ */
+struct ProposedChangeProofResult fwd_db_verify_and_propose_change_proof(const struct DatabaseHandle *db,
+                                                                        struct VerifyAndProposeArgs args);
 
 /**
  * Verify a range proof and prepare a proposal to later commit or drop. If the
@@ -2290,6 +2349,11 @@ struct ProposalResult fwd_propose_on_db(const struct DatabaseHandle *db, Borrowe
  */
 struct ProposalResult fwd_propose_on_proposal(const struct ProposalHandle *handle,
                                               BorrowedBatchOps values);
+
+/**
+ * Serialize a proposed `ChangeProof` to bytes.
+ */
+struct ValueResult fwd_proposed_change_proof_to_bytes(const struct ProposedChangeProofContext *proof);
 
 /**
  * Returns an iterator over the code hashes contained in the range proof.

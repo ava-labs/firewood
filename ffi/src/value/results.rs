@@ -304,6 +304,12 @@ pub enum ProposedChangeProofResult<'db> {
     NullHandlePointer,
     /// A proposal was successfully created for this proof.
     Ok(Box<ProposedChangeProofContext<'db>>),
+    /// Verification failed; the original [`ChangeProofContext`] is returned to
+    /// the caller so it can be freed or reused.
+    VerificationFailed {
+        original: Box<ChangeProofContext>,
+        error: OwnedBytes,
+    },
     /// An error occurred and the message is returned as an [`OwnedBytes`]. If
     /// value is guaranteed to contain only valid UTF-8.
     ///
@@ -649,6 +655,25 @@ impl<'db> From<Result<ProposedChangeProofContext<'db>, api::Error>>
         match value {
             Ok(context) => ProposedChangeProofResult::Ok(Box::new(context)),
             Err(err) => ProposedChangeProofResult::Err(err.to_string().into_bytes().into()),
+        }
+    }
+}
+
+impl<'db> From<Result<ProposedChangeProofContext<'db>, Box<(ChangeProofContext, api::Error)>>>
+    for ProposedChangeProofResult<'db>
+{
+    fn from(
+        value: Result<ProposedChangeProofContext<'db>, Box<(ChangeProofContext, api::Error)>>,
+    ) -> Self {
+        match value {
+            Ok(proposed) => Self::Ok(Box::new(proposed)),
+            Err(boxed) => {
+                let (original, err) = *boxed;
+                Self::VerificationFailed {
+                    original: Box::new(original),
+                    error: err.to_string().into_bytes().into(),
+                }
+            }
         }
     }
 }

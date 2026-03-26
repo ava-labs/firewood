@@ -49,6 +49,12 @@ package ffi
 // #cgo nocallback fwd_free_verified_change_proof
 // #cgo noescape fwd_free_proposed_change_proof
 // #cgo nocallback fwd_free_proposed_change_proof
+// #cgo noescape fwd_db_verify_and_propose_change_proof
+// #cgo nocallback fwd_db_verify_and_propose_change_proof
+// #cgo noescape fwd_db_verify_and_commit_change_proof
+// #cgo nocallback fwd_db_verify_and_commit_change_proof
+// #cgo noescape fwd_proposed_change_proof_to_bytes
+// #cgo nocallback fwd_proposed_change_proof_to_bytes
 import "C"
 
 import (
@@ -63,6 +69,7 @@ import (
 var (
 	errNotPrepared = errors.New("proof not prepared into a proposal or committed")
 	errEmptyTrie   = errors.New("a range proof was requested on an empty trie")
+	errProofFreed  = errors.New("proof handle has been freed or consumed")
 )
 
 var (
@@ -405,6 +412,102 @@ func (db *Database) ChangeProof(
 	return getChangeProofFromChangeProofResult(C.fwd_db_change_proof(db.handle, args))
 }
 
+// VerifyAndProposeChangeProof verifies the provided change [proof] proves the
+// changes between [startRoot] and [endRoot] for keys in the range
+// [startKey, endKey]. If the proof is valid, a proposal containing the changes
+// is prepared and returned as a [ProposedChangeProof].
+//
+// Because this method prepares a proposal, the database must be kept alive
+// until the proof is committed or freed.
+func (db *Database) VerifyAndProposeChangeProof(
+	proof *ChangeProof,
+	startRoot, endRoot Hash,
+	startKey, endKey Maybe[[]byte],
+	maxLength uint32,
+) (*ProposedChangeProof, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return nil, errDBClosed
+	}
+	if proof.handle == nil {
+		return nil, errProofFreed
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	// The Rust side takes ownership of proof.handle. We transfer it
+	// through the args struct and nil it out here before the call so
+	// that on success, only the returned ProposedChangeProofContext owns
+	// the data. On failure, the Rust side returns the original handle
+	// back to us via the VerificationFailed variant.
+	args := C.VerifyAndProposeArgs{
+		proof:      proof.handle,
+		start_root: newCHashKey(startRoot),
+		end_root:   newCHashKey(endRoot),
+		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
+		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
+		max_length: C.uint32_t(maxLength),
+	}
+	proof.handle = nil // ownership transferred to Rust
+
+	proposed, err := getProposedChangeProofFromResult(
+		C.fwd_db_verify_and_propose_change_proof(db.handle, args),
+		proof,
+		db,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	// keep the database alive while the proof owns the embedded proposal
+	// TODO: use runtime.AddCleanup and shared handle[T] infrastructure
+	// instead of SetFinalizer, for consistency with Proposal and Revision.
+	proposed.keepAliveHandle.init(&db.outstandingHandles)
+	runtime.SetFinalizer(proposed, (*ProposedChangeProof).Free)
+	return proposed, nil
+}
+
+// VerifyAndCommitChangeProof verifies the provided change [proof] proves the
+// changes between [startRoot] and [endRoot] for keys in the range
+// [startKey, endKey]. If the proof is valid, it is committed to the database and
+// the new root hash is returned. The resulting root hash may not equal the end
+// root if the proof was truncated due to [maxLength].
+func (db *Database) VerifyAndCommitChangeProof(
+	proof *ChangeProof,
+	startRoot, endRoot Hash,
+	startKey, endKey Maybe[[]byte],
+	maxLength uint32,
+) (Hash, error) {
+	db.handleLock.RLock()
+	defer db.handleLock.RUnlock()
+	if db.handle == nil {
+		return EmptyRoot, errDBClosed
+	}
+	if proof.handle == nil {
+		return EmptyRoot, errProofFreed
+	}
+
+	var pinner runtime.Pinner
+	defer pinner.Unpin()
+
+	// The Rust side takes ownership and always consumes the proof.
+	args := C.VerifyAndProposeArgs{
+		proof:      proof.handle,
+		start_root: newCHashKey(startRoot),
+		end_root:   newCHashKey(endRoot),
+		start_key:  newMaybeBorrowedBytes(startKey, &pinner),
+		end_key:    newMaybeBorrowedBytes(endKey, &pinner),
+		max_length: C.uint32_t(maxLength),
+	}
+	proof.handle = nil // proof is always consumed
+
+	db.commitLock.Lock()
+	defer db.commitLock.Unlock()
+	return getHashKeyFromHashResult(C.fwd_db_verify_and_commit_change_proof(db.handle, args))
+}
+
 // VerifyChangeProof verifies the provided change [proof] proves the changes
 // between [startRoot] and [endRoot] for keys in the range [startKey, endKey].
 func (proof *ChangeProof) VerifyChangeProof(
@@ -478,6 +581,17 @@ func (proof *ProposedChangeProof) CommitChangeProof() (Hash, error) {
 
 func (proof *ProposedChangeProof) FindNextKey() (*NextKeyRange, error) {
 	return getNextKeyRangeFromNextKeyRangeResult(C.fwd_change_proof_find_next_key_proposed(proof.handle))
+}
+
+// MarshalBinary returns a serialized representation of the proof data in this
+// ProposedChangeProof.
+//
+// The format is unspecified and opaque to firewood.
+func (proof *ProposedChangeProof) MarshalBinary() ([]byte, error) {
+	if proof.handle == nil {
+		return nil, errProofFreed
+	}
+	return getValueFromValueResult(C.fwd_proposed_change_proof_to_bytes(proof.handle))
 }
 
 /*
@@ -773,6 +887,34 @@ func getProposedChangeProofFromProposedChangeProofResult(db *Database, result C.
 	case C.ProposedChangeProofResult_Err:
 		err := newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 		return nil, err
+	default:
+		return nil, fmt.Errorf("unknown C.ProposedChangeProofResult tag: %d", result.tag)
+	}
+}
+
+// getProposedChangeProofFromResult parses a C.ProposedChangeProofResult.
+//
+// On success (Ok variant), it extracts the ProposedChangeProofContext pointer.
+// On verification failure, it puts the original ChangeProofContext back into
+// the provided [proof] so the caller retains ownership of the unverified proof.
+func getProposedChangeProofFromResult(
+	result C.ProposedChangeProofResult,
+	proof *ChangeProof,
+	db *Database,
+) (*ProposedChangeProof, error) {
+	switch result.tag {
+	case C.ProposedChangeProofResult_NullHandlePointer:
+		return nil, errDBClosed
+	case C.ProposedChangeProofResult_Ok:
+		ptr := *(**C.ProposedChangeProofContext)(unsafe.Pointer(&result.anon0))
+		return &ProposedChangeProof{handle: ptr, db: db}, nil
+	case C.ProposedChangeProofResult_VerificationFailed:
+		body := (*C.ProposedChangeProofResult_VerificationFailed_Body)(unsafe.Pointer(&result.anon0))
+		// Return the original handle to the caller so the proof can be freed or reused.
+		proof.handle = body.original
+		return nil, newOwnedBytes(body.error).intoError()
+	case C.ProposedChangeProofResult_Err:
+		return nil, newOwnedBytes(*(*C.OwnedBytes)(unsafe.Pointer(&result.anon0))).intoError()
 	default:
 		return nil, fmt.Errorf("unknown C.ProposedChangeProofResult tag: %d", result.tag)
 	}
