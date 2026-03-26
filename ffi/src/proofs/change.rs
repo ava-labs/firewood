@@ -7,7 +7,7 @@ use std::num::NonZeroUsize;
 use firewood_metrics::firewood_increment;
 #[cfg(feature = "ethhash")]
 use firewood_storage::TrieHash;
-use firewood_storage::{Children, HashType, Hashable, PathComponent, PathIterItem};
+use firewood_storage::{Children, HashType, Hashable, NibblesIterator, PathComponent, PathIterItem};
 #[cfg(feature = "ethhash")]
 use rlp::Rlp;
 
@@ -391,8 +391,13 @@ fn verify_subtrie_hashes(
                 // children AFTER its path nibble, end checks BEFORE.
                 let start_tail = next_idx.and_then(|j| start_nodes.get(j..)).unwrap_or(&[]);
                 let end_tail = next_idx.and_then(|j| end_nodes.get(j..)).unwrap_or(&[]);
-                walk_proof_tail(start_tail, &start_lookup, in_range_after)?;
-                walk_proof_tail(end_tail, &end_lookup, in_range_before)?;
+                walk_proof_tail(
+                    start_tail,
+                    &start_lookup,
+                    in_range_after,
+                    verification.start_key.as_deref(),
+                )?;
+                walk_proof_tail(end_tail, &end_lookup, in_range_before, None)?;
                 return Ok(());
             }
 
@@ -413,7 +418,7 @@ fn verify_subtrie_hashes(
                 let in_range = in_range_before(e);
                 check_in_range_children(s_node, &end_lookup, &in_range)?;
                 let end_tail = next_idx.and_then(|j| end_nodes.get(j..)).unwrap_or(&[]);
-                walk_proof_tail(end_tail, &end_lookup, in_range_before)?;
+                walk_proof_tail(end_tail, &end_lookup, in_range_before, None)?;
                 return Ok(());
             }
 
@@ -696,7 +701,12 @@ fn verify_single_proof_subtrie(
     };
 
     let lookup = build_proposal_lookup(Some(key), proposal)?;
-    walk_proof_tail(boundary_proof.as_ref(), &lookup, in_range_fn)
+    let last_node_key: Option<&[u8]> = if proof.start_proof().is_empty() {
+        None
+    } else {
+        Some(key)
+    };
+    walk_proof_tail(boundary_proof.as_ref(), &lookup, in_range_fn, last_node_key)
 }
 
 /// Compute the child nibble for a proof node at a given depth.
@@ -738,10 +748,17 @@ fn build_proposal_lookup(
 
 /// Walk proof nodes from a given starting point, checking in-range child
 /// hashes at each depth against the proposal trie.
+///
+/// `last_node_key` enables checking the last node's in-range children.
+/// Pass `Some(boundary_key)` on the start side so the forward nibble can
+/// be derived from the boundary key at the last node's depth. Pass `None`
+/// on the end side (children of the last end node lead outside the proven
+/// range and may legitimately differ).
 fn walk_proof_tail(
     nodes: &[ProofNode],
     lookup: &HashMap<Vec<PathComponent>, PathIterItem>,
     in_range_fn: fn(PathComponent) -> Vec<PathComponent>,
+    last_node_key: Option<&[u8]>,
 ) -> Result<(), api::Error> {
     for (i, proof_node) in nodes.iter().enumerate() {
         // The "forward nibble" is the child this proof node follows to
@@ -754,6 +771,21 @@ fn walk_proof_tail(
                 overlap.unique_b.first().copied()
             })
         else {
+            // Last node: derive the forward nibble from the boundary
+            // key when provided (start side). The nibble at the depth
+            // just past this node's path tells us which child the key
+            // follows. Children after that nibble are in-range.
+            // If the key terminates at this node, all children extend
+            // the key and are in-range.
+            if let Some(key) = last_node_key {
+                let depth = proof_node.full_path().len();
+                if let Some(nibble) = key_nibble_at_depth(key, depth) {
+                    let in_range = in_range_fn(nibble);
+                    check_in_range_children(proof_node, lookup, &in_range)?;
+                } else {
+                    check_in_range_children(proof_node, lookup, PathComponent::ALL.as_ref())?;
+                }
+            }
             continue;
         };
 
@@ -761,6 +793,15 @@ fn walk_proof_tail(
         check_in_range_children(proof_node, lookup, &in_range)?;
     }
     Ok(())
+}
+
+/// Compute the nibble a boundary key follows at the given trie depth.
+///
+/// Returns `None` when the key terminates at or before this depth (i.e. the
+/// key has no more nibbles to contribute).
+fn key_nibble_at_depth(key: &[u8], depth: usize) -> Option<PathComponent> {
+    let nibble = NibblesIterator::new(key).nth(depth)?;
+    PathComponent::try_new(nibble)
 }
 
 /// Compare in-range child hashes between a boundary proof node and the
@@ -1876,6 +1917,65 @@ mod tests {
                 firewood::api::Error::ProofError(ProofError::EndRootMismatch)
             ),
             "expected EndRootMismatch, got: {err}"
+        );
+    }
+
+    /// Verify that `walk_proof_tail` checks the last start-proof node's
+    /// children. A bounded change proof where the start proof terminates at
+    /// a branch node must verify that all children of that last node match
+    /// the proposal, since those children lead to keys > `start_key` (within
+    /// the proven range).
+    #[test]
+    fn test_start_tail_last_node_children_checked() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Keys chosen so that \x10 becomes a branch with children \x10\x01
+        // and \x10\x02 beneath it. The start proof for key \x10 will
+        // terminate at that branch node.
+        let initial = vec![
+            put(b"\x10\x01", b"a"),
+            put(b"\x10\x02", b"b"),
+            put(b"\x30", b"c"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // Change a key in the proven range (above \x10) on db_a.
+        let changes = vec![put(b"\x30", b"changed")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Bounded proof: start=\x10, end=None (open end).
+        // The start proof's last node is the branch at \x10 with children.
+        let proof = db_a
+            .change_proof(root1_a, root2.clone(), Some(b"\x10".as_ref()), None, None)
+            .expect("change proof");
+
+        let change_ctx = ChangeProofContext::from(proof);
+        // Verification must succeed — the children of the last start-proof
+        // node match because both databases share the same base state.
+        let result = change_ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"\x10".as_ref()),
+            None,
+            None,
+        );
+        assert!(
+            result.is_ok(),
+            "verify_and_propose should succeed when start tail children match: {:?}",
+            result.err()
         );
     }
 }
