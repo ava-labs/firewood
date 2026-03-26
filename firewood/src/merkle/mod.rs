@@ -236,10 +236,11 @@ fn compute_outside_children(
                     on_path_nibble,
                     is_left_edge,
                 );
-                // The on-path child itself also needs the proof hash because
-                // the proving trie only contains keys within the range, but
-                // the original subtree under this child may contain keys
-                // outside the range that contribute to its hash.
+                // The on-path child also needs the proof hash. In the full
+                // trie we're verifying against, this child's subtree may
+                // contain keys outside the proven range. Our proving trie
+                // lacks those keys, so its locally-computed hash would be
+                // wrong — we must use the proof's hash instead.
                 let entry = result.entry(terminal.key.clone()).or_insert([false; 16]);
                 entry[on_path_nibble as usize] = true;
             }
