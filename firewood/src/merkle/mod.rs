@@ -255,8 +255,7 @@ fn compute_outside_children(
                     boundary_nibbles[d] < terminal.key[d].as_u8()
                 };
                 if all_outside {
-                    let entry = result.entry(terminal.key.clone()).or_insert([false; 16]);
-                    *entry = [true; 16];
+                    result.insert(terminal.key.clone(), [true; 16]);
                 }
                 // Otherwise (boundary is "before" terminal), no children are outside.
             }
