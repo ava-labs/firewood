@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774423831299,
+  "lastUpdate": 1774510281999,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -1785,6 +1785,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 82.1660907055551,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "4fb8e85fee6d6b6cbf347f497b41200767b53ea6",
+          "message": "refactor(merkle): 3/6 fix dup detection in dump_node with keep_alive vec (#1832)\n\n## Why this should be merged\n\nDiscovered this problem while debugging merkle tries. Now that\nreconstructed revisions often contain Node types, the address of the\nNode Arc is used as a unique identifier. Unfortunately, these are reused\nwhile walking a reconstructed node, leading to false \"dup\" reports and\nnot actually traversing the children (to avoid infinite loops).\n\n## How this works\n\nKeep created nodes around to give them unique addresses. This uses more\nmemory but we typically never dump anything too big.\n\n## How this was tested\n\nUsed during debugging and it seems to work. I'm not sure I want a test\naround this because it's primarily a debugging tool, but if you feel\nstrongly that we should test it speak up.\n\n## Breaking Changes\n\nNone",
+          "timestamp": "2026-03-25T21:17:43Z",
+          "url": "https://github.com/ava-labs/firewood/commit/4fb8e85fee6d6b6cbf347f497b41200767b53ea6"
+        },
+        "date": 1774510281515,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 169.39199186529194,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5903.466799039972,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 108.74799609533032,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5717.49145844539,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 74.91957190092782,
             "unit": "block_accept_ms/ggas"
           }
         ]
