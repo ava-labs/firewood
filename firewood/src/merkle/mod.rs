@@ -241,8 +241,9 @@ fn compute_outside_children(
                 // contain keys outside the proven range. Our proving trie
                 // lacks those keys, so its locally-computed hash would be
                 // wrong — we must use the proof's hash instead.
-                let entry = result.entry(terminal.key.clone()).or_insert([false; 16]);
-                entry[on_path_nibble as usize] = true;
+                result
+                    .get_mut(&terminal.key)
+                    .expect("just inserted by mark_outside")[on_path_nibble as usize] = true;
             }
             Some(d) => {
                 // Boundary diverges within the terminal's key at position d.
