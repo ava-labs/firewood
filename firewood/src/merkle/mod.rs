@@ -5,6 +5,7 @@
 pub(crate) mod tests;
 
 pub(crate) mod changes;
+mod childmask;
 mod merge;
 /// Parallel merkle
 pub mod parallel;
@@ -21,7 +22,7 @@ use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashableShunt, HashedNodeReader,
     ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, Mutable, MutableKind,
     NibblesIterator, Node, NodeStore, Parentable, Path, PathBuf, PathComponent, Propose,
-    ReadableStorage, SharedNode, TrieHash, TrieReader, ValueDigest,
+    ReadableStorage, SharedNode, TrieHash, TrieReader, U4, ValueDigest,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -36,10 +37,7 @@ pub type Key = Box<[u8]>;
 /// Values are boxed u8 slices
 pub type Value = Box<[u8]>;
 
-/// Bitmask indicating which of a branch node's 16 children are "outside" the
-/// proven range and should use the proof's original hashes instead of being
-/// recomputed from the proving trie.
-type ChildMask = [bool; 16];
+use childmask::ChildMask;
 
 macro_rules! write_attributes {
     ($writer:ident, $node:expr, $value:expr) => {
@@ -191,7 +189,6 @@ fn verify_edge<H: ProofCollection + ?Sized>(
 /// The `boundary_key` (in bytes, not nibbles) is used to determine the on-path
 /// nibble at the terminal proof node, since there is no subsequent proof node
 /// to derive it from.
-#[expect(clippy::indexing_slicing)]
 fn compute_outside_children(
     proof_nodes: &[ProofNode],
     boundary_key: Option<&[u8]>,
@@ -200,18 +197,17 @@ fn compute_outside_children(
     let mut result: HashMap<PathBuf, ChildMask> = HashMap::new();
 
     // Non-terminal nodes: derive the on-path nibble from the next proof node
-    for window in proof_nodes.windows(2) {
-        let (parent, child) = (&window[0], &window[1]);
+    for (parent, child) in proof_nodes.iter().zip(proof_nodes.iter().skip(1)) {
         let on_path_nibble = child
             .key
             .get(parent.key.len())
             .ok_or(ProofError::ShouldBePrefixOfNextKey)?;
-        mark_outside(
-            &mut result,
-            parent.key.clone(),
-            on_path_nibble.as_u8(),
-            is_left_edge,
-        );
+        let entry = result.entry(parent.key.clone()).or_default();
+        *entry = if is_left_edge {
+            entry.mark_left_outside(on_path_nibble.0)
+        } else {
+            entry.mark_right_outside(on_path_nibble.0)
+        };
     }
 
     // Terminal node: derive the on-path nibble from the boundary key.
@@ -220,80 +216,47 @@ fn compute_outside_children(
     if let (Some(terminal), Some(boundary)) = (proof_nodes.last(), boundary_key) {
         let boundary_nibbles: Vec<u8> = NibblesIterator::new(boundary).collect();
 
-        // Check if boundary nibbles match the terminal's key up to terminal.key.len().
-        // Find the first position where they diverge.
+        // Find the first position where boundary and terminal key diverge,
+        // capturing the diverging values to avoid re-indexing.
         let divergence = terminal
             .key
             .iter()
             .zip(boundary_nibbles.iter())
-            .position(|(tk, &bn)| tk.as_u8() != bn);
+            .find(|(tk, bn)| tk.as_u8() != **bn);
 
-        match divergence {
-            None if boundary_nibbles.len() > terminal.key.len() => {
-                // No divergence found and the boundary key is longer than the
-                // terminal's key, so the terminal node is an ancestor of the
-                // boundary key in the trie. The next nibble of the boundary
-                // tells us which child branch leads toward the boundary.
-                let on_path_nibble = boundary_nibbles[terminal.key.len()];
-                mark_outside(
-                    &mut result,
-                    terminal.key.clone(),
-                    on_path_nibble,
-                    is_left_edge,
-                );
-                // The on-path child also needs the proof hash. In the full
-                // trie we're verifying against, this child's subtree may
-                // contain keys outside the proven range. Our proving trie
-                // lacks those keys, so its locally-computed hash would be
-                // wrong — we must use the proof's hash instead.
-                result
-                    .get_mut(&terminal.key)
-                    .expect("just inserted by mark_outside")[on_path_nibble as usize] = true;
+        if let Some((tk, bn)) = divergence {
+            // Boundary diverges within the terminal's key at this position.
+            // If boundary is "past" the terminal (left edge: B > terminal,
+            // right edge: B < terminal), all children are outside.
+            let all_outside = if is_left_edge {
+                *bn > tk.as_u8()
+            } else {
+                *bn < tk.as_u8()
+            };
+            if all_outside {
+                result.insert(terminal.key.clone(), ChildMask::ALL);
             }
-            Some(d) => {
-                // Boundary diverges within the terminal's key at position d.
-                // If boundary is "past" the terminal (left edge: B > terminal,
-                // right edge: B < terminal), all children are outside.
-                let all_outside = if is_left_edge {
-                    boundary_nibbles[d] > terminal.key[d].as_u8()
-                } else {
-                    boundary_nibbles[d] < terminal.key[d].as_u8()
-                };
-                if all_outside {
-                    result.insert(terminal.key.clone(), [true; 16]);
-                }
-                // Otherwise (boundary is "before" terminal), no children are outside.
+            // Otherwise (boundary is "before" terminal), no children are outside.
+        } else if let Some(on_path_byte) = boundary_nibbles.get(terminal.key.len()) {
+            // Terminal is an ancestor of the boundary key. The next
+            // nibble tells us which child leads toward the boundary.
+            // Mark children on the far side of that nibble as outside,
+            // and also mark the on-path child itself: its subtree may
+            // contain keys beyond the proven range, so we must use the
+            // proof's hash rather than recomputing it.
+            let on_path_nibble = U4::new_masked(*on_path_byte);
+            let entry = result.entry(terminal.key.clone()).or_default();
+            *entry = if is_left_edge {
+                entry.mark_left_outside(on_path_nibble)
+            } else {
+                entry.mark_right_outside(on_path_nibble)
             }
-            _ => {
-                // Boundary is same length as or shorter than terminal key and
-                // matches fully — terminal is the boundary node itself. No
-                // children need marking.
-            }
+            .set_outside(on_path_nibble);
         }
+        // Otherwise boundary matches terminal exactly — no children need marking.
     }
 
     Ok(result)
-}
-
-/// Marks children at the given node as "outside" the proven range.
-#[expect(clippy::indexing_slicing)]
-fn mark_outside(
-    map: &mut HashMap<PathBuf, ChildMask>,
-    key: PathBuf,
-    on_path_nibble: u8,
-    is_left_edge: bool,
-) {
-    let entry = map.entry(key).or_default();
-    if is_left_edge {
-        for nibble in 0..on_path_nibble {
-            entry[nibble as usize] = true;
-        }
-    } else {
-        #[expect(clippy::arithmetic_side_effects)]
-        for nibble in (on_path_nibble + 1)..16 {
-            entry[nibble as usize] = true;
-        }
-    }
 }
 
 /// Recursively computes the hash of a node in the proving trie, merging
@@ -304,7 +267,6 @@ fn mark_outside(
 /// proven range (as indicated by `outside_children`) get their hash from the
 /// corresponding proof node. Children not in the trie that are **inside** the
 /// range are left as `None`, causing a hash mismatch if they should exist.
-#[expect(clippy::indexing_slicing)]
 fn compute_root_hash_with_proofs(
     node: &Node,
     path_prefix: &[PathComponent],
@@ -330,7 +292,7 @@ fn compute_root_hash_with_proofs(
         (proof_nodes.get(&full_key), outside_children.get(&full_key))
     {
         for (nibble, hash) in proof_node.child_hashes.iter_present() {
-            if outside[nibble.as_u8() as usize] {
+            if outside.is_outside(nibble.0) {
                 child_hashes[nibble] = Some(hash.clone());
             }
         }
@@ -474,11 +436,34 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         .chain(proof.end_proof().as_ref())
         .collect();
 
-    // Verify that proof nodes with values within the range are included in key_values.
-    // Without this check, an attacker could hide key-value pairs that exist on an edge
-    // proof path by omitting them from key_values while reconciliation silently inserts
-    // them, making the root hash correct.
-    for proof_node in &all_proof_nodes {
+    verify_proof_node_values(
+        &all_proof_nodes,
+        first_key_bytes,
+        last_key_bytes,
+        key_values,
+    )?;
+
+    verify_root_hash(
+        &all_proof_nodes,
+        key_values,
+        proof,
+        first_key_bytes,
+        last_key_bytes,
+        root_hash,
+    )
+}
+
+/// Verifies that proof nodes with values within the range are included in `key_values`.
+/// Without this check, an attacker could hide key-value pairs that exist on an edge
+/// proof path by omitting them from `key_values` while reconciliation silently inserts
+/// them, making the root hash correct.
+fn verify_proof_node_values(
+    proof_nodes: &[&ProofNode],
+    first_key_bytes: Option<&[u8]>,
+    last_key_bytes: Option<&[u8]>,
+    key_values: &[(impl KeyType, impl ValueType)],
+) -> Result<(), api::Error> {
+    for proof_node in proof_nodes {
         // Only even-nibble-length keys correspond to byte keys with values
         if !proof_node.key.len().is_multiple_of(2) {
             continue;
@@ -505,7 +490,19 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
             ));
         }
     }
+    Ok(())
+}
 
+/// Reconstructs the trie from key-value pairs and proof nodes, then verifies
+/// that the computed root hash matches the expected one.
+fn verify_root_hash<H: ProofCollection<Node = ProofNode>>(
+    all_proof_nodes: &[&ProofNode],
+    key_values: &[(impl KeyType, impl ValueType)],
+    proof: &RangeProof<impl KeyType, impl ValueType, H>,
+    first_key_bytes: Option<&[u8]>,
+    last_key_bytes: Option<&[u8]>,
+    root_hash: &TrieHash,
+) -> Result<(), api::Error> {
     // Build in-memory merkle from key-value pairs
     let memstore = MemStore::default();
     let nodestore = NodeStore::new_empty_proposal(memstore.into());
@@ -520,15 +517,8 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     // (partial paths and child layout) to match the proof, so that hash
     // computation produces the same trie shape as the original.
     // Conflicting proof nodes (same key, different data) are rejected.
-    let all_proof_nodes: Vec<&ProofNode> = proof
-        .start_proof()
-        .as_ref()
-        .iter()
-        .chain(proof.end_proof().as_ref())
-        .collect();
-
     let mut proof_node_map: HashMap<PathBuf, &ProofNode> = HashMap::new();
-    for proof_node in &all_proof_nodes {
+    for proof_node in all_proof_nodes {
         proving_merkle.reconcile_branch_proof_node(proof_node)?;
         match proof_node_map.entry(proof_node.key.clone()) {
             std::collections::hash_map::Entry::Occupied(existing) => {
@@ -548,9 +538,7 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     for (key, flags) in compute_outside_children(proof.end_proof().as_ref(), last_key_bytes, false)?
     {
         let entry = outside_children.entry(key).or_default();
-        for (e, flag) in entry.iter_mut().zip(flags.iter()) {
-            *e |= flag;
-        }
+        *entry = entry.merge(flags);
     }
 
     // Compute root hash of the proving trie with proof sibling hashes
