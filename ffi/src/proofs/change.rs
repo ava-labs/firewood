@@ -96,7 +96,7 @@ pub struct ProposedChangeProofContext<'db> {
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
+#[expect(dead_code)]
 struct VerificationContext {
     end_root: HashKey,
     start_key: Option<Box<[u8]>>,
