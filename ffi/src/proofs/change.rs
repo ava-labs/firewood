@@ -12,7 +12,7 @@ use rlp::Rlp;
 
 use firewood::{
     ProofError,
-    api::{self, DbView as _, FrozenChangeProof},
+    api::{self, DbView as _, FrozenChangeProof, HashKey as ApiHashKey},
     logger::warn,
 };
 
@@ -167,6 +167,106 @@ impl ChangeProofContext {
         } else {
             Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted))
         }
+    }
+
+    /// Verify the change proof and prepare a proposal against the given database
+    /// without committing it.
+    ///
+    /// On success, consumes `self` and returns a [`ProposedChangeProofContext`].
+    /// On failure, returns `self` back to the caller (along with the error) so
+    /// that the caller retains ownership of the unverified proof.
+    #[allow(dead_code, reason = "wired to FFI in a follow-up PR")]
+    fn verify_and_propose<'db>(
+        self,
+        db: &'db DatabaseHandle,
+        start_root: ApiHashKey,
+        end_root: ApiHashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<ProposedChangeProofContext<'db>, Box<(Self, api::Error)>> {
+        let Some(proof) = self.proof else {
+            return Err(Box::new((
+                Self { proof: None },
+                api::Error::ProofError(ProofError::ProofIsNone),
+            )));
+        };
+
+        let batch_ops = proof.batch_ops();
+
+        if let Some(max_length) = max_length
+            && batch_ops.len() > max_length.into()
+        {
+            return Err(Box::new((
+                Self { proof: Some(proof) },
+                api::Error::ProofError(ProofError::ProofIsLargerThanMaxLength),
+            )));
+        }
+
+        if let (Some(start_key), Some(first_key)) = (start_key, batch_ops.first())
+            && start_key.cmp(first_key.key()) == Ordering::Greater
+        {
+            return Err(Box::new((
+                Self { proof: Some(proof) },
+                api::Error::ProofError(ProofError::StartKeyLargerThanFirstKey),
+            )));
+        }
+
+        if let (Some(end_key), Some(last_key)) = (end_key, batch_ops.last())
+            && end_key.cmp(last_key.key()) == Ordering::Less
+        {
+            return Err(Box::new((
+                Self { proof: Some(proof) },
+                api::Error::ProofError(ProofError::EndKeyLessThanLastKey),
+            )));
+        }
+
+        if !batch_ops
+            .iter()
+            .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
+        {
+            return Err(Box::new((
+                Self { proof: Some(proof) },
+                api::Error::ProofError(ProofError::ChangeProofKeysNotSorted),
+            )));
+        }
+
+        let proposal = match db.apply_change_proof_to_parent(start_root, &proof) {
+            Ok(p) => p,
+            Err(e) => return Err(Box::new((Self { proof: Some(proof) }, e))),
+        };
+
+        let root_hash = proposal.handle.root_hash().map(Into::into);
+        Ok(ProposedChangeProofContext {
+            proof,
+            db,
+            root_hash,
+            end_root: end_root.into(),
+            end_key: end_key.map(Box::from),
+            proposal: Some(proposal.handle),
+        })
+    }
+
+    /// Verify and commit the change proof to the given database.
+    ///
+    /// Consumes `self`. The proof is consumed regardless of success or failure.
+    #[allow(dead_code, reason = "wired to FFI in a follow-up PR")]
+    fn verify_and_commit(
+        self,
+        db: &DatabaseHandle,
+        start_root: ApiHashKey,
+        end_root: ApiHashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<Option<crate::HashKey>, api::Error> {
+        let mut proposed = self
+            .verify_and_propose(db, start_root, end_root, start_key, end_key, max_length)
+            .map_err(|boxed| {
+                let (_proof, err) = *boxed;
+                err
+            })?;
+        proposed.commit()
     }
 }
 

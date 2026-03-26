@@ -151,6 +151,27 @@ pub enum ProofError {
 
     #[error("the proposal for a change proof is None as it has been consumed")]
     ProposalIsNone,
+
+    /// Computed root hash after applying `batch_ops` doesn't match expected end root
+    #[error("computed root hash after applying batch_ops doesn't match the expected end root")]
+    EndRootMismatch,
+
+    /// Boundary value mismatch: after applying `batch_ops`, the value at a
+    /// boundary key does not match the value claimed by the boundary proof.
+    #[error("boundary value at key does not match proof claim after applying batch_ops")]
+    BoundaryValueMismatch,
+
+    /// Non-empty boundary proof cannot be validated against any key.
+    #[error("non-empty boundary proof has no key to validate against")]
+    BoundaryProofUnverifiable,
+
+    /// Change proof contains an unsupported `DeleteRange` operation.
+    #[error("change proof contains unsupported DeleteRange operation")]
+    UnsupportedDeleteRange,
+
+    /// Non-empty batch operations require at least one boundary proof for verification.
+    #[error("non-empty batch operations require at least one boundary proof for verification")]
+    MissingBoundaryProof,
 }
 
 #[derive(Clone, PartialEq, Eq)]
