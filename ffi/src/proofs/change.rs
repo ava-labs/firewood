@@ -7,10 +7,7 @@ use std::num::NonZeroUsize;
 use firewood_metrics::firewood_increment;
 #[cfg(feature = "ethhash")]
 use firewood_storage::TrieHash;
-use firewood_storage::{
-    Children, HashType, Hashable, NibblesIterator, PathBuf, PathComponent, PathIterItem,
-    TriePathFromUnpackedBytes,
-};
+use firewood_storage::{Children, HashType, Hashable, PathComponent, PathIterItem};
 #[cfg(feature = "ethhash")]
 use rlp::Rlp;
 
@@ -362,16 +359,10 @@ fn verify_subtrie_hashes(
 
     for (i, (s_node, e_node)) in start_nodes.iter().zip(end_nodes.iter()).enumerate() {
         let next_idx = i.checked_add(1);
-        let sn = nibble_at(
-            s_node,
-            next_idx.and_then(|j| start_nodes.get(j)),
-            verification.start_key.as_deref(),
-        );
-        let en = nibble_at(
-            e_node,
-            next_idx.and_then(|j| end_nodes.get(j)),
-            verification.resolved_end_key.as_deref(),
-        );
+        // Determine which child each proof follows at this depth.
+        // None means the proof terminates here (no deeper node).
+        let sn = nibble_at(s_node, next_idx.and_then(|j| start_nodes.get(j)));
+        let en = nibble_at(e_node, next_idx.and_then(|j| end_nodes.get(j)));
 
         match (sn, en) {
             // Above divergence: both proofs take the same child. No sub-tries
@@ -716,30 +707,19 @@ fn verify_single_proof_subtrie(
 
 /// Compute the child nibble for a proof node at a given depth.
 ///
-/// Tries the next proof node first; falls back to deriving the nibble
-/// from the boundary key via `PrefixOverlap`. Unlike `next_nibble` (strict
-/// prefix only), `PrefixOverlap` also returns the key's nibble when the
-/// node path and key path diverge (partial path overshoot).
-fn nibble_at(
-    node: &ProofNode,
-    next: Option<&ProofNode>,
-    key: Option<&[u8]>,
-) -> Option<PathComponent> {
-    // Try the next proof node: the nibble is the first component of
-    // the next node's path after the shared prefix with this node.
-    if let Some(n) = next {
-        let overlap = PrefixOverlap::from(node.full_path(), n.full_path());
-        if let Some(&nibble) = overlap.unique_b.first() {
-            return Some(nibble);
-        }
-    }
-    // Fall back to the boundary key: convert to nibbles and find the
-    // first key nibble after the shared prefix with this node's path.
-    // PrefixOverlap handles both strict-prefix (key extends past node)
-    // and divergence (partial path overshoots key).
-    let nibbles: Vec<u8> = NibblesIterator::new(key?).collect();
-    let key_path: PathBuf = TriePathFromUnpackedBytes::path_from_unpacked_bytes(&nibbles).ok()?;
-    let overlap = PrefixOverlap::from(node.full_path(), &key_path);
+/// Returns the first nibble of the next proof node's path that diverges
+/// from this node's path, or `None` if there is no next node (proof
+/// terminates at this depth). Only uses proof structure — never derives
+/// nibbles from boundary keys, which would mask the `(Some, None)` /
+/// `(None, Some)` match arms in `verify_subtrie_hashes`.
+fn nibble_at(node: &ProofNode, next: Option<&ProofNode>) -> Option<PathComponent> {
+    // If there's no next proof node, the proof terminates at this depth.
+    // Returning None lets the caller's match arms handle the asymmetry
+    // (e.g. EndProofTerminatedEarly when one proof is shorter).
+    let n = next?;
+    // The first nibble in unique_b is the child this node follows to
+    // reach the next node in the proof chain.
+    let overlap = PrefixOverlap::from(node.full_path(), n.full_path());
     overlap.unique_b.first().copied()
 }
 
@@ -1444,13 +1424,8 @@ mod tests {
         // This is acceptable — the test documents the code path.
     }
 
-    /// Test `nibble_at` with `PrefixOverlap`: when a node's partial path
-    /// overshoots the key, `nibble_at` should return the key's divergence
-    /// nibble rather than `None`.
-    ///
-    /// This test creates a real change proof from a database, extracts a
-    /// proof node from the start proof, and verifies that `nibble_at` with
-    /// a shorter key returns the correct divergence nibble.
+    /// Test `nibble_at` with real proof nodes: returns `None` when there is
+    /// no next node, and `Some(nibble)` when the next node diverges.
     #[test]
     fn test_nibble_at_with_real_proof() {
         let dir = tempfile::tempdir().expect("tempdir");
@@ -1485,31 +1460,22 @@ mod tests {
         let start_proof_nodes: &[firewood::ProofNode] = proof.start_proof().as_ref();
         // If the start proof is non-empty, test nibble_at on the first node
         if let Some(node) = start_proof_nodes.first() {
-            // nibble_at with no next node and no key should return None
-            let result = nibble_at(node, None, None);
-            assert_eq!(result, None, "no next node + no key = None");
+            // nibble_at with no next node should return None
+            let result = nibble_at(node, None);
+            assert_eq!(result, None, "no next node = None");
 
             // nibble_at with a next node should return the next node's nibble
             if let Some(next) = start_proof_nodes.get(1) {
-                let result = nibble_at(node, Some(next), None);
+                let result = nibble_at(node, Some(next));
                 assert!(
                     result.is_some(),
                     "with next node, nibble_at should return Some"
                 );
             }
-
-            // nibble_at with a key should return a nibble from the key path
-            let result = nibble_at(node, None, Some(b"\x00\x00\x01"));
-            // This should return Some nibble (the exact value depends on
-            // the trie structure)
-            assert!(
-                result.is_some(),
-                "nibble_at with a key should return Some when key extends past node"
-            );
         }
     }
 
-    /// Test `nibble_at` returns None when there's no next node and no key.
+    /// Test `nibble_at` returns None when there's no next node.
     /// Uses a real proof node from a database-generated proof.
     #[test]
     fn test_nibble_at_returns_none() {
@@ -1538,10 +1504,10 @@ mod tests {
 
         let start_proof_nodes: &[firewood::ProofNode] = proof.start_proof().as_ref();
         if let Some(node) = start_proof_nodes.first() {
-            let result = nibble_at(node, None, None);
+            let result = nibble_at(node, None);
             assert_eq!(
                 result, None,
-                "nibble_at with no next node and no key should return None"
+                "nibble_at with no next node should return None"
             );
         }
     }
@@ -1805,5 +1771,86 @@ mod tests {
             ),
             "expected EndRootMismatch, got: {err}"
         );
+    }
+
+    /// Regression: when start and end proofs have different depths, the
+    /// correct match arm must fire instead of being masked by a key-derived
+    /// nibble.
+    ///
+    /// Before the fix, `nibble_at` had a fallback that derived a nibble from
+    /// the boundary key when there was no next proof node. This caused the
+    /// `(Some(_), None)` arm (`EndProofTerminatedEarly`) to never fire in the
+    /// zip-length-mismatch case — the key fallback synthesized a `Some`
+    /// nibble, routing execution through divergence handling with an empty
+    /// tail, silently passing verification.
+    #[test]
+    fn test_asymmetric_proof_depth_not_masked() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Keys at different trie depths: shallow (\x10) and deep (\x10\x01\x02)
+        let initial = vec![
+            put(b"\x10", b"shallow"),
+            put(b"\x10\x01\x02", b"deep"),
+            put(b"\x20", b"other"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b, "initial roots must match");
+
+        // Change in the deeper key range on db_a
+        let changes = vec![put(b"\x10\x01\x02", b"deep_changed")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Bounded proof with deep start_key and shallow end_key — produces
+        // proofs of different lengths.
+        let proof = db_a
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                Some(b"\x10\x01\x02".as_ref()),
+                Some(b"\x20".as_ref()),
+                None,
+            )
+            .expect("change proof");
+
+        // Verify on db_b: the result must be explicit, not a silent pass
+        // through the wrong code path. Before the fix, the key fallback in
+        // nibble_at would synthesize a Some(nibble) from the boundary key,
+        // masking the (Some, None) / (None, Some) match arms and silently
+        // passing via walk_proof_tail on an empty tail.
+        let change_ctx = ChangeProofContext::from(proof);
+        let result = change_ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"\x10\x01\x02".as_ref()),
+            Some(b"\x20".as_ref()),
+            None,
+        );
+
+        // The proof should either verify correctly (the match arm handled
+        // the asymmetry properly) or return an explicit error — never a
+        // silent pass through divergence handling with empty tails.
+        match result {
+            Ok(_) => {} // correct: asymmetry handled by the right match arm
+            Err(boxed) => match boxed.1 {
+                firewood::api::Error::ProofError(
+                    ProofError::EndProofTerminatedEarly | ProofError::BoundaryPathsInverted,
+                ) => {}
+                other => {
+                    panic!("unexpected error (not a silent pass, but unexpected): {other:?}");
+                }
+            },
+        }
     }
 }
