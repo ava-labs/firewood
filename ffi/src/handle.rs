@@ -17,9 +17,7 @@ use firewood_storage::{Committed, FileBacked, NodeStore};
 use crate::{BatchOp, BorrowedBytes, CView, CreateProposalResult, arc_cache::ArcCache};
 
 use crate::revision::{GetRevisionResult, RevisionHandle};
-use firewood_metrics::{
-    MetricsContext, firewood_increment, firewood_record, fwd_expensive_timed_result,
-};
+use firewood_metrics::{MetricsContext, firewood_increment};
 
 /// The hashing mode to use for the database.
 ///
@@ -227,22 +225,8 @@ impl DatabaseHandle {
         &self,
         values: impl AsRef<[BatchOp<'a>]> + 'a,
     ) -> Result<Option<HashKey>, api::Error> {
-        let (root_hash_result, elapsed) =
-            fwd_expensive_timed_result!(crate::registry::BATCH_MS_BUCKET, {
-                let CreateProposalResult { handle } =
-                    self.create_proposal_handle(values.as_ref())?;
-                handle.commit_proposal()
-            });
-        let root_hash = root_hash_result?;
-        firewood_increment!(crate::registry::BATCH_MS, elapsed.as_millis() as u64);
-        firewood_increment!(crate::registry::BATCH_COUNT, 1);
-        firewood_record!(
-            crate::registry::BATCH_MS_BUCKET,
-            elapsed.as_secs_f64() * 1000.0,
-            expensive
-        );
-
-        Ok(root_hash)
+        let CreateProposalResult { handle } = self.create_proposal_handle(values.as_ref())?;
+        handle.commit_proposal()
     }
 
     /// Returns an owned handle to the revision corresponding to the provided root hash.
