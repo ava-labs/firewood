@@ -191,15 +191,16 @@ fn compute_outside_children(
     proof_nodes: &[ProofNode],
     boundary_key: Option<&[u8]>,
     is_left_edge: bool,
-) -> HashMap<PathBuf, ChildMask> {
+) -> Result<HashMap<PathBuf, ChildMask>, ProofError> {
     let mut result: HashMap<PathBuf, ChildMask> = HashMap::new();
 
     // Non-terminal nodes: derive the on-path nibble from the next proof node
     for window in proof_nodes.windows(2) {
         let (parent, child) = (&window[0], &window[1]);
-        let Some(on_path_nibble) = child.key.get(parent.key.len()) else {
-            continue;
-        };
+        let on_path_nibble = child
+            .key
+            .get(parent.key.len())
+            .ok_or(ProofError::ShouldBePrefixOfNextKey)?;
         mark_outside(
             &mut result,
             parent.key.clone(),
@@ -263,7 +264,7 @@ fn compute_outside_children(
         }
     }
 
-    result
+    Ok(result)
 }
 
 /// Marks children at the given node as "outside" the proven range.
@@ -480,8 +481,8 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
 
     // Compute which children at each edge node are outside the proven range
     let mut outside_children =
-        compute_outside_children(proof.start_proof().as_ref(), first_key_bytes, true);
-    for (key, flags) in compute_outside_children(proof.end_proof().as_ref(), last_key_bytes, false)
+        compute_outside_children(proof.start_proof().as_ref(), first_key_bytes, true)?;
+    for (key, flags) in compute_outside_children(proof.end_proof().as_ref(), last_key_bytes, false)?
     {
         let entry = outside_children.entry(key).or_insert([false; 16]);
         for (e, flag) in entry.iter_mut().zip(flags.iter()) {
