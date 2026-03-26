@@ -311,13 +311,21 @@ fn verify_end_proof(
 /// Returns true if this proof covers the full range (not truncated, not
 /// bounded by start/end keys). Only complete proofs should have their
 /// computed root hash compared against the expected end root.
-fn is_complete_proof(verification: &VerificationContext, proof: &FrozenChangeProof) -> bool {
-    // A complete proof has no start/end key bounds, and the end_proof is
-    // empty (meaning we reached the end of the keyspace rather than being
-    // truncated or bounded).
+fn is_complete_proof(
+    verification: &VerificationContext,
+    proof: &FrozenChangeProof,
+    max_length: Option<NonZeroUsize>,
+) -> bool {
+    // A complete proof has no start/end key bounds, and either:
+    // - max_length is None (unbounded request → truncation impossible), or
+    // - end_proof is empty (bounded but reached end of keyspace)
+    //
+    // Without the max_length check, an attacker could attach a valid
+    // end_proof to an unbounded proof that omits later changes, causing
+    // this to return false and skipping the root hash comparison.
     verification.start_key.is_none()
         && verification.end_key.is_none()
-        && proof.end_proof().is_empty()
+        && (max_length.is_none() || proof.end_proof().is_empty())
 }
 
 /// Verify sub-trie hashes: walk both boundary proofs from root toward
@@ -433,10 +441,7 @@ fn verify_subtrie_hashes(
 /// proofs' claims.
 ///
 /// Requires that `verification` was produced by [`verify_proof_structure`],
-/// which populates `resolved_end_key` via [`verify_end_proof`]. If the end
-/// proof is non-empty but `resolved_end_key` is `None`, the end boundary
-/// check is silently skipped. This is safe because `VerificationContext` is
-/// private and only constructible through `verify_proof_structure`.
+/// which populates `resolved_end_key` via [`verify_end_proof`].
 ///
 /// Complementary to [`verify_subtrie_hashes`]: subtrie checks verify child
 /// hashes at branch points along the boundary paths, while this function
@@ -460,9 +465,10 @@ fn verify_boundary_values(
     }
 
     // Check end boundary — uses the cached resolved key from verify_end_proof
-    if !proof.end_proof().is_empty()
-        && let Some(ref end_key) = verification.resolved_end_key
-    {
+    if !proof.end_proof().is_empty() {
+        let Some(ref end_key) = verification.resolved_end_key else {
+            return Err(api::Error::ProofError(ProofError::BoundaryProofUnverifiable));
+        };
         verify_single_boundary_value(proposal, proof.end_proof(), end_key, &verification.end_root)?;
     }
 
@@ -514,7 +520,7 @@ impl ChangeProofContext {
         // Only verify the root hash when the proof covers the full range.
         // Truncated proofs (partial changes) will naturally produce a different
         // root hash until all rounds have been applied.
-        if is_complete_proof(&verification, &proof) {
+        if is_complete_proof(&verification, &proof, max_length) {
             let computed: crate::HashKey = proposal
                 .handle
                 .root_hash()
@@ -589,17 +595,61 @@ impl ProposedChangeProofContext<'_> {
         }
     }
 
+    /// Compare the proposal's computed root hash against the expected
+    /// `end_root`. Called when `find_next_key` determines that sync has
+    /// reached the end of the keyspace (empty `end_proof` or no `batch_ops`).
+    /// This is the final cryptographic check that the accumulated state
+    /// matches the target revision.
+    fn check_root_hash(&self) -> Result<(), api::Error> {
+        // Retrieve the root hash from whichever state we're in.
+        // Before commit: read from the live proposal handle.
+        // After commit: use the cached hash from the commit result.
+        // None means the trie is empty; unwrap_or_default gives the
+        // canonical empty-trie hash, matching the pattern in
+        // verify_and_propose (line ~526).
+        let computed: crate::HashKey = match &self.proposal_state {
+            ProposalState::Proposed(handle) => handle
+                .root_hash()
+                .map(crate::HashKey::from)
+                .unwrap_or_default(),
+            ProposalState::Committed(hash) => hash
+                .clone()
+                .map(crate::HashKey::from)
+                .unwrap_or_default(),
+        };
+        if computed != crate::HashKey::from(self.verification.end_root.clone()) {
+            return Err(api::Error::ProofError(ProofError::EndRootMismatch));
+        }
+        Ok(())
+    }
+
     /// Returns the next key range that should be fetched after processing this
     /// change proof, or `None` if there are no more keys to fetch.
     fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
         let Some(last_op) = self.proof.batch_ops().last() else {
+            // No batch_ops means the proof claims no changes exist.
+            // Verify that the accumulated state matches end_root;
+            // otherwise a malicious sender could send an empty proof
+            // to make the receiver stop with incomplete state.
+            self.check_root_hash()?;
             return Ok(None);
         };
 
         if self.proof.end_proof().is_empty() {
+            // Empty end_proof signals the end of the keyspace — there
+            // are no more keys to fetch. Verify the root hash to
+            // confirm the accumulated state is complete; a malicious
+            // sender could craft partial changes with an empty
+            // end_proof to trigger premature completion.
+            self.check_root_hash()?;
             return Ok(None);
         }
 
+        // Range-bounded completion: last_op >= end_key. No root hash
+        // check here because end_key is controlled by the receiver,
+        // so the attacker cannot force this path. The proposal's root
+        // hash may legitimately differ from end_root when the proof
+        // covers only a sub-range of the full keyspace.
         if let Some(ref end_key) = self.verification.end_key
             && **last_op.key() >= **end_key
         {
@@ -1269,7 +1319,10 @@ mod tests {
 
     use crate::{BorrowedBytes, CView, DatabaseHandle, DatabaseHandleArgs, NodeHashAlgorithm};
 
-    use super::{VerificationContext, nibble_at, verify_proof_structure, verify_subtrie_hashes};
+    use super::{
+        ChangeProofContext, VerificationContext, is_complete_proof, nibble_at,
+        verify_proof_structure, verify_subtrie_hashes,
+    };
 
     /// Create a temporary database for testing.
     fn test_db(dir: &std::path::Path) -> DatabaseHandle {
@@ -1517,6 +1570,103 @@ mod tests {
         }
     }
 
+    /// Test that the `is_complete_proof` fix closes the `end_proof` bypass gap.
+    ///
+    /// Attack scenario: an attacker generates a truncated proof (`max_length=1`)
+    /// covering only 1 of N changes, then presents it as unbounded (`max_length=None`)
+    /// with `start_key=None, end_key=None`.
+    ///
+    /// Old behavior: `is_complete_proof` returned false (non-empty `end_proof`) →
+    ///   root hash check skipped → incomplete proof accepted silently.
+    /// New behavior: `is_complete_proof` returns true (`max_length=None` → unbounded →
+    ///   must be complete) → root hash check fires → `EndRootMismatch`.
+    #[test]
+    fn test_unbounded_proof_with_end_proof_checks_root_hash() {
+        use std::num::NonZeroUsize;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Both databases start with identical state
+        let initial = vec![
+            put(b"\x10", b"v0"),
+            put(b"\x20", b"v1"),
+            put(b"\x30", b"v2"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b, "initial roots must match");
+
+        // Source db gets multiple key changes → root2
+        let changes = vec![
+            put(b"\x10", b"changed0"),
+            put(b"\x20", b"changed1"),
+            put(b"\x30", b"changed2"),
+        ];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Generate a truncated proof covering only 1 change
+        let proof = db_a
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                None,
+                None,
+                NonZeroUsize::new(1),
+            )
+            .expect("truncated change proof");
+
+        // Truncated proof must have a non-empty end_proof
+        assert!(
+            !proof.end_proof().is_empty(),
+            "truncated proof should have non-empty end_proof"
+        );
+
+        // Unit-level: is_complete_proof with max_length=None must return true
+        // (unbounded → complete, regardless of end_proof)
+        let ctx = VerificationContext {
+            end_root: root2.clone(),
+            start_key: None,
+            end_key: None,
+            resolved_end_key: None,
+        };
+        assert!(
+            is_complete_proof(&ctx, &proof, None),
+            "unbounded request (max_length=None) must be treated as complete"
+        );
+
+        // Unit-level: is_complete_proof with max_length=Some(1) must return false
+        // (bounded + non-empty end_proof → truncated)
+        assert!(
+            !is_complete_proof(&ctx, &proof, NonZeroUsize::new(1)),
+            "bounded request with non-empty end_proof must be treated as truncated"
+        );
+
+        // Integration: verify_and_propose with max_length=None must reject the
+        // truncated proof with EndRootMismatch
+        let change_ctx = ChangeProofContext::from(proof);
+        let err = change_ctx
+            .verify_and_propose(&db_b, root1_b, root2, None, None, None)
+            .expect_err("truncated proof presented as unbounded must fail");
+        assert!(
+            matches!(
+                err.1,
+                firewood::api::Error::ProofError(ProofError::EndRootMismatch)
+            ),
+            "expected EndRootMismatch, got: {:?}",
+            err.1
+        );
+    }
+
     /// Test that `verify_proof_structure` rejects a proof where a
     /// non-empty start proof has no key to validate against
     /// (`BoundaryProofUnverifiable`).
@@ -1562,6 +1712,132 @@ mod tests {
                 firewood::api::Error::ProofError(ProofError::BoundaryProofUnverifiable)
             ),
             "expected BoundaryProofUnverifiable, got: {err}"
+        );
+    }
+
+    /// Happy path: single-round unbounded proof where root hash matches.
+    /// `find_next_key` returns `Ok(None)` without error because the
+    /// proposal's root hash matches `end_root`.
+    #[test]
+    fn test_find_next_key_root_hash_positive() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Both databases start with identical state
+        let initial = vec![put(b"\x10", b"v0"), put(b"\x20", b"v1")];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // db_a modifies keys → root2
+        let changes = vec![put(b"\x10", b"changed0"), put(b"\x20", b"changed1")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Generate unbounded proof covering all changes
+        let proof = db_a
+            .change_proof(root1_a.clone(), root2.clone(), None, None, None)
+            .expect("change proof");
+
+        let change_ctx = ChangeProofContext::from(proof);
+        let mut proposed = change_ctx
+            .verify_and_propose(&db_b, root1_b, root2, None, None, None)
+            .expect("verify_and_propose should succeed");
+
+        // find_next_key should return Ok(None) — root hash matches
+        let next = proposed
+            .find_next_key()
+            .expect("find_next_key should not error");
+        assert_eq!(next, None, "single-round unbounded proof should be complete");
+    }
+
+    /// Multi-round scenario where `is_complete_proof` is false (`start_key=Some`)
+    /// but `find_next_key` catches the root hash mismatch because the proof
+    /// only covers a suffix of the changed keys.
+    ///
+    /// Simulates a receiver that skips the first changed key (\x10) by
+    /// starting from \x11, so the proposal is missing one change and the
+    /// root hash won't match `end_root`.
+    #[test]
+    fn test_find_next_key_root_hash_mismatch() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Both databases start with identical state
+        let initial = vec![
+            put(b"\x10", b"v0"),
+            put(b"\x20", b"v1"),
+            put(b"\x30", b"v2"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // db_a modifies all 3 keys → root2
+        let changes = vec![
+            put(b"\x10", b"changed0"),
+            put(b"\x20", b"changed1"),
+            put(b"\x30", b"changed2"),
+        ];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Generate a proof starting from \x11, which skips the \x10 change.
+        // This gives us only the \x20 and \x30 changes with empty end_proof
+        // (end of keyspace). start_key=Some makes is_complete_proof false,
+        // so verify_and_propose skips the root hash check.
+        let partial_proof = db_a
+            .change_proof(
+                root1_a,
+                root2.clone(),
+                Some(b"\x11".as_ref()),
+                None,
+                None,
+            )
+            .expect("partial proof");
+        assert!(
+            partial_proof.end_proof().is_empty(),
+            "final page should have empty end_proof"
+        );
+
+        let partial_ctx = ChangeProofContext::from(partial_proof);
+        let mut proposed = partial_ctx
+            .verify_and_propose(
+                &db_b,
+                root1_b,
+                root2,
+                Some(b"\x11".as_ref()),
+                None,
+                None,
+            )
+            .expect("verify_and_propose should pass (no root hash check)");
+
+        // find_next_key → end_proof empty → check_root_hash → mismatch
+        // because the proposal is missing the \x10 change
+        let result = proposed.find_next_key();
+        let err = result.expect_err("find_next_key should detect root hash mismatch");
+        assert!(
+            matches!(
+                err,
+                firewood::api::Error::ProofError(ProofError::EndRootMismatch)
+            ),
+            "expected EndRootMismatch, got: {err}"
         );
     }
 }
