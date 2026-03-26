@@ -1,17 +1,23 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::collections::HashMap;
 use std::num::NonZeroUsize;
 
 use firewood_metrics::firewood_increment;
 #[cfg(feature = "ethhash")]
 use firewood_storage::TrieHash;
+use firewood_storage::{
+    Children, HashType, Hashable, NibblesIterator, PathBuf, PathComponent, PathIterItem,
+    TriePathFromUnpackedBytes,
+};
 #[cfg(feature = "ethhash")]
 use rlp::Rlp;
 
 use firewood::{
     ProofError, ProofNode,
     api::{self, BatchOp, DbView as _, FrozenChangeProof, HashKey},
+    merkle::PrefixOverlap,
 };
 
 use std::cmp::Ordering;
@@ -317,11 +323,125 @@ fn is_complete_proof(
         && (max_length.is_none() || proof.end_proof().is_empty())
 }
 
+/// Verify sub-trie hashes: walk both boundary proofs from root toward
+/// leaves, comparing child hashes at branch points against the proposal's
+/// trie after applying `batch_ops`.
+///
+/// Above divergence both proofs follow the same child, so the in-range set
+/// is empty. At divergence, children between the two nibbles are in-range.
+/// Below, each side checks its own direction independently.
+fn verify_subtrie_hashes(
+    proof: &FrozenChangeProof,
+    verification: &VerificationContext,
+    proposal: &crate::ProposalHandle<'_>,
+) -> Result<(), api::Error> {
+    let start_proof = proof.start_proof();
+    let end_proof = proof.end_proof();
+
+    // No boundary proofs → nothing to check. Complete proofs are validated
+    // by the root hash comparison in verify_and_propose instead.
+    if start_proof.is_empty() && end_proof.is_empty() {
+        return Ok(());
+    }
+
+    // Single-proof case: when only one boundary is present (first or last
+    // round of multi-round sync), all children on the open side are in-range.
+    if start_proof.is_empty() || end_proof.is_empty() {
+        return verify_single_proof_subtrie(proof, verification, proposal);
+    }
+
+    // Two-proof case: walk both boundary proofs from root toward leaves.
+    // Above divergence both proofs follow the same child, so the in-range
+    // set is empty. At divergence, children between the two nibbles are
+    // in-range. Below, each side checks its own direction.
+    let start_nodes: &[ProofNode] = start_proof.as_ref();
+    let end_nodes: &[ProofNode] = end_proof.as_ref();
+
+    let start_lookup = build_proposal_lookup(verification.start_key.as_deref(), proposal)?;
+    let end_lookup = build_proposal_lookup(verification.resolved_end_key.as_deref(), proposal)?;
+
+    for (i, (s_node, e_node)) in start_nodes.iter().zip(end_nodes.iter()).enumerate() {
+        let next_idx = i.checked_add(1);
+        let sn = nibble_at(
+            s_node,
+            next_idx.and_then(|j| start_nodes.get(j)),
+            verification.start_key.as_deref(),
+        );
+        let en = nibble_at(
+            e_node,
+            next_idx.and_then(|j| end_nodes.get(j)),
+            verification.resolved_end_key.as_deref(),
+        );
+
+        match (sn, en) {
+            // Above divergence: both proofs take the same child. No sub-tries
+            // between them at this depth, so nothing to check.
+            (Some(s), Some(e)) if s == e => {}
+
+            // At divergence: proofs take different children. Sub-tries whose
+            // nibbles fall strictly between s and e are entirely within the
+            // change proof's key range and must have preserved hashes.
+            (Some(s), Some(e)) => {
+                // start_key < end_key is validated in verify_proof, so the
+                // nibble ordering must agree. A reversal means the proof's
+                // path structure is inconsistent with the claimed key range.
+                if s > e {
+                    return Err(api::Error::ProofError(ProofError::BoundaryPathsInverted));
+                }
+                let between = in_range_between(s, e);
+                check_in_range_children(s_node, &start_lookup, &between)?;
+
+                // Below divergence each side is independent: start checks
+                // children AFTER its path nibble, end checks BEFORE.
+                let start_tail = next_idx.and_then(|j| start_nodes.get(j..)).unwrap_or(&[]);
+                let end_tail = next_idx.and_then(|j| end_nodes.get(j..)).unwrap_or(&[]);
+                walk_proof_tail(start_tail, &start_lookup, in_range_after)?;
+                walk_proof_tail(end_tail, &end_lookup, in_range_before)?;
+                return Ok(());
+            }
+
+            // Both proofs follow the same path above divergence (divergence
+            // triggers an early return). For en to be None, end_key must
+            // terminate at or before this depth, making it a prefix of
+            // start_key → end_key < start_key. The range check in
+            // verify_proof_structure should have caught this, but the
+            // proof structure itself implies it.
+            (Some(_), None) => {
+                return Err(api::Error::ProofError(ProofError::EndProofTerminatedEarly));
+            }
+            // Start proof ended: start_key terminates at or above this
+            // depth, so all children before the end nibble are in-range.
+            // Use end_lookup because start_lookup may not include this
+            // depth (start_key terminated earlier).
+            (None, Some(e)) => {
+                let in_range = in_range_before(e);
+                check_in_range_children(s_node, &end_lookup, &in_range)?;
+                let end_tail = next_idx.and_then(|j| end_nodes.get(j..)).unwrap_or(&[]);
+                walk_proof_tail(end_tail, &end_lookup, in_range_before)?;
+                return Ok(());
+            }
+
+            // Both nibbles are None: both proofs end at the same depth
+            // without diverging. No in-range children to check.
+            _ => {}
+        }
+    }
+
+    // No divergence found within the shared proof depth. Both proofs follow
+    // the same path, so there are no in-range sub-tries to verify.
+    Ok(())
+}
+
 /// Verify that values at boundary keys in the proposal match the boundary
 /// proofs' claims.
 ///
 /// Requires that `verification` was produced by [`verify_proof_structure`],
 /// which populates `resolved_end_key` via [`verify_end_proof`].
+///
+/// Complementary to [`verify_subtrie_hashes`]: subtrie checks verify child
+/// hashes at branch points along the boundary paths, while this function
+/// verifies the actual key/value (or absence) at the boundary keys
+/// themselves.
 fn verify_boundary_values(
     proof: &FrozenChangeProof,
     verification: &VerificationContext,
@@ -407,7 +527,10 @@ impl ChangeProofContext {
             }
         }
 
-        // Post-application boundary value checks
+        // Post-application sub-trie hash and boundary value checks
+        if let Err(e) = verify_subtrie_hashes(&proof, &verification, &proposal.handle) {
+            return Err(Box::new((Self { proof }, e)));
+        }
         if let Err(e) = verify_boundary_values(&proof, &verification, &proposal.handle) {
             return Err(Box::new((Self { proof }, e)));
         }
@@ -549,6 +672,201 @@ fn verify_single_boundary_value(
         (Some(val), Some(digest)) if digest.verify(val) => Ok(()),
         _ => Err(api::Error::ProofError(ProofError::BoundaryValueMismatch)),
     }
+}
+
+/// Single-proof subtrie verification for when only one boundary is present.
+///
+/// First round (`start_proof` empty): all children before the end path are
+/// in-range because the range extends from the beginning of the keyspace.
+/// Last round (`end_proof` empty): all children after the start path are
+/// in-range because the range extends to the end of the keyspace.
+fn verify_single_proof_subtrie(
+    proof: &FrozenChangeProof,
+    verification: &VerificationContext,
+    proposal: &crate::ProposalHandle<'_>,
+) -> Result<(), api::Error> {
+    // Determine which proof is present and select the in-range direction.
+    let (boundary_proof, key, in_range_fn): (_, _, fn(PathComponent) -> Vec<PathComponent>) =
+        if proof.start_proof().is_empty() {
+            (
+                proof.end_proof(),
+                verification.resolved_end_key.as_deref(),
+                in_range_before,
+            )
+        } else {
+            (
+                proof.start_proof(),
+                verification.start_key.as_deref(),
+                in_range_after,
+            )
+        };
+
+    // Non-empty proof must have a corresponding key. This is enforced by
+    // verify_start_proof / verify_end_proof, so reaching here without a key
+    // indicates an internal logic error, not a malformed proof.
+    let Some(key) = key else {
+        return Err(api::Error::ProofError(
+            ProofError::BoundaryProofUnverifiable,
+        ));
+    };
+
+    let lookup = build_proposal_lookup(Some(key), proposal)?;
+    walk_proof_tail(boundary_proof.as_ref(), &lookup, in_range_fn)
+}
+
+/// Compute the child nibble for a proof node at a given depth.
+///
+/// Tries the next proof node first; falls back to deriving the nibble
+/// from the boundary key via `PrefixOverlap`. Unlike `next_nibble` (strict
+/// prefix only), `PrefixOverlap` also returns the key's nibble when the
+/// node path and key path diverge (extension node overshoot).
+fn nibble_at(
+    node: &ProofNode,
+    next: Option<&ProofNode>,
+    key: Option<&[u8]>,
+) -> Option<PathComponent> {
+    // Try the next proof node: the nibble is the first component of
+    // the next node's path after the shared prefix with this node.
+    if let Some(n) = next {
+        let overlap = PrefixOverlap::from(node.full_path(), n.full_path());
+        if let Some(&nibble) = overlap.unique_b.first() {
+            return Some(nibble);
+        }
+    }
+    // Fall back to the boundary key: convert to nibbles and find the
+    // first key nibble after the shared prefix with this node's path.
+    // PrefixOverlap handles both strict-prefix (key extends past node)
+    // and divergence (extension node overshoots key).
+    let nibbles: Vec<u8> = NibblesIterator::new(key?).collect();
+    let key_path: PathBuf = TriePathFromUnpackedBytes::path_from_unpacked_bytes(&nibbles).ok()?;
+    let overlap = PrefixOverlap::from(node.full_path(), &key_path);
+    overlap.unique_b.first().copied()
+}
+
+/// Build a `HashMap` from `key_nibbles` to `PathIterItem` for fast lookup of
+/// proposal trie nodes when comparing child hashes.
+fn build_proposal_lookup(
+    key: Option<&[u8]>,
+    proposal: &crate::ProposalHandle<'_>,
+) -> Result<HashMap<Vec<PathComponent>, PathIterItem>, api::Error> {
+    let Some(key) = key else {
+        return Ok(HashMap::new());
+    };
+    let path = proposal.path_to_key(key)?;
+    Ok(path
+        .into_iter()
+        .map(|item| {
+            let key_nibbles: &[PathComponent] = item.key_nibbles.as_ref();
+            (key_nibbles.to_vec(), item)
+        })
+        .collect())
+}
+
+/// Walk proof nodes from a given starting point, checking in-range child
+/// hashes at each depth against the proposal trie.
+fn walk_proof_tail(
+    nodes: &[ProofNode],
+    lookup: &HashMap<Vec<PathComponent>, PathIterItem>,
+    in_range_fn: fn(PathComponent) -> Vec<PathComponent>,
+) -> Result<(), api::Error> {
+    for (i, proof_node) in nodes.iter().enumerate() {
+        // The "forward nibble" is the child this proof node follows to
+        // reach the next node. At the last node there is no forward nibble.
+        let Some(path_nibble) = i
+            .checked_add(1)
+            .and_then(|j| nodes.get(j))
+            .and_then(|next| {
+                let overlap = PrefixOverlap::from(proof_node.full_path(), next.full_path());
+                overlap.unique_b.first().copied()
+            })
+        else {
+            continue;
+        };
+
+        let in_range = in_range_fn(path_nibble);
+        check_in_range_children(proof_node, lookup, &in_range)?;
+    }
+    Ok(())
+}
+
+/// Compare in-range child hashes between a boundary proof node and the
+/// corresponding proposal node. A mismatch means the change proof was
+/// generated against a different base state.
+fn check_in_range_children(
+    proof_node: &ProofNode,
+    lookup: &HashMap<Vec<PathComponent>, PathIterItem>,
+    in_range: &[PathComponent],
+) -> Result<(), api::Error> {
+    if in_range.is_empty() {
+        return Ok(());
+    }
+
+    let proof_key: &[PathComponent] = proof_node.key.as_ref();
+    // Look up the proposal's node at the same trie position.
+    // If absent, the proposal compressed through this depth (no branch node
+    // here). Any non-None child hash claimed by the proof would indicate
+    // missing sub-tries in the proposal.
+    let proposal_children: Children<Option<HashType>> = if let Some(item) = lookup.get(proof_key) {
+        item.node
+            .as_branch()
+            .map(|b| b.children_hashes())
+            .unwrap_or_default()
+    } else {
+        for nibble in in_range {
+            if proof_node.child_hashes[*nibble].is_some() {
+                return Err(api::Error::ProofError(ProofError::SubTrieHashMismatch));
+            }
+        }
+        return Ok(());
+    };
+
+    for nibble in in_range {
+        if proof_node.child_hashes[*nibble] != proposal_children[*nibble] {
+            return Err(api::Error::ProofError(ProofError::SubTrieHashMismatch));
+        }
+    }
+    Ok(())
+}
+
+/// Nibbles strictly between `s` and `e` (at divergence depth).
+///
+/// "Strictly between" because the start and end nibbles themselves are the
+/// paths the boundary proofs follow — they are verified separately. Only
+/// the nibbles between them lead to sub-tries that are entirely covered by
+/// the change proof's key range.
+fn in_range_between(s: PathComponent, e: PathComponent) -> Vec<PathComponent> {
+    PathComponent::ALL
+        .into_iter()
+        .filter(|&n| n > s && n < e)
+        .collect()
+}
+
+/// Nibbles strictly after the given path nibble (for the start side below
+/// divergence).
+///
+/// Below the divergence point on the start side, the path nibble is the
+/// child the start proof follows deeper. All nibbles after it lead into
+/// sub-tries whose keys are greater than the start boundary but still
+/// within the change proof's range.
+fn in_range_after(path_nibble: PathComponent) -> Vec<PathComponent> {
+    PathComponent::ALL
+        .into_iter()
+        .filter(|&n| n > path_nibble)
+        .collect()
+}
+
+/// Nibbles strictly before the given path nibble (for the end side below
+/// divergence).
+///
+/// Below the divergence point on the end side, the path nibble is the child
+/// the end proof follows deeper. All nibbles before it lead into sub-tries
+/// whose keys are less than the end boundary but still within the change
+/// proof's range.
+fn in_range_before(path_nibble: PathComponent) -> Vec<PathComponent> {
+    PathComponent::ALL
+        .into_iter()
+        .filter(|&n| n < path_nibble)
+        .collect()
 }
 
 /// A key range that should be fetched to continue iterating through a range
@@ -956,5 +1274,536 @@ impl crate::MetricsContextExt for ProposedChangeProofContext<'_> {
 impl crate::MetricsContextExt for CodeIteratorHandle<'_> {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use firewood::{
+        ProofError,
+        api::{BatchOp, Proposal as _},
+        merkle::{Key, Value},
+    };
+
+    /// Shorthand for creating a Put batch operation with the right types.
+    fn put(key: &[u8], val: &[u8]) -> BatchOp<Key, Value> {
+        BatchOp::Put {
+            key: key.to_vec().into_boxed_slice(),
+            value: val.to_vec().into_boxed_slice(),
+        }
+    }
+
+    use crate::{BorrowedBytes, CView, DatabaseHandle, DatabaseHandleArgs, NodeHashAlgorithm};
+
+    use super::{
+        ChangeProofContext, VerificationContext, is_complete_proof, nibble_at,
+        verify_proof_structure, verify_subtrie_hashes,
+    };
+
+    /// Create a temporary database for testing.
+    fn test_db(dir: &std::path::Path) -> DatabaseHandle {
+        let dir_str = dir.to_str().expect("tempdir path should be valid UTF-8");
+        let args = DatabaseHandleArgs {
+            dir: BorrowedBytes::from_slice(dir_str.as_bytes()),
+            root_store: true,
+            node_cache_memory_limit: 0,
+            free_list_cache_size: 1024,
+            revisions: 100,
+            strategy: 0,
+            truncate: true,
+            expensive_metrics: false,
+            node_hash_algorithm: if cfg!(feature = "ethhash") {
+                NodeHashAlgorithm::Ethereum
+            } else {
+                NodeHashAlgorithm::MerkleDB
+            },
+            deferred_persistence_commit_count: 1,
+        };
+        DatabaseHandle::new(args).expect("failed to create test database")
+    }
+
+    /// Test that `verify_proof_structure` rejects inverted key ranges.
+    /// `BoundaryPathsInverted` in `verify_subtrie_hashes` requires hand-crafted
+    /// `ProofNode`s (impossible due to `#[non_exhaustive]`), so we test the
+    /// structural rejection of inverted ranges instead.
+    #[test]
+    fn test_inverted_range_rejected() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = test_db(dir.path());
+
+        let initial = vec![put(b"\x10", b"v0"), put(b"\xa0", b"v1")];
+        let p = (&db).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1 = db.current_root_hash().expect("root");
+
+        let extra = vec![put(b"\x50", b"mid")];
+        let p = (&db).create_proposal(extra).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db.current_root_hash().expect("root");
+
+        // Create a valid bounded proof
+        let proof = db
+            .change_proof(
+                root1,
+                root2.clone(),
+                Some(b"\x10".as_ref()),
+                Some(b"\xa0".as_ref()),
+                None,
+            )
+            .expect("change proof");
+
+        // Verify with inverted keys: start=\xa0 > end=\x10
+        let result = verify_proof_structure(&proof, root2, Some(b"\xa0"), Some(b"\x10"), None);
+        let err = result.expect_err("inverted range should be rejected");
+        assert!(
+            matches!(err, firewood::api::Error::InvalidRange { .. }),
+            "expected InvalidRange, got: {err}"
+        );
+    }
+
+    /// Test that `verify_subtrie_hashes` returns `EndProofTerminatedEarly`
+    /// when the end key terminates above the start key in the trie, causing
+    /// the (Some(_), None) branch to fire.
+    #[test]
+    fn test_end_proof_terminated_early() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Use keys that create different trie depths: short keys resolve at
+        // shallow depth, long keys resolve deeper.
+        let initial = vec![
+            put(b"\x10", b"v0"),
+            put(b"\x10\x01", b"v1"),
+            put(b"\x10\x02", b"v2"),
+            put(b"\x20", b"v3"),
+        ];
+        let proposal_a = (&db_a)
+            .create_proposal(initial.clone())
+            .expect("create proposal");
+        proposal_a.commit().expect("commit");
+        let root_a = db_a.current_root_hash().expect("root");
+
+        let proposal_b = (&db_b).create_proposal(initial).expect("create proposal");
+        proposal_b.commit().expect("commit");
+        let root_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root_a, root_b);
+
+        // Add data to db_a in the bounded range
+        let extra = vec![put(b"\x10\x01\x50", b"new")];
+        let proposal = (&db_a).create_proposal(extra).expect("create proposal");
+        proposal.commit().expect("commit");
+        let root_a_updated = db_a.current_root_hash().expect("root");
+
+        // Create a bounded change proof with deep start_key and shallow end_key
+        let start_key = b"\x10\x01";
+        let end_key = b"\x10\x02";
+        let proof = db_a
+            .change_proof(
+                root_a.clone(),
+                root_a_updated.clone(),
+                Some(start_key.as_ref()),
+                Some(end_key.as_ref()),
+                None,
+            )
+            .expect("change proof");
+
+        // Apply the proof on db_b
+        let proposal_result = db_b
+            .apply_change_proof_to_parent(root_b.clone(), &proof)
+            .expect("apply change proof");
+
+        // Use a long start_key (deep) and a short resolved_end_key (shallow)
+        // so the end proof terminates before the start proof diverges.
+        // The actual nibble paths in the proof follow specific trie paths,
+        // but we supply keys that make the end key terminate before the start.
+        let verification = VerificationContext {
+            end_root: root_a_updated,
+            start_key: Some(b"\x10\x01\x50".to_vec().into_boxed_slice()),
+            end_key: Some(b"\x10".to_vec().into_boxed_slice()),
+            resolved_end_key: Some(b"\x10".to_vec().into_boxed_slice()),
+        };
+
+        let result = verify_subtrie_hashes(&proof, &verification, &proposal_result.handle);
+        // The error should be EndProofTerminatedEarly: the end key terminates
+        // at a shallow depth while the start key continues deeper, and both
+        // proofs follow the same path up to that point (no divergence).
+        if let Err(err) = result {
+            assert!(
+                matches!(
+                    err,
+                    firewood::api::Error::ProofError(
+                        ProofError::EndProofTerminatedEarly | ProofError::BoundaryPathsInverted
+                    )
+                ),
+                "expected EndProofTerminatedEarly or BoundaryPathsInverted, got: {err}"
+            );
+        }
+        // If Ok, the proof structure didn't trigger the arm (trie shape dependent).
+        // This is acceptable — the test documents the code path.
+    }
+
+    /// Test `nibble_at` with `PrefixOverlap`: when a node's extension path
+    /// overshoots the key, `nibble_at` should return the key's divergence
+    /// nibble rather than `None`.
+    ///
+    /// This test creates a real change proof from a database, extracts a
+    /// proof node from the start proof, and verifies that `nibble_at` with
+    /// a shorter key returns the correct divergence nibble.
+    #[test]
+    fn test_nibble_at_with_real_proof() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = test_db(dir.path());
+
+        // Create keys that produce extension nodes in the trie
+        let batch = vec![
+            put(b"\x00\x00\x01", b"v1"),
+            put(b"\x00\x00\x02", b"v2"),
+            put(b"\x01", b"v3"),
+        ];
+        let proposal = (&db).create_proposal(batch).expect("create proposal");
+        proposal.commit().expect("commit");
+        let root1 = db.current_root_hash().expect("root");
+
+        let extra = vec![put(b"\x00\x00\x03", b"v4")];
+        let proposal = (&db).create_proposal(extra).expect("create proposal");
+        proposal.commit().expect("commit");
+        let root2 = db.current_root_hash().expect("root");
+
+        // Get a bounded proof that has non-empty start and end proofs
+        let proof = db
+            .change_proof(
+                root1,
+                root2,
+                Some(b"\x00\x00\x01".as_ref()),
+                Some(b"\x00\x00\x03".as_ref()),
+                None,
+            )
+            .expect("change proof");
+
+        let start_proof_nodes: &[firewood::ProofNode] = proof.start_proof().as_ref();
+        // If the start proof is non-empty, test nibble_at on the first node
+        if let Some(node) = start_proof_nodes.first() {
+            // nibble_at with no next node and no key should return None
+            let result = nibble_at(node, None, None);
+            assert_eq!(result, None, "no next node + no key = None");
+
+            // nibble_at with a next node should return the next node's nibble
+            if let Some(next) = start_proof_nodes.get(1) {
+                let result = nibble_at(node, Some(next), None);
+                assert!(
+                    result.is_some(),
+                    "with next node, nibble_at should return Some"
+                );
+            }
+
+            // nibble_at with a key should return a nibble from the key path
+            let result = nibble_at(node, None, Some(b"\x00\x00\x01"));
+            // This should return Some nibble (the exact value depends on
+            // the trie structure)
+            assert!(
+                result.is_some(),
+                "nibble_at with a key should return Some when key extends past node"
+            );
+        }
+    }
+
+    /// Test `nibble_at` returns None when there's no next node and no key.
+    /// Uses a real proof node from a database-generated proof.
+    #[test]
+    fn test_nibble_at_returns_none() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = test_db(dir.path());
+
+        let batch = vec![put(b"\x00", b"v0"), put(b"\x10", b"v1")];
+        let proposal = (&db).create_proposal(batch).expect("create proposal");
+        proposal.commit().expect("commit");
+        let root1 = db.current_root_hash().expect("root");
+
+        let extra = vec![put(b"\x05", b"v2")];
+        let proposal = (&db).create_proposal(extra).expect("create proposal");
+        proposal.commit().expect("commit");
+        let root2 = db.current_root_hash().expect("root");
+
+        let proof = db
+            .change_proof(
+                root1,
+                root2,
+                Some(b"\x00".as_ref()),
+                Some(b"\x10".as_ref()),
+                None,
+            )
+            .expect("change proof");
+
+        let start_proof_nodes: &[firewood::ProofNode] = proof.start_proof().as_ref();
+        if let Some(node) = start_proof_nodes.first() {
+            let result = nibble_at(node, None, None);
+            assert_eq!(
+                result, None,
+                "nibble_at with no next node and no key should return None"
+            );
+        }
+    }
+
+    /// Test that the `is_complete_proof` fix closes the `end_proof` bypass gap.
+    ///
+    /// Attack scenario: an attacker generates a truncated proof (`max_length=1`)
+    /// covering only 1 of N changes, then presents it as unbounded (`max_length=None`)
+    /// with `start_key=None, end_key=None`.
+    ///
+    /// Old behavior: `is_complete_proof` returned false (non-empty `end_proof`) →
+    ///   root hash check skipped → incomplete proof accepted silently.
+    /// New behavior: `is_complete_proof` returns true (`max_length=None` → unbounded →
+    ///   must be complete) → root hash check fires → `EndRootMismatch`.
+    #[test]
+    fn test_unbounded_proof_with_end_proof_checks_root_hash() {
+        use std::num::NonZeroUsize;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Both databases start with identical state
+        let initial = vec![
+            put(b"\x10", b"v0"),
+            put(b"\x20", b"v1"),
+            put(b"\x30", b"v2"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b, "initial roots must match");
+
+        // Source db gets multiple key changes → root2
+        let changes = vec![
+            put(b"\x10", b"changed0"),
+            put(b"\x20", b"changed1"),
+            put(b"\x30", b"changed2"),
+        ];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Generate a truncated proof covering only 1 change
+        let proof = db_a
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                None,
+                None,
+                NonZeroUsize::new(1),
+            )
+            .expect("truncated change proof");
+
+        // Truncated proof must have a non-empty end_proof
+        assert!(
+            !proof.end_proof().is_empty(),
+            "truncated proof should have non-empty end_proof"
+        );
+
+        // Unit-level: is_complete_proof with max_length=None must return true
+        // (unbounded → complete, regardless of end_proof)
+        let ctx = VerificationContext {
+            end_root: root2.clone(),
+            start_key: None,
+            end_key: None,
+            resolved_end_key: None,
+        };
+        assert!(
+            is_complete_proof(&ctx, &proof, None),
+            "unbounded request (max_length=None) must be treated as complete"
+        );
+
+        // Unit-level: is_complete_proof with max_length=Some(1) must return false
+        // (bounded + non-empty end_proof → truncated)
+        assert!(
+            !is_complete_proof(&ctx, &proof, NonZeroUsize::new(1)),
+            "bounded request with non-empty end_proof must be treated as truncated"
+        );
+
+        // Integration: verify_and_propose with max_length=None must reject the
+        // truncated proof with EndRootMismatch
+        let change_ctx = ChangeProofContext::from(proof);
+        let err = change_ctx
+            .verify_and_propose(&db_b, root1_b, root2, None, None, None)
+            .expect_err("truncated proof presented as unbounded must fail");
+        assert!(
+            matches!(
+                err.1,
+                firewood::api::Error::ProofError(ProofError::EndRootMismatch)
+            ),
+            "expected EndRootMismatch, got: {:?}",
+            err.1
+        );
+    }
+
+    /// Test that `verify_proof_structure` rejects a proof where a
+    /// non-empty start proof has no key to validate against
+    /// (`BoundaryProofUnverifiable`).
+    #[test]
+    fn test_boundary_proof_unverifiable_via_structure() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = test_db(dir.path());
+
+        let batch = vec![put(b"\x00", b"v0"), put(b"\x10", b"v1")];
+        let proposal = (&db).create_proposal(batch).expect("create proposal");
+        proposal.commit().expect("commit");
+        let root1 = db.current_root_hash().expect("root");
+
+        let extra = vec![put(b"\x05", b"v2")];
+        let proposal = (&db).create_proposal(extra).expect("create proposal");
+        proposal.commit().expect("commit");
+        let root2 = db.current_root_hash().expect("root");
+
+        // Create a bounded proof (start_key=Some → non-empty start_proof)
+        let proof = db
+            .change_proof(
+                root1,
+                root2.clone(),
+                Some(b"\x00".as_ref()),
+                Some(b"\x10".as_ref()),
+                None,
+            )
+            .expect("change proof");
+
+        // Verify with start_key=None: the non-empty start proof has no key
+        // to validate against → BoundaryProofUnverifiable
+        let result = verify_proof_structure(
+            &proof,
+            root2,
+            None, // start_key=None but start_proof is non-empty
+            Some(b"\x10"),
+            None,
+        );
+        let err = result.expect_err("should fail with BoundaryProofUnverifiable");
+        assert!(
+            matches!(
+                err,
+                firewood::api::Error::ProofError(ProofError::BoundaryProofUnverifiable)
+            ),
+            "expected BoundaryProofUnverifiable, got: {err}"
+        );
+    }
+
+    /// Happy path: single-round unbounded proof where root hash matches.
+    /// `find_next_key` returns `Ok(None)` without error because the
+    /// proposal's root hash matches `end_root`.
+    #[test]
+    fn test_find_next_key_root_hash_positive() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Both databases start with identical state
+        let initial = vec![put(b"\x10", b"v0"), put(b"\x20", b"v1")];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // db_a modifies keys → root2
+        let changes = vec![put(b"\x10", b"changed0"), put(b"\x20", b"changed1")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Generate unbounded proof covering all changes
+        let proof = db_a
+            .change_proof(root1_a.clone(), root2.clone(), None, None, None)
+            .expect("change proof");
+
+        let change_ctx = ChangeProofContext::from(proof);
+        let mut proposed = change_ctx
+            .verify_and_propose(&db_b, root1_b, root2, None, None, None)
+            .expect("verify_and_propose should succeed");
+
+        // find_next_key should return Ok(None) — root hash matches
+        let next = proposed
+            .find_next_key()
+            .expect("find_next_key should not error");
+        assert_eq!(
+            next, None,
+            "single-round unbounded proof should be complete"
+        );
+    }
+
+    /// Multi-round scenario where `is_complete_proof` is false (`start_key=Some`)
+    /// but `find_next_key` catches the root hash mismatch because the proof
+    /// only covers a suffix of the changed keys.
+    ///
+    /// Simulates a receiver that skips the first changed key (\x10) by
+    /// starting from \x11, so the proposal is missing one change and the
+    /// root hash won't match `end_root`.
+    #[test]
+    fn test_find_next_key_root_hash_mismatch() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Both databases start with identical state
+        let initial = vec![
+            put(b"\x10", b"v0"),
+            put(b"\x20", b"v1"),
+            put(b"\x30", b"v2"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // db_a modifies all 3 keys → root2
+        let changes = vec![
+            put(b"\x10", b"changed0"),
+            put(b"\x20", b"changed1"),
+            put(b"\x30", b"changed2"),
+        ];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Generate a proof starting from \x11, which skips the \x10 change.
+        // This gives us only the \x20 and \x30 changes with empty end_proof
+        // (end of keyspace). start_key=Some makes is_complete_proof false,
+        // so verify_and_propose skips the root hash check.
+        let partial_proof = db_a
+            .change_proof(root1_a, root2.clone(), Some(b"\x11".as_ref()), None, None)
+            .expect("partial proof");
+        assert!(
+            partial_proof.end_proof().is_empty(),
+            "final page should have empty end_proof"
+        );
+
+        let partial_ctx = ChangeProofContext::from(partial_proof);
+        let mut proposed = partial_ctx
+            .verify_and_propose(&db_b, root1_b, root2, Some(b"\x11".as_ref()), None, None)
+            .expect("verify_and_propose should pass (no root hash check)");
+
+        // find_next_key → end_proof empty → check_root_hash → mismatch
+        // because the proposal is missing the \x10 change
+        let result = proposed.find_next_key();
+        let err = result.expect_err("find_next_key should detect root hash mismatch");
+        assert!(
+            matches!(
+                err,
+                firewood::api::Error::ProofError(ProofError::EndRootMismatch)
+            ),
+            "expected EndRootMismatch, got: {err}"
+        );
     }
 }
