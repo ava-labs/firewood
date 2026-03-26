@@ -4,7 +4,6 @@
 use firewood::api::{self, BoxKeyValueIter, DbView, HashKey, IntoBatchIter, Proposal as _};
 
 use crate::{IteratorHandle, iterator::CreateIteratorResult, metrics::MetricsContextExt};
-use firewood_metrics::{firewood_increment, firewood_record, fwd_expensive_timed_result};
 
 /// An opaque wrapper around a Proposal that also retains a reference to the
 /// database handle it was created from.
@@ -80,15 +79,10 @@ impl ProposalHandle<'_> {
             _ = handle.get_root(hash_key.clone());
         }
 
-        let (commit_result, commit_time) =
-            fwd_expensive_timed_result!(crate::registry::COMMIT_MS_BUCKET, proposal.commit());
-        commit_result?;
+        proposal.commit()?;
 
         // clear the cached view so that it does not hold onto the proposal view
         handle.clear_cached_view();
-
-        firewood_increment!(crate::registry::COMMIT_MS, commit_time.as_millis() as u64);
-        firewood_increment!(crate::registry::COMMIT_COUNT, 1);
 
         Ok(hash_key)
     }
@@ -118,16 +112,7 @@ impl<'db> CreateProposalResult<'db> {
         handle: &'db crate::DatabaseHandle,
         f: impl FnOnce() -> Result<firewood::db::Proposal<'db>, api::Error>,
     ) -> Result<Self, api::Error> {
-        let (proposal_result, propose_time) =
-            fwd_expensive_timed_result!(crate::registry::PROPOSE_MS_BUCKET, f());
-        let proposal = proposal_result?;
-        firewood_increment!(crate::registry::PROPOSE_MS, propose_time.as_millis() as u64);
-        firewood_increment!(crate::registry::PROPOSE_COUNT, 1);
-        firewood_record!(
-            crate::registry::PROPOSE_MS_BUCKET,
-            propose_time.as_secs_f64() * 1000.0,
-            expensive
-        );
+        let proposal = f()?;
 
         let hash_key = proposal.root_hash();
 
@@ -147,7 +132,6 @@ impl<'db> CreateProposalResult<'db> {
 /// uniformly when creating new proposals. It provides a common interface for:
 /// - Getting the underlying database handle
 /// - Creating proposals from key-value pairs
-/// - Creating proposal handles with timing information
 ///
 /// This abstraction enables proposal chaining (creating proposals on top of other proposals)
 /// while maintaining a consistent API.
@@ -171,8 +155,7 @@ pub trait CView<'db> {
         values: impl IntoBatchIter,
     ) -> Result<firewood::db::Proposal<'db>, api::Error>;
 
-    /// Create a [`ProposalHandle`] from the values and return it with timing
-    /// information.
+    /// Create a [`ProposalHandle`] from the values.
     ///
     /// # Errors
     ///

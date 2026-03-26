@@ -6,7 +6,6 @@
 //! This crate provides:
 //! - Recording macros that are simple to use at callsites
 //! - Thread-local context for gating expensive metrics
-//! - Histogram bucket registry for bucket configuration
 //!
 //! Each crate defines its own metric registry (e.g., `ffi::registry`, `storage::registry`).
 //!
@@ -16,39 +15,14 @@
 //! use firewood_metrics::firewood_increment;
 //! use crate::registry;
 //!
-//! // At startup - register metrics and their bucket configurations
 //! registry::register();
 //!
-//! // Always increment
-//! firewood_increment!(registry::COMMIT_COUNT, 1);
-//!
-//! // Expensive histogram (only records if expensive metrics enabled)
-//! firewood_record!(registry::COMMIT_MS_BUCKET, elapsed_ms, expensive);
+//! firewood_increment!(registry::OP_COUNT, 1);
 //! ```
 //!
-//! # Histogram Bucket Registration
+//! # Macro overview
 //!
-//! Use [`register_histogram_with_buckets`] to specify custom buckets for histogram metrics.
-//! This should be called in your crate's `register()` function, collecting configs into
-//! a vector:
-//!
-//! ```ignore
-//! use firewood_metrics::{HistogramBucketConfig, register_histogram_with_buckets};
-//!
-//! pub fn register(histogram_configs: &mut Vec<HistogramBucketConfig>) {
-//!     // Register histogram with custom buckets
-//!     register_histogram_with_buckets(
-//!         histogram_configs,
-//!         "my.latency_ms",
-//!         "Latency in milliseconds",
-//!         &[1.0, 5.0, 10.0, 50.0, 100.0],
-//!     );
-//! }
-//! ```
-//!
-//! # Macro Overview
-//!
-//! All recording macros accept an optional trailing `expensive` flag:
+//! Recording macros accept an optional trailing `expensive` flag where noted:
 //!
 //! | Macro | Description |
 //! |-------|-------------|
@@ -56,12 +30,8 @@
 //! | `firewood_increment!(name, value, expensive)` | Increment only if expensive metrics enabled |
 //! | `firewood_set!(name, value)` | Always set a gauge value |
 //! | `firewood_set!(name, value, expensive)` | Set only if expensive metrics enabled |
-//! | `firewood_record!(name, value)` | Always record to histogram |
-//! | `firewood_record!(name, value, expensive)` | Record only if expensive metrics enabled |
-//! | `fwd_timed_result!(name, expr)` | Time a `Result` expression and record histogram on `Ok` |
-//! | `fwd_expensive_timed_result!(name, expr)` | Same as `fwd_timed_result!`, gated by expensive metrics |
 //!
-//! For registration, use `metrics::describe_*` macros or [`register_histogram_with_buckets`].
+//! For registration, use `metrics::describe_*` macros in your crate's `register()` function.
 
 use std::cell::Cell;
 
@@ -127,46 +97,12 @@ pub fn expensive_metrics_enabled() -> bool {
     current_metrics_context().is_some_and(MetricsContext::expensive_metrics_enabled)
 }
 
-/// Entry for a registered histogram with custom buckets.
-#[derive(Debug, Clone)]
-pub struct HistogramBucketConfig {
-    /// The metric name (e.g., `ffi.commit_ms_bucket`).
-    pub name: &'static str,
-    /// The bucket boundaries.
-    pub buckets: &'static [f64],
-}
-
-/// Registers a histogram metric with custom bucket boundaries.
-///
-/// This function:
-/// 1. Calls `metrics::describe_histogram!` to register the metric description
-/// 2. Appends the bucket configuration to the provided vector
-///
-/// # Arguments
-///
-/// * `configs` - Mutable vector to collect bucket configurations
-/// * `name` - The metric name (must be a `&'static str`)
-/// * `description` - Human-readable description of the metric
-/// * `buckets` - Bucket boundaries for the histogram (must be `&'static [f64]`)
-pub fn register_histogram_with_buckets(
-    configs: &mut Vec<HistogramBucketConfig>,
-    name: &'static str,
-    description: &'static str,
-    buckets: &'static [f64],
-) {
-    // Register the metric description
-    metrics::describe_histogram!(name, description);
-
-    // Collect bucket configuration
-    configs.push(HistogramBucketConfig { name, buckets });
-}
-
 /// Increments a counter metric.
 ///
 /// # Usage
 /// ```ignore
-/// firewood_increment!(registry::COMMIT_COUNT, 1);
-/// firewood_increment!(registry::COMMIT_COUNT, 1, "label" => "value");
+/// firewood_increment!(registry::OP_COUNT, 1);
+/// firewood_increment!(registry::OP_COUNT, 1, "label" => "value");
 /// firewood_increment!(registry::SLOW_OP_COUNT, 1, expensive);
 /// ```
 #[macro_export]
@@ -188,7 +124,7 @@ macro_rules! firewood_increment {
 ///
 /// # Usage
 /// ```ignore
-/// let counter = firewood_counter!(registry::COMMIT_COUNT);
+/// let counter = firewood_counter!(registry::OP_COUNT);
 /// counter.increment(1);
 /// counter.absolute(100);
 /// ```
@@ -241,93 +177,6 @@ macro_rules! firewood_gauge {
     };
     ($name:expr, $($labels:tt)+) => {
         ::metrics::gauge!($name, $($labels)+)
-    };
-}
-
-/// Records a value to a histogram metric.
-///
-/// # Usage
-/// ```ignore
-/// firewood_record!(registry::LATENCY_MS, elapsed_ms);
-/// firewood_record!(registry::LATENCY_MS, elapsed_ms, "op" => "read");
-/// firewood_record!(registry::COMMIT_MS_BUCKET, elapsed_ms, expensive);
-/// ```
-#[macro_export]
-macro_rules! firewood_record {
-    ($name:expr, $value:expr, expensive) => {
-        if $crate::expensive_metrics_enabled() {
-            ::metrics::histogram!($name).record($value);
-        }
-    };
-    ($name:expr, $value:expr) => {
-        ::metrics::histogram!($name).record($value)
-    };
-    ($name:expr, $value:expr, $($labels:tt)+) => {
-        ::metrics::histogram!($name, $($labels)+).record($value)
-    };
-}
-
-/// Times a `Result` expression and records elapsed milliseconds to a histogram on success.
-///
-/// Returns a tuple `(result, elapsed_duration)` where `elapsed_duration` is a
-/// `std::time::Duration`.
-///
-/// # Usage
-/// ```ignore
-/// let (result, elapsed) = fwd_timed_result!(registry::LATENCY_MS_BUCKET, work());
-/// let value = result?;
-/// ```
-#[macro_export]
-macro_rules! fwd_timed_result {
-    ($name:expr, $expr:expr) => {{
-        let __fwd_start = ::std::time::Instant::now();
-        let __fwd_result = $expr;
-        let __fwd_elapsed = __fwd_start.elapsed();
-        if __fwd_result.is_ok() {
-            $crate::firewood_record!($name, __fwd_elapsed.as_secs_f64() * 1000.0);
-        }
-        (__fwd_result, __fwd_elapsed)
-    }};
-}
-
-/// Times a `Result` expression and records elapsed milliseconds to a histogram on success
-/// (only when expensive metrics are enabled).
-///
-/// Returns a tuple `(result, elapsed_duration)` where `elapsed_duration` is a
-/// `std::time::Duration`.
-///
-/// # Usage
-/// ```ignore
-/// let (result, elapsed) = fwd_expensive_timed_result!(registry::LATENCY_MS_BUCKET, work());
-/// let value = result?;
-/// ```
-#[macro_export]
-macro_rules! fwd_expensive_timed_result {
-    ($name:expr, $expr:expr) => {{
-        let __fwd_start = ::std::time::Instant::now();
-        let __fwd_result = $expr;
-        let __fwd_elapsed = __fwd_start.elapsed();
-        if __fwd_result.is_ok() {
-            $crate::firewood_record!($name, __fwd_elapsed.as_secs_f64() * 1000.0, expensive);
-        }
-        (__fwd_result, __fwd_elapsed)
-    }};
-}
-
-/// Returns a histogram handle for advanced operations.
-///
-/// # Usage
-/// ```ignore
-/// let histogram = firewood_histogram!(registry::LATENCY_MS);
-/// histogram.record(elapsed_ms);
-/// ```
-#[macro_export]
-macro_rules! firewood_histogram {
-    ($name:expr) => {
-        ::metrics::histogram!($name)
-    };
-    ($name:expr, $($labels:tt)+) => {
-        ::metrics::histogram!($name, $($labels)+)
     };
 }
 
