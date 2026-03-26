@@ -29,6 +29,10 @@ package ffi
 // #cgo nocallback fwd_free_range_proof
 // #cgo noescape fwd_db_change_proof
 // #cgo nocallback fwd_db_change_proof
+// #cgo noescape fwd_db_verify_and_propose_change_proof
+// #cgo nocallback fwd_db_verify_and_propose_change_proof
+// #cgo noescape fwd_db_verify_and_commit_change_proof
+// #cgo nocallback fwd_db_verify_and_commit_change_proof
 // #cgo noescape fwd_verify_change_proof
 // #cgo nocallback fwd_verify_change_proof
 // #cgo noescape fwd_db_propose_change_proof
@@ -37,6 +41,8 @@ package ffi
 // #cgo nocallback fwd_db_commit_change_proof
 // #cgo noescape fwd_change_proof_find_next_key_proposed
 // #cgo nocallback fwd_change_proof_find_next_key_proposed
+// #cgo noescape fwd_proposed_change_proof_to_bytes
+// #cgo nocallback fwd_proposed_change_proof_to_bytes
 // #cgo noescape fwd_change_proof_to_bytes
 // #cgo nocallback fwd_change_proof_to_bytes
 // #cgo noescape fwd_change_proof_from_bytes
@@ -49,12 +55,6 @@ package ffi
 // #cgo nocallback fwd_free_verified_change_proof
 // #cgo noescape fwd_free_proposed_change_proof
 // #cgo nocallback fwd_free_proposed_change_proof
-// #cgo noescape fwd_db_verify_and_propose_change_proof
-// #cgo nocallback fwd_db_verify_and_propose_change_proof
-// #cgo noescape fwd_db_verify_and_commit_change_proof
-// #cgo nocallback fwd_db_verify_and_commit_change_proof
-// #cgo noescape fwd_proposed_change_proof_to_bytes
-// #cgo nocallback fwd_proposed_change_proof_to_bytes
 import "C"
 
 import (
