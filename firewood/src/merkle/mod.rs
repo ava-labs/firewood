@@ -348,6 +348,157 @@ fn compute_root_hash_with_proofs(
     .to_hash()
 }
 
+/// Verify that a range proof is valid for the specified key range and root hash.
+///
+/// This function validates a range proof by constructing a partial trie from the
+/// proof data and verifying that it produces the expected root hash. The proof may
+/// contain fewer key-value pairs than requested if the peer chose to limit the
+/// response size.
+///
+/// # Verification Process
+///
+/// 1. **Structural validation**: Ensure key-value pairs are in strictly ascending order,
+///    within the requested `[first_key, last_key]` range, and reject unexpected proofs
+/// 2. **Boundary proof verification**: Cryptographically verify start/end proofs against
+///    the provided root hash
+/// 3. **Trie reconstruction**: Build an in-memory Merkle trie from the key-value pairs
+///    and reconcile it with proof nodes
+/// 4. **Root hash comparison**: Verify the reconstructed trie's root hash matches the
+///    expected hash
+///
+/// # Errors
+///
+/// Returns [`api::Error::ProofError`] if the proof is structurally invalid,
+/// keys are outside the requested range, boundary proofs fail verification,
+/// or the reconstructed root hash doesn't match.
+pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
+    first_key: Option<impl KeyType>,
+    last_key: Option<impl KeyType>,
+    root_hash: &TrieHash,
+    proof: &RangeProof<impl KeyType, impl ValueType, H>,
+) -> Result<(), api::Error> {
+    let first_key_bytes: Option<&[u8]> = first_key.as_ref().map(AsRef::as_ref);
+    let last_key_bytes: Option<&[u8]> = last_key.as_ref().map(AsRef::as_ref);
+
+    // check that the keys are in ascending order and within the requested range
+    let key_values = proof.key_values();
+    if !key_values
+        .iter()
+        .map(|(key, _)| key.as_ref())
+        .is_sorted_by(|a, b| a < b)
+    {
+        return Err(api::Error::ProofError(
+            ProofError::NonMonotonicIncreaseRange,
+        ));
+    }
+
+    // Validate all keys are within the requested [first_key, last_key] range
+    for (key, _) in key_values {
+        let k = key.as_ref();
+        if first_key_bytes.is_some_and(|start| k < start)
+            || last_key_bytes.is_some_and(|end| k > end)
+        {
+            return Err(api::Error::ProofError(ProofError::KeyOutsideRange));
+        }
+    }
+
+    if key_values.is_empty() && first_key_bytes.is_none() && last_key_bytes.is_none() {
+        return Err(api::Error::ProofError(ProofError::Empty));
+    }
+
+    // Reject start proof when no start key is specified (non-canonical proof)
+    if first_key_bytes.is_none() && !proof.start_proof().is_empty() {
+        return Err(api::Error::ProofError(ProofError::UnexpectedStartProof));
+    }
+
+    // Require end proof when there are key-value pairs or an end key is specified
+    if proof.end_proof().is_empty() && (last_key_bytes.is_some() || !key_values.is_empty()) {
+        return Err(api::Error::ProofError(ProofError::NoEndProof));
+    }
+
+    let left_edge_key = key_values.first();
+    let right_edge_key = key_values.last();
+
+    let left_edge = left_edge_key.map(|(k, v)| (k.as_ref(), v.as_ref()));
+    let right_edge = right_edge_key.map(|(k, v)| (k.as_ref(), v.as_ref()));
+
+    if !proof.start_proof().is_empty() {
+        verify_edge(
+            first_key_bytes,
+            left_edge,
+            proof.start_proof(),
+            root_hash,
+            true,
+        )?;
+    }
+    if !proof.end_proof().is_empty() {
+        verify_edge(
+            last_key_bytes,
+            right_edge,
+            proof.end_proof(),
+            root_hash,
+            false,
+        )?;
+    }
+
+    // Build in-memory merkle from key-value pairs
+    let memstore = MemStore::default();
+    let nodestore = NodeStore::new_empty_proposal(memstore.into());
+    let mut proving_merkle: Merkle<NodeStore<Mutable<Propose>, MemStore>> = Merkle::from(nodestore);
+
+    for (key, value) in key_values {
+        proving_merkle.insert(key.as_ref(), value.as_ref().into())?;
+    }
+
+    // Reconcile all proof nodes and build lookup map; reject conflicting nodes
+    let all_proof_nodes: Vec<&ProofNode> = proof
+        .start_proof()
+        .as_ref()
+        .iter()
+        .chain(proof.end_proof().as_ref())
+        .collect();
+
+    let mut proof_node_map: HashMap<PathBuf, &ProofNode> = HashMap::new();
+    for proof_node in &all_proof_nodes {
+        proving_merkle.reconcile_branch_proof_node(proof_node)?;
+        match proof_node_map.entry(proof_node.key.clone()) {
+            std::collections::hash_map::Entry::Occupied(existing) => {
+                if *existing.get() != *proof_node {
+                    return Err(api::Error::ProofError(ProofError::ConflictingProofNodes));
+                }
+            }
+            std::collections::hash_map::Entry::Vacant(entry) => {
+                entry.insert(proof_node);
+            }
+        }
+    }
+
+    // Compute which children at each edge node are outside the proven range
+    let mut outside_children =
+        compute_outside_children(proof.start_proof().as_ref(), first_key_bytes, true);
+    for (key, flags) in compute_outside_children(proof.end_proof().as_ref(), last_key_bytes, false)
+    {
+        let entry = outside_children.entry(key).or_insert([false; 16]);
+        for (e, flag) in entry.iter_mut().zip(flags.iter()) {
+            *e |= flag;
+        }
+    }
+
+    // Compute root hash of the proving trie with proof sibling hashes
+    let Some(root_node) = proving_merkle.root() else {
+        return Err(api::Error::ProofError(ProofError::Empty));
+    };
+
+    let computed =
+        compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
+
+    if computed != root_hash.clone().into_hash_type() {
+        return Err(api::Error::ProofError(ProofError::UnexpectedHash));
+    }
+
+    Ok(())
+}
+
 impl<T: TrieReader> Merkle<T> {
     pub(crate) fn root(&self) -> Option<SharedNode> {
         self.nodestore.root_node()
@@ -401,184 +552,6 @@ impl<T: TrieReader> Merkle<T> {
         }
 
         Ok(Proof::new(proof.into_boxed_slice()))
-    }
-
-    /// Verify that a range proof is valid for the specified key range and root hash.
-    ///
-    /// This method validates a range proof by constructing a partial trie from the proof data
-    /// and verifying that it produces the expected root hash. The proof may contain fewer
-    /// key-value pairs than requested if the peer chose to limit the response size.
-    ///
-    /// # Parameters
-    ///
-    /// * `first_key` - The requested start of the range (inclusive).
-    ///   - If `Some(key)`, verifies the proof covers keys >= this key
-    ///   - If `None`, verifies the proof starts from the beginning of the trie
-    ///
-    /// * `last_key` - The requested end of the range (inclusive).
-    ///   - If `Some(key)`, represents the upper bound that was requested
-    ///   - If `None`, indicates no upper bound was specified
-    ///   - Note: The proof may contain fewer keys than requested if the peer limited the response
-    ///
-    /// * `root_hash` - The expected root hash of the trie. The constructed partial trie
-    ///   from the proof must produce this exact hash for the proof to be valid.
-    ///
-    /// * `proof` - The range proof to verify, containing:
-    ///   - Start proof: Merkle proof for the lower boundary
-    ///   - End proof: Merkle proof for the upper boundary
-    ///   - Key-value pairs: The actual entries within the range
-    ///
-    /// # Returns
-    ///
-    /// Returns `Ok(())` if the proof is valid. Returns `Err(api::Error)` if
-    /// structural validation or proof verification fails.
-    ///
-    /// # Verification Process
-    ///
-    /// The verification follows these steps:
-    /// 1. **Structural validation**: Verify the proof structure is well-formed
-    ///    - Ensure key-value pairs are in strictly ascending order
-    ///    - Validate that boundary proofs correctly bound the key-value pairs
-    ///
-    /// 2. **Boundary proof verification**: Cryptographically verify the start and end proofs
-    ///    against the provided root hash
-    ///
-    /// # Errors
-    ///
-    /// * [`api::Error::ProofError`] - The proof structure is malformed, inconsistent,
-    ///   or boundary proofs don't match the requested range
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// // Verify a range proof received from a peer
-    /// merkle.verify_range_proof(
-    ///     Some(b"alice"),
-    ///     Some(b"charlie"),
-    ///     &expected_root_hash,
-    ///     &range_proof
-    /// )?;
-    /// ```
-    pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
-        &self,
-        first_key: Option<impl KeyType>,
-        last_key: Option<impl KeyType>,
-        root_hash: &TrieHash,
-        proof: &RangeProof<impl KeyType, impl ValueType, H>,
-    ) -> Result<(), api::Error> {
-        let first_key_bytes: Option<&[u8]> = first_key.as_ref().map(AsRef::as_ref);
-        let last_key_bytes: Option<&[u8]> = last_key.as_ref().map(AsRef::as_ref);
-
-        // check that the keys are in ascending order and within the requested range
-        let key_values = proof.key_values();
-        if !key_values
-            .iter()
-            .map(|(key, _)| key.as_ref())
-            .is_sorted_by(|a, b| a < b)
-        {
-            return Err(api::Error::ProofError(
-                ProofError::NonMonotonicIncreaseRange,
-            ));
-        }
-
-        // Validate all keys are within the requested [first_key, last_key] range
-        for (key, _) in key_values {
-            let k = key.as_ref();
-            if first_key_bytes.is_some_and(|start| k < start)
-                || last_key_bytes.is_some_and(|end| k > end)
-            {
-                return Err(api::Error::ProofError(ProofError::KeyOutsideRange));
-            }
-        }
-
-        if key_values.is_empty() && first_key_bytes.is_none() && last_key_bytes.is_none() {
-            return Err(api::Error::ProofError(ProofError::Empty));
-        }
-
-        // Reject start proof when no start key is specified (non-canonical proof)
-        if first_key_bytes.is_none() && !proof.start_proof().is_empty() {
-            return Err(api::Error::ProofError(ProofError::UnexpectedStartProof));
-        }
-
-        // Require end proof when there are key-value pairs or an end key is specified
-        if proof.end_proof().is_empty() && (last_key_bytes.is_some() || !key_values.is_empty()) {
-            return Err(api::Error::ProofError(ProofError::NoEndProof));
-        }
-
-        let left_edge_key = key_values.first();
-        let right_edge_key = key_values.last();
-
-        let left_edge = left_edge_key.map(|(k, v)| (k.as_ref(), v.as_ref()));
-        let right_edge = right_edge_key.map(|(k, v)| (k.as_ref(), v.as_ref()));
-
-        if !proof.start_proof().is_empty() {
-            verify_edge(
-                first_key_bytes,
-                left_edge,
-                proof.start_proof(),
-                root_hash,
-                true,
-            )?;
-        }
-        if !proof.end_proof().is_empty() {
-            verify_edge(
-                last_key_bytes,
-                right_edge,
-                proof.end_proof(),
-                root_hash,
-                false,
-            )?;
-        }
-
-        // Build in-memory merkle from key-value pairs
-        let memstore = MemStore::default();
-        let nodestore = NodeStore::new_empty_proposal(memstore.into());
-        let mut proving_merkle: Merkle<NodeStore<Mutable<Propose>, MemStore>> =
-            Merkle::from(nodestore);
-
-        for (key, value) in key_values {
-            proving_merkle.insert(key.as_ref(), value.as_ref().into())?;
-        }
-
-        // Reconcile all proof nodes and build lookup map
-        let all_proof_nodes: Vec<&ProofNode> = proof
-            .start_proof()
-            .as_ref()
-            .iter()
-            .chain(proof.end_proof().as_ref())
-            .collect();
-
-        let mut proof_node_map: HashMap<PathBuf, &ProofNode> = HashMap::new();
-        for proof_node in &all_proof_nodes {
-            proving_merkle.reconcile_branch_proof_node(proof_node)?;
-            proof_node_map.insert(proof_node.key.clone(), proof_node);
-        }
-
-        // Compute which children at each edge node are outside the proven range
-        let mut outside_children =
-            compute_outside_children(proof.start_proof().as_ref(), first_key_bytes, true);
-        for (key, flags) in
-            compute_outside_children(proof.end_proof().as_ref(), last_key_bytes, false)
-        {
-            let entry = outside_children.entry(key).or_insert([false; 16]);
-            for (e, flag) in entry.iter_mut().zip(flags.iter()) {
-                *e |= flag;
-            }
-        }
-
-        // Compute root hash of the proving trie with proof sibling hashes
-        let Some(root_node) = proving_merkle.root() else {
-            return Err(api::Error::ProofError(ProofError::Empty));
-        };
-
-        let computed =
-            compute_root_hash_with_proofs(&root_node, &[], &proof_node_map, &outside_children);
-
-        if computed != root_hash.clone().into_hash_type() {
-            return Err(api::Error::ProofError(ProofError::UnexpectedHash));
-        }
-
-        Ok(())
     }
 
     /// Merges a sequence of key-value pairs with the base merkle trie, yielding

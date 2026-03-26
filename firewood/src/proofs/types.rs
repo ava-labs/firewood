@@ -161,6 +161,10 @@ pub enum ProofError {
     #[error("unexpected start proof")]
     UnexpectedStartProof,
 
+    /// Start and end proofs contain conflicting nodes at the same key path
+    #[error("conflicting proof nodes at the same key path")]
+    ConflictingProofNodes,
+
     #[error("the proposal for a change proof is None as it has been consumed")]
     ProposalIsNone,
 }
