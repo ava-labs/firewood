@@ -36,6 +36,11 @@ pub type Key = Box<[u8]>;
 /// Values are boxed u8 slices
 pub type Value = Box<[u8]>;
 
+/// Bitmask indicating which of a branch node's 16 children are "outside" the
+/// proven range and should use the proof's original hashes instead of being
+/// recomputed from the proving trie.
+type ChildMask = [bool; 16];
+
 macro_rules! write_attributes {
     ($writer:ident, $node:expr, $value:expr) => {
         if !$node.partial_path.0.is_empty() {
@@ -186,8 +191,8 @@ fn compute_outside_children(
     proof_nodes: &[ProofNode],
     boundary_key: Option<&[u8]>,
     is_left_edge: bool,
-) -> HashMap<PathBuf, [bool; 16]> {
-    let mut result: HashMap<PathBuf, [bool; 16]> = HashMap::new();
+) -> HashMap<PathBuf, ChildMask> {
+    let mut result: HashMap<PathBuf, ChildMask> = HashMap::new();
 
     // Non-terminal nodes: derive the on-path nibble from the next proof node
     for window in proof_nodes.windows(2) {
@@ -264,7 +269,7 @@ fn compute_outside_children(
 /// Marks children at the given node as "outside" the proven range.
 #[expect(clippy::indexing_slicing)]
 fn mark_outside(
-    map: &mut HashMap<PathBuf, [bool; 16]>,
+    map: &mut HashMap<PathBuf, ChildMask>,
     key: PathBuf,
     on_path_nibble: u8,
     is_left_edge: bool,
@@ -295,7 +300,7 @@ fn compute_root_hash_with_proofs(
     node: &Node,
     path_prefix: &[PathComponent],
     proof_nodes: &HashMap<PathBuf, &ProofNode>,
-    outside_children: &HashMap<PathBuf, [bool; 16]>,
+    outside_children: &HashMap<PathBuf, ChildMask>,
 ) -> HashType {
     let branch = match node {
         Node::Leaf(_) => return HashableShunt::from_node(path_prefix, node).to_hash(),
