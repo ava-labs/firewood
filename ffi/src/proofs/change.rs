@@ -712,7 +712,7 @@ fn verify_single_proof_subtrie(
 /// Tries the next proof node first; falls back to deriving the nibble
 /// from the boundary key via `PrefixOverlap`. Unlike `next_nibble` (strict
 /// prefix only), `PrefixOverlap` also returns the key's nibble when the
-/// node path and key path diverge (extension node overshoot).
+/// node path and key path diverge (partial path overshoot).
 fn nibble_at(
     node: &ProofNode,
     next: Option<&ProofNode>,
@@ -729,7 +729,7 @@ fn nibble_at(
     // Fall back to the boundary key: convert to nibbles and find the
     // first key nibble after the shared prefix with this node's path.
     // PrefixOverlap handles both strict-prefix (key extends past node)
-    // and divergence (extension node overshoots key).
+    // and divergence (node's partial path overshoots key).
     let nibbles: Vec<u8> = NibblesIterator::new(key?).collect();
     let key_path: PathBuf = TriePathFromUnpackedBytes::path_from_unpacked_bytes(&nibbles).ok()?;
     let overlap = PrefixOverlap::from(node.full_path(), &key_path);
@@ -1468,7 +1468,7 @@ mod tests {
         // This is acceptable — the test documents the code path.
     }
 
-    /// Test `nibble_at` with `PrefixOverlap`: when a node's extension path
+    /// Test `nibble_at` with `PrefixOverlap`: when a node's partial path
     /// overshoots the key, `nibble_at` should return the key's divergence
     /// nibble rather than `None`.
     ///
@@ -1480,7 +1480,7 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = test_db(dir.path());
 
-        // Create keys that produce extension nodes in the trie
+        // Create keys that produce branch nodes with multi-nibble partial paths
         let batch = vec![
             put(b"\x00\x00\x01", b"v1"),
             put(b"\x00\x00\x02", b"v2"),
