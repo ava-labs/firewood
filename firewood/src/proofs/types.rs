@@ -149,6 +149,22 @@ pub enum ProofError {
     #[error("the proof is None as it has been consumed")]
     ProofIsNone,
 
+    /// Key-value pair is outside the requested range
+    #[error("key-value pair is outside the requested range")]
+    KeyOutsideRange,
+
+    /// End proof is required when key-value pairs are present or end key is specified
+    #[error("no end proof")]
+    NoEndProof,
+
+    /// Start proof should be empty when no start key is specified
+    #[error("unexpected start proof")]
+    UnexpectedStartProof,
+
+    /// Start and end proofs contain conflicting nodes at the same key path
+    #[error("conflicting proof nodes at the same key path")]
+    ConflictingProofNodes,
+
     #[error("the proposal for a change proof is None as it has been consumed")]
     ProposalIsNone,
 }

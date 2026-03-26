@@ -37,7 +37,6 @@ impl NodeHashAlgorithm {
     /// Note: This function is only available in test builds or when the
     /// `test_utils` feature is enabled (for upstream testing purposes).
     #[must_use]
-    #[cfg(any(test, feature = "test_utils"))]
     pub const fn compile_option() -> Self {
         compile_option()
     }

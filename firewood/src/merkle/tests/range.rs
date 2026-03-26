@@ -35,12 +35,8 @@ fn test_range_proof() {
     let merkle = init_merkle(items.clone());
 
     for _ in 0..10 {
-        let start = rng.random_range(0..items.len());
-        let end = rng.random_range(0..items.len() - start) + start - 1;
-
-        if end <= start {
-            continue;
-        }
+        let start = rng.random_range(0..items.len() - 1);
+        let end = rng.random_range(start + 1..items.len());
 
         let start_proof = merkle.prove(items[start].0).unwrap();
         let end_proof = merkle.prove(items[end - 1].0).unwrap();
@@ -54,14 +50,13 @@ fn test_range_proof() {
 
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
-        merkle
-            .verify_range_proof(
-                Some(items[start].0),
-                Some(items[end - 1].0),
-                &root_hash,
-                &range_proof,
-            )
-            .unwrap();
+        verify_range_proof(
+            Some(items[start].0),
+            Some(items[end - 1].0),
+            &root_hash,
+            &range_proof,
+        )
+        .unwrap();
     }
 }
 
@@ -112,14 +107,13 @@ fn test_bad_range_proof_out_of_order() {
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
         assert!(
-            merkle
-                .verify_range_proof(
-                    Some(items[start].0),
-                    Some(items[end - 1].0),
-                    &root_hash,
-                    &range_proof,
-                )
-                .is_err()
+            verify_range_proof(
+                Some(items[start].0),
+                Some(items[end - 1].0),
+                &root_hash,
+                &range_proof,
+            )
+            .is_err()
         );
     }
 }
@@ -183,9 +177,7 @@ fn test_range_proof_with_non_existent_proof() {
 
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
-        merkle
-            .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof)
-            .unwrap();
+        verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof).unwrap();
     }
 
     // Special case, two edge proofs for two edge key.
@@ -204,9 +196,7 @@ fn test_range_proof_with_non_existent_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    merkle
-        .verify_range_proof(Some(first), Some(last), &root_hash, &range_proof)
-        .unwrap();
+    verify_range_proof(Some(first), Some(last), &root_hash, &range_proof).unwrap();
 }
 
 #[test]
@@ -242,14 +232,13 @@ fn test_range_proof_with_invalid_non_existent_proof() {
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     assert!(
-        merkle
-            .verify_range_proof(
-                Some(&first),
-                Some(items[end - 1].0),
-                &root_hash,
-                &range_proof,
-            )
-            .is_err()
+        verify_range_proof(
+            Some(&first),
+            Some(items[end - 1].0),
+            &root_hash,
+            &range_proof,
+        )
+        .is_err()
     );
 
     // Case 2
@@ -272,14 +261,13 @@ fn test_range_proof_with_invalid_non_existent_proof() {
     let root_hash_2 = merkle.nodestore().root_hash().unwrap();
 
     assert!(
-        merkle
-            .verify_range_proof(
-                Some(items[start].0),
-                Some(&last),
-                &root_hash_2,
-                &range_proof_2,
-            )
-            .is_err()
+        verify_range_proof(
+            Some(items[start].0),
+            Some(&last),
+            &root_hash_2,
+            &range_proof_2,
+        )
+        .is_err()
     );
 }
 
@@ -314,14 +302,13 @@ fn test_one_element_range_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    merkle
-        .verify_range_proof(
-            Some(items[start].0),
-            Some(items[start].0),
-            &root_hash,
-            &range_proof,
-        )
-        .unwrap();
+    verify_range_proof(
+        Some(items[start].0),
+        Some(items[start].0),
+        &root_hash,
+        &range_proof,
+    )
+    .unwrap();
 
     // One element with left non-existent edge proof
     let first = decrease_key(items[start].0);
@@ -336,14 +323,13 @@ fn test_one_element_range_proof() {
     let range_proof_2 =
         RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
 
-    merkle
-        .verify_range_proof(
-            Some(&first),
-            Some(items[start].0),
-            &root_hash,
-            &range_proof_2,
-        )
-        .unwrap();
+    verify_range_proof(
+        Some(&first),
+        Some(items[start].0),
+        &root_hash,
+        &range_proof_2,
+    )
+    .unwrap();
 
     // One element with right non-existent edge proof
     let last = increase_key(items[start].0);
@@ -358,14 +344,13 @@ fn test_one_element_range_proof() {
     let range_proof_3 =
         RangeProof::new(start_proof_3, end_proof_3, key_values_3.into_boxed_slice());
 
-    merkle
-        .verify_range_proof(
-            Some(items[start].0),
-            Some(&last),
-            &root_hash,
-            &range_proof_3,
-        )
-        .unwrap();
+    verify_range_proof(
+        Some(items[start].0),
+        Some(&last),
+        &root_hash,
+        &range_proof_3,
+    )
+    .unwrap();
 
     // One element with two non-existent edge proofs
     let start_proof_4 = merkle.prove(&first).unwrap();
@@ -379,9 +364,7 @@ fn test_one_element_range_proof() {
     let range_proof_4 =
         RangeProof::new(start_proof_4, end_proof_4, key_values_4.into_boxed_slice());
 
-    merkle
-        .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_4)
-        .unwrap();
+    verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_4).unwrap();
 
     // Test the mini trie with only a single element.
     let key = rng.random::<[u8; 32]>();
@@ -402,9 +385,7 @@ fn test_one_element_range_proof() {
 
     let root_hash_mini = merkle_mini.nodestore().root_hash().unwrap();
 
-    merkle_mini
-        .verify_range_proof(Some(first), Some(&key), &root_hash_mini, &range_proof_5)
-        .unwrap();
+    verify_range_proof(Some(first), Some(&key), &root_hash_mini, &range_proof_5).unwrap();
 }
 
 #[test]
@@ -419,31 +400,9 @@ fn test_all_elements_proof() {
     items.sort_unstable();
     let merkle = init_merkle(items.clone());
 
-    let item_iter = items.clone().into_iter();
-    let _keys: Vec<&[u8]> = item_iter.clone().map(|item| item.0.as_ref()).collect();
-    let _vals: Vec<&[u8; 20]> = item_iter.map(|item| item.1).collect();
-
-    let empty_proof = Proof::empty();
-    let empty_key: [u8; 32] = [0; 32];
-
-    let key_values: KeyValuePairs = items
-        .iter()
-        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
-        .collect();
-
-    let range_proof = RangeProof::new(
-        empty_proof.clone(),
-        empty_proof,
-        key_values.into_boxed_slice(),
-    );
-
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    merkle
-        .verify_range_proof(Some(&empty_key), Some(&empty_key), &root_hash, &range_proof)
-        .unwrap();
-
-    // With edge proofs, it should still work.
+    // With edge proofs, all elements proof should work.
     let start = 0;
     let end = &items.len() - 1;
     let start_proof_2 = merkle.prove(items[start].0).unwrap();
@@ -457,14 +416,13 @@ fn test_all_elements_proof() {
     let range_proof_2 =
         RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
 
-    merkle
-        .verify_range_proof(
-            Some(items[start].0),
-            Some(items[end].0),
-            &root_hash,
-            &range_proof_2,
-        )
-        .unwrap();
+    verify_range_proof(
+        Some(items[start].0),
+        Some(items[end].0),
+        &root_hash,
+        &range_proof_2,
+    )
+    .unwrap();
 
     // Even with non-existent edge proofs, it should still work.
     let first = &[0; 32];
@@ -480,9 +438,7 @@ fn test_all_elements_proof() {
     let range_proof_3 =
         RangeProof::new(start_proof_3, end_proof_3, key_values_3.into_boxed_slice());
 
-    merkle
-        .verify_range_proof(Some(first), Some(last), &root_hash, &range_proof_3)
-        .unwrap();
+    verify_range_proof(Some(first), Some(last), &root_hash, &range_proof_3).unwrap();
 }
 
 #[test]
@@ -512,14 +468,10 @@ fn test_empty_range_proof() {
 
         if c.1 {
             assert!(
-                merkle
-                    .verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof,)
-                    .is_err()
+                verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof,).is_err()
             );
         } else {
-            merkle
-                .verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof)
-                .unwrap();
+            verify_range_proof(Some(&first), Some(&first), &root_hash, &range_proof).unwrap();
         }
     }
 }
@@ -563,14 +515,13 @@ fn test_gapped_range_proof() {
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     assert!(
-        merkle
-            .verify_range_proof(
-                Some(&items[0].0),
-                Some(&items[items.len() - 1].0),
-                &root_hash,
-                &range_proof,
-            )
-            .is_err()
+        verify_range_proof(
+            Some(&items[0].0),
+            Some(&items[items.len() - 1].0),
+            &root_hash,
+            &range_proof,
+        )
+        .is_err()
     );
 }
 
@@ -602,11 +553,7 @@ fn test_same_side_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    assert!(
-        merkle
-            .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof,)
-            .is_err()
-    );
+    assert!(verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof,).is_err());
 
     first = increase_key(items[pos].0);
     last = first;
@@ -623,11 +570,7 @@ fn test_same_side_proof() {
     let range_proof_2 =
         RangeProof::new(start_proof_2, end_proof_2, key_values_2.into_boxed_slice());
 
-    assert!(
-        merkle
-            .verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_2,)
-            .is_err()
-    );
+    assert!(verify_range_proof(Some(&first), Some(&last), &root_hash, &range_proof_2,).is_err());
 }
 
 #[test]
@@ -664,9 +607,7 @@ fn test_single_side_range_proof() {
 
             let root_hash = merkle.nodestore().root_hash().unwrap();
 
-            merkle
-                .verify_range_proof(Some(start), Some(items[case].0), &root_hash, &range_proof)
-                .unwrap();
+            verify_range_proof(Some(start), Some(items[case].0), &root_hash, &range_proof).unwrap();
         }
     }
 }
@@ -706,9 +647,7 @@ fn test_reverse_single_side_range_proof() {
 
             let root_hash = merkle.nodestore().root_hash().unwrap();
 
-            merkle
-                .verify_range_proof(Some(items[case].0), Some(end), &root_hash, &range_proof)
-                .unwrap();
+            verify_range_proof(Some(items[case].0), Some(end), &root_hash, &range_proof).unwrap();
         }
     }
 }
@@ -744,9 +683,7 @@ fn test_both_sides_range_proof() {
 
         let root_hash = merkle.nodestore().root_hash().unwrap();
 
-        merkle
-            .verify_range_proof(Some(start), Some(end), &root_hash, &range_proof)
-            .unwrap();
+        verify_range_proof(Some(start), Some(end), &root_hash, &range_proof).unwrap();
     }
 }
 
@@ -787,14 +724,13 @@ fn test_empty_value_range_proof() {
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     assert!(
-        merkle
-            .verify_range_proof(
-                Some(items[start].0),
-                Some(items[end - 1].0),
-                &root_hash,
-                &range_proof,
-            )
-            .is_err()
+        verify_range_proof(
+            Some(items[start].0),
+            Some(items[end - 1].0),
+            &root_hash,
+            &range_proof,
+        )
+        .is_err()
     );
 }
 
@@ -833,14 +769,13 @@ fn test_all_elements_empty_value_range_proof() {
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
     assert!(
-        merkle
-            .verify_range_proof(
-                Some(items[start].0),
-                Some(items[end].0),
-                &root_hash,
-                &range_proof,
-            )
-            .is_err()
+        verify_range_proof(
+            Some(items[start].0),
+            Some(items[end].0),
+            &root_hash,
+            &range_proof,
+        )
+        .is_err()
     );
 }
 
@@ -878,9 +813,7 @@ fn test_range_proof_keys_with_shared_prefix() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    merkle
-        .verify_range_proof(Some(&start), Some(&end), &root_hash, &range_proof)
-        .unwrap();
+    verify_range_proof(Some(&start), Some(&end), &root_hash, &range_proof).unwrap();
 }
 
 #[test]
@@ -931,12 +864,164 @@ fn test_bloadted_range_proof() {
 
     let root_hash = merkle.nodestore().root_hash().unwrap();
 
-    merkle
-        .verify_range_proof(
-            Some(keys[0]),
-            Some(keys[keys.len() - 1]),
-            &root_hash,
-            &range_proof,
-        )
-        .unwrap();
+    verify_range_proof(
+        Some(keys[0]),
+        Some(keys[keys.len() - 1]),
+        &root_hash,
+        &range_proof,
+    )
+    .unwrap();
+}
+
+#[test]
+// Rejects a range proof containing keys below the requested start key.
+fn test_bad_range_proof_key_below_start() {
+    let items = [("bb", "v1"), ("cc", "v2"), ("dd", "v3")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start_proof = merkle.prove(b"cc").unwrap();
+    let end_proof = merkle.prove(b"dd").unwrap();
+
+    // Include "bb" which is below the claimed start key "cc"
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_bytes().to_vec().into_boxed_slice(),
+                v.as_bytes().to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    let result = verify_range_proof(
+        Some(b"cc".as_slice()),
+        Some(b"dd".as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(crate::api::Error::ProofError(ProofError::KeyOutsideRange))
+        ),
+        "expected KeyOutsideRange, got {result:?}"
+    );
+}
+
+#[test]
+// Rejects a range proof containing keys above the requested end key.
+fn test_bad_range_proof_key_above_end() {
+    let items = [("bb", "v1"), ("cc", "v2"), ("dd", "v3")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start_proof = merkle.prove(b"bb").unwrap();
+    let end_proof = merkle.prove(b"cc").unwrap();
+
+    // Include "dd" which is above the claimed end key "cc"
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_bytes().to_vec().into_boxed_slice(),
+                v.as_bytes().to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    let result = verify_range_proof(
+        Some(b"bb".as_slice()),
+        Some(b"cc".as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(crate::api::Error::ProofError(ProofError::KeyOutsideRange))
+        ),
+        "expected KeyOutsideRange, got {result:?}"
+    );
+}
+
+#[test]
+// Rejects a range proof with key-value pairs but no end proof.
+fn test_bad_range_proof_missing_end_proof() {
+    let items = [("bb", "v1"), ("cc", "v2")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start_proof = merkle.prove(b"bb").unwrap();
+
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_bytes().to_vec().into_boxed_slice(),
+                v.as_bytes().to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let empty_end: Proof<Box<[ProofNode]>> = Proof::new(Vec::new().into_boxed_slice());
+    let range_proof = RangeProof::new(start_proof, empty_end, key_values.into_boxed_slice());
+
+    let result = verify_range_proof(
+        Some(b"bb".as_slice()),
+        Some(b"cc".as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(crate::api::Error::ProofError(ProofError::NoEndProof))
+        ),
+        "expected NoEndProof, got {result:?}"
+    );
+}
+
+#[test]
+// Rejects a start proof when no start key is specified.
+fn test_bad_range_proof_unexpected_start_proof() {
+    let items = [("bb", "v1"), ("cc", "v2")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start_proof = merkle.prove(b"bb").unwrap();
+    let end_proof = merkle.prove(b"cc").unwrap();
+
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_bytes().to_vec().into_boxed_slice(),
+                v.as_bytes().to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    // Pass None as start key but provide a start proof — should be rejected
+    let result = verify_range_proof(
+        None::<&[u8]>,
+        Some(b"cc".as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(crate::api::Error::ProofError(
+                ProofError::UnexpectedStartProof
+            ))
+        ),
+        "expected UnexpectedStartProof, got {result:?}"
+    );
 }
