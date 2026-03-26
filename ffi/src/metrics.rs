@@ -5,6 +5,7 @@ use std::error::Error;
 use std::net::Ipv6Addr;
 use std::sync::OnceLock;
 
+use crate::jemalloc_metrics;
 use firewood_metrics::MetricsContext;
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use oxhttp::Server;
@@ -51,6 +52,7 @@ pub fn setup_metrics() -> Result<(), Box<dyn Error>> {
     firewood_storage::registry::register();
     #[cfg(feature = "block-replay")]
     firewood_replay::registry::register();
+    jemalloc_metrics::register();
 
     let builder = PrometheusBuilder::new();
     let handle = builder.install_recorder()?;
@@ -71,6 +73,7 @@ pub fn setup_metrics_with_exporter(metrics_port: u16) -> Result<(), Box<dyn Erro
     let recorder = RECORDER.get().ok_or("recorder not initialized")?;
     Server::new(move |request| {
         if request.method() == "GET" {
+            jemalloc_metrics::refresh();
             Response::builder()
                 .status(StatusCode::OK)
                 .header("Content-Type", "text/plain")
@@ -92,9 +95,12 @@ pub fn setup_metrics_with_exporter(metrics_port: u16) -> Result<(), Box<dyn Erro
 }
 
 /// Returns the latest metrics for this process.
+///
+/// Refreshes jemalloc stats before rendering so the returned snapshot is current.
 pub fn gather_metrics() -> Result<String, String> {
     let Some(recorder) = RECORDER.get() else {
         return Err(String::from("recorder not initialized"));
     };
+    jemalloc_metrics::refresh();
     Ok(recorder.render())
 }

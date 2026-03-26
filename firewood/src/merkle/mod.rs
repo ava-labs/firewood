@@ -605,12 +605,17 @@ impl<T: HashedNodeReader> Merkle<T> {
         Ok(ChangeProof::new(start_proof, end_proof, batch_ops))
     }
 
-    /// Dump a node, recursively, to a dot file
+    /// Dump a node, recursively, to a dot file.
+    ///
+    /// The `keep_alive` vec holds references to all `MaybePersistedNode`s
+    /// created during the dump so their addresses remain stable for dup
+    /// detection in `seen`.
     pub(crate) fn dump_node<W: std::io::Write + ?Sized>(
         &self,
         node: &MaybePersistedNode,
         hash: Option<&HashType>,
         seen: &mut HashSet<String>,
+        keep_alive: &mut Vec<MaybePersistedNode>,
         writer: &mut W,
     ) -> Result<(), FileIoError> {
         writeln!(writer, "  {node}[label=\"{node}")
@@ -634,10 +639,11 @@ impl<T: HashedNodeReader> Merkle<T> {
                     };
 
                     let inserted = seen.insert(format!("{child}"));
+                    keep_alive.push(child.clone());
                     if inserted {
                         writeln!(writer, "  {node} -> {child}[label=\"{childidx:x}\"]")
                             .map_err(|e| FileIoError::from_generic_no_file(e, "write branch"))?;
-                        self.dump_node(&child, child_hash, seen, writer)?;
+                        self.dump_node(&child, child_hash, seen, keep_alive, writer)?;
                     } else {
                         // We have already seen this child, which shouldn't happen.
                         // Indicate this with a red edge.
@@ -678,8 +684,15 @@ impl<T: HashedNodeReader> Merkle<T> {
                 .map_err(|e| FileIoError::new(e, None, 0, None))
                 .map_err(Error::other)?;
             let mut seen = HashSet::new();
-            self.dump_node(&root, Some(&root_hash.into_hash_type()), &mut seen, writer)
-                .map_err(Error::other)?;
+            let mut keep_alive = Vec::new();
+            self.dump_node(
+                &root,
+                Some(&root_hash.into_hash_type()),
+                &mut seen,
+                &mut keep_alive,
+                writer,
+            )
+            .map_err(Error::other)?;
         }
         writeln!(writer, "}}")
             .map_err(Error::other)
@@ -1306,6 +1319,18 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     }
 }
 
+/// The outcome of reconciling a branch proof node against the in-memory trie.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ReconcileResult {
+    /// The proof node had no value to reconcile (hash-only or absent).
+    NoValue,
+    /// The branch already had a matching value.
+    ValueAlreadyMatches,
+    /// A value was inserted into a branch that previously had none.
+    ValueInserted,
+}
+
 #[cfg(test)]
 impl Merkle<NodeStore<Mutable<Propose>, MemStore>> {
     /// Returns the node mapped to by `key_nibbles` where each key element is a
@@ -1344,6 +1369,65 @@ impl Merkle<NodeStore<Mutable<Propose>, MemStore>> {
         let root_node = self.insert_branch_helper(root_node, key_nibbles)?;
         *self.nodestore.root_mut() = root_node.into();
         Ok(())
+    }
+
+    /// Reconciles a branch proof node against the in-memory proving merkle.
+    ///
+    /// This helper never overwrites an existing branch value. It only
+    /// creates missing branch structure and inserts a value when the
+    /// branch exists without one.
+    ///
+    /// ## Arguments
+    ///
+    /// * `proof_node` - A branch proof node containing the key (as nibble
+    ///   path components) and an optional value digest to reconcile.
+    ///
+    /// ## Errors
+    ///
+    /// Returns an error if an existing value conflicts with the proof.
+    pub(crate) fn reconcile_branch_proof_node(
+        &mut self,
+        proof_node: &ProofNode,
+    ) -> Result<ReconcileResult, ProofError> {
+        let key_nibbles = proof_node
+            .key
+            .iter()
+            .map(|component| component.as_u8())
+            .collect::<Vec<_>>();
+        let key_nibbles = key_nibbles.as_slice();
+
+        if !key_nibbles.len().is_multiple_of(2)
+            && matches!(proof_node.value_digest, Some(ValueDigest::Value(_)))
+        {
+            return Err(ProofError::ValueAtOddNibbleLength);
+        }
+
+        self.insert_branch_from_nibbles(key_nibbles)?;
+
+        let Some(ValueDigest::Value(proof_value)) = proof_node.value_digest.as_ref() else {
+            // Hash-only value digests and absent values are validated in later
+            // proof-hash reconstruction steps.
+            return Ok(ReconcileResult::NoValue);
+        };
+
+        let Some(node) = self.get_node_from_nibbles(key_nibbles)? else {
+            return Err(ProofError::NodeNotInTrie);
+        };
+        let Some(branch) = node.as_branch() else {
+            return Err(ProofError::NodeNotInTrie);
+        };
+
+        match branch.value.as_deref() {
+            Some(existing_value) if existing_value != proof_value.as_ref() => {
+                Err(ProofError::UnexpectedValue)
+            }
+            Some(_) => Ok(ReconcileResult::ValueAlreadyMatches),
+            None => {
+                let key_bytes: Vec<u8> = Path::from(key_nibbles).bytes_iter().collect();
+                self.insert(&key_bytes, proof_value.clone())?;
+                Ok(ReconcileResult::ValueInserted)
+            }
+        }
     }
 }
 
