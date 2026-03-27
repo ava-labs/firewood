@@ -262,7 +262,7 @@ fn verify_start_proof(
 /// # Truncation ambiguity (A9)
 ///
 /// When `batch_ops.len() == max_length` but the proof was NOT truncated
-/// (exactly max_length changes exist), Try 1 attempts `last_op_key`.
+/// (exactly `max_length` changes exist), Try 1 attempts `last_op_key`.
 /// If the generator used `end_key`, Try 1 fails (hash mismatch) and
 /// Try 2 succeeds with `end_key`. If `last_op_key == end_key`, Try 1
 /// succeeds directly. Either way, `resolved_end_key` correctly reflects
@@ -393,8 +393,8 @@ fn is_child_in_range(
 ///
 /// # Two nodes (A5)
 ///
-/// Deepest (rev_idx=0) has no on-path child (`nodes.get(2)` = `None`).
-/// Root (rev_idx=1) has on-path child pointing to the deeper node
+/// Deepest (`rev_idx=0`) has no on-path child (`nodes.get(2)` = `None`).
+/// Root (`rev_idx=1`) has on-path child pointing to the deeper node
 /// (`nodes.get(1)` returns the deeper node).
 ///
 /// # Proposal lookup miss (A2)
@@ -470,7 +470,34 @@ fn walk_proof_bottom_up(
     computed_hash
 }
 
-/// Build divergence overrides and walk the shared prefix bottom-up.
+/// Walk the shared prefix of two boundary proof paths bottom-up, injecting
+/// branch hashes computed from each path's independent tail.
+///
+/// When a change proof has both a start and end boundary proof, the two
+/// proof paths share some common ancestor nodes before diverging at
+/// `divergence_depth`. For example, with start proof to key `\x10` and
+/// end proof to key `\x30`:
+///
+/// ```text
+///         root          ← shared prefix (indices 0..divergence_depth)
+///        /    \
+///     [1...]  [3...]    ← divergence point
+///      ↓        ↓
+///   start     end       ← independent tails (indices divergence_depth..)
+///   tail      tail
+/// ```
+///
+/// This function:
+/// 1. Identifies the parent node just above the divergence point.
+/// 2. Determines which child nibble of that parent leads to each tail.
+/// 3. Injects the pre-computed tail hashes (`branch_hashes`) as overrides
+///    at those child positions on the deepest shared node.
+/// 4. Walks the shared prefix bottom-up via [`walk_proof_bottom_up`] with
+///    those overrides, producing the expected root hash.
+///
+/// The tails are walked independently by the caller before invoking this
+/// function — each tail only needs its own boundary (start or end) for
+/// the in-range child classification.
 ///
 /// # Divergence at depth 0 (A6)
 ///
@@ -485,7 +512,7 @@ fn walk_proof_bottom_up(
 /// Overrides inject start/end branch hashes into the root's child
 /// slots. `walk_proof_bottom_up` hashes just the root with these
 /// overrides, producing the expected root hash.
-fn compute_two_proof_shared(
+fn walk_shared_prefix_with_tail_overrides(
     start_nodes: &[ProofNode],
     end_nodes: &[ProofNode],
     divergence_depth: usize,
@@ -494,12 +521,24 @@ fn compute_two_proof_shared(
     start_nibbles: Option<&[PathComponent]>,
     end_nibbles: Option<&[PathComponent]>,
 ) -> Option<HashType> {
+    // The node just above the divergence point. Its children include
+    // the slots that lead into the start tail and end tail respectively.
     let parent_idx = divergence_depth.checked_sub(1)?;
     let parent = start_nodes.get(parent_idx)?;
+
+    // Split both proof paths at the divergence point. The tails are the
+    // portions that diverge; the prefix (0..divergence_depth) is shared.
     let start_tail = start_nodes.get(divergence_depth..)?;
     let end_tail = end_nodes.get(divergence_depth..)?;
+
+    // Build overrides for the deepest shared node (the divergence parent).
+    // Each override replaces one child slot with the hash computed from
+    // walking the corresponding tail. The nibble is determined by
+    // comparing the parent's path to the first tail node's path — the
+    // first differing nibble is the child slot that leads into that tail.
     let mut overrides: Vec<(PathComponent, Option<HashType>)> = Vec::new();
 
+    // Override for the start-proof direction.
     if let (Some(hash), Some(first)) = (branch_hashes.0, start_tail.first())
         && let Some(&nibble) = PrefixOverlap::from(parent.full_path(), first.full_path())
             .unique_b
@@ -507,6 +546,8 @@ fn compute_two_proof_shared(
     {
         overrides.push((nibble, Some(hash)));
     }
+
+    // Override for the end-proof direction.
     if let (Some(hash), Some(first)) = (branch_hashes.1, end_tail.first())
         && let Some(&nibble) = PrefixOverlap::from(parent.full_path(), first.full_path())
             .unique_b
@@ -515,6 +556,8 @@ fn compute_two_proof_shared(
         overrides.push((nibble, Some(hash)));
     }
 
+    // Walk the shared prefix (root down to the divergence parent)
+    // bottom-up, injecting the tail overrides at the deepest node.
     let shared = start_nodes.get(..divergence_depth)?;
     walk_proof_bottom_up(shared, lookup, start_nibbles, end_nibbles, &overrides)
 }
@@ -535,7 +578,10 @@ fn verify_root_hash(
     let start_nodes: &[ProofNode] = proof.start_proof().as_ref();
     let end_nodes: &[ProofNode] = proof.end_proof().as_ref();
 
-    // Case 1: Both proofs empty — complete proof or empty diff.
+    // Case 1: Both proofs empty — this is a "complete" proof covering the
+    // entire keyspace (no boundaries). The proposal should contain the
+    // full target state, so compare its root hash directly against
+    // end_root. Also covers the degenerate case of an empty diff.
     if start_nodes.is_empty() && end_nodes.is_empty() {
         let computed: crate::HashKey = proposal
             .root_hash()
@@ -547,20 +593,38 @@ fn verify_root_hash(
         return Ok(());
     }
 
+    // Convert byte-level boundary keys to nibble-level paths for
+    // child-in-range classification during the bottom-up walk.
     let start_nibbles = verification.start_key.as_deref().map(key_to_nibbles);
+
+    // Use the resolved end key (the key the end proof was actually
+    // validated against) rather than the originally requested end_key.
+    // For truncated proofs, resolved_end_key is the last batch op key;
+    // for non-truncated proofs, it matches end_key.
     let effective_end_key = verification
         .resolved_end_key
         .as_deref()
         .or(verification.end_key.as_deref());
     let end_nibbles = effective_end_key.map(key_to_nibbles);
 
+    // Build lookup tables mapping trie paths to proposal nodes. Each
+    // lookup contains the proposal's nodes along the path to the
+    // corresponding boundary key, used to get the proposal's child
+    // hashes at each depth for in-range substitution.
     let start_lookup = build_proposal_lookup(verification.start_key.as_deref(), proposal)?;
     let end_lookup = build_proposal_lookup(effective_end_key, proposal)?;
 
-    // Case 2: Walk proof paths bottom-up
+    // Case 2: At least one boundary proof exists. Walk the proof path(s)
+    // bottom-up to compute the expected root hash.
+    //
+    // Three sub-cases based on which proofs are present:
     let computed_root = if start_nodes.is_empty() {
+        // Case 2a: Only end proof (first sync round, start_key=None).
+        // Walk the end proof path; no start boundary to constrain.
         walk_proof_bottom_up(end_nodes, &end_lookup, None, end_nibbles.as_deref(), &[])
     } else if end_nodes.is_empty() {
+        // Case 2b: Only start proof (last sync round, end of keyspace).
+        // Walk the start proof path; no end boundary to constrain.
         walk_proof_bottom_up(
             start_nodes,
             &start_lookup,
@@ -569,7 +633,11 @@ fn verify_root_hash(
             &[],
         )
     } else {
-        // Two boundary proofs: find divergence depth
+        // Case 2c: Both boundary proofs exist (middle sync round).
+        //
+        // Find where the two proof paths diverge. Before this depth,
+        // nodes are shared (same trie path); after it, each proof
+        // follows its own branch toward its boundary key.
         let divergence_depth = start_nodes
             .iter()
             .zip(end_nodes.iter())
@@ -582,15 +650,22 @@ fn verify_root_hash(
 
         // A6: Divergence at depth 0 means the two proofs have different
         // root node paths, which is invalid — they must share at least
-        // the root. This also pre-empts compute_two_proof_shared's
+        // the root. This also pre-empts walk_shared_prefix_with_tail_overrides's
         // checked_sub(1) returning None.
         if divergence_depth == 0 {
             return Err(api::Error::ProofError(ProofError::EndRootMismatch));
         }
 
+        // Split each proof path into the divergent tail (the portion
+        // that is unique to that boundary). Empty tails occur when one
+        // proof is a prefix of the other.
         let start_tail = start_nodes.get(divergence_depth..).unwrap_or(&[]);
         let end_tail = end_nodes.get(divergence_depth..).unwrap_or(&[]);
 
+        // Walk each tail independently to compute its branch hash.
+        // The start tail only needs the start boundary for in-range
+        // classification (no end boundary — everything to the right
+        // of the start path is in-range within this tail).
         let start_branch_hash = if start_tail.is_empty() {
             None
         } else {
@@ -602,13 +677,17 @@ fn verify_root_hash(
                 &[],
             )
         };
+
+        // Symmetrically, the end tail only needs the end boundary.
         let end_branch_hash = if end_tail.is_empty() {
             None
         } else {
             walk_proof_bottom_up(end_tail, &end_lookup, None, end_nibbles.as_deref(), &[])
         };
 
-        compute_two_proof_shared(
+        // Walk the shared prefix, injecting the tail hashes at the
+        // divergence parent's child slots.
+        walk_shared_prefix_with_tail_overrides(
             start_nodes,
             end_nodes,
             divergence_depth,
@@ -624,7 +703,7 @@ fn verify_root_hash(
     //   (guaranteed by the is_empty() checks above), which always returns
     //   Some for non-empty input.
     // - Two-proof case: divergence_depth >= 1 (checked above), so
-    //   compute_two_proof_shared receives a non-empty shared slice and
+    //   walk_shared_prefix_with_tail_overrides receives a non-empty shared slice and
     //   returns Some.
     // Kept as defense-in-depth.
     let Some(computed_root) = computed_root else {
@@ -653,7 +732,7 @@ fn verify_root_hash(
 /// every proof node that carries a value against the proposal node at the
 /// same trie path, using the already-built proposal lookups.
 ///
-/// Note: Despite the previous name "verify_boundary_values", this checks
+/// Note: Despite the previous name `verify_boundary_values`, this checks
 /// ALL proof nodes with values, not just the boundary keys. This is
 /// necessary because intermediate nodes on the proof path also carry
 /// values that must match.
@@ -678,7 +757,7 @@ fn verify_proof_node_values(
 /// Nodes at odd nibble depths cannot carry values in the trie encoding.
 /// `Proof::value_digest` (types.rs:316) enforces this via
 /// `ValueAtOddNibbleLength`, which is checked during the boundary proof
-/// hash chain verification (verify_start_proof / verify_end_proof). If a
+/// hash chain verification (`verify_start_proof` / `verify_end_proof`). If a
 /// malicious proof includes a value at odd depth, it is rejected by the
 /// hash chain check, not silently ignored here.
 fn check_proof_node_value(
@@ -833,14 +912,14 @@ impl ProposedChangeProofContext<'_> {
     ///
     /// # Termination analysis (A7)
     ///
-    /// | batch_ops | end_proof | end_key    | Path               | Root check? |
-    /// |-----------|-----------|------------|--------------------|-------------|
-    /// | empty     | empty     | any        | no batch_ops → nil | yes         |
-    /// | empty     | non-empty | any        | no batch_ops → nil | yes         |
-    /// | non-empty | empty     | any        | empty end_proof    | yes         |
-    /// | non-empty | non-empty | Some, sat  | last_op >= end_key | no (safe*)  |
-    /// | non-empty | non-empty | Some, !sat | continuation       | deferred    |
-    /// | non-empty | non-empty | None       | continuation       | deferred    |
+    /// | `batch_ops` | `end_proof` | `end_key`  | Path                   | Root check? |
+    /// |-------------|-------------|------------|------------------------|-------------|
+    /// | empty       | empty       | any        | no `batch_ops` → nil   | yes         |
+    /// | empty       | non-empty   | any        | no `batch_ops` → nil   | yes         |
+    /// | non-empty   | empty       | any        | empty `end_proof`      | yes         |
+    /// | non-empty   | non-empty   | Some, sat  | `last_op` >= `end_key` | no (safe*)  |
+    /// | non-empty   | non-empty   | Some, !sat | continuation           | deferred    |
+    /// | non-empty   | non-empty   | None       | continuation           | deferred    |
     ///
     /// *The `>=` comparison is byte-lexicographic on `Box<[u8]>`, which is
     /// standard byte ordering — no encoding confusion possible. The "no
@@ -2515,7 +2594,7 @@ mod tests {
     // B1: Untested error path tests
     // -----------------------------------------------------------------------
 
-    /// B1: `StartKeyLargerThanFirstKey` is returned when the start_key
+    /// B1: `StartKeyLargerThanFirstKey` is returned when the `start_key`
     /// is lexicographically greater than the first key in `batch_ops`.
     #[test]
     fn test_start_key_larger_than_first_key() {
@@ -2549,7 +2628,7 @@ mod tests {
         );
     }
 
-    /// B1: `EndKeyLessThanLastKey` is returned when the end_key is
+    /// B1: `EndKeyLessThanLastKey` is returned when the `end_key` is
     /// lexicographically less than the last key in `batch_ops`.
     #[test]
     fn test_end_key_less_than_last_key() {
