@@ -13,11 +13,11 @@ use firewood_storage::{Children, PathBuf, TrieHash, TriePathFromUnpackedBytes, V
 use integer_encoding::VarInt;
 
 use super::{
-    childmap::ChildrenMap,
     header::{Header, InvalidHeader},
     reader::{ProofReader, ReadError, ReadItem, V0Reader, Version0},
     types::{Proof, ProofNode, ProofType},
 };
+use crate::merkle::childmask::ChildMask;
 use crate::{
     api::{FrozenChangeProof, FrozenRangeProof},
     db::BatchOp,
@@ -172,7 +172,7 @@ impl Version0 for ProofNode {
         let partial_len = reader.read_item()?;
         let value_digest = reader.read_item()?;
 
-        let children_map = reader.read_item::<ChildrenMap>()?;
+        let children_map = reader.read_item::<ChildMask>()?;
 
         let mut child_hashes = Children::new();
         for idx in children_map.iter_indices() {
@@ -311,13 +311,13 @@ impl<'a> ReadItem<'a> for TrieHash {
     }
 }
 
-impl<'a> ReadItem<'a> for ChildrenMap {
+impl<'a> ReadItem<'a> for ChildMask {
     fn read_item(reader: &mut ProofReader<'a>) -> Result<Self, ReadError> {
         reader
-            .read_chunk::<{ size_of::<ChildrenMap>() }>()
+            .read_chunk::<2>()
             .map_err(|err| err.set_item("children map"))
             .copied()
-            .map(bytemuck::cast)
+            .map(ChildMask::from_le_bytes)
     }
 }
 

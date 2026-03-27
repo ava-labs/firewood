@@ -30,7 +30,7 @@
 //! - `reader`: Proof reading and deserialization utilities.
 //! - `ser`: Proof serialization implementation (internal).
 //! - `de`: Proof deserialization implementation (internal).
-//! - `childmap`: Compact bitmap for tracking present children (internal).
+//! - `childmask` (in `merkle`): Compact bitmap for tracking present children.
 //! - `magic`: Magic constants for proof format identification (internal).
 //!
 //! # Usage
@@ -65,7 +65,6 @@
 //! The serialization format is versioned to allow for future evolution while maintaining
 //! backward compatibility with proof verification.
 
-pub(super) mod childmap;
 pub(super) mod de;
 pub(crate) mod header;
 pub(crate) mod range;
