@@ -1548,6 +1548,55 @@ func TestChangeProofStructuralRejection(t *testing.T) {
 			},
 		},
 		{
+			// Non-empty end_proof with no end_key and no batch_ops.
+			// AvalancheGo: ErrUnexpectedEndProof
+			// Firewood: UnexpectedEndProof
+			name:        "unexpected end proof",
+			errContains: "unexpected non-empty end proof",
+			run: func(t *testing.T) {
+				r := require.New(t)
+				dbA := newTestDatabase(t)
+				dbB := newTestDatabase(t)
+
+				initialBatch := []BatchOp{
+					Put([]byte("\x10"), []byte("v0")),
+					Put([]byte("\x20"), []byte("v1")),
+				}
+				rootA, err := dbA.Update(initialBatch)
+				r.NoError(err)
+				rootB, err := dbB.Update(initialBatch)
+				r.NoError(err)
+				r.Equal(rootA, rootB)
+
+				// Change a key OUTSIDE the range we will query so that
+				// the proof has a non-empty end_proof but empty batch_ops.
+				rootAUpdated, err := dbA.Update([]BatchOp{Put([]byte("\xf0"), []byte("outside"))})
+				r.NoError(err)
+
+				// Range [None, \x20]: change at \xf0 is outside, so
+				// batch_ops is empty but end_proof is non-empty.
+				proof, err := dbA.ChangeProof(rootA, rootAUpdated,
+					nothing(), something([]byte("\x20")), changeProofLenUnbounded)
+				r.NoError(err)
+
+				proofBytes, err := proof.MarshalBinary()
+				r.NoError(err)
+				r.NoError(proof.Free())
+
+				mutatedProof := new(ChangeProof)
+				err = mutatedProof.UnmarshalBinary(proofBytes)
+				r.NoError(err)
+				t.Cleanup(func() { r.NoError(mutatedProof.Free()) })
+
+				// Verify with end_key=nothing — the proof has non-empty
+				// end_proof and empty batch_ops, triggering UnexpectedEndProof.
+				_, err = dbB.VerifyAndProposeChangeProof(mutatedProof, rootB, rootAUpdated,
+					nothing(), nothing(), changeProofLenUnbounded)
+				r.Error(err)
+				r.ErrorContains(err, "unexpected non-empty end proof")
+			},
+		},
+		{
 			// Empty proof with bounded range.
 			// AvalancheGo: ErrEmptyProof
 			// Firewood: MissingBoundaryProof (bounded range needs proofs)

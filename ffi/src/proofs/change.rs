@@ -212,6 +212,13 @@ fn verify_proof_structure(
         return Err(api::Error::ProofError(ProofError::MissingBoundaryProof));
     }
 
+    // Reject non-empty end_proof when there is no end_key and no batch_ops.
+    // The honest generator never produces this combination. Matches
+    // AvalancheGo's ErrUnexpectedEndProof.
+    if end_key.is_none() && batch_ops.is_empty() && !proof.end_proof().is_empty() {
+        return Err(api::Error::ProofError(ProofError::UnexpectedEndProof));
+    }
+
     // Verify boundary proofs against end_root
     verify_start_proof(proof, start_key, &end_root)?;
     // Fix 8: verify_end_proof now returns the resolved key it validated
@@ -519,11 +526,11 @@ fn walk_proof_bottom_up(
 /// - `end_nibbles`: Nibble-level end boundary key, or `None` if unbounded
 ///   from above.
 ///
-/// # Returns
+/// # Errors
 ///
-/// `None` if the proofs diverge at depth 0 (different root paths) or if
-/// either proof path is malformed. The caller maps `None` to
-/// `EndRootMismatch`.
+/// Returns `BoundaryProofsDivergeAtRoot` if the proofs diverge at depth 0
+/// (different root paths). Returns `EndRootMismatch` if either proof path
+/// is malformed (missing expected nodes).
 ///
 /// # Divergence at depth 1 (A6)
 ///
@@ -537,7 +544,7 @@ fn compute_root_from_proofs_with_overrides(
     end_lookup: &HashMap<Vec<PathComponent>, PathIterItem>,
     start_nibbles: Option<&[PathComponent]>,
     end_nibbles: Option<&[PathComponent]>,
-) -> Option<HashType> {
+) -> Result<HashType, ProofError> {
     // Find where the two proof paths diverge. Before this depth,
     // nodes are shared (same trie path); after it, each proof
     // follows its own branch toward its boundary key.
@@ -552,15 +559,22 @@ fn compute_root_from_proofs_with_overrides(
         .unwrap_or(std::cmp::min(start_nodes.len(), end_nodes.len()));
 
     // A6: Divergence at depth 0 means the two proofs have different root
-    // node paths. checked_sub(1) returns None → function returns None →
-    // caller returns EndRootMismatch.
-    let parent_idx = divergence_depth.checked_sub(1)?;
-    let parent = start_nodes.get(parent_idx)?;
+    // node paths — they cannot belong to the same trie.
+    let Some(parent_idx) = divergence_depth.checked_sub(1) else {
+        return Err(ProofError::BoundaryProofsDivergeAtRoot);
+    };
+    let parent = start_nodes
+        .get(parent_idx)
+        .ok_or(ProofError::EndRootMismatch)?;
 
     // Split both proof paths at the divergence point. The tails are the
     // portions that diverge; the prefix (0..divergence_depth) is shared.
-    let start_tail = start_nodes.get(divergence_depth..)?;
-    let end_tail = end_nodes.get(divergence_depth..)?;
+    let start_tail = start_nodes
+        .get(divergence_depth..)
+        .ok_or(ProofError::EndRootMismatch)?;
+    let end_tail = end_nodes
+        .get(divergence_depth..)
+        .ok_or(ProofError::EndRootMismatch)?;
 
     // Hash each tail independently. The start tail only needs the start
     // boundary for in-range classification (everything to the right of
@@ -600,8 +614,11 @@ fn compute_root_from_proofs_with_overrides(
 
     // Hash the shared prefix (root down to the divergence parent)
     // bottom-up, injecting the tail overrides at the deepest node.
-    let shared = start_nodes.get(..divergence_depth)?;
+    let shared = start_nodes
+        .get(..divergence_depth)
+        .ok_or(ProofError::EndRootMismatch)?;
     walk_proof_bottom_up(shared, start_lookup, start_nibbles, end_nibbles, &overrides)
+        .ok_or(ProofError::EndRootMismatch)
 }
 
 /// Compute the expected root hash by walking boundary proof paths
@@ -684,16 +701,14 @@ fn verify_root_hash(
             start_nibbles.as_deref(),
             end_nibbles.as_deref(),
         )
+        .map(Some)?
     };
 
-    // B3 Dead code analysis: In practice this None branch is unreachable.
-    // - Single-proof cases pass non-empty slices to walk_proof_bottom_up
-    //   (guaranteed by the is_empty() checks above), which always returns
-    //   Some for non-empty input.
-    // - Two-proof case: divergence_depth >= 1 (checked above), so
-    //   compute_root_from_proofs_with_overrides receives non-empty proofs and
-    //   returns Some.
-    // Kept as defense-in-depth.
+    // B3 Dead code analysis: In practice this None branch is unreachable
+    // for single-proof cases (non-empty slices always yield Some).
+    // The two-proof case now returns Result and is handled by `?` above
+    // (BoundaryProofsDivergeAtRoot or EndRootMismatch).
+    // Kept as defense-in-depth for the single-proof paths.
     let Some(computed_root) = computed_root else {
         return Err(api::Error::ProofError(ProofError::EndRootMismatch));
     };
@@ -706,7 +721,8 @@ fn verify_root_hash(
     // The root hash walk above only substitutes children, not values. A
     // base-state mismatch at any proof node (e.g. the proof claims "valA"
     // but the proposal has "valB") would go undetected by the hash walk
-    // because the proof's own value is used in the computation.
+    // because the proof's own value is used in the computation. Caught by
+    // `ProofNodeValueMismatch`.
     verify_proof_node_values(proof, &start_lookup, &end_lookup)?;
 
     Ok(())
@@ -762,7 +778,9 @@ fn check_proof_node_value(
     match (&node.value_digest, proposal_value) {
         (None, None) => Ok(()),
         (Some(digest), Some(val)) if digest.verify(val) => Ok(()),
-        _ => Err(api::Error::ProofError(ProofError::EndRootMismatch)),
+        _ => Err(api::Error::ProofError(ProofError::ProofNodeValueMismatch {
+            depth: node.full_path().len(),
+        })),
     }
 }
 
@@ -2490,9 +2508,9 @@ mod tests {
         assert!(
             matches!(
                 err.1,
-                firewood::api::Error::ProofError(ProofError::EndRootMismatch)
+                firewood::api::Error::ProofError(ProofError::ProofNodeValueMismatch { .. })
             ),
-            "expected EndRootMismatch, got: {:?}",
+            "expected ProofNodeValueMismatch, got: {:?}",
             err.1
         );
     }
@@ -2746,8 +2764,8 @@ mod tests {
         );
     }
 
-    /// B1: `EndRootMismatch` for divergence at depth 0. Two boundary
-    /// proofs whose root nodes have different paths are rejected.
+    /// B1: `BoundaryProofsDivergeAtRoot` for divergence at depth 0.
+    /// Two boundary proofs whose root nodes have different paths are rejected.
     #[test]
     fn test_divergence_at_depth_zero() {
         use firewood::api::FrozenChangeProof;
@@ -2844,6 +2862,60 @@ mod tests {
         // Even if the trie structure doesn't produce divergence at 0
         // naturally, the root hash walk + boundary proof checks still
         // protect against forged proofs.
+    }
+
+    /// Non-empty `end_proof` with no `end_key` and no `batch_ops` is rejected.
+    /// Matches `AvalancheGo`'s `ErrUnexpectedEndProof`.
+    #[test]
+    fn test_unexpected_end_proof_rejected() {
+        use firewood::api::FrozenChangeProof;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![put(b"\x10", b"v0"), put(b"\x20", b"v1")];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // Create a change that produces a non-empty end_proof
+        let changes = vec![put(b"\x20", b"changed")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Generate a proof with end_key=Some so that end_proof is populated
+        let valid_proof = db_a
+            .change_proof(root1_a, root2.clone(), None, Some(b"\x20".as_ref()), None)
+            .expect("change proof");
+
+        // Craft a proof with the non-empty end_proof but empty batch_ops.
+        let crafted = FrozenChangeProof::new(
+            firewood::Proof::new(Box::new([])),
+            firewood::Proof::new(valid_proof.end_proof().as_ref().into()),
+            Box::new([]),
+        );
+
+        // Verify with end_key=None and empty batch_ops — should be rejected.
+        let change_ctx = ChangeProofContext::from(crafted);
+        let err = change_ctx
+            .verify_and_propose(&db_b, root1_b, root2, None, None, None)
+            .expect_err("unexpected end proof must be rejected");
+        assert!(
+            matches!(
+                err.1,
+                firewood::api::Error::ProofError(ProofError::UnexpectedEndProof)
+            ),
+            "expected UnexpectedEndProof, got: {:?}",
+            err.1
+        );
     }
 
     // -----------------------------------------------------------------------

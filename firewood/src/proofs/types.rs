@@ -175,6 +175,26 @@ pub enum ProofError {
     /// the correct sub-trie hashes.
     #[error("non-empty batch operations require at least one boundary proof for verification")]
     MissingBoundaryProof,
+
+    /// A proof node's value doesn't match the corresponding proposal node's value.
+    ///
+    /// The root hash walk substitutes children but not values, so a value
+    /// mismatch at any proof node would be masked by the proof's own value
+    /// in the hash computation. This check catches base-state mismatches
+    /// that the root hash walk alone would miss.
+    #[error("proof node value doesn't match the proposal at key depth {depth}")]
+    ProofNodeValueMismatch { depth: usize },
+
+    /// Two boundary proofs have different root-level paths, meaning they
+    /// cannot belong to the same trie.
+    #[error("boundary proofs diverge at the root node")]
+    BoundaryProofsDivergeAtRoot,
+
+    /// Non-empty end proof when no end key is set and there are no batch
+    /// operations. The honest generator never produces this combination.
+    /// Matches `AvalancheGo`'s `ErrUnexpectedEndProof`.
+    #[error("unexpected non-empty end proof with no end key and no batch operations")]
+    UnexpectedEndProof,
 }
 
 #[derive(Clone, PartialEq, Eq)]
