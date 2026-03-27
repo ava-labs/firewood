@@ -9,7 +9,7 @@ use firewood_metrics::firewood_increment;
 use firewood_storage::TrieHash;
 use firewood_storage::{
     Children, HashType, Hashable, IntoHashType, NibblesIterator, PathComponent, PathIterItem,
-    Preimage, ValueDigest,
+    Preimage,
 };
 #[cfg(feature = "ethhash")]
 use rlp::Rlp;
@@ -372,21 +372,10 @@ fn walk_proof_bottom_up(
         let parent_nibbles: &[PathComponent] = node.full_path();
         let node_key: &[PathComponent] = node.key.as_ref();
 
-        let proposal_item = lookup.get(node_key);
-        let proposal_children: Children<Option<HashType>> = proposal_item
+        let proposal_children: Children<Option<HashType>> = lookup
+            .get(node_key)
             .and_then(|item| item.node.as_branch().map(|b| b.children_hashes()))
             .unwrap_or_default();
-
-        // Override the value with the proposal's value. This catches
-        // boundary value mismatches: if the proposal's base state has a
-        // different value at a boundary key than what the proof claims,
-        // the computed root won't match end_root.
-        if let Some(item) = proposal_item {
-            modified.value_digest = item
-                .node
-                .value()
-                .map(|v| ValueDigest::Value(v.to_vec().into_boxed_slice()));
-        }
 
         let on_path_nibble = (rev_idx > 0)
             .then(|| {
@@ -562,7 +551,56 @@ fn verify_root_hash(
     if computed_root != expected {
         return Err(api::Error::ProofError(ProofError::EndRootMismatch));
     }
+
+    // Verify that boundary values in the proposal match the proof's claims.
+    // The root hash walk above only substitutes children, not values. A
+    // base-state mismatch at a boundary key (e.g. the proof claims "valA"
+    // but the proposal has "valB") would go undetected by the hash walk
+    // because the proof's own value is used in the computation.
+    verify_boundary_values(proof, &start_lookup, &end_lookup)?;
+
     Ok(())
+}
+
+/// Verify that values at every proof node match the proposal.
+///
+/// The root hash walk substitutes children but not values, so a value
+/// mismatch at any proof node (boundary or intermediate) would be masked
+/// by the proof's own value in the hash computation. This check compares
+/// every proof node that carries a value against the proposal node at the
+/// same trie path, using the already-built proposal lookups.
+fn verify_boundary_values(
+    proof: &FrozenChangeProof,
+    start_lookup: &HashMap<Vec<PathComponent>, PathIterItem>,
+    end_lookup: &HashMap<Vec<PathComponent>, PathIterItem>,
+) -> Result<(), api::Error> {
+    for node in proof.start_proof().as_ref() {
+        check_proof_node_value(node, start_lookup)?;
+    }
+    for node in proof.end_proof().as_ref() {
+        check_proof_node_value(node, end_lookup)?;
+    }
+    Ok(())
+}
+
+/// Compare a single proof node's value against the corresponding proposal node.
+fn check_proof_node_value(
+    node: &ProofNode,
+    lookup: &HashMap<Vec<PathComponent>, PathIterItem>,
+) -> Result<(), api::Error> {
+    // Values only exist at even nibble lengths.
+    if !node.full_path().len().is_multiple_of(2) {
+        return Ok(());
+    }
+    let node_key: &[PathComponent] = node.key.as_ref();
+    let proposal_value = lookup
+        .get(node_key)
+        .and_then(|item| item.node.value());
+    match (&node.value_digest, proposal_value) {
+        (None, None) => Ok(()),
+        (Some(digest), Some(val)) if digest.verify(val) => Ok(()),
+        _ => Err(api::Error::ProofError(ProofError::EndRootMismatch)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2193,6 +2231,83 @@ mod tests {
         let err = change_ctx
             .verify_and_propose(&db_b, root1_b, wrong_root, None, None, None)
             .expect_err("wrong end_root must fail");
+        assert!(
+            matches!(
+                err.1,
+                firewood::api::Error::ProofError(ProofError::EndRootMismatch)
+            ),
+            "expected EndRootMismatch, got: {:?}",
+            err.1
+        );
+    }
+
+    /// Value mismatch at an INTERMEDIATE proof node (not a boundary key).
+    /// Key `\x20` sits on the end proof path to `\x20\x10\x01` and is within
+    /// the range [\x10, \x20\x10\x01]. `verify_boundary_values` checks all
+    /// proof nodes with values, not just the two boundary keys.
+    #[test]
+    fn test_intermediate_proof_node_value_mismatch() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Both dbs share keys, but differ at \x20 — an intermediate node
+        // on the end proof path to \x20\x10\x01.
+        let initial_a = vec![
+            put(b"\x10", b"shared0"),
+            put(b"\x20", b"valA"),
+            put(b"\x20\x10\x01", b"deep"),
+            put(b"\x30", b"shared2"),
+        ];
+        let initial_b = vec![
+            put(b"\x10", b"shared0"),
+            put(b"\x20", b"valB"),
+            put(b"\x20\x10\x01", b"deep"),
+            put(b"\x30", b"shared2"),
+        ];
+
+        let p = (&db_a).create_proposal(initial_a).expect("proposal");
+        p.commit().expect("commit");
+        let root_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial_b).expect("proposal");
+        p.commit().expect("commit");
+        let root_b = db_b.current_root_hash().expect("root");
+        assert_ne!(root_a, root_b, "roots should differ at key \\x20");
+
+        // Change a key deeper than \x20 on the same path
+        let changes = vec![put(b"\x20\x10\x01", b"deep_changed")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root_a_updated = db_a.current_root_hash().expect("root");
+
+        // Bounded proof: range [\x10, \x20\x10\x01].
+        // The end proof path goes through the node at \x20 (intermediate).
+        // batch_ops only contains the \x20\x10\x01 change, not \x20.
+        let proof = db_a
+            .change_proof(
+                root_a.clone(),
+                root_a_updated.clone(),
+                Some(b"\x10".as_ref()),
+                Some(b"\x20\x10\x01".as_ref()),
+                None,
+            )
+            .expect("change proof");
+
+        // Verify on dbB: \x20 has "valB" in proposal but "valA" in proof.
+        // The boundary check only covers \x10 and \x20\x10\x01, not \x20.
+        let change_ctx = ChangeProofContext::from(proof);
+        let result = change_ctx.verify_and_propose(
+            &db_b,
+            root_b,
+            root_a_updated,
+            Some(b"\x10".as_ref()),
+            Some(b"\x20\x10\x01".as_ref()),
+            None,
+        );
+
+        let err = result.expect_err("intermediate value mismatch at \\x20 should be caught");
         assert!(
             matches!(
                 err.1,

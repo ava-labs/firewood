@@ -546,6 +546,11 @@ func TestVerifyAndProposeChangeProof(t *testing.T) {
 	proposedChangeProof, err := dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
+
+	// Unbounded proof should be complete — no more data to fetch.
+	next, err := proposedChangeProof.FindNextKey()
+	r.NoError(err)
+	r.Nil(next, "unbounded proof should not need continuation")
 }
 
 func TestVerifyAndProposeEmptyChangeProofRange(t *testing.T) {
@@ -612,6 +617,11 @@ func TestVerifyAndCommitChangeProof(t *testing.T) {
 	proposedChangeProof, err := dbB.VerifyAndProposeChangeProof(changeProof, root, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
+
+	// Unbounded proof should be complete.
+	next, err := proposedChangeProof.FindNextKey()
+	r.NoError(err)
+	r.Nil(next, "unbounded proof should not need continuation")
 
 	// Commit the proposal on dbB.
 	rootBUpdated, err := proposedChangeProof.CommitChangeProof()
