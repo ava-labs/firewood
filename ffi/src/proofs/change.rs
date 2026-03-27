@@ -121,10 +121,6 @@ impl From<FrozenChangeProof> for ChangeProofContext {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Free functions for shared verification logic
-// ---------------------------------------------------------------------------
-
 /// Verify structural properties and boundary proofs of the change proof.
 ///
 /// On success, returns a `VerificationContext` capturing the verification
@@ -138,10 +134,9 @@ fn verify_proof_structure(
 ) -> Result<VerificationContext, api::Error> {
     let batch_ops = proof.batch_ops();
 
-    // Fix 3: Reject inverted ranges early. The generator enforces this
-    // (merkle/mod.rs:545-552), but the verifier must independently
-    // validate because start_key/end_key come from the caller, not
-    // the proof.
+    // Reject inverted ranges early. The generator enforces this, but the
+    // verifier must independently validate because start_key/end_key
+    // come from the caller, not the proof.
     if let (Some(start), Some(end)) = (start_key, end_key)
         && start.cmp(end) == Ordering::Greater
     {
@@ -151,7 +146,7 @@ fn verify_proof_structure(
         });
     }
 
-    // Fix 2: The honest diff algorithm only produces Put and Delete ops,
+    // The honest diff algorithm only produces Put and Delete ops,
     // never DeleteRange. A crafted proof could use DeleteRange to delete
     // keys outside the proven range.
     if batch_ops
@@ -197,7 +192,7 @@ fn verify_proof_structure(
         return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
     }
 
-    // Fix 9: Reject proofs with batch_ops but no boundary proofs, UNLESS
+    // Reject proofs with batch_ops but no boundary proofs, UNLESS
     // this is a complete proof (no key bounds). Complete proofs are validated
     // by root hash comparison in is_complete_proof() instead.
     if !batch_ops.is_empty()
@@ -217,7 +212,7 @@ fn verify_proof_structure(
 
     // Verify boundary proofs against end_root
     verify_start_proof(proof, start_key, &end_root)?;
-    // Fix 8: verify_end_proof now returns the resolved key it validated
+    // verify_end_proof now returns the resolved key it validated
     // against, cached to avoid redundant value_digest calls downstream.
     let resolved_end_key = verify_end_proof(proof, end_key, &end_root, max_length)?;
 
@@ -241,7 +236,7 @@ fn verify_start_proof(
         return Ok(());
     }
 
-    // Fix 1: If start_proof is non-empty, we MUST have a key to validate
+    // If start_proof is non-empty, we MUST have a key to validate
     // it against. The honest generator only produces a non-empty
     // start_proof when start_key is Some (merkle/mod.rs:558-561).
     let Some(start_key) = start_key else {
@@ -261,8 +256,6 @@ fn verify_start_proof(
 /// The generator uses the last batch op key when truncated but `end_key`
 /// otherwise. Since the verifier cannot distinguish the two cases, we try
 /// the last batch op key first and fall back to `end_key`.
-///
-/// # Truncation ambiguity (A9)
 ///
 /// When `batch_ops.len() == max_length` but the proof was NOT truncated
 /// (exactly `max_length` changes exist), Try 1 attempts `last_op_key`.
@@ -318,7 +311,7 @@ fn verify_end_proof(
         return Ok(Some(last_op.key().as_ref().into()));
     }
 
-    // Fix 1: All validation paths exhausted. end_proof is non-empty but
+    // All validation paths exhausted. end_proof is non-empty but
     // no key could validate it. The honest generator always provides a
     // key for a non-empty end_proof (merkle/mod.rs:589-603).
     Err(api::Error::ProofError(
@@ -562,10 +555,6 @@ fn verify_root_hash(
     Ok(())
 }
 
-// ---------------------------------------------------------------------------
-// Methods on ChangeProofContext
-// ---------------------------------------------------------------------------
-
 impl ChangeProofContext {
     /// Verify the change proof and prepare a proposal against the given database
     /// without committing it.
@@ -640,10 +629,6 @@ impl ChangeProofContext {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Methods on ProposedChangeProofContext
-// ---------------------------------------------------------------------------
-
 impl ProposedChangeProofContext<'_> {
     /// Commit a previously proposed change proof. Consumes the proposal handle.
     fn commit(&mut self) -> Result<Option<HashKey>, api::Error> {
@@ -694,7 +679,7 @@ impl ProposedChangeProofContext<'_> {
     /// Returns the next key range that should be fetched after processing this
     /// change proof, or `None` if there are no more keys to fetch.
     ///
-    /// # Termination analysis (A7)
+    /// # Termination analysis
     ///
     /// | `batch_ops` | `end_proof` | `end_key`  | Path                   | Root check? |
     /// |-------------|-------------|------------|------------------------|-------------|
@@ -857,10 +842,6 @@ impl<'a> CodeIteratorHandle<'a> {
         }
     }
 }
-
-// ---------------------------------------------------------------------------
-// FFI extern functions
-// ---------------------------------------------------------------------------
 
 /// Create a change proof for the given range of keys between two roots.
 ///
@@ -1159,10 +1140,6 @@ pub extern "C" fn fwd_free_proposed_change_proof(
 ) -> VoidResult {
     crate::invoke_with_handle(proof, drop)
 }
-
-// ---------------------------------------------------------------------------
-// MetricsContextExt impls
-// ---------------------------------------------------------------------------
 
 impl crate::MetricsContextExt for ChangeProofContext {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
@@ -1563,10 +1540,6 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // Defense-in-depth gap tests (cross-implementation comparison)
-    // -----------------------------------------------------------------------
-
     /// Defense-in-depth gap 4a: A non-empty `start_proof` with
     /// `start_key=None` must be rejected. Matches `AvalancheGo`'s
     /// `ErrUnexpectedStartProof`. Firewood catches this via
@@ -1794,8 +1767,8 @@ mod tests {
         );
 
         // With bounds: should fail with MissingBoundaryProof
-        // (empty proofs + batch_ops is checked by Fix 9, but even with
-        // empty batch_ops, bounded ranges need boundary proofs to be valid)
+        // (empty proofs + batch_ops is checked by MissingBoundaryProof, but
+        // even with empty batch_ops, bounded ranges need boundary proofs to be valid)
         let dummy_root = firewood::api::HashKey::empty();
 
         // Bounded range with empty proof must be rejected because there are
@@ -1809,7 +1782,7 @@ mod tests {
         );
         // The proof has empty start/end proofs. verify_start_proof passes
         // (empty start_proof is valid). verify_end_proof passes (empty
-        // end_proof is valid). But Fix 9 only fires when batch_ops is
+        // end_proof is valid). But MissingBoundaryProof only fires when batch_ops is
         // non-empty. For empty batch_ops + empty proofs + bounds, the
         // structural checks pass — this is intentional because an empty
         // diff within a range is valid (no changes in that sub-range).
@@ -1983,10 +1956,6 @@ mod tests {
             "find_next_key round 2 should not error: {final_next:?}"
         );
     }
-
-    // -----------------------------------------------------------------------
-    // New root hash verification tests
-    // -----------------------------------------------------------------------
 
     /// Happy path: first sync round with `start_key=None`, only `end_proof`.
     /// Verify that the root hash is computed correctly with a single boundary.
@@ -2293,11 +2262,7 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // B1: Untested error path tests
-    // -----------------------------------------------------------------------
-
-    /// B1: `StartKeyLargerThanFirstKey` is returned when the `start_key`
+    /// `StartKeyLargerThanFirstKey` is returned when the `start_key`
     /// is lexicographically greater than the first key in `batch_ops`.
     #[test]
     fn test_start_key_larger_than_first_key() {
@@ -2331,7 +2296,7 @@ mod tests {
         );
     }
 
-    /// B1: `EndKeyLessThanLastKey` is returned when the `end_key` is
+    /// `EndKeyLessThanLastKey` is returned when the `end_key` is
     /// lexicographically less than the last key in `batch_ops`.
     #[test]
     fn test_end_key_less_than_last_key() {
@@ -2365,7 +2330,7 @@ mod tests {
         );
     }
 
-    /// B1: `ProofIsLargerThanMaxLength` is returned when `batch_ops.len()`
+    /// `ProofIsLargerThanMaxLength` is returned when `batch_ops.len()`
     /// exceeds the specified `max_length`.
     #[test]
     fn test_proof_larger_than_max_length() {
@@ -2406,7 +2371,7 @@ mod tests {
         );
     }
 
-    /// B1: `UnsupportedDeleteRange` is rejected when a crafted proof
+    /// `UnsupportedDeleteRange` is rejected when a crafted proof
     /// contains a `DeleteRange` operation, tested through the full
     /// `verify_and_propose` pipeline.
     #[test]
@@ -2461,7 +2426,7 @@ mod tests {
         );
     }
 
-    /// B1: `BoundaryProofsDivergeAtRoot` for divergence at depth 0.
+    /// `BoundaryProofsDivergeAtRoot` for divergence at depth 0.
     /// Two boundary proofs whose root nodes have different paths are rejected.
     #[test]
     fn test_divergence_at_depth_zero() {
@@ -2615,11 +2580,7 @@ mod tests {
         );
     }
 
-    // -----------------------------------------------------------------------
-    // B2: Untested attack vector tests
-    // -----------------------------------------------------------------------
-
-    /// A8/B2: Omitted-change attack — a malicious sender removes one
+    /// Omitted-change attack — a malicious sender removes one
     /// `BatchOp` from a valid proof. The proposal's in-range subtrie hash
     /// differs from `end_root`'s, so `EndRootMismatch` is returned.
     #[test]
@@ -2693,7 +2654,7 @@ mod tests {
         );
     }
 
-    /// B2: Empty `batch_ops` with non-empty boundary proofs represents
+    /// Empty `batch_ops` with non-empty boundary proofs represents
     /// "no changes in this sub-range". The root hash check should pass
     /// because the proposal state is unchanged from the parent.
     #[test]
@@ -2755,7 +2716,7 @@ mod tests {
         );
     }
 
-    /// B2: Double-commit should return the cached hash from the first
+    /// Double-commit should return the cached hash from the first
     /// commit rather than erroring.
     #[test]
     fn test_double_commit_returns_cached_hash() {
@@ -2799,7 +2760,7 @@ mod tests {
         );
     }
 
-    /// A8 variant: omitted-change attack on a bounded proof.
+    /// Omitted-change attack on a bounded proof.
     /// Removes one `BatchOp` from a bounded (partial) proof.
     #[test]
     fn test_omitted_change_attack_bounded() {
