@@ -139,8 +139,9 @@ impl<T> From<T> for Merkle<T> {
 
 /// Verify one edge (left or right) of a range proof.
 ///
-/// Checks that the requested bound is consistent with the edge key-value pair,
-/// then verifies the proof against the root hash.
+/// Empty proofs are accepted without verification. Otherwise, checks that the
+/// requested bound is consistent with the edge key-value pair, then verifies
+/// the proof against the root hash.
 fn verify_edge<H: ProofCollection + ?Sized>(
     requested_bound: Option<&[u8]>,
     edge_kv: Option<(&[u8], &[u8])>,
@@ -148,6 +149,10 @@ fn verify_edge<H: ProofCollection + ?Sized>(
     root_hash: &TrieHash,
     bound_is_lower: bool,
 ) -> Result<(), api::Error> {
+    if edge_proof.is_empty() {
+        return Ok(());
+    }
+
     // Validate bound vs edge key ordering
     if let (Some(bound), Some((edge_key, _))) = (requested_bound, edge_kv) {
         let out_of_order = if bound_is_lower {
@@ -278,7 +283,7 @@ fn mark_outside(
     on_path_nibble: u8,
     is_left_edge: bool,
 ) {
-    let entry = map.entry(key).or_insert([false; 16]);
+    let entry = map.entry(key).or_default();
     if is_left_edge {
         for nibble in 0..on_path_nibble {
             entry[nibble as usize] = true;
@@ -384,6 +389,7 @@ fn compute_root_hash_with_proofs(
 /// Returns [`api::Error::ProofError`] if the proof is structurally invalid,
 /// keys are outside the requested range, boundary proofs fail verification,
 /// or the reconstructed root hash doesn't match.
+#[allow(clippy::too_many_lines)]
 pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
     first_key: Option<impl KeyType>,
     last_key: Option<impl KeyType>,
@@ -392,6 +398,13 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
 ) -> Result<(), api::Error> {
     let first_key_bytes: Option<&[u8]> = first_key.as_ref().map(AsRef::as_ref);
     let last_key_bytes: Option<&[u8]> = last_key.as_ref().map(AsRef::as_ref);
+
+    // Reject invalid range where start > end
+    if let (Some(start), Some(end)) = (first_key_bytes, last_key_bytes)
+        && start > end
+    {
+        return Err(api::Error::ProofError(ProofError::StartAfterEnd));
+    }
 
     // check that the keys are in ascending order and within the requested range
     let key_values = proof.key_values();
@@ -454,6 +467,45 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         )?;
     }
 
+    let all_proof_nodes: Box<[&ProofNode]> = proof
+        .start_proof()
+        .as_ref()
+        .iter()
+        .chain(proof.end_proof().as_ref())
+        .collect();
+
+    // Verify that proof nodes with values within the range are included in key_values.
+    // Without this check, an attacker could hide key-value pairs that exist on an edge
+    // proof path by omitting them from key_values while reconciliation silently inserts
+    // them, making the root hash correct.
+    for proof_node in &all_proof_nodes {
+        // Only even-nibble-length keys correspond to byte keys with values
+        if !proof_node.key.len().is_multiple_of(2) {
+            continue;
+        }
+        // Only check nodes that have values
+        if !matches!(proof_node.value_digest, Some(ValueDigest::Value(_))) {
+            continue;
+        }
+        let key_nibbles: Vec<u8> = proof_node
+            .key
+            .iter()
+            .map(|component| component.as_u8())
+            .collect();
+        let node_key_bytes: Vec<u8> = Path::from(key_nibbles.as_slice()).bytes_iter().collect();
+        let in_range = first_key_bytes.is_none_or(|start| node_key_bytes.as_slice() >= start)
+            && last_key_bytes.is_none_or(|end| node_key_bytes.as_slice() <= end);
+        if in_range
+            && key_values
+                .binary_search_by(|(k, _)| k.as_ref().cmp(node_key_bytes.as_slice()))
+                .is_err()
+        {
+            return Err(api::Error::ProofError(
+                ProofError::ProofNodeHasUnincludedValue,
+            ));
+        }
+    }
+
     // Build in-memory merkle from key-value pairs
     let memstore = MemStore::default();
     let nodestore = NodeStore::new_empty_proposal(memstore.into());
@@ -495,7 +547,7 @@ pub fn verify_range_proof<H: ProofCollection<Node = ProofNode>>(
         compute_outside_children(proof.start_proof().as_ref(), first_key_bytes, true)?;
     for (key, flags) in compute_outside_children(proof.end_proof().as_ref(), last_key_bytes, false)?
     {
-        let entry = outside_children.entry(key).or_insert([false; 16]);
+        let entry = outside_children.entry(key).or_default();
         for (e, flag) in entry.iter_mut().zip(flags.iter()) {
             *e |= flag;
         }

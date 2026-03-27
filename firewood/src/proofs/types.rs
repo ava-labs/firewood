@@ -165,6 +165,14 @@ pub enum ProofError {
     #[error("conflicting proof nodes at the same key path")]
     ConflictingProofNodes,
 
+    /// Start key is after end key
+    #[error("start key is after end key")]
+    StartAfterEnd,
+
+    /// A proof node within the range has a value not present in the key-value pairs
+    #[error("proof node has a value not included in key-value pairs")]
+    ProofNodeHasUnincludedValue,
+
     #[error("the proposal for a change proof is None as it has been consumed")]
     ProposalIsNone,
 }
