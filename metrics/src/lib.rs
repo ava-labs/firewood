@@ -180,6 +180,26 @@ macro_rules! firewood_gauge {
     };
 }
 
+#[macro_export]
+macro_rules! firewood_describe_counter {
+    ($name:literal, $desc:expr) => {
+        ::metrics::describe_counter!($name, $desc)
+    };
+    ($name:literal, $unit:expr, $desc:expr) => {
+        ::metrics::describe_counter!($name, $unit, $desc)
+    };
+}
+
+#[macro_export]
+macro_rules! firewood_describe_gauge {
+    ($name:literal, $desc:expr) => {
+        ::metrics::describe_gauge!($name, $desc)
+    };
+    ($name:literal, $unit:expr, $desc:expr) => {
+        ::metrics::describe_gauge!($name, $unit, $desc)
+    };
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(clippy::unwrap_used)]
