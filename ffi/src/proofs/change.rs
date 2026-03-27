@@ -8,8 +8,8 @@ use firewood_metrics::firewood_increment;
 #[cfg(feature = "ethhash")]
 use firewood_storage::TrieHash;
 use firewood_storage::{
-    Children, HashType, Hashable, IntoHashType, NibblesIterator, PathComponent, PathIterItem,
-    Preimage,
+    Children, HashType, Hashable, HashableShunt, IntoHashType, NibblesIterator, PathComponent,
+    PathIterItem, Preimage,
 };
 #[cfg(feature = "ethhash")]
 use rlp::Rlp;
@@ -417,7 +417,9 @@ fn walk_proof_bottom_up(
     nodes.len().checked_sub(1)?;
 
     for (rev_idx, node) in nodes.iter().rev().enumerate() {
-        let mut modified = node.clone();
+        // Clone only the 512-byte children array, not the entire ProofNode
+        // (which also includes the key PathBuf and value digest).
+        let mut children = node.child_hashes.clone();
         let parent_nibbles: &[PathComponent] = node.full_path();
         let node_key: &[PathComponent] = node.key.as_ref();
 
@@ -452,19 +454,27 @@ fn walk_proof_bottom_up(
 
         for nibble in PathComponent::ALL {
             if Some(nibble) == on_path_nibble {
-                modified.child_hashes[nibble].clone_from(&computed_hash);
+                children[nibble].clone_from(&computed_hash);
             } else if is_child_in_range(parent_nibbles, nibble, start_nibbles, end_nibbles) {
-                modified.child_hashes[nibble].clone_from(&proposal_children[nibble]);
+                children[nibble].clone_from(&proposal_children[nibble]);
             }
         }
 
         if rev_idx == 0 {
             for &(nibble, ref hash) in bottom_overrides {
-                modified.child_hashes[nibble].clone_from(hash);
+                children[nibble].clone_from(hash);
             }
         }
 
-        computed_hash = Some(Preimage::to_hash(&modified));
+        // Hash via a shunt that borrows the original node's paths and
+        // value, avoiding cloning the key PathBuf and value digest.
+        let shunt = HashableShunt::new(
+            node.parent_prefix_path(),
+            node.partial_path(),
+            node.value_digest(),
+            children,
+        );
+        computed_hash = Some(Preimage::to_hash(&shunt));
     }
 
     computed_hash
