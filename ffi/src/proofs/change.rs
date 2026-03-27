@@ -333,6 +333,21 @@ fn key_to_nibbles(key: &[u8]) -> Vec<PathComponent> {
         .collect()
 }
 
+/// Look up the proposal's children hashes at a given trie path.
+///
+/// Returns `Children::new()` (all-None) when the proposal has no branch
+/// node at this path, which is correct when the proposal's trie compressed
+/// through this depth.
+fn proposal_children_at(
+    lookup: &HashMap<Vec<PathComponent>, PathIterItem>,
+    key: &[PathComponent],
+) -> Children<Option<HashType>> {
+    lookup
+        .get(key)
+        .and_then(|item| item.node.as_branch().map(|b| b.children_hashes()))
+        .unwrap_or_default()
+}
+
 /// Verify that a proof node's value matches the proposal's value at the
 /// same trie path.
 ///
@@ -341,14 +356,13 @@ fn key_to_nibbles(key: &[u8]) -> Vec<PathComponent> {
 /// the boundary proof hash chain verification (`ValueAtOddNibbleLength`).
 fn verify_proof_node_value(
     node: &ProofNode,
-    lookup: &HashMap<Vec<PathComponent>, PathIterItem>,
+    lookup_item: Option<&PathIterItem>,
 ) -> Result<(), ProofError> {
     let depth = node.key.len();
     // Only nodes at even nibble depths can carry values.
     if !depth.is_multiple_of(2) {
         return Ok(());
     }
-    let lookup_item = lookup.get(node.key.as_ref());
     let proposal_value = lookup_item.and_then(|item| item.node.value());
     match (&node.value_digest, proposal_value) {
         (None, None) => Ok(()),
@@ -371,9 +385,11 @@ fn verify_in_range_children(
     is_in_range: impl Fn(PathComponent, PathComponent) -> bool,
 ) -> Result<(), ProofError> {
     for node in nodes {
-        verify_proof_node_value(node, lookup)?;
-
         let depth = node.key.len();
+
+        // Single lookup per node, reused for both value and children checks.
+        let lookup_item = lookup.get(node.key.as_ref());
+        verify_proof_node_value(node, lookup_item)?;
 
         // The boundary nibble at this depth determines which children
         // are in-range. If the boundary key terminates above this depth,
@@ -384,8 +400,7 @@ fn verify_in_range_children(
         // children default to all-None. Any proof child with a hash
         // at an in-range slot will mismatch, correctly detecting the
         // structural difference.
-        let proposal_children: Children<Option<HashType>> = lookup
-            .get(node.key.as_ref())
+        let proposal_children: Children<Option<HashType>> = lookup_item
             .and_then(|item| item.node.as_branch().map(|b| b.children_hashes()))
             .unwrap_or_default();
 
@@ -492,7 +507,7 @@ fn verify_root_hash(
             .get(..divergence_depth)
             .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
         for node in shared {
-            verify_proof_node_value(node, &start_lookup)?;
+            verify_proof_node_value(node, start_lookup.get(node.key.as_ref()))?;
         }
 
         // At the divergence parent: children between the two boundary
@@ -506,10 +521,7 @@ fn verify_root_hash(
         let end_bn = end_nibbles
             .as_deref()
             .and_then(|en| en.get(parent_depth).copied());
-        let proposal_children: Children<Option<HashType>> = start_lookup
-            .get(parent.key.as_ref())
-            .and_then(|item| item.node.as_branch().map(|b| b.children_hashes()))
-            .unwrap_or_default();
+        let proposal_children = proposal_children_at(&start_lookup, parent.key.as_ref());
         for nibble in PathComponent::ALL {
             let after_start = start_bn.is_none_or(|s| nibble > s);
             let before_end = end_bn.is_none_or(|e| nibble < e);
@@ -2853,6 +2865,10 @@ mod tests {
                     None,
                 )
                 .expect_err("omitted change in bounded proof must be detected");
+            // Omitting a batch op changes the proposal's trie. If the
+            // missing key's subtree is an in-range child, we get
+            // InRangeChildMismatch; if the root hash comparison catches
+            // it first (Case 1 / complete proofs), we get EndRootMismatch.
             assert!(
                 matches!(
                     err.1,
