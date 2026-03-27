@@ -147,7 +147,7 @@ impl ChangeProofContext {
     /// - The `start_key` is not greater than the first key in the proof
     /// - The `end_key` is not less than the last key in the proof
     ///
-    /// Additionally reject:
+    /// Additionally rejects:
     /// - proofs with `batch_ops` but no boundary proofs, UNLESS
     ///   this is a complete proof (no key bounds).
     /// - non-empty `end_proof` when there is no `end_key` and no `batch_ops`
