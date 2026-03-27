@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774510281999,
+  "lastUpdate": 1774596824950,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -1832,6 +1832,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 74.91957190092782,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "c4fb05ff2e76a1029005d8a22f5757c5006069d1",
+          "message": "test(proofs): 5/6 enable ignored range proof tests and add negative tests (#1834)\n\n## Why this should be merged\n\nUn-ignores all 14 range proof tests that were blocked on issue #738\n(full trie reconstruction). These tests now pass with the verification\nlogic from the previous commit.\n\nAdds three negative tests that construct tampered RangeProofs with valid\nedge proofs and assert that verify_range_proof rejects them:\n- test_bad_range_proof_modified_key: flips a bit in a middle key\n- test_bad_range_proof_modified_value: flips a bit in a middle value\n- test_bad_range_proof_gapped_entries: removes a middle entry\n\nFuzz testing is in a later commit.\n\n## How this works\n\nnew tests\n\n## How this was tested\n\nCI\n\n## Breaking Changes\n\nNone",
+          "timestamp": "2026-03-26T23:55:32Z",
+          "url": "https://github.com/ava-labs/firewood/commit/c4fb05ff2e76a1029005d8a22f5757c5006069d1"
+        },
+        "date": 1774596824422,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 168.9870240062285,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5917.614123810727,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 111.32043306164152,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5725.117918058455,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 78.40654725892767,
             "unit": "block_accept_ms/ggas"
           }
         ]
