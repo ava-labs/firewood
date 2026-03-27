@@ -365,7 +365,8 @@ fn walk_proof_bottom_up(
     bottom_overrides: &[(PathComponent, Option<HashType>)],
 ) -> Option<HashType> {
     let mut computed_hash: Option<HashType> = None;
-    let last_idx = nodes.len().checked_sub(1)?;
+    // Ensure non-empty (checked_sub returns None for empty slices).
+    nodes.len().checked_sub(1)?;
 
     for (rev_idx, node) in nodes.iter().rev().enumerate() {
         let mut modified = node.clone();
@@ -377,14 +378,13 @@ fn walk_proof_bottom_up(
             .and_then(|item| item.node.as_branch().map(|b| b.children_hashes()))
             .unwrap_or_default();
 
-        let on_path_nibble = (rev_idx > 0)
-            .then(|| {
-                last_idx
-                    .checked_sub(rev_idx)
-                    .and_then(|i| i.checked_add(1))
-                    .and_then(|j| nodes.get(j))
-            })
-            .flatten()
+        // The on-path child leads to the next deeper node in the proof.
+        // In reverse iteration, rev_idx=0 is the deepest node (no child below).
+        // Forward index of the next deeper node: nodes.len() - rev_idx.
+        let on_path_nibble = nodes
+            .len()
+            .checked_sub(rev_idx)
+            .and_then(|j| nodes.get(j))
             .and_then(|next| {
                 PrefixOverlap::from(node.full_path(), next.full_path())
                     .unique_b
@@ -436,10 +436,9 @@ fn compute_two_proof_shared(
         overrides.push((nibble, Some(hash)));
     }
     if let (Some(hash), Some(first)) = (branch_hashes.1, end_tail.first())
-        && let Some(&nibble) =
-            PrefixOverlap::from(end_nodes.get(parent_idx)?.full_path(), first.full_path())
-                .unique_b
-                .first()
+        && let Some(&nibble) = PrefixOverlap::from(parent.full_path(), first.full_path())
+            .unique_b
+            .first()
     {
         overrides.push((nibble, Some(hash)));
     }
@@ -593,9 +592,7 @@ fn check_proof_node_value(
         return Ok(());
     }
     let node_key: &[PathComponent] = node.key.as_ref();
-    let proposal_value = lookup
-        .get(node_key)
-        .and_then(|item| item.node.value());
+    let proposal_value = lookup.get(node_key).and_then(|item| item.node.value());
     match (&node.value_digest, proposal_value) {
         (None, None) => Ok(()),
         (Some(digest), Some(val)) if digest.verify(val) => Ok(()),
