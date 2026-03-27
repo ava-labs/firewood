@@ -113,6 +113,57 @@ impl From<FrozenChangeProof> for ChangeProofContext {
 }
 
 impl ChangeProofContext {
+    /// Validate a change proof's batch operations against the given parameters.
+    ///
+    /// Checks that:
+    /// - The number of batch operations does not exceed `max_length`
+    /// - The `start_key` is not greater than the first key in the proof
+    /// - The `end_key` is not less than the last key in the proof
+    /// - The keys are in sorted (ascending) order
+    fn validate(
+        proof: &FrozenChangeProof,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<(), api::Error> {
+        let batch_ops = proof.batch_ops();
+
+        // Check to make sure the BatchOp array size is less than or equal to `max_length`
+        if let Some(max_length) = max_length
+            && batch_ops.len() > max_length.into()
+        {
+            return Err(api::Error::ProofError(
+                ProofError::ProofIsLargerThanMaxLength,
+            ));
+        }
+
+        // Check the start key is not greater than the first key in the proof.
+        if let (Some(start_key), Some(first_key)) = (start_key, batch_ops.first())
+            && start_key.cmp(first_key.key()) == Ordering::Greater
+        {
+            return Err(api::Error::ProofError(
+                ProofError::StartKeyLargerThanFirstKey,
+            ));
+        }
+
+        // Check the end key is not less than the last key in the proof.
+        if let (Some(end_key), Some(last_key)) = (end_key, batch_ops.last())
+            && end_key.cmp(last_key.key()) == Ordering::Less
+        {
+            return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
+        }
+
+        // Verify the keys are in sorted order.
+        if !batch_ops
+            .iter()
+            .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
+        {
+            return Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted));
+        }
+
+        Ok(())
+    }
+
     /// Verifies the `ChangeProofContext` and creates a `VerifiedChangeProofContext`
     /// on success. Calling `verify` consumes the proof, and calling it again will
     /// return a `ProofIsNone` error.
@@ -127,46 +178,18 @@ impl ChangeProofContext {
             return Err(api::Error::ProofError(ProofError::ProofIsNone));
         };
 
-        let batch_ops = proof.batch_ops();
+        Self::validate(
+            &proof,
+            params.start_key.as_deref(),
+            params.end_key.as_deref(),
+            params.max_length,
+        )?;
 
-        // Check to make sure the BatchOp array size is less than or equal to `max_length`
-        if let Some(max_length) = params.max_length
-            && batch_ops.len() > max_length.into()
-        {
-            return Err(api::Error::ProofError(
-                ProofError::ProofIsLargerThanMaxLength,
-            ));
-        }
-
-        // Check the start key is not greater than the first key in the proof.
-        if let (Some(start_key), Some(first_key)) = (&params.start_key, batch_ops.first())
-            && start_key.cmp(first_key.key()) == Ordering::Greater
-        {
-            return Err(api::Error::ProofError(
-                ProofError::StartKeyLargerThanFirstKey,
-            ));
-        }
-
-        // Check the end key is not less than the last key in the proof.
-        if let (Some(end_key), Some(last_key)) = (&params.end_key, batch_ops.last())
-            && end_key.cmp(last_key.key()) == Ordering::Less
-        {
-            return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
-        }
-
-        // Verify the keys are in sorted order.
-        if batch_ops
-            .iter()
-            .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
-        {
-            warn!("change proof verification not yet implemented");
-            Ok(VerifiedChangeProofContext {
-                proof: Some(proof),
-                params,
-            })
-        } else {
-            Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted))
-        }
+        warn!("change proof verification not yet implemented");
+        Ok(VerifiedChangeProofContext {
+            proof: Some(proof),
+            params,
+        })
     }
 
     /// Verify the change proof and prepare a proposal against the given database
@@ -192,43 +215,8 @@ impl ChangeProofContext {
             )));
         };
 
-        let batch_ops = proof.batch_ops();
-
-        if let Some(max_length) = max_length
-            && batch_ops.len() > max_length.into()
-        {
-            return Err(Box::new((
-                Self { proof: Some(proof) },
-                api::Error::ProofError(ProofError::ProofIsLargerThanMaxLength),
-            )));
-        }
-
-        if let (Some(start_key), Some(first_key)) = (start_key, batch_ops.first())
-            && start_key.cmp(first_key.key()) == Ordering::Greater
-        {
-            return Err(Box::new((
-                Self { proof: Some(proof) },
-                api::Error::ProofError(ProofError::StartKeyLargerThanFirstKey),
-            )));
-        }
-
-        if let (Some(end_key), Some(last_key)) = (end_key, batch_ops.last())
-            && end_key.cmp(last_key.key()) == Ordering::Less
-        {
-            return Err(Box::new((
-                Self { proof: Some(proof) },
-                api::Error::ProofError(ProofError::EndKeyLessThanLastKey),
-            )));
-        }
-
-        if !batch_ops
-            .iter()
-            .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
-        {
-            return Err(Box::new((
-                Self { proof: Some(proof) },
-                api::Error::ProofError(ProofError::ChangeProofKeysNotSorted),
-            )));
+        if let Err(e) = Self::validate(&proof, start_key, end_key, max_length) {
+            return Err(Box::new((Self { proof: Some(proof) }, e)));
         }
 
         let proposal = match db.apply_change_proof_to_parent(start_root, &proof) {
