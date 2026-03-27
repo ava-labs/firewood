@@ -1228,3 +1228,248 @@ fn test_range_proof_fuzz() {
         }
     }
 }
+
+#[test]
+// Rejects a range proof where the end proof has been truncated (missing last node).
+fn test_bad_range_proof_truncated_end_proof() {
+    let items = [("aa", "v1"), ("bb", "v2"), ("cc", "v3")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start_proof = merkle.prove(b"aa").unwrap();
+    let end_proof = merkle.prove(b"cc").unwrap();
+
+    // Truncate the end proof by removing the last node
+    let mut truncated_end = end_proof.into_mutable();
+    truncated_end.pop();
+    let truncated_end = truncated_end.into_immutable();
+
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_bytes().to_vec().into_boxed_slice(),
+                v.as_bytes().to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, truncated_end, key_values.into_boxed_slice());
+
+    let result = verify_range_proof(
+        Some(b"aa".as_slice()),
+        Some(b"cc".as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(result.is_err(), "truncated end proof should be rejected");
+}
+
+#[test]
+// Rejects a range proof where the start proof has been truncated (missing last node).
+fn test_bad_range_proof_truncated_start_proof() {
+    let items = [("aa", "v1"), ("bb", "v2"), ("cc", "v3")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start_proof = merkle.prove(b"aa").unwrap();
+    let end_proof = merkle.prove(b"cc").unwrap();
+
+    // Truncate the start proof by removing the last node
+    let mut truncated_start = start_proof.into_mutable();
+    truncated_start.pop();
+    let truncated_start = truncated_start.into_immutable();
+
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_bytes().to_vec().into_boxed_slice(),
+                v.as_bytes().to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let range_proof = RangeProof::new(truncated_start, end_proof, key_values.into_boxed_slice());
+
+    let result = verify_range_proof(
+        Some(b"aa".as_slice()),
+        Some(b"cc".as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(result.is_err(), "truncated start proof should be rejected");
+}
+
+#[test]
+// Rejects a range proof containing a proof node with a value at an odd nibble length.
+// The odd-nibble-with-value check is defense-in-depth: in practice, corrupting a proof
+// node to have an odd-nibble key breaks its hash, so UnexpectedHash is returned first.
+// This test verifies the corruption is detected regardless of which check fires.
+fn test_bad_range_proof_value_at_odd_nibble() {
+    let items = [("aa", "v1"), ("bb", "v2"), ("cc", "v3")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let start_proof = merkle.prove(b"aa").unwrap();
+    let end_proof = merkle.prove(b"cc").unwrap();
+
+    // Corrupt the end proof: set a value on a node with an odd-length key.
+    let mut corrupt_end = end_proof.into_mutable();
+    if let Some(node) = corrupt_end.last_mut() {
+        // Extend the key by one nibble to make it odd length
+        node.key.push(firewood_storage::PathComponent::ALL[0]);
+        node.value_digest = Some(ValueDigest::Value(b"bad".to_vec().into()));
+    }
+    let corrupt_end = corrupt_end.into_immutable();
+
+    let key_values: KeyValuePairs = items
+        .iter()
+        .map(|(k, v)| {
+            (
+                k.as_bytes().to_vec().into_boxed_slice(),
+                v.as_bytes().to_vec().into_boxed_slice(),
+            )
+        })
+        .collect();
+
+    let range_proof = RangeProof::new(start_proof, corrupt_end, key_values.into_boxed_slice());
+
+    let result = verify_range_proof(
+        Some(b"aa".as_slice()),
+        Some(b"cc".as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(
+        result.is_err(),
+        "proof with value at odd nibble length should be rejected"
+    );
+}
+
+#[test]
+// Rejects a range proof that hides a key-value pair on an edge proof path by
+// omitting it from key_values.
+fn test_bad_range_proof_hidden_value_on_edge_path() {
+    // Create a trie where "b" is an intermediate branch on the path to "ba" and "bc".
+    // "b" has a value AND is on the edge proof path for "bc".
+    // The range ["a", "bc"] should include "b" and "ba", but we omit "b" from key_values.
+    let items = [("b", "v1"), ("ba", "v2"), ("bc", "v3")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // Use a non-existent start key so the start proof is an exclusion proof
+    let start_proof = merkle.prove(b"a").unwrap();
+    let end_proof = merkle.prove(b"bc").unwrap();
+
+    // Include "ba" and "bc" but omit "b" — "b" is on the end proof path
+    let key_values: KeyValuePairs = vec![
+        (
+            b"ba".to_vec().into_boxed_slice(),
+            b"v2".to_vec().into_boxed_slice(),
+        ),
+        (
+            b"bc".to_vec().into_boxed_slice(),
+            b"v3".to_vec().into_boxed_slice(),
+        ),
+    ];
+
+    let range_proof = RangeProof::new(start_proof, end_proof, key_values.into_boxed_slice());
+
+    let result = verify_range_proof(
+        Some(b"a".as_slice()),
+        Some(b"bc".as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(crate::api::Error::ProofError(
+                ProofError::ProofNodeHasUnincludedValue
+            ))
+        ),
+        "expected ProofNodeHasUnincludedValue, got {result:?}"
+    );
+}
+
+#[test]
+// Rejects a range proof with a non-existent edge proof that has its final node removed.
+// This is the subtle case: since the bound doesn't match any key in key_values,
+// verify_edge passes the truncated proof as an exclusion proof (expected_value=None).
+// The corruption must be caught by the final root hash check.
+fn test_bad_range_proof_truncated_non_existent_edge() {
+    let items: Vec<([u8; 32], [u8; 32])> = (0..10_u32)
+        .map(|i| {
+            let mut key = [0u8; 32];
+            let mut value = [0u8; 32];
+            key[..4].copy_from_slice(&i.to_be_bytes());
+            value[..4].copy_from_slice(&(i + 100).to_be_bytes());
+            (key, value)
+        })
+        .collect();
+
+    let merkle = init_merkle(items.clone());
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    // Use a non-existent start key (before the first item)
+    let start_bound = {
+        let mut k = items[2].0;
+        k[31] = k[31].wrapping_sub(1);
+        k
+    };
+    let end_bound = items[7].0;
+
+    let start_proof = merkle.prove(&start_bound).unwrap();
+    let end_proof = merkle.prove(&end_bound).unwrap();
+
+    // Truncate the start proof (non-existent edge)
+    let mut truncated_start = start_proof.into_mutable();
+    truncated_start.pop();
+    let truncated_start = truncated_start.into_immutable();
+
+    let key_values: KeyValuePairs = items[2..=7]
+        .iter()
+        .map(|(k, v)| (k.to_vec().into_boxed_slice(), v.to_vec().into_boxed_slice()))
+        .collect();
+
+    let range_proof = RangeProof::new(truncated_start, end_proof, key_values.into_boxed_slice());
+
+    let result = verify_range_proof(
+        Some(start_bound.as_slice()),
+        Some(end_bound.as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(
+        result.is_err(),
+        "truncated non-existent edge proof should be rejected"
+    );
+}
+
+#[test]
+// Rejects a range proof when start key > end key during verification.
+fn test_bad_range_proof_start_after_end() {
+    let items = [("bb", "v1"), ("cc", "v2"), ("dd", "v3")];
+    let merkle = init_merkle(items);
+    let root_hash = merkle.nodestore().root_hash().unwrap();
+
+    let range_proof = merkle
+        .range_proof(Some(b"bb".as_slice()), Some(b"dd".as_slice()), None)
+        .unwrap();
+
+    // Verify with start > end
+    let result = verify_range_proof(
+        Some(b"dd".as_slice()),
+        Some(b"bb".as_slice()),
+        &root_hash,
+        &range_proof,
+    );
+    assert!(
+        matches!(
+            result,
+            Err(crate::api::Error::ProofError(ProofError::StartAfterEnd))
+        ),
+        "expected StartAfterEnd, got {result:?}"
+    );
+}
