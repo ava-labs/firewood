@@ -195,6 +195,15 @@ pub enum ProofError {
     /// Matches `AvalancheGo`'s `ErrUnexpectedEndProof`.
     #[error("unexpected non-empty end proof with no end key and no batch operations")]
     UnexpectedEndProof,
+
+    /// An in-range child hash in the proof doesn't match the proposal's child
+    /// hash at that position.
+    ///
+    /// The proof's hash chain to the root is already verified. If an in-range
+    /// child differs from what the proposal computed, the proposal's state is
+    /// inconsistent with the proof.
+    #[error("in-range child hash mismatch at depth {depth}")]
+    InRangeChildMismatch { depth: usize },
 }
 
 #[derive(Clone, PartialEq, Eq)]
