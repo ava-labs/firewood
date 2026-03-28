@@ -431,10 +431,7 @@ fn verify_root_hash(
     // full target state, so compare its root hash directly against
     // end_root. Also covers the degenerate case of an empty diff.
     if start_nodes.is_empty() && end_nodes.is_empty() {
-        let computed: HashKey = proposal
-            .root_hash()
-            .map(HashKey::from)
-            .unwrap_or_default();
+        let computed: HashKey = proposal.root_hash().map(HashKey::from).unwrap_or_default();
         if computed != HashKey::from(verification.end_root.clone()) {
             return Err(api::Error::ProofError(ProofError::EndRootMismatch));
         }
@@ -569,7 +566,7 @@ impl ChangeProofContext {
     /// that the caller retains ownership of the unverified proof.
     fn verify_and_propose<'db>(
         self,
-        db: &'db crate::DatabaseHandle,
+        db: &'db DatabaseHandle,
         start_root: ApiHashKey,
         end_root: ApiHashKey,
         start_key: Option<&[u8]>,
@@ -615,7 +612,7 @@ impl ChangeProofContext {
     /// Consumes `self`. The proof is consumed regardless of success or failure.
     fn verify_and_commit(
         self,
-        db: &crate::DatabaseHandle,
+        db: &DatabaseHandle,
         start_root: ApiHashKey,
         end_root: ApiHashKey,
         start_key: Option<&[u8]>,
@@ -667,13 +664,10 @@ impl ProposedChangeProofContext<'_> {
         // canonical empty-trie hash, matching the pattern in
         // verify_and_propose (line ~526).
         let computed: HashKey = match &self.proposal_state {
-            ProposalState::Proposed(handle) => handle
-                .root_hash()
-                .map(HashKey::from)
-                .unwrap_or_default(),
-            ProposalState::Committed(hash) => {
-                hash.clone().map(HashKey::from).unwrap_or_default()
+            ProposalState::Proposed(handle) => {
+                handle.root_hash().map(HashKey::from).unwrap_or_default()
             }
+            ProposalState::Committed(hash) => hash.clone().map(HashKey::from).unwrap_or_default(),
             ProposalState::Failed => {
                 return Err(api::Error::CommitAlreadyFailed);
             }
