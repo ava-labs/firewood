@@ -1230,7 +1230,13 @@ mod tests {
             .expect("change proof");
 
         // Verify with inverted keys: start=\xa0 > end=\x10
-        let result = ChangeProofContext::verify_proof_structure(&proof, root2, Some(b"\xa0"), Some(b"\x10"), None);
+        let result = ChangeProofContext::verify_proof_structure(
+            &proof,
+            root2,
+            Some(b"\xa0"),
+            Some(b"\x10"),
+            None,
+        );
         let err = result.expect_err("inverted range should be rejected");
         assert!(
             matches!(err, firewood::api::Error::InvalidRange { .. }),
@@ -1576,7 +1582,8 @@ mod tests {
 
         // Verify with start_key=None: non-empty start_proof has no key
         // to validate against → BoundaryProofUnverifiable
-        let result = ChangeProofContext::verify_proof_structure(&proof, root2, None, Some(b"\xa0"), None);
+        let result =
+            ChangeProofContext::verify_proof_structure(&proof, root2, None, Some(b"\xa0"), None);
         let err = result.expect_err("non-empty start_proof with start_key=None must be rejected");
         assert!(
             matches!(
@@ -1675,7 +1682,13 @@ mod tests {
 
         // Verify with end_root = all zeros
         let empty_root = firewood::api::HashKey::empty();
-        let result = ChangeProofContext::verify_proof_structure(&proof, empty_root, Some(b"\x10"), Some(b"\xa0"), None);
+        let result = ChangeProofContext::verify_proof_structure(
+            &proof,
+            empty_root,
+            Some(b"\x10"),
+            Some(b"\xa0"),
+            None,
+        );
         // The boundary proof's value_digest will fail against the wrong root
         assert!(
             result.is_err(),
@@ -2284,7 +2297,8 @@ mod tests {
             .expect("change proof");
 
         // Verify with start_key=\xff, which is greater than any key in batch_ops
-        let result = ChangeProofContext::verify_proof_structure(&proof, root2, Some(b"\xff"), None, None);
+        let result =
+            ChangeProofContext::verify_proof_structure(&proof, root2, Some(b"\xff"), None, None);
         let err = result.expect_err("start_key > first_key must be rejected");
         assert!(
             matches!(
@@ -2318,7 +2332,8 @@ mod tests {
             .expect("change proof");
 
         // Verify with end_key=\x01, which is less than the last key in batch_ops
-        let result = ChangeProofContext::verify_proof_structure(&proof, root2, None, Some(b"\x01"), None);
+        let result =
+            ChangeProofContext::verify_proof_structure(&proof, root2, None, Some(b"\x01"), None);
         let err = result.expect_err("end_key < last_key must be rejected");
         assert!(
             matches!(
@@ -2359,7 +2374,13 @@ mod tests {
         );
 
         // Verify with max_length=1, which is less than the actual count
-        let result = ChangeProofContext::verify_proof_structure(&proof, root2, None, None, NonZeroUsize::new(1));
+        let result = ChangeProofContext::verify_proof_structure(
+            &proof,
+            root2,
+            None,
+            None,
+            NonZeroUsize::new(1),
+        );
         let err = result.expect_err("proof exceeding max_length must be rejected");
         assert!(
             matches!(
