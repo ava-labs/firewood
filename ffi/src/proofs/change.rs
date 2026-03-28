@@ -387,6 +387,7 @@ impl ChangeProofContext {
         proposed.commit()
     }
 }
+
 impl ProposedChangeProofContext<'_> {
     /// Commit a previously proposed change proof. Consumes the proposal handle.
     fn commit(&mut self) -> Result<Option<ApiHashKey>, api::Error> {
