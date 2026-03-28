@@ -1545,7 +1545,7 @@ mod tests {
         );
     }
 
-    /// Defense-in-depth gap 4a: A non-empty `start_proof` with
+    /// Defense-in-depth: A non-empty `start_proof` with
     /// `start_key=None` must be rejected. Matches `AvalancheGo`'s
     /// `ErrUnexpectedStartProof`. Firewood catches this via
     /// `BoundaryProofUnverifiable` in `verify_start_proof`.
@@ -1594,7 +1594,7 @@ mod tests {
         );
     }
 
-    /// Defense-in-depth gap 4c (complete proof case): `end_root` is an
+    /// Defense-in-depth (complete proof case): `end_root` is an
     /// all-zeros hash but `batch_ops` contain data. Matches `AvalancheGo`'s
     /// `ErrDataInMissingRootProof`. Firewood catches via `EndRootMismatch`
     /// because the complete proof's computed root won't match zeros.
@@ -1643,7 +1643,7 @@ mod tests {
         );
     }
 
-    /// Defense-in-depth gap 4c (partial proof case): `end_root` is an
+    /// Defense-in-depth (partial proof case): `end_root` is an
     /// all-zeros hash but the proof is bounded with real `batch_ops`.
     /// The boundary proof's hash chain fails because it was validated
     /// against the real root, not the zeros.
@@ -1696,7 +1696,7 @@ mod tests {
         );
     }
 
-    /// Defense-in-depth gap 4b: An intermediate value mismatch between the
+    /// Defense-in-depth: An intermediate value mismatch between the
     /// proof and the proposal is caught by the hash chain. Matches
     /// `AvalancheGo`'s `verifyChangeProofKeyValues`. Firewood catches via
     /// `ProofNodeValueMismatch` or `InRangeChildMismatch` in post-application
@@ -2446,21 +2446,27 @@ mod tests {
         );
     }
 
-    /// `BoundaryProofsDivergeAtRoot` for divergence at depth 0.
-    /// Two boundary proofs whose root nodes have different paths are rejected.
+    /// `BoundaryProofsDivergeAtRoot` is returned when `start_proof` and
+    /// `end_proof` have no shared root path (diverge at depth 0).
+    ///
+    /// This is a defense-in-depth check: after `verify_proof_structure`
+    /// passes (which validates each boundary proof's hash chain against
+    /// `end_root`), two valid proofs must share the same root node.
+    /// Divergence at root can only occur with crafted inputs that bypass
+    /// the hash chain check. We test it by calling `verify_root_hash`
+    /// directly with proof paths whose first nodes have different keys.
     #[test]
     fn test_divergence_at_depth_zero() {
         use firewood::api::FrozenChangeProof;
-        use firewood_storage::Hashable;
 
         let dir_a = tempfile::tempdir().expect("tempdir");
         let dir_b = tempfile::tempdir().expect("tempdir");
         let db_a = test_db(dir_a.path());
         let db_b = test_db(dir_b.path());
 
-        // We need keys that create deep trie structures so that the
-        // start and end proofs have different root node paths.
-        // Keys chosen so root has children at nibble 1 and nibble a.
+        // Keys at different nibble paths: \x10/\x11 under nibble 1,
+        // \xa0/\xa1 under nibble a. This creates a trie where the root
+        // branches to nibble 1 and nibble a.
         let initial = vec![
             put(b"\x10", b"v0"),
             put(b"\x11", b"v1"),
@@ -2481,69 +2487,94 @@ mod tests {
         p.commit().expect("commit");
         let root2 = db_a.current_root_hash().expect("root");
 
-        // Get the individual proofs
-        let start_proof_data = db_a
+        // Generate two proofs through different sub-trees.
+        // Left proof goes through nibble 1 (\x10..\x11).
+        // Right proof goes through nibble a (\xa0..\xa1).
+        let left_proof = db_a
             .change_proof(
                 root1_a.clone(),
                 root2.clone(),
                 Some(b"\x10".as_ref()),
-                None,
+                Some(b"\x11".as_ref()),
                 None,
             )
-            .expect("start proof");
-        let end_proof_data = db_a
-            .change_proof(root1_a, root2.clone(), None, Some(b"\xa0".as_ref()), None)
-            .expect("end proof");
+            .expect("left proof");
+        let right_proof = db_a
+            .change_proof(
+                root1_a,
+                root2.clone(),
+                Some(b"\xa0".as_ref()),
+                Some(b"\xa1".as_ref()),
+                None,
+            )
+            .expect("right proof");
 
-        // If the start and end proofs happen to share the same root node
-        // path (which they will for a trie with a single root), the
-        // divergence depth won't be 0. We test the structural check by
-        // crafting proofs with intentionally mismatched root paths.
-        // We can do this by using the start proof's start_proof nodes
-        // (which go through nibble 1) and the end proof's end_proof
-        // nodes (which go through nibble a) — but only if their first
-        // nodes have different paths.
-        let start_nodes = start_proof_data.start_proof();
-        let end_nodes = end_proof_data.end_proof();
+        let start_nodes = left_proof.start_proof();
+        let end_nodes = right_proof.end_proof();
 
-        if let (Some(start_root), Some(end_root)) =
-            (start_nodes.as_ref().first(), end_nodes.as_ref().first())
-        {
-            let s_root_path: &[firewood_storage::PathComponent] = start_root.full_path();
-            let e_root_path: &[firewood_storage::PathComponent] = end_root.full_path();
+        // Both proofs share the same root node (first element) but
+        // diverge at depth 1. Verify this assumption.
+        let start_slice = start_nodes.as_ref();
+        let end_slice = end_nodes.as_ref();
+        assert!(
+            start_slice.len() >= 2,
+            "start proof needs at least 2 nodes, got {}",
+            start_slice.len()
+        );
+        assert!(
+            end_slice.len() >= 2,
+            "end proof needs at least 2 nodes, got {}",
+            end_slice.len()
+        );
+        assert_eq!(
+            start_slice.first().expect("checked len").key,
+            end_slice.first().expect("checked len").key,
+            "first nodes must share the root path"
+        );
+        assert_ne!(
+            start_slice.get(1).expect("checked len").key,
+            end_slice.get(1).expect("checked len").key,
+            "second nodes must diverge"
+        );
 
-            if s_root_path != e_root_path {
-                // The proofs diverge at depth 0 — craft a combined proof
-                let crafted = FrozenChangeProof::new(
-                    firewood::Proof::new(start_nodes.as_ref().into()),
-                    firewood::Proof::new(end_nodes.as_ref().into()),
-                    Box::new([put(b"\x50", b"mid")]),
-                );
+        // Skip the shared root node (index 0) to create boundary proof
+        // paths that diverge at position 0.
+        let divergent_start: Box<[_]> = start_slice.get(1..).expect("checked len").into();
+        let divergent_end: Box<[_]> = end_slice.get(1..).expect("checked len").into();
 
-                let change_ctx = ChangeProofContext::from(crafted);
-                let err = change_ctx
-                    .verify_and_propose(
-                        &db_b,
-                        root1_b,
-                        root2,
-                        Some(b"\x10".as_ref()),
-                        Some(b"\xa0".as_ref()),
-                        None,
-                    )
-                    .expect_err("divergence at depth 0 must fail");
-                // The boundary proof hash chain check or root hash check
-                // should catch this.
-                assert!(
-                    matches!(err.1, firewood::api::Error::ProofError(_)),
-                    "expected ProofError, got: {:?}",
-                    err.1
-                );
-            }
-        }
+        let crafted = FrozenChangeProof::new(
+            firewood::Proof::new(divergent_start),
+            firewood::Proof::new(divergent_end),
+            Box::new([put(b"\x50", b"mid")]),
+        );
 
-        // Even if the trie structure doesn't produce divergence at 0
-        // naturally, the root hash walk + boundary proof checks still
-        // protect against forged proofs.
+        // Create a valid proposal — apply_change_proof_to_parent only
+        // applies batch_ops to the parent revision, it doesn't validate
+        // boundary proofs.
+        let proposal = db_b
+            .apply_change_proof_to_parent(root1_b, &crafted)
+            .expect("proposal from batch ops");
+
+        // Construct a VerificationContext with keys that exist in the
+        // proposal trie so that build_proposal_lookup succeeds.
+        let verification = super::VerificationContext {
+            end_root: root2,
+            start_key: Some(b"\x10".to_vec().into_boxed_slice()),
+            end_key: Some(b"\xa1".to_vec().into_boxed_slice()),
+            resolved_end_key: Some(b"\xa0".to_vec().into_boxed_slice()),
+        };
+
+        // Call verify_root_hash directly (bypassing verify_proof_structure
+        // which would reject these crafted proofs via hash chain checks).
+        let err = super::verify_root_hash(&crafted, &verification, &proposal.handle)
+            .expect_err("divergent root proofs should be rejected");
+        assert!(
+            matches!(
+                err,
+                firewood::api::Error::ProofError(ProofError::BoundaryProofsDivergeAtRoot)
+            ),
+            "expected BoundaryProofsDivergeAtRoot, got: {err}"
+        );
     }
 
     /// Non-empty `end_proof` with no `end_key` and no `batch_ops` is rejected.
