@@ -16,7 +16,9 @@ use firewood::{
 };
 
 use crate::{
-    BorrowedBytes, ChangeProofResult, DatabaseHandle, HashResult, KeyRange, Maybe, NextKeyRangeResult, OwnedBytes, ProposedChangeProofResult, ValueResult, VoidResult, metrics::MetricsContextExt
+    BorrowedBytes, ChangeProofResult, DatabaseHandle, HashKey, HashResult, KeyRange, Maybe,
+    NextKeyRangeResult, OwnedBytes, ProposedChangeProofResult, ValueResult, VoidResult,
+    metrics::MetricsContextExt,
 };
 
 #[cfg(feature = "ethhash")]
@@ -33,11 +35,11 @@ pub struct CreateChangeProofArgs<'a> {
     /// The root hash of the starting revision. This must be provided.
     /// If the root is not found in the database, the function will return
     /// [`ChangeProofResult::StartRevisionNotFound`].
-    pub start_root: crate::HashKey,
+    pub start_root: HashKey,
     /// The root hash of the ending revision. This must be provided.
     /// If the root is not found in the database, the function will return
     /// [`ChangeProofResult::EndRevisionNotFound`].
-    pub end_root: crate::HashKey,
+    pub end_root: HashKey,
     /// The start key of the range to create the proof for. If `None`, the range
     /// starts from the beginning of the keyspace.
     pub start_key: Maybe<BorrowedBytes<'a>>,
@@ -58,9 +60,9 @@ pub struct VerifyChangeProofArgs<'a> {
     /// The change proof to verify. Ownership is transferred to the callee.
     pub proof: Option<Box<ChangeProofContext>>,
     /// The root hash of the starting revision.
-    pub start_root: crate::HashKey,
+    pub start_root: HashKey,
     /// The root hash of the ending revision.
-    pub end_root: crate::HashKey,
+    pub end_root: HashKey,
     /// The lower bound of the key range that the proof is expected to cover.
     pub start_key: Maybe<BorrowedBytes<'a>>,
     /// The upper bound of the key range that the proof is expected to cover.
@@ -105,6 +107,7 @@ struct VerificationContext {
 enum ProposalState<'db> {
     Proposed(crate::ProposalHandle<'db>),
     Committed(Option<ApiHashKey>),
+    Failed,
 }
 
 impl From<FrozenChangeProof> for ChangeProofContext {
@@ -267,7 +270,7 @@ impl ChangeProofContext {
 impl ProposedChangeProofContext<'_> {
     /// Commit a previously proposed change proof. Consumes the proposal handle.
     fn commit(&mut self) -> Result<Option<ApiHashKey>, api::Error> {
-        let state = std::mem::replace(&mut self.proposal_state, ProposalState::Committed(None));
+        let state = std::mem::replace(&mut self.proposal_state, ProposalState::Failed);
         match state {
             ProposalState::Committed(hash) => {
                 self.proposal_state = ProposalState::Committed(hash.clone());
@@ -280,7 +283,8 @@ impl ProposedChangeProofContext<'_> {
                     Ok(hash)
                 }
                 Err(err) => Err(err),
-            },
+            }
+            ProposalState::Failed => Err(api::Error::CommitAlreadyFailed)
         }
     }
 
