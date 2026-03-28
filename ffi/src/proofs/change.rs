@@ -393,27 +393,23 @@ fn verify_in_range_children(
     boundary_nibbles: &[PathComponent],
     is_in_range: impl Fn(PathComponent, PathComponent) -> bool,
 ) -> Result<(), ProofError> {
+    // The forward-only cursor assumes nodes are in ascending depth order,
+    // which is guaranteed by the prefix checks in `verify_proof_structure`.
     for node in nodes {
         let depth = node.key.len();
 
-        // Advance the cursor to this depth; returns None if the proposal
-        // has no node here (trie compressed through this level).
-        // None is correct: verify_proof_node_value treats None as "no value",
-        // matching (None, None) when the proof node also has no value, and
-        // children default to all-None so any proof child hash at an in-range
-        // slot will mismatch and be caught below.
+        // Advance cursor to this depth. None means the proposal has no node
+        // here (trie compressed through this level). This is safe: the value
+        // check passes with (None, None), and children below default to
+        // all-None so any proof child hash at an in-range slot mismatches.
         let lookup_item = cursor.advance_to(depth);
         verify_proof_node_value(node, lookup_item)?;
 
-        // The boundary nibble at this depth determines which children
-        // are in-range. If the boundary key terminates above this depth,
-        // all children are in-range from that side.
+        // Boundary nibble at this depth; None if the boundary key is shorter,
+        // meaning all children are in-range from that side.
         let boundary_nibble = boundary_nibbles.get(depth).copied();
 
-        // When the proposal has no node at this path (cursor miss),
-        // children default to all-None. Any proof child with a hash
-        // at an in-range slot will mismatch, correctly detecting the
-        // structural difference.
+        // On cursor miss, defaults to all-None children (see above).
         let proposal_children: Children<Option<HashType>> = lookup_item
             .and_then(|item| item.node.as_branch().map(|b| b.children_hashes()))
             .unwrap_or_default();
