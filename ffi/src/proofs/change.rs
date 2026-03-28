@@ -12,13 +12,11 @@ use rlp::Rlp;
 
 use firewood::{
     ProofError,
-    api::{self, FrozenChangeProof, HashKey},
+    api::{self, BatchOp, FrozenChangeProof, HashKey as ApiHashKey},
 };
 
 use crate::{
-    BorrowedBytes, ChangeProofResult, DatabaseHandle, HashResult, KeyRange, Maybe,
-    NextKeyRangeResult, OwnedBytes, ProposedChangeProofResult, ValueResult, VoidResult,
-    metrics::MetricsContextExt,
+    BorrowedBytes, ChangeProofResult, DatabaseHandle, HashResult, KeyRange, Maybe, NextKeyRangeResult, OwnedBytes, ProposedChangeProofResult, ValueResult, VoidResult, metrics::MetricsContextExt
 };
 
 #[cfg(feature = "ethhash")]
@@ -98,7 +96,7 @@ pub struct ProposedChangeProofContext<'db> {
 #[derive(Debug)]
 #[expect(dead_code)]
 struct VerificationContext {
-    end_root: HashKey,
+    end_root: ApiHashKey,
     start_key: Option<Box<[u8]>>,
     end_key: Option<Box<[u8]>>,
 }
@@ -106,7 +104,7 @@ struct VerificationContext {
 #[derive(Debug)]
 enum ProposalState<'db> {
     Proposed(crate::ProposalHandle<'db>),
-    Committed(Option<HashKey>),
+    Committed(Option<ApiHashKey>),
 }
 
 impl From<FrozenChangeProof> for ChangeProofContext {
@@ -116,6 +114,93 @@ impl From<FrozenChangeProof> for ChangeProofContext {
 }
 
 impl ChangeProofContext {
+    /// Verify structural properties and boundary proofs of the change proof.
+    fn verify_proof_structure(
+        proof: &FrozenChangeProof,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<(), api::Error> {
+        let batch_ops = proof.batch_ops();
+
+        // Reject inverted ranges early. The generator enforces this, but the
+        // verifier must independently validate because start_key/end_key
+        // come from the caller, not the proof.
+        if let (Some(start), Some(end)) = (start_key, end_key)
+            && start.cmp(end) == Ordering::Greater
+        {
+            return Err(api::Error::InvalidRange {
+                start_key: start.to_vec().into(),
+                end_key: end.to_vec().into(),
+            });
+        }
+
+        // The honest diff algorithm only produces Put and Delete ops,
+        // never DeleteRange. A crafted proof could use DeleteRange to delete
+        // keys outside the proven range.
+        if batch_ops
+            .iter()
+            .any(|op| matches!(op, BatchOp::DeleteRange { .. }))
+        {
+            return Err(api::Error::ProofError(ProofError::UnsupportedDeleteRange));
+        }
+
+        // Check batch_ops length <= max_length
+        if let Some(max_length) = max_length
+            && batch_ops.len() > max_length.into()
+        {
+            return Err(api::Error::ProofError(
+                ProofError::ProofIsLargerThanMaxLength,
+            ));
+        }
+
+        // Verify keys are sorted and unique — must run before boundary
+        // checks (start_key ≤ first_key, end_key ≥ last_key) because
+        // those checks compare against first/last elements, which are
+        // only meaningful if the keys are actually sorted.
+        if !batch_ops
+            .iter()
+            .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
+        {
+            return Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted));
+        }
+
+        // Check start key not greater than first batch op key
+        if let (Some(start_key), Some(first_key)) = (start_key, batch_ops.first())
+            && start_key.cmp(first_key.key()) == Ordering::Greater
+        {
+            return Err(api::Error::ProofError(
+                ProofError::StartKeyLargerThanFirstKey,
+            ));
+        }
+
+        // Check end key not less than last batch op key
+        if let (Some(end_key), Some(last_key)) = (end_key, batch_ops.last())
+            && end_key.cmp(last_key.key()) == Ordering::Less
+        {
+            return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
+        }
+
+        // Reject proofs with batch_ops but no boundary proofs, UNLESS
+        // this is a complete proof (no key bounds).
+        if !batch_ops.is_empty()
+            && proof.start_proof().is_empty()
+            && proof.end_proof().is_empty()
+            && (start_key.is_some() || end_key.is_some())
+        {
+            return Err(api::Error::ProofError(ProofError::MissingBoundaryProof));
+        }
+
+        // Reject non-empty end_proof when there is no end_key and no batch_ops.
+        // The honest generator never produces this combination. Matches
+        // AvalancheGo's ErrUnexpectedEndProof.
+        if end_key.is_none() && batch_ops.is_empty() && !proof.end_proof().is_empty() {
+            return Err(api::Error::ProofError(ProofError::UnexpectedEndProof));
+        }
+
+        Ok(())
+    }
+
     /// Verify the change proof and prepare a proposal against the given database
     /// without committing it.
     ///
@@ -127,50 +212,16 @@ impl ChangeProofContext {
     fn verify_and_propose<'db>(
         self,
         db: &'db crate::DatabaseHandle,
-        start_root: HashKey,
-        end_root: HashKey,
+        start_root: ApiHashKey,
+        end_root: ApiHashKey,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
     ) -> Result<ProposedChangeProofContext<'db>, Box<(Self, api::Error)>> {
         let proof = self.proof;
-        let batch_ops = proof.batch_ops();
 
-        if let Some(max_length) = max_length
-            && batch_ops.len() > max_length.into()
-        {
-            return Err(Box::new((
-                Self { proof },
-                api::Error::ProofError(ProofError::ProofIsLargerThanMaxLength),
-            )));
-        }
-
-        if let (Some(start_key), Some(first_key)) = (start_key, batch_ops.first())
-            && start_key.cmp(first_key.key()) == Ordering::Greater
-        {
-            return Err(Box::new((
-                Self { proof },
-                api::Error::ProofError(ProofError::StartKeyLargerThanFirstKey),
-            )));
-        }
-
-        if let (Some(end_key), Some(last_key)) = (end_key, batch_ops.last())
-            && end_key.cmp(last_key.key()) == Ordering::Less
-        {
-            return Err(Box::new((
-                Self { proof },
-                api::Error::ProofError(ProofError::EndKeyLessThanLastKey),
-            )));
-        }
-
-        if !batch_ops
-            .iter()
-            .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
-        {
-            return Err(Box::new((
-                Self { proof },
-                api::Error::ProofError(ProofError::ChangeProofKeysNotSorted),
-            )));
+        if let Err(err) = Self::verify_proof_structure(&proof, start_key, end_key, max_length) {
+            return Err(Box::new((Self { proof }, err)));
         }
 
         let proposal = match db.apply_change_proof_to_parent(start_root, &proof) {
@@ -197,12 +248,12 @@ impl ChangeProofContext {
     fn verify_and_commit(
         self,
         db: &crate::DatabaseHandle,
-        start_root: HashKey,
-        end_root: HashKey,
+        start_root: ApiHashKey,
+        end_root: ApiHashKey,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
-    ) -> Result<Option<HashKey>, api::Error> {
+    ) -> Result<Option<ApiHashKey>, api::Error> {
         let mut proposed = self
             .verify_and_propose(db, start_root, end_root, start_key, end_key, max_length)
             .map_err(|boxed| {
@@ -215,7 +266,7 @@ impl ChangeProofContext {
 
 impl ProposedChangeProofContext<'_> {
     /// Commit a previously proposed change proof. Consumes the proposal handle.
-    fn commit(&mut self) -> Result<Option<HashKey>, api::Error> {
+    fn commit(&mut self) -> Result<Option<ApiHashKey>, api::Error> {
         let state = std::mem::replace(&mut self.proposal_state, ProposalState::Committed(None));
         match state {
             ProposalState::Committed(hash) => {
