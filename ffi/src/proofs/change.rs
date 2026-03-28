@@ -1,6 +1,7 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::num::NonZeroUsize;
 
@@ -13,15 +14,12 @@ use rlp::Rlp;
 
 use firewood::{
     ProofError, ProofNode,
-    api::{self, BatchOp, DbView as _, FrozenChangeProof, HashKey},
+    api::{self, BatchOp, DbView as _, FrozenChangeProof, HashKey as ApiHashKey},
 };
 
-use std::cmp::Ordering;
-
 use crate::{
-    BorrowedBytes, ChangeProofResult, DatabaseHandle, HashResult, KeyRange, Maybe,
+    BorrowedBytes, ChangeProofResult, DatabaseHandle, HashKey, HashResult, KeyRange, Maybe,
     NextKeyRangeResult, OwnedBytes, ProposedChangeProofResult, ValueResult, VoidResult,
-    metrics::MetricsContextExt,
 };
 
 #[cfg(feature = "ethhash")]
@@ -38,11 +36,11 @@ pub struct CreateChangeProofArgs<'a> {
     /// The root hash of the starting revision. This must be provided.
     /// If the root is not found in the database, the function will return
     /// [`ChangeProofResult::StartRevisionNotFound`].
-    pub start_root: crate::HashKey,
+    pub start_root: HashKey,
     /// The root hash of the ending revision. This must be provided.
     /// If the root is not found in the database, the function will return
     /// [`ChangeProofResult::EndRevisionNotFound`].
-    pub end_root: crate::HashKey,
+    pub end_root: HashKey,
     /// The start key of the range to create the proof for. If `None`, the range
     /// starts from the beginning of the keyspace.
     pub start_key: Maybe<BorrowedBytes<'a>>,
@@ -60,15 +58,17 @@ pub struct CreateChangeProofArgs<'a> {
 #[derive(Debug)]
 #[repr(C)]
 pub struct VerifyChangeProofArgs<'a> {
-    /// The change proof to verify. Ownership is transferred to the callee.
+    /// The change proof to verify.
     pub proof: Option<Box<ChangeProofContext>>,
     /// The root hash of the starting revision.
-    pub start_root: crate::HashKey,
+    pub start_root: HashKey,
     /// The root hash of the ending revision.
-    pub end_root: crate::HashKey,
-    /// The lower bound of the key range that the proof is expected to cover.
+    pub end_root: HashKey,
+    /// The lower bound of the key range that the proof is expected to cover. If
+    /// `None`, the proof is expected to cover from the start of the keyspace.
     pub start_key: Maybe<BorrowedBytes<'a>>,
-    /// The upper bound of the key range that the proof is expected to cover.
+    /// The upper bound of the key range that the proof is expected to cover. If
+    /// `None`, the proof is expected to cover to the end of the keyspace.
     pub end_key: Maybe<BorrowedBytes<'a>>,
     /// The maximum number of key/value pairs that the proof is expected to cover.
     pub max_length: u32,
@@ -100,7 +100,7 @@ pub struct ProposedChangeProofContext<'db> {
 
 #[derive(Debug)]
 struct VerificationContext {
-    end_root: HashKey,
+    end_root: ApiHashKey,
     start_key: Option<Box<[u8]>>,
     end_key: Option<Box<[u8]>>,
     /// The key that the end proof was actually validated against.
@@ -112,7 +112,8 @@ struct VerificationContext {
 #[derive(Debug)]
 enum ProposalState<'db> {
     Proposed(crate::ProposalHandle<'db>),
-    Committed(Option<HashKey>),
+    Committed(Option<ApiHashKey>),
+    Failed,
 }
 
 impl From<FrozenChangeProof> for ChangeProofContext {
@@ -127,7 +128,7 @@ impl From<FrozenChangeProof> for ChangeProofContext {
 /// parameters so that downstream logic can avoid re-verifying.
 fn verify_proof_structure(
     proof: &FrozenChangeProof,
-    end_root: HashKey,
+    end_root: ApiHashKey,
     start_key: Option<&[u8]>,
     end_key: Option<&[u8]>,
     max_length: Option<NonZeroUsize>,
@@ -228,7 +229,7 @@ fn verify_proof_structure(
 fn verify_start_proof(
     proof: &FrozenChangeProof,
     start_key: Option<&[u8]>,
-    end_root: &HashKey,
+    end_root: &ApiHashKey,
 ) -> Result<(), api::Error> {
     // An empty start_proof is valid: it means the range starts from the
     // beginning of the keyspace (start_key=None in the first sync round).
@@ -270,7 +271,7 @@ fn verify_start_proof(
 fn verify_end_proof(
     proof: &FrozenChangeProof,
     end_key: Option<&[u8]>,
-    end_root: &HashKey,
+    end_root: &ApiHashKey,
     max_length: Option<NonZeroUsize>,
 ) -> Result<Option<Box<[u8]>>, api::Error> {
     // Empty end_proof = range reaches end of keyspace. No key to resolve.
@@ -428,11 +429,11 @@ fn verify_root_hash(
     // full target state, so compare its root hash directly against
     // end_root. Also covers the degenerate case of an empty diff.
     if start_nodes.is_empty() && end_nodes.is_empty() {
-        let computed: crate::HashKey = proposal
+        let computed: HashKey = proposal
             .root_hash()
-            .map(crate::HashKey::from)
+            .map(HashKey::from)
             .unwrap_or_default();
-        if computed != crate::HashKey::from(verification.end_root.clone()) {
+        if computed != HashKey::from(verification.end_root.clone()) {
             return Err(api::Error::ProofError(ProofError::EndRootMismatch));
         }
         return Ok(());
@@ -567,8 +568,8 @@ impl ChangeProofContext {
     fn verify_and_propose<'db>(
         self,
         db: &'db crate::DatabaseHandle,
-        start_root: HashKey,
-        end_root: HashKey,
+        start_root: ApiHashKey,
+        end_root: ApiHashKey,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
@@ -613,12 +614,12 @@ impl ChangeProofContext {
     fn verify_and_commit(
         self,
         db: &crate::DatabaseHandle,
-        start_root: HashKey,
-        end_root: HashKey,
+        start_root: ApiHashKey,
+        end_root: ApiHashKey,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
-    ) -> Result<Option<HashKey>, api::Error> {
+    ) -> Result<Option<ApiHashKey>, api::Error> {
         let mut proposed = self
             .verify_and_propose(db, start_root, end_root, start_key, end_key, max_length)
             .map_err(|boxed| {
@@ -631,8 +632,9 @@ impl ChangeProofContext {
 
 impl ProposedChangeProofContext<'_> {
     /// Commit a previously proposed change proof. Consumes the proposal handle.
-    fn commit(&mut self) -> Result<Option<HashKey>, api::Error> {
-        let state = std::mem::replace(&mut self.proposal_state, ProposalState::Committed(None));
+    fn commit(&mut self) -> Result<Option<ApiHashKey>, api::Error> {
+        // Pessimistically set state to Failed; success paths below restore it.
+        let state = std::mem::replace(&mut self.proposal_state, ProposalState::Failed);
         match state {
             ProposalState::Committed(hash) => {
                 self.proposal_state = ProposalState::Committed(hash.clone());
@@ -646,6 +648,7 @@ impl ProposedChangeProofContext<'_> {
                 }
                 Err(err) => Err(err),
             },
+            ProposalState::Failed => Err(api::Error::CommitAlreadyFailed),
         }
     }
 
@@ -661,16 +664,19 @@ impl ProposedChangeProofContext<'_> {
         // None means the trie is empty; unwrap_or_default gives the
         // canonical empty-trie hash, matching the pattern in
         // verify_and_propose (line ~526).
-        let computed: crate::HashKey = match &self.proposal_state {
+        let computed: HashKey = match &self.proposal_state {
             ProposalState::Proposed(handle) => handle
                 .root_hash()
-                .map(crate::HashKey::from)
+                .map(HashKey::from)
                 .unwrap_or_default(),
             ProposalState::Committed(hash) => {
-                hash.clone().map(crate::HashKey::from).unwrap_or_default()
+                hash.clone().map(HashKey::from).unwrap_or_default()
+            }
+            ProposalState::Failed => {
+                return Err(api::Error::CommitAlreadyFailed);
             }
         };
-        if computed != crate::HashKey::from(self.verification.end_root.clone()) {
+        if computed != HashKey::from(self.verification.end_root.clone()) {
             return Err(api::Error::ProofError(ProofError::EndRootMismatch));
         }
         Ok(())
@@ -781,7 +787,7 @@ pub struct CodeIteratorHandle<'a> {
 type KeyValuePair = (Box<[u8]>, Box<[u8]>);
 
 impl Iterator for CodeIteratorHandle<'_> {
-    type Item = Result<crate::HashKey, api::Error>;
+    type Item = Result<HashKey, api::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         #[cfg(not(feature = "ethhash"))]
@@ -796,7 +802,7 @@ impl Iterator for CodeIteratorHandle<'_> {
             let Ok(code_hash_slice) = Rlp::new(value).at(3).and_then(|r| r.data()) else {
                 return Some(Err(api::Error::ProofError(ProofError::InvalidValueFormat)));
             };
-            let code_hash: crate::HashKey = TrieHash::try_from(code_hash_slice).ok()?.into();
+            let code_hash: HashKey = TrieHash::try_from(code_hash_slice).ok()?.into();
             if code_hash == TrieHash::from(EMPTY_CODE_HASH).into() {
                 return None;
             }
@@ -916,17 +922,11 @@ pub extern "C" fn fwd_db_verify_and_propose_change_proof<'db>(
     db: Option<&'db DatabaseHandle>,
     args: VerifyChangeProofArgs,
 ) -> ProposedChangeProofResult<'db> {
-    let (Some(db), Some(proof)) = (db, args.proof) else {
-        return ProposedChangeProofResult::NullHandlePointer;
-    };
-
     let start_key = args.start_key.into_option();
     let end_key = args.end_key.into_option();
-
-    let _guard = firewood_metrics::set_metrics_context(db.metrics_context());
-
-    crate::invoke(move || {
-        (*proof).verify_and_propose(
+    let handle = db.and_then(|db| args.proof.map(|p| (db, p)));
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        ctx.verify_and_propose(
             db,
             args.start_root.into(),
             args.end_root.into(),
@@ -965,17 +965,11 @@ pub extern "C" fn fwd_db_verify_and_commit_change_proof(
     db: Option<&DatabaseHandle>,
     args: VerifyChangeProofArgs,
 ) -> HashResult {
-    let (Some(db), Some(proof)) = (db, args.proof) else {
-        return HashResult::NullHandlePointer;
-    };
-
     let start_key = args.start_key.into_option();
     let end_key = args.end_key.into_option();
-
-    let _guard = firewood_metrics::set_metrics_context(db.metrics_context());
-
-    crate::invoke(move || {
-        (*proof).verify_and_commit(
+    let handle = db.and_then(|db| args.proof.map(|p| (db, p)));
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        ctx.verify_and_commit(
             db,
             args.start_root.into(),
             args.end_root.into(),
@@ -1051,7 +1045,8 @@ pub extern "C" fn fwd_change_proof_find_next_key_proposed(
 ///
 /// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`ValueResult::Some`] containing the serialized bytes if successful.
-/// - [`ValueResult::Err`] if the caller provided a null pointer.
+/// - [`ValueResult::Err`] containing an error message if the `ChangeProof`
+///   cannot be serialized.
 ///
 /// The other [`ValueResult`] variants are not used.
 #[unsafe(no_mangle)]
@@ -1070,7 +1065,8 @@ pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) 
 ///
 /// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`ValueResult::Some`] containing the serialized bytes if successful.
-/// - [`ValueResult::Err`] if the caller provided a null pointer.
+/// - [`ValueResult::Err`] containing an error message if the proposed `ChangeProof`
+///   cannot be serialized.
 ///
 /// The other [`ValueResult`] variants are not used.
 #[unsafe(no_mangle)]
@@ -1156,6 +1152,12 @@ impl crate::MetricsContextExt for ProposedChangeProofContext<'_> {
 impl crate::MetricsContextExt for CodeIteratorHandle<'_> {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         None
+    }
+}
+
+impl crate::MetricsContextExt for (&DatabaseHandle, Box<ChangeProofContext>) {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
+        self.0.metrics_context()
     }
 }
 
@@ -2757,6 +2759,76 @@ mod tests {
         assert_eq!(
             hash1, hash2,
             "double commit should return the same cached hash"
+        );
+    }
+
+    /// After a failed commit (e.g. `SiblingCommitted`), subsequent commits
+    /// should return `CommitAlreadyFailed` rather than falsely succeeding
+    /// with an empty hash.
+    #[test]
+    fn test_commit_after_failed_commit_returns_error() {
+        use firewood::api::Proposal as _;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Both databases start with identical state
+        let initial = vec![put(b"\x10", b"v0"), put(b"\x20", b"v1")];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // db_a: make a change → root2
+        let changes = vec![put(b"\x10", b"changed")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Generate change proof from db_a
+        let proof = db_a
+            .change_proof(root1_a, root2.clone(), None, None, None)
+            .expect("change proof");
+
+        // verify_and_propose on db_b
+        let change_ctx = ChangeProofContext::from(proof);
+        let mut proposed = change_ctx
+            .verify_and_propose(&db_b, root1_b.clone(), root2, None, None, None)
+            .expect("verify_and_propose");
+
+        // Advance db_b's state with a sibling proposal, making the
+        // change proof proposal stale
+        let sibling = (&db_b)
+            .create_proposal(vec![put(b"\x20", b"sibling")])
+            .expect("sibling proposal");
+        sibling.commit().expect("sibling commit");
+
+        // First commit should fail (sibling advanced the state)
+        let err1 = proposed
+            .commit()
+            .expect_err("first commit should fail due to sibling");
+        assert!(
+            matches!(
+                err1,
+                firewood::api::Error::SiblingCommitted
+                    | firewood::api::Error::ParentNotLatest { .. }
+            ),
+            "expected SiblingCommitted or ParentNotLatest, got: {err1}"
+        );
+
+        // Second commit should fail with CommitAlreadyFailed, not succeed
+        let err2 = proposed
+            .commit()
+            .expect_err("second commit should fail with CommitAlreadyFailed");
+        assert!(
+            matches!(err2, firewood::api::Error::CommitAlreadyFailed),
+            "expected CommitAlreadyFailed, got: {err2}"
         );
     }
 
