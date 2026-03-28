@@ -57,7 +57,7 @@ pub struct CreateChangeProofArgs<'a> {
 #[derive(Debug)]
 #[repr(C)]
 pub struct VerifyChangeProofArgs<'a> {
-    /// The change proof to verify. Ownership is transferred to the callee.
+    /// The change proof to verify.
     pub proof: Option<Box<ChangeProofContext>>,
     /// The root hash of the starting revision.
     pub start_root: HashKey,
