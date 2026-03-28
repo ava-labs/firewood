@@ -18,7 +18,6 @@ use firewood::{
 use crate::{
     BorrowedBytes, ChangeProofResult, DatabaseHandle, HashKey, HashResult, KeyRange, Maybe,
     NextKeyRangeResult, OwnedBytes, ProposedChangeProofResult, ValueResult, VoidResult,
-    metrics::MetricsContextExt,
 };
 
 #[cfg(feature = "ethhash")]
@@ -449,106 +448,6 @@ pub extern "C" fn fwd_db_change_proof(
     })
 }
 
-/// Verify a change proof and prepare a proposal to later commit or drop.
-///
-/// On success, the proof is consumed and a [`ProposedChangeProofContext`] is
-/// returned. On failure, the original [`ChangeProofContext`] is returned to
-/// the caller so it can be retried or freed.
-///
-/// # Arguments
-///
-/// - `db` - The database to verify the proof against.
-/// - `args` - The arguments for verifying and proposing the change proof.
-///
-/// # Returns
-///
-/// - [`ProposedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer
-///   to either the database or the proof.
-/// - [`ProposedChangeProofResult::Ok`] containing the proposed context on success.
-/// - [`ProposedChangeProofResult::VerificationFailed`] containing the original proof and
-///   error message on verification failure.
-///
-/// # Thread Safety
-///
-/// It is not safe to call this function concurrently with the same proof context
-/// nor is it safe to call any other function that accesses the same proof context
-/// concurrently. The caller must ensure exclusive access to the proof context
-/// for the duration of the call.
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_db_verify_and_propose_change_proof<'db>(
-    db: Option<&'db DatabaseHandle>,
-    args: VerifyChangeProofArgs,
-) -> ProposedChangeProofResult<'db> {
-    let (Some(db), Some(proof)) = (db, args.proof) else {
-        return ProposedChangeProofResult::NullHandlePointer;
-    };
-
-    let start_key = args.start_key.into_option();
-    let end_key = args.end_key.into_option();
-
-    let _guard = firewood_metrics::set_metrics_context(db.metrics_context());
-
-    crate::invoke(move || {
-        (*proof).verify_and_propose(
-            db,
-            args.start_root.into(),
-            args.end_root.into(),
-            start_key.as_deref(),
-            end_key.as_deref(),
-            NonZeroUsize::new(args.max_length as usize),
-        )
-    })
-}
-
-/// Verify and commit a change proof to the database.
-///
-/// The proof is consumed regardless of success or failure.
-///
-/// # Arguments
-///
-/// - `db` - The database to commit the changes to.
-/// - `args` - The arguments for verifying and committing the change proof.
-///
-/// # Returns
-///
-/// - [`HashResult::NullHandlePointer`] if the caller provided a null pointer to either
-///   the database or the proof.
-/// - [`HashResult::None`] if the proof resulted in an empty database (i.e., all keys were deleted).
-/// - [`HashResult::Some`] containing the new root hash if the proof was successfully verified
-/// - [`HashResult::Err`] containing an error message if the proof could not be verified or committed.
-///
-/// # Thread Safety
-///
-/// It is not safe to call this function concurrently with the same proof context
-/// nor is it safe to call any other function that accesses the same proof context
-/// concurrently. The caller must ensure exclusive access to the proof context
-/// for the duration of the call.
-#[unsafe(no_mangle)]
-pub extern "C" fn fwd_db_verify_and_commit_change_proof(
-    db: Option<&DatabaseHandle>,
-    args: VerifyChangeProofArgs,
-) -> HashResult {
-    let (Some(db), Some(proof)) = (db, args.proof) else {
-        return HashResult::NullHandlePointer;
-    };
-
-    let start_key = args.start_key.into_option();
-    let end_key = args.end_key.into_option();
-
-    let _guard = firewood_metrics::set_metrics_context(db.metrics_context());
-
-    crate::invoke(move || {
-        (*proof).verify_and_commit(
-            db,
-            args.start_root.into(),
-            args.end_root.into(),
-            start_key.as_deref(),
-            end_key.as_deref(),
-            NonZeroUsize::new(args.max_length as usize),
-        )
-    })
-}
-
 /// Commit a change proof to the database.
 ///
 /// # Arguments
@@ -600,6 +499,54 @@ pub extern "C" fn fwd_change_proof_find_next_key_proposed(
     proof: Option<&mut ProposedChangeProofContext>,
 ) -> NextKeyRangeResult {
     crate::invoke_with_handle(proof, ProposedChangeProofContext::find_next_key)
+}
+
+/// Verify a change proof and prepare a proposal to later commit or drop.
+///
+/// On success, the proof is consumed and a [`ProposedChangeProofContext`] is
+/// returned. On failure, the original [`ChangeProofContext`] is returned to
+/// the caller so it can be retried or freed.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_db_verify_and_propose_change_proof<'db>(
+    db: Option<&'db DatabaseHandle>,
+    args: VerifyChangeProofArgs,
+) -> ProposedChangeProofResult<'db> {
+    let start_key = args.start_key.into_option();
+    let end_key = args.end_key.into_option();
+    let handle = db.and_then(|db| args.proof.map(|p| (db, p)));
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        ctx.verify_and_propose(
+            db,
+            args.start_root.into(),
+            args.end_root.into(),
+            start_key.as_deref(),
+            end_key.as_deref(),
+            NonZeroUsize::new(args.max_length as usize),
+        )
+    })
+}
+
+/// Verify and commit a change proof to the database.
+///
+/// The proof is consumed regardless of success or failure.
+#[unsafe(no_mangle)]
+pub extern "C" fn fwd_db_verify_and_commit_change_proof(
+    db: Option<&DatabaseHandle>,
+    args: VerifyChangeProofArgs,
+) -> crate::HashResult {
+    let start_key = args.start_key.into_option();
+    let end_key = args.end_key.into_option();
+    let handle = db.and_then(|db| args.proof.map(|p| (db, p)));
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        ctx.verify_and_commit(
+            db,
+            args.start_root.into(),
+            args.end_root.into(),
+            start_key.as_deref(),
+            end_key.as_deref(),
+            NonZeroUsize::new(args.max_length as usize),
+        )
+    })
 }
 
 /// Serialize a `ChangeProof` to bytes.
@@ -715,6 +662,18 @@ impl crate::MetricsContextExt for ChangeProofContext {
 impl crate::MetricsContextExt for ProposedChangeProofContext<'_> {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         None
+    }
+}
+
+impl crate::MetricsContextExt for (&DatabaseHandle, &mut ChangeProofContext) {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
+        self.0.metrics_context()
+    }
+}
+
+impl crate::MetricsContextExt for (&DatabaseHandle, Box<ChangeProofContext>) {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
+        self.0.metrics_context()
     }
 }
 
