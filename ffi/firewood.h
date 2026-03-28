@@ -1585,6 +1585,26 @@ struct RangeProofResult fwd_db_range_proof(const struct DatabaseHandle *db,
  * Verify and commit a change proof to the database.
  *
  * The proof is consumed regardless of success or failure.
+ *
+ * # Arguments
+ *
+ * - `db` - The database to commit the changes to.
+ * - `args` - The arguments for verifying and committing the change proof.
+ *
+ * # Returns
+ *
+ * - [`HashResult::NullHandlePointer`] if the caller provided a null pointer to either
+ *   the database or the proof.
+ * - [`HashResult::None`] if the proof resulted in an empty database (i.e., all keys were deleted).
+ * - [`HashResult::Some`] containing the new root hash if the proof was successfully verified
+ * - [`HashResult::Err`] containing an error message if the proof could not be verified or committed.
+ *
+ * # Thread Safety
+ *
+ * It is not safe to call this function concurrently with the same proof context
+ * nor is it safe to call any other function that accesses the same proof context
+ * concurrently. The caller must ensure exclusive access to the proof context
+ * for the duration of the call.
  */
 struct HashResult fwd_db_verify_and_commit_change_proof(const struct DatabaseHandle *db,
                                                         struct VerifyChangeProofArgs args);
@@ -1630,6 +1650,26 @@ struct HashResult fwd_db_verify_and_commit_range_proof(const struct DatabaseHand
  * On success, the proof is consumed and a [`ProposedChangeProofContext`] is
  * returned. On failure, the original [`ChangeProofContext`] is returned to
  * the caller so it can be retried or freed.
+ *
+ * # Arguments
+ *
+ * - `db` - The database to verify the proof against.
+ * - `args` - The arguments for verifying and proposing the change proof.
+ *
+ * # Returns
+ *
+ * - [`ProposedChangeProofResult::NullHandlePointer`] if the caller provided a null pointer
+ *   to either the database or the proof.
+ * - [`ProposedChangeProofResult::Ok`] containing the proposed context on success.
+ * - [`ProposedChangeProofResult::VerificationFailed`] containing the original proof and
+ *   error message on verification failure.
+ *
+ * # Thread Safety
+ *
+ * It is not safe to call this function concurrently with the same proof context
+ * nor is it safe to call any other function that accesses the same proof context
+ * concurrently. The caller must ensure exclusive access to the proof context
+ * for the duration of the call.
  */
 struct ProposedChangeProofResult fwd_db_verify_and_propose_change_proof(const struct DatabaseHandle *db,
                                                                         struct VerifyChangeProofArgs args);
