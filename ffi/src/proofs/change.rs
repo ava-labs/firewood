@@ -717,7 +717,7 @@ pub extern "C" fn fwd_proposed_change_proof_to_bytes(
     crate::invoke_with_handle(proof, |ctx| {
         let mut vec = Vec::new();
         ctx.proof.write_to_vec(&mut vec);
-        Ok::<_, api::Error>(Some(vec.into_boxed_slice()))
+        vec.into_boxed_slice()
     })
 }
 
