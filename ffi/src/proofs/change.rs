@@ -126,7 +126,7 @@ impl ChangeProofContext {
             return Err(api::Error::ProofError(ProofError::ProofIsNone));
         };
 
-        Self::validate(
+        Self::verify_proof_structure(
             &proof,
             params.start_key.as_deref(),
             params.end_key.as_deref(),
@@ -139,19 +139,8 @@ impl ChangeProofContext {
         })
     }
 
-    /// Checks that:
-    /// - `start_key` is <= `end_key`
-    /// - There are no `DeleteRange` ops
-    /// - The number of batch operations does not exceed `max_length`
-    /// - The keys are in sorted (ascending) order
-    /// - The `start_key` is not greater than the first key in the proof
-    /// - The `end_key` is not less than the last key in the proof
-    ///
-    /// Additionally rejects:
-    /// - proofs with `batch_ops` but no boundary proofs, UNLESS
-    ///   this is a complete proof (no key bounds).
-    /// - non-empty `end_proof` when there is no `end_key` and no `batch_ops`
-    fn validate(
+    /// Verify structural properties and boundary proofs of the change proof.
+    fn verify_proof_structure(
         proof: &FrozenChangeProof,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
@@ -233,6 +222,7 @@ impl ChangeProofContext {
         if end_key.is_none() && batch_ops.is_empty() && !proof.end_proof().is_empty() {
             return Err(api::Error::ProofError(ProofError::UnexpectedEndProof));
         }
+
         Ok(())
     }
 
@@ -259,7 +249,7 @@ impl ChangeProofContext {
             )));
         };
 
-        if let Err(err) = Self::validate(&proof, start_key, end_key, max_length) {
+        if let Err(err) = Self::verify_proof_structure(&proof, start_key, end_key, max_length) {
             return Err(Box::new((Self { proof: Some(proof) }, err)));
         }
 
