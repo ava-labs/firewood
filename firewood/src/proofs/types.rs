@@ -172,6 +172,12 @@ pub enum ProofError {
     /// Non-empty batch operations require at least one boundary proof for verification.
     #[error("non-empty batch operations require at least one boundary proof for verification")]
     MissingBoundaryProof,
+
+    /// Non-empty end proof when no end key is set and there are no batch
+    /// operations. The honest generator never produces this combination.
+    /// Matches `AvalancheGo`'s `ErrUnexpectedEndProof`.
+    #[error("unexpected non-empty end proof with no end key and no batch operations")]
+    UnexpectedEndProof,
 }
 
 #[derive(Clone, PartialEq, Eq)]

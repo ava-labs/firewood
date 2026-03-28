@@ -12,8 +12,7 @@ use rlp::Rlp;
 
 use firewood::{
     ProofError,
-    api::{self, DbView as _, FrozenChangeProof, HashKey as ApiHashKey},
-    logger::warn,
+    api::{self, BatchOp, DbView as _, FrozenChangeProof, HashKey as ApiHashKey},
 };
 
 use std::cmp::Ordering;
@@ -145,10 +144,52 @@ impl ChangeProofContext {
             return Err(api::Error::ProofError(ProofError::ProofIsNone));
         };
 
+        Self::verify_proof_structure(
+            &proof,
+            params.start_key.as_deref(),
+            params.end_key.as_deref(),
+            params.max_length,
+        )?;
+
+        Ok(VerifiedChangeProofContext {
+            proof: Some(proof),
+            params,
+        })
+    }
+
+    /// Verify structural properties and boundary proofs of the change proof.
+    fn verify_proof_structure(
+        proof: &FrozenChangeProof,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<(), api::Error> {
         let batch_ops = proof.batch_ops();
 
-        // Check to make sure the BatchOp array size is less than or equal to `max_length`
-        if let Some(max_length) = params.max_length
+        // Reject inverted ranges early. The generator enforces this, but the
+        // verifier must independently validate because start_key/end_key
+        // come from the caller, not the proof.
+        if let (Some(start), Some(end)) = (start_key, end_key)
+            && start.cmp(end) == Ordering::Greater
+        {
+            return Err(api::Error::InvalidRange {
+                start_key: start.to_vec().into(),
+                end_key: end.to_vec().into(),
+            });
+        }
+
+        // The honest diff algorithm only produces Put and Delete ops,
+        // never DeleteRange. A crafted proof could use DeleteRange to delete
+        // keys outside the proven range.
+        if batch_ops
+            .iter()
+            .any(|op| matches!(op, BatchOp::DeleteRange { .. }))
+        {
+            return Err(api::Error::ProofError(ProofError::UnsupportedDeleteRange));
+        }
+
+        // Check batch_ops length <= max_length
+        if let Some(max_length) = max_length
             && batch_ops.len() > max_length.into()
         {
             return Err(api::Error::ProofError(
@@ -156,8 +197,19 @@ impl ChangeProofContext {
             ));
         }
 
-        // Check the start key is not greater than the first key in the proof.
-        if let (Some(start_key), Some(first_key)) = (&params.start_key, batch_ops.first())
+        // Verify keys are sorted and unique — must run before boundary
+        // checks (start_key ≤ first_key, end_key ≥ last_key) because
+        // those checks compare against first/last elements, which are
+        // only meaningful if the keys are actually sorted.
+        if !batch_ops
+            .iter()
+            .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
+        {
+            return Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted));
+        }
+
+        // Check start key not greater than first batch op key
+        if let (Some(start_key), Some(first_key)) = (start_key, batch_ops.first())
             && start_key.cmp(first_key.key()) == Ordering::Greater
         {
             return Err(api::Error::ProofError(
@@ -165,26 +217,31 @@ impl ChangeProofContext {
             ));
         }
 
-        // Check the end key is not less than the last key in the proof.
-        if let (Some(end_key), Some(last_key)) = (&params.end_key, batch_ops.last())
+        // Check end key not less than last batch op key
+        if let (Some(end_key), Some(last_key)) = (end_key, batch_ops.last())
             && end_key.cmp(last_key.key()) == Ordering::Less
         {
             return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
         }
 
-        // Verify the keys are in sorted order.
-        if batch_ops
-            .iter()
-            .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
+        // Reject proofs with batch_ops but no boundary proofs, UNLESS
+        // this is a complete proof (no key bounds).
+        if !batch_ops.is_empty()
+            && proof.start_proof().is_empty()
+            && proof.end_proof().is_empty()
+            && (start_key.is_some() || end_key.is_some())
         {
-            warn!("change proof verification not yet implemented");
-            Ok(VerifiedChangeProofContext {
-                proof: Some(proof),
-                params,
-            })
-        } else {
-            Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted))
+            return Err(api::Error::ProofError(ProofError::MissingBoundaryProof));
         }
+
+        // Reject non-empty end_proof when there is no end_key and no batch_ops.
+        // The honest generator never produces this combination. Matches
+        // AvalancheGo's ErrUnexpectedEndProof.
+        if end_key.is_none() && batch_ops.is_empty() && !proof.end_proof().is_empty() {
+            return Err(api::Error::ProofError(ProofError::UnexpectedEndProof));
+        }
+
+        Ok(())
     }
 
     /// Verify the change proof and prepare a proposal against the given database
@@ -209,43 +266,8 @@ impl ChangeProofContext {
             )));
         };
 
-        let batch_ops = proof.batch_ops();
-
-        if let Some(max_length) = max_length
-            && batch_ops.len() > max_length.into()
-        {
-            return Err(Box::new((
-                Self { proof: Some(proof) },
-                api::Error::ProofError(ProofError::ProofIsLargerThanMaxLength),
-            )));
-        }
-
-        if let (Some(start_key), Some(first_key)) = (start_key, batch_ops.first())
-            && start_key.cmp(first_key.key()) == Ordering::Greater
-        {
-            return Err(Box::new((
-                Self { proof: Some(proof) },
-                api::Error::ProofError(ProofError::StartKeyLargerThanFirstKey),
-            )));
-        }
-
-        if let (Some(end_key), Some(last_key)) = (end_key, batch_ops.last())
-            && end_key.cmp(last_key.key()) == Ordering::Less
-        {
-            return Err(Box::new((
-                Self { proof: Some(proof) },
-                api::Error::ProofError(ProofError::EndKeyLessThanLastKey),
-            )));
-        }
-
-        if !batch_ops
-            .iter()
-            .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
-        {
-            return Err(Box::new((
-                Self { proof: Some(proof) },
-                api::Error::ProofError(ProofError::ChangeProofKeysNotSorted),
-            )));
+        if let Err(err) = Self::verify_proof_structure(&proof, start_key, end_key, max_length) {
+            return Err(Box::new((Self { proof: Some(proof) }, err)));
         }
 
         let proposal = match db.apply_change_proof_to_parent(start_root, &proof) {
