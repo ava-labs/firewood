@@ -2,7 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
 use std::num::NonZeroUsize;
 
 use firewood_metrics::firewood_increment;
@@ -329,19 +328,33 @@ fn key_to_nibbles(key: &[u8]) -> Vec<PathComponent> {
         .collect()
 }
 
-/// Look up the proposal's children hashes at a given trie path.
-///
-/// Returns `Children::new()` (all-None) when the proposal has no branch
-/// node at this path, which is correct when the proposal's trie compressed
-/// through this depth.
-fn proposal_children_at(
-    lookup: &HashMap<Vec<PathComponent>, PathIterItem>,
-    key: &[PathComponent],
-) -> Children<Option<HashType>> {
-    lookup
-        .get(key)
-        .and_then(|item| item.node.as_branch().map(|b| b.children_hashes()))
-        .unwrap_or_default()
+/// Forward-only cursor over a proposal's path-to-key result.
+/// Both proof nodes and proposal path nodes are sorted by depth,
+/// so we advance through the proposal path in lockstep with the
+/// proof nodes instead of building a `HashMap`.
+struct ProposalCursor<'a> {
+    path: &'a [PathIterItem],
+    pos: usize,
+}
+
+impl<'a> ProposalCursor<'a> {
+    const fn new(path: &'a [PathIterItem]) -> Self {
+        Self { path, pos: 0 }
+    }
+
+    /// Advance past nodes shallower than `depth`, return the node
+    /// at exactly `depth` if one exists.
+    fn advance_to(&mut self, depth: usize) -> Option<&'a PathIterItem> {
+        while let Some(item) = self.path.get(self.pos) {
+            if item.key_nibbles.len() >= depth {
+                break;
+            }
+            self.pos = self.pos.saturating_add(1);
+        }
+        self.path
+            .get(self.pos)
+            .filter(|item| item.key_nibbles.len() == depth)
+    }
 }
 
 /// Verify that a proof node's value matches the proposal's value at the
@@ -376,26 +389,27 @@ fn verify_proof_node_value(
 /// proposal's state differs from what the proof claims.
 fn verify_in_range_children(
     nodes: &[ProofNode],
-    lookup: &HashMap<Vec<PathComponent>, PathIterItem>,
+    cursor: &mut ProposalCursor<'_>,
     boundary_nibbles: &[PathComponent],
     is_in_range: impl Fn(PathComponent, PathComponent) -> bool,
 ) -> Result<(), ProofError> {
+    // The forward-only cursor assumes nodes are in ascending depth order,
+    // which is guaranteed by the prefix checks in `verify_proof_structure`.
     for node in nodes {
         let depth = node.key.len();
 
-        // Single lookup per node, reused for both value and children checks.
-        let lookup_item = lookup.get(node.key.as_ref());
+        // Advance cursor to this depth. None means the proposal has no node
+        // here (trie compressed through this level). This is safe: the value
+        // check passes with (None, None), and children below default to
+        // all-None so any proof child hash at an in-range slot mismatches.
+        let lookup_item = cursor.advance_to(depth);
         verify_proof_node_value(node, lookup_item)?;
 
-        // The boundary nibble at this depth determines which children
-        // are in-range. If the boundary key terminates above this depth,
-        // all children are in-range from that side.
+        // Boundary nibble at this depth; None if the boundary key is shorter,
+        // meaning all children are in-range from that side.
         let boundary_nibble = boundary_nibbles.get(depth).copied();
 
-        // When the proposal has no node at this path (lookup miss),
-        // children default to all-None. Any proof child with a hash
-        // at an in-range slot will mismatch, correctly detecting the
-        // structural difference.
+        // On cursor miss, defaults to all-None children (see above).
         let proposal_children: Children<Option<HashType>> = lookup_item
             .and_then(|item| item.node.as_branch().map(|b| b.children_hashes()))
             .unwrap_or_default();
@@ -452,28 +466,28 @@ fn verify_root_hash(
         .or(verification.end_key.as_deref());
     let end_nibbles = effective_end_key.map(key_to_nibbles);
 
-    // Build lookup tables mapping trie paths to proposal nodes. Each
-    // lookup contains the proposal's nodes along the path to the
-    // corresponding boundary key, used to get the proposal's child
-    // hashes at each depth for in-range comparison.
-    let start_lookup = build_proposal_lookup(verification.start_key.as_deref(), proposal)?;
-    let end_lookup = build_proposal_lookup(effective_end_key, proposal)?;
+    // Retrieve the proposal's path-to-key results for each boundary.
+    // These are sorted by depth (root to leaf), matching proof node order.
+    let start_path = get_proposal_path(verification.start_key.as_deref(), proposal)?;
+    let end_path = get_proposal_path(effective_end_key, proposal)?;
 
     if start_nodes.is_empty() {
         // Case 2a: Only end proof (first sync round, start_key=None).
         // Children before the end boundary nibble are in-range.
+        let mut cursor = ProposalCursor::new(&end_path);
         verify_in_range_children(
             end_nodes,
-            &end_lookup,
+            &mut cursor,
             end_nibbles.as_deref().unwrap_or(&[]),
             |n, bn| n < bn,
         )?;
     } else if end_nodes.is_empty() {
         // Case 2b: Only start proof (last sync round, end of keyspace).
         // Children after the start boundary nibble are in-range.
+        let mut cursor = ProposalCursor::new(&start_path);
         verify_in_range_children(
             start_nodes,
-            &start_lookup,
+            &mut cursor,
             start_nibbles.as_deref().unwrap_or(&[]),
             |n, bn| n > bn,
         )?;
@@ -499,8 +513,16 @@ fn verify_root_hash(
         let shared = start_nodes
             .get(..divergence_depth)
             .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
+        // The start cursor advances through shared prefix nodes first,
+        // then continues into the divergence parent and start tail.
+        let mut start_cursor = ProposalCursor::new(&start_path);
         for node in shared {
-            verify_proof_node_value(node, start_lookup.get(node.key.as_ref()))?;
+            // None means the proposal compressed through this depth (no
+            // explicit node). verify_proof_node_value allows (None, None)
+            // — if the proof node claims a value exists but the proposal
+            // has none, the mismatch is caught.
+            let item = start_cursor.advance_to(node.key.len());
+            verify_proof_node_value(node, item)?;
         }
 
         // At the divergence parent: children between the two boundary
@@ -514,7 +536,16 @@ fn verify_root_hash(
         let end_bn = end_nibbles
             .as_deref()
             .and_then(|en| en.get(parent_depth).copied());
-        let proposal_children = proposal_children_at(&start_lookup, parent.key.as_ref());
+
+        // Reuse the start cursor to look up the divergence parent's children.
+        // None means the proposal compressed through this depth; children
+        // default to all-None, so any proof child with a hash at an in-range
+        // slot will produce an InRangeChildMismatch, correctly detecting the
+        // structural difference between the proof and proposal.
+        let item = start_cursor.advance_to(parent_depth);
+        let proposal_children = item
+            .and_then(|i| i.node.as_branch().map(|b| b.children_hashes()))
+            .unwrap_or_default();
         for nibble in PathComponent::ALL {
             let after_start = start_bn.is_none_or(|s| nibble > s);
             let before_end = end_bn.is_none_or(|e| nibble < e);
@@ -528,6 +559,7 @@ fn verify_root_hash(
         }
 
         // Walk tails independently below the divergence point.
+        // start_cursor naturally continues past shared prefix nodes.
         let start_tail = start_nodes
             .get(divergence_depth..)
             .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
@@ -537,15 +569,18 @@ fn verify_root_hash(
         if !start_tail.is_empty() {
             verify_in_range_children(
                 start_tail,
-                &start_lookup,
+                &mut start_cursor,
                 start_nibbles.as_deref().unwrap_or(&[]),
                 |n, bn| n > bn,
             )?;
         }
         if !end_tail.is_empty() {
+            // Separate cursor for the end tail since it walks a different
+            // proposal path than the start cursor.
+            let mut end_cursor = ProposalCursor::new(&end_path);
             verify_in_range_children(
                 end_tail,
-                &end_lookup,
+                &mut end_cursor,
                 end_nibbles.as_deref().unwrap_or(&[]),
                 |n, bn| n < bn,
             )?;
@@ -734,23 +769,16 @@ impl ProposedChangeProofContext<'_> {
     }
 }
 
-/// Build a `HashMap` from `key_nibbles` to `PathIterItem` for fast lookup of
-/// proposal trie nodes when comparing child hashes.
-fn build_proposal_lookup(
+/// Retrieve the proposal's path-to-key result for the given boundary key.
+/// Returns an empty Vec when no key is provided (no boundary on that side).
+fn get_proposal_path(
     key: Option<&[u8]>,
     proposal: &crate::ProposalHandle<'_>,
-) -> Result<HashMap<Vec<PathComponent>, PathIterItem>, api::Error> {
+) -> Result<Vec<PathIterItem>, api::Error> {
     let Some(key) = key else {
-        return Ok(HashMap::new());
+        return Ok(Vec::new());
     };
-    let path = proposal.path_to_key(key)?;
-    Ok(path
-        .into_iter()
-        .map(|item| {
-            let key_nibbles: &[PathComponent] = item.key_nibbles.as_ref();
-            (key_nibbles.to_vec(), item)
-        })
-        .collect())
+    proposal.path_to_key(key)
 }
 
 /// A key range that should be fetched to continue iterating through a range
