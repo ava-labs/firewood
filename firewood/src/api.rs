@@ -160,7 +160,7 @@ pub enum Error {
 
     /// Proposal already failed to commit
     #[error("Proposal already failed to commit")]
-    CommitAlreadyFailed,    
+    CommitAlreadyFailed,
 
     /// Internal error
     #[error("Internal error")]
