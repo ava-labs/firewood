@@ -63,9 +63,11 @@ pub struct VerifyChangeProofArgs<'a> {
     pub start_root: HashKey,
     /// The root hash of the ending revision.
     pub end_root: HashKey,
-    /// The lower bound of the key range that the proof is expected to cover.
+    /// The lower bound of the key range that the proof is expected to cover. If
+    /// `None`, the proof is expected to cover from the start of the keyspace.
     pub start_key: Maybe<BorrowedBytes<'a>>,
-    /// The upper bound of the key range that the proof is expected to cover.
+    /// The upper bound of the key range that the proof is expected to cover. If
+    /// `None`, the proof is expected to cover to the end of the keyspace.
     pub end_key: Maybe<BorrowedBytes<'a>>,
     /// The maximum number of key/value pairs that the proof is expected to cover.
     pub max_length: u32,
@@ -283,8 +285,8 @@ impl ProposedChangeProofContext<'_> {
                     Ok(hash)
                 }
                 Err(err) => Err(err),
-            }
-            ProposalState::Failed => Err(api::Error::CommitAlreadyFailed)
+            },
+            ProposalState::Failed => Err(api::Error::CommitAlreadyFailed),
         }
     }
 
@@ -612,7 +614,8 @@ pub extern "C" fn fwd_change_proof_find_next_key_proposed(
 ///
 /// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`ValueResult::Some`] containing the serialized bytes if successful.
-/// - [`ValueResult::Err`] if the caller provided a null pointer.
+/// - [`ValueResult::Err`] containing an error message if the `ChangeProof`
+///   cannot be serialized.
 ///
 /// The other [`ValueResult`] variants are not used.
 #[unsafe(no_mangle)]
@@ -631,7 +634,8 @@ pub extern "C" fn fwd_change_proof_to_bytes(proof: Option<&ChangeProofContext>) 
 ///
 /// - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
 /// - [`ValueResult::Some`] containing the serialized bytes if successful.
-/// - [`ValueResult::Err`] if the caller provided a null pointer.
+/// - [`ValueResult::Err`] containing an error message if the proposed `ChangeProof`
+///   cannot be serialized.
 ///
 /// The other [`ValueResult`] variants are not used.
 #[unsafe(no_mangle)]

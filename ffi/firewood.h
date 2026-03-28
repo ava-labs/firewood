@@ -668,7 +668,7 @@ typedef struct CreateRangeProofArgs {
  */
 typedef struct VerifyChangeProofArgs {
   /**
-   * The change proof to verify. Ownership is transferred to the callee.
+   * The change proof to verify.
    */
   struct ChangeProofContext *proof;
   /**
@@ -680,11 +680,13 @@ typedef struct VerifyChangeProofArgs {
    */
   struct HashKey end_root;
   /**
-   * The lower bound of the key range that the proof is expected to cover.
+   * The lower bound of the key range that the proof is expected to cover. If
+   * `None`, the proof is expected to cover from the start of the keyspace.
    */
   struct Maybe_BorrowedBytes start_key;
   /**
-   * The upper bound of the key range that the proof is expected to cover.
+   * The upper bound of the key range that the proof is expected to cover. If
+   * `None`, the proof is expected to cover to the end of the keyspace.
    */
   struct Maybe_BorrowedBytes end_key;
   /**
@@ -1378,7 +1380,8 @@ struct ChangeProofResult fwd_change_proof_from_bytes(BorrowedBytes bytes);
  *
  * - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
  * - [`ValueResult::Some`] containing the serialized bytes if successful.
- * - [`ValueResult::Err`] if the caller provided a null pointer.
+ * - [`ValueResult::Err`] containing an error message if the `ChangeProof`
+ *   cannot be serialized.
  *
  * The other [`ValueResult`] variants are not used.
  */
@@ -2293,7 +2296,8 @@ struct ProposalResult fwd_propose_on_proposal(const struct ProposalHandle *handl
  *
  * - [`ValueResult::NullHandlePointer`] if the caller provided a null pointer.
  * - [`ValueResult::Some`] containing the serialized bytes if successful.
- * - [`ValueResult::Err`] if the caller provided a null pointer.
+ * - [`ValueResult::Err`] containing an error message if the proposed `ChangeProof`
+ *   cannot be serialized.
  *
  * The other [`ValueResult`] variants are not used.
  */
