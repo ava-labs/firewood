@@ -107,7 +107,6 @@ struct VerificationContext {
 enum ProposalState<'db> {
     Proposed(crate::ProposalHandle<'db>),
     Committed(Option<HashKey>),
-    Failed,
 }
 
 impl From<FrozenChangeProof> for ChangeProofContext {
@@ -217,7 +216,7 @@ impl ChangeProofContext {
 impl ProposedChangeProofContext<'_> {
     /// Commit a previously proposed change proof. Consumes the proposal handle.
     fn commit(&mut self) -> Result<Option<HashKey>, api::Error> {
-        let state = std::mem::replace(&mut self.proposal_state, ProposalState::Failed);
+        let state = std::mem::replace(&mut self.proposal_state, ProposalState::Committed(None));
         match state {
             ProposalState::Committed(hash) => {
                 self.proposal_state = ProposalState::Committed(hash.clone());
@@ -231,7 +230,6 @@ impl ProposedChangeProofContext<'_> {
                 }
                 Err(err) => Err(err),
             },
-            ProposalState::Failed => Err(api::Error::CommitAlreadyFailed),
         }
     }
 
