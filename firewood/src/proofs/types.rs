@@ -149,35 +149,61 @@ pub enum ProofError {
     #[error("the proof is None as it has been consumed")]
     ProofIsNone,
 
-    #[error("the proposal for a change proof is None as it has been consumed")]
-    ProposalIsNone,
-
     /// Computed root hash after applying `batch_ops` doesn't match expected end root
     #[error("computed root hash after applying batch_ops doesn't match the expected end root")]
     EndRootMismatch,
 
-    /// Boundary value mismatch: after applying `batch_ops`, the value at a
-    /// boundary key does not match the value claimed by the boundary proof.
-    #[error("boundary value at key does not match proof claim after applying batch_ops")]
-    BoundaryValueMismatch,
-
     /// Non-empty boundary proof cannot be validated against any key.
+    ///
+    /// The honest generator only produces a non-empty boundary proof when a
+    /// corresponding key is available. A non-empty proof with no key to
+    /// validate against indicates a maliciously crafted proof.
     #[error("non-empty boundary proof has no key to validate against")]
     BoundaryProofUnverifiable,
 
     /// Change proof contains an unsupported `DeleteRange` operation.
+    ///
+    /// The honest diff algorithm only produces `Put` and `Delete` operations.
+    /// A `DeleteRange` could delete keys outside the proven range.
     #[error("change proof contains unsupported DeleteRange operation")]
     UnsupportedDeleteRange,
 
-    /// Non-empty batch operations require at least one boundary proof for verification.
+    /// Non-empty batch operations require at least one boundary proof for
+    /// verification.
+    ///
+    /// Without a Merkle path there is no way to verify that `batch_ops` produce
+    /// the correct sub-trie hashes.
     #[error("non-empty batch operations require at least one boundary proof for verification")]
     MissingBoundaryProof,
+
+    /// A proof node's value doesn't match the corresponding proposal node's value.
+    ///
+    /// The root hash walk substitutes children but not values, so a value
+    /// mismatch at any proof node would be masked by the proof's own value
+    /// in the hash computation. This check catches base-state mismatches
+    /// that the root hash walk alone would miss.
+    #[error("proof node value doesn't match the proposal at key depth {depth}")]
+    ProofNodeValueMismatch { depth: usize },
+
+    /// Two boundary proofs have different root-level paths, meaning they
+    /// cannot belong to the same trie.
+    #[error("boundary proofs diverge at the root node")]
+    BoundaryProofsDivergeAtRoot,
 
     /// Non-empty end proof when no end key is set and there are no batch
     /// operations. The honest generator never produces this combination.
     /// Matches `AvalancheGo`'s `ErrUnexpectedEndProof`.
     #[error("unexpected non-empty end proof with no end key and no batch operations")]
     UnexpectedEndProof,
+
+    /// An in-range child hash in the proof doesn't match the proposal's child
+    /// hash at that position.
+    ///
+    /// The proof's hash chain to the root is already verified. If an in-range
+    /// child differs from what the proposal computed, the proposal's state is
+    /// inconsistent with the proof.
+    #[error("in-range child hash mismatch at depth {depth}")]
+    InRangeChildMismatch { depth: usize },
 }
 
 #[derive(Clone, PartialEq, Eq)]

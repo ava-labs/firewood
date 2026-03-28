@@ -1347,10 +1347,6 @@ impl Merkle<NodeStore<Mutable<Propose>, MemStore>> {
     }
 }
 
-/// The [`PrefixOverlap`] type represents the _shared_ and _unique_ parts of two potentially overlapping slices.
-/// As the type-name implies, the `shared` property only constitues a shared *prefix*.
-/// The `unique_*` properties, [`unique_a`][`PrefixOverlap::unique_a`] and [`unique_b`][`PrefixOverlap::unique_b`]
-/// are set based on the argument order passed into the [`from`][`PrefixOverlap::from`] constructor.
 #[derive(Debug)]
 struct PrefixOverlap<'a, T> {
     shared: &'a [T],

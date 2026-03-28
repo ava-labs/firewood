@@ -102,6 +102,10 @@ struct VerificationContext {
     end_root: ApiHashKey,
     start_key: Option<Box<[u8]>>,
     end_key: Option<Box<[u8]>>,
+    /// The key that the end proof was actually validated against.
+    /// Computed during `verify_end_proof` and cached to avoid
+    /// redundant `value_digest` calls in downstream checks.
+    resolved_end_key: Option<Box<[u8]>>,
 }
 
 #[derive(Debug)]
@@ -119,12 +123,16 @@ impl From<FrozenChangeProof> for ChangeProofContext {
 
 impl ChangeProofContext {
     /// Verify structural properties and boundary proofs of the change proof.
+    ///
+    /// On success, returns a `VerificationContext` capturing the verification
+    /// parameters so that downstream logic can avoid re-verifying.
     fn verify_proof_structure(
         proof: &FrozenChangeProof,
+        end_root: ApiHashKey,
         start_key: Option<&[u8]>,
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
-    ) -> Result<(), api::Error> {
+    ) -> Result<VerificationContext, api::Error> {
         let batch_ops = proof.batch_ops();
 
         // Reject inverted ranges early. The generator enforces this, but the
@@ -186,7 +194,8 @@ impl ChangeProofContext {
         }
 
         // Reject proofs with batch_ops but no boundary proofs, UNLESS
-        // this is a complete proof (no key bounds).
+        // this is a complete proof (no key bounds). Complete proofs are validated
+        // by root hash comparison in verify_root_hash() instead.
         if !batch_ops.is_empty()
             && proof.start_proof().is_empty()
             && proof.end_proof().is_empty()
@@ -202,9 +211,117 @@ impl ChangeProofContext {
             return Err(api::Error::ProofError(ProofError::UnexpectedEndProof));
         }
 
+        // Verify boundary proofs against end_root
+        Self::verify_start_proof(proof, start_key, &end_root)?;
+        // verify_end_proof now returns the resolved key it validated
+        // against, cached to avoid redundant value_digest calls downstream.
+        let resolved_end_key = Self::verify_end_proof(proof, end_key, &end_root, max_length)?;
+
+        Ok(VerificationContext {
+            end_root,
+            start_key: start_key.map(Box::from),
+            end_key: end_key.map(Box::from),
+            resolved_end_key,
+        })
+    }
+
+    /// Verify the start boundary proof against the end root hash.
+    fn verify_start_proof(
+        proof: &FrozenChangeProof,
+        start_key: Option<&[u8]>,
+        end_root: &ApiHashKey,
+    ) -> Result<(), api::Error> {
+        // An empty start_proof is valid: it means the range starts from the
+        // beginning of the keyspace (start_key=None in the first sync round).
+        if proof.start_proof().is_empty() {
+            return Ok(());
+        }
+
+        // If start_proof is non-empty, we MUST have a key to validate
+        // it against. The honest generator only produces a non-empty
+        // start_proof when start_key is Some.
+        let Some(start_key) = start_key else {
+            return Err(api::Error::ProofError(
+                ProofError::BoundaryProofUnverifiable,
+            ));
+        };
+
+        proof.start_proof().value_digest(start_key, end_root)?;
         Ok(())
     }
 
+    /// Verify the end boundary proof against the end root hash and return the
+    /// key it was validated against.
+    ///
+    /// When `batch_ops.len() >= max_length`, the proof may have been truncated.
+    /// The generator uses the last batch op key when truncated but `end_key`
+    /// otherwise. Since the verifier cannot distinguish the two cases, we try
+    /// the last batch op key first and fall back to `end_key`.
+    ///
+    /// When `batch_ops.len() == max_length` but the proof was NOT truncated
+    /// (exactly `max_length` changes exist), Try 1 attempts `last_op_key`.
+    /// If the generator used `end_key`, Try 1 fails (hash mismatch) and
+    /// Try 2 succeeds with `end_key`. If `last_op_key == end_key`, Try 1
+    /// succeeds directly. Either way, `resolved_end_key` correctly reflects
+    /// the key the proof was actually validated against, ensuring downstream
+    /// nibble bounds and lookups use the right boundary.
+    ///
+    /// Returns `Ok(Some(key))` with the validated key, or `Ok(None)` if the
+    /// end proof is empty (range reaches end of keyspace).
+    fn verify_end_proof(
+        proof: &FrozenChangeProof,
+        end_key: Option<&[u8]>,
+        end_root: &ApiHashKey,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<Option<Box<[u8]>>, api::Error> {
+        // Empty end_proof = range reaches end of keyspace. No key to resolve.
+        if proof.end_proof().is_empty() {
+            return Ok(None);
+        }
+
+        let batch_ops = proof.batch_ops();
+        let potentially_truncated = max_length.is_some_and(|max| batch_ops.len() >= max.get());
+
+        // Try 1: truncated proof — validate against the last batch op key.
+        // Only fall through to Try 2 if the proof is valid but proves a
+        // different key (ShouldBePrefixOfProvenKey). Any structural error
+        // (broken hash chain, missing child, etc.) is propagated immediately
+        // rather than masked by trying another key.
+        if potentially_truncated && let Some(last_op) = batch_ops.last() {
+            match proof
+                .end_proof()
+                .value_digest(last_op.key().as_ref(), end_root)
+            {
+                Ok(_) => return Ok(Some(last_op.key().as_ref().into())),
+                Err(ProofError::ShouldBePrefixOfProvenKey) => {}
+                Err(e) => return Err(api::Error::ProofError(e)),
+            }
+        }
+
+        // Try 2: non-truncated proof — validate against the requested end_key.
+        if let Some(end_key) = end_key {
+            proof.end_proof().value_digest(end_key, end_root)?;
+            return Ok(Some(end_key.into()));
+        }
+
+        // Try 3: no end_key — fall back to last batch op key.
+        if let Some(last_op) = batch_ops.last() {
+            proof
+                .end_proof()
+                .value_digest(last_op.key().as_ref(), end_root)?;
+            return Ok(Some(last_op.key().as_ref().into()));
+        }
+
+        // All validation paths exhausted. end_proof is non-empty but
+        // no key could validate it. The honest generator always provides a
+        // key for a non-empty end_proof.
+        Err(api::Error::ProofError(
+            ProofError::BoundaryProofUnverifiable,
+        ))
+    }
+}
+
+impl ChangeProofContext {
     /// Verify the change proof and prepare a proposal against the given database
     /// without committing it.
     ///
@@ -222,21 +339,24 @@ impl ChangeProofContext {
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
     ) -> Result<ProposedChangeProofContext<'db>, Box<(Self, api::Error)>> {
+        // Destructure self so we can move `proof` into either the Ok or Err
+        // result without cloning.
         let proof = self.proof;
 
-        if let Err(err) = Self::verify_proof_structure(&proof, start_key, end_key, max_length) {
-            return Err(Box::new((Self { proof }, err)));
-        }
+        let verification = match Self::verify_proof_structure(
+            &proof,
+            end_root.clone(),
+            start_key,
+            end_key,
+            max_length,
+        ) {
+            Ok(v) => v,
+            Err(e) => return Err(Box::new((Self { proof }, e))),
+        };
 
         let proposal = match db.apply_change_proof_to_parent(start_root, &proof) {
             Ok(p) => p,
             Err(e) => return Err(Box::new((Self { proof }, e))),
-        };
-
-        let verification = VerificationContext {
-            end_root,
-            start_key: start_key.map(Box::from),
-            end_key: end_key.map(Box::from),
         };
 
         Ok(ProposedChangeProofContext {
@@ -267,7 +387,6 @@ impl ChangeProofContext {
         proposed.commit()
     }
 }
-
 impl ProposedChangeProofContext<'_> {
     /// Commit a previously proposed change proof. Consumes the proposal handle.
     fn commit(&mut self) -> Result<Option<ApiHashKey>, api::Error> {
