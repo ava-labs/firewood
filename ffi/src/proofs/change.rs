@@ -666,12 +666,6 @@ impl crate::MetricsContextExt for ProposedChangeProofContext<'_> {
     }
 }
 
-impl crate::MetricsContextExt for (&DatabaseHandle, &mut ChangeProofContext) {
-    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
-        self.0.metrics_context()
-    }
-}
-
 impl crate::MetricsContextExt for (&DatabaseHandle, Box<ChangeProofContext>) {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         self.0.metrics_context()
