@@ -1184,96 +1184,81 @@ func TestChangeProofKeysNotSorted(t *testing.T) {
 // verify_subtrie_hashes by choosing a short start_key and long end_key that
 // resolve at different trie depths. The start proof has fewer nodes than the
 // end proof, so the zip terminates early and the asymmetric arm fires.
+//
+// Sub-tests cover matching and mismatched initial states to verify that
+// the sub-trie hash check catches divergence even with asymmetric depths.
 func TestChangeProofAsymmetricDepth(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
-
-	// Insert keys at varying depths to create asymmetric proofs.
+	// Keys at varying depths to create asymmetric proofs.
 	// Short keys resolve at shallow depth; long keys resolve deeper
 	// through extension nodes.
-	initialBatch := []BatchOp{
-		Put([]byte("\x00"), []byte("v0")),
-		Put([]byte("\x00\x00\x01"), []byte("v1")),
-		Put([]byte("\x00\x00\xff"), []byte("v2")),
-		Put([]byte("\x01"), []byte("v3")),
-		Put([]byte("\x01\x00\x01"), []byte("v4")),
-	}
-	rootA, err := dbA.Update(initialBatch)
-	r.NoError(err)
-	rootB, err := dbB.Update(initialBatch)
-	r.NoError(err)
-	r.Equal(rootA, rootB)
-
-	// Add more data to dbA in the range between start_key and end_key
-	extraBatch := []BatchOp{
-		Put([]byte("\x00\x00\x02"), []byte("v5")),
-		Put([]byte("\x00\x00\x80"), []byte("v6")),
-	}
-	rootAUpdated, err := dbA.Update(extraBatch)
-	r.NoError(err)
-
-	// Create a bounded change proof with start_key="\x00" (shallow)
-	// and end_key="\x00\x00\xFF" (deep). The start proof should have
-	// fewer nodes than the end proof, exercising the asymmetric arm.
-	startKey := something([]byte("\x00"))
-	endKey := something([]byte("\x00\x00\xff"))
-
-	proof, err := dbA.ChangeProof(rootA, rootAUpdated, startKey, endKey, changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(proof.Free()) })
-
-	proposed, err := dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated, startKey, endKey, changeProofLenUnbounded)
-	r.NoError(err, "asymmetric depth proof should pass verification")
-	t.Cleanup(func() { r.NoError(proposed.Free()) })
-}
-
-// TestChangeProofAsymmetricDepthMismatch is the same setup as
-// TestChangeProofAsymmetricDepth but with mismatched initial states (different
-// values for the same keys). Verifies that the sub-trie hash check catches
-// mismatches even with asymmetric proof depths.
-func TestChangeProofAsymmetricDepthMismatch(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
-
-	// Same keys, different values → different initial root hashes
 	initialBatchA := []BatchOp{
 		Put([]byte("\x00"), []byte("vA0")),
 		Put([]byte("\x00\x00\x01"), []byte("vA1")),
 		Put([]byte("\x00\x00\xff"), []byte("vA2")),
 		Put([]byte("\x01"), []byte("vA3")),
+		Put([]byte("\x01\x00\x01"), []byte("vA4")),
 	}
-	initialBatchB := []BatchOp{
-		Put([]byte("\x00"), []byte("vB0")),
-		Put([]byte("\x00\x00\x01"), []byte("vB1")),
-		Put([]byte("\x00\x00\xff"), []byte("vB2")),
-		Put([]byte("\x01"), []byte("vB3")),
+
+	tests := []struct {
+		name          string
+		initialBatchB []BatchOp // dbB's initial data (dbA always uses initialBatchA)
+		expectSuccess bool
+	}{
+		{
+			name:          "matching base state",
+			initialBatchB: initialBatchA,
+			expectSuccess: true,
+		},
+		{
+			name: "mismatched base state",
+			initialBatchB: []BatchOp{
+				Put([]byte("\x00"), []byte("vB0")),
+				Put([]byte("\x00\x00\x01"), []byte("vB1")),
+				Put([]byte("\x00\x00\xff"), []byte("vB2")),
+				Put([]byte("\x01"), []byte("vB3")),
+			},
+			expectSuccess: false,
+		},
 	}
-	rootA, err := dbA.Update(initialBatchA)
-	r.NoError(err)
-	rootB, err := dbB.Update(initialBatchB)
-	r.NoError(err)
-	r.NotEqual(rootA, rootB, "roots should differ because values differ")
 
-	// Add more data to dbA
-	extraBatch := []BatchOp{
-		Put([]byte("\x00\x00\x02"), []byte("v5")),
-		Put([]byte("\x00\x00\x80"), []byte("v6")),
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := require.New(t)
+			dbA := newTestDatabase(t)
+			dbB := newTestDatabase(t)
+
+			rootA, err := dbA.Update(initialBatchA)
+			r.NoError(err)
+			rootB, err := dbB.Update(tc.initialBatchB)
+			r.NoError(err)
+
+			// Add more data to dbA in the range between start_key and end_key
+			extraBatch := []BatchOp{
+				Put([]byte("\x00\x00\x02"), []byte("v5")),
+				Put([]byte("\x00\x00\x80"), []byte("v6")),
+			}
+			rootAUpdated, err := dbA.Update(extraBatch)
+			r.NoError(err)
+
+			// Create a bounded change proof with start_key="\x00" (shallow)
+			// and end_key="\x00\x00\xFF" (deep). The start proof should have
+			// fewer nodes than the end proof, exercising the asymmetric arm.
+			startKey := something([]byte("\x00"))
+			endKey := something([]byte("\x00\x00\xff"))
+
+			proof, err := dbA.ChangeProof(rootA, rootAUpdated, startKey, endKey, changeProofLenUnbounded)
+			r.NoError(err)
+			t.Cleanup(func() { r.NoError(proof.Free()) })
+
+			proposed, err := dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated, startKey, endKey, changeProofLenUnbounded)
+			if tc.expectSuccess {
+				r.NoError(err, "asymmetric depth proof should pass verification")
+				t.Cleanup(func() { r.NoError(proposed.Free()) })
+			} else {
+				r.Error(err, "should fail: dbB has different initial data than dbA")
+			}
+		})
 	}
-	rootAUpdated, err := dbA.Update(extraBatch)
-	r.NoError(err)
-
-	startKey := something([]byte("\x00"))
-	endKey := something([]byte("\x00\x00\xff"))
-
-	proof, err := dbA.ChangeProof(rootA, rootAUpdated, startKey, endKey, changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(proof.Free()) })
-
-	// Should fail because dbB's initial state differs from dbA's
-	_, err = dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated, startKey, endKey, changeProofLenUnbounded)
-	r.Error(err, "should fail: dbB has different initial data than dbA")
 }
 
 // TestChangeProofBoundaryValueMismatch creates two databases with the same
