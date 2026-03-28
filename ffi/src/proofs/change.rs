@@ -536,6 +536,7 @@ fn verify_root_hash(
         let end_bn = end_nibbles
             .as_deref()
             .and_then(|en| en.get(parent_depth).copied());
+
         // Reuse the start cursor to look up the divergence parent's children.
         // None means the proposal compressed through this depth; children
         // default to all-None, so any proof child with a hash at an in-range
