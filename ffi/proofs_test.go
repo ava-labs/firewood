@@ -494,30 +494,50 @@ func TestChangeProofDiffersAfterUpdate(t *testing.T) {
 }
 
 func TestRoundTripChangeProofSerialization(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
+	tests := []struct {
+		name      string
+		emptyDiff bool
+	}{
+		{"normal proof", false},
+		{"empty diff proof", true},
+	}
 
-	// Insert some data.
-	_, _, batch := kvForTest(10)
-	root1, err := db.Update(batch[:5])
-	r.NoError(err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			db := newTestDatabase(t)
 
-	root2, err := db.Update(batch[5:])
-	r.NoError(err)
+			// Insert some data.
+			_, _, batch := kvForTest(10)
+			root1, err := db.Update(batch[:5])
+			r.NoError(err)
 
-	// get a proof
-	proofBytes := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing(), changeProofLenUnbounded)
+			var root2 Hash
+			if tt.emptyDiff {
+				// Re-insert the same data to create a second revision
+				// with the same root hash (no actual changes).
+				root2, err = db.Update(batch[:5])
+				r.NoError(err)
+			} else {
+				root2, err = db.Update(batch[5:])
+				r.NoError(err)
+			}
 
-	// Deserialize the proof.
-	proof := new(ChangeProof)
-	err = proof.UnmarshalBinary(proofBytes)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(proof.Free()) })
+			// get a proof
+			proofBytes := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing(), changeProofLenUnbounded)
 
-	// serialize the proof again
-	serialized, err := proof.MarshalBinary()
-	r.NoError(err)
-	r.Equal(proofBytes, serialized)
+			// Deserialize the proof.
+			proof := new(ChangeProof)
+			err = proof.UnmarshalBinary(proofBytes)
+			r.NoError(err)
+			t.Cleanup(func() { r.NoError(proof.Free()) })
+
+			// serialize the proof again
+			serialized, err := proof.MarshalBinary()
+			r.NoError(err)
+			r.Equal(proofBytes, serialized)
+		})
+	}
 }
 
 func TestVerifyAndProposeChangeProof(t *testing.T) {
@@ -906,11 +926,13 @@ func TestMultiRoundChangeProof(t *testing.T) {
 	type TestStruct struct {
 		name       string
 		hasDeletes bool
+		deleteOnly bool
 	}
 
 	tests := []TestStruct{
-		{"Multi-round change proofs with no deletes", false},
-		{"Multi-round change proofs With deletes", true},
+		{"Multi-round change proofs with no deletes", false, false},
+		{"Multi-round change proofs With deletes", true, false},
+		{"Multi-round change proofs delete-only update", false, true},
 	}
 
 	for _, tt := range tests {
@@ -931,7 +953,17 @@ func TestMultiRoundChangeProof(t *testing.T) {
 			rootAUpdated, err := dbA.Update(batch[50:])
 			r.NoError(err)
 
-			if tt.hasDeletes {
+			if tt.deleteOnly {
+				// Delete ALL keys from the second batch, producing a proof
+				// with only Delete batch_ops and no Put ops.
+				delKeys := make([]BatchOp, 50)
+				for i := range delKeys {
+					delKeys[i] = Delete(keys[50+i])
+					keys[50+i] = nil
+				}
+				rootAUpdated, err = dbA.Update(delKeys)
+				r.NoError(err)
+			} else if tt.hasDeletes {
 				// Delete some of the keys. This will create Delete BatchOps in the
 				// change proof.
 				delKeys := make([]BatchOp, 20)
