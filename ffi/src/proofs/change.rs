@@ -271,6 +271,8 @@ impl ChangeProofContext {
 impl ProposedChangeProofContext<'_> {
     /// Commit a previously proposed change proof. Consumes the proposal handle.
     fn commit(&mut self) -> Result<Option<ApiHashKey>, api::Error> {
+        // Replace proposal_state with ProposalState::Failed. None failure cases
+        // must update proposal_state with the appropriate state.
         let state = std::mem::replace(&mut self.proposal_state, ProposalState::Failed);
         match state {
             ProposalState::Committed(hash) => {
