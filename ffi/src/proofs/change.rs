@@ -214,7 +214,7 @@ impl ChangeProofContext {
     /// that the caller retains ownership of the unverified proof.
     fn verify_and_propose<'db>(
         self,
-        db: &'db crate::DatabaseHandle,
+        db: &'db DatabaseHandle,
         start_root: ApiHashKey,
         end_root: ApiHashKey,
         start_key: Option<&[u8]>,
@@ -250,7 +250,7 @@ impl ChangeProofContext {
     /// Consumes `self`. The proof is consumed regardless of success or failure.
     fn verify_and_commit(
         self,
-        db: &crate::DatabaseHandle,
+        db: &DatabaseHandle,
         start_root: ApiHashKey,
         end_root: ApiHashKey,
         start_key: Option<&[u8]>,
@@ -342,7 +342,7 @@ pub struct CodeIteratorHandle<'a> {
 type KeyValuePair = (Box<[u8]>, Box<[u8]>);
 
 impl Iterator for CodeIteratorHandle<'_> {
-    type Item = Result<crate::HashKey, api::Error>;
+    type Item = Result<HashKey, api::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
         #[cfg(not(feature = "ethhash"))]
@@ -357,7 +357,7 @@ impl Iterator for CodeIteratorHandle<'_> {
             let Ok(code_hash_slice) = Rlp::new(value).at(3).and_then(|r| r.data()) else {
                 return Some(Err(api::Error::ProofError(ProofError::InvalidValueFormat)));
             };
-            let code_hash: crate::HashKey = TrieHash::try_from(code_hash_slice).ok()?.into();
+            let code_hash: HashKey = TrieHash::try_from(code_hash_slice).ok()?.into();
             if code_hash == TrieHash::from(EMPTY_CODE_HASH).into() {
                 return None;
             }
