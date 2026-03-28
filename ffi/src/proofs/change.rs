@@ -3101,7 +3101,9 @@ mod tests {
         assert!(cursor.advance_to(4).is_none());
 
         // Depth 8 is still reachable.
-        let hit = cursor.advance_to(8).expect("depth 8 not consumed by gap miss");
+        let hit = cursor
+            .advance_to(8)
+            .expect("depth 8 not consumed by gap miss");
         assert_eq!(hit.key_nibbles.len(), 8);
     }
 }
