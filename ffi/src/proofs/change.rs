@@ -19,7 +19,7 @@ use std::cmp::Ordering;
 
 use crate::{
     BorrowedBytes, ChangeProofResult, DatabaseHandle, HashKey, HashResult, KeyRange, Maybe,
-    MetricsContextExt, NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
+    NextKeyRangeResult, OwnedBytes, ValueResult, VoidResult,
     results::{ProposedChangeProofResult, VerifiedChangeProofResult},
 };
 
@@ -670,14 +670,11 @@ pub extern "C" fn fwd_db_verify_and_propose_change_proof<'db>(
     db: Option<&'db DatabaseHandle>,
     args: VerifyAndProposeArgs,
 ) -> ProposedChangeProofResult<'db> {
-    let (Some(db), Some(proof)) = (db, args.proof) else {
-        return ProposedChangeProofResult::NullHandlePointer;
-    };
     let start_key = args.start_key.into_option();
     let end_key = args.end_key.into_option();
-    let _guard = firewood_metrics::set_metrics_context(db.metrics_context());
-    crate::invoke(move || {
-        (*proof).verify_and_propose(
+    let handle = db.and_then(|db| args.proof.map(|p| (db, p)));
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        ctx.verify_and_propose(
             db,
             args.start_root.into(),
             args.end_root.into(),
@@ -696,23 +693,19 @@ pub extern "C" fn fwd_db_verify_and_commit_change_proof(
     db: Option<&DatabaseHandle>,
     args: VerifyAndProposeArgs,
 ) -> crate::HashResult {
-    let (Some(db), Some(proof)) = (db, args.proof) else {
-        return crate::HashResult::NullHandlePointer;
-    };
     let start_key = args.start_key.into_option();
     let end_key = args.end_key.into_option();
-    let _guard = firewood_metrics::set_metrics_context(db.metrics_context());
-    crate::invoke(move || {
-        (*proof)
-            .verify_and_commit(
-                db,
-                args.start_root.into(),
-                args.end_root.into(),
-                start_key.as_deref(),
-                end_key.as_deref(),
-                NonZeroUsize::new(args.max_length as usize),
-            )
-            .map(|hash_key| hash_key.map(Into::into))
+    let handle = db.and_then(|db| args.proof.map(|p| (db, p)));
+    crate::invoke_with_handle(handle, |(db, ctx)| {
+        ctx.verify_and_commit(
+            db,
+            args.start_root.into(),
+            args.end_root.into(),
+            start_key.as_deref(),
+            end_key.as_deref(),
+            NonZeroUsize::new(args.max_length as usize),
+        )
+        .map(|hash_key| hash_key.map(Into::into))
     })
 }
 
@@ -866,6 +859,12 @@ impl crate::MetricsContextExt for ProposedChangeProofContext<'_> {
 }
 
 impl crate::MetricsContextExt for (&DatabaseHandle, &mut ChangeProofContext) {
+    fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
+        self.0.metrics_context()
+    }
+}
+
+impl crate::MetricsContextExt for (&DatabaseHandle, Box<ChangeProofContext>) {
     fn metrics_context(&self) -> Option<firewood_metrics::MetricsContext> {
         self.0.metrics_context()
     }
