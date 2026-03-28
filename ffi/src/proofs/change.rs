@@ -1545,7 +1545,7 @@ mod tests {
         );
     }
 
-    /// Defense-in-depth gap 4a: A non-empty `start_proof` with
+    /// Defense-in-depth: A non-empty `start_proof` with
     /// `start_key=None` must be rejected. Matches `AvalancheGo`'s
     /// `ErrUnexpectedStartProof`. Firewood catches this via
     /// `BoundaryProofUnverifiable` in `verify_start_proof`.
@@ -1594,7 +1594,7 @@ mod tests {
         );
     }
 
-    /// Defense-in-depth gap 4c (complete proof case): `end_root` is an
+    /// Defense-in-depth (complete proof case): `end_root` is an
     /// all-zeros hash but `batch_ops` contain data. Matches `AvalancheGo`'s
     /// `ErrDataInMissingRootProof`. Firewood catches via `EndRootMismatch`
     /// because the complete proof's computed root won't match zeros.
@@ -1643,7 +1643,7 @@ mod tests {
         );
     }
 
-    /// Defense-in-depth gap 4c (partial proof case): `end_root` is an
+    /// Defense-in-depth (partial proof case): `end_root` is an
     /// all-zeros hash but the proof is bounded with real `batch_ops`.
     /// The boundary proof's hash chain fails because it was validated
     /// against the real root, not the zeros.
@@ -1696,7 +1696,7 @@ mod tests {
         );
     }
 
-    /// Defense-in-depth gap 4b: An intermediate value mismatch between the
+    /// Defense-in-depth: An intermediate value mismatch between the
     /// proof and the proposal is caught by the hash chain. Matches
     /// `AvalancheGo`'s `verifyChangeProofKeyValues`. Firewood catches via
     /// `ProofNodeValueMismatch` or `InRangeChildMismatch` in post-application

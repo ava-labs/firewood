@@ -1194,7 +1194,7 @@ func TestChangeProofKeysNotSorted(t *testing.T) {
 	// reverses the sort order: ["bbb","aaa"] is not sorted.
 	idxA := bytes.Index(proofBytes, []byte("aaa"))
 	idxB := bytes.Index(proofBytes, []byte("bbb"))
-	r.Greater(idxA, 0, "should find 'aaa' in proof bytes")
+	r.Positive(idxA, "should find 'aaa' in proof bytes")
 	r.Greater(idxB, idxA, "'bbb' should come after 'aaa' in sorted proof")
 
 	mutated := append([]byte{}, proofBytes...)
@@ -1341,13 +1341,13 @@ func TestChangeProofBoundaryValueMismatch(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Defense-in-depth gap tests (cross-implementation comparison)
+// Defense-in-depth tests (cross-implementation comparison)
 //
 // These tests document that Firewood catches the same adversarial scenarios
 // as AvalancheGo, even though the defense mechanisms differ.
 // ---------------------------------------------------------------------------
 
-// TestChangeProofDefenseInDepth covers gaps 4a, 4b, and 4c from the
+// TestChangeProofDefenseInDepth covers adversarial scenarios from the
 // cross-implementation comparison. Each subtest creates its own databases
 // and proof, then verifies with adversarial parameters.
 func TestChangeProofDefenseInDepth(t *testing.T) {
@@ -1357,7 +1357,7 @@ func TestChangeProofDefenseInDepth(t *testing.T) {
 		errContains string
 	}{
 		{
-			// Gap 4a: non-empty start_proof verified with startKey=Nothing.
+			// Non-empty start_proof verified with startKey=Nothing.
 			// AvalancheGo: ErrUnexpectedStartProof
 			// Firewood: BoundaryProofUnverifiable
 			name: "unexpected start proof",
@@ -1392,7 +1392,7 @@ func TestChangeProofDefenseInDepth(t *testing.T) {
 			errContains: "no key to validate against",
 		},
 		{
-			// Gap 4c (complete): end_root = zeros, batch_ops non-empty.
+			// Complete proof: end_root = zeros, batch_ops non-empty.
 			// AvalancheGo: ErrDataInMissingRootProof
 			// Firewood: EndRootMismatch (complete proof root check)
 			name: "empty end root complete",
@@ -1425,7 +1425,7 @@ func TestChangeProofDefenseInDepth(t *testing.T) {
 			errContains: "proof error:",
 		},
 		{
-			// Gap 4c (partial): end_root = zeros, bounded proof.
+			// Partial proof: end_root = zeros, bounded proof.
 			// Boundary proof hash chain fails against wrong root.
 			name: "empty end root partial",
 			setup: func(t *testing.T) (*ChangeProof, *Database, Hash, Hash, maybe, maybe, uint32) {
@@ -1458,7 +1458,7 @@ func TestChangeProofDefenseInDepth(t *testing.T) {
 			errContains: "proof error:",
 		},
 		{
-			// Gap 4b: mismatched base state between proof source and verifier.
+			// Mismatched base state between proof source and verifier.
 			// AvalancheGo: verifyChangeProofKeyValues
 			// Firewood: hash chain divergence (ProofNodeValueMismatch/InRangeChildMismatch)
 			name: "mismatched base state",
@@ -1547,7 +1547,7 @@ func TestChangeProofStructuralRejection(t *testing.T) {
 				// Find "aaa" and duplicate it by overwriting "bbb" with "aaa"
 				idxA := bytes.Index(proofBytes, []byte("aaa"))
 				idxB := bytes.Index(proofBytes, []byte("bbb"))
-				r.Greater(idxA, 0, "should find 'aaa'")
+				r.Positive(idxA, "should find 'aaa'")
 				r.Greater(idxB, idxA, "'bbb' should come after 'aaa'")
 
 				mutated := append([]byte{}, proofBytes...)
