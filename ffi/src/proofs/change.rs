@@ -122,202 +122,204 @@ impl From<FrozenChangeProof> for ChangeProofContext {
     }
 }
 
-/// Verify structural properties and boundary proofs of the change proof.
-///
-/// On success, returns a `VerificationContext` capturing the verification
-/// parameters so that downstream logic can avoid re-verifying.
-fn verify_proof_structure(
-    proof: &FrozenChangeProof,
-    end_root: ApiHashKey,
-    start_key: Option<&[u8]>,
-    end_key: Option<&[u8]>,
-    max_length: Option<NonZeroUsize>,
-) -> Result<VerificationContext, api::Error> {
-    let batch_ops = proof.batch_ops();
+impl ChangeProofContext {
+    /// Verify structural properties and boundary proofs of the change proof.
+    ///
+    /// On success, returns a `VerificationContext` capturing the verification
+    /// parameters so that downstream logic can avoid re-verifying.
+    fn verify_proof_structure(
+        proof: &FrozenChangeProof,
+        end_root: ApiHashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<VerificationContext, api::Error> {
+        let batch_ops = proof.batch_ops();
 
-    // Reject inverted ranges early. The generator enforces this, but the
-    // verifier must independently validate because start_key/end_key
-    // come from the caller, not the proof.
-    if let (Some(start), Some(end)) = (start_key, end_key)
-        && start.cmp(end) == Ordering::Greater
-    {
-        return Err(api::Error::InvalidRange {
-            start_key: start.to_vec().into(),
-            end_key: end.to_vec().into(),
-        });
-    }
-
-    // The honest diff algorithm only produces Put and Delete ops,
-    // never DeleteRange. A crafted proof could use DeleteRange to delete
-    // keys outside the proven range.
-    if batch_ops
-        .iter()
-        .any(|op| matches!(op, BatchOp::DeleteRange { .. }))
-    {
-        return Err(api::Error::ProofError(ProofError::UnsupportedDeleteRange));
-    }
-
-    // Check batch_ops length <= max_length
-    if let Some(max_length) = max_length
-        && batch_ops.len() > max_length.into()
-    {
-        return Err(api::Error::ProofError(
-            ProofError::ProofIsLargerThanMaxLength,
-        ));
-    }
-
-    // Verify keys are sorted and unique — must run before boundary
-    // checks (start_key ≤ first_key, end_key ≥ last_key) because
-    // those checks compare against first/last elements, which are
-    // only meaningful if the keys are actually sorted.
-    if !batch_ops
-        .iter()
-        .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
-    {
-        return Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted));
-    }
-
-    // Check start key not greater than first batch op key
-    if let (Some(start_key), Some(first_key)) = (start_key, batch_ops.first())
-        && start_key.cmp(first_key.key()) == Ordering::Greater
-    {
-        return Err(api::Error::ProofError(
-            ProofError::StartKeyLargerThanFirstKey,
-        ));
-    }
-
-    // Check end key not less than last batch op key
-    if let (Some(end_key), Some(last_key)) = (end_key, batch_ops.last())
-        && end_key.cmp(last_key.key()) == Ordering::Less
-    {
-        return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
-    }
-
-    // Reject proofs with batch_ops but no boundary proofs, UNLESS
-    // this is a complete proof (no key bounds). Complete proofs are validated
-    // by root hash comparison in is_complete_proof() instead.
-    if !batch_ops.is_empty()
-        && proof.start_proof().is_empty()
-        && proof.end_proof().is_empty()
-        && (start_key.is_some() || end_key.is_some())
-    {
-        return Err(api::Error::ProofError(ProofError::MissingBoundaryProof));
-    }
-
-    // Reject non-empty end_proof when there is no end_key and no batch_ops.
-    // The honest generator never produces this combination. Matches
-    // AvalancheGo's ErrUnexpectedEndProof.
-    if end_key.is_none() && batch_ops.is_empty() && !proof.end_proof().is_empty() {
-        return Err(api::Error::ProofError(ProofError::UnexpectedEndProof));
-    }
-
-    // Verify boundary proofs against end_root
-    verify_start_proof(proof, start_key, &end_root)?;
-    // verify_end_proof now returns the resolved key it validated
-    // against, cached to avoid redundant value_digest calls downstream.
-    let resolved_end_key = verify_end_proof(proof, end_key, &end_root, max_length)?;
-
-    Ok(VerificationContext {
-        end_root,
-        start_key: start_key.map(Box::from),
-        end_key: end_key.map(Box::from),
-        resolved_end_key,
-    })
-}
-
-/// Verify the start boundary proof against the end root hash.
-fn verify_start_proof(
-    proof: &FrozenChangeProof,
-    start_key: Option<&[u8]>,
-    end_root: &ApiHashKey,
-) -> Result<(), api::Error> {
-    // An empty start_proof is valid: it means the range starts from the
-    // beginning of the keyspace (start_key=None in the first sync round).
-    if proof.start_proof().is_empty() {
-        return Ok(());
-    }
-
-    // If start_proof is non-empty, we MUST have a key to validate
-    // it against. The honest generator only produces a non-empty
-    // start_proof when start_key is Some (merkle/mod.rs:558-561).
-    let Some(start_key) = start_key else {
-        return Err(api::Error::ProofError(
-            ProofError::BoundaryProofUnverifiable,
-        ));
-    };
-
-    proof.start_proof().value_digest(start_key, end_root)?;
-    Ok(())
-}
-
-/// Verify the end boundary proof against the end root hash and return the
-/// key it was validated against.
-///
-/// When `batch_ops.len() >= max_length`, the proof may have been truncated.
-/// The generator uses the last batch op key when truncated but `end_key`
-/// otherwise. Since the verifier cannot distinguish the two cases, we try
-/// the last batch op key first and fall back to `end_key`.
-///
-/// When `batch_ops.len() == max_length` but the proof was NOT truncated
-/// (exactly `max_length` changes exist), Try 1 attempts `last_op_key`.
-/// If the generator used `end_key`, Try 1 fails (hash mismatch) and
-/// Try 2 succeeds with `end_key`. If `last_op_key == end_key`, Try 1
-/// succeeds directly. Either way, `resolved_end_key` correctly reflects
-/// the key the proof was actually validated against, ensuring downstream
-/// nibble bounds and lookups use the right boundary.
-///
-/// Returns `Ok(Some(key))` with the validated key, or `Ok(None)` if the
-/// end proof is empty (range reaches end of keyspace).
-fn verify_end_proof(
-    proof: &FrozenChangeProof,
-    end_key: Option<&[u8]>,
-    end_root: &ApiHashKey,
-    max_length: Option<NonZeroUsize>,
-) -> Result<Option<Box<[u8]>>, api::Error> {
-    // Empty end_proof = range reaches end of keyspace. No key to resolve.
-    if proof.end_proof().is_empty() {
-        return Ok(None);
-    }
-
-    let batch_ops = proof.batch_ops();
-    let potentially_truncated = max_length.is_some_and(|max| batch_ops.len() >= max.get());
-
-    // Try 1: truncated proof — validate against the last batch op key.
-    // Only fall through to Try 2 if the proof is valid but proves a
-    // different key (ShouldBePrefixOfProvenKey). Any structural error
-    // (broken hash chain, missing child, etc.) is propagated immediately
-    // rather than masked by trying another key.
-    if potentially_truncated && let Some(last_op) = batch_ops.last() {
-        match proof
-            .end_proof()
-            .value_digest(last_op.key().as_ref(), end_root)
+        // Reject inverted ranges early. The generator enforces this, but the
+        // verifier must independently validate because start_key/end_key
+        // come from the caller, not the proof.
+        if let (Some(start), Some(end)) = (start_key, end_key)
+            && start.cmp(end) == Ordering::Greater
         {
-            Ok(_) => return Ok(Some(last_op.key().as_ref().into())),
-            Err(ProofError::ShouldBePrefixOfProvenKey) => {}
-            Err(e) => return Err(api::Error::ProofError(e)),
+            return Err(api::Error::InvalidRange {
+                start_key: start.to_vec().into(),
+                end_key: end.to_vec().into(),
+            });
         }
+
+        // The honest diff algorithm only produces Put and Delete ops,
+        // never DeleteRange. A crafted proof could use DeleteRange to delete
+        // keys outside the proven range.
+        if batch_ops
+            .iter()
+            .any(|op| matches!(op, BatchOp::DeleteRange { .. }))
+        {
+            return Err(api::Error::ProofError(ProofError::UnsupportedDeleteRange));
+        }
+
+        // Check batch_ops length <= max_length
+        if let Some(max_length) = max_length
+            && batch_ops.len() > max_length.into()
+        {
+            return Err(api::Error::ProofError(
+                ProofError::ProofIsLargerThanMaxLength,
+            ));
+        }
+
+        // Verify keys are sorted and unique — must run before boundary
+        // checks (start_key ≤ first_key, end_key ≥ last_key) because
+        // those checks compare against first/last elements, which are
+        // only meaningful if the keys are actually sorted.
+        if !batch_ops
+            .iter()
+            .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
+        {
+            return Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted));
+        }
+
+        // Check start key not greater than first batch op key
+        if let (Some(start_key), Some(first_key)) = (start_key, batch_ops.first())
+            && start_key.cmp(first_key.key()) == Ordering::Greater
+        {
+            return Err(api::Error::ProofError(
+                ProofError::StartKeyLargerThanFirstKey,
+            ));
+        }
+
+        // Check end key not less than last batch op key
+        if let (Some(end_key), Some(last_key)) = (end_key, batch_ops.last())
+            && end_key.cmp(last_key.key()) == Ordering::Less
+        {
+            return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
+        }
+
+        // Reject proofs with batch_ops but no boundary proofs, UNLESS
+        // this is a complete proof (no key bounds). Complete proofs are validated
+        // by root hash comparison in verify_root_hash() instead.
+        if !batch_ops.is_empty()
+            && proof.start_proof().is_empty()
+            && proof.end_proof().is_empty()
+            && (start_key.is_some() || end_key.is_some())
+        {
+            return Err(api::Error::ProofError(ProofError::MissingBoundaryProof));
+        }
+
+        // Reject non-empty end_proof when there is no end_key and no batch_ops.
+        // The honest generator never produces this combination. Matches
+        // AvalancheGo's ErrUnexpectedEndProof.
+        if end_key.is_none() && batch_ops.is_empty() && !proof.end_proof().is_empty() {
+            return Err(api::Error::ProofError(ProofError::UnexpectedEndProof));
+        }
+
+        // Verify boundary proofs against end_root
+        Self::verify_start_proof(proof, start_key, &end_root)?;
+        // verify_end_proof now returns the resolved key it validated
+        // against, cached to avoid redundant value_digest calls downstream.
+        let resolved_end_key = Self::verify_end_proof(proof, end_key, &end_root, max_length)?;
+
+        Ok(VerificationContext {
+            end_root,
+            start_key: start_key.map(Box::from),
+            end_key: end_key.map(Box::from),
+            resolved_end_key,
+        })
     }
 
-    // Try 2: non-truncated proof — validate against the requested end_key.
-    if let Some(end_key) = end_key {
-        proof.end_proof().value_digest(end_key, end_root)?;
-        return Ok(Some(end_key.into()));
+    /// Verify the start boundary proof against the end root hash.
+    fn verify_start_proof(
+        proof: &FrozenChangeProof,
+        start_key: Option<&[u8]>,
+        end_root: &ApiHashKey,
+    ) -> Result<(), api::Error> {
+        // An empty start_proof is valid: it means the range starts from the
+        // beginning of the keyspace (start_key=None in the first sync round).
+        if proof.start_proof().is_empty() {
+            return Ok(());
+        }
+
+        // If start_proof is non-empty, we MUST have a key to validate
+        // it against. The honest generator only produces a non-empty
+        // start_proof when start_key is Some.
+        let Some(start_key) = start_key else {
+            return Err(api::Error::ProofError(
+                ProofError::BoundaryProofUnverifiable,
+            ));
+        };
+
+        proof.start_proof().value_digest(start_key, end_root)?;
+        Ok(())
     }
 
-    // Try 3: no end_key — fall back to last batch op key.
-    if let Some(last_op) = batch_ops.last() {
-        proof
-            .end_proof()
-            .value_digest(last_op.key().as_ref(), end_root)?;
-        return Ok(Some(last_op.key().as_ref().into()));
-    }
+    /// Verify the end boundary proof against the end root hash and return the
+    /// key it was validated against.
+    ///
+    /// When `batch_ops.len() >= max_length`, the proof may have been truncated.
+    /// The generator uses the last batch op key when truncated but `end_key`
+    /// otherwise. Since the verifier cannot distinguish the two cases, we try
+    /// the last batch op key first and fall back to `end_key`.
+    ///
+    /// When `batch_ops.len() == max_length` but the proof was NOT truncated
+    /// (exactly `max_length` changes exist), Try 1 attempts `last_op_key`.
+    /// If the generator used `end_key`, Try 1 fails (hash mismatch) and
+    /// Try 2 succeeds with `end_key`. If `last_op_key == end_key`, Try 1
+    /// succeeds directly. Either way, `resolved_end_key` correctly reflects
+    /// the key the proof was actually validated against, ensuring downstream
+    /// nibble bounds and lookups use the right boundary.
+    ///
+    /// Returns `Ok(Some(key))` with the validated key, or `Ok(None)` if the
+    /// end proof is empty (range reaches end of keyspace).
+    fn verify_end_proof(
+        proof: &FrozenChangeProof,
+        end_key: Option<&[u8]>,
+        end_root: &ApiHashKey,
+        max_length: Option<NonZeroUsize>,
+    ) -> Result<Option<Box<[u8]>>, api::Error> {
+        // Empty end_proof = range reaches end of keyspace. No key to resolve.
+        if proof.end_proof().is_empty() {
+            return Ok(None);
+        }
 
-    // All validation paths exhausted. end_proof is non-empty but
-    // no key could validate it. The honest generator always provides a
-    // key for a non-empty end_proof (merkle/mod.rs:589-603).
-    Err(api::Error::ProofError(
-        ProofError::BoundaryProofUnverifiable,
-    ))
+        let batch_ops = proof.batch_ops();
+        let potentially_truncated = max_length.is_some_and(|max| batch_ops.len() >= max.get());
+
+        // Try 1: truncated proof — validate against the last batch op key.
+        // Only fall through to Try 2 if the proof is valid but proves a
+        // different key (ShouldBePrefixOfProvenKey). Any structural error
+        // (broken hash chain, missing child, etc.) is propagated immediately
+        // rather than masked by trying another key.
+        if potentially_truncated && let Some(last_op) = batch_ops.last() {
+            match proof
+                .end_proof()
+                .value_digest(last_op.key().as_ref(), end_root)
+            {
+                Ok(_) => return Ok(Some(last_op.key().as_ref().into())),
+                Err(ProofError::ShouldBePrefixOfProvenKey) => {}
+                Err(e) => return Err(api::Error::ProofError(e)),
+            }
+        }
+
+        // Try 2: non-truncated proof — validate against the requested end_key.
+        if let Some(end_key) = end_key {
+            proof.end_proof().value_digest(end_key, end_root)?;
+            return Ok(Some(end_key.into()));
+        }
+
+        // Try 3: no end_key — fall back to last batch op key.
+        if let Some(last_op) = batch_ops.last() {
+            proof
+                .end_proof()
+                .value_digest(last_op.key().as_ref(), end_root)?;
+            return Ok(Some(last_op.key().as_ref().into()));
+        }
+
+        // All validation paths exhausted. end_proof is non-empty but
+        // no key could validate it. The honest generator always provides a
+        // key for a non-empty end_proof.
+        Err(api::Error::ProofError(
+            ProofError::BoundaryProofUnverifiable,
+        ))
+    }
 }
 
 /// Convert a byte key to a nibble path.
@@ -578,7 +580,7 @@ impl ChangeProofContext {
         // result without cloning.
         let proof = self.proof;
 
-        let verification = match verify_proof_structure(
+        let verification = match Self::verify_proof_structure(
             &proof,
             end_root.clone(),
             start_key,
@@ -1179,7 +1181,7 @@ mod tests {
 
     use crate::{BorrowedBytes, CView, DatabaseHandle, DatabaseHandleArgs, NodeHashAlgorithm};
 
-    use super::{ChangeProofContext, verify_proof_structure};
+    use super::ChangeProofContext;
 
     /// Create a temporary database for testing.
     fn test_db(dir: &std::path::Path) -> DatabaseHandle {
@@ -1234,7 +1236,7 @@ mod tests {
             .expect("change proof");
 
         // Verify with inverted keys: start=\xa0 > end=\x10
-        let result = verify_proof_structure(&proof, root2, Some(b"\xa0"), Some(b"\x10"), None);
+        let result = ChangeProofContext::verify_proof_structure(&proof, root2, Some(b"\xa0"), Some(b"\x10"), None);
         let err = result.expect_err("inverted range should be rejected");
         assert!(
             matches!(err, firewood::api::Error::InvalidRange { .. }),
@@ -1350,7 +1352,7 @@ mod tests {
 
         // Verify with start_key=None: the non-empty start proof has no key
         // to validate against → BoundaryProofUnverifiable
-        let result = verify_proof_structure(
+        let result = ChangeProofContext::verify_proof_structure(
             &proof,
             root2,
             None, // start_key=None but start_proof is non-empty
@@ -1414,7 +1416,7 @@ mod tests {
         );
     }
 
-    /// Multi-round scenario where `is_complete_proof` is false (`start_key=Some`)
+    /// Multi-round scenario where the proof is not complete (`start_key=Some`)
     /// but `find_next_key` catches the root hash mismatch because the proof
     /// only covers a suffix of the changed keys.
     ///
@@ -1455,8 +1457,9 @@ mod tests {
 
         // Generate a proof starting from \x11, which skips the \x10 change.
         // This gives us only the \x20 and \x30 changes with empty end_proof
-        // (end of keyspace). start_key=Some makes is_complete_proof false,
-        // so verify_and_propose skips the root hash check.
+        // (end of keyspace). start_key=Some means this is not a complete proof,
+        // so verify_root_hash checks in-range children instead of a direct
+        // root hash comparison.
         let partial_proof = db_a
             .change_proof(root1_a, root2.clone(), Some(b"\x11".as_ref()), None, None)
             .expect("partial proof");
@@ -1579,7 +1582,7 @@ mod tests {
 
         // Verify with start_key=None: non-empty start_proof has no key
         // to validate against → BoundaryProofUnverifiable
-        let result = verify_proof_structure(&proof, root2, None, Some(b"\xa0"), None);
+        let result = ChangeProofContext::verify_proof_structure(&proof, root2, None, Some(b"\xa0"), None);
         let err = result.expect_err("non-empty start_proof with start_key=None must be rejected");
         assert!(
             matches!(
@@ -1678,7 +1681,7 @@ mod tests {
 
         // Verify with end_root = all zeros
         let empty_root = firewood::api::HashKey::empty();
-        let result = verify_proof_structure(&proof, empty_root, Some(b"\x10"), Some(b"\xa0"), None);
+        let result = ChangeProofContext::verify_proof_structure(&proof, empty_root, Some(b"\x10"), Some(b"\xa0"), None);
         // The boundary proof's value_digest will fail against the wrong root
         assert!(
             result.is_err(),
@@ -1689,7 +1692,7 @@ mod tests {
     /// Defense-in-depth gap 4b: An intermediate value mismatch between the
     /// proof and the proposal is caught by the hash chain. Matches
     /// `AvalancheGo`'s `verifyChangeProofKeyValues`. Firewood catches via
-    /// `SubTrieHashMismatch` or `BoundaryValueMismatch` in post-application
+    /// `ProofNodeValueMismatch` or `InRangeChildMismatch` in post-application
     /// verification.
     #[test]
     fn test_intermediate_value_mismatch_caught_by_hash_chain() {
@@ -1775,7 +1778,7 @@ mod tests {
 
         // Bounded range with empty proof must be rejected because there are
         // no boundary proofs to validate the range
-        let _result = verify_proof_structure(
+        let _result = ChangeProofContext::verify_proof_structure(
             &empty_proof,
             dummy_root.clone(),
             Some(b"\x10"),
@@ -1798,7 +1801,7 @@ mod tests {
             Proof::new(Box::new([])),
             Box::new([put(b"\x50", b"value")]),
         );
-        let result = verify_proof_structure(
+        let result = ChangeProofContext::verify_proof_structure(
             &non_empty_proof,
             dummy_root,
             Some(b"\x10"),
@@ -1847,7 +1850,7 @@ mod tests {
             Box::new([put(b"\x50", b"a"), put(b"\x50", b"b")]),
         );
 
-        let result = verify_proof_structure(&crafted, root2, None, None, None);
+        let result = ChangeProofContext::verify_proof_structure(&crafted, root2, None, None, None);
         let err = result.expect_err("duplicate keys must be rejected");
         assert!(
             matches!(
@@ -2287,7 +2290,7 @@ mod tests {
             .expect("change proof");
 
         // Verify with start_key=\xff, which is greater than any key in batch_ops
-        let result = verify_proof_structure(&proof, root2, Some(b"\xff"), None, None);
+        let result = ChangeProofContext::verify_proof_structure(&proof, root2, Some(b"\xff"), None, None);
         let err = result.expect_err("start_key > first_key must be rejected");
         assert!(
             matches!(
@@ -2321,7 +2324,7 @@ mod tests {
             .expect("change proof");
 
         // Verify with end_key=\x01, which is less than the last key in batch_ops
-        let result = verify_proof_structure(&proof, root2, None, Some(b"\x01"), None);
+        let result = ChangeProofContext::verify_proof_structure(&proof, root2, None, Some(b"\x01"), None);
         let err = result.expect_err("end_key < last_key must be rejected");
         assert!(
             matches!(
@@ -2362,7 +2365,7 @@ mod tests {
         );
 
         // Verify with max_length=1, which is less than the actual count
-        let result = verify_proof_structure(&proof, root2, None, None, NonZeroUsize::new(1));
+        let result = ChangeProofContext::verify_proof_structure(&proof, root2, None, None, NonZeroUsize::new(1));
         let err = result.expect_err("proof exceeding max_length must be rejected");
         assert!(
             matches!(

@@ -1443,7 +1443,7 @@ func TestChangeProofDefenseInDepth(t *testing.T) {
 		{
 			// Gap 4b: mismatched base state between proof source and verifier.
 			// AvalancheGo: verifyChangeProofKeyValues
-			// Firewood: hash chain divergence (SubTrieHashMismatch/BoundaryValueMismatch)
+			// Firewood: hash chain divergence (ProofNodeValueMismatch/InRangeChildMismatch)
 			name: "mismatched base state",
 			setup: func(t *testing.T) (*ChangeProof, *Database, Hash, Hash, maybe, maybe, uint32) {
 				t.Helper()
