@@ -429,10 +429,11 @@ fn verify_proof_node_value(
 ///
 /// `is_end_proof` controls both the direction of the in-range check
 /// and what happens when no boundary nibble is available (key
-/// exhausted at the last node): for the end proof, no children are
-/// in-range (they extend the key, coming after it); for the start
-/// proof, all children are in-range (same reason — after the key is
-/// the in-range direction).
+/// exhausted at the last node, i.e. an inclusion proof): for the
+/// end proof, no children are in-range (they all come after the
+/// proven key); for the start proof, all children are in-range
+/// (they all come after the proven key, which is the in-range
+/// direction for start proofs).
 fn verify_in_range_children(
     nodes: &[ProofNode],
     cursor: &mut ProposalCursor<'_>,
@@ -624,11 +625,23 @@ fn verify_root_hash(
     let start_nibbles = verification.start_key.as_deref().map(key_to_nibbles);
 
     // The end proof's last-node boundary comes from the last batch_op's
-    // key, not from end_key or the key verify_end_proof validated. The
-    // proposal only applies changes up to last_op — children beyond
-    // last_op's nibble are unchanged from start_root and should not be
-    // compared against end_root (which may differ due to truncation).
-    let end_nibbles = proof.batch_ops().last().map(|op| key_to_nibbles(op.key()));
+    // key when batch_ops is non-empty. The proposal only applies changes
+    // up to last_op — children beyond last_op's nibble are unchanged
+    // from start_root and should not be compared against end_root (which
+    // may differ due to truncation).
+    //
+    // When batch_ops is empty, the proposal is just start_root with no
+    // modifications. The in-range region extends to end_key, so we fall
+    // back to end_key's nibbles to ensure in-range children at the last
+    // end-proof node are still checked. Without this fallback,
+    // boundary_nibble would be None and no children would be verified,
+    // allowing a prover to claim "no changes" while end_root actually
+    // differs from start_root within the range.
+    let end_nibbles = proof
+        .batch_ops()
+        .last()
+        .map(|op| key_to_nibbles(op.key()))
+        .or_else(|| verification.end_key.as_deref().map(key_to_nibbles));
 
     // Retrieve the proposal's path aligned with each boundary proof.
     // The lookup key is derived from the proof nodes themselves, so the
