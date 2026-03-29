@@ -7,7 +7,9 @@ use std::num::NonZeroUsize;
 use firewood_metrics::firewood_increment;
 #[cfg(feature = "ethhash")]
 use firewood_storage::TrieHash;
-use firewood_storage::{Children, HashType, NibblesIterator, PathComponent, PathIterItem};
+use firewood_storage::{
+    Children, HashType, NibblesIterator, Path, PathComponent, PathComponentSliceExt, PathIterItem,
+};
 #[cfg(feature = "ethhash")]
 use rlp::Rlp;
 
@@ -102,10 +104,10 @@ struct VerificationContext {
     end_root: ApiHashKey,
     start_key: Option<Box<[u8]>>,
     end_key: Option<Box<[u8]>>,
-    /// The key that the end proof was actually validated against.
-    /// Computed during `verify_end_proof` and cached to avoid
-    /// redundant `value_digest` calls in downstream checks.
-    resolved_end_key: Option<Box<[u8]>>,
+    /// The proof path's actual endpoint, extracted from the last end
+    /// proof node's nibble path. Used downstream by `verify_root_hash`
+    /// for nibble boundary calculations.
+    end_proof_boundary: Option<Box<[u8]>>,
 }
 
 #[derive(Debug)]
@@ -213,15 +215,15 @@ impl ChangeProofContext {
 
         // Verify boundary proofs against end_root
         Self::verify_start_proof(proof, start_key, &end_root)?;
-        // verify_end_proof now returns the resolved key it validated
-        // against, cached to avoid redundant value_digest calls downstream.
-        let resolved_end_key = Self::verify_end_proof(proof, end_key, &end_root, max_length)?;
+        // verify_end_proof returns the proof's boundary key, extracted
+        // from the last proof node's nibble path.
+        let end_proof_boundary = Self::verify_end_proof(proof, end_key, &end_root)?;
 
         Ok(VerificationContext {
             end_root,
             start_key: start_key.map(Box::from),
             end_key: end_key.map(Box::from),
-            resolved_end_key,
+            end_proof_boundary,
         })
     }
 
@@ -250,71 +252,58 @@ impl ChangeProofContext {
         Ok(())
     }
 
-    /// Verify the end boundary proof against the end root hash and return the
-    /// key it was validated against.
+    /// Verify the end boundary proof against the end root hash and return
+    /// the key it was validated against.
     ///
-    /// When `batch_ops.len() >= max_length`, the proof may have been truncated.
-    /// The generator uses the last batch op key when truncated but `end_key`
-    /// otherwise. Since the verifier cannot distinguish the two cases, we try
-    /// the last batch op key first and fall back to `end_key`.
+    /// The generator builds the end proof for either `last_op_key`
+    /// (truncated) or `end_key` (non-truncated). Rather than relying on
+    /// an external hint like `max_length`, we use the proof's own content
+    /// (`batch_ops`) to determine which key to try first:
+    /// - Put + `Ok(Some(_))`: definitive inclusion
+    /// - Delete + `Ok(None)`: expected exclusion
+    /// - `end_key` fallback: any `Ok` result accepted
     ///
-    /// When `batch_ops.len() == max_length` but the proof was NOT truncated
-    /// (exactly `max_length` changes exist), Try 1 attempts `last_op_key`.
-    /// If the generator used `end_key`, Try 1 fails (hash mismatch) and
-    /// Try 2 succeeds with `end_key`. If `last_op_key == end_key`, Try 1
-    /// succeeds directly. Either way, `resolved_end_key` correctly reflects
-    /// the key the proof was actually validated against, ensuring downstream
-    /// nibble bounds and lookups use the right boundary.
+    /// The returned key is used for nibble boundary classification in
+    /// `verify_root_hash`. The proposal path lookup is derived separately
+    /// from the proof nodes themselves.
     ///
-    /// Returns `Ok(Some(key))` with the validated key, or `Ok(None)` if the
-    /// end proof is empty (range reaches end of keyspace).
+    /// Returns `Ok(Some(key))` with the validated key, or `Ok(None)` if
+    /// the end proof is empty (range reaches end of keyspace).
     fn verify_end_proof(
         proof: &FrozenChangeProof,
         end_key: Option<&[u8]>,
         end_root: &ApiHashKey,
-        max_length: Option<NonZeroUsize>,
     ) -> Result<Option<Box<[u8]>>, api::Error> {
-        // Empty end_proof = range reaches end of keyspace. No key to resolve.
         if proof.end_proof().is_empty() {
             return Ok(None);
         }
 
-        let batch_ops = proof.batch_ops();
-        let potentially_truncated = max_length.is_some_and(|max| batch_ops.len() >= max.get());
-
-        // Try 1: truncated proof — validate against the last batch op key.
-        // Only fall through to Try 2 if the proof is valid but proves a
-        // different key (ShouldBePrefixOfProvenKey). Any structural error
-        // (broken hash chain, missing child, etc.) is propagated immediately
-        // rather than masked by trying another key.
-        if potentially_truncated && let Some(last_op) = batch_ops.last() {
+        // Try last_op_key first — the end proof may be for the right
+        // edge of the changes (truncated proof).
+        if let Some(last_op) = proof.batch_ops().last() {
+            let is_delete = matches!(last_op, BatchOp::Delete { .. });
             match proof
                 .end_proof()
                 .value_digest(last_op.key().as_ref(), end_root)
             {
-                Ok(_) => return Ok(Some(last_op.key().as_ref().into())),
-                Err(ProofError::ShouldBePrefixOfProvenKey) => {}
+                // Put + inclusion: definitive match
+                Ok(Some(_)) if !is_delete => return Ok(Some(last_op.key().as_ref().into())),
+                // Delete + exclusion: expected match
+                Ok(None) if is_delete => return Ok(Some(last_op.key().as_ref().into())),
+                // Wrong key or unexpected result: fall through
+                Ok(_) | Err(ProofError::ShouldBePrefixOfProvenKey) => {}
                 Err(e) => return Err(api::Error::ProofError(e)),
             }
         }
 
-        // Try 2: non-truncated proof — validate against the requested end_key.
+        // Last batch op key didn't match (or no batch ops) — try end_key.
+        // This is the non-truncated case where the generator used end_key.
         if let Some(end_key) = end_key {
             proof.end_proof().value_digest(end_key, end_root)?;
             return Ok(Some(end_key.into()));
         }
 
-        // Try 3: no end_key — fall back to last batch op key.
-        if let Some(last_op) = batch_ops.last() {
-            proof
-                .end_proof()
-                .value_digest(last_op.key().as_ref(), end_root)?;
-            return Ok(Some(last_op.key().as_ref().into()));
-        }
-
-        // All validation paths exhausted. end_proof is non-empty but
-        // no key could validate it. The honest generator always provides a
-        // key for a non-empty end_proof.
+        // end_proof is non-empty but no key could validate it.
         Err(api::Error::ProofError(
             ProofError::BoundaryProofUnverifiable,
         ))
@@ -355,6 +344,15 @@ impl<'a> ProposalCursor<'a> {
             .get(self.pos)
             .filter(|item| item.key_nibbles.len() == depth)
     }
+}
+
+/// Convert a proof node's nibble key to a byte-level key for proposal lookup.
+///
+/// Each pair of nibbles is combined into one byte via [`Path::bytes_iter`].
+/// An odd trailing nibble is dropped, which is safe because values and
+/// children only exist at even nibble depths.
+fn proof_node_byte_key(node: &ProofNode) -> Vec<u8> {
+    Path::from(node.key.as_byte_slice()).bytes_iter().collect()
 }
 
 /// Verify that a proof node's value matches the proposal's value at the
@@ -456,20 +454,20 @@ fn verify_root_hash(
     // in-range child classification.
     let start_nibbles = verification.start_key.as_deref().map(key_to_nibbles);
 
-    // Use the resolved end key (the key the end proof was actually
-    // validated against) rather than the originally requested end_key.
-    // For truncated proofs, resolved_end_key is the last batch op key;
-    // for non-truncated proofs, it matches end_key.
+    // Use the end proof boundary (extracted from the last proof node's
+    // nibble path) rather than the originally requested end_key. This
+    // is the proof path's actual endpoint for nibble boundary calculations.
     let effective_end_key = verification
-        .resolved_end_key
+        .end_proof_boundary
         .as_deref()
         .or(verification.end_key.as_deref());
     let end_nibbles = effective_end_key.map(key_to_nibbles);
 
-    // Retrieve the proposal's path-to-key results for each boundary.
-    // These are sorted by depth (root to leaf), matching proof node order.
-    let start_path = get_proposal_path(verification.start_key.as_deref(), proposal)?;
-    let end_path = get_proposal_path(effective_end_key, proposal)?;
+    // Retrieve the proposal's path aligned with each boundary proof.
+    // The lookup key is derived from the proof nodes themselves, so the
+    // proposal traversal follows the same trie path as the proof.
+    let start_path = get_proposal_path_for_proof(start_nodes, proposal)?;
+    let end_path = get_proposal_path_for_proof(end_nodes, proposal)?;
 
     if start_nodes.is_empty() {
         // Case 2a: Only end proof (first sync round, start_key=None).
@@ -769,16 +767,21 @@ impl ProposedChangeProofContext<'_> {
     }
 }
 
-/// Retrieve the proposal's path-to-key result for the given boundary key.
-/// Returns an empty Vec when no key is provided (no boundary on that side).
-fn get_proposal_path(
-    key: Option<&[u8]>,
+/// Retrieve the proposal's path aligned with the given proof nodes.
+///
+/// The lookup key is derived from the last proof node's nibble path
+/// (converted to bytes), so the proposal traversal follows the same
+/// trie path as the proof regardless of which key was verified.
+/// Returns an empty Vec when the proof is empty.
+fn get_proposal_path_for_proof(
+    proof_nodes: &[ProofNode],
     proposal: &crate::ProposalHandle<'_>,
 ) -> Result<Vec<PathIterItem>, api::Error> {
-    let Some(key) = key else {
+    let Some(last) = proof_nodes.last() else {
         return Ok(Vec::new());
     };
-    proposal.path_to_key(key)
+    let key = proof_node_byte_key(last);
+    proposal.path_to_key(&key)
 }
 
 /// A key range that should be fetched to continue iterating through a range
@@ -1198,6 +1201,13 @@ mod tests {
         BatchOp::Put {
             key: key.to_vec().into_boxed_slice(),
             value: val.to_vec().into_boxed_slice(),
+        }
+    }
+
+    /// Shorthand for creating a Delete batch operation with the right types.
+    fn delete(key: &[u8]) -> BatchOp<Key, Value> {
+        BatchOp::Delete {
+            key: key.to_vec().into_boxed_slice(),
         }
     }
 
@@ -2590,7 +2600,7 @@ mod tests {
             end_root: root2,
             start_key: Some(b"\x10".to_vec().into_boxed_slice()),
             end_key: Some(b"\xa1".to_vec().into_boxed_slice()),
-            resolved_end_key: Some(b"\xa0".to_vec().into_boxed_slice()),
+            end_proof_boundary: Some(b"\xa0".to_vec().into_boxed_slice()),
         };
 
         // Call verify_root_hash directly (bypassing verify_proof_structure
@@ -3101,9 +3111,338 @@ mod tests {
         assert!(cursor.advance_to(4).is_none());
 
         // Depth 8 is still reachable.
-        let hit = cursor
-            .advance_to(8)
-            .expect("depth 8 not consumed by gap miss");
+        let hit = cursor.advance_to(8).expect("depth 8 not consumed by gap miss");
         assert_eq!(hit.key_nibbles.len(), 8);
+    }
+
+    /// Unbounded truncated proof where the last batch op is Delete.
+    /// The end proof is an exclusion proof for the deleted key.
+    /// `verify_end_proof` must accept Delete + `Ok(None)` as a valid match.
+    #[test]
+    fn test_truncated_proof_with_delete_last_op() {
+        use std::num::NonZeroUsize;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![
+            put(b"\x10", b"v0"),
+            put(b"\x20", b"v1"),
+            put(b"\x30", b"v2"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // db_a: modify one key, delete another, modify a third.
+        // With max_length=2, the truncated proof includes the first two ops,
+        // with the last being a Delete.
+        let changes = vec![
+            put(b"\x10", b"changed0"),
+            delete(b"\x20"),
+            put(b"\x30", b"changed2"),
+        ];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        let proof = db_a
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                None,
+                None,
+                NonZeroUsize::new(2),
+            )
+            .expect("truncated change proof");
+
+        let batch_ops = proof.batch_ops();
+        assert_eq!(batch_ops.len(), 2, "should have exactly 2 ops");
+        assert!(
+            matches!(batch_ops.last().expect("checked"), BatchOp::Delete { .. }),
+            "last op should be Delete"
+        );
+
+        // Verify on db_b — should succeed despite last op being Delete
+        let change_ctx = ChangeProofContext::from(proof);
+        let mut proposed = change_ctx
+            .verify_and_propose(&db_b, root1_b, root2, None, None, None)
+            .expect("truncated proof with Delete last op should verify");
+
+        let next = proposed
+            .find_next_key()
+            .expect("find_next_key should not error");
+        assert!(next.is_some(), "truncated proof should have a next range");
+    }
+
+    /// Non-truncated bounded proof where the last batch op is Delete and
+    /// `end_key` differs from `last_op_key`. The end proof is built for
+    /// `end_key`, so the `last_op_key` check falls through to `end_key`.
+    #[test]
+    fn test_non_truncated_delete_falls_through_to_end_key() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![
+            put(b"\x10", b"v0"),
+            put(b"\x20", b"v1"),
+            put(b"\xa0", b"v2"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // Delete \x20 (middle key). The last op in the diff is the delete.
+        // end_key=\xa0 differs from last_op_key=\x20.
+        let changes = vec![delete(b"\x20")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Non-truncated bounded proof: end proof built for end_key=\xa0
+        let proof = db_a
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                Some(b"\x10".as_ref()),
+                Some(b"\xa0".as_ref()),
+                None,
+            )
+            .expect("change proof");
+
+        let batch_ops = proof.batch_ops();
+        assert!(
+            !batch_ops.is_empty(),
+            "proof should have at least one batch op"
+        );
+        assert!(
+            matches!(batch_ops.last().expect("non-empty"), BatchOp::Delete { .. }),
+            "last op should be Delete"
+        );
+
+        let change_ctx = ChangeProofContext::from(proof);
+        let result = change_ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"\x10".as_ref()),
+            Some(b"\xa0".as_ref()),
+            None,
+        );
+        assert!(
+            result.is_ok(),
+            "non-truncated delete proof should verify via end_key fallback: {:?}",
+            result.err()
+        );
+    }
+
+    /// Bounded truncated proof where the last batch op is Delete.
+    /// Tests the path where `end_key` is provided but the proof was
+    /// built for `last_op_key` (truncated).
+    #[test]
+    fn test_bounded_truncated_delete() {
+        use std::num::NonZeroUsize;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![
+            put(b"\x10", b"v0"),
+            put(b"\x20", b"v1"),
+            put(b"\x30", b"v2"),
+            put(b"\xa0", b"v3"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // Multiple changes including a delete in the middle.
+        let changes = vec![
+            put(b"\x10", b"changed0"),
+            delete(b"\x20"),
+            put(b"\x30", b"changed2"),
+        ];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Bounded truncated proof: end_key=\xa0, max_length=2.
+        // The truncated proof covers the first 2 ops, with the last being Delete(\x20).
+        let proof = db_a
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                None,
+                Some(b"\xa0".as_ref()),
+                NonZeroUsize::new(2),
+            )
+            .expect("bounded truncated change proof");
+
+        let batch_ops = proof.batch_ops();
+        assert_eq!(batch_ops.len(), 2, "should have exactly 2 ops");
+        assert!(
+            matches!(batch_ops.last().expect("checked"), BatchOp::Delete { .. }),
+            "last op should be Delete"
+        );
+
+        let change_ctx = ChangeProofContext::from(proof);
+        let mut proposed = change_ctx
+            .verify_and_propose(
+                &db_b,
+                root1_b,
+                root2,
+                None,
+                Some(b"\xa0".as_ref()),
+                None,
+            )
+            .expect("bounded truncated delete proof should verify");
+
+        let next = proposed
+            .find_next_key()
+            .expect("find_next_key should not error");
+        assert!(next.is_some(), "truncated proof should have a next range");
+    }
+
+    /// Truncated proof verified without forwarding `max_length`.
+    /// Previously, `verify_end_proof` relied on `max_length` to detect
+    /// truncation. Now it uses the proof's own content, so passing
+    /// `max_length=None` to the verifier still works.
+    #[test]
+    fn test_verify_end_proof_ignores_max_length() {
+        use std::num::NonZeroUsize;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![
+            put(b"\x10", b"v0"),
+            put(b"\x20", b"v1"),
+            put(b"\x30", b"v2"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        let changes = vec![
+            put(b"\x10", b"changed0"),
+            put(b"\x20", b"changed1"),
+            put(b"\x30", b"changed2"),
+        ];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Generate a truncated proof with max_length=1
+        let proof = db_a
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                None,
+                None,
+                NonZeroUsize::new(1),
+            )
+            .expect("truncated proof");
+
+        assert!(
+            !proof.end_proof().is_empty(),
+            "truncated proof should have non-empty end_proof"
+        );
+
+        // Verify with max_length=None — verifier does not need max_length
+        // to determine truncation because verify_end_proof uses batch_ops.
+        let change_ctx = ChangeProofContext::from(proof);
+        let result =
+            change_ctx.verify_and_propose(&db_b, root1_b, root2, None, None, None);
+        assert!(
+            result.is_ok(),
+            "truncated proof verified without max_length should succeed: {:?}",
+            result.err()
+        );
+    }
+
+    /// Start proof where `start_key` was deleted in the target trie.
+    /// The start proof is an exclusion proof for the deleted key,
+    /// which `verify_start_proof` accepts via `value_digest`.
+    #[test]
+    fn test_start_proof_exclusion_for_deleted_key() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![
+            put(b"\x10", b"v0"),
+            put(b"\x20", b"v1"),
+            put(b"\x30", b"v2"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // Delete start_key \x10 and modify \x30.
+        // The start proof for \x10 in end_root's trie will be an exclusion proof.
+        let changes = vec![delete(b"\x10"), put(b"\x30", b"changed")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Bounded proof starting from the deleted key
+        let proof = db_a
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                Some(b"\x10".as_ref()),
+                None,
+                None,
+            )
+            .expect("change proof with deleted start_key");
+
+        let change_ctx = ChangeProofContext::from(proof);
+        let result = change_ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"\x10".as_ref()),
+            None,
+            None,
+        );
+        assert!(
+            result.is_ok(),
+            "start proof exclusion for deleted key should verify: {:?}",
+            result.err()
+        );
     }
 }
