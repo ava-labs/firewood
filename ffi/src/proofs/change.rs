@@ -1,19 +1,17 @@
 // Copyright (C) 2025, Ava Labs, Inc. All rights reserved.
 // See the file LICENSE.md for licensing terms.
 
-use std::cmp::Ordering;
 use std::num::NonZeroUsize;
 
 use firewood_metrics::firewood_increment;
 #[cfg(feature = "ethhash")]
 use firewood_storage::TrieHash;
-use firewood_storage::{Children, HashType, NibblesIterator, PathComponent, PathIterItem};
 #[cfg(feature = "ethhash")]
 use rlp::Rlp;
 
 use firewood::{
-    ProofError, ProofNode,
-    api::{self, BatchOp, DbView as _, FrozenChangeProof, HashKey as ApiHashKey},
+    ProofError,
+    api::{self, DbView as _, FrozenChangeProof, HashKey as ApiHashKey},
 };
 
 use crate::{
@@ -100,12 +98,7 @@ pub struct ProposedChangeProofContext<'db> {
 #[derive(Debug)]
 struct VerificationContext {
     end_root: ApiHashKey,
-    start_key: Option<Box<[u8]>>,
     end_key: Option<Box<[u8]>>,
-    /// The key that the end proof was actually validated against.
-    /// Computed during `verify_end_proof` and cached to avoid
-    /// redundant `value_digest` calls in downstream checks.
-    resolved_end_key: Option<Box<[u8]>>,
 }
 
 #[derive(Debug)]
@@ -119,475 +112,6 @@ impl From<FrozenChangeProof> for ChangeProofContext {
     fn from(proof: FrozenChangeProof) -> Self {
         Self { proof }
     }
-}
-
-impl ChangeProofContext {
-    /// Verify structural properties and boundary proofs of the change proof.
-    ///
-    /// On success, returns a `VerificationContext` capturing the verification
-    /// parameters so that downstream logic can avoid re-verifying.
-    fn verify_proof_structure(
-        proof: &FrozenChangeProof,
-        end_root: ApiHashKey,
-        start_key: Option<&[u8]>,
-        end_key: Option<&[u8]>,
-        max_length: Option<NonZeroUsize>,
-    ) -> Result<VerificationContext, api::Error> {
-        let batch_ops = proof.batch_ops();
-
-        // Reject inverted ranges early. The generator enforces this, but the
-        // verifier must independently validate because start_key/end_key
-        // come from the caller, not the proof.
-        if let (Some(start), Some(end)) = (start_key, end_key)
-            && start.cmp(end) == Ordering::Greater
-        {
-            return Err(api::Error::InvalidRange {
-                start_key: start.to_vec().into(),
-                end_key: end.to_vec().into(),
-            });
-        }
-
-        // The honest diff algorithm only produces Put and Delete ops,
-        // never DeleteRange. A crafted proof could use DeleteRange to delete
-        // keys outside the proven range.
-        if batch_ops
-            .iter()
-            .any(|op| matches!(op, BatchOp::DeleteRange { .. }))
-        {
-            return Err(api::Error::ProofError(ProofError::UnsupportedDeleteRange));
-        }
-
-        // Check batch_ops length <= max_length
-        if let Some(max_length) = max_length
-            && batch_ops.len() > max_length.into()
-        {
-            return Err(api::Error::ProofError(
-                ProofError::ProofIsLargerThanMaxLength,
-            ));
-        }
-
-        // Verify keys are sorted and unique — must run before boundary
-        // checks (start_key ≤ first_key, end_key ≥ last_key) because
-        // those checks compare against first/last elements, which are
-        // only meaningful if the keys are actually sorted.
-        if !batch_ops
-            .iter()
-            .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
-        {
-            return Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted));
-        }
-
-        // Check start key not greater than first batch op key
-        if let (Some(start_key), Some(first_key)) = (start_key, batch_ops.first())
-            && start_key.cmp(first_key.key()) == Ordering::Greater
-        {
-            return Err(api::Error::ProofError(
-                ProofError::StartKeyLargerThanFirstKey,
-            ));
-        }
-
-        // Check end key not less than last batch op key
-        if let (Some(end_key), Some(last_key)) = (end_key, batch_ops.last())
-            && end_key.cmp(last_key.key()) == Ordering::Less
-        {
-            return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
-        }
-
-        // Reject proofs with batch_ops but no boundary proofs, UNLESS
-        // this is a complete proof (no key bounds). Complete proofs are validated
-        // by root hash comparison in verify_root_hash() instead.
-        if !batch_ops.is_empty()
-            && proof.start_proof().is_empty()
-            && proof.end_proof().is_empty()
-            && (start_key.is_some() || end_key.is_some())
-        {
-            return Err(api::Error::ProofError(ProofError::MissingBoundaryProof));
-        }
-
-        // Reject non-empty end_proof when there is no end_key and no batch_ops.
-        // The honest generator never produces this combination. Matches
-        // AvalancheGo's ErrUnexpectedEndProof.
-        if end_key.is_none() && batch_ops.is_empty() && !proof.end_proof().is_empty() {
-            return Err(api::Error::ProofError(ProofError::UnexpectedEndProof));
-        }
-
-        // Verify boundary proofs against end_root
-        Self::verify_start_proof(proof, start_key, &end_root)?;
-        // verify_end_proof now returns the resolved key it validated
-        // against, cached to avoid redundant value_digest calls downstream.
-        let resolved_end_key = Self::verify_end_proof(proof, end_key, &end_root, max_length)?;
-
-        Ok(VerificationContext {
-            end_root,
-            start_key: start_key.map(Box::from),
-            end_key: end_key.map(Box::from),
-            resolved_end_key,
-        })
-    }
-
-    /// Verify the start boundary proof against the end root hash.
-    fn verify_start_proof(
-        proof: &FrozenChangeProof,
-        start_key: Option<&[u8]>,
-        end_root: &ApiHashKey,
-    ) -> Result<(), api::Error> {
-        // An empty start_proof is valid: it means the range starts from the
-        // beginning of the keyspace (start_key=None in the first sync round).
-        if proof.start_proof().is_empty() {
-            return Ok(());
-        }
-
-        // If start_proof is non-empty, we MUST have a key to validate
-        // it against. The honest generator only produces a non-empty
-        // start_proof when start_key is Some.
-        let Some(start_key) = start_key else {
-            return Err(api::Error::ProofError(
-                ProofError::BoundaryProofUnverifiable,
-            ));
-        };
-
-        proof.start_proof().value_digest(start_key, end_root)?;
-        Ok(())
-    }
-
-    /// Verify the end boundary proof against the end root hash and return the
-    /// key it was validated against.
-    ///
-    /// When `batch_ops.len() >= max_length`, the proof may have been truncated.
-    /// The generator uses the last batch op key when truncated but `end_key`
-    /// otherwise. Since the verifier cannot distinguish the two cases, we try
-    /// the last batch op key first and fall back to `end_key`.
-    ///
-    /// When `batch_ops.len() == max_length` but the proof was NOT truncated
-    /// (exactly `max_length` changes exist), Try 1 attempts `last_op_key`.
-    /// If the generator used `end_key`, Try 1 fails (hash mismatch) and
-    /// Try 2 succeeds with `end_key`. If `last_op_key == end_key`, Try 1
-    /// succeeds directly. Either way, `resolved_end_key` correctly reflects
-    /// the key the proof was actually validated against, ensuring downstream
-    /// nibble bounds and lookups use the right boundary.
-    ///
-    /// Returns `Ok(Some(key))` with the validated key, or `Ok(None)` if the
-    /// end proof is empty (range reaches end of keyspace).
-    fn verify_end_proof(
-        proof: &FrozenChangeProof,
-        end_key: Option<&[u8]>,
-        end_root: &ApiHashKey,
-        max_length: Option<NonZeroUsize>,
-    ) -> Result<Option<Box<[u8]>>, api::Error> {
-        // Empty end_proof = range reaches end of keyspace. No key to resolve.
-        if proof.end_proof().is_empty() {
-            return Ok(None);
-        }
-
-        let batch_ops = proof.batch_ops();
-        let potentially_truncated = max_length.is_some_and(|max| batch_ops.len() >= max.get());
-
-        // Try 1: truncated proof — validate against the last batch op key.
-        // Only fall through to Try 2 if the proof is valid but proves a
-        // different key (ShouldBePrefixOfProvenKey). Any structural error
-        // (broken hash chain, missing child, etc.) is propagated immediately
-        // rather than masked by trying another key.
-        if potentially_truncated && let Some(last_op) = batch_ops.last() {
-            match proof
-                .end_proof()
-                .value_digest(last_op.key().as_ref(), end_root)
-            {
-                Ok(_) => return Ok(Some(last_op.key().as_ref().into())),
-                Err(ProofError::ShouldBePrefixOfProvenKey) => {}
-                Err(e) => return Err(api::Error::ProofError(e)),
-            }
-        }
-
-        // Try 2: non-truncated proof — validate against the requested end_key.
-        if let Some(end_key) = end_key {
-            proof.end_proof().value_digest(end_key, end_root)?;
-            return Ok(Some(end_key.into()));
-        }
-
-        // Try 3: no end_key — fall back to last batch op key.
-        if let Some(last_op) = batch_ops.last() {
-            proof
-                .end_proof()
-                .value_digest(last_op.key().as_ref(), end_root)?;
-            return Ok(Some(last_op.key().as_ref().into()));
-        }
-
-        // All validation paths exhausted. end_proof is non-empty but
-        // no key could validate it. The honest generator always provides a
-        // key for a non-empty end_proof.
-        Err(api::Error::ProofError(
-            ProofError::BoundaryProofUnverifiable,
-        ))
-    }
-}
-
-/// Convert a byte key to a nibble path.
-fn key_to_nibbles(key: &[u8]) -> Vec<PathComponent> {
-    NibblesIterator::new(key)
-        .filter_map(PathComponent::try_new)
-        .collect()
-}
-
-/// Forward-only cursor over a proposal's path-to-key result.
-/// Both proof nodes and proposal path nodes are sorted by depth,
-/// so we advance through the proposal path in lockstep with the
-/// proof nodes instead of building a `HashMap`.
-struct ProposalCursor<'a> {
-    path: &'a [PathIterItem],
-    pos: usize,
-}
-
-impl<'a> ProposalCursor<'a> {
-    const fn new(path: &'a [PathIterItem]) -> Self {
-        Self { path, pos: 0 }
-    }
-
-    /// Advance past nodes shallower than `depth`, return the node
-    /// at exactly `depth` if one exists.
-    fn advance_to(&mut self, depth: usize) -> Option<&'a PathIterItem> {
-        while let Some(item) = self.path.get(self.pos) {
-            if item.key_nibbles.len() >= depth {
-                break;
-            }
-            self.pos = self.pos.saturating_add(1);
-        }
-        self.path
-            .get(self.pos)
-            .filter(|item| item.key_nibbles.len() == depth)
-    }
-}
-
-/// Verify that a proof node's value matches the proposal's value at the
-/// same trie path.
-///
-/// Nodes at odd nibble depths cannot carry values in the trie encoding.
-/// Malicious proofs with values at odd depths are rejected earlier by
-/// the boundary proof hash chain verification (`ValueAtOddNibbleLength`).
-fn verify_proof_node_value(
-    node: &ProofNode,
-    lookup_item: Option<&PathIterItem>,
-) -> Result<(), ProofError> {
-    let depth = node.key.len();
-    // Only nodes at even nibble depths can carry values.
-    if !depth.is_multiple_of(2) {
-        return Ok(());
-    }
-    let proposal_value = lookup_item.and_then(|item| item.node.value());
-    match (&node.value_digest, proposal_value) {
-        (None, None) => Ok(()),
-        (Some(digest), Some(val)) if digest.verify(val) => Ok(()),
-        _ => Err(ProofError::ProofNodeValueMismatch { depth }),
-    }
-}
-
-/// Verify that in-range children of each proof node match the proposal.
-///
-/// The proof's hash chain to `end_root` is already verified by
-/// `verify_proof_structure`. If every in-range child hash matches the
-/// proposal's, the substitution in the old rehash approach would have
-/// been a no-op and the root hash unchanged. A mismatch means the
-/// proposal's state differs from what the proof claims.
-fn verify_in_range_children(
-    nodes: &[ProofNode],
-    cursor: &mut ProposalCursor<'_>,
-    boundary_nibbles: &[PathComponent],
-    is_in_range: impl Fn(PathComponent, PathComponent) -> bool,
-) -> Result<(), ProofError> {
-    // The forward-only cursor assumes nodes are in ascending depth order,
-    // which is guaranteed by the prefix checks in `verify_proof_structure`.
-    for node in nodes {
-        let depth = node.key.len();
-
-        // Advance cursor to this depth. None means the proposal has no node
-        // here (trie compressed through this level). This is safe: the value
-        // check passes with (None, None), and children below default to
-        // all-None so any proof child hash at an in-range slot mismatches.
-        let lookup_item = cursor.advance_to(depth);
-        verify_proof_node_value(node, lookup_item)?;
-
-        // Boundary nibble at this depth; None if the boundary key is shorter,
-        // meaning all children are in-range from that side.
-        let boundary_nibble = boundary_nibbles.get(depth).copied();
-
-        // On cursor miss, defaults to all-None children (see above).
-        let proposal_children: Children<Option<HashType>> = lookup_item
-            .and_then(|item| item.node.as_branch().map(|b| b.children_hashes()))
-            .unwrap_or_default();
-
-        for nibble in PathComponent::ALL {
-            let in_range = boundary_nibble.is_none_or(|bn| is_in_range(nibble, bn));
-            if in_range && node.child_hashes[nibble] != proposal_children[nibble] {
-                return Err(ProofError::InRangeChildMismatch { depth });
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Verify that boundary proof nodes are consistent with the proposal
-/// by comparing in-range children directly.
-///
-/// The proof's hash chain to `end_root` is already verified in
-/// `verify_proof_structure`. Substituting a child hash with an
-/// identical value doesn't change the hash input, so rehashing is
-/// redundant. Instead we compare in-range children directly — same
-/// verification, less work.
-fn verify_root_hash(
-    proof: &FrozenChangeProof,
-    verification: &VerificationContext,
-    proposal: &crate::ProposalHandle<'_>,
-) -> Result<(), api::Error> {
-    let start_nodes: &[ProofNode] = proof.start_proof().as_ref();
-    let end_nodes: &[ProofNode] = proof.end_proof().as_ref();
-
-    // Case 1: Both proofs empty — this is a "complete" proof covering the
-    // entire keyspace (no boundaries). The proposal should contain the
-    // full target state, so compare its root hash directly against
-    // end_root. Also covers the degenerate case of an empty diff.
-    if start_nodes.is_empty() && end_nodes.is_empty() {
-        let computed: HashKey = proposal.root_hash().map(HashKey::from).unwrap_or_default();
-        if computed != HashKey::from(verification.end_root.clone()) {
-            return Err(api::Error::ProofError(ProofError::EndRootMismatch));
-        }
-        return Ok(());
-    }
-
-    // Convert byte-level boundary keys to nibble-level paths for
-    // in-range child classification.
-    let start_nibbles = verification.start_key.as_deref().map(key_to_nibbles);
-
-    // Use the resolved end key (the key the end proof was actually
-    // validated against) rather than the originally requested end_key.
-    // For truncated proofs, resolved_end_key is the last batch op key;
-    // for non-truncated proofs, it matches end_key.
-    let effective_end_key = verification
-        .resolved_end_key
-        .as_deref()
-        .or(verification.end_key.as_deref());
-    let end_nibbles = effective_end_key.map(key_to_nibbles);
-
-    // Retrieve the proposal's path-to-key results for each boundary.
-    // These are sorted by depth (root to leaf), matching proof node order.
-    let start_path = get_proposal_path(verification.start_key.as_deref(), proposal)?;
-    let end_path = get_proposal_path(effective_end_key, proposal)?;
-
-    if start_nodes.is_empty() {
-        // Case 2a: Only end proof (first sync round, start_key=None).
-        // Children before the end boundary nibble are in-range.
-        let mut cursor = ProposalCursor::new(&end_path);
-        verify_in_range_children(
-            end_nodes,
-            &mut cursor,
-            end_nibbles.as_deref().unwrap_or(&[]),
-            |n, bn| n < bn,
-        )?;
-    } else if end_nodes.is_empty() {
-        // Case 2b: Only start proof (last sync round, end of keyspace).
-        // Children after the start boundary nibble are in-range.
-        let mut cursor = ProposalCursor::new(&start_path);
-        verify_in_range_children(
-            start_nodes,
-            &mut cursor,
-            start_nibbles.as_deref().unwrap_or(&[]),
-            |n, bn| n > bn,
-        )?;
-    } else {
-        // Case 2c: Both boundary proofs exist (middle sync round).
-        // Find where the two proof paths diverge.
-        let divergence_depth = start_nodes
-            .iter()
-            .zip(end_nodes.iter())
-            .position(|(s, e)| s.key != e.key)
-            .unwrap_or(std::cmp::min(start_nodes.len(), end_nodes.len()));
-
-        let Some(parent_idx) = divergence_depth.checked_sub(1) else {
-            return Err(ProofError::BoundaryProofsDivergeAtRoot.into());
-        };
-        let parent = start_nodes
-            .get(parent_idx)
-            .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
-
-        // Verify values at shared prefix nodes (including divergence parent).
-        // At shared prefix nodes both proofs route through the same nibble,
-        // so no children are in-range from either side — only values matter.
-        let shared = start_nodes
-            .get(..divergence_depth)
-            .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
-        // The start cursor advances through shared prefix nodes first,
-        // then continues into the divergence parent and start tail.
-        let mut start_cursor = ProposalCursor::new(&start_path);
-        for node in shared {
-            // None means the proposal compressed through this depth (no
-            // explicit node). verify_proof_node_value allows (None, None)
-            // — if the proof node claims a value exists but the proposal
-            // has none, the mismatch is caught.
-            let item = start_cursor.advance_to(node.key.len());
-            verify_proof_node_value(node, item)?;
-        }
-
-        // At the divergence parent: children between the two boundary
-        // nibbles are in-range. boundary_nibbles.get() returns None when
-        // that boundary's key terminates at or above this depth, meaning
-        // all children are in-range from that side.
-        let parent_depth = parent.key.len();
-        let start_bn = start_nibbles
-            .as_deref()
-            .and_then(|sn| sn.get(parent_depth).copied());
-        let end_bn = end_nibbles
-            .as_deref()
-            .and_then(|en| en.get(parent_depth).copied());
-
-        // Reuse the start cursor to look up the divergence parent's children.
-        // None means the proposal compressed through this depth; children
-        // default to all-None, so any proof child with a hash at an in-range
-        // slot will produce an InRangeChildMismatch, correctly detecting the
-        // structural difference between the proof and proposal.
-        let item = start_cursor.advance_to(parent_depth);
-        let proposal_children = item
-            .and_then(|i| i.node.as_branch().map(|b| b.children_hashes()))
-            .unwrap_or_default();
-        for nibble in PathComponent::ALL {
-            let after_start = start_bn.is_none_or(|s| nibble > s);
-            let before_end = end_bn.is_none_or(|e| nibble < e);
-            if after_start && before_end && parent.child_hashes[nibble] != proposal_children[nibble]
-            {
-                return Err(ProofError::InRangeChildMismatch {
-                    depth: parent_depth,
-                }
-                .into());
-            }
-        }
-
-        // Walk tails independently below the divergence point.
-        // start_cursor naturally continues past shared prefix nodes.
-        let start_tail = start_nodes
-            .get(divergence_depth..)
-            .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
-        let end_tail = end_nodes
-            .get(divergence_depth..)
-            .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
-        if !start_tail.is_empty() {
-            verify_in_range_children(
-                start_tail,
-                &mut start_cursor,
-                start_nibbles.as_deref().unwrap_or(&[]),
-                |n, bn| n > bn,
-            )?;
-        }
-        if !end_tail.is_empty() {
-            // Separate cursor for the end tail since it walks a different
-            // proposal path than the start cursor.
-            let mut end_cursor = ProposalCursor::new(&end_path);
-            verify_in_range_children(
-                end_tail,
-                &mut end_cursor,
-                end_nibbles.as_deref().unwrap_or(&[]),
-                |n, bn| n < bn,
-            )?;
-        }
-    }
-
-    Ok(())
 }
 
 impl ChangeProofContext {
@@ -608,32 +132,28 @@ impl ChangeProofContext {
         end_key: Option<&[u8]>,
         max_length: Option<NonZeroUsize>,
     ) -> Result<ProposedChangeProofContext<'db>, Box<(Self, api::Error)>> {
-        // Destructure self so we can move `proof` into either the Ok or Err
-        // result without cloning.
         let proof = self.proof;
-
-        let verification = match Self::verify_proof_structure(
-            &proof,
-            end_root.clone(),
-            start_key,
-            end_key,
-            max_length,
-        ) {
-            Ok(v) => v,
-            Err(e) => return Err(Box::new((Self { proof }, e))),
-        };
 
         let proposal = match db.apply_change_proof_to_parent(start_root, &proof) {
             Ok(p) => p,
             Err(e) => return Err(Box::new((Self { proof }, e))),
         };
 
-        // Root hash verification: walk boundary proof paths bottom-up,
-        // substituting in-range children from the proposal, and compare
-        // the computed root against end_root.
-        if let Err(e) = verify_root_hash(&proof, &verification, &proposal.handle) {
+        if let Err(e) = firewood::proofs::change::verify_change_proof(
+            &proof,
+            proposal.handle.nodestore(),
+            &end_root,
+            start_key,
+            end_key,
+            max_length,
+        ) {
             return Err(Box::new((Self { proof }, e)));
         }
+
+        let verification = VerificationContext {
+            end_root,
+            end_key: end_key.map(Box::from),
+        };
 
         Ok(ProposedChangeProofContext {
             proof,
@@ -697,7 +217,7 @@ impl ProposedChangeProofContext<'_> {
         // After commit: use the cached hash from the commit result.
         // None means the trie is empty; unwrap_or_default gives the
         // canonical empty-trie hash, matching the pattern in
-        // verify_and_propose (line ~526).
+        // verify_and_propose.
         let computed: HashKey = match &self.proposal_state {
             ProposalState::Proposed(handle) => {
                 handle.root_hash().map(HashKey::from).unwrap_or_default()
@@ -767,18 +287,6 @@ impl ProposedChangeProofContext<'_> {
             self.verification.end_key.clone(),
         )))
     }
-}
-
-/// Retrieve the proposal's path-to-key result for the given boundary key.
-/// Returns an empty Vec when no key is provided (no boundary on that side).
-fn get_proposal_path(
-    key: Option<&[u8]>,
-    proposal: &crate::ProposalHandle<'_>,
-) -> Result<Vec<PathIterItem>, api::Error> {
-    let Some(key) = key else {
-        return Ok(Vec::new());
-    };
-    proposal.path_to_key(key)
 }
 
 /// A key range that should be fetched to continue iterating through a range

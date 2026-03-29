@@ -48,6 +48,9 @@ nightly = []
 io-uring = ["firewood-storage/io-uring"]
 logger = ["firewood-storage/logger"]
 ethhash = ["firewood-storage/ethhash"]
+# Exposes internal types (e.g. `Merkle`) for use by benchmarks and integration
+# tests. Not part of the public API; do not use in production code.
+test_utils = []
 
 [dev-dependencies]
 # Workspace dependencies
@@ -72,6 +75,7 @@ sha3 = "0.10.8"
 [[bench]]
 name = "hashops"
 harness = false
+required-features = ["test_utils"]
 
 [[bench]]
 name = "defer_persist"

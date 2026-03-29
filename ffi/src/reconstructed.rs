@@ -23,7 +23,7 @@ impl<'db> DbView for ReconstructedHandle<'db> {
         self.reconstructed.root_hash()
     }
 
-    fn val<K: api::KeyType>(&self, key: K) -> Result<Option<firewood::merkle::Value>, api::Error> {
+    fn val<K: api::KeyType>(&self, key: K) -> Result<Option<firewood::Value>, api::Error> {
         self.reconstructed.val(key)
     }
 

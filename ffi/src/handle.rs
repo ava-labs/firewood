@@ -10,7 +10,6 @@ use firewood::{
     },
     db::{Db, DbConfig},
     manager::RevisionManagerConfig,
-    merkle::Merkle,
 };
 use firewood_storage::{Committed, FileBacked, NodeStore};
 
@@ -337,27 +336,7 @@ impl DatabaseHandle {
         end_key: Option<&[u8]>,
         limit: Option<NonZeroUsize>,
     ) -> Result<FrozenChangeProof, api::Error> {
-        // Convert `RevisionNotFound` to `EndRevisionNotFound`. We get the end merkle
-        // before the start merkle since we want to return an `EndRevisionNotFound` in
-        // the case where both the start and end keys are not available.
-        let end_merkle = Merkle::from(self.db.revision(end_hash).map_err(|err| {
-            if let api::Error::RevisionNotFound { provided } = err {
-                api::Error::EndRevisionNotFound { provided }
-            } else {
-                err
-            }
-        })?);
-
-        // Convert `RevisionNotFound` to `StartRevisionNotFound`.
-        let start_merkle = Merkle::from(self.db.revision(start_hash).map_err(|err| {
-            if let api::Error::RevisionNotFound { provided } = err {
-                api::Error::StartRevisionNotFound { provided }
-            } else {
-                err
-            }
-        })?);
-
-        end_merkle.change_proof(start_key, end_key, start_merkle.nodestore(), limit)
+        self.db.change_proof(end_hash, start_hash, start_key, end_key, limit)
     }
 
     /// Applies the `BatchOp`s of a change proof to the parent.

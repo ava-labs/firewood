@@ -4,7 +4,7 @@ use clap::Args;
 use firewood::api::{self, Db as _};
 use firewood::db::{Db, DbConfig};
 use firewood::iter::MerkleKeyValueIter;
-use firewood::merkle::{Key, Value};
+use firewood::{Key, Value};
 use firewood_storage::FileIoError;
 use std::borrow::Cow;
 use std::error::Error;

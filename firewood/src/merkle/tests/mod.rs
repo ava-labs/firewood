@@ -6,6 +6,7 @@
 #[cfg(feature = "ethhash")]
 mod ethhash;
 // TODO: get the hashes from merkledb and verify compatibility with branch factor 256
+mod change;
 mod proof;
 mod range;
 #[cfg(not(feature = "ethhash"))]

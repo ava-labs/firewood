@@ -14,22 +14,29 @@ use crate::api::{
 };
 use crate::iter::{MerkleKeyValueIter, PathIterator};
 use crate::merkle::changes::{ChangeProof, DiffMerkleNodeStream};
-use crate::{Proof, ProofCollection, ProofError, ProofNode, RangeProof};
+use crate::{Proof, ProofError, ProofNode, RangeProof};
+#[cfg(test)]
+use crate::ProofCollection;
 use firewood_metrics::firewood_increment;
 #[cfg(test)]
 use firewood_storage::MemStore;
 use firewood_storage::{
-    BranchNode, Child, Children, FileIoError, HashType, HashedNodeReader, ImmutableProposal,
+    BranchNode, Child, Children, FileIoError, HashType, HashedNodeReader,
     IntoHashType, LeafNode, MaybePersistedNode, Mutable, MutableKind, NibblesIterator, Node,
-    NodeStore, Parentable, Path, PathComponent, Propose, ReadableStorage, SharedNode, TrieHash,
+    NodeStore, Path, PathComponent, ReadableStorage, SharedNode,
     TrieReader, ValueDigest,
 };
+#[cfg(any(test, feature = "test_utils"))]
+use firewood_storage::{ImmutableProposal, Parentable, Propose};
+#[cfg(test)]
+use firewood_storage::TrieHash;
+#[cfg(any(test, feature = "test_utils"))]
+use std::sync::Arc;
 use std::collections::HashSet;
 use std::fmt::Debug;
 use std::io::Error;
 use std::iter::once;
 use std::num::NonZeroUsize;
-use std::sync::Arc;
 
 /// Keys are boxed u8 slices
 pub type Key = Box<[u8]>;
@@ -133,6 +140,7 @@ impl<T> From<T> for Merkle<T> {
     }
 }
 
+#[cfg(test)]
 /// Verify one edge (left or right) of a range proof.
 ///
 /// Checks that the requested bound is consistent with the edge key-value pair,
@@ -228,6 +236,7 @@ impl<T: TrieReader> Merkle<T> {
         Ok(Proof::new(proof.into_boxed_slice()))
     }
 
+    #[cfg(test)]
     /// Verify that a range proof is valid for the specified key range and root hash.
     ///
     /// This method validates a range proof by constructing a partial trie from the proof data
@@ -702,6 +711,7 @@ impl<T: HashedNodeReader> Merkle<T> {
     }
 }
 
+#[cfg(any(test, feature = "test_utils"))]
 impl<F: Parentable, S: ReadableStorage> Merkle<NodeStore<F, S>> {
     /// Forks the current Merkle trie into a new mutable proposal.
     ///
@@ -713,6 +723,7 @@ impl<F: Parentable, S: ReadableStorage> Merkle<NodeStore<F, S>> {
     }
 }
 
+#[cfg(any(test, feature = "test_utils"))]
 impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<Mutable<Propose>, S>>>
     for Merkle<NodeStore<Arc<ImmutableProposal>, S>>
 {
@@ -724,6 +735,7 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<Mutable<Propose>, S>>>
     }
 }
 
+#[cfg(any(test, feature = "test_utils"))]
 impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     /// Convert a merkle backed by a `Mutable<Propose>` into an `ImmutableProposal`
     ///
@@ -738,7 +750,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     }
 }
 
-#[expect(clippy::missing_errors_doc)]
 impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     fn read_for_update(&mut self, child: Child) -> Result<Node, FileIoError> {
         match child {
@@ -781,7 +792,6 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     /// Map `key` to `value` into the subtrie rooted at `node`.
     /// Each element of `key` is 1 nibble.
     /// Returns the new root of the subtrie.
-    #[expect(clippy::missing_panics_doc)]
     pub fn insert_helper(
         &mut self,
         mut node: Node,

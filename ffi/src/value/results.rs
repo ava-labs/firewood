@@ -2,7 +2,6 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::api;
-use firewood::merkle;
 use firewood_storage::TrieHash;
 use std::fmt;
 
@@ -463,8 +462,8 @@ pub enum KeyValueResult {
     Err(OwnedBytes),
 }
 
-impl From<Option<Result<(merkle::Key, merkle::Value), api::Error>>> for KeyValueResult {
-    fn from(value: Option<Result<(merkle::Key, merkle::Value), api::Error>>) -> Self {
+impl From<Option<Result<(firewood::Key, firewood::Value), api::Error>>> for KeyValueResult {
+    fn from(value: Option<Result<(firewood::Key, firewood::Value), api::Error>>) -> Self {
         match value {
             Some(value) => match value {
                 Ok(value) => KeyValueResult::Some(value.into()),
@@ -493,8 +492,8 @@ pub enum KeyValueBatchResult {
     Err(OwnedBytes),
 }
 
-impl From<Result<Vec<(merkle::Key, merkle::Value)>, api::Error>> for KeyValueBatchResult {
-    fn from(value: Result<Vec<(merkle::Key, merkle::Value)>, api::Error>) -> Self {
+impl From<Result<Vec<(firewood::Key, firewood::Value)>, api::Error>> for KeyValueBatchResult {
+    fn from(value: Result<Vec<(firewood::Key, firewood::Value)>, api::Error>) -> Self {
         match value {
             Ok(pairs) => {
                 let values: Vec<_> = pairs.into_iter().map(Into::into).collect();

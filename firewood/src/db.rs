@@ -17,7 +17,7 @@ use crate::api::{
 use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
 
-use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig};
+use crate::manager::{ConfigManager, RevisionManager, RevisionManagerConfig, RevisionManagerError};
 use firewood_metrics::firewood_counter;
 use firewood_storage::{
     CheckOpt, CheckerReport, Committed, FileBacked, FileIoError, HashedNodeReader,
@@ -369,6 +369,45 @@ impl Db {
         })
     }
 
+    /// Generate a change proof between two revisions identified by their root hashes.
+    ///
+    /// Returns the proof that covers key-value changes between `start_hash` and `end_hash`
+    /// within the optional `[start_key, end_key]` range, truncated to at most `limit` entries.
+    ///
+    /// # Errors
+    ///
+    /// - [`api::Error::EndRevisionNotFound`] if `end_hash` is not found.
+    /// - [`api::Error::StartRevisionNotFound`] if `start_hash` is not found.
+    /// - Other I/O or structural errors during proof generation.
+    pub fn change_proof(
+        &self,
+        end_hash: HashKey,
+        start_hash: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<api::FrozenChangeProof, api::Error> {
+        // Resolve end revision first so we return EndRevisionNotFound when both
+        // hashes are missing (matching the FFI's prior error-precedence rule).
+        let end_rev = self.manager.revision(end_hash).map_err(|err| {
+            if let RevisionManagerError::RevisionNotFound { provided } = err {
+                api::Error::EndRevisionNotFound { provided: Some(provided) }
+            } else {
+                api::Error::from(err)
+            }
+        })?;
+        let start_rev = self.manager.revision(start_hash).map_err(|err| {
+            if let RevisionManagerError::RevisionNotFound { provided } = err {
+                api::Error::StartRevisionNotFound { provided: Some(provided) }
+            } else {
+                api::Error::from(err)
+            }
+        })?;
+        let start_merkle = Merkle::from(start_rev);
+        let end_merkle = Merkle::from(end_rev);
+        end_merkle.change_proof(start_key, end_key, start_merkle.nodestore(), limit)
+    }
+
     /// Closes the database gracefully.
     ///
     /// Shuts down the background persistence worker and persists the latest
@@ -462,6 +501,15 @@ impl Proposal<'_> {
     #[must_use]
     pub fn view(&self) -> ArcDynDbView {
         self.nodestore.clone()
+    }
+
+    /// Returns a reference to the underlying nodestore.
+    ///
+    /// Used by external verification code (e.g. the FFI layer) that needs to
+    /// pass an already-applied proposal to [`firewood::proofs::change::verify_change_proof`].
+    #[must_use]
+    pub fn nodestore(&self) -> &NodeStore<Arc<ImmutableProposal>, FileBacked> {
+        &self.nodestore
     }
 
     /// Walk the trie path from root to the given key, returning each node

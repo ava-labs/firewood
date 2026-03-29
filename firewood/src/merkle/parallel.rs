@@ -7,14 +7,14 @@ use crate::merkle::{Key, Merkle, Value};
 use firewood_metrics::{current_metrics_context, set_metrics_context};
 use firewood_storage::logger::error;
 use firewood_storage::{
-    BranchNode, Child, Children, FileBacked, FileIoError, ImmutableProposal, LeafNode,
-    MaybePersistedNode, Mutable, NibblesIterator, Node, NodeStore, Parentable, Path, PathComponent,
+    BranchNode, Child, Children, FileBacked, FileIoError, LeafNode,
+    MaybePersistedNode, Mutable, NibblesIterator, Node, NodeStore, Path, PathComponent,
     Propose,
 };
 use rayon::ThreadPool;
 use std::iter::once;
 use std::sync::mpsc::{Receiver, SendError, Sender};
-use std::sync::{Arc, mpsc};
+use std::sync::mpsc;
 
 #[derive(Debug)]
 struct WorkerSender(mpsc::Sender<BatchOp<Key, Value>>);
@@ -500,32 +500,4 @@ impl ParallelMerkle {
         Ok(mutable_nodestore)
     }
 
-    /// Creates a parallel proposal in 4 steps: Prepare, Split, Merge, and Post-process. In the
-    /// Prepare step, the trie is modified to ensure that the root is a branch node with no
-    /// partial path. In the split step, entries from the batch are sent to workers that
-    /// independently modify their sub-tries. In the merge step, the sub-tries are merged back
-    /// to the main trie. Finally, in the post-processing step, the trie is returned to its
-    /// canonical form.
-    ///
-    /// # Errors
-    ///
-    /// Returns a `CreateProposalError::FileIoError` if it encounters an error fetching nodes
-    /// from storage, a `CreateProposalError::SendError` if it is unable to send messages to
-    /// the workers, and a `CreateProposalError::InvalidConversionToPathComponent` if it is
-    /// unable to convert a u8 index into a path component.
-    pub fn create_proposal<T: Parentable>(
-        &mut self,
-        parent: &NodeStore<T, FileBacked>,
-        batch: impl IntoBatchIter,
-        pool: &ThreadPool,
-    ) -> Result<Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>>, CreateProposalError> {
-        // Create a mutable nodestore from the parent
-        let mutable_nodestore = NodeStore::new(parent)?;
-        let mutable_nodestore = self.apply(mutable_nodestore, batch, pool)?;
-
-        let immutable: Arc<NodeStore<Arc<ImmutableProposal>, FileBacked>> =
-            Arc::new(mutable_nodestore.try_into()?);
-
-        Ok(immutable)
-    }
 }

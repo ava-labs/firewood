@@ -66,6 +66,7 @@
 //! backward compatibility with proof verification.
 
 pub(super) mod childmap;
+pub mod change;
 pub(super) mod de;
 pub(crate) mod header;
 pub(crate) mod range;

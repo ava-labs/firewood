@@ -2,6 +2,8 @@
 // See the file LICENSE.md for licensing terms.
 
 use firewood::api::{self, BoxKeyValueIter, DbView, HashKey, IntoBatchIter, Proposal as _};
+use firewood_storage::{FileBacked, ImmutableProposal, NodeStore};
+use std::sync::Arc;
 
 use crate::{IteratorHandle, iterator::CreateIteratorResult, metrics::MetricsContextExt};
 use firewood_metrics::{firewood_increment, firewood_record, fwd_expensive_timed_result};
@@ -25,7 +27,7 @@ impl<'db> DbView for ProposalHandle<'db> {
         self.proposal.root_hash()
     }
 
-    fn val<K: api::KeyType>(&self, key: K) -> Result<Option<firewood::merkle::Value>, api::Error> {
+    fn val<K: api::KeyType>(&self, key: K) -> Result<Option<firewood::Value>, api::Error> {
         self.proposal.val(key)
     }
 
@@ -61,6 +63,15 @@ impl ProposalHandle<'_> {
         self.hash_key.clone().map(Into::into)
     }
 
+    /// Returns the nodestore backing this proposal.
+    ///
+    /// Used by the FFI verification layer to pass the applied proposal to
+    /// [`firewood::proofs::change::verify_change_proof`].
+    #[must_use]
+    pub(crate) fn nodestore(&self) -> &NodeStore<Arc<ImmutableProposal>, FileBacked> {
+        self.proposal.nodestore()
+    }
+
     /// Consume and commit a proposal.
     ///
     /// # Errors
@@ -91,15 +102,6 @@ impl ProposalHandle<'_> {
         firewood_increment!(crate::registry::COMMIT_COUNT, 1);
 
         Ok(hash_key)
-    }
-
-    /// Walk the trie path from root to the given key, returning each node
-    /// along the path with its child hashes.
-    pub(crate) fn path_to_key(
-        &self,
-        key: &[u8],
-    ) -> Result<Vec<firewood_storage::PathIterItem>, api::Error> {
-        self.proposal.path_to_key(key)
     }
 
     /// Creates an iterator on the proposal starting from the given key.

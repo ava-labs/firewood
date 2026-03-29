@@ -125,7 +125,15 @@ pub mod iter;
 pub mod manager;
 
 /// Merkle module, containing merkle operations
-pub mod merkle;
+#[doc(hidden)]
+pub(crate) mod merkle;
+
+// Re-export `Merkle` when the `test_utils` feature is enabled so that
+// benchmarks and integration tests can access it without making the entire
+// `merkle` module part of the public API.
+#[cfg(feature = "test_utils")]
+#[doc(hidden)]
+pub use merkle::Merkle;
 
 /// Metrics registry for firewood layer metrics
 pub mod registry;
@@ -148,6 +156,7 @@ pub mod registry;
 pub mod proofs;
 
 // Re-export commonly used proof types at the crate root for ergonomic access
+pub use merkle::{Key, Value};
 pub use proofs::{
     EmptyProofCollection, InvalidHeader, Proof, ProofCollection, ProofError, ProofNode, ProofType,
     RangeProof, ReadError,

@@ -80,7 +80,7 @@ impl DbView for RevisionHandle<'_> {
         self.view.root_hash()
     }
 
-    fn val<K: api::KeyType>(&self, key: K) -> Result<Option<firewood::merkle::Value>, api::Error> {
+    fn val<K: api::KeyType>(&self, key: K) -> Result<Option<firewood::Value>, api::Error> {
         self.view.val(key.as_ref())
     }
 
