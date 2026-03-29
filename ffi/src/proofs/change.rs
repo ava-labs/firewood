@@ -4086,4 +4086,133 @@ mod tests {
             "omitted change below prefix start_key should be detected"
         );
     }
+
+    /// Exercises the `end_nibbles` fallback path where `batch_ops` is
+    /// empty but the last end-proof node has in-range children that
+    /// must be verified against the proposal.
+    ///
+    /// The attack: take an honest proof from end_root (which has empty
+    /// batch_ops because no changes occurred within the proven range),
+    /// but verify it against a different verifier database whose
+    /// start state has different in-range keys. The boundary proofs
+    /// are genuinely from end_root so the hash chain passes — only
+    /// `verify_root_hash` can catch the in-range child mismatch.
+    ///
+    /// Setup:
+    /// - Prover db_a: keys \x20, \x25, \x30
+    /// - Verifier db_b: keys \x21, \x25, \x30 (differs at \x20 vs \x21)
+    /// - Prover changes only \x30 (outside the range [\x10, \x23])
+    /// - Proof for [\x10, \x23] has empty batch_ops (no in-range changes)
+    /// - End proof for \x23 is an exclusion proof from end_root
+    ///
+    /// Trie structure at end_root (nibble view):
+    /// ```text
+    ///       root
+    ///      2/  \3
+    ///    [2]    [3,0] = \x30
+    ///   0/ \5
+    /// [2,0] [2,5]
+    /// ```
+    ///
+    /// The end proof path for \x23 (nibbles [2,3]) reaches the branch
+    /// at nibble depth 1 (key [2]) and stops — child 3 doesn't exist,
+    /// so this is an exclusion proof. The last end-proof node has
+    /// children at nibbles 0 (\x20) and 5 (\x25).
+    ///
+    /// db_b's trie has \x21 instead of \x20, so child 0's hash at
+    /// the [2] branch differs between end_root and db_b's start state.
+    ///
+    /// With the fix (end_nibbles falls back to end_key):
+    ///   boundary_nibble at depth 1 = 3 (from \x23's nibble at depth 1)
+    ///   → child at nibble 0 is in-range (0 < 3) and verified
+    ///   → mismatch detected: db_a has \x20, db_b has \x21
+    ///
+    /// Without the fix (end_nibbles = None when batch_ops is empty):
+    ///   boundary_nibble = None → no children verified
+    ///   → the state difference goes undetected
+    #[test]
+    fn test_empty_batch_ops_end_nibbles_fallback() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // db_a starts with keys \x20, \x25, \x30.
+        let initial_a = vec![
+            put(b"\x20", b"v0"),
+            put(b"\x25", b"v1"),
+            put(b"\x30", b"v2"),
+        ];
+        let p = (&db_a).create_proposal(initial_a).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        // db_b starts with keys \x21, \x25, \x30 — differs at \x21
+        // instead of \x20. This means db_b's start state differs from
+        // db_a's within the range [\x10, \x23], but both databases
+        // agree on \x25 and \x30 (outside or at the boundary).
+        let initial_b = vec![
+            put(b"\x21", b"v0"),
+            put(b"\x25", b"v1"),
+            put(b"\x30", b"v2"),
+        ];
+        let p = (&db_b).create_proposal(initial_b).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+
+        // The two databases have different root hashes because \x20 ≠ \x21.
+        assert_ne!(root1_a, root1_b);
+
+        // On db_a, change only \x30 (outside the range [\x10, \x23]).
+        let changes = vec![put(b"\x30", b"changed")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Generate a proof for range [\x10, \x23] between root1_a and
+        // root2 on db_a. Since the only change (\x30) is outside the
+        // range, batch_ops should be empty. The boundary proofs are
+        // genuinely from root2 (end_root).
+        let proof = db_a
+            .change_proof(
+                root1_a,
+                root2.clone(),
+                Some(b"\x10".as_ref()),
+                Some(b"\x23".as_ref()),
+                None,
+            )
+            .expect("change proof");
+
+        assert!(
+            proof.batch_ops().is_empty(),
+            "proof should have empty batch_ops (no in-range changes)"
+        );
+        assert!(
+            !proof.end_proof().is_empty(),
+            "proof should have an end proof for \\x23"
+        );
+
+        // Present this proof to db_b, claiming it covers root1_b → root2.
+        // The end proof's hash chain validates against root2 (it was
+        // genuinely generated from root2). The proposal applies empty
+        // batch_ops to root1_b, so the proposal is just root1_b.
+        //
+        // But root1_b has \x21 where root2 has \x20. The in-range child
+        // at the last end-proof node (nibble 0 under the [2] branch)
+        // should differ between the proof (from root2) and the proposal
+        // (from root1_b). verify_root_hash must detect this.
+        let ctx = ChangeProofContext::from(proof);
+        let result = ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"\x10".as_ref()),
+            Some(b"\x23".as_ref()),
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "in-range child mismatch at last end-proof node should be detected"
+        );
+    }
 }
