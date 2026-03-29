@@ -245,23 +245,29 @@ impl ChangeProofContext {
 
     /// Verify the end boundary proof's hash chain against the end root.
     ///
-    /// The generator builds the end proof for either `last_op_key`
-    /// (truncated) or `end_key` (non-truncated). Rather than relying on
-    /// an external hint like `max_length`, we use the proof's own content
-    /// (`batch_ops`) to determine which key to try first:
-    /// - Put + `Ok(Some(_))`: definitive inclusion
-    /// - Delete + `Ok(None)`: expected exclusion
-    /// - `end_key` fallback: any `Ok` result accepted
+    /// The change proof generator builds the end proof for one of two possible
+    /// keys, depending on whether `max_length` truncated the result set:
     ///
-    /// Nibble boundaries at intermediate proof nodes are derived from
-    /// the proof's own structure. At the last proof node, the boundary
-    /// is derived from `batch_ops().last()` in `verify_root_hash`,
-    /// independent of which key validated the hash chain here.
+    /// - **Truncated**: end proof is built for `batch_ops.last().key()` — the
+    ///   rightmost key that was actually included in the proof.
+    /// - **Non-truncated**: end proof is built for `end_key` — the caller's
+    ///   requested upper bound.
+    ///
+    /// The verifier does not receive a "truncated" flag. Instead, it infers
+    /// the correct key by trying `last_op_key` first (the common/truncated
+    /// case), then falling back to `end_key`. The match is validated by
+    /// checking that inclusion/exclusion from `value_digest` is consistent
+    /// with the operation type (Put expects inclusion, Delete expects
+    /// exclusion).
     fn verify_end_proof(
         proof: &FrozenChangeProof,
         end_key: Option<&[u8]>,
         end_root: &ApiHashKey,
     ) -> Result<(), api::Error> {
+        // An empty end_proof is valid: it means the proof covers the entire
+        // right side of the keyspace (no right boundary), or the structural
+        // checks in verify_proof_structure already ruled out invalid
+        // combinations (e.g., UnexpectedEndProof).
         if proof.end_proof().is_empty() {
             return Ok(());
         }
@@ -274,24 +280,48 @@ impl ChangeProofContext {
                 .end_proof()
                 .value_digest(last_op.key().as_ref(), end_root)
             {
-                // Put + inclusion: definitive match
+                // Put + key exists in end trie: the proof was built for this
+                // key and the trie confirms it was inserted. Definitive match.
                 Ok(Some(_)) if !is_delete => return Ok(()),
-                // Delete + exclusion: expected match
+
+                // Delete + key absent from end trie: the proof was built for
+                // this key and the trie confirms it was removed. Definitive match.
                 Ok(None) if is_delete => return Ok(()),
-                // Wrong key or unexpected result: fall through
+
+                // Inclusion/exclusion doesn't match the op type (e.g., Put but
+                // key absent, or Delete but key present). This means
+                // last_op_key is not the key the proof was built for.
+                //
+                // ShouldBePrefixOfProvenKey means the proof's node path
+                // doesn't even align with this key — the proof was clearly
+                // built for a different key entirely.
+                //
+                // Both cases: fall through to try end_key instead.
                 Ok(_) | Err(ProofError::ShouldBePrefixOfProvenKey) => {}
+
+                // Any other error (UnexpectedHash, NodeNotInTrie, etc.) is a
+                // genuine hash-chain failure — the proof is corrupt regardless
+                // of which key it was built for.
                 Err(e) => return Err(api::Error::ProofError(e)),
             }
         }
 
-        // Last batch op key didn't match (or no batch ops) — try end_key.
-        // This is the non-truncated case where the generator used end_key.
+        // last_op_key didn't validate the proof (or batch_ops is empty).
+        // Try end_key — this is the non-truncated case where the generator
+        // built the proof for the caller's requested upper bound.
+        //
+        // Any Ok result is accepted here (both inclusion and exclusion)
+        // because end_key is an arbitrary bound — it may or may not exist
+        // as a key in the trie. We only need the hash chain to be valid.
         if let Some(end_key) = end_key {
             proof.end_proof().value_digest(end_key, end_root)?;
             return Ok(());
         }
 
-        // end_proof is non-empty but no key could validate it.
+        // end_proof is non-empty, but neither last_op_key nor end_key could
+        // validate it. This means either: (a) both keys were tried and the
+        // hash chain didn't match either, or (b) there were no batch_ops and
+        // no end_key, so there was no key to verify against at all.
         Err(api::Error::ProofError(
             ProofError::BoundaryProofUnverifiable,
         ))
