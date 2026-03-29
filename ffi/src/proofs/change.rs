@@ -4091,21 +4091,21 @@ mod tests {
     /// empty but the last end-proof node has in-range children that
     /// must be verified against the proposal.
     ///
-    /// The attack: take an honest proof from end_root (which has empty
-    /// batch_ops because no changes occurred within the proven range),
+    /// The attack: take an honest proof from `end_root` (which has empty
+    /// `batch_ops` because no changes occurred within the proven range),
     /// but verify it against a different verifier database whose
     /// start state has different in-range keys. The boundary proofs
-    /// are genuinely from end_root so the hash chain passes — only
+    /// are genuinely from `end_root` so the hash chain passes — only
     /// `verify_root_hash` can catch the in-range child mismatch.
     ///
     /// Setup:
-    /// - Prover db_a: keys \x20, \x25, \x30
-    /// - Verifier db_b: keys \x21, \x25, \x30 (differs at \x20 vs \x21)
-    /// - Prover changes only \x30 (outside the range [\x10, \x23])
-    /// - Proof for [\x10, \x23] has empty batch_ops (no in-range changes)
-    /// - End proof for \x23 is an exclusion proof from end_root
+    /// - Prover `db_a`: keys `\x20`, `\x25`, `\x30`
+    /// - Verifier `db_b`: keys `\x21`, `\x25`, `\x30` (differs at `\x20` vs `\x21`)
+    /// - Prover changes only `\x30` (outside the range `[\x10, \x23]`)
+    /// - Proof for `[\x10, \x23]` has empty `batch_ops` (no in-range changes)
+    /// - End proof for `\x23` is an exclusion proof from `end_root`
     ///
-    /// Trie structure at end_root (nibble view):
+    /// Trie structure at `end_root` (nibble view):
     /// ```text
     ///       root
     ///      2/  \3
@@ -4114,21 +4114,21 @@ mod tests {
     /// [2,0] [2,5]
     /// ```
     ///
-    /// The end proof path for \x23 (nibbles [2,3]) reaches the branch
-    /// at nibble depth 1 (key [2]) and stops — child 3 doesn't exist,
+    /// The end proof path for `\x23` (nibbles `[2,3]`) reaches the branch
+    /// at nibble depth 1 (key `[2]`) and stops — child 3 doesn't exist,
     /// so this is an exclusion proof. The last end-proof node has
-    /// children at nibbles 0 (\x20) and 5 (\x25).
+    /// children at nibbles 0 (`\x20`) and 5 (`\x25`).
     ///
-    /// db_b's trie has \x21 instead of \x20, so child 0's hash at
-    /// the [2] branch differs between end_root and db_b's start state.
+    /// `db_b`'s trie has `\x21` instead of `\x20`, so child 0's hash at
+    /// the `[2]` branch differs between `end_root` and `db_b`'s start state.
     ///
-    /// With the fix (end_nibbles falls back to end_key):
-    ///   boundary_nibble at depth 1 = 3 (from \x23's nibble at depth 1)
+    /// With the fix (`end_nibbles` falls back to `end_key`):
+    ///   `boundary_nibble` at depth 1 = 3 (from `\x23`'s nibble at depth 1)
     ///   → child at nibble 0 is in-range (0 < 3) and verified
-    ///   → mismatch detected: db_a has \x20, db_b has \x21
+    ///   → mismatch detected: `db_a` has `\x20`, `db_b` has `\x21`
     ///
-    /// Without the fix (end_nibbles = None when batch_ops is empty):
-    ///   boundary_nibble = None → no children verified
+    /// Without the fix (`end_nibbles` = None when `batch_ops` is empty):
+    ///   `boundary_nibble` = None → no children verified
     ///   → the state difference goes undetected
     #[test]
     fn test_empty_batch_ops_end_nibbles_fallback() {
