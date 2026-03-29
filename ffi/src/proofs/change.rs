@@ -104,10 +104,6 @@ struct VerificationContext {
     end_root: ApiHashKey,
     start_key: Option<Box<[u8]>>,
     end_key: Option<Box<[u8]>>,
-    /// The proof path's actual endpoint, extracted from the last end
-    /// proof node's nibble path. Used downstream by `verify_root_hash`
-    /// for nibble boundary calculations.
-    end_proof_boundary: Option<Box<[u8]>>,
 }
 
 #[derive(Debug)]
@@ -215,15 +211,12 @@ impl ChangeProofContext {
 
         // Verify boundary proofs against end_root
         Self::verify_start_proof(proof, start_key, &end_root)?;
-        // verify_end_proof returns the proof's boundary key, extracted
-        // from the last proof node's nibble path.
-        let end_proof_boundary = Self::verify_end_proof(proof, end_key, &end_root)?;
+        Self::verify_end_proof(proof, end_key, &end_root)?;
 
         Ok(VerificationContext {
             end_root,
             start_key: start_key.map(Box::from),
             end_key: end_key.map(Box::from),
-            end_proof_boundary,
         })
     }
 
@@ -252,8 +245,7 @@ impl ChangeProofContext {
         Ok(())
     }
 
-    /// Verify the end boundary proof against the end root hash and return
-    /// the key it was validated against.
+    /// Verify the end boundary proof's hash chain against the end root.
     ///
     /// The generator builds the end proof for either `last_op_key`
     /// (truncated) or `end_key` (non-truncated). Rather than relying on
@@ -263,19 +255,17 @@ impl ChangeProofContext {
     /// - Delete + `Ok(None)`: expected exclusion
     /// - `end_key` fallback: any `Ok` result accepted
     ///
-    /// The returned key is used for nibble boundary classification in
-    /// `verify_root_hash`. The proposal path lookup is derived separately
-    /// from the proof nodes themselves.
-    ///
-    /// Returns `Ok(Some(key))` with the validated key, or `Ok(None)` if
-    /// the end proof is empty (range reaches end of keyspace).
+    /// Nibble boundaries at intermediate proof nodes are derived from
+    /// the proof's own structure. At the last proof node, the boundary
+    /// is derived from `batch_ops().last()` in `verify_root_hash`,
+    /// independent of which key validated the hash chain here.
     fn verify_end_proof(
         proof: &FrozenChangeProof,
         end_key: Option<&[u8]>,
         end_root: &ApiHashKey,
-    ) -> Result<Option<Box<[u8]>>, api::Error> {
+    ) -> Result<(), api::Error> {
         if proof.end_proof().is_empty() {
-            return Ok(None);
+            return Ok(());
         }
 
         // Try last_op_key first — the end proof may be for the right
@@ -287,9 +277,9 @@ impl ChangeProofContext {
                 .value_digest(last_op.key().as_ref(), end_root)
             {
                 // Put + inclusion: definitive match
-                Ok(Some(_)) if !is_delete => return Ok(Some(last_op.key().as_ref().into())),
+                Ok(Some(_)) if !is_delete => return Ok(()),
                 // Delete + exclusion: expected match
-                Ok(None) if is_delete => return Ok(Some(last_op.key().as_ref().into())),
+                Ok(None) if is_delete => return Ok(()),
                 // Wrong key or unexpected result: fall through
                 Ok(_) | Err(ProofError::ShouldBePrefixOfProvenKey) => {}
                 Err(e) => return Err(api::Error::ProofError(e)),
@@ -300,7 +290,7 @@ impl ChangeProofContext {
         // This is the non-truncated case where the generator used end_key.
         if let Some(end_key) = end_key {
             proof.end_proof().value_digest(end_key, end_root)?;
-            return Ok(Some(end_key.into()));
+            return Ok(());
         }
 
         // end_proof is non-empty but no key could validate it.
@@ -349,10 +339,24 @@ impl<'a> ProposalCursor<'a> {
 /// Convert a proof node's nibble key to a byte-level key for proposal lookup.
 ///
 /// Each pair of nibbles is combined into one byte via [`Path::bytes_iter`].
-/// An odd trailing nibble is dropped, which is safe because values and
-/// children only exist at even nibble depths.
+/// Odd-length keys are padded with a zero nibble before conversion so that
+/// `path_to_key` traverses through the odd-depth node.
 fn proof_node_byte_key(node: &ProofNode) -> Vec<u8> {
-    Path::from(node.key.as_byte_slice()).bytes_iter().collect()
+    let nibbles = node.key.as_byte_slice();
+    if nibbles.len().is_multiple_of(2) {
+        Path::from(nibbles).bytes_iter().collect()
+    } else {
+        // bytes_iter() drops trailing odd nibbles, so a proof node at
+        // depth 5 would produce a byte key of depth 4. path_to_key with
+        // the shorter key misses the depth-5 node, causing the cursor to
+        // return None and the children check to false-positive. Padding
+        // with 0 ensures path_to_key traverses through the odd-depth
+        // node. The extra nibble is harmless — path_to_key stops at the
+        // deepest matching node.
+        let mut padded = nibbles.to_vec();
+        padded.push(0);
+        Path::from(padded.as_slice()).bytes_iter().collect()
+    }
 }
 
 /// Verify that a proof node's value matches the proposal's value at the
@@ -385,15 +389,29 @@ fn verify_proof_node_value(
 /// proposal's, the substitution in the old rehash approach would have
 /// been a no-op and the root hash unchanged. A mismatch means the
 /// proposal's state differs from what the proof claims.
+///
+/// The boundary nibble at each depth is derived from the proof's own
+/// structure: the next node's key at this depth tells us which child
+/// the proof navigated to. This is always correct regardless of which
+/// key `verify_end_proof` validated against. At the last proof node
+/// (where no next node exists), `fallback_nibbles` from the external
+/// key provides the boundary.
+///
+/// `is_end_proof` controls both the direction of the in-range check
+/// and what happens when no boundary nibble is available (key
+/// exhausted at the last node): for the end proof, no children are
+/// in-range (they extend the key, coming after it); for the start
+/// proof, all children are in-range (same reason — after the key is
+/// the in-range direction).
 fn verify_in_range_children(
     nodes: &[ProofNode],
     cursor: &mut ProposalCursor<'_>,
-    boundary_nibbles: &[PathComponent],
-    is_in_range: impl Fn(PathComponent, PathComponent) -> bool,
+    fallback_nibbles: &[PathComponent],
+    is_end_proof: bool,
 ) -> Result<(), ProofError> {
     // The forward-only cursor assumes nodes are in ascending depth order,
     // which is guaranteed by the prefix checks in `verify_proof_structure`.
-    for node in nodes {
+    for (i, node) in nodes.iter().enumerate() {
         let depth = node.key.len();
 
         // Advance cursor to this depth. None means the proposal has no node
@@ -403,9 +421,18 @@ fn verify_in_range_children(
         let lookup_item = cursor.advance_to(depth);
         verify_proof_node_value(node, lookup_item)?;
 
-        // Boundary nibble at this depth; None if the boundary key is shorter,
-        // meaning all children are in-range from that side.
-        let boundary_nibble = boundary_nibbles.get(depth).copied();
+        // Derive the boundary nibble from the proof's own structure: the
+        // next node's key at this depth tells us which child the proof
+        // navigated to. At the last node, fall back to the external
+        // key's nibble at this depth. If the fallback also has no nibble
+        // (key exhausted — inclusion proof), the end proof checks no
+        // children (they're all after the key) while the start proof
+        // checks all children (after the key is the in-range direction).
+        let boundary_nibble = i
+            .checked_add(1)
+            .and_then(|next_i| nodes.get(next_i))
+            .and_then(|next| next.key.get(depth).copied())
+            .or_else(|| fallback_nibbles.get(depth).copied());
 
         // On cursor miss, defaults to all-None children (see above).
         let proposal_children: Children<Option<HashType>> = lookup_item
@@ -413,12 +440,122 @@ fn verify_in_range_children(
             .unwrap_or_default();
 
         for nibble in PathComponent::ALL {
-            let in_range = boundary_nibble.is_none_or(|bn| is_in_range(nibble, bn));
+            let in_range = match boundary_nibble {
+                Some(bn) if is_end_proof => nibble < bn,
+                Some(bn) => nibble > bn,
+                None => !is_end_proof,
+            };
             if in_range && node.child_hashes[nibble] != proposal_children[nibble] {
                 return Err(ProofError::InRangeChildMismatch { depth });
             }
         }
     }
+    Ok(())
+}
+
+/// Verify Case 2c: both start and end boundary proofs exist.
+/// Finds the divergence point, checks shared prefix values, the
+/// divergence parent's in-range children, and walks both tails.
+fn verify_divergent_proofs(
+    start_nodes: &[ProofNode],
+    end_nodes: &[ProofNode],
+    start_path: &[PathIterItem],
+    end_path: &[PathIterItem],
+    start_nibbles: Option<&[PathComponent]>,
+    end_nibbles: Option<&[PathComponent]>,
+) -> Result<(), api::Error> {
+    // Find where the two proof paths diverge.
+    let divergence_depth = start_nodes
+        .iter()
+        .zip(end_nodes.iter())
+        .position(|(s, e)| s.key != e.key)
+        .unwrap_or(std::cmp::min(start_nodes.len(), end_nodes.len()));
+
+    let Some(parent_idx) = divergence_depth.checked_sub(1) else {
+        return Err(ProofError::BoundaryProofsDivergeAtRoot.into());
+    };
+    let parent = start_nodes
+        .get(parent_idx)
+        .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
+
+    // Verify values at shared prefix nodes (including divergence parent).
+    // At shared prefix nodes both proofs route through the same nibble,
+    // so no children are in-range from either side — only values matter.
+    let shared = start_nodes
+        .get(..divergence_depth)
+        .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
+    // The start cursor advances through shared prefix nodes first,
+    // then continues into the divergence parent and start tail.
+    let mut start_cursor = ProposalCursor::new(start_path);
+    for node in shared {
+        // None means the proposal compressed through this depth (no
+        // explicit node). verify_proof_node_value allows (None, None)
+        // — if the proof node claims a value exists but the proposal
+        // has none, the mismatch is caught.
+        let item = start_cursor.advance_to(node.key.len());
+        verify_proof_node_value(node, item)?;
+    }
+
+    // At the divergence parent: children between the two boundary
+    // nibbles are in-range. Derive boundary nibbles from the proof
+    // nodes below the divergence point — the node at divergence_depth
+    // in each proof is the first node after the parent, and its key
+    // at the parent's depth is the nibble the proof navigated to.
+    // If a proof has no node after divergence, fall back to the
+    // external key's nibble at the parent depth.
+    let parent_depth = parent.key.len();
+    let start_bn = start_nodes
+        .get(divergence_depth)
+        .and_then(|next| next.key.get(parent_depth).copied())
+        .or_else(|| start_nibbles.and_then(|sn| sn.get(parent_depth).copied()));
+    let end_bn = end_nodes
+        .get(divergence_depth)
+        .and_then(|next| next.key.get(parent_depth).copied())
+        .or_else(|| end_nibbles.and_then(|en| en.get(parent_depth).copied()));
+
+    // Reuse the start cursor to look up the divergence parent's children.
+    // None means the proposal compressed through this depth; children
+    // default to all-None, so any proof child with a hash at an in-range
+    // slot will produce an InRangeChildMismatch, correctly detecting the
+    // structural difference between the proof and proposal.
+    let item = start_cursor.advance_to(parent_depth);
+    let proposal_children = item
+        .and_then(|i| i.node.as_branch().map(|b| b.children_hashes()))
+        .unwrap_or_default();
+    for nibble in PathComponent::ALL {
+        let after_start = start_bn.is_none_or(|s| nibble > s);
+        let before_end = end_bn.is_none_or(|e| nibble < e);
+        if after_start && before_end && parent.child_hashes[nibble] != proposal_children[nibble] {
+            return Err(ProofError::InRangeChildMismatch {
+                depth: parent_depth,
+            }
+            .into());
+        }
+    }
+
+    // Walk tails independently below the divergence point.
+    // start_cursor naturally continues past shared prefix nodes.
+    let start_tail = start_nodes
+        .get(divergence_depth..)
+        .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
+    let end_tail = end_nodes
+        .get(divergence_depth..)
+        .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
+    if !start_tail.is_empty() {
+        verify_in_range_children(
+            start_tail,
+            &mut start_cursor,
+            start_nibbles.unwrap_or(&[]),
+            false,
+        )?;
+    }
+    if !end_tail.is_empty() {
+        // Separate cursor for the end tail since it walks a different
+        // proposal path than the start cursor.
+        let mut end_cursor = ProposalCursor::new(end_path);
+        verify_in_range_children(end_tail, &mut end_cursor, end_nibbles.unwrap_or(&[]), true)?;
+    }
+
     Ok(())
 }
 
@@ -450,18 +587,18 @@ fn verify_root_hash(
         return Ok(());
     }
 
-    // Convert byte-level boundary keys to nibble-level paths for
-    // in-range child classification.
+    // Fallback nibbles from external keys — used at the last proof node
+    // where no next node exists to derive the boundary from. Intermediate
+    // nodes derive their boundary from the next proof node's key, which
+    // is always correct regardless of which key verify_end_proof validated.
     let start_nibbles = verification.start_key.as_deref().map(key_to_nibbles);
 
-    // Use the end proof boundary (extracted from the last proof node's
-    // nibble path) rather than the originally requested end_key. This
-    // is the proof path's actual endpoint for nibble boundary calculations.
-    let effective_end_key = verification
-        .end_proof_boundary
-        .as_deref()
-        .or(verification.end_key.as_deref());
-    let end_nibbles = effective_end_key.map(key_to_nibbles);
+    // The end proof's last-node boundary comes from the last batch_op's
+    // key, not from end_key or the key verify_end_proof validated. The
+    // proposal only applies changes up to last_op — children beyond
+    // last_op's nibble are unchanged from start_root and should not be
+    // compared against end_root (which may differ due to truncation).
+    let end_nibbles = proof.batch_ops().last().map(|op| key_to_nibbles(op.key()));
 
     // Retrieve the proposal's path aligned with each boundary proof.
     // The lookup key is derived from the proof nodes themselves, so the
@@ -471,118 +608,32 @@ fn verify_root_hash(
 
     if start_nodes.is_empty() {
         // Case 2a: Only end proof (first sync round, start_key=None).
-        // Children before the end boundary nibble are in-range.
         let mut cursor = ProposalCursor::new(&end_path);
         verify_in_range_children(
             end_nodes,
             &mut cursor,
             end_nibbles.as_deref().unwrap_or(&[]),
-            |n, bn| n < bn,
+            true,
         )?;
     } else if end_nodes.is_empty() {
         // Case 2b: Only start proof (last sync round, end of keyspace).
-        // Children after the start boundary nibble are in-range.
         let mut cursor = ProposalCursor::new(&start_path);
         verify_in_range_children(
             start_nodes,
             &mut cursor,
             start_nibbles.as_deref().unwrap_or(&[]),
-            |n, bn| n > bn,
+            false,
         )?;
     } else {
         // Case 2c: Both boundary proofs exist (middle sync round).
-        // Find where the two proof paths diverge.
-        let divergence_depth = start_nodes
-            .iter()
-            .zip(end_nodes.iter())
-            .position(|(s, e)| s.key != e.key)
-            .unwrap_or(std::cmp::min(start_nodes.len(), end_nodes.len()));
-
-        let Some(parent_idx) = divergence_depth.checked_sub(1) else {
-            return Err(ProofError::BoundaryProofsDivergeAtRoot.into());
-        };
-        let parent = start_nodes
-            .get(parent_idx)
-            .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
-
-        // Verify values at shared prefix nodes (including divergence parent).
-        // At shared prefix nodes both proofs route through the same nibble,
-        // so no children are in-range from either side — only values matter.
-        let shared = start_nodes
-            .get(..divergence_depth)
-            .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
-        // The start cursor advances through shared prefix nodes first,
-        // then continues into the divergence parent and start tail.
-        let mut start_cursor = ProposalCursor::new(&start_path);
-        for node in shared {
-            // None means the proposal compressed through this depth (no
-            // explicit node). verify_proof_node_value allows (None, None)
-            // — if the proof node claims a value exists but the proposal
-            // has none, the mismatch is caught.
-            let item = start_cursor.advance_to(node.key.len());
-            verify_proof_node_value(node, item)?;
-        }
-
-        // At the divergence parent: children between the two boundary
-        // nibbles are in-range. boundary_nibbles.get() returns None when
-        // that boundary's key terminates at or above this depth, meaning
-        // all children are in-range from that side.
-        let parent_depth = parent.key.len();
-        let start_bn = start_nibbles
-            .as_deref()
-            .and_then(|sn| sn.get(parent_depth).copied());
-        let end_bn = end_nibbles
-            .as_deref()
-            .and_then(|en| en.get(parent_depth).copied());
-
-        // Reuse the start cursor to look up the divergence parent's children.
-        // None means the proposal compressed through this depth; children
-        // default to all-None, so any proof child with a hash at an in-range
-        // slot will produce an InRangeChildMismatch, correctly detecting the
-        // structural difference between the proof and proposal.
-        let item = start_cursor.advance_to(parent_depth);
-        let proposal_children = item
-            .and_then(|i| i.node.as_branch().map(|b| b.children_hashes()))
-            .unwrap_or_default();
-        for nibble in PathComponent::ALL {
-            let after_start = start_bn.is_none_or(|s| nibble > s);
-            let before_end = end_bn.is_none_or(|e| nibble < e);
-            if after_start && before_end && parent.child_hashes[nibble] != proposal_children[nibble]
-            {
-                return Err(ProofError::InRangeChildMismatch {
-                    depth: parent_depth,
-                }
-                .into());
-            }
-        }
-
-        // Walk tails independently below the divergence point.
-        // start_cursor naturally continues past shared prefix nodes.
-        let start_tail = start_nodes
-            .get(divergence_depth..)
-            .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
-        let end_tail = end_nodes
-            .get(divergence_depth..)
-            .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
-        if !start_tail.is_empty() {
-            verify_in_range_children(
-                start_tail,
-                &mut start_cursor,
-                start_nibbles.as_deref().unwrap_or(&[]),
-                |n, bn| n > bn,
-            )?;
-        }
-        if !end_tail.is_empty() {
-            // Separate cursor for the end tail since it walks a different
-            // proposal path than the start cursor.
-            let mut end_cursor = ProposalCursor::new(&end_path);
-            verify_in_range_children(
-                end_tail,
-                &mut end_cursor,
-                end_nibbles.as_deref().unwrap_or(&[]),
-                |n, bn| n < bn,
-            )?;
-        }
+        verify_divergent_proofs(
+            start_nodes,
+            end_nodes,
+            &start_path,
+            &end_path,
+            start_nibbles.as_deref(),
+            end_nibbles.as_deref(),
+        )?;
     }
 
     Ok(())
@@ -2600,7 +2651,6 @@ mod tests {
             end_root: root2,
             start_key: Some(b"\x10".to_vec().into_boxed_slice()),
             end_key: Some(b"\xa1".to_vec().into_boxed_slice()),
-            end_proof_boundary: Some(b"\xa0".to_vec().into_boxed_slice()),
         };
 
         // Call verify_root_hash directly (bypassing verify_proof_structure
@@ -3111,7 +3161,9 @@ mod tests {
         assert!(cursor.advance_to(4).is_none());
 
         // Depth 8 is still reachable.
-        let hit = cursor.advance_to(8).expect("depth 8 not consumed by gap miss");
+        let hit = cursor
+            .advance_to(8)
+            .expect("depth 8 not consumed by gap miss");
         assert_eq!(hit.key_nibbles.len(), 8);
     }
 
@@ -3308,14 +3360,7 @@ mod tests {
 
         let change_ctx = ChangeProofContext::from(proof);
         let mut proposed = change_ctx
-            .verify_and_propose(
-                &db_b,
-                root1_b,
-                root2,
-                None,
-                Some(b"\xa0".as_ref()),
-                None,
-            )
+            .verify_and_propose(&db_b, root1_b, root2, None, Some(b"\xa0".as_ref()), None)
             .expect("bounded truncated delete proof should verify");
 
         let next = proposed
@@ -3379,8 +3424,7 @@ mod tests {
         // Verify with max_length=None — verifier does not need max_length
         // to determine truncation because verify_end_proof uses batch_ops.
         let change_ctx = ChangeProofContext::from(proof);
-        let result =
-            change_ctx.verify_and_propose(&db_b, root1_b, root2, None, None, None);
+        let result = change_ctx.verify_and_propose(&db_b, root1_b, root2, None, None, None);
         assert!(
             result.is_ok(),
             "truncated proof verified without max_length should succeed: {:?}",
@@ -3443,6 +3487,560 @@ mod tests {
             result.is_ok(),
             "start proof exclusion for deleted key should verify: {:?}",
             result.err()
+        );
+    }
+
+    /// Adversarial: omitting a `batch_op` in the gap between `last_op_key`
+    /// and the proof's actual boundary. With key-derived nibbles, the
+    /// narrower boundary from Delete + Ok(None) would skip the gap;
+    /// with proof-derived nibbles the actual proof path's boundary is
+    /// used and the omission is detected.
+    #[test]
+    fn test_omitted_change_in_nibble_gap() {
+        use firewood::api::FrozenChangeProof;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Initial keys: \x10, \x20, \x30, \xa0
+        let initial = vec![
+            put(b"\x10", b"v0"),
+            put(b"\x20", b"v1"),
+            put(b"\x30", b"v2"),
+            put(b"\xa0", b"v3"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // Changes: Delete(\x20), Put(\x30, "changed"), Put(\xa0, "changed")
+        let changes = vec![
+            delete(b"\x20"),
+            put(b"\x30", b"changed"),
+            put(b"\xa0", b"changed"),
+        ];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Non-truncated bounded proof: start_key=\x10, end_key=\xa0
+        let valid_proof = db_a
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                Some(b"\x10".as_ref()),
+                Some(b"\xa0".as_ref()),
+                None,
+            )
+            .expect("change proof");
+
+        let batch_ops = valid_proof.batch_ops();
+        assert!(
+            batch_ops.len() >= 3,
+            "need at least 3 batch_ops (Delete + 2 Puts), got {}",
+            batch_ops.len()
+        );
+
+        // Craft a proof with the \x30 Put removed. The proof's boundary
+        // proofs still authenticate the full range [\x10, \xa0], but
+        // the proposal will be missing the \x30 change.
+        let shortened_ops: Vec<_> = batch_ops
+            .iter()
+            .filter(|op| op.key().as_ref() != b"\x30")
+            .cloned()
+            .collect();
+        assert_eq!(
+            shortened_ops.len(),
+            batch_ops.len() - 1,
+            "should have removed exactly one op"
+        );
+
+        let crafted = FrozenChangeProof::new(
+            firewood::Proof::new(valid_proof.start_proof().as_ref().into()),
+            firewood::Proof::new(valid_proof.end_proof().as_ref().into()),
+            shortened_ops.into_boxed_slice(),
+        );
+
+        // With proof-derived nibbles, the end proof's path to \xa0 gives
+        // boundary nibble `a` at the root. Nibble 3 (\x30) is < `a`, so
+        // it's in-range and the child mismatch is detected.
+        let change_ctx = ChangeProofContext::from(crafted);
+        let err = change_ctx
+            .verify_and_propose(
+                &db_b,
+                root1_b,
+                root2,
+                Some(b"\x10".as_ref()),
+                Some(b"\xa0".as_ref()),
+                None,
+            )
+            .expect_err("omitted \x30 in nibble gap must be detected");
+        assert!(
+            matches!(
+                err.1,
+                firewood::api::Error::ProofError(
+                    ProofError::InRangeChildMismatch { .. }
+                        | ProofError::ProofNodeValueMismatch { .. }
+                )
+            ),
+            "expected InRangeChildMismatch or ProofNodeValueMismatch, got: {:?}",
+            err.1
+        );
+    }
+
+    /// Correctness: a proof whose last node is at an odd nibble depth
+    /// must not false-positive. Without the odd-depth padding fix in
+    /// `proof_node_byte_key`, `path_to_key` misses the odd-depth node
+    /// and the cursor returns None, causing a spurious
+    /// `InRangeChildMismatch`.
+    #[test]
+    fn test_odd_depth_proof_node_accepted() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Keys \x12 and \x13 share nibble 1 at depth 0 and diverge at
+        // depth 1 (odd). This creates a branch at odd depth 1. Key \x50
+        // is in a different subtree (nibble 5).
+        let initial = vec![
+            put(b"\x12", b"v0"),
+            put(b"\x13", b"v1"),
+            put(b"\x50", b"v2"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // Change \x50 only. The change is outside the [\x14, ..] range
+        // start proof path but within the proven range.
+        let changes = vec![put(b"\x50", b"changed")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Bounded proof: start_key=\x14, end_key=None.
+        // The start proof for \x14 follows nibble 1 at depth 0 to the
+        // depth-1 branch, where nibble 4 doesn't exist (only 2 and 3).
+        // The last proof node is at odd depth 1.
+        let proof = db_a
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                Some(b"\x14".as_ref()),
+                None,
+                None,
+            )
+            .expect("change proof with odd-depth end");
+
+        let change_ctx = ChangeProofContext::from(proof);
+        let result = change_ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"\x14".as_ref()),
+            None,
+            None,
+        );
+        assert!(
+            result.is_ok(),
+            "proof with odd-depth last node should verify (no false positive): {:?}",
+            result.err()
+        );
+    }
+
+    /// Regression test: normal bounded proof with Puts still succeeds
+    /// after switching from key-derived to proof-derived nibble
+    /// boundaries. The proof-derived boundary should produce identical
+    /// results to the old key-derived boundary for standard Put
+    /// operations.
+    #[test]
+    fn test_proof_derived_nibbles_match_key_derived() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Multiple keys spread across different nibble subtrees
+        let initial = vec![
+            put(b"\x10", b"v0"),
+            put(b"\x20", b"v1"),
+            put(b"\x30", b"v2"),
+            put(b"\x40", b"v3"),
+            put(b"\xa0", b"v4"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // Put changes in the middle of the range
+        let changes = vec![
+            put(b"\x20", b"changed1"),
+            put(b"\x30", b"changed2"),
+            put(b"\x40", b"changed3"),
+        ];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Bounded proof with both start and end proofs
+        let proof = db_a
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                Some(b"\x10".as_ref()),
+                Some(b"\xa0".as_ref()),
+                None,
+            )
+            .expect("change proof");
+
+        assert!(
+            !proof.start_proof().is_empty() && !proof.end_proof().is_empty(),
+            "bounded proof should have both boundary proofs"
+        );
+
+        let change_ctx = ChangeProofContext::from(proof);
+        let result = change_ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"\x10".as_ref()),
+            Some(b"\xa0".as_ref()),
+            None,
+        );
+        assert!(
+            result.is_ok(),
+            "normal bounded proof with Puts should still verify: {:?}",
+            result.err()
+        );
+    }
+
+    /// Exercises `boundary_nibble = None` + `is_end_proof = false` in
+    /// `verify_in_range_children`. When `start_key` is a prefix of
+    /// another key in the trie, the start proof's last node is a branch
+    /// that also carries a value. At that depth the start key's nibbles
+    /// are exhausted, so `fallback_nibbles.get(depth)` returns `None`
+    /// and all children are treated as in-range.
+    ///
+    /// This must not false-positive on a valid proof.
+    #[test]
+    fn test_start_proof_inclusion_with_children_below() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // \xab is a prefix of \xab\xcd at the byte level.
+        // In the trie, the branch at nibble path [a, b] carries the value
+        // for key \xab and has a child at nibble c leading to \xab\xcd.
+        // Key \xf0 is in a separate subtree.
+        let initial = vec![
+            put(b"\xab", b"short"),
+            put(b"\xab\xcd", b"long"),
+            put(b"\xf0", b"other"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // Change the child key (\xab\xcd) and the separate key (\xf0).
+        // start_key=\xab is unchanged but its subtree is modified.
+        let changes = vec![put(b"\xab\xcd", b"changed"), put(b"\xf0", b"changed2")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Bounded proof: start_key = \xab (inclusion proof with children).
+        // The start proof's last node at depth 2 has children below it.
+        // fallback_nibbles for \xab = [a, b] → get(2) = None →
+        // boundary_nibble = None → all children in-range.
+        let proof = db_a
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                Some(b"\xab".as_ref()),
+                None,
+                None,
+            )
+            .expect("change proof with prefix start_key");
+
+        assert!(
+            !proof.start_proof().is_empty(),
+            "start proof should be non-empty for prefix key"
+        );
+
+        let change_ctx = ChangeProofContext::from(proof);
+        let result = change_ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"\xab".as_ref()),
+            None,
+            None,
+        );
+        assert!(
+            result.is_ok(),
+            "start proof inclusion with children below should not false-positive: {:?}",
+            result.err()
+        );
+    }
+
+    /// Mirror of `test_start_proof_inclusion_with_children_below` for the
+    /// end proof. When `last_op_key` is a prefix of another key, the end
+    /// proof's last node has children. `boundary_nibble = None` +
+    /// `is_end_proof = true` → no children are checked (they extend past
+    /// the boundary). Must not false-positive.
+    #[test]
+    fn test_end_proof_inclusion_with_children_below() {
+        use std::num::NonZeroUsize;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // \xab is a prefix of \xab\xcd.
+        // Key \xf0 is in a separate subtree.
+        let initial = vec![
+            put(b"\xab", b"short"),
+            put(b"\xab\xcd", b"long"),
+            put(b"\xf0", b"other"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // Change ALL three keys. The diff from root1→root2 has 3 ops.
+        // With max_length=1, only the first (sorted) op is included:
+        // \xab (the prefix key). The proof is truncated since 1 < 3.
+        let changes = vec![
+            put(b"\xab", b"changed0"),
+            put(b"\xab\xcd", b"changed1"),
+            put(b"\xf0", b"changed2"),
+        ];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Truncated proof (max_length=1) so last_op = \xab.
+        // The end proof for \xab is an inclusion proof — the last node
+        // at depth 2 has a child at nibble c (for \xab\xcd).
+        // end_nibbles = [a, b] → get(2) = None → boundary_nibble = None
+        // → is_end_proof = true → no children checked.
+        let proof = db_a
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                None,
+                None,
+                NonZeroUsize::new(1),
+            )
+            .expect("truncated change proof with prefix last_op_key");
+
+        assert!(
+            !proof.end_proof().is_empty(),
+            "end proof should be non-empty for truncated proof"
+        );
+
+        let change_ctx = ChangeProofContext::from(proof);
+        let result =
+            change_ctx.verify_and_propose(&db_b, root1_b, root2, None, None, NonZeroUsize::new(1));
+        assert!(
+            result.is_ok(),
+            "end proof inclusion with children below should not false-positive: {:?}",
+            result.err()
+        );
+    }
+
+    /// Exercises `start_bn = None` at the divergence parent in
+    /// `verify_divergent_proofs`. When both proofs share a prefix and
+    /// the start key is exhausted at the parent depth, `is_none_or`
+    /// treats all children as in-range from the start side.
+    ///
+    /// Setup: `start_key` \x12 doesn't exist in the trie but the trie
+    /// has a branch at depth 2 (nibble path [1, 2]) with children
+    /// \x12\x34 and \x12\x56. The start proof is an exclusion proof
+    /// ending at the branch — the last start node is at depth 2 where
+    /// `start_nibbles` [1, 2] are exhausted.
+    #[test]
+    fn test_divergence_parent_start_key_exhausted() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Keys under nibble prefix [1, 2] — creating a branch at depth 2.
+        // Key \xf0 is in a different subtree (nibble f) for the end proof.
+        let initial = vec![
+            put(b"\x12\x34", b"v0"),
+            put(b"\x12\x56", b"v1"),
+            put(b"\xf0", b"v2"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // Modify keys in the subtree and beyond.
+        let changes = vec![
+            put(b"\x12\x34", b"changed0"),
+            put(b"\x12\x56", b"changed1"),
+            put(b"\xf0", b"changed2"),
+        ];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Bounded proof: start_key=\x12, end_key=\xf0.
+        // \x12 doesn't exist in the trie → start proof is an exclusion
+        // proof. The start proof's last node is at the branch for [1, 2]
+        // at depth 2. start_nibbles for \x12 = [1, 2] → get(2) = None.
+        //
+        // The end proof for \xf0 goes through a different path.
+        // At the divergence parent (shared root), start_bn uses the
+        // start proof's next node's nibble at root depth (nibble 1).
+        // At the start tail's last node (the depth-2 branch), the
+        // fallback start_nibbles.get(2) = None → boundary_nibble = None
+        // → all children of the branch are checked as in-range.
+        let proof = db_a
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                Some(b"\x12".as_ref()),
+                Some(b"\xf0".as_ref()),
+                None,
+            )
+            .expect("change proof with exhausted start_key at branch");
+
+        assert!(
+            !proof.start_proof().is_empty() && !proof.end_proof().is_empty(),
+            "both proofs should be non-empty"
+        );
+
+        let change_ctx = ChangeProofContext::from(proof);
+        let result = change_ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"\x12".as_ref()),
+            Some(b"\xf0".as_ref()),
+            None,
+        );
+        assert!(
+            result.is_ok(),
+            "divergence parent with exhausted start_key should not false-positive: {:?}",
+            result.err()
+        );
+    }
+
+    /// Adversarial counterpart to `test_start_proof_inclusion_with_children_below`.
+    /// Omits a `batch_op` in the subtree below `start_key`. The `None`
+    /// boundary nibble at the start proof's last node means ALL children
+    /// are checked. The omitted change causes a child hash mismatch
+    /// between the proof and the proposal, which must be caught.
+    #[test]
+    fn test_omitted_change_below_prefix_start_key() {
+        use firewood::api::FrozenChangeProof;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![
+            put(b"\xab", b"short"),
+            put(b"\xab\xcd", b"long"),
+            put(b"\xf0", b"other"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // Change both the child key and the separate key.
+        let changes = vec![put(b"\xab\xcd", b"changed"), put(b"\xf0", b"changed2")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Get the real proof
+        let real_proof = db_a
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                Some(b"\xab".as_ref()),
+                None,
+                None,
+            )
+            .expect("change proof");
+
+        // Craft a proof that omits the \xab\xcd change — only keep \xf0.
+        // The omitted change in the subtree below start_key should be
+        // caught by the all-children check at the start proof's last node.
+        let tampered_ops: Vec<_> = real_proof
+            .batch_ops()
+            .iter()
+            .filter(|op| op.key().as_ref() != b"\xab\xcd")
+            .cloned()
+            .collect();
+        assert!(
+            tampered_ops.len() < real_proof.batch_ops().len(),
+            "should have removed at least one op"
+        );
+
+        let tampered = FrozenChangeProof::new(
+            firewood::Proof::new(real_proof.start_proof().as_ref().into()),
+            firewood::Proof::new(real_proof.end_proof().as_ref().into()),
+            tampered_ops.into_boxed_slice(),
+        );
+
+        let change_ctx = ChangeProofContext::from(tampered);
+        let result = change_ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"\xab".as_ref()),
+            None,
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "omitted change below prefix start_key should be detected"
         );
     }
 }
