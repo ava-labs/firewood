@@ -4656,4 +4656,605 @@ mod tests {
             "omission in branch trie (depth 2) should be detected"
         );
     }
+
+    // ── Remaining tests adapted from rkuris/cp-test-additions ────────────
+
+    /// Structural: keys in descending order are rejected.
+    /// Adapted from rkuris `test_reject_unsorted_keys`.
+    #[test]
+    fn test_reject_unsorted_keys() {
+        use firewood::Proof;
+        use firewood::api::FrozenChangeProof;
+
+        let crafted = FrozenChangeProof::new(
+            Proof::new(Box::new([])),
+            Proof::new(Box::new([])),
+            vec![
+                put(b"\x90", b"\x09"),
+                put(b"\x10", b"\x01"), // descending — invalid
+            ]
+            .into_boxed_slice(),
+        );
+
+        let result = ChangeProofContext::verify_proof_structure(
+            &crafted,
+            firewood::api::HashKey::empty(),
+            None,
+            None,
+            None,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(firewood::api::Error::ProofError(
+                    ProofError::ChangeProofKeysNotSorted
+                ))
+            ),
+            "unsorted keys should be rejected, got: {result:?}",
+        );
+    }
+
+    /// Case 1: skip `batch_ops` entirely — proposal root won't match `end_root`.
+    /// Adapted from rkuris `test_reject_wrong_root_complete_proof`.
+    /// Redundant with `test_empty_end_root_with_batch_ops_rejected_complete`.
+    #[test]
+    fn test_reject_wrong_root_complete_proof() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![put(b"\x10", b"v1")];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+
+        let changes = vec![put(b"\x10", b"v2")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        let proof = db_a
+            .change_proof(root1_a, root2.clone(), None, None, None)
+            .expect("proof");
+
+        // Use a wrong `end_root` — the proof's hash chain fails.
+        let wrong_root = firewood::api::HashKey::empty();
+        let ctx = ChangeProofContext::from(proof);
+        let _err = ctx
+            .verify_and_propose(&db_b, root1_b, wrong_root, None, None, None)
+            .expect_err("wrong end_root should be rejected");
+    }
+
+    /// Case 2c: omit a Put — the in-range child hash differs.
+    /// Adapted from rkuris `test_reject_omitted_batch_op_in_range`.
+    /// Redundant with `test_omitted_change_attack`.
+    #[test]
+    fn test_reject_omitted_batch_op_in_range() {
+        use firewood::api::FrozenChangeProof;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![put(b"\x10", b"v1"), put(b"\x90", b"v9")];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+
+        // Add \x50 on db_a
+        let changes = vec![put(b"\x50", b"v5")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        let honest = db_a
+            .change_proof(
+                root1_a,
+                root2.clone(),
+                Some(b"\x10".as_ref()),
+                Some(b"\x90".as_ref()),
+                None,
+            )
+            .expect("proof");
+
+        // Strip all batch_ops — omit the \x50 addition.
+        let crafted = FrozenChangeProof::new(
+            honest.start_proof().clone(),
+            honest.end_proof().clone(),
+            Box::new([]),
+        );
+
+        let ctx = ChangeProofContext::from(crafted);
+        let result = ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"\x10".as_ref()),
+            Some(b"\x90".as_ref()),
+            None,
+        );
+        assert!(result.is_err(), "omitted batch_op should be detected");
+    }
+
+    /// Case 2a: `start_key=None`, only end proof. Omitting the batch op
+    /// that adds `\x50` leaves the proposal without a child at nibble 5.
+    /// Adapted from rkuris `test_reject_case2a_omitted_op_end_proof_only`.
+    #[test]
+    fn test_reject_case2a_omitted_op_end_proof_only() {
+        use firewood::api::FrozenChangeProof;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![put(b"\x10", b"v1"), put(b"\x90", b"v9")];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+
+        let changes = vec![put(b"\x50", b"v5")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Generate proof with start_key=None → Case 2a (only end proof).
+        let honest = db_a
+            .change_proof(root1_a, root2.clone(), None, Some(b"\x90".as_ref()), None)
+            .expect("proof");
+
+        // Strip batch_ops.
+        let crafted = FrozenChangeProof::new(
+            honest.start_proof().clone(),
+            honest.end_proof().clone(),
+            Box::new([]),
+        );
+
+        let ctx = ChangeProofContext::from(crafted);
+        let result =
+            ctx.verify_and_propose(&db_b, root1_b, root2, None, Some(b"\x90".as_ref()), None);
+        assert!(
+            result.is_err(),
+            "Case 2a omitted batch_op should be detected"
+        );
+    }
+
+    /// Case 2b: `end_key=None`, only start proof. Omitting the batch op
+    /// that adds `\x50` leaves the proposal without a child at nibble 5.
+    /// Adapted from rkuris `test_reject_case2b_omitted_op_start_proof_only`.
+    ///
+    /// The generator change produces a non-empty end proof when `batch_ops`
+    /// is non-empty. To get Case 2b (empty end proof), we strip the end
+    /// proof from an honest proof.
+    #[cfg(not(feature = "ethhash"))]
+    #[test]
+    fn test_reject_case2b_omitted_op_start_proof_only() {
+        use firewood::api::FrozenChangeProof;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![put(b"\x10", b"v1"), put(b"\x90", b"v9")];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+
+        let changes = vec![put(b"\x50", b"v5")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        let honest = db_a
+            .change_proof(
+                root1_a,
+                root2.clone(),
+                Some(b"\x10".as_ref()),
+                Some(b"\x90".as_ref()),
+                None,
+            )
+            .expect("proof");
+
+        // Strip end proof and batch_ops → Case 2b with empty batch_ops.
+        // The start proof's in-range children (nibble > 1) should catch
+        // the missing \x50 at nibble 5.
+        let crafted = FrozenChangeProof::new(
+            honest.start_proof().clone(),
+            firewood::Proof::default(),
+            Box::new([]),
+        );
+
+        let ctx = ChangeProofContext::from(crafted);
+        let result =
+            ctx.verify_and_propose(&db_b, root1_b, root2, Some(b"\x10".as_ref()), None, None);
+        assert!(
+            result.is_err(),
+            "Case 2b omitted batch_op should be detected"
+        );
+    }
+
+    /// Case 2b: attacker keeps valid start proof but forges a batch op value.
+    /// Adapted from rkuris `test_reject_case2b_bogus_batch_ops`.
+    #[cfg(not(feature = "ethhash"))]
+    #[test]
+    fn test_reject_case2b_bogus_batch_ops() {
+        use firewood::api::FrozenChangeProof;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![put(b"\x10", b"v1"), put(b"\x90", b"v9")];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+
+        let changes = vec![put(b"\x50", b"v5")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        let honest = db_a
+            .change_proof(
+                root1_a,
+                root2.clone(),
+                Some(b"\x10".as_ref()),
+                Some(b"\x90".as_ref()),
+                None,
+            )
+            .expect("proof");
+
+        // Keep valid start proof, strip end proof (Case 2b), forge
+        // the batch op value for \x50.
+        let bogus_ops: Vec<BatchOp<Key, Value>> = honest
+            .batch_ops()
+            .iter()
+            .map(|op| {
+                if op.key().as_ref() == b"\x50" {
+                    put(b"\x50", b"\xff")
+                } else {
+                    op.clone()
+                }
+            })
+            .collect();
+        let crafted = FrozenChangeProof::new(
+            honest.start_proof().clone(),
+            firewood::Proof::default(),
+            bogus_ops.into_boxed_slice(),
+        );
+
+        let ctx = ChangeProofContext::from(crafted);
+        let result =
+            ctx.verify_and_propose(&db_b, root1_b, root2, Some(b"\x10".as_ref()), None, None);
+        assert!(
+            result.is_err(),
+            "Case 2b bogus batch_ops should be detected"
+        );
+    }
+
+    /// Case 2a: tamper a batch op value with no start proof present.
+    /// 52-key trie ("aa".."az" and "za".."zz"). Strip start proof to
+    /// get Case 2a, then tamper "ac" from V2 to V3.
+    /// Adapted from rkuris `test_case2a_no_start_proof_tamper_detects`.
+    #[cfg(not(feature = "ethhash"))]
+    #[test]
+    fn test_case2a_no_start_proof_tamper_detects() {
+        use firewood::api::FrozenChangeProof;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let letters: Vec<u8> = (b'a'..=b'z').collect();
+        let r1_ops: Vec<_> = [b'a', b'z']
+            .iter()
+            .flat_map(|&c1| letters.iter().map(move |&c2| put(&[c1, c2], b"V1")))
+            .collect();
+
+        let p = (&db_a).create_proposal(r1_ops.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(r1_ops).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+
+        // R2: change "ac" and "za" to V2
+        let r2_changes: Vec<_> = vec![put(b"ac", b"V2"), put(b"za", b"V2")];
+        let p = (&db_a).create_proposal(r2_changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Get a bounded proof, then strip start proof → Case 2a.
+        let honest = db_a
+            .change_proof(
+                root1_a,
+                root2.clone(),
+                Some(b"abc".as_ref()),
+                Some(b"zaa".as_ref()),
+                None,
+            )
+            .expect("proof");
+
+        // Tamper "ac" value from V2 to V3.
+        let tampered_ops: Vec<BatchOp<Key, Value>> = honest
+            .batch_ops()
+            .iter()
+            .map(|op| {
+                if op.key().as_ref() == b"ac" {
+                    put(b"ac", b"V3")
+                } else {
+                    op.clone()
+                }
+            })
+            .collect();
+
+        let crafted = FrozenChangeProof::new(
+            firewood::Proof::default(), // strip start proof
+            honest.end_proof().clone(),
+            tampered_ops.into_boxed_slice(),
+        );
+
+        let ctx = ChangeProofContext::from(crafted);
+        let result = ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            None, // start_key=None → Case 2a
+            Some(b"zaa".as_ref()),
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "Case 2a tampered batch_op should be detected"
+        );
+    }
+
+    /// Case 2b: tamper a batch op value with no end proof present.
+    /// 52-key trie. Strip end proof to get Case 2b, then tamper "za"
+    /// from V2 to V3.
+    /// Adapted from rkuris `test_case2b_no_end_proof_tamper_detects`.
+    #[cfg(not(feature = "ethhash"))]
+    #[test]
+    fn test_case2b_no_end_proof_tamper_detects() {
+        use firewood::api::FrozenChangeProof;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let letters: Vec<u8> = (b'a'..=b'z').collect();
+
+        // R1: "aa".."az" and "za".."zz", all V1.
+        let r1_ops: Vec<_> = [b'a', b'z']
+            .iter()
+            .flat_map(|&c1| letters.iter().map(move |&c2| put(&[c1, c2], b"V1")))
+            .collect();
+
+        let p = (&db_a).create_proposal(r1_ops.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(r1_ops).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+
+        // R2: change "ac".."az" and "za" to V2.
+        // "aa" and "ab" stay at V1 (they're below "abc" start boundary).
+        // "zb".."zz" stay at V1 (they're above "zaa" end boundary).
+        let mut r2_changes = Vec::new();
+        for &c2 in &letters[2..] {
+            // "ac".."az"
+            r2_changes.push(put(&[b'a', c2], b"V2"));
+        }
+        r2_changes.push(put(b"za", b"V2"));
+        let p = (&db_a).create_proposal(r2_changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        let honest = db_a
+            .change_proof(
+                root1_a,
+                root2.clone(),
+                Some(b"abc".as_ref()),
+                Some(b"zaa".as_ref()),
+                None,
+            )
+            .expect("proof");
+
+        // Tamper "za" value from V2 to V3, strip end proof → Case 2b.
+        let tampered_ops: Vec<BatchOp<Key, Value>> = honest
+            .batch_ops()
+            .iter()
+            .map(|op| {
+                if op.key().as_ref() == b"za" {
+                    put(b"za", b"V3")
+                } else {
+                    op.clone()
+                }
+            })
+            .collect();
+
+        let crafted = FrozenChangeProof::new(
+            honest.start_proof().clone(),
+            firewood::Proof::default(), // strip end proof
+            tampered_ops.into_boxed_slice(),
+        );
+
+        let ctx = ChangeProofContext::from(crafted);
+        let result = ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"abc".as_ref()),
+            None, // end_key=None → Case 2b
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "Case 2b tampered batch_op should be detected"
+        );
+    }
+
+    /// Multi-round iterative sync from root1 to root2.
+    /// Adapted from rkuris `test_iterative_sync_converges`.
+    ///
+    /// Disabled: requires `find_next_key` termination changes to work
+    /// with `end_key=None` and the generator convention (end proof for
+    /// `last_op_key`).
+    #[test]
+    #[ignore = "requires find_next_key termination changes for end_key=None"]
+    fn test_iterative_sync_converges() {
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let mut initial = Vec::new();
+        for i in 0..100u32 {
+            let key = format!("key{i:03}");
+            let val = format!("val{i:03}");
+            initial.push(put(key.as_bytes(), val.as_bytes()));
+        }
+
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let mut root_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root_b);
+
+        let mut changes = Vec::new();
+        for i in 0..50u32 {
+            let key = format!("key{i:03}");
+            let val = format!("changed{i:03}");
+            changes.push(put(key.as_bytes(), val.as_bytes()));
+        }
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        let mut start_key: Option<Vec<u8>> = None;
+        let max_rounds = 20;
+
+        for round in 0..max_rounds {
+            let proof = db_a
+                .change_proof(
+                    root1_a.clone(),
+                    root2.clone(),
+                    start_key.as_deref(),
+                    None,
+                    std::num::NonZeroUsize::new(10),
+                )
+                .expect("proof");
+
+            let ctx = ChangeProofContext::from(proof);
+            let mut proposed = ctx
+                .verify_and_propose(
+                    &db_b,
+                    root_b.clone(),
+                    root2.clone(),
+                    start_key.as_deref(),
+                    None,
+                    std::num::NonZeroUsize::new(10),
+                )
+                .unwrap_or_else(|e| panic!("round {round}: verify_and_propose failed: {:?}", e.1));
+
+            root_b = proposed
+                .commit()
+                .unwrap_or_else(|e| panic!("round {round}: commit failed: {e:?}"))
+                .expect("commit should return a root hash");
+
+            let next = proposed
+                .find_next_key()
+                .unwrap_or_else(|e| panic!("round {round}: find_next_key failed: {e:?}"));
+
+            match next {
+                None => break,
+                Some((next_start, _)) => {
+                    start_key = Some(next_start.to_vec());
+                }
+            }
+
+            assert!(
+                round < max_rounds - 1,
+                "sync did not converge after {max_rounds} rounds"
+            );
+        }
+
+        assert_eq!(
+            root_b, root2,
+            "after iterative sync, root hashes should match"
+        );
+    }
+
+    // Fuzz-style test from rkuris `test_change_proof_fuzz`.
+    // Commented out: requires core-level infrastructure (SeededRng,
+    // init_merkle, apply_batch_ops, verify_change_proof,
+    // fixed_and_pseudorandom_data, decrease_key, increase_key) that
+    // doesn't exist in the FFI layer.
+    //
+    // fn test_change_proof_fuzz() {
+    //     let outer_rng = firewood_storage::SeededRng::from_env_or_random();
+    //     for run in 0..100 {
+    //         let seed = outer_rng.next_u64();
+    //         let rng = firewood_storage::SeededRng::new(seed);
+    //         let key_count = rng.random_range(64..=2048_u32);
+    //         let start_data = fixed_and_pseudorandom_data(&rng, key_count);
+    //         let mut start_items: Vec<_> = start_data.iter().collect();
+    //         start_items.sort_unstable();
+    //         let start_merkle = init_merkle(start_items.clone());
+    //         let mut end_data = start_data.clone();
+    //         let delete_count = (start_items.len() / 7).max(1);
+    //         for i in (0..start_items.len()).step_by(start_items.len() / delete_count + 1) {
+    //             end_data.remove(start_items[i].0);
+    //         }
+    //         let insert_count = rng.random_range(10..=50_u32);
+    //         for _ in 0..insert_count {
+    //             end_data.insert(rng.random::<[u8; 32]>(), rng.random::<[u8; 20]>());
+    //         }
+    //         let mut end_items: Vec<_> = end_data.iter().collect();
+    //         end_items.sort_unstable();
+    //         let end_merkle = init_merkle(end_items.clone());
+    //         let end_root = end_merkle.nodestore().root_hash().unwrap();
+    //         for _ in 0..50 {
+    //             let scenario = rng.random_range(0..5_u32);
+    //             match scenario {
+    //                 0 => { /* both boundary keys existing */ }
+    //                 1 => { /* start boundary non-existent (decreased) */ }
+    //                 2 => { /* end boundary non-existent (increased) */ }
+    //                 3 => { /* both boundaries non-existent */ }
+    //                 _ => { /* no bounds — complete proof */ }
+    //             }
+    //         }
+    //     }
+    // }
 }
