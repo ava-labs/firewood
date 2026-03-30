@@ -4656,5 +4656,4 @@ mod tests {
             "omission in branch trie (depth 2) should be detected"
         );
     }
-
 }
