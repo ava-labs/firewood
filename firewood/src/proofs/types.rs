@@ -161,6 +161,14 @@ pub enum ProofError {
     #[error("non-empty boundary proof has no key to validate against")]
     BoundaryProofUnverifiable,
 
+    /// The end proof's inclusion/exclusion result doesn't match the last
+    /// batch op's type. A Put expects the key to exist in `end_root`
+    /// (inclusion proof); a Delete expects it to be absent (exclusion).
+    /// A mismatch indicates the attacker tampered with `batch_ops` so the
+    /// derived key doesn't match the key the end proof was built for.
+    #[error("end proof inclusion/exclusion result doesn't match last batch op type")]
+    EndProofOperationMismatch,
+
     /// Change proof contains an unsupported `DeleteRange` operation.
     ///
     /// The honest diff algorithm only produces `Put` and `Delete` operations.

@@ -325,7 +325,7 @@ impl ChangeProofContext {
             let consistent = matches!((is_delete, &result), (false, Some(_)) | (true, None));
             if !consistent {
                 return Err(api::Error::ProofError(
-                    ProofError::BoundaryProofUnverifiable,
+                    ProofError::EndProofOperationMismatch,
                 ));
             }
         }
