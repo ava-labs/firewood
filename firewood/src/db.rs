@@ -11,8 +11,8 @@ mod tests;
 
 pub use crate::api::BatchOp;
 use crate::api::{
-    self, ArcDynDbView, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter, KeyType,
-    KeyValuePair, OptionalHashKeyExt,
+    self, ArcDynDbView, FrozenChangeProof, FrozenProof, FrozenRangeProof, HashKey, IntoBatchIter,
+    KeyType, KeyValuePair, OptionalHashKeyExt,
 };
 use crate::iter::MerkleKeyValueIter;
 use crate::merkle::{Merkle, Value};
@@ -367,6 +367,48 @@ impl Db {
             db: self,
             nodestore: Arc::new(mutable_nodestore.into()),
         })
+    }
+
+    /// Generate a change proof between two revisions identified by their root hashes.
+    ///
+    /// Returns the proof that covers key-value changes between `start_hash` and
+    /// `end_hash` within the optional `[start_key, end_key]` range, truncated to
+    /// at most `limit` entries.
+    ///
+    /// # Errors
+    ///
+    /// - [`api::Error::EndRevisionNotFound`] if `end_hash` is not found.
+    /// - [`api::Error::StartRevisionNotFound`] if `start_hash` is not found.
+    /// - Other I/O or structural errors during proof generation.
+    pub fn change_proof(
+        &self,
+        start_hash: HashKey,
+        end_hash: HashKey,
+        start_key: Option<&[u8]>,
+        end_key: Option<&[u8]>,
+        limit: Option<NonZeroUsize>,
+    ) -> Result<FrozenChangeProof, api::Error> {
+        // Resolve end revision first so we return EndRevisionNotFound when both
+        // hashes are missing (matching the FFI's prior error-precedence rule).
+        let end_rev = self.manager.revision(end_hash).map_err(|err| {
+            let err = api::Error::from(err);
+            if let api::Error::RevisionNotFound { provided } = err {
+                api::Error::EndRevisionNotFound { provided }
+            } else {
+                err
+            }
+        })?;
+        let start_rev = self.manager.revision(start_hash).map_err(|err| {
+            let err = api::Error::from(err);
+            if let api::Error::RevisionNotFound { provided } = err {
+                api::Error::StartRevisionNotFound { provided }
+            } else {
+                err
+            }
+        })?;
+        let start_merkle = Merkle::from(start_rev);
+        let end_merkle = Merkle::from(end_rev);
+        end_merkle.change_proof(start_key, end_key, start_merkle.nodestore(), limit)
     }
 
     /// Closes the database gracefully.
