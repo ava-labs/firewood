@@ -178,6 +178,12 @@ pub enum ProofError {
     /// Matches `AvalancheGo`'s `ErrUnexpectedEndProof`.
     #[error("unexpected non-empty end proof with no end key and no batch operations")]
     UnexpectedEndProof,
+
+    /// Empty end proof when `end_key` is set or `batch_ops` is non-empty.
+    /// The honest generator always produces an end proof in these cases.
+    /// Matches `AvalancheGo`'s `ErrNoEndProof`.
+    #[error("missing end proof: end_key is set or batch_ops is non-empty")]
+    MissingEndProof,
 }
 
 #[derive(Clone, PartialEq, Eq)]
