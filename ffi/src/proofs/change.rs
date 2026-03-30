@@ -1287,6 +1287,7 @@ impl crate::MetricsContextExt for (&DatabaseHandle, Box<ChangeProofContext>) {
 }
 
 #[cfg(test)]
+#[expect(clippy::indexing_slicing)]
 mod tests {
     use firewood::{
         ProofError,
@@ -4190,4 +4191,470 @@ mod tests {
             "expected MissingEndProof, got: {result:?}",
         );
     }
+
+    // ── Tests adapted from rkuris/cp-test-additions ──────────────────────────
+    //
+    // These test attack scenarios against verify_root_hash by crafting proofs
+    // with tampered batch_ops while keeping genuine boundary proofs from
+    // end_root. The boundary proofs pass the hash chain check, but the
+    // proposal (start_root + tampered_ops) differs from end_root at in-range
+    // children.
+
+    /// Attacker ADDS a spurious Put for a key that doesn't exist in `end_root`.
+    /// The proposal gains a child that the proof doesn't expect.
+    /// Adapted from rkuris `test_reject_spurious_batch_op_in_range`.
+    #[test]
+    fn test_spurious_batch_op_detected() {
+        use firewood::api::FrozenChangeProof;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Keys in distinct nibble subtrees: \x10 (nibble 1), \x90 (nibble 9).
+        // The gap at nibble 5 (\x50) is where we'll inject the spurious key.
+        let initial = vec![put(b"\x10", b"v1"), put(b"\x90", b"v9")];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // Change \x10's value on db_a → root2
+        let changes = vec![put(b"\x10", b"v1_changed")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Generate a legitimate bounded proof
+        let honest = db_a
+            .change_proof(
+                root1_a,
+                root2.clone(),
+                Some(b"\x10".as_ref()),
+                Some(b"\x90".as_ref()),
+                None,
+            )
+            .expect("proof");
+
+        // Inject a spurious Put(\x50) into the batch_ops.
+        // \x10 < \x50 < \x90 so sorted order is maintained.
+        let mut tampered_ops: Vec<BatchOp<firewood::merkle::Key, firewood::merkle::Value>> =
+            honest.batch_ops().to_vec();
+        tampered_ops.push(BatchOp::Put {
+            key: b"\x50".to_vec().into_boxed_slice(),
+            value: b"fake".to_vec().into_boxed_slice(),
+        });
+        tampered_ops.sort_by(|a, b| a.key().cmp(b.key()));
+
+        let crafted = FrozenChangeProof::new(
+            honest.start_proof().clone(),
+            honest.end_proof().clone(),
+            tampered_ops.into_boxed_slice(),
+        );
+
+        // The inclusion/exclusion check in verify_end_proof catches this:
+        // the derived key (\x50) produces an exclusion proof (key doesn't
+        // exist in end_root), but it's a Put (expects inclusion).
+        // EndProofOperationMismatch is returned.
+        let ctx = ChangeProofContext::from(crafted);
+        let result = ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"\x10".as_ref()),
+            Some(b"\x90".as_ref()),
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "spurious batch_op should be rejected by inclusion/exclusion check"
+        );
+    }
+
+    /// Attacker omits a Delete from `batch_ops`. The proposal retains a key
+    /// that `end_root` deleted, causing a child hash mismatch.
+    /// Adapted from rkuris `test_reject_missing_delete_in_range`.
+    #[test]
+    fn test_missing_delete_detected() {
+        use firewood::api::FrozenChangeProof;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Three keys in distinct nibble subtrees.
+        let initial = vec![
+            put(b"\x10", b"v1"),
+            put(b"\x50", b"v5"),
+            put(b"\x90", b"v9"),
+        ];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+
+        // Delete \x50 on db_a → root2
+        let changes = vec![delete(b"\x50")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Generate a legitimate proof that includes the Delete
+        let honest = db_a
+            .change_proof(
+                root1_a,
+                root2.clone(),
+                Some(b"\x10".as_ref()),
+                Some(b"\x90".as_ref()),
+                None,
+            )
+            .expect("proof");
+
+        // Strip the Delete — keep only non-Delete ops
+        let tampered_ops: Vec<BatchOp<firewood::merkle::Key, firewood::merkle::Value>> = honest
+            .batch_ops()
+            .iter()
+            .filter(|op| !matches!(op, BatchOp::Delete { .. }))
+            .cloned()
+            .collect();
+        assert!(
+            tampered_ops.len() < honest.batch_ops().len(),
+            "should have removed the Delete"
+        );
+
+        let crafted = FrozenChangeProof::new(
+            honest.start_proof().clone(),
+            honest.end_proof().clone(),
+            tampered_ops.into_boxed_slice(),
+        );
+
+        // The proposal retains \x50, but end_root has it deleted.
+        // Child at nibble 5 differs.
+        let ctx = ChangeProofContext::from(crafted);
+        let result = ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"\x10".as_ref()),
+            Some(b"\x90".as_ref()),
+            None,
+        );
+        assert!(result.is_err(), "missing Delete should be detected");
+    }
+
+    /// Attacker forges a value in `batch_ops`. The boundary proofs are genuine
+    /// (from `end_root`), but the applied trie has a wrong value.
+    /// Adapted from rkuris `test_reject_wrong_value_in_applied_trie`.
+    #[test]
+    fn test_forged_value_detected() {
+        use firewood::api::FrozenChangeProof;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![put(b"\x10", b"v1"), put(b"\x90", b"v9")];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+
+        // Change \x10 to "correct_value" on db_a
+        let changes = vec![put(b"\x10", b"correct_value")];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        let honest = db_a
+            .change_proof(
+                root1_a,
+                root2.clone(),
+                Some(b"\x10".as_ref()),
+                Some(b"\x90".as_ref()),
+                None,
+            )
+            .expect("proof");
+
+        // Forge: replace the value with "wrong_value"
+        let forged_ops: Vec<BatchOp<firewood::merkle::Key, firewood::merkle::Value>> = honest
+            .batch_ops()
+            .iter()
+            .map(|op| match op {
+                BatchOp::Put { key, .. } if key.as_ref() == b"\x10" => BatchOp::Put {
+                    key: key.clone(),
+                    value: b"wrong_value".to_vec().into_boxed_slice(),
+                },
+                other => other.clone(),
+            })
+            .collect();
+
+        let crafted = FrozenChangeProof::new(
+            honest.start_proof().clone(),
+            honest.end_proof().clone(),
+            forged_ops.into_boxed_slice(),
+        );
+
+        // The proof's boundary nodes record the correct value digest from
+        // end_root. The applied trie has "wrong_value" instead.
+        let ctx = ChangeProofContext::from(crafted);
+        let result = ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"\x10".as_ref()),
+            Some(b"\x90".as_ref()),
+            None,
+        );
+        assert!(result.is_err(), "forged value should be detected");
+    }
+
+    /// Attacker XORs the last byte of an interior key. The boundary proofs
+    /// are genuine, but the tampered key places a leaf at a different trie
+    /// position, producing a different child hash.
+    /// Adapted from rkuris `test_reject_tampered_interior_key`.
+    #[test]
+    fn test_tampered_interior_key_detected() {
+        use firewood::api::FrozenChangeProof;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let initial = vec![put(b"\x10", b"v1"), put(b"\x90", b"v9")];
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+
+        // Add three interior keys
+        let changes = vec![
+            put(b"\x30", b"v3"),
+            put(b"\x50", b"v5"),
+            put(b"\x70", b"v7"),
+        ];
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        let honest = db_a
+            .change_proof(
+                root1_a,
+                root2.clone(),
+                Some(b"\x10".as_ref()),
+                Some(b"\x90".as_ref()),
+                None,
+            )
+            .expect("proof");
+
+        // Tamper: XOR the last byte of the middle key (\x50 → \x51)
+        let mut tampered_ops: Vec<BatchOp<firewood::merkle::Key, firewood::merkle::Value>> =
+            honest.batch_ops().to_vec();
+        let mid = tampered_ops.len() / 2;
+        if let BatchOp::Put { key, .. } = &mut tampered_ops[mid] {
+            let mut new_key = key.to_vec();
+            let last = new_key.len() - 1;
+            new_key[last] ^= 0x01;
+            *key = new_key.into_boxed_slice();
+        }
+
+        let crafted = FrozenChangeProof::new(
+            honest.start_proof().clone(),
+            honest.end_proof().clone(),
+            tampered_ops.into_boxed_slice(),
+        );
+
+        let ctx = ChangeProofContext::from(crafted);
+        let result = ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"\x10".as_ref()),
+            Some(b"\x90".as_ref()),
+            None,
+        );
+        assert!(result.is_err(), "tampered interior key should be detected");
+    }
+
+    /// Omission caught at depth > 0 in the end proof tail. Uses a deeper
+    /// trie structure ("aa".."zz", 676 keys) to exercise the end tail's
+    /// in-range child check at depth 1.
+    /// Adapted from rkuris `test_reject_removed_key_end_proof_tail`.
+    #[test]
+    fn test_omission_at_end_proof_tail() {
+        use firewood::api::FrozenChangeProof;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        // Build a 676-key trie: "aa".."zz" with value "V1"
+        let letters: Vec<u8> = (b'a'..=b'z').collect();
+        let initial: Vec<_> = letters
+            .iter()
+            .flat_map(|&c1| letters.iter().map(move |&c2| put(&[c1, c2], b"V1")))
+            .collect();
+
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+        assert_eq!(root1_a, root1_b);
+
+        // Change all values to "V2" on db_a
+        let changes: Vec<_> = letters
+            .iter()
+            .flat_map(|&c1| letters.iter().map(move |&c2| put(&[c1, c2], b"V2")))
+            .collect();
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        // Generate a bounded proof for range ["ba", "yz"]
+        let honest = db_a
+            .change_proof(
+                root1_a,
+                root2.clone(),
+                Some(b"ba".as_ref()),
+                Some(b"yz".as_ref()),
+                None,
+            )
+            .expect("proof");
+
+        // Remove "xr" from batch_ops. "xr" = [0x78, 0x72], nibbles [7,8,7,2].
+        // The end proof tail at depth 1 (the [7] node) has end boundary
+        // nibble 9 (from "yz" = [7,9,...]). Nibble 8 < 9 → in-range.
+        let tampered_ops: Vec<BatchOp<firewood::merkle::Key, firewood::merkle::Value>> = honest
+            .batch_ops()
+            .iter()
+            .filter(|op| op.key().as_ref() != b"xr")
+            .cloned()
+            .collect();
+        assert!(
+            tampered_ops.len() < honest.batch_ops().len(),
+            "key \"xr\" should be in batch_ops for range [ba, yz]"
+        );
+
+        let crafted = FrozenChangeProof::new(
+            honest.start_proof().clone(),
+            honest.end_proof().clone(),
+            tampered_ops.into_boxed_slice(),
+        );
+
+        let ctx = ChangeProofContext::from(crafted);
+        let result = ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"ba".as_ref()),
+            Some(b"yz".as_ref()),
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "omission at end proof tail (depth > 0) should be detected"
+        );
+    }
+
+    /// Omission in a 676-key trie at depth 2. Removes "bp" from `batch_ops`.
+    /// "bp" sits at nibble 7 at depth 2, which is in-range (> boundary
+    /// nibble 6 from "ba").
+    /// Adapted from rkuris `test_reject_removed_key_branch_trie`.
+    #[test]
+    fn test_omission_in_branch_trie() {
+        use firewood::api::FrozenChangeProof;
+
+        let dir_a = tempfile::tempdir().expect("tempdir");
+        let dir_b = tempfile::tempdir().expect("tempdir");
+        let db_a = test_db(dir_a.path());
+        let db_b = test_db(dir_b.path());
+
+        let letters: Vec<u8> = (b'a'..=b'z').collect();
+        let initial: Vec<_> = letters
+            .iter()
+            .flat_map(|&c1| letters.iter().map(move |&c2| put(&[c1, c2], b"V1")))
+            .collect();
+
+        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        p.commit().expect("commit");
+        let root1_a = db_a.current_root_hash().expect("root");
+
+        let p = (&db_b).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1_b = db_b.current_root_hash().expect("root");
+
+        let changes: Vec<_> = letters
+            .iter()
+            .flat_map(|&c1| letters.iter().map(move |&c2| put(&[c1, c2], b"V2")))
+            .collect();
+        let p = (&db_a).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db_a.current_root_hash().expect("root");
+
+        let honest = db_a
+            .change_proof(
+                root1_a,
+                root2.clone(),
+                Some(b"ba".as_ref()),
+                Some(b"yz".as_ref()),
+                None,
+            )
+            .expect("proof");
+
+        // Remove "bp". "bp" = [0x62, 0x70], nibbles [6,2,7,0].
+        // At depth 2 (the [6,2] node for "b?" keys), boundary nibble is 6
+        // (high nibble of 'a' = 0x61). "bp"'s nibble at depth 2 is 7 > 6 →
+        // in-range.
+        let tampered_ops: Vec<BatchOp<firewood::merkle::Key, firewood::merkle::Value>> = honest
+            .batch_ops()
+            .iter()
+            .filter(|op| op.key().as_ref() != b"bp")
+            .cloned()
+            .collect();
+        assert!(
+            tampered_ops.len() < honest.batch_ops().len(),
+            "key \"bp\" should be in batch_ops for range [ba, yz]"
+        );
+
+        let crafted = FrozenChangeProof::new(
+            honest.start_proof().clone(),
+            honest.end_proof().clone(),
+            tampered_ops.into_boxed_slice(),
+        );
+
+        let ctx = ChangeProofContext::from(crafted);
+        let result = ctx.verify_and_propose(
+            &db_b,
+            root1_b,
+            root2,
+            Some(b"ba".as_ref()),
+            Some(b"yz".as_ref()),
+            None,
+        );
+        assert!(
+            result.is_err(),
+            "omission in branch trie (depth 2) should be detected"
+        );
+    }
+
 }
