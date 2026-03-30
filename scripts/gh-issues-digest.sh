@@ -81,18 +81,19 @@ fi
 OWNER="${REPO%/*}"
 REPO_NAME="${REPO#*/}"
 BATCH_SIZE=50
-PR_MAP="{}"
+GRAPHQL_MAP="{}"
 
 issue_numbers=$(echo "$ISSUES_JSON" | jq -r '.[].number')
 batch=()
 batch_num=0
 
-fetch_pr_batch() {
+fetch_issue_details_batch() {
     local nums=("$@")
     local query="{ repository(owner: \"$OWNER\", name: \"$REPO_NAME\") {"
     for n in "${nums[@]}"; do
         query+=" i${n}: issue(number: $n) {"
         query+="   number"
+        query+="   issueType { name }"
         query+="   timelineItems(itemTypes: [CROSS_REFERENCED_EVENT], first: 25) {"
         query+="     nodes { ... on CrossReferencedEvent { source { __typename"
         query+="       ... on PullRequest { number title state isDraft merged url }"
@@ -105,35 +106,49 @@ fetch_pr_batch() {
     local result
     result=$(gh api graphql -f query="$query" 2>/dev/null) || return 0
 
-    # Extract PR data per issue, filtering to only PullRequest sources
+    # Extract PR data and issue type per issue
     echo "$result" | jq '
       .data.repository | to_entries | map(
         {
           key: (.value.number | tostring),
-          value: [
-            .value.timelineItems.nodes[]
-            | select(.source.__typename == "PullRequest")
-            | .source
-            | {
-                number,
-                title,
-                url,
-                status: (
-                  if .merged then "merged"
-                  elif .state == "CLOSED" then "closed"
-                  elif .isDraft then "open-draft"
-                  else "open-review"
-                  end
-                )
-              }
-          ]
+          value: {
+            issueType: (.value.issueType.name // null),
+            linkedPRs: [
+              .value.timelineItems.nodes[]
+              | select(.source.__typename == "PullRequest")
+              | .source
+              | {
+                  number,
+                  title,
+                  url,
+                  status: (
+                    if .merged then "merged"
+                    elif .state == "CLOSED" then "closed"
+                    elif .isDraft then "open-draft"
+                    else "open-review"
+                    end
+                  )
+                }
+            ]
+          }
         }
       ) | from_entries
     '
 }
 
-# --- Fetch repository labels with open issue/PR counts via GraphQL ---
-echo "Fetching repository labels..." >&2
+# --- Fetch repository issue types and labels via GraphQL ---
+echo "Fetching repository issue types and labels..." >&2
+ISSUE_TYPES_JSON=$(gh api graphql -f query='
+{
+  repository(owner: "'"$OWNER"'", name: "'"$REPO_NAME"'") {
+    issueTypes(first: 20) {
+      nodes { name description }
+    }
+  }
+}' | jq '.data.repository.issueTypes.nodes')
+
+type_count=$(echo "$ISSUE_TYPES_JSON" | jq 'length')
+echo "Found $type_count issue types." >&2
 LABELS_JSON=$(gh api graphql --paginate -f query='
 {
   repository(owner: "'"$OWNER"'", name: "'"$REPO_NAME"'") {
@@ -154,33 +169,36 @@ LABELS_JSON=$(gh api graphql --paginate -f query='
 label_count=$(echo "$LABELS_JSON" | jq 'length')
 echo "Found $label_count labels." >&2
 
-echo "Fetching linked pull requests..." >&2
+echo "Fetching linked pull requests and issue types..." >&2
 for n in $issue_numbers; do
     batch+=("$n")
     if [[ ${#batch[@]} -ge $BATCH_SIZE ]]; then
         batch_num=$((batch_num + 1))
-        batch_result=$(fetch_pr_batch "${batch[@]}")
+        batch_result=$(fetch_issue_details_batch "${batch[@]}")
         if [[ -n "$batch_result" ]]; then
-            PR_MAP=$(echo "$PR_MAP" "$batch_result" | jq -s '.[0] * .[1]')
+            GRAPHQL_MAP=$(echo "$GRAPHQL_MAP" "$batch_result" | jq -s '.[0] * .[1]')
         fi
         batch=()
     fi
 done
 # Final partial batch
 if [[ ${#batch[@]} -gt 0 ]]; then
-    batch_result=$(fetch_pr_batch "${batch[@]}")
+    batch_result=$(fetch_issue_details_batch "${batch[@]}")
     if [[ -n "$batch_result" ]]; then
-        PR_MAP=$(echo "$PR_MAP" "$batch_result" | jq -s '.[0] * .[1]')
+        GRAPHQL_MAP=$(echo "$GRAPHQL_MAP" "$batch_result" | jq -s '.[0] * .[1]')
     fi
 fi
 
-pr_total=$(echo "$PR_MAP" | jq '[.[] | length] | add // 0')
+pr_total=$(echo "$GRAPHQL_MAP" | jq '[.[].linkedPRs | length] | add // 0')
 echo "Found $pr_total linked pull requests." >&2
 
-# Merge PR data into issues JSON
-ISSUES_JSON=$(echo "$ISSUES_JSON" "$PR_MAP" | jq -s '
-  .[0] as $issues | .[1] as $prs |
-  [$issues[] | . + {linkedPRs: ($prs[.number | tostring] // [])}]
+# Merge GraphQL data (linked PRs + issue type) into issues JSON
+ISSUES_JSON=$(echo "$ISSUES_JSON" "$GRAPHQL_MAP" | jq -s '
+  .[0] as $issues | .[1] as $details |
+  [$issues[] |
+    ($details[.number | tostring] // {}) as $d |
+    . + {linkedPRs: ($d.linkedPRs // []), issueType: ($d.issueType // null)}
+  ]
 ')
 
 # --- Output setup ---
@@ -252,6 +270,8 @@ echo "$ISSUES_JSON" | jq -r --arg repo "$REPO" '
   "| With milestone | \($milestoned) |",
   "| Oldest | \($oldest.createdAt[:10]) (#\($oldest.number)) |",
   "| Newest | \($newest.createdAt[:10]) (#\($newest.number)) |",
+  "| With type | \([$sorted[] | select(.issueType != null)] | length) |",
+  "| Without type | \([$sorted[] | select(.issueType == null)] | length) |",
   "| With linked PRs | \([$sorted[] | select(.linkedPRs | length > 0)] | length) |",
   ""
 '
@@ -267,6 +287,25 @@ echo "$LABELS_JSON" | jq -r '
     (.[] |
       "| \(.name) | \(.description // "—") | \(.issuesOpen.totalCount)/\(.issuesClosed.totalCount) | \(.prsOpen.totalCount)/\(.prsMerged.totalCount)/\(.prsClosed.totalCount) |"
     ),
+    ""
+  end
+'
+
+# Issue types with descriptions and open counts (computed from fetched issues)
+echo "$ISSUE_TYPES_JSON" "$ISSUES_JSON" | jq -r -s '
+  .[0] as $types | .[1] as $issues |
+  # Count open issues per type from our data
+  ($issues | group_by(.issueType) | map({key: (.[0].issueType // ""), value: length}) | from_entries) as $counts |
+  if ($types | length) == 0 then
+    "### Issue Types\n\nNo issue types defined.\n"
+  else
+    "### Issue Types\n",
+    "| Type | Description | Open Issues |",
+    "|------|-------------|:-----------:|",
+    ($types[] |
+      "| \(.name) | \(.description // "—") | \($counts[.name] // 0) |"
+    ),
+    "| *(none)* | Issues without a type assigned | \($counts[""] // 0) |",
     ""
   end
 '
@@ -320,6 +359,7 @@ echo "$ISSUES_JSON" | jq -r \
   "---\n" +
   "### #\(.number): \(.title)\($pinned)\n\n" +
   "- **URL:** \(.url)\n" +
+  "- **Type:** \(.issueType // "none")\n" +
   "- **Author:** \(.author.login)\n" +
   "- **Created:** \(.createdAt[:10])\n" +
   "- **Updated:** \(.updatedAt[:10])\n" +
