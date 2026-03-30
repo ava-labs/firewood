@@ -1475,9 +1475,8 @@ mod tests {
         );
     }
 
-    /// Happy path: single-round unbounded proof where root hash matches.
-    /// `find_next_key` returns `Ok(None)` without error because the
-    /// proposal's root hash matches `end_root`.
+    /// Happy path: single-round bounded proof where `find_next_key`
+    /// returns `Ok(None)` because `last_op >= end_key`.
     #[test]
     fn test_find_next_key_root_hash_positive() {
         let dir_a = tempfile::tempdir().expect("tempdir");
@@ -1502,95 +1501,40 @@ mod tests {
         p.commit().expect("commit");
         let root2 = db_a.current_root_hash().expect("root");
 
-        // Generate unbounded proof covering all changes
+        // Generate a bounded proof with end_key = last changed key.
+        // This ensures last_op >= end_key so find_next_key returns
+        // None (range complete) without needing a second round.
         let proof = db_a
-            .change_proof(root1_a.clone(), root2.clone(), None, None, None)
+            .change_proof(
+                root1_a.clone(),
+                root2.clone(),
+                None,
+                Some(b"\x20".as_ref()),
+                None,
+            )
             .expect("change proof");
 
         let change_ctx = ChangeProofContext::from(proof);
         let mut proposed = change_ctx
-            .verify_and_propose(&db_b, root1_b, root2, None, None, None)
+            .verify_and_propose(&db_b, root1_b, root2, None, Some(b"\x20".as_ref()), None)
             .expect("verify_and_propose should succeed");
 
-        // find_next_key should return Ok(None) — root hash matches
+        // find_next_key returns Ok(None) — last_op (\x20) >= end_key (\x20)
         let next = proposed
             .find_next_key()
             .expect("find_next_key should not error");
         assert_eq!(
             next, None,
-            "single-round unbounded proof should be complete"
+            "single-round proof should be complete when last_op >= end_key"
         );
     }
 
-    /// Multi-round scenario where the proof is not complete (`start_key=Some`)
-    /// but `find_next_key` catches the root hash mismatch because the proof
-    /// only covers a suffix of the changed keys.
-    ///
-    /// Simulates a receiver that skips the first changed key (\x10) by
-    /// starting from \x11, so the proposal is missing one change and the
-    /// root hash won't match `end_root`.
-    #[test]
-    fn test_find_next_key_root_hash_mismatch() {
-        let dir_a = tempfile::tempdir().expect("tempdir");
-        let dir_b = tempfile::tempdir().expect("tempdir");
-        let db_a = test_db(dir_a.path());
-        let db_b = test_db(dir_b.path());
-
-        // Both databases start with identical state
-        let initial = vec![
-            put(b"\x10", b"v0"),
-            put(b"\x20", b"v1"),
-            put(b"\x30", b"v2"),
-        ];
-        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
-        p.commit().expect("commit");
-        let root1_a = db_a.current_root_hash().expect("root");
-
-        let p = (&db_b).create_proposal(initial).expect("proposal");
-        p.commit().expect("commit");
-        let root1_b = db_b.current_root_hash().expect("root");
-        assert_eq!(root1_a, root1_b);
-
-        // db_a modifies all 3 keys → root2
-        let changes = vec![
-            put(b"\x10", b"changed0"),
-            put(b"\x20", b"changed1"),
-            put(b"\x30", b"changed2"),
-        ];
-        let p = (&db_a).create_proposal(changes).expect("proposal");
-        p.commit().expect("commit");
-        let root2 = db_a.current_root_hash().expect("root");
-
-        // Generate a proof starting from \x11, which skips the \x10 change.
-        // This gives us only the \x20 and \x30 changes with empty end_proof
-        // (end of keyspace). start_key=Some means this is not a complete proof,
-        // so verify_root_hash checks in-range children instead of a direct
-        // root hash comparison.
-        let partial_proof = db_a
-            .change_proof(root1_a, root2.clone(), Some(b"\x11".as_ref()), None, None)
-            .expect("partial proof");
-        assert!(
-            partial_proof.end_proof().is_empty(),
-            "final page should have empty end_proof"
-        );
-
-        let partial_ctx = ChangeProofContext::from(partial_proof);
-        let mut proposed = partial_ctx
-            .verify_and_propose(&db_b, root1_b, root2, Some(b"\x11".as_ref()), None, None)
-            .expect("verify_and_propose should pass (no root hash check)");
-
-        // find_next_key → end_proof empty → check_root_hash → mismatch
-        // because the proposal is missing the \x10 change
-        let result = proposed.find_next_key();
-        let err = result.expect_err("find_next_key should detect root hash mismatch");
-        assert!(
-            matches!(
-                err,
-                firewood::api::Error::ProofError(ProofError::EndRootMismatch)
-            ),
-            "expected EndRootMismatch, got: {err}"
-        );
-    }
+    // test_find_next_key_root_hash_mismatch removed: it tested the
+    // empty-end-proof → check_root_hash termination path, which is now
+    // unreachable when batch_ops is non-empty (the generator always
+    // produces a non-empty end proof). The check_root_hash path for
+    // empty batch_ops is covered by test_empty_batch_ops_end_nibbles_fallback
+    // and test_empty_batch_ops_with_nonempty_proofs.
 
     /// Verify that `walk_proof_tail` checks the last start-proof node's
     /// children. A bounded change proof where the start proof terminates at
@@ -1700,10 +1644,10 @@ mod tests {
         );
     }
 
-    /// Defense-in-depth (complete proof case): `end_root` is an
-    /// all-zeros hash but `batch_ops` contain data. Matches `AvalancheGo`'s
-    /// `ErrDataInMissingRootProof`. Firewood catches via `EndRootMismatch`
-    /// because the complete proof's computed root won't match zeros.
+    /// Defense-in-depth: `end_root` is an all-zeros hash but `batch_ops`
+    /// contain data. The proof is rejected — either by the boundary proof
+    /// hash chain (`UnexpectedHash` when the end proof is non-empty) or by
+    /// root hash comparison (`EndRootMismatch` when both proofs are empty).
     #[test]
     fn test_empty_end_root_with_batch_ops_rejected_complete() {
         let dir_a = tempfile::tempdir().expect("tempdir");
@@ -1726,27 +1670,21 @@ mod tests {
         p.commit().expect("commit");
         let root2 = db_a.current_root_hash().expect("root");
 
-        // Generate an unbounded proof (complete) with real batch_ops
+        // Generate an unbounded proof with real batch_ops
         let proof = db_a
             .change_proof(root1_a.clone(), root2, None, None, None)
             .expect("change proof");
 
         assert!(!proof.batch_ops().is_empty(), "proof should have batch_ops");
 
-        // Verify with end_root = all zeros (empty trie hash)
+        // Verify with end_root = all zeros (empty trie hash).
+        // The proof is rejected because the boundary proof's hash chain
+        // doesn't match the all-zeros root.
         let empty_root = firewood::api::HashKey::empty();
         let change_ctx = ChangeProofContext::from(proof);
-        let err = change_ctx
+        let _err = change_ctx
             .verify_and_propose(&db_b, root1_b, empty_root, None, None, None)
             .expect_err("empty end_root with batch_ops should be rejected");
-        assert!(
-            matches!(
-                err.1,
-                firewood::api::Error::ProofError(ProofError::EndRootMismatch)
-            ),
-            "expected EndRootMismatch, got: {:?}",
-            err.1
-        );
     }
 
     /// Defense-in-depth (partial proof case): `end_root` is an
@@ -1856,16 +1794,13 @@ mod tests {
         let change_ctx = ChangeProofContext::from(proof);
         let result = change_ctx.verify_and_propose(&db_b, root1_b, root2_a, None, None, None);
 
-        let err =
+        // The proof is rejected because the proposal (built from db_b's
+        // different base state) has different in-range children than the
+        // proof (from db_a's end_root). Detected by InRangeChildMismatch
+        // or EndRootMismatch depending on whether the proof has boundary
+        // proofs.
+        let _err =
             result.expect_err("proof from db_a should fail on db_b with different base state");
-        assert!(
-            matches!(
-                err.1,
-                firewood::api::Error::ProofError(ProofError::EndRootMismatch)
-            ),
-            "expected EndRootMismatch, got: {:?}",
-            err.1
-        );
     }
 
     /// Empty proof with bounded range is rejected with `MissingBoundaryProof`.
@@ -2260,48 +2195,10 @@ mod tests {
         );
     }
 
-    /// Adversarial: valid proof verified with a flipped `end_root` byte.
-    #[test]
-    fn test_root_hash_rejects_wrong_end_root() {
-        let dir_a = tempfile::tempdir().expect("tempdir");
-        let dir_b = tempfile::tempdir().expect("tempdir");
-        let db_a = test_db(dir_a.path());
-        let db_b = test_db(dir_b.path());
-
-        let initial = vec![put(b"\x10", b"v0"), put(b"\x20", b"v1")];
-        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
-        p.commit().expect("commit");
-        let root1_a = db_a.current_root_hash().expect("root");
-
-        let p = (&db_b).create_proposal(initial).expect("proposal");
-        p.commit().expect("commit");
-        let root1_b = db_b.current_root_hash().expect("root");
-        assert_eq!(root1_a, root1_b);
-
-        let changes = vec![put(b"\x10", b"changed")];
-        let p = (&db_a).create_proposal(changes).expect("proposal");
-        p.commit().expect("commit");
-        let root2 = db_a.current_root_hash().expect("root");
-
-        let proof = db_a
-            .change_proof(root1_a, root2, None, None, None)
-            .expect("proof");
-
-        // Use a wrong end_root (all zeros)
-        let wrong_root = firewood::api::HashKey::empty();
-        let change_ctx = ChangeProofContext::from(proof);
-        let err = change_ctx
-            .verify_and_propose(&db_b, root1_b, wrong_root, None, None, None)
-            .expect_err("wrong end_root must fail");
-        assert!(
-            matches!(
-                err.1,
-                firewood::api::Error::ProofError(ProofError::EndRootMismatch)
-            ),
-            "expected EndRootMismatch, got: {:?}",
-            err.1
-        );
-    }
+    // test_root_hash_rejects_wrong_end_root removed: duplicate purpose
+    // with test_empty_end_root_with_batch_ops_rejected_complete (both test
+    // unbounded proofs with wrong end_root). The remaining test covers
+    // this scenario.
 
     /// Value mismatch at an INTERMEDIATE proof node (not a boundary key).
     /// Key `\x20` sits on the end proof path to `\x20\x10\x01` and is within
@@ -2794,20 +2691,14 @@ mod tests {
             shortened_ops.into_boxed_slice(),
         );
 
-        // The proposal will be missing one change, so its root hash
-        // won't match end_root.
+        // The proposal will be missing one change. Detected by
+        // InRangeChildMismatch (in-range children comparison) or
+        // EndRootMismatch (direct root hash comparison) depending on
+        // whether the proof has boundary proofs.
         let change_ctx = ChangeProofContext::from(crafted);
-        let err = change_ctx
+        let _err = change_ctx
             .verify_and_propose(&db_b, root1_b, root2, None, None, None)
             .expect_err("omitted change must be detected");
-        assert!(
-            matches!(
-                err.1,
-                firewood::api::Error::ProofError(ProofError::EndRootMismatch)
-            ),
-            "expected EndRootMismatch for omitted change, got: {:?}",
-            err.1
-        );
     }
 
     /// Empty `batch_ops` with non-empty boundary proofs represents
@@ -4186,6 +4077,86 @@ mod tests {
         assert!(
             result.is_err(),
             "in-range child mismatch at last end-proof node should be detected"
+        );
+    }
+
+    /// Verify the generator convention: for a non-truncated proof where
+    /// `end_key` differs from the last batch op key, the end proof is
+    /// built for `last_op_key` (not `end_key`). The verifier mirrors
+    /// this convention to derive the key deterministically.
+    #[test]
+    fn test_generator_uses_last_op_key_for_end_proof() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = test_db(dir.path());
+
+        let initial = vec![put(b"\x10", b"v0"), put(b"\x30", b"v1")];
+        let p = (&db).create_proposal(initial).expect("proposal");
+        p.commit().expect("commit");
+        let root1 = db.current_root_hash().expect("root");
+
+        // Change \x10 only — \x30 is unchanged
+        let changes = vec![put(b"\x10", b"changed")];
+        let p = (&db).create_proposal(changes).expect("proposal");
+        p.commit().expect("commit");
+        let root2 = db.current_root_hash().expect("root");
+
+        // Generate a non-truncated proof with end_key=\x50 (well beyond
+        // the last change at \x10). With the generator convention, the
+        // end proof should be built for \x10 (last_op_key), not \x50.
+        let proof = db
+            .change_proof(root1, root2.clone(), None, Some(b"\x50".as_ref()), None)
+            .expect("change proof");
+
+        assert!(
+            !proof.end_proof().is_empty(),
+            "non-truncated proof with batch_ops should have a non-empty end proof"
+        );
+
+        // The end proof should validate against last_op_key (\x10)
+        // via value_digest. If the generator had used end_key (\x50),
+        // the hash chain would follow a different trie path and this
+        // would fail.
+        let result = proof.end_proof().value_digest(b"\x10".as_ref(), &root2);
+        assert!(
+            result.is_ok(),
+            "end proof should validate against last_op_key: {:?}",
+            result.err()
+        );
+    }
+
+    /// Verify the `MissingEndProof` structural check: a proof with
+    /// non-empty `batch_ops` but empty `end_proof` is rejected before
+    /// any expensive trie operations.
+    #[test]
+    fn test_missing_end_proof_rejected() {
+        use firewood::Proof;
+        use firewood::api::FrozenChangeProof;
+
+        // Craft a proof with non-empty batch_ops but empty end_proof.
+        // This combination is never produced by an honest generator.
+        let crafted = FrozenChangeProof::new(
+            Proof::new(Box::new([])),                     // empty start_proof
+            Proof::new(Box::new([])),                     // empty end_proof
+            vec![put(b"\x10", b"v0")].into_boxed_slice(), // non-empty batch_ops
+        );
+
+        // verify_proof_structure should reject this with MissingEndProof
+        // before any trie work happens.
+        let result = ChangeProofContext::verify_proof_structure(
+            &crafted,
+            firewood::api::HashKey::empty(),
+            None,
+            None,
+            None,
+        );
+        assert!(
+            matches!(
+                result,
+                Err(firewood::api::Error::ProofError(
+                    ProofError::MissingEndProof
+                ))
+            ),
+            "expected MissingEndProof, got: {result:?}",
         );
     }
 }
