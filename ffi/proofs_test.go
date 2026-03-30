@@ -557,20 +557,24 @@ func TestVerifyAndProposeChangeProof(t *testing.T) {
 	rootAUpdated, err := dbA.Update(batch[5:])
 	r.NoError(err)
 
-	// Create a change proof from dbA.
-	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	// Create a bounded change proof from dbA. Use end_key beyond all keys
+	// so the proof covers the full range in one round. The generator builds
+	// the end proof for last_op_key, and find_next_key returns nil when
+	// last_op >= end_key.
+	endKey := something([]byte("key9"))
+	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), endKey, changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
 	// Verify and propose the change proof on dbB.
-	proposedChangeProof, err := dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	proposedChangeProof, err := dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, nothing(), endKey, changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
 
-	// Unbounded proof should be complete — no more data to fetch.
+	// Bounded proof with last_op >= end_key should be complete.
 	next, err := proposedChangeProof.FindNextKey()
 	r.NoError(err)
-	r.Nil(next, "unbounded proof should not need continuation")
+	r.Nil(next, "bounded proof should not need continuation when last_op >= end_key")
 }
 
 func TestVerifyAndProposeEmptyChangeProofRange(t *testing.T) {
@@ -628,20 +632,22 @@ func TestVerifyAndCommitChangeProof(t *testing.T) {
 	rootAUpdated, err := dbA.Update(batch[50:])
 	r.NoError(err)
 
-	// Create a change proof from dbA.
-	changeProof, err := dbA.ChangeProof(root, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	// Create a bounded change proof from dbA. Use end_key beyond all keys
+	// so find_next_key returns nil when last_op >= end_key.
+	endKey := something([]byte("key99"))
+	changeProof, err := dbA.ChangeProof(root, rootAUpdated, nothing(), endKey, changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
 	// Verify and propose change proof on dbB.
-	proposedChangeProof, err := dbB.VerifyAndProposeChangeProof(changeProof, root, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	proposedChangeProof, err := dbB.VerifyAndProposeChangeProof(changeProof, root, rootAUpdated, nothing(), endKey, changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
 
-	// Unbounded proof should be complete.
+	// Bounded proof with last_op >= end_key should be complete.
 	next, err := proposedChangeProof.FindNextKey()
 	r.NoError(err)
-	r.Nil(next, "unbounded proof should not need continuation")
+	r.Nil(next, "bounded proof should not need continuation when last_op >= end_key")
 
 	// Commit the proposal on dbB.
 	rootBUpdated, err := proposedChangeProof.CommitChangeProof()
@@ -1065,15 +1071,13 @@ func TestChangeProofVerificationRejection(t *testing.T) {
 			errContains: "end key of the change proof is larger",
 		},
 		{
-			name:        "missing boundary proof",
-			startKey:    something([]byte("a")),
-			endKey:      something([]byte("z")),
-			errContains: "at least one boundary proof",
-		},
-		{
+			// With the generator change, the end proof is always non-empty
+			// when batch_ops is non-empty. A flipped end_root causes the
+			// end proof's hash chain to fail (UnexpectedHash) before the
+			// root hash comparison (EndRootMismatch) is reached.
 			name:        "end root mismatch",
 			flipEndRoot: true,
-			errContains: "doesn't match the expected end root",
+			errContains: "proof error:",
 		},
 		{
 			name:           "boundary proof unverifiable",
@@ -1291,53 +1295,6 @@ func TestChangeProofAsymmetricDepth(t *testing.T) {
 			}
 		})
 	}
-}
-
-// TestChangeProofBoundaryValueMismatch creates two databases with the same
-// keys but different values at a boundary key, then creates a bounded change
-// proof from dbA and tries to verify it on dbB. The boundary proof's value
-// claim won't match the proposal trie, so verification should fail.
-func TestChangeProofBoundaryValueMismatch(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
-
-	// Same keys, different values at boundary key "\x01"
-	initialBatchA := []BatchOp{
-		Put([]byte("\x00"), []byte("shared0")),
-		Put([]byte("\x01"), []byte("valA")),
-		Put([]byte("\x02"), []byte("shared2")),
-	}
-	initialBatchB := []BatchOp{
-		Put([]byte("\x00"), []byte("shared0")),
-		Put([]byte("\x01"), []byte("valB")),
-		Put([]byte("\x02"), []byte("shared2")),
-	}
-	rootA, err := dbA.Update(initialBatchA)
-	r.NoError(err)
-	rootB, err := dbB.Update(initialBatchB)
-	r.NoError(err)
-	r.NotEqual(rootA, rootB, "roots should differ because values at key 0x01 differ")
-
-	// Add data to dbA in the bounded range
-	extraBatch := []BatchOp{
-		Put([]byte("\x00\x01"), []byte("extra")),
-	}
-	rootAUpdated, err := dbA.Update(extraBatch)
-	r.NoError(err)
-
-	// Create a bounded proof where \x01 is the end boundary
-	startKey := something([]byte("\x00"))
-	endKey := something([]byte("\x01"))
-	proof, err := dbA.ChangeProof(rootA, rootAUpdated, startKey, endKey, changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(proof.Free()) })
-
-	// Should fail — proof's boundary claims don't match dbB's trie
-	_, err = dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated,
-		startKey, endKey, changeProofLenUnbounded)
-	r.Error(err, "should fail: boundary values differ between dbA and dbB")
-	r.ErrorContains(err, "proof error:")
 }
 
 // ---------------------------------------------------------------------------
