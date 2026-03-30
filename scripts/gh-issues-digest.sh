@@ -141,8 +141,11 @@ LABELS_JSON=$(gh api graphql --paginate -f query='
       nodes {
         name
         description
-        issues(states: [OPEN]) { totalCount }
-        pullRequests(states: [OPEN]) { totalCount }
+        issuesOpen: issues(states: [OPEN]) { totalCount }
+        issuesClosed: issues(states: [CLOSED]) { totalCount }
+        prsOpen: pullRequests(states: [OPEN]) { totalCount }
+        prsMerged: pullRequests(states: [MERGED]) { totalCount }
+        prsClosed: pullRequests(states: [CLOSED]) { totalCount }
       }
     }
   }
@@ -253,16 +256,16 @@ echo "$ISSUES_JSON" | jq -r --arg repo "$REPO" '
   ""
 '
 
-# Repository labels with descriptions and open issue/PR counts
+# Repository labels with descriptions and issue/PR counts
 echo "$LABELS_JSON" | jq -r '
   if length == 0 then
     "### Repository Labels\n\nNo labels defined.\n"
   else
     "### Repository Labels\n",
-    "| Label | Description | Open Issues | Open PRs |",
-    "|-------|-------------|:-----------:|:--------:|",
+    "| Label | Description | Issues (Open/Closed) | PRs (Open/Merged/Closed) |",
+    "|-------|-------------|:--------------------:|:------------------------:|",
     (.[] |
-      "| \(.name) | \(.description // "—") | \(.issues.totalCount) | \(.pullRequests.totalCount) |"
+      "| \(.name) | \(.description // "—") | \(.issuesOpen.totalCount)/\(.issuesClosed.totalCount) | \(.prsOpen.totalCount)/\(.prsMerged.totalCount)/\(.prsClosed.totalCount) |"
     ),
     ""
   end
