@@ -296,7 +296,38 @@ impl ChangeProofContext {
             ));
         };
 
-        proof.end_proof().value_digest(key, end_root)?;
+        // Validate the hash chain and determine inclusion/exclusion.
+        // value_digest returns:
+        //   Ok(Some(_)) → inclusion proof (key exists at the last proof node)
+        //   Ok(None)    → exclusion proof (key does not exist)
+        let result = proof.end_proof().value_digest(key, end_root)?;
+
+        // When batch_ops is non-empty, the generator built the end proof
+        // for last_op_key. A Put means the key was inserted in end_root
+        // (expect inclusion); a Delete means it was removed (expect
+        // exclusion). If the result doesn't match, the attacker tampered
+        // with batch_ops — the derived key doesn't match the proof's
+        // actual target.
+        //
+        // When batch_ops is empty, the key came from end_key (an
+        // arbitrary range bound that may or may not exist in the trie).
+        // Both inclusion and exclusion are valid — skip the check.
+        if let Some(last_op) = proof.batch_ops().last() {
+            let is_delete = matches!(last_op, BatchOp::Delete { .. });
+            // Put + inclusion (key exists) or Delete + exclusion (key
+            // absent) are the only valid combinations. Any mismatch
+            // means the attacker added a spurious key (Put but key
+            // doesn't exist) or converted a Put to Delete (Delete but
+            // key still exists). The derived key doesn't match the
+            // proof's actual target.
+            let consistent = matches!((is_delete, &result), (false, Some(_)) | (true, None));
+            if !consistent {
+                return Err(api::Error::ProofError(
+                    ProofError::BoundaryProofUnverifiable,
+                ));
+            }
+        }
+
         Ok(())
     }
 }
