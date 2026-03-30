@@ -21,8 +21,8 @@ use firewood_storage::MemStore;
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashableShunt, HashedNodeReader,
     ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, Mutable, MutableKind,
-    NibblesIterator, Node, NodeStore, Parentable, Path, PathBuf, PathComponent, Propose,
-    ReadableStorage, SharedNode, TrieHash, TrieReader, U4, ValueDigest,
+    NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose, ReadableStorage,
+    SharedNode, TrieHash, TrieReader, U4, ValueDigest,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -983,7 +983,8 @@ impl<T: HashedNodeReader> Merkle<T> {
     }
 }
 
-impl<F: Parentable, S: ReadableStorage> Merkle<NodeStore<F, S>> {
+#[cfg(test)]
+impl<F: firewood_storage::Parentable, S: ReadableStorage> Merkle<NodeStore<F, S>> {
     /// Forks the current Merkle trie into a new mutable proposal.
     ///
     /// ## Errors
@@ -1005,6 +1006,7 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<Mutable<Propose>, S>>>
     }
 }
 
+#[cfg(test)]
 impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     /// Convert a merkle backed by a `Mutable<Propose>` into an `ImmutableProposal`
     ///
@@ -1019,7 +1021,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     }
 }
 
-#[expect(clippy::missing_errors_doc)]
 impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     fn read_for_update(&mut self, child: Child) -> Result<Node, FileIoError> {
         match child {
@@ -1062,7 +1063,6 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     /// Map `key` to `value` into the subtrie rooted at `node`.
     /// Each element of `key` is 1 nibble.
     /// Returns the new root of the subtrie.
-    #[expect(clippy::missing_panics_doc)]
     pub fn insert_helper(
         &mut self,
         mut node: Node,
