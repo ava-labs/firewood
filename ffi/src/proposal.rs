@@ -24,7 +24,7 @@ impl<'db> DbView for ProposalHandle<'db> {
         self.proposal.root_hash()
     }
 
-    fn val<K: api::KeyType>(&self, key: K) -> Result<Option<firewood::merkle::Value>, api::Error> {
+    fn val<K: api::KeyType>(&self, key: K) -> Result<Option<firewood::Value>, api::Error> {
         self.proposal.val(key)
     }
 

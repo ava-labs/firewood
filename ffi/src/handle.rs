@@ -4,13 +4,13 @@
 use std::num::{NonZeroU64, NonZeroUsize};
 
 use firewood::{
+    Merkle,
     api::{
         self, ArcDynDbView, Db as _, DbView, FrozenChangeProof, HashKey, HashKeyExt, IntoBatchIter,
         KeyType,
     },
     db::{Db, DbConfig},
     manager::RevisionManagerConfig,
-    merkle::Merkle,
 };
 use firewood_storage::{Committed, FileBacked, NodeStore};
 
