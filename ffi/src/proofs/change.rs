@@ -241,6 +241,16 @@ impl ChangeProofContext {
             return Err(api::Error::ProofError(ProofError::UnexpectedEndProof));
         }
 
+        // Reject empty end_proof when end_key is provided or batch_ops is
+        // non-empty. The honest generator always produces an end proof in
+        // these cases. Without this check, a malicious prover can force the
+        // verifier through expensive trie operations (proposal construction,
+        // root hash verification) before the proof is ultimately rejected.
+        // Matches AvalancheGo's ErrNoEndProof.
+        if proof.end_proof().is_empty() && (end_key.is_some() || !batch_ops.is_empty()) {
+            return Err(api::Error::ProofError(ProofError::MissingEndProof));
+        }
+
         Ok(())
     }
 
