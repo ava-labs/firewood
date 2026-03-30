@@ -215,7 +215,7 @@ impl ChangeProofContext {
         // Matches AvalancheGo's ErrNoEndProof.
         if proof.end_proof().is_empty() && (end_key.is_some() || !batch_ops.is_empty()) {
             return Err(api::Error::ProofError(ProofError::MissingEndProof));
-        }        
+        }
 
         // Verify boundary proofs against end_root
         Self::verify_start_proof(proof, start_key, &end_root)?;
