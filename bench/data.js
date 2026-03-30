@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774596824950,
+  "lastUpdate": 1774856478370,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -1879,6 +1879,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 78.40654725892767,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "4a6fa2857b3963f387e87b498453131e5ad1db1f",
+          "message": "refactor(proofs): replace ChildMask [bool; 16] with u16 newtype (#1849)\n\n## Why this should be merged\n\nA ChildMask is much cleaner as a newtype and using bit manipulations.\nCompiler explorer shows that most of this reduces to a few bit\noperations.\n\nAlso verify_range_proof became enormous, so it was split up in this diff\nas well. Just created verify_proof_node_values and verify_root_hash as\nhelpers.\n\nAlso, added some unit tests for outside_children. This allowed for some\nrefactoring and testing at a higher level to detect problems a bit\nearlier.\n\n## How this was tested\n\nCI\n\n## Breaking Changes\n\nNone",
+          "timestamp": "2026-03-27T20:18:12Z",
+          "url": "https://github.com/ava-labs/firewood/commit/4a6fa2857b3963f387e87b498453131e5ad1db1f"
+        },
+        "date": 1774856477731,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 170.25478733136984,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5873.549963994156,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 108.39209908504655,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5687.224214310081,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 75.58842641106857,
             "unit": "block_accept_ms/ggas"
           }
         ]
