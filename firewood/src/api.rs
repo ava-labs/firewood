@@ -158,6 +158,10 @@ pub enum Error {
     #[error("Cannot commit a committed proposal")]
     AlreadyCommitted,
 
+    /// Proposal already failed to commit
+    #[error("Proposal already failed to commit")]
+    CommitAlreadyFailed,
+
     /// Internal error
     #[error("Internal error")]
     InternalError(Box<dyn std::error::Error + Send + Sync>),
@@ -179,7 +183,7 @@ pub enum Error {
     SiblingCommitted,
 
     /// Proof error
-    #[error("proof error")]
+    #[error("proof error: {0}")]
     ProofError(#[from] ProofError),
 
     /// An invalid root hash was provided

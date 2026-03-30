@@ -149,6 +149,7 @@ pub enum ProofError {
     #[error("the proof is None as it has been consumed")]
     ProofIsNone,
 
+    // ── Range proof verification variants (from main) ──
     /// Key-value pair is outside the requested range
     #[error("key-value pair is outside the requested range")]
     KeyOutsideRange,
@@ -175,6 +176,48 @@ pub enum ProofError {
 
     #[error("the proposal for a change proof is None as it has been consumed")]
     ProposalIsNone,
+
+    // ── Change proof verification variants ──
+    /// Computed root hash after applying `batch_ops` doesn't match expected end root
+    #[error("computed root hash after applying batch_ops doesn't match the expected end root")]
+    EndRootMismatch,
+
+    /// Non-empty boundary proof cannot be validated against any key.
+    #[error("non-empty boundary proof has no key to validate against")]
+    BoundaryProofUnverifiable,
+
+    /// The end proof's inclusion/exclusion result doesn't match the last
+    /// batch op's type.
+    #[error("end proof inclusion/exclusion result doesn't match last batch op type")]
+    EndProofOperationMismatch,
+
+    /// Change proof contains an unsupported `DeleteRange` operation.
+    #[error("change proof contains unsupported DeleteRange operation")]
+    UnsupportedDeleteRange,
+
+    /// Non-empty batch operations require at least one boundary proof.
+    #[error("non-empty batch operations require at least one boundary proof for verification")]
+    MissingBoundaryProof,
+
+    /// A proof node's value doesn't match the proposal at the same depth.
+    #[error("proof node value doesn't match the proposal at key depth {depth}")]
+    ProofNodeValueMismatch { depth: usize },
+
+    /// Boundary proofs diverge at the root node.
+    #[error("boundary proofs diverge at the root node")]
+    BoundaryProofsDivergeAtRoot,
+
+    /// Non-empty end proof when no end key is set and no batch operations.
+    #[error("unexpected non-empty end proof with no end key and no batch operations")]
+    UnexpectedEndProof,
+
+    /// In-range child hash mismatch between proof and proposal.
+    #[error("in-range child hash mismatch at depth {depth}")]
+    InRangeChildMismatch { depth: usize },
+
+    /// Empty end proof when `end_key` is set or `batch_ops` is non-empty.
+    #[error("missing end proof: end_key is set or batch_ops is non-empty")]
+    MissingEndProof,
 }
 
 #[derive(Clone, PartialEq, Eq)]

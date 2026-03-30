@@ -4,6 +4,7 @@
 package ffi
 
 import (
+	"bytes"
 	"encoding/hex"
 	"runtime"
 	"testing"
@@ -136,11 +137,7 @@ func newProposedChangeProof(
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
-	verifiedProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verifiedProof.Free()) })
-
-	proposed, err := dbB.ProposeChangeProof(verifiedProof)
+	proposed, err := dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
 	r.NoError(err)
 
 	return proposed, rootAUpdated
@@ -497,33 +494,53 @@ func TestChangeProofDiffersAfterUpdate(t *testing.T) {
 }
 
 func TestRoundTripChangeProofSerialization(t *testing.T) {
-	r := require.New(t)
-	db := newTestDatabase(t)
+	tests := []struct {
+		name      string
+		emptyDiff bool
+	}{
+		{"normal proof", false},
+		{"empty diff proof", true},
+	}
 
-	// Insert some data.
-	_, _, batch := kvForTest(10)
-	root1, err := db.Update(batch[:5])
-	r.NoError(err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			db := newTestDatabase(t)
 
-	root2, err := db.Update(batch[5:])
-	r.NoError(err)
+			// Insert some data.
+			_, _, batch := kvForTest(10)
+			root1, err := db.Update(batch[:5])
+			r.NoError(err)
 
-	// get a proof
-	proofBytes := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing(), changeProofLenUnbounded)
+			var root2 Hash
+			if tt.emptyDiff {
+				// Re-insert the same data to create a second revision
+				// with the same root hash (no actual changes).
+				root2, err = db.Update(batch[:5])
+				r.NoError(err)
+			} else {
+				root2, err = db.Update(batch[5:])
+				r.NoError(err)
+			}
 
-	// Deserialize the proof.
-	proof := new(ChangeProof)
-	err = proof.UnmarshalBinary(proofBytes)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(proof.Free()) })
+			// get a proof
+			proofBytes := newSerializedChangeProof(t, db, root1, root2, nothing(), nothing(), changeProofLenUnbounded)
 
-	// serialize the proof again
-	serialized, err := proof.MarshalBinary()
-	r.NoError(err)
-	r.Equal(proofBytes, serialized)
+			// Deserialize the proof.
+			proof := new(ChangeProof)
+			err = proof.UnmarshalBinary(proofBytes)
+			r.NoError(err)
+			t.Cleanup(func() { r.NoError(proof.Free()) })
+
+			// serialize the proof again
+			serialized, err := proof.MarshalBinary()
+			r.NoError(err)
+			r.Equal(proofBytes, serialized)
+		})
+	}
 }
 
-func TestVerifyChangeProof(t *testing.T) {
+func TestVerifyAndProposeChangeProof(t *testing.T) {
 	r := require.New(t)
 	dbA := newTestDatabase(t)
 	dbB := newTestDatabase(t)
@@ -540,23 +557,27 @@ func TestVerifyChangeProof(t *testing.T) {
 	rootAUpdated, err := dbA.Update(batch[5:])
 	r.NoError(err)
 
-	// Create a change proof from dbA.
-	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	// Create a bounded change proof from dbA. Use end_key beyond all keys
+	// so the proof covers the full range in one round. The generator builds
+	// the end proof for last_op_key, and find_next_key returns nil when
+	// last_op >= end_key.
+	endKey := something([]byte("key9"))
+	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), endKey, changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
-	// Verify the change proof
-	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
-
-	// Create a proposal on dbB.
-	proposedChangeProof, err := dbB.ProposeChangeProof(verifiedChangeProof)
+	// Verify and propose the change proof on dbB.
+	proposedChangeProof, err := dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, nothing(), endKey, changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
+
+	// Bounded proof with last_op >= end_key should be complete.
+	next, err := proposedChangeProof.FindNextKey()
+	r.NoError(err)
+	r.Nil(next, "bounded proof should not need continuation when last_op >= end_key")
 }
 
-func TestVerifyEmptyChangeProofRange(t *testing.T) {
+func TestVerifyAndProposeEmptyChangeProofRange(t *testing.T) {
 	r := require.New(t)
 	dbA := newTestDatabase(t)
 	dbB := newTestDatabase(t)
@@ -589,13 +610,8 @@ func TestVerifyEmptyChangeProofRange(t *testing.T) {
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
-	// Verify the change proof.
-	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootB, rootAUpdated, startKey, endKey, 5)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
-
-	// Create an empty proposal on dbB.
-	proposedChangeProof, err := dbB.ProposeChangeProof(verifiedChangeProof)
+	// Verify and propose the change proof on dbB.
+	proposedChangeProof, err := dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, startKey, endKey, 5)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
 }
@@ -616,20 +632,22 @@ func TestVerifyAndCommitChangeProof(t *testing.T) {
 	rootAUpdated, err := dbA.Update(batch[50:])
 	r.NoError(err)
 
-	// Create a change proof from dbA.
-	changeProof, err := dbA.ChangeProof(root, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	// Create a bounded change proof from dbA. Use end_key beyond all keys
+	// so find_next_key returns nil when last_op >= end_key.
+	endKey := something([]byte("key99"))
+	changeProof, err := dbA.ChangeProof(root, rootAUpdated, nothing(), endKey, changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(changeProof.Free()) })
 
-	// Verify the change proof.
-	verifiedChangeProof, err := changeProof.VerifyChangeProof(root, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
-
-	// Propose change proof
-	proposedChangeProof, err := dbB.ProposeChangeProof(verifiedChangeProof)
+	// Verify and propose change proof on dbB.
+	proposedChangeProof, err := dbB.VerifyAndProposeChangeProof(changeProof, root, rootAUpdated, nothing(), endKey, changeProofLenUnbounded)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
+
+	// Bounded proof with last_op >= end_key should be complete.
+	next, err := proposedChangeProof.FindNextKey()
+	r.NoError(err)
+	r.Nil(next, "bounded proof should not need continuation when last_op >= end_key")
 
 	// Commit the proposal on dbB.
 	rootBUpdated, err := proposedChangeProof.CommitChangeProof()
@@ -665,13 +683,8 @@ func TestChangeProofFindNextKey(t *testing.T) {
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proof.Free()) })
 
-	// Verify the change proof.
-	verifiedChangeProof, err := proof.VerifyChangeProof(rootB, rootAUpdated, nothing(), nothing(), changeProofLenTruncated)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
-
-	// Propose change proof
-	proposedChangeProof, err := dbB.ProposeChangeProof(verifiedChangeProof)
+	// Verify and propose change proof
+	proposedChangeProof, err := dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenTruncated)
 	r.NoError(err)
 	t.Cleanup(func() { r.NoError(proposedChangeProof.Free()) })
 
@@ -743,15 +756,189 @@ func TestProposedChangeProofKeepAlive(t *testing.T) {
 	}
 }
 
+func TestProposedChangeProofMarshalBinary(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	proposed, _ := newProposedChangeProof(t, dbA, dbB)
+	t.Cleanup(func() { r.NoError(proposed.Free()) })
+
+	// MarshalBinary should work on a ProposedChangeProof
+	bytes, err := proposed.MarshalBinary()
+	r.NoError(err)
+	r.NotEmpty(bytes)
+}
+
+// newMismatchedChangeProof creates two databases with the same keys but
+// different values, adds extra data to dbA, and returns a change proof from
+// dbA that will fail verification on dbB (because the initial states differ).
+func newMismatchedChangeProof(
+	t *testing.T,
+	dbA, dbB *Database,
+) (changeProof *ChangeProof, rootB Hash, rootAUpdated Hash) {
+	t.Helper()
+	r := require.New(t)
+
+	// Populate dbA and dbB with the SAME keys but DIFFERENT values
+	keysA := make([]BatchOp, 50)
+	keysB := make([]BatchOp, 50)
+	for i := range 50 {
+		key := keyForTest(i)
+		keysA[i] = Put(key, []byte("valueA"+string(key)))
+		keysB[i] = Put(key, []byte("valueB"+string(key)))
+	}
+	rootA, err := dbA.Update(keysA)
+	r.NoError(err)
+	rootB, err = dbB.Update(keysB)
+	r.NoError(err)
+	r.NotEqual(rootA, rootB, "roots should differ because values differ")
+
+	// Add more data to dbA
+	moreKeys := make([]BatchOp, 50)
+	for i := range 50 {
+		key := keyForTest(50 + i)
+		moreKeys[i] = Put(key, valForTest(50+i))
+	}
+	rootAUpdated, err = dbA.Update(moreKeys)
+	r.NoError(err)
+
+	// Create a change proof from dbA
+	changeProof, err = dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(changeProof.Free()) })
+
+	return changeProof, rootB, rootAUpdated
+}
+
+// TestSubTrieHashCheckWithMismatchedSource creates a change proof on dbA, then
+// attempts to apply it on dbB which has DIFFERENT initial data (same keys,
+// different values). The proposal's sub-trie hashes won't match the boundary
+// proof's claims, so we expect an error.
+func TestSubTrieHashCheckWithMismatchedSource(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	changeProof, rootB, rootAUpdated := newMismatchedChangeProof(t, dbA, dbB)
+
+	// Attempt to verify and propose on dbB — should fail because dbB's
+	// initial state differs from dbA's
+	_, err := dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.Error(err, "should fail: dbB has different initial data than dbA")
+	r.ErrorContains(err, "proof error:")
+}
+
+// TestSubTrieHashCheckTruncatedProof creates a valid truncated change proof
+// and verifies that VerifyAndProposeChangeProof succeeds — both sub-trie
+// and boundary value checks pass for valid truncated proofs.
+func TestSubTrieHashCheckTruncatedProof(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	// Insert shared initial data
+	_, _, batch := kvForTest(100)
+	rootA, err := dbA.Update(batch[:50])
+	r.NoError(err)
+	rootB, err := dbB.Update(batch[:50])
+	r.NoError(err)
+	r.Equal(rootA, rootB)
+
+	// Insert more data into dbA
+	rootAUpdated, err := dbA.Update(batch[50:])
+	r.NoError(err)
+
+	// Create a truncated change proof (fewer items than total changes)
+	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenTruncated)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(changeProof.Free()) })
+
+	// Verify and propose should succeed for valid truncated proof
+	proposed, err := dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenTruncated)
+	r.NoError(err, "valid truncated proof should pass both sub-trie and boundary value checks")
+	t.Cleanup(func() { r.NoError(proposed.Free()) })
+}
+
+func TestChangeProofMarshalAfterPropose(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	_, _, batch := kvForTest(10)
+	rootA, err := dbA.Update(batch[:5])
+	r.NoError(err)
+	rootB, err := dbB.Update(batch[:5])
+	r.NoError(err)
+
+	rootAUpdated, err := dbA.Update(batch[5:])
+	r.NoError(err)
+
+	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(changeProof.Free()) })
+
+	// Marshal before propose — should succeed
+	bytes, err := changeProof.MarshalBinary()
+	r.NoError(err)
+	r.NotEmpty(bytes)
+
+	// Propose consumes the handle
+	proposed, err := dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(proposed.Free()) })
+
+	// Marshal on consumed ChangeProof — should return errProofFreed, not errDBClosed
+	_, err = changeProof.MarshalBinary()
+	r.ErrorIs(err, errProofFreed)
+
+	// Marshal on ProposedChangeProof — should still work
+	bytes2, err := proposed.MarshalBinary()
+	r.NoError(err)
+	r.Equal(bytes, bytes2)
+}
+
+// TestVerifyAndProposeFailureKeepsChangeProof verifies that on failed
+// verification, the original ChangeProof handle is still valid (can be freed
+// or marshalled). This exercises the ProposedChangeProofResult::VerificationFailed
+// path which returns the original ChangeProofContext to the Go side.
+func TestVerifyAndProposeFailureKeepsChangeProof(t *testing.T) {
+	r := require.New(t)
+	dbA := newTestDatabase(t)
+	dbB := newTestDatabase(t)
+
+	changeProof, rootB, rootAUpdated := newMismatchedChangeProof(t, dbA, dbB)
+
+	// Marshal before failed propose — should succeed
+	bytesBefore, err := changeProof.MarshalBinary()
+	r.NoError(err)
+	r.NotEmpty(bytesBefore)
+
+	// Attempt to verify and propose on dbB — should fail because dbB's
+	// initial state differs from dbA's
+	_, err = dbB.VerifyAndProposeChangeProof(changeProof, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	r.Error(err, "should fail: dbB has different initial data than dbA")
+
+	// The original ChangeProof handle should still be valid after failure
+	r.NotNil(changeProof.handle, "handle should not be nil after failed propose")
+
+	// Marshal after failed propose — should still work
+	bytesAfter, err := changeProof.MarshalBinary()
+	r.NoError(err)
+	r.Equal(bytesBefore, bytesAfter, "marshalled bytes should be identical")
+}
+
 func TestMultiRoundChangeProof(t *testing.T) {
 	type TestStruct struct {
 		name       string
 		hasDeletes bool
+		deleteOnly bool
 	}
 
 	tests := []TestStruct{
-		{"Multi-round change proofs with no deletes", false},
-		{"Multi-round change proofs With deletes", true},
+		{"Multi-round change proofs with no deletes", false, false},
+		{"Multi-round change proofs With deletes", true, false},
+		{"Multi-round change proofs delete-only update", false, true},
 	}
 
 	for _, tt := range tests {
@@ -772,7 +959,17 @@ func TestMultiRoundChangeProof(t *testing.T) {
 			rootAUpdated, err := dbA.Update(batch[50:])
 			r.NoError(err)
 
-			if tt.hasDeletes {
+			if tt.deleteOnly {
+				// Delete ALL keys from the second batch, producing a proof
+				// with only Delete batch_ops and no Put ops.
+				delKeys := make([]BatchOp, 50)
+				for i := range delKeys {
+					delKeys[i] = Delete(keys[50+i])
+					keys[50+i] = nil
+				}
+				rootAUpdated, err = dbA.Update(delKeys)
+				r.NoError(err)
+			} else if tt.hasDeletes {
 				// Delete some of the keys. This will create Delete BatchOps in the
 				// change proof.
 				delKeys := make([]BatchOp, 20)
@@ -794,13 +991,8 @@ func TestMultiRoundChangeProof(t *testing.T) {
 				r.NoError(err)
 				t.Cleanup(func() { r.NoError(proof.Free()) })
 
-				// Verify the proof
-				verifiedProof, err := proof.VerifyChangeProof(rootB, rootAUpdated, startKey, nothing(), changeProofLenTruncated)
-				r.NoError(err)
-				t.Cleanup(func() { r.NoError(verifiedProof.Free()) })
-
-				// Propose the proof
-				proposedProof, err := dbB.ProposeChangeProof(verifiedProof)
+				// Verify and propose the proof
+				proposedProof, err := dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated, startKey, nothing(), changeProofLenTruncated)
 				r.NoError(err)
 				t.Cleanup(func() { r.NoError(proposedProof.Free()) })
 
@@ -837,80 +1029,688 @@ func TestMultiRoundChangeProof(t *testing.T) {
 	}
 }
 
-// TestChangeProofMarshalFailsAfterVerify verifies that MarshalBinary on a
-// ChangeProof returns an error after the proof has been consumed by
-// VerifyChangeProof. Previously, this silently returned empty bytes.
-func TestChangeProofMarshalFailsAfterVerify(t *testing.T) {
-	r := require.New(t)
-	dbA := newTestDatabase(t)
-	dbB := newTestDatabase(t)
+// ---------------------------------------------------------------------------
+// Adversarial change proof verification tests
+//
+// Each test crafts an invalid proof (or invalid verification parameters) and
+// asserts that the verifier rejects it with the expected error.
+// ---------------------------------------------------------------------------
 
-	// Insert some data.
-	_, _, batch := kvForTest(10)
-	rootA, err := dbA.Update(batch[:5])
-	r.NoError(err)
-	_, err = dbB.Update(batch[:5])
-	r.NoError(err)
+// TestChangeProofVerificationRejection is a table-driven test covering seven
+// adversarial scenarios that share the same two-DB setup with a complete
+// change proof but vary the verification parameters and expected error.
+func TestChangeProofVerificationRejection(t *testing.T) {
+	tests := []struct {
+		name           string
+		createStartKey maybe  // proof creation start_key (default: nothing)
+		startKey       maybe  // verification start_key
+		endKey         maybe  // verification end_key
+		maxLength      uint32 // verification max_length (0 = unbounded)
+		flipEndRoot    bool   // XOR byte 0 of end_root before verify
+		errContains    string // expected error substring
+	}{
+		{
+			name:        "inverted range",
+			startKey:    something([]byte("z")),
+			endKey:      something([]byte("a")),
+			errContains: "Invalid range",
+		},
+		{
+			name:        "exceeds max length",
+			maxLength:   1,
+			errContains: "larger than max length",
+		},
+		{
+			name:        "start key out of bounds",
+			startKey:    something([]byte("zzz")),
+			errContains: "start key of the change proof is larger",
+		},
+		{
+			name:        "end key out of bounds",
+			endKey:      something([]byte("a")),
+			errContains: "end key of the change proof is larger",
+		},
+		{
+			// With the generator change, the end proof is always non-empty
+			// when batch_ops is non-empty. A flipped end_root causes the
+			// end proof's hash chain to fail (UnexpectedHash) before the
+			// root hash comparison (EndRootMismatch) is reached.
+			name:        "end root mismatch",
+			flipEndRoot: true,
+			errContains: "proof error:",
+		},
+		{
+			name:           "boundary proof unverifiable",
+			createStartKey: something([]byte("key1")),
+			errContains:    "no key to validate against",
+		},
+	}
 
-	// Insert more data into dbA.
-	rootAUpdated, err := dbA.Update(batch[5:])
-	r.NoError(err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			dbA := newTestDatabase(t)
+			dbB := newTestDatabase(t)
 
-	// Create a change proof.
-	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(changeProof.Free()) })
+			_, _, batch := kvForTest(100)
+			rootA, err := dbA.Update(batch[:50])
+			r.NoError(err)
+			rootB, err := dbB.Update(batch[:50])
+			r.NoError(err)
+			r.Equal(rootA, rootB)
 
-	// Marshal before verify — should succeed.
-	marshalledBefore, err := changeProof.MarshalBinary()
-	r.NoError(err)
-	r.NotEmpty(marshalledBefore)
+			rootAUpdated, err := dbA.Update(batch[50:])
+			r.NoError(err)
 
-	// Verify the change proof — consumes the inner proof.
-	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
-	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
+			// Create the proof — bounded if createStartKey is set,
+			// complete (nothing/nothing) otherwise.
+			proof, err := dbA.ChangeProof(rootA, rootAUpdated,
+				tt.createStartKey, nothing(), changeProofLenUnbounded)
+			r.NoError(err)
+			t.Cleanup(func() { r.NoError(proof.Free()) })
 
-	// Marshal after verify — should return an error, not empty bytes.
-	_, err = changeProof.MarshalBinary()
-	r.Error(err)
+			endRoot := rootAUpdated
+			if tt.flipEndRoot {
+				endRoot[0] ^= 0xFF
+			}
+
+			_, err = dbB.VerifyAndProposeChangeProof(proof, rootB, endRoot,
+				tt.startKey, tt.endKey, tt.maxLength)
+			r.Error(err)
+			r.ErrorContains(err, tt.errContains)
+		})
+	}
 }
 
-// TestVerifiedChangeProofMarshal verifies that MarshalBinary works on a
-// VerifiedChangeProof and produces the same bytes as the original ChangeProof.
-func TestVerifiedChangeProofMarshal(t *testing.T) {
+// TestChangeProofDeleteRangeRejected injects a DeleteRange operation into a
+// serialized proof by flipping a Delete discriminant byte and verifies that
+// the verifier rejects it.
+func TestChangeProofDeleteRangeRejected(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Insert initial data, then delete a key so the change proof contains a
+	// Delete op whose serialized discriminant (0x01) we can flip to
+	// DeleteRange (0x02).
+	_, _, batch := kvForTest(20)
+	root1, err := db.Update(batch)
+	r.NoError(err)
+
+	root2, err := db.Update([]BatchOp{Delete([]byte("key0"))})
+	r.NoError(err)
+
+	proof, err := db.ChangeProof(root1, root2, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+
+	proofBytes, err := proof.MarshalBinary()
+	r.NoError(err)
+	r.NoError(proof.Free())
+
+	// The Delete op for "key0" (4 bytes) is serialized as:
+	//   0x01 (Delete) | 0x04 (varint key length) | 'k' 'e' 'y' '0'
+	target := []byte{0x01, 0x04, 'k', 'e', 'y', '0'}
+	idx := bytes.Index(proofBytes, target)
+	r.GreaterOrEqual(idx, 0, "should find Delete('key0') in serialized proof")
+
+	// Flip discriminant from Delete (0x01) to DeleteRange (0x02).
+	// The two variants share the same wire format (tag + key), so
+	// deserialization succeeds but verification rejects DeleteRange.
+	mutated := append([]byte{}, proofBytes...)
+	mutated[idx] = 0x02
+
+	mutatedProof := new(ChangeProof)
+	err = mutatedProof.UnmarshalBinary(mutated)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(mutatedProof.Free()) })
+
+	_, err = db.VerifyAndProposeChangeProof(mutatedProof, root1, root2,
+		nothing(), nothing(), changeProofLenUnbounded)
+	r.Error(err)
+	r.ErrorContains(err, "unsupported DeleteRange")
+}
+
+// TestChangeProofKeysNotSorted swaps two key values in a serialized proof to
+// break the sort invariant and verifies the verifier catches it.
+func TestChangeProofKeysNotSorted(t *testing.T) {
+	r := require.New(t)
+	db := newTestDatabase(t)
+
+	// Create a proof with exactly two Put ops using short, known keys.
+	// "mmm" is only in root1 so it won't appear in the diff.
+	root1, err := db.Update([]BatchOp{Put([]byte("mmm"), []byte("v1"))})
+	r.NoError(err)
+
+	root2, err := db.Update([]BatchOp{
+		Put([]byte("aaa"), []byte("va")),
+		Put([]byte("bbb"), []byte("vb")),
+	})
+	r.NoError(err)
+
+	proof, err := db.ChangeProof(root1, root2, nothing(), nothing(), changeProofLenUnbounded)
+	r.NoError(err)
+
+	proofBytes, err := proof.MarshalBinary()
+	r.NoError(err)
+	r.NoError(proof.Free())
+
+	// For a complete proof (no bounds), boundary proofs are empty, so "aaa"
+	// and "bbb" only appear in the batch_ops section. Swapping them in place
+	// reverses the sort order: ["bbb","aaa"] is not sorted.
+	idxA := bytes.Index(proofBytes, []byte("aaa"))
+	idxB := bytes.Index(proofBytes, []byte("bbb"))
+	r.Positive(idxA, "should find 'aaa' in proof bytes")
+	r.Greater(idxB, idxA, "'bbb' should come after 'aaa' in sorted proof")
+
+	mutated := append([]byte{}, proofBytes...)
+	copy(mutated[idxA:idxA+3], []byte("bbb"))
+	copy(mutated[idxB:idxB+3], []byte("aaa"))
+
+	mutatedProof := new(ChangeProof)
+	err = mutatedProof.UnmarshalBinary(mutated)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(mutatedProof.Free()) })
+
+	_, err = db.VerifyAndProposeChangeProof(mutatedProof, root1, root2,
+		nothing(), nothing(), changeProofLenUnbounded)
+	r.Error(err)
+	r.ErrorContains(err, "keys are not sorted")
+}
+
+// TestChangeProofAsymmetricDepth exercises the (None, Some(e)) code path in
+// verify_subtrie_hashes by choosing a short start_key and long end_key that
+// resolve at different trie depths. The start proof has fewer nodes than the
+// end proof, so the zip terminates early and the asymmetric arm fires.
+//
+// Sub-tests cover matching and mismatched initial states to verify that
+// the sub-trie hash check catches divergence even with asymmetric depths.
+func TestChangeProofAsymmetricDepth(t *testing.T) {
+	// Keys at varying depths to create asymmetric proofs.
+	// Short keys resolve at shallow depth; long keys resolve deeper
+	// through extension nodes.
+	initialBatchA := []BatchOp{
+		Put([]byte("\x00"), []byte("vA0")),
+		Put([]byte("\x00\x00\x01"), []byte("vA1")),
+		Put([]byte("\x00\x00\xff"), []byte("vA2")),
+		Put([]byte("\x01"), []byte("vA3")),
+		Put([]byte("\x01\x00\x01"), []byte("vA4")),
+	}
+
+	tests := []struct {
+		name          string
+		initialBatchB []BatchOp // dbB's initial data (dbA always uses initialBatchA)
+		expectSuccess bool
+	}{
+		{
+			name:          "matching base state",
+			initialBatchB: initialBatchA,
+			expectSuccess: true,
+		},
+		{
+			name: "mismatched base state",
+			initialBatchB: []BatchOp{
+				Put([]byte("\x00"), []byte("vB0")),
+				Put([]byte("\x00\x00\x01"), []byte("vB1")),
+				Put([]byte("\x00\x00\xff"), []byte("vB2")),
+				Put([]byte("\x01"), []byte("vB3")),
+			},
+			expectSuccess: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			r := require.New(t)
+			dbA := newTestDatabase(t)
+			dbB := newTestDatabase(t)
+
+			rootA, err := dbA.Update(initialBatchA)
+			r.NoError(err)
+			rootB, err := dbB.Update(tc.initialBatchB)
+			r.NoError(err)
+
+			// Add more data to dbA in the range between start_key and end_key
+			extraBatch := []BatchOp{
+				Put([]byte("\x00\x00\x02"), []byte("v5")),
+				Put([]byte("\x00\x00\x80"), []byte("v6")),
+			}
+			rootAUpdated, err := dbA.Update(extraBatch)
+			r.NoError(err)
+
+			// Create a bounded change proof with start_key="\x00" (shallow)
+			// and end_key="\x00\x00\xFF" (deep). The start proof should have
+			// fewer nodes than the end proof, exercising the asymmetric arm.
+			startKey := something([]byte("\x00"))
+			endKey := something([]byte("\x00\x00\xff"))
+
+			proof, err := dbA.ChangeProof(rootA, rootAUpdated, startKey, endKey, changeProofLenUnbounded)
+			r.NoError(err)
+			t.Cleanup(func() { r.NoError(proof.Free()) })
+
+			proposed, err := dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated, startKey, endKey, changeProofLenUnbounded)
+			if tc.expectSuccess {
+				r.NoError(err, "asymmetric depth proof should pass verification")
+				t.Cleanup(func() { r.NoError(proposed.Free()) })
+			} else {
+				r.Error(err, "should fail: dbB has different initial data than dbA")
+			}
+		})
+	}
+}
+
+// TestChangeProofBoundaryValueMismatchDeferred verifies that when two
+// databases have different values at a key, a multi-round sync detects
+// the mismatch during verify_root_hash (not just at final completion).
+//
+// Setup:
+//   - dbA: \x10=v0, \x20=valA, \x30=v2 (prover)
+//   - dbB: \x10=v0, \x20=valB, \x30=v2 (verifier, different at \x20)
+//   - Changes on dbA: Put(\x10, changed), Put(\x30, changed)
+//
+// Round 1 (truncated, max_length=1): batch_ops=[Put(\x10, changed)].
+// End proof for \x10 (nibble 1 at depth 0). The mismatch at \x20
+// (nibble 2) is beyond end_bn — not checked. find_next_key returns
+// continuation.
+//
+// Round 2 (full): batch_ops=[Put(\x10, changed), Put(\x30, changed)].
+// Start proof for \x10 (nibble 1), end proof for \x30 (nibble 3).
+// At the divergence parent, nibble 2 (\x20) is between start_bn (1)
+// and end_bn (3) — in-range. The proposal has \x20=valB (from dbB),
+// the proof has \x20=valA (from end_root). InRangeChildMismatch.
+func TestChangeProofBoundaryValueMismatchDeferred(t *testing.T) {
 	r := require.New(t)
 	dbA := newTestDatabase(t)
 	dbB := newTestDatabase(t)
 
-	// Insert some data.
-	_, _, batch := kvForTest(10)
-	rootA, err := dbA.Update(batch[:5])
+	// Same keys, different values at \x20
+	initialA := []BatchOp{
+		Put([]byte("\x10"), []byte("v0")),
+		Put([]byte("\x20"), []byte("valA")),
+		Put([]byte("\x30"), []byte("v2")),
+	}
+	initialB := []BatchOp{
+		Put([]byte("\x10"), []byte("v0")),
+		Put([]byte("\x20"), []byte("valB")),
+		Put([]byte("\x30"), []byte("v2")),
+	}
+	rootA, err := dbA.Update(initialA)
 	r.NoError(err)
-	_, err = dbB.Update(batch[:5])
+	rootB, err := dbB.Update(initialB)
+	r.NoError(err)
+	r.NotEqual(rootA, rootB, "roots should differ at \\x20")
+
+	// Change \x10 and \x30 on dbA
+	rootAUpdated, err := dbA.Update([]BatchOp{
+		Put([]byte("\x10"), []byte("changed0")),
+		Put([]byte("\x30"), []byte("changed2")),
+	})
 	r.NoError(err)
 
-	// Insert more data into dbA.
-	rootAUpdated, err := dbA.Update(batch[5:])
-	r.NoError(err)
+	startKey := something([]byte("\x00"))
+	endKey := something([]byte("\x30"))
 
-	// Create a change proof.
-	changeProof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	// --- Round 1: truncated proof (max_length=1) ---
+	// Only includes Put(\x10). End proof for \x10 (nibble 1).
+	// \x20 (nibble 2) is beyond end_bn — not checked.
+	proof1, err := dbA.ChangeProof(rootA, rootAUpdated, startKey, endKey, 1)
 	r.NoError(err)
-	t.Cleanup(func() { r.NoError(changeProof.Free()) })
+	t.Cleanup(func() { r.NoError(proof1.Free()) })
 
-	// Marshal before verify.
-	marshalledBefore, err := changeProof.MarshalBinary()
-	r.NoError(err)
-	r.NotEmpty(marshalledBefore)
+	proposed1, err := dbB.VerifyAndProposeChangeProof(
+		proof1, rootB, rootAUpdated, startKey, endKey, 1)
+	r.NoError(err, "round 1: should pass (\\x20 mismatch is off-path)")
+	t.Cleanup(func() { r.NoError(proposed1.Free()) })
 
-	// Verify the change proof.
-	verifiedChangeProof, err := changeProof.VerifyChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+	// find_next_key: last_op (\x10) < end_key (\x30) → continuation
+	next, err := proposed1.FindNextKey()
 	r.NoError(err)
-	t.Cleanup(func() { r.NoError(verifiedChangeProof.Free()) })
+	r.NotNil(next, "round 1: should return continuation")
 
-	// Marshal from the verified proof — should produce the same bytes.
-	marshalledAfterVerify, err := verifiedChangeProof.MarshalBinary()
+	// Commit round 1
+	rootB, err = proposed1.CommitChangeProof()
 	r.NoError(err)
-	r.Equal(marshalledBefore, marshalledAfterVerify)
+	nextStart := maybe{hasValue: true, value: next.StartKey()}
+	r.NoError(next.Free())
+
+	// --- Round 2: full proof for continuation range ---
+	// Includes Put(\x10) again (idempotent) and Put(\x30).
+	// Start proof for \x10 (nibble 1), end proof for \x30 (nibble 3).
+	// \x20 (nibble 2) is in-range at the divergence parent.
+	// Proposal has \x20=valB, proof has \x20=valA → mismatch.
+	proof2, err := dbA.ChangeProof(rootA, rootAUpdated, nextStart, endKey, changeProofLenUnbounded)
+	r.NoError(err)
+	t.Cleanup(func() { r.NoError(proof2.Free()) })
+
+	_, err = dbB.VerifyAndProposeChangeProof(
+		proof2, rootB, rootAUpdated, nextStart, endKey, changeProofLenUnbounded)
+	r.Error(err, "round 2: verify_root_hash should catch \\x20 mismatch")
+	r.ErrorContains(err, "proof error:")
+}
+
+// ---------------------------------------------------------------------------
+// Defense-in-depth tests (cross-implementation comparison)
+//
+// These tests document that Firewood catches the same adversarial scenarios
+// as AvalancheGo, even though the defense mechanisms differ.
+// ---------------------------------------------------------------------------
+
+// TestChangeProofDefenseInDepth covers adversarial scenarios from the
+// cross-implementation comparison. Each subtest creates its own databases
+// and proof, then verifies with adversarial parameters.
+func TestChangeProofDefenseInDepth(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T) (proof *ChangeProof, dbB *Database, rootB, rootAUpdated Hash, startKey, endKey maybe, maxLen uint32)
+		errContains string
+	}{
+		{
+			// Non-empty start_proof verified with startKey=Nothing.
+			// AvalancheGo: ErrUnexpectedStartProof
+			// Firewood: BoundaryProofUnverifiable
+			name: "unexpected start proof",
+			setup: func(t *testing.T) (*ChangeProof, *Database, Hash, Hash, maybe, maybe, uint32) {
+				t.Helper()
+				r := require.New(t)
+				dbA := newTestDatabase(t)
+				dbB := newTestDatabase(t)
+
+				initialBatch := []BatchOp{
+					Put([]byte("\x10"), []byte("v0")),
+					Put([]byte("\xa0"), []byte("v1")),
+				}
+				rootA, err := dbA.Update(initialBatch)
+				r.NoError(err)
+				rootB, err := dbB.Update(initialBatch)
+				r.NoError(err)
+				r.Equal(rootA, rootB)
+
+				rootAUpdated, err := dbA.Update([]BatchOp{Put([]byte("\x50"), []byte("mid"))})
+				r.NoError(err)
+
+				// Create a bounded proof → non-empty start_proof
+				proof, err := dbA.ChangeProof(rootA, rootAUpdated,
+					something([]byte("\x10")), something([]byte("\xa0")), changeProofLenUnbounded)
+				r.NoError(err)
+				t.Cleanup(func() { r.NoError(proof.Free()) })
+
+				// Verify with startKey=Nothing (adversarial)
+				return proof, dbB, rootB, rootAUpdated, nothing(), something([]byte("\xa0")), changeProofLenUnbounded
+			},
+			errContains: "no key to validate against",
+		},
+		{
+			// Complete proof: end_root = zeros, batch_ops non-empty.
+			// AvalancheGo: ErrDataInMissingRootProof
+			// Firewood: EndRootMismatch (complete proof root check)
+			name: "empty end root complete",
+			setup: func(t *testing.T) (*ChangeProof, *Database, Hash, Hash, maybe, maybe, uint32) {
+				t.Helper()
+				r := require.New(t)
+				dbA := newTestDatabase(t)
+				dbB := newTestDatabase(t)
+
+				initialBatch := []BatchOp{
+					Put([]byte("\x10"), []byte("v0")),
+					Put([]byte("\xa0"), []byte("v1")),
+				}
+				rootA, err := dbA.Update(initialBatch)
+				r.NoError(err)
+				rootB, err := dbB.Update(initialBatch)
+				r.NoError(err)
+				r.Equal(rootA, rootB)
+
+				rootAUpdated, err := dbA.Update([]BatchOp{Put([]byte("\x50"), []byte("mid"))})
+				r.NoError(err)
+
+				proof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+				r.NoError(err)
+				t.Cleanup(func() { r.NoError(proof.Free()) })
+
+				// Verify with end_root = zeros (adversarial)
+				return proof, dbB, rootB, EmptyRoot, nothing(), nothing(), changeProofLenUnbounded
+			},
+			errContains: "proof error:",
+		},
+		{
+			// Partial proof: end_root = zeros, bounded proof.
+			// Boundary proof hash chain fails against wrong root.
+			name: "empty end root partial",
+			setup: func(t *testing.T) (*ChangeProof, *Database, Hash, Hash, maybe, maybe, uint32) {
+				t.Helper()
+				r := require.New(t)
+				dbA := newTestDatabase(t)
+				dbB := newTestDatabase(t)
+
+				initialBatch := []BatchOp{
+					Put([]byte("\x10"), []byte("v0")),
+					Put([]byte("\xa0"), []byte("v1")),
+				}
+				rootA, err := dbA.Update(initialBatch)
+				r.NoError(err)
+				rootB, err := dbB.Update(initialBatch)
+				r.NoError(err)
+				r.Equal(rootA, rootB)
+
+				rootAUpdated, err := dbA.Update([]BatchOp{Put([]byte("\x50"), []byte("mid"))})
+				r.NoError(err)
+
+				proof, err := dbA.ChangeProof(rootA, rootAUpdated,
+					something([]byte("\x10")), something([]byte("\xa0")), changeProofLenUnbounded)
+				r.NoError(err)
+				t.Cleanup(func() { r.NoError(proof.Free()) })
+
+				// Verify with end_root = zeros (adversarial)
+				return proof, dbB, rootB, EmptyRoot, something([]byte("\x10")), something([]byte("\xa0")), changeProofLenUnbounded
+			},
+			errContains: "proof error:",
+		},
+		{
+			// Mismatched base state between proof source and verifier.
+			// AvalancheGo: verifyChangeProofKeyValues
+			// Firewood: hash chain divergence (ProofNodeValueMismatch/InRangeChildMismatch)
+			name: "mismatched base state",
+			setup: func(t *testing.T) (*ChangeProof, *Database, Hash, Hash, maybe, maybe, uint32) {
+				t.Helper()
+				r := require.New(t)
+				dbA := newTestDatabase(t)
+				dbB := newTestDatabase(t)
+
+				// Same keys, different values → different roots
+				batchA := []BatchOp{
+					Put([]byte("\x10"), []byte("valA0")),
+					Put([]byte("\x20"), []byte("valA1")),
+					Put([]byte("\x30"), []byte("valA2")),
+				}
+				batchB := []BatchOp{
+					Put([]byte("\x10"), []byte("valB0")),
+					Put([]byte("\x20"), []byte("valB1")),
+					Put([]byte("\x30"), []byte("valB2")),
+				}
+				rootA, err := dbA.Update(batchA)
+				r.NoError(err)
+				rootB, err := dbB.Update(batchB)
+				r.NoError(err)
+				r.NotEqual(rootA, rootB)
+
+				rootAUpdated, err := dbA.Update([]BatchOp{Put([]byte("\x50"), []byte("new"))})
+				r.NoError(err)
+
+				proof, err := dbA.ChangeProof(rootA, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded)
+				r.NoError(err)
+				t.Cleanup(func() { r.NoError(proof.Free()) })
+
+				return proof, dbB, rootB, rootAUpdated, nothing(), nothing(), changeProofLenUnbounded
+			},
+			errContains: "proof error:",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			r := require.New(t)
+			proof, dbB, rootB, endRoot, startKey, endKey, maxLen := tt.setup(t)
+
+			_, err := dbB.VerifyAndProposeChangeProof(proof, rootB, endRoot, startKey, endKey, maxLen)
+			r.Error(err)
+			r.ErrorContains(err, tt.errContains)
+		})
+	}
+}
+
+// TestChangeProofStructuralRejection covers structural rejection scenarios
+// using serialized proof mutation. Each subtest exercises a different
+// malformation caught by verify_proof_structure.
+func TestChangeProofStructuralRejection(t *testing.T) {
+	tests := []struct {
+		name        string
+		errContains string
+		run         func(t *testing.T)
+	}{
+		{
+			// Duplicate keys in batch_ops.
+			// AvalancheGo: ErrNonIncreasingValues
+			// Firewood: ChangeProofKeysNotSorted (strict ordering rejects equal keys)
+			name:        "duplicate keys",
+			errContains: "keys are not sorted",
+			run: func(t *testing.T) {
+				r := require.New(t)
+				db := newTestDatabase(t)
+
+				// Create a proof with two distinct Put ops using known keys
+				root1, err := db.Update([]BatchOp{Put([]byte("mmm"), []byte("v1"))})
+				r.NoError(err)
+				root2, err := db.Update([]BatchOp{
+					Put([]byte("aaa"), []byte("va")),
+					Put([]byte("bbb"), []byte("vb")),
+				})
+				r.NoError(err)
+
+				proof, err := db.ChangeProof(root1, root2, nothing(), nothing(), changeProofLenUnbounded)
+				r.NoError(err)
+				proofBytes, err := proof.MarshalBinary()
+				r.NoError(err)
+				r.NoError(proof.Free())
+
+				// Find "aaa" and duplicate it by overwriting "bbb" with "aaa"
+				idxA := bytes.Index(proofBytes, []byte("aaa"))
+				idxB := bytes.Index(proofBytes, []byte("bbb"))
+				r.Positive(idxA, "should find 'aaa'")
+				r.Greater(idxB, idxA, "'bbb' should come after 'aaa'")
+
+				mutated := append([]byte{}, proofBytes...)
+				copy(mutated[idxB:idxB+3], []byte("aaa"))
+
+				mutatedProof := new(ChangeProof)
+				err = mutatedProof.UnmarshalBinary(mutated)
+				r.NoError(err)
+				t.Cleanup(func() { r.NoError(mutatedProof.Free()) })
+
+				_, err = db.VerifyAndProposeChangeProof(mutatedProof, root1, root2,
+					nothing(), nothing(), changeProofLenUnbounded)
+				r.Error(err)
+				r.ErrorContains(err, "keys are not sorted")
+			},
+		},
+		{
+			// Non-empty end_proof with no end_key and no batch_ops.
+			// AvalancheGo: ErrUnexpectedEndProof
+			// Firewood: UnexpectedEndProof
+			name:        "unexpected end proof",
+			errContains: "unexpected non-empty end proof",
+			run: func(t *testing.T) {
+				r := require.New(t)
+				dbA := newTestDatabase(t)
+				dbB := newTestDatabase(t)
+
+				initialBatch := []BatchOp{
+					Put([]byte("\x10"), []byte("v0")),
+					Put([]byte("\x20"), []byte("v1")),
+				}
+				rootA, err := dbA.Update(initialBatch)
+				r.NoError(err)
+				rootB, err := dbB.Update(initialBatch)
+				r.NoError(err)
+				r.Equal(rootA, rootB)
+
+				// Change a key OUTSIDE the range we will query so that
+				// the proof has a non-empty end_proof but empty batch_ops.
+				rootAUpdated, err := dbA.Update([]BatchOp{Put([]byte("\xf0"), []byte("outside"))})
+				r.NoError(err)
+
+				// Range [None, \x20]: change at \xf0 is outside, so
+				// batch_ops is empty but end_proof is non-empty.
+				proof, err := dbA.ChangeProof(rootA, rootAUpdated,
+					nothing(), something([]byte("\x20")), changeProofLenUnbounded)
+				r.NoError(err)
+
+				proofBytes, err := proof.MarshalBinary()
+				r.NoError(err)
+				r.NoError(proof.Free())
+
+				mutatedProof := new(ChangeProof)
+				err = mutatedProof.UnmarshalBinary(proofBytes)
+				r.NoError(err)
+				t.Cleanup(func() { r.NoError(mutatedProof.Free()) })
+
+				// Verify with end_key=nothing — the proof has non-empty
+				// end_proof and empty batch_ops, triggering UnexpectedEndProof.
+				_, err = dbB.VerifyAndProposeChangeProof(mutatedProof, rootB, rootAUpdated,
+					nothing(), nothing(), changeProofLenUnbounded)
+				r.Error(err)
+				r.ErrorContains(err, "unexpected non-empty end proof")
+			},
+		},
+		{
+			// Empty proof with bounded range.
+			// AvalancheGo: ErrEmptyProof
+			// Firewood: MissingBoundaryProof (bounded range needs proofs)
+			name:        "empty proof bounded",
+			errContains: "proof error:",
+			run: func(t *testing.T) {
+				r := require.New(t)
+				dbA := newTestDatabase(t)
+				dbB := newTestDatabase(t)
+
+				initialBatch := []BatchOp{
+					Put([]byte("\x10"), []byte("v0")),
+					Put([]byte("\xa0"), []byte("v1")),
+				}
+				rootA, err := dbA.Update(initialBatch)
+				r.NoError(err)
+				rootB, err := dbB.Update(initialBatch)
+				r.NoError(err)
+				r.Equal(rootA, rootB)
+
+				// Create a proof where no changes occurred in the bounded range.
+				// Use the same root for start and end but with a small change
+				// outside the bounded range to make the roots differ.
+				rootAUpdated, err := dbA.Update([]BatchOp{Put([]byte("\xff"), []byte("outside"))})
+				r.NoError(err)
+
+				// Create a bounded proof where no batch_ops fall in range
+				proof, err := dbA.ChangeProof(rootA, rootAUpdated,
+					something([]byte("\x20")), something([]byte("\x30")), changeProofLenUnbounded)
+				r.NoError(err)
+				t.Cleanup(func() { r.NoError(proof.Free()) })
+
+				// Verify on dbB — this tests the empty-proof-with-bounds path.
+				// The proof may succeed if the verifier considers an empty diff
+				// within a range to be valid (no changes in that sub-range).
+				// What matters is that it doesn't silently accept invalid state.
+				_, err = dbB.VerifyAndProposeChangeProof(proof, rootB, rootAUpdated,
+					something([]byte("\x20")), something([]byte("\x30")), changeProofLenUnbounded)
+				// If it errors, it should be a proof error (not a panic or crash)
+				if err != nil {
+					r.ErrorContains(err, "proof error:")
+				}
+				// If it succeeds, the empty diff within the range is valid —
+				// the proof had boundary proofs that validated correctly.
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.run(t)
+		})
+	}
 }

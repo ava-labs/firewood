@@ -87,6 +87,15 @@ impl ProposalHandle<'_> {
         Ok(hash_key)
     }
 
+    /// Walk the trie path from root to the given key, returning each node
+    /// along the path with its child hashes.
+    pub(crate) fn path_to_key(
+        &self,
+        key: &[u8],
+    ) -> Result<Vec<firewood_storage::PathIterItem>, api::Error> {
+        self.proposal.path_to_key(key)
+    }
+
     /// Creates an iterator on the proposal starting from the given key.
     #[must_use]
     #[allow(clippy::missing_panics_doc)]

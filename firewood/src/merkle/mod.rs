@@ -963,21 +963,21 @@ impl<T: HashedNodeReader> Merkle<T> {
             .take(limit.map_or(usize::MAX, NonZeroUsize::get))
             .collect::<Result<Box<_>, FileIoError>>()?;
 
-        let end_proof = if let Some(limit) = limit
-            && limit.get() <= batch_ops.len()
-            && iter.next().is_some()
-        {
-            // limit was provided, we hit it, and there is at least one more key
-            // end proof is for the last key provided
-            batch_ops.last().map(|largest_key| &**largest_key.key())
-        } else {
-            // limit was not hit or not provided, end proof is for the requested
-            // end key so that we can prove we have all keys up to that key
-            end_key
-        }
-        .map(|end_key| self.prove(end_key))
-        .transpose()?
-        .unwrap_or_default();
+        // The end proof is built for the last batch_op key when batch_ops
+        // is non-empty, or for end_key when batch_ops is empty (the "no
+        // changes in this range" case). When batch_ops is non-empty,
+        // end_key is not used for end proof generation — last_op_key
+        // always takes precedence. This matches AvalancheGo's convention
+        // and ensures the verifier can always determine the end proof's
+        // key deterministically from the proof content — no ambiguity, no
+        // two-key trial needed.
+        let end_proof = batch_ops
+            .last()
+            .map(|largest_key| &**largest_key.key())
+            .or(end_key)
+            .map(|end_key| self.prove(end_key))
+            .transpose()?
+            .unwrap_or_default();
 
         Ok(ChangeProof::new(start_proof, end_proof, batch_ops))
     }
