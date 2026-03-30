@@ -58,7 +58,7 @@ fn outside_children_ancestor_left_edge() {
     // Children 0..=5 should be outside (left of 5, plus 5 itself)
     for i in 0..16u8 {
         assert_eq!(
-            mask.is_outside(U4::new_masked(i)),
+            mask.is_set(U4::new_masked(i)),
             i <= 5,
             "left edge ancestor: child {i}"
         );
@@ -74,7 +74,7 @@ fn outside_children_ancestor_right_edge() {
     let mask = result[&nibble_path(&[1])];
     for i in 0..16u8 {
         assert_eq!(
-            mask.is_outside(U4::new_masked(i)),
+            mask.is_set(U4::new_masked(i)),
             i >= 5,
             "right edge ancestor: child {i}"
         );
@@ -90,7 +90,7 @@ fn outside_children_diverges_past_terminal_left() {
     let mask = result[&nibble_path(&[1, 3])];
     for i in 0..16u8 {
         assert!(
-            mask.is_outside(U4::new_masked(i)),
+            mask.is_set(U4::new_masked(i)),
             "all outside when boundary past terminal (left): child {i}"
         );
     }
@@ -117,7 +117,7 @@ fn outside_children_two_nodes_left_edge() {
     let mask = result[&nibble_path(&[1])];
     for i in 0..16u8 {
         assert_eq!(
-            mask.is_outside(U4::new_masked(i)),
+            mask.is_set(U4::new_masked(i)),
             i < 5,
             "two nodes left: child {i}"
         );
@@ -133,7 +133,7 @@ fn outside_children_two_nodes_right_edge() {
     let mask = result[&nibble_path(&[1])];
     for i in 0..16u8 {
         assert_eq!(
-            mask.is_outside(U4::new_masked(i)),
+            mask.is_set(U4::new_masked(i)),
             i > 5,
             "two nodes right: child {i}"
         );

@@ -11,10 +11,10 @@ use firewood_storage::{PathBuf, PathComponentSliceExt, ValueDigest};
 use integer_encoding::VarInt;
 
 use super::{
-    childmap::ChildrenMap,
     header::Header,
     types::{ProofNode, ProofType},
 };
+use crate::merkle::childmask::ChildMask;
 use crate::{
     api::{FrozenChangeProof, FrozenRangeProof},
     db::BatchOp,
@@ -151,7 +151,7 @@ impl WriteItem for ProofNode {
         self.key.write_item(out);
         out.push_var_int(self.partial_len);
         self.value_digest.write_item(out);
-        ChildrenMap::new(&self.child_hashes).write_item(out);
+        ChildMask::from_children(&self.child_hashes).write_item(out);
         for (_, child) in self.child_hashes.iter_present() {
             child.write_item(out);
         }
@@ -236,9 +236,9 @@ impl WriteItem for firewood_storage::HashType {
     }
 }
 
-impl WriteItem for ChildrenMap {
+impl WriteItem for ChildMask {
     fn write_item(&self, out: &mut Vec<u8>) {
-        out.extend_from_slice(bytemuck::bytes_of(self));
+        out.extend_from_slice(&self.to_le_bytes());
     }
 }
 

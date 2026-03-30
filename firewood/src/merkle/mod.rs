@@ -5,7 +5,7 @@
 pub(crate) mod tests;
 
 pub(crate) mod changes;
-mod childmask;
+pub(crate) mod childmask;
 mod merge;
 /// Parallel merkle
 pub mod parallel;
@@ -204,9 +204,9 @@ fn compute_outside_children(
             .ok_or(ProofError::ShouldBePrefixOfNextKey)?;
         let entry = result.entry(parent.key.clone()).or_default();
         *entry = if is_left_edge {
-            entry.mark_left_outside(on_path_nibble.0)
+            entry.set_below(on_path_nibble.0)
         } else {
-            entry.mark_right_outside(on_path_nibble.0)
+            entry.set_above(on_path_nibble.0)
         };
     }
 
@@ -247,11 +247,11 @@ fn compute_outside_children(
             let on_path_nibble = U4::new_masked(*on_path_byte);
             let entry = result.entry(terminal.key.clone()).or_default();
             *entry = if is_left_edge {
-                entry.mark_left_outside(on_path_nibble)
+                entry.set_below(on_path_nibble)
             } else {
-                entry.mark_right_outside(on_path_nibble)
+                entry.set_above(on_path_nibble)
             }
-            .set_outside(on_path_nibble);
+            .set(on_path_nibble);
         }
         // Otherwise boundary matches terminal exactly — no children need marking.
     }
@@ -292,7 +292,7 @@ fn compute_root_hash_with_proofs(
         (proof_nodes.get(&full_key), outside_children.get(&full_key))
     {
         for (nibble, hash) in proof_node.child_hashes.iter_present() {
-            if outside.is_outside(nibble.0) {
+            if outside.is_set(nibble.0) {
                 child_hashes[nibble] = Some(hash.clone());
             }
         }
@@ -538,7 +538,7 @@ fn verify_root_hash<H: ProofCollection<Node = ProofNode>>(
     for (key, flags) in compute_outside_children(proof.end_proof().as_ref(), last_key_bytes, false)?
     {
         let entry = outside_children.entry(key).or_default();
-        *entry = entry.merge(flags);
+        *entry |= flags;
     }
 
     // Compute root hash of the proving trie with proof sibling hashes
