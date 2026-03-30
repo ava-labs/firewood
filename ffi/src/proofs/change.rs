@@ -209,6 +209,16 @@ impl ChangeProofContext {
             return Err(api::Error::ProofError(ProofError::UnexpectedEndProof));
         }
 
+        // Reject empty end_proof when end_key is provided or batch_ops is
+        // non-empty. The honest generator always produces an end proof in
+        // these cases. Without this check, a malicious prover can force the
+        // verifier through expensive trie operations (proposal construction,
+        // root hash verification) before the proof is ultimately rejected.
+        // Matches AvalancheGo's ErrNoEndProof.
+        if proof.end_proof().is_empty() && (end_key.is_some() || !batch_ops.is_empty()) {
+            return Err(api::Error::ProofError(ProofError::MissingEndProof));
+        }
+
         // Verify boundary proofs against end_root
         Self::verify_start_proof(proof, start_key, &end_root)?;
         Self::verify_end_proof(proof, end_key, &end_root)?;
@@ -247,86 +257,49 @@ impl ChangeProofContext {
 
     /// Verify the end boundary proof's hash chain against the end root.
     ///
-    /// The change proof generator builds the end proof for one of two possible
-    /// keys, depending on whether `max_length` truncated the result set:
-    ///
-    /// - **Truncated**: end proof is built for `batch_ops.last().key()` — the
-    ///   rightmost key that was actually included in the proof.
-    /// - **Non-truncated**: end proof is built for `end_key` — the caller's
-    ///   requested upper bound.
-    ///
-    /// The verifier does not receive a "truncated" flag. Instead, it infers
-    /// the correct key by trying `last_op_key` first (the common/truncated
-    /// case), then falling back to `end_key`. The match is validated by
-    /// checking that inclusion/exclusion from `value_digest` is consistent
-    /// with the operation type (Put expects inclusion, Delete expects
-    /// exclusion).
+    /// The generator always builds the end proof for `batch_ops.last().key()`
+    /// when `batch_ops` is non-empty, or for `end_key` when `batch_ops` is
+    /// empty (matching `AvalancheGo`'s convention). The verifier mirrors this
+    /// to derive the key deterministically — no ambiguity, single hash chain
+    /// check.
     fn verify_end_proof(
         proof: &FrozenChangeProof,
         end_key: Option<&[u8]>,
         end_root: &ApiHashKey,
     ) -> Result<(), api::Error> {
-        // An empty end_proof is valid: it means the proof covers the entire
-        // right side of the keyspace (no right boundary), or the structural
-        // checks in verify_proof_structure already ruled out invalid
-        // combinations (e.g., UnexpectedEndProof).
+        // An empty end_proof is valid: it means both end_key is None and
+        // batch_ops is empty (the MissingEndProof structural check in
+        // verify_proof_structure rejects empty end_proof in all other
+        // cases). There is no right boundary to verify.
         if proof.end_proof().is_empty() {
             return Ok(());
         }
 
-        // Try last_op_key first — the end proof may be for the right
-        // edge of the changes (truncated proof).
-        if let Some(last_op) = proof.batch_ops().last() {
-            let is_delete = matches!(last_op, BatchOp::Delete { .. });
-            match proof
-                .end_proof()
-                .value_digest(last_op.key().as_ref(), end_root)
-            {
-                // Put + key exists in end trie: the proof was built for this
-                // key and the trie confirms it was inserted. Definitive match.
-                Ok(Some(_)) if !is_delete => return Ok(()),
+        // Derive the key the generator built the end proof for:
+        // last batch_ops key when non-empty, end_key otherwise.
+        // The structural checks guarantee that at least one of these
+        // is Some when end_proof is non-empty:
+        //   - batch_ops non-empty → last() is Some
+        //   - batch_ops empty + end_proof non-empty → end_key must be
+        //     Some (otherwise UnexpectedEndProof would have fired)
+        let key = proof
+            .batch_ops()
+            .last()
+            .map(|op| op.key().as_ref())
+            .or(end_key);
 
-                // Delete + key absent from end trie: the proof was built for
-                // this key and the trie confirms it was removed. Definitive match.
-                Ok(None) if is_delete => return Ok(()),
+        let Some(key) = key else {
+            // Unreachable when called after verify_proof_structure:
+            // the structural checks ensure at least one key is available
+            // whenever end_proof is non-empty. This branch is defensive
+            // against callers that bypass structural validation.
+            return Err(api::Error::ProofError(
+                ProofError::BoundaryProofUnverifiable,
+            ));
+        };
 
-                // Inclusion/exclusion doesn't match the op type (e.g., Put but
-                // key absent, or Delete but key present). This means
-                // last_op_key is not the key the proof was built for.
-                //
-                // ShouldBePrefixOfProvenKey means the proof's node path
-                // doesn't even align with this key — the proof was clearly
-                // built for a different key entirely.
-                //
-                // Both cases: fall through to try end_key instead.
-                Ok(_) | Err(ProofError::ShouldBePrefixOfProvenKey) => {}
-
-                // Any other error (UnexpectedHash, NodeNotInTrie, etc.) is a
-                // genuine hash-chain failure — the proof is corrupt regardless
-                // of which key it was built for.
-                Err(e) => return Err(api::Error::ProofError(e)),
-            }
-        }
-
-        // last_op_key didn't validate the proof (or batch_ops is empty).
-        // Try end_key — this is the non-truncated case where the generator
-        // built the proof for the caller's requested upper bound.
-        //
-        // Any Ok result is accepted here (both inclusion and exclusion)
-        // because end_key is an arbitrary bound — it may or may not exist
-        // as a key in the trie. We only need the hash chain to be valid.
-        if let Some(end_key) = end_key {
-            proof.end_proof().value_digest(end_key, end_root)?;
-            return Ok(());
-        }
-
-        // end_proof is non-empty, but neither last_op_key nor end_key could
-        // validate it. This means either: (a) both keys were tried and the
-        // hash chain didn't match either, or (b) there were no batch_ops and
-        // no end_key, so there was no key to verify against at all.
-        Err(api::Error::ProofError(
-            ProofError::BoundaryProofUnverifiable,
-        ))
+        proof.end_proof().value_digest(key, end_root)?;
+        Ok(())
     }
 }
 
