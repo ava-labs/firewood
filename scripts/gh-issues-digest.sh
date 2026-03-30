@@ -132,6 +132,25 @@ fetch_pr_batch() {
     '
 }
 
+# --- Fetch repository labels with open issue/PR counts via GraphQL ---
+echo "Fetching repository labels..." >&2
+LABELS_JSON=$(gh api graphql --paginate -f query='
+{
+  repository(owner: "'"$OWNER"'", name: "'"$REPO_NAME"'") {
+    labels(first: 100) {
+      nodes {
+        name
+        description
+        issues(states: [OPEN]) { totalCount }
+        pullRequests(states: [OPEN]) { totalCount }
+      }
+    }
+  }
+}' | jq -s '[.[].data.repository.labels.nodes[]] | sort_by(.name | ascii_downcase)')
+
+label_count=$(echo "$LABELS_JSON" | jq 'length')
+echo "Found $label_count labels." >&2
+
 echo "Fetching linked pull requests..." >&2
 for n in $issue_numbers; do
     batch+=("$n")
@@ -234,17 +253,17 @@ echo "$ISSUES_JSON" | jq -r --arg repo "$REPO" '
   ""
 '
 
-# Label distribution
-echo "$ISSUES_JSON" | jq -r '
-  [.[].labels[].name] | group_by(.) |
-  map({name: .[0], count: length}) | sort_by(-.count) |
+# Repository labels with descriptions and open issue/PR counts
+echo "$LABELS_JSON" | jq -r '
   if length == 0 then
-    "### Label Distribution\n\nNo labels found.\n"
+    "### Repository Labels\n\nNo labels defined.\n"
   else
-    "### Label Distribution\n",
-    "| Label | Count |",
-    "|-------|-------|",
-    (.[] | "| \(.name) | \(.count) |"),
+    "### Repository Labels\n",
+    "| Label | Description | Open Issues | Open PRs |",
+    "|-------|-------------|:-----------:|:--------:|",
+    (.[] |
+      "| \(.name) | \(.description // "—") | \(.issues.totalCount) | \(.pullRequests.totalCount) |"
+    ),
     ""
   end
 '
