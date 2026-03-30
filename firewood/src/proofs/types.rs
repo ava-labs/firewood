@@ -204,7 +204,7 @@ pub enum ProofError {
     /// inconsistent with the proof.
     #[error("in-range child hash mismatch at depth {depth}")]
     InRangeChildMismatch { depth: usize },
-    
+
     /// Empty end proof when `end_key` is set or `batch_ops` is non-empty.
     /// The honest generator always produces an end proof in these cases.
     /// Matches `AvalancheGo`'s `ErrNoEndProof`.
