@@ -18,16 +18,37 @@ use crate::{
     merkle::{Key, PrefixOverlap, Value},
 };
 
-/// A change proof can demonstrate that by applying the provided array of `BatchOp`s to a Merkle
-/// trie with given start root hash, the resulting trie will have the given end root hash. It
-/// consists of the following:
-/// - A start proof: proves that the smallest key does/doesn't exist
-/// - An end proof: proves the the largest key does/doesn't exist
-/// - The actual `BatchOp`s that specify the difference between the start and end tries.
+/// A change proof describes the differences between two Merkle trie revisions over a
+/// requested key range. The `start_proof` and `end_proof` bound the range, while
+/// `batch_ops` contains the actual key-value changes within that range.
+///
+/// A change proof may cover only a subset of the full keyspace. When both proofs are
+/// empty and `batch_ops` is also empty, the two tries are identical over the
+/// requested range. Multiple change proofs can be fetched (e.g. with pagination via
+/// `limit`) to cover the full keyspace incrementally.
 #[derive(Debug)]
 pub struct ChangeProof<K: AsRef<[u8]> + Debug, V: AsRef<[u8]> + Debug, H> {
+    /// A proof for the smallest key in the requested range.
+    ///
+    /// | Lower bound | Key in trie? | Proof |
+    /// |---|---|---|
+    /// | None | n/a | Empty — range starts from the beginning of the keyspace |
+    /// | Some(key) | No | Exclusion proof of that key |
+    /// | Some(key) | Yes | Inclusion proof of that key |
     start_proof: Proof<H>,
+    /// A proof for the largest key in the requested range.
+    ///
+    /// | `batch_ops` | Upper bound | Proof |
+    /// |---|---|---|
+    /// | Non-empty | Some(key) | Proof of the last key in `batch_ops` (inclusion if it exists in the end trie, exclusion if it was deleted) |
+    /// | Non-empty | None | Proof of the last key in `batch_ops` (same as above) |
+    /// | Empty | Some(key) | Proof of that key |
+    /// | Empty | None | Empty — no changes and no upper bound |
     end_proof: Proof<H>,
+    /// A set of [`BatchOp::Put`] and [`BatchOp::Delete`] operations for all kv pairs between the
+    /// keys specified by [`Self::start_proof`] and [`Self::end_proof`] that are different between
+    /// the two revisions.
+    /// A valid change proof never contains [`BatchOp::DeleteRange`] operators
     batch_ops: Box<[BatchOp<K, V>]>,
 }
 
@@ -52,19 +73,19 @@ where
         }
     }
 
-    /// Returns a reference to the start proof, which may be empty.
+    /// Returns a reference to the start proof.
     #[must_use]
     pub const fn start_proof(&self) -> &Proof<H> {
         &self.start_proof
     }
 
-    /// Returns a reference to the end proof, which may be empty.
+    /// Returns a reference to the end proof.
     #[must_use]
     pub const fn end_proof(&self) -> &Proof<H> {
         &self.end_proof
     }
 
-    /// Returns the `BatchOp`s included in the change proof, which may be empty.
+    /// Returns the [`BatchOp`]s included in the change proof.
     #[must_use]
     pub const fn batch_ops(&self) -> &[BatchOp<K, V>] {
         &self.batch_ops
