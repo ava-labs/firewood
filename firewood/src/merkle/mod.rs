@@ -1032,12 +1032,13 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
 
     /// Map `key` to `value` in the trie.
     /// Each element of key is 2 nibbles.
+    #[cfg_attr(feature = "test_utils", expect(clippy::missing_errors_doc))]
     pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), FileIoError> {
         self.insert_from_iter(NibblesIterator::new(key), value)
     }
 
     /// Map `key` to `value` in the trie when `key` is a `NibblesIterator`
-    pub fn insert_from_iter(
+    pub(crate) fn insert_from_iter(
         &mut self,
         key: NibblesIterator<'_>,
         value: Value,
@@ -1063,7 +1064,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     /// Map `key` to `value` into the subtrie rooted at `node`.
     /// Each element of `key` is 1 nibble.
     /// Returns the new root of the subtrie.
-    pub fn insert_helper(
+    fn insert_helper(
         &mut self,
         mut node: Node,
         key: &[u8],
@@ -1300,7 +1301,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
     /// Each element of `key` is 2 nibbles.
-    pub fn remove(&mut self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
+    pub(crate) fn remove(&mut self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
         self.remove_from_iter(NibblesIterator::new(key))
     }
 
@@ -1308,7 +1309,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
     /// Each element of `key` is 2 nibbles.
-    pub fn remove_from_iter(
+    pub(crate) fn remove_from_iter(
         &mut self,
         key: NibblesIterator<'_>,
     ) -> Result<Option<Value>, FileIoError> {
@@ -1399,13 +1400,13 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
 
     /// Removes any key-value pairs with keys that have the given `prefix`.
     /// Returns the number of key-value pairs removed.
-    pub fn remove_prefix(&mut self, prefix: &[u8]) -> Result<usize, FileIoError> {
+    pub(crate) fn remove_prefix(&mut self, prefix: &[u8]) -> Result<usize, FileIoError> {
         self.remove_prefix_from_iter(NibblesIterator::new(prefix))
     }
 
     /// Removes any key-value pairs with keys that have the given `prefix` where `prefix` is a `NibblesIterator`
     /// Returns the number of key-value pairs removed.
-    pub fn remove_prefix_from_iter(
+    pub(crate) fn remove_prefix_from_iter(
         &mut self,
         prefix: NibblesIterator<'_>,
     ) -> Result<usize, FileIoError> {
