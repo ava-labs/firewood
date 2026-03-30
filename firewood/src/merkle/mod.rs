@@ -1006,7 +1006,7 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<Mutable<Propose>, S>>>
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "test_utils"))]
 impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     /// Convert a merkle backed by a `Mutable<Propose>` into an `ImmutableProposal`
     ///
