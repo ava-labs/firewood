@@ -1131,12 +1131,30 @@ fn test_divergence_at_depth_zero() {
     ));
 }
 
+// Verify that the children of the last node in the start proof are checked
+// during verification. The start bound \x10 is a branch node (not a leaf),
+// so the verifier must inspect its children (\x10\x01, \x10\x02) to ensure
+// they haven't been tampered with. The actual change is to \x30, which is
+// on a completely separate branch, so this isolates the child-checking logic.
+//
+// Trie structure (both dbs start identical):
+//
+//       [root]
+//       /    \
+//   [0x1_]   [0x3_]
+//    /   \      |
+// [_0_1] [_0_2] [_0]
+//  "a"    "b"   "c"
+//
+// The change proof query uses start=\x10 (the branch node), end=None.
+// Only \x30 changes ("c" -> "changed"), but the verifier must still
+// validate that \x10's children are intact.
 #[test]
 fn test_start_tail_last_node_children_checked() {
-    let (db_a, _dir_a) = new_db();
-    let (db_b, _dir_b) = new_db();
+    let (sender, _dir_sender) = new_db();
+    let (receiver, _dir_receiver) = new_db();
 
-    let initial: Vec<BatchOp<&[u8], &[u8]>> = vec![
+    let start_data_for_both: Vec<BatchOp<&[u8], &[u8]>> = vec![
         BatchOp::Put {
             key: b"\x10\x01",
             value: b"a",
@@ -1150,25 +1168,42 @@ fn test_start_tail_last_node_children_checked() {
             value: b"c",
         },
     ];
-    db_a.propose(initial.clone()).unwrap().commit().unwrap();
-    let root1_a = db_a.root_hash().unwrap();
-    db_b.propose(initial).unwrap().commit().unwrap();
-    let root1_b = db_b.root_hash().unwrap();
-
-    db_a.propose(vec![BatchOp::Put {
-        key: b"\x30",
-        value: b"changed",
-    }])
-    .unwrap()
-    .commit()
-    .unwrap();
-    let root2 = db_a.root_hash().unwrap();
-
-    let proof = db_a
-        .change_proof(root1_a, root2.clone(), Some(b"\x10"), None, None)
+    sender
+        .propose(start_data_for_both.clone())
+        .unwrap()
+        .commit()
         .unwrap();
-    let ctx = verify_change_proof_structure(&proof, root2, Some(b"\x10"), None, None).unwrap();
-    verify_and_check(&db_b, &proof, &ctx, root1_b).unwrap();
+    let sender_root1 = sender.root_hash().unwrap();
+    receiver
+        .propose(start_data_for_both)
+        .unwrap()
+        .commit()
+        .unwrap();
+    let receiver_root1 = receiver.root_hash().unwrap();
+
+    // Only modify \x30 on the sender; \x10's children are untouched
+    sender
+        .propose(vec![BatchOp::Put {
+            key: b"\x30",
+            value: b"changed",
+        }])
+        .unwrap()
+        .commit()
+        .unwrap();
+    let sender_root2 = sender.root_hash().unwrap();
+
+    let proof = sender
+        .change_proof(
+            sender_root1,
+            sender_root2.clone(),
+            Some(b"\x10"),
+            None,
+            None,
+        )
+        .unwrap();
+    let ctx =
+        verify_change_proof_structure(&proof, sender_root2, Some(b"\x10"), None, None).unwrap();
+    verify_and_check(&receiver, &proof, &ctx, receiver_root1).unwrap();
 }
 
 #[test]
