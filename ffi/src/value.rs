@@ -6,19 +6,25 @@ mod display_hex;
 mod hash_key;
 mod kvp;
 mod owned;
+pub mod rendered_metrics;
 pub(crate) mod results;
 
 pub use self::borrowed::{BorrowedBatchOps, BorrowedBytes, BorrowedSlice};
 use self::display_hex::DisplayHex;
 pub use self::hash_key::HashKey;
-pub use self::kvp::{BatchOp, OwnedKeyValueBatch, OwnedKeyValuePair};
+pub use self::kvp::{BatchOp, BorrowedKeyValuePair, OwnedKeyValueBatch, OwnedKeyValuePair};
 pub use self::owned::{OwnedBytes, OwnedSlice};
+pub use self::rendered_metrics::{
+    OwnedBucket, OwnedBucketSpan, OwnedClassicHistogram, OwnedLabelPair, OwnedMetric,
+    OwnedMetricFamily, OwnedMetricValue, OwnedNativeHistogram, OwnedQuantile, OwnedRenderedMetrics,
+    OwnedSummary,
+};
 pub(crate) use self::results::{CResult, NullHandleResult};
 pub use self::results::{
     ChangeProofResult, CodeIteratorResult, HandleResult, HashResult, IteratorResult,
     KeyValueBatchResult, KeyValueResult, NextKeyRangeResult, ProposalResult,
-    ProposedChangeProofResult, RangeProofResult, ReconstructedResult, RevisionResult, ValueResult,
-    VerifiedChangeProofResult, VoidResult,
+    ProposedChangeProofResult, RangeProofResult, ReconstructedResult, RenderedMetricsResult,
+    RevisionResult, ValueResult, VerifiedChangeProofResult, VoidResult,
 };
 
 /// Maybe is a C-compatible optional type using a tagged union pattern.

@@ -94,6 +94,50 @@ func TestMetrics(t *testing.T) {
 	}
 }
 
+func TestGatherRenderedMetrics(t *testing.T) {
+	r := require.New(t)
+
+	// Ensure the metrics recorder is initialized.
+	ensureMetricsStarted(t)
+
+	// Call gather multiple times so the histogram accumulates observations.
+	const gatherCalls = 3
+	var allFamilies []*dto.MetricFamily
+	for range gatherCalls {
+		families, err := GatherRenderedMetrics()
+		r.NoError(err)
+		r.NotEmpty(families)
+		allFamilies = families
+	}
+
+	// Find the native histogram metric for gather duration.
+	var histFamily *dto.MetricFamily
+	for _, mf := range allFamilies {
+		if mf.GetName() == "ffi_gather_duration_seconds" {
+			histFamily = mf
+			break
+		}
+	}
+	r.NotNil(histFamily, "ffi_gather_duration_seconds metric not found")
+	r.Equal(dto.MetricType_HISTOGRAM, histFamily.GetType())
+	r.NotEmpty(histFamily.GetMetric())
+
+	hist := histFamily.GetMetric()[0].GetHistogram()
+	r.NotNil(hist, "histogram field must be set")
+
+	// We called gather at least gatherCalls times; each call records one observation.
+	// The first call won't see itself, but subsequent calls see prior observations.
+	r.GreaterOrEqual(hist.GetSampleCount(), uint64(gatherCalls-1),
+		"expected at least %d observations", gatherCalls-1)
+	r.Greater(hist.GetSampleSum(), 0.0, "sample sum should be positive")
+
+	// Validate native histogram fields are populated.
+	r.NotNil(hist.Schema, "native histogram schema must be set")
+	r.NotNil(hist.ZeroThreshold, "native histogram zero_threshold must be set")
+	r.NotEmpty(hist.GetPositiveSpan(), "native histogram should have positive spans")
+	r.NotEmpty(hist.GetPositiveDelta(), "native histogram should have positive deltas")
+}
+
 func assertNonEmptyFile(t *testing.T, path string) bool {
 	t.Helper()
 	f, err := os.ReadFile(path)

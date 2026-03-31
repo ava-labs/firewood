@@ -99,3 +99,10 @@ impl From<(Box<[u8]>, Box<[u8]>)> for OwnedKeyValuePair {
         }
     }
 }
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct BorrowedKeyValuePair<'a> {
+    pub key: BorrowedBytes<'a>,
+    pub value: BorrowedBytes<'a>,
+}
