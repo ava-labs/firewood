@@ -39,26 +39,22 @@ use std::cell::Cell;
 // depend on this crate and never import `metrics` directly.
 pub use metrics::{Counter, Gauge, Histogram, Unit};
 
-/// Defines metric constants and a `register()` function from a single schema.
+/// Defines metric name constants and outputs a `register()` function from a single schema.
 ///
-/// Each entry is `IDENT = "metric.name" : "description"`. Expands to:
-/// - A `pub(crate) const IDENT: &str = "metric.name"` with the description as
-///   its rustdoc comment
-/// - A `pub fn register()` that calls `describe_counter!` / `describe_gauge!`
-///   for every entry using the same literal strings, so name and description
-///   can never drift from each other
+/// Each entry has the form `IDENT = "metric.name" : "description"` and expands to:
+/// - A `pub(crate) const IDENT: &str = "metric.name"` that can be referenced at recording callsites
+/// - A `firewood_describe_counter!` / `firewood_describe_gauge!` call in `register()`
 ///
-/// The `gauges:` section is optional and can be omitted if there are no gauges.
+/// Because the same literal appears in both the constant and the describe call,
+/// the metric name and its description are guaranteed to stay in sync.
 ///
-/// # Example
-///
-/// ```rust,ignore
+/// ```rust
 /// firewood_metrics::define_metrics! {
 ///     counters: {
-///         PROPOSALS_CREATED_TOTAL = "proposals_created_total" : "Number of proposals created",
+///         COMMITS_TOTAL  = "commits_total"   : "Total number of commits",
 ///     },
 ///     gauges: {
-///         ACTIVE_REVISIONS = "active_revisions" : "Current number of active revisions",
+///         ACTIVE_REVISIONS = "active_revisions" : "Current number of revisions held in memory",
 ///     }
 /// }
 /// ```
