@@ -199,6 +199,48 @@ macro_rules! firewood_gauge {
     };
 }
 
+/// Describes a counter metric with a human-readable description.
+///
+/// `$name` must be a string literal so the metrics key can be cached in a
+/// per-callsite `static`, avoiding an allocation on every call.
+///
+/// # Examples
+///
+/// ```rust
+/// firewood_describe_counter!("proposals_created_total", "Number of proposals created");
+/// firewood_describe_counter!("bytes_written_total", Unit::Bytes, "Total bytes written to disk");
+/// ```
+#[macro_export]
+macro_rules! firewood_describe_counter {
+    ($name:literal, $desc:expr) => {
+        ::metrics::describe_counter!($name, $desc)
+    };
+    ($name:literal, $unit:expr, $desc:expr) => {
+        ::metrics::describe_counter!($name, $unit, $desc)
+    };
+}
+
+/// Describes a gauge metric with a human-readable description.
+///
+/// `$name` must be a string literal so the metrics key can be cached in a
+/// per-callsite `static`, avoiding an allocation on every call.
+///
+/// # Examples
+///
+/// ```rust
+/// firewood_describe_gauge!("active_revisions", "Number of revisions currently held in memory");
+/// firewood_describe_gauge!("node_cache_bytes", Unit::Bytes, "Current node cache size");
+/// ```
+#[macro_export]
+macro_rules! firewood_describe_gauge {
+    ($name:literal, $desc:expr) => {
+        ::metrics::describe_gauge!($name, $desc)
+    };
+    ($name:literal, $unit:expr, $desc:expr) => {
+        ::metrics::describe_gauge!($name, $unit, $desc)
+    };
+}
+
 #[cfg(test)]
 mod tests {
     #![expect(clippy::unwrap_used)]
