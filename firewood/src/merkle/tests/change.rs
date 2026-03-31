@@ -1303,6 +1303,69 @@ fn test_delete_range_rejected() {
     .unwrap();
     let root1 = db.root_hash().unwrap();
 
+    db.propose(vec![
+        BatchOp::Put {
+            key: b"\x50",
+            value: b"mid",
+        },
+        BatchOp::Put {
+            key: b"\x80",
+            value: b"end",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    let valid = db
+        .change_proof(root1, root2.clone(), None, None, None)
+        .unwrap();
+
+    // Place a DeleteRange before a valid Put so the end-proof consistency
+    // check passes on the last op (Put) and the O(n) scan catches the
+    // DeleteRange.
+    let crafted = FrozenChangeProof::new(
+        crate::Proof::new(valid.start_proof().as_ref().into()),
+        crate::Proof::new(valid.end_proof().as_ref().into()),
+        Box::new([
+            BatchOp::DeleteRange {
+                prefix: b"\x50".to_vec().into(),
+            },
+            BatchOp::Put {
+                key: b"\x80".to_vec().into(),
+                value: b"end".to_vec().into(),
+            },
+        ]),
+    );
+
+    let err = verify_change_proof_structure(&crafted, root2, None, None, None).unwrap_err();
+    assert!(matches!(
+        err,
+        api::Error::ProofError(crate::ProofError::UnsupportedDeleteRange)
+    ));
+}
+
+/// When boundary proofs are present, the end-proof consistency check catches
+/// the DeleteRange before the O(n) scan runs.
+#[test]
+fn test_delete_range_rejected_with_boundary_proofs() {
+    let (db, _dir) = new_db();
+    db.propose(vec![
+        BatchOp::Put {
+            key: b"\x10",
+            value: b"v0",
+        },
+        BatchOp::Put {
+            key: b"\xa0",
+            value: b"v1",
+        },
+    ])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root1 = db.root_hash().unwrap();
+
     db.propose(vec![BatchOp::Put {
         key: b"\x50",
         value: b"mid",

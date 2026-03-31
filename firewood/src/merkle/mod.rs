@@ -623,17 +623,24 @@ pub fn verify_change_proof_structure(
         });
     }
 
-    // Validate end_proof presence against batch_ops and end_key.
-    // The honest generator follows strict rules about when end_proof
-    // should be present. These O(1) checks reject malformed proofs
-    // before expensive O(n) scans.
+    // Validate boundary proof presence against batch_ops, start_key,
+    // and end_key. The honest generator follows strict rules about when
+    // proofs should be present. These O(1) checks reject malformed
+    // proofs before expensive O(n) scans.
+
+    // Non-empty start_proof without a start_key is unverifiable — the
+    // honest generator only produces start_proof when start_key is Some.
+    if !proof.start_proof().is_empty() && start_key.is_none() {
+        return Err(api::Error::ProofError(
+            ProofError::BoundaryProofUnverifiable,
+        ));
+    }
+
     match (batch_ops.is_empty(), proof.end_proof().is_empty()) {
         // batch_ops present but no end_proof — always an error, but
         // distinguish "no boundary proofs at all" from "just missing end".
         (false, true) => {
-            if proof.start_proof().is_empty()
-                && (start_key.is_some() || end_key.is_some())
-            {
+            if proof.start_proof().is_empty() && (start_key.is_some() || end_key.is_some()) {
                 return Err(api::Error::ProofError(ProofError::MissingBoundaryProof));
             }
             return Err(api::Error::ProofError(ProofError::MissingEndProof));
@@ -667,6 +674,57 @@ pub fn verify_change_proof_structure(
         return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
     }
 
+    // Verify start boundary proof against end_root.
+    // value_digest returns ProofError::Empty for an empty proof,
+    // which is valid here (range starts from beginning of keyspace).
+    if let Some(start_key) = start_key {
+        match proof.start_proof().value_digest(start_key, &end_root) {
+            Ok(_) | Err(ProofError::Empty) => {}
+            Err(e) => return Err(api::Error::ProofError(e)),
+        }
+    }
+
+    // Verify end boundary proof against end_root.
+    // Derive the key the generator built the end proof for:
+    // last batch_ops key when non-empty, end_key otherwise.
+    // When both are None, there is no end boundary to verify (the
+    // structural match block above ensures end_proof is also empty).
+    if let Some(key) = batch_ops.last().map(|op| op.key().as_ref()).or(end_key) {
+        // value_digest returns:
+        //   Ok(Some(_)) → inclusion proof (key exists at the last proof node)
+        //   Ok(None)    → exclusion proof (key does not exist)
+        //   Err(Empty)  → end_proof is empty, valid here only when
+        //                  batch_ops is empty (no operation to check)
+        let result = match proof.end_proof().value_digest(key, &end_root) {
+            Ok(result) => result,
+            Err(ProofError::Empty) => None,
+            Err(e) => return Err(api::Error::ProofError(e)),
+        };
+
+        // When batch_ops is non-empty, the generator built the end proof
+        // for last_op_key. A Put means the key was inserted in end_root
+        // (expect inclusion); a Delete means it was removed (expect
+        // exclusion). When batch_ops is empty, the key came from end_key
+        // (an arbitrary range bound) — both inclusion and exclusion are
+        // valid.
+        if let Some(last_op) = batch_ops.last() {
+            // Reject DeleteRange before the consistency check so the
+            // specific error is returned rather than a generic mismatch.
+            if matches!(last_op, BatchOp::DeleteRange { .. }) {
+                return Err(api::Error::ProofError(ProofError::UnsupportedDeleteRange));
+            }
+            let consistent = matches!(
+                (last_op, &result),
+                (BatchOp::Put { .. }, Some(_)) | (BatchOp::Delete { .. }, None)
+            );
+            if !consistent {
+                return Err(api::Error::ProofError(
+                    ProofError::EndProofOperationMismatch,
+                ));
+            }
+        }
+    }
+
     // Single-pass O(n) scan: reject DeleteRange ops and verify keys are
     // sorted and unique. The honest diff algorithm only produces Put and
     // Delete ops; a crafted proof could use DeleteRange to delete keys
@@ -687,118 +745,11 @@ pub fn verify_change_proof_structure(
         }
     }
 
-    // Verify boundary proofs against end_root
-    verify_change_proof_start(&end_root, proof, start_key)?;
-    verify_change_proof_end(&end_root, proof, end_key)?;
-
     Ok(ChangeProofVerificationContext {
         end_root,
         start_key: start_key.map(Box::from),
         end_key: end_key.map(Box::from),
     })
-}
-
-/// Verify the start boundary proof against the end root hash.
-fn verify_change_proof_start(
-    end_root: &HashKey,
-    proof: &FrozenChangeProof,
-    start_key: Option<&[u8]>,
-) -> Result<(), api::Error> {
-    // An empty start_proof is valid: it means the range starts from the
-    // beginning of the keyspace (start_key=None in the first sync round).
-    if proof.start_proof().is_empty() {
-        return Ok(());
-    }
-
-    // If start_proof is non-empty, we MUST have a key to validate
-    // it against. The honest generator only produces a non-empty
-    // start_proof when start_key is Some.
-    let Some(start_key) = start_key else {
-        return Err(api::Error::ProofError(
-            ProofError::BoundaryProofUnverifiable,
-        ));
-    };
-
-    proof.start_proof().value_digest(start_key, end_root)?;
-    Ok(())
-}
-
-/// Verify the end boundary proof's hash chain against the end root.
-///
-/// The generator always builds the end proof for `batch_ops.last().key()`
-/// when `batch_ops` is non-empty, or for `end_key` when `batch_ops` is
-/// empty (matching `AvalancheGo`'s convention). The verifier mirrors this
-/// to derive the key deterministically — no ambiguity, single hash chain
-/// check.
-fn verify_change_proof_end(
-    end_root: &HashKey,
-    proof: &FrozenChangeProof,
-    end_key: Option<&[u8]>,
-) -> Result<(), api::Error> {
-    // An empty end_proof is valid: it means both end_key is None and
-    // batch_ops is empty (the MissingEndProof structural check in
-    // verify_change_proof_structure rejects empty end_proof in all other
-    // cases). There is no right boundary to verify.
-    if proof.end_proof().is_empty() {
-        return Ok(());
-    }
-
-    // Derive the key the generator built the end proof for:
-    // last batch_ops key when non-empty, end_key otherwise.
-    // The structural checks guarantee that at least one of these
-    // is Some when end_proof is non-empty:
-    //   - batch_ops non-empty → last() is Some
-    //   - batch_ops empty + end_proof non-empty → end_key must be
-    //     Some (otherwise UnexpectedEndProof would have fired)
-    let key = proof
-        .batch_ops()
-        .last()
-        .map(|op| op.key().as_ref())
-        .or(end_key);
-
-    let Some(key) = key else {
-        // Unreachable when called after verify_change_proof_structure:
-        // the structural checks ensure at least one key is available
-        // whenever end_proof is non-empty. This branch is defensive
-        // against callers that bypass structural validation.
-        return Err(api::Error::ProofError(
-            ProofError::BoundaryProofUnverifiable,
-        ));
-    };
-
-    // Validate the hash chain and determine inclusion/exclusion.
-    // value_digest returns:
-    //   Ok(Some(_)) → inclusion proof (key exists at the last proof node)
-    //   Ok(None)    → exclusion proof (key does not exist)
-    let result = proof.end_proof().value_digest(key, end_root)?;
-
-    // When batch_ops is non-empty, the generator built the end proof
-    // for last_op_key. A Put means the key was inserted in end_root
-    // (expect inclusion); a Delete means it was removed (expect
-    // exclusion). If the result doesn't match, the attacker tampered
-    // with batch_ops — the derived key doesn't match the proof's
-    // actual target.
-    //
-    // When batch_ops is empty, the key came from end_key (an
-    // arbitrary range bound that may or may not exist in the trie).
-    // Both inclusion and exclusion are valid — skip the check.
-    if let Some(last_op) = proof.batch_ops().last() {
-        let is_delete = matches!(last_op, BatchOp::Delete { .. });
-        // Put + inclusion (key exists) or Delete + exclusion (key
-        // absent) are the only valid combinations. Any mismatch
-        // means the attacker added a spurious key (Put but key
-        // doesn't exist) or converted a Put to Delete (Delete but
-        // key still exists). The derived key doesn't match the
-        // proof's actual target.
-        let consistent = matches!((is_delete, &result), (false, Some(_)) | (true, None));
-        if !consistent {
-            return Err(api::Error::ProofError(
-                ProofError::EndProofOperationMismatch,
-            ));
-        }
-    }
-
-    Ok(())
 }
 
 /// Convert a byte key to a nibble path for change proof boundary derivation.
@@ -895,7 +846,7 @@ fn verify_change_proof_node_value(
 /// The boundary nibble at each depth is derived from the proof's own
 /// structure: the next node's key at this depth tells us which child
 /// the proof navigated to. This is always correct regardless of which
-/// key `verify_change_proof_end` validated against. At the last proof node
+/// key the end boundary proof was validated against. At the last proof node
 /// (where no next node exists), `fallback_nibbles` from the external
 /// key provides the boundary.
 ///
@@ -1111,7 +1062,7 @@ pub fn verify_change_proof_root_hash(
     // Fallback nibbles from external keys — used at the last proof node
     // where no next node exists to derive the boundary from. Intermediate
     // nodes derive their boundary from the next proof node's key, which
-    // is always correct regardless of which key verify_change_proof_end validated.
+    // is always correct regardless of which key the end boundary proof was validated against.
     let start_nibbles = verification
         .start_key
         .as_deref()

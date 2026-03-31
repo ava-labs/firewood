@@ -331,10 +331,29 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         verify_opt_value_digest(expected_value, self.value_digest(key, root_hash)?)
     }
 
-    /// Returns the value digest associated with the given `key` in the trie revision
-    /// with the given `root_hash`. If the key does not exist in the trie, returns `None`.
-    /// Returns an error if the proof is invalid or doesn't prove the key for the
-    /// given revision.
+    /// Verify this proof against `root_hash` for the given `key` and return the
+    /// value digest at that key.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Some(digest))` — **inclusion proof**: the key exists in the trie
+    ///   and `digest` is its value digest.
+    /// - `Ok(None)` — **exclusion proof**: the proof is valid but the key does
+    ///   not exist in the trie revision.
+    ///
+    /// # Errors
+    ///
+    /// - [`ProofError::Empty`] — the proof contains no nodes.
+    /// - [`ProofError::UnexpectedHash`] — a node's hash does not match the
+    ///   expected hash from its parent (or `root_hash` for the first node).
+    /// - [`ProofError::ValueAtOddNibbleLength`] — a node whose key has an odd
+    ///   number of nibbles carries a value digest, which is structurally invalid.
+    /// - [`ProofError::ShouldBePrefixOfProvenKey`] — an intermediate node's key
+    ///   is not a prefix of `key`.
+    /// - [`ProofError::ShouldBePrefixOfNextKey`] — a node's key is not a prefix
+    ///   of the next node's key in the proof.
+    /// - [`ProofError::NodeNotInTrie`] — the child pointer from one node to the
+    ///   next is absent, meaning the proof path does not exist in the trie.
     pub fn value_digest<K: AsRef<[u8]>>(
         &self,
         key: K,
