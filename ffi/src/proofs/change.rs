@@ -239,82 +239,39 @@ impl ProposedChangeProofContext<'_> {
         }
     }
 
-    /// Compare the proposal's computed root hash against the expected
-    /// `end_root`. Called when `find_next_key` determines that sync has
-    /// reached the end of the keyspace (empty `end_proof` or no `batch_ops`).
-    /// This is the final cryptographic check that the accumulated state
-    /// matches the target revision.
-    fn check_root_hash(&self) -> Result<(), api::Error> {
-        // Retrieve the root hash from whichever state we're in.
-        // Before commit: read from the live proposal handle.
-        // After commit: use the cached hash from the commit result.
-        // None means the trie is empty; unwrap_or_default gives the
-        // canonical empty-trie hash, matching the pattern in
-        // verify_and_propose (line ~526).
-        let computed: HashKey = match &self.proposal_state {
-            ProposalState::Proposed(handle) => {
-                handle.root_hash().map(HashKey::from).unwrap_or_default()
-            }
-            ProposalState::Committed(hash) => hash.clone().map(HashKey::from).unwrap_or_default(),
-            ProposalState::Failed => {
-                return Err(api::Error::CommitAlreadyFailed);
-            }
-        };
-        if computed != HashKey::from(self.verification.end_root.clone()) {
-            return Err(api::Error::ProofError(ProofError::EndRootMismatch));
-        }
-        Ok(())
-    }
-
     /// Returns the next key range that should be fetched after processing this
     /// change proof, or `None` if there are no more keys to fetch.
     ///
-    /// # Termination analysis
-    ///
-    /// | `batch_ops` | `end_proof` | `end_key`  | Path                   | Root check? |
-    /// |-------------|-------------|------------|------------------------|-------------|
-    /// | empty       | empty       | any        | no `batch_ops` → nil   | yes         |
-    /// | empty       | non-empty   | any        | no `batch_ops` → nil   | yes         |
-    /// | non-empty   | empty       | any        | empty `end_proof`      | yes         |
-    /// | non-empty   | non-empty   | Some, sat  | `last_op` >= `end_key` | no (safe*)  |
-    /// | non-empty   | non-empty   | Some, !sat | continuation           | deferred    |
-    /// | non-empty   | non-empty   | None       | continuation           | deferred    |
-    ///
-    /// *The `>=` comparison is byte-lexicographic on `Box<[u8]>`, which is
-    /// standard byte ordering — no encoding confusion possible. The "no
-    /// root check" row is safe because `end_key` is receiver-controlled,
-    /// not attacker-controlled.
+    /// This function only inspects the proof structure to determine whether
+    /// more keys exist in the keyspace. It does **not** verify sync completion
+    /// — callers must compare root hashes themselves to decide when the
+    /// accumulated state matches the target revision.
     fn find_next_key(&mut self) -> Result<Option<KeyRange>, api::Error> {
         let Some(last_op) = self.proof.batch_ops().last() else {
-            // No batch_ops means the proof claims no changes exist.
-            // Verify that the accumulated state matches end_root;
-            // otherwise a malicious sender could send an empty proof
-            // to make the receiver stop with incomplete state.
-            self.check_root_hash()?;
+            // No batch_ops means the proof contains no changes in this range.
+            // There is nothing more to fetch — the caller should check root
+            // hashes to determine whether sync is complete.
             return Ok(None);
         };
 
         if self.proof.end_proof().is_empty() {
-            // Empty end_proof signals the end of the keyspace — there
-            // are no more keys to fetch. Verify the root hash to
-            // confirm the accumulated state is complete; a malicious
-            // sender could craft partial changes with an empty
-            // end_proof to trigger premature completion.
-            self.check_root_hash()?;
+            // An empty end_proof signals the end of the keyspace — there
+            // are no more keys beyond the last batch operation. The caller
+            // should compare root hashes to confirm sync completion.
             return Ok(None);
         }
 
-        // Range-bounded completion: last_op >= end_key. No root hash
-        // check here because end_key is controlled by the receiver,
-        // so the attacker cannot force this path. The proposal's root
-        // hash may legitimately differ from end_root when the proof
-        // covers only a sub-range of the full keyspace.
+        // Range-bounded completion: the last batch operation has reached or
+        // exceeded the receiver-controlled end_key, so the requested range
+        // is fully covered.
         if let Some(ref end_key) = self.verification.end_key
             && **last_op.key() >= **end_key
         {
             return Ok(None);
         }
 
+        // More keys may exist beyond last_op within the requested range.
+        // Return the continuation range for the caller to fetch next.
         Ok(Some((
             last_op.key().clone(),
             self.verification.end_key.clone(),
@@ -768,7 +725,7 @@ mod tests {
     }
 
     #[test]
-    fn test_unbounded_proof_with_end_proof_checks_root_hash() {
+    fn test_truncated_unbounded_proof_returns_continuation() {
         use std::num::NonZeroUsize;
 
         let dir_a = tempfile::tempdir().expect("tempdir");
@@ -818,7 +775,7 @@ mod tests {
     }
 
     #[test]
-    fn test_find_next_key_root_hash_positive() {
+    fn test_find_next_key_bounded_complete() {
         let dir_a = tempfile::tempdir().expect("tempdir");
         let dir_b = tempfile::tempdir().expect("tempdir");
         let db_a = test_db(dir_a.path());
@@ -844,13 +801,21 @@ mod tests {
 
         let change_ctx = ChangeProofContext::from(proof);
         let mut proposed = change_ctx
-            .verify_and_propose(&db_b, root1_b, root2, None, Some(b"\x20".as_ref()), None)
+            .verify_and_propose(&db_b, root1_b, root2.clone(), None, Some(b"\x20".as_ref()), None)
             .expect("verify_and_propose should succeed");
 
         let next = proposed
             .find_next_key()
             .expect("find_next_key should not error");
         assert_eq!(next, None, "single-round proof should be complete");
+
+        // Callers determine sync completion by comparing root hashes, not
+        // by checking find_next_key's return value.
+        let committed_root = proposed.commit().expect("commit").expect("root hash");
+        assert_eq!(
+            committed_root, root2,
+            "root hashes should match after complete proof"
+        );
     }
 
     #[test]
@@ -944,7 +909,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires find_next_key termination changes for end_key=None"]
     fn test_iterative_sync_converges() {
         let dir_a = tempfile::tempdir().expect("tempdir");
         let dir_b = tempfile::tempdir().expect("tempdir");
@@ -1008,16 +972,25 @@ mod tests {
                 .unwrap_or_else(|e| panic!("round {round}: commit failed: {e:?}"))
                 .expect("commit should return a root hash");
 
+            // Sync completion is determined by root hash match, not
+            // find_next_key. The caller compares the committed root against
+            // the target root to decide when the accumulated state is complete.
+            if root_b == root2 {
+                break;
+            }
+
+            // Not done — use find_next_key to get the next range to fetch.
             let next = proposed
                 .find_next_key()
                 .unwrap_or_else(|e| panic!("round {round}: find_next_key failed: {e:?}"));
 
-            match next {
-                None => break,
-                Some((next_start, _)) => {
-                    start_key = Some(next_start.to_vec());
-                }
-            }
+            start_key = Some(match next {
+                Some((next_start, _)) => next_start.to_vec(),
+                None => panic!(
+                    "find_next_key returned None but root hashes don't match — \
+                     expected root {root2:?}, got {root_b:?}"
+                ),
+            });
 
             assert!(
                 round < max_rounds - 1,

@@ -1000,12 +1000,16 @@ func TestMultiRoundChangeProof(t *testing.T) {
 				rootB, err = proposedProof.CommitChangeProof()
 				r.NoError(err)
 
-				// Find the next start key
-				nextRange, err := proposedProof.FindNextKey()
-				r.NoError(err)
-				if nextRange == nil {
+				// Sync is complete when root hashes match. The caller
+				// determines completion, not find_next_key.
+				if rootB == rootAUpdated {
 					break
 				}
+
+				// Not done — find next key range to continue syncing.
+				nextRange, err := proposedProof.FindNextKey()
+				r.NoError(err)
+				r.NotNil(nextRange, "find_next_key returned nil but root hashes don't match")
 				startKey = maybe{
 					hasValue: true,
 					value:    nextRange.StartKey(),
