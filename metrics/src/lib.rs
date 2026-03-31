@@ -280,10 +280,10 @@ macro_rules! firewood_gauge {
 /// ```
 #[macro_export]
 macro_rules! firewood_describe_counter {
-    ($name:expr, $desc:expr) => {
+    ($name:literal, $desc:expr) => {
         ::metrics::describe_counter!($name, $desc)
     };
-    ($name:expr, $unit:expr, $desc:expr) => {
+    ($name:literal, $unit:expr, $desc:expr) => {
         ::metrics::describe_counter!($name, $unit, $desc)
     };
 }
@@ -301,10 +301,10 @@ macro_rules! firewood_describe_counter {
 /// ```
 #[macro_export]
 macro_rules! firewood_describe_gauge {
-    ($name:expr, $desc:expr) => {
+    ($name:literal, $desc:expr) => {
         ::metrics::describe_gauge!($name, $desc)
     };
-    ($name:expr, $unit:expr, $desc:expr) => {
+    ($name:literal, $unit:expr, $desc:expr) => {
         ::metrics::describe_gauge!($name, $unit, $desc)
     };
 }
