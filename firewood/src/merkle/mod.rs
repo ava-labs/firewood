@@ -863,7 +863,7 @@ fn verify_change_proof_node_value(
     match (&node.value_digest, proposal_value) {
         (None, None) => Ok(()),
         (Some(digest), Some(val)) if digest.verify(val) => Ok(()),
-        _ => Err(ProofError::ProofNodeValueMismatch { depth }),
+        _ => Err(ProofError::ProofNodeValueMismatch),
     }
 }
 
@@ -932,7 +932,7 @@ fn verify_change_proof_in_range_children(
                 None => !is_end_proof,
             };
             if in_range && node.child_hashes[nibble] != proposal_children[nibble] {
-                return Err(ProofError::InRangeChildMismatch { depth });
+                return Err(ProofError::InRangeChildMismatch);
             }
         }
     }
@@ -1012,10 +1012,7 @@ fn verify_change_proof_divergent(
         let after_start = start_bn.is_none_or(|s| nibble > s);
         let before_end = end_bn.is_none_or(|e| nibble < e);
         if after_start && before_end && parent.child_hashes[nibble] != proposal_children[nibble] {
-            return Err(ProofError::InRangeChildMismatch {
-                depth: parent_depth,
-            }
-            .into());
+            return Err(ProofError::InRangeChildMismatch.into());
         }
     }
 

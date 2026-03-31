@@ -208,8 +208,8 @@ pub enum ProofError {
     MissingBoundaryProof,
 
     /// A proof node's value doesn't match the proposal at the same depth.
-    #[error("proof node value doesn't match the proposal at key depth {depth}")]
-    ProofNodeValueMismatch { depth: usize },
+    #[error("proof node value doesn't match the proposal")]
+    ProofNodeValueMismatch,
 
     /// Boundary proofs diverge at the root node.
     #[error("boundary proofs diverge at the root node")]
@@ -220,8 +220,8 @@ pub enum ProofError {
     UnexpectedEndProof,
 
     /// In-range child hash mismatch between proof and proposal.
-    #[error("in-range child hash mismatch at depth {depth}")]
-    InRangeChildMismatch { depth: usize },
+    #[error("in-range child hash mismatch")]
+    InRangeChildMismatch,
 
     /// Empty end proof when `end_key` is set or `batch_ops` is non-empty.
     #[error("missing end proof: end_key is set or batch_ops is non-empty")]

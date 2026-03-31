@@ -801,7 +801,14 @@ mod tests {
 
         let change_ctx = ChangeProofContext::from(proof);
         let mut proposed = change_ctx
-            .verify_and_propose(&db_b, root1_b, root2.clone(), None, Some(b"\x20".as_ref()), None)
+            .verify_and_propose(
+                &db_b,
+                root1_b,
+                root2.clone(),
+                None,
+                Some(b"\x20".as_ref()),
+                None,
+            )
             .expect("verify_and_propose should succeed");
 
         let next = proposed
