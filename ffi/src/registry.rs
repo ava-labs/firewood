@@ -3,16 +3,11 @@
 
 //! FFI layer metric definitions.
 
-use metrics::describe_counter;
-
-pub const CACHED_VIEW_MISS: &str = "ffi.cached_view.miss";
-pub const CACHED_VIEW_HIT: &str = "ffi.cached_view.hit";
-
-pub const MERGE_COUNT: &str = "firewood.ffi.merge";
-
-/// Registers all FFI metric descriptions.
-pub fn register() {
-    describe_counter!(CACHED_VIEW_MISS, "Count of cached view misses");
-    describe_counter!(CACHED_VIEW_HIT, "Count of cached view hits");
-    describe_counter!(MERGE_COUNT, "Count of range proof merges via FFI");
+firewood_metrics::define_metrics! {
+    counters: {
+        CACHED_VIEW_MISS = "ffi.cached_view.miss" : "Count of cached view misses",
+        CACHED_VIEW_HIT  = "ffi.cached_view.hit"  : "Count of cached view hits",
+        MERGE_COUNT      = "firewood.ffi.merge"    : "Count of range proof merges via FFI"
+    },
+    gauges: {}
 }

@@ -35,10 +35,6 @@
 
 use std::cell::Cell;
 
-// Re-export metric handle types and Unit so that consumers only need to
-// depend on this crate and never import `metrics` directly.
-pub use metrics::{Counter, Gauge, Histogram, Unit};
-
 /// Defines metric name constants and outputs a `register()` function from a single schema.
 ///
 /// Each entry has the form `IDENT = "metric.name" : "description"` and expands to:
