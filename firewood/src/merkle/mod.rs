@@ -822,7 +822,8 @@ impl<'a> ChangeProofCursor<'a> {
 ///
 /// Each pair of nibbles is combined into one byte. Odd-length keys are
 /// implicitly padded with a zero nibble so that `path_to_key` traverses
-/// through the odd-depth node.
+/// through the odd-depth node. Only valid for the last node in a proof
+/// path — the zero padding would misalign intermediate nodes.
 #[must_use]
 pub fn change_proof_node_byte_key(node: &ProofNode) -> Box<[u8]> {
     // Pair nibbles into bytes directly. For odd-length keys, the
