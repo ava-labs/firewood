@@ -1346,8 +1346,8 @@ fn test_delete_range_rejected() {
     ));
 }
 
-/// When boundary proofs are present, the end-proof consistency check catches
-/// the `DeleteRange` before the O(n) scan runs.
+/// When boundary proofs are present, the O(n) scan catches the `DeleteRange`
+/// before the end-proof consistency check runs.
 #[test]
 fn test_delete_range_rejected_with_boundary_proofs() {
     let (db, _dir) = new_db();

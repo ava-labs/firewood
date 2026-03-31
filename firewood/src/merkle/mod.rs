@@ -723,12 +723,31 @@ pub fn verify_change_proof_structure(
         }
     }
 
+    // Single-pass O(n) scan: reject DeleteRange ops and verify keys are
+    // sorted and unique. The honest diff algorithm only produces Put and
+    // Delete ops; a crafted proof could use DeleteRange to delete keys
+    // outside the proven range. After the loop, last_op holds the last
+    // batch op for end proof verification.
+    let mut last_op: Option<&BatchOp<_, _>> = None;
+    for op in batch_ops {
+        if matches!(op, BatchOp::DeleteRange { .. }) {
+            return Err(api::Error::ProofError(ProofError::UnsupportedDeleteRange));
+        }
+        let key = op.key();
+        if let Some(prev) = last_op
+            && key <= prev.key()
+        {
+            return Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted));
+        }
+        last_op = Some(op);
+    }
+
     // Verify end boundary proof against end_root.
     // Derive the key the generator built the end proof for:
     // last batch_ops key when non-empty, end_key otherwise.
     // When both are None, there is no end boundary to verify (the
     // structural match block above ensures end_proof is also empty).
-    if let Some(key) = batch_ops.last().map(|op| op.key().as_ref()).or(end_key) {
+    if let Some(key) = last_op.map(|op| op.key().as_ref()).or(end_key) {
         // value_digest returns:
         //   Ok(Some(_)) → inclusion proof (key exists at the last proof node)
         //   Ok(None)    → exclusion proof (key does not exist)
@@ -743,44 +762,21 @@ pub fn verify_change_proof_structure(
         // When batch_ops is non-empty, the generator built the end proof
         // for last_op_key. A Put means the key was inserted in end_root
         // (expect inclusion); a Delete means it was removed (expect
-        // exclusion). When batch_ops is empty, the key came from end_key
-        // (an arbitrary range bound) — both inclusion and exclusion are
-        // valid.
-        if let Some(last_op) = batch_ops.last() {
-            // Reject DeleteRange before the consistency check so the
-            // specific error is returned rather than a generic mismatch.
-            if matches!(last_op, BatchOp::DeleteRange { .. }) {
-                return Err(api::Error::ProofError(ProofError::UnsupportedDeleteRange));
-            }
-            let consistent = matches!(
-                (last_op, &result),
-                (BatchOp::Put { .. }, Some(_)) | (BatchOp::Delete { .. }, None)
-            );
-            if !consistent {
+        // exclusion). When batch_ops is empty (last_op is None), the key
+        // came from end_key (an arbitrary range bound) — both inclusion
+        // and exclusion are valid, so we fall through to the wildcard.
+        match last_op {
+            Some(BatchOp::Put { .. }) if result.is_none() => {
                 return Err(api::Error::ProofError(
                     ProofError::EndProofOperationMismatch,
                 ));
             }
-        }
-    }
-
-    // Single-pass O(n) scan: reject DeleteRange ops and verify keys are
-    // sorted and unique. The honest diff algorithm only produces Put and
-    // Delete ops; a crafted proof could use DeleteRange to delete keys
-    // outside the proven range.
-    {
-        let mut prev_key: Option<&Box<[u8]>> = None;
-        for op in batch_ops {
-            if matches!(op, BatchOp::DeleteRange { .. }) {
-                return Err(api::Error::ProofError(ProofError::UnsupportedDeleteRange));
+            Some(BatchOp::Delete { .. }) if result.is_some() => {
+                return Err(api::Error::ProofError(
+                    ProofError::EndProofOperationMismatch,
+                ));
             }
-            let key = op.key();
-            if let Some(prev) = prev_key
-                && key <= prev
-            {
-                return Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted));
-            }
-            prev_key = Some(key);
+            _ => {}
         }
     }
 
