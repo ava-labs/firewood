@@ -191,6 +191,14 @@ pub enum ProofError {
     #[error("end proof inclusion/exclusion result doesn't match last batch op type")]
     EndProofOperationMismatch,
 
+    /// The start proof's inclusion/exclusion result doesn't match the first
+    /// batch op's type when `first_op_key == start_key`. A Put expects the
+    /// key to exist in `end_root` (inclusion); a Delete expects it to be
+    /// absent (exclusion). A mismatch indicates the attacker tampered with
+    /// `batch_ops` by adding a spurious key at `start_key`.
+    #[error("start proof inclusion/exclusion result doesn't match first batch op type")]
+    StartProofOperationMismatch,
+
     /// Change proof contains an unsupported `DeleteRange` operation.
     #[error("change proof contains unsupported DeleteRange operation")]
     UnsupportedDeleteRange,

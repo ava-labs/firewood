@@ -592,6 +592,7 @@ pub struct ChangeProofVerificationContext {
 ///
 /// On success, returns a [`ChangeProofVerificationContext`] capturing the
 /// verification parameters for use by downstream root hash verification.
+#[expect(clippy::too_many_lines)]
 pub fn verify_change_proof_structure(
     proof: &FrozenChangeProof,
     end_root: HashKey,
@@ -678,12 +679,47 @@ pub fn verify_change_proof_structure(
     // Verify start boundary proof against end_root.
     // The BoundaryProofUnverifiable case (non-empty start_proof, no
     // start_key) was already rejected in the O(1) section above.
-    // value_digest returns ProofError::Empty for an empty proof,
-    // which is valid here (range starts from beginning of keyspace).
+    // value_digest returns:
+    //   Ok(Some(_)) → inclusion proof (key exists at the last proof node)
+    //   Ok(None)    → exclusion proof (key does not exist)
+    //   Err(Empty)  → start_proof is empty, valid here (range starts
+    //                  from beginning of keyspace)
     if let Some(start_key) = start_key {
-        match proof.start_proof().value_digest(start_key, &end_root) {
-            Ok(_) | Err(ProofError::Empty) => {}
+        let result = match proof.start_proof().value_digest(start_key, &end_root) {
+            Ok(result) => result,
+            Err(ProofError::Empty) => None,
             Err(e) => return Err(api::Error::ProofError(e)),
+        };
+
+        // When the first batch op key equals start_key, verify that
+        // the start proof's inclusion/exclusion result matches the op
+        // type. A Put expects inclusion (key exists in end_root); a
+        // Delete expects exclusion (key absent). A mismatch means the
+        // attacker added a spurious key at start_key (e.g., Put when
+        // start_key doesn't exist) or converted a Put to Delete.
+        //
+        // When first_op_key != start_key (or batch_ops is empty), the
+        // start proof is for start_key which is an arbitrary range
+        // bound — both inclusion and exclusion are valid.
+        if let Some(first_op) = batch_ops.first()
+            && first_op.key().as_ref() == start_key
+        {
+            // Reject DeleteRange early with the specific error
+            // before the generic mismatch check. The O(n) scan
+            // below also catches DeleteRange, but this provides
+            // a better error for the first-op position.
+            if matches!(first_op, BatchOp::DeleteRange { .. }) {
+                return Err(api::Error::ProofError(ProofError::UnsupportedDeleteRange));
+            }
+            let consistent = matches!(
+                (first_op, &result),
+                (BatchOp::Put { .. }, Some(_)) | (BatchOp::Delete { .. }, None)
+            );
+            if !consistent {
+                return Err(api::Error::ProofError(
+                    ProofError::StartProofOperationMismatch,
+                ));
+            }
         }
     }
 
