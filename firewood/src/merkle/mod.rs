@@ -677,8 +677,9 @@ pub fn verify_change_proof_structure(
     }
 
     // Verify start boundary proof against end_root.
-    // The BoundaryProofUnverifiable case (non-empty start_proof, no
-    // start_key) was already rejected in the O(1) section above.
+    // When start_key is None, the start proof must be empty (enforced by
+    // the BoundaryProofUnverifiable check above), so there is nothing to
+    // verify and we skip this block.
     // value_digest returns:
     //   Ok(Some(_)) → inclusion proof (key exists at the last proof node)
     //   Ok(None)    → exclusion proof (key does not exist)
@@ -743,10 +744,11 @@ pub fn verify_change_proof_structure(
     }
 
     // Verify end boundary proof against end_root.
-    // Derive the key the generator built the end proof for:
-    // last batch_ops key when non-empty, end_key otherwise.
-    // When both are None, there is no end boundary to verify (the
-    // structural match block above ensures end_proof is also empty).
+    // The key used is last_op_key when batch_ops is non-empty, or end_key
+    // when batch_ops is empty. When both are None, this block is skipped
+    // — the structural match block above guarantees the end proof is also
+    // empty in that case (UnexpectedEndProof rejects non-empty end proofs
+    // when batch_ops is empty and end_key is None).
     if let Some(key) = last_op.map(|op| op.key().as_ref()).or(end_key) {
         // value_digest returns:
         //   Ok(Some(_)) → inclusion proof (key exists at the last proof node)
