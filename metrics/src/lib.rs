@@ -35,66 +35,6 @@
 
 use std::cell::Cell;
 
-/// Defines metric name constants and outputs a `register()` function from a single schema.
-///
-/// Each entry has the form `IDENT = "metric.name" : "description"` and expands to:
-/// - A `pub(crate) const IDENT: &str = "metric.name"` that can be referenced at recording callsites
-/// - A `firewood_describe_counter!` / `firewood_describe_gauge!` call in `register()`
-///
-/// Because the same literal appears in both the constant and the describe call,
-/// the metric name and its description are guaranteed to stay in sync.
-///
-/// ```rust
-/// firewood_metrics::define_metrics! {
-///     counters: {
-///         COMMITS_TOTAL  = "commits_total"   : "Total number of commits",
-///     },
-///     gauges: {
-///         ACTIVE_REVISIONS = "active_revisions" : "Current number of revisions held in memory",
-///     }
-/// }
-/// ```
-#[macro_export]
-macro_rules! define_metrics {
-    (
-        counters: {
-            $(
-                $c_id:ident = $c_name:literal : $c_desc:literal
-            ),* $(,)?
-        },
-        gauges: {
-            $(
-                $g_id:ident = $g_name:literal : $g_desc:literal
-            ),* $(,)?
-        } $(,)?
-    ) => {
-        // Metric name constants are intentionally crate-private. They are used
-        // only at recording callsites (firewood_increment!, firewood_set!) within
-        // the same crate. Exposing them as `pub` would make the metric name strings
-        // part of the crate's public API.
-        $(
-            #[doc = $c_desc]
-            pub(crate) const $c_id: &str = $c_name;
-        )*
-        $(
-            #[doc = $g_desc]
-            pub(crate) const $g_id: &str = $g_name;
-        )*
-
-        /// Registers all metric descriptions with the global recorder.
-        ///
-        /// Call once at startup before recording any metrics.
-        pub fn register() {
-            $(
-                $crate::firewood_describe_counter!($c_name, $c_desc);
-            )*
-            $(
-                $crate::firewood_describe_gauge!($g_name, $g_desc);
-            )*
-        }
-    };
-}
-
 /// Metric configuration context for the current thread.
 ///
 /// This is set at API boundaries (e.g., FFI entrypoints) and read when deciding
@@ -155,6 +95,66 @@ pub fn current_metrics_context() -> Option<MetricsContext> {
 #[must_use]
 pub fn expensive_metrics_enabled() -> bool {
     current_metrics_context().is_some_and(MetricsContext::expensive_metrics_enabled)
+}
+
+/// Defines metric name constants and outputs a `register()` function from a single schema.
+///
+/// Each entry has the form `IDENT = "metric.name" : "description"` and expands to:
+/// - A `pub(crate) const IDENT: &str = "metric.name"` that can be referenced at recording callsites
+/// - A `::metrics::describe_counter!` / `::metrics::describe_gauge!` call in `register()`
+///
+/// Because the same literal appears in both the constant and the describe call,
+/// the metric name and its description are guaranteed to stay in sync.
+///
+/// ```rust
+/// firewood_metrics::define_metrics! {
+///     counters: {
+///         COMMITS_TOTAL  = "commits_total"   : "Total number of commits",
+///     },
+///     gauges: {
+///         ACTIVE_REVISIONS = "active_revisions" : "Current number of revisions held in memory",
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! define_metrics {
+    (
+        counters: {
+            $(
+                $c_id:ident = $c_name:literal : $c_desc:literal
+            ),* $(,)?
+        },
+        gauges: {
+            $(
+                $g_id:ident = $g_name:literal : $g_desc:literal
+            ),* $(,)?
+        } $(,)?
+    ) => {
+        // Metric name constants are intentionally crate-private. They are used
+        // only at recording callsites (firewood_increment!, firewood_set!) within
+        // the same crate. Exposing them as `pub` would make the metric name strings
+        // part of the crate's public API.
+        $(
+            #[doc = $c_desc]
+            pub(crate) const $c_id: &str = $c_name;
+        )*
+        $(
+            #[doc = $g_desc]
+            pub(crate) const $g_id: &str = $g_name;
+        )*
+
+        /// Registers all metric descriptions with the global recorder.
+        ///
+        /// Call once at startup before recording any metrics.
+        pub fn register() {
+            $(
+                ::metrics::describe_counter!($c_name, $c_desc);
+            )*
+            $(
+                ::metrics::describe_gauge!($g_name, $g_desc);
+            )*
+        }
+    };
 }
 
 /// Increments a counter metric.
@@ -256,48 +256,6 @@ macro_rules! firewood_gauge {
     };
     ($name:expr, $($labels:tt)+) => {
         ::metrics::gauge!($name, $($labels)+)
-    };
-}
-
-/// Describes a counter metric with a human-readable description.
-///
-/// `$name` must be a string literal so the metrics key can be cached in a
-/// per-callsite `static`, avoiding an allocation on every call.
-///
-/// # Examples
-///
-/// ```rust
-/// firewood_describe_counter!("proposals_created_total", "Number of proposals created");
-/// firewood_describe_counter!("bytes_written_total", Unit::Bytes, "Total bytes written to disk");
-/// ```
-#[macro_export]
-macro_rules! firewood_describe_counter {
-    ($name:literal, $desc:expr) => {
-        ::metrics::describe_counter!($name, $desc)
-    };
-    ($name:literal, $unit:expr, $desc:expr) => {
-        ::metrics::describe_counter!($name, $unit, $desc)
-    };
-}
-
-/// Describes a gauge metric with a human-readable description.
-///
-/// `$name` must be a string literal so the metrics key can be cached in a
-/// per-callsite `static`, avoiding an allocation on every call.
-///
-/// # Examples
-///
-/// ```rust
-/// firewood_describe_gauge!("active_revisions", "Number of revisions currently held in memory");
-/// firewood_describe_gauge!("node_cache_bytes", Unit::Bytes, "Current node cache size");
-/// ```
-#[macro_export]
-macro_rules! firewood_describe_gauge {
-    ($name:literal, $desc:expr) => {
-        ::metrics::describe_gauge!($name, $desc)
-    };
-    ($name:literal, $unit:expr, $desc:expr) => {
-        ::metrics::describe_gauge!($name, $unit, $desc)
     };
 }
 
