@@ -5,7 +5,7 @@
 pub(crate) mod tests;
 
 pub(crate) mod changes;
-mod childmask;
+pub(crate) mod childmask;
 mod merge;
 /// Parallel merkle
 pub mod parallel;
@@ -21,8 +21,8 @@ use firewood_storage::MemStore;
 use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashableShunt, HashedNodeReader,
     ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, Mutable, MutableKind,
-    NibblesIterator, Node, NodeStore, Parentable, Path, PathBuf, PathComponent, Propose,
-    ReadableStorage, SharedNode, TrieHash, TrieReader, U4, ValueDigest,
+    NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, Propose, ReadableStorage,
+    SharedNode, TrieHash, TrieReader, U4, ValueDigest,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -204,9 +204,9 @@ fn compute_outside_children(
             .ok_or(ProofError::ShouldBePrefixOfNextKey)?;
         let entry = result.entry(parent.key.clone()).or_default();
         *entry = if is_left_edge {
-            entry.mark_left_outside(on_path_nibble.0)
+            entry.set_below(on_path_nibble.0)
         } else {
-            entry.mark_right_outside(on_path_nibble.0)
+            entry.set_above(on_path_nibble.0)
         };
     }
 
@@ -247,11 +247,11 @@ fn compute_outside_children(
             let on_path_nibble = U4::new_masked(*on_path_byte);
             let entry = result.entry(terminal.key.clone()).or_default();
             *entry = if is_left_edge {
-                entry.mark_left_outside(on_path_nibble)
+                entry.set_below(on_path_nibble)
             } else {
-                entry.mark_right_outside(on_path_nibble)
+                entry.set_above(on_path_nibble)
             }
-            .set_outside(on_path_nibble);
+            .set(on_path_nibble);
         }
         // Otherwise boundary matches terminal exactly — no children need marking.
     }
@@ -292,7 +292,7 @@ fn compute_root_hash_with_proofs(
         (proof_nodes.get(&full_key), outside_children.get(&full_key))
     {
         for (nibble, hash) in proof_node.child_hashes.iter_present() {
-            if outside.is_outside(nibble.0) {
+            if outside.is_set(nibble.0) {
                 child_hashes[nibble] = Some(hash.clone());
             }
         }
@@ -538,7 +538,7 @@ fn verify_root_hash<H: ProofCollection<Node = ProofNode>>(
     for (key, flags) in compute_outside_children(proof.end_proof().as_ref(), last_key_bytes, false)?
     {
         let entry = outside_children.entry(key).or_default();
-        *entry = entry.merge(flags);
+        *entry |= flags;
     }
 
     // Compute root hash of the proving trie with proof sibling hashes
@@ -983,7 +983,8 @@ impl<T: HashedNodeReader> Merkle<T> {
     }
 }
 
-impl<F: Parentable, S: ReadableStorage> Merkle<NodeStore<F, S>> {
+#[cfg(test)]
+impl<F: firewood_storage::Parentable, S: ReadableStorage> Merkle<NodeStore<F, S>> {
     /// Forks the current Merkle trie into a new mutable proposal.
     ///
     /// ## Errors
@@ -1005,6 +1006,7 @@ impl<S: ReadableStorage> TryFrom<Merkle<NodeStore<Mutable<Propose>, S>>>
     }
 }
 
+#[cfg(any(test, feature = "test_utils"))]
 impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     /// Convert a merkle backed by a `Mutable<Propose>` into an `ImmutableProposal`
     ///
@@ -1019,7 +1021,6 @@ impl<S: ReadableStorage> Merkle<NodeStore<Mutable<Propose>, S>> {
     }
 }
 
-#[expect(clippy::missing_errors_doc)]
 impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     fn read_for_update(&mut self, child: Child) -> Result<Node, FileIoError> {
         match child {
@@ -1031,12 +1032,13 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
 
     /// Map `key` to `value` in the trie.
     /// Each element of key is 2 nibbles.
+    #[cfg_attr(feature = "test_utils", expect(clippy::missing_errors_doc))]
     pub fn insert(&mut self, key: &[u8], value: Value) -> Result<(), FileIoError> {
         self.insert_from_iter(NibblesIterator::new(key), value)
     }
 
     /// Map `key` to `value` in the trie when `key` is a `NibblesIterator`
-    pub fn insert_from_iter(
+    pub(crate) fn insert_from_iter(
         &mut self,
         key: NibblesIterator<'_>,
         value: Value,
@@ -1062,8 +1064,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     /// Map `key` to `value` into the subtrie rooted at `node`.
     /// Each element of `key` is 1 nibble.
     /// Returns the new root of the subtrie.
-    #[expect(clippy::missing_panics_doc)]
-    pub fn insert_helper(
+    fn insert_helper(
         &mut self,
         mut node: Node,
         key: &[u8],
@@ -1300,7 +1301,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
     /// Each element of `key` is 2 nibbles.
-    pub fn remove(&mut self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
+    pub(crate) fn remove(&mut self, key: &[u8]) -> Result<Option<Value>, FileIoError> {
         self.remove_from_iter(NibblesIterator::new(key))
     }
 
@@ -1308,7 +1309,7 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
     /// Returns the value that was removed, if any.
     /// Otherwise returns `None`.
     /// Each element of `key` is 2 nibbles.
-    pub fn remove_from_iter(
+    pub(crate) fn remove_from_iter(
         &mut self,
         key: NibblesIterator<'_>,
     ) -> Result<Option<Value>, FileIoError> {
@@ -1399,13 +1400,13 @@ impl<K: MutableKind, S: ReadableStorage> Merkle<NodeStore<Mutable<K>, S>> {
 
     /// Removes any key-value pairs with keys that have the given `prefix`.
     /// Returns the number of key-value pairs removed.
-    pub fn remove_prefix(&mut self, prefix: &[u8]) -> Result<usize, FileIoError> {
+    pub(crate) fn remove_prefix(&mut self, prefix: &[u8]) -> Result<usize, FileIoError> {
         self.remove_prefix_from_iter(NibblesIterator::new(prefix))
     }
 
     /// Removes any key-value pairs with keys that have the given `prefix` where `prefix` is a `NibblesIterator`
     /// Returns the number of key-value pairs removed.
-    pub fn remove_prefix_from_iter(
+    pub(crate) fn remove_prefix_from_iter(
         &mut self,
         prefix: NibblesIterator<'_>,
     ) -> Result<usize, FileIoError> {

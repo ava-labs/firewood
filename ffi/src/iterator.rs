@@ -4,11 +4,11 @@
 use std::fmt;
 
 use firewood::api::{self, ArcDynDbView, BoxKeyValueIter};
-use firewood::merkle;
+use firewood::{Key, Value};
 use firewood_metrics::MetricsContext;
 use std::iter::FusedIterator;
 
-type KeyValueItem = (merkle::Key, merkle::Value);
+type KeyValueItem = (Key, Value);
 
 /// An opaque wrapper around a [`BoxKeyValueIter`] and a reference
 /// to the [`ArcDynDbView`] backing it, preventing the view from
