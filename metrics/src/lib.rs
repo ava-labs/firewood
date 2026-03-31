@@ -189,7 +189,7 @@ macro_rules! firewood_gauge {
 ///
 /// ```rust
 /// firewood_describe_counter!("proposals_created_total", "Number of proposals created");
-/// firewood_describe_counter!("io_read_seconds_total", Unit::Seconds, "Time spent on IO reads");
+/// firewood_describe_counter!("bytes_written_total", Unit::Bytes, "Total bytes written to disk");
 /// ```
 #[macro_export]
 macro_rules! firewood_describe_counter {
