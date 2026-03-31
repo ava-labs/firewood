@@ -4,5 +4,5 @@
 mod change;
 mod range;
 
-pub use self::change::*;
-pub use self::range::*;
+pub use change::*;
+pub use range::*;
