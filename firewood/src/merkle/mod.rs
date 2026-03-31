@@ -23,7 +23,8 @@ use firewood_storage::{
     BranchNode, Child, Children, FileIoError, HashType, HashableShunt, HashedNodeReader,
     ImmutableProposal, IntoHashType, LeafNode, MaybePersistedNode, Mutable, MutableKind,
     NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, PathComponentSliceExt,
-    PathIterItem, Propose, ReadableStorage, SharedNode, TrieHash, TrieReader, U4, ValueDigest,
+    PathIterItem, Propose, ReadableStorage, SharedNode, TrieHash, TriePathFromPackedBytes,
+    TrieReader, U4, ValueDigest,
 };
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
@@ -675,6 +676,8 @@ pub fn verify_change_proof_structure(
     }
 
     // Verify start boundary proof against end_root.
+    // The BoundaryProofUnverifiable case (non-empty start_proof, no
+    // start_key) was already rejected in the O(1) section above.
     // value_digest returns ProofError::Empty for an empty proof,
     // which is valid here (range starts from beginning of keyspace).
     if let Some(start_key) = start_key {
@@ -750,13 +753,6 @@ pub fn verify_change_proof_structure(
         start_key: start_key.map(Box::from),
         end_key: end_key.map(Box::from),
     })
-}
-
-/// Convert a byte key to a nibble path for change proof boundary derivation.
-fn change_proof_key_to_nibbles(key: &[u8]) -> Vec<PathComponent> {
-    NibblesIterator::new(key)
-        .filter_map(PathComponent::try_new)
-        .collect()
 }
 
 /// Forward-only cursor over a path-to-key result.
@@ -1063,10 +1059,10 @@ pub fn verify_change_proof_root_hash(
     // where no next node exists to derive the boundary from. Intermediate
     // nodes derive their boundary from the next proof node's key, which
     // is always correct regardless of which key the end boundary proof was validated against.
-    let start_nibbles = verification
+    let start_nibbles: Option<Box<[PathComponent]>> = verification
         .start_key
         .as_deref()
-        .map(change_proof_key_to_nibbles);
+        .map(TriePathFromPackedBytes::path_from_packed_bytes);
 
     // The end proof's last-node boundary comes from the last batch_op's
     // key when batch_ops is non-empty. The proposal only applies changes
@@ -1081,15 +1077,15 @@ pub fn verify_change_proof_root_hash(
     // boundary_nibble would be None and no children would be verified,
     // allowing a prover to claim "no changes" while end_root actually
     // differs from start_root within the range.
-    let end_nibbles = proof
+    let end_nibbles: Option<Box<[PathComponent]>> = proof
         .batch_ops()
         .last()
-        .map(|op| change_proof_key_to_nibbles(op.key()))
+        .map(|op| TriePathFromPackedBytes::path_from_packed_bytes(op.key().as_ref()))
         .or_else(|| {
             verification
                 .end_key
                 .as_deref()
-                .map(change_proof_key_to_nibbles)
+                .map(TriePathFromPackedBytes::path_from_packed_bytes)
         });
 
     if start_nodes.is_empty() {
