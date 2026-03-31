@@ -25,7 +25,6 @@ use firewood_storage::{
     NibblesIterator, Node, NodeStore, Path, PathBuf, PathComponent, PathComponentSliceExt,
     PathIterItem, Propose, ReadableStorage, SharedNode, TrieHash, TrieReader, U4, ValueDigest,
 };
-use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::io::Error;
@@ -601,27 +600,7 @@ pub fn verify_change_proof_structure(
 ) -> Result<ChangeProofVerificationContext, api::Error> {
     let batch_ops = proof.batch_ops();
 
-    // Reject inverted ranges early. The generator enforces this, but the
-    // verifier must independently validate because start_key/end_key
-    // come from the caller, not the proof.
-    if let (Some(start), Some(end)) = (start_key, end_key)
-        && start.cmp(end) == Ordering::Greater
-    {
-        return Err(api::Error::InvalidRange {
-            start_key: start.to_vec().into(),
-            end_key: end.to_vec().into(),
-        });
-    }
-
-    // The honest diff algorithm only produces Put and Delete ops,
-    // never DeleteRange. A crafted proof could use DeleteRange to delete
-    // keys outside the proven range.
-    if batch_ops
-        .iter()
-        .any(|op| matches!(op, BatchOp::DeleteRange { .. }))
-    {
-        return Err(api::Error::ProofError(ProofError::UnsupportedDeleteRange));
-    }
+    // --- O(1) checks first ---
 
     // Check batch_ops length <= max_length
     if let Some(max_length) = max_length
@@ -632,20 +611,49 @@ pub fn verify_change_proof_structure(
         ));
     }
 
-    // Verify keys are sorted and unique — must run before boundary
-    // checks (start_key ≤ first_key, end_key ≥ last_key) because
-    // those checks compare against first/last elements, which are
-    // only meaningful if the keys are actually sorted.
-    if !batch_ops
-        .iter()
-        .is_sorted_by(|a, b| b.key().cmp(a.key()) == Ordering::Greater)
+    // Reject inverted ranges early. The generator enforces this, but the
+    // verifier must independently validate because start_key/end_key
+    // come from the caller, not the proof.
+    if let (Some(start), Some(end)) = (start_key, end_key)
+        && start > end
     {
-        return Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted));
+        return Err(api::Error::InvalidRange {
+            start_key: start.to_vec().into(),
+            end_key: end.to_vec().into(),
+        });
+    }
+
+    // Validate end_proof presence against batch_ops and end_key.
+    // The honest generator follows strict rules about when end_proof
+    // should be present. These O(1) checks reject malformed proofs
+    // before expensive O(n) scans.
+    match (batch_ops.is_empty(), proof.end_proof().is_empty()) {
+        // batch_ops present but no end_proof — always an error, but
+        // distinguish "no boundary proofs at all" from "just missing end".
+        (false, true) => {
+            if proof.start_proof().is_empty()
+                && (start_key.is_some() || end_key.is_some())
+            {
+                return Err(api::Error::ProofError(ProofError::MissingBoundaryProof));
+            }
+            return Err(api::Error::ProofError(ProofError::MissingEndProof));
+        }
+        // No batch_ops, end_proof present but no end_key — the honest
+        // generator never produces this.
+        (true, false) if end_key.is_none() => {
+            return Err(api::Error::ProofError(ProofError::UnexpectedEndProof));
+        }
+        // No batch_ops, no end_proof, but end_key present — missing.
+        (true, true) if end_key.is_some() => {
+            return Err(api::Error::ProofError(ProofError::MissingEndProof));
+        }
+        // all other cases are fine
+        _ => {}
     }
 
     // Check start key not greater than first batch op key
     if let (Some(start_key), Some(first_key)) = (start_key, batch_ops.first())
-        && start_key.cmp(first_key.key()) == Ordering::Greater
+        && *start_key > **first_key.key()
     {
         return Err(api::Error::ProofError(
             ProofError::StartKeyLargerThanFirstKey,
@@ -654,37 +662,29 @@ pub fn verify_change_proof_structure(
 
     // Check end key not less than last batch op key
     if let (Some(end_key), Some(last_key)) = (end_key, batch_ops.last())
-        && end_key.cmp(last_key.key()) == Ordering::Less
+        && *end_key < **last_key.key()
     {
         return Err(api::Error::ProofError(ProofError::EndKeyLessThanLastKey));
     }
 
-    // Reject proofs with batch_ops but no boundary proofs, UNLESS
-    // this is a complete proof (no key bounds). Complete proofs are validated
-    // by root hash comparison in verify_change_proof_root_hash() instead.
-    if !batch_ops.is_empty()
-        && proof.start_proof().is_empty()
-        && proof.end_proof().is_empty()
-        && (start_key.is_some() || end_key.is_some())
+    // Single-pass O(n) scan: reject DeleteRange ops and verify keys are
+    // sorted and unique. The honest diff algorithm only produces Put and
+    // Delete ops; a crafted proof could use DeleteRange to delete keys
+    // outside the proven range.
     {
-        return Err(api::Error::ProofError(ProofError::MissingBoundaryProof));
-    }
-
-    // Reject non-empty end_proof when there is no end_key and no batch_ops.
-    // The honest generator never produces this combination. Matches
-    // AvalancheGo's ErrUnexpectedEndProof.
-    if end_key.is_none() && batch_ops.is_empty() && !proof.end_proof().is_empty() {
-        return Err(api::Error::ProofError(ProofError::UnexpectedEndProof));
-    }
-
-    // Reject empty end_proof when end_key is provided or batch_ops is
-    // non-empty. The honest generator always produces an end proof in
-    // these cases. Without this check, a malicious prover can force the
-    // verifier through expensive trie operations (proposal construction,
-    // root hash verification) before the proof is ultimately rejected.
-    // Matches AvalancheGo's ErrNoEndProof.
-    if proof.end_proof().is_empty() && (end_key.is_some() || !batch_ops.is_empty()) {
-        return Err(api::Error::ProofError(ProofError::MissingEndProof));
+        let mut prev_key: Option<&Box<[u8]>> = None;
+        for op in batch_ops {
+            if matches!(op, BatchOp::DeleteRange { .. }) {
+                return Err(api::Error::ProofError(ProofError::UnsupportedDeleteRange));
+            }
+            let key = op.key();
+            if let Some(prev) = prev_key
+                && key <= prev
+            {
+                return Err(api::Error::ProofError(ProofError::ChangeProofKeysNotSorted));
+            }
+            prev_key = Some(key);
+        }
     }
 
     // Verify boundary proofs against end_root
