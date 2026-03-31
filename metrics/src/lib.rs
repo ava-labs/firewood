@@ -35,6 +35,74 @@
 
 use std::cell::Cell;
 
+// Re-export metric handle types and Unit so that consumers only need to
+// depend on this crate and never import `metrics` directly.
+pub use metrics::{Counter, Gauge, Histogram, Unit};
+
+/// Defines metric constants and a `register()` function from a single schema.
+///
+/// Each entry is `IDENT = "metric.name" : "description"`. Expands to:
+/// - A `pub(crate) const IDENT: &str = "metric.name"` with the description as
+///   its rustdoc comment
+/// - A `pub fn register()` that calls `describe_counter!` / `describe_gauge!`
+///   for every entry using the same literal strings, so name and description
+///   can never drift from each other
+///
+/// The `gauges:` section is optional and can be omitted if there are no gauges.
+///
+/// # Example
+///
+/// ```rust,ignore
+/// firewood_metrics::define_metrics! {
+///     counters: {
+///         PROPOSALS_CREATED_TOTAL = "proposals_created_total" : "Number of proposals created",
+///     },
+///     gauges: {
+///         ACTIVE_REVISIONS = "active_revisions" : "Current number of active revisions",
+///     }
+/// }
+/// ```
+#[macro_export]
+macro_rules! define_metrics {
+    (
+        counters: {
+            $(
+                $c_id:ident = $c_name:literal : $c_desc:literal
+            ),* $(,)?
+        },
+        gauges: {
+            $(
+                $g_id:ident = $g_name:literal : $g_desc:literal
+            ),* $(,)?
+        } $(,)?
+    ) => {
+        // Metric name constants are intentionally crate-private. They are used
+        // only at recording callsites (firewood_increment!, firewood_set!) within
+        // the same crate. Exposing them as `pub` would make the metric name strings
+        // part of the crate's public API.
+        $(
+            #[doc = $c_desc]
+            pub(crate) const $c_id: &str = $c_name;
+        )*
+        $(
+            #[doc = $g_desc]
+            pub(crate) const $g_id: &str = $g_name;
+        )*
+
+        /// Registers all metric descriptions with the global recorder.
+        ///
+        /// Call once at startup before recording any metrics.
+        pub fn register() {
+            $(
+                $crate::firewood_describe_counter!($c_name, $c_desc);
+            )*
+            $(
+                $crate::firewood_describe_gauge!($g_name, $g_desc);
+            )*
+        }
+    };
+}
+
 /// Metric configuration context for the current thread.
 ///
 /// This is set at API boundaries (e.g., FFI entrypoints) and read when deciding
@@ -212,10 +280,10 @@ macro_rules! firewood_gauge {
 /// ```
 #[macro_export]
 macro_rules! firewood_describe_counter {
-    ($name:literal, $desc:expr) => {
+    ($name:expr, $desc:expr) => {
         ::metrics::describe_counter!($name, $desc)
     };
-    ($name:literal, $unit:expr, $desc:expr) => {
+    ($name:expr, $unit:expr, $desc:expr) => {
         ::metrics::describe_counter!($name, $unit, $desc)
     };
 }
@@ -233,10 +301,10 @@ macro_rules! firewood_describe_counter {
 /// ```
 #[macro_export]
 macro_rules! firewood_describe_gauge {
-    ($name:literal, $desc:expr) => {
+    ($name:expr, $desc:expr) => {
         ::metrics::describe_gauge!($name, $desc)
     };
-    ($name:literal, $unit:expr, $desc:expr) => {
+    ($name:expr, $unit:expr, $desc:expr) => {
         ::metrics::describe_gauge!($name, $unit, $desc)
     };
 }
