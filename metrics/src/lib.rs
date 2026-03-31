@@ -180,6 +180,16 @@ macro_rules! firewood_gauge {
     };
 }
 
+/// Describes a counter metric with a human-readable description.
+///
+/// `$name` must be a string literal so the metrics key can be cached in a
+/// per-callsite `static`, avoiding an allocation on every call.
+///
+/// # Examples
+/// ```ignore
+/// firewood_describe_counter!("proposals_created", "Number of proposals created");
+/// firewood_describe_counter!("io_read", Unit::Count, "Number of IO read operations");
+/// ```
 #[macro_export]
 macro_rules! firewood_describe_counter {
     ($name:literal, $desc:expr) => {
@@ -190,6 +200,16 @@ macro_rules! firewood_describe_counter {
     };
 }
 
+/// Describes a gauge metric with a human-readable description.
+///
+/// `$name` must be a string literal so the metrics key can be cached in a
+/// per-callsite `static`, avoiding an allocation on every call.
+///
+/// # Examples
+/// ```ignore
+/// firewood_describe_gauge!("ops_total", "Total operations processed");
+/// firewood_describe_gauge!("bytes_in", Unit::Bytes, "Bytes received");
+/// ```
 #[macro_export]
 macro_rules! firewood_describe_gauge {
     ($name:literal, $desc:expr) => {
