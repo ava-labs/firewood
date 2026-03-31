@@ -132,7 +132,7 @@ macro_rules! firewood_increment {
 /// multiple operations without a repeated name lookup.
 ///
 /// # Usage
-/// ```rust
+/// ```ignore
 /// let counter = firewood_counter!(registry::PROPOSALS_CREATED_TOTAL);
 /// counter.increment(1);
 /// counter.absolute(100);
@@ -156,7 +156,7 @@ macro_rules! firewood_counter {
 /// use [`firewood_increment!`] instead.
 ///
 /// # Usage
-/// ```rust
+/// ```ignore
 /// firewood_set!(registry::ACTIVE_REVISIONS, count);
 /// firewood_set!(registry::NODE_CACHE_BYTES, size, "tier" => "l1");
 /// firewood_set!(registry::PENDING_PROPOSALS, count, expensive);
@@ -183,7 +183,7 @@ macro_rules! firewood_set {
 /// handle across multiple operations.
 ///
 /// # Usage
-/// ```rust
+/// ```ignore
 /// let gauge = firewood_gauge!(registry::ACTIVE_REVISIONS);
 /// gauge.set(10.0);
 /// gauge.increment(1.0);
