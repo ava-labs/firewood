@@ -4,6 +4,7 @@
 #![expect(clippy::indexing_slicing, clippy::unwrap_used)]
 
 mod change;
+mod cursor;
 #[cfg(feature = "ethhash")]
 mod ethhash;
 // TODO: get the hashes from merkledb and verify compatibility with branch factor 256

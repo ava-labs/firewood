@@ -512,11 +512,11 @@ impl Proposal<'_> {
     pub fn path_to_key(
         &self,
         key: &[u8],
-    ) -> Result<Vec<firewood_storage::PathIterItem>, api::Error> {
+    ) -> Result<Box<[firewood_storage::PathIterItem]>, api::Error> {
         let merkle = Merkle::from(&*self.nodestore);
         merkle
             .path_iter(key)?
-            .collect::<Result<Vec<_>, _>>()
+            .collect::<Result<Box<[_]>, _>>()
             .map_err(api::Error::from)
     }
 }

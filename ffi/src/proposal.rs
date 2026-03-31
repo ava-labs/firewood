@@ -92,7 +92,7 @@ impl ProposalHandle<'_> {
     pub(crate) fn path_to_key(
         &self,
         key: &[u8],
-    ) -> Result<Vec<firewood_storage::PathIterItem>, api::Error> {
+    ) -> Result<Box<[firewood_storage::PathIterItem]>, api::Error> {
         self.proposal.path_to_key(key)
     }
 

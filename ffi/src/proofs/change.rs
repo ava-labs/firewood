@@ -136,9 +136,9 @@ fn verify_root_hash(
 fn get_proposal_path_for_proof(
     proof_nodes: &[firewood::ProofNode],
     proposal: &crate::ProposalHandle<'_>,
-) -> Result<Vec<PathIterItem>, api::Error> {
+) -> Result<Box<[PathIterItem]>, api::Error> {
     let Some(key) = change_proof_boundary_key(proof_nodes) else {
-        return Ok(Vec::new());
+        return Ok(Box::default());
     };
     proposal.path_to_key(&key)
 }
