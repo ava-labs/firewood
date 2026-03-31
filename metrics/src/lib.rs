@@ -186,9 +186,10 @@ macro_rules! firewood_gauge {
 /// per-callsite `static`, avoiding an allocation on every call.
 ///
 /// # Examples
-/// ```ignore
-/// firewood_describe_counter!("proposals_created", "Number of proposals created");
-/// firewood_describe_counter!("io_read", Unit::Count, "Number of IO read operations");
+///
+/// ```rust
+/// firewood_describe_counter!("proposals_created_total", "Number of proposals created");
+/// firewood_describe_counter!("io_read_seconds_total", Unit::Seconds, "Time spent on IO reads");
 /// ```
 #[macro_export]
 macro_rules! firewood_describe_counter {
@@ -206,9 +207,10 @@ macro_rules! firewood_describe_counter {
 /// per-callsite `static`, avoiding an allocation on every call.
 ///
 /// # Examples
-/// ```ignore
-/// firewood_describe_gauge!("ops_total", "Total operations processed");
-/// firewood_describe_gauge!("bytes_in", Unit::Bytes, "Bytes received");
+///
+/// ```rust
+/// firewood_describe_gauge!("active_revisions", "Number of revisions currently held in memory");
+/// firewood_describe_gauge!("node_cache_bytes", Unit::Bytes, "Current node cache size");
 /// ```
 #[macro_export]
 macro_rules! firewood_describe_gauge {
