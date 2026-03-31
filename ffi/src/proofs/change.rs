@@ -724,47 +724,64 @@ mod tests {
         DatabaseHandle::new(args).expect("failed to create test database")
     }
 
+    /// A truncated unbounded proof (`max_length=1` with 3 changes) must
+    /// return a continuation from `find_next_key`, not `None`.
     #[test]
     fn test_truncated_unbounded_proof_returns_continuation() {
         use std::num::NonZeroUsize;
 
-        let dir_a = tempfile::tempdir().expect("tempdir");
-        let dir_b = tempfile::tempdir().expect("tempdir");
-        let db_a = test_db(dir_a.path());
-        let db_b = test_db(dir_b.path());
+        let dir_prover = tempfile::tempdir().expect("tempdir");
+        let dir_verifier = tempfile::tempdir().expect("tempdir");
+        let db_prover = test_db(dir_prover.path());
+        let db_verifier = test_db(dir_verifier.path());
 
+        // Both databases start with identical state.
         let initial = vec![
             put(b"\x10", b"v0"),
             put(b"\x20", b"v1"),
             put(b"\x30", b"v2"),
         ];
-        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        let p = (&db_prover)
+            .create_proposal(initial.clone())
+            .expect("proposal");
         p.commit().expect("commit");
-        let root1_a = db_a.current_root_hash().expect("root");
+        let root1_prover = db_prover.current_root_hash().expect("root");
 
-        let p = (&db_b).create_proposal(initial).expect("proposal");
+        let p = (&db_verifier).create_proposal(initial).expect("proposal");
         p.commit().expect("commit");
-        let root1_b = db_b.current_root_hash().expect("root");
-        assert_eq!(root1_a, root1_b);
+        let root1_verifier = db_verifier.current_root_hash().expect("root");
+        assert_eq!(root1_prover, root1_verifier);
 
+        // Prover advances: change all three values.
         let changes = vec![
             put(b"\x10", b"changed0"),
             put(b"\x20", b"changed1"),
             put(b"\x30", b"changed2"),
         ];
-        let p = (&db_a).create_proposal(changes).expect("proposal");
+        let p = (&db_prover).create_proposal(changes).expect("proposal");
         p.commit().expect("commit");
-        let root2 = db_a.current_root_hash().expect("root");
+        let root2 = db_prover.current_root_hash().expect("root");
 
-        let proof = db_a
-            .change_proof(root1_a, root2.clone(), None, None, NonZeroUsize::new(1))
+        // Prover generates an unbounded proof truncated to 1 op (of 3 total).
+        // Only Put(\x10, changed0) is included; \x20 and \x30 are not.
+        let proof = db_prover
+            .change_proof(
+                root1_prover,
+                root2.clone(),
+                None,
+                None,
+                NonZeroUsize::new(1),
+            )
             .expect("truncated change proof");
 
+        // Verifier checks the proof (still at root1_verifier).
         let change_ctx = ChangeProofContext::from(proof);
         let mut proposed = change_ctx
-            .verify_and_propose(&db_b, root1_b, root2, None, None, None)
+            .verify_and_propose(&db_verifier, root1_verifier, root2, None, None, None)
             .expect("verify_and_propose should succeed");
 
+        // The proof only covered 1 of 3 changes, so find_next_key must
+        // return Some — indicating more rounds are needed.
         let next = proposed
             .find_next_key()
             .expect("find_next_key should not error");
@@ -774,36 +791,52 @@ mod tests {
         );
     }
 
+    /// A bounded proof that covers the full range (`last_op >= end_key`)
+    /// must return `None` from `find_next_key`, and the committed root
+    /// hash must match the target.
     #[test]
     fn test_find_next_key_bounded_complete() {
-        let dir_a = tempfile::tempdir().expect("tempdir");
-        let dir_b = tempfile::tempdir().expect("tempdir");
-        let db_a = test_db(dir_a.path());
-        let db_b = test_db(dir_b.path());
+        let dir_prover = tempfile::tempdir().expect("tempdir");
+        let dir_verifier = tempfile::tempdir().expect("tempdir");
+        let db_prover = test_db(dir_prover.path());
+        let db_verifier = test_db(dir_verifier.path());
 
+        // Both databases start with identical state.
         let initial = vec![put(b"\x10", b"v0"), put(b"\x20", b"v1")];
-        let p = (&db_a).create_proposal(initial.clone()).expect("proposal");
+        let p = (&db_prover)
+            .create_proposal(initial.clone())
+            .expect("proposal");
         p.commit().expect("commit");
-        let root1_a = db_a.current_root_hash().expect("root");
+        let root1_prover = db_prover.current_root_hash().expect("root");
 
-        let p = (&db_b).create_proposal(initial).expect("proposal");
+        let p = (&db_verifier).create_proposal(initial).expect("proposal");
         p.commit().expect("commit");
-        let root1_b = db_b.current_root_hash().expect("root");
+        let root1_verifier = db_verifier.current_root_hash().expect("root");
 
+        // Prover advances: change both values.
         let changes = vec![put(b"\x10", b"changed0"), put(b"\x20", b"changed1")];
-        let p = (&db_a).create_proposal(changes).expect("proposal");
+        let p = (&db_prover).create_proposal(changes).expect("proposal");
         p.commit().expect("commit");
-        let root2 = db_a.current_root_hash().expect("root");
+        let root2 = db_prover.current_root_hash().expect("root");
 
-        let proof = db_a
-            .change_proof(root1_a, root2.clone(), None, Some(b"\x20".as_ref()), None)
+        // Bounded proof with end_key=\x20. Both changes are within range,
+        // so the proof is complete (not truncated).
+        let proof = db_prover
+            .change_proof(
+                root1_prover,
+                root2.clone(),
+                None,
+                Some(b"\x20".as_ref()),
+                None,
+            )
             .expect("change proof");
 
+        // Verifier checks the proof.
         let change_ctx = ChangeProofContext::from(proof);
         let mut proposed = change_ctx
             .verify_and_propose(
-                &db_b,
-                root1_b,
+                &db_verifier,
+                root1_verifier,
                 root2.clone(),
                 None,
                 Some(b"\x20".as_ref()),
@@ -811,6 +844,7 @@ mod tests {
             )
             .expect("verify_and_propose should succeed");
 
+        // last_op key \x20 >= end_key \x20, so range is fully covered.
         let next = proposed
             .find_next_key()
             .expect("find_next_key should not error");
