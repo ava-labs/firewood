@@ -934,8 +934,32 @@ fn verify_change_proof_in_range_children(
 }
 
 /// Verify Case 2c: both start and end boundary proofs exist.
-/// Finds the divergence point, checks shared prefix values, the
-/// divergence parent's in-range children, and walks both tails.
+///
+/// # Algorithm overview
+///
+/// Both the start and end boundary proofs are paths from the trie root down
+/// to the start/end keys respectively. Because they originate from the same
+/// trie, the two paths share a common prefix of nodes (the "shared prefix")
+/// before splitting apart at some interior node (the "divergence parent").
+///
+/// The **divergence point** is the depth at which the start and end proof
+/// paths first visit different trie nodes. The node just above that point —
+/// the last node the two paths have in common — is the **divergence parent**.
+/// Below the divergence parent, the start proof descends toward the left
+/// boundary key and the end proof descends toward the right boundary key;
+/// these disjoint suffixes are the **tails**.
+///
+/// The **shared prefix values** are the key/value pairs stored at each node
+/// along the common prefix. Because both proofs pass through these same
+/// nodes, neither proof "owns" children in the key range there — only the
+/// values at those nodes need to match the proposal.
+///
+/// After validating the shared prefix, this function checks the divergence
+/// parent's children that fall strictly between the two boundary nibbles
+/// (these children are entirely within the proven range and must match the
+/// proposal), then **walks both tails** independently: the start tail
+/// checks children to the right of the start boundary, and the end tail
+/// checks children to the left of the end boundary.
 fn verify_change_proof_divergent(
     start_nodes: &[ProofNode],
     end_nodes: &[ProofNode],
@@ -944,26 +968,37 @@ fn verify_change_proof_divergent(
     start_nibbles: Option<&[PathComponent]>,
     end_nibbles: Option<&[PathComponent]>,
 ) -> Result<(), api::Error> {
-    // Find where the two proof paths diverge.
-    let divergence_depth = start_nodes
+    // Find where the two proof paths diverge. Both proofs are rooted at the
+    // same trie (end_root), so nodes at the same position are identical —
+    // comparing `key` alone is sufficient to detect when the paths take
+    // different branches. The `key` is the node's full path from the root,
+    // so equal keys mean the same node; divergence means the two proofs
+    // descended into different children of the parent.
+    let shared_len = start_nodes
         .iter()
         .zip(end_nodes.iter())
-        .position(|(s, e)| s.key != e.key)
-        .unwrap_or(std::cmp::min(start_nodes.len(), end_nodes.len()));
+        .take_while(|(s, e)| s.key == e.key)
+        .inspect(|(s, e)| debug_assert_eq!(s, e))
+        .count();
 
-    let Some(parent_idx) = divergence_depth.checked_sub(1) else {
-        return Err(ProofError::BoundaryProofsDivergeAtRoot.into());
-    };
-    let parent = start_nodes
-        .get(parent_idx)
-        .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
+    // Split each proof into (shared prefix, tail). The shared prefix
+    // includes the divergence parent as its last element; the tails are
+    // the disjoint suffixes that descend toward each boundary key.
+    let (shared, start_tail) = start_nodes.split_at(shared_len);
+    let end_tail = &end_nodes[shared_len..];
+
+    // Extract the divergence parent via split_last. If the shared prefix
+    // is empty, the two proofs disagree on the very first (root) node.
+    // Since both proofs originate from the same trie, this should be
+    // impossible — it means the prover supplied inconsistent root nodes.
+    let (parent, _ancestors) = shared
+        .split_last()
+        .ok_or(ProofError::BoundaryProofsDivergeAtRoot)?;
 
     // Verify values at shared prefix nodes (including divergence parent).
     // At shared prefix nodes both proofs route through the same nibble,
     // so no children are in-range from either side — only values matter.
-    let shared = start_nodes
-        .get(..divergence_depth)
-        .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
+    //
     // The start cursor advances through shared prefix nodes first,
     // then continues into the divergence parent and start tail.
     let mut start_cursor = ChangeProofCursor::new(start_path);
@@ -976,28 +1011,27 @@ fn verify_change_proof_divergent(
         verify_change_proof_node_value(node, item)?;
     }
 
-    // At the divergence parent: children between the two boundary
-    // nibbles are in-range. Derive boundary nibbles from the proof
-    // nodes below the divergence point — the node at divergence_depth
-    // in each proof is the first node after the parent, and its key
-    // at the parent's depth is the nibble the proof navigated to.
-    // If a proof has no node after divergence, fall back to the
-    // external key's nibble at the parent depth.
+    // At the divergence parent: children between the two boundary nibbles
+    // are entirely within the proven range and must match the proposal.
+    //
+    // Derive boundary nibbles from the first node in each tail (the child
+    // the proof navigated to from the parent). If a tail is empty, fall
+    // back to the external key's nibble at the parent depth.
     let parent_depth = parent.key.len();
-    let start_bn = start_nodes
-        .get(divergence_depth)
+    let start_bn = start_tail
+        .first()
         .and_then(|next| next.key.get(parent_depth).copied())
         .or_else(|| start_nibbles.and_then(|sn| sn.get(parent_depth).copied()));
-    let end_bn = end_nodes
-        .get(divergence_depth)
+    let end_bn = end_tail
+        .first()
         .and_then(|next| next.key.get(parent_depth).copied())
         .or_else(|| end_nibbles.and_then(|en| en.get(parent_depth).copied()));
 
-    // Reuse the start cursor to look up the divergence parent's children.
-    // None means the proposal compressed through this depth; children
-    // default to all-None, so any proof child with a hash at an in-range
-    // slot will produce an InRangeChildMismatch, correctly detecting the
-    // structural difference between the proof and proposal.
+    // Look up the divergence parent's children in the proposal. None means
+    // the proposal compressed through this depth; children default to
+    // all-None, so any proof child with a hash at an in-range slot will
+    // produce an InRangeChildMismatch — the proof claims a subtree exists
+    // but the proposal says nothing is there.
     let item = start_cursor.advance_to(parent_depth);
     let proposal_children = item
         .and_then(|i| i.node.as_branch().map(|b| b.children_hashes()))
@@ -1010,15 +1044,13 @@ fn verify_change_proof_divergent(
         }
     }
 
-    // Walk tails independently below the divergence point.
-    // start_cursor naturally continues past shared prefix nodes.
-    let start_tail = start_nodes
-        .get(divergence_depth..)
-        .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
-    let end_tail = end_nodes
-        .get(divergence_depth..)
-        .ok_or(api::Error::ProofError(ProofError::EndRootMismatch))?;
+    // Walk tails independently below the divergence point. Each tail
+    // contains the proof nodes from the divergence point down to the
+    // respective boundary key. The start tail checks children to the
+    // right of each node's boundary nibble; the end tail checks children
+    // to the left.
     if !start_tail.is_empty() {
+        // start_cursor naturally continues past the shared prefix nodes.
         verify_change_proof_in_range_children(
             start_tail,
             &mut start_cursor,
@@ -1027,8 +1059,8 @@ fn verify_change_proof_divergent(
         )?;
     }
     if !end_tail.is_empty() {
-        // Separate cursor for the end tail since it walks a different
-        // proposal path than the start cursor.
+        // The end tail walks a different branch of the trie from the
+        // divergence parent, so it needs its own cursor into the proposal.
         let mut end_cursor = ChangeProofCursor::new(end_path);
         verify_change_proof_in_range_children(
             end_tail,
