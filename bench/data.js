@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774856478370,
+  "lastUpdate": 1774942167884,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -1926,6 +1926,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 75.58842641106857,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Ron Kuris",
+            "username": "rkuris",
+            "email": "ron.kuris@avalabs.org"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "34819ab6a0bdb4e718dd2a37967cce2fa420350b",
+          "message": "refactor(merkle)!: reduce visibility of firewood::merkle module (#1858)\n\n## Why this should be merged\n\nfirewood::Merkle keeps bleeding into ffi, and it should not.\n\n## How this works\n\nThis reduces the visibility by adding a test_utils feature flag. Some\nthings became unreachable as they were dead code.\n\n## How this was tested\n\nCI\n\n## Breaking Changes\n\n- [X] firewood\n\nTechnically this breaks the firewood interface, as it removes Merkle,\nbut nobody should have been relying on it.\n\n---------\n\nSigned-off-by: Ron Kuris <swcafe@gmail.com>\nCo-authored-by: Joachim Brandon LeBlanc <brandon.leblanc@avalabs.org>",
+          "timestamp": "2026-03-30T21:10:57Z",
+          "url": "https://github.com/ava-labs/firewood/commit/34819ab6a0bdb4e718dd2a37967cce2fa420350b"
+        },
+        "date": 1774942167415,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 174.42633447034368,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 5733.079256848238,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 106.30631517260939,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5552.0395033347095,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 72.60359587935076,
             "unit": "block_accept_ms/ggas"
           }
         ]
