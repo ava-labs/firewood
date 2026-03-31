@@ -816,8 +816,7 @@ mod tests {
             .expect("find_next_key should not error");
         assert_eq!(next, None, "single-round proof should be complete");
 
-        // Callers determine sync completion by comparing root hashes, not
-        // by checking find_next_key's return value.
+        // Verify the committed root hash matches the target root.
         let committed_root = proposed.commit().expect("commit").expect("root hash");
         assert_eq!(
             committed_root, root2,
@@ -979,14 +978,12 @@ mod tests {
                 .unwrap_or_else(|e| panic!("round {round}: commit failed: {e:?}"))
                 .expect("commit should return a root hash");
 
-            // Sync completion is determined by root hash match, not
-            // find_next_key. The caller compares the committed root against
-            // the target root to decide when the accumulated state is complete.
+            // Sync is complete when root hashes match.
             if root_b == root2 {
                 break;
             }
 
-            // Not done — use find_next_key to get the next range to fetch.
+            // Not done — find next key range to continue syncing.
             let next = proposed
                 .find_next_key()
                 .unwrap_or_else(|e| panic!("round {round}: find_next_key failed: {e:?}"));
