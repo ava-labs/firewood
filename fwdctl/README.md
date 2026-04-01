@@ -58,6 +58,13 @@ $ fwdctl create firewood
 ```sh
 # Get the value associated with a key in the database, if it exists.
 fwdctl get KEY
+
+# Get the value associated with a hex-encoded key.
+fwdctl get --key-hex HEX
+
+# Get the value and output it in hex format.
+fwdctl get KEY --hex
+fwdctl get --key-hex HEX --hex
 ```
 
 * fwdctl insert KEY VALUE
@@ -65,6 +72,13 @@ fwdctl get KEY
 ```sh
 # Insert a key/value pair into the database.
 fwdctl insert KEY VALUE
+
+# Insert with hex-encoded key and value.
+fwdctl insert --key-hex HEX --value-hex HEX
+
+# Insert with hex key and normal value (or vice versa).
+fwdctl insert --key-hex HEX VALUE
+fwdctl insert KEY --value-hex HEX
 ```
 
 * fwdctl delete KEY
@@ -72,4 +86,7 @@ fwdctl insert KEY VALUE
 ```sh
 # Delete a key from the database, along with the associated value.
 fwdctl delete KEY
+
+# Delete a hex-encoded key from the database.
+fwdctl delete --key-hex HEX
 ```

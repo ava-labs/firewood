@@ -580,3 +580,279 @@ fn test_slow_fwdctl_check_db_with_data() {
         .assert()
         .success();
 }
+
+// Tests for hex input support (Issue #1000)
+
+#[test]
+fn fwdctl_insert_with_hex_key_and_value() {
+    let tmpdir = tempfile::tempdir().unwrap();
+
+    // Create db
+    cargo_bin_cmd!()
+        .arg("create")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .assert()
+        .success();
+
+    // Insert data with hex key and hex value
+    // key_hex "61" = 'a', value_hex "31" = '1'
+    cargo_bin_cmd!()
+        .arg("insert")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["--key-hex"])
+        .args(["61"])
+        .args(["--value-hex"])
+        .args(["31"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0x61"));
+
+    // Verify with normal get (key 'a' should have value '1')
+    cargo_bin_cmd!()
+        .arg("get")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["a"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("1"));
+}
+
+#[test]
+fn fwdctl_insert_with_hex_key_only() {
+    let tmpdir = tempfile::tempdir().unwrap();
+
+    // Create db
+    cargo_bin_cmd!()
+        .arg("create")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .assert()
+        .success();
+
+    // Insert data with hex key but normal value
+    // key_hex "62" = 'b'
+    cargo_bin_cmd!()
+        .arg("insert")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["--key-hex"])
+        .args(["62"])
+        .args(["test_value"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0x62"));
+
+    // Verify with hex get
+    cargo_bin_cmd!()
+        .arg("get")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["--key-hex"])
+        .args(["62"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("test_value"));
+}
+
+#[test]
+fn fwdctl_get_with_hex_key() {
+    let tmpdir = tempfile::tempdir().unwrap();
+
+    // Create db and insert data
+    cargo_bin_cmd!()
+        .arg("create")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .assert()
+        .success();
+
+    // Insert data
+    cargo_bin_cmd!()
+        .arg("insert")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["testkey"])
+        .args(["testvalue"])
+        .assert()
+        .success();
+
+    // Get value using hex key (hex of "testkey" = 746573746b6579)
+    cargo_bin_cmd!()
+        .arg("get")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["--key-hex"])
+        .args(["746573746b6579"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("testvalue"));
+}
+
+#[test]
+fn fwdctl_get_with_hex_output() {
+    let tmpdir = tempfile::tempdir().unwrap();
+
+    // Create db and insert data
+    cargo_bin_cmd!()
+        .arg("create")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .assert()
+        .success();
+
+    // Insert data with hex value
+    cargo_bin_cmd!()
+        .arg("insert")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["--key-hex"])
+        .args(["ab"])
+        .args(["--value-hex"])
+        .args(["cd"])
+        .assert()
+        .success();
+
+    // Get value with --hex output flag
+    cargo_bin_cmd!()
+        .arg("get")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["--key-hex"])
+        .args(["ab"])
+        .args(["--hex"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("0xcd"));
+}
+
+#[test]
+fn fwdctl_delete_with_hex_key() {
+    let tmpdir = tempfile::tempdir().unwrap();
+
+    // Create db and insert data
+    cargo_bin_cmd!()
+        .arg("create")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .assert()
+        .success();
+
+    // Insert data with hex key
+    cargo_bin_cmd!()
+        .arg("insert")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["--key-hex"])
+        .args(["63"])
+        .args(["--value-hex"])
+        .args(["33"])
+        .assert()
+        .success();
+
+    // Delete with hex key (63 = 'c')
+    cargo_bin_cmd!()
+        .arg("delete")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["--key-hex"])
+        .args(["63"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("key 0x63 deleted successfully"));
+
+    // Verify key is deleted
+    cargo_bin_cmd!()
+        .arg("get")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["--key-hex"])
+        .args(["63"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("not found"));
+}
+
+#[test]
+fn fwdctl_insert_with_0x_prefix_hex() {
+    let tmpdir = tempfile::tempdir().unwrap();
+
+    // Create db
+    cargo_bin_cmd!()
+        .arg("create")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .assert()
+        .success();
+
+    // Insert data with hex key and hex value using 0x prefix
+    cargo_bin_cmd!()
+        .arg("insert")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["--key-hex"])
+        .args(["0x64"])
+        .args(["--value-hex"])
+        .args(["0x34"])
+        .assert()
+        .success();
+
+    // Verify with normal get (key 'd' should have value '4')
+    cargo_bin_cmd!()
+        .arg("get")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["d"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("4"));
+}
+
+#[test]
+fn fwdctl_conflicting_key_and_key_hex() {
+    let tmpdir = tempfile::tempdir().unwrap();
+
+    // Create db
+    cargo_bin_cmd!()
+        .arg("create")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .assert()
+        .success();
+
+    // Test that key and --key-hex conflict for insert
+    cargo_bin_cmd!()
+        .arg("insert")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["key"])
+        .args(["value"])
+        .args(["--key-hex"])
+        .args(["61"])
+        .assert()
+        .failure();
+
+    // Test that key and --key-hex conflict for get
+    cargo_bin_cmd!()
+        .arg("get")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["key"])
+        .args(["--key-hex"])
+        .args(["61"])
+        .assert()
+        .failure();
+
+    // Test that key and --key-hex conflict for delete
+    cargo_bin_cmd!()
+        .arg("delete")
+        .arg("--db")
+        .arg(tmpdir.path())
+        .args(["key"])
+        .args(["--key-hex"])
+        .args(["61"])
+        .assert()
+        .failure();
+}
