@@ -204,11 +204,9 @@ impl From<Option<Result<HashKey, api::Error>>> for HashResult {
 
 /// A result type returned from FFI functions that create or parse range proofs.
 ///
-/// The caller must ensure that [`fwd_free_range_proof`] is called to
+/// The caller must ensure that `fwd_free_range_proof` is called to
 /// free the memory associated with the returned context when it is no longer
 /// needed.
-///
-/// [`fwd_free_range_proof`]: crate::fwd_free_range_proof
 #[derive(Debug)]
 #[repr(C, usize)]
 pub enum RangeProofResult<'db> {
@@ -249,11 +247,9 @@ impl From<Result<api::FrozenRangeProof, api::Error>> for RangeProofResult<'_> {
 
 /// A result type returned from FFI functions that create or parse change proofs.
 ///
-/// The caller must ensure that [`fwd_free_change_proof`] is called to
+/// The caller must ensure that `fwd_free_change_proof` is called to
 /// free the memory associated with the returned context when it is no longer
 /// needed.
-///
-/// [`fwd_free_change_proof`]: crate::fwd_free_change_proof
 #[derive(Debug)]
 #[repr(C, usize)]
 pub enum ChangeProofResult {
@@ -285,10 +281,8 @@ pub enum ChangeProofResult {
 /// On verification failure, the original [`ChangeProofContext`] is returned so the
 /// caller can retry or free it.
 ///
-/// The caller must ensure that [`fwd_free_proposed_change_proof`] is called to
+/// The caller must ensure that `fwd_free_proposed_change_proof` is called to
 /// free the memory associated with the returned context when it is no longer needed.
-///
-/// [`fwd_free_proposed_change_proof`]: crate::fwd_free_proposed_change_proof
 #[derive(Debug)]
 #[repr(C, usize)]
 pub enum ProposedChangeProofResult<'db> {
@@ -359,9 +353,7 @@ pub enum CodeIteratorResult<'p> {
     /// Building the iterator was successful and the iterator handle is returned
     Ok {
         /// An opaque pointer to the [`CodeIteratorHandle`].
-        /// The value should be freed with [`fwd_code_hash_iter_free`]
-        ///
-        /// [`fwd_code_hash_iter_free`]: crate::fwd_code_hash_iter_free
+        /// The value should be freed with `fwd_code_hash_iter_free`.
         handle: Box<CodeIteratorHandle<'p>>,
     },
     /// An error occurred and the message is returned as an [`OwnedBytes`].

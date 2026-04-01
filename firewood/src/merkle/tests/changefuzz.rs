@@ -17,9 +17,9 @@
 use super::*;
 use crate::api::{self, BatchOp, Db as DbTrait, DbView, Proposal as _};
 use crate::db::{Db, DbConfig};
-use crate::merkle::{
-    ChangeProofVerificationContext, change_proof_boundary_key, verify_change_proof_root_hash,
-    verify_change_proof_structure,
+use crate::merkle::verify_change_proof_root_hash;
+use crate::{
+    ChangeProofVerificationContext, change_proof_boundary_key, verify_change_proof_structure,
 };
 
 /// Verify a change proof end-to-end: structural check + root hash check.

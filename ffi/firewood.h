@@ -396,11 +396,9 @@ typedef struct NextKeyRangeResult {
 /**
  * A result type returned from FFI functions that create or parse change proofs.
  *
- * The caller must ensure that [`fwd_free_change_proof`] is called to
+ * The caller must ensure that `fwd_free_change_proof` is called to
  * free the memory associated with the returned context when it is no longer
  * needed.
- *
- * [`fwd_free_change_proof`]: crate::fwd_free_change_proof
  */
 enum ChangeProofResult_Tag {
   /**
@@ -576,11 +574,9 @@ typedef struct CommittedChangeProofArgs {
 /**
  * A result type returned from FFI functions that create or parse range proofs.
  *
- * The caller must ensure that [`fwd_free_range_proof`] is called to
+ * The caller must ensure that `fwd_free_range_proof` is called to
  * free the memory associated with the returned context when it is no longer
  * needed.
- *
- * [`fwd_free_range_proof`]: crate::fwd_free_range_proof
  */
 enum RangeProofResult_Tag {
   /**
@@ -741,10 +737,8 @@ typedef struct VerifyRangeProofArgs {
  * On verification failure, the original [`ChangeProofContext`] is returned so the
  * caller can retry or free it.
  *
- * The caller must ensure that [`fwd_free_proposed_change_proof`] is called to
+ * The caller must ensure that `fwd_free_proposed_change_proof` is called to
  * free the memory associated with the returned context when it is no longer needed.
- *
- * [`fwd_free_proposed_change_proof`]: crate::fwd_free_proposed_change_proof
  */
 enum ProposedChangeProofResult_Tag {
   /**
@@ -1207,9 +1201,7 @@ typedef size_t CodeIteratorResult_Tag;
 typedef struct CodeIteratorResult_Ok_Body {
   /**
    * An opaque pointer to the [`CodeIteratorHandle`].
-   * The value should be freed with [`fwd_code_hash_iter_free`]
-   *
-   * [`fwd_code_hash_iter_free`]: crate::fwd_code_hash_iter_free
+   * The value should be freed with `fwd_code_hash_iter_free`.
    */
   struct CodeIteratorHandle *handle;
 } CodeIteratorResult_Ok_Body;
