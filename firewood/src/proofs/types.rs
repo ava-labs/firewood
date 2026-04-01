@@ -182,12 +182,6 @@ pub enum ProofError {
     #[error("computed root hash after applying batch_ops doesn't match the expected end root")]
     EndRootMismatch,
 
-    /// The change proof's boundary proofs are mutually inconsistent —
-    /// divergence analysis cannot proceed. This is a defensive check
-    /// that should be unreachable after structural validation.
-    #[error("malformed change proof: boundary proof divergence analysis failed")]
-    MalformedChangeProof,
-
     /// The end proof's inclusion/exclusion result doesn't match the last
     /// batch op's type when `batch_ops` is non-empty. A Put expects the
     /// key to exist in `end_root` (inclusion); a Delete expects it to be
