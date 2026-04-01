@@ -160,8 +160,8 @@ pub use merkle::{
     verify_range_proof,
 };
 pub use proofs::{
-    EmptyProofCollection, InvalidHeader, Proof, ProofCollection, ProofError, ProofNode, ProofType,
-    RangeProof, ReadError,
+    ChangeProof, EmptyProofCollection, InvalidHeader, Proof, ProofCollection, ProofError,
+    ProofNode, ProofType, RangeProof, ReadError,
 };
 
 // Re-export the proc macro from firewood-macros

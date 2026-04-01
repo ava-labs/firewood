@@ -95,6 +95,7 @@
 //! were formally reproduced as regression tests — TLC confirms both the vulnerable
 //! behavior and the necessity of their fixes. No new bugs were found.
 
+pub(crate) mod change;
 pub(super) mod de;
 pub(crate) mod header;
 pub(crate) mod range;
@@ -104,6 +105,7 @@ pub(super) mod ser;
 mod tests;
 pub(crate) mod types;
 
+pub use self::change::ChangeProof;
 pub use self::header::InvalidHeader;
 pub use self::range::RangeProof;
 pub use self::reader::ReadError;

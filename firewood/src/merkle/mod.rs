@@ -15,8 +15,8 @@ use crate::api::{
     KeyValuePair, ValueType,
 };
 use crate::iter::{MerkleKeyValueIter, PathIterator};
-use crate::merkle::changes::{ChangeProof, DiffMerkleNodeStream};
-use crate::{Proof, ProofCollection, ProofError, ProofNode, RangeProof};
+use crate::merkle::changes::DiffMerkleNodeStream;
+use crate::{ChangeProof, Proof, ProofCollection, ProofError, ProofNode, RangeProof};
 use firewood_metrics::firewood_increment;
 use firewood_storage::MemStore;
 use firewood_storage::{
@@ -987,7 +987,7 @@ fn verify_change_proof_divergent(
     // includes the divergence parent as its last element; the tails are
     // the disjoint suffixes that descend toward each boundary key.
     let (shared, start_tail) = start_nodes.split_at(shared_len);
-    let end_tail = &end_nodes[shared_len..];
+    let (_shared_end, end_tail) = end_nodes.split_at(shared_len);
 
     // Extract the divergence parent via split_last. If the shared prefix
     // is empty, the two proofs disagree on the very first (root) node.
