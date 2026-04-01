@@ -633,9 +633,7 @@ pub fn verify_change_proof_structure(
     // Non-empty start_proof without a start_key is unverifiable — the
     // honest generator only produces start_proof when start_key is Some.
     if !proof.start_proof().is_empty() && start_key.is_none() {
-        return Err(api::Error::ProofError(
-            ProofError::BoundaryProofUnverifiable,
-        ));
+        return Err(api::Error::ProofError(ProofError::UnexpectedStartProof));
     }
 
     match (batch_ops.is_empty(), proof.end_proof().is_empty()) {
@@ -678,7 +676,7 @@ pub fn verify_change_proof_structure(
 
     // Verify start boundary proof against end_root.
     // When start_key is None, the start proof must be empty (enforced by
-    // the BoundaryProofUnverifiable check above), so there is nothing to
+    // the UnexpectedStartProof check above), so there is nothing to
     // verify and we skip this block.
     // value_digest returns:
     //   Ok(Some(_)) → inclusion proof (key exists at the last proof node)
@@ -710,7 +708,9 @@ pub fn verify_change_proof_structure(
             // below also catches DeleteRange, but this provides
             // a better error for the first-op position.
             if matches!(first_op, BatchOp::DeleteRange { .. }) {
-                return Err(api::Error::ProofError(ProofError::UnsupportedDeleteRange));
+                return Err(api::Error::ProofError(
+                    ProofError::DeleteRangeFoundInChangeProof,
+                ));
             }
             let consistent = matches!(
                 (first_op, &result),
@@ -732,7 +732,9 @@ pub fn verify_change_proof_structure(
     let mut last_op: Option<&BatchOp<_, _>> = None;
     for op in batch_ops {
         if matches!(op, BatchOp::DeleteRange { .. }) {
-            return Err(api::Error::ProofError(ProofError::UnsupportedDeleteRange));
+            return Err(api::Error::ProofError(
+                ProofError::DeleteRangeFoundInChangeProof,
+            ));
         }
         let key = op.key();
         if let Some(prev) = last_op

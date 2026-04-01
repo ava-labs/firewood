@@ -182,12 +182,12 @@ pub enum ProofError {
     #[error("computed root hash after applying batch_ops doesn't match the expected end root")]
     EndRootMismatch,
 
-    /// Non-empty boundary proof cannot be validated against any key.
-    #[error("non-empty boundary proof has no key to validate against")]
-    BoundaryProofUnverifiable,
-
     /// The end proof's inclusion/exclusion result doesn't match the last
-    /// batch op's type.
+    /// batch op's type when `batch_ops` is non-empty. A Put expects the
+    /// key to exist in `end_root` (inclusion); a Delete expects it to be
+    /// absent (exclusion). A mismatch indicates the attacker tampered with
+    /// `batch_ops` — for example, appending a spurious key changes
+    /// `last_op_key`, shifting the end proof's derived key.
     #[error("end proof inclusion/exclusion result doesn't match last batch op type")]
     EndProofOperationMismatch,
 
@@ -199,19 +199,28 @@ pub enum ProofError {
     #[error("start proof inclusion/exclusion result doesn't match first batch op type")]
     StartProofOperationMismatch,
 
-    /// Change proof contains an unsupported `DeleteRange` operation.
-    #[error("change proof contains unsupported DeleteRange operation")]
-    UnsupportedDeleteRange,
+    /// A `DeleteRange` operation was found in a change proof's batch ops.
+    /// `DeleteRange` is not supported in change proofs — honest generators
+    /// only produce `Put` and `Delete` operations.
+    #[error("DeleteRange operation found in change proof")]
+    DeleteRangeFoundInChangeProof,
 
-    /// Non-empty batch operations require at least one boundary proof.
-    #[error("non-empty batch operations require at least one boundary proof for verification")]
+    /// Bounded change proof with non-empty batch operations requires at
+    /// least one boundary proof for verification. Unbounded proofs
+    /// (`start_key` and `end_key` both `None`) use direct root hash
+    /// comparison and do not require boundary proofs.
+    #[error("bounded change proof requires at least one boundary proof")]
     MissingBoundaryProof,
 
     /// A proof node's value doesn't match the proposal at the same depth.
     #[error("proof node value doesn't match the proposal")]
     ProofNodeValueMismatch,
 
-    /// Boundary proofs diverge at the root node.
+    /// Start and end boundary proofs share no common prefix — they
+    /// disagree on the very first node. Since both proofs have already
+    /// passed hash chain verification against the same `end_root`, their
+    /// first nodes must be identical. This is unreachable without a hash
+    /// collision.
     #[error("boundary proofs diverge at the root node")]
     BoundaryProofsDivergeAtRoot,
 

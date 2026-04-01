@@ -118,7 +118,7 @@ fn test_boundary_proof_unverifiable() {
     let err = verify_change_proof_structure(&proof, root2, None, Some(b"\x10"), None).unwrap_err();
     assert!(matches!(
         err,
-        api::Error::ProofError(crate::ProofError::BoundaryProofUnverifiable)
+        api::Error::ProofError(crate::ProofError::UnexpectedStartProof)
     ));
 }
 
@@ -1306,7 +1306,7 @@ fn test_delete_range_rejected() {
     let err = verify_change_proof_structure(&crafted, root2, None, None, None).unwrap_err();
     assert!(matches!(
         err,
-        api::Error::ProofError(crate::ProofError::UnsupportedDeleteRange)
+        api::Error::ProofError(crate::ProofError::DeleteRangeFoundInChangeProof)
     ));
 }
 
@@ -1353,7 +1353,7 @@ fn test_delete_range_rejected_with_boundary_proofs() {
     let err = verify_change_proof_structure(&crafted, root2, None, None, None).unwrap_err();
     assert!(matches!(
         err,
-        api::Error::ProofError(crate::ProofError::UnsupportedDeleteRange)
+        api::Error::ProofError(crate::ProofError::DeleteRangeFoundInChangeProof)
     ));
 }
 
