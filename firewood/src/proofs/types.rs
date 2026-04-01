@@ -149,6 +149,7 @@ pub enum ProofError {
     #[error("the proof is None as it has been consumed")]
     ProofIsNone,
 
+    // ── Range proof verification variants (from main) ──
     /// Key-value pair is outside the requested range
     #[error("key-value pair is outside the requested range")]
     KeyOutsideRange,
@@ -175,6 +176,65 @@ pub enum ProofError {
 
     #[error("the proposal for a change proof is None as it has been consumed")]
     ProposalIsNone,
+
+    // ── Change proof verification variants ──
+    /// Computed root hash after applying `batch_ops` doesn't match expected end root
+    #[error("computed root hash after applying batch_ops doesn't match the expected end root")]
+    EndRootMismatch,
+
+    /// The end proof's inclusion/exclusion result doesn't match the last
+    /// batch op's type when `batch_ops` is non-empty. A Put expects the
+    /// key to exist in `end_root` (inclusion); a Delete expects it to be
+    /// absent (exclusion). A mismatch indicates the attacker tampered with
+    /// `batch_ops` — for example, appending a spurious key changes
+    /// `last_op_key`, shifting the end proof's derived key.
+    #[error("end proof inclusion/exclusion result doesn't match last batch op type")]
+    EndProofOperationMismatch,
+
+    /// The start proof's inclusion/exclusion result doesn't match the first
+    /// batch op's type when `first_op_key == start_key`. A Put expects the
+    /// key to exist in `end_root` (inclusion); a Delete expects it to be
+    /// absent (exclusion). A mismatch indicates the attacker tampered with
+    /// `batch_ops` by adding a spurious key at `start_key`.
+    #[error("start proof inclusion/exclusion result doesn't match first batch op type")]
+    StartProofOperationMismatch,
+
+    /// A `DeleteRange` operation was found in a change proof's batch ops.
+    /// `DeleteRange` is not supported in change proofs — honest generators
+    /// only produce `Put` and `Delete` operations.
+    #[error("DeleteRange operation found in change proof")]
+    DeleteRangeFoundInChangeProof,
+
+    /// Bounded change proof with non-empty batch operations requires at
+    /// least one boundary proof for verification. Unbounded proofs
+    /// (`start_key` and `end_key` both `None`) use direct root hash
+    /// comparison and do not require boundary proofs.
+    #[error("bounded change proof requires at least one boundary proof")]
+    MissingBoundaryProof,
+
+    /// A proof node's value doesn't match the proposal at the same depth.
+    #[error("proof node value doesn't match the proposal")]
+    ProofNodeValueMismatch,
+
+    /// Start and end boundary proofs share no common prefix — they
+    /// disagree on the very first node. Since both proofs have already
+    /// passed hash chain verification against the same `end_root`, their
+    /// first nodes must be identical. This is unreachable without a hash
+    /// collision.
+    #[error("boundary proofs diverge at the root node")]
+    BoundaryProofsDivergeAtRoot,
+
+    /// Non-empty end proof when no end key is set and no batch operations.
+    #[error("unexpected non-empty end proof with no end key and no batch operations")]
+    UnexpectedEndProof,
+
+    /// In-range child hash mismatch between proof and proposal.
+    #[error("in-range child hash mismatch")]
+    InRangeChildMismatch,
+
+    /// Empty end proof when `end_key` is set or `batch_ops` is non-empty.
+    #[error("missing end proof: end_key is set or batch_ops is non-empty")]
+    MissingEndProof,
 }
 
 #[derive(Clone, PartialEq, Eq)]
@@ -288,10 +348,29 @@ impl<T: ProofCollection + ?Sized> Proof<T> {
         verify_opt_value_digest(expected_value, self.value_digest(key, root_hash)?)
     }
 
-    /// Returns the value digest associated with the given `key` in the trie revision
-    /// with the given `root_hash`. If the key does not exist in the trie, returns `None`.
-    /// Returns an error if the proof is invalid or doesn't prove the key for the
-    /// given revision.
+    /// Verify this proof against `root_hash` for the given `key` and return the
+    /// value digest at that key.
+    ///
+    /// # Returns
+    ///
+    /// - `Ok(Some(digest))` — **inclusion proof**: the key exists in the trie
+    ///   and `digest` is its value digest.
+    /// - `Ok(None)` — **exclusion proof**: the proof is valid but the key does
+    ///   not exist in the trie revision.
+    ///
+    /// # Errors
+    ///
+    /// - [`ProofError::Empty`] — the proof contains no nodes.
+    /// - [`ProofError::UnexpectedHash`] — a node's hash does not match the
+    ///   expected hash from its parent (or `root_hash` for the first node).
+    /// - [`ProofError::ValueAtOddNibbleLength`] — a node whose key has an odd
+    ///   number of nibbles carries a value digest, which is structurally invalid.
+    /// - [`ProofError::ShouldBePrefixOfProvenKey`] — an intermediate node's key
+    ///   is not a prefix of `key`.
+    /// - [`ProofError::ShouldBePrefixOfNextKey`] — a node's key is not a prefix
+    ///   of the next node's key in the proof.
+    /// - [`ProofError::NodeNotInTrie`] — the child pointer from one node to the
+    ///   next is absent, meaning the proof path does not exist in the trie.
     pub fn value_digest<K: AsRef<[u8]>>(
         &self,
         key: K,
