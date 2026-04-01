@@ -5,7 +5,6 @@
 
 mod change;
 mod changefuzz;
-mod cursor;
 #[cfg(feature = "ethhash")]
 mod ethhash;
 // TODO: get the hashes from merkledb and verify compatibility with branch factor 256
