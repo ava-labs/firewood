@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1774942167884,
+  "lastUpdate": 1775029290242,
   "repoUrl": "https://github.com/ava-labs/firewood",
   "entries": {
     "C-Chain Reexecution with Firewood": [
@@ -1973,6 +1973,53 @@ window.BENCHMARK_DATA = {
           {
             "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
             "value": 72.60359587935076,
+            "unit": "block_accept_ms/ggas"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Elvis",
+            "username": "Elvis339",
+            "email": "43846394+Elvis339@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "GitHub",
+            "username": "web-flow",
+            "email": "noreply@github.com"
+          },
+          "id": "592cefc4231fd4fd1572903aacef7f4ed2a74fe5",
+          "message": "feat(metrics): add firewood_describe_counter! and firewood_describe_gauge! facades (#1853)\n\n## Why this should be merged\nRoute all metric descriptions through firewood_metrics so registry\nmodules no longer import metrics directly. The firewood_ namespace\nprefix will be applied here in a follow-up PR.\n\nMetric names are constrained to $name:literal so that concat! can fuse\nthe prefix at compile time and the metrics crate can cache the key in a\nper-callsite static, avoiding a new allocation on every call.\n\n## How this works\nAdd two facades over `metrics::describe_counter!` and\n`metrics::describe_gauge!`.\n\nConstraining `$name` to `:literal` means the `metrics` crate's\n`key_var!` macro takes its `$name:literal` arm, which stores the key in\na `static` at the callsite rather than constructing a new `Key` on every\ncall.\n\n## How this was tested\n`cargo check -p firewood-ffi --features ethhash,logger`\n\n## Breaking Changes\n- [ ] firewood\n- [ ] firewood-storage\n- [ ] firewood-ffi (C api)\n- [ ] firewood-go (Go api)\n- [ ] fwdctl",
+          "timestamp": "2026-03-31T18:58:07Z",
+          "url": "https://github.com/ava-labs/firewood/commit/592cefc4231fd4fd1572903aacef7f4ed2a74fe5"
+        },
+        "date": 1775029289875,
+        "tool": "customBiggerIsBetter",
+        "benches": [
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - mgas/s",
+            "value": 165.50487748507524,
+            "unit": "mgas/s"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - ms/ggas",
+            "value": 6042.118003985574,
+            "unit": "ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_parse_ms/ggas",
+            "value": 113.41935046008282,
+            "unit": "block_parse_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_verify_ms/ggas",
+            "value": 5844.460476353633,
+            "unit": "block_verify_ms/ggas"
+          },
+          {
+            "name": "BenchmarkReexecuteRange/[40000001,41000000]-Config-firewood-Runner-avago-runner-i4i-2xlarge-local-ssd - block_accept_ms/ggas",
+            "value": 81.30026652170031,
             "unit": "block_accept_ms/ggas"
           }
         ]
