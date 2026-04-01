@@ -54,9 +54,9 @@ unused_self = "allow"
 cast_possible_truncation = "allow"
 
 [patch.crates-io]
-metrics = { git = "https://github.com/demosdemon/metrics.git", rev = "38f3c565808733517532bef9084136529969c525" }
-metrics-util = { git = "https://github.com/demosdemon/metrics.git", rev = "38f3c565808733517532bef9084136529969c525" }
-metrics-exporter-prometheus = { git = "https://github.com/demosdemon/metrics.git", rev = "38f3c565808733517532bef9084136529969c525" }
+metrics = { git = "https://github.com/demosdemon/metrics.git", rev = "b12dd4b4ab096147199520f9cc1b47fbd8186f10" }
+metrics-util = { git = "https://github.com/demosdemon/metrics.git", rev = "b12dd4b4ab096147199520f9cc1b47fbd8186f10" }
+metrics-exporter-prometheus = { git = "https://github.com/demosdemon/metrics.git", rev = "b12dd4b4ab096147199520f9cc1b47fbd8186f10" }
 
 [workspace.dependencies]
 # workspace local packages

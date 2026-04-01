@@ -6,6 +6,19 @@ use metrics_exporter_prometheus::render;
 use super::Maybe;
 use super::owned::{OwnedBytes, OwnedSlice};
 
+pub(crate) trait MapIntoCollection<T>: IntoIterator {
+    fn map_into<U, I>(self) -> I
+    where
+        Self: Sized,
+        Self::Item: Into<U>,
+        I: FromIterator<U>,
+    {
+        self.into_iter().map(Into::into).collect()
+    }
+}
+
+impl<T, C> MapIntoCollection<T> for C where C: IntoIterator<Item = T> {}
+
 /// A C-compatible representation of a label pair.
 #[derive(Debug)]
 #[repr(C)]
@@ -80,6 +93,7 @@ pub enum OwnedMetricValue {
     Summary(OwnedSummary),
     ClassicHistogram(OwnedClassicHistogram),
     NativeHistogram(OwnedNativeHistogram),
+    Unknown, // For forward compatibility if new metric types are added
 }
 
 /// A C-compatible representation of a single metric with its labels and value.
@@ -104,15 +118,11 @@ pub type OwnedRenderedMetrics = OwnedSlice<OwnedMetricFamily>;
 
 // --- From conversions ---
 
-fn string_to_owned_bytes(s: String) -> OwnedBytes {
-    s.into_bytes().into()
-}
-
 impl From<render::LabelPair> for OwnedLabelPair {
     fn from(lp: render::LabelPair) -> Self {
         Self {
-            label: string_to_owned_bytes(lp.label),
-            value: string_to_owned_bytes(lp.value),
+            label: lp.label.into(),
+            value: lp.value.into(),
         }
     }
 }
@@ -130,13 +140,8 @@ impl From<render::Summary> for OwnedSummary {
     fn from(s: render::Summary) -> Self {
         Self {
             sample_count: s.sample_count,
-            sample_sum: s.sample_sume,
-            quantiles: s
-                .quantiles
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<_>>()
-                .into(),
+            sample_sum: s.sample_sum,
+            quantiles: s.quantiles.map_into(),
         }
     }
 }
@@ -155,12 +160,7 @@ impl From<render::ClassicHistogram> for OwnedClassicHistogram {
         Self {
             sample_count: h.sample_count,
             sample_sum: h.sample_sum,
-            buckets: h
-                .buckets
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<_>>()
-                .into(),
+            buckets: h.buckets.map_into(),
         }
     }
 }
@@ -182,19 +182,9 @@ impl From<render::NativeHistogram> for OwnedNativeHistogram {
             zero_threshold: h.zero_threshold,
             schema: h.schema,
             zero_count: h.zero_count,
-            positive_spans: h
-                .positive_spans
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<_>>()
-                .into(),
+            positive_spans: h.positive_spans.map_into(),
             positive_deltas: h.positive_deltas.into(),
-            negative_spans: h
-                .negative_spans
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<_>>()
-                .into(),
+            negative_spans: h.negative_spans.map_into(),
             negative_deltas: h.negative_deltas.into(),
         }
     }
@@ -208,6 +198,7 @@ impl From<render::MetricValue> for OwnedMetricValue {
             render::MetricValue::Summary(v) => Self::Summary(v.into()),
             render::MetricValue::ClassicHistogram(v) => Self::ClassicHistogram(v.into()),
             render::MetricValue::NativeHistogram(v) => Self::NativeHistogram(v.into()),
+            _ => Self::Unknown, // For forward compatibility if new metric types are added
         }
     }
 }
@@ -215,12 +206,7 @@ impl From<render::MetricValue> for OwnedMetricValue {
 impl From<render::Metric> for OwnedMetric {
     fn from(m: render::Metric) -> Self {
         Self {
-            labels: m
-                .labels
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<_>>()
-                .into(),
+            labels: m.labels.map_into(),
             value: m.value.into(),
         }
     }
@@ -229,23 +215,9 @@ impl From<render::Metric> for OwnedMetric {
 impl From<render::MetricFamily> for OwnedMetricFamily {
     fn from(mf: render::MetricFamily) -> Self {
         Self {
-            name: string_to_owned_bytes(mf.name),
-            help: mf.help.map(string_to_owned_bytes).into(),
-            metrics: mf
-                .metrics
-                .into_iter()
-                .map(Into::into)
-                .collect::<Vec<_>>()
-                .into(),
+            name: mf.name.into(),
+            help: mf.help.map(Into::into).into(),
+            metrics: mf.metrics.map_into(),
         }
-    }
-}
-
-impl From<render::RenderedMetrics> for OwnedRenderedMetrics {
-    fn from(rm: render::RenderedMetrics) -> Self {
-        rm.into_iter()
-            .map(Into::<OwnedMetricFamily>::into)
-            .collect::<Vec<_>>()
-            .into()
     }
 }

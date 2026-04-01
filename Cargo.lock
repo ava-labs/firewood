@@ -2941,7 +2941,7 @@ dependencies = [
 [[package]]
 name = "metrics"
 version = "0.24.3"
-source = "git+https://github.com/demosdemon/metrics.git?rev=38f3c565808733517532bef9084136529969c525#38f3c565808733517532bef9084136529969c525"
+source = "git+https://github.com/demosdemon/metrics.git?rev=b12dd4b4ab096147199520f9cc1b47fbd8186f10#b12dd4b4ab096147199520f9cc1b47fbd8186f10"
 dependencies = [
  "portable-atomic",
  "rapidhash",
@@ -2950,7 +2950,7 @@ dependencies = [
 [[package]]
 name = "metrics-exporter-prometheus"
 version = "0.18.1"
-source = "git+https://github.com/demosdemon/metrics.git?rev=38f3c565808733517532bef9084136529969c525#38f3c565808733517532bef9084136529969c525"
+source = "git+https://github.com/demosdemon/metrics.git?rev=b12dd4b4ab096147199520f9cc1b47fbd8186f10#b12dd4b4ab096147199520f9cc1b47fbd8186f10"
 dependencies = [
  "base64",
  "evmap",
@@ -2970,7 +2970,7 @@ dependencies = [
 [[package]]
 name = "metrics-util"
 version = "0.20.1"
-source = "git+https://github.com/demosdemon/metrics.git?rev=38f3c565808733517532bef9084136529969c525#38f3c565808733517532bef9084136529969c525"
+source = "git+https://github.com/demosdemon/metrics.git?rev=b12dd4b4ab096147199520f9cc1b47fbd8186f10#b12dd4b4ab096147199520f9cc1b47fbd8186f10"
 dependencies = [
  "aho-corasick",
  "crossbeam-epoch",

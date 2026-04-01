@@ -910,6 +910,7 @@ enum OwnedMetricValue_Tag {
   OwnedMetricValue_Summary,
   OwnedMetricValue_ClassicHistogram,
   OwnedMetricValue_NativeHistogram,
+  OwnedMetricValue_Unknown,
 };
 typedef size_t OwnedMetricValue_Tag;
 

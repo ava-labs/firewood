@@ -10,8 +10,8 @@ use crate::revision::{GetRevisionResult, RevisionHandle};
 use crate::{
     ChangeProofContext, CodeIteratorHandle, CreateIteratorResult, CreateProposalResult, HashKey,
     IteratorHandle, KeyRange, NextKeyRange, OwnedBytes, OwnedKeyValueBatch, OwnedKeyValuePair,
-    OwnedMetricFamily, OwnedRenderedMetrics, ProposalHandle, ProposedChangeProofContext,
-    RangeProofContext, ReconstructedHandle, VerifiedChangeProofContext,
+    OwnedRenderedMetrics, ProposalHandle, ProposedChangeProofContext, RangeProofContext,
+    ReconstructedHandle, VerifiedChangeProofContext,
 };
 
 /// The result type returned from an FFI function that returns no value but may
@@ -531,17 +531,10 @@ pub enum RenderedMetricsResult {
     Err(OwnedBytes),
 }
 
-impl<E: fmt::Display> From<Result<metrics_exporter_prometheus::render::RenderedMetrics, E>>
-    for RenderedMetricsResult
-{
-    fn from(value: Result<metrics_exporter_prometheus::render::RenderedMetrics, E>) -> Self {
+impl<E: fmt::Display> From<Result<OwnedRenderedMetrics, E>> for RenderedMetricsResult {
+    fn from(value: Result<OwnedRenderedMetrics, E>) -> Self {
         match value {
-            Ok(rm) => RenderedMetricsResult::Ok(
-                rm.into_iter()
-                    .map(Into::<OwnedMetricFamily>::into)
-                    .collect::<Vec<_>>()
-                    .into(),
-            ),
+            Ok(ok) => RenderedMetricsResult::Ok(ok),
             Err(err) => RenderedMetricsResult::Err(err.to_string().into_bytes().into()),
         }
     }

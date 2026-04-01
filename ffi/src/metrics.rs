@@ -5,7 +5,8 @@ use std::error::Error;
 use std::net::Ipv6Addr;
 use std::sync::OnceLock;
 
-use crate::jemalloc_metrics;
+use crate::rendered_metrics::MapIntoCollection;
+use crate::{OwnedRenderedMetrics, jemalloc_metrics};
 use firewood_metrics::MetricsContext;
 use metrics_exporter_prometheus::{
     Matcher, NativeHistogramConfig, PrometheusBuilder, PrometheusHandle,
@@ -110,12 +111,11 @@ pub fn gather_metrics() -> Result<String, String> {
     Ok(recorder.render())
 }
 
-pub fn gather_rendered_metrics()
--> Result<metrics_exporter_prometheus::render::RenderedMetrics, String> {
+pub fn gather_rendered_metrics() -> Result<OwnedRenderedMetrics, String> {
     let recorder = RECORDER.get().ok_or("recorder not initialized")?;
     jemalloc_metrics::refresh();
     let start = std::time::Instant::now();
-    let result = recorder.render_snapshot_and_descriptions();
+    let result = recorder.render_snapshot_and_descriptions().map_into();
     let elapsed = start.elapsed();
     metrics::histogram!(crate::registry::GATHER_DURATION_SECONDS).record(elapsed.as_secs_f64());
     Ok(result)
