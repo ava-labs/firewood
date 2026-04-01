@@ -1655,3 +1655,62 @@ fn test_spurious_delete_at_start_key_boundary() {
             .expect_err("spurious Delete at start_key should be detected");
     }
 }
+
+/// Verify that change proof verification succeeds when the only key
+/// changed between two revisions falls outside the requested range,
+/// so the proof's `batch_ops` for the queried subrange is empty.
+///
+/// R1 has `\x00`, R2 adds `\x00\x10`. The query range
+/// `[\x00\x10\x20, \x00\x10\x30]` excludes the new key. The shared
+/// prefix node at `\x00\x10` carries a value that legitimately differs
+/// between the proposal (R1 + empty ops) and the end trie (R2), but
+/// because `\x00\x10` < `\x00\x10\x20` the value check should be
+/// skipped.
+#[test]
+fn test_disjoint_proof() {
+    let (db, _dir) = new_db();
+
+    // R1: trie with a single key \x00
+    db.propose(vec![BatchOp::Put {
+        key: b"\x00",
+        value: b"v0",
+    }])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root1 = db.root_hash().unwrap();
+
+    // R2: add \x00\x10 (outside query range [\x00\x10\x20, \x00\x10\x30])
+    db.propose(vec![BatchOp::Put {
+        key: b"\x00\x10",
+        value: b"v1",
+    }])
+    .unwrap()
+    .commit()
+    .unwrap();
+    let root2 = db.root_hash().unwrap();
+
+    let first = b"\x00\x10\x20";
+    let last = b"\x00\x10\x30";
+
+    let proof = db
+        .change_proof(
+            root1.clone(),
+            root2.clone(),
+            Some(first.as_ref()),
+            Some(last.as_ref()),
+            None,
+        )
+        .unwrap();
+
+    let verification = verify_change_proof_structure(
+        &proof,
+        root2,
+        Some(first.as_slice()),
+        Some(last.as_slice()),
+        None,
+    )
+    .unwrap();
+
+    verify_and_check(&db, &proof, &verification, root1).unwrap();
+}

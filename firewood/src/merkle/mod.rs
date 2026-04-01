@@ -17,7 +17,7 @@ use crate::api::{
 };
 use crate::iter::{MerkleKeyValueIter, PathIterator};
 use crate::merkle::changes::DiffMerkleNodeStream;
-use crate::proofs::change::ChangeProofVerificationContext;
+use crate::proofs::change::{ChangeProofVerificationContext, change_proof_node_byte_key};
 use crate::{ChangeProof, Proof, ProofCollection, ProofError, ProofNode, RangeProof};
 use firewood_metrics::firewood_increment;
 use firewood_storage::MemStore;
@@ -572,10 +572,20 @@ use proof_cursor::ProofCursor;
 fn verify_proof_node_value(
     node: &ProofNode,
     lookup_item: Option<&PathIterItem>,
+    start_key: Option<&[u8]>,
 ) -> Result<(), ProofError> {
     let depth = node.key.len();
     // Only nodes at even nibble depths can carry values.
     if !depth.is_multiple_of(2) {
+        return Ok(());
+    }
+    // The proposal only needs to match the end trie within [start_key, end_key].
+    // Values at nodes outside the range may legitimately differ. Every proof
+    // node is on a path from the root to a boundary key, so its packed byte
+    // key is a prefix of that boundary key and therefore ≤ end_key. Only
+    // the start_key bound can exclude a proof node.
+    let packed = change_proof_node_byte_key(node);
+    if start_key.is_some_and(|sk| &*packed < sk) {
         return Ok(());
     }
     let proposal_value = lookup_item.and_then(|item| item.node.value());
@@ -612,6 +622,7 @@ fn verify_in_range_children(
     cursor: &mut ProofCursor<'_>,
     range_key_nibbles: &[PathComponent],
     is_end_proof: bool,
+    start_key: Option<&[u8]>,
 ) -> Result<(), ProofError> {
     let mut nodes_iter = nodes.iter().peekable();
     while let Some(node) = nodes_iter.next() {
@@ -622,7 +633,7 @@ fn verify_in_range_children(
         // check passes with (None, None), and children below default to
         // all-None so any proof child hash at an in-range slot mismatches.
         let lookup_item = cursor.advance_to(depth);
-        verify_proof_node_value(node, lookup_item)?;
+        verify_proof_node_value(node, lookup_item, start_key)?;
 
         // Derive the boundary nibble from the proof's own structure: the
         // next node's key at this depth tells us which child the proof
@@ -696,6 +707,7 @@ fn verify_change_proof_divergent(
     end_path: &[PathIterItem],
     start_nibbles: Option<&[PathComponent]>,
     end_nibbles: Option<&[PathComponent]>,
+    start_key: Option<&[u8]>,
 ) -> Result<(), api::Error> {
     // Find where the two proof paths diverge. Both proofs are rooted at the
     // same trie (end_root), so nodes at the same position are identical —
@@ -737,7 +749,7 @@ fn verify_change_proof_divergent(
         // — if the proof node claims a value exists but the proposal
         // has none, the mismatch is caught.
         let item = start_cursor.advance_to(node.key.len());
-        verify_proof_node_value(node, item)?;
+        verify_proof_node_value(node, item, start_key)?;
     }
 
     // At the divergence parent: children between the two boundary nibbles
@@ -785,13 +797,20 @@ fn verify_change_proof_divergent(
             &mut start_cursor,
             start_nibbles.unwrap_or(&[]),
             false,
+            start_key,
         )?;
     }
     if !end_tail.is_empty() {
         // The end tail walks a different branch of the trie from the
         // divergence parent, so it needs its own cursor into the proposal.
         let mut end_cursor = ProofCursor::new(end_path);
-        verify_in_range_children(end_tail, &mut end_cursor, end_nibbles.unwrap_or(&[]), true)?;
+        verify_in_range_children(
+            end_tail,
+            &mut end_cursor,
+            end_nibbles.unwrap_or(&[]),
+            true,
+            start_key,
+        )?;
     }
 
     Ok(())
@@ -871,6 +890,8 @@ pub fn verify_change_proof_root_hash(
                 .map(TriePathFromPackedBytes::path_from_packed_bytes)
         });
 
+    let start_key = verification.start_key.as_deref();
+
     if start_nodes.is_empty() {
         // Case 2a: Only end proof (first sync round, start_key=None).
         let mut cursor = ProofCursor::new(end_path);
@@ -879,6 +900,7 @@ pub fn verify_change_proof_root_hash(
             &mut cursor,
             end_nibbles.as_deref().unwrap_or(&[]),
             true,
+            start_key,
         )?;
     } else if end_nodes.is_empty() {
         // Case 2b: Only start proof (last sync round, end of keyspace).
@@ -888,6 +910,7 @@ pub fn verify_change_proof_root_hash(
             &mut cursor,
             start_nibbles.as_deref().unwrap_or(&[]),
             false,
+            start_key,
         )?;
     } else {
         // Case 2c: Both boundary proofs exist (middle sync round).
@@ -898,6 +921,7 @@ pub fn verify_change_proof_root_hash(
             end_path,
             start_nibbles.as_deref(),
             end_nibbles.as_deref(),
+            start_key,
         )?;
     }
 
