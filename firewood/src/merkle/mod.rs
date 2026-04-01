@@ -9,6 +9,7 @@ pub(crate) mod childmask;
 mod merge;
 /// Parallel merkle
 pub mod parallel;
+pub(crate) mod proof_cursor;
 
 use crate::api::{
     self, BatchIter, FrozenChangeProof, FrozenProof, FrozenRangeProof, HashKey, KeyType,
@@ -560,34 +561,7 @@ fn verify_root_hash<H: ProofCollection<Node = ProofNode>>(
 
 // ── Change proof verification ──────────────────────────────────────────────
 
-/// Forward-only cursor over a path-to-key result.
-/// Both proof nodes and path nodes are sorted by depth,
-/// so we advance through the path in lockstep with the
-/// proof nodes instead of building a `HashMap`.
-pub(crate) struct ChangeProofCursor<'a> {
-    path: &'a [PathIterItem],
-    pos: usize,
-}
-
-impl<'a> ChangeProofCursor<'a> {
-    const fn new(path: &'a [PathIterItem]) -> Self {
-        Self { path, pos: 0 }
-    }
-
-    /// Advance past nodes shallower than `depth`, return the node
-    /// at exactly `depth` if one exists.
-    fn advance_to(&mut self, depth: usize) -> Option<&'a PathIterItem> {
-        while let Some(item) = self.path.get(self.pos) {
-            if item.key_nibbles.len() >= depth {
-                break;
-            }
-            self.pos = self.pos.saturating_add(1);
-        }
-        self.path
-            .get(self.pos)
-            .filter(|item| item.key_nibbles.len() == depth)
-    }
-}
+use proof_cursor::ProofCursor;
 
 /// Verify that a proof node's value matches the proposal's value at the
 /// same trie path.
@@ -595,7 +569,7 @@ impl<'a> ChangeProofCursor<'a> {
 /// Nodes at odd nibble depths cannot carry values in the trie encoding.
 /// Malicious proofs with values at odd depths are rejected earlier by
 /// the boundary proof hash chain verification (`ValueAtOddNibbleLength`).
-fn verify_change_proof_node_value(
+fn verify_proof_node_value(
     node: &ProofNode,
     lookup_item: Option<&PathIterItem>,
 ) -> Result<(), ProofError> {
@@ -615,36 +589,32 @@ fn verify_change_proof_node_value(
 /// Verify that in-range children of each proof node match the proposal.
 ///
 /// Each proof node's hash has already been verified against `end_root`
-/// by `verify_change_proof_structure`. A node's hash is computed from
-/// its value and child hashes — so if the in-range child hashes in the
-/// proposal are identical to the proof's, the hash would be the same
-/// without needing to recompute it. A mismatch means the proposal's
-/// state differs from `end_root` in the proven range.
+/// by `verify_change_proof_structure`. A mismatch in any in-range child
+/// hash means the proposal's state differs from `end_root` in the
+/// proven range.
 ///
-/// At each depth of the proof, a boundary nibble separates in-range
-/// children from out-of-range children. It is derived from the proof's
-/// own structure: the next node's key at this depth tells us which
-/// child the proof navigated to. At the last proof node (where no
-/// next node exists), `fallback_nibbles` from the external key
-/// provides the boundary.
-///
-/// `is_end_proof` controls both the direction of the in-range check
-/// and what happens when no boundary nibble is available (key
-/// exhausted at the last node, i.e. an inclusion proof): for the
-/// end proof, no children are in-range (they all come after the
-/// proven key); for the start proof, all children are in-range
-/// (they all come after the proven key, which is the in-range
-/// direction for start proofs).
-fn verify_change_proof_in_range_children(
+/// * `nodes` — proof nodes in ascending depth order (guaranteed by
+///   `verify_change_proof_structure` via `Proof::value_digest`, which
+///   requires each node's key to be a strict prefix of the next).
+/// * `cursor` — forward-only cursor into the proposal trie, used to
+///   look up the proposal's node and child hashes at each depth.
+/// * `range_key_nibbles` — nibble-expanded range boundary key
+///   (`start_key` for start proofs, last batch op key or `end_key` for end
+///   proofs). Used as the boundary nibble at the last proof node, where
+///   no next node exists to derive it from.
+/// * `is_end_proof` — controls the direction of the in-range check and
+///   the behavior when no boundary nibble is available (key exhausted,
+///   i.e. an inclusion proof): end proofs check no children (all come
+///   after the proven key); start proofs check all children (after the
+///   key is the in-range direction).
+fn verify_in_range_children(
     nodes: &[ProofNode],
-    cursor: &mut ChangeProofCursor<'_>,
-    fallback_nibbles: &[PathComponent],
+    cursor: &mut ProofCursor<'_>,
+    range_key_nibbles: &[PathComponent],
     is_end_proof: bool,
 ) -> Result<(), ProofError> {
-    // The forward-only cursor assumes nodes are in ascending depth order,
-    // which is guaranteed by the prefix checks in `verify_change_proof_structure`.
-    let mut iter = nodes.iter().peekable();
-    while let Some(node) = iter.next() {
+    let mut nodes_iter = nodes.iter().peekable();
+    while let Some(node) = nodes_iter.next() {
         let depth = node.key.len();
 
         // Advance cursor to this depth. None means the proposal has no node
@@ -652,19 +622,19 @@ fn verify_change_proof_in_range_children(
         // check passes with (None, None), and children below default to
         // all-None so any proof child hash at an in-range slot mismatches.
         let lookup_item = cursor.advance_to(depth);
-        verify_change_proof_node_value(node, lookup_item)?;
+        verify_proof_node_value(node, lookup_item)?;
 
         // Derive the boundary nibble from the proof's own structure: the
         // next node's key at this depth tells us which child the proof
-        // navigated to. At the last node, fall back to the external
-        // key's nibble at this depth. If the fallback also has no nibble
+        // navigated to. At the last node, fall back to the range boundary
+        // key's nibble at this depth. If neither source has a nibble
         // (key exhausted — inclusion proof), the end proof checks no
         // children (they're all after the key) while the start proof
         // checks all children (after the key is the in-range direction).
-        let boundary_nibble = iter
+        let boundary_nibble = nodes_iter
             .peek()
             .and_then(|next| next.key.get(depth).copied())
-            .or_else(|| fallback_nibbles.get(depth).copied());
+            .or_else(|| range_key_nibbles.get(depth).copied());
 
         // Get the proposal's child hashes at this depth for comparison
         // against the proof's. Defaults to all-None if the proposal has
@@ -760,14 +730,14 @@ fn verify_change_proof_divergent(
     //
     // The start cursor advances through shared prefix nodes first,
     // then continues into the divergence parent and start tail.
-    let mut start_cursor = ChangeProofCursor::new(start_path);
+    let mut start_cursor = ProofCursor::new(start_path);
     for node in shared {
         // None means the proposal compressed through this depth (no
-        // explicit node). verify_change_proof_node_value allows (None, None)
+        // explicit node). verify_proof_node_value allows (None, None)
         // — if the proof node claims a value exists but the proposal
         // has none, the mismatch is caught.
         let item = start_cursor.advance_to(node.key.len());
-        verify_change_proof_node_value(node, item)?;
+        verify_proof_node_value(node, item)?;
     }
 
     // At the divergence parent: children between the two boundary nibbles
@@ -810,7 +780,7 @@ fn verify_change_proof_divergent(
     // to the left.
     if !start_tail.is_empty() {
         // start_cursor naturally continues past the shared prefix nodes.
-        verify_change_proof_in_range_children(
+        verify_in_range_children(
             start_tail,
             &mut start_cursor,
             start_nibbles.unwrap_or(&[]),
@@ -820,13 +790,8 @@ fn verify_change_proof_divergent(
     if !end_tail.is_empty() {
         // The end tail walks a different branch of the trie from the
         // divergence parent, so it needs its own cursor into the proposal.
-        let mut end_cursor = ChangeProofCursor::new(end_path);
-        verify_change_proof_in_range_children(
-            end_tail,
-            &mut end_cursor,
-            end_nibbles.unwrap_or(&[]),
-            true,
-        )?;
+        let mut end_cursor = ProofCursor::new(end_path);
+        verify_in_range_children(end_tail, &mut end_cursor, end_nibbles.unwrap_or(&[]), true)?;
     }
 
     Ok(())
@@ -873,7 +838,7 @@ pub fn verify_change_proof_root_hash(
         return Ok(());
     }
 
-    // Fallback nibbles from external keys — used at the last proof node
+    // Range boundary keys as nibbles — used at the last proof node
     // where no next node exists to derive the boundary from. Intermediate
     // nodes derive their boundary from the next proof node's key, which
     // is always correct regardless of which key the end boundary proof was validated against.
@@ -908,8 +873,8 @@ pub fn verify_change_proof_root_hash(
 
     if start_nodes.is_empty() {
         // Case 2a: Only end proof (first sync round, start_key=None).
-        let mut cursor = ChangeProofCursor::new(end_path);
-        verify_change_proof_in_range_children(
+        let mut cursor = ProofCursor::new(end_path);
+        verify_in_range_children(
             end_nodes,
             &mut cursor,
             end_nibbles.as_deref().unwrap_or(&[]),
@@ -917,8 +882,8 @@ pub fn verify_change_proof_root_hash(
         )?;
     } else if end_nodes.is_empty() {
         // Case 2b: Only start proof (last sync round, end of keyspace).
-        let mut cursor = ChangeProofCursor::new(start_path);
-        verify_change_proof_in_range_children(
+        let mut cursor = ProofCursor::new(start_path);
+        verify_in_range_children(
             start_nodes,
             &mut cursor,
             start_nibbles.as_deref().unwrap_or(&[]),
