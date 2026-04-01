@@ -865,18 +865,19 @@ fn verify_change_proof_node_value(
 
 /// Verify that in-range children of each proof node match the proposal.
 ///
-/// The proof's hash chain to `end_root` is already verified by
-/// `verify_change_proof_structure`. If every in-range child hash matches the
-/// proposal's, the substitution in the old rehash approach would have
-/// been a no-op and the root hash unchanged. A mismatch means the
-/// proposal's state differs from what the proof claims.
+/// Each proof node's hash has already been verified against `end_root`
+/// by `verify_change_proof_structure`. A node's hash is computed from
+/// its value and child hashes — so if the in-range child hashes in the
+/// proposal are identical to the proof's, the hash would be the same
+/// without needing to recompute it. A mismatch means the proposal's
+/// state differs from `end_root` in the proven range.
 ///
-/// The boundary nibble at each depth is derived from the proof's own
-/// structure: the next node's key at this depth tells us which child
-/// the proof navigated to. This is always correct regardless of which
-/// key the end boundary proof was validated against. At the last proof node
-/// (where no next node exists), `fallback_nibbles` from the external
-/// key provides the boundary.
+/// At each depth of the proof, a boundary nibble separates in-range
+/// children from out-of-range children. It is derived from the proof's
+/// own structure: the next node's key at this depth tells us which
+/// child the proof navigated to. At the last proof node (where no
+/// next node exists), `fallback_nibbles` from the external key
+/// provides the boundary.
 ///
 /// `is_end_proof` controls both the direction of the in-range check
 /// and what happens when no boundary nibble is available (key
@@ -893,7 +894,8 @@ fn verify_change_proof_in_range_children(
 ) -> Result<(), ProofError> {
     // The forward-only cursor assumes nodes are in ascending depth order,
     // which is guaranteed by the prefix checks in `verify_change_proof_structure`.
-    for (i, node) in nodes.iter().enumerate() {
+    let mut iter = nodes.iter().peekable();
+    while let Some(node) = iter.next() {
         let depth = node.key.len();
 
         // Advance cursor to this depth. None means the proposal has no node
@@ -910,26 +912,32 @@ fn verify_change_proof_in_range_children(
         // (key exhausted — inclusion proof), the end proof checks no
         // children (they're all after the key) while the start proof
         // checks all children (after the key is the in-range direction).
-        let boundary_nibble = i
-            .checked_add(1)
-            .and_then(|next_i| nodes.get(next_i))
+        let boundary_nibble = iter
+            .peek()
             .and_then(|next| next.key.get(depth).copied())
             .or_else(|| fallback_nibbles.get(depth).copied());
 
-        // On cursor miss, defaults to all-None children (see above).
+        // Get the proposal's child hashes at this depth for comparison
+        // against the proof's. Defaults to all-None if the proposal has
+        // no branch node here (cursor miss or leaf).
         let proposal_children: Children<Option<HashType>> = lookup_item
             .and_then(|item| item.node.as_branch().map(|b| b.children_hashes()))
             .unwrap_or_default();
 
-        for nibble in PathComponent::ALL {
-            let in_range = match boundary_nibble {
-                Some(bn) if is_end_proof => nibble < bn,
-                Some(bn) => nibble > bn,
-                None => !is_end_proof,
-            };
-            if in_range && node.child_hashes[nibble] != proposal_children[nibble] {
-                return Err(ProofError::InRangeChildMismatch);
-            }
+        // Zip the proof and proposal child hashes. If any hashes differ
+        // at an in-range slot, the proposal disagrees with end_root.
+        let has_mismatch = node.child_hashes.iter().zip(proposal_children.iter()).any(
+            |((nibble, proof_hash), (_, proposal_hash))| {
+                proof_hash != proposal_hash
+                    && match boundary_nibble {
+                        Some(bn) if is_end_proof => nibble < bn,
+                        Some(bn) => nibble > bn,
+                        None => !is_end_proof,
+                    }
+            },
+        );
+        if has_mismatch {
+            return Err(ProofError::InRangeChildMismatch);
         }
     }
     Ok(())
