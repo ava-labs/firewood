@@ -406,6 +406,11 @@ impl<T: TrieReader> Iterator for PathIterator<'_, '_, T> {
                     Ordering::Less | Ordering::Greater => {
                         self.state = PathIteratorState::Exhausted;
                         None
+                        // Some(Ok(PathIterItem {
+                        //     key_nibbles: node_key,
+                        //     node: saved_node,
+                        //     next_nibble: None,
+                        // }))
                     }
                     Ordering::Equal => {
                         matched_key.extend(partial_path.iter());

@@ -1714,3 +1714,151 @@ fn test_disjoint_proof() {
 
     verify_and_check(&db, &proof, &verification, root1).unwrap();
 }
+
+/// A change proof from an empty trie to a populated trie is structurally
+/// equivalent to a range proof: the proposal only contains keys within
+/// the proven range, with no pre-existing keys outside it. This test
+/// uses the same seed that exposed a range proof bug (where the partial
+/// trie's compressed structure differed from the full trie) to verify
+/// that change proofs handle the same scenario correctly.
+#[test]
+fn test_change_proof_from_empty_trie_matches_range_proof_scenario() {
+    use crate::api::HashKeyExt;
+    use firewood_storage::SeededRng;
+
+    let rng = SeededRng::new(5_509_119_972_227_599_358);
+    let num_keys = rng.random_range(64..=2048u32);
+    let set = fixed_and_pseudorandom_data(&rng, num_keys);
+    let mut items: Vec<_> = set.iter().collect();
+    items.sort_unstable();
+
+    // Create a database and commit all the data
+    let (db, _dir) = new_db();
+    let empty_root = api::HashKey::default_root_hash();
+
+    let ops: Vec<_> = items
+        .iter()
+        .map(|(k, v)| BatchOp::Put {
+            key: k.as_slice(),
+            value: v.as_slice(),
+        })
+        .collect();
+    db.propose(ops).unwrap().commit().unwrap();
+    let end_root = db.root_hash().unwrap();
+
+    // Reproduce the failing fuzz scenario (case 3: both edges non-existent).
+    // Walk the RNG forward to the same state as the fuzz test at seed
+    // 5509119972227599358 when it hits case 3.
+    for _ in 0..50 {
+        let scenario = rng.random_range(0..5u8);
+        if scenario != 3 {
+            // Burn the same random values the fuzz test would
+            match scenario {
+                0 => {
+                    rng.random_range(0..items.len() - 1);
+                    let start = rng.random_range(0..items.len() - 1);
+                    rng.random_range((start + 1)..items.len());
+                }
+                1 => {
+                    rng.random_range(1..items.len() - 1);
+                    let start = rng.random_range(1..items.len() - 1);
+                    rng.random_range((start + 1)..items.len());
+                }
+                2 => {
+                    rng.random_range(0..items.len() - 1);
+                    let start = rng.random_range(0..items.len() - 1);
+                    rng.random_range(start..items.len() - 1);
+                }
+                4 => {
+                    rng.random_range(0..items.len());
+                }
+                _ => unreachable!(),
+            }
+            continue;
+        }
+
+        let start = rng.random_range(1..items.len() - 1);
+        let end = rng.random_range(start..items.len() - 1);
+        let first = decrease_key(items[start].0);
+        let last = increase_key(items[end].0);
+        if &first >= items[start].0
+            || &last <= items[end].0
+            || (start > 0 && first.as_ref() == items[start - 1].0)
+            || (end + 1 < items.len() && last.as_ref() == items[end + 1].0)
+        {
+            continue;
+        }
+
+        // Generate a change proof from empty → end_root for this subrange.
+        // The proposal will only have keys in [first, last], just like a
+        // range proof's in-memory trie.
+        let empty = empty_root.clone().unwrap();
+        let proof = db
+            .change_proof(
+                empty.clone(),
+                end_root.clone(),
+                Some(&first),
+                Some(&last),
+                None,
+            )
+            .unwrap();
+
+        let verification = verify_change_proof_structure(
+            &proof,
+            end_root.clone(),
+            Some(&first),
+            Some(&last),
+            None,
+        )
+        .unwrap();
+
+        verify_and_check(&db, &proof, &verification, empty).unwrap();
+        return; // We only need to verify one case 3 scenario
+    }
+
+    panic!("RNG did not produce a case-3 scenario within 50 iterations");
+}
+
+/// Minimal reproduction: change proof verification fails when the start
+/// trie is empty and the only key in the full trie falls outside the
+/// requested range. The proposal (empty + no `batch_ops`) has no trie
+/// nodes, but the boundary proofs describe the full trie's path to the
+/// out-of-range key. The cursor finds nothing where the proof expects
+/// a branch, producing `InRangeChildMismatch`.
+#[test]
+fn test_change_proof_from_empty_subrange() {
+    let key = b"\x10";
+    let val = b"\x01";
+    let first = b"\x20";
+    let last = b"\x30";
+
+    let (db, _dir) = new_db();
+    let empty_root = db.root_hash().unwrap();
+
+    db.propose(vec![BatchOp::Put { key, value: val }])
+        .unwrap()
+        .commit()
+        .unwrap();
+    let end_root = db.root_hash().unwrap();
+
+    let proof = db
+        .change_proof(
+            empty_root.clone(),
+            end_root.clone(),
+            Some(first.as_ref()),
+            Some(last.as_ref()),
+            None,
+        )
+        .unwrap();
+
+    let verification = verify_change_proof_structure(
+        &proof,
+        end_root,
+        Some(first.as_slice()),
+        Some(last.as_slice()),
+        None,
+    )
+    .unwrap();
+
+    verify_and_check(&db, &proof, &verification, empty_root).unwrap();
+}
