@@ -16,7 +16,7 @@
 //!   (or doesn't exist) in a trie with a given root hash.
 //! - **Range proofs** ([`RangeProof`]): Verify that a contiguous set of key-value pairs
 //!   exists within a specific key range.
-//! - **Change proofs** (`ChangeProof`): Verify that a set of key-value changes
+//! - **Change proofs** ([`ChangeProof`]): Verify that a set of key-value changes
 //!   between two trie revisions is consistent with a target root hash.
 //! - **Serialization format**: A compact binary format for transmitting proofs over the
 //!   network or storing them persistently.
@@ -28,8 +28,7 @@
 //! - `types`: Core proof types including [`Proof`], [`ProofNode`], [`ProofError`], and
 //!   [`ProofCollection`].
 //! - `range`: Range proof implementation for verifying multiple consecutive keys.
-//! - `changes` (in `merkle`): Change proof generation and the
-//!   `ChangeProof` type.
+//! - `change`: Change proof type and structural verification.
 //! - `header`: Proof format headers and validation.
 //! - `reader`: Proof reading and deserialization utilities.
 //! - `ser`: Proof serialization implementation (internal).
@@ -95,6 +94,7 @@
 //! were formally reproduced as regression tests — TLC confirms both the vulnerable
 //! behavior and the necessity of their fixes. No new bugs were found.
 
+pub(crate) mod change;
 pub(super) mod de;
 pub(crate) mod header;
 pub(crate) mod range;
@@ -104,6 +104,10 @@ pub(super) mod ser;
 mod tests;
 pub(crate) mod types;
 
+pub use self::change::{
+    ChangeProof, ChangeProofVerificationContext, change_proof_boundary_key,
+    change_proof_node_byte_key, verify_change_proof_structure,
+};
 pub use self::header::InvalidHeader;
 pub use self::range::RangeProof;
 pub use self::reader::ReadError;
