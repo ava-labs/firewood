@@ -351,7 +351,9 @@ enum PathIteratorState<'a> {
 /// Iterates over all nodes on the path to a given key starting from the root.
 ///
 /// All nodes are branch nodes except possibly the last, which may be a leaf.
-/// All returned nodes have keys which are a prefix of the given key.
+/// All returned nodes have keys which are a prefix of the given key, except
+/// possibly the last, which may be a divergent node whose partial path does
+/// not match the key. Divergent nodes are included for exclusion proofs.
 /// If the given key is in the trie, the last node is at that key.
 #[derive(Debug)]
 pub struct PathIterator<'a, 'b, T> {
@@ -642,27 +644,19 @@ mod tests {
         assert!(iter.next().is_none());
     }
 
-    #[test_case(&[],true; "empty key")]
-    #[test_case(&[0xBE,0xE0],true; "prefix of singleton key")]
-    #[test_case(&[0xBE, 0xEF],true; "match singleton key")]
-    #[test_case(&[0xBE, 0xEF,0x10],true; "suffix of singleton key")]
-    #[test_case(&[0xF0],true; "no key nibbles match singleton key")]
-    fn path_iterate_singleton_merkle(key: &[u8], should_yield_elt: bool) {
+    #[test_case(&[]; "empty key")]
+    #[test_case(&[0xBE,0xE0]; "prefix of singleton key")]
+    #[test_case(&[0xBE, 0xEF]; "match singleton key")]
+    #[test_case(&[0xBE, 0xEF,0x10]; "suffix of singleton key")]
+    #[test_case(&[0xF0]; "no key nibbles match singleton key")]
+    fn path_iterate_singleton_merkle(key: &[u8]) {
         let mut merkle = create_test_merkle();
 
         merkle.insert(&[0xBE, 0xEF], Box::new([0x42])).unwrap();
 
         let mut iter = merkle.path_iter(key).unwrap();
-        let node = match iter.next() {
-            Some(Ok(item)) => item,
-            Some(Err(e)) => panic!("{e:?}"),
-            None => {
-                assert!(!should_yield_elt);
-                return;
-            }
-        };
+        let node = iter.next().unwrap().unwrap();
 
-        assert!(should_yield_elt);
         assert_eq!(*node.key_nibbles, path![0x0B, 0x0E, 0x0E, 0x0F]);
         assert_eq!(node.node.as_leaf().unwrap().value, Box::from([0x42]));
         assert_eq!(node.next_nibble, None);
